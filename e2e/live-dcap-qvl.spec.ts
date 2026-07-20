@@ -1,8 +1,9 @@
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { test, expect } from "@playwright/test";
 import { parseTdxQuoteV4 } from "../src/attestation/tdx";
 
-const fixturePath = "/Users/chrisk/chutes-jumpmaster/airship/.airship-lab/attest/fixtures/evidence.json";
+const fixturePath = resolve(process.cwd(), ".airship-lab", "attest", "fixtures", "evidence.json");
 
 test.skip(!process.env.AIRSHIP_DCAP_LIVE, "requires captured Chutes evidence and live Intel collateral");
 

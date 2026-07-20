@@ -5,7 +5,7 @@ browser-first runtime with its own contracts.
 
 ## Hermes Agent
 
-The local `/Users/chrisk/hermes-agent` checkout is the primary behavioral
+The local `~/hermes-agent` checkout is the primary behavioral
 reference. Airship adopts these ideas conceptually:
 
 - a byte-stable per-conversation prompt prefix;
@@ -50,7 +50,7 @@ narrower immutable-blob semantics. See [WALRUS_STORAGE.md](WALRUS_STORAGE.md).
 
 ## Arclink
 
-The local `/Users/chrisk/arclink` checkout informed only product principles:
+The local `~/arclink` checkout informed only product principles:
 clear account standing, explicit entitlements, minimal authoritative surfaces,
 and strong separation between identity, payment, service access, and user data.
 Airship does not copy its lore, backend topology, visual theme, or source. The

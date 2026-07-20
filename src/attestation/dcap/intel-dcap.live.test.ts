@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { createIntelDcapVerifierPort } from "./intel-dcap";
 import type { DcapVerifierInput } from "../types";
 
 // Live test: runs the real WebCrypto DCAP verifier against a captured real
 // Chutes quote + fetches live Intel collateral from the CORS-enabled PCCS.
 // Gated behind AIRSHIP_DCAP_LIVE so it never runs in the offline CI suite.
-const FIXTURE = "/Users/chrisk/chutes-jumpmaster/airship/.airship-lab/attest/fixtures/evidence.json";
+const FIXTURE = resolve(process.cwd(), ".airship-lab", "attest", "fixtures", "evidence.json");
 
 describe.skipIf(!process.env.AIRSHIP_DCAP_LIVE)("IntelDcapVerifierPort (live)", () => {
   it("reports the compact-checker boundary on a genuine Chutes TDX quote", async () => {
