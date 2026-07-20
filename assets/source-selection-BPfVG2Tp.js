@@ -1,0 +1,1 @@
+var e=`airship.ui.sources.repository.v1`,t=``;function n(n){t=n;try{globalThis.sessionStorage?.setItem(e,n)}catch{}}function r(){if(t)return t;try{return globalThis.sessionStorage?.getItem(e)??``}catch{return``}}export{n,r as t};
