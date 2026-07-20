@@ -21,6 +21,11 @@
 # misc
 .DS_Store
 *.pem
+/playwright-report/
+/test-results/
+
+# Rust build output
+/crates/*/target/
 
 # debug
 npm-debug.log*
