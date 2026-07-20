@@ -29,6 +29,7 @@ export { AccessView } from "./ui/access-view";
 export { AttestationsView } from "./ui/attestations-view";
 export { BillingView } from "./ui/billing-view";
 export { GoogleDriveSetup } from "./ui/google-drive-setup";
+export { LocalLabSetup } from "./ui/local-lab-setup";
 export { presentSessionMessages } from "./ui/chat/session-message-presentation";
 export { ContextView } from "./ui/context-view";
 export {

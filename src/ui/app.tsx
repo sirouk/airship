@@ -100,7 +100,6 @@ import { attestationRecordIdForReceipt, sessionAttestationReceipts } from "./att
 import type { AttestationRefreshTarget } from "./attestations-view";
 import { ContextView as ClientContextView } from "./context-route";
 import { Icon, type IconName } from "./icons";
-import { LocalLabSetup } from "./local-lab-setup";
 import { MenuSelect } from "./menu-select";
 import { MobileNavigation } from "./mobile-navigation";
 import { ModelControl } from "./model-control";
@@ -212,6 +211,7 @@ type WorkspaceScreenComponent = typeof import("./workspace-view").WorkspaceView;
 type TerminalScreenComponent = typeof import("./terminal-view").TerminalView;
 type CapabilitiesScreenComponent = typeof import("./capabilities-view").CapabilitiesView;
 type GoogleDriveSetupComponent = typeof import("./google-drive-setup").GoogleDriveSetup;
+type LocalLabSetupComponent = typeof import("./local-lab-setup").LocalLabSetup;
 const WORKSPACE_EDITOR_BYTE_LIMIT = 128 * 1024;
 class MountedAttestationError extends Error {
   readonly name = "AttestationEvidenceClientError";
@@ -417,6 +417,7 @@ export function App() {
   const [CapabilitiesScreen, setCapabilitiesScreen] = useState<CapabilitiesScreenComponent>();
   const [capabilitiesViewError, setCapabilitiesViewError] = useState<string>();
   const [GoogleDriveSetupScreen, setGoogleDriveSetupScreen] = useState<GoogleDriveSetupComponent>();
+  const [LocalLabSetupScreen, setLocalLabSetupScreen] = useState<LocalLabSetupComponent>();
   const runtime = useRef<Runtime>();
   const workspaceOpenRequest = useRef(0);
   const approvalBroker = useMemo(() => new ApprovalBroker(), []);
@@ -785,15 +786,18 @@ export function App() {
   }, [view, AttestationsScreen]);
 
   useEffect(() => {
-    if (view !== "vault" || preferences.vaultBackend !== "google-drive" || GoogleDriveSetupScreen) return;
+    if (view !== "vault" || (GoogleDriveSetupScreen && LocalLabSetupScreen)) return;
     let current = true;
     void loadDeferredCapabilities().then((module) => {
-      if (current) setGoogleDriveSetupScreen(() => module.GoogleDriveSetup);
+      if (current) {
+        setGoogleDriveSetupScreen(() => module.GoogleDriveSetup);
+        setLocalLabSetupScreen(() => module.LocalLabSetup);
+      }
     }).catch(() => {
       if (current) setRuntimeStatus("Google Drive setup could not be loaded; no vault state changed");
     });
     return () => { current = false; };
-  }, [view, preferences.vaultBackend, GoogleDriveSetupScreen]);
+  }, [view, GoogleDriveSetupScreen, LocalLabSetupScreen]);
 
   useEffect(() => {
     if (view !== "sources" || SourcesScreen) return;
@@ -3039,11 +3043,11 @@ export function App() {
                       ? "Google Drive vault verified; adopting encrypted storage"
                       : result.phase === "degraded" ? `Google Drive vault blocked: ${result.diagnostic.publicMessage}` : result.message);
                   }).catch((error) => setRuntimeStatus(error instanceof Error ? error.message : "Google Drive verification stopped safely"));
-                }} /> : <RouteSkeleton label="Loading Google Drive connection" /> : <LocalLabSetup onConfigure={(request) => {
+                }} /> : <RouteSkeleton label="Loading Google Drive connection" /> : LocalLabSetupScreen ? <LocalLabSetupScreen onConfigure={(request) => {
                     vault.configure(request);
                     setVaultSetupOpen(false);
                     setRuntimeStatus("Local S3 lab configured in page memory; live probe still required");
-                  }} />}
+                  }} /> : <RouteSkeleton label="Loading local S3 lab setup" />}
               </div>
             ) : null}
           </div>
@@ -4119,7 +4123,7 @@ function MemoryView({
           ) : <EmptyState icon="memory" title="Select an idea" body="Pan, zoom, search, or select any node to inspect its typed relationships and source metadata." />}
         </aside>
       </div>
-      <div class="callout"><Icon name="cloud" /><div><strong>S3 remains the durable backbone</strong><p>Only the bounded neighborhood needed for the active profile, directory, source, and task should stream to the device. This page graph currently derives from the in-memory demo because encrypted graph generations are not connected yet.</p></div></div>
+      <div class="callout"><Icon name="cloud" /><div><strong>The selected Vault is the encrypted backbone</strong><p>Google Drive or S3 can serve exact encrypted segment ranges, while expert routing and ranking stay in this browser. This relationship graph still derives from current page inputs; remote graph-generation convergence is not claimed yet.</p></div></div>
       </> : null}
       {tab === "index" ? workspace ? <ClientContextView workspace={workspace} entries={files} embedded /> : <EmptyState icon="context" title="Index unavailable" body="The active browser workspace is not ready, so no index generation was started." /> : null}
     </section>

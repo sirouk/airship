@@ -80,6 +80,7 @@ async function verifySemanticAssets(
 ): Promise<void> {
   const suffixes = [
     "runtime/transformers.web.js",
+    "runtime/ort.webgpu.min.mjs",
     "models/mixedbread-ai/mxbai-embed-xsmall-v1/config.json",
     "models/mixedbread-ai/mxbai-embed-xsmall-v1/tokenizer.json",
     "models/mixedbread-ai/mxbai-embed-xsmall-v1/tokenizer_config.json",

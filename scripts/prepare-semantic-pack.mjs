@@ -15,7 +15,12 @@ for (const [path, expected] of Object.entries(manifest.assets)) {
     if (!response.ok) throw new Error(`Could not download ${path}: ${response.status}`);
     await writeFile(target, new Uint8Array(await response.arrayBuffer()));
   } else if (path === "runtime/transformers.web.js") {
-    await cp(resolve("node_modules/@huggingface/transformers/dist/transformers.web.js"), target);
+    const source = await readFile(resolve("node_modules/@huggingface/transformers/dist/transformers.web.js"), "utf8");
+    const specifier = 'from "onnxruntime-web/webgpu"';
+    if (!source.includes(specifier)) throw new Error("The pinned Transformers.js ORT import contract changed.");
+    await writeFile(target, source.replace(specifier, 'from "./ort.webgpu.min.mjs"'));
+  } else if (path === "runtime/ort.webgpu.min.mjs") {
+    await cp(resolve("node_modules/onnxruntime-web/dist/ort.webgpu.min.mjs"), target);
   } else {
     await cp(resolve("node_modules/onnxruntime-web/dist", path.slice("runtime/".length)), target);
   }

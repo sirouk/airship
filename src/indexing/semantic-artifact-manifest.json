@@ -2,7 +2,8 @@
   "version": 1,
   "modelRevision": "b0561d9a97e6b298da39f0ef3e7d3cf153b1b29a",
   "assets": {
-    "runtime/transformers.web.js": { "bytes": 1086251, "sha256": "18e85b0396b2ce9343c837c5430e6dd86f7ed1bc1f307ffd3f65bbb24e0d2812" },
+    "runtime/transformers.web.js": { "bytes": 1086249, "sha256": "542b0fe0ef66dc022e47dc681266df3a68b375109664ebba24ea572db6657cc7" },
+    "runtime/ort.webgpu.min.mjs": { "bytes": 67172, "sha256": "5e9331403e69e0180bad5a6c0028911770f1b09b585c8d9459e699055cb0cf65" },
     "models/mixedbread-ai/mxbai-embed-xsmall-v1/config.json": { "bytes": 675, "sha256": "55f755d351fd04b0fef37760e07e195eb47e15f7aed6fc42d9be3dde3d38bca4" },
     "models/mixedbread-ai/mxbai-embed-xsmall-v1/tokenizer.json": { "bytes": 711661, "sha256": "da0e79933b9ed51798a3ae27893d3c5fa4a201126cef75586296df9b4d2c62a0" },
     "models/mixedbread-ai/mxbai-embed-xsmall-v1/tokenizer_config.json": { "bytes": 1433, "sha256": "bd2e06a5b20fd1b13ca988bedc8763d332d242381b4fbc98f8fead4524158f79" },
