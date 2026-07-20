@@ -1,4 +1,6 @@
 import { isGoogleDriveConfiguration, type VaultSnapshot } from "../vault/coordinator";
+import type { VaultBackend } from "./platform-shell";
+import { MenuSelect } from "./menu-select";
 import "./vault-view.css";
 
 export type VaultViewProps = {
@@ -8,6 +10,9 @@ export type VaultViewProps = {
   onProbe?: () => void;
   onCancelProbe?: () => void;
   onDisconnect?: () => void;
+  provider: VaultBackend;
+  providerSwitching?: boolean;
+  onProviderChange(provider: VaultBackend): void;
 };
 
 /** Evidence-first vault status surface. It intentionally has no secret inputs. */
@@ -18,6 +23,9 @@ export function VaultView({
   onProbe,
   onCancelProbe,
   onDisconnect,
+  provider,
+  providerSwitching = false,
+  onProviderChange,
 }: VaultViewProps) {
   const status = phaseCopy(snapshot);
   return (
@@ -32,6 +40,24 @@ export function VaultView({
           {runtimeAdopted ? "Encrypted runtime active" : status.label}
         </span>
       </header>
+
+      <div class="vault-provider-selector">
+        <div><strong>Storage provider</strong><span>Keys and encryption stay client-owned in every mode.</span></div>
+        <MenuSelect
+          className="vault-provider-selector__menu"
+          placement="down"
+          ariaLabel="Vault storage provider"
+          value={provider}
+          disabled={providerSwitching}
+          options={[
+            { value: "google-drive", label: "Google Drive · recommended", description: "Your encrypted Airship workspace folder" },
+            { value: "local-lab", label: "S3-compatible / MinIO", description: "Advanced provider or local development lab" },
+            { value: "ephemeral", label: "Ephemeral", description: "Page memory only; nothing synced" },
+          ]}
+          onChange={(value) => onProviderChange(value as VaultBackend)}
+        />
+        {providerSwitching ? <span role="status">Moving the active runtime safely…</span> : null}
+      </div>
 
       <div class="vault-view__truth" data-phase={snapshot.phase}>
         <strong>{status.headline}</strong>

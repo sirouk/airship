@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "preact/hooks";
+import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { loadDeferredCapabilities } from "../load-deferred-capabilities";
 import type { GoogleIdentityServicesAuthorizer, MemoryOnlyGoogleAccessTokenProvider } from "../storage/google-drive-auth";
 import type { ConfigureGoogleDriveVaultRequest } from "../vault";
@@ -16,6 +16,7 @@ export function GoogleDriveSetup({ onConfigure }: Readonly<{
   const [prepared, setPrepared] = useState(false);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string>();
+  const authorityHandedOff = useRef(false);
   const session = useMemo(() => ({ current: undefined as undefined | {
     provider: MemoryOnlyGoogleAccessTokenProvider;
     authorizer: GoogleIdentityServicesAuthorizer;
@@ -33,7 +34,10 @@ export function GoogleDriveSetup({ onConfigure }: Readonly<{
     }).catch((error) => current && setStatus(error instanceof Error ? error.message : "Google sign-in could not be prepared."));
     return () => {
       current = false;
-      session.current?.authorizer.reset();
+      // After a successful handoff the coordinator owns credential cleanup.
+      // Resetting here would revoke the page-memory token between configure
+      // and the mandatory live probe as this setup surface unmounts.
+      if (!authorityHandedOff.current) session.current?.authorizer.reset();
       session.current = undefined;
     };
   }, [clientId, session]);
@@ -66,13 +70,19 @@ export function GoogleDriveSetup({ onConfigure }: Readonly<{
         workspace,
         workspaceKey,
       });
-      onConfigure(Object.freeze({
-        workspace,
-        store,
-        workspaceKey,
-        accountLabel: identity.email,
-        reset: () => preparedSession.authorizer.reset(),
-      }));
+      authorityHandedOff.current = true;
+      try {
+        onConfigure(Object.freeze({
+          workspace,
+          store,
+          workspaceKey,
+          accountLabel: identity.email,
+          reset: () => preparedSession.authorizer.reset(),
+        }));
+      } catch (error) {
+        authorityHandedOff.current = false;
+        throw error;
+      }
       recovery?.clear();
       setRecovery(undefined);
       setImportedRecovery("");

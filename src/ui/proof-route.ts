@@ -10,6 +10,8 @@ export type ProofSelection = Readonly<{
   turnId?: string;
 }>;
 
+export type ProofSection = "summary" | "attestations";
+
 export function proofSelectionForReceipt(
   receipt: Pick<ConversationReceipt, "sessionId" | "receiptId" | "turnId">,
 ): ProofSelection {
@@ -25,12 +27,27 @@ export function proofSelectionForSession(sessionId: string | undefined): ProofSe
   return bounded ? Object.freeze({ sessionId: bounded }) : undefined;
 }
 
-export function proofHash(selection?: ProofSelection): string {
-  if (!selection) return "#proof";
-  const parameters = new URLSearchParams({ session: selection.sessionId });
-  if (selection.receiptId) parameters.set("receipt", selection.receiptId);
-  if (selection.turnId) parameters.set("turn", selection.turnId);
-  return `#proof?${parameters.toString()}`;
+export function proofHash(selection?: ProofSelection, section: ProofSection = "summary"): string {
+  const parameters = new URLSearchParams();
+  if (selection) {
+    parameters.set("session", selection.sessionId);
+    if (selection.receiptId) parameters.set("receipt", selection.receiptId);
+    if (selection.turnId) parameters.set("turn", selection.turnId);
+  }
+  if (section === "attestations") parameters.set("section", "attestations");
+  const query = parameters.toString();
+  return query ? `#proof?${query}` : "#proof";
+}
+
+/** Legacy #attestations links open the evidence section of the unified Proof route. */
+export function proofSectionFromHash(hash: string): ProofSection {
+  const normalized = hash.startsWith("#") ? hash.slice(1) : hash;
+  const queryIndex = normalized.indexOf("?");
+  const route = queryIndex === -1 ? normalized : normalized.slice(0, queryIndex);
+  if (route === "attestations") return "attestations";
+  if (route !== "proof") return "summary";
+  const parameters = new URLSearchParams(queryIndex === -1 ? "" : normalized.slice(queryIndex + 1));
+  return parameters.get("section") === "attestations" ? "attestations" : "summary";
 }
 
 export function proofSelectionFromHash(hash: string): ProofSelection | undefined {

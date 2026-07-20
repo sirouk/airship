@@ -40,21 +40,24 @@ test("mobile keeps conversations out of the fixed bar and exposes the ledger thr
   await expect(page.getByRole("heading", { name: "Session library", level: 1 })).toBeVisible();
 });
 
-test("Workspace owns Sources and Terminal without breaking their deep links", async ({ page }, testInfo) => {
+test("Workspace owns one Editor and Terminal while preserving the legacy Sources deep link", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium", "desktop nested workspace information architecture");
   await page.goto("/#workspace");
   const navigation = page.getByRole("navigation", { name: "Primary" });
-  await expect(navigation.getByRole("button", { name: "Sources", exact: true })).toBeVisible();
+  await expect(navigation.getByRole("button", { name: "Sources", exact: true })).toHaveCount(0);
+  await expect(navigation.getByRole("button", { name: "Editor", exact: true })).toBeVisible();
   await expect(navigation.getByRole("button", { name: "Terminal", exact: true })).toBeVisible();
-  await navigation.getByRole("button", { name: "Sources", exact: true }).click();
-  await expect(page).toHaveURL(/#sources$/);
+  await navigation.getByRole("button", { name: "Editor", exact: true }).click();
+  await expect(page).toHaveURL(/#editor$/);
+  await expect(page.getByRole("tab", { name: "Files & editor" })).toHaveAttribute("aria-selected", "true");
   await navigation.getByRole("button", { name: "Terminal", exact: true }).click();
   await expect(page).toHaveURL(/#terminal$/);
 });
 
-test("Sources defaults to a collapsible tree and Profiles archives without stranding history", async ({ page }, testInfo) => {
+test("Editor source tools default to a collapsible tree and Profiles archives without stranding history", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium", "desktop management information architecture");
-  await page.goto("/#sources");
+  await page.goto("/#editor");
+  await page.getByRole("tab", { name: "Sources", exact: true }).click();
   const tree = page.getByRole("button", { name: "Tree", exact: true });
   const flat = page.getByRole("button", { name: "Flat", exact: true });
   await expect(tree).toHaveAttribute("aria-pressed", "true");
@@ -95,16 +98,28 @@ test("Memory unifies federated search, graph, and the legacy Context index deep 
   await expect(page.getByLabel("Context index status")).toBeVisible();
 });
 
-test("Profiles uses a bounded disclosure and one scoped tabbed manager", async ({ page }, testInfo) => {
+test("Profiles opens by default, remains collapsible, and uses one scoped tabbed manager", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium", "desktop profile information architecture");
   await page.goto("/#chat");
   const navigation = page.getByRole("navigation", { name: "Primary" });
   await expect(navigation.getByRole("button", { name: "Skills", exact: true })).toHaveCount(0);
   await expect(navigation.getByRole("button", { name: "Capabilities", exact: true })).toHaveCount(0);
-  await navigation.getByRole("button", { name: "Expand profiles" }).click();
+  await expect(navigation.getByRole("button", { name: "Collapse profiles" })).toHaveAttribute("aria-expanded", "true");
   const profileList = navigation.locator("#airship-profile-navigation");
-  expect(await profileList.locator(".recent-conversation").count()).toBeLessThanOrEqual(8);
-  await profileList.getByRole("button", { name: /Research Analyst/u }).click();
+  await expect(profileList).toBeVisible();
+  expect(await profileList.locator(".recent-conversation").count()).toBeGreaterThan(0);
+  const profileRailStyle = await profileList.evaluate((element) => ({
+    overflowY: getComputedStyle(element).overflowY,
+    maxHeight: getComputedStyle(element).maxHeight,
+  }));
+  expect(profileRailStyle.overflowY).toBe("auto");
+  expect(profileRailStyle.maxHeight).toContain("310px");
+  await navigation.getByRole("button", { name: "Collapse profiles" }).click();
+  await expect(profileList).toHaveCount(0);
+  await navigation.getByRole("button", { name: "Profiles", exact: true }).click();
+  await expect(navigation.getByRole("button", { name: "Collapse profiles" })).toHaveAttribute("aria-expanded", "true");
+  const reopenedProfileList = navigation.locator("#airship-profile-navigation");
+  await reopenedProfileList.getByRole("button", { name: /Research Analyst/u }).click();
   await expect(page).toHaveURL(/#profiles$/);
   await expect(page.getByRole("button", { name: "Profile manager scope" })).toContainText("Research Analyst");
   await expect(page.locator(".profile-card.active")).toContainText("Research Analyst");
@@ -114,4 +129,40 @@ test("Profiles uses a bounded disclosure and one scoped tabbed manager", async (
   await page.getByRole("tab", { name: "Skills" }).click();
   await expect(page.getByRole("heading", { name: "Skills", level: 1 })).toBeVisible();
   await expect(page.getByText("Profile scope", { exact: true })).toBeVisible();
+});
+
+test("Profiles keeps catalogs larger than ten inside a ten-row scrolling rail", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "desktop profile rail capacity contract");
+  await page.goto("/#profiles");
+  const cards = page.locator(".profile-card");
+  const fork = page.getByRole("button", { name: "Fork", exact: true });
+  while (await cards.count() <= 10) {
+    const before = await cards.count();
+    await expect(fork).toBeEnabled();
+    await fork.click();
+    await expect(cards).toHaveCount(before + 1);
+  }
+
+  const profileList = page.getByRole("navigation", { name: "Primary" }).locator("#airship-profile-navigation");
+  await expect(profileList.locator(".recent-conversation")).toHaveCount(await cards.count());
+  const dimensions = await profileList.evaluate((element) => ({
+    clientHeight: element.clientHeight,
+    scrollHeight: element.scrollHeight,
+  }));
+  expect(dimensions.clientHeight).toBeLessThanOrEqual(310);
+  expect(dimensions.scrollHeight).toBeGreaterThan(dimensions.clientHeight);
+});
+
+test("Proof owns receipt, journal, and attestation evidence without a duplicate destination", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "desktop unified proof information architecture");
+  await page.goto("/#proof");
+  const navigation = page.getByRole("navigation", { name: "Primary" });
+  await expect(navigation.getByRole("button", { name: "Attestations", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("tab", { name: "Receipt & journal" })).toHaveAttribute("aria-selected", "true");
+  await page.getByRole("tab", { name: "Attestation evidence" }).click();
+  await expect(page).toHaveURL(/#proof\?section=attestations$/);
+  await expect(page.getByRole("heading", { name: "Endpoint & receipt evidence", level: 2 })).toBeVisible();
+  await page.getByRole("tab", { name: "Attestation evidence" }).press("ArrowLeft");
+  await expect(page.getByRole("tab", { name: "Receipt & journal" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("heading", { name: "Session journal integrity", level: 2 })).toBeVisible();
 });

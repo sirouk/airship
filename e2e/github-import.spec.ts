@@ -5,8 +5,9 @@ test("imports a real public GitHub snapshot into workspace and browser Git", asy
   test.setTimeout(120_000);
 
   const isolatedNamespace = `airship-live-v2/e2e/github-import-${Date.now()}`;
-  await page.goto(`/?airshipLabNamespace=${encodeURIComponent(isolatedNamespace)}#sources`);
+  await page.goto(`/?airshipLabNamespace=${encodeURIComponent(isolatedNamespace)}#editor`);
   await expect(page.getByText("Encrypted state synced", { exact: true }).first()).toBeVisible({ timeout: 20_000 });
+  await page.getByRole("tab", { name: "Sources", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Repositories & worktrees" })).toBeVisible();
   await page.getByRole("button", { name: /Import public GitHub snapshot/ }).click();
 
@@ -31,7 +32,8 @@ test("imports a real public GitHub snapshot into workspace and browser Git", asy
   await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Workspace" }).click();
   await page.getByRole("treeitem", { name: new RegExp(`${destinationName}$`) }).click();
   await expect(page.getByRole("treeitem", { name: /^README /u })).toBeVisible();
-  await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Sources" }).click();
+  await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Editor" }).click();
+  await page.getByRole("tab", { name: "Sources", exact: true }).click();
   await expect(page.locator(".git-repository-meta")).toContainText("octocat/Hello-World");
 
   const changes = page.getByRole("list", { name: "Changed paths" });
@@ -49,7 +51,8 @@ test("imports a real public GitHub snapshot into workspace and browser Git", asy
 
   await page.reload();
   await expect(page.getByText("Encrypted state synced", { exact: true }).first()).toBeVisible({ timeout: 20_000 });
-  await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Sources" }).click();
+  await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Editor" }).click();
+  await page.getByRole("tab", { name: "Sources", exact: true }).click();
   await expect(page.locator(".git-repository-meta")).toContainText("octocat/Hello-World");
   await expect(page.locator(".git-repository-meta > span")).toHaveText(committedHead);
   await expect(page.getByRole("list", { name: "Changed paths" })).toBeVisible();

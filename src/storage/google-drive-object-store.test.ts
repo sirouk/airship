@@ -39,6 +39,26 @@ describe("Google Drive encrypted ObjectStore", () => {
     await expect(store.putIfAbsent("must-not-commit", new Uint8Array([1]))).rejects.toMatchObject({ name: "GoogleDriveAmbiguousRootError" });
   });
 
+  it("fails closed when a duplicate matching workspace hierarchy folder exists", async () => {
+    const { drive, provider, key, workspace } = await driveFixture();
+    drive.duplicateFolderByRole("workspace", "root");
+    await expect(new GoogleDriveWorkspaceManager(provider, key, drive.fetch).connectOrCreate()).rejects.toMatchObject({
+      name: "GoogleDriveAmbiguousFolderError",
+    });
+
+    drive.removeDuplicateFolderByRole("workspace", "root");
+    drive.duplicateFolderByRole("root", workspace.workspaceFolderId);
+    await expect(new GoogleDriveWorkspaceManager(provider, key, drive.fetch).connectOrCreate()).rejects.toMatchObject({
+      name: "GoogleDriveAmbiguousFolderError",
+    });
+
+    drive.removeDuplicateFolderByRole("root", workspace.workspaceFolderId);
+    drive.duplicateFolderByRole("segments", workspace.rootFolderId);
+    await expect(new GoogleDriveWorkspaceManager(provider, key, drive.fetch).connectOrCreate()).rejects.toMatchObject({
+      name: "GoogleDriveAmbiguousFolderError",
+    });
+  });
+
   it("coalesces concurrent range-reader index downloads while writes force freshness", async () => {
     const { drive, provider, key, workspace, store } = await driveFixture();
     const bytes = new TextEncoder().encode("0123456789abcdefghijklmnopqrstuvwxyz");
@@ -122,6 +142,30 @@ class FakeDrive {
       parents: [...source.parents],
       appProperties: { ...source.appProperties },
     }, source.bytes.slice());
+  }
+
+  duplicateFolderByRole(role: string, parentId: string): void {
+    const source = [...this.files.values()].find((file) =>
+      file.mimeType === "application/vnd.google-apps.folder"
+      && file.appProperties.airshipRole === role
+      && file.parents.includes(parentId),
+    );
+    if (!source) throw new Error(`folder role is missing: ${role}`);
+    this.insert({
+      name: source.name,
+      mimeType: source.mimeType,
+      parents: [...source.parents],
+      appProperties: { ...source.appProperties },
+    }, new Uint8Array());
+  }
+
+  removeDuplicateFolderByRole(role: string, parentId: string): void {
+    const matches = [...this.files.values()].filter((file) =>
+      file.mimeType === "application/vnd.google-apps.folder"
+      && file.appProperties.airshipRole === role
+      && file.parents.includes(parentId),
+    ).sort((left, right) => left.id.localeCompare(right.id));
+    for (const duplicate of matches.slice(1)) this.files.delete(duplicate.id);
   }
 
   private list(url: URL): Response {

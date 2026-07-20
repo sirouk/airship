@@ -15,7 +15,7 @@ const allViews: readonly NavigationView[] = [
   "chat",
   "sessions",
   "workspace",
-  "sources",
+  "editor",
   "terminal",
   "memory",
   "context",
@@ -23,7 +23,6 @@ const allViews: readonly NavigationView[] = [
   "capabilities",
   "skills",
   "vault",
-  "attestations",
   "billing",
   "proof",
   "access",
@@ -37,11 +36,10 @@ describe("canonical navigation model", () => {
       "memory",
       "profiles",
       "proof",
-      "attestations",
       "vault",
       "access",
     ]);
-    expect(CANONICAL_DESTINATIONS).toHaveLength(8);
+    expect(CANONICAL_DESTINATIONS).toHaveLength(7);
 
     const chat = CANONICAL_DESTINATIONS.find((entry) => entry.id === "chat");
     const workspace = CANONICAL_DESTINATIONS.find((entry) => entry.id === "workspace");
@@ -51,7 +49,7 @@ describe("canonical navigation model", () => {
       expect.objectContaining({ id: "sessions", label: "All conversations", hash: "#sessions" }),
     ]);
     expect(workspace?.nested).toEqual([
-      expect.objectContaining({ id: "sources", label: "Sources", hash: "#sources" }),
+      expect.objectContaining({ id: "editor", label: "Editor", hash: "#editor" }),
       expect.objectContaining({ id: "terminal", label: "Terminal", hash: "#terminal" }),
     ]);
     expect(profiles?.nested).toEqual([]);
@@ -62,7 +60,7 @@ describe("canonical navigation model", () => {
     expect(canonicalParentForView("capabilities")).toBe("profiles");
     expect(canonicalParentForView("billing")).toBe("access");
     expect(canonicalParentForView("sessions")).toBe("chat");
-    expect(canonicalParentForView("sources")).toBe("workspace");
+    expect(canonicalParentForView("editor")).toBe("workspace");
     expect(canonicalParentForView("terminal")).toBe("workspace");
     expect(canonicalParentForView("context")).toBe("memory");
   });
@@ -76,6 +74,8 @@ describe("canonical navigation model", () => {
     }
     expect(navigationViewFromHash("#access")).toBe("access");
     expect(navigationViewFromHash("#billing")).toBe("billing");
+    expect(navigationViewFromHash("#sources")).toBe("editor");
+    expect(navigationViewFromHash("#attestations")).toBe("proof");
     expect(navigationViewFromHash("#unknown")).toBe("chat");
   });
 
@@ -95,7 +95,7 @@ describe("canonical navigation model", () => {
       chat: "chat",
       sessions: "more",
       workspace: "workspace",
-      sources: "more",
+      editor: "more",
       terminal: "more",
       memory: "more",
       context: "more",
@@ -103,7 +103,6 @@ describe("canonical navigation model", () => {
       capabilities: "more",
       skills: "more",
       vault: "more",
-      attestations: "more",
       billing: "more",
       proof: "trust",
       access: "more",
@@ -113,11 +112,10 @@ describe("canonical navigation model", () => {
   it("provides the complete More sheet order and a distinct Settings overlay", () => {
     expect(MOBILE_MORE_ENTRIES.map((entry) => entry.id)).toEqual([
       "sessions",
-      "sources",
+      "editor",
       "terminal",
       "memory",
       "profiles",
-      "attestations",
       "vault",
       "access",
       "billing",

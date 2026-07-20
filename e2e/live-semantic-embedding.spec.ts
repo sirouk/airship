@@ -71,7 +71,9 @@ test("production UI activates the same-origin semantic worker and rebuilds the i
   await page.goto(`${baseUrl}/#memory`);
   await page.getByRole("tab", { name: "Index" }).click();
   await page.getByRole("button", { name: "Local semantic" }).click();
-  await expect(page.getByRole("status").filter({ hasText: /semantic model ready/i })).toBeVisible({ timeout: 180_000 });
+  const semanticStatus = page.locator(".embedding-engine-state");
+  await expect(semanticStatus).toContainText(/semantic model ready|semantic unavailable/i, { timeout: 180_000 });
+  await expect(semanticStatus).toContainText(/semantic model ready/i);
   await expect(page.getByText(/airship-transformersjs:4\.0\.0:mixedbread-ai\/mxbai-embed-xsmall-v1/)).toBeVisible({ timeout: 60_000 });
   expect(offOriginRequests).toEqual([]);
 });

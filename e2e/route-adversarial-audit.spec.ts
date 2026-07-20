@@ -11,8 +11,8 @@ type Route = Readonly<{
 const routes: readonly Route[] = Object.freeze([
   { hash: "chat", label: "Chat", heading: /.+/, primaryMobile: true },
   { hash: "sessions", label: "All conversations", heading: /^Session library$/i },
-  { hash: "workspace", label: "Workspace", heading: /^Workspace$/i, primaryMobile: true },
-  { hash: "sources", label: "Sources", heading: /^Repositories & worktrees$/i },
+  { hash: "workspace", label: "Workspace", heading: /^Editor$/i, primaryMobile: true },
+  { hash: "editor", label: "Editor", heading: /^Editor$/i },
   { hash: "terminal", label: "Terminal", heading: /^Terminal$/i },
   { hash: "memory", label: "Memory", heading: /^Memory$/i },
   { hash: "context", label: "Context index", heading: /^Memory$/i, deepLinkOnly: true },
@@ -20,7 +20,6 @@ const routes: readonly Route[] = Object.freeze([
   { hash: "capabilities", label: "Capabilities", heading: /^Capabilities$/i, deepLinkOnly: true },
   { hash: "skills", label: "Skills", heading: /^Skills$/i, deepLinkOnly: true },
   { hash: "proof", label: "Proof", heading: /^Proof$/i, primaryMobile: true },
-  { hash: "attestations", label: "Attestations", heading: /^Attestations$/i },
   { hash: "vault", label: "Vault", heading: /^Vault$/i },
   { hash: "connection", label: "Connection", heading: /^Chutes access$/i },
   { hash: "account", label: "Account", heading: /^Account standing$/i },
@@ -86,7 +85,7 @@ test("every desktop and mobile route remains usable in the live local lab", asyn
       await expect(main.getByText("Encrypted runtime active", { exact: true })).toBeVisible();
       await expect(main).toContainText("Cross-device convergence remains outside the provider probe and is not certified.");
     }
-    if (["proof", "attestations", "vault", "connection", "account"].includes(route.hash)) {
+    if (["proof", "vault", "connection", "account"].includes(route.hash)) {
       const activeTrustTab = main.getByRole("navigation", { name: "Trust hub" }).locator("button[aria-current='page']");
       await expect(activeTrustTab).toBeInViewport();
     }
@@ -97,6 +96,12 @@ test("every desktop and mobile route remains usable in the live local lab", asyn
 
   expect(Math.max(...gutterOffsets) - Math.min(...gutterOffsets), "route headings share one outer gutter").toBeLessThanOrEqual(1);
   expect(runtimeErrors, runtimeErrors.join("\n")).toEqual([]);
+
+  await page.goto("/#attestations");
+  await expect(page).toHaveURL(/#proof\?section=attestations$/);
+  await expect(page.getByRole("heading", { name: "Proof", level: 1 })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Attestation evidence" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("heading", { name: "Endpoint & receipt evidence", level: 2 })).toBeVisible();
 
   await navigate(page, routes[0]!, mobile);
   await expect(page.getByText("Encrypted state synced", { exact: true }).first()).toBeVisible();

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { cp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
+import { build } from "esbuild";
 
 const root = resolve(".airship-lab/semantic-pack");
 const manifest = JSON.parse(await readFile(new URL("../src/indexing/semantic-artifact-manifest.json", import.meta.url), "utf8"));
@@ -16,11 +17,24 @@ for (const [path, expected] of Object.entries(manifest.assets)) {
     await writeFile(target, new Uint8Array(await response.arrayBuffer()));
   } else if (path === "runtime/transformers.web.js") {
     const source = await readFile(resolve("node_modules/@huggingface/transformers/dist/transformers.web.js"), "utf8");
-    const specifier = 'from "onnxruntime-web/webgpu"';
-    if (!source.includes(specifier)) throw new Error("The pinned Transformers.js ORT import contract changed.");
-    await writeFile(target, source.replace(specifier, 'from "./ort.webgpu.min.mjs"'));
-  } else if (path === "runtime/ort.webgpu.min.mjs") {
-    await cp(resolve("node_modules/onnxruntime-web/dist/ort.webgpu.min.mjs"), target);
+    const webgpuSpecifier = 'from "onnxruntime-web/webgpu"';
+    const commonSpecifier = 'from "onnxruntime-common"';
+    if (!source.includes(webgpuSpecifier) || !source.includes(commonSpecifier)) throw new Error("The pinned Transformers.js ORT import contract changed.");
+    await writeFile(target, source
+      .replace(webgpuSpecifier, 'from "./ort.webgpu.bundle.min.mjs"')
+      .replace(commonSpecifier, 'from "./onnxruntime-common.mjs"'));
+  } else if (path === "runtime/ort.webgpu.bundle.min.mjs") {
+    await cp(resolve("node_modules/onnxruntime-web/dist/ort.webgpu.bundle.min.mjs"), target);
+  } else if (path === "runtime/onnxruntime-common.mjs") {
+    await build({
+      entryPoints: [resolve("node_modules/onnxruntime-common/dist/esm/index.js")],
+      bundle: true,
+      format: "esm",
+      platform: "browser",
+      minify: true,
+      outfile: target,
+      logLevel: "silent",
+    });
   } else {
     await cp(resolve("node_modules/onnxruntime-web/dist", path.slice("runtime/".length)), target);
   }

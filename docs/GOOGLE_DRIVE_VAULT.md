@@ -118,6 +118,19 @@ these gates pass:
 No “synced,” “cross-device ready,” or production CAS badge is valid before the
 real-Google and two-context gates pass.
 
+### Deterministic browser acceptance
+
+`npm run test:e2e:google-drive` builds a production-preview client with a
+syntactically valid test OAuth client ID. Playwright drives the real setup UI,
+GIS wrapper, workspace manager, object store, coordinator probes, encrypted
+composition, and runtime adoption. Only the external GIS and Google HTTP
+boundaries are deterministic browser fakes. The test proves requested scopes,
+Bearer authorization, encrypted writes, ranges, CAS success/rejection, adopted
+UI state, and absence of token/client-secret/recovery persistence.
+
+Passing this test is **not** real-Google acceptance and does not satisfy release
+gates 1 or 2.
+
 ## Deployment checklist
 
 1. Create a Google OAuth **Web application** client.

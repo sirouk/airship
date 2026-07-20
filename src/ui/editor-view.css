@@ -1,0 +1,9 @@
+.editor-route { display: grid; gap: .72rem; width: 100%; min-width: 0; }
+.editor-route__tabs { display: flex; gap: .2rem; width: fit-content; max-width: 100%; padding: .2rem; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--surface-soft); }
+.editor-route__tabs button { min-height: 34px; padding: 0 .8rem; border: 0; border-radius: calc(var(--radius-control) - 2px); color: var(--ink-muted); background: transparent; cursor: pointer; }
+.editor-route__tabs button[aria-selected="true"] { color: var(--ink); background: color-mix(in srgb, var(--accent) 12%, var(--surface)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 24%, transparent); }
+.editor-route__loading { min-height: 12rem; padding: 1rem; border: 1px solid var(--line); border-radius: var(--radius-panel); color: var(--ink-muted); background: var(--surface); }
+@media (max-width: 760px) {
+  .editor-route__tabs { display: grid; grid-template-columns: 1fr 1fr; width: 100%; }
+  .editor-route__tabs button { min-height: 44px; }
+}

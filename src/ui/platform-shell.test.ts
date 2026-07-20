@@ -1,8 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { applyPreferenceOverrides, buildPaletteEntries, DEFAULT_PREFERENCES, filterPaletteEntries, loadPreferenceOverrides, loadRecentSessionPaletteSources, navigationJumpForChord, recentSessionPaletteSources, savePreferenceOverrides, worstTrustAxis } from "./platform-shell";
+import { applyPreferenceOverrides, buildPaletteEntries, DEFAULT_PREFERENCES, filterPaletteEntries, loadPreferenceOverrides, loadRecentSessionPaletteSources, navigationJumpForChord, recentSessionPaletteSources, resolveDefaultVaultBackend, savePreferenceOverrides, worstTrustAxis } from "./platform-shell";
 import { CANONICAL_DESTINATIONS } from "./navigation-model";
 
 describe("platform shell contracts", () => {
+  it("defaults ordinary builds to Drive while allowing an explicit local-lab provider", () => {
+    expect(resolveDefaultVaultBackend(undefined)).toBe("google-drive");
+    expect(resolveDefaultVaultBackend("google-drive")).toBe("google-drive");
+    expect(resolveDefaultVaultBackend("local-lab")).toBe("local-lab");
+    expect(resolveDefaultVaultBackend("unexpected")).toBe("google-drive");
+  });
+
   it("makes every canonical and nested destination plus preferences reachable", () => {
     const entries = buildPaletteEntries({ navigate() {}, openPreferences() {} });
     const expected = CANONICAL_DESTINATIONS.flatMap((item) => [item.id, ...item.nested.map((nested) => nested.id)]);
@@ -46,7 +53,7 @@ describe("platform shell contracts", () => {
   it("picks the weakest trust axis without changing its claim", () => {
     const axes = [
       { id: "local", label: "Local runtime", state: "verified", detail: "On device", view: "proof" },
-      { id: "attestation", label: "Endpoint not checked", state: "asserted", detail: "Encrypted only", view: "attestations" },
+      { id: "attestation", label: "Endpoint not checked", state: "asserted", detail: "Encrypted only", view: "proof" },
     ] as const;
     expect(worstTrustAxis(axes)).toBe(axes[1]);
   });

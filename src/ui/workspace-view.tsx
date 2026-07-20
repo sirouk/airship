@@ -34,6 +34,8 @@ export function WorkspaceView({
   review,
   onWorkspaceChanged,
   workspaceName = "Page workspace",
+  heading = "Workspace",
+  onOpenRepositoryManager,
   durability = { state: "ephemeral", detail: "Workspace files exist only in this page-memory adapter. Nothing is synced." },
 }: {
   files: readonly WorkspaceEntry[];
@@ -44,6 +46,8 @@ export function WorkspaceView({
   review?: Review;
   onWorkspaceChanged: () => void | Promise<void>;
   workspaceName?: string;
+  heading?: string;
+  onOpenRepositoryManager?: () => void;
   durability?: Readonly<{ state: DurabilityState; detail: string }>;
 }) {
   const tree = useMemo(() => buildWorkspaceTree(files), [files]);
@@ -405,7 +409,7 @@ export function WorkspaceView({
 
   return (
     <section class="work-view workspace-workbench">
-      <header class="page-heading workspace-heading"><div><span class="eyebrow">Device-executed · {workspaceName}</span><h1>Workspace</h1><p>A browser-native workbench: folders, version-fenced editing, and the same local Git state shown in Sources.</p></div><DurabilityIndicator state={durability.state} detail={durability.detail} /></header>
+      <header class="page-heading workspace-heading"><div><span class="eyebrow">Device-executed · {workspaceName}</span><h1>{heading}</h1><p>Files, version-fenced editing, and browser-native source control share one workspace.</p></div><DurabilityIndicator state={durability.state} detail={durability.detail} /></header>
       <div class="workbench-mobile-switch" role="tablist" aria-label="Workspace pane"><button role="tab" aria-selected={mobilePane === "navigation"} onClick={() => setMobilePane("navigation")}>Files</button><button role="tab" aria-selected={mobilePane === "editor"} onClick={() => setMobilePane("editor")} disabled={!tabs.length}>Editor {tabs.length ? `· ${tabs.length}` : ""}</button></div>
       {(error || notice) ? <div class={`workbench-notice ${error ? "error" : ""}`} role={error ? "alert" : "status"}>{error ?? notice}</div> : null}
       <div class="workbench-shell">
@@ -441,7 +445,7 @@ export function WorkspaceView({
                 </div>)}
               </div></div>
             </div>
-          </> : <SourceControlRail repositories={repositories} repositoryId={repositoryId} setRepositoryId={(id) => { setRepositoryId(id); setWorktree(repositories.find((item) => item.id === id)?.worktrees[0]); }} worktree={worktree} setWorktreeId={(id) => setWorktree(repositories.find((item) => item.id === repositoryId)?.worktrees.find((item) => item.id === id))} loading={scmLoading} refresh={() => void refreshSourceControl(repositoryId, worktree?.id)} openPath={(path) => { const repository = repositories.find((item) => item.id === repositoryId); const root = repository && worktree ? gitWorktreeWorkspaceRoot(repository, worktree) : "/workspace"; void openTab(normalizeWorkspacePath(`${root}/${path}`)); }} mutate={mutateSource} commitMessage={commitMessage} setCommitMessage={setCommitMessage} />}
+          </> : <SourceControlRail repositories={repositories} repositoryId={repositoryId} setRepositoryId={(id) => { setRepositoryId(id); setWorktree(repositories.find((item) => item.id === id)?.worktrees[0]); }} worktree={worktree} setWorktreeId={(id) => setWorktree(repositories.find((item) => item.id === repositoryId)?.worktrees.find((item) => item.id === id))} loading={scmLoading} refresh={() => void refreshSourceControl(repositoryId, worktree?.id)} openPath={(path) => { const repository = repositories.find((item) => item.id === repositoryId); const root = repository && worktree ? gitWorktreeWorkspaceRoot(repository, worktree) : "/workspace"; void openTab(normalizeWorkspacePath(`${root}/${path}`)); }} mutate={mutateSource} commitMessage={commitMessage} setCommitMessage={setCommitMessage} onOpenRepositoryManager={onOpenRepositoryManager} />}
         </aside>
         <main class={`workbench-editor ${mobilePane === "editor" ? "mobile-active" : ""}`} aria-label="File editor">
           <div class="editor-tabs" role="tablist" aria-label="Open files">{tabs.map((path) => <div class={path === activePath ? "active" : ""} key={path}><button role="tab" aria-selected={path === activePath} onClick={() => void openTab(path)}><Icon name="file" size={13} />{workspaceBaseName(path)}{buffers[path]?.draft !== buffers[path]?.content ? <b aria-label="Unsaved">●</b> : null}</button><button type="button" aria-label={`Close ${workspaceBaseName(path)}`} onClick={() => closeTab(path)}>×</button></div>)}</div>
@@ -459,7 +463,7 @@ export function WorkspaceView({
   );
 }
 
-function SourceControlRail({ repositories, repositoryId, setRepositoryId, worktree, setWorktreeId, loading, refresh, openPath, mutate, commitMessage, setCommitMessage }: { repositories: readonly GitRepositorySnapshot[]; repositoryId: string; setRepositoryId(id: string): void; worktree?: GitWorktreeSnapshot; setWorktreeId(id: string): void; loading: boolean; refresh(): void; openPath(path: string): void; mutate(operation: GitOperation): void | Promise<void>; commitMessage: string; setCommitMessage(value: string): void }) {
+function SourceControlRail({ repositories, repositoryId, setRepositoryId, worktree, setWorktreeId, loading, refresh, openPath, mutate, commitMessage, setCommitMessage, onOpenRepositoryManager }: { repositories: readonly GitRepositorySnapshot[]; repositoryId: string; setRepositoryId(id: string): void; worktree?: GitWorktreeSnapshot; setWorktreeId(id: string): void; loading: boolean; refresh(): void; openPath(path: string): void; mutate(operation: GitOperation): void | Promise<void>; commitMessage: string; setCommitMessage(value: string): void; onOpenRepositoryManager?: () => void }) {
   const repository = repositories.find((item) => item.id === repositoryId) ?? repositories[0];
   const staged = (worktree?.status.filter((entry) => entry.index) ?? []).slice(0, 250);
   const unstaged = (worktree?.status.filter((entry) => entry.worktree) ?? []).slice(0, 250);
@@ -468,14 +472,14 @@ function SourceControlRail({ repositories, repositoryId, setRepositoryId, worktr
   return <div class="workspace-scm">
     <label>Repository<MenuSelect placement="down" ariaLabel="Workspace repository" value={repository?.id ?? ""} options={repositories.map((item) => ({ value: item.id, label: item.name }))} onChange={setRepositoryId} /></label>
     {repository && repository.worktrees.length > 1 ? <label>Worktree<MenuSelect placement="down" ariaLabel="Workspace worktree" value={worktree?.id ?? ""} options={repository.worktrees.map((item) => ({ value: item.id, label: `${item.branch} · ${item.path}` }))} onChange={setWorktreeId} /></label> : null}
-    <div class="scm-toolbar"><button type="button" onClick={refresh} disabled={loading}>{loading ? "Refreshing…" : "Refresh"}</button><button type="button" onClick={() => { window.location.hash = "sources"; }}>Open full Sources</button></div>
+    <div class="scm-toolbar"><button type="button" onClick={refresh} disabled={loading}>{loading ? "Refreshing…" : "Refresh"}</button>{onOpenRepositoryManager ? <button type="button" onClick={onOpenRepositoryManager}>Repository manager</button> : null}</div>
     <div class="scm-summary"><strong>{worktree?.branch ?? "No worktree"}</strong><span>{worktree?.status.length ?? 0} changes</span></div>
     {!loading && !repository ? <div class="workspace-boundary">No Git repositories are connected to this workspace.</div> : null}
     {staged.length ? <ScmGroup title="Staged" entries={staged} lane="staged" repository={repository} worktree={worktree} openPath={openPath} mutate={mutate} /> : null}
     {staged.length > 1 ? <button type="button" onClick={() => { const next = operation("unstage", staged.map((entry) => entry.path)); if (next) void mutate(next); }}>Unstage all visible</button> : null}
     {unstaged.length ? <ScmGroup title="Changes" entries={unstaged} lane="unstaged" repository={repository} worktree={worktree} openPath={openPath} mutate={mutate} /> : null}
     {unstaged.length > 1 ? <button type="button" onClick={() => { const next = operation("stage", unstaged.map((entry) => entry.path)); if (next) void mutate(next); }}>Stage all visible</button> : null}
-    {truncated ? <div class="workspace-boundary attention">Showing the first 250 staged and unstaged paths. Open full Sources for the complete, virtualized worktree.</div> : null}
+    {truncated ? <div class="workspace-boundary attention">Showing the first 250 staged and unstaged paths. Open the repository manager for the complete, virtualized worktree.</div> : null}
     {worktree?.status.some((entry) => entry.index) ? <div class="scm-commit"><textarea aria-label="Commit message" value={commitMessage} onInput={(event) => setCommitMessage(event.currentTarget.value)} placeholder="Commit message" /><button class="primary" type="button" disabled={!commitMessage.trim()} onClick={() => repository && mutate({ kind: "commit", request: { repositoryId: repository.id, worktreeId: worktree.id, message: commitMessage, author: DEFAULT_AUTHOR, expectedWorktreeVersion: worktree.version } })}>Commit staged</button></div> : null}
   </div>;
 }

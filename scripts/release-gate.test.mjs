@@ -10,6 +10,8 @@ import {
   isOptionalNodeExecutionPackPath,
   isOptionalModelCatalogPath,
   isOptionalWorkspaceWorkbenchPath,
+  isOptionalSourceControlPath,
+  isOptionalSessionLibraryPath,
   isOptionalTerminalPath,
   isOptionalSemanticWorkerPath,
   isDeferredCapabilityPackPath,
@@ -72,8 +74,12 @@ describe("release gate", () => {
     expect(isOptionalExecutionPackPath("assets/execution-tools-Ab_12-CD.js")).toBe(false);
     expect(isOptionalNodeExecutionPackPath("assets/node-webcontainer-pack-Ab_12-CD.js")).toBe(true);
     expect(isOptionalNodeExecutionPackPath("assets/execution-runtime-pack-Ab_12-CD.js")).toBe(false);
-    expect(isOptionalWorkspaceWorkbenchPath("assets/workspace-view-Ab_12-CD.js")).toBe(true);
+    expect(isOptionalWorkspaceWorkbenchPath("assets/editor-view-Ab_12-CD.js")).toBe(true);
     expect(isOptionalWorkspaceWorkbenchPath("assets/workspace-tree-Ab_12-CD.js")).toBe(false);
+    expect(isOptionalSourceControlPath("assets/sources-view-Ab_12-CD.js")).toBe(true);
+    expect(isOptionalSourceControlPath("assets/source-tree-Ab_12-CD.js")).toBe(false);
+    expect(isOptionalSessionLibraryPath("assets/sessions-route-Ab_12-CD.js")).toBe(true);
+    expect(isOptionalSessionLibraryPath("assets/session-view-Ab_12-CD.js")).toBe(false);
     expect(isOptionalTerminalPath("assets/terminal-view-Ab_12-CD.js")).toBe(true);
     expect(isOptionalTerminalPath("assets/terminal-runtime-Ab_12-CD.js")).toBe(false);
     expect(isOptionalSemanticWorkerPath("assets/semantic.worker-Ab_12-CD.js")).toBe(true);
@@ -96,7 +102,13 @@ describe("release gate", () => {
       '<link rel="modulepreload" href="/assets/node-webcontainer-pack-Ab12.js">',
     )).toThrow(/must not preload/iu);
     expect(() => assertOptionalPacksAreNotPreloaded(
-      '<link rel="modulepreload" href="/assets/workspace-view-Ab12.js">',
+      '<link rel="modulepreload" href="/assets/editor-view-Ab12.js">',
+    )).toThrow(/must not preload/iu);
+    expect(() => assertOptionalPacksAreNotPreloaded(
+      '<link rel="modulepreload" href="/assets/sources-view-Ab12.js">',
+    )).toThrow(/must not preload/iu);
+    expect(() => assertOptionalPacksAreNotPreloaded(
+      '<link rel="modulepreload" href="/assets/sessions-route-Ab12.js">',
     )).toThrow(/must not preload/iu);
     expect(() => assertOptionalPacksAreNotPreloaded(
       '<link rel="modulepreload" href="/assets/terminal-view-Ab12.js">',

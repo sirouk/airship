@@ -15,13 +15,19 @@ export const RELEASE_BUDGETS = Object.freeze({
   // entry remains below its stricter 110 KiB limit. Heavy QVL stays deferred.
   allJavaScriptAndWorkers: Object.freeze({ raw: 640 * 1024, gzip: 132 * 1024 }),
   deferredCapabilities: Object.freeze({ raw: 384 * 1024, gzip: 110 * 1024 }),
-  totalJavaScriptAndWorkers: Object.freeze({ raw: 1664 * 1024, gzip: 364 * 1024 }),
+  // Full-route ceiling, not startup cost: includes the independently loaded
+  // Editor, Git, Sessions, Terminal and attestation surfaces.
+  totalJavaScriptAndWorkers: Object.freeze({ raw: 1664 * 1024, gzip: 384 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. Keep it visible under a dedicated, deliberately small cap.
   serviceWorker: Object.freeze({ raw: 12 * 1024, gzip: 4 * 1024 }),
   optionalExecutionPack: Object.freeze({ raw: 32 * 1024, gzip: 10 * 1024 }),
   optionalNodeExecutionPack: Object.freeze({ raw: 32 * 1024, gzip: 8 * 1024 }),
-  optionalWorkspaceWorkbench: Object.freeze({ raw: 24 * 1024, gzip: 8 * 1024 }),
+  // Files/editor shell plus its in-page source-control handoff. Git remains a
+  // second lazy pack; this cap covers only the combined Editor route chrome.
+  optionalWorkspaceWorkbench: Object.freeze({ raw: 28 * 1024, gzip: 10 * 1024 }),
+  optionalSourceControl: Object.freeze({ raw: 48 * 1024, gzip: 14 * 1024 }),
+  optionalSessionLibrary: Object.freeze({ raw: 48 * 1024, gzip: 14 * 1024 }),
   // Official xterm.js is isolated behind the Terminal route and is never part
   // of initial navigation or a background capability probe.
   optionalTerminal: Object.freeze({ raw: 384 * 1024, gzip: 100 * 1024 }),
@@ -180,6 +186,16 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
     throw new Error(`Production must contain exactly one optional Workspace workbench pack; found ${optionalWorkspaceWorkbenchPacks.length}.`);
   }
   const optionalWorkspaceWorkbenchMeasurement = measure(optionalWorkspaceWorkbenchPacks[0].payload);
+  const optionalSourceControlPacks = javaScriptFiles.filter((file) => isOptionalSourceControlPath(file.path));
+  if (optionalSourceControlPacks.length !== 1) {
+    throw new Error(`Production must contain exactly one optional source-control pack; found ${optionalSourceControlPacks.length}.`);
+  }
+  const optionalSourceControlMeasurement = measure(optionalSourceControlPacks[0].payload);
+  const optionalSessionLibraryPacks = javaScriptFiles.filter((file) => isOptionalSessionLibraryPath(file.path));
+  if (optionalSessionLibraryPacks.length !== 1) {
+    throw new Error(`Production must contain exactly one optional session-library pack; found ${optionalSessionLibraryPacks.length}.`);
+  }
+  const optionalSessionLibraryMeasurement = measure(optionalSessionLibraryPacks[0].payload);
   const optionalTerminalPacks = javaScriptFiles.filter((file) => isOptionalTerminalPath(file.path));
   if (optionalTerminalPacks.length !== 1) {
     throw new Error(`Production must contain exactly one optional Terminal pack; found ${optionalTerminalPacks.length}.`);
@@ -215,6 +231,8 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
     (file) => !isOptionalExecutionPackPath(file.path)
       && !isOptionalNodeExecutionPackPath(file.path)
       && !isOptionalWorkspaceWorkbenchPath(file.path)
+      && !isOptionalSourceControlPath(file.path)
+      && !isOptionalSessionLibraryPath(file.path)
       && !isOptionalTerminalPath(file.path)
       && !isOptionalSemanticWorkerPath(file.path)
       && !isOptionalModelCatalogPath(file.path)
@@ -249,6 +267,8 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
     optionalWorkspaceWorkbenchMeasurement,
     RELEASE_BUDGETS.optionalWorkspaceWorkbench,
   );
+  assertWithinBudget("Optional source control", optionalSourceControlMeasurement, RELEASE_BUDGETS.optionalSourceControl);
+  assertWithinBudget("Optional session library", optionalSessionLibraryMeasurement, RELEASE_BUDGETS.optionalSessionLibrary);
   assertWithinBudget("Optional Terminal", optionalTerminalMeasurement, RELEASE_BUDGETS.optionalTerminal);
   assertWithinBudget("Optional semantic worker", optionalSemanticWorkerMeasurement, RELEASE_BUDGETS.optionalSemanticWorker);
   assertWithinBudget(
@@ -312,6 +332,14 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
         path: optionalWorkspaceWorkbenchPacks[0].path,
         ...optionalWorkspaceWorkbenchMeasurement,
       }),
+      optionalSourceControl: Object.freeze({
+        path: optionalSourceControlPacks[0].path,
+        ...optionalSourceControlMeasurement,
+      }),
+      optionalSessionLibrary: Object.freeze({
+        path: optionalSessionLibraryPacks[0].path,
+        ...optionalSessionLibraryMeasurement,
+      }),
       optionalTerminal: Object.freeze({ path: optionalTerminalPacks[0].path, ...optionalTerminalMeasurement }),
       optionalSemanticWorker: Object.freeze({ path: optionalSemanticWorkerPacks[0].path, ...optionalSemanticWorkerMeasurement }),
       optionalModelCatalog: Object.freeze({
@@ -357,7 +385,15 @@ export function isOptionalNodeExecutionPackPath(path) {
 }
 
 export function isOptionalWorkspaceWorkbenchPath(path) {
-  return /^assets\/workspace-view-[A-Za-z0-9_-]+\.js$/u.test(path);
+  return /^assets\/editor-view-[A-Za-z0-9_-]+\.js$/u.test(path);
+}
+
+export function isOptionalSourceControlPath(path) {
+  return /^assets\/sources-view-[A-Za-z0-9_-]+\.js$/u.test(path);
+}
+
+export function isOptionalSessionLibraryPath(path) {
+  return /^assets\/sessions-route-[A-Za-z0-9_-]+\.js$/u.test(path);
 }
 
 export function isOptionalTerminalPath(path) {
@@ -381,7 +417,7 @@ export function isOptionalPythonPackPath(path) {
 }
 
 export function assertOptionalPacksAreNotPreloaded(index) {
-  if (/<link\b[^>]*\brel="modulepreload"[^>]*\bhref="\/assets\/(?:deferred-capabilities|execution-runtime-pack|node-webcontainer-pack|workspace-view|terminal-view|semantic\.worker|client-runtime|telemetry)-/u.test(index)) {
+  if (/<link\b[^>]*\brel="modulepreload"[^>]*\bhref="\/assets\/(?:deferred-capabilities|execution-runtime-pack|node-webcontainer-pack|editor-view|sources-view|sessions-route|terminal-view|semantic\.worker|client-runtime|telemetry)-/u.test(index)) {
     throw new Error("Production HTML must not preload deferred capability or optional execution packs.");
   }
 }
@@ -607,6 +643,12 @@ function printResult(result) {
   );
   console.log(
     `Optional Workspace workbench ${formatBytes(measurements.optionalWorkspaceWorkbench.raw)} raw / ${formatBytes(measurements.optionalWorkspaceWorkbench.gzip)} gzip`,
+  );
+  console.log(
+    `Optional source control ${formatBytes(measurements.optionalSourceControl.raw)} raw / ${formatBytes(measurements.optionalSourceControl.gzip)} gzip`,
+  );
+  console.log(
+    `Optional session library ${formatBytes(measurements.optionalSessionLibrary.raw)} raw / ${formatBytes(measurements.optionalSessionLibrary.gzip)} gzip`,
   );
   console.log(
     `Optional Python pack ${formatBytes(measurements.optionalPythonPack.raw)} raw / ${formatBytes(measurements.optionalPythonPack.gzip)} gzip`,

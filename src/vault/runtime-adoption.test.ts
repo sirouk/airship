@@ -70,6 +70,38 @@ describe("vault runtime adoption", () => {
     await expect(migrateJournalState(source, target)).rejects.toThrow("conflicting session");
   });
 
+  it("migrates a newly created session whose journal head is still genesis", async () => {
+    const sourceBackend = new MemoryJournalBackend();
+    const source = new EventJournal(sourceBackend);
+    const target = new MemoryJournalBackend();
+    const manifest = await createSessionManifest({
+      systemPrompt: "stable prompt",
+      providerId: "test-provider",
+      model: "test-model",
+      tools: [],
+      workspaceId: "memory://test",
+      now: "2026-07-19T00:00:00.000Z",
+    });
+    const session = {
+      id: "empty-migration-session",
+      title: "Empty migration",
+      manifest,
+      createdAt: "2026-07-19T00:00:00.000Z",
+      updatedAt: "2026-07-19T00:00:00.000Z",
+      headSequence: 0,
+      headDigest: "genesis",
+    };
+    await sourceBackend.createSession(session);
+
+    await expect(migrateJournalState(source, target)).resolves.toBeUndefined();
+    await expect(target.getSession(session.id)).resolves.toMatchObject({
+      id: session.id,
+      headSequence: 0,
+      headDigest: "genesis",
+    });
+    await expect(target.readEvents(session.id)).resolves.toEqual([]);
+  });
+
   it("refuses a session append racing migration before creating a vault session", async () => {
     const source = new EventJournal(new MemoryJournalBackend());
     const target = new MemoryJournalBackend();

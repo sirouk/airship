@@ -48,6 +48,22 @@
 .vault-view__phase--degraded { color: var(--v-caution); }
 .vault-view__phase--probing { color: var(--v-info); }
 
+.vault-provider-selector {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(15rem, 22rem);
+  align-items: center;
+  gap: .75rem 1rem;
+  padding: .65rem .75rem;
+  border: 1px solid var(--line, #343631);
+  border-radius: var(--radius-control);
+  background: var(--surface-soft);
+}
+.vault-provider-selector > div:first-child { display: grid; gap: 2px; }
+.vault-provider-selector strong { font-size: var(--fs-meta); }
+.vault-provider-selector span { color: var(--ink-muted); font-size: var(--fs-micro); }
+.vault-provider-selector > span { grid-column: 1 / -1; color: var(--v-info); }
+.vault-provider-selector__menu { min-width: 0; }
+
 .vault-view__truth,
 .vault-view__empty,
 .vault-view__evidence,
@@ -172,6 +188,8 @@
   .vault-view__readiness { grid-template-columns: 1fr; }
   .vault-view__actions { display: grid; grid-template-columns: 1fr; }
   .vault-view button { width: 100%; }
+  .vault-provider-selector { grid-template-columns: 1fr; }
+  .vault-provider-selector .menu-select-trigger { width: 100%; }
 }
 
 @media (forced-colors: active) {

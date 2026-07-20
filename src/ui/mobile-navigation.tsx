@@ -34,7 +34,7 @@ const routeIcons: Readonly<Record<NavigationView, IconName>> = Object.freeze({
   chat: "chat",
   sessions: "sessions",
   workspace: "workspace",
-  sources: "source",
+  editor: "source",
   terminal: "terminal",
   memory: "memory",
   context: "context",
@@ -42,7 +42,6 @@ const routeIcons: Readonly<Record<NavigationView, IconName>> = Object.freeze({
   capabilities: "terminal",
   skills: "skills",
   vault: "cloud",
-  attestations: "attestation",
   billing: "billing",
   proof: "proof",
   access: "access",
@@ -223,7 +222,7 @@ export function MobileNavigation({
                 }
 
                 const current = entry.view === view;
-                const notice = entry.view === "attestations" ? attestationNoticeCount : 0;
+                const notice = entry.view === "proof" ? attestationNoticeCount : 0;
                 return (
                   <button
                     key={entry.id}

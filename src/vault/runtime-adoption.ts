@@ -36,12 +36,15 @@ export async function migrateJournalState(source: EventJournal, target: JournalB
   for (const session of sessions) {
     const events = await source.readEvents(session.id);
     const fresh = await source.getSession(session.id);
+    const eventHeadMatches = session.headSequence === 0
+      ? events.length === 0 && session.headDigest === "genesis"
+      : events.at(-1)?.sequence === session.headSequence
+        && events.at(-1)?.digest === session.headDigest;
     if (
       !fresh ||
       fresh.headSequence !== session.headSequence ||
       fresh.headDigest !== session.headDigest ||
-      events.at(-1)?.sequence !== session.headSequence ||
-      events.at(-1)?.digest !== session.headDigest
+      !eventHeadMatches
     ) {
       throw new Error(`Session ${session.id} changed during vault migration; retry after the turn settles.`);
     }

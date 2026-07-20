@@ -21,22 +21,25 @@ fallback that can mislabel hash vectors as semantic vectors.
 workspace-text embedding. The application entry bundle contains only the
 small worker facade; Vite emits Transformers.js and the worker as optional
 chunks requested on first semantic indexing. The worker protocol supports
-progress, cancellation, bounded batches, finite-vector and dimension checks,
-and disposal.
+progress, cooperative cancellation, bounded batches, finite-vector and
+dimension checks, and disposal. Cancellation aborts downloads and suppresses
+stale results immediately; an ONNX inference already executing may finish its
+current native/WASM call before the worker can reclaim that compute.
 
 ## Artifact and network posture
 
 The model and ONNX runtime are served below the application origin at
-`/semantic-pack/`. `env.allowRemoteModels` is false,
+`/semantic-pack/v1/`. `env.allowRemoteModels` is false,
 `env.allowLocalModels` is true, and the pipeline uses `local_files_only`.
 Before model construction, the worker fetches every backend-specific asset and
 refuses byte-length or SHA-256 drift against
-`semantic-artifact-manifest.json`. The revision, dtype, dimensions, pooling,
-and normalization are also pinned in source.
+`semantic-artifact-manifest.json`. The URL is immutable and versioned; a future
+artifact set must use a new pack version. The revision, dtype, dimensions,
+pooling, and normalization are also pinned in source.
 
 Run `npm run semantic:prepare` to materialize the reviewed public artifacts in
-`.airship-lab/semantic-pack`. The Vite development plugin exposes only that
-directory on the same origin. Production hosting must publish the same
+`.airship-lab/semantic-pack`. The Vite development and production-preview
+plugin exposes only that directory on the same origin. Production hosting must publish the same
 verified directory at the same URL; the model pack is intentionally not
 folded into the startup bundle.
 

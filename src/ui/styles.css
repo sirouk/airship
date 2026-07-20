@@ -581,6 +581,14 @@ button.primary:hover:not(:disabled) {
 }
 .chat-nav-new:hover:not(:disabled) { color: var(--accent-bright); border-color: var(--line); background: rgba(255, 255, 255, 0.026); }
 .profile-nav-primary { grid-template-columns: minmax(0, 1fr) 30px; }
+.recent-conversations.profile-navigation {
+  /* Ten full profile rows remain immediately available; larger catalogs stay
+     inside this rail instead of pushing Trust navigation off-screen. */
+  max-height: min(310px, 38vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
 .profile-navigation .recent-conversation { grid-template-columns: 23px minmax(0, 1fr); min-height: 31px; }
 .profile-navigation .profile-monogram { display: grid; place-items: center; width: 21px; height: 21px; border: 1px solid var(--line); border-radius: 50%; color: var(--accent-bright); font-size: 11px; }
 
@@ -2401,6 +2409,41 @@ button.runtime-posture {
   margin: 7px 0 0;
   font-size: var(--fs-micro);
   line-height: 1.55;
+}
+
+.proof-surface-tabs {
+  display: flex;
+  gap: 3px;
+  width: fit-content;
+  max-width: 100%;
+  margin: 0 0 14px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  background: var(--surface-soft);
+}
+
+.proof-surface-tabs button {
+  min-height: 36px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: calc(var(--radius-control) - 2px);
+  color: var(--ink-muted);
+  background: transparent;
+  cursor: pointer;
+}
+
+.proof-surface-tabs button[aria-selected="true"] {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 24%, transparent);
+}
+
+.proof-surface-panel { min-width: 0; }
+
+@media (max-width: 760px) {
+  .proof-surface-tabs { display: grid; grid-template-columns: 1fr 1fr; width: 100%; }
+  .proof-surface-tabs button { min-height: 44px; }
 }
 
 .proof-overview {

@@ -2,12 +2,12 @@ import type { Plugin } from "vite";
 import { createReadStream, existsSync, statSync } from "node:fs";
 import { resolve, sep } from "node:path";
 
-const PREFIX = "/semantic-pack/";
+const PREFIX = "/semantic-pack/v1/";
 
 /** Serves only the explicitly prepared, public semantic pack on the app origin. */
 export function airshipSemanticPackAssets(): Plugin {
   const root = resolve(process.cwd(), ".airship-lab/semantic-pack");
-  const install = (middlewares: { use(handler: (request: import("node:http").IncomingMessage, response: import("node:http").ServerResponse, next: () => void): void): void }) => {
+  const install = (middlewares: { use(handler: (request: import("node:http").IncomingMessage, response: import("node:http").ServerResponse, next: () => void) => void): void }) => {
     middlewares.use((request, response, next) => {
       const pathname = new URL(request.url ?? "/", "http://airship.local").pathname;
       if (!pathname.startsWith(PREFIX)) { next(); return; }

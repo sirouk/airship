@@ -124,6 +124,7 @@ import {
   useVisualViewport,
   worstTrustAxis,
   type PreferenceOverrides,
+  type VaultBackend,
   type TrustAxis,
 } from "./platform-shell";
 import {
@@ -131,14 +132,16 @@ import {
   proofSelectionForReceipt,
   proofSelectionForSession,
   proofSelectionFromHash,
+  proofSectionFromHash,
   resolveProofReceipt,
+  type ProofSection,
   type ProofSelection,
 } from "./proof-route";
-import { SessionsView } from "./sessions-view";
 import { postureSeal, SEAL_LABELS, Seal, sealStateForProofStatus, type SealState } from "./seal";
 import { enabledSlashSelection, firstEnabledSlashIndex, moveSlashSelection } from "./slash-menu-state";
 import type { SourcesImportRequest } from "./sources-view";
 import { VaultView } from "./vault-view";
+import { transitionVaultProvider } from "./vault-provider-transition";
 import {
   ASSISTANT_MESSAGE_ESTIMATE,
   USER_MESSAGE_ESTIMATE,
@@ -206,12 +209,12 @@ type Runtime = {
 
 type OAuthCallbackStatus = { kind: "verified" | "blocked" | "error"; message: string };
 type AttestationsScreenComponent = typeof import("./attestations-view").AttestationsView;
-type SourcesScreenComponent = typeof import("./sources-view").SourcesView;
-type WorkspaceScreenComponent = typeof import("./workspace-view").WorkspaceView;
+type EditorScreenComponent = typeof import("./editor-view").EditorView;
 type TerminalScreenComponent = typeof import("./terminal-view").TerminalView;
 type CapabilitiesScreenComponent = typeof import("./capabilities-view").CapabilitiesView;
 type GoogleDriveSetupComponent = typeof import("./google-drive-setup").GoogleDriveSetup;
 type LocalLabSetupComponent = typeof import("./local-lab-setup").LocalLabSetup;
+type SessionsScreenComponent = typeof import("./sessions-route").SessionsView;
 const WORKSPACE_EDITOR_BYTE_LIMIT = 128 * 1024;
 class MountedAttestationError extends Error {
   readonly name = "AttestationEvidenceClientError";
@@ -365,11 +368,14 @@ export function App() {
   const [sessionLibrary, setSessionLibrary] = useState<SessionLibrary>();
   const [sessionRevision, setSessionRevision] = useState(0);
   const [chatNavExpanded, setChatNavExpanded] = useState(true);
-  const [profileNavExpanded, setProfileNavExpanded] = useState(false);
+  const [profileNavExpanded, setProfileNavExpanded] = useState(true);
   const [recentPaletteSessions, setRecentPaletteSessions] = useState<readonly Readonly<{ id: string; title: string; open(): void }>[]>([]);
   const [recentProfileConversations, setRecentProfileConversations] = useState<readonly Readonly<{ id: string; title: string; open(): void }>[]>([]);
   const [proofSelection, setProofSelection] = useState<ProofSelection | undefined>(() =>
     typeof window === "undefined" ? undefined : proofSelectionFromHash(window.location.hash)
+  );
+  const [proofSection, setProofSection] = useState<ProofSection>(() =>
+    typeof window === "undefined" ? "summary" : proofSectionFromHash(window.location.hash)
   );
   const [gitClient, setGitClient] = useState<BrowserGitClient>();
   const [messages, setMessages] = useState<UiMessage[]>([welcomeMessage]);
@@ -408,16 +414,15 @@ export function App() {
   const [selectedAttestationRecordId, setSelectedAttestationRecordId] = useState<string>();
   const [AttestationsScreen, setAttestationsScreen] = useState<AttestationsScreenComponent>();
   const [attestationsViewError, setAttestationsViewError] = useState<string>();
-  const [SourcesScreen, setSourcesScreen] = useState<SourcesScreenComponent>();
-  const [sourcesViewError, setSourcesViewError] = useState<string>();
-  const [WorkspaceScreen, setWorkspaceScreen] = useState<WorkspaceScreenComponent>();
-  const [workspaceViewError, setWorkspaceViewError] = useState<string>();
+  const [EditorScreen, setEditorScreen] = useState<EditorScreenComponent>();
+  const [editorViewError, setEditorViewError] = useState<string>();
   const [TerminalScreen, setTerminalScreen] = useState<TerminalScreenComponent>();
   const [terminalViewError, setTerminalViewError] = useState<string>();
   const [CapabilitiesScreen, setCapabilitiesScreen] = useState<CapabilitiesScreenComponent>();
   const [capabilitiesViewError, setCapabilitiesViewError] = useState<string>();
   const [GoogleDriveSetupScreen, setGoogleDriveSetupScreen] = useState<GoogleDriveSetupComponent>();
   const [LocalLabSetupScreen, setLocalLabSetupScreen] = useState<LocalLabSetupComponent>();
+  const [SessionsScreen, setSessionsScreen] = useState<SessionsScreenComponent>();
   const runtime = useRef<Runtime>();
   const workspaceOpenRequest = useRef(0);
   const approvalBroker = useMemo(() => new ApprovalBroker(), []);
@@ -444,6 +449,8 @@ export function App() {
   const vault = useMemo(() => new VaultCoordinator(), []);
   const [vaultSnapshot, setVaultSnapshot] = useState<VaultSnapshot>(() => vault.snapshot);
   const [vaultSetupOpen, setVaultSetupOpen] = useState(false);
+  const [vaultProviderSwitching, setVaultProviderSwitching] = useState(false);
+  const vaultProviderSwitchingRef = useRef(false);
   const oauthTokens = useRef<ChutesOAuthTokenSet>();
   const pendingOAuthCredential = useRef<string>();
   const accountCredential = useRef<string>();
@@ -643,7 +650,7 @@ export function App() {
     { id: "local", label: online ? "Local runtime" : OFFLINE_RUNTIME_LABEL, state: online ? "none" : "attention", detail: online ? "The agent kernel executes in this browser." : OFFLINE_RUNTIME_DETAIL, view: "proof" },
     { id: "vault", label: vaultRuntimeAdopted ? "Vault active" : vaultSnapshot.phase === "ready" ? "Vault verified" : vaultSnapshot.phase === "probing" ? "Vault testing" : vaultSnapshot.phase === "configured" ? "Vault configured" : vaultSnapshot.phase === "degraded" ? "Vault blocked" : "Ephemeral", state: vaultSnapshot.phase === "ready" ? "verified" : vaultSnapshot.phase === "probing" ? "checking" : vaultSnapshot.phase === "configured" ? "asserted" : vaultSnapshot.phase === "degraded" ? "failed" : "none", detail: vaultRuntimeAdopted ? "This page uses verified client-encrypted cloud workspace and journal adapters; cross-device convergence is not certified." : vaultSnapshot.phase === "ready" ? "Storage contract passed; the active runtime has not adopted it." : vaultSnapshot.message, view: "vault" },
     { id: "e2ee", label: chutesConnected ? (connection.invokeAuthorization === "verified" ? "E2EE used" : "E2EE ready") : "Inference local", state: chutesConnected ? (connection.invokeAuthorization === "verified" ? "verified" : "asserted") : "none", detail: chutesConnected ? (connection.invokeAuthorization === "verified" ? "Protected invocation succeeded." : "Provider permission has not been tested yet.") : "No Chutes credential configured.", view: "access" },
-    { id: "attestation", label: attestationSeal.label, state: attestationSeal.state, detail: attestationSeal.detail, view: "attestations" },
+    { id: "attestation", label: attestationSeal.label, state: attestationSeal.state, detail: attestationSeal.detail, view: "proof" },
   ]);
   const mobilePostureSeal = worstTrustAxis(trustAxes) ?? trustAxes[0]!;
   const attestationReceipts = useMemo(() => sessionAttestationReceipts({
@@ -772,7 +779,7 @@ export function App() {
   }, [sessionId]);
 
   useEffect(() => {
-    if (view !== "attestations" || AttestationsScreen) return;
+    if (view !== "proof" || proofSection !== "attestations" || AttestationsScreen) return;
     let current = true;
     setAttestationsViewError(undefined);
     void loadDeferredCapabilities()
@@ -783,7 +790,18 @@ export function App() {
         if (current) setAttestationsViewError("The attestation interface chunk could not be loaded. No trust claim changed.");
       });
     return () => { current = false; };
-  }, [view, AttestationsScreen]);
+  }, [view, proofSection, AttestationsScreen]);
+
+  useEffect(() => {
+    if (view !== "sessions" || SessionsScreen) return;
+    let current = true;
+    void import("./sessions-route").then((module) => {
+      if (current) setSessionsScreen(() => module.SessionsView);
+    }).catch(() => {
+      if (current) setRuntimeStatus("Session library interface could not be loaded");
+    });
+    return () => { current = false; };
+  }, [view, SessionsScreen]);
 
   useEffect(() => {
     if (view !== "vault" || (GoogleDriveSetupScreen && LocalLabSetupScreen)) return;
@@ -800,30 +818,16 @@ export function App() {
   }, [view, GoogleDriveSetupScreen, LocalLabSetupScreen]);
 
   useEffect(() => {
-    if (view !== "sources" || SourcesScreen) return;
+    if ((view !== "workspace" && view !== "editor") || EditorScreen) return;
     let current = true;
-    setSourcesViewError(undefined);
-    void loadDeferredCapabilities()
-      .then((module) => {
-        if (current) setSourcesScreen(() => module.SourcesView);
-      })
-      .catch(() => {
-        if (current) setSourcesViewError("The browser source-control chunk could not be loaded. No workspace or Git state changed.");
-      });
-    return () => { current = false; };
-  }, [view, SourcesScreen]);
-
-  useEffect(() => {
-    if (view !== "workspace" || WorkspaceScreen) return;
-    let current = true;
-    setWorkspaceViewError(undefined);
-    void import("./workspace-view").then((module) => {
-      if (current) setWorkspaceScreen(() => module.WorkspaceView);
+    setEditorViewError(undefined);
+    void import("./editor-view").then((module) => {
+      if (current) setEditorScreen(() => module.EditorView);
     }).catch(() => {
-      if (current) setWorkspaceViewError("The Workspace workbench chunk could not be loaded. No file or Git state changed.");
+      if (current) setEditorViewError("The Workspace Editor chunk could not be loaded. No file or Git state changed.");
     });
     return () => { current = false; };
-  }, [view, WorkspaceScreen]);
+  }, [view, EditorScreen]);
 
   useEffect(() => {
     if (view !== "terminal" || TerminalScreen) return;
@@ -849,11 +853,11 @@ export function App() {
     return () => { current = false; };
   }, [view, CapabilitiesScreen]);
 
-  // When the Attestations page opens on a live connection with no evidence yet,
+  // When the Proof evidence section opens on a live connection with no evidence yet,
   // probe + verify a currently-live endpoint so the ledger shows real state
   // (verified/failed) instead of an empty "no records" panel.
   useEffect(() => {
-    if (view !== "attestations" || !chutesConnected || !attestationClient.current) return;
+    if (view !== "proof" || proofSection !== "attestations" || !chutesConnected || !attestationClient.current) return;
     if (attestationRecords.length > 0) return;
     const controller = new AbortController();
     void probeCurrentEndpoint(controller.signal).catch(() => {
@@ -861,12 +865,15 @@ export function App() {
     });
     return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, chutesConnected, credentialRevision]);
+  }, [view, proofSection, chutesConnected, credentialRevision]);
 
   function navigate(next: View, targetHash: string = navigationHashForView(next)) {
     setMobileMoreOpen(false);
     setView(next);
-    if (next !== "proof") setProofSelection(undefined);
+    if (next !== "proof") {
+      setProofSelection(undefined);
+      setProofSection("summary");
+    }
     if (window.location.hash !== targetHash) window.history.pushState({ view: next }, "", targetHash);
   }
 
@@ -893,7 +900,10 @@ export function App() {
     if (receipt.sessionId === sessionId) {
       setSelectedAttestationRecordId(attestationRecordIdForReceipt(receipt));
     }
-    navigate("attestations");
+    const selection = proofSelectionForReceipt(receipt);
+    setProofSelection(selection);
+    setProofSection("attestations");
+    navigate("proof", proofHash(selection, "attestations"));
   }
 
   async function startOAuthSignIn(): Promise<void> {
@@ -1067,9 +1077,11 @@ export function App() {
       const next = readViewHash();
       setMobileMoreOpen(false);
       const nextProofSelection = next === "proof" ? proofSelectionFromHash(window.location.hash) : undefined;
+      const nextProofSection = next === "proof" ? proofSectionFromHash(window.location.hash) : "summary";
       setView(next);
       setProofSelection(nextProofSelection);
-      const canonicalHash = next === "proof" ? proofHash(nextProofSelection) : navigationHashForView(next);
+      setProofSection(nextProofSection);
+      const canonicalHash = next === "proof" ? proofHash(nextProofSelection, nextProofSection) : navigationHashForView(next);
       if (window.location.hash !== canonicalHash) window.history.replaceState({ view: next }, "", canonicalHash);
     };
     window.addEventListener("hashchange", updateFromHistory);
@@ -1916,6 +1928,35 @@ export function App() {
     setRuntimeStatus("Ephemeral mode · page memory only");
   }
 
+  async function changeVaultProvider(next: VaultBackend, desiredPreferences?: PreferenceOverrides): Promise<void> {
+    if (vaultProviderSwitchingRef.current || next === preferences.vaultBackend) return;
+    vaultProviderSwitchingRef.current = true;
+    setVaultProviderSwitching(true);
+    setVaultSetupOpen(false);
+    setRuntimeStatus("Safely releasing the current vault provider");
+    try {
+      await transitionVaultProvider({
+        current: preferences.vaultBackend,
+        next,
+        runtimeUsesVault: () => runtime.current?.workspaceId.startsWith("vault+") === true,
+        adoptEphemeralRuntime,
+        disconnectAuthority: () => vault.disconnect(),
+        commitPreference: (provider) => setPreferences((current) => Object.freeze({ ...(desiredPreferences ?? current), vaultBackend: provider })),
+      });
+      setVaultSetupOpen(next !== "ephemeral");
+      setRuntimeStatus(next === "google-drive"
+        ? "Google Drive selected · connect your workspace"
+        : next === "local-lab"
+          ? "S3-compatible storage selected · configure the provider"
+          : "Ephemeral mode · page memory only");
+    } catch (error) {
+      setRuntimeStatus(error instanceof Error ? error.message : "Vault provider switch stopped safely");
+    } finally {
+      vaultProviderSwitchingRef.current = false;
+      setVaultProviderSwitching(false);
+    }
+  }
+
   async function installAttestationEvidenceClient(
     credential: string,
     credentialKind: ActiveChutesConnection["credentialKind"],
@@ -2459,12 +2500,23 @@ export function App() {
       ? proofSelectionForReceipt(lastReceipt)
       : proofSelectionForSession(targetSessionId);
     setProofSelection(selection);
+    setProofSection("summary");
     navigate("proof", proofHash(selection));
+  }
+
+  function openAttestationEvidence(targetSessionId = sessionId): void {
+    const selection = targetSessionId && lastReceipt?.sessionId === targetSessionId
+      ? proofSelectionForReceipt(lastReceipt)
+      : proofSelectionForSession(targetSessionId);
+    setProofSelection(selection);
+    setProofSection("attestations");
+    navigate("proof", proofHash(selection, "attestations"));
   }
 
   function openReceiptProof(receipt: ConversationReceipt): void {
     const selection = proofSelectionForReceipt(receipt);
     setProofSelection(selection);
+    setProofSection("summary");
     navigate("proof", proofHash(selection));
   }
 
@@ -2519,7 +2571,7 @@ export function App() {
             state={attestationSeal.state}
             label={attestationSeal.label}
             detail={attestationSeal.detail}
-            onClick={() => navigate("attestations")}
+            onClick={() => openAttestationEvidence()}
           />
           {connectivitySeal ? (
             <StatusSeal
@@ -2621,10 +2673,10 @@ export function App() {
                   </div>;
                 }
                 if (item.id === "profiles") {
-                  const profileOptions = managedProfiles(catalog).slice(0, 8);
+                  const profileOptions = managedProfiles(catalog);
                   return <div class="chat-nav-section profile-nav-section" key={item.id}>
                     <div class="chat-nav-primary profile-nav-primary">
-                      <button class={active ? "nav-item active" : childActive ? "nav-item has-active-child" : "nav-item"} type="button" aria-current={active ? "page" : undefined} data-scope={item.scope} title="Open profile manager" onClick={() => navigatePrimary("profiles")}><Icon name={item.icon} /><span>Profiles</span></button>
+                      <button class={active ? "nav-item active" : childActive ? "nav-item has-active-child" : "nav-item"} type="button" aria-current={active ? "page" : undefined} data-scope={item.scope} title="Open profile manager" onClick={() => { setProfileNavExpanded(true); navigatePrimary("profiles"); }}><Icon name={item.icon} /><span>Profiles</span></button>
                       <button class="chat-nav-disclosure" type="button" aria-label={`${profileNavExpanded ? "Collapse" : "Expand"} profiles`} aria-expanded={profileNavExpanded} aria-controls="airship-profile-navigation" onClick={() => setProfileNavExpanded((expanded) => !expanded)}><span aria-hidden="true">›</span></button>
                     </div>
                     {profileNavExpanded ? <div id="airship-profile-navigation" class="recent-conversations profile-navigation" aria-label="Profiles">
@@ -2645,7 +2697,6 @@ export function App() {
                   <Icon name={item.icon} />
                   <span>{item.label}</span>
                   {item.id === "proof" && lastReceipt ? <span class="nav-proof-dot" /> : null}
-                  {item.id === "attestations" && (attestationRecords.length > 0 || attestationFailure) ? <span class="nav-proof-dot" /> : null}
                 </button>,
                 ...item.nested.map((nested) => (
                   <button
@@ -2687,13 +2738,13 @@ export function App() {
         tabIndex={-1}
         class={view === "chat"
           ? "main chat-layout"
-          : ["proof", "attestations", "vault", "access", "billing"].includes(view)
+          : ["proof", "vault", "access", "billing"].includes(view)
             ? "main route-layout trust-route-layout"
             : "main route-layout"}
         inert={platformOverlayOpen}
         aria-hidden={platformOverlayOpen || undefined}
       >
-        {["proof", "attestations", "vault", "access", "billing"].includes(view) ? <TrustHubTabs view={view} onNavigate={navigatePrimary} /> : null}
+        {["proof", "vault", "access", "billing"].includes(view) ? <TrustHubTabs view={view} onNavigate={navigatePrimary} /> : null}
         {view === "chat" ? (
           <>
             <section class="chat-stage" aria-label="Agent session">
@@ -2762,7 +2813,7 @@ export function App() {
                     <MessageCard
                       message={entry.item}
                       onProof={() => entry.item.receipt && openReceiptProof(entry.item.receipt)}
-                      onAttestations={() => entry.item.receipt ? openReceiptAttestation(entry.item.receipt) : navigate("attestations")}
+                      onAttestations={() => entry.item.receipt ? openReceiptAttestation(entry.item.receipt) : openAttestationEvidence()}
                       attestation={describeMessageAttestation(entry.item.receipt, attestationRecords, attestationFailure, attestationNow)}
                       onCopy={() => void navigator.clipboard.writeText(entry.item.parts?.length ? messagePlainText(entry.item.parts) : entry.item.content)}
                       onRetry={() => entry.item.originatingPrompt && void sendMessage(
@@ -2934,12 +2985,12 @@ export function App() {
               endpointRecord={lastReceipt ? attestationRecords.find((record) => attestationRecordMatchesReceipt(record, lastReceipt)) : undefined}
               now={attestationNow}
               compact
-              onOpenAttestations={() => navigate("attestations")}
+              onOpenAttestations={() => openAttestationEvidence()}
             /></aside>
           </>
         ) : null}
-        {view === "sessions" && sessionLibrary ? (
-          <SessionsView
+        {view === "sessions" && sessionLibrary ? SessionsScreen ? (
+          <SessionsScreen
             library={sessionLibrary}
             runtime={sessionRuntime}
             activeSessionId={sessionId}
@@ -2950,28 +3001,18 @@ export function App() {
             onOpenProof={openSessionProof}
             durability={sessionDurability}
           />
-        ) : null}
-        {view === "workspace" && runtime.current ? WorkspaceScreen ? <WorkspaceScreen
+        ) : <RouteSkeleton label="Loading session library" /> : null}
+        {(view === "workspace" || view === "editor") && runtime.current && gitClient ? EditorScreen ? <EditorScreen
           files={files}
           selected={selectedFile}
           onOpen={openFile}
           workspace={runtime.current.workspace}
           git={gitClient}
           review={reviewGitOperation}
+          reviewImport={reviewSourceImport}
           onWorkspaceChanged={() => runtime.current ? refreshWorkspaceState(runtime.current.workspace, setFiles, setWorkspaceFiles) : undefined}
           durability={sessionDurability}
-        /> : workspaceViewError ? <section class="work-view panel" role="alert"><h1>Workspace</h1><p>{workspaceViewError}</p></section> : <RouteSkeleton label="Loading the browser-native Workspace workbench" /> : null}
-        {view === "sources" && gitClient && runtime.current ? (
-          SourcesScreen ? <SourcesScreen
-            client={gitClient}
-            author={{ name: "Local Airship User", email: "airship@local.invalid" }}
-            review={reviewGitOperation}
-            workspace={runtime.current.workspace}
-            reviewImport={reviewSourceImport}
-            onWorkspaceChanged={() => runtime.current ? refreshWorkspaceState(runtime.current.workspace, setFiles, setWorkspaceFiles) : undefined}
-            workspaceDurability={sessionDurability}
-          /> : <section class="work-view panel" aria-live="polite"><h1>Sources</h1><p>{sourcesViewError ?? "Loading the browser source-control workspace…"}</p></section>
-        ) : null}
+        /> : editorViewError ? <section class="work-view panel" role="alert"><h1>Editor</h1><p>{editorViewError}</p></section> : <RouteSkeleton label="Loading the browser-native Workspace Editor" /> : null}
         {view === "terminal" && runtime.current ? TerminalScreen ? <TerminalScreen
           workspace={runtime.current.workspace}
           threadId={sessionId}
@@ -3021,6 +3062,9 @@ export function App() {
             <VaultView
               snapshot={vaultSnapshot}
               runtimeAdopted={vaultRuntimeAdopted}
+              provider={preferences.vaultBackend}
+              providerSwitching={vaultProviderSwitching}
+              onProviderChange={(provider) => void changeVaultProvider(provider)}
               onOpenSetup={preferences.vaultBackend === "ephemeral" ? undefined : () => setVaultSetupOpen((open) => !open)}
               onProbe={vaultSnapshot.phase === "disconnected" ? undefined : () => void probeVault()}
               onCancelProbe={vaultSnapshot.phase === "probing" ? () => {
@@ -3052,24 +3096,6 @@ export function App() {
             ) : null}
           </div>
         ) : null}
-        {view === "attestations" ? (
-          AttestationsScreen ? (
-            <AttestationsScreen
-              endpointRecords={attestationRecords}
-              receipts={attestationReceipts}
-              selectedRecordId={selectedAttestationRecordId}
-              onSelectRecord={(recordId) => setSelectedAttestationRecordId(recordId)}
-              acquisitionNotice={!online ? OFFLINE_INLINE_REASON : attestationFailure ? `${attestationFailure.label}. Current endpoint evidence was not accepted, and no TEE claim was inferred.` : undefined}
-              onRefresh={online && chutesConnected ? refreshAttestation : undefined}
-              onCancel={() => attestationClient.current?.cancel()}
-            />
-          ) : (
-            <section class="work-view">
-              <PageHeading eyebrow="Independent evidence ledger" title="Attestations" description="Loading the isolated evidence inspector without changing any trust state." />
-              {attestationsViewError ? <div class="panel" role="alert">{attestationsViewError}</div> : <RouteSkeleton label="Loading attestation inspector" />}
-            </section>
-          )
-        ) : null}
         {view === "billing" ? (
           <BillingView
             accountReadable={isChutesConnected(connection)}
@@ -3090,7 +3116,21 @@ export function App() {
             sessionId={proofTargetId}
             requestedReceiptId={proofSelection?.receiptId}
             loadAudit={loadSessionAudit}
-            onOpenAttestations={() => navigate("attestations")}
+            section={proofSection}
+            onSectionChange={(section) => {
+              setProofSection(section);
+              navigate("proof", proofHash(proofSelection, section));
+            }}
+            evidenceLedger={AttestationsScreen ? <AttestationsScreen
+              endpointRecords={attestationRecords}
+              receipts={attestationReceipts}
+              selectedRecordId={selectedAttestationRecordId}
+              onSelectRecord={(recordId) => setSelectedAttestationRecordId(recordId)}
+              acquisitionNotice={!online ? OFFLINE_INLINE_REASON : attestationFailure ? `${attestationFailure.label}. Current endpoint evidence was not accepted, and no TEE claim was inferred.` : undefined}
+              onRefresh={online && chutesConnected ? refreshAttestation : undefined}
+              onCancel={() => attestationClient.current?.cancel()}
+              embedded
+            /> : attestationsViewError ? <div class="panel" role="alert">{attestationsViewError}</div> : <RouteSkeleton label="Loading attestation evidence" />}
           />
         ) : null}
         {view === "access" ? (
@@ -3143,7 +3183,10 @@ export function App() {
       />
       <ApprovalDock broker={approvalBroker} />
       <CommandPalette open={paletteOpen} entries={paletteEntries} onClose={() => setPaletteOpen(false)} />
-      <PreferencesDialog open={preferencesOpen} value={preferences} onChange={setPreferences} onClose={() => setPreferencesOpen(false)} />
+      <PreferencesDialog open={preferencesOpen} value={preferences} onChange={(next) => {
+        if (next.vaultBackend !== preferences.vaultBackend) void changeVaultProvider(next.vaultBackend, next);
+        else setPreferences(next);
+      }} onClose={() => setPreferencesOpen(false)} />
       <TrustPostureSheet open={trustSheetOpen} axes={trustAxes} onClose={() => setTrustSheetOpen(false)} onNavigate={navigatePrimary} />
       <PwaUpdateBanner updateReady={pwaUpdate.updateReady} onReload={pwaUpdate.reload} />
     </div>
@@ -4158,7 +4201,9 @@ function ProofView({
   sessionId,
   requestedReceiptId,
   loadAudit,
-  onOpenAttestations,
+  section,
+  onSectionChange,
+  evidenceLedger,
 }: {
   receipt?: ConversationReceipt;
   endpointRecord?: ChutesEndpointEvidenceRecord;
@@ -4167,7 +4212,9 @@ function ProofView({
   sessionId?: string;
   requestedReceiptId?: string;
   loadAudit: (sessionId: string) => Promise<SessionAuditReport>;
-  onOpenAttestations: () => void;
+  section: ProofSection;
+  onSectionChange: (section: ProofSection) => void;
+  evidenceLedger: ComponentChildren;
 }) {
   const [receiptAction, setReceiptAction] = useState<string>();
   const [audit, setAudit] = useState<SessionAuditReport>();
@@ -4255,6 +4302,11 @@ function ProofView({
   return (
     <section class="work-view">
       <PageHeading eyebrow="Inspectable, portable evidence" title="Proof" description="Endpoint attestation and conversation receipts are different claims. Airship never presents one as the other." />
+      <nav class="proof-surface-tabs" aria-label="Proof views" role="tablist">
+        <button id="proof-tab-summary" type="button" role="tab" aria-controls="proof-panel-summary" aria-selected={section === "summary"} tabIndex={section === "summary" ? 0 : -1} onClick={() => onSectionChange("summary")} onKeyDown={(event) => { if (event.key === "ArrowRight" || event.key === "ArrowLeft") { event.preventDefault(); onSectionChange("attestations"); requestAnimationFrame(() => document.getElementById("proof-tab-attestations")?.focus()); } }}>Receipt &amp; journal</button>
+        <button id="proof-tab-attestations" type="button" role="tab" aria-controls="proof-panel-attestations" aria-selected={section === "attestations"} tabIndex={section === "attestations" ? 0 : -1} onClick={() => onSectionChange("attestations")} onKeyDown={(event) => { if (event.key === "ArrowRight" || event.key === "ArrowLeft") { event.preventDefault(); onSectionChange("summary"); requestAnimationFrame(() => document.getElementById("proof-tab-summary")?.focus()); } }}>Attestation evidence</button>
+      </nav>
+      {section === "attestations" ? <div id="proof-panel-attestations" class="proof-surface-panel" role="tabpanel" aria-labelledby="proof-tab-attestations">{evidenceLedger}</div> : <div id="proof-panel-summary" class="proof-surface-panel" role="tabpanel" aria-labelledby="proof-tab-summary">
       <div class="proof-overview">
         <div class="proof-hero panel">
           <Seal
@@ -4270,7 +4322,7 @@ function ProofView({
         <div class="metric"><span>Session journal</span><strong>{auditLabel}</strong><small>{audit ? `${audit.counts.events} event${audit.counts.events === 1 ? "" : "s"} · ${audit.commitment.digest.slice(0, 18)}…` : `${eventCount} observed event${eventCount === 1 ? "" : "s"}`}</small></div>
         <div class="metric"><span>TEE verification</span><strong>{receipt?.posture === "encrypted-attested" ? "Receipt-attested" : "Not established"}</strong><small>{receipt?.posture === "encrypted-unattested" ? "compatibility mode" : "production remote mode must fail closed"}</small></div>
       </div>
-      <ProofInspector receipt={receipt} endpointRecord={endpointRecord} now={attestationNow} onOpenAttestations={onOpenAttestations} />
+      <ProofInspector receipt={receipt} endpointRecord={endpointRecord} now={attestationNow} onOpenAttestations={() => onSectionChange("attestations")} />
       <section class={`journal-audit panel ${audit?.status ?? "pending"}`} aria-labelledby="journal-audit-title">
         <div class="journal-audit-heading">
           <div>
@@ -4328,6 +4380,7 @@ function ProofView({
         {receiptAction ? <span role="status" aria-live="polite">{receiptAction}</span> : null}
       </div>
       {receipt ? <p class="proof-export-boundary">Default receipt export is an unsigned privacy-safe status summary. It withholds plaintext digests, raw evidence, arbitrary claim details, nonces, and keys; it is not an independently verifiable forensic bundle.</p> : null}
+      </div>}
     </section>
   );
 }

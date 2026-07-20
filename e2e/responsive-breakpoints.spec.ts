@@ -1,10 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
 
 const routes = [
-  ["chat", /.+/], ["sessions", /^Session library$/i], ["workspace", /^Workspace$/i],
-  ["sources", /^Repositories & worktrees$/i], ["terminal", /^Terminal$/i], ["memory", /^Memory$/i], ["context", /^Memory$/i],
+  ["chat", /.+/], ["sessions", /^Session library$/i], ["workspace", /^Editor$/i],
+  ["editor", /^Editor$/i], ["terminal", /^Terminal$/i], ["memory", /^Memory$/i], ["context", /^Memory$/i],
   ["profiles", /^Profiles$/i], ["capabilities", /^Capabilities$/i], ["skills", /^Skills$/i],
-  ["proof", /^Proof$/i], ["attestations", /^Attestations$/i], ["vault", /^Vault$/i],
+  ["proof", /^Proof$/i], ["vault", /^Vault$/i],
   ["connection", /^Chutes access$/i], ["account", /^Account standing$/i],
 ] as const;
 
@@ -60,7 +60,7 @@ for (const density of densities) {
         if (density === "comfortable") expect(geometry!.rootFont).toBeGreaterThanOrEqual(17);
         else expect(geometry!.rootFont).toBeLessThan(17);
 
-        if (["proof", "attestations", "vault", "connection", "account"].includes(hash)) {
+        if (["proof", "vault", "connection", "account"].includes(hash)) {
           const activeTab = main.getByRole("navigation", { name: "Trust hub" }).locator("button[aria-current='page']");
           await expect(activeTab).toBeInViewport();
           const tabBox = await activeTab.boundingBox();
@@ -70,7 +70,7 @@ for (const density of densities) {
         }
       }
 
-      for (const hash of ["chat", "workspace", "sources", "profiles", "attestations", "connection"] as const) {
+      for (const hash of ["chat", "workspace", "editor", "profiles", "proof?section=attestations", "connection"] as const) {
         await page.goto(`/#${hash}`);
         await page.screenshot({ path: testInfo.outputPath(`${density}-${width}-${hash}.png`), animations: "disabled" });
       }

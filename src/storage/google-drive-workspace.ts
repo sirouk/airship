@@ -30,12 +30,9 @@ export class GoogleDriveWorkspaceManager {
   async connectOrCreate(name = "Airship Workspace", signal?: AbortSignal): Promise<GoogleDriveWorkspace> {
     const workspaceName = validFolderName(name);
     const namespaceId = await this.key.opaqueObjectId("airship/google-drive-workspace/v1");
-    const workspace = await this.findFolder("root", "workspace", namespaceId, signal)
-      ?? await this.createFolder(workspaceName, "root", "workspace", namespaceId, signal);
-    const root = await this.findFolder(workspace.id, "root", namespaceId, signal)
-      ?? await this.createFolder("root", workspace.id, "root", namespaceId, signal);
-    const segments = await this.findFolder(root.id, "segments", namespaceId, signal)
-      ?? await this.createFolder("segments", root.id, "segments", namespaceId, signal);
+    const workspace = await this.findOrCreateFolder(workspaceName, "root", "workspace", namespaceId, signal);
+    const root = await this.findOrCreateFolder("root", workspace.id, "root", namespaceId, signal);
+    const segments = await this.findOrCreateFolder("segments", root.id, "segments", namespaceId, signal);
     return Object.freeze({
       workspaceFolderId: workspace.id,
       workspaceName: workspace.name,
@@ -44,6 +41,23 @@ export class GoogleDriveWorkspaceManager {
       webViewLink: workspace.webViewLink,
       namespaceId,
     });
+  }
+
+  private async findOrCreateFolder(
+    name: string,
+    parentId: string,
+    role: string,
+    namespaceId: string,
+    signal?: AbortSignal,
+  ): Promise<DriveFile> {
+    const existing = await this.findFolder(parentId, role, namespaceId, signal);
+    if (existing) return existing;
+    await this.createFolder(name, parentId, role, namespaceId, signal);
+    // Drive folder names are not unique. Re-list after creation so concurrent
+    // initializers cannot silently establish competing authority hierarchies.
+    const winner = await this.findFolder(parentId, role, namespaceId, signal);
+    if (!winner) throw new Error(`Google Drive ${role} folder disappeared after creation.`);
+    return winner;
   }
 
   async rename(workspace: GoogleDriveWorkspace, nextName: string, signal?: AbortSignal): Promise<GoogleDriveWorkspace> {
@@ -77,6 +91,7 @@ export class GoogleDriveWorkspaceManager {
     const body = await driveJson<{ files?: DriveFile[] }>(response, "locate Google Drive workspace folder");
     const matches = (body.files ?? []).filter((file) => file.appProperties?.airshipNamespace === namespaceId && file.appProperties.airshipRole === role);
     for (const file of matches) assertFolder(file);
+    if (matches.length > 1) throw ambiguousFolderError(role, matches.length);
     return matches.sort((left, right) => left.id.localeCompare(right.id))[0];
   }
 
@@ -103,6 +118,12 @@ export class GoogleDriveWorkspaceManager {
     headers.set("Authorization", `Bearer ${token.accessToken}`);
     return this.fetchImplementation(input, { ...init, headers });
   }
+}
+
+function ambiguousFolderError(role: string, count: number): Error {
+  const error = new Error(`Google Drive returned ${count} matching ${role} folders; folder authority is ambiguous.`);
+  error.name = "GoogleDriveAmbiguousFolderError";
+  return error;
 }
 
 function validFolderName(value: string): string {

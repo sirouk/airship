@@ -7,7 +7,10 @@ import type { ObjectStore } from "./object-store";
 const encoder = new TextEncoder();
 const NONCE_BYTES = 12;
 const TAG_BYTES = 16;
-const MAX_BLOCK_BYTES = 16 * 1024 * 1024 - NONCE_BYTES - TAG_BYTES;
+/** Portable ceilings shared by the strict S3 and Google Drive adapters. */
+export const MAX_AUTHENTICATED_RANGE_BYTES = 8 * 1024 * 1024;
+export const MAX_SEGMENTED_OBJECT_BYTES = 64 * 1024 * 1024;
+const MAX_BLOCK_BYTES = MAX_AUTHENTICATED_RANGE_BYTES - NONCE_BYTES - TAG_BYTES;
 const MAX_BLOCKS = 65_536;
 
 export type PlaintextSegment = {
@@ -55,9 +58,16 @@ export async function sealSegmentedObject(args: {
     throw new Error(`Segmented objects require between 1 and ${MAX_BLOCKS} blocks.`);
   }
   const ids = new Set<string>();
+  let ciphertextLength = 0;
   for (const block of args.blocks) {
     if (!block.id || ids.has(block.id)) throw new Error("Segment block identifiers must be non-empty and unique.");
-    if (block.bytes.byteLength > MAX_BLOCK_BYTES) throw new Error("A segment block exceeds the range-read size limit.");
+    if (block.bytes.byteLength > MAX_BLOCK_BYTES) {
+      throw new Error("A segment block exceeds the portable 8 MiB authenticated-range limit.");
+    }
+    ciphertextLength += NONCE_BYTES + block.bytes.byteLength + TAG_BYTES;
+    if (ciphertextLength > MAX_SEGMENTED_OBJECT_BYTES) {
+      throw new Error("A segmented object exceeds the portable 64 MiB object limit; publish it as multiple objects.");
+    }
     ids.add(block.id);
   }
 
@@ -187,6 +197,13 @@ async function validateDescriptor(
   if (descriptor.blocks.length === 0 || descriptor.blocks.length > MAX_BLOCKS) {
     throw new Error("Encrypted segment descriptor has an invalid block count.");
   }
+  if (
+    !Number.isSafeInteger(descriptor.ciphertextLength)
+    || descriptor.ciphertextLength < 1
+    || descriptor.ciphertextLength > MAX_SEGMENTED_OBJECT_BYTES
+  ) {
+    throw new Error("Encrypted segment descriptor exceeds the portable 64 MiB object limit.");
+  }
   let expectedOffset = 0;
   const ids = new Set<string>();
   for (const block of descriptor.blocks) {
@@ -235,4 +252,3 @@ function blockAad(descriptor: SegmentedObjectDescriptor, block: EncryptedSegment
     plaintextDigest: block.plaintextDigest,
   };
 }
-

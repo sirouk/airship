@@ -32,6 +32,8 @@ export type AttestationsViewProps = Readonly<{
   acquisitionNotice?: string;
   /** Receives an unsigned, privacy-safe status summary. Raw evidence is never passed here. */
   onExport?: (json: string) => void;
+  /** Renders inside the unified Proof route without introducing a second page heading. */
+  embedded?: boolean;
 }>;
 
 type InspectorSelection =
@@ -47,6 +49,7 @@ export function AttestationsView({
   onCancel,
   acquisitionNotice,
   onExport,
+  embedded = false,
 }: AttestationsViewProps) {
   const inputOverflow = attestationInputOverflow({ endpointRecords, receipts });
   const records = useMemo(
@@ -144,11 +147,11 @@ export function AttestationsView({
     : undefined;
 
   return (
-    <section class="attestations-view" aria-labelledby="attestations-title">
+    <section class={`attestations-view${embedded ? " attestations-view--embedded" : ""}`} aria-labelledby="attestations-title">
       <header class="attestations-heading">
         <div>
           <span>Independent evidence ledger</span>
-          <h1 id="attestations-title">Attestations</h1>
+          {embedded ? <h2 id="attestations-title">Endpoint &amp; receipt evidence</h2> : <h1 id="attestations-title">Attestations</h1>}
           <p>Each result applies only to its named claim. A fetched quote, locally matched key, verified endpoint, model artifact, and signed conversation are separate facts with separate authorities.</p>
         </div>
         <div class="attestations-heading-actions">

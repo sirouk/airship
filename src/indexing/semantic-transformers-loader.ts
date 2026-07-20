@@ -5,8 +5,9 @@ import type {
 } from "./semantic-worker-provider";
 import artifactManifest from "./semantic-artifact-manifest.json";
 
-const MODEL_ROOT = "/semantic-pack/models/";
-const RUNTIME_ROOT = "/semantic-pack/runtime/";
+const PACK_ROOT = "/semantic-pack/v1/";
+const MODEL_ROOT = `${PACK_ROOT}models/`;
+const RUNTIME_ROOT = `${PACK_ROOT}runtime/`;
 
 type Progress = Readonly<{ status?: string; loaded?: number; total?: number }>;
 type TransformersModule = typeof import("@huggingface/transformers");
@@ -22,7 +23,8 @@ export const transformersSemanticLoader: SemanticModelLoader = Object.freeze({
     await verifySemanticAssets(backend, signal, onProgress);
     // The reviewed library is part of the separately deployed same-origin
     // semantic pack, not the application or worker bundle.
-    const transformers = await import(/* @vite-ignore */ "/semantic-pack/runtime/transformers.web.js") as TransformersModule;
+    const runtimeUrl = `${RUNTIME_ROOT}transformers.web.js`;
+    const transformers = await import(/* @vite-ignore */ runtimeUrl) as TransformersModule;
     if (transformers.env.version !== manifest.transformersVersion) {
       throw new Error(`Transformers.js ${transformers.env.version} does not match pinned ${manifest.transformersVersion}.`);
     }
@@ -80,7 +82,8 @@ async function verifySemanticAssets(
 ): Promise<void> {
   const suffixes = [
     "runtime/transformers.web.js",
-    "runtime/ort.webgpu.min.mjs",
+    "runtime/ort.webgpu.bundle.min.mjs",
+    "runtime/onnxruntime-common.mjs",
     "models/mixedbread-ai/mxbai-embed-xsmall-v1/config.json",
     "models/mixedbread-ai/mxbai-embed-xsmall-v1/tokenizer.json",
     "models/mixedbread-ai/mxbai-embed-xsmall-v1/tokenizer_config.json",
@@ -95,7 +98,7 @@ async function verifySemanticAssets(
   let loadedBytes = 0;
   for (const path of suffixes) {
     const expected = artifactManifest.assets[path];
-    const response = await fetch(`/semantic-pack/${path}`, { signal, credentials: "same-origin", cache: "force-cache" });
+    const response = await fetch(`${PACK_ROOT}${path}`, { signal, credentials: "same-origin", cache: "force-cache" });
     if (!response.ok || response.type === "opaque") throw new Error(`Semantic pack asset ${path} is unavailable (${response.status}).`);
     const bytes = await response.arrayBuffer();
     if (bytes.byteLength !== expected.bytes) throw new Error(`Semantic pack asset ${path} has an unexpected byte length.`);

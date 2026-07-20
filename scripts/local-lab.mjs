@@ -45,6 +45,7 @@ export function labEnvironment(base = process.env) {
     AIRSHIP_LOCAL_S3_NAMESPACE: LOCAL_LAB.namespace,
     AIRSHIP_LOCAL_S3_ACCESS_KEY: LOCAL_LAB.accessKeyId,
     AIRSHIP_LOCAL_S3_SECRET_KEY: LOCAL_LAB.secretAccessKey,
+    VITE_AIRSHIP_DEFAULT_VAULT_PROVIDER: "local-lab",
   });
 }
 
@@ -204,7 +205,7 @@ async function ensureVite() {
     child = spawn(process.execPath, [viteBinary, "--host", "127.0.0.1", "--port", "4173", "--strictPort"], {
       cwd: root,
       detached: true,
-      env: process.env,
+      env: labEnvironment(process.env),
       stdio: ["ignore", descriptor, descriptor],
     });
     child.unref();

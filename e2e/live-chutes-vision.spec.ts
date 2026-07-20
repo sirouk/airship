@@ -54,7 +54,8 @@ test("a catalog-declared vision model receives an encrypted inline image", async
   // This intentionally asserts an endpoint record, not a conversation upgrade:
   // the provider's current evidence contract does not sign the transcript.
   await page.goto("/#attestations");
-  await expect(page.getByRole("heading", { name: "Attestations" })).toBeVisible();
+  await expect(page).toHaveURL(/#proof\?section=attestations/);
+  await expect(page.getByRole("heading", { name: "Endpoint & receipt evidence" })).toBeVisible();
   await expect(page.locator(".attestation-record-list button").first()).toBeVisible({ timeout: 120_000 });
   await expect(page.locator(".attestation-record-heading")).toContainText("Endpoint acquisition");
   await expect(page.locator(".attestation-matrix button")).toHaveCount(8);

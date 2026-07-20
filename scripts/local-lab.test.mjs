@@ -21,6 +21,7 @@ describe("local full-system lab contract", () => {
       AIRSHIP_LOCAL_S3_ENDPOINT: LOCAL_LAB.s3Endpoint,
       AIRSHIP_LOCAL_S3_BUCKET: LOCAL_LAB.bucket,
       AIRSHIP_LOCAL_S3_ACCESS_KEY: LOCAL_LAB.accessKeyId,
+      VITE_AIRSHIP_DEFAULT_VAULT_PROVIDER: "local-lab",
     });
     expect(Object.isFrozen(result)).toBe(true);
   });

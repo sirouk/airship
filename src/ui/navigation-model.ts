@@ -2,7 +2,7 @@ export type NavigationView =
   | "chat"
   | "sessions"
   | "workspace"
-  | "sources"
+  | "editor"
   | "terminal"
   | "memory"
   | "context"
@@ -10,13 +10,12 @@ export type NavigationView =
   | "capabilities"
   | "skills"
   | "vault"
-  | "attestations"
   | "billing"
   | "proof"
   | "access";
 
-export type CanonicalDestinationId = Exclude<NavigationView, "sessions" | "sources" | "terminal" | "context" | "capabilities" | "skills" | "billing">;
-export type NestedDestinationId = Extract<NavigationView, "sessions" | "sources" | "terminal" | "capabilities" | "skills" | "billing">;
+export type CanonicalDestinationId = Exclude<NavigationView, "sessions" | "editor" | "terminal" | "context" | "capabilities" | "skills" | "billing">;
+export type NestedDestinationId = Extract<NavigationView, "sessions" | "editor" | "terminal" | "capabilities" | "skills" | "billing">;
 export type NavigationGroup = "Work" | "Agent" | "Trust";
 export type NavigationScope = "session" | "workspace" | "profile" | "global";
 export type MobilePrimaryControlId = "chat" | "workspace" | "trust" | "more";
@@ -24,7 +23,7 @@ export type NavigationHash =
   | "#chat"
   | "#sessions"
   | "#workspace"
-  | "#sources"
+  | "#editor"
   | "#terminal"
   | "#memory"
   | "#context"
@@ -32,7 +31,6 @@ export type NavigationHash =
   | "#capabilities"
   | "#skills"
   | "#vault"
-  | "#attestations"
   | "#account"
   | "#proof"
   | "#connection";
@@ -93,7 +91,7 @@ const VIEW_HASHES: Readonly<Record<NavigationView, NavigationHash>> = Object.fre
   chat: "#chat",
   sessions: "#sessions",
   workspace: "#workspace",
-  sources: "#sources",
+  editor: "#editor",
   terminal: "#terminal",
   memory: "#memory",
   context: "#context",
@@ -101,7 +99,6 @@ const VIEW_HASHES: Readonly<Record<NavigationView, NavigationHash>> = Object.fre
   capabilities: "#capabilities",
   skills: "#skills",
   vault: "#vault",
-  attestations: "#attestations",
   billing: "#account",
   proof: "#proof",
   access: "#connection",
@@ -114,13 +111,12 @@ export const CANONICAL_DESTINATIONS: readonly CanonicalDestination[] = Object.fr
     nestedDestination("sessions", "All conversations", "global"),
   ]),
   destination("workspace", "Workspace", "Work", "workspace", [
-    nestedDestination("sources", "Sources", "workspace"),
+    nestedDestination("editor", "Editor", "workspace"),
     nestedDestination("terminal", "Terminal", "workspace"),
   ]),
   destination("memory", "Memory", "Work", "session"),
   destination("profiles", "Profiles", "Agent", "profile"),
   destination("proof", "Proof", "Trust", "session"),
-  destination("attestations", "Attestations", "Trust", "global"),
   destination("vault", "Vault", "Trust", "global"),
   destination("access", "Connection", "Trust", "global", [
     nestedDestination("billing", "Account", "global"),
@@ -144,11 +140,10 @@ export const SETTINGS_OVERLAY_ENTRY: NavigationOverlayEntry = Object.freeze({
 
 export const MOBILE_MORE_ENTRIES: readonly MobileMoreEntry[] = Object.freeze([
   moreRoute("sessions", "All conversations", "chat"),
-  moreRoute("sources", "Sources", "workspace"),
+  moreRoute("editor", "Editor", "workspace"),
   moreRoute("terminal", "Terminal", "workspace"),
   moreRoute("memory", "Memory"),
   moreRoute("profiles", "Profiles"),
-  moreRoute("attestations", "Attestations"),
   moreRoute("vault", "Vault"),
   moreRoute("access", "Connection"),
   moreRoute("billing", "Account", "access"),
@@ -160,7 +155,7 @@ const MOBILE_CONTROL_BY_VIEW: Readonly<Record<NavigationView, MobilePrimaryContr
   sessions: "more",
   workspace: "workspace",
   proof: "trust",
-  sources: "more",
+  editor: "more",
   terminal: "more",
   memory: "more",
   context: "more",
@@ -168,7 +163,6 @@ const MOBILE_CONTROL_BY_VIEW: Readonly<Record<NavigationView, MobilePrimaryContr
   capabilities: "more",
   skills: "more",
   vault: "more",
-  attestations: "more",
   billing: "more",
   access: "more",
 });
@@ -177,7 +171,7 @@ const PARENT_BY_VIEW: Readonly<Record<NavigationView, CanonicalDestinationId>> =
   chat: "chat",
   sessions: "chat",
   workspace: "workspace",
-  sources: "workspace",
+  editor: "workspace",
   terminal: "workspace",
   memory: "memory",
   context: "memory",
@@ -185,7 +179,6 @@ const PARENT_BY_VIEW: Readonly<Record<NavigationView, CanonicalDestinationId>> =
   capabilities: "profiles",
   skills: "profiles",
   proof: "proof",
-  attestations: "attestations",
   vault: "vault",
   access: "access",
   billing: "access",
@@ -210,6 +203,11 @@ export function navigationViewFromHash(hash: string): NavigationView {
   // Preserve already-shipped deep links while emitting only label-aligned hashes.
   if (candidate === "access") return "access";
   if (candidate === "billing") return "billing";
+  // Sources shipped as a standalone route before source control moved into
+  // the Workspace Editor. Keep old bookmarks useful without retaining a
+  // second destination or a split-brain workbench.
+  if (candidate === "sources") return "editor";
+  if (candidate === "attestations") return "proof";
   return navigationViews.has(candidate as NavigationView) ? candidate as NavigationView : "chat";
 }
 

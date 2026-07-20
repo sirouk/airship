@@ -16,6 +16,7 @@
     "test:e2e": "playwright test",
     "test:e2e:headed": "playwright test --headed",
     "test:e2e:live": "playwright test e2e/live-chutes-vision.spec.ts --project=desktop-chromium",
+    "test:e2e:google-drive": "playwright test --config=playwright.google-drive.config.ts",
     "test:vault:live": "AIRSHIP_LIVE_LOCAL_S3=1 vitest run src/vault/local-lab-live.test.ts --reporter=verbose",
     "test:chutes:live": "vitest run src/inference/chutes/transport.live.test.ts src/core/airship-agent.live.test.ts --reporter=verbose",
     "test:watch": "vitest --exclude '.airship-lab/**' --exclude 'e2e/**'",
@@ -46,6 +47,7 @@
   "devDependencies": {
     "@playwright/test": "^1.61.1",
     "@preact/preset-vite": "^2.10.2",
+    "esbuild": "0.28.1",
     "typescript": "^5.9.3",
     "vite": "^8.0.13",
     "vitest": "^4.1.6"

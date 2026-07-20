@@ -5,7 +5,7 @@ async function openIsolatedWorkspace(page: Page): Promise<void> {
     mode: "dark", typeScale: "default", density: "comfortable", corners: "subtle", bodyFont: "system-sans", vaultBackend: "ephemeral", approvalMode: "full-access",
   })));
   await page.goto("/#workspace");
-  await expect(page.getByRole("heading", { name: "Workspace", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Editor", level: 1 })).toBeVisible();
   await expect(page.getByRole("tree", { name: "Workspace files" })).toBeVisible();
 }
 

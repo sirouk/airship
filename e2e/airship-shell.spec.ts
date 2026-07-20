@@ -30,7 +30,7 @@ test("desktop shell navigates real routes and presents a coherent session header
 
   await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Workspace" }).click();
   await expect(page).toHaveURL(/#workspace$/);
-  await expect(page.getByRole("heading", { name: "Workspace", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Editor", level: 1 })).toBeVisible();
 
   await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Chat" }).click();
   await expect(page).toHaveURL(/#chat$/);
@@ -93,10 +93,11 @@ test("route form menus use the styled accessible listbox contract", async ({ pag
 
   if (mobile) {
     await primary.getByRole("button", { name: "More", exact: true }).click();
-    await page.getByRole("dialog", { name: "More" }).getByRole("button").filter({ hasText: "Sources" }).first().click();
+    await page.getByRole("dialog", { name: "More" }).getByRole("button").filter({ hasText: "Editor" }).first().click();
   } else {
-    await primary.getByRole("button", { name: "Sources", exact: true }).click();
+    await primary.getByRole("button", { name: "Editor", exact: true }).click();
   }
+  await page.getByRole("tab", { name: "Sources", exact: true }).click();
   const repository = page.getByRole("button", { name: "Repository" });
   await repository.click();
   await expect(page.getByRole("listbox", { name: "Repository" })).toBeVisible();
@@ -118,7 +119,7 @@ test("mobile shell keeps primary destinations usable and exposes additional rout
 
   await mobileNavigation.getByRole("button", { name: "Workspace" }).click();
   await expect(page).toHaveURL(/#workspace$/);
-  await expect(page.getByRole("heading", { name: "Workspace", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Editor", level: 1 })).toBeVisible();
 
   await mobileNavigation.getByRole("button", { name: "More" }).click();
   const more = page.getByRole("dialog", { name: "More" });

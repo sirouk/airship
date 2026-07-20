@@ -4,6 +4,7 @@ import {
   proofHash,
   proofSelectionForReceipt,
   proofSelectionFromHash,
+  proofSectionFromHash,
   resolveProofReceipt,
 } from "./proof-route";
 
@@ -46,6 +47,14 @@ describe("proof receipt routing", () => {
 
     expect(incomplete).toEqual({ sessionId: first.sessionId, receiptId: first.receiptId });
     expect(resolveProofReceipt([first, second], incomplete, second)).toBeUndefined();
+  });
+
+  it("preserves receipt identity while routing legacy attestations into Proof evidence", () => {
+    const [receipt] = twoTurnReceipts();
+    const hash = proofHash(proofSelectionForReceipt(receipt), "attestations");
+    expect(proofSectionFromHash(hash)).toBe("attestations");
+    expect(proofSelectionFromHash(hash)).toEqual(proofSelectionForReceipt(receipt));
+    expect(proofSectionFromHash("#attestations")).toBe("attestations");
   });
 });
 

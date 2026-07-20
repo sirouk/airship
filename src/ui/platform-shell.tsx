@@ -222,8 +222,14 @@ export type PreferenceOverrides = Readonly<{
   approvalMode: ApprovalMode;
 }>;
 
+export type VaultBackend = PreferenceOverrides["vaultBackend"];
+
+export function resolveDefaultVaultBackend(value: string | undefined): PreferenceOverrides["vaultBackend"] {
+  return value === "local-lab" || value === "ephemeral" ? value : "google-drive";
+}
+
 export const DEFAULT_PREFERENCES: PreferenceOverrides = Object.freeze({
-  mode: "dark", typeScale: "default", density: "comfortable", corners: "subtle", bodyFont: "system-sans", vaultBackend: "google-drive", approvalMode: "ask-first",
+  mode: "dark", typeScale: "default", density: "comfortable", corners: "subtle", bodyFont: "system-sans", vaultBackend: resolveDefaultVaultBackend(import.meta.env.VITE_AIRSHIP_DEFAULT_VAULT_PROVIDER), approvalMode: "ask-first",
 });
 
 const PREFERENCE_STORAGE_KEY = "airship.display-preferences.v1";
@@ -329,7 +335,7 @@ export function TrustPostureSheet({ open, axes, onClose, onNavigate }: Readonly<
 }
 
 const TRUST_TABS: readonly Readonly<{ view: NavigationView; label: string }>[] = Object.freeze([
-  { view: "proof", label: "Proof" }, { view: "attestations", label: "Attestations" },
+  { view: "proof", label: "Proof" },
   { view: "vault", label: "Vault" }, { view: "access", label: "Connection" }, { view: "billing", label: "Account" },
 ]);
 
