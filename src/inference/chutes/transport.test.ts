@@ -25,6 +25,31 @@ afterEach(() => {
 });
 
 describe("ChutesInferenceTransport", () => {
+  it("keeps public model discovery anonymous and proves protected endpoint access before invocation", async () => {
+    const fetch = sequenceFetch([modelResponse(), instanceResponse(["nonce-a"])]);
+    const transport = new ChutesInferenceTransport({ apiKey: "cak_memory-only", fetch, attestationMode: "optional" });
+
+    await expect(transport.verifyModelAccess("confidential-model")).resolves.toBeUndefined();
+
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(String(fetch.mock.calls[0]![0])).toMatch(/\/v1\/models$/u);
+    expect(header(fetch.mock.calls[0]![1], "Authorization")).toBeUndefined();
+    expect(String(fetch.mock.calls[1]![0])).toMatch(/\/e2e\/instances\/chute-a$/u);
+    expect(header(fetch.mock.calls[1]![1], "Authorization")).toBe("Bearer cak_memory-only");
+    expect(invokeCalls(fetch)).toHaveLength(0);
+  });
+
+  it("labels protected endpoint authorization failures at their exact boundary", async () => {
+    const fetch = sequenceFetch([modelResponse(), jsonResponse({ detail: "forbidden" }, 403)]);
+    const transport = new ChutesInferenceTransport({ apiKey: "cak_memory-only", fetch, attestationMode: "optional" });
+
+    await expect(transport.verifyModelAccess("confidential-model")).rejects.toMatchObject({
+      code: "HTTP_ERROR",
+      status: 403,
+      operation: "instance-discovery",
+    });
+  });
+
   it("requires explicit confidential_compute instead of trusting a -TEE suffix", async () => {
     const fetch = sequenceFetch([
       jsonResponse({

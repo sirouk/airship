@@ -17,8 +17,8 @@ export function proofLevelLabel(value: ProofLevel): string {
 export function postureLabel(value: SecurityPosture): string {
   if (value === "local") return "Local only";
   if (value === "plaintext-remote") return "Remote · not encrypted end to end";
-  if (value === "encrypted-unattested") return "Encrypted · endpoint not independently checked";
-  return "Encrypted · attested endpoint required";
+  if (value === "encrypted-unattested") return "Encrypted · no required endpoint proof";
+  return "Encrypted · fresh endpoint proof required";
 }
 
 export function proofStatusLabel(value: ProofStatus): string {

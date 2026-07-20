@@ -33,13 +33,13 @@ export function CapabilitiesView({ inspect, onCommand, onOpenSkills }: Capabilit
   return (
     <section class="work-view capabilities-view" aria-labelledby="capabilities-title">
       <header class="page-heading capabilities-heading">
-        <div><span class="eyebrow">Browser-owned execution</span><h1 id="capabilities-title">Capabilities</h1><p>Know exactly what this device can run, what must be activated, and what remains unavailable before asking the agent to act.</p></div>
+        <div><span class="eyebrow">Browser-owned execution</span><h1 id="capabilities-title">Capabilities</h1><p>Inspect and activate runtimes on this device. No inference provider—including Chutes—is required for local activation.</p></div>
         <button type="button" onClick={() => void refresh()}><Icon name="terminal" size={17} /> Refresh</button>
       </header>
 
       <div class="capability-summary" role="status">
         <Seal state={error ? "failed" : runtimes.length ? "verified" : "checking"} acting={!error && !runtimes.length} label={status} detail="Capability state is derived from the active in-page runtime registry." />
-        <span>Execution still follows the active Ask First, Auto Approve, or Full Access policy.</span>
+        <span>Local activation needs no model provider. Execution still follows the active Ask First, Auto Approve, or Full Access policy.</span>
       </div>
       {error ? <div class="capability-error" role="alert"><Icon name="warning" />{error}</div> : null}
 
@@ -48,7 +48,7 @@ export function CapabilitiesView({ inspect, onCommand, onOpenSkills }: Capabilit
       </div>
 
       <section class="capability-extension panel">
-        <div><span class="eyebrow">Agent layer</span><h2>Tools and Skills</h2><p>Runtime availability is separate from the tool schemas and profile/global Skills that teach the agent when to use it.</p></div>
+        <div><span class="eyebrow">Agent layer</span><h2>Tools and Skills</h2><p>Runtime availability is separate from tool schemas and Skills. Local slash commands remain usable while inference is disconnected.</p></div>
         <div><button type="button" onClick={() => onCommand("/help ")}><Icon name="terminal" /> Browse slash tools</button><button type="button" onClick={onOpenSkills}><Icon name="skills" /> Manage Skills</button></div>
       </section>
     </section>

@@ -4,6 +4,11 @@ import { describe, expect, it } from "vitest";
 const source = await readFile(new URL("./access-view.tsx", import.meta.url), "utf8");
 
 describe("Chutes connection method copy", () => {
+  it("pins the connection to the transport's actual security posture", () => {
+    expect(source).toContain("posture: transport.posture");
+    expect(source).not.toContain('posture: "encrypted-unattested"');
+  });
+
   it("names scoped sign-in without presenting cak_ as a manual credential", () => {
     expect(source).toContain("Chutes sign-in · scoped user session");
     expect(source).toContain('prefix="cpk_"');
@@ -37,5 +42,15 @@ describe("Chutes connection method copy", () => {
     expect(source).toContain('attestationMode: "required"');
     expect(source).not.toContain('attestationMode: "optional"');
     expect(source).toContain("attestationGate: createChutesAttestationGate");
+  });
+
+  it("makes OAuth completion and the proof-policy finish step explicit without claiming policy is proof", () => {
+    expect(source).toContain("Chutes sign-in complete · finish connection");
+    expect(source).toContain("No second credential is required");
+    expect(source).toContain("Require fresh endpoint proof before every turn");
+    expect(source).toContain("This policy is not itself proof");
+    expect(source).toContain("Finish: verify &amp; connect");
+    expect(source).not.toContain("I understand this endpoint is not independently attested");
+    expect(source).not.toContain("Encrypted · TEE unverified");
   });
 });

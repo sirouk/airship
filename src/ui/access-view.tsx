@@ -188,7 +188,7 @@ export function AccessView({
       setModelId(selection.model?.id ?? compatibleModels[0]!.id);
       setDetectedKind(credential.kind);
       setAccepted(false);
-      setStatus(`${compatibleModels.length} encrypted-inference candidate${compatibleModels.length === 1 ? "" : "s"} found. The catalog is public metadata; this credential will be proved only by the first protected invocation.`);
+      setStatus(`${compatibleModels.length} encrypted-inference candidate${compatibleModels.length === 1 ? "" : "s"} found. Catalog metadata is not proof. Finish verifies selected-model authorization and arms the fail-closed proof policy used on every turn.`);
     } catch (caught) {
       clearEphemeral();
       if (input) input.value = "";
@@ -221,13 +221,16 @@ export function AccessView({
     const model = candidate?.models.find((item) => item.id === modelId);
     if (!credential || !transport || !candidate || !model || !accepted) return;
     setBusy(true);
-    setStatus("Pinning an encrypted, unattested Chutes session…");
+    const controller = new AbortController();
+    discoveryAbort.current = controller;
+    setStatus("Verifying chutes:invoke access and encrypted endpoint availability…");
     setError(undefined);
     try {
+      await transport.verifyModelAccess(model.id, controller.signal);
       const nextConnection = createChutesConnection({
         credentialKind: credential.kind,
         model: model.id,
-        posture: "encrypted-unattested",
+        posture: transport.posture,
       });
       await onConnect({
         connection: nextConnection,
@@ -250,6 +253,7 @@ export function AccessView({
       setError(mapUnknownRequestFailure(caught, online).message);
       requestAnimationFrame(() => credentialInput.current?.focus());
     } finally {
+      if (discoveryAbort.current === controller) discoveryAbort.current = undefined;
       setBusy(false);
     }
   }
@@ -352,7 +356,7 @@ export function AccessView({
       <header class="access-connection-heading">
         <span>Direct provider connection</span>
         <h1 id="access-connection-title">Chutes access</h1>
-        <p>Sign in with a scoped Chutes account, or deliberately use a direct API-key session. Tokens remain in page memory, and neither path is treated as hardware attestation.</p>
+        <p>Sign in with a scoped Chutes account, or deliberately use a direct API-key session. Credentials stay in page memory. Authentication grants access; fresh endpoint evidence is evaluated separately before each encrypted turn.</p>
       </header>
 
       <div class="access-connection-layout">
@@ -388,7 +392,7 @@ export function AccessView({
                     ) : connection.model}
                   </dd>
                 </div>
-                <div><dt>Transport</dt><dd>{connection.posture === "encrypted-attested" ? "Encrypted · attested" : "Encrypted · TEE unverified"}</dd></div>
+                <div><dt>Proof policy</dt><dd>{connection.posture === "encrypted-attested" ? "Fresh endpoint proof required before every turn" : "Encrypted compatibility mode · no required proof gate"}</dd></div>
                 <div><dt>Inference authorization</dt><dd>{connection.invokeAuthorization === "verified" ? `Verified by protected request${connection.lastInvokeAt ? ` · ${formatCatalogTime(connection.lastInvokeAt)}` : ""}` : "Not tested yet"}</dd></div>
                 <div><dt>Credential lifetime</dt><dd>Not introspected</dd></div>
                 <div><dt>Storage</dt><dd>Page memory only</dd></div>
@@ -401,6 +405,15 @@ export function AccessView({
             </div>
           ) : candidate ? (
             <div class="connection-candidate">
+              {candidate.credentialKind === "oauth-user-token" ? (
+                <div class="oauth-finish-banner" role="status" aria-live="polite">
+                  <Icon name="proof" size={18} />
+                  <div>
+                    <strong>Chutes sign-in complete · finish connection</strong>
+                    <span>Choose the session model, confirm the fail-closed proof policy, then finish. No second credential is required.</span>
+                  </div>
+                </div>
+              ) : null}
               <div class="credential-kind-result" role="status">
                 <Icon name={candidate.credentialKind === "oauth-user-token" ? "access" : "lock"} size={20} />
                 <div>
@@ -421,13 +434,13 @@ export function AccessView({
                   <details><summary>{candidate.issues.length} catalog notice{candidate.issues.length === 1 ? "" : "s"}</summary>{candidate.issues.map((issue, index) => <p key={`${issue.source}-${issue.code}-${index}`}>{issue.source}: {issue.message}</p>)}</details>
                 ) : null}
               </div>
-              <label class="unattested-consent">
+              <label class="proof-policy-consent">
                 <input type="checkbox" checked={accepted} onChange={(event) => setAccepted(event.currentTarget.checked)} />
-                <span><strong>I understand this endpoint is not independently attested</strong><small>The compatibility transport encrypts application payloads, but it does not prove the endpoint's current TEE identity.</small></span>
+                <span><strong>Require fresh endpoint proof before every turn</strong><small>Airship must locally accept fresh instance evidence and its endpoint-key binding before sending an encrypted invocation. If proof cannot be established, the turn stops. This policy is not itself proof; completed receipts record what was actually verified.</small></span>
               </label>
               <div class="candidate-actions">
                 <button type="button" onClick={chooseDifferentCredential} disabled={busy}>Use a different credential</button>
-                <button class="primary" type="button" onClick={() => void activate()} disabled={!accepted || busy}>Connect selected model</button>
+                <button class="primary" type="button" onClick={() => void activate()} disabled={!accepted || busy}>Finish: verify &amp; connect</button>
               </div>
             </div>
           ) : (

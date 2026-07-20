@@ -5,17 +5,20 @@ import "./ui/durability-indicator.css";
 
 render(<App />, document.getElementById("app")!);
 
+const AIRSHIP_BASE_PATH = import.meta.env.BASE_URL;
+const AIRSHIP_SERVICE_WORKER_PATH = `${AIRSHIP_BASE_PATH}sw.js`;
+
 if ("serviceWorker" in navigator && import.meta.env.PROD) {
   window.addEventListener("load", () => {
     const scriptUrl = trustedServiceWorkerUrl();
-    void navigator.serviceWorker.register(scriptUrl as string, { scope: "/" }).catch((error: unknown) => {
+    void navigator.serviceWorker.register(scriptUrl as string, { scope: AIRSHIP_BASE_PATH }).catch((error: unknown) => {
       console.warn("Airship service worker registration failed; offline shell caching is unavailable.", error);
     });
   });
 }
 
 function trustedServiceWorkerUrl(): string | object {
-  const value = new URL("/sw.js", window.location.origin).href;
+  const value = new URL(AIRSHIP_SERVICE_WORKER_PATH, window.location.origin).href;
   const factory = (globalThis as typeof globalThis & {
     trustedTypes?: {
       createPolicy(
@@ -30,7 +33,7 @@ function trustedServiceWorkerUrl(): string | object {
       const candidate = new URL(input, window.location.origin);
       if (
         candidate.origin !== window.location.origin ||
-        candidate.pathname !== "/sw.js" ||
+        candidate.pathname !== AIRSHIP_SERVICE_WORKER_PATH ||
         candidate.search ||
         candidate.hash
       ) {

@@ -50,6 +50,21 @@ describe("BrowserTerminalManager metadata", () => {
     expect(manager.list()[0]?.detail).toContain("never survive reload");
   });
 
+  it("renames a tab inline and persists the bounded name", async () => {
+    const workspace = new MemoryWorkspace();
+    const manager = new BrowserTerminalManager(workspace);
+    await manager.ready;
+    const tab = manager.list()[0]!;
+
+    expect(manager.rename(tab.id, "  Release console  ")).toMatchObject({ name: "Release console" });
+    expect(() => manager.rename(tab.id, "   ")).toThrow("Terminal tab name is invalid");
+    await vi.waitFor(async () => expect((await workspace.read(TERMINAL_METADATA_PATH))?.content).toContain("Release console"));
+
+    const restored = new BrowserTerminalManager(workspace);
+    await restored.ready;
+    expect(restored.list()[0]?.name).toBe("Release console");
+  });
+
   it("owns a real interactive process lifecycle with input, resize, interrupt, and close", async () => {
     const workspace = new MemoryWorkspace();
     await workspace.write("README.md", "mounted\n", { expectedRevision: null });

@@ -9,8 +9,8 @@ export function PostureChip({ posture, prefix = "Minimum" }: { posture: Security
 export function posturePresentation(posture: SecurityPosture): Readonly<{ state: SealState; label: string; detail: string }> {
   switch (posture) {
     case "local": return { state: "none", label: "Local", detail: "No remote inference required." };
-    case "encrypted-unattested": return { state: "asserted", label: "Encrypted · unattested", detail: "Encryption required; TEE identity may be unverified." };
-    case "encrypted-attested": return { state: "verified", label: "Encrypted · attested", detail: "Fresh verified attestation required." };
+    case "encrypted-unattested": return { state: "asserted", label: "Encrypted · no proof gate", detail: "Encryption is required, but fresh endpoint proof is not enforced." };
+    case "encrypted-attested": return { state: "asserted", label: "Encrypted · proof required", detail: "Policy requires fresh endpoint proof before invocation; only turn evidence can verify the claim." };
     case "plaintext-remote": return { state: "attention", label: "Plaintext remote", detail: "Remote plaintext permitted." };
   }
 }

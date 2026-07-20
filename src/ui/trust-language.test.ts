@@ -4,7 +4,8 @@ import { claimExpiry, claimLanguage, postureLabel, proofLevelLabel, proofStatusL
 describe("trust language", () => {
   it("never exposes machine enums as primary copy", () => {
     expect(proofLevelLabel("attested-endpoint")).toBe("Endpoint attested");
-    expect(postureLabel("encrypted-unattested")).toBe("Encrypted · endpoint not independently checked");
+    expect(postureLabel("encrypted-unattested")).toBe("Encrypted · no required endpoint proof");
+    expect(postureLabel("encrypted-attested")).toBe("Encrypted · fresh endpoint proof required");
     expect(proofStatusLabel("partial")).toBe("Asserted");
     expect(claimLanguage("cpuTee")).toEqual({ primary: "Protected CPU runtime", technical: "CPU TEE" });
   });

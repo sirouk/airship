@@ -16,6 +16,29 @@ describe("request state mapper", () => {
     expect(mapUnknownRequestFailure(new Error("anything"), false)).toEqual(expect.objectContaining({ kind: "offline" }));
   });
 
+  it("explains the exact protected authorization boundary", () => {
+    expect(mapUnknownRequestFailure({ code: "HTTP_ERROR", status: 403, operation: "instance-discovery" }, true)).toEqual({
+      kind: "credential",
+      message: "Endpoint discovery denied. Reconnect with chutes:invoke or an API key.",
+    });
+    expect(mapUnknownRequestFailure({ code: "HTTP_ERROR", status: 401, operation: "invoke" }, true)).toEqual({
+      kind: "credential",
+      message: "Encrypted inference denied. Reconnect, then check account and model access.",
+    });
+  });
+
+  it("does not misreport attestation and nonce failures as credentials", () => {
+    expect(mapUnknownRequestFailure({ code: "ATTESTATION_FAILED", status: 403 }, true).kind).toBe("provider");
+    expect(mapUnknownRequestFailure({ code: "NONCE_REJECTED", status: 403 }, true).kind).toBe("provider");
+  });
+
+  it("does not infer provider authentication from prose in a local invariant error", () => {
+    expect(mapUnknownRequestFailure(new Error("The transport posture and credential metadata do not form one connection."), true)).toEqual({
+      kind: "unknown",
+      message: "Request failed. Local state was kept; no remote success is assumed.",
+    });
+  });
+
   it("maps stalled and truncated streams to actionable bounded failures", () => {
     expect(mapUnknownRequestFailure({ code: "STREAM_STALLED" }, true)).toEqual({
       kind: "unreachable",

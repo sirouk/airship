@@ -7,6 +7,14 @@ const NOW = Date.parse("2026-07-19T12:00:00.000Z");
 const KEY_DIGEST = `sha256:${"a".repeat(64)}`;
 
 describe("session attestation seal", () => {
+  it("distinguishes an armed proof policy from actual endpoint evidence", () => {
+    expect(describeAttestationSeal({ connected: true, records: [], now: NOW })).toEqual({
+      state: "asserted",
+      label: "Proof required next turn",
+      detail: "The fail-closed endpoint-proof policy is armed, but no active turn receipt currently establishes a hardware claim.",
+    });
+  });
+
   it("labels post-turn endpoint evidence as a separate local match without upgrading the receipt", () => {
     const receipt = encryptedReceipt();
     const seal = describeAttestationSeal({

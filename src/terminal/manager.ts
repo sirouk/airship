@@ -117,6 +117,15 @@ export class BrowserTerminalManager {
     return snapshot(session);
   }
 
+  rename(sessionId: string, name: string): TerminalSessionSnapshot {
+    const session = this.requireSession(sessionId);
+    session.name = boundedName(name);
+    session.updatedAt = new Date().toISOString();
+    this.emit(session);
+    this.queuePersist();
+    return snapshot(session);
+  }
+
   async start(sessionId: string, dimensions: TerminalDimensions = DEFAULT_DIMENSIONS, signal = new AbortController().signal): Promise<void> {
     await this.ready;
     const session = this.requireSession(sessionId);

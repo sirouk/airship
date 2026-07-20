@@ -50,22 +50,30 @@ export function resolveChutesOAuthRegistration(args: Readonly<{
   development: boolean;
   publicClientId?: string;
   publicOrigin?: string;
+  publicBasePath?: string;
 }>): ChutesOAuthRegistration {
   if (args.development) return CHUTES_LOCAL_REGISTRATION;
   const clientId = args.publicClientId?.trim() ?? "";
   const origin = normalizePublicOrigin(args.publicOrigin);
+  const basePath = normalizePublicBasePath(args.publicBasePath);
   const errors: string[] = [];
   if (!/^cid_[A-Za-z0-9._~-]{3,256}$/u.test(clientId)) {
     errors.push("VITE_AIRSHIP_CHUTES_PUBLIC_CLIENT_ID must identify a Chutes Browser/native PKCE app");
   }
   if (!origin) errors.push("VITE_AIRSHIP_PUBLIC_ORIGIN must be an exact HTTPS origin");
+  if (!basePath) errors.push("the production base path must be an absolute URL path");
   const configured = errors.length === 0;
+  const homepageUrl = origin && basePath
+    ? basePath === "/" ? origin : `${origin}${basePath}`
+    : "";
   return Object.freeze({
     name: "Airship",
     clientId,
     description: "Private, browser-native agent runtime with encrypted Chutes inference.",
-    homepageUrl: origin ?? "",
-    redirectUris: origin ? Object.freeze([`${origin}/auth/chutes/callback`]) : Object.freeze([]),
+    homepageUrl,
+    redirectUris: origin && basePath
+      ? Object.freeze([`${origin}${basePath}auth/chutes/callback`])
+      : Object.freeze([]),
     registrationScopes: CHUTES_REGISTRATION_SCOPES,
     scopes: CHUTES_REQUEST_SCOPES,
     tokenEndpointAuthMethod: "none",
@@ -80,6 +88,7 @@ export const CHUTES_ACTIVE_REGISTRATION = resolveChutesOAuthRegistration({
   development: import.meta.env.DEV,
   publicClientId: import.meta.env.VITE_AIRSHIP_CHUTES_PUBLIC_CLIENT_ID,
   publicOrigin: import.meta.env.VITE_AIRSHIP_PUBLIC_ORIGIN,
+  publicBasePath: import.meta.env.BASE_URL,
 });
 
 export type ChutesPkceAttempt = {
@@ -418,6 +427,12 @@ function normalizePublicOrigin(value: string | undefined): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function normalizePublicBasePath(value: string | undefined): string | undefined {
+  const candidate = value?.trim() || "/";
+  if (!candidate.startsWith("/") || candidate.includes("?") || candidate.includes("#")) return undefined;
+  return candidate.endsWith("/") ? candidate : `${candidate}/`;
 }
 
 function validateClientId(value: string): string {

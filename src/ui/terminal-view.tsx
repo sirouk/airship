@@ -18,6 +18,9 @@ export function TerminalView({ workspace, threadId, workspaceRoot = "/workspace"
   const [activeId, setActiveId] = useState<string>();
   const [notice, setNotice] = useState("Loading encrypted terminal metadata…");
   const [syncing, setSyncing] = useState(false);
+  const [renamingId, setRenamingId] = useState<string>();
+  const [renameValue, setRenameValue] = useState("");
+  const cancelRename = useRef(false);
 
   useEffect(() => {
     let current = true;
@@ -48,6 +51,27 @@ export function TerminalView({ workspace, threadId, workspaceRoot = "/workspace"
       setNotice(error instanceof Error ? error.message : "Workspace synchronization failed safely.");
     } finally { setSyncing(false); }
   };
+  const beginRename = (session: TerminalSessionSnapshot) => {
+    cancelRename.current = false;
+    setActiveId(session.id);
+    setRenameValue(session.name);
+    setRenamingId(session.id);
+  };
+  const commitRename = (sessionId: string, value: string) => {
+    if (cancelRename.current) {
+      cancelRename.current = false;
+      setRenamingId(undefined);
+      return;
+    }
+    try {
+      manager.rename(sessionId, value);
+      setNotice(`Terminal renamed to ${value.trim()}.`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Terminal tab could not be renamed.");
+    } finally {
+      setRenamingId(undefined);
+    }
+  };
 
   return (
     <section class="terminal-route" aria-labelledby="terminal-title">
@@ -67,9 +91,24 @@ export function TerminalView({ workspace, threadId, workspaceRoot = "/workspace"
       </div>
 
       <div class="terminal-tabs" role="tablist" aria-label="Terminal tabs">
-        {sessions.map((session) => <button key={session.id} type="button" role="tab" aria-selected={session.id === activeId} onClick={() => setActiveId(session.id)}>
-          <span class={`terminal-status status-${session.status}`} aria-hidden="true" /><strong>{session.name}</strong><small>{statusLabel(session)}</small>
-        </button>)}
+        {sessions.map((session) => <div key={session.id} class="terminal-tab" role="presentation" data-active={session.id === activeId ? "true" : "false"}>
+          {renamingId === session.id ? <input
+            class="terminal-tab__name-input"
+            aria-label={`Rename ${session.name}`}
+            value={renameValue}
+            maxLength={80}
+            autoFocus
+            onInput={(event) => setRenameValue(event.currentTarget.value)}
+            onBlur={(event) => commitRename(session.id, event.currentTarget.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") event.currentTarget.blur();
+              if (event.key === "Escape") { cancelRename.current = true; event.currentTarget.blur(); }
+            }}
+          /> : <button type="button" role="tab" aria-selected={session.id === activeId} onClick={() => setActiveId(session.id)} onDblClick={() => beginRename(session)}>
+            <span class={`terminal-status status-${session.status}`} aria-hidden="true" /><span class="terminal-tab__label"><strong>{session.name}</strong><small>{statusLabel(session)}</small></span>
+          </button>}
+          <button class="terminal-tab__rename" type="button" aria-label={`Rename ${session.name}`} title="Rename terminal" onClick={() => beginRename(session)}>✎</button>
+        </div>)}
       </div>
 
       {active ? <TerminalPanel key={active.id} manager={manager} session={active} onNotice={setNotice} /> : (
@@ -88,17 +127,23 @@ function TerminalPanel({ manager, session: initial, onNotice }: Readonly<{
   const [session, setSession] = useState(initial);
   const host = useRef<HTMLDivElement>(null);
   const terminal = useRef<Terminal>();
-  const fit = useRef<FitAddon>();
   const renderedOutput = useRef("");
+  const chromeSignature = useRef(sessionChromeSignature(initial));
 
-  useEffect(() => manager.subscribe(session.id, (next) => {
-    setSession(next);
+  useEffect(() => manager.subscribe(initial.id, (next) => {
+    host.current?.setAttribute("data-output-chars", String(next.bufferedOutput.length));
     const emulator = terminal.current;
-    if (!emulator || next.bufferedOutput === renderedOutput.current) return;
-    if (next.bufferedOutput.startsWith(renderedOutput.current)) emulator.write(next.bufferedOutput.slice(renderedOutput.current.length));
-    else { emulator.clear(); emulator.write(next.bufferedOutput); }
-    renderedOutput.current = next.bufferedOutput;
-  }), [manager, session.id]);
+    if (emulator && next.bufferedOutput !== renderedOutput.current) {
+      if (next.bufferedOutput.startsWith(renderedOutput.current)) emulator.write(next.bufferedOutput.slice(renderedOutput.current.length));
+      else { emulator.clear(); emulator.write(next.bufferedOutput); }
+      renderedOutput.current = next.bufferedOutput;
+    }
+    const signature = sessionChromeSignature(next);
+    if (signature !== chromeSignature.current) {
+      chromeSignature.current = signature;
+      setSession(next);
+    }
+  }), [manager, initial.id]);
 
   useEffect(() => {
     if (!host.current) return;
@@ -118,48 +163,60 @@ function TerminalPanel({ manager, session: initial, onNotice }: Readonly<{
     emulator.loadAddon(fitter);
     emulator.open(host.current);
     terminal.current = emulator;
-    fit.current = fitter;
-    if (session.bufferedOutput) {
-      emulator.write(session.bufferedOutput);
-      renderedOutput.current = session.bufferedOutput;
+    if (initial.bufferedOutput) {
+      emulator.write(initial.bufferedOutput);
+      renderedOutput.current = initial.bufferedOutput;
     }
-    const resize = new ResizeObserver(() => {
-      try { fitter.fit(); manager.resize(session.id, { cols: emulator.cols, rows: emulator.rows }); } catch { /* Hidden route or zero-size transition. */ }
-    });
+    const sendInput = (data: string) => {
+      if (!data) return;
+      void manager.write(initial.id, data).catch((error) => onNotice(error instanceof Error ? error.message : "Terminal input failed safely."));
+    };
+    const input = emulator.onData(sendInput);
+    const binary = emulator.onBinary(sendInput);
+    let frame = 0;
+    let autoStartPending = true;
+    let lastDimensions = "";
+    const layout = () => {
+      frame = 0;
+      try {
+        fitter.fit();
+        const dimensions = { cols: emulator.cols, rows: emulator.rows };
+        const key = `${dimensions.cols}x${dimensions.rows}`;
+        if (key !== lastDimensions) {
+          lastDimensions = key;
+          manager.resize(initial.id, dimensions);
+        }
+        if (autoStartPending) {
+          autoStartPending = false;
+          void manager.start(initial.id, dimensions).catch((error) => onNotice(error instanceof Error ? error.message : "Terminal could not start."));
+        }
+      } catch { /* Hidden route or zero-size transition. */ }
+    };
+    const scheduleLayout = () => {
+      if (!frame) frame = requestAnimationFrame(layout);
+    };
+    const resize = new ResizeObserver(scheduleLayout);
     resize.observe(host.current);
-    requestAnimationFrame(() => { try { fitter.fit(); } catch { /* Initial route layout can still be settling. */ } });
-    return () => { resize.disconnect(); emulator.dispose(); terminal.current = undefined; fit.current = undefined; };
-  }, [manager, session.id]);
+    scheduleLayout();
+    return () => {
+      resize.disconnect();
+      if (frame) cancelAnimationFrame(frame);
+      input.dispose();
+      binary.dispose();
+      emulator.dispose();
+      terminal.current = undefined;
+    };
+  }, [initial.id, manager, onNotice]);
 
   const dimensions = () => ({ cols: terminal.current?.cols ?? 100, rows: terminal.current?.rows ?? 30 });
-  const start = () => void manager.start(session.id, dimensions());
   const restart = () => void manager.restart(session.id, dimensions());
   const close = async () => { await manager.close(session.id); onNotice("Terminal tab closed. Its page-local process was terminated."); };
-  const sendInput = (data: string) => {
-    if (!data) return;
-    void manager.write(session.id, data).catch((error) => onNotice(error instanceof Error ? error.message : "Terminal input failed safely."));
-  };
-  const keyDown = (event: KeyboardEvent) => {
-    const data = terminalKeyData(event);
-    if (data === undefined) return;
-    event.preventDefault();
-    event.stopPropagation();
-    sendInput(data);
-  };
-  const paste = (event: ClipboardEvent) => {
-    const data = event.clipboardData?.getData("text/plain") ?? "";
-    if (!data) return;
-    event.preventDefault();
-    event.stopPropagation();
-    sendInput(data);
-  };
-  const compositionEnd = (event: CompositionEvent) => sendInput(event.data);
 
   return <div class="terminal-panel">
     <div class="terminal-panel__bar">
       <div><span class={`terminal-status status-${session.status}`} aria-hidden="true" /><strong>{statusLabel(session)}</strong><code>{session.cwd}</code>{session.threadId ? <span title={session.threadId}>thread {compactId(session.threadId)}</span> : null}</div>
       <div>
-        {session.status === "running" ? <button type="button" onClick={() => void manager.interrupt(session.id)} aria-label="Interrupt process">⌃C <span>Interrupt</span></button> : <button type="button" onClick={start}><Icon name="terminal" size={14} /> Start</button>}
+        {session.status === "running" ? <button type="button" onClick={() => void manager.interrupt(session.id)} aria-label="Interrupt process">⌃C <span>Interrupt</span></button> : <span class="terminal-panel__starting" aria-live="polite">{statusLabel(session)}</span>}
         <button type="button" onClick={restart} disabled={session.status === "starting"}><Icon name="branch" size={14} /> Restart</button>
         <button type="button" onClick={() => void close()} aria-label="Close terminal tab">× <span>Close</span></button>
       </div>
@@ -169,9 +226,6 @@ function TerminalPanel({ manager, session: initial, onNotice }: Readonly<{
       ref={host}
       aria-label={`${session.name} browser terminal`}
       data-output-chars={session.bufferedOutput.length}
-      onKeyDownCapture={keyDown}
-      onPasteCapture={paste}
-      onCompositionEndCapture={compositionEnd}
     />
     <div class="terminal-panel__meta"><span>{session.detail}</span><details><summary>Command history · {session.history.length}</summary>{session.history.length ? <ol>{session.history.slice().reverse().map((command, index) => <li key={`${index}-${command}`}><code>{command}</code></li>)}</ol> : <p>No commands recorded in this page.</p>}</details></div>
   </div>;
@@ -185,34 +239,6 @@ function statusLabel(session: TerminalSessionSnapshot): string {
 
 function compactId(value: string): string { return value.length > 14 ? `${value.slice(0, 7)}…${value.slice(-5)}` : value; }
 
-/** Translate the focused xterm surface into the WebContainer PTY explicitly. */
-function terminalKeyData(event: KeyboardEvent): string | undefined {
-  if (event.isComposing || event.key === "Process" || event.key === "Dead") return undefined;
-  if ((event.metaKey || event.ctrlKey) && (event.key.toLowerCase() === "c" || event.key.toLowerCase() === "v") && event.shiftKey) {
-    return undefined;
-  }
-  if (event.metaKey) return undefined;
-  if (event.ctrlKey && event.key.length === 1) {
-    const code = event.key.toUpperCase().charCodeAt(0);
-    if (code >= 64 && code <= 95) return String.fromCharCode(code - 64);
-  }
-  const sequences: Record<string, string> = {
-    Enter: "\r",
-    Backspace: "\x7f",
-    Tab: "\t",
-    Escape: "\x1b",
-    ArrowUp: "\x1b[A",
-    ArrowDown: "\x1b[B",
-    ArrowRight: "\x1b[C",
-    ArrowLeft: "\x1b[D",
-    Home: "\x1b[H",
-    End: "\x1b[F",
-    Delete: "\x1b[3~",
-    PageUp: "\x1b[5~",
-    PageDown: "\x1b[6~",
-  };
-  const sequence = sequences[event.key];
-  if (sequence) return sequence;
-  if (event.key.length !== 1 || event.ctrlKey) return undefined;
-  return event.altKey ? `\x1b${event.key}` : event.key;
+function sessionChromeSignature(session: TerminalSessionSnapshot): string {
+  return JSON.stringify([session.name, session.threadId, session.cwd, session.status, session.exitCode, session.detail, session.history]);
 }

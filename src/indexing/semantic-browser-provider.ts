@@ -42,7 +42,9 @@ function trustedSemanticWorkerUrl(url: URL): string | object {
     createScriptURL(input) {
       const candidate = new URL(input, location.origin);
       const sourceWorker = candidate.pathname === "/src/indexing/semantic.worker.ts" || candidate.pathname === "/src/indexing/semantic.worker.ts?worker_file&type=module";
-      const builtWorker = /^\/assets\/semantic\.worker-[A-Za-z0-9_-]+\.js$/.test(candidate.pathname);
+      const builtWorkerPrefix = `${import.meta.env.BASE_URL}assets/`;
+      const builtWorker = candidate.pathname.startsWith(builtWorkerPrefix) &&
+        /^semantic\.worker-[A-Za-z0-9_-]+\.js$/u.test(candidate.pathname.slice(builtWorkerPrefix.length));
       if (candidate.origin !== location.origin || (!sourceWorker && !builtWorker) || candidate.hash) {
         throw new TypeError("Airship refused an unapproved semantic worker URL.");
       }

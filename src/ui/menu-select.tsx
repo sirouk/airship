@@ -150,7 +150,7 @@ export function MenuSelect({
               }}
             >
               {leading ? leading(option) : null}
-              <span><strong>{option.label}</strong>{option.description ? <small>{option.description}</small> : null}</span>
+              <span class="menu-select-option-copy"><strong>{option.label}</strong>{option.description ? <small>{option.description}</small> : null}</span>
               {option.value === value ? <span class="menu-select-check" aria-hidden="true">✓</span> : null}
             </button>
           ))}

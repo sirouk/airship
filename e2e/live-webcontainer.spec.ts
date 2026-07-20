@@ -48,7 +48,6 @@ test("opt-in live Workspace Terminal accepts an interactive command", async ({ p
   })));
   const liveBaseUrl = process.env.AIRSHIP_LIVE_BASE_URL ?? "";
   await page.goto(`${liveBaseUrl}/#terminal`);
-  await page.getByRole("button", { name: "Start", exact: true }).click();
   await expect(page.locator(".terminal-panel__bar strong", { hasText: "Running" })).toBeVisible({ timeout: 90_000 });
   console.log("terminal-live: running");
 
@@ -64,7 +63,7 @@ test("opt-in live Workspace Terminal accepts an interactive command", async ({ p
   await expect(emulator.locator(".xterm-accessibility-tree")).toContainText("AIRSHIP_TERMINAL_42", { timeout: 30_000 });
   console.log("terminal-live: output");
 
-  await emulator.evaluate((element) => {
+  await input.evaluate((element) => {
     const clipboard = new DataTransfer();
     clipboard.setData("text/plain", "node -e \"console.log('AIRSHIP_PASTE_43')\"");
     element.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: clipboard }));

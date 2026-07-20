@@ -55,10 +55,7 @@ import {
   type GitOperation,
   type GitOperationDescriptor,
 } from "../git";
-import {
-  ChutesInferenceTransport,
-  type ChutesInvocationTelemetry,
-} from "../inference/chutes";
+import type { ChutesInferenceTransport, ChutesInvocationTelemetry } from "../inference/chutes";
 import { modelInputModalityCapability, type AirshipModel } from "../models";
 import type { ExecutionCapability } from "../execution/runtime-registry";
 import {
@@ -92,10 +89,8 @@ import { createLocalLabConfigureRequest } from "../vault/local-lab";
 import { WorkspaceRootKey } from "../storage/encrypted-envelope";
 import { isWorkspaceControlPlanePath, type WorkspaceEntry, type WorkspaceFile, type WorkspacePort } from "../workspace/contracts";
 import { MemoryWorkspace } from "../workspace/memory";
-import { BillingView } from "./billing-route";
 import { composeClaimStack, type ClaimStackFact, type ClaimStackItem } from "./claim-stack-model";
 import { ApprovalDock } from "./approval-dock";
-import { AccessView as ConnectionAccessView } from "./access-route";
 import { attestationRecordIdForReceipt, sessionAttestationReceipts } from "./attestation-history";
 import type { AttestationRefreshTarget } from "./attestations-view";
 import { ContextView as ClientContextView } from "./context-route";
@@ -140,7 +135,6 @@ import {
 import { postureSeal, SEAL_LABELS, Seal, sealStateForProofStatus, type SealState } from "./seal";
 import { enabledSlashSelection, firstEnabledSlashIndex, moveSlashSelection } from "./slash-menu-state";
 import type { SourcesImportRequest } from "./sources-view";
-import { VaultView } from "./vault-view";
 import { transitionVaultProvider } from "./vault-provider-transition";
 import {
   ASSISTANT_MESSAGE_ESTIMATE,
@@ -215,6 +209,9 @@ type CapabilitiesScreenComponent = typeof import("./capabilities-view").Capabili
 type GoogleDriveSetupComponent = typeof import("./google-drive-setup").GoogleDriveSetup;
 type LocalLabSetupComponent = typeof import("./local-lab-setup").LocalLabSetup;
 type SessionsScreenComponent = typeof import("./sessions-route").SessionsView;
+type VaultScreenComponent = typeof import("./vault-view").VaultView;
+type AccessScreenComponent = typeof import("./access-view").AccessView;
+type BillingScreenComponent = typeof import("./billing-view").BillingView;
 const WORKSPACE_EDITOR_BYTE_LIMIT = 128 * 1024;
 class MountedAttestationError extends Error {
   readonly name = "AttestationEvidenceClientError";
@@ -423,6 +420,12 @@ export function App() {
   const [GoogleDriveSetupScreen, setGoogleDriveSetupScreen] = useState<GoogleDriveSetupComponent>();
   const [LocalLabSetupScreen, setLocalLabSetupScreen] = useState<LocalLabSetupComponent>();
   const [SessionsScreen, setSessionsScreen] = useState<SessionsScreenComponent>();
+  const [VaultScreen, setVaultScreen] = useState<VaultScreenComponent>();
+  const [vaultViewError, setVaultViewError] = useState<string>();
+  const [AccessScreen, setAccessScreen] = useState<AccessScreenComponent>();
+  const [accessViewError, setAccessViewError] = useState<string>();
+  const [BillingScreen, setBillingScreen] = useState<BillingScreenComponent>();
+  const [billingViewError, setBillingViewError] = useState<string>();
   const runtime = useRef<Runtime>();
   const workspaceOpenRequest = useRef(0);
   const approvalBroker = useMemo(() => new ApprovalBroker(), []);
@@ -793,15 +796,20 @@ export function App() {
   }, [view, proofSection, AttestationsScreen]);
 
   useEffect(() => {
-    if (view !== "sessions" || SessionsScreen) return;
+    if ((view !== "sessions" || SessionsScreen) && (view !== "vault" || VaultScreen)) return;
     let current = true;
+    if (view === "vault") setVaultViewError(undefined);
     void import("./sessions-route").then((module) => {
-      if (current) setSessionsScreen(() => module.SessionsView);
+      if (!current) return;
+      if (view === "sessions") setSessionsScreen(() => module.SessionsView);
+      if (view === "vault") setVaultScreen(() => module.VaultView);
     }).catch(() => {
-      if (current) setRuntimeStatus("Session library interface could not be loaded");
+      if (!current) return;
+      if (view === "sessions") setRuntimeStatus("Session library interface could not be loaded");
+      if (view === "vault") setVaultViewError("The Vault interface could not be loaded. No provider, key, or runtime state changed.");
     });
     return () => { current = false; };
-  }, [view, SessionsScreen]);
+  }, [view, SessionsScreen, VaultScreen]);
 
   useEffect(() => {
     if (view !== "vault" || (GoogleDriveSetupScreen && LocalLabSetupScreen)) return;
@@ -816,6 +824,23 @@ export function App() {
     });
     return () => { current = false; };
   }, [view, GoogleDriveSetupScreen, LocalLabSetupScreen]);
+
+  useEffect(() => {
+    if ((view !== "access" || AccessScreen) && (view !== "billing" || BillingScreen)) return;
+    let current = true;
+    if (view === "access") setAccessViewError(undefined);
+    if (view === "billing") setBillingViewError(undefined);
+    void loadDeferredCapabilities().then((module) => {
+      if (!current) return;
+      if (view === "access") setAccessScreen(() => module.AccessView);
+      if (view === "billing") setBillingScreen(() => module.BillingView);
+    }).catch(() => {
+      if (!current) return;
+      if (view === "access") setAccessViewError("The Connection interface could not be loaded. No credential or session state changed.");
+      if (view === "billing") setBillingViewError("The Account interface could not be loaded. No credential or billing state changed.");
+    });
+    return () => { current = false; };
+  }, [view, AccessScreen, BillingScreen]);
 
   useEffect(() => {
     if ((view !== "workspace" && view !== "editor") || EditorScreen) return;
@@ -1035,12 +1060,12 @@ export function App() {
   }, [activeTheme, preferences]);
 
   useEffect(() => {
-    if (window.location.pathname !== "/auth/chutes/callback") return;
+    if (window.location.pathname !== `${import.meta.env.BASE_URL}auth/chutes/callback`) return;
     let disposed = false;
     const callbackSearch = window.location.search;
     const rawAttempt = sessionStorage.getItem(CHUTES_OAUTH_ATTEMPT_KEY);
     sessionStorage.removeItem(CHUTES_OAUTH_ATTEMPT_KEY);
-    window.history.replaceState({ view: "access" }, "", "/#connection");
+    window.history.replaceState({ view: "access" }, "", `${import.meta.env.BASE_URL}#connection`);
     setView("access");
     setOauthCallbackStatus({ kind: "blocked", message: "Exchanging the one-time authorization code directly with Chutes…" });
     void (async () => {
@@ -1060,7 +1085,7 @@ export function App() {
         setOauthBootstrapRevision((value) => value + 1);
         setOauthCallbackStatus({
           kind: "verified",
-          message: "Chutes sign-in succeeded with S256 PKCE. The scoped token is in page memory; review the model and endpoint posture to finish connecting.",
+          message: "Chutes sign-in complete with S256 PKCE. Finish below: choose a model, confirm the required endpoint-proof policy, then select Finish: verify & connect. No API key is needed.",
         });
       } catch (error) {
         if (disposed) return;
@@ -2201,7 +2226,7 @@ export function App() {
       {
         ...welcomeMessage,
         id: randomUuid(),
-        content: `Connected to ${model.id} through Chutes E2EE v1. Every turn must pass fresh local endpoint attestation before the encrypted invocation is sent.`,
+        content: `Connected to ${model.id} through Chutes E2EE v1 with a fail-closed proof gate. Before each encrypted invocation, Airship must locally accept fresh endpoint evidence and its key binding. Turn receipts show the evidence actually established; this connection policy alone is not proof.`,
       },
     ]);
     setEventCount(1);
@@ -2214,7 +2239,7 @@ export function App() {
     setCredentialRevision((value) => value + 1);
     setInvocationTelemetry(undefined);
     setConnection(connectionMetadata);
-    setRuntimeStatus("Encrypted, attestation-required session ready");
+    setRuntimeStatus("Encrypted session ready · endpoint proof required on every turn");
     navigate("chat");
   }
 
@@ -2301,7 +2326,7 @@ export function App() {
     setAttestationFailure(undefined);
     setInvocationTelemetry(undefined);
     setConnection(withChutesModel(connection, model.id));
-    setRuntimeStatus("Encrypted, unattested session ready");
+    setRuntimeStatus("Encrypted session ready · endpoint proof required on next turn");
   }
 
   async function saveProfileRevision(draft: ProfileEditorDraft): Promise<ProfileRevision> {
@@ -2778,6 +2803,10 @@ export function App() {
                   </div>
                 </div>
               </div>
+              {!chutesConnected ? <div class="chat-live-guidance" role="note">
+                <span><strong>Local tools ready.</strong> Slash commands work here. Connect Chutes by OAuth or API key for live E2EE.</span>
+                <button type="button" onClick={() => navigate("access")}>Connect Chutes</button>
+              </div> : null}
               <div
                 ref={transcriptElement}
                 class="transcript"
@@ -2971,13 +3000,11 @@ export function App() {
                   </div>
                 </div>
                 {composerNotice ? <p class="composer-notice" role="status">{composerNotice}</p> : null}
-                <p class={!online ? "connectivity-inline-reason" : undefined} role={!online ? "status" : undefined}>
-                  {!online
-                    ? OFFLINE_INLINE_REASON
-                    : chutesConnected
-                      ? `Encrypted inference through ${connection.model}; TEE claim remains unverified.`
-                      : "Demo inference is deterministic and local. No credential or workspace byte leaves this page."}
-                </p>
+                {!online ? <p class="connectivity-inline-reason" role="status">{OFFLINE_INLINE_REASON}</p>
+                  : isChutesConnected(connection) ? <p>{connection.posture === "encrypted-attested"
+                    ? `Encrypted inference through ${connection.model}; fresh endpoint proof is required before the next invocation.`
+                    : `Encrypted inference through ${connection.model}; this compatibility connection has no required endpoint-proof gate.`}</p>
+                    : null}
               </div>
             </section>
             <aside class="inspector"><ProofInspector
@@ -3059,7 +3086,7 @@ export function App() {
         ) : null}
         {view === "vault" ? (
           <div class="work-view">
-            <VaultView
+            {VaultScreen ? <VaultScreen
               snapshot={vaultSnapshot}
               runtimeAdopted={vaultRuntimeAdopted}
               provider={preferences.vaultBackend}
@@ -3075,7 +3102,7 @@ export function App() {
                 vault.disconnect();
                 setRuntimeStatus("Vault disconnected and page-memory key material cleared");
               }}
-            />
+            /> : vaultViewError ? <section class="panel" role="alert"><h1>Vault</h1><p>{vaultViewError}</p></section> : <RouteSkeleton label="Loading the Vault interface" />}
             {(vaultSetupOpen || (preferences.vaultBackend === "google-drive" && vaultSnapshot.phase === "disconnected")) ? (
               <div class="vault-setup-slot">
                 {preferences.vaultBackend === "google-drive" ? GoogleDriveSetupScreen ? <GoogleDriveSetupScreen onConfigure={(request) => {
@@ -3096,8 +3123,8 @@ export function App() {
             ) : null}
           </div>
         ) : null}
-        {view === "billing" ? (
-          <BillingView
+        {view === "billing" ? BillingScreen ? (
+          <BillingScreen
             accountReadable={isChutesConnected(connection)}
             credentialKind={connection.kind === "chutes-oauth" ? "oauth" : connection.kind === "chutes-api-key" ? "api-key" : undefined}
             credentialRevision={credentialRevision}
@@ -3106,7 +3133,7 @@ export function App() {
             loadSnapshot={loadBillingSnapshot}
             onOpenAccess={() => navigate("access")}
           />
-        ) : null}
+        ) : billingViewError ? <section class="work-view panel" role="alert"><h1>Account</h1><p>{billingViewError}</p></section> : <RouteSkeleton label="Loading Account" /> : null}
         {view === "proof" ? (
           <ProofView
             receipt={proofReceipt}
@@ -3133,8 +3160,8 @@ export function App() {
             /> : attestationsViewError ? <div class="panel" role="alert">{attestationsViewError}</div> : <RouteSkeleton label="Loading attestation evidence" />}
           />
         ) : null}
-        {view === "access" ? (
-          <ConnectionAccessView
+        {view === "access" ? AccessScreen ? (
+          <AccessScreen
             connection={connection}
             online={online}
             onConnect={({ connection: nextConnection, transport, model, models, credential }) =>
@@ -3165,7 +3192,7 @@ export function App() {
               getBearerToken: currentOAuthBearer,
             }}
           />
-        ) : null}
+        ) : accessViewError ? <section class="work-view panel" role="alert"><h1>Connection</h1><p>{accessViewError}</p></section> : <RouteSkeleton label="Loading Connection" /> : null}
       </main>
       </ViewErrorBoundary>
 
@@ -3556,9 +3583,9 @@ export function describeAttestationSeal(args: {
   }
   return args.connected
     ? {
-        state: "none",
-        label: "TEE not checked",
-        detail: "No fresh endpoint evidence record is attached to the active turn.",
+        state: "asserted",
+        label: "Proof required next turn",
+        detail: "The fail-closed endpoint-proof policy is armed, but no active turn receipt currently establishes a hardware claim.",
       }
     : { state: "none", label: "TEE not checked", detail: "Demo provider" };
 }

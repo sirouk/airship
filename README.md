@@ -178,8 +178,9 @@ It enables sign-in only when the build supplies both:
 
 - `VITE_AIRSHIP_CHUTES_PUBLIC_CLIENT_ID`, registered at Chutes as
   Browser/native PKCE with token-endpoint authentication `none`; and
-- `VITE_AIRSHIP_PUBLIC_ORIGIN`, an exact HTTPS origin whose registered callback
-  is `<origin>/auth/chutes/callback`.
+- `VITE_AIRSHIP_PUBLIC_ORIGIN`, an exact HTTPS origin. The registered callback
+  is `<origin><base-path>auth/chutes/callback`; the repository Pages workflow
+  builds with `/airship/` as its base path.
 
 If either value is missing or malformed, the production sign-in control fails
 closed while the deliberate page-memory API-key path remains available.

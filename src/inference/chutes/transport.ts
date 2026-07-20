@@ -28,6 +28,7 @@ import {
 } from "./crypto";
 import {
   ChutesTransportError,
+  type ChutesTransportOperation,
   cancelledError,
   errorFromAbortSignal,
   normalizeTransportError,
@@ -154,7 +155,7 @@ const SAFE_NONCE_MESSAGES = new Set([
 
 export class ChutesInferenceTransport implements InferenceTransport {
   readonly id = "chutes-e2ee-v1";
-  readonly posture: SecurityPosture;
+  readonly posture: Extract<SecurityPosture, "encrypted-attested" | "encrypted-unattested">;
 
   private readonly apiKeySource: ChutesTransportOptions["apiKey"];
   private readonly fetchImpl: FetchLike;
@@ -185,7 +186,31 @@ export class ChutesInferenceTransport implements InferenceTransport {
   async listModels(signal: AbortSignal = new AbortController().signal): Promise<ChutesModel[]> {
     const apiKey = await abortable(this.resolveApiKey(), signal);
     const authScope = await sha256Local(apiKey);
-    return this.getModels(apiKey, authScope, signal);
+    return this.getModels(authScope, signal);
+  }
+
+  /** Prove protected E2E endpoint access without spending a nonce or invoking. */
+  async verifyModelAccess(
+    modelId: string,
+    signal: AbortSignal = new AbortController().signal,
+  ): Promise<void> {
+    const apiKey = await abortable(this.resolveApiKey(), signal);
+    const authScope = await sha256Local(apiKey);
+    const models = await this.getModels(authScope, signal);
+    const model = models.find((candidate) => candidate.id === modelId);
+    if (!model) {
+      throw new ChutesTransportError(
+        "MODEL_NOT_CONFIDENTIAL",
+        `Model ${modelId} is not explicitly marked confidential_compute by Chutes discovery.`,
+        { operation: "model-discovery" },
+      );
+    }
+    await this.fetchAndPoolLeases(
+      apiKey,
+      model.chuteId,
+      `${authScope}:${model.chuteId}`,
+      signal,
+    );
   }
 
   async *stream(request: InferenceRequest, parentSignal: AbortSignal): AsyncIterable<InferenceEvent> {
@@ -200,7 +225,7 @@ export class ChutesInferenceTransport implements InferenceTransport {
       throwIfAborted(signal);
       const apiKey = await abortable(this.resolveApiKey(), signal);
       const authScope = await sha256Local(apiKey);
-      const models = await this.getModels(apiKey, authScope, signal);
+      const models = await this.getModels(authScope, signal);
       const model = models.find((candidate) => candidate.id === request.model);
       if (!model) {
         throw new ChutesTransportError(
@@ -290,7 +315,7 @@ export class ChutesInferenceTransport implements InferenceTransport {
             { status: response.status, detail: errorBody.slice(0, 500) },
           );
         }
-        throw httpError("Chutes E2EE invoke", response.status, errorBody);
+        throw httpError("invoke", "Chutes E2EE invoke", response.status, errorBody);
       }
 
       if (!response?.ok) {
@@ -506,7 +531,7 @@ export class ChutesInferenceTransport implements InferenceTransport {
     return key;
   }
 
-  private async getModels(apiKey: string, authScope: string, signal: AbortSignal) {
+  private async getModels(authScope: string, signal: AbortSignal) {
     const cached = this.modelCaches.get(authScope);
     if (cached && cached.expiresAt > this.now()) return cached.models.slice();
 
@@ -515,7 +540,7 @@ export class ChutesInferenceTransport implements InferenceTransport {
       const controller = new AbortController();
       flight = { controller, promise: Promise.resolve([]), waiters: 0, settled: false };
       const created = flight;
-      created.promise = this.fetchModels(apiKey, controller.signal).finally(() => {
+      created.promise = this.fetchModels(controller.signal).finally(() => {
         created.settled = true;
         if (this.pendingModels.get(authScope) === created) this.pendingModels.delete(authScope);
       });
@@ -537,20 +562,19 @@ export class ChutesInferenceTransport implements InferenceTransport {
     }
   }
 
-  private async fetchModels(apiKey: string, signal: AbortSignal): Promise<ChutesModel[]> {
+  private async fetchModels(signal: AbortSignal): Promise<ChutesModel[]> {
     const response = await abortable(
       this.fetchImpl(`${this.options.llmBase}/v1/models`, {
         method: "GET",
         mode: "cors",
         credentials: "omit",
         signal,
-        headers: { Authorization: `Bearer ${apiKey}` },
       }),
       signal,
     );
     if (!response.ok) {
       const detail = await readTextBounded(response, this.options.maxErrorBodyBytes, signal);
-      throw httpError("Chutes model discovery", response.status, detail);
+      throw httpError("model-discovery", "Chutes model discovery", response.status, detail);
     }
     const body = await readJsonBounded(response, this.options.maxJsonResponseBytes, signal);
     if (!isRecord(body) || !Array.isArray(body.data)) {
@@ -641,7 +665,7 @@ export class ChutesInferenceTransport implements InferenceTransport {
     );
     if (!response.ok) {
       const detail = await readTextBounded(response, this.options.maxErrorBodyBytes, signal);
-      throw httpError("Chutes E2EE instance discovery", response.status, detail);
+      throw httpError("instance-discovery", "Chutes E2EE instance discovery", response.status, detail);
     }
     const body = await readJsonBounded(response, this.options.maxJsonResponseBytes, signal);
     if (!isRecord(body) || !Array.isArray(body.instances)) {
@@ -1011,10 +1035,16 @@ function isSafeNonceRejection(response: Response, body: string) {
   return SAFE_NONCE_MESSAGES.has(body.trim().toLowerCase());
 }
 
-function httpError(operation: string, status: number, body: string) {
-  return new ChutesTransportError("HTTP_ERROR", `${operation} failed with HTTP ${status}.`, {
+function httpError(
+  operation: ChutesTransportOperation,
+  label: string,
+  status: number,
+  body: string,
+) {
+  return new ChutesTransportError("HTTP_ERROR", `${label} failed with HTTP ${status}.`, {
     status,
     detail: body.slice(0, 500),
+    operation,
   });
 }
 

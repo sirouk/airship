@@ -70,7 +70,7 @@ export function ModelPicker({ models, value, disabled, onSelect }: Readonly<{ mo
   }, [open]);
   return <div class="model-picker" ref={root}>
     <button ref={trigger} class="model-picker-trigger" type="button" disabled={disabled} aria-haspopup="dialog" aria-controls={open ? `${optionsId}-dialog` : undefined} aria-expanded={open} onClick={() => open ? close(false) : openPicker()} onKeyDown={(event) => { if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) { event.preventDefault(); openPicker(); setActive(event.key === "ArrowUp" || event.key === "End" ? Math.max(0, visible.length - 1) : 0); } if (event.key === "Escape" && open) { event.preventDefault(); close(); } }}>{selected ? <ModelLogo model={selected} /> : null}<span class="model-picker-value">{selected?.id ?? "Choose model"}</span><span aria-hidden="true">⌄</span></button>
-    {open ? <div id={`${optionsId}-dialog`} class="model-picker-popover" role="dialog" aria-label="Choose a model" onKeyDown={(event) => {
+    {open ? <div id={`${optionsId}-dialog`} class="model-picker-popover" role="dialog" aria-label="Choose a Chutes model" onKeyDown={(event) => {
       if (event.key === "Escape") { event.preventDefault(); close(); }
       if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); setActive((current) => nextModelIndex(visible.length, current, event.key === "ArrowDown" ? 1 : -1)); }
       if (event.key === "Home" || event.key === "End") { event.preventDefault(); setActive(event.key === "Home" ? 0 : Math.max(0, visible.length - 1)); }

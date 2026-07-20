@@ -1,6 +1,6 @@
 .vault-view {
   display: grid;
-  gap: 1rem;
+  gap: clamp(.8rem, 1.25vw, 1rem);
   color: var(--ink, #e9e8e3);
 }
 
@@ -14,10 +14,12 @@
   gap: 1rem;
 }
 
-.vault-view__header h2,
+.vault-view__header h1,
 .vault-view__evidence h3 {
   margin: 0;
 }
+
+.vault-view__header > div { min-width: 0; }
 
 .vault-view__header p:not(.vault-view__eyebrow) {
   max-width: 68ch;
@@ -53,7 +55,7 @@
   grid-template-columns: minmax(0, 1fr) minmax(15rem, 22rem);
   align-items: center;
   gap: .75rem 1rem;
-  padding: .65rem .75rem;
+  padding: .75rem .8rem;
   border: 1px solid var(--line, #343631);
   border-radius: var(--radius-control);
   background: var(--surface-soft);
@@ -63,6 +65,47 @@
 .vault-provider-selector span { color: var(--ink-muted); font-size: var(--fs-micro); }
 .vault-provider-selector > span { grid-column: 1 / -1; color: var(--v-info); }
 .vault-provider-selector__menu { min-width: 0; }
+.vault-provider-selector__menu .menu-select-trigger {
+  min-height: 44px;
+  border-color: var(--line-strong);
+  color: var(--ink);
+  background: var(--surface-raised);
+  font-weight: 650;
+}
+.vault-provider-selector__menu .menu-select-trigger:hover,
+.vault-provider-selector__menu .menu-select-trigger[aria-expanded="true"] {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line-strong));
+  color: var(--ink);
+  background: color-mix(in srgb, var(--accent) 5%, var(--surface-raised));
+}
+.vault-provider-selector__menu .menu-select-popover {
+  gap: 4px;
+  padding: 7px;
+  border-color: var(--line-strong);
+  background: var(--surface-raised);
+}
+.vault-provider-selector__menu .menu-select-option {
+  min-height: 52px;
+  color: var(--ink);
+  background: transparent;
+  font-weight: 500;
+}
+.vault-provider-selector__menu .menu-select-option:hover,
+.vault-provider-selector__menu .menu-select-option:focus-visible {
+  border-color: var(--line-strong);
+  color: var(--ink);
+  background: var(--surface-soft);
+}
+.vault-provider-selector__menu .menu-select-option[aria-selected="true"] {
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--line));
+  color: var(--ink);
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface-soft));
+}
+.vault-provider-selector__menu .menu-select-option small {
+  color: var(--ink-muted);
+  line-height: 1.35;
+  white-space: normal;
+}
 
 .vault-view__truth,
 .vault-view__empty,
@@ -105,6 +148,14 @@
   padding: .8rem 1rem;
   border-bottom: 1px solid var(--line, #343631);
 }
+
+.vault-view__configuration > div:nth-child(odd) { border-right: 1px solid var(--line, #343631); }
+.vault-view__configuration > div:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+  border-right: 0;
+}
+.vault-view__configuration > div:nth-last-child(-n + 2) { border-bottom: 0; }
+.vault-view__configuration > div:last-child:nth-child(odd) { border-bottom: 0; }
 
 .vault-view__configuration dt {
   color: var(--ink-muted, #aaa9a4);
@@ -162,7 +213,8 @@
 .vault-view__diagnostic p { margin: .65rem 0 0; color: var(--ink-muted, #aaa9a4); line-height: 1.5; }
 
 .vault-view__actions { justify-content: flex-start; flex-wrap: wrap; }
-.vault-view button {
+.vault-view__actions > button,
+.vault-view__empty > button {
   min-height: 44px;
   padding: .65rem 1rem;
   border: 1px solid var(--brass, #c7a867);
@@ -174,10 +226,13 @@
   cursor: pointer;
 }
 
-.vault-view button:disabled { cursor: not-allowed; opacity: .45; }
+.vault-view__actions > button:disabled,
+.vault-view__empty > button:disabled { cursor: not-allowed; opacity: .45; }
 .vault-view .vault-view__button--secondary { background: transparent; color: var(--ink, #e9e8e3); }
 .vault-view .vault-view__button--quiet { border-color: transparent; background: transparent; color: var(--ink-muted, #aaa9a4); }
-.vault-view button:focus-visible,
+.vault-view__actions > button:focus-visible,
+.vault-view__empty > button:focus-visible,
+.vault-view .menu-select button:focus-visible,
 .vault-view summary:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
 
 @media (max-width: 680px) {
@@ -186,8 +241,13 @@
   .vault-view__phase { align-self: flex-start; }
   .vault-view__configuration,
   .vault-view__readiness { grid-template-columns: 1fr; }
+  .vault-view__configuration > div,
+  .vault-view__configuration > div:nth-child(odd),
+  .vault-view__configuration > div:nth-last-child(-n + 2) { grid-column: auto; border-right: 0; border-bottom: 1px solid var(--line, #343631); }
+  .vault-view__configuration > div:last-child { border-bottom: 0; }
   .vault-view__actions { display: grid; grid-template-columns: 1fr; }
-  .vault-view button { width: 100%; }
+  .vault-view__actions > button,
+  .vault-view__empty > button { width: 100%; }
   .vault-provider-selector { grid-template-columns: 1fr; }
   .vault-provider-selector .menu-select-trigger { width: 100%; }
 }

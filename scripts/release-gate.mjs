@@ -472,21 +472,23 @@ function validateWebManifest(source, index) {
   } catch {
     throw new Error("Web app manifest is not valid JSON.");
   }
-  if (manifest.id !== "/" || manifest.start_url !== "/" || manifest.scope !== "/") {
-    throw new Error("Web app manifest id, start_url, and scope must remain same-origin root paths.");
+  const rootManifest = manifest.id === "/" && manifest.start_url === "/" && manifest.scope === "/";
+  const relativeManifest = manifest.id === "." && manifest.start_url === "./" && manifest.scope === "./";
+  if (!rootManifest && !relativeManifest) {
+    throw new Error("Web app manifest id, start_url, and scope must remain aligned same-origin paths.");
   }
   if (manifest.display !== "standalone") throw new Error("Web app manifest must remain installable in standalone mode.");
   if (
     !Array.isArray(manifest.icons) ||
     manifest.icons.length === 0 ||
-    manifest.icons.some((icon) => !icon || icon.src !== "/favicon.svg")
+    manifest.icons.some((icon) => !icon || !["/favicon.svg", "favicon.svg"].includes(icon.src))
   ) {
     throw new Error("Web app manifest icons must use the reviewed same-origin favicon.");
   }
-  if (!/<link\b[^>]*\brel="manifest"[^>]*\bhref="\/manifest\.webmanifest"[^>]*>/u.test(index)) {
+  if (!/<link\b[^>]*\brel="manifest"[^>]*\bhref="\/(?:[A-Za-z0-9._~-]+\/)*manifest\.webmanifest"[^>]*>/u.test(index)) {
     throw new Error("Built index does not reference the reviewed web app manifest.");
   }
-  if (!/<link\b[^>]*\brel="icon"[^>]*\bhref="\/favicon\.svg"[^>]*>/u.test(index)) {
+  if (!/<link\b[^>]*\brel="icon"[^>]*\bhref="\/(?:[A-Za-z0-9._~-]+\/)*favicon\.svg"[^>]*>/u.test(index)) {
     throw new Error("Built index does not reference the reviewed same-origin icon.");
   }
 }
@@ -534,22 +536,22 @@ function serializePolicy(policy) {
 function validateServiceWorker(source) {
   const requirements = [
     ["versioned cache", /const CACHE_VERSION = "airship-shell-v\d+";/u],
-    ["release-manifest precache", /fetch\("\/release-manifest\.json"[\s\S]*?manifest\.artifacts[\s\S]*?cache\.addAll\(\[\.\.\.SHELL, \.\.\.new Set\(assets\)\]\)/u],
+    ["release-manifest precache", /fetch\((?:"\/release-manifest\.json"|scopedPath\("release-manifest\.json"\))[\s\S]*?manifest\.artifacts[\s\S]*?cache\.addAll\(\[\.\.\.SHELL, \.\.\.new Set\(assets\)\]\)/u],
     ["same-origin boundary", /requestUrl\.origin !== self\.location\.origin/u],
     ["GET-only cache boundary", /event\.request\.method !== "GET"/u],
     ["authorization bypass", /headers\.has\("authorization"\)/u],
     ["range bypass", /headers\.has\("range"\)/u],
-    ["network-first navigation", /request\.mode === "navigate"[\s\S]*?fetch\(event\.request\)[\s\S]*?caches\.match\("\/"\)/u],
-    ["hashed asset scope", /pathname\.startsWith\("\/assets\/"\)/u],
+    ["network-first navigation", /request\.mode === "navigate"[\s\S]*?fetch\(event\.request\)[\s\S]*?caches\.match\((?:"\/"|BASE_PATH)\)/u],
+    ["hashed asset scope", /pathname\.startsWith\((?:"\/assets\/"|scopedPath\("assets\/"\))\)/u],
     ["Set-Cookie exclusion", /!response\.headers\.has\("set-cookie"\)/u],
   ];
   for (const [label, pattern] of requirements) {
     if (!pattern.test(source)) throw new Error(`Service worker is missing its ${label} invariant.`);
   }
-  for (const shellPath of ["/", "/manifest.webmanifest", "/favicon.svg"]) {
-    if (!source.includes(JSON.stringify(shellPath))) {
-      throw new Error(`Service-worker shell is missing ${shellPath}.`);
-    }
+  const rootShell = ["/", "/manifest.webmanifest", "/favicon.svg"].every((path) => source.includes(JSON.stringify(path)));
+  const scopedShell = /const SHELL = \[BASE_PATH, scopedPath\("manifest\.webmanifest"\), scopedPath\("favicon\.svg"\)\];/u.test(source);
+  if (!rootShell && !scopedShell) {
+    throw new Error("Service-worker shell is missing its reviewed root or scoped paths.");
   }
 }
 
@@ -567,10 +569,11 @@ function parseHtmlEntries(html) {
 }
 
 function requireAsset(fileMap, url, extension) {
-  if (!url.startsWith("/assets/") || url.includes("?") || url.includes("#")) {
+  const match = /^\/(?:[A-Za-z0-9._~-]+\/)*(assets\/[^?#]+)$/u.exec(url);
+  if (!match || url.includes("?") || url.includes("#")) {
     throw new Error(`Entry URL is not an immutable same-origin asset: ${url}.`);
   }
-  const path = decodeURIComponent(url.slice(1));
+  const path = decodeURIComponent(match[1]);
   if (!path.endsWith(extension) || path.includes("..")) throw new Error(`Unexpected entry asset: ${url}.`);
   const file = fileMap.get(path);
   if (!file) throw new Error(`Entry asset does not exist: ${url}.`);

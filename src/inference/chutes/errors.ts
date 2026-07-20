@@ -21,21 +21,29 @@ export type ChutesTransportErrorCode =
   | "REMOTE_ERROR"
   | "INVALID_TOOL_CALL";
 
+export type ChutesTransportOperation =
+  | "model-discovery"
+  | "instance-discovery"
+  | "attestation"
+  | "invoke";
+
 export class ChutesTransportError extends Error {
   readonly code: ChutesTransportErrorCode;
   readonly status?: number;
   readonly detail?: string;
+  readonly operation?: ChutesTransportOperation;
 
   constructor(
     code: ChutesTransportErrorCode,
     message: string,
-    options: { status?: number; detail?: string; cause?: unknown } = {},
+    options: { status?: number; detail?: string; operation?: ChutesTransportOperation; cause?: unknown } = {},
   ) {
     super(message, { cause: options.cause });
     this.name = "ChutesTransportError";
     this.code = code;
     this.status = options.status;
     this.detail = options.detail;
+    this.operation = options.operation;
   }
 }
 

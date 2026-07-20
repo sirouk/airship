@@ -25,6 +25,12 @@ test("desktop terminal manages page-local tabs without claiming host Bash", asyn
   await expect(page.getByText("Processes stay hot while this page lives")).toBeVisible();
   await expect(page.getByText("Reload requires process restart")).toBeVisible();
 
+  await tabs.getByRole("button", { name: /Rename Terminal 1/ }).click();
+  const name = page.getByRole("textbox", { name: "Rename Terminal 1" });
+  await name.fill("Build console");
+  await name.press("Enter");
+  await expect(tabs.getByRole("tab", { name: /Build console/ })).toBeVisible();
+
   await page.getByRole("button", { name: "New terminal" }).click();
   await expect(tabs.getByRole("tab")).toHaveCount(2);
   await expect(tabs.getByRole("tab").nth(1)).toHaveAttribute("aria-selected", "true");
@@ -43,7 +49,7 @@ test("mobile terminal keeps process controls and horizontal tabs usable", async 
   await page.getByRole("button", { name: "New terminal" }).click();
   const tabs = page.getByRole("tablist", { name: "Terminal tabs" });
   await expect(tabs.getByRole("tab")).toHaveCount(2);
-  await expect(page.getByRole("button", { name: "Start", exact: true })).toBeVisible();
+  await expect(page.getByText(/Starting|Running|Failed|Restart required/, { exact: true }).first()).toBeVisible();
   await expect(page.getByRole("button", { name: "Close terminal tab" })).toBeVisible();
   await expect(page.locator(".terminal-panel")).toBeInViewport();
   await page.screenshot({ path: testInfo.outputPath("workspace-terminal-mobile.png"), fullPage: true });

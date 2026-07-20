@@ -9,7 +9,7 @@
 .menu-select-popover { position:absolute; z-index:320; right:0; bottom:calc(100% + 7px); display:grid; gap:3px; width:max(100%,260px); max-width:min(340px,calc(100vw - 20px)); max-height:min(420px,70dvh); overflow:auto; padding:6px; border:1px solid var(--line-strong); border-radius:var(--radius-panel); background:var(--surface-raised); box-shadow:0 20px 65px rgba(0,0,0,.55); }
 .menu-select.placement-down .menu-select-popover { top:calc(100% + 7px); right:auto; bottom:auto; left:0; max-height:min(420px,70dvh,var(--menu-select-available-height,70dvh)); }
 .menu-select-option { display:grid; grid-template-columns:auto minmax(0,1fr) auto; gap:9px; align-items:center; width:100%; min-height:44px; padding:7px 9px; border:1px solid transparent; border-radius:var(--radius-control); color:var(--ink); background:transparent; cursor:pointer; text-align:left; }
-.menu-select-option > span:nth-child(2), .menu-select-option > span:first-child:not(:last-child) { display:grid; gap:2px; min-width:0; }
+.menu-select-option-copy { display:grid; gap:2px; min-width:0; }
 .menu-select-option strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .menu-select-option:hover, .menu-select-option:focus-visible { border-color:var(--line); background:color-mix(in srgb,var(--accent) 8%,var(--surface-soft)); }
 .menu-select-option[aria-selected="true"] { border-color:color-mix(in srgb,var(--accent) 38%,var(--line)); background:color-mix(in srgb,var(--accent) 11%,var(--surface-soft)); }

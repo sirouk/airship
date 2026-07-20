@@ -830,6 +830,38 @@ button.primary:hover:not(:disabled) {
   background: color-mix(in srgb, var(--ground) 76%, transparent);
 }
 
+.chat-stage:has(> .chat-live-guidance) { grid-template-rows: auto auto minmax(0, 1fr) auto; }
+
+.chat-live-guidance {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  padding: 6px 22px;
+  border-bottom: 1px solid var(--line);
+  color: var(--ink-muted);
+  background: color-mix(in srgb, var(--v-info) 5%, var(--surface-soft));
+  font-size: var(--fs-micro);
+  line-height: 1.4;
+}
+.chat-live-guidance strong { color: var(--ink); }
+.chat-live-guidance button {
+  min-height: 30px;
+  padding: 0 9px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-control);
+  color: var(--ink);
+  background: var(--surface);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+@media (max-width: 760px) {
+  .chat-live-guidance { grid-template-columns: minmax(0, 1fr); padding: 7px max(10px, env(safe-area-inset-right)) 7px max(10px, env(safe-area-inset-left)); }
+  .chat-live-guidance button { justify-self: start; min-height: 36px; }
+}
+
 .stage-header {
   display: grid;
   grid-template-columns: minmax(180px, 1fr) minmax(270px, 420px);

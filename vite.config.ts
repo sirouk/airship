@@ -13,7 +13,16 @@ export function applyLocalDevelopmentPolicy(html: string): string {
     );
 }
 
+export function resolvePublicBasePath(value: string | undefined): string {
+  const candidate = value?.trim() || "/";
+  if (!candidate.startsWith("/") || candidate.includes("?") || candidate.includes("#")) {
+    throw new TypeError("AIRSHIP_PUBLIC_BASE_PATH must be an absolute URL path.");
+  }
+  return candidate.endsWith("/") ? candidate : `${candidate}/`;
+}
+
 export default defineConfig({
+  base: resolvePublicBasePath(process.env.AIRSHIP_PUBLIC_BASE_PATH),
   plugins: [
     preact(),
     airshipPyodideAssets(),

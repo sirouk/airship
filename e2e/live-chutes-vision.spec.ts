@@ -27,13 +27,15 @@ test("a catalog-declared vision model receives an encrypted inline image", async
   await picker.getByRole("searchbox", { name: "Search models" }).fill("Kimi-K2.6-TEE");
   const option = picker.getByRole("option").filter({ hasText: /Kimi-K2\.6-TEE/i }).first();
   await expect(option).toContainText(/Tools/i, { timeout: 15_000 });
-  await expect(option).toContainText(/attestation candidate/i);
+  await expect(option).toContainText(/confidential candidate/i);
   await option.click();
-  await page.getByLabel(/I understand this endpoint is not independently attested/).check();
-  await page.getByRole("button", { name: "Connect selected model" }).click();
+  await page.getByLabel(/Require fresh endpoint proof before every turn/).check();
+  await page.getByRole("button", { name: "Finish: verify & connect" }).click();
   await expect(page.getByText("Chutes API key · direct session").first()).toBeVisible({ timeout: 60_000 });
 
-  await page.goto("/#chat");
+  // connectChutes already navigates to Chat. Do not use page.goto here: a
+  // document reload must erase Airship's memory-only credential by design.
+  await expect(page).toHaveURL(/#chat$/u);
   const input = page.locator('input[type="file"][accept="image/*"]');
   await input.setInputFiles({
     name: "airship-vision-smoke.png",
