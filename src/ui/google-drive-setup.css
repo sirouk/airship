@@ -1,0 +1,10 @@
+.google-drive-setup{display:grid;gap:var(--space-4);padding:var(--space-5);border:1px solid var(--line);background:var(--surface-1)}
+.google-drive-setup header{display:flex;align-items:start;justify-content:space-between;gap:var(--space-4)}
+.google-drive-setup h2,.google-drive-setup p{margin:0}.google-drive-setup header>span{font:var(--font-mono-xs);color:var(--muted)}
+.google-drive-setup label{display:grid;gap:var(--space-2);font-weight:650}.google-drive-setup input,.google-drive-setup textarea,.google-drive-setup output{width:100%;box-sizing:border-box;padding:.75rem;border:1px solid var(--line);background:var(--surface-0);color:var(--text);font:inherit}
+.google-drive-setup output{display:block;overflow-wrap:anywhere;font-family:var(--font-mono);color:var(--accent)}
+.google-drive-setup__key{display:grid;gap:var(--space-3);padding:var(--space-4);border:1px solid var(--line);background:color-mix(in srgb,var(--surface-0) 75%,transparent)}
+.google-drive-setup__check{grid-template-columns:auto 1fr!important;align-items:center}.google-drive-setup__check input{width:auto}
+.google-drive-setup button{justify-self:start}.google-drive-setup__secondary{background:transparent;color:var(--text);border-color:var(--line)}
+.google-drive-setup__notice,.google-drive-setup__status{padding:var(--space-3);border:1px solid var(--line);background:var(--surface-0)}
+@media(max-width:720px){.google-drive-setup{padding:var(--space-4)}.google-drive-setup header{display:grid}}

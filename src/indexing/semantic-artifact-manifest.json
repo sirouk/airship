@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "modelRevision": "b0561d9a97e6b298da39f0ef3e7d3cf153b1b29a",
+  "assets": {
+    "runtime/transformers.web.js": { "bytes": 1086251, "sha256": "18e85b0396b2ce9343c837c5430e6dd86f7ed1bc1f307ffd3f65bbb24e0d2812" },
+    "models/mixedbread-ai/mxbai-embed-xsmall-v1/config.json": { "bytes": 675, "sha256": "55f755d351fd04b0fef37760e07e195eb47e15f7aed6fc42d9be3dde3d38bca4" },
+    "models/mixedbread-ai/mxbai-embed-xsmall-v1/tokenizer.json": { "bytes": 711661, "sha256": "da0e79933b9ed51798a3ae27893d3c5fa4a201126cef75586296df9b4d2c62a0" },
+    "models/mixedbread-ai/mxbai-embed-xsmall-v1/tokenizer_config.json": { "bytes": 1433, "sha256": "bd2e06a5b20fd1b13ca988bedc8763d332d242381b4fbc98f8fead4524158f79" },
+    "models/mixedbread-ai/mxbai-embed-xsmall-v1/special_tokens_map.json": { "bytes": 695, "sha256": "5d5b662e421ea9fac075174bb0688ee0d9431699900b90662acd44b2a350503a" },
+    "models/mixedbread-ai/mxbai-embed-xsmall-v1/onnx/model_quantized.onnx": { "bytes": 24448010, "sha256": "952f996d8cf46c311ee8654a750fa942b71c8b94aabe69d043dbb2bcaff5528e" },
+    "models/mixedbread-ai/mxbai-embed-xsmall-v1/onnx/model_q4f16.onnx": { "bytes": 32885696, "sha256": "0603096aad8ef4e77cfb7f22929c7b5741b11edef00f63d33c9e0095825293c4" },
+    "runtime/ort-wasm-simd-threaded.mjs": { "bytes": 24274, "sha256": "1fb7c33cf1ace9b6905d0ebeb01d25cd46f7d5c7cb1ecdd58cc735bd8ff87be0" },
+    "runtime/ort-wasm-simd-threaded.wasm": { "bytes": 12528402, "sha256": "07a97c7185bece61ed42fd6864aa488ec60b54416334197970f18a72f5455b5d" },
+    "runtime/ort-wasm-simd-threaded.jsep.mjs": { "bytes": 46595, "sha256": "1596a6f8f261093fa35d4967b83e31705dd03a393170ac3183fecbdd7cad59f9" },
+    "runtime/ort-wasm-simd-threaded.jsep.wasm": { "bytes": 25415321, "sha256": "74d9472bf82a9777474c511db98f1c014fcf3cbf779ca8709758ccf45ef97077" }
+  }
+}

@@ -1,0 +1,38 @@
+.capabilities-view { min-width: 0; }
+.capabilities-heading { display: flex; align-items: end; justify-content: space-between; gap: 1rem; }
+.capabilities-heading > div { min-width: 0; }
+.capabilities-heading > button, .capability-extension button { display: inline-flex; gap: .45rem; align-items: center; justify-content: center; min-height: var(--density-control); padding: 0 .85rem; border: 1px solid var(--line-strong); border-radius: var(--radius-control); color: var(--ink); background: var(--surface-soft); }
+.capability-summary { display: flex; gap: .8rem; align-items: center; justify-content: space-between; margin-bottom: var(--density-gap); padding: .65rem .75rem; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--surface-soft); }
+.capability-summary > span { color: var(--ink-faint); font-size: var(--fs-micro); text-align: right; }
+.capability-error { display: flex; gap: .55rem; align-items: center; margin-bottom: var(--density-gap); padding: .65rem .75rem; border: 1px solid color-mix(in srgb, var(--danger) 42%, var(--line)); border-radius: var(--radius-control); color: var(--danger); background: color-mix(in srgb, var(--danger) 5%, var(--surface)); }
+.capability-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--density-gap); }
+.capability-runtime { display: grid; align-content: start; gap: .8rem; min-width: 0; padding: var(--density-panel-pad); border: 1px solid var(--line); border-radius: var(--radius-panel); background: var(--surface); }
+.capability-runtime.ready { border-color: color-mix(in srgb, var(--v-ready) 30%, var(--line)); }
+.capability-runtime.failed { border-color: color-mix(in srgb, var(--danger) 34%, var(--line)); }
+.capability-runtime > header { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; gap: .6rem; align-items: center; }
+.capability-runtime__icon { display: grid; width: 34px; height: 34px; place-items: center; border: 1px solid var(--line-strong); border-radius: var(--radius-control); color: var(--accent-bright); background: var(--surface-soft); }
+.capability-runtime h2 { margin: 0; font: 600 var(--fs-body)/1.2 var(--font-body); }
+.capability-runtime header small { color: var(--ink-faint); font: var(--fs-micro)/1.4 var(--font-mono); }
+.capability-runtime > p { margin: 0; color: var(--ink-muted); font-size: var(--fs-small); line-height: var(--lh-body); }
+.capability-runtime dl { display: grid; grid-template-columns: 1fr 1fr; gap: .45rem; margin: 0; }
+.capability-runtime dl > div { display: grid; gap: .2rem; padding: .5rem; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--surface-soft); }
+.capability-runtime dt { color: var(--ink-faint); font: var(--fs-micro)/1.2 var(--font-mono); text-transform: uppercase; }
+.capability-runtime dd { margin: 0; color: var(--ink); font-size: var(--fs-micro); text-transform: capitalize; }
+.capability-runtime > button { display: flex; align-items: center; justify-content: space-between; min-height: var(--density-control); margin-top: auto; padding: 0 .75rem; }
+.capability-runtime__boundary { color: var(--ink-faint); font-size: var(--fs-micro); }
+.capability-extension { display: flex; gap: 1rem; align-items: center; justify-content: space-between; margin-top: var(--density-gap); padding: var(--density-panel-pad); }
+.capability-extension h2 { margin: .2rem 0; font-family: var(--font-display); }
+.capability-extension p { margin: 0; color: var(--ink-muted); }
+.capability-extension > div:last-child { display: flex; flex: 0 0 auto; gap: .5rem; }
+@media (max-width: 760px) {
+  .capabilities-heading { align-items: start; }
+  .capabilities-heading > button { min-width: 44px; min-height: 44px; }
+  .capability-summary, .capability-extension { align-items: stretch; flex-direction: column; }
+  .capability-summary > span { text-align: left; }
+  .capability-grid { grid-template-columns: 1fr; }
+  .capability-runtime > header { grid-template-columns: 34px minmax(0, 1fr); }
+  .capability-runtime > header > .seal { grid-column: 1 / -1; }
+  .capability-runtime > button { min-height: 44px; }
+  .capability-extension > div:last-child { display: grid; grid-template-columns: 1fr 1fr; }
+  .capability-extension button { min-height: 44px; }
+}

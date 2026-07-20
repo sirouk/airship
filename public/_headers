@@ -1,0 +1,20 @@
+/*
+  Content-Security-Policy: default-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; frame-src https://stackblitz.com https://accounts.google.com; object-src 'none'; script-src 'self' 'wasm-unsafe-eval' https://accounts.google.com; style-src 'self' 'unsafe-inline' https://accounts.google.com; img-src 'self' data: blob: https://logos.chutes.ai; connect-src 'self' https://api.chutes.ai https://llm.chutes.ai https://api.github.com https://raw.githubusercontent.com https://api.shelbynet.shelby.xyz https://pccs.phala.network https://accounts.google.com https://www.googleapis.com https://openidconnect.googleapis.com http://127.0.0.1:9900; worker-src 'self' blob:; manifest-src 'self'; font-src 'self'; trusted-types airship-static airship-worker airship-semantic-worker; require-trusted-types-for 'script'
+  Cross-Origin-Embedder-Policy: credentialless
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Resource-Policy: same-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=(), bluetooth=()
+  Referrer-Policy: no-referrer
+  Strict-Transport-Security: max-age=63072000; includeSubDomains; preload
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+/sw.js
+  Cache-Control: no-cache
+  Service-Worker-Allowed: /
+
+/release-manifest.json
+  Cache-Control: no-cache

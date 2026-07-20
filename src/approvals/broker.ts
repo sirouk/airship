@@ -1,0 +1,185 @@
+import type {
+  ApprovalDecision,
+  ApprovalPolicy,
+  JsonValue,
+  ToolContext,
+  ToolDefinition,
+} from "../core/contracts";
+
+export type ApprovalRisk = "observe" | "change" | "communicate" | "execute" | "identity";
+
+export type PendingApproval = Readonly<{
+  id: string;
+  toolName: string;
+  description: string;
+  effect: ToolDefinition["effect"];
+  risk: ApprovalRisk;
+  sessionId: string;
+  turnId: string;
+  operationId: string;
+  requestedAt: string;
+  expiresAt: string;
+  displayArguments: JsonValue;
+}>;
+
+export type ApprovalBrokerSnapshot = Readonly<{
+  pending: readonly PendingApproval[];
+}>;
+
+export type ApprovalBrokerOptions = Readonly<{
+  maxPending?: number;
+  decisionTimeoutMs?: number;
+  now?: () => string;
+}>;
+
+type PendingEntry = {
+  request: PendingApproval;
+  resolve: (decision: ApprovalDecision) => void;
+  timer: ReturnType<typeof setTimeout>;
+  signal: AbortSignal;
+  abort: () => void;
+};
+
+const SECRET_KEY = /(?:authorization|cookie|credential|password|passwd|secret|token|api[_-]?key|private[_-]?key|signature)/iu;
+const DEFAULT_DECISION_TIMEOUT_MS = 5 * 60_000;
+const DEFAULT_MAX_PENDING = 16;
+
+/**
+ * Page-memory approval coordinator. It receives arguments only long enough to
+ * derive a bounded, recursively redacted display copy and never retains the
+ * raw value after `request` returns.
+ */
+export class ApprovalBroker {
+  private readonly entries = new Map<string, PendingEntry>();
+  private readonly listeners = new Set<(snapshot: ApprovalBrokerSnapshot) => void>();
+  private readonly maxPending: number;
+  private readonly decisionTimeoutMs: number;
+  private readonly now: () => string;
+
+  constructor(options: ApprovalBrokerOptions = {}) {
+    this.maxPending = integerWithin(options.maxPending ?? DEFAULT_MAX_PENDING, 1, 128, "maxPending");
+    this.decisionTimeoutMs = integerWithin(
+      options.decisionTimeoutMs ?? DEFAULT_DECISION_TIMEOUT_MS,
+      1,
+      30 * 60_000,
+      "decisionTimeoutMs",
+    );
+    this.now = options.now ?? (() => new Date().toISOString());
+  }
+
+  snapshot(): ApprovalBrokerSnapshot {
+    return Object.freeze({
+      pending: Object.freeze([...this.entries.values()].map((entry) => entry.request)),
+    });
+  }
+
+  subscribe(listener: (snapshot: ApprovalBrokerSnapshot) => void): () => void {
+    this.listeners.add(listener);
+    listener(this.snapshot());
+    return () => this.listeners.delete(listener);
+  }
+
+  request(tool: ToolDefinition, argumentsValue: JsonValue, context: ToolContext): Promise<ApprovalDecision> {
+    if (context.signal.aborted || this.entries.size >= this.maxPending) return Promise.resolve("deny");
+    const id = `${context.sessionId}:${context.turnId}:${context.operationId}`;
+    if (this.entries.has(id)) return Promise.resolve("deny");
+
+    const requestedAt = this.now();
+    const requestedAtMs = Date.parse(requestedAt);
+    const expiresAt = new Date((Number.isFinite(requestedAtMs) ? requestedAtMs : Date.now()) + this.decisionTimeoutMs).toISOString();
+    const request = Object.freeze({
+      id,
+      toolName: tool.name,
+      description: tool.description,
+      effect: tool.effect,
+      risk: riskForEffect(tool.effect),
+      sessionId: context.sessionId,
+      turnId: context.turnId,
+      operationId: context.operationId,
+      requestedAt,
+      expiresAt,
+      displayArguments: redactForDisplay(argumentsValue),
+    } satisfies PendingApproval);
+
+    return new Promise<ApprovalDecision>((resolve) => {
+      const abort = () => this.settle(id, "deny");
+      const timer = setTimeout(() => this.settle(id, "deny"), this.decisionTimeoutMs);
+      this.entries.set(id, { request, resolve, timer, signal: context.signal, abort });
+      context.signal.addEventListener("abort", abort, { once: true });
+      this.emit();
+    });
+  }
+
+  decide(id: string, decision: ApprovalDecision): boolean {
+    if (decision !== "allow" && decision !== "deny") return false;
+    return this.settle(id, decision);
+  }
+
+  denyAll(): void {
+    for (const id of [...this.entries.keys()]) this.settle(id, "deny");
+  }
+
+  private settle(id: string, decision: ApprovalDecision): boolean {
+    const entry = this.entries.get(id);
+    if (!entry) return false;
+    this.entries.delete(id);
+    clearTimeout(entry.timer);
+    entry.signal.removeEventListener("abort", entry.abort);
+    entry.resolve(decision);
+    this.emit();
+    return true;
+  }
+
+  private emit(): void {
+    const snapshot = this.snapshot();
+    for (const listener of this.listeners) listener(snapshot);
+  }
+}
+
+export function createBrokeredApprovalPolicy(
+  broker: ApprovalBroker,
+  options: Readonly<{ autoAllowEffects?: readonly ToolDefinition["effect"][] }> = {},
+): ApprovalPolicy {
+  const autoAllow = new Set(options.autoAllowEffects ?? ["read"]);
+  return {
+    review(tool, argumentsValue, context) {
+      if (autoAllow.has(tool.effect)) return Promise.resolve("allow");
+      return broker.request(tool, argumentsValue, context);
+    },
+  };
+}
+
+export function riskForEffect(effect: ToolDefinition["effect"]): ApprovalRisk {
+  if (effect === "read") return "observe";
+  if (effect === "write") return "change";
+  if (effect === "network") return "communicate";
+  return effect;
+}
+
+export function redactForDisplay(value: JsonValue): JsonValue {
+  return redactValue(value, 0, "");
+}
+
+function redactValue(value: JsonValue, depth: number, key: string): JsonValue {
+  if (key && SECRET_KEY.test(key)) return "[redacted]";
+  if (depth >= 7) return "[depth limit]";
+  if (typeof value === "string") return value.length <= 512 ? value : `${value.slice(0, 512)}…`;
+  if (value === null || typeof value !== "object") return value;
+  if (Array.isArray(value)) {
+    const result = value.slice(0, 32).map((item) => redactValue(item, depth + 1, ""));
+    if (value.length > 32) result.push(`[${value.length - 32} more items]`);
+    return result;
+  }
+  const result: Record<string, JsonValue> = Object.create(null) as Record<string, JsonValue>;
+  const entries = Object.entries(value).slice(0, 64);
+  for (const [childKey, child] of entries) result[childKey] = redactValue(child, depth + 1, childKey);
+  if (Object.keys(value).length > entries.length) result["…"] = `[${Object.keys(value).length - entries.length} more fields]`;
+  return result;
+}
+
+function integerWithin(value: number, minimum: number, maximum: number, label: string): number {
+  if (!Number.isSafeInteger(value) || value < minimum || value > maximum) {
+    throw new Error(`${label} must be an integer from ${minimum} through ${maximum}.`);
+  }
+  return value;
+}

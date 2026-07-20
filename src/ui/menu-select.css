@@ -1,0 +1,31 @@
+.menu-select { position:relative; min-width:0; }
+.menu-select-trigger { display:flex; gap:8px; align-items:center; width:100%; min-height:40px; padding:7px 9px; border:1px solid var(--line); border-radius:var(--radius-control); color:var(--ink); background:var(--surface-soft); cursor:pointer; text-align:left; }
+.menu-select-trigger:hover, .menu-select-trigger[aria-expanded="true"] { border-color:color-mix(in srgb,var(--accent) 55%,var(--line)); background:var(--surface-raised); }
+.menu-select-value { display:grid; flex:1; gap:2px; min-width:0; }
+.menu-select-value strong, .menu-select-value small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.menu-select-value small, .menu-select-option small { color:var(--ink-faint); font-size:var(--fs-micro); font-weight:400; }
+.menu-select-caret { margin-left:auto; color:var(--ink-muted); transition:transform 120ms ease; }
+.menu-select-trigger[aria-expanded="true"] .menu-select-caret { transform:rotate(180deg); }
+.menu-select-popover { position:absolute; z-index:320; right:0; bottom:calc(100% + 7px); display:grid; gap:3px; width:max(100%,260px); max-width:min(340px,calc(100vw - 20px)); max-height:min(420px,70dvh); overflow:auto; padding:6px; border:1px solid var(--line-strong); border-radius:var(--radius-panel); background:var(--surface-raised); box-shadow:0 20px 65px rgba(0,0,0,.55); }
+.menu-select.placement-down .menu-select-popover { top:calc(100% + 7px); right:auto; bottom:auto; left:0; max-height:min(420px,70dvh,var(--menu-select-available-height,70dvh)); }
+.menu-select-option { display:grid; grid-template-columns:auto minmax(0,1fr) auto; gap:9px; align-items:center; width:100%; min-height:44px; padding:7px 9px; border:1px solid transparent; border-radius:var(--radius-control); color:var(--ink); background:transparent; cursor:pointer; text-align:left; }
+.menu-select-option > span:nth-child(2), .menu-select-option > span:first-child:not(:last-child) { display:grid; gap:2px; min-width:0; }
+.menu-select-option strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.menu-select-option:hover, .menu-select-option:focus-visible { border-color:var(--line); background:color-mix(in srgb,var(--accent) 8%,var(--surface-soft)); }
+.menu-select-option[aria-selected="true"] { border-color:color-mix(in srgb,var(--accent) 38%,var(--line)); background:color-mix(in srgb,var(--accent) 11%,var(--surface-soft)); }
+.menu-select-check { color:var(--accent-bright); }
+.menu-select.compact { width:44px; }
+.menu-select.compact .menu-select-trigger { justify-content:center; width:44px; height:44px; min-height:44px; padding:0; border-radius:50%; color:var(--brass-bright); background:rgba(193,154,88,.065); }
+.menu-select.compact .menu-select-caret { position:absolute; right:-2px; bottom:-2px; display:grid; place-items:center; width:16px; height:16px; border:1.5px solid var(--ground); border-radius:50%; color:var(--ink); background:var(--surface-raised); font-size:11px; }
+.menu-select.compact .menu-select-popover { position:fixed; top:58px; right:8px; bottom:auto; width:min(320px,calc(100vw - 16px)); }
+.compact-profile-menu { display:none; }
+.profile-switcher .profile-menu { margin-top:9px; }
+.profile-switcher .profile-menu .menu-select-popover { right:auto; left:0; }
+.profile-switcher .profile-menu .menu-select-trigger { padding:6px; border:0; background:transparent; }
+.profile-switcher .profile-menu .menu-select-trigger:hover,
+.profile-switcher .profile-menu .menu-select-trigger[aria-expanded="true"] { background:var(--surface-soft); }
+.profile-manage-link { width:100%; margin-top:7px; padding:5px 7px; border:0; color:var(--ink-faint); background:transparent; cursor:pointer; font-size:var(--fs-micro); text-align:left; }
+.profile-manage-link:hover { color:var(--accent-bright); }
+@media (max-width:860px) { .compact-profile-menu { display:block; } }
+@media (max-width:640px) { .menu-select-popover, .menu-select.placement-down .menu-select-popover { position:fixed; inset:auto 8px max(8px,env(safe-area-inset-bottom)) 8px; width:auto; max-width:none; max-height:70dvh; padding:8px; } }
+@media (prefers-reduced-motion:reduce) { .menu-select-caret { transition:none; } }

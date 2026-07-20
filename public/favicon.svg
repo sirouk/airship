@@ -1,0 +1,7 @@
+<svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Airship asserted seal">
+  <rect width="64" height="64" rx="14" fill="#101417"/>
+  <circle cx="32" cy="32" r="22" stroke="#B8734F" stroke-width="3"/>
+  <path d="M32 10a22 22 0 0 0 0 44Z" fill="#B8734F"/>
+  <path d="M32 10v44" stroke="#B8734F" stroke-width="3"/>
+  <path d="M50 47l9 5" stroke="#B8734F" stroke-width="3" stroke-linecap="round"/>
+</svg>

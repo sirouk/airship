@@ -1,0 +1,400 @@
+import type { JsonValue } from "../core/contracts";
+import { stableStringify, sha256 } from "../core/hash";
+import { randomUuid } from "../core/id";
+import {
+  WorkspaceConflictError,
+  normalizeWorkspacePath,
+  type WorkspaceEntry,
+  type WorkspaceFile,
+  type ClientEncryptedWorkspacePort,
+  type WorkspacePort,
+} from "../workspace/contracts";
+import {
+  WorkspaceRootKey,
+  decodeEnvelope,
+  encodeEnvelope,
+  openEnvelope,
+  sealEnvelope,
+} from "../storage/encrypted-envelope";
+import type { ObjectRecord, ObjectStore } from "../storage/object-store";
+
+const encoder = new TextEncoder();
+const decoder = new TextDecoder("utf-8", { fatal: true });
+const ROOT_NAMESPACE = "airship/workspace-head/v1";
+const FILE_NAMESPACE = "airship/workspace-file/v1";
+const MAX_FILE_BYTES = 16 * 1024 * 1024;
+const MAX_FILES = 100_000;
+const MAX_MANIFEST_BYTES = 32 * 1024 * 1024;
+
+type WorkspaceManifestEntry = WorkspaceEntry & {
+  cloudKey: string;
+  etag: string;
+};
+
+type WorkspaceManifest = {
+  version: 1;
+  generation: number;
+  files: WorkspaceManifestEntry[];
+};
+
+type LoadedManifest = {
+  record: ObjectRecord;
+  manifest: WorkspaceManifest;
+};
+
+/**
+ * Strict cloud workspace: immutable encrypted file objects are committed first,
+ * then one encrypted manifest is advanced with CAS. Lost CAS races leave only
+ * opaque ciphertext orphans and never acknowledge the conflicting mutation.
+ */
+export class EncryptedObjectWorkspace implements WorkspacePort, ClientEncryptedWorkspacePort {
+  readonly encryptionBoundary = "airship-client-envelope-v1" as const;
+  private readonly prefix: string;
+
+  constructor(
+    private readonly store: ObjectStore,
+    private readonly key: WorkspaceRootKey,
+    prefix = "state/workspace/v1",
+    private readonly now: () => string = () => new Date().toISOString(),
+    private readonly id: () => string = randomUuid,
+  ) {
+    this.prefix = canonicalPrefix(prefix);
+  }
+
+  async read(path: string): Promise<WorkspaceFile | undefined> {
+    const normalized = normalizeWorkspacePath(path);
+    const loaded = await this.loadManifest();
+    if (!loaded) return undefined;
+    const { manifest } = loaded;
+    const entry = manifest.files.find((candidate) => candidate.path === normalized);
+    if (!entry) return undefined;
+    return this.readEntry(entry);
+  }
+
+  async readBounded(path: string, maxBytes: number): Promise<WorkspaceFile | undefined> {
+    if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > MAX_FILE_BYTES) {
+      throw new Error("Encrypted workspace bounded reads require a 1 byte to 16 MiB limit.");
+    }
+    const normalized = normalizeWorkspacePath(path);
+    const loaded = await this.loadManifest();
+    const entry = loaded?.manifest.files.find((candidate) => candidate.path === normalized);
+    if (!entry) return undefined;
+    // AES-GCM authenticates the complete immutable object. For an oversized
+    // file, returning committed metadata and an empty preview avoids silently
+    // downloading/decrypting the whole object under a bounded-read request.
+    if (entry.size > maxBytes) {
+      return { path: entry.path, content: "", revision: entry.revision, updatedAt: entry.updatedAt, size: entry.size };
+    }
+    return this.readEntry(entry);
+  }
+
+  async list(path = "/workspace"): Promise<WorkspaceEntry[]> {
+    const normalized = normalizeWorkspacePath(path);
+    const loaded = await this.loadManifest();
+    if (!loaded) return [];
+    const { manifest } = loaded;
+    return manifest.files
+      .filter((entry) => entry.path === normalized || entry.path.startsWith(`${normalized}/`))
+      .map(({ cloudKey: _cloudKey, etag: _etag, ...entry }) => structuredClone(entry));
+  }
+
+  async write(
+    path: string,
+    content: string,
+    options: { expectedRevision?: string | null } = {},
+  ): Promise<WorkspaceFile> {
+    const normalized = normalizeWorkspacePath(path);
+    if (normalized === "/workspace") throw new Error("Cannot write to the workspace root.");
+    const contentBytes = encoder.encode(content);
+    if (contentBytes.byteLength > MAX_FILE_BYTES) throw new Error("Encrypted workspace file exceeds the client limit.");
+    const loaded = await this.loadOrCreateManifest();
+    const current = loaded.manifest.files.find((candidate) => candidate.path === normalized);
+    checkExpectedRevision(current, options.expectedRevision);
+    if (!current && loaded.manifest.files.length >= MAX_FILES) {
+      throw new Error("Encrypted workspace exceeds the client file limit.");
+    }
+
+    const file: WorkspaceFile = {
+      path: normalized,
+      content,
+      revision: this.id(),
+      updatedAt: validTimestamp(this.now(), "workspace update time"),
+      size: contentBytes.byteLength,
+    };
+    const logicalId = fileLogicalId(file.path, file.revision);
+    const cloudKey = `${this.prefix}/files/${await this.key.opaqueObjectId(logicalId)}`;
+    const bytes = await this.sealFile(file, logicalId);
+    const created = await this.store.putIfAbsent(cloudKey, bytes);
+    let etag: string;
+    if (created.created) {
+      etag = created.etag;
+    } else {
+      const existing = await this.store.get(cloudKey);
+      if (!existing) throw new Error("Encrypted workspace file conflicted and then disappeared.");
+      const opened = await this.openFile(existing, file.path, file.revision, file.updatedAt, file.size);
+      if (
+        stableStringify(opened as unknown as JsonValue) !==
+        stableStringify(file as unknown as JsonValue)
+      ) {
+        throw new Error("Encrypted workspace file identifier collided with different content.");
+      }
+      etag = existing.etag;
+    }
+
+    const nextEntry: WorkspaceManifestEntry = {
+      path: file.path,
+      revision: file.revision,
+      updatedAt: file.updatedAt,
+      size: file.size,
+      cloudKey,
+      etag,
+    };
+    const files = loaded.manifest.files
+      .filter((entry) => entry.path !== normalized)
+      .concat(nextEntry)
+      .sort((left, right) => compareWorkspacePaths(left.path, right.path));
+    await this.advanceManifest(loaded, { version: 1, generation: loaded.manifest.generation + 1, files });
+    return structuredClone(file);
+  }
+
+  async remove(path: string, options: { expectedRevision?: string } = {}): Promise<void> {
+    const normalized = normalizeWorkspacePath(path);
+    const loaded = await this.loadManifest();
+    if (!loaded) return;
+    const current = loaded.manifest.files.find((candidate) => candidate.path === normalized);
+    if (!current) return;
+    checkExpectedRevision(current, options.expectedRevision);
+    const files = loaded.manifest.files.filter((entry) => entry.path !== normalized);
+    await this.advanceManifest(loaded, { version: 1, generation: loaded.manifest.generation + 1, files });
+  }
+
+  private async readEntry(entry: WorkspaceManifestEntry): Promise<WorkspaceFile> {
+    const record = await this.store.get(entry.cloudKey);
+    if (!record) throw new Error("Encrypted workspace file is missing.");
+    if (record.etag !== entry.etag) throw new Error("Encrypted workspace immutable file ETag changed.");
+    return this.openFile(record, entry.path, entry.revision, entry.updatedAt, entry.size);
+  }
+
+  private async loadOrCreateManifest(): Promise<LoadedManifest> {
+    const loaded = await this.loadManifest();
+    if (loaded) return loaded;
+    const key = await this.rootCloudKey();
+    const manifest: WorkspaceManifest = { version: 1, generation: 0, files: [] };
+    const bytes = await this.sealManifest(manifest);
+    const created = await this.store.putIfAbsent(key, bytes);
+    if (created.created) {
+      return {
+        record: { key, bytes, etag: created.etag },
+        manifest,
+      };
+    }
+    const winner = await this.store.get(key);
+    if (!winner) throw new Error("Encrypted workspace root conflicted and then disappeared.");
+    return { record: winner, manifest: await this.openManifest(winner) };
+  }
+
+  private async loadManifest(): Promise<LoadedManifest | undefined> {
+    const record = await this.store.get(await this.rootCloudKey());
+    if (!record) return undefined;
+    return { record, manifest: await this.openManifest(record) };
+  }
+
+  private async advanceManifest(current: LoadedManifest, next: WorkspaceManifest): Promise<void> {
+    const bytes = await this.sealManifest(next);
+    const result = await this.store.compareAndSwap(current.record.key, current.record.etag, bytes);
+    if (!result.updated) throw new WorkspaceConflictError("The encrypted workspace root changed before commit.");
+  }
+
+  private async rootCloudKey(): Promise<string> {
+    return `${this.prefix}/heads/${await this.key.opaqueObjectId(rootLogicalId(this.prefix))}`;
+  }
+
+  private async sealManifest(manifest: WorkspaceManifest): Promise<Uint8Array> {
+    const plaintext = encodeJson(manifest);
+    if (plaintext.byteLength > MAX_MANIFEST_BYTES) throw new Error("Encrypted workspace manifest exceeds the client limit.");
+    const digest = await sha256(plaintext);
+    return encodeEnvelope(await sealEnvelope({
+      key: this.key,
+      namespace: ROOT_NAMESPACE,
+      logicalId: rootLogicalId(this.prefix),
+      revision: `${manifest.generation}:${digest}`,
+      contentType: "application/vnd.airship.workspace-head+json",
+      plaintext,
+    }));
+  }
+
+  private async openManifest(record: ObjectRecord): Promise<WorkspaceManifest> {
+    const envelope = decodeEnvelope(record.bytes);
+    const plaintext = await openEnvelope({
+      key: this.key,
+      envelope,
+      expectedNamespace: ROOT_NAMESPACE,
+      expectedLogicalId: rootLogicalId(this.prefix),
+      maxPlaintextBytes: MAX_MANIFEST_BYTES,
+    });
+    const manifest = parseManifest(plaintext, this.prefix);
+    const digest = await sha256(plaintext);
+    if (
+      envelope.revision !== `${manifest.generation}:${digest}` ||
+      envelope.aad.contentType !== "application/vnd.airship.workspace-head+json" ||
+      record.key !== await this.rootCloudKey()
+    ) {
+      throw new Error("Encrypted workspace root metadata does not match its contents.");
+    }
+    return manifest;
+  }
+
+  private async sealFile(file: WorkspaceFile, logicalId: string): Promise<Uint8Array> {
+    return encodeEnvelope(await sealEnvelope({
+      key: this.key,
+      namespace: FILE_NAMESPACE,
+      logicalId,
+      revision: file.revision,
+      contentType: "text/plain;charset=utf-8",
+      plaintext: encoder.encode(file.content),
+    }));
+  }
+
+  private async openFile(
+    record: ObjectRecord,
+    path: string,
+    revision: string,
+    updatedAt: string,
+    expectedSize: number,
+  ): Promise<WorkspaceFile> {
+    const envelope = decodeEnvelope(record.bytes);
+    const plaintext = await openEnvelope({
+      key: this.key,
+      envelope,
+      expectedNamespace: FILE_NAMESPACE,
+      expectedLogicalId: fileLogicalId(path, revision),
+      maxPlaintextBytes: MAX_FILE_BYTES,
+    });
+    if (plaintext.byteLength !== expectedSize) {
+      throw new Error("Encrypted workspace file byte size does not match its committed manifest entry.");
+    }
+    let content: string;
+    try {
+      content = decoder.decode(plaintext);
+    } catch (cause) {
+      throw new Error("Encrypted workspace file is not valid UTF-8.", { cause });
+    }
+    if (
+      envelope.revision !== revision ||
+      envelope.aad.contentType !== "text/plain;charset=utf-8"
+    ) {
+      throw new Error("Encrypted workspace file metadata does not match its contents.");
+    }
+    return { path, content, revision, updatedAt, size: expectedSize };
+  }
+}
+
+function parseManifest(bytes: Uint8Array, prefix: string): WorkspaceManifest {
+  const value = parseJson(bytes, "encrypted workspace manifest");
+  if (!isRecord(value) || value.version !== 1 || !Number.isSafeInteger(value.generation) || Number(value.generation) < 0 || !Array.isArray(value.files)) {
+    throw new Error("Encrypted workspace manifest is invalid.");
+  }
+  if (value.files.length > MAX_FILES) throw new Error("Encrypted workspace manifest has too many files.");
+  const files = value.files.map(parseManifestEntry);
+  for (let index = 0; index < files.length; index += 1) {
+    const entry = files[index]!;
+    if (index > 0 && files[index - 1]!.path >= entry.path) {
+      throw new Error("Encrypted workspace manifest paths are duplicated or unsorted.");
+    }
+    if (!entry.cloudKey.startsWith(`${prefix}/files/`)) {
+      throw new Error("Encrypted workspace manifest references an object outside its prefix.");
+    }
+  }
+  return { version: 1, generation: Number(value.generation), files };
+}
+
+/** Locale-independent order matching the manifest parser's canonical check. */
+function compareWorkspacePaths(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function parseManifestEntry(value: unknown): WorkspaceManifestEntry {
+  if (!isRecord(value)) throw new Error("Encrypted workspace manifest entry is invalid.");
+  const path = normalizeWorkspacePath(requiredString(value.path, "workspace path", 4_096));
+  if (path === "/workspace") throw new Error("Encrypted workspace manifest contains the workspace root as a file.");
+  const size = requiredInteger(value.size, "workspace file size", true);
+  if (size > MAX_FILE_BYTES) throw new Error("Encrypted workspace manifest file exceeds the client limit.");
+  return {
+    path,
+    revision: requiredString(value.revision, "workspace revision", 512),
+    updatedAt: validTimestamp(requiredString(value.updatedAt, "workspace update time", 128), "workspace update time"),
+    size,
+    cloudKey: requiredString(value.cloudKey, "workspace cloud key", 4_096),
+    etag: requiredString(value.etag, "workspace ETag", 4_096),
+  };
+}
+
+function checkExpectedRevision(
+  current: Pick<WorkspaceManifestEntry, "revision"> | undefined,
+  expected: string | null | undefined,
+): void {
+  if (expected === undefined) return;
+  if (expected === null && current) throw new WorkspaceConflictError("The encrypted workspace file already exists.");
+  if (typeof expected === "string" && current?.revision !== expected) throw new WorkspaceConflictError();
+}
+
+function canonicalPrefix(value: string): string {
+  if (
+    value !== value.trim() ||
+    value.startsWith("/") ||
+    value.endsWith("/") ||
+    value.includes("//") ||
+    value.includes("\\") ||
+    !/^[A-Za-z0-9._:/=@+-]+$/u.test(value) ||
+    value.split("/").some((segment) => segment === "." || segment === "..")
+  ) {
+    throw new Error("Encrypted workspace prefix is invalid.");
+  }
+  return value;
+}
+
+function rootLogicalId(prefix: string): string {
+  return `workspace:${prefix}:head`;
+}
+
+function fileLogicalId(path: string, revision: string): string {
+  return `workspace:file:${path}:${revision}`;
+}
+
+function encodeJson(value: unknown): Uint8Array {
+  return encoder.encode(stableStringify(value as JsonValue));
+}
+
+function parseJson(bytes: Uint8Array, label: string): unknown {
+  try {
+    return JSON.parse(decoder.decode(bytes)) as unknown;
+  } catch (cause) {
+    throw new Error(`Could not decode ${label}.`, { cause });
+  }
+}
+
+function requiredString(value: unknown, label: string, maxBytes: number): string {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    encoder.encode(value).byteLength > maxBytes
+  ) throw new Error(`${label} is invalid.`);
+  return value;
+}
+
+function requiredInteger(value: unknown, label: string, allowZero = false): number {
+  if (!Number.isSafeInteger(value) || (allowZero ? Number(value) < 0 : Number(value) <= 0)) {
+    throw new Error(`${label} is invalid.`);
+  }
+  return Number(value);
+}
+
+function validTimestamp(value: string, label: string): string {
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp) || new Date(timestamp).toISOString() !== value) throw new Error(`${label} is invalid.`);
+  return value;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}

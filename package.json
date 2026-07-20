@@ -1,0 +1,53 @@
+{
+  "name": "@chutes/airship",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 4173 --strictPort",
+    "dev:lan": "vite --host 0.0.0.0 --port 4173 --strictPort",
+    "preview": "vite preview --host 127.0.0.1 --port 4173 --strictPort",
+    "preview:lan": "vite preview --host 0.0.0.0 --port 4173 --strictPort",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --exclude '.airship-lab/**' --exclude 'e2e/**'",
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "playwright test --headed",
+    "test:e2e:live": "playwright test e2e/live-chutes-vision.spec.ts --project=desktop-chromium",
+    "test:vault:live": "AIRSHIP_LIVE_LOCAL_S3=1 vitest run src/vault/local-lab-live.test.ts --reporter=verbose",
+    "test:chutes:live": "vitest run src/inference/chutes/transport.live.test.ts src/core/airship-agent.live.test.ts --reporter=verbose",
+    "test:watch": "vitest --exclude '.airship-lab/**' --exclude 'e2e/**'",
+    "lab:start": "node scripts/local-lab.mjs start",
+    "lab:status": "node scripts/local-lab.mjs status",
+    "lab:test": "node scripts/local-lab.mjs test",
+    "lab:logs": "node scripts/local-lab.mjs logs",
+    "lab:stop": "node scripts/local-lab.mjs stop",
+    "check:security": "node scripts/check-static-security.mjs",
+    "check:release": "node scripts/release-gate.mjs",
+    "build:static": "vite build",
+    "build:dcap-wasm": "bash scripts/build-dcap-qvl-wasm.sh",
+    "semantic:prepare": "node scripts/prepare-semantic-pack.mjs",
+    "build": "npm run typecheck && npm run check:security && npm run build:static && npm run check:release",
+    "check": "npm run typecheck && npm run check:security && npm run test && npm run build:static && npm run check:release"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "4.0.0",
+    "@webcontainer/api": "1.6.4",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "preact": "^10.27.2",
+    "pyodide": "314.0.2"
+  },
+  "overrides": {
+    "adm-zip": "0.6.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.61.1",
+    "@preact/preset-vite": "^2.10.2",
+    "typescript": "^5.9.3",
+    "vite": "^8.0.13",
+    "vitest": "^4.1.6"
+  }
+}

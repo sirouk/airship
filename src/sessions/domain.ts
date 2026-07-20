@@ -1,0 +1,1057 @@
+import type {
+  SecurityPosture,
+  SessionManifest,
+  SessionProfileBinding,
+} from "../core/contracts";
+import type { DurableEvent, SessionRecord } from "../core/journal";
+import type {
+  ClaimKey,
+  ConversationReceipt,
+  ProofLevel,
+  ProofStatus,
+} from "../receipts/types";
+
+const POSTURES = new Set<SecurityPosture>([
+  "local",
+  "plaintext-remote",
+  "encrypted-unattested",
+  "encrypted-attested",
+]);
+const CAPABILITY_TIERS = new Set(["web-baseline", "web-enhanced", "native", "remote-confidential"]);
+const DIGEST_PATTERN = /^sha256:[A-Za-z0-9_-]{43}$/u;
+const TERMINAL_TURN_TYPES = new Set(["turn.completed", "turn.cancelled", "turn.failed"]);
+const RECEIPT_CLAIM_KEYS: readonly ClaimKey[] = Object.freeze([
+  "encryption",
+  "freshness",
+  "cpuTee",
+  "gpuTee",
+  "endpointKey",
+  "model",
+  "conversation",
+  "payment",
+]);
+const PROOF_LEVELS = new Set<ProofLevel>([
+  "local",
+  "encrypted",
+  "attested-endpoint",
+  "model-bound",
+  "conversation-bound",
+  "settled",
+]);
+const PROOF_STATUSES = new Set<ProofStatus>(["verified", "partial", "failed", "expired", "unavailable"]);
+const UNSAFE_CONTROLS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/gu;
+const HAS_UNSAFE_CONTROL = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/u;
+
+export type SessionInspectionLimits = Readonly<{
+  maxEvents: number;
+  maxMessages: number;
+  maxMessageChars: number;
+  maxTranscriptChars: number;
+}>;
+
+export const DEFAULT_SESSION_INSPECTION_LIMITS: SessionInspectionLimits = Object.freeze({
+  maxEvents: 20_000,
+  maxMessages: 500,
+  maxMessageChars: 64 * 1024,
+  maxTranscriptChars: 512 * 1024,
+});
+
+export type SessionHistoryIssue = Readonly<{
+  code: string;
+  severity: "warning" | "error";
+  message: string;
+  sequence?: number;
+  turnId?: string;
+}>;
+
+export type SessionHistoryAssessment = Readonly<{
+  status: "consistent" | "incomplete" | "suspect";
+  label: "Locally consistent" | "Unfinished" | "Needs review";
+  verification: Readonly<{
+    scope: "structural-linkage-only";
+    digestRecomputed: false;
+    authenticity: "not-proven";
+  }>;
+  checkedEvents: number;
+  totalEvents: number;
+  turnCount: number;
+  completedTurnCount: number;
+  issues: readonly SessionHistoryIssue[];
+}>;
+
+export type MaterializedSessionMessage = Readonly<{
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  turnId?: string;
+  sequence: number;
+  recordedAt?: string;
+  phase: "request" | "tool-call" | "response";
+  turnStatus: "completed" | "failed" | "cancelled" | "incomplete";
+  providerContext: "included" | "excluded";
+  truncated: boolean;
+  /** Present only when a bounded receipt is identity-bound to this assistant event. */
+  receipt?: ConversationReceipt;
+}>;
+
+export type SessionLifecycle = Readonly<{
+  state: "ready" | "running" | "completed" | "failed" | "cancelled";
+  label: "Ready" | "Turn in progress" | "Last turn completed" | "Last turn failed" | "Last turn cancelled";
+  turnId?: string;
+  sequence: number;
+  recordedAt?: string;
+}>;
+
+export const READY_SESSION_LIFECYCLE: SessionLifecycle = Object.freeze({
+  state: "ready",
+  label: "Ready",
+  sequence: 0,
+});
+
+export type SessionMaterialization = Readonly<{
+  messages: readonly MaterializedSessionMessage[];
+  /** Ordered, bounded receipts recovered from final assistant events in this session only. */
+  receipts: readonly ConversationReceipt[];
+  lifecycle: SessionLifecycle;
+  omittedMessages: number;
+  ignoredEvents: number;
+  transcriptChars: number;
+  truncated: boolean;
+}>;
+
+export type SessionPostureBinding = Readonly<{
+  basis: "manifest" | "event-observation" | "not-recorded";
+  value?: SecurityPosture;
+  observedValues: readonly SecurityPosture[];
+  mixed: boolean;
+}>;
+
+export type SessionPinnedProfile = Readonly<{
+  profileId: string;
+  profileRevision: string;
+  themeId: string;
+  themeDigest: string;
+  skillSetDigest: string;
+  resolutionDigest: string;
+  skills: readonly Readonly<{ skillId: string; digest: string; promptOrder: number }>[];
+  skillCount: number;
+  skillsTruncated: boolean;
+}>;
+
+export type SessionPins = Readonly<{
+  protocolVersion: number;
+  providerId: string;
+  model: string;
+  workspaceId: string;
+  capabilityTier: SessionManifest["capabilityTier"];
+  systemPromptDigest: string;
+  toolManifestDigest: string;
+  posture: SessionPostureBinding;
+  profile?: SessionPinnedProfile;
+  lineage?: Readonly<{
+    sourceSessionId: string;
+    sourceHeadSequence: number;
+    sourceHeadDigest: string;
+    forkedAt: string;
+  }>;
+}>;
+
+export type ActiveSessionRuntime = Readonly<{
+  providerId: string;
+  model: string;
+  posture: SecurityPosture;
+  toolManifestDigest: string;
+  workspaceId?: string;
+  profile?: Readonly<{
+    profileId: string;
+    profileRevision: string;
+    themeDigest: string;
+    skillSetDigest: string;
+    resolutionDigest: string;
+  }>;
+}>;
+
+export type SessionCompatibilityReason = Readonly<{
+  code: string;
+  severity: "info" | "warning" | "error";
+  message: string;
+}>;
+
+export type SessionResumeCompatibility = Readonly<{
+  action: "resume" | "fork-required" | "blocked";
+  label: "Ready to resume" | "Fork required" | "Resume blocked";
+  reasons: readonly SessionCompatibilityReason[];
+}>;
+
+export type SessionListSort = "updated-desc" | "created-desc" | "title-asc";
+
+export type SessionListQuery = Readonly<{
+  search?: string;
+  providerId?: string;
+  model?: string;
+  profileId?: string | "unbound";
+  sort?: SessionListSort;
+  offset?: number;
+  limit?: number;
+}>;
+
+export type SessionListItem = Readonly<{
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  headSequence: number;
+  headDigest: string;
+  providerId: string;
+  model: string;
+  workspaceId: string;
+  capabilityTier: SessionManifest["capabilityTier"];
+  declaredPosture?: SecurityPosture;
+  profileId?: string;
+  profileRevision?: string;
+  profileResolutionDigest?: string;
+  sourceSessionId?: string;
+}>;
+
+export type SessionListPage = Readonly<{
+  items: readonly SessionListItem[];
+  total: number;
+  rejected: number;
+  offset: number;
+  limit: number;
+  facets: Readonly<{
+    providers: readonly string[];
+    models: readonly string[];
+    profiles: readonly string[];
+  }>;
+}>;
+
+export function materializeSessionMessages(
+  events: readonly DurableEvent[],
+  limitOverrides: Partial<SessionInspectionLimits> = {},
+  expectedSessionId?: string,
+): SessionMaterialization {
+  const limits = resolveLimits(limitOverrides);
+  const start = Math.max(0, events.length - limits.maxEvents);
+  const candidates: Array<Omit<MaterializedSessionMessage, "content" | "truncated"> & { raw: string }> = [];
+  const receiptCandidates: ConversationReceipt[] = [];
+  const boundedEvents = events.slice(start);
+  const scopedBoundedEvents = expectedSessionId
+    ? boundedEvents.filter((event) => event.sessionId === expectedSessionId)
+    : boundedEvents;
+  const terminalTurns = terminalTurnStates(scopedBoundedEvents);
+  const lifecycle = advanceSessionLifecycle(
+    READY_SESSION_LIFECYCLE,
+    scopedBoundedEvents,
+  );
+  let ignoredEvents = start;
+
+  for (let index = start; index < events.length; index += 1) {
+    const event = events[index]!;
+    if (expectedSessionId && event.sessionId !== expectedSessionId) {
+      ignoredEvents += 1;
+      continue;
+    }
+    const payload = plainRecord(event.payload);
+    if (event.type === "turn.requested") {
+      const turnStatus = materializedTurnStatus(event.turnId, terminalTurns);
+      if (!payload || typeof payload.content !== "string" || payload.content.length === 0) {
+        ignoredEvents += 1;
+        continue;
+      }
+      candidates.push({
+        id: safeIdentifier(event.eventId, `event-${String(event.sequence)}`)!,
+        role: "user",
+        raw: payload.content,
+        ...(safeIdentifier(event.turnId) ? { turnId: event.turnId } : {}),
+        sequence: safeSequence(event.sequence),
+        ...(safeDate(event.recordedAt) ? { recordedAt: event.recordedAt } : {}),
+        phase: "request",
+        turnStatus,
+        providerContext: providerContextDisposition(turnStatus),
+      });
+      continue;
+    }
+    if (event.type === "assistant.completed") {
+      const turnStatus = materializedTurnStatus(event.turnId, terminalTurns);
+      const message = plainRecord(payload?.message);
+      if (!message || message.role !== "assistant" || typeof message.content !== "string" || message.content.length === 0) {
+        ignoredEvents += 1;
+        continue;
+      }
+      const receipt = turnStatus === "completed" ? boundedConversationReceipt(payload?.receipt, event) : undefined;
+      if (receipt) receiptCandidates.push(receipt);
+      candidates.push({
+        id: safeIdentifier(event.eventId, `event-${String(event.sequence)}`)!,
+        role: "assistant",
+        raw: message.content,
+        ...(safeIdentifier(event.turnId) ? { turnId: event.turnId } : {}),
+        sequence: safeSequence(event.sequence),
+        ...(safeDate(event.recordedAt) ? { recordedAt: event.recordedAt } : {}),
+        phase: Array.isArray(message.toolCalls) && message.toolCalls.length > 0 ? "tool-call" : "response",
+        turnStatus,
+        providerContext: providerContextDisposition(turnStatus),
+        ...(receipt ? { receipt } : {}),
+      });
+      continue;
+    }
+    if (event.type === "turn.completed") {
+      ignoredEvents += 1;
+      continue;
+    }
+    if (event.type === "turn.failed") {
+      ignoredEvents += 1;
+      continue;
+    }
+    if (event.type === "turn.cancelled") {
+      ignoredEvents += 1;
+      continue;
+    }
+    ignoredEvents += 1;
+  }
+
+  const selected = candidates.slice(-limits.maxMessages);
+  const messages: MaterializedSessionMessage[] = [];
+  let remaining = limits.maxTranscriptChars;
+  let omittedForBudget = 0;
+  for (let index = selected.length - 1; index >= 0; index -= 1) {
+    const candidate = selected[index]!;
+    if (remaining <= 0) {
+      omittedForBudget += index + 1;
+      break;
+    }
+    const normalized = candidate.raw.replace(UNSAFE_CONTROLS, "�");
+    const maximum = Math.min(limits.maxMessageChars, remaining);
+    const content = truncateSafely(normalized, maximum);
+    if (!content) {
+      omittedForBudget += 1;
+      continue;
+    }
+    messages.unshift(Object.freeze({
+      id: candidate.id,
+      role: candidate.role,
+      content,
+      ...(candidate.turnId ? { turnId: candidate.turnId } : {}),
+      sequence: candidate.sequence,
+      ...(candidate.recordedAt ? { recordedAt: candidate.recordedAt } : {}),
+      phase: candidate.phase,
+      turnStatus: candidate.turnStatus,
+      providerContext: candidate.providerContext,
+      truncated: content !== candidate.raw,
+      ...(candidate.receipt ? { receipt: candidate.receipt } : {}),
+    }));
+    remaining -= content.length;
+  }
+
+  const omittedMessages = candidates.length - selected.length + omittedForBudget;
+  return Object.freeze({
+    messages: Object.freeze(messages),
+    receipts: Object.freeze(receiptCandidates.slice(-limits.maxMessages)),
+    lifecycle,
+    omittedMessages,
+    ignoredEvents,
+    transcriptChars: limits.maxTranscriptChars - remaining,
+    truncated: start > 0 || omittedMessages > 0 || messages.some((message) => message.truncated),
+  });
+}
+
+function terminalTurnStates(
+  events: readonly DurableEvent[],
+): ReadonlyMap<string, "completed" | "failed" | "cancelled"> {
+  const states = new Map<string, "completed" | "failed" | "cancelled">();
+  for (const event of events) {
+    const turnId = safeIdentifier(event.turnId);
+    if (!turnId) continue;
+    if (event.type === "turn.completed") states.set(turnId, "completed");
+    if (event.type === "turn.failed") states.set(turnId, "failed");
+    if (event.type === "turn.cancelled") states.set(turnId, "cancelled");
+  }
+  return states;
+}
+
+function materializedTurnStatus(
+  turnId: unknown,
+  states: ReadonlyMap<string, "completed" | "failed" | "cancelled">,
+): MaterializedSessionMessage["turnStatus"] {
+  const safeTurnId = safeIdentifier(turnId);
+  return safeTurnId ? states.get(safeTurnId) ?? "incomplete" : "incomplete";
+}
+
+function providerContextDisposition(
+  status: MaterializedSessionMessage["turnStatus"],
+): MaterializedSessionMessage["providerContext"] {
+  return status === "failed" || status === "cancelled" ? "excluded" : "included";
+}
+
+export function advanceSessionLifecycle(
+  current: SessionLifecycle,
+  events: readonly DurableEvent[],
+): SessionLifecycle {
+  let lifecycle = current;
+  for (const event of events) {
+    if (event.type === "turn.requested") {
+      lifecycle = lifecycleForEvent(event, "running", "Turn in progress");
+    } else if (event.type === "turn.completed") {
+      lifecycle = lifecycleForEvent(event, "completed", "Last turn completed");
+    } else if (event.type === "turn.failed") {
+      lifecycle = lifecycleForEvent(event, "failed", "Last turn failed");
+    } else if (event.type === "turn.cancelled") {
+      lifecycle = lifecycleForEvent(event, "cancelled", "Last turn cancelled");
+    }
+  }
+  return lifecycle;
+}
+
+function lifecycleForEvent(
+  event: DurableEvent,
+  state: SessionLifecycle["state"],
+  label: SessionLifecycle["label"],
+): SessionLifecycle {
+  return Object.freeze({
+    state,
+    label,
+    ...(safeIdentifier(event.turnId) ? { turnId: event.turnId } : {}),
+    sequence: safeSequence(event.sequence),
+    ...(safeDate(event.recordedAt) ? { recordedAt: event.recordedAt } : {}),
+  });
+}
+
+/**
+ * Materialization is a display boundary, not a trust upgrade. Recover a
+ * receipt only when its bounded public shape and session/turn identity match
+ * the durable assistant event. Full binding verification remains the audit's
+ * responsibility.
+ */
+function boundedConversationReceipt(value: unknown, event: DurableEvent): ConversationReceipt | undefined {
+  const receipt = plainRecord(value);
+  if (!receipt || !boundedReceiptTree(receipt)) return undefined;
+  const claims = plainRecord(receipt?.claims);
+  const bindings = plainRecord(receipt?.bindings);
+  if (
+    receipt.version !== 1 ||
+    !boundedText(receipt.receiptId, 2_048) ||
+    receipt.sessionId !== event.sessionId ||
+    receipt.turnId !== event.turnId ||
+    !safeDate(receipt.createdAt) ||
+    !PROOF_LEVELS.has(receipt.proofLevel as ProofLevel) ||
+    !POSTURES.has(receipt.posture as SecurityPosture) ||
+    !boundedText(receipt.provider, 256) ||
+    (receipt.instanceId !== undefined && !boundedText(receipt.instanceId, 2_048)) ||
+    (receipt.model !== undefined && !boundedText(receipt.model, 512)) ||
+    !claims ||
+    !RECEIPT_CLAIM_KEYS.every((key) => validReceiptClaim(claims[key])) ||
+    !bindings ||
+    bindings.algorithm !== "SHA-256" ||
+    !validOptionalReceiptText(bindings.endpointKeyDigest) ||
+    !validOptionalReceiptText(bindings.requestDigest) ||
+    !validOptionalReceiptText(bindings.responseDigest) ||
+    !validOptionalReceiptText(bindings.requestCiphertextDigest) ||
+    !validOptionalReceiptText(bindings.responseCiphertextDigest) ||
+    !validOptionalReceiptText(bindings.evidenceDigest) ||
+    !Array.isArray(receipt.verifications) ||
+    receipt.verifications.length > 512 ||
+    receipt.verifications.some((verification) => !validVerificationRecord(verification))
+  ) return undefined;
+  return deepFreeze(structuredClone(receipt) as unknown as ConversationReceipt);
+}
+
+function validReceiptClaim(value: unknown): boolean {
+  const claim = plainRecord(value);
+  return Boolean(
+    claim &&
+    PROOF_STATUSES.has(claim.status as ProofStatus) &&
+    boundedText(claim.summary, 8_192) &&
+    validOptionalReceiptText(claim.verifier) &&
+    validOptionalReceiptText(claim.policyDigest) &&
+    (claim.checkedAt === undefined || safeDate(claim.checkedAt)),
+  );
+}
+
+function validVerificationRecord(value: unknown): boolean {
+  const verification = plainRecord(value);
+  return Boolean(
+    verification &&
+    boundedText(verification.verifier, 512) &&
+    boundedText(verification.version, 128) &&
+    safeDate(verification.checkedAt) &&
+    PROOF_STATUSES.has(verification.status as ProofStatus) &&
+    RECEIPT_CLAIM_KEYS.includes(verification.claim as ClaimKey) &&
+    validOptionalReceiptText(verification.policyDigest) &&
+    validOptionalReceiptText(verification.detail, 8_192),
+  );
+}
+
+function validOptionalReceiptText(value: unknown, maximum = 2_048): boolean {
+  return value === undefined || Boolean(boundedText(value, maximum));
+}
+
+function boundedReceiptTree(root: object): boolean {
+  const ancestors = new WeakSet<object>();
+  let nodes = 0;
+  let stringChars = 0;
+  const visit = (value: unknown, depth: number): boolean => {
+    nodes += 1;
+    if (nodes > 100_000 || depth > 64) return false;
+    if (value === null || typeof value === "boolean") return true;
+    if (typeof value === "number") return Number.isFinite(value);
+    if (typeof value === "string") {
+      stringChars += value.length;
+      return stringChars <= 2 * 1024 * 1024;
+    }
+    if (!value || typeof value !== "object" || ancestors.has(value)) return false;
+    const prototype = Object.getPrototypeOf(value);
+    if (Array.isArray(value) ? prototype !== Array.prototype : prototype !== Object.prototype && prototype !== null) return false;
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    ancestors.add(value);
+    for (const [key, descriptor] of Object.entries(descriptors)) {
+      if (Array.isArray(value) && key === "length") continue;
+      if ("get" in descriptor || "set" in descriptor || !visit(descriptor.value, depth + 1)) {
+        ancestors.delete(value);
+        return false;
+      }
+    }
+    ancestors.delete(value);
+    return true;
+  };
+  return visit(root, 0);
+}
+
+export function assessSessionHistory(
+  session: SessionRecord,
+  events: readonly DurableEvent[],
+  options: Readonly<{
+    limits?: Partial<SessionInspectionLimits>;
+    snapshotStable?: boolean;
+  }> = {},
+): SessionHistoryAssessment {
+  const limits = resolveLimits(options.limits ?? {});
+  const inspected = events.slice(0, limits.maxEvents);
+  const issues: SessionHistoryIssue[] = [];
+  const eventIds = new Set<string>();
+  const turns = new Set<string>();
+  const postures = new Set<SecurityPosture>();
+  let activeTurn: string | undefined;
+  let completedTurns = 0;
+  let expectedSequence = 1;
+  let expectedPreviousDigest = "genesis";
+  let previousTime = Number.NEGATIVE_INFINITY;
+  let sawCreation = false;
+  let activeSawAssistant = false;
+
+  const add = (issue: SessionHistoryIssue) => issues.push(Object.freeze(issue));
+  if (
+    session.manifest.protocolVersion !== 1 ||
+    !boundedText(session.manifest.providerId, 256) ||
+    !boundedText(session.manifest.model, 512) ||
+    !boundedText(session.manifest.workspaceId, 2_048) ||
+    !DIGEST_PATTERN.test(session.manifest.systemPromptDigest) ||
+    !DIGEST_PATTERN.test(session.manifest.toolManifestDigest) ||
+    !CAPABILITY_TIERS.has(String(session.manifest.capabilityTier)) ||
+    (session.manifest.securityPosture !== undefined && !POSTURES.has(session.manifest.securityPosture))
+  ) {
+    add({ code: "MANIFEST_BINDING_INVALID", severity: "error", message: "The session manifest has an invalid bounded runtime binding." });
+  }
+  const manifestProfile = session.manifest.profile;
+  if (manifestProfile && (
+    manifestProfile.version !== 1 ||
+    !boundedText(manifestProfile.profileId, 256) ||
+    !DIGEST_PATTERN.test(manifestProfile.profileRevision) ||
+    !boundedText(manifestProfile.themeId, 256) ||
+    !DIGEST_PATTERN.test(manifestProfile.themeDigest) ||
+    !DIGEST_PATTERN.test(manifestProfile.skillSetDigest) ||
+    !DIGEST_PATTERN.test(manifestProfile.resolutionDigest) ||
+    !Array.isArray(manifestProfile.resolvedSkills) ||
+    manifestProfile.resolvedSkills.length > 512 ||
+    manifestProfile.resolvedSkills.some((skill) =>
+      !boundedText(skill.skillId, 256) ||
+      !DIGEST_PATTERN.test(skill.digest) ||
+      !Number.isSafeInteger(skill.promptOrder) ||
+      skill.promptOrder < 0)
+  )) {
+    add({ code: "PROFILE_BINDING_INVALID", severity: "error", message: "The manifest profile or resolved skill binding is malformed." });
+  }
+  const manifestLineage = session.manifest.lineage;
+  if (manifestLineage && (
+    manifestLineage.version !== 1 ||
+    manifestLineage.kind !== "fork" ||
+    !boundedText(manifestLineage.sourceSessionId, 512) ||
+    !Number.isSafeInteger(manifestLineage.sourceHeadSequence) ||
+    manifestLineage.sourceHeadSequence <= 0 ||
+    !DIGEST_PATTERN.test(manifestLineage.sourceHeadDigest) ||
+    !safeDate(manifestLineage.forkedAt) ||
+    manifestLineage.forkedAt !== session.manifest.createdAt
+  )) {
+    add({ code: "FORK_LINEAGE_INVALID", severity: "error", message: "The immediate ancestor commitment is malformed." });
+  }
+  if (
+    !Number.isSafeInteger(session.headSequence) ||
+    session.headSequence < 0 ||
+    (session.headSequence === 0 ? session.headDigest !== "genesis" : !DIGEST_PATTERN.test(session.headDigest))
+  ) {
+    add({ code: "SESSION_HEAD_INVALID", severity: "error", message: "The stored session head has an invalid sequence or digest shape." });
+  }
+  if (events.length > limits.maxEvents) {
+    add({
+      code: "INSPECTION_LIMIT_REACHED",
+      severity: "warning",
+      message: `Only the first ${String(limits.maxEvents)} of ${String(events.length)} events were structurally inspected.`,
+    });
+  }
+  if (options.snapshotStable === false) {
+    add({
+      code: "SNAPSHOT_CHANGED_DURING_READ",
+      severity: "warning",
+      message: "The session advanced while it was being read. Refresh before resuming.",
+    });
+  }
+  if (inspected.length === 0 || inspected[0]?.type !== "session.created") {
+    add({ code: "SESSION_CREATION_MISSING", severity: "error", message: "The history does not begin with session.created." });
+  }
+
+  for (const event of inspected) {
+    const location = {
+      ...(Number.isSafeInteger(event.sequence) ? { sequence: event.sequence } : {}),
+      ...(safeIdentifier(event.turnId) ? { turnId: event.turnId } : {}),
+    };
+    if (event.sessionId !== session.id) {
+      add({ ...location, code: "CROSS_SESSION_EVENT", severity: "error", message: "An event belongs to a different session." });
+    }
+    if (event.version !== 1 || !boundedText(event.type, 128) || !DIGEST_PATTERN.test(event.digest) || (event.previousDigest !== "genesis" && !DIGEST_PATTERN.test(event.previousDigest))) {
+      add({ ...location, code: "EVENT_SHAPE_INVALID", severity: "error", message: "An event has an invalid protocol version, type, or digest shape." });
+    }
+    if (!Number.isSafeInteger(event.sequence) || event.sequence !== expectedSequence) {
+      add({ ...location, code: "SEQUENCE_GAP", severity: "error", message: `Expected event sequence ${String(expectedSequence)}.` });
+    }
+    if (event.previousDigest !== expectedPreviousDigest) {
+      add({ ...location, code: "LINKAGE_MISMATCH", severity: "error", message: "An event does not reference the preceding stored digest." });
+    }
+    if (!safeIdentifier(event.eventId)) {
+      add({ ...location, code: "EVENT_ID_INVALID", severity: "error", message: "An event ID is missing or unreasonably large." });
+    } else if (eventIds.has(event.eventId)) {
+      add({ ...location, code: "EVENT_ID_REUSED", severity: "error", message: "An event ID is reused in this session." });
+    } else {
+      eventIds.add(event.eventId);
+    }
+    const recorded = Date.parse(event.recordedAt);
+    if (!Number.isFinite(recorded)) {
+      add({ ...location, code: "EVENT_TIME_INVALID", severity: "error", message: "An event timestamp is invalid." });
+    } else if (recorded < previousTime) {
+      add({ ...location, code: "EVENT_TIME_REVERSED", severity: "error", message: "An event timestamp moves backward." });
+    }
+    if (Number.isFinite(recorded)) previousTime = recorded;
+    expectedSequence = Number.isSafeInteger(event.sequence) ? event.sequence + 1 : expectedSequence + 1;
+    expectedPreviousDigest = typeof event.digest === "string" ? event.digest : "";
+
+    const payload = plainRecord(event.payload);
+    if (event.type === "session.created") {
+      if (sawCreation || event.sequence !== 1 || event.turnId || event.operationId) {
+        add({ ...location, code: "SESSION_CREATION_MALFORMED", severity: "error", message: "session.created must be the first and only creation event." });
+      }
+      sawCreation = true;
+    }
+    if (event.type === "turn.requested") {
+      if (!safeIdentifier(event.turnId) || event.operationId || !payload || typeof payload.content !== "string") {
+        add({ ...location, code: "TURN_REQUEST_MALFORMED", severity: "error", message: "A turn request has malformed identity or content." });
+        continue;
+      }
+      if (activeTurn) {
+        add({ ...location, code: "TURN_OVERLAP", severity: "error", message: "A new turn began before the prior turn reached a terminal event." });
+      }
+      if (turns.has(event.turnId!)) {
+        add({ ...location, code: "TURN_ID_REUSED", severity: "error", message: "A turn ID is reused." });
+      }
+      turns.add(event.turnId!);
+      activeTurn = event.turnId;
+      activeSawAssistant = false;
+      continue;
+    }
+    if (event.type === "inference.started") {
+      const posture = payload?.posture;
+      if (typeof posture !== "string" || !POSTURES.has(posture as SecurityPosture)) {
+        add({ ...location, code: "POSTURE_INVALID", severity: "error", message: "An inference event has no recognized security posture." });
+      } else {
+        postures.add(posture as SecurityPosture);
+        if (session.manifest.securityPosture && posture !== session.manifest.securityPosture) {
+          add({ ...location, code: "POSTURE_PIN_MISMATCH", severity: "error", message: "Observed inference posture differs from the manifest pin." });
+        }
+      }
+      if (payload?.providerId !== session.manifest.providerId || payload.model !== session.manifest.model) {
+        add({ ...location, code: "INFERENCE_BINDING_MISMATCH", severity: "error", message: "An inference event differs from the manifest provider or model." });
+      }
+    }
+    if (event.type === "assistant.completed") {
+      const message = plainRecord(payload?.message);
+      if (!activeTurn || event.turnId !== activeTurn || !message || message.role !== "assistant" || typeof message.content !== "string") {
+        add({ ...location, code: "ASSISTANT_EVENT_MALFORMED", severity: "error", message: "An assistant event does not match the active turn." });
+      }
+      if (activeTurn && event.turnId === activeTurn && message?.role === "assistant" && typeof message.content === "string") {
+        activeSawAssistant = true;
+      }
+    }
+    if (TERMINAL_TURN_TYPES.has(event.type)) {
+      if (!activeTurn || event.turnId !== activeTurn || event.operationId) {
+        add({ ...location, code: "TURN_TERMINAL_MALFORMED", severity: "error", message: "A terminal event does not match the active turn." });
+      } else {
+        if (event.type === "turn.completed" && !activeSawAssistant) {
+          add({ ...location, code: "TURN_COMPLETION_WITHOUT_ASSISTANT", severity: "error", message: "A completed turn has no matching assistant event." });
+        }
+        if (event.type === "turn.completed") completedTurns += 1;
+        activeTurn = undefined;
+        activeSawAssistant = false;
+      }
+    }
+  }
+
+  if (postures.size > 1 && !session.manifest.securityPosture) {
+    add({
+      code: "POSTURE_CHANGED_WITHOUT_PIN",
+      severity: "error",
+      message: "The session contains multiple observed postures and no manifest posture pin.",
+    });
+  }
+  if (activeTurn) {
+    add({ code: "TURN_INCOMPLETE", severity: "warning", message: "The most recent turn has no durable terminal event.", turnId: activeTurn });
+  }
+  if (events.length <= limits.maxEvents) {
+    const last = inspected.at(-1);
+    const sequence = last?.sequence ?? 0;
+    const digest = last?.digest ?? "genesis";
+    if (session.headSequence !== sequence || session.headDigest !== digest) {
+      add({ code: "SESSION_HEAD_MISMATCH", severity: "error", message: "The session record does not match the final event linkage." });
+    }
+    if (last && session.updatedAt !== last.recordedAt) {
+      add({ code: "SESSION_UPDATE_TIME_MISMATCH", severity: "warning", message: "The session update timestamp differs from the final event." });
+    }
+  }
+
+  const status = issues.some((issue) => issue.severity === "error")
+    ? "suspect"
+    : issues.length > 0
+      ? "incomplete"
+      : "consistent";
+  return deepFreeze({
+    status,
+    label: status === "consistent" ? "Locally consistent" : status === "incomplete" ? "Unfinished" : "Needs review",
+    verification: {
+      scope: "structural-linkage-only",
+      digestRecomputed: false,
+      authenticity: "not-proven",
+    },
+    checkedEvents: inspected.length,
+    totalEvents: events.length,
+    turnCount: turns.size,
+    completedTurnCount: completedTurns,
+    issues,
+  });
+}
+
+export function extractSessionPins(
+  session: SessionRecord,
+  events: readonly DurableEvent[] = [],
+): SessionPins {
+  const observed = new Set<SecurityPosture>();
+  for (const event of events.slice(0, DEFAULT_SESSION_INSPECTION_LIMITS.maxEvents)) {
+    if (event.type !== "inference.started") continue;
+    const posture = plainRecord(event.payload)?.posture;
+    if (typeof posture === "string" && POSTURES.has(posture as SecurityPosture)) observed.add(posture as SecurityPosture);
+  }
+  const observedValues = [...observed].sort();
+  const declared = session.manifest.securityPosture;
+  const posture: SessionPostureBinding = declared && POSTURES.has(declared)
+    ? {
+        basis: "manifest",
+        value: declared,
+        observedValues,
+        mixed: observedValues.some((value) => value !== declared),
+      }
+    : observedValues.length === 1
+      ? { basis: "event-observation", value: observedValues[0], observedValues, mixed: false }
+      : {
+          basis: observedValues.length ? "event-observation" : "not-recorded",
+          observedValues,
+          mixed: observedValues.length > 1,
+        };
+
+  const profile = session.manifest.profile ? pinnedProfile(session.manifest.profile) : undefined;
+  const lineage = session.manifest.lineage;
+  return deepFreeze({
+    protocolVersion: session.manifest.protocolVersion,
+    providerId: boundedText(session.manifest.providerId, 256) ?? "[invalid provider]",
+    model: boundedText(session.manifest.model, 512) ?? "[invalid model]",
+    workspaceId: boundedText(session.manifest.workspaceId, 2_048) ?? "[invalid workspace]",
+    capabilityTier: session.manifest.capabilityTier,
+    systemPromptDigest: boundedText(session.manifest.systemPromptDigest, 128) ?? "[invalid digest]",
+    toolManifestDigest: boundedText(session.manifest.toolManifestDigest, 128) ?? "[invalid digest]",
+    posture,
+    ...(profile ? { profile } : {}),
+    ...(lineage ? {
+      lineage: {
+        sourceSessionId: boundedText(lineage.sourceSessionId, 512) ?? "[invalid source]",
+        sourceHeadSequence: lineage.sourceHeadSequence,
+        sourceHeadDigest: boundedText(lineage.sourceHeadDigest, 128) ?? "[invalid digest]",
+        forkedAt: boundedText(lineage.forkedAt, 128) ?? "[invalid time]",
+      },
+    } : {}),
+  });
+}
+
+export function decideSessionResume(
+  pins: SessionPins,
+  assessment: SessionHistoryAssessment,
+  runtime: ActiveSessionRuntime,
+): SessionResumeCompatibility {
+  const reasons: SessionCompatibilityReason[] = [];
+  const add = (reason: SessionCompatibilityReason) => reasons.push(Object.freeze(reason));
+
+  if (assessment.status === "suspect") {
+    add({ code: "HISTORY_SUSPECT", severity: "error", message: "Structural history issues must be reviewed before this session can resume." });
+  } else if (assessment.status === "incomplete") {
+    add({ code: "HISTORY_INCOMPLETE", severity: "warning", message: "The session ended mid-turn or was only partially inspected; fork before continuing." });
+  }
+  if (pins.providerId !== runtime.providerId) {
+    add({ code: "PROVIDER_MISMATCH", severity: "warning", message: `Pinned provider ${pins.providerId} differs from active provider ${runtime.providerId}.` });
+  }
+  if (pins.model !== runtime.model) {
+    add({ code: "MODEL_MISMATCH", severity: "warning", message: `Pinned model ${pins.model} differs from active model ${runtime.model}.` });
+  }
+  if (pins.toolManifestDigest !== runtime.toolManifestDigest) {
+    add({ code: "TOOL_MANIFEST_MISMATCH", severity: "warning", message: "The active tool manifest differs from the session pin." });
+  }
+  if (runtime.workspaceId !== undefined && pins.workspaceId !== runtime.workspaceId) {
+    add({ code: "WORKSPACE_MISMATCH", severity: "warning", message: "The active workspace differs from the session pin." });
+  }
+  if (pins.posture.mixed) {
+    add({ code: "POSTURE_AMBIGUOUS", severity: "error", message: "The history does not establish one coherent security posture." });
+  } else if (pins.posture.value && pins.posture.value !== runtime.posture) {
+    add({ code: "POSTURE_MISMATCH", severity: "warning", message: `Session posture ${pins.posture.value} differs from active posture ${runtime.posture}.` });
+  } else if (pins.posture.basis === "not-recorded") {
+    add({ code: "POSTURE_NOT_RECORDED", severity: "info", message: "No prior inference posture is recorded; the next session should pin the active posture." });
+  } else if (pins.posture.basis === "event-observation") {
+    add({ code: "POSTURE_OBSERVED_ONLY", severity: "info", message: "Posture was observed in turn events but was not pinned in this older manifest." });
+  }
+
+  compareProfiles(pins.profile, runtime.profile, add);
+  const blocked = reasons.some((reason) => reason.severity === "error");
+  const requiresFork = assessment.status === "incomplete" || reasons.some((reason) => reason.severity === "warning");
+  const action = blocked ? "blocked" : requiresFork ? "fork-required" : "resume";
+  return deepFreeze({
+    action,
+    label: action === "resume" ? "Ready to resume" : action === "fork-required" ? "Fork required" : "Resume blocked",
+    reasons,
+  });
+}
+
+export function querySessionRecords(
+  records: readonly SessionRecord[],
+  query: SessionListQuery = {},
+): SessionListPage {
+  const offset = nonNegativeInteger(query.offset, 0, 1_000_000);
+  const limit = positiveInteger(query.limit, 100, 200);
+  const search = normalizeSearch(query.search);
+  const summaries: SessionListItem[] = [];
+  let rejected = 0;
+  for (const record of records.slice(0, 10_000)) {
+    const summary = summarizeSession(record);
+    if (summary) summaries.push(summary);
+    else rejected += 1;
+  }
+  if (records.length > 10_000) rejected += records.length - 10_000;
+
+  const facets = {
+    providers: uniqueSorted(summaries.map((item) => item.providerId)),
+    models: uniqueSorted(summaries.map((item) => item.model)),
+    profiles: uniqueSorted(summaries.flatMap((item) => item.profileId ? [item.profileId] : [])),
+  };
+  const filtered = summaries.filter((item) => {
+    if (query.providerId && item.providerId !== query.providerId) return false;
+    if (query.model && item.model !== query.model) return false;
+    if (query.profileId === "unbound" && item.profileId) return false;
+    if (query.profileId && query.profileId !== "unbound" && item.profileId !== query.profileId) return false;
+    if (!search) return true;
+    return [item.title, item.id, item.providerId, item.model, item.profileId ?? "", item.sourceSessionId ?? ""]
+      .some((value) => searchable(value).includes(search));
+  });
+  filtered.sort(sessionComparer(query.sort ?? "updated-desc"));
+  return deepFreeze({
+    items: filtered.slice(offset, offset + limit),
+    total: filtered.length,
+    rejected,
+    offset,
+    limit,
+    facets,
+  });
+}
+
+function summarizeSession(session: SessionRecord): SessionListItem | undefined {
+  if (
+    !safeIdentifier(session.id) ||
+    typeof session.title !== "string" ||
+    session.title.length === 0 ||
+    session.title.length > 4_096 ||
+    !safeDate(session.createdAt) ||
+    !safeDate(session.updatedAt) ||
+    !Number.isSafeInteger(session.headSequence) ||
+    session.headSequence < 0 ||
+    typeof session.headDigest !== "string" ||
+    (session.headSequence === 0 ? session.headDigest !== "genesis" : !DIGEST_PATTERN.test(session.headDigest)) ||
+    !safeIdentifier(session.manifest.providerId) ||
+    typeof session.manifest.model !== "string" ||
+    session.manifest.model.length === 0 ||
+    session.manifest.model.length > 512 ||
+    typeof session.manifest.workspaceId !== "string" ||
+    session.manifest.workspaceId.length === 0 ||
+    session.manifest.workspaceId.length > 2_048 ||
+    !CAPABILITY_TIERS.has(String(session.manifest.capabilityTier)) ||
+    (session.manifest.securityPosture !== undefined && !POSTURES.has(session.manifest.securityPosture)) ||
+    (session.manifest.profile !== undefined && !safeIdentifier(session.manifest.profile.profileId)) ||
+    (session.manifest.lineage !== undefined && !safeIdentifier(session.manifest.lineage.sourceSessionId))
+  ) return undefined;
+  return Object.freeze({
+    id: session.id,
+    title: truncateSafely(session.title.replace(UNSAFE_CONTROLS, "�"), 240),
+    createdAt: session.createdAt,
+    updatedAt: session.updatedAt,
+    headSequence: session.headSequence,
+    headDigest: session.headDigest,
+    providerId: session.manifest.providerId,
+    model: session.manifest.model,
+    workspaceId: session.manifest.workspaceId,
+    capabilityTier: session.manifest.capabilityTier,
+    ...(session.manifest.securityPosture ? { declaredPosture: session.manifest.securityPosture } : {}),
+    ...(session.manifest.profile ? {
+      profileId: session.manifest.profile.profileId,
+      profileRevision: session.manifest.profile.profileRevision,
+      profileResolutionDigest: session.manifest.profile.resolutionDigest,
+    } : {}),
+    ...(session.manifest.lineage ? { sourceSessionId: session.manifest.lineage.sourceSessionId } : {}),
+  });
+}
+
+function sessionComparer(sort: SessionListSort): (left: SessionListItem, right: SessionListItem) => number {
+  return (left, right) => {
+    if (sort === "title-asc") {
+      const title = left.title.localeCompare(right.title, undefined, { sensitivity: "base" });
+      return title || right.updatedAt.localeCompare(left.updatedAt) || left.id.localeCompare(right.id);
+    }
+    const field = sort === "created-desc" ? "createdAt" : "updatedAt";
+    return right[field].localeCompare(left[field]) || left.id.localeCompare(right.id);
+  };
+}
+
+function compareProfiles(
+  pinned: SessionPinnedProfile | undefined,
+  active: ActiveSessionRuntime["profile"],
+  add: (reason: SessionCompatibilityReason) => void,
+): void {
+  if (!pinned && !active) return;
+  if (!pinned || !active) {
+    add({ code: "PROFILE_BINDING_MISMATCH", severity: "warning", message: "The active profile binding differs from the session manifest." });
+    return;
+  }
+  if (
+    pinned.profileId !== active.profileId ||
+    pinned.profileRevision !== active.profileRevision ||
+    pinned.themeDigest !== active.themeDigest ||
+    pinned.skillSetDigest !== active.skillSetDigest ||
+    pinned.resolutionDigest !== active.resolutionDigest
+  ) {
+    add({ code: "PROFILE_DIGEST_MISMATCH", severity: "warning", message: "The active profile, theme, or resolved skill digests differ from the session pin." });
+  }
+}
+
+function pinnedProfile(profile: SessionProfileBinding): SessionPinnedProfile {
+  const skillCount = profile.resolvedSkills.length;
+  const skills = profile.resolvedSkills.slice(0, 512);
+  return {
+    profileId: boundedText(profile.profileId, 256) ?? "[invalid profile]",
+    profileRevision: boundedText(profile.profileRevision, 128) ?? "[invalid digest]",
+    themeId: boundedText(profile.themeId, 256) ?? "[invalid theme]",
+    themeDigest: boundedText(profile.themeDigest, 128) ?? "[invalid digest]",
+    skillSetDigest: boundedText(profile.skillSetDigest, 128) ?? "[invalid digest]",
+    resolutionDigest: boundedText(profile.resolutionDigest, 128) ?? "[invalid digest]",
+    skills: skills.map((skill) => Object.freeze({
+      skillId: boundedText(skill.skillId, 256) ?? "[invalid skill]",
+      digest: boundedText(skill.digest, 128) ?? "[invalid digest]",
+      promptOrder: Number.isSafeInteger(skill.promptOrder) ? skill.promptOrder : -1,
+    })),
+    skillCount,
+    skillsTruncated: skillCount > skills.length,
+  };
+}
+
+function resolveLimits(overrides: Partial<SessionInspectionLimits>): SessionInspectionLimits {
+  const limits = { ...DEFAULT_SESSION_INSPECTION_LIMITS, ...overrides };
+  for (const [name, value] of Object.entries(limits)) {
+    if (!Number.isSafeInteger(value) || value <= 0) throw new TypeError(`${name} must be a positive safe integer.`);
+  }
+  return Object.freeze(limits);
+}
+
+function normalizeSearch(value: string | undefined): string {
+  if (!value) return "";
+  return searchable(value.slice(0, 256).trim());
+}
+
+function searchable(value: string): string {
+  return value.normalize("NFKC").toLocaleLowerCase();
+}
+
+function uniqueSorted(values: readonly string[]): readonly string[] {
+  return Object.freeze([...new Set(values)].sort((left, right) => left.localeCompare(right)).slice(0, 500));
+}
+
+function positiveInteger(value: number | undefined, fallback: number, maximum: number): number {
+  if (value === undefined) return fallback;
+  if (!Number.isSafeInteger(value) || value <= 0) throw new TypeError("limit must be a positive safe integer.");
+  return Math.min(value, maximum);
+}
+
+function nonNegativeInteger(value: number | undefined, fallback: number, maximum: number): number {
+  if (value === undefined) return fallback;
+  if (!Number.isSafeInteger(value) || value < 0) throw new TypeError("offset must be a non-negative safe integer.");
+  return Math.min(value, maximum);
+}
+
+function plainRecord(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return undefined;
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  if (Object.values(descriptors).some((descriptor) => "get" in descriptor || "set" in descriptor)) return undefined;
+  return value as Record<string, unknown>;
+}
+
+function safeIdentifier(value: unknown, fallback?: string): string | undefined {
+  return typeof value === "string" && value.length > 0 && value.length <= 512 && !HAS_UNSAFE_CONTROL.test(value)
+    ? value
+    : fallback;
+}
+
+function safeDate(value: unknown): value is string {
+  return typeof value === "string" && value.length <= 128 && Number.isFinite(Date.parse(value));
+}
+
+function boundedText(value: unknown, maximum: number): string | undefined {
+  return typeof value === "string" && value.length > 0 && value.length <= maximum && !HAS_UNSAFE_CONTROL.test(value)
+    ? value
+    : undefined;
+}
+
+function safeSequence(value: unknown): number {
+  return Number.isSafeInteger(value) && (value as number) > 0 ? value as number : 0;
+}
+
+function truncateSafely(value: string, maximum: number): string {
+  if (value.length <= maximum) return value;
+  if (maximum <= 1) return "…".slice(0, maximum);
+  let end = maximum - 1;
+  const last = value.charCodeAt(end - 1);
+  if (last >= 0xd800 && last <= 0xdbff) end -= 1;
+  return `${value.slice(0, Math.max(0, end))}…`;
+}
+
+function deepFreeze<T>(value: T): T {
+  if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
+  for (const child of Object.values(value as Record<string, unknown>)) deepFreeze(child);
+  return Object.freeze(value);
+}

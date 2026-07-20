@@ -1,0 +1,40 @@
+services:
+  minio:
+    image: quay.io/minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
+    pull_policy: missing
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: airship-lab-root
+      MINIO_ROOT_PASSWORD: airship-lab-root-only-2026
+      MINIO_API_CORS_ALLOW_ORIGIN: http://localhost:4173,http://127.0.0.1:4173
+    ports:
+      - "127.0.0.1:9900:9000"
+      - "127.0.0.1:9901:9001"
+    volumes:
+      - airship-lab-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9000/minio/health/live"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+      start_period: 2s
+
+  minio-init:
+    image: quay.io/minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
+    pull_policy: missing
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: airship-lab-root
+      MINIO_ROOT_PASSWORD: airship-lab-root-only-2026
+      AIRSHIP_LAB_ACCESS_KEY: airship-vault-probe
+      AIRSHIP_LAB_SECRET_KEY: airship-vault-probe-only-2026
+      AIRSHIP_LAB_BUCKET: airship-dev
+    entrypoint: ["/bin/sh", "/config/minio-init.sh"]
+    volumes:
+      - ./local-lab/minio-init.sh:/config/minio-init.sh:ro
+      - ./local-lab/minio-policy.json:/config/minio-policy.json:ro
+
+volumes:
+  airship-lab-data:
