@@ -15,19 +15,72 @@ export const RELEASE_BUDGETS = Object.freeze({
   // entry remains below its stricter 110 KiB limit. Heavy QVL stays deferred.
   allJavaScriptAndWorkers: Object.freeze({ raw: 640 * 1024, gzip: 132 * 1024 }),
   deferredCapabilities: Object.freeze({ raw: 384 * 1024, gzip: 110 * 1024 }),
-  // Full-route ceiling, not startup cost: includes the independently loaded
-  // Editor, Git, Sessions, Terminal and attestation surfaces.
-  totalJavaScriptAndWorkers: Object.freeze({ raw: 1664 * 1024, gzip: 384 * 1024 }),
+  // Core plus every optional route except the two independently delivered
+  // vendor engines. The former 384 KiB "all routes" meaning became impossible
+  // once full isomorphic-git and xterm engines were deliberately installed:
+  // they are mutually activated, separately cached, and already individually
+  // capped. Keep 384 KiB as the stronger first-party/all-other partition.
+  // Local Device custody plus the provider-neutral inference fabric add
+  // independently lazy first-party packs; the reviewed installed first-party
+  // aggregate remains below 1.4 MiB raw and 424 KiB gzip.
+  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 1664 * 1024, gzip: 424 * 1024 }),
+  // isomorphic-git and xterm are mutually activated vendor engines with their
+  // own per-pack caps. Their cumulative cap is <5% above the measured pair.
+  optionalVendorRuntimeAggregate: Object.freeze({ raw: 608 * 1024, gzip: 176 * 1024 }),
+  // Absolute installed bundle backstop. It includes first-party/routes, both
+  // vendor engines, model catalog chunks, and the service worker. Static
+  // Pyodide assets remain governed by their separate pack cap below.
+  // Genuine linked worktrees add an isolated worktree administration overlay
+  // while retaining one shared object/ref database. Keep roughly 1 KiB of
+  // headroom over the reviewed installed aggregate; startup, route, and
+  // browser-Git pack ceilings remain independently unchanged.
+  totalJavaScriptAndWorkers: Object.freeze({ raw: 2048 * 1024, gzip: 600 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. Keep it visible under a dedicated, deliberately small cap.
   serviceWorker: Object.freeze({ raw: 12 * 1024, gzip: 4 * 1024 }),
   optionalExecutionPack: Object.freeze({ raw: 32 * 1024, gzip: 10 * 1024 }),
+  // The stable broker is tiny; Worker/WASI/Pyodide implementation follows as
+  // a second-level chunk only when runtime inspection or execution begins.
+  optionalExecutionEngine: Object.freeze({ raw: 48 * 1024, gzip: 12 * 1024 }),
+  optionalExecutionSupport: Object.freeze({ raw: 8 * 1024, gzip: 3 * 1024 }),
+  // Pinned browser_wasi_shim plus Airship's bounded virtual-filesystem Worker.
+  // It is fetched only when the precompiled WASI adapter executes a command.
+  optionalWasiPreview1Worker: Object.freeze({ raw: 32 * 1024, gzip: 8 * 1024 }),
   optionalNodeExecutionPack: Object.freeze({ raw: 32 * 1024, gzip: 8 * 1024 }),
+  // The research WASIX candidate is intentionally absent from production
+  // until its bidirectional workspace/output promotion probe passes.
+  optionalWasixJavaScript: Object.freeze({ raw: 0, gzip: 0 }),
+  optionalWasixWasm: Object.freeze({ raw: 0, gzip: 0 }),
+  // The full inspect-act-verify loop is fetched on the first sent turn. The
+  // shell keeps only immutable session-manifest construction on its boot path.
+  optionalAgentRuntime: Object.freeze({ raw: 48 * 1024, gzip: 14 * 1024 }),
+  // The registry, local retrieval broker and repository admission logic load
+  // together when an agent-capable workspace is first constructed.
+  optionalAgentTools: Object.freeze({ raw: 128 * 1024, gzip: 36 * 1024 }),
   // Files/editor shell plus its in-page source-control handoff. Git remains a
   // second lazy pack; this cap covers only the combined Editor route chrome.
   optionalWorkspaceWorkbench: Object.freeze({ raw: 28 * 1024, gzip: 10 * 1024 }),
+  optionalWorkspaceBinding: Object.freeze({ raw: 2 * 1024, gzip: 1 * 1024 }),
+  optionalWorkspaceCodec: Object.freeze({ raw: 2 * 1024, gzip: 1 * 1024 }),
   optionalSourceControl: Object.freeze({ raw: 48 * 1024, gzip: 14 * 1024 }),
+  optionalSourceSelection: Object.freeze({ raw: 2 * 1024, gzip: 1 * 1024 }),
+  // Full standards-compatible Git engine. It is loaded once during browser
+  // runtime boot, never preloaded with the shell, and remains independently
+  // cacheable from the lightweight Source Control presentation pack.
+  optionalBrowserGit: Object.freeze({ raw: 256 * 1024, gzip: 80 * 1024 }),
   optionalSessionLibrary: Object.freeze({ raw: 48 * 1024, gzip: 14 * 1024 }),
+  optionalCapabilitiesView: Object.freeze({ raw: 8 * 1024, gzip: 3 * 1024 }),
+  // Hardware/browser feature detection is requested after the shell starts so
+  // it can select the strongest runtime without inflating the HTML preload set.
+  optionalBrowserCapabilities: Object.freeze({ raw: 16 * 1024, gzip: 6 * 1024 }),
+  // Graph derivation and relationship controls load only on Memory/Context.
+  optionalMemoryView: Object.freeze({ raw: 36 * 1024, gzip: 12 * 1024 }),
+  // Small shared node-shape vocabulary split out by Vite because both the
+  // Memory route and deferred graph renderer consume it.
+  optionalMemorySupport: Object.freeze({ raw: 2 * 1024, gzip: 1 * 1024 }),
+  // Proof presentation and privacy-safe receipt serialization are fetched only
+  // when the user opens the comprehensive Proof surface.
+  optionalProofSurface: Object.freeze({ raw: 64 * 1024, gzip: 20 * 1024 }),
   // Official xterm.js is isolated behind the Terminal route and is never part
   // of initial navigation or a background capability probe.
   optionalTerminal: Object.freeze({ raw: 384 * 1024, gzip: 100 * 1024 }),
@@ -37,6 +90,14 @@ export const RELEASE_BUDGETS = Object.freeze({
   // Model catalog + utilization normalization is loaded only when provider
   // discovery opens and is enforced separately from the interactive app.
   optionalModelCatalog: Object.freeze({ raw: 32 * 1024, gzip: 10 * 1024 }),
+  // Multi-provider connection UI, page-lifetime provider fabric, credential-
+  // free route contracts, and cloud transport adapters load with the
+  // Connection route/runtime bootstrap. They are deliberately absent from the
+  // HTML preload graph.
+  optionalInferenceProviders: Object.freeze({ raw: 112 * 1024, gzip: 34 * 1024 }),
+  // Local Device setup and its OPFS/IndexedDB key-custody runtime load only
+  // after the user selects that Vault provider.
+  optionalLocalDeviceVault: Object.freeze({ raw: 60 * 1024, gzip: 19 * 1024 }),
   optionalDcapQvlJavaScript: Object.freeze({ raw: 32 * 1024, gzip: 8 * 1024 }),
   optionalDcapQvlWasm: Object.freeze({ raw: 1536 * 1024, gzip: 512 * 1024 }),
   optionalPythonPack: Object.freeze({ raw: 16 * 1024 * 1024, gzip: 8 * 1024 * 1024 }),
@@ -113,6 +174,38 @@ export function assertWithinBudget(label, measurement, budget) {
   if (exceeded.length > 0) throw new Error(`${label} exceeds its release budget: ${exceeded.join(", ")}.`);
 }
 
+/** A researched runtime that failed promotion must contribute zero release artifacts. */
+export function assertUnpromotedWasixAbsent(kind, paths) {
+  if (paths.length !== 0) {
+    throw new Error(`Production must not contain the unpromoted WASIX ${kind}; found ${paths.length} artifacts.`);
+  }
+}
+
+/** Every emitted bundled JavaScript artifact has one, and only one, owner. */
+export function assertExclusiveArtifactClassifications(paths, classifications) {
+  const claims = new Map(paths.map((path) => [path, []]));
+  for (const classification of classifications) {
+    const uniquePaths = new Set(classification.paths);
+    for (const path of uniquePaths) {
+      const owners = claims.get(path);
+      if (owners) owners.push(classification.name);
+    }
+  }
+  const unclassified = [];
+  const multiplyClassified = [];
+  for (const [path, owners] of claims) {
+    if (owners.length === 0) unclassified.push(path);
+    if (owners.length > 1) multiplyClassified.push(`${path} (${owners.join(", ")})`);
+  }
+  if (unclassified.length || multiplyClassified.length) {
+    const failures = [
+      ...unclassified.map((path) => `unclassified: ${path}`),
+      ...multiplyClassified.map((path) => `multiple classes: ${path}`),
+    ];
+    throw new Error(`JavaScript artifact classification failed:\n- ${failures.join("\n- ")}`);
+  }
+}
+
 export async function runReleaseGate(outputDirectory = defaultOutput) {
   const output = resolve(outputDirectory);
   const files = await collectFiles(output);
@@ -176,31 +269,106 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
     throw new Error(`Production must contain exactly one optional execution pack; found ${optionalExecutionPacks.length}.`);
   }
   const optionalExecutionPackMeasurement = measure(optionalExecutionPacks[0].payload);
+  const optionalExecutionEnginePacks = javaScriptFiles.filter((file) => isOptionalExecutionEnginePath(file.path));
+  if (optionalExecutionEnginePacks.length !== 1) {
+    throw new Error(`Production must contain exactly one optional execution engine; found ${optionalExecutionEnginePacks.length}.`);
+  }
+  const optionalExecutionEngineMeasurement = measure(optionalExecutionEnginePacks[0].payload);
+  const optionalExecutionSupportPacks = javaScriptFiles.filter((file) => isOptionalExecutionSupportPath(file.path));
+  if (optionalExecutionSupportPacks.length !== 1) {
+    throw new Error(`Production must contain exactly one optional execution support chunk; found ${optionalExecutionSupportPacks.length}.`);
+  }
+  const optionalExecutionSupportMeasurement = measure(optionalExecutionSupportPacks[0].payload);
+  const optionalWasiPreview1WorkerPacks = javaScriptFiles.filter((file) => isOptionalWasiPreview1WorkerPath(file.path));
+  if (optionalWasiPreview1WorkerPacks.length !== 1) {
+    throw new Error(`Production must contain exactly one optional WASI Preview 1 Worker; found ${optionalWasiPreview1WorkerPacks.length}.`);
+  }
+  const optionalWasiPreview1WorkerMeasurement = measure(optionalWasiPreview1WorkerPacks[0].payload);
   const optionalNodeExecutionPacks = javaScriptFiles.filter((file) => isOptionalNodeExecutionPackPath(file.path));
   if (optionalNodeExecutionPacks.length !== 1) {
     throw new Error(`Production must contain exactly one optional Node execution pack; found ${optionalNodeExecutionPacks.length}.`);
   }
   const optionalNodeExecutionPackMeasurement = measure(optionalNodeExecutionPacks[0].payload);
+  const optionalWasixJavaScriptPacks = javaScriptFiles.filter((file) => isOptionalWasixJavaScriptPath(file.path));
+  assertUnpromotedWasixAbsent("JavaScript candidate", optionalWasixJavaScriptPacks.map((file) => file.path));
+  const optionalWasixJavaScriptMeasurement = sumMeasurements(
+    optionalWasixJavaScriptPacks.map((file) => measure(file.payload)),
+  );
+  const optionalAgentRuntimePacks = javaScriptFiles.filter((file) => isOptionalAgentRuntimePath(file.path));
+  if (optionalAgentRuntimePacks.length !== 1) {
+    throw new Error(`Production must contain exactly one optional agent runtime; found ${optionalAgentRuntimePacks.length}.`);
+  }
+  const optionalAgentRuntimeMeasurement = measure(optionalAgentRuntimePacks[0].payload);
+  const optionalAgentToolPacks = javaScriptFiles.filter((file) => isOptionalAgentToolsPath(file.path));
+  if (optionalAgentToolPacks.length !== 4) {
+    throw new Error(`Production must contain exactly four optional agent-tool chunks; found ${optionalAgentToolPacks.length}.`);
+  }
+  const optionalAgentToolsMeasurement = sumMeasurements(optionalAgentToolPacks.map((file) => measure(file.payload)));
   const optionalWorkspaceWorkbenchPacks = javaScriptFiles.filter((file) => isOptionalWorkspaceWorkbenchPath(file.path));
   if (optionalWorkspaceWorkbenchPacks.length !== 1) {
     throw new Error(`Production must contain exactly one optional Workspace workbench pack; found ${optionalWorkspaceWorkbenchPacks.length}.`);
   }
   const optionalWorkspaceWorkbenchMeasurement = measure(optionalWorkspaceWorkbenchPacks[0].payload);
+  const optionalWorkspaceBindingPacks = javaScriptFiles.filter((file) => isOptionalWorkspaceBindingPath(file.path));
+  if (optionalWorkspaceBindingPacks.length !== 1) {
+    throw new Error(`Production must contain exactly one optional workspace-binding chunk; found ${optionalWorkspaceBindingPacks.length}.`);
+  }
+  const optionalWorkspaceBindingMeasurement = measure(optionalWorkspaceBindingPacks[0].payload);
+  const optionalWorkspaceCodecPacks = javaScriptFiles.filter((file) => isOptionalWorkspaceCodecPath(file.path));
+  if (optionalWorkspaceCodecPacks.length !== 1) {
+    throw new Error(`Production must contain exactly one optional workspace codec; found ${optionalWorkspaceCodecPacks.length}.`);
+  }
+  const optionalWorkspaceCodecMeasurement = measure(optionalWorkspaceCodecPacks[0].payload);
   const optionalSourceControlPacks = javaScriptFiles.filter((file) => isOptionalSourceControlPath(file.path));
   if (optionalSourceControlPacks.length !== 1) {
     throw new Error(`Production must contain exactly one optional source-control pack; found ${optionalSourceControlPacks.length}.`);
   }
   const optionalSourceControlMeasurement = measure(optionalSourceControlPacks[0].payload);
+  const optionalSourceSelectionPacks = javaScriptFiles.filter((file) => isOptionalSourceSelectionPath(file.path));
+  if (optionalSourceSelectionPacks.length !== 1) {
+    throw new Error(`Production must contain exactly one optional source-selection chunk; found ${optionalSourceSelectionPacks.length}.`);
+  }
+  const optionalSourceSelectionMeasurement = measure(optionalSourceSelectionPacks[0].payload);
+  const optionalBrowserGitPacks = javaScriptFiles.filter((file) => isOptionalBrowserGitPath(file.path));
+  if (optionalBrowserGitPacks.length !== 1) {
+    throw new Error(`Production must contain exactly one optional browser-Git engine pack; found ${optionalBrowserGitPacks.length}.`);
+  }
+  const optionalBrowserGitMeasurement = measure(optionalBrowserGitPacks[0].payload);
   const optionalSessionLibraryPacks = javaScriptFiles.filter((file) => isOptionalSessionLibraryPath(file.path));
   if (optionalSessionLibraryPacks.length !== 1) {
     throw new Error(`Production must contain exactly one optional session-library pack; found ${optionalSessionLibraryPacks.length}.`);
   }
   const optionalSessionLibraryMeasurement = measure(optionalSessionLibraryPacks[0].payload);
-  const optionalTerminalPacks = javaScriptFiles.filter((file) => isOptionalTerminalPath(file.path));
-  if (optionalTerminalPacks.length !== 1) {
-    throw new Error(`Production must contain exactly one optional Terminal pack; found ${optionalTerminalPacks.length}.`);
+  const optionalCapabilitiesViewPacks = javaScriptFiles.filter((file) => isOptionalCapabilitiesViewPath(file.path));
+  if (optionalCapabilitiesViewPacks.length !== 1) {
+    throw new Error(`Production must contain exactly one optional Capabilities view; found ${optionalCapabilitiesViewPacks.length}.`);
   }
-  const optionalTerminalMeasurement = measure(optionalTerminalPacks[0].payload);
+  const optionalCapabilitiesViewMeasurement = measure(optionalCapabilitiesViewPacks[0].payload);
+  const optionalBrowserCapabilityPacks = javaScriptFiles.filter((file) => isOptionalBrowserCapabilityPath(file.path));
+  if (optionalBrowserCapabilityPacks.length !== 1) {
+    throw new Error(`Production must contain exactly one optional browser-capability pack; found ${optionalBrowserCapabilityPacks.length}.`);
+  }
+  const optionalBrowserCapabilityMeasurement = measure(optionalBrowserCapabilityPacks[0].payload);
+  const optionalMemoryViewPacks = javaScriptFiles.filter((file) => isOptionalMemoryViewPath(file.path));
+  if (optionalMemoryViewPacks.length !== 1) {
+    throw new Error(`Production must contain exactly one optional Memory view; found ${optionalMemoryViewPacks.length}.`);
+  }
+  const optionalMemoryViewMeasurement = measure(optionalMemoryViewPacks[0].payload);
+  const optionalMemorySupportPacks = javaScriptFiles.filter((file) => isOptionalMemorySupportPath(file.path));
+  if (optionalMemorySupportPacks.length !== 1) {
+    throw new Error(`Production must contain exactly one optional Memory support chunk; found ${optionalMemorySupportPacks.length}.`);
+  }
+  const optionalMemorySupportMeasurement = measure(optionalMemorySupportPacks[0].payload);
+  const optionalProofSurfacePacks = javaScriptFiles.filter((file) => isOptionalProofSurfacePath(file.path));
+  if (optionalProofSurfacePacks.length !== 3) {
+    throw new Error(`Production must contain exactly three optional Proof-surface chunks; found ${optionalProofSurfacePacks.length}.`);
+  }
+  const optionalProofSurfaceMeasurement = sumMeasurements(optionalProofSurfacePacks.map((file) => measure(file.payload)));
+  const optionalTerminalPacks = javaScriptFiles.filter((file) => isOptionalTerminalPath(file.path));
+  if (optionalTerminalPacks.length !== 2) {
+    throw new Error(`Production must contain exactly two optional Terminal packs; found ${optionalTerminalPacks.length}.`);
+  }
+  const optionalTerminalMeasurement = sumMeasurements(optionalTerminalPacks.map((file) => measure(file.payload)));
   const optionalSemanticWorkerPacks = javaScriptFiles.filter((file) => isOptionalSemanticWorkerPath(file.path));
   if (optionalSemanticWorkerPacks.length !== 1) {
     throw new Error(`Production must contain exactly one optional semantic worker; found ${optionalSemanticWorkerPacks.length}.`);
@@ -211,6 +379,20 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
     throw new Error(`Production must contain exactly two optional model-catalog packs; found ${optionalModelCatalogPacks.length}.`);
   }
   const optionalModelCatalogMeasurement = sumMeasurements(optionalModelCatalogPacks.map((file) => measure(file.payload)));
+  const optionalInferenceProviderPacks = javaScriptFiles.filter((file) => isOptionalInferenceProviderPath(file.path));
+  if (optionalInferenceProviderPacks.length !== 5) {
+    throw new Error(`Production must contain exactly five optional inference-provider packs; found ${optionalInferenceProviderPacks.length}.`);
+  }
+  const optionalInferenceProviderMeasurement = sumMeasurements(
+    optionalInferenceProviderPacks.map((file) => measure(file.payload)),
+  );
+  const optionalLocalDeviceVaultPacks = javaScriptFiles.filter((file) => isOptionalLocalDeviceVaultPath(file.path));
+  if (optionalLocalDeviceVaultPacks.length !== 5) {
+    throw new Error(`Production must contain exactly five optional local-storage provider packs; found ${optionalLocalDeviceVaultPacks.length}.`);
+  }
+  const optionalLocalDeviceVaultMeasurement = sumMeasurements(
+    optionalLocalDeviceVaultPacks.map((file) => measure(file.payload)),
+  );
   const optionalDcapQvlPacks = javaScriptFiles.filter((file) => isOptionalDcapQvlPath(file.path));
   if (optionalDcapQvlPacks.length !== 1) {
     throw new Error(`Production must contain exactly one optional DCAP QVL JavaScript pack; found ${optionalDcapQvlPacks.length}.`);
@@ -221,6 +403,9 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
     throw new Error(`Production must contain exactly one optional DCAP QVL WASM pack; found ${optionalDcapQvlWasmFiles.length}.`);
   }
   const optionalDcapQvlWasmMeasurement = measure(optionalDcapQvlWasmFiles[0].payload);
+  const optionalWasixWasmFiles = wasmFiles.filter((file) => isOptionalWasixWasmPath(file.path));
+  assertUnpromotedWasixAbsent("engine WASM", optionalWasixWasmFiles.map((file) => file.path));
+  const optionalWasixWasmMeasurement = sumMeasurements(optionalWasixWasmFiles.map((file) => measure(file.payload)));
   const deferredCapabilityPacks = javaScriptFiles.filter((file) => isDeferredCapabilityPackPath(file.path));
   if (deferredCapabilityPacks.length !== 1) {
     throw new Error(`Production must contain exactly one deferred capability pack; found ${deferredCapabilityPacks.length}.`);
@@ -229,21 +414,83 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
   const optionalPythonPackMeasurement = sumMeasurements(pyodideFiles.map((file) => measure(file.payload)));
   const baselineJavaScriptFiles = javaScriptFiles.filter(
     (file) => !isOptionalExecutionPackPath(file.path)
+      && !isOptionalExecutionEnginePath(file.path)
+      && !isOptionalExecutionSupportPath(file.path)
+      && !isOptionalWasiPreview1WorkerPath(file.path)
       && !isOptionalNodeExecutionPackPath(file.path)
+      && !isOptionalWasixJavaScriptPath(file.path)
+      && !isOptionalAgentRuntimePath(file.path)
+      && !isOptionalAgentToolsPath(file.path)
       && !isOptionalWorkspaceWorkbenchPath(file.path)
+      && !isOptionalWorkspaceBindingPath(file.path)
+      && !isOptionalWorkspaceCodecPath(file.path)
       && !isOptionalSourceControlPath(file.path)
+      && !isOptionalSourceSelectionPath(file.path)
+      && !isOptionalBrowserGitPath(file.path)
       && !isOptionalSessionLibraryPath(file.path)
+      && !isOptionalCapabilitiesViewPath(file.path)
+      && !isOptionalBrowserCapabilityPath(file.path)
+      && !isOptionalMemoryViewPath(file.path)
+      && !isOptionalMemorySupportPath(file.path)
+      && !isOptionalProofSurfacePath(file.path)
       && !isOptionalTerminalPath(file.path)
       && !isOptionalSemanticWorkerPath(file.path)
       && !isOptionalModelCatalogPath(file.path)
+      && !isOptionalInferenceProviderPath(file.path)
+      && !isOptionalLocalDeviceVaultPath(file.path)
       && !isOptionalDcapQvlPath(file.path)
       && !isDeferredCapabilityPackPath(file.path),
   );
   const baselineJavaScriptMeasurement = sumMeasurements(baselineJavaScriptFiles.map((file) => measure(file.payload)));
-  const totalJavaScriptMeasurement = sumMeasurements(
-    javaScriptFiles.filter((file) => !isOptionalModelCatalogPath(file.path)).map((file) => measure(file.payload)),
+  const vendorRuntimeFiles = [...optionalBrowserGitPacks, ...optionalTerminalPacks];
+  const optionalVendorRuntimeMeasurement = sumMeasurements(vendorRuntimeFiles.map((file) => measure(file.payload)));
+  const firstPartyJavaScriptFiles = [
+    serviceWorker,
+    ...javaScriptFiles.filter(
+      (file) => !isOptionalBrowserGitPath(file.path) && !isOptionalTerminalPath(file.path),
+    ),
+  ];
+  const firstPartyJavaScriptMeasurement = sumMeasurements(firstPartyJavaScriptFiles.map((file) => measure(file.payload)));
+  const installedJavaScriptFiles = [serviceWorker, ...javaScriptFiles];
+  const totalJavaScriptMeasurement = sumMeasurements(installedJavaScriptFiles.map((file) => measure(file.payload)));
+
+  assertExclusiveArtifactClassifications(
+    installedJavaScriptFiles.map((file) => file.path),
+    [
+      { name: "core-entry-and-preloads", paths: initialJavaScriptFiles.map((file) => file.path) },
+      { name: "service-worker", paths: [serviceWorker.path] },
+      { name: "deferred-capabilities", paths: deferredCapabilityPacks.map((file) => file.path) },
+      { name: "execution-broker", paths: optionalExecutionPacks.map((file) => file.path) },
+      { name: "execution-engine", paths: optionalExecutionEnginePacks.map((file) => file.path) },
+      { name: "execution-support", paths: optionalExecutionSupportPacks.map((file) => file.path) },
+      { name: "wasi-preview1-worker", paths: optionalWasiPreview1WorkerPacks.map((file) => file.path) },
+      { name: "node-runtime", paths: optionalNodeExecutionPacks.map((file) => file.path) },
+      { name: "wasix-runtime", paths: optionalWasixJavaScriptPacks.map((file) => file.path) },
+      { name: "agent-runtime", paths: optionalAgentRuntimePacks.map((file) => file.path) },
+      { name: "agent-tools", paths: optionalAgentToolPacks.map((file) => file.path) },
+      { name: "workspace-workbench", paths: optionalWorkspaceWorkbenchPacks.map((file) => file.path) },
+      { name: "workspace-binding", paths: optionalWorkspaceBindingPacks.map((file) => file.path) },
+      { name: "workspace-codec", paths: optionalWorkspaceCodecPacks.map((file) => file.path) },
+      { name: "source-control", paths: optionalSourceControlPacks.map((file) => file.path) },
+      { name: "source-selection", paths: optionalSourceSelectionPacks.map((file) => file.path) },
+      { name: "browser-git-vendor", paths: optionalBrowserGitPacks.map((file) => file.path) },
+      { name: "session-library", paths: optionalSessionLibraryPacks.map((file) => file.path) },
+      { name: "capabilities-view", paths: optionalCapabilitiesViewPacks.map((file) => file.path) },
+      { name: "browser-capabilities", paths: optionalBrowserCapabilityPacks.map((file) => file.path) },
+      { name: "memory-view", paths: optionalMemoryViewPacks.map((file) => file.path) },
+      { name: "memory-support", paths: optionalMemorySupportPacks.map((file) => file.path) },
+      { name: "proof-surface", paths: optionalProofSurfacePacks.map((file) => file.path) },
+      { name: "terminal-vendor", paths: optionalTerminalPacks.map((file) => file.path) },
+      { name: "semantic-worker", paths: optionalSemanticWorkerPacks.map((file) => file.path) },
+      { name: "model-catalog", paths: optionalModelCatalogPacks.map((file) => file.path) },
+      { name: "inference-providers", paths: optionalInferenceProviderPacks.map((file) => file.path) },
+      { name: "local-device-vault", paths: optionalLocalDeviceVaultPacks.map((file) => file.path) },
+      { name: "dcap-qvl", paths: optionalDcapQvlPacks.map((file) => file.path) },
+    ],
   );
-  const baselineWasmFiles = wasmFiles.filter((file) => !isOptionalDcapQvlWasmPath(file.path));
+  const baselineWasmFiles = wasmFiles.filter(
+    (file) => !isOptionalDcapQvlWasmPath(file.path) && !isOptionalWasixWasmPath(file.path),
+  );
   const allWasmMeasurement = sumMeasurements(baselineWasmFiles.map((file) => measure(file.payload)));
 
   assertWithinBudget("Entry JavaScript", entryJavaScriptMeasurement, RELEASE_BUDGETS.entryJavaScript);
@@ -258,23 +505,77 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
     RELEASE_BUDGETS.optionalExecutionPack,
   );
   assertWithinBudget(
+    "Optional execution engine",
+    optionalExecutionEngineMeasurement,
+    RELEASE_BUDGETS.optionalExecutionEngine,
+  );
+  assertWithinBudget(
+    "Optional execution support",
+    optionalExecutionSupportMeasurement,
+    RELEASE_BUDGETS.optionalExecutionSupport,
+  );
+  assertWithinBudget(
+    "Optional WASI Preview 1 Worker",
+    optionalWasiPreview1WorkerMeasurement,
+    RELEASE_BUDGETS.optionalWasiPreview1Worker,
+  );
+  assertWithinBudget(
     "Optional Node execution pack",
     optionalNodeExecutionPackMeasurement,
     RELEASE_BUDGETS.optionalNodeExecutionPack,
   );
   assertWithinBudget(
+    "Optional WASIX JavaScript",
+    optionalWasixJavaScriptMeasurement,
+    RELEASE_BUDGETS.optionalWasixJavaScript,
+  );
+  assertWithinBudget("Optional WASIX engine WASM", optionalWasixWasmMeasurement, RELEASE_BUDGETS.optionalWasixWasm);
+  assertWithinBudget("Optional agent runtime", optionalAgentRuntimeMeasurement, RELEASE_BUDGETS.optionalAgentRuntime);
+  assertWithinBudget("Optional agent tools", optionalAgentToolsMeasurement, RELEASE_BUDGETS.optionalAgentTools);
+  assertWithinBudget(
     "Optional Workspace workbench",
     optionalWorkspaceWorkbenchMeasurement,
     RELEASE_BUDGETS.optionalWorkspaceWorkbench,
   );
+  assertWithinBudget(
+    "Optional workspace binding",
+    optionalWorkspaceBindingMeasurement,
+    RELEASE_BUDGETS.optionalWorkspaceBinding,
+  );
+  assertWithinBudget(
+    "Optional workspace codec",
+    optionalWorkspaceCodecMeasurement,
+    RELEASE_BUDGETS.optionalWorkspaceCodec,
+  );
   assertWithinBudget("Optional source control", optionalSourceControlMeasurement, RELEASE_BUDGETS.optionalSourceControl);
+  assertWithinBudget("Optional source selection", optionalSourceSelectionMeasurement, RELEASE_BUDGETS.optionalSourceSelection);
+  assertWithinBudget("Optional browser Git", optionalBrowserGitMeasurement, RELEASE_BUDGETS.optionalBrowserGit);
   assertWithinBudget("Optional session library", optionalSessionLibraryMeasurement, RELEASE_BUDGETS.optionalSessionLibrary);
+  assertWithinBudget("Optional Capabilities view", optionalCapabilitiesViewMeasurement, RELEASE_BUDGETS.optionalCapabilitiesView);
+  assertWithinBudget(
+    "Optional browser capabilities",
+    optionalBrowserCapabilityMeasurement,
+    RELEASE_BUDGETS.optionalBrowserCapabilities,
+  );
+  assertWithinBudget("Optional Memory view", optionalMemoryViewMeasurement, RELEASE_BUDGETS.optionalMemoryView);
+  assertWithinBudget("Optional Memory support", optionalMemorySupportMeasurement, RELEASE_BUDGETS.optionalMemorySupport);
+  assertWithinBudget("Optional Proof surface", optionalProofSurfaceMeasurement, RELEASE_BUDGETS.optionalProofSurface);
   assertWithinBudget("Optional Terminal", optionalTerminalMeasurement, RELEASE_BUDGETS.optionalTerminal);
   assertWithinBudget("Optional semantic worker", optionalSemanticWorkerMeasurement, RELEASE_BUDGETS.optionalSemanticWorker);
   assertWithinBudget(
     "Optional model catalog",
     optionalModelCatalogMeasurement,
     RELEASE_BUDGETS.optionalModelCatalog,
+  );
+  assertWithinBudget(
+    "Optional inference providers",
+    optionalInferenceProviderMeasurement,
+    RELEASE_BUDGETS.optionalInferenceProviders,
+  );
+  assertWithinBudget(
+    "Optional Local Device Vault",
+    optionalLocalDeviceVaultMeasurement,
+    RELEASE_BUDGETS.optionalLocalDeviceVault,
   );
   assertWithinBudget(
     "Optional DCAP QVL JavaScript",
@@ -290,6 +591,16 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
     "Deferred capability pack",
     deferredCapabilityMeasurement,
     RELEASE_BUDGETS.deferredCapabilities,
+  );
+  assertWithinBudget(
+    "First-party JavaScript and workers",
+    firstPartyJavaScriptMeasurement,
+    RELEASE_BUDGETS.firstPartyJavaScriptAndWorkers,
+  );
+  assertWithinBudget(
+    "Optional vendor runtime aggregate",
+    optionalVendorRuntimeMeasurement,
+    RELEASE_BUDGETS.optionalVendorRuntimeAggregate,
   );
   assertWithinBudget(
     "Total JavaScript and workers",
@@ -324,27 +635,99 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
       allJavaScriptAndWorkers: baselineJavaScriptMeasurement,
       baselineJavaScriptAndWorkers: baselineJavaScriptMeasurement,
       optionalExecutionPack: Object.freeze({ path: optionalExecutionPacks[0].path, ...optionalExecutionPackMeasurement }),
+      optionalExecutionEngine: Object.freeze({
+        path: optionalExecutionEnginePacks[0].path,
+        ...optionalExecutionEngineMeasurement,
+      }),
+      optionalExecutionSupport: Object.freeze({
+        path: optionalExecutionSupportPacks[0].path,
+        ...optionalExecutionSupportMeasurement,
+      }),
+      optionalWasiPreview1Worker: Object.freeze({
+        path: optionalWasiPreview1WorkerPacks[0].path,
+        ...optionalWasiPreview1WorkerMeasurement,
+      }),
       optionalNodeExecutionPack: Object.freeze({
         path: optionalNodeExecutionPacks[0].path,
         ...optionalNodeExecutionPackMeasurement,
+      }),
+      optionalWasixJavaScript: Object.freeze({
+        paths: Object.freeze(optionalWasixJavaScriptPacks.map((file) => file.path)),
+        ...optionalWasixJavaScriptMeasurement,
+      }),
+      optionalWasixWasm: Object.freeze({
+        paths: Object.freeze(optionalWasixWasmFiles.map((file) => file.path)),
+        ...optionalWasixWasmMeasurement,
+      }),
+      optionalAgentRuntime: Object.freeze({
+        path: optionalAgentRuntimePacks[0].path,
+        ...optionalAgentRuntimeMeasurement,
+      }),
+      optionalAgentTools: Object.freeze({
+        paths: Object.freeze(optionalAgentToolPacks.map((file) => file.path)),
+        ...optionalAgentToolsMeasurement,
       }),
       optionalWorkspaceWorkbench: Object.freeze({
         path: optionalWorkspaceWorkbenchPacks[0].path,
         ...optionalWorkspaceWorkbenchMeasurement,
       }),
+      optionalWorkspaceBinding: Object.freeze({
+        path: optionalWorkspaceBindingPacks[0].path,
+        ...optionalWorkspaceBindingMeasurement,
+      }),
+      optionalWorkspaceCodec: Object.freeze({
+        path: optionalWorkspaceCodecPacks[0].path,
+        ...optionalWorkspaceCodecMeasurement,
+      }),
       optionalSourceControl: Object.freeze({
         path: optionalSourceControlPacks[0].path,
         ...optionalSourceControlMeasurement,
+      }),
+      optionalSourceSelection: Object.freeze({
+        path: optionalSourceSelectionPacks[0].path,
+        ...optionalSourceSelectionMeasurement,
+      }),
+      optionalBrowserGit: Object.freeze({
+        path: optionalBrowserGitPacks[0].path,
+        ...optionalBrowserGitMeasurement,
       }),
       optionalSessionLibrary: Object.freeze({
         path: optionalSessionLibraryPacks[0].path,
         ...optionalSessionLibraryMeasurement,
       }),
-      optionalTerminal: Object.freeze({ path: optionalTerminalPacks[0].path, ...optionalTerminalMeasurement }),
+      optionalCapabilitiesView: Object.freeze({
+        path: optionalCapabilitiesViewPacks[0].path,
+        ...optionalCapabilitiesViewMeasurement,
+      }),
+      optionalBrowserCapabilities: Object.freeze({
+        path: optionalBrowserCapabilityPacks[0].path,
+        ...optionalBrowserCapabilityMeasurement,
+      }),
+      optionalMemoryView: Object.freeze({ path: optionalMemoryViewPacks[0].path, ...optionalMemoryViewMeasurement }),
+      optionalMemorySupport: Object.freeze({
+        path: optionalMemorySupportPacks[0].path,
+        ...optionalMemorySupportMeasurement,
+      }),
+      optionalProofSurface: Object.freeze({
+        paths: Object.freeze(optionalProofSurfacePacks.map((file) => file.path)),
+        ...optionalProofSurfaceMeasurement,
+      }),
+      optionalTerminal: Object.freeze({
+        paths: Object.freeze(optionalTerminalPacks.map((file) => file.path)),
+        ...optionalTerminalMeasurement,
+      }),
       optionalSemanticWorker: Object.freeze({ path: optionalSemanticWorkerPacks[0].path, ...optionalSemanticWorkerMeasurement }),
       optionalModelCatalog: Object.freeze({
         paths: Object.freeze(optionalModelCatalogPacks.map((file) => file.path)),
         ...optionalModelCatalogMeasurement,
+      }),
+      optionalInferenceProviders: Object.freeze({
+        paths: Object.freeze(optionalInferenceProviderPacks.map((file) => file.path)),
+        ...optionalInferenceProviderMeasurement,
+      }),
+      optionalLocalDeviceVault: Object.freeze({
+        paths: Object.freeze(optionalLocalDeviceVaultPacks.map((file) => file.path)),
+        ...optionalLocalDeviceVaultMeasurement,
       }),
       optionalDcapQvlJavaScript: Object.freeze({
         path: optionalDcapQvlPacks[0].path,
@@ -359,6 +742,8 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
         ...deferredCapabilityMeasurement,
       }),
       optionalPythonPack: optionalPythonPackMeasurement,
+      firstPartyJavaScriptAndWorkers: firstPartyJavaScriptMeasurement,
+      optionalVendorRuntimeAggregate: optionalVendorRuntimeMeasurement,
       totalJavaScriptAndWorkers: totalJavaScriptMeasurement,
       serviceWorker: Object.freeze({ path: serviceWorker.path, ...serviceWorkerMeasurement }),
       entryCss: entryCssMeasurement,
@@ -370,6 +755,18 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
 
 export function isOptionalExecutionPackPath(path) {
   return /^assets\/execution-runtime-pack-[A-Za-z0-9_-]+\.js$/u.test(path);
+}
+
+export function isOptionalExecutionEnginePath(path) {
+  return /^assets\/execution-engine-[A-Za-z0-9_-]+\.js$/u.test(path);
+}
+
+export function isOptionalExecutionSupportPath(path) {
+  return /^assets\/runtime-registry-[A-Za-z0-9_-]+\.js$/u.test(path);
+}
+
+export function isOptionalWasiPreview1WorkerPath(path) {
+  return /^assets\/wasi-preview1-worker-[A-Za-z0-9_-]+\.js$/u.test(path);
 }
 
 export function isOptionalDcapQvlPath(path) {
@@ -384,20 +781,73 @@ export function isOptionalNodeExecutionPackPath(path) {
   return /^assets\/node-webcontainer-pack-[A-Za-z0-9_-]+\.js$/u.test(path);
 }
 
+export function isOptionalWasixJavaScriptPath(path) {
+  return /^assets\/(?:wasix-pack|wasix-worker|dist)-[A-Za-z0-9_-]+\.js$/u.test(path)
+    || /^assets\/index-[A-Za-z0-9_-]+\.mjs$/u.test(path);
+}
+
+export function isOptionalWasixWasmPath(path) {
+  return /^assets\/wasmer_js_bg-[A-Za-z0-9_-]+\.wasm$/u.test(path);
+}
+
+export function isOptionalAgentRuntimePath(path) {
+  return /^assets\/agent-[A-Za-z0-9_-]+\.js$/u.test(path);
+}
+
+export function isOptionalAgentToolsPath(path) {
+  return /^assets\/(?:tool-bundle|client-context-runtime|context-selection|repository-admission)-[A-Za-z0-9_-]+\.js$/u.test(path);
+}
+
 export function isOptionalWorkspaceWorkbenchPath(path) {
   return /^assets\/editor-view-[A-Za-z0-9_-]+\.js$/u.test(path);
+}
+
+export function isOptionalWorkspaceBindingPath(path) {
+  return /^assets\/workspace-binding-[A-Za-z0-9_-]+\.js$/u.test(path);
+}
+
+export function isOptionalWorkspaceCodecPath(path) {
+  return /^assets\/content-codec-[A-Za-z0-9_-]+\.js$/u.test(path);
 }
 
 export function isOptionalSourceControlPath(path) {
   return /^assets\/sources-view-[A-Za-z0-9_-]+\.js$/u.test(path);
 }
 
+export function isOptionalSourceSelectionPath(path) {
+  return /^assets\/source-selection-[A-Za-z0-9_-]+\.js$/u.test(path);
+}
+
+export function isOptionalBrowserGitPath(path) {
+  return /^assets\/workspace-adapter-[A-Za-z0-9_-]+\.js$/u.test(path);
+}
+
 export function isOptionalSessionLibraryPath(path) {
   return /^assets\/sessions-route-[A-Za-z0-9_-]+\.js$/u.test(path);
 }
 
+export function isOptionalCapabilitiesViewPath(path) {
+  return /^assets\/capabilities-view-[A-Za-z0-9_-]+\.js$/u.test(path);
+}
+
+export function isOptionalBrowserCapabilityPath(path) {
+  return /^assets\/browser-runtime-[A-Za-z0-9_-]+\.js$/u.test(path);
+}
+
+export function isOptionalMemoryViewPath(path) {
+  return /^assets\/memory-view-[A-Za-z0-9_-]+\.js$/u.test(path);
+}
+
+export function isOptionalMemorySupportPath(path) {
+  return /^assets\/kind-visual-[A-Za-z0-9_-]+\.js$/u.test(path);
+}
+
+export function isOptionalProofSurfacePath(path) {
+  return /^assets\/(?:proof-view-[A-Za-z0-9_-]+|provider-client-[A-Za-z0-9_-]+|client-(?!runtime-|context-)[A-Za-z0-9_-]+)\.js$/u.test(path);
+}
+
 export function isOptionalTerminalPath(path) {
-  return /^assets\/terminal-view-[A-Za-z0-9_-]+\.js$/u.test(path);
+  return /^assets\/(?:terminal-view|manager)-[A-Za-z0-9_-]+\.js$/u.test(path);
 }
 
 export function isOptionalSemanticWorkerPath(path) {
@@ -406,6 +856,14 @@ export function isOptionalSemanticWorkerPath(path) {
 
 export function isOptionalModelCatalogPath(path) {
   return /^assets\/(?:client-runtime|telemetry)-[A-Za-z0-9_-]+\.js$/u.test(path);
+}
+
+export function isOptionalInferenceProviderPath(path) {
+  return /^assets\/(?:fabric|openai|provider-connections-view|providers|session-route)-[A-Za-z0-9_-]+\.js$/u.test(path);
+}
+
+export function isOptionalLocalDeviceVaultPath(path) {
+  return /^assets\/(?:local-device-vault-setup|local-device-keyring|local-lab|recovery|encrypted-envelope)-[A-Za-z0-9_-]+\.js$/u.test(path);
 }
 
 export function isDeferredCapabilityPackPath(path) {
@@ -417,7 +875,7 @@ export function isOptionalPythonPackPath(path) {
 }
 
 export function assertOptionalPacksAreNotPreloaded(index) {
-  if (/<link\b[^>]*\brel="modulepreload"[^>]*\bhref="\/assets\/(?:deferred-capabilities|execution-runtime-pack|node-webcontainer-pack|editor-view|sources-view|sessions-route|terminal-view|semantic\.worker|client-runtime|telemetry)-/u.test(index)) {
+  if (/<link\b[^>]*\brel="modulepreload"[^>]*\bhref="\/assets\/(?:deferred-capabilities|execution-runtime-pack|execution-engine|runtime-registry|wasi-preview1-worker|node-webcontainer-pack|wasix-pack|wasix-worker|dist|index|agent|tool-bundle|client-context-runtime|context-selection|repository-admission|editor-view|workspace-binding|content-codec|sources-view|source-selection|workspace-adapter|sessions-route|capabilities-view|browser-runtime|memory-view|kind-visual|proof-view|client|terminal-view|semantic\.worker|client-runtime|telemetry|fabric|openai|provider-connections-view|providers|session-route|local-device-vault-setup|local-device-keyring|local-lab|recovery|encrypted-envelope)-/u.test(index)) {
     throw new Error("Production HTML must not preload deferred capability or optional execution packs.");
   }
 }
@@ -543,6 +1001,7 @@ function validateServiceWorker(source) {
     ["range bypass", /headers\.has\("range"\)/u],
     ["network-first navigation", /request\.mode === "navigate"[\s\S]*?fetch\(event\.request\)[\s\S]*?caches\.match\((?:"\/"|BASE_PATH)\)/u],
     ["hashed asset scope", /pathname\.startsWith\((?:"\/assets\/"|scopedPath\("assets\/"\))\)/u],
+    ["optional semantic pack cache", /pathname\.startsWith\((?:"\/semantic-pack\/v1\/"|scopedPath\("semantic-pack\/v1\/"\))\)/u],
     ["Set-Cookie exclusion", /!response\.headers\.has\("set-cookie"\)/u],
   ];
   for (const [label, pattern] of requirements) {
@@ -642,7 +1101,25 @@ function printResult(result) {
     `Optional execution pack ${formatBytes(measurements.optionalExecutionPack.raw)} raw / ${formatBytes(measurements.optionalExecutionPack.gzip)} gzip`,
   );
   console.log(
+    `Optional execution engine ${formatBytes(measurements.optionalExecutionEngine.raw)} raw / ${formatBytes(measurements.optionalExecutionEngine.gzip)} gzip`,
+  );
+  console.log(
+    `Optional WASI Preview 1 Worker ${formatBytes(measurements.optionalWasiPreview1Worker.raw)} raw / ${formatBytes(measurements.optionalWasiPreview1Worker.gzip)} gzip`,
+  );
+  console.log(
     `Optional Node execution pack ${formatBytes(measurements.optionalNodeExecutionPack.raw)} raw / ${formatBytes(measurements.optionalNodeExecutionPack.gzip)} gzip`,
+  );
+  console.log(
+    `Unpromoted WASIX JavaScript shipped ${formatBytes(measurements.optionalWasixJavaScript.raw)} raw / ${formatBytes(measurements.optionalWasixJavaScript.gzip)} gzip`,
+  );
+  console.log(
+    `Unpromoted WASIX engine shipped ${formatBytes(measurements.optionalWasixWasm.raw)} raw / ${formatBytes(measurements.optionalWasixWasm.gzip)} gzip`,
+  );
+  console.log(
+    `Optional agent runtime ${formatBytes(measurements.optionalAgentRuntime.raw)} raw / ${formatBytes(measurements.optionalAgentRuntime.gzip)} gzip`,
+  );
+  console.log(
+    `Optional agent tools ${formatBytes(measurements.optionalAgentTools.raw)} raw / ${formatBytes(measurements.optionalAgentTools.gzip)} gzip`,
   );
   console.log(
     `Optional Workspace workbench ${formatBytes(measurements.optionalWorkspaceWorkbench.raw)} raw / ${formatBytes(measurements.optionalWorkspaceWorkbench.gzip)} gzip`,
@@ -651,13 +1128,31 @@ function printResult(result) {
     `Optional source control ${formatBytes(measurements.optionalSourceControl.raw)} raw / ${formatBytes(measurements.optionalSourceControl.gzip)} gzip`,
   );
   console.log(
+    `Optional browser Git ${formatBytes(measurements.optionalBrowserGit.raw)} raw / ${formatBytes(measurements.optionalBrowserGit.gzip)} gzip`,
+  );
+  console.log(
     `Optional session library ${formatBytes(measurements.optionalSessionLibrary.raw)} raw / ${formatBytes(measurements.optionalSessionLibrary.gzip)} gzip`,
+  );
+  console.log(
+    `Optional Memory view ${formatBytes(measurements.optionalMemoryView.raw)} raw / ${formatBytes(measurements.optionalMemoryView.gzip)} gzip`,
+  );
+  console.log(
+    `Optional Memory support ${formatBytes(measurements.optionalMemorySupport.raw)} raw / ${formatBytes(measurements.optionalMemorySupport.gzip)} gzip`,
+  );
+  console.log(
+    `Optional Proof surface ${formatBytes(measurements.optionalProofSurface.raw)} raw / ${formatBytes(measurements.optionalProofSurface.gzip)} gzip`,
   );
   console.log(
     `Optional Python pack ${formatBytes(measurements.optionalPythonPack.raw)} raw / ${formatBytes(measurements.optionalPythonPack.gzip)} gzip`,
   );
   console.log(
-    `Total JS/workers ${formatBytes(measurements.totalJavaScriptAndWorkers.raw)} raw / ${formatBytes(measurements.totalJavaScriptAndWorkers.gzip)} gzip`,
+    `First-party/all-other JS ${formatBytes(measurements.firstPartyJavaScriptAndWorkers.raw)} raw / ${formatBytes(measurements.firstPartyJavaScriptAndWorkers.gzip)} gzip`,
+  );
+  console.log(
+    `Vendor runtime aggregate ${formatBytes(measurements.optionalVendorRuntimeAggregate.raw)} raw / ${formatBytes(measurements.optionalVendorRuntimeAggregate.gzip)} gzip`,
+  );
+  console.log(
+    `Installed bundled JS/workers ${formatBytes(measurements.totalJavaScriptAndWorkers.raw)} raw / ${formatBytes(measurements.totalJavaScriptAndWorkers.gzip)} gzip`,
   );
   console.log(`Service worker ${formatBytes(measurements.serviceWorker.raw)} raw / ${formatBytes(measurements.serviceWorker.gzip)} gzip`);
   console.log(`Entry CSS ${formatBytes(measurements.entryCss.raw)} raw / ${formatBytes(measurements.entryCss.gzip)} gzip`);

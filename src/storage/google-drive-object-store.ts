@@ -17,6 +17,7 @@ import type {
   ObjectStore,
   ObjectSummary,
   PutIfAbsentResult,
+  ObjectStoreCapabilities,
 } from "./object-store";
 
 const DRIVE_API = "https://www.googleapis.com/drive/v3";
@@ -27,9 +28,13 @@ const SEGMENT_CONTENT_TYPE = "application/vnd.airship.encrypted-segment";
 const MAX_OBJECT_BYTES = 64 * 1024 * 1024;
 const MAX_RANGE_BYTES = 8 * 1024 * 1024;
 const MAX_INDEX_BYTES = 24 * 1024 * 1024;
+const MAX_DRIVE_JSON_BYTES = 512 * 1024;
 const MAX_OBJECTS = 100_000;
 const MAX_CAS_ATTEMPTS = 5;
 const INDEX_CACHE_TTL_MS = 1_500;
+const RESUMABLE_UPLOAD_THRESHOLD_BYTES = 8 * 1024 * 1024;
+const RESUMABLE_UPLOAD_CHUNK_BYTES = 4 * 1024 * 1024;
+const MAX_RESUMABLE_RECOVERY_ATTEMPTS = 4;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder("utf-8", { fatal: true });
 
@@ -80,6 +85,13 @@ export type GoogleDriveObjectStoreOptions = Readonly<{
  * conditional-request and CORS behavior.
  */
 export class GoogleDriveObjectStore implements ObjectStore {
+  readonly capabilities: ObjectStoreCapabilities = Object.freeze({
+    version: 1,
+    adapter: "google-drive",
+    rangeRead: Object.freeze({ mode: "exact-or-fail", maxBytes: MAX_RANGE_BYTES, providerEvidence: "live-conformance-required" }),
+    conditionalWrite: Object.freeze({ createIfAbsent: "atomic-or-fail", compareAndSwap: "atomic-or-fail", providerEvidence: "live-conformance-required" }),
+    upload: Object.freeze({ mode: "resumable-active-call", interruptionRecovery: "resume-current-call", persistsResumeCapability: false }),
+  });
   private readonly fetchImplementation: typeof fetch;
   private readonly now: () => Date;
   private indexId?: string;
@@ -291,7 +303,7 @@ export class GoogleDriveObjectStore implements ObjectStore {
 
   private async uploadSegment(key: string, etag: string, bytes: Uint8Array, signal?: AbortSignal): Promise<IndexEntry> {
     const opaqueName = await this.options.workspaceKey.opaqueObjectId(`airship/google-drive-segment/v1\0${key}\0${etag}`);
-    const file = await this.createMultipartFile({
+    const upload = {
       name: `${opaqueName}.enc`,
       parentId: this.options.workspace.segmentsFolderId,
       bytes,
@@ -301,7 +313,10 @@ export class GoogleDriveObjectStore implements ObjectStore {
         airshipRole: "encrypted-segment-v1",
       },
       signal,
-    });
+    };
+    const file = bytes.byteLength >= RESUMABLE_UPLOAD_THRESHOLD_BYTES
+      ? await this.createResumableFile(upload)
+      : await this.createMultipartFile(upload);
     return Object.freeze({
       key,
       fileId: file.id,
@@ -309,6 +324,123 @@ export class GoogleDriveObjectStore implements ObjectStore {
       size: bytes.byteLength,
       updatedAt: validTimestamp(file.modifiedTime ?? this.now().toISOString()),
     });
+  }
+
+  /**
+   * Drive resumable upload with in-call offset recovery. The session URL is a
+   * bearer-like capability and is deliberately never returned, persisted, or
+   * retained after this method settles. A refresh retries the immutable shard,
+   * not an old session URL.
+   */
+  private async createResumableFile(args: {
+    name: string;
+    parentId: string;
+    bytes: Uint8Array;
+    mimeType: string;
+    appProperties: Record<string, string>;
+    signal?: AbortSignal;
+  }): Promise<DriveFile> {
+    const metadata = stableStringify({
+      name: args.name,
+      mimeType: args.mimeType,
+      parents: [args.parentId],
+      appProperties: args.appProperties,
+    } as unknown as JsonValue);
+    const initiation = await this.driveFetch(
+      `${DRIVE_UPLOAD}/files?uploadType=resumable&fields=id,name,mimeType,size,modifiedTime,appProperties`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json; charset=UTF-8",
+          "X-Upload-Content-Type": args.mimeType,
+          "X-Upload-Content-Length": String(args.bytes.byteLength),
+        },
+        body: metadata,
+        signal: args.signal,
+      },
+    );
+    if (!initiation.ok) throw await driveError(initiation, "start resumable encrypted-object upload");
+    const sessionUrl = resumableSessionUrl(initiation.headers.get("location"));
+    await discardResponseBody(initiation);
+    let offset = 0;
+    let recoveryAttempts = 0;
+    while (offset < args.bytes.byteLength) {
+      args.signal?.throwIfAborted();
+      const endExclusive = Math.min(args.bytes.byteLength, offset + RESUMABLE_UPLOAD_CHUNK_BYTES);
+      let response: Response;
+      try {
+        response = await this.driveFetch(sessionUrl, {
+          method: "PUT",
+          headers: {
+            "Content-Type": args.mimeType,
+            "Content-Length": String(endExclusive - offset),
+            "Content-Range": `bytes ${offset}-${endExclusive - 1}/${args.bytes.byteLength}`,
+          },
+          body: ownedArrayBuffer(args.bytes.slice(offset, endExclusive)),
+          signal: args.signal,
+        });
+      } catch (error) {
+        if (args.signal?.aborted) throw error;
+        response = await this.queryResumableUpload(sessionUrl, args.bytes.byteLength, args.signal);
+      }
+      if (response.status === 308) {
+        try {
+          const committed = resumableCommittedOffset(response.headers.get("range"), args.bytes.byteLength);
+          if (committed < offset || committed > endExclusive) {
+            throw new Error("Google Drive resumable upload reported an invalid committed range.");
+          }
+          offset = committed;
+          recoveryAttempts = committed === endExclusive ? 0 : recoveryAttempts + 1;
+          if (recoveryAttempts > MAX_RESUMABLE_RECOVERY_ATTEMPTS) {
+            throw new Error("Google Drive resumable upload made no progress within its recovery budget.");
+          }
+        } finally {
+          await discardResponseBody(response);
+        }
+        continue;
+      }
+      if (response.ok) {
+        if (endExclusive !== args.bytes.byteLength) {
+          throw new Error("Google Drive completed a resumable upload before all bytes were acknowledged.");
+        }
+        const file = await responseJson<DriveFile>(response, "complete resumable encrypted-object upload");
+        assertDriveFile(file);
+        return file;
+      }
+      if (!isRetryableUploadStatus(response.status) || recoveryAttempts >= MAX_RESUMABLE_RECOVERY_ATTEMPTS) {
+        throw await driveError(response, "resume encrypted-object upload");
+      }
+      recoveryAttempts += 1;
+      await discardResponseBody(response);
+      response = await this.queryResumableUpload(sessionUrl, args.bytes.byteLength, args.signal);
+      if (response.ok && response.status !== 308) {
+        const file = await responseJson<DriveFile>(response, "recover completed encrypted-object upload");
+        assertDriveFile(file);
+        return file;
+      }
+      try {
+        offset = resumableCommittedOffset(response.headers.get("range"), args.bytes.byteLength);
+      } finally {
+        await discardResponseBody(response);
+      }
+    }
+    throw new Error("Google Drive resumable upload ended without final file metadata.");
+  }
+
+  private async queryResumableUpload(sessionUrl: string, totalBytes: number, signal?: AbortSignal): Promise<Response> {
+    const response = await this.driveFetch(sessionUrl, {
+      method: "PUT",
+      headers: {
+        "Content-Length": "0",
+        "Content-Range": `bytes */${totalBytes}`,
+      },
+      signal,
+    });
+    if (response.status === 404 || response.status === 410) {
+      throw new Error("Google Drive resumable upload session expired; retry the immutable shard.");
+    }
+    if (response.status !== 308 && !response.ok) throw await driveError(response, "query resumable encrypted-object upload");
+    return response;
   }
 
   private async createMultipartFile(args: {
@@ -379,7 +511,14 @@ export class GoogleDriveObjectStore implements ObjectStore {
     const token = await this.options.tokenProvider.getAccessToken(init.signal ?? undefined);
     const headers = new Headers(init.headers);
     headers.set("Authorization", `Bearer ${token.accessToken}`);
-    return this.fetchImplementation(input, { ...init, headers });
+    return this.fetchImplementation(input, {
+      ...init,
+      headers,
+      cache: "no-store",
+      credentials: "omit",
+      redirect: "error",
+      referrerPolicy: "no-referrer",
+    });
   }
 }
 
@@ -481,21 +620,84 @@ function parseContentRange(value: string | null): { start: number; endExclusive:
 async function boundedBytes(response: Response, maximum: number, label: string, exact?: number): Promise<Uint8Array> {
   const declared = response.headers.get("content-length");
   if (declared !== null) {
+    if (!/^\d+$/u.test(declared)) throw new Error(`${label} declared an invalid size.`);
     const size = Number(declared);
     if (!Number.isSafeInteger(size) || size < 0 || size > maximum || (exact !== undefined && size !== exact)) throw new Error(`${label} declared an invalid size.`);
   }
-  const bytes = new Uint8Array(await response.arrayBuffer());
-  if (bytes.byteLength > maximum || (exact !== undefined && bytes.byteLength !== exact)) throw new Error(`${label} returned an invalid size.`);
+  if (!response.body) {
+    if (exact === 0) return new Uint8Array();
+    throw new Error(`${label} returned an empty body.`);
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maximum || (exact !== undefined && total > exact)) {
+        await reader.cancel(`${label} exceeded its bounded response size.`).catch(() => undefined);
+        throw new Error(`${label} returned an invalid size.`);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    try { reader.releaseLock(); } catch { /* a cancelled stream may retain its reader */ }
+  }
+  if (exact !== undefined && total !== exact) throw new Error(`${label} returned an invalid size.`);
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
   return bytes;
 }
 
 async function driveJson<T>(response: Response, operation: string): Promise<T> {
   if (!response.ok) throw await driveError(response, operation);
-  try { return await response.json() as T; }
+  try { return JSON.parse(decoder.decode(await boundedBytes(response, MAX_DRIVE_JSON_BYTES, "Google Drive JSON response"))) as T; }
   catch { throw new Error(`Google Drive returned invalid JSON while attempting to ${operation}.`); }
 }
 
+async function responseJson<T>(response: Response, operation: string): Promise<T> {
+  try { return JSON.parse(decoder.decode(await boundedBytes(response, MAX_DRIVE_JSON_BYTES, "Google Drive JSON response"))) as T; }
+  catch { throw new Error(`Google Drive returned invalid JSON while attempting to ${operation}.`); }
+}
+
+function resumableSessionUrl(value: string | null): string {
+  if (!value || value.length > 4_096 || /[\r\n]/u.test(value)) {
+    throw new Error("Google Drive did not return a usable resumable upload session.");
+  }
+  const url = new URL(value);
+  if (url.protocol !== "https:" || url.origin !== "https://www.googleapis.com" || !url.pathname.startsWith("/upload/drive/v3/")) {
+    throw new Error("Google Drive returned a resumable upload session outside the pinned API origin.");
+  }
+  return url.href;
+}
+
+function resumableCommittedOffset(value: string | null, totalBytes: number): number {
+  if (value === null) return 0;
+  const match = /^bytes=0-(\d+)$/u.exec(value.trim());
+  if (!match) throw new Error("Google Drive resumable upload returned an invalid committed range.");
+  const endInclusive = Number(match[1]);
+  if (!Number.isSafeInteger(endInclusive) || endInclusive < 0 || endInclusive >= totalBytes) {
+    throw new Error("Google Drive resumable upload returned an out-of-bounds committed range.");
+  }
+  return endInclusive + 1;
+}
+
+function isRetryableUploadStatus(status: number): boolean {
+  return status === 408 || status === 429 || status >= 500;
+}
+
+async function discardResponseBody(response: Response): Promise<void> {
+  await response.body?.cancel().catch(() => undefined);
+}
+
 async function driveError(response: Response, operation: string): Promise<Error> {
+  void response.body?.cancel().catch(() => undefined);
   const error = new Error(`Google Drive could not ${operation} (${response.status}).`);
   error.name = "GoogleDriveStorageError";
   return error;

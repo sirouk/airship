@@ -17,7 +17,8 @@ describe("Chutes connection method copy", () => {
   });
 
   it("uses capability names instead of credential prefixes as table headers", () => {
-    expect(source).toContain('<th scope="col">Chutes sign-in</th><th scope="col">API key</th>');
+    expect(source).toContain('<th scope="col">Sign-in eligible</th><th scope="col">Key eligible</th><th scope="col">Active method</th>');
+    expect(source).toContain("These are credential-class eligibility rules, not observed grants");
     expect(source).not.toContain('<th scope="col">cak_</th>');
     expect(source).not.toContain('<th scope="col">cpk_</th>');
   });
@@ -38,19 +39,34 @@ describe("Chutes connection method copy", () => {
     expect(source).toContain("isChutesConnected(connection) ? (");
   });
 
-  it("connects production Chutes sessions through the required attestation gate", () => {
-    expect(source).toContain('attestationMode: "required"');
-    expect(source).not.toContain('attestationMode: "optional"');
-    expect(source).toContain("attestationGate: createChutesAttestationGate");
+  it("admits only source-declared text generation models to agent sessions", () => {
+    expect(source.match(/inputModalities: \["text"\]/gu)).toHaveLength(2);
+    expect(source.match(/outputModalities: \["text"\]/gu)).toHaveLength(2);
+    expect(source).toContain("no text-in/text-out models explicitly eligible");
   });
 
-  it("makes OAuth completion and the proof-policy finish step explicit without claiming policy is proof", () => {
+  it("collects proof without breaking encrypted chat and does not offer an impossible strict policy", () => {
+    expect(source).toContain('attestationMode: "optional"');
+    expect(source).toContain('attestationMode: "required"');
+    expect(source).toContain("attestationGate: createChutesAttestationGate");
+    expect(source).toContain("Verify &amp; record");
+    expect(source).toContain("Strict fail-closed · unavailable");
+    expect(source).toContain("disabled={!CHUTES_STRICT_ENDPOINT_PROOF_CAPABILITY.available}");
+  });
+
+  it("makes OAuth completion and the proof-policy finish step explicit without requiring a waiver", () => {
     expect(source).toContain("Chutes sign-in complete · finish connection");
-    expect(source).toContain("No second credential is required");
-    expect(source).toContain("Require fresh endpoint proof before every turn");
-    expect(source).toContain("This policy is not itself proof");
+    expect(source).toContain("No second credential or attestation waiver is required");
+    expect(source).toContain("This policy is not proof");
     expect(source).toContain("Finish: verify &amp; connect");
     expect(source).not.toContain("I understand this endpoint is not independently attested");
     expect(source).not.toContain("Encrypted · TEE unverified");
+  });
+
+  it("presents Chutes as one inference connection and mounts additional providers accessibly", () => {
+    expect(source).toContain("<span>Inference connections</span>");
+    expect(source).toContain('<h1 id="access-connection-title">Connect models</h1>');
+    expect(source).toContain("<span>Chutes connection</span>");
+    expect(source).toContain('aria-label="Additional cloud and local inference providers"');
   });
 });

@@ -5,7 +5,7 @@ async function openClaimStack(page: Page, projectName: string): Promise<Locator>
   await expect(page.locator(".app-shell")).toBeVisible();
   await page.getByRole("combobox", { name: "Message Airship" }).fill("Create a local proof-layout fixture.");
   await page.getByRole("button", { name: "Send message" }).click();
-  await expect(page.getByText("Airship is running this turn entirely on your device", { exact: false })).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator(".transcript .message.assistant").getByText("Airship is running this turn entirely on your device", { exact: false })).toBeVisible({ timeout: 15_000 });
   if (projectName !== "desktop-chromium") await page.goto("/#proof");
   const inspector = page.locator(projectName === "desktop-chromium"
     ? ".inspector .proof-inspector"
@@ -16,6 +16,21 @@ async function openClaimStack(page: Page, projectName: string): Promise<Locator>
   await expect(inspector.locator(".claim-absence")).toBeVisible();
   return inspector;
 }
+
+test("proof names every unavailable claim before the first completed turn", async ({ page }, testInfo) => {
+  await page.goto("/#proof");
+  const inspector = page.getByRole("main").locator(".proof-inspector");
+  await expect(inspector.getByRole("heading", { name: "Verification" })).toBeVisible();
+  const unavailable = inspector.locator(".claim-absence");
+  await expect(unavailable).toHaveAttribute("open", "");
+  await expect(unavailable.locator(".claim-absence__list > div")).toHaveCount(8);
+  for (const label of ["Encrypted transport", "Fresh evidence", "Protected CPU runtime", "Protected accelerator", "Endpoint identity", "Model artifact", "Conversation integrity", "Payment standing"] as const) {
+    await expect(unavailable.getByText(label, { exact: true })).toBeVisible();
+  }
+  await inspector.screenshot({ path: testInfo.outputPath(`empty-claim-stack-${testInfo.project.name}.png`), animations: "disabled" });
+  await unavailable.locator(":scope > summary").click();
+  await expect(unavailable).not.toHaveAttribute("open", "");
+});
 
 test("claim stack keeps labels, state, technical names, and Details contained", async ({ page }, testInfo) => {
   const inspector = await openClaimStack(page, testInfo.project.name);

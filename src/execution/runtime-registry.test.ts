@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { ClientExecutionRuntime, type ExecutionAdapter } from "./runtime-registry";
+import {
+  ClientExecutionRuntime,
+  deriveBrowserExecutionTier,
+  sessionAllowsBrowserExecutionTier,
+  type ExecutionAdapter,
+} from "./runtime-registry";
 
 const javascriptAdapter: ExecutionAdapter = {
   capability: {
@@ -7,24 +12,61 @@ const javascriptAdapter: ExecutionAdapter = {
     label: "JavaScript",
     languages: ["javascript"],
     state: "ready",
+    tier: "web-baseline",
     isolation: "disposable-worker",
     persistence: "ephemeral",
+    commandInterface: "javascript-function",
+    shell: "none",
+    workspaceAccess: "none",
+    output: "bounded-stream",
+    cancellation: "terminate-worker",
     detail: "test adapter",
   },
   async execute(request) {
-    return { runtime: "javascript-worker", exitCode: 0, stdout: request.code ?? "", stderr: "", value: 42 };
+    return {
+      runtime: "javascript-worker",
+      exitCode: 0,
+      stdout: request.code ?? "",
+      stderr: "",
+      value: 42,
+      provenance: { capabilityTier: "web-baseline", authority: "browser", engine: "test", artifactKind: "source" },
+    };
   },
 };
 
 describe("ClientExecutionRuntime", () => {
+  it("promotes only a genuinely ready enhanced runtime", () => {
+    expect(deriveBrowserExecutionTier([
+      { state: "ready", tier: "web-baseline" },
+      { state: "installable", tier: "web-enhanced" },
+    ])).toBe("web-baseline");
+    expect(deriveBrowserExecutionTier([
+      { state: "ready", tier: "web-baseline" },
+      { state: "ready", tier: "web-enhanced" },
+    ])).toBe("web-enhanced");
+  });
+
+  it("does not let a page-lifetime activation promote an existing baseline session", () => {
+    expect(sessionAllowsBrowserExecutionTier("web-baseline", "web-baseline")).toBe(true);
+    expect(sessionAllowsBrowserExecutionTier("web-baseline", "web-enhanced")).toBe(false);
+    expect(sessionAllowsBrowserExecutionTier(undefined, "web-enhanced")).toBe(false);
+    expect(sessionAllowsBrowserExecutionTier("web-enhanced", "web-enhanced")).toBe(true);
+  });
+
   it("reports installed and optional runtimes without claiming that packs are ready", () => {
     const runtime = new ClientExecutionRuntime([{
       id: "python-pyodide",
       label: "Python",
       languages: ["python"],
       state: "installable",
+      tier: "web-enhanced",
       isolation: "dedicated-worker",
       persistence: "workspace-checkpoint",
+      commandInterface: "python-job",
+      shell: "none",
+      workspaceAccess: "bounded-snapshot-writeback",
+      output: "bounded-stream",
+      cancellation: "terminate-worker",
       detail: "lazy pack",
     }]);
     runtime.register(javascriptAdapter);
@@ -53,8 +95,14 @@ describe("ClientExecutionRuntime", () => {
       label: "Python",
       languages: ["python"],
       state: "installable",
+      tier: "web-enhanced",
       isolation: "dedicated-worker",
       persistence: "workspace-checkpoint",
+      commandInterface: "python-job",
+      shell: "none",
+      workspaceAccess: "bounded-snapshot-writeback",
+      output: "bounded-stream",
+      cancellation: "terminate-worker",
       detail: "lazy pack",
     }]);
     await expect(runtime.execute({
@@ -81,8 +129,14 @@ describe("ClientExecutionRuntime", () => {
       label: "Node",
       languages: ["node"],
       state: "installable",
+      tier: "web-enhanced",
       isolation: "webcontainer",
       persistence: "workspace-checkpoint",
+      commandInterface: "direct-process",
+      shell: "webcontainer-jsh",
+      workspaceAccess: "bounded-snapshot-writeback",
+      output: "bounded-stream",
+      cancellation: "kill-process",
       detail: "cold",
     }]);
     runtime.setOptionalState("node-webcontainer", "activating", "booting");
@@ -109,7 +163,13 @@ describe("ClientExecutionRuntime", () => {
     runtime.register({
       ...javascriptAdapter,
       async execute() {
-        return { runtime: "wasi-preview1", exitCode: 0, stdout: "", stderr: "" };
+        return {
+          runtime: "wasi-preview1",
+          exitCode: 0,
+          stdout: "",
+          stderr: "",
+          provenance: { capabilityTier: "web-baseline", authority: "browser", engine: "spoof", artifactKind: "wasi-command" },
+        };
       },
     });
     await expect(runtime.execute({
@@ -118,5 +178,27 @@ describe("ClientExecutionRuntime", () => {
       timeoutMs: 100,
       signal: new AbortController().signal,
     })).rejects.toThrow(/mismatched runtime identity/u);
+  });
+
+  it("rejects result provenance that promotes the registered capability tier", async () => {
+    const runtime = new ClientExecutionRuntime([]);
+    runtime.register({
+      ...javascriptAdapter,
+      async execute() {
+        return {
+          runtime: "javascript-worker",
+          exitCode: 0,
+          stdout: "",
+          stderr: "",
+          provenance: { capabilityTier: "web-enhanced", authority: "browser", engine: "spoof", artifactKind: "source" },
+        };
+      },
+    });
+    await expect(runtime.execute({
+      runtime: "javascript-worker",
+      code: "42",
+      timeoutMs: 100,
+      signal: new AbortController().signal,
+    })).rejects.toThrow(/provenance/u);
   });
 });

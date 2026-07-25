@@ -2,16 +2,37 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
+  RELEASE_BUDGETS,
   assertWithinBudget,
+  assertUnpromotedWasixAbsent,
+  assertExclusiveArtifactClassifications,
   assertOptionalPacksAreNotPreloaded,
   createReleaseManifest,
   inspectPayload,
   isOptionalExecutionPackPath,
+  isOptionalExecutionEnginePath,
+  isOptionalExecutionSupportPath,
+  isOptionalWasiPreview1WorkerPath,
   isOptionalNodeExecutionPackPath,
+  isOptionalWasixJavaScriptPath,
+  isOptionalWasixWasmPath,
+  isOptionalAgentRuntimePath,
+  isOptionalAgentToolsPath,
   isOptionalModelCatalogPath,
+  isOptionalInferenceProviderPath,
+  isOptionalLocalDeviceVaultPath,
   isOptionalWorkspaceWorkbenchPath,
+  isOptionalWorkspaceBindingPath,
+  isOptionalWorkspaceCodecPath,
   isOptionalSourceControlPath,
+  isOptionalSourceSelectionPath,
+  isOptionalBrowserGitPath,
   isOptionalSessionLibraryPath,
+  isOptionalCapabilitiesViewPath,
+  isOptionalBrowserCapabilityPath,
+  isOptionalMemoryViewPath,
+  isOptionalMemorySupportPath,
+  isOptionalProofSurfacePath,
   isOptionalTerminalPath,
   isOptionalSemanticWorkerPath,
   isDeferredCapabilityPackPath,
@@ -19,10 +40,29 @@ import {
 } from "./release-gate.mjs";
 
 describe("release gate", () => {
+  it("ships zero artifacts and zero bytes for the unpromoted WASIX candidate", () => {
+    expect(RELEASE_BUDGETS.optionalWasixJavaScript).toEqual({ raw: 0, gzip: 0 });
+    expect(RELEASE_BUDGETS.optionalWasixWasm).toEqual({ raw: 0, gzip: 0 });
+    expect(() => assertUnpromotedWasixAbsent("JavaScript candidate", [])).not.toThrow();
+    expect(() => assertUnpromotedWasixAbsent("JavaScript candidate", ["assets/wasix-pack-A.js"]))
+      .toThrow(/must not contain the unpromoted WASIX JavaScript candidate; found 1 artifacts/u);
+    expect(() => assertUnpromotedWasixAbsent("engine WASM", ["assets/wasmer_js_bg-A.wasm"]))
+      .toThrow(/must not contain the unpromoted WASIX engine WASM; found 1 artifacts/u);
+  });
+
   it("discloses only the embedding origin required by the WebContainer frame", () => {
     const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
     expect(html).toContain('<meta name="referrer" content="origin" />');
     expect(html).not.toContain('<meta name="referrer" content="no-referrer" />');
+  });
+
+  it("keeps disposable loopback storage origins out of production policies", () => {
+    const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
+    const headers = readFileSync(new URL("../public/_headers", import.meta.url), "utf8");
+    for (const policy of [html, headers]) {
+      expect(policy).not.toContain("http://127.0.0.1:9900");
+      expect(policy).not.toContain("http://localhost:9900");
+    }
   });
 
   it("emits a stable, sorted, explicitly unsigned manifest", () => {
@@ -69,24 +109,97 @@ describe("release gate", () => {
     expect(() => assertWithinBudget("fixture", { raw: 5, gzip: 5 }, { raw: 10, gzip: 10 })).not.toThrow();
   });
 
+  it("rejects unknown and multiply owned JavaScript artifacts", () => {
+    expect(() => assertExclusiveArtifactClassifications(
+      ["assets/core-A.js", "assets/unknown-B.js"],
+      [{ name: "core", paths: ["assets/core-A.js"] }],
+    )).toThrow(/unclassified: assets\/unknown-B\.js/iu);
+
+    expect(() => assertExclusiveArtifactClassifications(
+      ["assets/shared-A.js"],
+      [
+        { name: "core", paths: ["assets/shared-A.js"] },
+        { name: "optional", paths: ["assets/shared-A.js"] },
+      ],
+    )).toThrow(/multiple classes: assets\/shared-A\.js/iu);
+
+    expect(() => assertExclusiveArtifactClassifications(
+      ["assets/core-A.js", "assets/optional-B.js"],
+      [
+        { name: "core", paths: ["assets/core-A.js"] },
+        { name: "optional", paths: ["assets/optional-B.js"] },
+      ],
+    )).not.toThrow();
+  });
+
   it("recognizes only the hashed execution pack and forbids optional-pack preloads", () => {
     expect(isOptionalExecutionPackPath("assets/execution-runtime-pack-Ab_12-CD.js")).toBe(true);
     expect(isOptionalExecutionPackPath("assets/execution-tools-Ab_12-CD.js")).toBe(false);
+    expect(isOptionalExecutionEnginePath("assets/execution-engine-Ab_12-CD.js")).toBe(true);
+    expect(isOptionalExecutionEnginePath("assets/execution-runtime-pack-Ab_12-CD.js")).toBe(false);
+    expect(isOptionalExecutionSupportPath("assets/runtime-registry-Ab_12-CD.js")).toBe(true);
+    expect(isOptionalExecutionSupportPath("assets/runtime-Ab_12-CD.js")).toBe(false);
+    expect(isOptionalWasiPreview1WorkerPath("assets/wasi-preview1-worker-Ab_12-CD.js")).toBe(true);
+    expect(isOptionalWasiPreview1WorkerPath("assets/wasi-preview1-pack-Ab_12-CD.js")).toBe(false);
     expect(isOptionalNodeExecutionPackPath("assets/node-webcontainer-pack-Ab_12-CD.js")).toBe(true);
     expect(isOptionalNodeExecutionPackPath("assets/execution-runtime-pack-Ab_12-CD.js")).toBe(false);
+    expect(isOptionalWasixJavaScriptPath("assets/wasix-pack-Ab_12-CD.js")).toBe(true);
+    expect(isOptionalWasixJavaScriptPath("assets/wasix-worker-Ab_12-CD.js")).toBe(true);
+    expect(isOptionalWasixJavaScriptPath("assets/dist-Ab_12-CD.js")).toBe(true);
+    expect(isOptionalWasixJavaScriptPath("assets/index-Ab_12-CD.mjs")).toBe(true);
+    expect(isOptionalWasixJavaScriptPath("assets/index-Ab_12-CD.js")).toBe(false);
+    expect(isOptionalWasixWasmPath("assets/wasmer_js_bg-Ab_12-CD.wasm")).toBe(true);
+    expect(isOptionalWasixWasmPath("assets/wasmer_js_bg-Ab_12-CD.js")).toBe(false);
+    expect(isOptionalAgentRuntimePath("assets/agent-Ab_12-CD.js")).toBe(true);
+    expect(isOptionalAgentRuntimePath("assets/turn-runtime-Ab_12-CD.js")).toBe(false);
+    expect(isOptionalAgentToolsPath("assets/tool-bundle-Ab_12-CD.js")).toBe(true);
+    expect(isOptionalAgentToolsPath("assets/client-context-runtime-Ab_12-CD.js")).toBe(true);
+    expect(isOptionalAgentToolsPath("assets/context-selection-Ab_12-CD.js")).toBe(true);
+    expect(isOptionalAgentToolsPath("assets/repository-admission-Ab_12-CD.js")).toBe(true);
+    expect(isOptionalAgentToolsPath("assets/tools-Ab_12-CD.js")).toBe(false);
     expect(isOptionalWorkspaceWorkbenchPath("assets/editor-view-Ab_12-CD.js")).toBe(true);
     expect(isOptionalWorkspaceWorkbenchPath("assets/workspace-tree-Ab_12-CD.js")).toBe(false);
+    expect(isOptionalWorkspaceBindingPath("assets/workspace-binding-Ab_12-CD.js")).toBe(true);
+    expect(isOptionalWorkspaceBindingPath("assets/workspace-bind-Ab_12-CD.js")).toBe(false);
+    expect(isOptionalWorkspaceCodecPath("assets/content-codec-Ab_12-CD.js")).toBe(true);
+    expect(isOptionalWorkspaceCodecPath("assets/content-Ab_12-CD.js")).toBe(false);
     expect(isOptionalSourceControlPath("assets/sources-view-Ab_12-CD.js")).toBe(true);
     expect(isOptionalSourceControlPath("assets/source-tree-Ab_12-CD.js")).toBe(false);
+    expect(isOptionalSourceSelectionPath("assets/source-selection-Ab_12-CD.js")).toBe(true);
+    expect(isOptionalSourceSelectionPath("assets/source-select-Ab_12-CD.js")).toBe(false);
+    expect(isOptionalBrowserGitPath("assets/workspace-adapter-Ab_12-CD.js")).toBe(true);
+    expect(isOptionalBrowserGitPath("assets/workspace-binding-Ab_12-CD.js")).toBe(false);
     expect(isOptionalSessionLibraryPath("assets/sessions-route-Ab_12-CD.js")).toBe(true);
     expect(isOptionalSessionLibraryPath("assets/session-view-Ab_12-CD.js")).toBe(false);
+    expect(isOptionalCapabilitiesViewPath("assets/capabilities-view-Ab_12-CD.js")).toBe(true);
+    expect(isOptionalCapabilitiesViewPath("assets/capability-view-Ab_12-CD.js")).toBe(false);
+    expect(isOptionalBrowserCapabilityPath("assets/browser-runtime-Ab_12-CD.js")).toBe(true);
+    expect(isOptionalBrowserCapabilityPath("assets/runtime-browser-Ab_12-CD.js")).toBe(false);
+    expect(isOptionalMemoryViewPath("assets/memory-view-Ab_12-CD.js")).toBe(true);
+    expect(isOptionalMemoryViewPath("assets/memory-graph-Ab_12-CD.js")).toBe(false);
+    expect(isOptionalMemorySupportPath("assets/kind-visual-Ab_12-CD.js")).toBe(true);
+    expect(isOptionalMemorySupportPath("assets/kind-visual.css")).toBe(false);
+    expect(isOptionalProofSurfacePath("assets/proof-view-Ab_12-CD.js")).toBe(true);
+    expect(isOptionalProofSurfacePath("assets/provider-client-Ab_12-CD.js")).toBe(true);
+    expect(isOptionalProofSurfacePath("assets/client-Ab_12-CD.js")).toBe(true);
+    expect(isOptionalProofSurfacePath("assets/client-runtime-Ab_12-CD.js")).toBe(false);
     expect(isOptionalTerminalPath("assets/terminal-view-Ab_12-CD.js")).toBe(true);
+    expect(isOptionalTerminalPath("assets/manager-Ab_12-CD.js")).toBe(true);
     expect(isOptionalTerminalPath("assets/terminal-runtime-Ab_12-CD.js")).toBe(false);
     expect(isOptionalSemanticWorkerPath("assets/semantic.worker-Ab_12-CD.js")).toBe(true);
     expect(isOptionalSemanticWorkerPath("assets/semantic-worker-Ab_12-CD.js")).toBe(false);
     expect(isOptionalModelCatalogPath("assets/client-runtime-Ab_12-CD.js")).toBe(true);
     expect(isOptionalModelCatalogPath("assets/telemetry-Ab_12-CD.js")).toBe(true);
     expect(isOptionalModelCatalogPath("assets/client-Ab_12-CD.js")).toBe(false);
+    expect(isOptionalInferenceProviderPath("assets/fabric-Ab_12-CD.js")).toBe(true);
+    expect(isOptionalInferenceProviderPath("assets/provider-connections-view-Ab_12-CD.js")).toBe(true);
+    expect(isOptionalInferenceProviderPath("assets/provider-panel-Ab_12-CD.js")).toBe(false);
+    expect(isOptionalLocalDeviceVaultPath("assets/local-device-vault-setup-Ab_12-CD.js")).toBe(true);
+    expect(isOptionalLocalDeviceVaultPath("assets/local-device-keyring-Ab_12-CD.js")).toBe(true);
+    expect(isOptionalLocalDeviceVaultPath("assets/local-lab-Ab_12-CD.js")).toBe(true);
+    expect(isOptionalLocalDeviceVaultPath("assets/recovery-Ab_12-CD.js")).toBe(true);
+    expect(isOptionalLocalDeviceVaultPath("assets/encrypted-envelope-Ab_12-CD.js")).toBe(true);
+    expect(isOptionalLocalDeviceVaultPath("assets/local-storage-Ab_12-CD.js")).toBe(false);
     expect(isDeferredCapabilityPackPath("assets/deferred-capabilities-Ab_12-CD.js")).toBe(true);
     expect(isDeferredCapabilityPackPath("assets/connectivity-Ab_12-CD.js")).toBe(false);
     expect(() => assertOptionalPacksAreNotPreloaded(
@@ -96,25 +209,85 @@ describe("release gate", () => {
       '<link rel="modulepreload" href="/assets/execution-runtime-pack-Ab12.js">',
     )).toThrow(/must not preload/iu);
     expect(() => assertOptionalPacksAreNotPreloaded(
+      '<link rel="modulepreload" href="/assets/execution-engine-Ab12.js">',
+    )).toThrow(/must not preload/iu);
+    expect(() => assertOptionalPacksAreNotPreloaded(
+      '<link rel="modulepreload" href="/assets/runtime-registry-Ab12.js">',
+    )).toThrow(/must not preload/iu);
+    expect(() => assertOptionalPacksAreNotPreloaded(
+      '<link rel="modulepreload" href="/assets/wasi-preview1-worker-Ab12.js">',
+    )).toThrow(/must not preload/iu);
+    expect(() => assertOptionalPacksAreNotPreloaded(
       '<link rel="modulepreload" href="/assets/deferred-capabilities-Ab12.js">',
     )).toThrow(/must not preload/iu);
     expect(() => assertOptionalPacksAreNotPreloaded(
       '<link rel="modulepreload" href="/assets/node-webcontainer-pack-Ab12.js">',
     )).toThrow(/must not preload/iu);
     expect(() => assertOptionalPacksAreNotPreloaded(
+      '<link rel="modulepreload" href="/assets/wasix-pack-Ab12.js">',
+    )).toThrow(/must not preload/iu);
+    expect(() => assertOptionalPacksAreNotPreloaded(
+      '<link rel="modulepreload" href="/assets/dist-Ab12.js">',
+    )).toThrow(/must not preload/iu);
+    expect(() => assertOptionalPacksAreNotPreloaded(
+      '<link rel="modulepreload" href="/assets/index-Ab12.mjs">',
+    )).toThrow(/must not preload/iu);
+    expect(() => assertOptionalPacksAreNotPreloaded(
+      '<link rel="modulepreload" href="/assets/agent-Ab12.js">',
+    )).toThrow(/must not preload/iu);
+    expect(() => assertOptionalPacksAreNotPreloaded(
+      '<link rel="modulepreload" href="/assets/tool-bundle-Ab12.js">',
+    )).toThrow(/must not preload/iu);
+    expect(() => assertOptionalPacksAreNotPreloaded(
       '<link rel="modulepreload" href="/assets/editor-view-Ab12.js">',
+    )).toThrow(/must not preload/iu);
+    expect(() => assertOptionalPacksAreNotPreloaded(
+      '<link rel="modulepreload" href="/assets/workspace-binding-Ab12.js">',
+    )).toThrow(/must not preload/iu);
+    expect(() => assertOptionalPacksAreNotPreloaded(
+      '<link rel="modulepreload" href="/assets/content-codec-Ab12.js">',
     )).toThrow(/must not preload/iu);
     expect(() => assertOptionalPacksAreNotPreloaded(
       '<link rel="modulepreload" href="/assets/sources-view-Ab12.js">',
     )).toThrow(/must not preload/iu);
     expect(() => assertOptionalPacksAreNotPreloaded(
+      '<link rel="modulepreload" href="/assets/source-selection-Ab12.js">',
+    )).toThrow(/must not preload/iu);
+    expect(() => assertOptionalPacksAreNotPreloaded(
+      '<link rel="modulepreload" href="/assets/workspace-adapter-Ab12.js">',
+    )).toThrow(/must not preload/iu);
+    expect(() => assertOptionalPacksAreNotPreloaded(
       '<link rel="modulepreload" href="/assets/sessions-route-Ab12.js">',
+    )).toThrow(/must not preload/iu);
+    expect(() => assertOptionalPacksAreNotPreloaded(
+      '<link rel="modulepreload" href="/assets/capabilities-view-Ab12.js">',
+    )).toThrow(/must not preload/iu);
+    expect(() => assertOptionalPacksAreNotPreloaded(
+      '<link rel="modulepreload" href="/assets/browser-runtime-Ab12.js">',
+    )).toThrow(/must not preload/iu);
+    expect(() => assertOptionalPacksAreNotPreloaded(
+      '<link rel="modulepreload" href="/assets/memory-view-Ab12.js">',
+    )).toThrow(/must not preload/iu);
+    expect(() => assertOptionalPacksAreNotPreloaded(
+      '<link rel="modulepreload" href="/assets/kind-visual-Ab12.js">',
+    )).toThrow(/must not preload/iu);
+    expect(() => assertOptionalPacksAreNotPreloaded(
+      '<link rel="modulepreload" href="/assets/proof-view-Ab12.js">',
     )).toThrow(/must not preload/iu);
     expect(() => assertOptionalPacksAreNotPreloaded(
       '<link rel="modulepreload" href="/assets/terminal-view-Ab12.js">',
     )).toThrow(/must not preload/iu);
     expect(() => assertOptionalPacksAreNotPreloaded(
       '<link rel="modulepreload" href="/assets/client-runtime-Ab12.js">',
+    )).toThrow(/must not preload/iu);
+    expect(() => assertOptionalPacksAreNotPreloaded(
+      '<link rel="modulepreload" href="/assets/provider-connections-view-Ab12.js">',
+    )).toThrow(/must not preload/iu);
+    expect(() => assertOptionalPacksAreNotPreloaded(
+      '<link rel="modulepreload" href="/assets/local-device-keyring-Ab12.js">',
+    )).toThrow(/must not preload/iu);
+    expect(() => assertOptionalPacksAreNotPreloaded(
+      '<link rel="modulepreload" href="/assets/encrypted-envelope-Ab12.js">',
     )).toThrow(/must not preload/iu);
   });
 });

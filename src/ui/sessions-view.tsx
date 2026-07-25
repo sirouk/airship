@@ -185,22 +185,22 @@ export function SessionsView({
     <section class="session-library-view" aria-labelledby="session-library-title">
       <header class="session-library-heading">
         <div>
-          <span class="session-library-eyebrow">Immutable runtime records</span>
-          <h1 id="session-library-title">Session library</h1>
-          <p>Resume only when runtime bindings match. Forks create a new journal identity and never rewrite the source history.</p>
+          <span class="session-library-eyebrow">Conversation history</span>
+          <h1 id="session-library-title">All conversations</h1>
+          <p>Open a thread where you left it. Pinned runtime details remain available for audit; a fork appears only when its meaning genuinely changes.</p>
         </div>
         <div class="session-library-origin"><Icon name="workspace" size={17} /><span><strong>Current journal adapter</strong><small>{durability.state === "synced" ? "Client-encrypted cloud journal; writes commit directly from this browser." : "Page-memory journal; remote availability is not inferred."}</small></span><DurabilityIndicator state={durability.state} detail={durability.detail} /></div>
       </header>
 
       <div class="session-library-toolbar" role="search" aria-label="Filter sessions">
         <label class="session-library-search">
-          <span class="session-library-visually-hidden">Search sessions</span>
+          <span class="session-library-visually-hidden">Search conversations</span>
           <Icon name="context" size={17} />
           <input
             type="search"
             value={draftSearch}
             onInput={(event) => setDraftSearch(event.currentTarget.value)}
-            placeholder="Search title, session ID, provider, or model"
+            placeholder="Search conversations"
             autocomplete="off"
             spellcheck={false}
           />
@@ -256,12 +256,12 @@ export function SessionsView({
       <span class="session-library-visually-hidden" aria-live="polite">{announcement}</span>
 
       <div class="session-library-layout">
-        <aside class="session-library-list-panel" aria-label="Sessions">
+        <aside class="session-library-list-panel" aria-label="Conversations">
           <div class="session-library-list-heading">
-            <span>{page?.total ?? 0} session{page?.total === 1 ? "" : "s"}</span>
+            <span>{page?.total ?? 0} conversation{page?.total === 1 ? "" : "s"}</span>
             <small>{loadingList ? "Reading journal…" : "Metadata only"}</small>
           </div>
-          <div class="session-library-list" role="listbox" aria-label="Available sessions">
+          <div class="session-library-list" role="listbox" aria-label="Available conversations">
             {groupedSessions.pinned.length ? <div class="session-library-group-label" role="presentation">Pinned · page memory</div> : null}
             {[...groupedSessions.pinned, ...groupedSessions.other].map((item, index) => {
               const selected = item.id === selectedId;
@@ -286,7 +286,7 @@ export function SessionsView({
               );
             })}
             {!loadingList && page?.items.length === 0 ? (
-              <div class="session-library-empty"><Icon name="chat" size={24} /><strong>No matching sessions</strong><p>{filterActive ? "Clear or widen the current filters." : "A session appears here after the journal creates it."}</p></div>
+              <div class="session-library-empty"><Icon name="chat" size={24} /><strong>No matching conversations</strong><p>{filterActive ? "Clear or widen the current filters." : "A conversation appears here after the journal creates it."}</p></div>
             ) : null}
           </div>
         </aside>
@@ -296,7 +296,7 @@ export function SessionsView({
           {detailError ? <div class="session-library-alert error" role="alert"><Icon name="warning" /><span>{detailError}</span></div> : null}
           {!loadingDetail && !detail ? <div class="session-library-empty detail"><Icon name="chat" size={28} /><strong>Select a session</strong><p>Its pinned runtime, structural history status, and bounded transcript will appear here.</p></div> : null}
           {!loadingDetail && detail ? (
-            <><form class="session-library-rename" onSubmit={(event) => { event.preventDefault(); void renameSelected(); }}><label>Rename session<input value={renameTitle} maxlength={240} placeholder={detail.session.title} onInput={(event) => setRenameTitle(event.currentTarget.value)} /></label><button type="submit" disabled={busy || !renameTitle.trim()}>Save rename</button></form>
+            <><details class="session-library-rename-disclosure"><summary>Rename conversation</summary><form class="session-library-rename" onSubmit={(event) => { event.preventDefault(); void renameSelected(); }}><label>Title<input value={renameTitle} maxlength={240} placeholder={detail.session.title} onInput={(event) => setRenameTitle(event.currentTarget.value)} /></label><button type="submit" disabled={busy || !renameTitle.trim()}>Save rename</button></form></details>
             <SessionDetail
               detail={detail}
               active={detail.session.id === activeSessionId}
@@ -369,7 +369,7 @@ function SessionDetail({
 
       <div class={`session-library-health ${detail.history.status}`}>
         <span class="session-library-health-mark"><Icon name={detail.history.status === "consistent" ? "check" : "warning"} size={18} /></span>
-        <div><strong>{detail.history.label}</strong><small>{detail.history.checkedEvents} of {detail.history.totalEvents} events inspected · {detail.history.turnCount} turn{detail.history.turnCount === 1 ? "" : "s"}</small></div>
+        <div><strong>{detail.history.status === "consistent" ? "Journal structure passed" : detail.history.label}</strong><small>{detail.history.checkedEvents} of {detail.history.totalEvents} events inspected · {detail.history.turnCount} turn{detail.history.turnCount === 1 ? "" : "s"}</small></div>
         <span class="session-library-proof-scope">Structural linkage only · digests not recomputed · authenticity not proven</span>
       </div>
 
@@ -403,7 +403,9 @@ function SessionDetail({
         </section>
       ) : null}
 
-      <div class="session-library-detail-grid">
+      <details class="session-library-technical">
+        <summary><span>Runtime record</span><strong>Manifest pins and transcript</strong></summary>
+        <div class="session-library-detail-grid">
         <section class="session-library-panel" aria-labelledby="session-pins-title">
           <div class="session-library-panel-heading"><span>Immutable manifest</span><strong id="session-pins-title">Runtime pins</strong></div>
           <dl class="session-library-pins">
@@ -447,7 +449,8 @@ function SessionDetail({
             </ol>
           ) : <div class="session-library-empty compact"><Icon name="chat" size={20} /><strong>No user or assistant messages</strong><p>Tool payloads and internal events are intentionally not rendered here.</p></div>}
         </section>
-      </div>
+        </div>
+      </details>
 
       {detail.history.issues.length ? (
         <details class="session-library-issues">

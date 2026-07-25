@@ -1,7 +1,7 @@
 # Chutes attestation evidence in Airship
 
 Status: implemented provider/evidence client and browser-local Intel DCAP QVL.
-Source review and live probes: 2026-07-19.
+Source review and live probes: 2026-07-23.
 
 ## Executive trust statement
 
@@ -13,12 +13,20 @@ validity, debug prohibition, and aggregate/QE/platform `UpToDate` status with no
 advisories. Airship separately compares MRTD/RTMR measurements with Chutes'
 published policy feed.
 
-NVIDIA verification is currently partial. Chutes' evidence schema also does not bind model weights, a
-request, a response, a conversation, usage, or payment. The resulting object is
-an `endpoint-evidence` record whose claims are evaluated independently. Only a
-fresh exact-instance/key CPU-QVL result plus matched runtime policy can promote
-the endpoint tier; it never becomes a verified conversation receipt. A local
-mismatch is `rejected`.
+NVIDIA verification is currently partial. Airship locally checks that every
+compact NVIDIA SPDM request carries the same endpoint-binding digest as the TDX
+quote, but that byte match is not an NVIDIA authenticity verdict. Chutes'
+evidence schema also does not
+bind model weights, a request, a response, a conversation, usage, or payment.
+The resulting object is an `endpoint-evidence` record whose claims are evaluated
+independently. A GPU-backed Chutes endpoint can promote the aggregate endpoint
+tier only when the fresh exact-instance/key binding, CPU QVL, NVIDIA GPU
+verification, and runtime policy all satisfy their respective gates. Because
+the current browser NVIDIA verifier cannot establish nonce-bound RIM,
+revocation, freshness, and confidential-compute policy, it tops out at
+`matched/partial`; CPU may be independently verified, but the aggregate remains
+encrypted-unattested. An endpoint result never becomes a verified conversation
+receipt. A local mismatch is `rejected`.
 
 ## Current browser-facing provider surfaces
 
@@ -58,13 +66,21 @@ and retain the exact already-authenticated discovery instance/key pair.
 
 ### Live payload observations
 
-On 2026-07-18, the public `Qwen/Qwen3-32B-TEE` chute
+On 2026-07-23, the public `Qwen/Qwen3-32B-TEE` chute
 `ac059e33-eb27-541c-b9a9-24b214036475` returned:
 
 - 14 instance evidence records;
 - 8 GPU evidence objects per instance;
 - 0 failed instances;
 - approximately 1.48 MB of JSON.
+
+Each observed Blackwell GPU evidence value decoded to an 87-byte compact SPDM
+artifact. Bytes 4 through 35 matched the first 32 bytes of the TDX
+`report_data` in the same instance record. Submitting the complete eight-device
+batch and that digest to NVIDIA Remote Attestation Service (NRAS) returned a
+signed EAT verdict. That confirms the provider payload is usable with NVIDIA's
+remote verifier; it does not make the local 32-byte comparison equivalent to
+that verdict.
 
 The public measurement feed returned 21 valid records (approximately 22.8 KB).
 One observed policy was version `1.3.0`, profile `8xh200`, GPU count 8.
@@ -166,11 +182,29 @@ No stale feed is used after an invalid or failed refresh.
 
 ### GPU / NVIDIA
 
-Airship currently checks the NVIDIA certificate chain and SPDM signature, so a
-successful result is `matched/partial`. It is not `verified`: caller nonce
-binding, RIM/golden firmware comparison, revocation/freshness, and complete
-confidential-compute policy remain required. Counting JSON objects is never GPU
-authenticity.
+The default static client validates canonical bounded GPU fields and compares
+the SPDM request nonce at bytes 4 through 35 with the endpoint-binding digest
+already carried by the TDX quote. Every device must match and a mixed-
+architecture batch fails closed. A successful result is `matched/partial`, not
+`verified`.
+
+The compact 87-byte live artifact does not contain the self-contained SPDM
+signature, certificate/RIM chain, revocation status, or confidential-compute
+policy needed for a complete local NVIDIA decision. Airship therefore does not
+claim to verify those items. A configured independent NVIDIA verifier port may
+promote the claim only after it returns a complete `verified` result; otherwise
+the local nonce match remains partial.
+
+NVIDIA's official remote-verifier flow posts `{nonce, evidence_list, arch,
+claims_version}` to NRAS, then verifies its signed EAT with NVIDIA JWKS. A live
+server-side probe succeeded on 2026-07-23. The NRAS POST browser preflight from
+the Airship loopback origin returned HTTP 403, while the JWKS GET was
+cross-origin readable. Consequently a service worker or ordinary static PWA
+cannot acquire the signed verdict directly today. Closing this gap requires
+either Chutes to include/proxy the signed NRAS result, NVIDIA to authorize the
+browser POST, or a complete bounded local NVIDIA verifier with RIM and
+revocation inputs. Airship does not route around that boundary through a hidden
+backend. Counting JSON objects is never GPU authenticity.
 
 ### Certificate
 
@@ -188,8 +222,12 @@ Current evidence supplies no cryptographic proof for:
 - full conversation transcript;
 - inference usage, price, charge, or settlement.
 
-Those dimensions remain `unavailable`. Local Airship journal hashes are valuable
-client records but are not enclave signatures.
+Those dimensions remain `unavailable` in the endpoint-evidence record. The
+separate local turn receipt does carry a request-ciphertext digest and an
+order-sensitive hash chain over authenticated response-ciphertext records, so
+its conversation-integrity claim is `partial / airship-client`. Local Airship
+journal and ciphertext commitments are valuable client records, but they are
+not enclave signatures and never promote endpoint evidence.
 
 ## Discovery and post-hoc inspection
 
@@ -262,13 +300,17 @@ is bounded and cancellation-safe but is not the final billion-device hot path.
 Airship may display **CPU TEE verified** after the exact invocation-time key,
 fresh nonce, complete local Intel QVL, and current Chutes runtime-measurement
 match pass. It must not turn that scoped result into a whole-endpoint,
-accelerator, model, conversation, or payment seal.
+accelerator, model, conversation, or payment seal. For Chutes' GPU-backed
+inference endpoint, the aggregate encrypted-attested/TEE seal also requires the
+GPU claim itself to be independently `verified`; the currently implemented
+partial NVIDIA check therefore cannot promote that aggregate.
 
 Stronger tiers still require:
 
 1. a signed/pinned workload policy rather than mutable HTTPS JSON;
-2. NVIDIA nonce, revocation, RIM/firmware, freshness, and confidential-mode
-   policy verification;
+2. NVIDIA signed-EAT authenticity, nonce, revocation, RIM/firmware, freshness,
+   and confidential-mode policy verification through a browser-reachable or
+   completely local verifier;
 3. a model artifact digest cryptographically bound to execution;
 4. an enclave signature over request, response, model, endpoint, session, turn,
    usage, and timestamp for conversation-level proof; and

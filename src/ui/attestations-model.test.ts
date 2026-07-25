@@ -39,6 +39,49 @@ describe("attestation presentation model", () => {
     expect(Object.isFrozen(record!.dimensions.model.facts)).toBe(true);
   });
 
+  it("identifies only the bundled Intel QVL and NVIDIA binding checks as local authorities", () => {
+    const base = endpointRecord();
+    const input: ChutesEndpointEvidenceRecord = {
+      ...base,
+      claims: {
+        ...base.claims,
+        cpuTee: claim(
+          "verified",
+          "Intel TDX authenticity",
+          "The bundled QVL completed every required check.",
+          "intel-dcap-qvl-wasm@dcap-qvl/0.5.2",
+        ),
+        gpuTee: claim(
+          "matched",
+          "NVIDIA GPU evidence binding",
+          "The SPDM request nonce matched; full NVIDIA verification is separate.",
+          "airship-nvidia-spdm-binding/v1",
+        ),
+        nonceFreshness: claim(
+          "verified",
+          "Nonce freshness",
+          "A third-party plugin declared freshness.",
+          "airship-untrusted-plugin",
+        ),
+      },
+    };
+
+    const [record] = normalizeAttestationEvidence({ endpointRecords: [input] });
+    expect(record!.dimensions["cpu-tee"]).toMatchObject({
+      state: "verified",
+      authorityKind: "local",
+    });
+    expect(record!.dimensions["gpu-tee"]).toMatchObject({
+      state: "partial",
+      qualifier: "matched",
+      authorityKind: "local",
+    });
+    expect(record!.dimensions.freshness).toMatchObject({
+      state: "verified",
+      authorityKind: "external",
+    });
+  });
+
   it("keeps every structurally typed conversation receipt assertion-only", () => {
     const receipt = attestedReceipt();
     const [record] = normalizeAttestationEvidence({ receipts: [receipt] });

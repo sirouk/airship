@@ -1,5 +1,6 @@
 import { sha256 } from "../core/hash";
 import { isWorkspaceControlPlanePath } from "../workspace/contracts";
+import { isWorkspaceBinaryEnvelope } from "../workspace/content-codec";
 import type {
   ClientIndex,
   EmbeddedChunk,
@@ -41,6 +42,12 @@ export class IncrementalWorkspaceIndexer {
   private readonly maxFileBytes;
   private readonly maxChunkCharacters;
   private readonly overlapCharacters;
+  private readonly embeddingBatchSize;
+  private readonly maxIndexingConcurrency;
+  private readonly cooperativeYieldIntervalMs;
+  private readonly clock;
+  private readonly yieldControl;
+  private lastYieldAt;
   private readonly indexedRevisions = new Map<string, string>();
 
   constructor(options: IndexerOptions) {
@@ -51,6 +58,12 @@ export class IncrementalWorkspaceIndexer {
     this.maxChunkCharacters = options.maxChunkCharacters ?? 1_200;
     this.overlapCharacters = options.overlapCharacters ?? 160;
     if (this.overlapCharacters >= this.maxChunkCharacters) throw new Error("Chunk overlap must be smaller than chunk size.");
+    this.embeddingBatchSize = boundedInteger(options.scheduling?.embeddingBatchSize ?? 512, 1, 512, "Embedding batch size");
+    this.maxIndexingConcurrency = boundedInteger(options.scheduling?.maxIndexingConcurrency ?? 1, 1, 8, "Indexing concurrency");
+    this.cooperativeYieldIntervalMs = boundedInteger(options.scheduling?.cooperativeYieldIntervalMs ?? 0, 0, 1_000, "Cooperative yield interval");
+    this.clock = options.scheduling?.clock ?? monotonicNow;
+    this.yieldControl = options.scheduling?.yieldControl ?? yieldToBrowser;
+    this.lastYieldAt = this.clock();
   }
 
   async discover(): Promise<IndexCandidate[]> {
@@ -83,45 +96,12 @@ export class IncrementalWorkspaceIndexer {
       }
     }
 
-    const results: IndexCandidate[] = [];
-    for (const candidate of candidates) {
+    return concurrentMap(candidates, this.maxIndexingConcurrency, async (candidate) => {
       if (signal?.aborted) throw signal.reason;
-      if (candidate.status === "unsupported" || candidate.status === "too-large" || candidate.status === "indexed") {
-        results.push(candidate);
-        continue;
-      }
-      try {
-        const file = await this.workspace.read(candidate.path);
-        if (!file) continue;
-        const texts = chunkText(file.content, this.maxChunkCharacters, this.overlapCharacters);
-        const vectors = await this.embeddings.embed(texts, signal);
-        if (vectors.length !== texts.length) throw new Error("Embedding provider returned the wrong number of vectors.");
-        const contentDigest = await sha256(file.content);
-        const chunks: EmbeddedChunk[] = await Promise.all(
-          texts.map(async (text, chunkIndex) => ({
-            id: await sha256(`${file.path}\0${file.revision}\0${chunkIndex}\0${text}`),
-            path: file.path,
-            revision: file.revision,
-            contentDigest,
-            chunkIndex,
-            text,
-            tokens: tokenize(text),
-            vector: vectors[chunkIndex],
-          })),
-        );
-        await this.index.removeByPath(file.path);
-        await this.index.upsert(chunks);
-        this.indexedRevisions.set(file.path, file.revision);
-        results.push({ ...candidate, status: "indexed", reason: "Indexed on this device.", chunks: chunks.length });
-      } catch (error) {
-        results.push({
-          ...candidate,
-          status: "failed",
-          reason: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
-    return results;
+      const result = await this.indexCandidate(candidate, signal);
+      await this.cooperativeCheckpoint(signal);
+      return result;
+    });
   }
 
   async search(query: string, limit = 8, signal?: AbortSignal): Promise<SearchHit[]> {
@@ -154,6 +134,62 @@ export class IncrementalWorkspaceIndexer {
     this.indexedRevisions.clear();
     for (const chunk of chunks) this.indexedRevisions.set(chunk.path, chunk.revision);
   }
+
+  private async indexCandidate(candidate: IndexCandidate, signal?: AbortSignal): Promise<IndexCandidate> {
+    if (candidate.status === "unsupported" || candidate.status === "too-large" || candidate.status === "indexed") return candidate;
+    try {
+      const file = await this.workspace.read(candidate.path);
+      if (!file) return { ...candidate, status: "failed", reason: "Workspace file disappeared during indexing." };
+      if (isWorkspaceBinaryEnvelope(file.content)) {
+        await this.index.removeByPath(file.path);
+        this.indexedRevisions.delete(file.path);
+        return { ...candidate, status: "unsupported", reason: "Opaque binary bytes are preserved but never decoded as model context." };
+      }
+      const texts = chunkText(file.content, this.maxChunkCharacters, this.overlapCharacters);
+      const vectors: Float32Array[] = [];
+      for (let start = 0; start < texts.length; start += this.embeddingBatchSize) {
+        if (signal?.aborted) throw signal.reason;
+        const batch = texts.slice(start, start + this.embeddingBatchSize);
+        const embedded = await this.embeddings.embed(batch, signal);
+        if (embedded.length !== batch.length) throw new Error("Embedding provider returned the wrong number of vectors.");
+        vectors.push(...embedded);
+        await this.cooperativeCheckpoint(signal);
+      }
+      if (vectors.length !== texts.length) throw new Error("Embedding provider returned the wrong number of vectors.");
+      const contentDigest = await sha256(file.content);
+      const chunks: EmbeddedChunk[] = await Promise.all(
+        texts.map(async (text, chunkIndex) => ({
+          id: await sha256(`${file.path}\0${file.revision}\0${chunkIndex}\0${text}`),
+          path: file.path,
+          revision: file.revision,
+          contentDigest,
+          chunkIndex,
+          text,
+          tokens: tokenize(text),
+          vector: vectors[chunkIndex]!,
+        })),
+      );
+      await this.index.removeByPath(file.path);
+      await this.index.upsert(chunks);
+      this.indexedRevisions.set(file.path, file.revision);
+      return { ...candidate, status: "indexed", reason: "Indexed on this device.", chunks: chunks.length };
+    } catch (error) {
+      if (signal?.aborted) throw signal.reason ?? error;
+      return {
+        ...candidate,
+        status: "failed",
+        reason: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
+  private async cooperativeCheckpoint(signal?: AbortSignal): Promise<void> {
+    const now = this.clock();
+    if (this.cooperativeYieldIntervalMs === 0 || now - this.lastYieldAt < this.cooperativeYieldIntervalMs) return;
+    await this.yieldControl();
+    this.lastYieldAt = this.clock();
+    if (signal?.aborted) throw signal.reason;
+  }
 }
 
 export function chunkText(text: string, maxCharacters = 1_200, overlapCharacters = 160): string[] {
@@ -181,4 +217,35 @@ function contentTypeFor(path: string): string | undefined {
     if (lower.endsWith(extension)) return contentType;
   }
   return undefined;
+}
+
+async function concurrentMap<T, R>(
+  values: readonly T[],
+  concurrency: number,
+  operation: (value: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(values.length);
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(concurrency, Math.max(1, values.length)) }, async () => {
+    while (cursor < values.length) {
+      const index = cursor;
+      cursor += 1;
+      results[index] = await operation(values[index]!, index);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+function boundedInteger(value: number, minimum: number, maximum: number, label: string): number {
+  if (!Number.isSafeInteger(value) || value < minimum || value > maximum) throw new RangeError(`${label} is invalid.`);
+  return value;
+}
+
+function monotonicNow(): number {
+  return typeof performance === "undefined" ? Date.now() : performance.now();
+}
+
+function yieldToBrowser(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
 }

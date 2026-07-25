@@ -6,6 +6,7 @@ import {
   validateBranchName,
   validateCommitMessage,
   validateGitIdentifier,
+  validateGitDestination,
   validateGitPath,
   validatePathList,
   validateRemoteUrl,
@@ -59,7 +60,7 @@ export function normalizeGitOperation(operation: GitOperation): GitOperation {
       return frozen(operation.kind, {
         repositoryId: validateGitIdentifier(operation.request.repositoryId, "Repository ID"),
         worktreeId: validateGitIdentifier(operation.request.worktreeId, "Worktree ID"),
-        path: validateGitIdentifier(operation.request.path, "Virtual worktree path"),
+        path: validateGitDestination(operation.request.path),
         branch: validateBranchName(operation.request.branch),
         expectedRepositoryVersion: validateVersion(operation.request.expectedRepositoryVersion),
       });
@@ -76,7 +77,7 @@ export function normalizeGitOperation(operation: GitOperation): GitOperation {
         remoteUrl: validateRemoteUrl(operation.request.remoteUrl),
         remoteName: validateGitIdentifier(operation.request.remoteName ?? "origin", "Remote name"),
         ...(operation.request.defaultBranch ? { defaultBranch: validateBranchName(operation.request.defaultBranch) } : {}),
-        destination: validateGitIdentifier(operation.request.destination, "Virtual destination"),
+        destination: validateGitDestination(operation.request.destination),
       });
     case "fetch":
       return frozen(operation.kind, {
@@ -181,4 +182,3 @@ function deepFreeze<T>(value: T): T {
 function invalid(message: string): never {
   throw new GitValidationError(message);
 }
-

@@ -84,6 +84,18 @@ export type ClientContextGeneration = Readonly<{
   lineage: ClientContextLineage;
 }>;
 
+/**
+ * Immutable publication view of the active client generation. This is exposed
+ * only after the same revision snapshot used for search is fully committed.
+ * Callers receive cloned vectors so a Vault publisher cannot mutate the live
+ * in-memory index.
+ */
+export type ClientContextGenerationExport = Readonly<{
+  generation: ClientContextGeneration;
+  embeddings: EmbeddingProvider;
+  chunks: readonly EmbeddedChunk[];
+}>;
+
 export type ClientContextSearchHit = Readonly<SearchHit & {
   contentDigest: string;
   chunkIndex: number;
@@ -124,6 +136,14 @@ export type ClientContextEngineOptions = Readonly<{
   overlapCharacters?: number;
   clock?: () => number;
   now?: () => Date;
+  /** Re-read for every generation so battery/network lifecycle probes can tune new work. */
+  scheduling?: () => ClientContextSchedulingPolicy;
+}>;
+
+export type ClientContextSchedulingPolicy = Readonly<{
+  embeddingBatchSize: number;
+  maxIndexingConcurrency: number;
+  yieldEveryMs: number;
 }>;
 
 export type ClientContextSearchOptions = Readonly<{
@@ -199,6 +219,7 @@ export class ClientContextEngine {
   private readonly overlapCharacters: number;
   private readonly clock: () => number;
   private readonly now: () => Date;
+  private readonly scheduling?: () => ClientContextSchedulingPolicy;
   private readonly listeners = new Set<(state: ClientContextEngineState) => void>();
   private active?: ActiveGeneration;
   private running?: RefreshRun;
@@ -217,10 +238,26 @@ export class ClientContextEngine {
     this.overlapCharacters = boundedInteger(options.overlapCharacters ?? DEFAULT_OVERLAP_CHARACTERS, "Chunk overlap characters", 0, this.maxChunkCharacters - 1);
     this.clock = options.clock ?? monotonicNow;
     this.now = options.now ?? (() => new Date());
+    this.scheduling = options.scheduling;
   }
 
   getState(): ClientContextEngineState {
     return this.state;
+  }
+
+  exportActiveGeneration(): ClientContextGenerationExport {
+    if (this.disposed || this.state.phase !== "ready" || !this.active || this.running || this.pending) {
+      throw new ClientContextUnavailableError("A stable context generation is not available for encrypted publication.");
+    }
+    return Object.freeze({
+      generation: this.active.public,
+      embeddings: this.embeddings,
+      chunks: Object.freeze([...this.active.chunks.values()].map((chunk) => Object.freeze({
+        ...chunk,
+        tokens: [...chunk.tokens],
+        vector: new Float32Array(chunk.vector),
+      }))),
+    });
   }
 
   subscribe(listener: (state: ClientContextEngineState) => void): () => void {
@@ -420,6 +457,7 @@ export class ClientContextEngine {
     validationMs += elapsed(this.clock(), firstValidation);
 
     const index = new FlatClientIndex();
+    const scheduling = resolveScheduling(this.scheduling?.());
     const indexer = new IncrementalWorkspaceIndexer({
       workspace: this.workspace,
       embeddings: this.embeddings,
@@ -427,6 +465,11 @@ export class ClientContextEngine {
       maxFileBytes: this.maxFileBytes,
       maxChunkCharacters: this.maxChunkCharacters,
       overlapCharacters: this.overlapCharacters,
+      scheduling: {
+        embeddingBatchSize: scheduling.embeddingBatchSize,
+        maxIndexingConcurrency: scheduling.maxIndexingConcurrency,
+        cooperativeYieldIntervalMs: scheduling.yieldEveryMs,
+      },
     });
     if (this.active) await indexer.importSnapshot(this.active.snapshot);
     throwIfAborted(run.controller.signal);
@@ -514,6 +557,15 @@ export class ClientContextEngine {
     this.state = Object.freeze(state);
     for (const listener of this.listeners) listener(this.state);
   }
+}
+
+function resolveScheduling(value: ClientContextSchedulingPolicy | undefined): ClientContextSchedulingPolicy {
+  if (!value) return Object.freeze({ embeddingBatchSize: 512, maxIndexingConcurrency: 1, yieldEveryMs: 0 });
+  return Object.freeze({
+    embeddingBatchSize: boundedInteger(value.embeddingBatchSize, "Embedding batch size", 1, 512),
+    maxIndexingConcurrency: boundedInteger(value.maxIndexingConcurrency, "Indexing concurrency", 1, 8),
+    yieldEveryMs: boundedInteger(value.yieldEveryMs, "Cooperative yield interval", 0, 1_000),
+  });
 }
 
 export function isContextSupersession(error: unknown): error is ClientContextSupersededError {

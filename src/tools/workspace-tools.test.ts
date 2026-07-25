@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { JsonValue, Tool, ToolContext } from "../core/contracts";
 import { MemoryWorkspace } from "../workspace/memory";
+import { encodeWorkspaceBytes } from "../workspace/content-codec";
 import { WorkspaceConflictError } from "../workspace/contracts";
 import { createWorkspaceToolRegistry } from "./workspace-tools";
 
@@ -32,6 +33,7 @@ describe("workspace tools", () => {
       replace_text: "write",
       search_text: "read",
       stat_path: "read",
+      text_editor: "write",
       write_file: "write",
     });
   });
@@ -81,6 +83,23 @@ describe("workspace tools", () => {
     ]);
   });
 
+  it("keeps opaque workspace bytes out of UTF-8 read, search, and edit tools", async () => {
+    const workspace = new MemoryWorkspace();
+    const binary = encodeWorkspaceBytes(Uint8Array.from([0, 255, 1, 2]));
+    await workspace.write("opaque.json", binary);
+
+    await expect(execute(workspace, "read_file", { path: "opaque.json" })).resolves.toMatchObject({
+      isError: true,
+      metadata: { encoding: "binary", size: 4 },
+    });
+    await expect(execute(workspace, "search_text", { query: "airship-git-binary-v1" })).resolves.toMatchObject({
+      metadata: { matches: 0, skippedFiles: 1 },
+    });
+    await expect(execute(workspace, "replace_text", { path: "opaque.json", oldText: "airship", newText: "broken" })).resolves.toMatchObject({ isError: true });
+    await expect(execute(workspace, "text_editor", { edits: [{ path: "opaque.json", oldText: "airship", newText: "broken" }] })).rejects.toThrow("opaque binary");
+    expect((await workspace.read("opaque.json"))?.content).toBe(binary);
+  });
+
   it("refuses ambiguous replacement by default and supports explicit replace-all with revision safety", async () => {
     const workspace = new MemoryWorkspace();
     const original = await workspace.write("draft.txt", "old / old");
@@ -108,6 +127,35 @@ describe("workspace tools", () => {
       oldText: "new",
       newText: "stale",
       expectedRevision: original.revision,
+    })).rejects.toBeInstanceOf(WorkspaceConflictError);
+  });
+
+  it("applies a preflighted text-editor batch with exact create and replacement semantics", async () => {
+    const workspace = new MemoryWorkspace();
+    const original = await workspace.write("src/one.ts", "const before = 1;\n");
+    const result = await execute(workspace, "text_editor", {
+      edits: [
+        {
+          path: "src/one.ts",
+          oldText: "before = 1",
+          newText: "after = 2",
+          expectedRevision: original.revision,
+        },
+        {
+          path: "src/two.ts",
+          oldText: null,
+          newText: "export const ready = true;\n",
+          expectedRevision: null,
+        },
+      ],
+    });
+
+    expect(result.metadata).toMatchObject({ transaction: "preflight-plus-per-file-cas", atomic: false });
+    expect((await workspace.read("src/one.ts"))?.content).toContain("after = 2");
+    expect((await workspace.read("src/two.ts"))?.content).toContain("ready = true");
+
+    await expect(execute(workspace, "text_editor", {
+      edits: [{ path: "src/one.ts", oldText: null, newText: "overwrite" }],
     })).rejects.toBeInstanceOf(WorkspaceConflictError);
   });
 

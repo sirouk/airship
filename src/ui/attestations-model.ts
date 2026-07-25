@@ -107,6 +107,11 @@ const LOCAL_VERIFIER_IDS = new Set([
   "airship-local-request-binding",
   "airship-attestation-composer",
   "airship-structural-check/v1",
+  "airship-nvidia-spdm-binding/v1",
+]);
+const LOCAL_VERIFIER_PATTERNS = Object.freeze([
+  /^intel-dcap-qvl-wasm@dcap-qvl\/0\.5\.2$/u,
+  /^intel-dcap-webcrypto@1\.0\.0$/u,
 ]);
 
 const dimensionTitles: Readonly<Record<AttestationDimensionKey, string>> = Object.freeze({
@@ -601,10 +606,15 @@ function authorityFor(verifier: string | undefined): { label: string; kind: Atte
   if (!safe || safe === "unavailable") return { label: "No verification authority", kind: "none" };
   const parts = safe.split("+").map((part) => part.trim()).filter(Boolean);
   if (parts.length === 0) return { label: "No verification authority", kind: "none" };
-  const local = parts.filter((part) => LOCAL_VERIFIER_IDS.has(part)).length;
+  const local = parts.filter(isLocalVerifierId).length;
   if (local === parts.length) return { label: `${safe} · local client check`, kind: "local" };
   if (local > 0) return { label: `${safe} · mixed verifier chain`, kind: "mixed" };
   return { label: `${safe} · external verifier`, kind: "external" };
+}
+
+function isLocalVerifierId(verifier: string): boolean {
+  return LOCAL_VERIFIER_IDS.has(verifier)
+    || LOCAL_VERIFIER_PATTERNS.some((pattern) => pattern.test(verifier));
 }
 
 function assertedAuthorityFor(verifier: string | undefined): { label: string; kind: AttestationAuthorityKind } {

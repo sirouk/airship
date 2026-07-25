@@ -220,7 +220,9 @@ function forkTitle(requested: string | undefined, sourceTitle: string): string {
 
 function validateForkManifest(manifest: SessionManifest): void {
   if (
-    manifest.protocolVersion !== 1 ||
+    (manifest.protocolVersion !== 1 && manifest.protocolVersion !== 2) ||
+    (manifest.protocolVersion === 2 &&
+      manifest.turnContext !== "required" && manifest.turnContext !== "disabled") ||
     !manifest.providerId ||
     manifest.providerId.length > 256 ||
     !manifest.model ||
@@ -231,7 +233,7 @@ function validateForkManifest(manifest: SessionManifest): void {
     !manifest.toolManifestDigest ||
     !Array.isArray(manifest.tools)
   ) {
-    throw new TypeError("Fork manifest does not satisfy the bounded session protocol-v1 shape.");
+    throw new TypeError("Fork manifest does not satisfy a supported bounded session protocol shape.");
   }
 }
 

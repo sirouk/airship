@@ -2,6 +2,7 @@ const CHUTES_AUTHORIZE_ENDPOINT = "https://api.chutes.ai/idp/authorize";
 const CHUTES_TOKEN_ENDPOINT = import.meta.env.DEV && import.meta.env.MODE !== "test"
   ? "/__airship/chutes/oauth/token"
   : "https://api.chutes.ai/idp/token";
+const CHUTES_LOCAL_BRIDGE_ENDPOINT = "/__airship/chutes/oauth/token";
 const MAX_TOKEN_RESPONSE_BYTES = 32 * 1024;
 const MAX_OAUTH_TOKEN_BYTES = 4 * 1024;
 const TOKEN_REQUEST_TIMEOUT_MS = 20_000;
@@ -91,6 +92,34 @@ export const CHUTES_ACTIVE_REGISTRATION = resolveChutesOAuthRegistration({
   publicBasePath: import.meta.env.BASE_URL,
 });
 
+/**
+ * Validate both the registered origin and deployment base path. OAuth state is
+ * tab-local, so a sibling application on the same origin must not be allowed to
+ * start an Airship authorization attempt.
+ */
+export function chutesOAuthLocationState(
+  homepageUrl: string,
+  currentLocation: string,
+): Readonly<{ available: boolean; reason?: string }> {
+  try {
+    const homepage = new URL(homepageUrl);
+    const current = new URL(currentLocation);
+    if (homepage.origin !== current.origin) {
+      return { available: false, reason: `Sign-in is registered for ${homepage.origin}. Open Airship there before continuing.` };
+    }
+    const homepagePath = homepage.pathname === "/" ? "/" : homepage.pathname.replace(/\/+$/u, "");
+    const pathMatches = homepagePath === "/"
+      || current.pathname === homepagePath
+      || current.pathname.startsWith(`${homepagePath}/`);
+    if (!pathMatches) {
+      return { available: false, reason: `Sign-in is registered for ${homepage.href}. Open that Airship deployment before continuing.` };
+    }
+    return { available: true };
+  } catch {
+    return { available: false, reason: "The configured OAuth homepage is invalid; sign-in remains disabled." };
+  }
+}
+
 export type ChutesPkceAttempt = {
   state: string;
   verifier: string;
@@ -110,6 +139,29 @@ export type ChutesOAuthTokenSet = Readonly<{
   expiresAt: number;
   scopes: readonly string[];
 }>;
+
+/** Fail before authorization redirect when the development-only confidential bridge is absent. */
+export async function requireLocalChutesOAuthBridge(fetchImpl: typeof globalThis.fetch = globalThis.fetch): Promise<void> {
+  if (!fetchImpl) throw new Error("Fetch is required to inspect the local Chutes OAuth bridge.");
+  let response: Response;
+  try {
+    response = await fetchImpl(CHUTES_LOCAL_BRIDGE_ENDPOINT, {
+      method: "GET",
+      cache: "no-store",
+      credentials: "omit",
+      redirect: "error",
+      referrerPolicy: "no-referrer",
+      signal: AbortSignal.timeout(5_000),
+    });
+  } catch {
+    throw new Error("The local Chutes OAuth bridge is unavailable. Restart the Airship companion with its OAuth registration configured.");
+  }
+  if (response.status === 204) return;
+  if (response.status === 503) {
+    throw new Error("The local Chutes OAuth bridge is not configured. Restart the Airship companion with its process-held client secret.");
+  }
+  throw new Error(`The local Chutes OAuth bridge readiness check failed with HTTP ${response.status}.`);
+}
 
 type ChutesTokenResponse = Readonly<{
   access_token?: unknown;
@@ -332,9 +384,15 @@ async function readBoundedJson(
   maxBytes: number,
   signal: AbortSignal,
 ): Promise<Record<string, unknown>> {
-  const contentLength = Number(response.headers.get("content-length"));
-  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
-    throw new Error("Chutes OAuth token response exceeded the browser safety limit.");
+  const declaredLength = response.headers.get("content-length");
+  if (declaredLength !== null) {
+    if (!/^\d+$/u.test(declaredLength)) {
+      throw new Error("Chutes OAuth token response declared an invalid length.");
+    }
+    const contentLength = Number(declaredLength);
+    if (!Number.isSafeInteger(contentLength) || contentLength > maxBytes) {
+      throw new Error("Chutes OAuth token response exceeded the browser safety limit.");
+    }
   }
   if (!response.body) throw new Error("Chutes OAuth token response was empty.");
   const reader = response.body.getReader();
@@ -458,7 +516,13 @@ function validateOpaqueValue(value: string, label: string, maxBytes: number): st
 }
 
 function validateToken(value: unknown, prefix: "cak_" | "crt_", label: string): string {
-  if (typeof value !== "string" || !value.startsWith(prefix) || value.length > MAX_OAUTH_TOKEN_BYTES || /[\u0000-\u0020\u007f]/u.test(value)) {
+  if (
+    typeof value !== "string" ||
+    !value.startsWith(prefix) ||
+    value.length <= prefix.length ||
+    value.length > MAX_OAUTH_TOKEN_BYTES ||
+    /[\u0000-\u0020\u007f]/u.test(value)
+  ) {
     throw new Error(`Chutes OAuth returned an invalid ${label}.`);
   }
   return value;

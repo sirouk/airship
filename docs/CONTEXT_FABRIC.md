@@ -2,7 +2,14 @@
 
 ## Decision
 
-Airship treats ordinary S3-compatible object storage as the encrypted, authoritative substrate for workspace context. The browser does not download a whole vector database and does not depend on a continuously running retrieval service. It holds a small decrypted routing mirror in memory, selects a sparse set of context experts, range-fetches only their independently authenticated pages, scores them locally, and streams useful results into the active turn.
+Airship treats the selected encrypted `ObjectStore`—Google Drive by default,
+S3-compatible storage as an advanced adapter, or page memory while
+Ephemeral—as the authoritative substrate for workspace context. The browser
+does not download a whole vector database and does not depend on a continuously
+running retrieval service. It holds a small decrypted routing mirror in memory,
+selects a sparse set of context experts, range-fetches only their independently
+authenticated pages when the active adapter has passed its exact-range contract,
+scores them locally, and streams useful results into the active turn.
 
 This is a data mixture-of-experts, not a claim that a neural MoE is running in the browser. The gate routes over directory, Git, profile, task, source, recency, lexical, and semantic signals. Each expert owns a bounded partition of the context index.
 
@@ -17,7 +24,71 @@ This is a data mixture-of-experts, not a claim that a neural MoE is running in t
 7. Fetch full-precision vector tails or source chunks only for finalists, then optionally run a local cross-encoder or late-interaction reranker.
 8. Inject cited chunks into the turn and commit the mirror digest, query digest, exact object ranges, ETags, page digests, selected experts, and result digest to the conversation receipt.
 
-The current executable slice implements steps 1–6 and the retrieval commitment in `src/retrieval/`. It uses full vectors in encrypted JSON pages and a deterministic feature-hash embedding provider for testability. Those are bootstrap codecs, not the production quality target.
+The current executable slice implements steps 1–6 and the retrieval commitment
+in `src/retrieval/`. `FederatedTurnContextProvider` is the provider-neutral seam
+called by every model turn. It selects separately governed active-profile
+memory and workspace results, then seals a version-two context commitment. Each
+hit references a shared generation record containing source revision/digest,
+extractor, chunker, embedding provider/dimensions/posture, index format,
+persistence, session/profile/workspace scope, and generation digest. This avoids
+copying that metadata into every hit while retaining complete lineage.
+
+`VaultTurnContextProvider` implements the same seam for encrypted object shards.
+It routes a compact mirror, range-fetches only selected authenticated blocks,
+and seals the adapter, exact range contract, mirror/result digests, expert IDs,
+object/block IDs, offsets, lengths, ETags, plaintext digests, byte count, and
+completion state into the turn selection. When an encrypted Vault becomes the
+active runtime, the built-in application rebuilds the exact local generation
+and read-only resolves an existing routing mirror. A matching mirror activates
+the ranged provider behind the same federated turn seam; a missing, malformed,
+or stale mirror leaves the local generation active and exposes that fallback
+reason. Runtime adoption never publishes a shard. Publication is a separate
+operation whose API requires the literal `explicit-user-approved` policy, so a
+Vault connection or page reload cannot silently upload an index. The production
+Vault screen is the sole built-in caller: **Publish encrypted index** snapshots
+the current local generation, encrypts its derived expert shards, and advances
+the authenticated routing mirror. **Update encrypted index** performs the same
+explicit operation for a newer generation. The installed ranged provider is
+generation-fenced on every turn; if the workspace has changed since publication,
+the fresh on-device generation serves that turn until the user republishes.
+Neither publication nor provider replacement rewrites the active session
+manifest or its append-only journal.
+
+The bootstrap index still uses full vectors in encrypted JSON pages and a
+deterministic feature-hash embedding provider for testability. Those are
+bootstrap codecs, not the production quality target.
+
+## Turn history compression
+
+The session manifest copies authoritative provider-catalog context-window
+metadata when the session is created; Airship never guesses capacity from a
+model name or re-reads a mutable catalog while replaying an old conversation.
+Historical manifests without that optional pin retain full history. The trigger
+is configurable from 80–85% (82% in the current remote-client policy). It
+preserves recent complete turns and summarizes only boundaries ending at
+`turn.completed`, so tool-call/result pairs are never split.
+
+Remote sessions pin a tool-free inference-transport summarizer. It calls the
+already selected transport directly—not the agent loop—and records its adapter,
+provider, model, posture, request digest, response digest, and optional receipt
+ID in the summary commitment. Its input is exact journal-linked source records
+plus the previous bounded projection. Empty, oversized, malformed, tool-calling,
+or incomplete output fails validation. The pinned failure policy either retains
+full history or uses the deterministic extractive fallback; fallback events are
+explicitly labeled with the failed attempt and are never presented as
+model-intelligent summaries.
+
+Compression is iterative and append-only. Each `context.summary.updated` event
+stores only the newly covered summary delta plus exact journal sequence/digest
+anchors and the prior summary digest. Provider materialization substitutes one
+bounded digest-linked reference projection for the covered prefix; the raw
+journal remains authoritative, replayable, and audit-verifiable. Old source
+messages and prior summary bodies are not copied into each update. A malformed
+range, digest, or chain fails audit and is not trusted.
+
+This follows the useful Hermes pattern of iterative re-compression, protected
+recent context, and boundary-aware compaction. Airship's 80–85% policy is a
+product requirement, not a claim that it is Hermes' current default.
 
 ## Cloud object layout
 
@@ -37,7 +108,18 @@ encrypted root pointer (small, mutable by CAS)
 
 Logical names are HMAC-derived opaque object IDs. A generation is immutable and content-addressed. A small root object advances through conditional writes (`If-Match`/ETag), so a crashed or competing client cannot silently replace a generation. Page descriptors live inside an authenticated encrypted manifest. Page AAD binds workspace epoch, namespace, opaque object, revision, block ID and index, byte offset, lengths, and plaintext digest.
 
-Whole-object AES-GCM is not used for large index objects because it defeats range reads. `src/storage/encrypted-segments.ts` provides the independently decryptable page format; `ObjectStore.getRange` enforces exact ranges and rejects a storage endpoint that ignores non-zero ranges.
+Whole-object AES-GCM is not used for large index objects because it defeats
+range reads. `src/storage/encrypted-segments.ts` provides the independently
+decryptable page format; `ObjectStore.getRange` enforces exact `206` ranges and
+rejects a storage endpoint that ignores or changes a requested range.
+
+Every adapter exposes a versioned capability record distinguishing in-process
+enforcement from live-provider evidence. The conformance probe returns a
+time-stamped result only after exact ranges, atomic create, and CAS have all
+passed. It does not turn one successful probe into a permanent provider claim.
+Google Drive additionally supports active-call resumable uploads for large
+immutable shards; S3 in this repository retries shard objects but does not claim
+multipart/resumable upload. No adapter persists a resume bearer capability.
 
 ## Routing mirror and experts
 
@@ -96,9 +178,13 @@ No dependency is adopted solely because its benchmark is impressive. Airship rec
 
 ## Privacy boundary
 
-The private default uses ordinary S3 objects containing opaque, encrypted pages. Managed vector APIs, including S3 Vectors, are optional non-E2EE adapters because the service must see embeddings and filter metadata to search them.
+The private default uses opaque, encrypted page objects in the selected Vault.
+Managed vector APIs, including S3 Vectors, are optional non-E2EE adapters because
+the service must see embeddings and filter metadata to search them.
 
-Encryption does not hide every access pattern. S3 can observe object identifiers, requested ranges, sizes, timing, and frequency. Mitigations are selectable because each costs bandwidth:
+Encryption does not hide every access pattern. Google Drive or S3 can observe
+object identifiers, requested ranges, sizes, timing, and frequency. Mitigations
+are selectable because each costs bandwidth:
 
 - fixed page classes and padded final pages;
 - fetch coalescing and bounded cover reads;
@@ -116,6 +202,11 @@ Source plaintext, embeddings, lexical terms, paths, profile instructions, and ro
 - Default expert fan-out: four, raised only when recall telemetry justifies it.
 - Page size classes: benchmark 64 KiB–1 MiB; avoid hundreds of tiny WAN requests.
 - All requests cancellable; stale directory/task queries are abandoned rather than completed in the background.
+- Turn selection is capped at eight hits and 32 KiB; the ordinary federated
+  policy uses six hits and 24 KiB.
+- Summary deltas default to 12 KiB (64 KiB hard maximum), and the materialized
+  digest-reference chain is capped at 48 KiB. The tokenizer-agnostic estimate
+  and measured reductions are workload evidence, not a universal ratio claim.
 - Recent writes are searchable before compaction.
 - An unavailable expert degrades recall and produces a visible receipt warning; it does not corrupt the session.
 
@@ -123,15 +214,18 @@ Source plaintext, embeddings, lexical terms, paths, profile instructions, and ro
 
 ## Required storage behavior
 
-The bucket or S3-compatible endpoint must support:
+Any remote Vault selected for streamed context must pass:
 
 - CORS for the Airship origin;
 - `GET`, `HEAD`, and conditional `PUT`;
 - request header `Range`;
 - exposed response headers `ETag`, `Content-Length`, `Content-Range`, and `Last-Modified`;
-- exact `206 Partial Content` behavior for non-zero ranges;
+- exact `206 Partial Content` behavior for every requested range;
 - short-lived least-privilege credentials or presigned capabilities;
 - versioning/lifecycle policies where the provider offers them.
 
-Airship tests range semantics during connection setup and refuses to label a store “streaming ready” when it silently returns whole objects.
-
+S3 deployments additionally require the listed CORS/exposed-header policy.
+Google Drive uses its authorized `files.get?alt=media` byte-range path and its
+own CORS/auth contract. Airship tests range semantics during connection setup
+and refuses to label a store “streaming ready” when it silently returns whole
+objects.

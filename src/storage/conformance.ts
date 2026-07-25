@@ -6,6 +6,13 @@ export type ObjectStoreConformanceResult = {
   prefix: string;
   checks: Array<{ name: string; durationMs: number }>;
   createdKeys: string[];
+  capabilities: Readonly<{
+    adapter: ObjectStore["capabilities"];
+    exactRangeRead: "verified";
+    conditionalCreate: "verified";
+    compareAndSwap: "verified";
+    verifiedAt: string;
+  }>;
 };
 
 /**
@@ -111,7 +118,18 @@ export async function runObjectStoreConformance(args: {
   invariant(equalBytes(finalRoot.bytes, winnerBytes), "root bytes do not match the CAS winner");
   invariant(finalRoot.etag === winnerEtag, "root ETag does not match the CAS winner");
 
-  return { prefix, checks, createdKeys };
+  return {
+    prefix,
+    checks,
+    createdKeys,
+    capabilities: Object.freeze({
+      adapter: args.store.capabilities,
+      exactRangeRead: "verified",
+      conditionalCreate: "verified",
+      compareAndSwap: "verified",
+      verifiedAt: new Date().toISOString(),
+    }),
+  };
 }
 
 async function timed<T>(

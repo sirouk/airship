@@ -75,4 +75,25 @@ describe("browser Git validation", () => {
     expect(descriptor.summary).toContain("Force-push");
     expect(descriptor.arguments).toMatchObject({ force: true, branch: "main" });
   });
+
+  it("binds linked-worktree approval to the normalized workspace destination", () => {
+    const descriptor = describeGitOperation({
+      kind: "worktree-create",
+      request: {
+        repositoryId: "airship",
+        worktreeId: "proof",
+        path: "worktrees/proof",
+        branch: "feature/proof",
+        expectedRepositoryVersion: "repository-v3",
+      },
+    });
+    expect(descriptor).toMatchObject({
+      brokerEffect: "write",
+      risk: "change-local",
+      approvalRequired: true,
+      dataLeavesDevice: false,
+      resource: "repository:airship/worktree:proof",
+    });
+    expect(descriptor.arguments).toMatchObject({ path: "/workspace/worktrees/proof", branch: "feature/proof" });
+  });
 });

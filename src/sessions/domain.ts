@@ -142,6 +142,7 @@ export type SessionPins = Readonly<{
   protocolVersion: number;
   providerId: string;
   model: string;
+  inferenceBinding?: SessionManifest["inferenceBinding"];
   workspaceId: string;
   capabilityTier: SessionManifest["capabilityTier"];
   systemPromptDigest: string;
@@ -159,6 +160,7 @@ export type SessionPins = Readonly<{
 export type ActiveSessionRuntime = Readonly<{
   providerId: string;
   model: string;
+  inferenceBinding?: SessionManifest["inferenceBinding"];
   posture: SecurityPosture;
   toolManifestDigest: string;
   workspaceId?: string;
@@ -540,7 +542,9 @@ export function assessSessionHistory(
 
   const add = (issue: SessionHistoryIssue) => issues.push(Object.freeze(issue));
   if (
-    session.manifest.protocolVersion !== 1 ||
+    (session.manifest.protocolVersion !== 1 && session.manifest.protocolVersion !== 2) ||
+    (session.manifest.protocolVersion === 2 &&
+      session.manifest.turnContext !== "required" && session.manifest.turnContext !== "disabled") ||
     !boundedText(session.manifest.providerId, 256) ||
     !boundedText(session.manifest.model, 512) ||
     !boundedText(session.manifest.workspaceId, 2_048) ||
@@ -551,9 +555,36 @@ export function assessSessionHistory(
   ) {
     add({ code: "MANIFEST_BINDING_INVALID", severity: "error", message: "The session manifest has an invalid bounded runtime binding." });
   }
+  const inferenceBinding = session.manifest.inferenceBinding;
+  if (inferenceBinding && (
+    inferenceBinding.version !== 1 ||
+    !boundedText(inferenceBinding.connectionId, 256) ||
+    !Number.isSafeInteger(inferenceBinding.connectionGeneration) ||
+    inferenceBinding.connectionGeneration <= 0 ||
+    !boundedText(inferenceBinding.providerId, 256) ||
+    !boundedText(inferenceBinding.providerLabel, 256) ||
+    !Number.isSafeInteger(inferenceBinding.providerRevision) ||
+    inferenceBinding.providerRevision <= 0 ||
+    !["oauth-pkce", "api-key", "local-none"].includes(inferenceBinding.authMethod) ||
+    !["e2ee-attestable", "provider-tls", "loopback-local"].includes(inferenceBinding.transportBoundary) ||
+    !boundedText(inferenceBinding.modelId, 512) ||
+    inferenceBinding.modelId !== session.manifest.model ||
+    !Number.isFinite(Date.parse(inferenceBinding.boundAt))
+  )) {
+    add({ code: "INFERENCE_BINDING_INVALID", severity: "error", message: "The session manifest has an invalid credential-free inference connection binding." });
+  }
   const manifestProfile = session.manifest.profile;
+  const workspaceBinding = manifestProfile?.version === 2 ? manifestProfile.workspaceBinding : undefined;
+  const v2SiloValid = manifestProfile?.version === 2 &&
+    workspaceBinding !== undefined &&
+    (workspaceBinding.kind === "active-workspace" ||
+      (workspaceBinding.kind === "workspace-id" && boundedText(workspaceBinding.workspaceId, 512) !== undefined)) &&
+    ["session", "profile", "workspace"].includes(manifestProfile.memoryScope) &&
+    ["ask-first", "auto-approve", "full-access"].includes(manifestProfile.approvalMode) &&
+    POSTURES.has(manifestProfile.minimumPosture);
   if (manifestProfile && (
-    manifestProfile.version !== 1 ||
+    (manifestProfile.version !== 1 && manifestProfile.version !== 2) ||
+    (manifestProfile.version === 2 && !v2SiloValid) ||
     !boundedText(manifestProfile.profileId, 256) ||
     !DIGEST_PATTERN.test(manifestProfile.profileRevision) ||
     !boundedText(manifestProfile.themeId, 256) ||
@@ -778,6 +809,9 @@ export function extractSessionPins(
     protocolVersion: session.manifest.protocolVersion,
     providerId: boundedText(session.manifest.providerId, 256) ?? "[invalid provider]",
     model: boundedText(session.manifest.model, 512) ?? "[invalid model]",
+    ...(session.manifest.inferenceBinding
+      ? { inferenceBinding: { ...session.manifest.inferenceBinding } }
+      : {}),
     workspaceId: boundedText(session.manifest.workspaceId, 2_048) ?? "[invalid workspace]",
     capabilityTier: session.manifest.capabilityTier,
     systemPromptDigest: boundedText(session.manifest.systemPromptDigest, 128) ?? "[invalid digest]",
@@ -814,6 +848,13 @@ export function decideSessionResume(
   if (pins.model !== runtime.model) {
     add({ code: "MODEL_MISMATCH", severity: "warning", message: `Pinned model ${pins.model} differs from active model ${runtime.model}.` });
   }
+  if (!inferenceBindingsEqual(pins.inferenceBinding, runtime.inferenceBinding)) {
+    add({
+      code: "INFERENCE_CONNECTION_MISMATCH",
+      severity: "warning",
+      message: "The active inference account, credential generation, provider revision, trust boundary, or model binding differs from this session pin.",
+    });
+  }
   if (pins.toolManifestDigest !== runtime.toolManifestDigest) {
     add({ code: "TOOL_MANIFEST_MISMATCH", severity: "warning", message: "The active tool manifest differs from the session pin." });
   }
@@ -839,6 +880,22 @@ export function decideSessionResume(
     label: action === "resume" ? "Ready to resume" : action === "fork-required" ? "Fork required" : "Resume blocked",
     reasons,
   });
+}
+
+function inferenceBindingsEqual(
+  left: SessionManifest["inferenceBinding"],
+  right: SessionManifest["inferenceBinding"],
+): boolean {
+  if (!left || !right) return left === right;
+  return left.version === right.version
+    && left.connectionId === right.connectionId
+    && left.connectionGeneration === right.connectionGeneration
+    && left.providerId === right.providerId
+    && left.providerLabel === right.providerLabel
+    && left.providerRevision === right.providerRevision
+    && left.authMethod === right.authMethod
+    && left.transportBoundary === right.transportBoundary
+    && left.modelId === right.modelId;
 }
 
 export function querySessionRecords(

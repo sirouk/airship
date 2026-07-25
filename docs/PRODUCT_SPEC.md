@@ -3,6 +3,11 @@
 Status: executable architecture, milestone 0  
 Date: 2026-07-18
 
+> **Current authority:** [`CANON.md`](CANON.md) is the reconciled project
+> overview and implementation-status ledger. This specification supplies the
+> detailed product contract; where later shipped decisions differ, the canon
+> governs.
+
 ## Product definition
 
 Airship is a portable, private agent runtime whose authoritative execution
@@ -37,7 +42,7 @@ the browser has OS privileges it does not have.
 - Agent reasoning, decryption, indexing, tools, and rendering execute on the
   client. Durable sessions, memory, receipts, workspaces, source repositories,
   and indexes are encrypted on the client and committed directly to the user's
-  S3-compatible provider.
+  configured Google Drive or S3-compatible Vault provider.
 - Strict mode retains no durable application data on the device. Cache Storage
   may retain the static app shell; memory holds the active decrypted working
   set. An encrypted IndexedDB/OPFS offline cache is explicit opt-in.
@@ -54,9 +59,10 @@ the browser has OS privileges it does not have.
 
 - API credentials are memory-only unless a user explicitly enrolls a
   hardware-backed or OS-backed secret store.
-- Long-lived S3 credentials are never stored in the browser. Direct storage
-  uses service cookies or short-lived, prefix-scoped capabilities/STS
-  credentials supplied by the selected identity/storage service.
+- Long-lived storage credentials are never persisted by Airship. Direct
+  storage uses memory-held Google authorization or short-lived,
+  prefix-scoped capabilities/STS credentials supplied by the selected
+  identity/storage service.
 - Session, memory, and workspace payloads are encrypted before cloud storage.
 - Storage providers see opaque object identifiers, ciphertext sizes, timing,
   account metadata, and access patterns, but not logical paths or content.
@@ -100,8 +106,9 @@ the browser has OS privileges it does not have.
   incompatible model/chunker upgrades create a new index generation.
 - Dense vector retrieval and lexical search run locally. WebGPU is the preferred
   embedding accelerator; WASM SIMD is the portable fallback.
-- Hot vectors live in memory. Encrypted index shards/checkpoints sync to S3 and
-  may be rehydrated by another device without reprocessing the workspace.
+- Hot vectors live in memory. Encrypted index shards/checkpoints sync through
+  the configured Vault provider and may be rehydrated by another device
+  without reprocessing the workspace.
 - The interface surfaces supported, pending, current, changed, too-large,
   private/excluded, and failed candidates before automatic processing.
 
@@ -111,12 +118,20 @@ the browser has OS privileges it does not have.
   tools, skills, memory scope, workspace, permissions, and receipt policy.
   Switching profiles starts or forks into the selected pinned manifest; it does
   not mutate an active conversation prefix.
-- `Workspace` and `Sources` are sibling surfaces. Sources manages repositories,
-  branches, multiple worktree/checkouts, diffs, staging, commits, merges, fetch,
-  and push through a client Git engine.
+- Workspace Editor combines Files and Sources. Sources manages registered
+  repositories, the real checkout/index, diffs, staging, commits, branches,
+  and conditional direct fetch/clone/push through a client Git engine. Push is
+  separately identity-approved, accepts only an out-of-band page-memory
+  credential callback, and treats a lost terminal response as an unknown
+  remote outcome. Linked worktrees have conventional per-worktree metadata and
+  one shared object/ref store; unsupported merge behavior remains labeled
+  unavailable.
 - Git object/index operations run on the device. Remote operations require a
   Git host with browser CORS and OAuth/scoped credentials or a direct host API;
   Airship does not provide a proxy.
+- Terminal's Shared Git bridge dispatches to that same client and approval
+  policy; arbitrary WebContainer processes do not receive a divergent `.git`
+  mirror.
 - Desktop and mobile expose the same profiles, repository state, actions, and
   receipts. Mobile uses tabs/drawers and progressive detail, not a read-only
   reduced feature set.
@@ -146,8 +161,8 @@ the browser has OS privileges it does not have.
   reproducible from its lineage and may be discarded or rebuilt at any time.
 - Large workspaces never hydrate one global graph. The context driver fetches a
   bounded relationship neighborhood selected by active profile, workspace
-  directory, source/worktree, task, and retrieval result; encrypted S3 segment
-  ranges remain the durable backbone.
+  directory, source/worktree, task, and retrieval result; encrypted Vault
+  segment ranges remain the durable backbone.
 
 ### Account standing and provider runway
 
@@ -206,12 +221,19 @@ These are engineering targets, not claims about the current milestone.
 | Cloud sync RPO while online | under 5 s |
 | Incremental index of unchanged workspace | no embedding work |
 | Local hybrid search over 100k chunks, p95 desktop | under 100 ms target |
-| Runtime JS + workers, compressed | at most 224 KiB; entry at most 110 KiB |
+| Automatically loaded startup JS + workers, compressed | at most 224 KiB target; entry at most 110 KiB |
 | Crypto WASM, compressed | under 350 KiB goal |
 
 Inference latency is dominated by provider queueing and model generation, so
 Airship warms only short-lived provider leases that are safe to prefetch and
 keeps local orchestration off the critical rendering path.
+
+The startup target is not an installed-bundle ceiling. Git, Terminal,
+execution, semantic, Proof, Memory, and other demand-loaded packs are classified
+and capped separately, with an additional absolute installed-JavaScript
+backstop. [`RELEASE_GATE.md`](RELEASE_GATE.md) is the executable budget
+inventory; changing one of its reviewed ceilings requires a code and document
+change together.
 
 ## Scale model
 

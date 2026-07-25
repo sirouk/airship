@@ -1,25 +1,45 @@
 import type { JsonValue, Tool, ToolContext, ToolExecutionResult } from "../core/contracts";
 import {
   ClientExecutionRuntime,
+  deriveBrowserExecutionTier,
+  emitExecutionOutput,
+  sessionAllowsBrowserExecutionTier,
   type ExecutionAdapter,
+  type ExecutionCapability,
   type ExecutionRequest,
   type ExecutionResult,
   type ExecutionRuntimeId,
 } from "../execution/runtime-registry";
 import type { ToolRegistry } from "./registry";
+import { decodeWorkspaceBytes, encodeWorkspaceBytes, workspaceContentByteLength } from "../workspace/content-codec";
 import { isWorkspaceControlPlanePath, normalizeWorkspacePath, type WorkspacePort } from "../workspace/contracts";
+import { sha256 } from "../core/hash";
+import { createWasiPreview1Adapter } from "../execution/wasi-preview1-pack";
+
+export { runDisposableWasi } from "../execution/wasi-preview1-pack";
 
 const MAX_CODE_CHARS = 64 * 1_024;
 const MAX_WASM_BASE64_CHARS = 5_600_000;
 const DEFAULT_TIMEOUT_MS = 5_000;
 const DEFAULT_INSTALL_TIMEOUT_MS = 30_000;
 const MAX_OUTPUT_CHARS = 256 * 1_024;
+const MAX_EXECUTION_VALUE_BYTES = 512 * 1_024;
 const MAX_PYTHON_WORKSPACE_FILES = 256;
 const MAX_PYTHON_WORKSPACE_FILE_BYTES = 512 * 1_024;
 const MAX_PYTHON_WORKSPACE_BYTES = 4 * 1_024 * 1_024;
+const PYTHON_WORKSPACE_EXCLUDED_SEGMENTS = new Set([".airship", ".git", "node_modules"]);
 const WORKER_POLICY_NAME = "airship-worker";
 const PYODIDE_VERSION = "314.0.2";
 const PYODIDE_ASSET_PATH = "/execution-packs/pyodide/";
+const MAX_WORKSPACE_PROGRAM_CALLS = 16;
+const MAX_WORKSPACE_PROGRAM_RESULT_BYTES = 512 * 1_024;
+const WORKSPACE_PROGRAM_TOOL_EFFECTS = new Map<string, Tool["definition"]["effect"]>([
+  ["list_files", "read"],
+  ["read_file", "read"],
+  ["stat_path", "read"],
+  ["search_text", "read"],
+  ["text_editor", "write"],
+]);
 
 type TrustedWorkerPolicy = Readonly<{
   createScriptURL(value: string): unknown;
@@ -37,7 +57,7 @@ let clientRuntime: ClientExecutionRuntime | undefined;
 let pyodideInstall: Promise<void> | undefined;
 let nodePack: Promise<typeof import("../execution/node-webcontainer-pack")> | undefined;
 
-export function registerExecutionTools(registry: ToolRegistry, workspace?: WorkspacePort): void {
+export function registerExecutionTools(registry: ToolRegistry, workspace?: WorkspacePort, hostRegistry?: ToolRegistry): void {
   const executeJavascript: Tool = {
     definition: {
       name: "execute_javascript",
@@ -57,14 +77,69 @@ export function registerExecutionTools(registry: ToolRegistry, workspace?: Works
       const args = objectArguments(argumentsValue);
       const code = stringArgument(args.code, "code");
       const timeoutMs = typeof args.timeoutMs === "number" ? args.timeoutMs : DEFAULT_TIMEOUT_MS;
-      const result = await runDisposableWorker(code, timeoutMs, context.signal);
+      const result = await runDisposableWorker(code, timeoutMs, context.signal, context.onOutput);
       return {
         content: JSON.stringify(result, null, 2),
-        metadata: { timeoutMs, logs: result.logs.length },
+        metadata: {
+          timeoutMs,
+          logs: result.logs.length,
+          capabilityTier: "web-baseline",
+          authority: "browser",
+          engine: "disposable-javascript-worker",
+        },
       };
     },
   };
   registry.register(executeJavascript);
+  registry.register({
+    definition: {
+      name: "execute_workspace_program",
+      description: "Run bounded JavaScript that may invoke only exact predeclared workspace file calls in its approval-bound manifest. It exposes no ambient DOM, storage, network, shell, or undeclared tool access.",
+      effect: "write",
+      inputSchema: {
+        type: "object",
+        properties: {
+          code: { type: "string", minLength: 1, maxLength: MAX_CODE_CHARS },
+          calls: {
+            type: "array",
+            maxItems: MAX_WORKSPACE_PROGRAM_CALLS,
+            items: {
+              type: "object",
+              properties: {
+                id: { type: "string", minLength: 1, maxLength: 64 },
+                tool: { type: "string", enum: [...WORKSPACE_PROGRAM_TOOL_EFFECTS.keys()] },
+                arguments: { type: "object" },
+              },
+              required: ["id", "tool", "arguments"],
+              additionalProperties: false,
+            },
+          },
+          timeoutMs: { type: "integer", minimum: 50, maximum: 10_000 },
+        },
+        required: ["code", "calls"],
+        additionalProperties: false,
+      },
+    },
+    async execute(argumentsValue, context) {
+      if (!hostRegistry) throw new Error("Workspace-program execution has no bound Airship tool registry.");
+      const args = objectArguments(argumentsValue);
+      const code = stringArgument(args.code, "code");
+      const calls = workspaceProgramCalls(args.calls, hostRegistry);
+      const timeoutMs = typeof args.timeoutMs === "number" ? args.timeoutMs : DEFAULT_TIMEOUT_MS;
+      const result = await runDisposableWorkspaceProgram(code, calls, hostRegistry, timeoutMs, context);
+      return {
+        content: JSON.stringify(result, null, 2),
+        metadata: {
+          capabilityTier: "web-baseline",
+          authority: "browser",
+          engine: "manifest-bound-workspace-worker",
+          declaredCalls: calls.length,
+          completedCalls: result.calls.filter(({ status }) => status === "completed").length,
+        },
+        isError: result.calls.some(({ status, isError }) => status === "failed" || isError),
+      };
+    },
+  });
   registry.register({
     definition: {
       name: "install_execution_runtime",
@@ -84,14 +159,22 @@ export function registerExecutionTools(registry: ToolRegistry, workspace?: Works
       const args = objectArguments(argumentsValue);
       const runtime = stringArgument(args.runtime, "runtime");
       const timeoutMs = typeof args.timeoutMs === "number" ? args.timeoutMs : DEFAULT_INSTALL_TIMEOUT_MS;
-      if (runtime === "node-webcontainer") return activateNodeRuntime(context.signal, timeoutMs);
+      if (runtime === "node-webcontainer") {
+        const activated = await activateNodeRuntime(context.signal, timeoutMs);
+        return activationResultForSession(activated, context);
+      }
       if (runtime !== "python-pyodide") throw new Error(`${runtime} cannot be installed by this Airship release.`);
       await installPyodideExecutionRuntime(timeoutMs, context.signal);
       const capability = getClientExecutionRuntime().capabilities().find(({ id }) => id === runtime);
-      return {
+      return activationResultForSession({
         content: JSON.stringify(capability, null, 2),
-        metadata: { runtime, state: capability?.state ?? "unavailable", version: PYODIDE_VERSION },
-      };
+        metadata: {
+          runtime,
+          state: capability?.state ?? "unavailable",
+          version: PYODIDE_VERSION,
+          capabilityTier: deriveBrowserExecutionTier(getClientExecutionRuntime().capabilities()),
+        },
+      }, context);
     },
   });
   registry.register({
@@ -102,13 +185,20 @@ export function registerExecutionTools(registry: ToolRegistry, workspace?: Works
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
     },
     async execute() {
-      return { content: JSON.stringify(getClientExecutionRuntime().capabilities(), null, 2) };
+      const capabilities = getClientExecutionRuntime().capabilities();
+      return {
+        content: JSON.stringify(capabilities, null, 2),
+        metadata: {
+          capabilityTier: deriveBrowserExecutionTier(capabilities),
+          ready: capabilities.filter(({ state }) => state === "ready").map(({ id }) => id),
+        },
+      };
     },
   });
   registry.register({
     definition: {
       name: "execute_code",
-      description: "Execute code in a ready client-side runtime. JavaScript Worker and compact WASI Preview 1 are built in; install Python explicitly first. Node/npm projects use the separately activated execute_node_project path.",
+      description: "Execute one strictly typed browser job in a ready runtime: JavaScript source; a precompiled WASI Preview 1 command (including Rust compiled elsewhere for wasm32-wasip1) with optional bounded workspace snapshot/writeback; or explicitly installed Pyodide Python. This is not Bash, rustc, Cargo, or host execution. Inspect runtimes first; Node projects use execute_node_project.",
       effect: "execute",
       inputSchema: {
         type: "object",
@@ -130,14 +220,12 @@ export function registerExecutionTools(registry: ToolRegistry, workspace?: Works
     async execute(argumentsValue, context) {
       const args = objectArguments(argumentsValue);
       const runtime = stringArgument(args.runtime, "runtime") as ExecutionRuntimeId;
+      validateExecuteCodeArguments(runtime, args);
       const workspaceRoot = typeof args.workspaceRoot === "string" ? normalizeWorkspacePath(args.workspaceRoot) : undefined;
       const sourcePath = typeof args.sourcePath === "string" ? normalizeWorkspacePath(args.sourcePath) : undefined;
-      if ((workspaceRoot || sourcePath || args.writeBack === true) && runtime !== "python-pyodide") {
-        throw new Error("Workspace-mounted execute_code is currently available only for python-pyodide.");
-      }
-      if ((sourcePath || args.writeBack === true) && !workspaceRoot) {
-        throw new Error("Python sourcePath and writeBack require a workspaceRoot.");
-      }
+      if (sourcePath && runtime !== "python-pyodide") throw new Error("sourcePath is available only for Pyodide Python source.");
+      if ((sourcePath || args.writeBack === true) && !workspaceRoot) throw new Error("sourcePath and writeBack require a workspaceRoot.");
+      if (workspaceRoot && !workspace) throw new Error("Workspace-mounted execute_code has no bound Airship workspace.");
       if (sourcePath && args.code !== undefined) throw new Error("Use either Python code or sourcePath, not both.");
       const request: ExecutionRequest = {
         runtime,
@@ -150,7 +238,9 @@ export function registerExecutionTools(registry: ToolRegistry, workspace?: Works
         writeBack: args.writeBack === true,
         timeoutMs: typeof args.timeoutMs === "number" ? args.timeoutMs : DEFAULT_TIMEOUT_MS,
         signal: context.signal,
+        onOutput: context.onOutput,
       };
+      assertPinnedExecutionTier(context, getClientExecutionRuntime().capabilities().find(({ id }) => id === runtime));
       const result = await getClientExecutionRuntime().execute(request);
       const capability = getClientExecutionRuntime().capabilities().find(({ id }) => id === result.runtime);
       return {
@@ -160,6 +250,12 @@ export function registerExecutionTools(registry: ToolRegistry, workspace?: Works
           exitCode: result.exitCode,
           isolation: capability?.isolation ?? "unknown",
           persistence: capability?.persistence ?? "unknown",
+          commandInterface: capability?.commandInterface ?? "unavailable",
+          shell: capability?.shell ?? "unavailable",
+          workspaceAccess: capability?.workspaceAccess ?? "unavailable",
+          capabilityTier: result.provenance.capabilityTier,
+          authority: result.provenance.authority,
+          engine: result.provenance.engine,
         },
         isError: result.exitCode !== 0,
       };
@@ -180,7 +276,8 @@ export function registerExecutionTools(registry: ToolRegistry, workspace?: Works
     async execute(argumentsValue) {
       const args = objectArguments(argumentsValue);
       const runtimeId = stringArgument(args.runtime, "runtime") as ExecutionRuntimeId;
-      if (nodePack) await (await nodePack).deactivateNodeWebContainer();
+      if (runtimeId !== "node-webcontainer") throw new Error(`${runtimeId} cannot be deactivated by this Airship release.`);
+      if (runtimeId === "node-webcontainer" && nodePack) await (await nodePack).deactivateNodeWebContainer();
       getClientExecutionRuntime().unregister(runtimeId);
       getClientExecutionRuntime().clearOptionalState(runtimeId);
       return {
@@ -195,7 +292,7 @@ export function registerExecutionTools(registry: ToolRegistry, workspace?: Works
   registry.register({
     definition: {
       name: "execute_node_project",
-      description: "Run a direct Node/npm command in the in-browser WebContainer on a bounded workspace snapshot; writeBack adopts revision-checked text changes.",
+      description: "Spawn one direct Node/npm-family process in an activated in-browser WebContainer over a bounded workspace snapshot. No shell string or host Bash is involved; writeBack adopts revision-checked text changes.",
       effect: "network",
       inputSchema: {
         type: "object",
@@ -224,11 +321,23 @@ export function registerExecutionTools(registry: ToolRegistry, workspace?: Works
         timeoutMs: typeof args.timeoutMs === "number" ? args.timeoutMs : 30_000,
         writeBack: args.writeBack === true,
         signal: context.signal,
+        onOutput: context.onOutput,
       };
+      assertPinnedExecutionTier(context, getClientExecutionRuntime().capabilities().find(({ id }) => id === "node-webcontainer"));
       const result = await getClientExecutionRuntime().execute(request);
       return {
         content: JSON.stringify(result, null, 2),
-        metadata: { runtime: result.runtime, exitCode: result.exitCode, provider: "StackBlitz WebContainers" },
+        metadata: {
+          runtime: result.runtime,
+          exitCode: result.exitCode,
+          provider: "StackBlitz WebContainers",
+          capabilityTier: result.provenance.capabilityTier,
+          authority: result.provenance.authority,
+          engine: result.provenance.engine,
+          commandInterface: "direct-process",
+          shell: "none",
+          workspaceAccess: "bounded-snapshot-writeback",
+        },
         isError: result.exitCode !== 0,
       };
     },
@@ -236,17 +345,172 @@ export function registerExecutionTools(registry: ToolRegistry, workspace?: Works
 }
 
 /** Entry point used by the lightweight schemas in the baseline tool bundle. */
-export function executeExecutionTool(
+export async function executeExecutionTool(
   name: string,
   argumentsValue: JsonValue,
   context: ToolContext,
   workspace?: WorkspacePort,
+  hostRegistry?: ToolRegistry,
 ): Promise<ToolExecutionResult> {
-  const tools = new Map<string, Tool>();
-  registerExecutionTools({ register(tool) { tools.set(tool.definition.name, tool); } } as ToolRegistry, workspace);
-  const tool = tools.get(name);
-  if (!tool) throw new Error(`Unknown execution tool: ${name}`);
-  return tool.execute(argumentsValue, context);
+  const args = objectArguments(argumentsValue);
+  switch (name) {
+    case "execute_javascript": {
+      const code = stringArgument(args.code, "code");
+      const timeoutMs = typeof args.timeoutMs === "number" ? args.timeoutMs : DEFAULT_TIMEOUT_MS;
+      const result = await runDisposableWorker(code, timeoutMs, context.signal, context.onOutput);
+      return {
+        content: JSON.stringify(result, null, 2),
+        metadata: {
+          timeoutMs,
+          logs: result.logs.length,
+          capabilityTier: "web-baseline",
+          authority: "browser",
+          engine: "disposable-javascript-worker",
+        },
+      };
+    }
+    case "execute_workspace_program": {
+      if (!hostRegistry) throw new Error("Workspace-program execution has no bound Airship tool registry.");
+      const code = stringArgument(args.code, "code");
+      const calls = workspaceProgramCalls(args.calls, hostRegistry);
+      const timeoutMs = typeof args.timeoutMs === "number" ? args.timeoutMs : DEFAULT_TIMEOUT_MS;
+      const result = await runDisposableWorkspaceProgram(code, calls, hostRegistry, timeoutMs, context);
+      return {
+        content: JSON.stringify(result, null, 2),
+        metadata: {
+          capabilityTier: "web-baseline",
+          authority: "browser",
+          engine: "manifest-bound-workspace-worker",
+          declaredCalls: calls.length,
+          completedCalls: result.calls.filter(({ status }) => status === "completed").length,
+        },
+        isError: result.calls.some(({ status, isError }) => status === "failed" || isError),
+      };
+    }
+    case "install_execution_runtime": {
+      const runtime = stringArgument(args.runtime, "runtime");
+      const timeoutMs = typeof args.timeoutMs === "number" ? args.timeoutMs : DEFAULT_INSTALL_TIMEOUT_MS;
+      if (runtime === "node-webcontainer") {
+        return activationResultForSession(await activateNodeRuntime(context.signal, timeoutMs), context);
+      }
+      if (runtime === "wasix") throw new Error(wasixUnavailableDetail());
+      if (runtime !== "python-pyodide") throw new Error(`${runtime} cannot be installed by this Airship release.`);
+      await installPyodideExecutionRuntime(timeoutMs, context.signal);
+      const capability = getClientExecutionRuntime().capabilities().find(({ id }) => id === runtime);
+      return activationResultForSession({
+        content: JSON.stringify(capability, null, 2),
+        metadata: {
+          runtime,
+          state: capability?.state ?? "unavailable",
+          version: PYODIDE_VERSION,
+          capabilityTier: deriveBrowserExecutionTier(getClientExecutionRuntime().capabilities()),
+        },
+      }, context);
+    }
+    case "inspect_execution_runtimes": {
+      const capabilities = getClientExecutionRuntime().capabilities();
+      return {
+        content: JSON.stringify(capabilities, null, 2),
+        metadata: {
+          capabilityTier: deriveBrowserExecutionTier(capabilities),
+          ready: capabilities.filter(({ state }) => state === "ready").map(({ id }) => id),
+        },
+      };
+    }
+    case "execute_code": {
+      const runtime = stringArgument(args.runtime, "runtime") as ExecutionRuntimeId;
+      validateExecuteCodeArguments(runtime, args);
+      const workspaceRoot = typeof args.workspaceRoot === "string" ? normalizeWorkspacePath(args.workspaceRoot) : undefined;
+      const sourcePath = typeof args.sourcePath === "string" ? normalizeWorkspacePath(args.sourcePath) : undefined;
+      if (sourcePath && runtime !== "python-pyodide") throw new Error("sourcePath is available only for Pyodide Python source.");
+      if ((sourcePath || args.writeBack === true) && !workspaceRoot) throw new Error("sourcePath and writeBack require a workspaceRoot.");
+      if (workspaceRoot && !workspace) throw new Error("Workspace-mounted execute_code has no bound Airship workspace.");
+      if (sourcePath && args.code !== undefined) throw new Error("Use either Python code or sourcePath, not both.");
+      const request: ExecutionRequest = {
+        runtime,
+        ...(typeof args.code === "string" ? { code: args.code } : {}),
+        ...(typeof args.wasmBase64 === "string" ? { wasmBase64: args.wasmBase64 } : {}),
+        args: stringArray(args.args, "args"),
+        env: stringRecord(args.env, "env"),
+        ...(workspaceRoot ? { workspaceRoot, workspace } : {}),
+        ...(sourcePath ? { sourcePath } : {}),
+        writeBack: args.writeBack === true,
+        timeoutMs: typeof args.timeoutMs === "number" ? args.timeoutMs : DEFAULT_TIMEOUT_MS,
+        signal: context.signal,
+        onOutput: context.onOutput,
+      };
+      assertPinnedExecutionTier(context, getClientExecutionRuntime().capabilities().find(({ id }) => id === runtime));
+      const result = await getClientExecutionRuntime().execute(request);
+      const capability = getClientExecutionRuntime().capabilities().find(({ id }) => id === result.runtime);
+      return {
+        content: JSON.stringify(result, null, 2),
+        metadata: {
+          runtime: result.runtime,
+          exitCode: result.exitCode,
+          isolation: capability?.isolation ?? "unknown",
+          persistence: capability?.persistence ?? "unknown",
+          commandInterface: capability?.commandInterface ?? "unavailable",
+          shell: capability?.shell ?? "unavailable",
+          workspaceAccess: capability?.workspaceAccess ?? "unavailable",
+          capabilityTier: result.provenance.capabilityTier,
+          authority: result.provenance.authority,
+          engine: result.provenance.engine,
+        },
+        isError: result.exitCode !== 0,
+      };
+    }
+    case "deactivate_execution_runtime": {
+      const runtimeId = stringArgument(args.runtime, "runtime") as ExecutionRuntimeId;
+      if (runtimeId !== "node-webcontainer") throw new Error(`${runtimeId} cannot be deactivated by this Airship release.`);
+      if (runtimeId === "node-webcontainer" && nodePack) await (await nodePack).deactivateNodeWebContainer();
+      getClientExecutionRuntime().unregister(runtimeId);
+      getClientExecutionRuntime().clearOptionalState(runtimeId);
+      return {
+        content: JSON.stringify(
+          getClientExecutionRuntime().capabilities().find(({ id }) => id === runtimeId),
+          null,
+          2,
+        ),
+      };
+    }
+    case "execute_wasix_shell": {
+      throw new Error(wasixUnavailableDetail());
+    }
+    case "execute_node_project": {
+      if (!workspace) throw new Error("Node project execution has no workspace binding.");
+      const request: ExecutionRequest = {
+        runtime: "node-webcontainer",
+        workspace,
+        workspaceRoot: normalizeWorkspacePath(stringArgument(args.workspaceRoot, "workspaceRoot")),
+        command: stringArgument(args.command, "command"),
+        args: stringArray(args.args, "args"),
+        env: stringRecord(args.env, "env"),
+        timeoutMs: typeof args.timeoutMs === "number" ? args.timeoutMs : 30_000,
+        writeBack: args.writeBack === true,
+        signal: context.signal,
+        onOutput: context.onOutput,
+      };
+      assertPinnedExecutionTier(context, getClientExecutionRuntime().capabilities().find(({ id }) => id === "node-webcontainer"));
+      const result = await getClientExecutionRuntime().execute(request);
+      return {
+        content: JSON.stringify(result, null, 2),
+        metadata: {
+          runtime: result.runtime,
+          exitCode: result.exitCode,
+          provider: "StackBlitz WebContainers",
+          capabilityTier: result.provenance.capabilityTier,
+          authority: result.provenance.authority,
+          engine: result.provenance.engine,
+          commandInterface: "direct-process",
+          shell: "none",
+          workspaceAccess: "bounded-snapshot-writeback",
+        },
+        isError: result.exitCode !== 0,
+      };
+    }
+    default:
+      throw new Error(`Unknown execution tool: ${name}`);
+  }
 }
 
 /** Optional same-origin packs call this only after their pinned assets load. */
@@ -280,6 +544,10 @@ async function activateNodeRuntime(signal: AbortSignal, timeoutMs: number): Prom
   }
 }
 
+function wasixUnavailableDetail(): string {
+  return "WASIX Bash is not promoted in this release: the pinned browser pack could not preserve nonzero Bash status or bidirectional mounted-workspace mutations. Use Node WebContainer for Node/npm projects or Pyodide for Python; full browser Bash and a Rust compiler remain unavailable.";
+}
+
 export function getClientExecutionRuntime(): ClientExecutionRuntime {
   if (clientRuntime) return clientRuntime;
   clientRuntime = new ClientExecutionRuntime();
@@ -290,41 +558,42 @@ export function getClientExecutionRuntime(): ClientExecutionRuntime {
         label: "JavaScript · disposable Worker",
         languages: ["javascript"],
         state: "ready",
+        tier: "web-baseline",
         isolation: "disposable-worker",
         persistence: "ephemeral",
+        commandInterface: "javascript-function",
+        shell: "none",
+        workspaceAccess: "none",
+        output: "bounded-stream",
+        cancellation: "terminate-worker",
         detail: "Bounded evaluation with no DOM, storage, workspace, or network binding.",
       },
       async execute(request) {
         if (!request.code) throw new Error("JavaScript execution requires code.");
-        const result = await runDisposableWorker(request.code, request.timeoutMs, request.signal);
+        const result = await runDisposableWorker(request.code, request.timeoutMs, request.signal, request.onOutput);
         return {
           runtime: "javascript-worker",
           exitCode: 0,
           stdout: result.logs.join("\n"),
-          stderr: "",
+          stderr: result.errors.join("\n"),
           value: result.value,
+          provenance: {
+            capabilityTier: "web-baseline",
+            authority: "browser",
+            engine: "disposable-javascript-worker",
+            artifactKind: "source",
+          },
         };
       },
     });
-    if (typeof WebAssembly !== "undefined") {
-      clientRuntime.register({
-        capability: {
-          id: "wasi-preview1",
-          label: "WebAssembly · compact WASI Preview 1",
-          languages: ["compiled-wasm"],
-          state: "ready",
-          isolation: "disposable-worker",
-          persistence: "ephemeral",
-          detail: "Runs a base64 command module with args, env, clock, random, stdout, and stderr; no sockets or mounted filesystem.",
-        },
-        async execute(request) {
-          if (!request.wasmBase64) throw new Error("WASI execution requires wasmBase64.");
-          return runDisposableWasi(request.wasmBase64, request.args ?? [], request.env ?? {}, request.timeoutMs, request.signal);
-        },
-      });
-    }
+    if (typeof WebAssembly !== "undefined") clientRuntime.register(createWasiPreview1Adapter());
   }
   return clientRuntime;
+}
+
+/** Exact page-lifetime tier used when a new session pins its runtime manifest. */
+export function getCurrentBrowserExecutionTier() {
+  return deriveBrowserExecutionTier(getClientExecutionRuntime().capabilities());
 }
 
 /**
@@ -363,8 +632,14 @@ export async function installPyodideExecutionRuntime(
         label: `Python · Pyodide ${PYODIDE_VERSION}`,
         languages: ["python"],
         state: "ready",
+        tier: "web-enhanced",
         isolation: "disposable-worker",
         persistence: "ephemeral",
+        commandInterface: "python-job",
+        shell: "none",
+        workspaceAccess: "bounded-snapshot-writeback",
+        output: "bounded-stream",
+        cancellation: "terminate-worker",
         detail: "Fresh in-browser CPython interpreter per job with a bounded virtual workspace snapshot and optional revision-checked text writeback; standard library only, bounded output, hard termination, and no DOM, storage, sockets, package installation, or runtime network binding.",
       },
       async execute(request) {
@@ -386,9 +661,160 @@ export async function installPyodideExecutionRuntime(
   }
 }
 
-export async function runDisposableWorker(code: string, timeoutMs: number, signal: AbortSignal): Promise<{
+type WorkspaceProgramCall = Readonly<{
+  id: string;
+  tool: string;
+  arguments: JsonValue;
+}>;
+
+type WorkspaceProgramCallTrace = Readonly<{
+  id: string;
+  tool: string;
+  status: "unused" | "completed" | "failed";
+  isError?: boolean;
+  metadata?: JsonValue;
+}>;
+
+function workspaceProgramCalls(value: JsonValue | undefined, registry: ToolRegistry): readonly WorkspaceProgramCall[] {
+  if (!Array.isArray(value) || value.length > MAX_WORKSPACE_PROGRAM_CALLS) {
+    throw new Error(`calls must be an array of at most ${MAX_WORKSPACE_PROGRAM_CALLS} predeclared operations.`);
+  }
+  const calls: WorkspaceProgramCall[] = [];
+  const ids = new Set<string>();
+  for (const [index, raw] of value.entries()) {
+    const record = objectArguments(raw);
+    const id = stringArgument(record.id, `calls[${index}].id`);
+    const toolName = stringArgument(record.tool, `calls[${index}].tool`);
+    if (!/^[a-z][a-z0-9_-]{0,63}$/u.test(id) || ids.has(id)) throw new Error(`calls[${index}].id must be unique and identifier-safe.`);
+    const expectedEffect = WORKSPACE_PROGRAM_TOOL_EFFECTS.get(toolName);
+    if (!expectedEffect) throw new Error(`Workspace programs cannot invoke ${toolName}.`);
+    const tool = registry.get(toolName);
+    if (!tool || tool.definition.effect !== expectedEffect) {
+      throw new Error(`Workspace program tool is not installed with its exact ${expectedEffect} capability: ${toolName}`);
+    }
+    const callArguments = objectArguments(record.arguments) as JsonValue;
+    registry.validateArguments(toolName, callArguments);
+    ids.add(id);
+    calls.push(Object.freeze({ id, tool: toolName, arguments: structuredClone(callArguments) }));
+  }
+  return Object.freeze(calls);
+}
+
+async function runDisposableWorkspaceProgram(
+  code: string,
+  calls: readonly WorkspaceProgramCall[],
+  registry: ToolRegistry,
+  timeoutMs: number,
+  context: ToolContext,
+): Promise<Readonly<{ value: JsonValue; stdout: string; stderr: string; calls: readonly WorkspaceProgramCallTrace[] }>> {
+  if (!supportsDisposableWorkers()) throw new Error("Disposable workspace-program workers are unavailable in this environment.");
+  if (!code.trim() || code.length > MAX_CODE_CHARS) throw new Error("Workspace-program source must be between 1 and 64 KiB.");
+  const url = URL.createObjectURL(new Blob([workspaceProgramWorkerSource(code)], { type: "text/javascript" }));
+  let worker: Worker;
+  try {
+    worker = new Worker(trustedWorkerUrl(url) as string, { name: "airship-workspace-program" });
+  } catch (error) {
+    URL.revokeObjectURL(url);
+    throw error;
+  }
+  const declared = new Map(calls.map((call) => [call.id, call]));
+  const used = new Set<string>();
+  const traces = new Map<string, WorkspaceProgramCallTrace>();
+  let returnedBytes = 0;
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (error?: unknown, value?: Readonly<{ value: JsonValue; stdout: string; stderr: string }>) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      context.signal.removeEventListener("abort", onAbort);
+      worker.terminate();
+      URL.revokeObjectURL(url);
+      if (error) reject(error);
+      else resolve(Object.freeze({
+        ...value!,
+        calls: Object.freeze(calls.map((call) => traces.get(call.id) ?? Object.freeze({ id: call.id, tool: call.tool, status: "unused" as const }))),
+      }));
+    };
+    const timer = setTimeout(() => finish(new Error(`Workspace program exceeded ${timeoutMs} ms.`)), timeoutMs);
+    const onAbort = () => finish(context.signal.reason ?? new DOMException("Aborted", "AbortError"));
+    context.signal.addEventListener("abort", onAbort, { once: true });
+    worker.onerror = (event) => finish(new Error(event.message || "Workspace program worker failed."));
+    worker.onmessage = (event: MessageEvent<unknown>) => {
+      if (!event.data || typeof event.data !== "object" || Array.isArray(event.data)) {
+        finish(new Error("Workspace program worker returned malformed output."));
+        return;
+      }
+      const message = event.data as Record<string, unknown>;
+      if (message.type === "output") {
+        const stream = message.stream === "stderr" ? "stderr" : "stdout";
+        if (typeof message.text === "string") emitExecutionOutput(context.onOutput, { stream, text: message.text.slice(0, 4_097) });
+        return;
+      }
+      if (message.type === "tool-call") {
+        const requestId = typeof message.requestId === "number" && Number.isSafeInteger(message.requestId) ? message.requestId : undefined;
+        const id = typeof message.id === "string" ? message.id : "";
+        const call = declared.get(id);
+        if (requestId === undefined || !call || used.has(id)) {
+          worker.postMessage({ type: "tool-result", requestId, ok: false, error: "Tool call was not uniquely predeclared in the approved manifest." });
+          return;
+        }
+        used.add(id);
+        const tool = registry.get(call.tool)!;
+        void (async () => tool.execute(structuredClone(call.arguments), {
+          ...context,
+          operationId: `declared:${await sha256(`${context.operationId}:${id}`)}`,
+        }))().then((result) => {
+          if (settled) return;
+          const bytes = new TextEncoder().encode(result.content).byteLength;
+          returnedBytes += bytes;
+          if (returnedBytes > MAX_WORKSPACE_PROGRAM_RESULT_BYTES) {
+            throw new Error("Declared workspace-tool results exceeded the 512 KiB program budget.");
+          }
+          traces.set(id, Object.freeze({
+            id,
+            tool: call.tool,
+            status: "completed",
+            isError: result.isError ?? false,
+            ...(result.metadata !== undefined ? { metadata: structuredClone(result.metadata) } : {}),
+          }));
+          worker.postMessage({
+            type: "tool-result",
+            requestId,
+            ok: true,
+            result: { content: result.content, metadata: result.metadata ?? null, isError: result.isError ?? false },
+          });
+        }).catch((error) => {
+          if (settled) return;
+          const summary = error instanceof Error ? error.message : String(error);
+          traces.set(id, Object.freeze({ id, tool: call.tool, status: "failed" }));
+          worker.postMessage({ type: "tool-result", requestId, ok: false, error: summary.slice(0, 2_048) });
+        });
+        return;
+      }
+      if (message.ok !== true) {
+        finish(new Error(typeof message.error === "string" ? message.error : "Workspace program execution failed."));
+        return;
+      }
+      finish(undefined, {
+        value: parseWorkerJsonValue(message.valueJson),
+        stdout: typeof message.stdout === "string" ? message.stdout.slice(0, MAX_OUTPUT_CHARS) : "",
+        stderr: typeof message.stderr === "string" ? message.stderr.slice(0, MAX_OUTPUT_CHARS) : "",
+      });
+    };
+    if (context.signal.aborted) onAbort();
+  });
+}
+
+export async function runDisposableWorker(
+  code: string,
+  timeoutMs: number,
+  signal: AbortSignal,
+  onOutput?: ExecutionRequest["onOutput"],
+): Promise<{
   value: JsonValue;
   logs: string[];
+  errors: string[];
 }> {
   if (typeof Worker === "undefined" || typeof URL.createObjectURL !== "function") {
     throw new Error("Disposable browser workers are unavailable in this environment.");
@@ -404,7 +830,7 @@ export async function runDisposableWorker(code: string, timeoutMs: number, signa
   }
   return new Promise((resolve, reject) => {
     let settled = false;
-    const finish = (error?: unknown, value?: { value: JsonValue; logs: string[] }) => {
+    const finish = (error?: unknown, value?: { value: JsonValue; logs: string[]; errors: string[] }) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -425,75 +851,22 @@ export async function runDisposableWorker(code: string, timeoutMs: number, signa
         return;
       }
       const record = message as Record<string, unknown>;
+      if (record.type === "output") {
+        const stream = record.stream === "stderr" ? "stderr" : "stdout";
+        if (typeof record.text === "string") emitExecutionOutput(onOutput, { stream, text: record.text.slice(0, 4_097) });
+        return;
+      }
       if (record.ok !== true) {
         finish(new Error(typeof record.error === "string" ? record.error : "Disposable JavaScript execution failed."));
         return;
       }
       finish(undefined, {
-        value: jsonSafe(record.value),
+        value: parseWorkerJsonValue(record.valueJson),
         logs: Array.isArray(record.logs) ? record.logs.filter((item): item is string => typeof item === "string").slice(0, 200) : [],
+        errors: Array.isArray(record.errors) ? record.errors.filter((item): item is string => typeof item === "string").slice(0, 200) : [],
       });
     };
     if (signal.aborted) onAbort();
-  });
-}
-
-export async function runDisposableWasi(
-  wasmBase64: string,
-  args: readonly string[],
-  env: Readonly<Record<string, string>>,
-  timeoutMs: number,
-  signal: AbortSignal,
-): Promise<ExecutionResult> {
-  if (!supportsDisposableWorkers() || typeof WebAssembly === "undefined") {
-    throw new Error("Disposable WASI workers are unavailable in this environment.");
-  }
-  if (!/^[A-Za-z0-9+/]*={0,2}$/u.test(wasmBase64) || wasmBase64.length > MAX_WASM_BASE64_CHARS) {
-    throw new Error("wasmBase64 is malformed or exceeds the 4 MiB artifact limit.");
-  }
-  const url = URL.createObjectURL(new Blob([wasiWorkerSource()], { type: "text/javascript" }));
-  let worker: Worker;
-  try {
-    worker = new Worker(trustedWorkerUrl(url) as string, { name: "airship-wasi-preview1" });
-  } catch (error) {
-    URL.revokeObjectURL(url);
-    throw error;
-  }
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const finish = (error?: unknown, value?: ExecutionResult) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      signal.removeEventListener("abort", onAbort);
-      worker.terminate();
-      URL.revokeObjectURL(url);
-      if (error) reject(error);
-      else resolve(value!);
-    };
-    const timer = setTimeout(() => finish(new Error(`WASI execution exceeded ${timeoutMs} ms.`)), timeoutMs);
-    const onAbort = () => finish(signal.reason ?? new DOMException("Aborted", "AbortError"));
-    signal.addEventListener("abort", onAbort, { once: true });
-    worker.onerror = (event) => finish(new Error(event.message || "Disposable WASI worker failed."));
-    worker.onmessage = (event: MessageEvent<unknown>) => {
-      if (!event.data || typeof event.data !== "object" || Array.isArray(event.data)) {
-        finish(new Error("Disposable WASI worker returned malformed output."));
-        return;
-      }
-      const message = event.data as Record<string, unknown>;
-      if (message.ok !== true) {
-        finish(new Error(typeof message.error === "string" ? message.error : "Disposable WASI execution failed."));
-        return;
-      }
-      finish(undefined, {
-        runtime: "wasi-preview1",
-        exitCode: typeof message.exitCode === "number" ? message.exitCode : 1,
-        stdout: typeof message.stdout === "string" ? message.stdout : "",
-        stderr: typeof message.stderr === "string" ? message.stderr : "",
-      });
-    };
-    if (signal.aborted) onAbort();
-    else worker.postMessage({ wasmBase64, args: [...args], env: { ...env } });
   });
 }
 
@@ -516,6 +889,7 @@ async function executePythonRequest(request: ExecutionRequest): Promise<Executio
     request.signal,
     snapshot,
     request.sourcePath,
+    request.onOutput,
   );
   if (!snapshot || !request.workspace) return result;
 
@@ -566,6 +940,8 @@ async function executePythonRequest(request: ExecutionRequest): Promise<Executio
       changedPaths,
       writtenPaths,
       deletedPaths,
+      writeBackRequested: request.writeBack === true,
+      adopted: request.writeBack === true && result.exitCode === 0 && changedPaths.length > 0,
       writeBack: request.writeBack === true,
     },
   };
@@ -580,19 +956,23 @@ async function capturePythonWorkspace(
   if (sourcePath && sourcePath !== root && !sourcePath.startsWith(`${root}/`)) {
     throw new Error("Python sourcePath must stay inside workspaceRoot.");
   }
-  const entries = (await workspace.list(root)).filter(({ path }) => !isWorkspaceControlPlanePath(path));
+  const entries = (await workspace.list(root))
+    .filter(({ path }) => path === root || path.startsWith(`${root}/`))
+    .filter(({ path }) => !isWorkspaceControlPlanePath(path))
+    .filter(({ path }) => !workspaceRelativeSegments(path, root).some((segment) => PYTHON_WORKSPACE_EXCLUDED_SEGMENTS.has(segment)));
   if (entries.length > MAX_PYTHON_WORKSPACE_FILES) {
     throw new Error(`Python workspace mount exceeds ${MAX_PYTHON_WORKSPACE_FILES} files.`);
   }
   const files: PythonWorkspaceFile[] = [];
   let totalBytes = 0;
   for (const entry of entries) {
-    if (entry.size > MAX_PYTHON_WORKSPACE_FILE_BYTES) {
-      throw new Error(`Python workspace file exceeds 512 KiB: ${entry.path}`);
-    }
     const file = await workspace.read(entry.path);
     if (!file) throw new Error(`Python workspace file disappeared during snapshot: ${entry.path}`);
-    const bytes = new TextEncoder().encode(file.content).byteLength;
+    if (file.revision !== entry.revision) throw new Error(`Python workspace changed during snapshot: ${entry.path}`);
+    const bytes = workspaceContentByteLength(file.content);
+    if (bytes > MAX_PYTHON_WORKSPACE_FILE_BYTES) {
+      throw new Error(`Python workspace file exceeds 512 KiB: ${entry.path}`);
+    }
     totalBytes += bytes;
     if (totalBytes > MAX_PYTHON_WORKSPACE_BYTES) throw new Error("Python workspace mount exceeds 4 MiB.");
     files.push({ path: file.path, content: file.content, revision: file.revision });
@@ -603,6 +983,11 @@ async function capturePythonWorkspace(
   return { root, files };
 }
 
+function workspaceRelativeSegments(path: string, root: string): string[] {
+  if (path === root) return [];
+  return path.slice(root.length + 1).split("/");
+}
+
 export async function runDisposablePyodide(
   code: string,
   args: readonly string[],
@@ -611,6 +996,7 @@ export async function runDisposablePyodide(
   signal: AbortSignal,
   workspace?: PythonWorkspaceSnapshot,
   sourcePath?: string,
+  onOutput?: ExecutionRequest["onOutput"],
 ): Promise<PyodideWorkerResult> {
   if (!supportsDisposableWorkers() || typeof WebAssembly === "undefined") {
     throw new Error("Disposable Pyodide workers are unavailable in this environment.");
@@ -652,19 +1038,33 @@ export async function runDisposablePyodide(
         return;
       }
       const message = event.data as Record<string, unknown>;
+      if (message.type === "output") {
+        const stream = message.stream === "stderr" ? "stderr" : "stdout";
+        if (typeof message.text === "string") emitExecutionOutput(onOutput, { stream, text: message.text.slice(0, 65_536) });
+        return;
+      }
       if (message.ok !== true) {
         finish(new Error(typeof message.error === "string" ? message.error : "Disposable Pyodide initialization failed."));
         return;
       }
       const workspaceFiles = Array.isArray(message.workspaceFiles)
-        ? message.workspaceFiles.filter(isPythonWorkspaceFile).slice(0, MAX_PYTHON_WORKSPACE_FILES)
+        ? message.workspaceFiles
+          .map(parsePythonWorkspaceFile)
+          .filter((file): file is PythonWorkspaceFile => file !== undefined)
+          .slice(0, MAX_PYTHON_WORKSPACE_FILES)
         : undefined;
       finish(undefined, {
         runtime: "python-pyodide",
         exitCode: typeof message.exitCode === "number" ? message.exitCode : 1,
         stdout: typeof message.stdout === "string" ? message.stdout.slice(0, MAX_OUTPUT_CHARS) : "",
         stderr: typeof message.stderr === "string" ? message.stderr.slice(0, MAX_OUTPUT_CHARS) : "",
-        value: jsonSafe(message.value),
+        value: parseWorkerJsonValue(message.valueJson),
+        provenance: {
+          capabilityTier: "web-enhanced",
+          authority: "browser",
+          engine: `pyodide-${PYODIDE_VERSION}-worker`,
+          artifactKind: "source",
+        },
         ...(workspaceFiles ? { workspaceFiles } : {}),
       });
     };
@@ -673,16 +1073,21 @@ export async function runDisposablePyodide(
       code,
       args: [...args],
       env: { ...env },
-      ...(workspace ? { workspaceRoot: workspace.root, workspaceFiles: workspace.files.map(({ path, content }) => ({ path, content })) } : {}),
+      ...(workspace ? {
+        workspaceRoot: workspace.root,
+        workspaceFiles: workspace.files.map(({ path, content }) => ({ path, bytes: decodeWorkspaceBytes(content) })),
+      } : {}),
       ...(sourcePath ? { sourcePath } : {}),
     });
   });
 }
 
-function isPythonWorkspaceFile(value: unknown): value is PythonWorkspaceFile {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+function parsePythonWorkspaceFile(value: unknown): PythonWorkspaceFile | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
-  return typeof record.path === "string" && typeof record.content === "string";
+  if (typeof record.path !== "string" || !(record.bytes instanceof Uint8Array)) return undefined;
+  if (record.bytes.byteLength > MAX_PYTHON_WORKSPACE_FILE_BYTES) return undefined;
+  return { path: record.path, content: encodeWorkspaceBytes(record.bytes) };
 }
 
 /**
@@ -702,88 +1107,115 @@ function trustedWorkerUrl(url: string): unknown {
   return workerPolicy.createScriptURL(url);
 }
 
+function workspaceProgramWorkerSource(code: string): string {
+  return `"use strict";
+const __post = globalThis.postMessage.bind(globalThis);
+const __stdout = [], __stderr = [], __pending = new Map(), __inflight = new Set(); let __request = 0, __outputChars = 0;
+const __render = value => { try { return typeof value === "string" ? value : JSON.stringify(value); } catch { return String(value); } };
+const __serializeValue = value => {
+  let encoded;
+  try { encoded = JSON.stringify(value === undefined ? null : value); }
+  catch { encoded = JSON.stringify(String(value)); }
+  if (new TextEncoder().encode(encoded).byteLength <= ${MAX_EXECUTION_VALUE_BYTES}) return encoded;
+  return JSON.stringify({ airshipValue:"truncated", limitBytes:${MAX_EXECUTION_VALUE_BYTES} });
+};
+const __emit = (stream, target, values) => {
+  if (__outputChars >= ${MAX_OUTPUT_CHARS}) return;
+  const remaining = ${MAX_OUTPUT_CHARS} - __outputChars;
+  if (remaining <= 1) return;
+  const body = values.map(__render).join(" ").slice(0, Math.min(4096, remaining - 1));
+  if (!body) return;
+  const text = body + "\\n";
+  target.push(text);
+  __outputChars += text.length;
+  __post({ type:"output", stream, text });
+};
+console.log = (...values) => __emit("stdout", __stdout, values);
+console.info = console.log;
+console.warn = (...values) => __emit("stderr", __stderr, values);
+console.error = (...values) => __emit("stderr", __stderr, values);
+for (const name of ["fetch", "WebSocket", "EventSource", "indexedDB", "caches", "importScripts", "Worker", "SharedWorker"]) {
+  try { Object.defineProperty(globalThis, name, { value:undefined, configurable:false, writable:false }); } catch {}
+}
+try { Object.defineProperty(globalThis, "postMessage", { value:undefined, configurable:false, writable:false }); } catch {}
+Object.defineProperty(globalThis, "airship", { configurable:false, writable:false, value:Object.freeze({
+  call(id) {
+    if (typeof id !== "string") return Promise.reject(new TypeError("airship.call requires a declared call ID."));
+    const requestId = ++__request;
+    __post({ type:"tool-call", requestId, id });
+    const call = new Promise((resolve, reject) => __pending.set(requestId, { resolve, reject }));
+    __inflight.add(call);
+    void call.then(() => __inflight.delete(call), () => __inflight.delete(call));
+    return call;
+  }
+}) });
+self.onmessage = ({ data }) => {
+  if (!data || data.type !== "tool-result" || !Number.isSafeInteger(data.requestId)) return;
+  const pending = __pending.get(data.requestId);
+  if (!pending) return;
+  __pending.delete(data.requestId);
+  if (data.ok === true) pending.resolve(data.result);
+  else pending.reject(new Error(typeof data.error === "string" ? data.error : "Declared Airship tool failed."));
+};
+Promise.resolve().then(async () => {
+  const value = await (async (__post, __stdout, __stderr, __pending, __inflight, __request, __outputChars, __render, __emit, __serializeValue) => {
+${code}
+  })(undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined);
+  while (__inflight.size > 0) {
+    const results = await Promise.allSettled([...__inflight]);
+    const failed = results.find(result => result.status === "rejected");
+    if (failed) throw failed.reason;
+  }
+  __post({ ok:true, valueJson:__serializeValue(value), stdout:__stdout.join(""), stderr:__stderr.join("") });
+}).catch(error => __post({ ok:false, error:String(error && error.stack || error), stdout:__stdout.join(""), stderr:__stderr.join("") }));`;
+}
+
 function workerSource(code: string): string {
   return `"use strict";
+const __post = globalThis.postMessage.bind(globalThis);
 const __logs = [];
+const __errors = [];
+let __outputChars = 0;
 const __render = value => {
   try { return typeof value === "string" ? value : JSON.stringify(value); }
   catch { return String(value); }
 };
-console.log = (...values) => { if (__logs.length < 200) __logs.push(values.map(__render).join(" ").slice(0, 4096)); };
+const __serializeValue = value => {
+  let encoded;
+  try { encoded = JSON.stringify(value === undefined ? null : value); }
+  catch { encoded = JSON.stringify(String(value)); }
+  if (new TextEncoder().encode(encoded).byteLength <= ${MAX_EXECUTION_VALUE_BYTES}) return encoded;
+  return JSON.stringify({ airshipValue:"truncated", limitBytes:${MAX_EXECUTION_VALUE_BYTES} });
+};
+const __emit = (stream, target, values) => {
+  if (target.length >= 200 || __outputChars >= ${MAX_OUTPUT_CHARS}) return;
+  const remaining = ${MAX_OUTPUT_CHARS} - __outputChars;
+  if (remaining <= 1) return;
+  const text = values.map(__render).join(" ").slice(0, Math.min(4096, remaining - 1));
+  if (!text) return;
+  target.push(text);
+  __outputChars += text.length + 1;
+  __post({ type:"output", stream, text:text + "\\n" });
+};
+console.log = (...values) => __emit("stdout", __logs, values);
 console.info = console.log;
-console.warn = console.log;
-console.error = console.log;
+console.warn = (...values) => __emit("stderr", __errors, values);
+console.error = (...values) => __emit("stderr", __errors, values);
 for (const name of ["fetch", "WebSocket", "EventSource", "indexedDB", "caches", "importScripts", "Worker", "SharedWorker"]) {
   try { Object.defineProperty(globalThis, name, { value: undefined, configurable: false, writable: false }); } catch {}
 }
+try { Object.defineProperty(globalThis, "postMessage", { value:undefined, configurable:false, writable:false }); } catch {}
 Promise.resolve().then(async () => {
-  const value = await (async () => {
+  const value = await (async (__post, __logs, __errors, __outputChars, __render, __emit, __serializeValue) => {
 ${code}
-  })();
-  postMessage({ ok: true, value: value === undefined ? null : value, logs: __logs });
-}).catch(error => postMessage({ ok: false, error: String(error && error.stack || error), logs: __logs }));`;
-}
-
-function wasiWorkerSource(): string {
-  return `"use strict";
-const LIMIT = 262144;
-const encode = new TextEncoder();
-const decode = new TextDecoder();
-self.onmessage = async ({ data }) => {
-  let stdout = "", stderr = "", memory, instance, exitCode = 0;
-  const append = (fd, bytes) => {
-    const text = decode.decode(bytes);
-    if (fd === 1) stdout = (stdout + text).slice(0, LIMIT);
-    if (fd === 2) stderr = (stderr + text).slice(0, LIMIT);
-  };
-  const view = () => {
-    if (!memory) throw new Error("WASI command did not export memory.");
-    return new DataView(memory.buffer);
-  };
-  const writeStrings = (values, pointers, buffer) => {
-    const dataView = view();
-    let cursor = buffer;
-    values.forEach((value, index) => {
-      const bytes = encode.encode(value + "\\0");
-      dataView.setUint32(pointers + index * 4, cursor, true);
-      new Uint8Array(memory.buffer, cursor, bytes.length).set(bytes);
-      cursor += bytes.length;
-    });
-  };
-  const argv = ["airship-wasi", ...(Array.isArray(data.args) ? data.args : [])];
-  const environ = Object.entries(data.env || {}).map(([key, value]) => key + "=" + value);
-  const wasi = {
-    args_sizes_get(argc, size) { const v=view(); v.setUint32(argc, argv.length, true); v.setUint32(size, argv.reduce((n,s)=>n+encode.encode(s).length+1,0), true); return 0; },
-    args_get(pointers, buffer) { writeStrings(argv, pointers, buffer); return 0; },
-    environ_sizes_get(count, size) { const v=view(); v.setUint32(count, environ.length, true); v.setUint32(size, environ.reduce((n,s)=>n+encode.encode(s).length+1,0), true); return 0; },
-    environ_get(pointers, buffer) { writeStrings(environ, pointers, buffer); return 0; },
-    fd_write(fd, iovs, length, written) {
-      const v=view(); let total=0;
-      for (let i=0;i<length;i+=1) { const pointer=v.getUint32(iovs+i*8,true), size=v.getUint32(iovs+i*8+4,true); append(fd,new Uint8Array(memory.buffer,pointer,size)); total+=size; }
-      v.setUint32(written,total,true); return fd === 1 || fd === 2 ? 0 : 8;
-    },
-    fd_close() { return 0; }, fd_fdstat_get() { return 0; }, fd_seek() { return 70; },
-    clock_time_get(_clock, _precision, time) { const now=BigInt(Date.now())*1000000n; view().setBigUint64(time,now,true); return 0; },
-    random_get(pointer, length) { crypto.getRandomValues(new Uint8Array(memory.buffer,pointer,length)); return 0; },
-    proc_exit(code) { const error=new Error("WASI_EXIT"); error.exitCode=code; throw error; },
-  };
-  const imports = new Proxy(wasi, { get(target, name) { return target[name] || (() => 52); } });
-  try {
-    const binary = Uint8Array.from(atob(data.wasmBase64), value => value.charCodeAt(0));
-    if (binary.byteLength > 4194304 || !WebAssembly.validate(binary)) throw new Error("Invalid or oversized WebAssembly artifact.");
-    const result = await WebAssembly.instantiate(binary, { wasi_snapshot_preview1: imports, wasi_unstable: imports });
-    instance = result.instance; memory = instance.exports.memory;
-    if (memory && memory.buffer.byteLength > 67108864) throw new Error("WASI initial memory exceeds 64 MiB.");
-    const start = instance.exports._start || instance.exports._initialize;
-    if (typeof start !== "function") throw new Error("WASI command must export _start or _initialize.");
-    try { start(); } catch (error) { if (error && error.message === "WASI_EXIT") exitCode=error.exitCode; else throw error; }
-    postMessage({ ok:true, exitCode, stdout, stderr });
-  } catch (error) { postMessage({ ok:false, error:String(error && error.stack || error) }); }
-};`;
+  })(undefined, undefined, undefined, undefined, undefined, undefined, undefined);
+  __post({ ok: true, valueJson: __serializeValue(value), logs: __logs, errors: __errors });
+}).catch(error => __post({ ok: false, error: String(error && error.stack || error), logs: __logs, errors: __errors }));`;
 }
 
 function pyodideWorkerSource(assetBase: string): string {
   return `"use strict";
+const __post = globalThis.postMessage.bind(globalThis);
 const PYODIDE_MODULE = ${JSON.stringify(new URL("pyodide.mjs", assetBase).href)};
 const PYODIDE_BASE = ${JSON.stringify(assetBase)};
 const LIMIT = ${MAX_OUTPUT_CHARS};
@@ -796,9 +1228,11 @@ const jsonValue = value => {
   let converted = value;
   try {
     if (value && typeof value.toJs === "function") converted = value.toJs();
-    const encoded = JSON.stringify(converted === undefined ? null : converted);
-    return encoded === undefined ? null : JSON.parse(encoded);
-  } catch { return String(converted); }
+    let encoded = JSON.stringify(converted === undefined ? null : converted);
+    if (encoded === undefined) encoded = "null";
+    if (new TextEncoder().encode(encoded).byteLength <= ${MAX_EXECUTION_VALUE_BYTES}) return encoded;
+    return JSON.stringify({ airshipValue:"truncated", limitBytes:${MAX_EXECUTION_VALUE_BYTES} });
+  } catch { return JSON.stringify(String(converted)); }
   finally { try { if (value && typeof value.destroy === "function") value.destroy(); } catch {} }
 };
 const mountWorkspace = (pyodide, data) => {
@@ -807,7 +1241,8 @@ const mountWorkspace = (pyodide, data) => {
   for (const file of Array.isArray(data.workspaceFiles) ? data.workspaceFiles : []) {
     const slash = file.path.lastIndexOf("/");
     pyodide.FS.mkdirTree(file.path.slice(0, slash) || "/workspace");
-    pyodide.FS.writeFile(file.path, file.content, { encoding:"utf8" });
+    if (!(file.bytes instanceof Uint8Array)) throw new Error("Python workspace input was not byte-safe.");
+    pyodide.FS.writeFile(file.path, file.bytes);
   }
   pyodide.FS.chdir(data.workspaceRoot);
 };
@@ -823,11 +1258,9 @@ const collectWorkspace = (pyodide, root) => {
       if (!pyodide.FS.isFile(stat.mode)) continue;
       const bytes = pyodide.FS.readFile(path);
       if (bytes.byteLength > ${MAX_PYTHON_WORKSPACE_FILE_BYTES}) throw new Error("Python generated a file over 512 KiB: " + path);
-      let content;
-      try { content = new TextDecoder("utf-8", { fatal:true }).decode(bytes); } catch { continue; }
       total += bytes.byteLength;
       if (files.length >= ${MAX_PYTHON_WORKSPACE_FILES} || total > ${MAX_PYTHON_WORKSPACE_BYTES}) throw new Error("Python workspace output exceeded its mount budget.");
-      files.push({ path, content });
+      files.push({ path, bytes });
     }
   };
   visit(root);
@@ -839,16 +1272,17 @@ self.onmessage = async ({ data }) => {
     const module = await import(PYODIDE_MODULE);
     pyodide = await module.loadPyodide({ indexURL: PYODIDE_BASE, fullStdLib: false });
   } catch (error) {
-    postMessage({ ok:false, error:"Pyodide initialization failed: " + String(error && error.message || error) });
+    __post({ ok:false, error:"Pyodide initialization failed: " + String(error && error.message || error) });
     return;
   }
   let stdout = "", stderr = "";
-  pyodide.setStdout({ batched: value => { stdout = boundedAppend(stdout, value); } });
-  pyodide.setStderr({ batched: value => { stderr = boundedAppend(stderr, value); } });
+  pyodide.setStdout({ batched: value => { const next=boundedAppend(stdout,value), accepted=next.slice(stdout.length); stdout=next; if(accepted) __post({ type:"output", stream:"stdout", text:accepted }); } });
+  pyodide.setStderr({ batched: value => { const next=boundedAppend(stderr,value), accepted=next.slice(stderr.length); stderr=next; if(accepted) __post({ type:"output", stream:"stderr", text:accepted }); } });
   try { pyodide.setStdin({ stdin: () => null }); } catch {}
   for (const name of ["fetch", "XMLHttpRequest", "WebSocket", "EventSource", "indexedDB", "caches", "importScripts", "Worker", "SharedWorker"]) {
     try { Object.defineProperty(globalThis, name, { value: undefined, configurable: false, writable: false }); } catch {}
   }
+  try { Object.defineProperty(globalThis, "postMessage", { value:undefined, configurable:false, writable:false }); } catch {}
   mountWorkspace(pyodide, data);
   let exitCode = 0, value = null;
   try {
@@ -865,12 +1299,15 @@ self.onmessage = async ({ data }) => {
     value = jsonValue(await pyodide.runPythonAsync(executionSource, { filename:data.sourcePath || "<airship>" }));
   } catch (error) {
     exitCode = 1;
-    stderr = boundedAppend(stderr, String(error && error.message || error));
+    const next = boundedAppend(stderr, String(error && error.message || error));
+    const accepted = next.slice(stderr.length);
+    stderr = next;
+    if (accepted) __post({ type:"output", stream:"stderr", text:accepted });
   }
   try {
-    postMessage({ ok:true, exitCode, stdout, stderr, value, workspaceFiles:collectWorkspace(pyodide, data.workspaceRoot) });
+    __post({ ok:true, exitCode, stdout, stderr, valueJson:value, workspaceFiles:collectWorkspace(pyodide, data.workspaceRoot) });
   } catch (error) {
-    postMessage({ ok:false, error:"Python workspace collection failed: " + String(error && error.message || error) });
+    __post({ ok:false, error:"Python workspace collection failed: " + String(error && error.message || error) });
   }
 };`;
 }
@@ -879,13 +1316,85 @@ function supportsDisposableWorkers(): boolean {
   return typeof Worker !== "undefined" && typeof URL.createObjectURL === "function";
 }
 
-function jsonSafe(value: unknown): JsonValue {
+function assertPinnedExecutionTier(context: ToolContext, capability: ExecutionCapability | undefined): void {
+  if (!capability || capability.state !== "ready" || sessionAllowsBrowserExecutionTier(context.capabilityTier, capability.tier)) return;
+  throw new Error(
+    `${capability.label} is ready in this page but this session is pinned ${context.capabilityTier ?? "web-baseline"}. ` +
+    "Create or fork a conversation after activation before using the enhanced runtime.",
+  );
+}
+
+function activationResultForSession(result: ToolExecutionResult, context: ToolContext): ToolExecutionResult {
+  const requiresSessionFork = !sessionAllowsBrowserExecutionTier(context.capabilityTier, "web-enhanced");
+  let content = result.content;
   try {
-    const serialized = JSON.stringify(value === undefined ? null : value);
-    if (serialized === undefined) return null;
-    return JSON.parse(serialized) as JsonValue;
+    const capability = JSON.parse(result.content) as JsonValue;
+    if (capability && typeof capability === "object" && !Array.isArray(capability)) {
+      content = JSON.stringify({
+        ...capability,
+        sessionCompatibility: requiresSessionFork ? "fork-required" : "ready-in-current-session",
+      }, null, 2);
+    }
   } catch {
-    return String(value);
+    // The activation result remains useful even if a future adapter uses text.
+  }
+  const metadata = result.metadata && typeof result.metadata === "object" && !Array.isArray(result.metadata)
+    ? result.metadata
+    : {};
+  return {
+    ...result,
+    content,
+    metadata: {
+      ...metadata,
+      requiresSessionFork,
+      pinnedCapabilityTier: context.capabilityTier ?? "web-baseline",
+    },
+  };
+}
+
+function validateExecuteCodeArguments(runtime: ExecutionRuntimeId, args: Record<string, JsonValue>): void {
+  const hasCode = typeof args.code === "string";
+  const hasArtifact = typeof args.wasmBase64 === "string";
+  const hasSourcePath = typeof args.sourcePath === "string";
+  const hasWorkspace = typeof args.workspaceRoot === "string" || hasSourcePath || args.writeBack !== undefined;
+
+  if (runtime === "javascript-worker") {
+    if (!hasCode) throw new Error("JavaScript Worker execution requires code.");
+    if (hasArtifact || hasSourcePath || hasWorkspace || args.args !== undefined || args.env !== undefined) {
+      throw new Error("JavaScript Worker accepts only code and timeoutMs; it has no argv, environment, workspace, or WASI artifact binding.");
+    }
+    return;
+  }
+  if (runtime === "wasi-preview1") {
+    if (!hasArtifact) throw new Error("WASI Preview 1 execution requires a precompiled wasmBase64 command artifact.");
+    if (hasCode || hasSourcePath) {
+      throw new Error(
+        "WASI Preview 1 accepts a precompiled command artifact, not source code, Bash, rustc, or Cargo; its bounded workspace mount is optional.",
+      );
+    }
+    if (args.writeBack === true && typeof args.workspaceRoot !== "string") throw new Error("WASI writeBack requires a workspaceRoot.");
+    return;
+  }
+  if (runtime === "python-pyodide") {
+    if (hasArtifact) throw new Error("Pyodide executes Python source, not a WASI artifact.");
+    if (hasCode === hasSourcePath) throw new Error("Pyodide requires exactly one of code or sourcePath.");
+    if ((hasSourcePath || args.writeBack === true) && typeof args.workspaceRoot !== "string") {
+      throw new Error("Python sourcePath and writeBack require a workspaceRoot.");
+    }
+    return;
+  }
+  throw new Error(`${runtime} is not available through execute_code.`);
+}
+
+function parseWorkerJsonValue(value: unknown): JsonValue {
+  if (typeof value !== "string") throw new Error("Execution worker did not return its bounded JSON value envelope.");
+  if (new TextEncoder().encode(value).byteLength > MAX_EXECUTION_VALUE_BYTES) {
+    throw new Error("Execution worker returned a value over the 512 KiB result budget.");
+  }
+  try {
+    return JSON.parse(value) as JsonValue;
+  } catch {
+    throw new Error("Execution worker returned malformed JSON value data.");
   }
 }
 

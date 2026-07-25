@@ -39,6 +39,91 @@ describe("ChutesInferenceTransport", () => {
     expect(invokeCalls(fetch)).toHaveLength(0);
   });
 
+  it("irreversibly rejects a retained transport reference after its credential is revoked", async () => {
+    let credentialReads = 0;
+    const fetch = sequenceFetch([modelResponse()]);
+    const transport = new ChutesInferenceTransport({
+      apiKey: () => {
+        credentialReads += 1;
+        return "cak_memory-only";
+      },
+      fetch,
+      attestationMode: "optional",
+    });
+
+    await expect(transport.listModels()).resolves.toHaveLength(1);
+    transport.revokeCredential();
+    transport.revokeCredential();
+
+    await expect(transport.listModels()).rejects.toMatchObject({ code: "CANCELLED" });
+    await expect(transport.verifyModelAccess("confidential-model")).rejects.toMatchObject({
+      code: "CANCELLED",
+    });
+    await expect(
+      collect(transport.stream(baseRequest(), new AbortController().signal)),
+    ).rejects.toMatchObject({ code: "CANCELLED" });
+    expect(credentialReads).toBe(1);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels an in-flight model read when credential authority is revoked", async () => {
+    let resolveModels!: (response: Response) => void;
+    let modelSignal: AbortSignal | undefined;
+    const fetch = vi.fn<FetchLike>((_input, init) => {
+      modelSignal = init?.signal ?? undefined;
+      return new Promise<Response>((resolve) => {
+        resolveModels = resolve;
+      });
+    });
+    const transport = new ChutesInferenceTransport({
+      apiKey: "cak_memory-only",
+      fetch,
+      attestationMode: "optional",
+    });
+    const pending = transport.listModels();
+
+    await vi.waitFor(() => expect(modelSignal).toBeDefined());
+    transport.revokeCredential();
+
+    await expect(pending).rejects.toMatchObject({ code: "CANCELLED" });
+    expect(modelSignal?.aborted).toBe(true);
+    resolveModels(modelResponse());
+  });
+
+  it("cancels an in-flight encrypted invocation when credential authority is revoked", async () => {
+    const crypto = new MockCrypto({});
+    let resolveInvoke!: (response: Response) => void;
+    let invokeSignal: AbortSignal | undefined;
+    const fetch = vi.fn<FetchLike>((input, init) => {
+      const url = String(input);
+      if (url.endsWith("/v1/models")) return Promise.resolve(modelResponse());
+      if (url.includes("/e2e/instances/")) {
+        return Promise.resolve(instanceResponse(["nonce-a"]));
+      }
+      invokeSignal = init?.signal ?? undefined;
+      return new Promise<Response>((resolve) => {
+        resolveInvoke = resolve;
+      });
+    });
+    const transport = new ChutesInferenceTransport({
+      apiKey: "cak_memory-only",
+      fetch,
+      crypto,
+      attestationMode: "optional",
+    });
+    const pending = collect(
+      transport.stream(baseRequest(), new AbortController().signal),
+    );
+
+    await vi.waitFor(() => expect(invokeSignal).toBeDefined());
+    transport.revokeCredential();
+
+    await expect(pending).rejects.toMatchObject({ code: "CANCELLED" });
+    expect(invokeSignal?.aborted).toBe(true);
+    expect(crypto.requests[0]?.freeCalls).toBe(1);
+    resolveInvoke(new Response(null, { status: 499 }));
+  });
+
   it("labels protected endpoint authorization failures at their exact boundary", async () => {
     const fetch = sequenceFetch([modelResponse(), jsonResponse({ detail: "forbidden" }, 403)]);
     const transport = new ChutesInferenceTransport({ apiKey: "cak_memory-only", fetch, attestationMode: "optional" });
@@ -219,7 +304,14 @@ describe("ChutesInferenceTransport", () => {
           claims: expect.objectContaining({
             endpointKey: expect.objectContaining({ status: "unavailable" }),
             model: expect.objectContaining({ status: "unavailable" }),
-            conversation: expect.objectContaining({ status: "unavailable" }),
+            conversation: expect.objectContaining({
+              status: "partial",
+              verifier: "airship-client",
+            }),
+          }),
+          bindings: expect.objectContaining({
+            requestCiphertextDigest: expect.stringMatching(/^sha256:/u),
+            responseCiphertextDigest: expect.stringMatching(/^sha256:/u),
           }),
         }),
       }),
@@ -264,6 +356,43 @@ describe("ChutesInferenceTransport", () => {
     expect(crypto.requests[0].freeCalls).toBe(1);
     expect(crypto.streams[0].finishCalls).toBe(1);
     expect(crypto.streams[0].freeCalls).toBe(1);
+  });
+
+  it("commits authenticated response ciphertext order without retaining the transcript", async () => {
+    const emptyDelta = inner({ choices: [{ index: 0, delta: {}, finish_reason: null }] });
+    const stop = inner({ choices: [{ index: 0, delta: {}, finish_reason: "stop" }] });
+    const responseCommitment = async (records: readonly string[]) => {
+      const crypto = new MockCrypto({ a: emptyDelta, b: emptyDelta, stop });
+      const transport = new ChutesInferenceTransport({
+        apiKey: "key",
+        fetch: sequenceFetch([
+          modelResponse(),
+          instanceResponse(["nonce-a"]),
+          streamResponse([
+            outer({ e2e_init: "init" }),
+            ...records.map((record) => outer({ e2e: record })),
+            outer({ e2e: "stop" }),
+            "data: [DONE]\n\n",
+          ]),
+        ]),
+        crypto,
+        attestationMode: "optional",
+      });
+      const completed = (await collect(
+        transport.stream(baseRequest(), new AbortController().signal),
+      )).at(-1);
+      if (completed?.type !== "completed") throw new Error("fixture did not complete");
+      if (!completed.receipt) throw new Error("fixture did not emit a receipt");
+      return completed.receipt.bindings.responseCiphertextDigest;
+    };
+
+    const ordered = await responseCommitment(["a", "b"]);
+    const repeated = await responseCommitment(["a", "b"]);
+    const reordered = await responseCommitment(["b", "a"]);
+
+    expect(ordered).toMatch(/^sha256:/u);
+    expect(repeated).toBe(ordered);
+    expect(reordered).not.toBe(ordered);
   });
 
   it("assembles deployed Chutes inner SSE lines across separately authenticated delimiters", async () => {
@@ -371,6 +500,36 @@ describe("ChutesInferenceTransport", () => {
     ]);
   });
 
+  it("assembles multiple directly authenticated JSON objects coalesced into one encrypted record", async () => {
+    const first = JSON.stringify({
+      choices: [{ index: 0, delta: { content: "coalesced { in string } " }, finish_reason: null }],
+    });
+    const terminal = JSON.stringify({
+      choices: [{ index: 0, delta: { content: "records" }, finish_reason: "stop" }],
+    });
+    const crypto = new MockCrypto({ combined: `  ${first}\n${terminal}\n` });
+    const fetch = sequenceFetch([
+      modelResponse(),
+      instanceResponse(["nonce-a"]),
+      streamResponse([
+        outer({ e2e_init: "init" }),
+        outer({ e2e: "combined" }),
+      ]),
+    ]);
+    const transport = new ChutesInferenceTransport({
+      apiKey: "key",
+      fetch,
+      crypto,
+      attestationMode: "optional",
+    });
+
+    await expect(collect(transport.stream(baseRequest(), new AbortController().signal))).resolves.toEqual([
+      { type: "text-delta", text: "coalesced { in string } " },
+      { type: "text-delta", text: "records" },
+      expect.objectContaining({ type: "completed", finishReason: "stop" }),
+    ]);
+  });
+
   it("rejects EOF after authenticated JSON without a terminal finish reason", async () => {
     const crypto = new MockCrypto({
       partial: JSON.stringify({
@@ -451,7 +610,7 @@ describe("ChutesInferenceTransport", () => {
           endpointKey: { status: "verified" },
           freshness: { status: "verified" },
           model: { status: "unavailable" },
-          conversation: { status: "unavailable" },
+          conversation: { status: "partial", verifier: "airship-client" },
         },
       },
     });
@@ -499,7 +658,7 @@ describe("ChutesInferenceTransport", () => {
           cpuTee: { status: "partial" },
           gpuTee: { status: "failed" },
           model: { status: "partial", policyDigest: "sha256:policy" },
-          conversation: { status: "unavailable" },
+          conversation: { status: "partial", verifier: "airship-client" },
         },
         bindings: { evidenceDigest: "sha256:evidence" },
       },
@@ -590,11 +749,12 @@ describe("ChutesInferenceTransport", () => {
       posture: "encrypted-attested",
       claims: {
         endpointKey: { status: "verified" },
-        conversation: { status: "unavailable" },
+        conversation: { status: "partial", verifier: "airship-client" },
       },
       bindings: {
         algorithm: "SHA-256",
         requestCiphertextDigest: expect.stringMatching(/^sha256:/u),
+        responseCiphertextDigest: expect.stringMatching(/^sha256:/u),
         evidenceDigest: "sha256:evidence",
         requestDigest: (inferenceStarted.payload as { requestDigest: string }).requestDigest,
         responseDigest: (assistantCompleted.payload as { responseDigest: string }).responseDigest,

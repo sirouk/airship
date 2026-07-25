@@ -1,11 +1,11 @@
 # Airship Design Blueprint
 
-**Status:** Canonical product and interaction design blueprint  
+**Status:** Detailed design reference; [`CANON.md`](CANON.md) governs current product decisions
 **Design language:** Instrument  
 **Generated:** 2026-07-18  
 **Scope:** Visual design, product behavior, interaction logic, responsive behavior, performance, accessibility, component architecture, and delivery sequencing. This is deliberately not a security audit.
 
-This blueprint consolidates the completed Claude Opus 4.8 design-only ultracode fanout: 36 recovered specialist and adversarial outputs spanning the design constitution, information architecture, chat, workflows, state systems, performance, QA, and delivery planning. The original recovered outputs remain unchanged under `.airship-lab/harvest/`; this file is the reconciled implementation source of truth.
+This blueprint consolidates the completed Claude Opus 4.8 design-only ultracode fanout: 36 recovered specialist and adversarial outputs spanning the design constitution, information architecture, chat, workflows, state systems, performance, QA, and delivery planning. The original recovered outputs remain unchanged under `.airship-lab/harvest/`. It remains the detailed design record, but later navigation, provider, trust, and implementation decisions are reconciled in `CANON.md` and supersede conflicting blueprint text.
 
 ## Canonical coherence locks
 

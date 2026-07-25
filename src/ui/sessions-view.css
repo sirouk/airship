@@ -589,6 +589,35 @@
   align-items: start;
 }
 
+.session-library-technical {
+  overflow: hidden;
+  border: 1px solid var(--line, rgba(225, 217, 200, 0.105));
+  border-radius: var(--radius-panel, 10px);
+  background: var(--surface-soft, #14191c);
+}
+
+.session-library-technical > summary {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 48px;
+  padding: 0 14px;
+  color: var(--ink, #ece8de);
+  cursor: pointer;
+}
+
+.session-library-technical > summary span {
+  color: var(--ink-faint, #858d8a);
+  font: var(--fs-micro)/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.session-library-technical > summary strong { font-size: 12px; }
+.session-library-technical[open] > summary { border-bottom: 1px solid var(--line, rgba(225, 217, 200, 0.105)); }
+.session-library-technical .session-library-detail-grid { padding: 12px; }
+
 .session-library-panel {
   min-width: 0;
   overflow: hidden;
@@ -890,6 +919,10 @@
 }
 
 @media (max-width: 1180px) {
+  .session-library-origin {
+    display: none;
+  }
+
   .session-library-toolbar {
     grid-template-columns: minmax(260px, 1fr) repeat(3, minmax(120px, auto)) auto auto;
   }
@@ -900,6 +933,24 @@
 
   .session-library-detail-grid {
     grid-template-columns: 1fr;
+  }
+
+  .session-library-detail-heading {
+    display: grid;
+  }
+
+  .session-library-actions {
+    justify-content: flex-start;
+  }
+
+  .session-library-health {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .session-library-proof-scope {
+    grid-column: 1 / -1;
+    justify-self: start;
+    text-align: left;
   }
 
   .session-library-continuity {
@@ -1091,5 +1142,7 @@
     transition-duration: 0.01ms !important;
   }
 }
-.session-library-rename { display:flex; gap:8px; align-items:end; padding:10px 18px; border-bottom:1px solid var(--line); }
+.session-library-rename-disclosure { border-bottom:1px solid var(--line); background: var(--surface-soft); }
+.session-library-rename-disclosure > summary { display:flex; align-items:center; min-height:42px; padding:0 18px; color:var(--ink-muted); cursor:pointer; font-size:var(--fs-micro); }
+.session-library-rename { display:flex; gap:8px; align-items:end; padding:0 18px 12px; }
 .session-library-rename label { display:grid; gap:4px; flex:1; }

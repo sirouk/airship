@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { boundedWorkspaceContent, resolveGitBinding, workspaceFileWindow, WORKSPACE_EDITOR_BYTE_LIMIT } from "./workspace-view";
+import { encodeWorkspaceBytes } from "../workspace/content-codec";
+import { boundedWorkspaceContent, resolveGitBinding, workspaceEditorProjection, workspaceFileWindow, WORKSPACE_EDITOR_BYTE_LIMIT } from "./workspace-view";
 
 describe("bounded workspace presentation", () => {
   it("mounts a constant metadata window for a 100k-file workspace", () => {
@@ -19,6 +20,12 @@ describe("bounded workspace presentation", () => {
 
   it("preserves full object size from a bounded range read", () => {
     expect(boundedWorkspaceContent("preview", WORKSPACE_EDITOR_BYTE_LIMIT, 9_000_000)).toMatchObject({ content: "preview", totalBytes: 9_000_000, truncated: true });
+  });
+
+  it("never exposes an opaque workspace envelope as editable text", () => {
+    const envelope = encodeWorkspaceBytes(Uint8Array.from([0, 255, 1, 2]));
+    const projection = workspaceEditorProjection({ path: "/workspace/image.png", content: envelope, revision: "r1", updatedAt: new Date(0).toISOString(), size: envelope.length });
+    expect(projection).toMatchObject({ content: "", binary: true, truncated: true, shownBytes: 0 });
   });
 
   it("maps an admitted repository root to one relative Git path", () => {

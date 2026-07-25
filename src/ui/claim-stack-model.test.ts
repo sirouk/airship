@@ -7,20 +7,55 @@ const NOW = Date.parse("2026-07-19T12:00:00.000Z");
 const KEY_DIGEST = `sha256:${"a".repeat(64)}`;
 
 describe("claim-stack evidence composition", () => {
-  it("joins matching fresh endpoint evidence without upgrading the immutable receipt", () => {
+  it("names every unestablished proof axis before the first completed turn", () => {
+    const model = composeClaimStack(undefined, undefined, NOW);
+
+    expect(model.evidence).toBe("absent");
+    expect(model.items).toHaveLength(8);
+    expect(model.groups.unavailable.map((item) => item.key)).toEqual([
+      "encryption", "freshness", "cpuTee", "gpuTee", "endpointKey", "model", "conversation", "payment",
+    ]);
+    expect(model.groups.unavailable.every((item) => item.status === "unavailable" && item.claim.summary.length > 20)).toBe(true);
+  });
+
+  it("composes fresh endpoint evidence only when its payload digest is recorded by the immutable receipt", () => {
     const receipt = encryptedReceipt();
     const model = composeClaimStack(receipt, endpointRecord(), NOW);
 
-    expect(model.evidence).toBe("matched");
+    expect(model.evidence).toBe("turn-bound");
+    expect(model.evidenceSummary).toContain("payload digest exactly matches");
     expect(model.groups.asserted.map((item) => item.key)).toEqual(expect.arrayContaining(["encryption", "freshness", "cpuTee", "endpointKey"]));
     expect(model.items.find((item) => item.key === "endpointKey")).toMatchObject({ source: "endpoint-evidence", status: "partial" });
     expect(model.items.find((item) => item.key === "conversation")).toMatchObject({ source: "turn-receipt", status: "partial" });
     expect(receipt.claims.endpointKey.status).toBe("unavailable");
   });
 
+  it("labels later same-instance/key evidence as not turn-bound and does not project its claims", () => {
+    const receipt = encryptedReceipt(null);
+    const model = composeClaimStack(receipt, endpointRecord(), NOW);
+
+    expect(model.evidence).toBe("same-endpoint");
+    expect(model.evidenceSummary).toContain("matches only the receipt’s instance and endpoint-key digest");
+    expect(model.evidenceSummary).toContain("not bound to this exact turn");
+    expect(model.items.find((item) => item.key === "cpuTee")).toMatchObject({
+      source: "turn-receipt",
+      status: "unavailable",
+    });
+    expect(model.items.find((item) => item.key === "endpointKey")).toMatchObject({
+      source: "turn-receipt",
+      status: "unavailable",
+    });
+  });
+
+  it("does not treat a different evidence digest as exact-turn evidence", () => {
+    const model = composeClaimStack(encryptedReceipt(`sha256:${"b".repeat(64)}`), endpointRecord(), NOW);
+    expect(model.evidence).toBe("same-endpoint");
+    expect(model.groups.verified).toHaveLength(0);
+  });
+
   it("does not compose stale evidence and collapses its hardware claims as unavailable", () => {
     const model = composeClaimStack(encryptedReceipt(), endpointRecord(), Date.parse("2026-07-19T12:06:00.000Z"));
-    expect(model.evidence).toBe("stale");
+    expect(model.evidence).toBe("stale-turn-bound");
     expect(model.items.find((item) => item.key === "cpuTee")).toMatchObject({ source: "turn-receipt", status: "unavailable" });
     expect(model.groups.unavailable.map((item) => item.key)).toContain("endpointKey");
   });
@@ -52,12 +87,13 @@ describe("claim-stack evidence composition", () => {
   });
 });
 
-function encryptedReceipt() {
+function encryptedReceipt(evidenceDigest: string | null = KEY_DIGEST) {
   const receipt = createLocalReceipt({ sessionId: "session-1", turnId: "turn-1", provider: "chutes-e2ee-v1", model: "model-1" });
   receipt.instanceId = "instance-1";
   receipt.posture = "encrypted-unattested";
   receipt.proofLevel = "encrypted";
   receipt.bindings.endpointKeyDigest = KEY_DIGEST;
+  if (evidenceDigest) receipt.bindings.evidenceDigest = evidenceDigest;
   receipt.claims.encryption = { status: "partial", summary: "Authenticated encryption was used for the turn." };
   return receipt;
 }

@@ -109,8 +109,58 @@ export function registerGitTools(registry: ToolRegistry, client: BrowserGitClien
     },
   };
 
+  const remote: Tool = {
+    definition: {
+      name: "git_remote",
+      description: "Clone a real Git repository or fetch its remote directly from this browser. Remote Smart HTTP must permit browser CORS; Airship never inserts a proxy.",
+      effect: "network",
+      inputSchema: {
+        type: "object",
+        properties: {
+          action: { type: "string", enum: ["clone", "fetch"] },
+          repositoryId: { type: "string", maxLength: 256 },
+          name: { type: "string", maxLength: 512 },
+          remoteUrl: { type: "string", maxLength: 4_096 },
+          remoteName: { type: "string", maxLength: 256 },
+          defaultBranch: { type: "string", maxLength: 1_024 },
+          destination: { type: "string", maxLength: 4_096 },
+          remote: { type: "string", maxLength: 256 },
+          expectedRepositoryVersion: { type: "string", maxLength: 256 },
+          prune: { type: "boolean" },
+        },
+        required: ["action", "repositoryId"],
+        additionalProperties: false,
+      },
+    },
+    async execute(argumentsValue, context) {
+      const args = objectArguments(argumentsValue);
+      const action = stringArgument(args.action, "action");
+      const repositoryId = stringArgument(args.repositoryId, "repositoryId");
+      if (action === "clone") {
+        return jsonResult(await client.clone({
+          repositoryId,
+          name: stringArgument(args.name, "name"),
+          remoteUrl: stringArgument(args.remoteUrl, "remoteUrl"),
+          remoteName: optionalString(args.remoteName) ?? "origin",
+          ...(optionalString(args.defaultBranch) ? { defaultBranch: optionalString(args.defaultBranch) } : {}),
+          destination: stringArgument(args.destination, "destination"),
+        }, context.signal));
+      }
+      if (action === "fetch") {
+        return jsonResult(await client.fetch({
+          repositoryId,
+          remote: optionalString(args.remote) ?? "origin",
+          expectedRepositoryVersion: stringArgument(args.expectedRepositoryVersion, "expectedRepositoryVersion"),
+          prune: args.prune === true,
+        }, context.signal));
+      }
+      throw new Error(`Unsupported Git remote action: ${action}.`);
+    },
+  };
+
   registry.register(inspect);
   registry.register(change);
+  registry.register(remote);
 }
 
 function jsonResult(value: unknown) {

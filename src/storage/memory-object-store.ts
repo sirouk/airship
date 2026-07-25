@@ -6,9 +6,17 @@ import type {
   ObjectStore,
   ObjectSummary,
   PutIfAbsentResult,
+  ObjectStoreCapabilities,
 } from "./object-store";
 
 export class MemoryObjectStore implements ObjectStore {
+  readonly capabilities: ObjectStoreCapabilities = Object.freeze({
+    version: 1,
+    adapter: "memory",
+    rangeRead: Object.freeze({ mode: "exact-or-fail", maxBytes: Number.MAX_SAFE_INTEGER, providerEvidence: "in-process" }),
+    conditionalWrite: Object.freeze({ createIfAbsent: "atomic-or-fail", compareAndSwap: "atomic-or-fail", providerEvidence: "in-process" }),
+    upload: Object.freeze({ mode: "single-request", interruptionRecovery: "none", persistsResumeCapability: false }),
+  });
   private readonly objects = new Map<string, ObjectRecord>();
 
   async get(key: string): Promise<ObjectRecord | undefined> {

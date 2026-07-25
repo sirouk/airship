@@ -1,4 +1,5 @@
 import { isGoogleDriveConfiguration, type VaultSnapshot } from "../vault/coordinator";
+import type { LocalDeviceVaultStatus } from "../vault/local-device";
 import type { VaultBackend } from "./platform-shell";
 import { MenuSelect } from "./menu-select";
 import "./vault-view.css";
@@ -6,38 +7,68 @@ import "./vault-view.css";
 export type VaultViewProps = {
   snapshot: VaultSnapshot;
   runtimeAdopted?: boolean;
+  contextMode?: "memory-only" | "encrypted-ranged" | "local-fallback";
+  contextPublishing?: boolean;
+  contextPublicationMessage?: string;
+  onPublishContext?: () => void;
   onOpenSetup?: () => void;
   onProbe?: () => void;
   onCancelProbe?: () => void;
+  onReauthorize?: () => void;
+  reauthorizing?: boolean;
   onDisconnect?: () => void;
   provider: VaultBackend;
   providerSwitching?: boolean;
   onProviderChange(provider: VaultBackend): void;
+  localDeviceStatus?: LocalDeviceVaultStatus;
 };
 
 /** Evidence-first vault status surface. It intentionally has no secret inputs. */
 export function VaultView({
   snapshot,
   runtimeAdopted = false,
+  contextMode,
+  contextPublishing = false,
+  contextPublicationMessage,
+  onPublishContext,
   onOpenSetup,
   onProbe,
   onCancelProbe,
+  onReauthorize,
+  reauthorizing = false,
   onDisconnect,
   provider,
   providerSwitching = false,
   onProviderChange,
+  localDeviceStatus,
 }: VaultViewProps) {
   const status = phaseCopy(snapshot);
+  const localDevice = provider === "local-device";
+  const ephemeral = provider === "ephemeral";
+  const googleDrive = snapshot.phase !== "disconnected" && isGoogleDriveConfiguration(snapshot.config);
+  const adoptedDrive = runtimeAdopted && googleDrive;
   return (
     <section class="vault-view" aria-labelledby="vault-heading">
       <header class="vault-view__header">
         <div>
-          <p class="vault-view__eyebrow">Private cloud state</p>
+          <p class="vault-view__eyebrow">{localDevice
+            ? "Private device state"
+            : ephemeral
+              ? "Private page state"
+              : "Private cloud state"}</p>
           <h1 id="vault-heading">Vault</h1>
-          <p>Encrypted journal and workspace state travel directly between this device and the selected object store.</p>
+          <p>{localDevice
+            ? "Encrypted journal and workspace state remain in browser-managed storage on this device and work offline."
+            : ephemeral
+              ? "Workspace and journal state remain only in this page-memory runtime. Nothing is synchronized, and closing the page releases it."
+              : "Encrypted journal and workspace state travel directly between this device and the selected object store."}</p>
         </div>
         <span class={`vault-view__phase vault-view__phase--${snapshot.phase}`} role="status" aria-live="polite">
-          {runtimeAdopted ? "Encrypted runtime active" : status.label}
+          {localDevice && localDeviceStatus
+            ? "Encrypted device Vault ready"
+            : runtimeAdopted
+              ? "Encrypted runtime active"
+              : status.label}
         </span>
       </header>
 
@@ -50,7 +81,8 @@ export function VaultView({
           value={provider}
           disabled={providerSwitching}
           options={[
-            { value: "google-drive", label: "Google Drive · recommended", description: "Your encrypted Airship workspace folder" },
+            { value: "local-device", label: "Local Device", description: "Encrypted, offline, and persistent in this browser profile" },
+            { value: "google-drive", label: "Google Drive", description: "Your encrypted cross-device Airship workspace folder" },
             { value: "local-lab", label: "S3-compatible / MinIO", description: "Advanced provider or local development lab" },
             { value: "ephemeral", label: "Ephemeral", description: "Page memory only; nothing synced" },
           ]}
@@ -60,13 +92,52 @@ export function VaultView({
       </div>
 
       <div class="vault-view__truth" data-phase={snapshot.phase}>
-        <strong>{status.headline}</strong>
-        <span>{runtimeAdopted
-          ? "This page has adopted the verified client-encrypted workspace and journal adapters. Cross-device convergence remains outside the provider probe and is not certified."
+        <strong>{localDevice
+          ? localDeviceStatus ? "Local Device · encrypted and offline" : "Local Device setup required"
+          : ephemeral ? "Ephemeral · page memory only"
+          : adoptedDrive ? "Google Drive · encrypted" : status.headline}</strong>
+        <span>{localDevice
+          ? localDeviceStatus?.message ?? "Create or recover the device key below. No storage authority is created before the recovery value is acknowledged."
+          : ephemeral
+            ? "No cloud or device Vault is attached. Use this mode for disposable work, or select a durable provider before closing the page."
+          : runtimeAdopted
+          ? adoptedDrive
+            ? "This browser is using the verified client-encrypted Google Drive workspace and journal adapters. Cross-device sync is not evaluated by this probe."
+            : "The active browser runtime uses the verified encrypted workspace and journal adapters. Cross-device sync is not evaluated by this probe."
           : snapshot.message}</span>
       </div>
 
-      {snapshot.phase === "disconnected" ? (
+      {localDevice ? (
+        <>
+          {localDeviceStatus ? (
+            <dl class="vault-view__configuration">
+              <div><dt>Provider</dt><dd>Local Device</dd></div>
+              <div><dt>Storage engine</dt><dd>{localDeviceStatus.readiness.backend === "opfs" ? "Origin Private File System" : "IndexedDB fallback"}</dd></div>
+              <div><dt>Retention</dt><dd>{localDeviceStatus.readiness.persistence === "origin-private-persisted" ? "Persistent permission granted" : "Browser managed · backup recommended"}</dd></div>
+              <div><dt>Synchronization</dt><dd>Device only · offline available</dd></div>
+              <div><dt>Encryption</dt><dd>AES-256-GCM envelopes · non-extractable key handle</dd></div>
+              <div><dt>Schema</dt><dd>v{localDeviceStatus.readiness.schema.current}{localDeviceStatus.readiness.schema.migratedFrom ? ` · migrated from v${localDeviceStatus.readiness.schema.migratedFrom}` : ""}</dd></div>
+            </dl>
+          ) : (
+            <div class="vault-view__empty">
+              <p>Complete the crash-safe recovery ceremony below to activate encrypted offline persistence.</p>
+              {onOpenSetup ? <button type="button" onClick={onOpenSetup}>Open Local Device setup</button> : null}
+            </div>
+          )}
+          {runtimeAdopted && onPublishContext ? <ContextFabricPanel
+            contextMode={contextMode}
+            contextPublishing={contextPublishing}
+            contextPublicationMessage={contextPublicationMessage}
+            localDevice
+            onPublishContext={onPublishContext}
+          /> : null}
+          {runtimeAdopted && onDisconnect ? (
+            <div class="vault-view__actions">
+              <button type="button" class="vault-view__button--quiet" onClick={onDisconnect}>Switch to ephemeral · keep a page copy</button>
+            </div>
+          ) : null}
+        </>
+      ) : snapshot.phase === "disconnected" ? (
         <div class="vault-view__empty">
           <p>No endpoint, credential authority, or workspace key is attached.</p>
           {onOpenSetup && <button type="button" onClick={onOpenSetup}>Configure vault</button>}
@@ -137,6 +208,13 @@ export function VaultView({
             </div>
           )}
 
+          {snapshot.phase === "ready" && runtimeAdopted && onPublishContext ? <ContextFabricPanel
+            contextMode={contextMode}
+            contextPublishing={contextPublishing}
+            contextPublicationMessage={contextPublicationMessage}
+            onPublishContext={onPublishContext}
+          /> : null}
+
           <details class="vault-view__requirements">
             <summary>Deployment requirements</summary>
             <div class="vault-view__details">
@@ -154,12 +232,53 @@ export function VaultView({
               : onProbe && <button type="button" onClick={onProbe} disabled={snapshot.workspaceKey !== "attached"}>
                   {snapshot.phase === "ready" ? "Verify again" : "Run live probe"}
                 </button>}
+            {googleDrive && onReauthorize && <button type="button" class="vault-view__button--secondary" onClick={onReauthorize} disabled={reauthorizing}>
+              {reauthorizing ? "Renewing Google access…" : "Renew Google access"}
+            </button>}
             {onOpenSetup && <button type="button" class="vault-view__button--secondary" onClick={onOpenSetup}>Edit configuration</button>}
-            {onDisconnect && <button type="button" class="vault-view__button--quiet" onClick={onDisconnect}>Disconnect and clear memory</button>}
+            {onDisconnect && <button type="button" class="vault-view__button--quiet" onClick={onDisconnect}>Disconnect · continue locally</button>}
           </div>
         </>
       )}
     </section>
+  );
+}
+
+function ContextFabricPanel({
+  contextMode,
+  contextPublishing,
+  contextPublicationMessage,
+  localDevice = false,
+  onPublishContext,
+}: Readonly<{
+  contextMode?: "memory-only" | "encrypted-ranged" | "local-fallback";
+  contextPublishing: boolean;
+  contextPublicationMessage?: string;
+  localDevice?: boolean;
+  onPublishContext(): void;
+}>) {
+  return (
+    <div class="vault-view__context" data-mode={contextMode ?? "local-fallback"}>
+      <div>
+        <p class="vault-view__eyebrow">Context fabric</p>
+        <strong>{contextMode === "encrypted-ranged" ? "Encrypted generation published" : "On-device index active"}</strong>
+        <span>{contextMode === "encrypted-ranged"
+          ? localDevice
+            ? "Matching turns retrieve authenticated ranges from encrypted device shards without a network request."
+            : "Matching turns fetch routed, authenticated ranges. Newer workspace snapshots fall back locally until you explicitly update this generation."
+          : localDevice
+            ? "Publishing writes encrypted derived shards to this device Vault; source plaintext never leaves this browser."
+            : "No matching encrypted generation is active. Publishing uploads encrypted derived shards; source plaintext never leaves this browser."}</span>
+        {contextPublicationMessage && <small role="status" aria-live="polite">{contextPublicationMessage}</small>}
+      </div>
+      <button type="button" onClick={onPublishContext} disabled={contextPublishing} aria-busy={contextPublishing}>
+        {contextPublishing
+          ? "Publishing encrypted shards…"
+          : contextMode === "encrypted-ranged"
+            ? "Update encrypted index"
+            : "Publish encrypted index"}
+      </button>
+    </div>
   );
 }
 
@@ -172,7 +291,7 @@ function phaseCopy(snapshot: VaultSnapshot): { label: string; headline: string }
     case "disconnected": return { label: "Disconnected", headline: "No vault claim" };
     case "configured": return { label: "Configured", headline: "Configuration only" };
     case "probing": return { label: "Testing", headline: "Live checks in progress" };
-    case "ready": return { label: "Contract verified", headline: "Storage and encryption path ready" };
+    case "ready": return { label: "Contract verified", headline: "Browser storage contract passed" };
     case "degraded": return { label: "Not ready", headline: "Strict mode blocked" };
   }
 }

@@ -7,7 +7,11 @@ The session library is a browser-native control surface over the active `EventJo
 - `src/sessions/domain.ts` contains bounded materialization, structural history assessment, immutable pin extraction, runtime compatibility decisions, and metadata query/sort/filter functions.
 - `src/sessions/library.ts` provides abort-aware list and inspect reads plus conflict-checked fork creation.
 - `src/ui/sessions-view.tsx` is the reusable Preact surface; it owns its responsive styles in `sessions-view.css`.
-- `src/core/contracts.ts` now permits an optional manifest `securityPosture` pin and an immediate `lineage` commitment. Both remain protocol-v1-compatible optional fields for older sessions.
+- `src/core/contracts.ts` accepts historical protocol-v1 manifests for replay
+  and emits protocol-v2 manifests for current work. V2 requires an explicit
+  `turnContext` policy; v1 sessions must be forked before a new turn. Optional
+  `securityPosture` and immediate `lineage` commitments remain readable on both
+  supported versions.
 
 ## Host integration
 

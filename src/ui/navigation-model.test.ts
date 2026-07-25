@@ -90,22 +90,22 @@ describe("canonical navigation model", () => {
     expect(mobilePrimaryControlForView("proof")).toBe("trust");
   });
 
-  it("maps every other non-primary view to More", () => {
+  it("keeps nested destinations attached to their primary mobile parent", () => {
     expect(Object.fromEntries(allViews.map((view) => [view, mobilePrimaryControlForView(view)]))).toEqual({
       chat: "chat",
-      sessions: "more",
+      sessions: "chat",
       workspace: "workspace",
-      editor: "more",
-      terminal: "more",
+      editor: "workspace",
+      terminal: "workspace",
       memory: "more",
       context: "more",
       profiles: "more",
       capabilities: "more",
       skills: "more",
-      vault: "more",
-      billing: "more",
+      vault: "trust",
+      billing: "trust",
       proof: "trust",
-      access: "more",
+      access: "trust",
     });
   });
 

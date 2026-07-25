@@ -13,16 +13,40 @@ export async function publishContextGeneration(args: {
   generation: string;
   embeddingProvider: string;
   dimensions: number;
+  sourceRevision: string;
+  sourceDigest: string;
+  extractor: string;
+  chunker: string;
+  embeddingPosture: "deterministic-bootstrap" | "local-semantic";
+  indexFormat: string;
   chunks: EmbeddedChunk[];
   maxRecordsPerExpert?: number;
   resolveScope?: (chunk: EmbeddedChunk) => ContextScope;
   now?: () => Date;
+  signal?: AbortSignal;
 }): Promise<ContextRoutingMirror> {
-  if (!args.workspaceId || !args.generation || !args.embeddingProvider) {
+  args.signal?.throwIfAborted();
+  if (
+    !args.workspaceId ||
+    !/^sha256:[A-Za-z0-9_-]{43}$/u.test(args.generation) ||
+    !args.embeddingProvider ||
+    !args.sourceRevision ||
+    !/^sha256:[A-Za-z0-9_-]{43}$/u.test(args.sourceDigest) ||
+    !args.extractor ||
+    !args.chunker ||
+    !args.indexFormat
+  ) {
     throw new Error("Context generations require workspace, generation, and embedding identifiers.");
   }
   if (args.chunks.some((chunk) => chunk.vector.length !== args.dimensions)) {
     throw new Error("Context chunks do not match the declared embedding dimensions.");
+  }
+  if (args.chunks.some((chunk) =>
+    !/^sha256:[A-Za-z0-9_-]{43}$/u.test(chunk.id) ||
+    !/^sha256:[A-Za-z0-9_-]{43}$/u.test(chunk.contentDigest) ||
+    !chunk.path || !chunk.revision || !Number.isSafeInteger(chunk.chunkIndex) || chunk.chunkIndex < 0
+  )) {
+    throw new Error("Context chunks do not carry canonical source and chunk lineage.");
   }
   const maxRecords = Math.max(1, Math.min(args.maxRecordsPerExpert ?? 96, 512));
   const grouped = groupChunks(args.chunks, args.resolveScope ?? defaultScope);
@@ -47,8 +71,9 @@ export async function publishContextGeneration(args: {
     contentType: "application/vnd.airship.context-shards+json",
     blocks,
   });
+  args.signal?.throwIfAborted();
   const cloudKey = `context/segments/${sealed.descriptor.objectId}`;
-  const write = await args.store.putIfAbsent(cloudKey, sealed.ciphertext);
+  const write = await args.store.putIfAbsent(cloudKey, sealed.ciphertext, args.signal);
   if (!write.created) throw new Error("A context generation with this identifier already exists.");
 
   const experts: ContextExpert[] = await Promise.all(
@@ -65,11 +90,19 @@ export async function publishContextGeneration(args: {
     })),
   );
   return {
-    version: 1,
+    version: 2,
     generation: args.generation,
     workspaceId: args.workspaceId,
     embeddingProvider: args.embeddingProvider,
     dimensions: args.dimensions,
+    lineage: Object.freeze({
+      sourceRevision: args.sourceRevision,
+      sourceDigest: args.sourceDigest,
+      extractor: args.extractor,
+      chunker: args.chunker,
+      embeddingPosture: args.embeddingPosture,
+      indexFormat: args.indexFormat,
+    }),
     createdAt: (args.now ?? (() => new Date()))().toISOString(),
     objects: {
       [sealed.descriptor.objectId]: { cloudKey, descriptor: sealed.descriptor },
@@ -140,4 +173,3 @@ function lexicalSketch(chunks: EmbeddedChunk[]): string[] {
     .slice(0, 48)
     .map(([token]) => token);
 }
-

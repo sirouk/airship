@@ -1,6 +1,6 @@
 import type { JSX } from "preact";
 import type { SecurityPosture } from "../core/contracts";
-import type { ProofStatus } from "../receipts/types";
+import type { ConversationReceipt, ProofStatus } from "../receipts/types";
 
 export const SEAL_STATES = [
   "none",
@@ -104,12 +104,34 @@ export function sealStateForRuntimeStatus(
   return "none";
 }
 
+export function sealStateForCapabilitySummary(
+  runtimes: readonly Readonly<{ state: string }>[],
+  failed = false,
+): SealState {
+  if (failed) return "failed";
+  if (!runtimes.length) return "checking";
+  const ready = runtimes.filter(({ state }) => state === "ready").length;
+  if (!ready) return runtimes.some(({ state }) => state === "failed") ? "failed" : "none";
+  return ready === runtimes.length ? "verified" : "asserted";
+}
+
 /** Maps runtime posture to the canonical proof-hero shape. */
 export function postureSeal(posture: SecurityPosture | undefined): SealState {
   if (posture === "encrypted-attested") return "verified";
   if (posture === "encrypted-unattested") return "asserted";
   if (posture === "plaintext-remote") return "attention";
   return "none";
+}
+
+/** A stored receipt earns a green hero only when its attested fields agree. */
+export function sealStateForReceipt(receipt: ConversationReceipt | undefined): SealState {
+  if (!receipt) return "none";
+  if (receipt.posture !== "encrypted-attested") return postureSeal(receipt.posture);
+  const attestedLevel = receipt.proofLevel === "attested-endpoint"
+    || receipt.proofLevel === "model-bound"
+    || receipt.proofLevel === "conversation-bound"
+    || receipt.proofLevel === "settled";
+  return receipt.claims.endpointKey.status === "verified" && attestedLevel ? "verified" : "failed";
 }
 
 function sealShape(state: SealState): JSX.Element {

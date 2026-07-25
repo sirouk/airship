@@ -83,7 +83,7 @@ export function BillingView({
       <header class="page-heading billing-heading">
         <span class="eyebrow">Direct user-scoped Chutes telemetry</span>
         <h1>Account standing</h1>
-        <p>See available balance, actual charges, covered subscription runway, fixed four-hour burst capacity, quota configuration, and live invocation headers—without an Airship billing backend.</p>
+        <p>See balance, provider-reported charges, subscription runway, and live limits directly from Chutes.</p>
       </header>
 
       <div class="panel billing-toolbar">
@@ -95,7 +95,7 @@ export function BillingView({
           {online
             ? <a class="small-button" href="https://chutes.ai/app/settings/billing" target="_blank" rel="noreferrer">Manage at Chutes ↗</a>
             : <span class="small-button is-disabled" aria-disabled="true">Manage at Chutes ↗</span>}
-          {accountReadable ? <button class="small-button" type="button" disabled={loading || !online} onClick={() => setRefresh((value) => value + 1)}>{loading ? "Refreshing…" : "Refresh"}</button> : <button class="small-button" type="button" onClick={onOpenAccess}>Open Access</button>}
+          {accountReadable ? <button class="small-button" type="button" disabled={loading || !online} onClick={() => setRefresh((value) => value + 1)}>{loading ? "Refreshing…" : "Refresh"}</button> : null}
         </div>
       </div>
 
@@ -114,6 +114,7 @@ export function BillingView({
             <span class="eyebrow">User-scoped token required</span>
             <h2>Connect your Chutes account</h2>
             <p>Connect with scoped Chutes sign-in or a direct API-key session. The credential remains held only in page memory.</p>
+            <button class="primary billing-gate-action" type="button" onClick={onOpenAccess}>Connect Chutes</button>
             <details class="billing-gate-preview">
               <summary>What becomes available</summary>
               <p>Balance, subscription runway, charged usage, token totals, quota configuration, and live invocation headroom.</p>

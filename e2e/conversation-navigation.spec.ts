@@ -20,7 +20,7 @@ test("desktop treats Chat as the conversation disclosure and preserves the full 
   await navigation.getByRole("button", { name: "Expand recent conversations" }).click();
   await navigation.getByRole("button", { name: "All conversations", exact: true }).click();
   await expect(page).toHaveURL(/#sessions$/);
-  await expect(page.getByRole("heading", { name: "Session library", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "All conversations", level: 1 })).toBeVisible();
 
   await navigation.getByRole("button", { name: "Chat", exact: true }).click();
   await page.locator(".session-id").click();
@@ -37,7 +37,7 @@ test("mobile keeps conversations out of the fixed bar and exposes the ledger thr
   const more = page.getByRole("dialog", { name: "More" });
   await more.getByRole("button").filter({ hasText: "All conversations" }).click();
   await expect(page).toHaveURL(/#sessions$/);
-  await expect(page.getByRole("heading", { name: "Session library", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "All conversations", level: 1 })).toBeVisible();
 });
 
 test("Workspace owns one Editor and Terminal while preserving the legacy Sources deep link", async ({ page }, testInfo) => {
@@ -71,14 +71,16 @@ test("Editor source tools default to a collapsible tree and Profiles archives wi
   }
 
   await page.goto("/#profiles");
+  const danger = page.locator("details.profile-danger-disclosure");
+  await danger.locator("summary").click();
   const remove = page.getByRole("button", { name: /Remove profile|Only profile/u });
   await expect(remove).toBeDisabled();
-  await page.locator(".profile-card").filter({ hasText: "Research Analyst" }).click();
+  await page.locator(".profile-card").filter({ hasText: "Research" }).click();
   await expect(remove).toBeEnabled();
   page.once("dialog", (dialog) => void dialog.accept());
   await remove.click();
   await expect(page.getByText(/Removed from new work/u)).toBeVisible();
-  await expect(page.locator(".profile-card").filter({ hasText: "Research Analyst" })).toHaveCount(0);
+  await expect(page.locator(".profile-card").filter({ hasText: "Research" })).toHaveCount(0);
 });
 
 test("Memory unifies federated search, graph, and the legacy Context index deep link", async ({ page }, testInfo) => {
@@ -89,7 +91,7 @@ test("Memory unifies federated search, graph, and the legacy Context index deep 
   await expect(page.getByRole("tab", { name: "Search" })).toHaveAttribute("aria-selected", "true");
   await expect(page.getByText("Current conversation", { exact: true })).toBeVisible();
   await expect(page.getByText("Active profile memory", { exact: true })).toBeVisible();
-  await expect(page.getByText("Shared workspace & sources", { exact: true })).toBeVisible();
+  await expect(page.getByText("Workspace & sources", { exact: true })).toBeVisible();
   await page.getByRole("tab", { name: "Graph" }).click();
   await expect(page.getByLabel("Interactive memory relationship graph")).toBeVisible();
   await page.goto("/#context");
@@ -119,14 +121,14 @@ test("Profiles opens by default, remains collapsible, and uses one scoped tabbed
   await navigation.getByRole("button", { name: "Profiles", exact: true }).click();
   await expect(navigation.getByRole("button", { name: "Collapse profiles" })).toHaveAttribute("aria-expanded", "true");
   const reopenedProfileList = navigation.locator("#airship-profile-navigation");
-  await reopenedProfileList.getByRole("button", { name: /Research Analyst/u }).click();
+  await reopenedProfileList.getByRole("button", { name: /Research/u }).click();
   await expect(page).toHaveURL(/#profiles$/);
-  await expect(page.getByRole("button", { name: "Profile manager scope" })).toContainText("Research Analyst");
-  await expect(page.locator(".profile-card.active")).toContainText("Research Analyst");
-  await page.getByRole("tab", { name: "Capabilities" }).click();
+  await expect(page.locator(".profile-card.active")).toContainText("Research");
+  const manager = page.getByRole("navigation", { name: "Agent configuration" });
+  await manager.getByRole("button", { name: "Capabilities", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Capabilities", level: 1 })).toBeVisible();
-  await expect(page.getByText(/Availability is measured and read-only/u)).toBeVisible();
-  await page.getByRole("tab", { name: "Skills" }).click();
+  await expect(page.getByText(/No inference provider.*is required for local activation/u)).toBeVisible();
+  await manager.getByRole("button", { name: "Skills", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Skills", level: 1 })).toBeVisible();
   await expect(page.getByText("Profile scope", { exact: true })).toBeVisible();
 });
@@ -136,6 +138,7 @@ test("Profiles keeps catalogs larger than ten inside a ten-row scrolling rail", 
   await page.goto("/#profiles");
   const cards = page.locator(".profile-card");
   const fork = page.getByRole("button", { name: "Fork", exact: true });
+  await expect(cards).toHaveCount(3);
   while (await cards.count() <= 10) {
     const before = await cards.count();
     await expect(fork).toBeEnabled();

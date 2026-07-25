@@ -1,10 +1,10 @@
 import { sha256, stableStringify } from "../core/hash";
 import type { JsonValue } from "../core/contracts";
-import type { SearchHit } from "../indexing/contracts";
 import { readEncryptedSegment } from "../storage/encrypted-segments";
 import { decodeExpertBlock, type StoredContextRecord } from "./codec";
 import type {
   ContextDriverOptions,
+  ContextFabricSearchHit,
   ContextExpert,
   ContextRoutingMirror,
   ContextStreamEvent,
@@ -50,7 +50,7 @@ export class ContextFabricDriver {
     }
 
     const deadline = deadlineSignal(signal, limits.maxLatencyMs);
-    const candidates = new Map<string, SearchHit>();
+    const candidates = new Map<string, ContextFabricSearchHit>();
     const reads: RetrievalObjectRead[] = [];
     let bytesRead = 0;
     let completedExperts = 0;
@@ -103,7 +103,15 @@ export class ContextFabricDriver {
     const hits = topHits(candidates, limits.topK);
     const resultDigest = await sha256(
       stableStringify(
-        hits.map(({ chunkId, path, revision, score }) => ({ chunkId, path, revision, score })) as unknown as JsonValue,
+        await Promise.all(hits.map(async ({ chunkId, path, revision, contentDigest, chunkIndex, score, text }) => ({
+          chunkId,
+          path,
+          revision,
+          contentDigest,
+          chunkIndex,
+          score,
+          textDigest: await sha256(text),
+        }))) as unknown as JsonValue,
       ),
     );
     yield {
@@ -133,7 +141,7 @@ async function fetchExpert(
   queryVector: Float32Array,
   queryTokens: string[],
   signal: AbortSignal,
-): Promise<{ hits: SearchHit[]; read: RetrievalObjectRead }> {
+): Promise<{ hits: ContextFabricSearchHit[]; read: RetrievalObjectRead }> {
   const object = options.mirror.objects[expert.objectId];
   if (!object) throw new Error("The context expert references a missing segment object.");
   const block = object.descriptor.blocks.find((candidate) => candidate.id === expert.blockId);
@@ -203,13 +211,15 @@ function scoreRecord(
   queryVector: Float32Array,
   queryTokens: string[],
   routeScore: number,
-): SearchHit {
+): ContextFabricSearchHit {
   const denseScore = normalizedCosine(record.vector, queryVector);
   const lexicalScore = overlap(queryTokens, record.tokens);
   return {
     chunkId: record.chunkId,
     path: record.path,
     revision: record.revision,
+    contentDigest: record.contentDigest,
+    chunkIndex: record.chunkIndex,
     text: record.text,
     denseScore,
     lexicalScore,
@@ -272,7 +282,7 @@ function tokenize(value: string): string[] {
   return value.toLocaleLowerCase().match(/[\p{L}\p{N}_-]{2,}/gu) ?? [];
 }
 
-function topHits(candidates: Map<string, SearchHit>, limit: number): SearchHit[] {
+function topHits(candidates: Map<string, ContextFabricSearchHit>, limit: number): ContextFabricSearchHit[] {
   return [...candidates.values()]
     .sort((left, right) => right.score - left.score || left.chunkId.localeCompare(right.chunkId))
     .slice(0, limit);
@@ -294,7 +304,17 @@ function routedView(expert: ContextExpert, score: number, bytes: number): Routed
 }
 
 function validateMirror(mirror: ContextRoutingMirror): void {
-  if (mirror.version !== 1 || !mirror.generation || !mirror.workspaceId || mirror.dimensions <= 0) {
+  if (
+    mirror.version !== 2 ||
+    !/^sha256:[A-Za-z0-9_-]{43}$/u.test(mirror.generation) ||
+    !mirror.workspaceId ||
+    mirror.dimensions <= 0 ||
+    !mirror.lineage.sourceRevision ||
+    !/^sha256:[A-Za-z0-9_-]{43}$/u.test(mirror.lineage.sourceDigest) ||
+    !mirror.lineage.extractor ||
+    !mirror.lineage.chunker ||
+    !mirror.lineage.indexFormat
+  ) {
     throw new Error("Invalid context routing mirror.");
   }
   if (!mirror.experts.length || !Object.keys(mirror.objects).length) throw new Error("Context routing mirror is empty.");
@@ -314,4 +334,3 @@ function deadlineSignal(parent: AbortSignal | undefined, timeoutMs: number): { s
     },
   };
 }
-

@@ -1,9 +1,21 @@
-const CACHE_VERSION = "airship-shell-v5";
-const SHELL = ["/", "/manifest.webmanifest", "/favicon.svg"];
+const CACHE_VERSION = "airship-shell-v6";
+const BASE_URL = new URL("./", self.location.href);
+const BASE_PATH = BASE_URL.pathname;
+const SHELL = [BASE_PATH, scopedPath("manifest.webmanifest"), scopedPath("favicon.svg")];
+
+function scopedPath(path) {
+  return new URL(path, BASE_URL).pathname;
+}
+
+function reviewedAssetPath(path) {
+  return typeof path === "string"
+    && /^assets\/[A-Za-z0-9._/-]+$/u.test(path)
+    && path.split("/").every((segment) => segment && segment !== "." && segment !== "..");
+}
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
-    fetch("/release-manifest.json", { cache: "no-store", credentials: "omit" })
+    fetch(scopedPath("release-manifest.json"), { cache: "no-store", credentials: "omit" })
       .then((response) => {
         if (!response.ok) throw new Error("Airship release manifest was unavailable during service-worker install.");
         return response.json();
@@ -14,8 +26,8 @@ self.addEventListener("install", (event) => {
         }
         const assets = manifest.artifacts
           .map((artifact) => artifact?.path)
-          .filter((path) => typeof path === "string" && /^assets\/[A-Za-z0-9._/-]+$/u.test(path))
-          .map((path) => `/${path}`);
+          .filter(reviewedAssetPath)
+          .map(scopedPath);
         if (assets.length === 0) throw new Error("Airship release manifest did not contain its application assets.");
         return caches.open(CACHE_VERSION).then((cache) => cache.addAll([...SHELL, ...new Set(assets)]));
       }),
@@ -44,18 +56,22 @@ self.addEventListener("fetch", (event) => {
       fetch(event.request)
         .then((response) => {
           if (response.ok && response.type === "basic") {
-            event.waitUntil(caches.open(CACHE_VERSION).then((cache) => cache.put("/", response.clone())));
+            event.waitUntil(caches.open(CACHE_VERSION).then((cache) => cache.put(BASE_PATH, response.clone())));
           }
           return response;
         })
-        .catch(() => caches.match("/").then((cached) => cached ?? Response.error())),
+        .catch(() => caches.match(BASE_PATH).then((cached) => cached ?? Response.error())),
     );
     return;
   }
 
   const isStaticAsset =
-    requestUrl.pathname.startsWith("/assets/") ||
-    requestUrl.pathname.startsWith("/execution-packs/pyodide/") ||
+    requestUrl.pathname.startsWith(scopedPath("assets/")) ||
+    requestUrl.pathname.startsWith(scopedPath("execution-packs/pyodide/")) ||
+    // The reviewed semantic artifact manifest pins every byte below this
+    // versioned same-origin prefix. Cache on first use; do not inflate the
+    // install transaction with optional model weights.
+    requestUrl.pathname.startsWith(scopedPath("semantic-pack/v1/")) ||
     SHELL.includes(requestUrl.pathname);
   if (!isStaticAsset) return;
   event.respondWith(

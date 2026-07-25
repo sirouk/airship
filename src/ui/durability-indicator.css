@@ -1,6 +1,8 @@
 .durability-indicator { display:inline-flex; align-items:center; gap:7px; width:max-content; padding:5px 8px; border:1px solid var(--line-strong); border-radius:var(--radius-control); color:var(--ink-muted); font-size:var(--fs-caption); }
 .durability-indicator i { width:8px; height:8px; border:1px solid currentColor; border-radius:50%; }
 .durability-indicator.ephemeral { border-style:dashed; color:var(--truth-local); }
+.durability-indicator.local { border-style:solid; color:var(--v-info); }
+.durability-indicator.local i { background:currentColor; }
 .durability-indicator.syncing { border-style:dashed; color:var(--v-info); }
 .durability-indicator.syncing i { border-top-color:transparent; }
 .durability-indicator.synced { border-style:solid; color:var(--v-verified); }

@@ -1,8 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { SwitchableEmbeddingProvider, readEmbeddingMode, writeEmbeddingMode } from "./semantic-browser-provider";
+import {
+  createBrowserSemanticProvider,
+  SwitchableEmbeddingProvider,
+  readEmbeddingMode,
+  writeEmbeddingMode,
+} from "./semantic-browser-provider";
 import { AIRSHIP_SEMANTIC_MODEL, LazySemanticWorkerEmbeddingProvider, type SemanticWorkerRequest, type SemanticWorkerResponse } from "./semantic-worker-provider";
 import { ClientContextRuntime } from "../retrieval/client-context-runtime";
 import { MemoryWorkspace } from "../workspace/memory";
+import type { BrowserRuntimeCapabilityReport } from "../capabilities/browser-runtime";
 
 describe("semantic embedding selection", () => {
   beforeEach(() => {
@@ -25,11 +31,39 @@ describe("semantic embedding selection", () => {
     expect(readEmbeddingMode()).toBe("semantic");
   });
 
+  it("keeps bootstrap retrieval live when browser preference storage is denied", () => {
+    vi.stubGlobal("localStorage", {
+      getItem() { throw new DOMException("Storage denied", "SecurityError"); },
+      setItem() { throw new DOMException("Storage denied", "SecurityError"); },
+    });
+    expect(readEmbeddingMode()).toBe("bootstrap");
+    expect(() => writeEmbeddingMode("semantic")).not.toThrow();
+    expect(new SwitchableEmbeddingProvider().posture).toBe("deterministic-bootstrap");
+  });
+
   it("does not construct the semantic worker while bootstrap mode is active", async () => {
     const worker = vi.spyOn(globalThis, "Worker");
     const provider = new SwitchableEmbeddingProvider(384, "bootstrap");
     await provider.embed(["local only"]);
     expect(worker).not.toHaveBeenCalled();
+  });
+
+  it("prefers WebGPU only when the live capability policy selected a probed adapter", async () => {
+    const webgpuWorker = new FakeSemanticWorker();
+    const webgpuProvider = createBrowserSemanticProvider({
+      workerFactory: () => webgpuWorker,
+      capabilities: () => ({ scheduling: scheduling("webgpu") }),
+    });
+    await webgpuProvider.embed(["adapter passed"]);
+    expect(webgpuWorker.requests[0]).toMatchObject({ type: "initialize", preferredBackend: "webgpu" });
+
+    const wasmWorker = new FakeSemanticWorker();
+    const wasmProvider = createBrowserSemanticProvider({
+      workerFactory: () => wasmWorker,
+      capabilities: () => ({ scheduling: scheduling("wasm") }),
+    });
+    await wasmProvider.embed(["adapter absent"]);
+    expect(wasmWorker.requests[0]).toMatchObject({ type: "initialize", preferredBackend: "wasm" });
   });
 
   it("drops the bootstrap materialization and rebuilds every unchanged revision on semantic activation", async () => {
@@ -49,8 +83,10 @@ describe("semantic embedding selection", () => {
 });
 
 class FakeSemanticWorker {
+  readonly requests: SemanticWorkerRequest[] = [];
   private listeners = new Set<(event: MessageEvent<SemanticWorkerResponse>) => void>();
   postMessage(message: SemanticWorkerRequest) {
+    this.requests.push(structuredClone(message));
     queueMicrotask(() => {
       if (message.type === "initialize") this.emit({ type: "ready", requestId: message.requestId, manifest: AIRSHIP_SEMANTIC_MODEL, backend: "wasm" });
       if (message.type === "embed") this.emit({ type: "result", requestId: message.requestId, vectors: message.texts.map(() => Float32Array.from({ length: 384 }, (_, i) => i === 0 ? 1 : 0)) });
@@ -60,4 +96,22 @@ class FakeSemanticWorker {
   removeEventListener(_type: "message", listener: (event: MessageEvent<SemanticWorkerResponse>) => void) { this.listeners.delete(listener); }
   terminate() { this.listeners.clear(); }
   private emit(data: SemanticWorkerResponse) { for (const listener of this.listeners) listener({ data } as MessageEvent<SemanticWorkerResponse>); }
+}
+
+function scheduling(
+  preferredSemanticBackend: "webgpu" | "wasm",
+): BrowserRuntimeCapabilityReport["scheduling"] {
+  return Object.freeze({
+    class: "balanced",
+    maxWorkerConcurrency: 2,
+    maxIndexingConcurrency: 2,
+    embeddingBatchSize: 12,
+    yieldEveryMs: 12,
+    heavyPackLoading: "lazy-on-demand",
+    preferredSemanticBackend,
+    preferredWasmTier: "simd",
+    preferredWorkspaceStorage: "opfs",
+    powerPreference: "default",
+    reasons: Object.freeze(["test policy"]),
+  });
 }

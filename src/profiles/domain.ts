@@ -1,6 +1,11 @@
-import type { JsonValue, SecurityPosture } from "../core/contracts";
+import type { JsonValue, SecurityPosture, ToolDefinition } from "../core/contracts";
 import { sha256 } from "../core/hash";
-import { composeAirshipOperatingPrompt } from "../core/operating-charter";
+import {
+  composeAirshipOperatingPrompt,
+  type InferenceDirectoryPromptDefinition,
+  type ObservedBrowserCapabilityPromptDefinition,
+} from "../core/operating-charter";
+import type { ApprovalMode } from "../approvals/modes";
 
 const MAX_DESCRIPTION_LENGTH = 4_096;
 const MAX_NAME_LENGTH = 120;
@@ -10,6 +15,23 @@ const MAX_TOOLS_PER_SKILL = 128;
 
 export type ContentDigest = `sha256:${string}`;
 export type SkillMode = "inherit" | "on" | "off";
+/** The memory corpus a profile is allowed to prioritize for new work. */
+export type ProfileMemoryScope = "session" | "profile" | "workspace";
+/**
+ * A profile never receives an ambient host path. It either follows the runtime
+ * workspace selected by the person, or requires one exact runtime workspace ID.
+ */
+export type ProfileWorkspaceBinding = Readonly<
+  | { kind: "active-workspace" }
+  | { kind: "workspace-id"; workspaceId: string }
+>;
+
+/** The complete non-prompt profile boundary copied into a new session pin. */
+export type ResolvedProfileSilo = Readonly<{
+  workspaceBinding: ProfileWorkspaceBinding;
+  memoryScope: ProfileMemoryScope;
+  approvalMode: ApprovalMode;
+}>;
 export type ThemeColorScheme = "dark" | "light";
 export type ThemeFontFamily = "system-sans" | "system-serif";
 export type ThemeTypeScale = "compact" | "standard" | "large";
@@ -97,6 +119,8 @@ export type SkillRevision = Readonly<{
 export type GlobalSkillSettings = Readonly<Record<string, boolean>>;
 
 export type ProfileRevisionDraft = Readonly<{
+  /** Version 1 revisions remain valid historical objects. New revisions are version 2. */
+  version?: 1 | 2;
   profileId: string;
   parentRevision?: ContentDigest;
   name: string;
@@ -105,6 +129,12 @@ export type ProfileRevisionDraft = Readonly<{
   providerId: string;
   model: string;
   minimumPosture: SecurityPosture;
+  /** Profile-owned workspace boundary. Omitted only by legacy version-1 profiles. */
+  workspaceBinding?: ProfileWorkspaceBinding;
+  /** Profile-owned recall lane. Omitted only by legacy version-1 profiles. */
+  memoryScope?: ProfileMemoryScope;
+  /** Profile-owned default for effectful browser actions. */
+  approvalMode?: ApprovalMode;
   theme: Readonly<{
     themeId: string;
     digest: ContentDigest;
@@ -115,7 +145,7 @@ export type ProfileRevisionDraft = Readonly<{
 }>;
 
 export type ProfileRevision = Readonly<ProfileRevisionDraft & {
-  version: 1;
+  version: 1 | 2;
   revision: ContentDigest;
 }>;
 
@@ -136,7 +166,7 @@ export type ResolvedSkillPin = Readonly<{
 
 /** Fully resolved, content-addressed material to copy into a new session manifest. */
 export type SessionProfilePin = Readonly<{
-  version: 1;
+  version: 2;
   profile: Readonly<{
     profileId: string;
     revision: ContentDigest;
@@ -148,6 +178,9 @@ export type SessionProfilePin = Readonly<{
   providerId: string;
   model: string;
   minimumPosture: SecurityPosture;
+  workspaceBinding: ProfileWorkspaceBinding;
+  memoryScope: ProfileMemoryScope;
+  approvalMode: ApprovalMode;
   skillDecisions: readonly ResolvedSkillDecision[];
   resolvedSkills: readonly ResolvedSkillPin[];
   resolvedSkillDigests: readonly ContentDigest[];
@@ -194,11 +227,31 @@ export async function createProfileRevision(draft: ProfileRevisionDraft): Promis
   return deepFreeze({ ...payload, revision }) as ProfileRevision;
 }
 
+/**
+ * Resolves the implicit defaults of a historical v1 profile without rewriting
+ * its digest. Callers should pin this result, never mutate the legacy object.
+ */
+export function resolveProfileSilo(profile: Pick<ProfileRevisionDraft,
+  "workspaceBinding" | "memoryScope" | "approvalMode"
+>): ResolvedProfileSilo {
+  return deepFreeze({
+    workspaceBinding: normalizeWorkspaceBinding(profile.workspaceBinding),
+    memoryScope: oneOf(profile.memoryScope ?? "profile", ["session", "profile", "workspace"] as const, "memory scope"),
+    approvalMode: oneOf(profile.approvalMode ?? "ask-first", ["ask-first", "auto-approve", "full-access"] as const, "approval mode"),
+  }) as ResolvedProfileSilo;
+}
+
 export async function resolveProfileForSession(args: Readonly<{
   profile: ProfileRevision;
   theme: ThemeManifest;
   skills: readonly SkillRevision[];
   globalSkills: GlobalSkillSettings;
+  /** Exact tool contracts installed in the runtime that will own this immutable session. */
+  installedTools?: readonly ToolDefinition[];
+  /** Successful device observations copied into this immutable session prompt. */
+  browserCapabilities?: readonly ObservedBrowserCapabilityPromptDefinition[];
+  /** Credential-free provider/model availability copied into this immutable session prompt. */
+  inferenceDirectory?: InferenceDirectoryPromptDefinition;
 }>): Promise<SessionProfilePin> {
   await verifyProfileRevision(args.profile);
   await verifyThemeManifest(args.theme);
@@ -249,15 +302,25 @@ export async function resolveProfileForSession(args: Readonly<{
     digest: skill.digest,
     promptOrder: skill.promptOrder,
   })));
-  const systemPrompt = composeSystemPrompt(args.profile.systemPrompt, enabledSkills);
+  const systemPrompt = composeSystemPrompt(
+    args.profile.systemPrompt,
+    enabledSkills,
+    args.installedTools ?? [],
+    args.browserCapabilities ?? [],
+    args.inferenceDirectory,
+  );
   const systemPromptDigest = asContentDigest(await sha256(systemPrompt));
+  const silo = resolveProfileSilo(args.profile);
   const resolutionDigest = await digestJson({
-    version: 1,
+    version: 2,
     profile: { profileId: args.profile.profileId, revision: args.profile.revision },
     theme: { themeId: args.theme.themeId, digest: args.theme.digest },
     providerId: args.profile.providerId,
     model: args.profile.model,
     minimumPosture: args.profile.minimumPosture,
+    workspaceBinding: silo.workspaceBinding,
+    memoryScope: silo.memoryScope,
+    approvalMode: silo.approvalMode,
     resolvedSkills: resolvedSkills.map((skill) => ({
       skillId: skill.skillId,
       digest: skill.digest,
@@ -268,12 +331,15 @@ export async function resolveProfileForSession(args: Readonly<{
   });
 
   return deepFreeze({
-    version: 1,
+    version: 2,
     profile: { profileId: args.profile.profileId, revision: args.profile.revision },
     theme: { themeId: args.theme.themeId, digest: args.theme.digest },
     providerId: args.profile.providerId,
     model: args.profile.model,
     minimumPosture: args.profile.minimumPosture,
+    workspaceBinding: silo.workspaceBinding,
+    memoryScope: silo.memoryScope,
+    approvalMode: silo.approvalMode,
     skillDecisions: decisions,
     resolvedSkills,
     resolvedSkillDigests,
@@ -284,8 +350,14 @@ export async function resolveProfileForSession(args: Readonly<{
   }) as SessionProfilePin;
 }
 
-function composeSystemPrompt(basePrompt: string, skills: readonly SkillRevision[]): string {
-  return composeAirshipOperatingPrompt(basePrompt, skills);
+function composeSystemPrompt(
+  basePrompt: string,
+  skills: readonly SkillRevision[],
+  installedTools: readonly ToolDefinition[],
+  browserCapabilities: readonly ObservedBrowserCapabilityPromptDefinition[],
+  inferenceDirectory?: InferenceDirectoryPromptDefinition,
+): string {
+  return composeAirshipOperatingPrompt(basePrompt, skills, installedTools, browserCapabilities, inferenceDirectory);
 }
 
 async function verifyThemeManifest(theme: ThemeManifest): Promise<void> {
@@ -361,8 +433,10 @@ function profilePayload(draft: ProfileRevisionDraft): Omit<ProfileRevision, "rev
     skillModes[skillId] = oneOf(rawMode, ["inherit", "on", "off"] as const, `mode for ${skillId}`);
   }
   const parentRevision = draft.parentRevision ? contentDigest(draft.parentRevision, "parent profile revision") : undefined;
+  const version = draft.version ?? 2;
+  if (version !== 1 && version !== 2) throw new Error("Profile version is invalid.");
   const base = {
-    version: 1 as const,
+    version,
     profileId: identifier(draft.profileId, "profile ID"),
     name: boundedText(draft.name, "profile name", MAX_NAME_LENGTH),
     description: boundedText(draft.description, "profile description", MAX_DESCRIPTION_LENGTH, true),
@@ -381,7 +455,27 @@ function profilePayload(draft: ProfileRevisionDraft): Omit<ProfileRevision, "rev
     skillModes,
     createdAt: isoTimestamp(draft.createdAt),
   };
-  return parentRevision ? { ...base, parentRevision } : base;
+  if (version === 1) {
+    if (draft.workspaceBinding !== undefined || draft.memoryScope !== undefined || draft.approvalMode !== undefined) {
+      throw new Error("Version 1 profiles cannot carry silo settings; create a new revision instead.");
+    }
+    return parentRevision ? { ...base, parentRevision } : base;
+  }
+  const silo = resolveProfileSilo(draft);
+  const v2 = { ...base, ...silo };
+  return parentRevision ? { ...v2, parentRevision } : v2;
+}
+
+function normalizeWorkspaceBinding(value: ProfileWorkspaceBinding | undefined): ProfileWorkspaceBinding {
+  if (value === undefined) return Object.freeze({ kind: "active-workspace" });
+  if (value.kind === "active-workspace") {
+    if (Object.keys(value).length !== 1) throw new Error("Active workspace binding cannot include a workspace ID.");
+    return Object.freeze({ kind: "active-workspace" });
+  }
+  if (value.kind !== "workspace-id") throw new Error("Workspace binding is invalid.");
+  const workspaceId = boundedText(value.workspaceId, "workspace ID", 512);
+  if (/^[\u0000-\u001f\u007f]/u.test(workspaceId)) throw new Error("Workspace ID is invalid.");
+  return Object.freeze({ kind: "workspace-id", workspaceId });
 }
 
 function assertKnownSkillIds(

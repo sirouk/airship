@@ -13,6 +13,7 @@ export { auditSessionHistory } from "./core/session-audit";
 export { EncryptedWorkspaceGitAdapter } from "./git/encrypted-workspace-adapter";
 export { CanvasMemoryGraphSurface } from "./memory-graph/canvas-renderer";
 export { EncryptedObjectJournalBackend } from "./storage/encrypted-object-journal";
+export { EncryptedProfileCatalogStore } from "./profiles/persistence";
 export { runObjectStoreConformance } from "./storage/conformance";
 export { S3ObjectStore } from "./storage/s3-object-store";
 export {
@@ -24,7 +25,18 @@ export {
 } from "./storage/google-drive-auth";
 export { GoogleDriveObjectStore } from "./storage/google-drive-object-store";
 export { GoogleDriveWorkspaceManager } from "./storage/google-drive-workspace";
-export { createLoadedAirshipToolRegistry } from "./tools/tool-bundle";
+export {
+  LocalDeviceObjectStore,
+  openLocalDeviceObjectStore,
+  requestPersistentLocalDeviceStorage,
+} from "./storage/local-device-object-store";
+export {
+  importLocalDeviceWorkspaceRecoveryKey,
+  openLocalDeviceWorkspaceKey,
+  prepareLocalDeviceWorkspaceKeyEnrollment,
+} from "./storage/local-device-keyring";
+export { createClientCiphertextCache } from "./storage/client-ciphertext-cache";
+export { CiphertextCachingObjectStore } from "./storage/caching-object-store";
 export { AccessView } from "./ui/access-view";
 export { AttestationsView } from "./ui/attestations-view";
 export { BillingView } from "./ui/billing-view";
@@ -37,6 +49,15 @@ export {
   createLocalLabConfigureRequest,
   importLocalLabRecoveryKey,
 } from "./vault/local-lab";
-export { migrateJournalState, migrateWorkspaceState } from "./vault/runtime-adoption";
+export {
+  WorkspaceRecoveryMaterial,
+  importWorkspaceRecoveryKey,
+} from "./vault/recovery";
+export { migrateJournalState, migrateProfileCatalogState, migrateWorkspaceState } from "./vault/runtime-adoption";
 export { EncryptedObjectWorkspace } from "./vault/encrypted-workspace";
+export { VaultContextFabricPort } from "./vault/context-fabric-port";
+export {
+  openLocalDeviceVault,
+  restoreLocalDeviceVaultBackup,
+} from "./vault/local-device";
 export { SourcesView } from "./ui/sources-view";

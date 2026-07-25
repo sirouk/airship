@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { FileSystemTree, WebContainer, WebContainerProcess } from "@webcontainer/api";
 import { MemoryWorkspace } from "../workspace/memory";
+import { decodeWorkspaceBytes, encodeWorkspaceBytes } from "../workspace/content-codec";
 import { executeNodeProject } from "./node-webcontainer-adapter";
 
 describe("Node WebContainer adapter", () => {
@@ -32,9 +33,13 @@ describe("Node WebContainer adapter", () => {
     });
 
     expect(mounted).toMatchObject({
-      "package.json": { file: { contents: expect.stringContaining("build") } },
-      "index.js": { file: { contents: "console.log('before')\n" } },
+      "package.json": { file: { contents: expect.any(Uint8Array) } },
+      "index.js": { file: { contents: expect.any(Uint8Array) } },
     });
+    const mountedIndex = mounted?.["index.js"];
+    expect(mountedIndex && "file" in mountedIndex && "contents" in mountedIndex.file
+      ? new TextDecoder().decode(mountedIndex.file.contents as Uint8Array)
+      : undefined).toBe("console.log('before')\n");
     expect(result).toMatchObject({ runtime: "node-webcontainer", exitCode: 0, stdout: "node-ready\n" });
     expect(result.value).toMatchObject({ adopted: true, outputStream: "combined" });
     expect(await workspace.read("/workspace/app/index.js")).toMatchObject({ content: "console.log('after')\n" });
@@ -91,6 +96,70 @@ describe("Node WebContainer adapter", () => {
     });
     expect(result).toMatchObject({ exitCode: 1, value: { adopted: false } });
     expect(await workspace.read("/workspace/app/index.js")).toMatchObject({ content: "before\n" });
+  });
+
+  it("round-trips opaque workspace bytes without executing the envelope text", async () => {
+    const workspace = new MemoryWorkspace();
+    const before = new Uint8Array([0, 255, 1, 2, 128]);
+    const after = new Uint8Array([0, 254, 3, 4, 129]);
+    await workspace.write("/workspace/app/blob.bin", encodeWorkspaceBytes(before));
+    let mounted: FileSystemTree | undefined;
+    const container = fakeContainer({
+      mount(tree) { mounted = tree; },
+      exported: { "blob.bin": { file: { contents: after } } },
+    });
+
+    await executeNodeProject(container, {
+      runtime: "node-webcontainer",
+      workspace,
+      workspaceRoot: "/workspace/app",
+      command: "node",
+      args: ["noop.js"],
+      timeoutMs: 5_000,
+      writeBack: true,
+      signal: new AbortController().signal,
+    });
+
+    const mountedBlob = mounted?.["blob.bin"];
+    expect(mountedBlob && "file" in mountedBlob && "contents" in mountedBlob.file
+      ? [...mountedBlob.file.contents as Uint8Array]
+      : undefined).toEqual([...before]);
+    expect([...(decodeWorkspaceBytes((await workspace.read("/workspace/app/blob.bin"))!.content))]).toEqual([...after]);
+  });
+
+  it("keeps the execution deadline active until the provider output stream closes", async () => {
+    const workspace = new MemoryWorkspace();
+    const kill = vi.fn();
+    const container = {
+      fs: {
+        mkdir: vi.fn(async () => "jobs"),
+        rm: vi.fn(async () => undefined),
+      },
+      async mount() {},
+      async spawn() {
+        return {
+          exit: Promise.resolve(0),
+          input: new WritableStream<string>(),
+          output: new ReadableStream<string>({
+            start(controller) { controller.enqueue("partial output"); },
+          }),
+          kill,
+          resize() {},
+        };
+      },
+      async export() { return {}; },
+    } as unknown as Pick<WebContainer, "export" | "fs" | "mount" | "spawn">;
+
+    await expect(executeNodeProject(container, {
+      runtime: "node-webcontainer",
+      workspace,
+      workspaceRoot: "/workspace",
+      command: "node",
+      args: ["index.js"],
+      timeoutMs: 20,
+      signal: new AbortController().signal,
+    })).rejects.toThrow("exceeded 20 ms");
+    expect(kill).toHaveBeenCalled();
   });
 });
 

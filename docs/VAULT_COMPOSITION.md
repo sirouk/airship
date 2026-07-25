@@ -83,6 +83,15 @@ if (result.phase !== "ready") throw new Error(result.phase);
 const { journal, workspace } = vault.readyRuntime();
 ```
 
+After conformance succeeds, the ready runtime wraps the provider with a
+ciphertext-only accelerator. It probes dedicated-worker OPFS sync access first,
+then async OPFS, IndexedDB, and page memory. The wrapper admits only immutable
+workspace/Git objects and encrypted context pages; provider reads remain
+mandatory for mutable heads, list operations, create-if-absent, and every CAS.
+The factual result is available as `vault.readyRuntime().acceleration` and does
+not change the Vault readiness or synchronization verdict. See
+[CLIENT_STORAGE_ACCELERATION.md](CLIENT_STORAGE_ACCELERATION.md).
+
 The credential provider object and non-extractable `WorkspaceRootKey` are
 private coordinator fields. Snapshots, subscribers, diagnostics, and the
 [`VaultView`](../src/ui/vault-view.tsx) receive neither. `disconnect()` aborts

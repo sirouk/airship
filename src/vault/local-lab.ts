@@ -1,4 +1,3 @@
-import { fromBase64Url, toBase64Url } from "../core/hash";
 import { WorkspaceRootKey } from "../storage/encrypted-envelope";
 import type { S3TemporaryCredentials } from "../storage/s3-object-store";
 import {
@@ -10,7 +9,6 @@ import type {
   ResettableVaultCredentialProvider,
 } from "./coordinator";
 
-const RECOVERY_PREFIX = "airship-wrk-v1.";
 const MAX_ACCESS_KEY_BYTES = 256;
 const MAX_SECRET_KEY_BYTES = 4_096;
 
@@ -70,70 +68,12 @@ export class MemoryOnlyLocalLabCredentialProvider implements ResettableVaultCred
   }
 }
 
-/** One-time recovery display plus a non-extractable WebCrypto workspace key. */
-export class LocalLabRecoveryMaterial {
-  #workspaceKey?: WorkspaceRootKey;
-  #recoveryBytes?: Uint8Array;
-  #displayValue?: string;
-
-  private constructor(key: WorkspaceRootKey, recoveryBytes: Uint8Array) {
-    this.#workspaceKey = key;
-    this.#recoveryBytes = recoveryBytes;
-    this.#displayValue = `${RECOVERY_PREFIX}${toBase64Url(recoveryBytes)}`;
-  }
-
-  static async generate(): Promise<LocalLabRecoveryMaterial> {
-    const { key, recoveryBytes } = await WorkspaceRootKey.generate();
-    return new LocalLabRecoveryMaterial(key, recoveryBytes);
-  }
-
-  get workspaceKey(): WorkspaceRootKey {
-    if (!this.#workspaceKey) throw new DOMException("Recovery material was cleared.", "InvalidStateError");
-    return this.#workspaceKey;
-  }
-
-  get displayValue(): string {
-    if (!this.#displayValue) throw new DOMException("Recovery material was cleared.", "InvalidStateError");
-    return this.#displayValue;
-  }
-
-  get cleared(): boolean {
-    return !this.#workspaceKey;
-  }
-
-  clear(): void {
-    this.#recoveryBytes?.fill(0);
-    this.#recoveryBytes = undefined;
-    this.#displayValue = undefined;
-    this.#workspaceKey = undefined;
-  }
-
-  toJSON(): { kind: "workspace-recovery"; available: boolean; persistence: "memory-only" } {
-    return { kind: "workspace-recovery", available: !this.cleared, persistence: "memory-only" };
-  }
-}
-
-export async function importLocalLabRecoveryKey(value: string): Promise<WorkspaceRootKey> {
-  const normalized = value.trim();
-  if (!normalized.startsWith(RECOVERY_PREFIX)) throw new Error("Airship recovery key version is invalid.");
-  const encoded = normalized.slice(RECOVERY_PREFIX.length);
-  if (!/^[A-Za-z0-9_-]{43}$/u.test(encoded)) throw new Error("Airship recovery key encoding is invalid.");
-  let bytes: Uint8Array;
-  try {
-    bytes = fromBase64Url(encoded);
-  } catch {
-    throw new Error("Airship recovery key encoding is invalid.");
-  }
-  if (bytes.byteLength !== 32 || toBase64Url(bytes) !== encoded) {
-    bytes.fill(0);
-    throw new Error("Airship recovery key encoding is invalid.");
-  }
-  try {
-    return await WorkspaceRootKey.import(bytes);
-  } finally {
-    bytes.fill(0);
-  }
-}
+// Backward-compatible names for the original local-lab callers. Recovery is a
+// workspace authority shared by every provider, not an S3-specific concept.
+export {
+  WorkspaceRecoveryMaterial as LocalLabRecoveryMaterial,
+  importWorkspaceRecoveryKey as importLocalLabRecoveryKey,
+} from "./recovery";
 
 /**
  * Produces a coordinator request but performs no network call and runs no

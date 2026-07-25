@@ -17,7 +17,7 @@ button.status-seal:hover { border-color: var(--line-strong); background: var(--s
 .nav-item.active::after { background: var(--accent-bright); opacity: 1; }
 .nav-item.active::before { content: none; }
 .session-attestation { display: inline-flex; min-height: 2rem; align-items: center; padding: .25rem .5rem; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--surface-soft); }
-.trust-hub-tabs { position: sticky; z-index: 8; top: 0; display: flex; gap: .25rem; min-height: 2.75rem; align-items: center; padding: .375rem max(1rem, env(safe-area-inset-left)); overflow-x: auto; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--ground) 94%, transparent); scroll-snap-type: x proximity; scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
+.trust-hub-tabs { position: sticky; z-index: 8; top: 0; display: flex; gap: .25rem; min-height: 2.75rem; align-items: center; padding: .375rem max(1rem, env(safe-area-inset-left)); overflow-x: auto; border-bottom: 1px solid var(--line); background: var(--ground); scroll-snap-type: x proximity; scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
 .trust-hub-tabs::-webkit-scrollbar { height: 3px; }
 .trust-hub-tabs::-webkit-scrollbar-thumb { border-radius: 3px; background: var(--line-strong); }
 .trust-hub-tabs button { min-height: 2.75rem; padding: 0 .75rem; border: 1px solid transparent; border-radius: var(--radius-control); background: transparent; color: var(--ink-muted); scroll-snap-align: nearest; }
@@ -81,6 +81,12 @@ button.status-seal:hover { border-color: var(--line-strong); background: var(--s
 .preference-menu { width: 100%; }
 .preference-menu .menu-select-trigger { min-height: 2.5rem; border-color: var(--line-strong); background: var(--surface-soft); }
 .preference-menu .menu-select-popover { top: calc(100% + .35rem); right: 0; bottom: auto; min-width: min(22rem, calc(100vw - 2rem)); }
+.profile-approval-preference { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .65rem 1rem; align-items: center; padding: .75rem 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.profile-approval-preference > div { display: grid; gap: .2rem; }
+.profile-approval-preference > div span { color: var(--ink-muted); font-size: .75rem; }
+.profile-approval-preference > div strong { font-size: .9rem; }
+.profile-approval-preference > button { padding-inline: .75rem; color: var(--accent-bright); }
+.profile-approval-preference > p { grid-column: 1 / -1; margin: 0; color: var(--ink-muted); font-size: .75rem; line-height: 1.45; }
 .preferences-dialog__reset { width: 100%; margin-top: 1rem; }
 
 .trust-sheet { width: min(34rem, 100%); padding: 1rem; border: 1px solid var(--line-strong); border-radius: var(--radius-panel); background: var(--surface-raised); box-shadow: var(--shadow); }
@@ -119,7 +125,11 @@ button.status-seal:hover { border-color: var(--line-strong); background: var(--s
 :root[data-keyboard-open="true"] .composer-wrap { bottom: var(--visual-viewport-bottom, 0); }
 
 @media (max-width: 640px) {
-  .trust-hub-tabs { box-shadow: inset 16px 0 13px -16px var(--ink-muted), inset -16px 0 13px -16px var(--ink-muted); }
+  .trust-hub-tabs { box-sizing: border-box; min-height: 45px; padding-block: 0; padding-inline-start: max(8px, env(safe-area-inset-left)); padding-inline-end: max(8px, env(safe-area-inset-right)); background: var(--ground); box-shadow: none; scrollbar-width: none; overscroll-behavior-inline: contain; }
+  .trust-hub-tabs::-webkit-scrollbar { display: none; }
+  .trust-hub-tabs button { min-height: 44px; padding-inline: 12px; border: 0; border-radius: 0; background: transparent; white-space: nowrap; }
+  .trust-hub-tabs button.is-active { border: 0; background: transparent; box-shadow: inset 0 -2px var(--accent); }
+  .trust-hub-tabs button:focus-visible { outline: 2px solid var(--accent-bright); outline-offset: -3px; }
   .platform-scrim { place-items: end center; padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
   .command-palette, .preferences-dialog, .trust-sheet { width: 100%; max-height: min(84vh, 44rem); border-radius: var(--radius-panel) var(--radius-panel) 0 0; }
   .preferences-dialog { -webkit-overflow-scrolling: touch; }
@@ -132,6 +142,8 @@ button.status-seal:hover { border-color: var(--line-strong); background: var(--s
   }
   .command-palette__results { max-height: 55vh; }
   .preference-row { grid-template-columns: 1fr; gap: .35rem; padding: .55rem 0; }
+  .profile-approval-preference { grid-template-columns: 1fr; }
+  .profile-approval-preference > button { justify-self: stretch; }
   .pwa-update { right: .5rem; bottom: calc(4.5rem + env(safe-area-inset-bottom)); left: .5rem; }
 }
 

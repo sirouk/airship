@@ -6,6 +6,7 @@ import { gitWorktreeWorkspaceRoot, resolveGitWorkspaceBinding } from "../git/wor
 import type { GitAuthor, GitOperation, GitOperationDescriptor, GitRepositorySnapshot, GitStatusEntry, GitWorktreeSnapshot } from "../git/types";
 import type { WorkspaceEntry, WorkspaceFile, WorkspacePort } from "../workspace/contracts";
 import { normalizeWorkspacePath } from "../workspace/contracts";
+import { isWorkspaceBinaryEnvelope } from "../workspace/content-codec";
 import { moveWorkspaceFile } from "../workspace/mutations";
 import { buildWorkspaceTree, visibleWorkspaceTree, workspaceBaseName, workspaceDirectories, workspaceParentPath } from "../workspace/tree";
 import { Icon } from "./icons";
@@ -21,7 +22,7 @@ const TAB_STORAGE = "airship.workspace.tabs.v1";
 const PAGE_DRAFTS = new WeakMap<WorkspacePort, Readonly<Record<string, Buffer>>>();
 
 type Review = (operation: GitOperation, descriptor: GitOperationDescriptor) => Promise<"allow" | "deny">;
-type Buffer = WorkspaceFile & { draft: string; truncated: boolean };
+type Buffer = WorkspaceFile & { draft: string; truncated: boolean; binary: boolean };
 type Dialog = Readonly<{ kind: "create" | "rename" | "move" | "delete" | "discard"; path: string }>;
 type TabState = Readonly<{ tabs: readonly string[]; activePath: string }>;
 
@@ -87,13 +88,18 @@ export function WorkspaceView({
     setBuffers((current) => {
       const prior = current[selected.path];
       if (prior && prior.draft !== prior.content) return current;
-      const shownBytes = new TextEncoder().encode(selected.content).byteLength;
-      return { ...current, [selected.path]: { ...selected, draft: selected.content, truncated: selected.size > shownBytes } };
+      const projection = workspaceEditorProjection(selected);
+      return { ...current, [selected.path]: { ...selected, content: projection.content, draft: projection.content, truncated: projection.truncated, binary: projection.binary } };
     });
   }, [selected?.path, selected?.revision]);
 
   useEffect(() => {
-    sessionStorage.setItem(TAB_STORAGE, JSON.stringify({ tabs, activePath }));
+    try {
+      sessionStorage.setItem(TAB_STORAGE, JSON.stringify({ tabs, activePath }));
+    } catch {
+      // Open tabs and drafts remain valid page-memory state when browser
+      // privacy policy denies optional session preference storage.
+    }
   }, [tabs, activePath]);
 
   useEffect(() => {
@@ -181,12 +187,12 @@ export function WorkspaceView({
   }
 
   async function saveActive(): Promise<void> {
-    if (!buffer || buffer.truncated || !dirty || busy) return;
+    if (!buffer || buffer.truncated || buffer.binary || !dirty || busy) return;
     await transact("Saving file", async () => {
       const saved = await writeWorkspaceAndGit(buffer.path, buffer.draft, buffer.revision);
       setBuffers((current) => ({
         ...current,
-        [saved.path]: { ...saved, draft: saved.content, truncated: false },
+        [saved.path]: { ...saved, draft: saved.content, truncated: false, binary: false },
       }));
       await refreshAll(buffer.path);
       setNotice(`Saved ${workspaceBaseName(buffer.path)} with revision compare-and-swap.`);
@@ -195,10 +201,10 @@ export function WorkspaceView({
 
   async function saveAndClose(path: string): Promise<void> {
     const candidate = buffers[path];
-    if (!candidate || candidate.truncated || candidate.draft === candidate.content || busy) return;
+    if (!candidate || candidate.truncated || candidate.binary || candidate.draft === candidate.content || busy) return;
     await transact("Saving file", async () => {
       const saved = await writeWorkspaceAndGit(candidate.path, candidate.draft, candidate.revision);
-      setBuffers((current) => ({ ...current, [saved.path]: { ...saved, draft: saved.content, truncated: false } }));
+      setBuffers((current) => ({ ...current, [saved.path]: { ...saved, draft: saved.content, truncated: false, binary: false } }));
       await onWorkspaceChanged();
       const binding = await gitBinding(saved.path);
       await refreshSourceControl(binding?.repository.id ?? repositoryId, binding?.worktree.id ?? worktree?.id);
@@ -275,7 +281,7 @@ export function WorkspaceView({
       setActivePath((current) => current === source ? target : current);
       setBuffers((current) => {
         const next = Object.fromEntries(Object.entries(current).filter(([path]) => path !== source));
-        next[target] = { ...moved, draft: pending?.draft ?? moved.content, truncated: false };
+      next[target] = { ...moved, draft: pending?.draft ?? moved.content, truncated: pending?.truncated ?? false, binary: pending?.binary ?? isWorkspaceBinaryEnvelope(moved.content) };
         return next;
       });
       await refreshAll(target);
@@ -450,10 +456,12 @@ export function WorkspaceView({
         <main class={`workbench-editor ${mobilePane === "editor" ? "mobile-active" : ""}`} aria-label="File editor">
           <div class="editor-tabs" role="tablist" aria-label="Open files">{tabs.map((path) => <div class={path === activePath ? "active" : ""} key={path}><button role="tab" aria-selected={path === activePath} onClick={() => void openTab(path)}><Icon name="file" size={13} />{workspaceBaseName(path)}{buffers[path]?.draft !== buffers[path]?.content ? <b aria-label="Unsaved">●</b> : null}</button><button type="button" aria-label={`Close ${workspaceBaseName(path)}`} onClick={() => closeTab(path)}>×</button></div>)}</div>
           {buffer ? <>
-            <div class="editor-toolbar"><span title={buffer.path}>{buffer.path.replace("/workspace/", "")}</span><div><small>{buffer.revision.slice(0, 7)} · {formatBytes(buffer.size)}</small><button class="primary" type="button" disabled={!dirty || busy || buffer.truncated} onClick={() => void saveActive()}>Save</button></div></div>
-            {buffer.truncated ? <div class="workspace-boundary attention" role="status">{buffer.content ? "Bounded preview only." : "Encrypted file not downloaded."} Files above {formatBytes(WORKSPACE_EDITOR_BYTE_LIMIT)} are read-only; full-object AES-GCM verification is never mislabeled as a range stream.</div> : null}
-            <textarea class="code-editor" aria-label={`Edit ${workspaceBaseName(buffer.path)}`} value={buffer.draft} readOnly={buffer.truncated} spellcheck={false} onInput={(event) => setBuffers((current) => ({ ...current, [buffer.path]: { ...buffer, draft: event.currentTarget.value } }))} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") { event.preventDefault(); void saveActive(); } }} />
-            <footer class="editor-status"><span>{dirty ? "Modified" : "Saved"}</span><span>UTF-8 · LF · client-side</span></footer>
+            <div class="editor-toolbar"><span title={buffer.path}>{buffer.path.replace("/workspace/", "")}</span><div><small>{buffer.revision.slice(0, 7)} · {formatBytes(buffer.size)}</small><button class="primary" type="button" disabled={!dirty || busy || buffer.truncated || buffer.binary} onClick={() => void saveActive()}>Save</button></div></div>
+            {buffer.binary ? <div class="workspace-binary-preview" role="status"><Icon name="file" size={30} /><strong>Binary file · read-only</strong><span>Airship preserves the original bytes for Git and browser execution. The internal storage envelope is never exposed as editable text.</span></div> : <>
+              {buffer.truncated ? <div class="workspace-boundary attention" role="status">{buffer.content ? "Bounded preview only." : "Encrypted file not downloaded."} Files above {formatBytes(WORKSPACE_EDITOR_BYTE_LIMIT)} are read-only; full-object AES-GCM verification is never mislabeled as a range stream.</div> : null}
+              <textarea class="code-editor" aria-label={`Edit ${workspaceBaseName(buffer.path)}`} value={buffer.draft} readOnly={buffer.truncated} spellcheck={false} onInput={(event) => setBuffers((current) => ({ ...current, [buffer.path]: { ...buffer, draft: event.currentTarget.value } }))} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") { event.preventDefault(); void saveActive(); } }} />
+            </>}
+            <footer class="editor-status"><span>{buffer.binary ? "Protected bytes" : dirty ? "Modified" : "Saved"}</span><span>{buffer.binary ? "Binary · read-only" : "UTF-8 · LF"} · client-side</span></footer>
           </> : <div class="workbench-empty"><Icon name="workspace" size={36} /><strong>Open a file from Explorer</strong><span>Nothing is downloaded until you select it.</span></div>}
         </main>
       </div>
@@ -518,6 +526,17 @@ function clampedContext(path: string, x: number, y: number) {
 export function workspaceFileWindow(count: number, scrollTop: number, viewportHeight: number, rowHeight = WORKSPACE_FILE_ROW_HEIGHT) { const first = Math.max(0, Math.floor(Math.max(0, scrollTop) / rowHeight)); const visible = Math.ceil(Math.max(0, viewportHeight) / rowHeight); const start = Math.max(0, first - WORKSPACE_FILE_OVERSCAN); return Object.freeze({ start, end: Math.min(count, first + visible + WORKSPACE_FILE_OVERSCAN) }); }
 
 function workspaceRowHeight(): number { if (typeof innerWidth === "number" && innerWidth <= 760) return 44; if (typeof document === "undefined") return WORKSPACE_FILE_ROW_HEIGHT; return document.documentElement.dataset.density === "comfortable" ? 42 : document.documentElement.dataset.density === "compact" ? 30 : WORKSPACE_FILE_ROW_HEIGHT; }
+
+export function workspaceEditorProjection(file: WorkspaceFile) {
+  const shownBytes = new TextEncoder().encode(file.content).byteLength;
+  const binary = isWorkspaceBinaryEnvelope(file.content);
+  return Object.freeze({
+    content: binary ? "" : file.content,
+    binary,
+    shownBytes: binary ? 0 : shownBytes,
+    truncated: binary || file.size > shownBytes,
+  });
+}
 
 export function boundedWorkspaceContent(content: string, byteLimit: number, knownTotalBytes?: number) { if (!Number.isInteger(byteLimit) || byteLimit < 1) throw new Error("Workspace byte limit must be a positive integer."); const bytes = new TextEncoder().encode(content); const totalBytes = Math.max(bytes.byteLength, knownTotalBytes ?? 0); if (bytes.byteLength <= byteLimit) return Object.freeze({ content, shownBytes: bytes.byteLength, totalBytes, truncated: totalBytes > bytes.byteLength }); const bounded = new TextDecoder("utf-8", { fatal: false }).decode(bytes.slice(0, byteLimit)); return Object.freeze({ content: bounded, shownBytes: new TextEncoder().encode(bounded).byteLength, totalBytes, truncated: true }); }
 

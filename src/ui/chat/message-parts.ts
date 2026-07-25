@@ -1,5 +1,6 @@
-import type { JsonValue } from "../../core/contracts";
+import type { JsonValue, SessionManifest } from "../../core/contracts";
 import type { DurableEvent } from "../../core/journal";
+import { parseCapabilityTier } from "./capability-tier";
 
 export const MESSAGE_PART_KINDS = [
   "text",
@@ -73,6 +74,8 @@ export type ToolResultPart = MessagePartBase<"tool-result"> & Readonly<{
   name?: string;
   summary: string;
   metadataSummary?: string;
+  /** Exact producing tier when the durable tool result reports one. */
+  capabilityTier?: SessionManifest["capabilityTier"];
   status: ToolResultStatus;
 }>;
 
@@ -529,6 +532,7 @@ function applyFact(parts: MessagePart[], fact: MessagePartFact): boolean {
 
   if (fact.kind === "tool-result") {
     const status = fact.status ?? "success";
+    const capabilityTier = toolResultCapabilityTier(fact.metadata);
     updateToolCall(
       parts,
       fact.callId,
@@ -544,6 +548,7 @@ function applyFact(parts: MessagePart[], fact: MessagePartFact): boolean {
       ...(fact.metadata !== undefined
         ? { metadataSummary: summarizeJson(fact.metadata, MESSAGE_PART_DISPLAY_LIMITS.toolArgumentsChars) }
         : {}),
+      ...(capabilityTier ? { capabilityTier } : {}),
       status,
     }));
     return true;
@@ -617,6 +622,13 @@ function applyFact(parts: MessagePart[], fact: MessagePartFact): boolean {
     ...(fact.recordedAt ? { recordedAt: boundedDisplayText(fact.recordedAt, 64) } : {}),
   }));
   return true;
+}
+
+export function toolResultCapabilityTier(
+  metadata: JsonValue | undefined,
+): SessionManifest["capabilityTier"] | undefined {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return undefined;
+  return parseCapabilityTier(metadata.capabilityTier);
 }
 
 function updateToolCall(

@@ -1,7 +1,8 @@
 import type { FileSystemTree, WebContainer, WebContainerProcess } from "@webcontainer/api";
 import type { JsonValue } from "../core/contracts";
+import { decodeWorkspaceBytes, encodeWorkspaceBytes, workspaceContentByteLength } from "../workspace/content-codec";
 import { isWorkspaceControlPlanePath, normalizeWorkspacePath, WorkspaceConflictError, type WorkspacePort } from "../workspace/contracts";
-import type { ExecutionAdapter, ExecutionRequest, ExecutionResult } from "./runtime-registry";
+import { emitExecutionOutput, type ExecutionAdapter, type ExecutionRequest, type ExecutionResult } from "./runtime-registry";
 
 const MAX_FILES = 2_048;
 const MAX_INPUT_BYTES = 16 * 1_024 * 1_024;
@@ -35,8 +36,14 @@ export function createNodeWebContainerAdapter(container: WebContainerLike): Exec
       label: "Node.js · WebContainer",
       languages: ["javascript", "typescript", "node", "npm", "pnpm", "yarn"],
       state: "ready",
+      tier: "web-enhanced",
       isolation: "webcontainer",
       persistence: "workspace-checkpoint",
+      commandInterface: "direct-process",
+      shell: "webcontainer-jsh",
+      workspaceAccess: "bounded-snapshot-writeback",
+      output: "bounded-stream",
+      cancellation: "kill-process",
       detail: "StackBlitz WebContainer is active in this tab. Commands run against an isolated workspace snapshot; source deltas return to Airship only when writeBack is explicitly enabled.",
     },
     async execute(request) {
@@ -71,7 +78,7 @@ export async function executeNodeProject(
       env: { ...request.env },
       terminal: { cols: 120, rows: 40 },
     });
-    const processResult = await waitForProcess(process, request.timeoutMs, request.signal);
+    const processResult = await waitForProcess(process, request.timeoutMs, request.signal, request.onOutput);
     const exported = await container.export(jobRoot, {
       format: "json",
       excludes: ["node_modules", "**/node_modules/**", ".git", "**/.git/**", ".airship", "**/.airship/**"],
@@ -85,6 +92,13 @@ export async function executeNodeProject(
       exitCode: processResult.exitCode,
       stdout: processResult.output,
       stderr: processResult.limitReason ?? "",
+      provenance: {
+        capabilityTier: "web-enhanced",
+        authority: "browser",
+        engine: "stackblitz-webcontainer",
+        providerBoundary: "StackBlitz runtime delivery and command-dependent package/network egress",
+        artifactKind: "workspace-project",
+      },
       value: {
         provider: "StackBlitz WebContainers",
         browserCompute: true,
@@ -97,6 +111,20 @@ export async function executeNodeProject(
         outputStream: "combined",
         changes: changes.map(({ content: _content, expectedRevision: _revision, ...change }) => change),
       } satisfies JsonValue,
+      workspace: {
+        root: workspaceRoot,
+        mountedFiles: snapshot.files.size,
+        changedPaths: changes.map(({ path }) => path),
+        writtenPaths: adopted
+          ? changes.filter(({ kind }) => kind !== "delete").map(({ path }) => path)
+          : [],
+        deletedPaths: adopted
+          ? changes.filter(({ kind }) => kind === "delete").map(({ path }) => path)
+          : [],
+        writeBackRequested: request.writeBack === true,
+        adopted,
+        writeBack: request.writeBack === true,
+      },
     };
   } finally {
     await container.fs.rm(jobRoot, { force: true, recursive: true }).catch(() => undefined);
@@ -120,11 +148,12 @@ async function snapshotWorkspace(workspace: WorkspacePort, root: string): Promis
     if (!relative) continue;
     const file = await workspace.readBounded?.(entry.path, MAX_FILE_BYTES + 1) ?? await workspace.read(entry.path);
     if (!file) throw new WorkspaceConflictError(`Workspace file disappeared while mounting: ${entry.path}`);
-    const size = new TextEncoder().encode(file.content).byteLength;
+    const mountedBytes = decodeWorkspaceBytes(file.content);
+    const size = mountedBytes.byteLength;
     if (size > MAX_FILE_BYTES) throw new Error(`Node workspace file exceeds 2 MiB: ${entry.path}`);
     bytes += size;
     if (bytes > MAX_INPUT_BYTES) throw new Error("Node workspace snapshot exceeds the 16 MiB input limit.");
-    insertTreeFile(tree, relative.split("/"), file.content);
+    insertTreeFile(tree, relative.split("/"), mountedBytes);
     files.set(relative, { content: file.content, revision: file.revision });
   }
   return { tree, files, bytes };
@@ -143,7 +172,7 @@ function collectWorkspaceChanges(
     if (relative.split("/").some((segment) => EXCLUDED_SEGMENTS.has(segment))) continue;
     const original = snapshot.files.get(relative);
     if (original?.content === content) continue;
-    const size = new TextEncoder().encode(content).byteLength;
+    const size = workspaceContentByteLength(content);
     changedBytes += size;
     changes.push({
       path: normalizeWorkspacePath(`${root}/${relative}`),
@@ -191,6 +220,7 @@ async function waitForProcess(
   process: WebContainerProcess,
   timeoutMs: number,
   signal: AbortSignal,
+  onOutput?: ExecutionRequest["onOutput"],
 ): Promise<Readonly<{ exitCode: number; output: string; limitReason?: string }>> {
   const reader = process.output.getReader();
   let output = "";
@@ -200,12 +230,15 @@ async function waitForProcess(
       const chunk = await reader.read();
       if (chunk.done) return;
       if (output.length + chunk.value.length > MAX_OUTPUT_CHARS) {
-        output += chunk.value.slice(0, Math.max(0, MAX_OUTPUT_CHARS - output.length));
+        const accepted = chunk.value.slice(0, Math.max(0, MAX_OUTPUT_CHARS - output.length));
+        output += accepted;
+        if (accepted) emitExecutionOutput(onOutput, { stream: "combined", text: accepted });
         limitReason = "Process output exceeded 256 KiB and was terminated.";
         process.kill();
         return;
       }
       output += chunk.value;
+      emitExecutionOutput(onOutput, { stream: "combined", text: chunk.value });
     }
   })();
 
@@ -224,17 +257,25 @@ async function waitForProcess(
     if (signal.aborted) onAbort();
   });
   try {
-    const exitCode = await Promise.race([process.exit, interrupted]);
-    await outputTask;
+    // Process exit and stream EOF are one terminal condition. Some providers
+    // resolve `exit` before the output stream closes; waiting for output after
+    // winning a race against the timeout would otherwise hang forever.
+    const completed = Promise.all([process.exit, outputTask]).then(([exitCode]) => exitCode);
+    const exitCode = await Promise.race([completed, interrupted]);
     return { exitCode, output, ...(limitReason ? { limitReason } : {}) };
+  } catch (error) {
+    try { process.kill(); } catch { /* The provider process may already be gone. */ }
+    throw error;
   } finally {
     if (timer) clearTimeout(timer);
     if (onAbort) signal.removeEventListener("abort", onAbort);
+    await reader.cancel().catch(() => undefined);
+    await outputTask.catch(() => undefined);
     reader.releaseLock();
   }
 }
 
-function insertTreeFile(tree: FileSystemTree, segments: readonly string[], content: string): void {
+function insertTreeFile(tree: FileSystemTree, segments: readonly string[], content: string | Uint8Array): void {
   if (segments.length === 0) throw new Error("Cannot mount an empty workspace path.");
   let cursor = tree;
   for (let index = 0; index < segments.length - 1; index += 1) {
@@ -257,7 +298,7 @@ function flattenTree(tree: FileSystemTree, prefix: readonly string[], output: Ma
     if (!("contents" in node.file)) throw new Error(`Node output contains an unsupported symlink: ${path.join("/")}`);
     const content = typeof node.file.contents === "string"
       ? node.file.contents
-      : new TextDecoder("utf-8", { fatal: true }).decode(node.file.contents);
+      : encodeWorkspaceBytes(node.file.contents);
     output.set(path.join("/"), content);
   }
 }

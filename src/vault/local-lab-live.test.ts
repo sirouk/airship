@@ -63,7 +63,7 @@ describe("live local S3 harness boundaries", () => {
     ]) expect(serialized).not.toContain(secret);
     expect(serialized).not.toContain("createdKeys");
     expect(serialized).not.toContain("publicMessage");
-  });
+  }, 15_000);
 
   it("rejects non-loopback targets before credential or storage use", async () => {
     const environment = { ...completeEnvironment(), [LIVE_LOCAL_S3_ENVIRONMENT.endpoint]: "https://s3.example" };

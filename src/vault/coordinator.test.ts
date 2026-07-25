@@ -5,6 +5,7 @@ import { WorkspaceRootKey } from "../storage/encrypted-envelope";
 import { MemoryObjectStore } from "../storage/memory-object-store";
 import type { S3TemporaryCredentials } from "../storage/s3-object-store";
 import { VaultCoordinator, type ResettableVaultCredentialProvider } from "./coordinator";
+import { createBuiltInProfileCatalog } from "../profiles/catalog";
 import type { VaultS3ConfigurationInput } from "./config";
 
 const startedAt = Date.parse("2026-07-18T12:00:00.000Z");
@@ -87,14 +88,24 @@ describe("VaultCoordinator", () => {
     expect(phases).toEqual(["disconnected", "configured", "probing", "ready"]);
 
     const runtime = coordinator.readyRuntime();
+    expect(runtime.acceleration).toMatchObject({
+      active: true,
+      backend: "memory",
+      persistenceBoundary: "ciphertext-only",
+      authority: "vault-provider-remains-authoritative",
+    });
     const file = await runtime.workspace.write("real.txt", "actual private state", { expectedRevision: null });
     expect(await runtime.workspace.read("real.txt")).toEqual(file);
+    const profiles = await runtime.profiles.initialize(await createBuiltInProfileCatalog());
+    expect(profiles).toMatchObject({ disposition: "created", checkpoint: { generation: 1 } });
     expect(emulator.serializedBytes()).not.toContain("actual private state");
-  });
+    expect(emulator.serializedBytes()).not.toContain("Evidence first");
+  }, 15_000);
 
   it("adopts a Google Drive ObjectStore only after the same strict encrypted composition probe", async () => {
     const { key } = await WorkspaceRootKey.generate();
     const reset = vi.fn();
+    const reauthorize = vi.fn(async () => undefined);
     const coordinator = new VaultCoordinator();
     const snapshot = coordinator.configureGoogleDrive({
       workspace: {
@@ -108,6 +119,7 @@ describe("VaultCoordinator", () => {
       store: new MemoryObjectStore(),
       workspaceKey: key,
       accountLabel: "operator@example.test",
+      reauthorize,
       reset,
       now: () => new Date(startedAt),
     });
@@ -119,10 +131,115 @@ describe("VaultCoordinator", () => {
 
     const ready = await coordinator.probe({ acknowledgeImmutableProbeObjects: true, nonce: "driveprobe001" });
     expect(ready).toMatchObject({ phase: "ready", config: { provider: "google-drive" } });
-    const written = await coordinator.readyRuntime().workspace.write("drive.txt", "encrypted composition", { expectedRevision: null });
-    expect((await coordinator.readyRuntime().workspace.read("drive.txt"))?.revision).toBe(written.revision);
+    const adoptedRuntime = coordinator.readyRuntime();
+    const written = await adoptedRuntime.workspace.write("drive.txt", "encrypted composition", { expectedRevision: null });
+    expect((await adoptedRuntime.workspace.read("drive.txt"))?.revision).toBe(written.revision);
+    await coordinator.reauthorizeGoogleDrive();
+    expect(reauthorize).toHaveBeenCalledOnce();
+    const reprobe = coordinator.probe({ acknowledgeImmutableProbeObjects: true, nonce: "driveprobe002" });
+    expect(coordinator.snapshot.phase).toBe("probing");
+    expect(() => coordinator.readyRuntime()).toThrow("unavailable");
+    expect((await adoptedRuntime.workspace.read("drive.txt"))?.content).toBe("encrypted composition");
+    await expect(reprobe).resolves.toMatchObject({ phase: "ready", evidence: { runId: "driveprobe002" } });
+    expect(coordinator.readyRuntime()).toBe(adoptedRuntime);
+    const afterReprobe = await adoptedRuntime.workspace.write("after-reprobe.txt", "still operable", { expectedRevision: null });
+    expect((await adoptedRuntime.workspace.read("after-reprobe.txt"))?.revision).toBe(afterReprobe.revision);
     coordinator.disconnect();
     expect(reset).toHaveBeenCalledOnce();
+    await expect(coordinator.reauthorizeGoogleDrive()).rejects.toThrow("not the configured");
+  });
+
+  it("fails a same-authority re-probe closed without invalidating the adopted runtime", async () => {
+    const { key } = await WorkspaceRootKey.generate();
+    const store = new MemoryObjectStore();
+    const coordinator = new VaultCoordinator();
+    coordinator.configureGoogleDrive({
+      workspace: {
+        workspaceFolderId: "drive_workspace_fail_closed",
+        workspaceName: "Airship Fail Closed",
+        rootFolderId: "drive_root_fail_closed",
+        segmentsFolderId: "drive_segments_fail_closed",
+        namespaceId: "opaque-drive-fail-closed",
+      },
+      store,
+      workspaceKey: key,
+      accountLabel: "operator@example.test",
+      now: () => new Date(startedAt),
+    });
+    await expect(coordinator.probe({
+      acknowledgeImmutableProbeObjects: true,
+      nonce: "drivegood001",
+    })).resolves.toMatchObject({ phase: "ready" });
+    const adoptedRuntime = coordinator.readyRuntime();
+    await adoptedRuntime.workspace.write("survives.txt", "retained ciphertext path", { expectedRevision: null });
+
+    const authoritativePut = store.putIfAbsent.bind(store);
+    vi.spyOn(store, "putIfAbsent").mockImplementation((objectKey, bytes) => {
+      if (objectKey.startsWith(".airship-probes/v1/drivefailed001/")) {
+        throw new TypeError("simulated provider outage");
+      }
+      return authoritativePut(objectKey, bytes);
+    });
+    const degraded = await coordinator.probe({
+      acknowledgeImmutableProbeObjects: true,
+      nonce: "drivefailed001",
+    });
+
+    expect(degraded).toMatchObject({
+      phase: "degraded",
+      diagnostic: { code: "conformance-failed" },
+      previousEvidence: { runId: "drivegood001" },
+    });
+    expect(() => coordinator.readyRuntime()).toThrow("unavailable");
+    expect((await adoptedRuntime.workspace.read("survives.txt"))?.content).toBe("retained ciphertext path");
+    expect(coordinator.disconnect()).toMatchObject({ phase: "disconnected" });
+  });
+
+  it("validates a replacement Google Drive authority before releasing the ready runtime", async () => {
+    const { key } = await WorkspaceRootKey.generate();
+    const reset = vi.fn();
+    const coordinator = new VaultCoordinator();
+    coordinator.configureGoogleDrive({
+      workspace: {
+        workspaceFolderId: "drive_workspace_atomic",
+        workspaceName: "Mounted workspace",
+        rootFolderId: "drive_root_atomic",
+        segmentsFolderId: "drive_segments_atomic",
+        namespaceId: "opaque-drive-atomic-authority",
+      },
+      store: new MemoryObjectStore(),
+      workspaceKey: key,
+      accountLabel: "operator@example.test",
+      reset,
+      now: () => new Date(startedAt),
+    });
+    await expect(coordinator.probe({
+      acknowledgeImmutableProbeObjects: true,
+      nonce: "driveatomic001",
+    })).resolves.toMatchObject({ phase: "ready" });
+    const runtime = coordinator.readyRuntime();
+    const before = coordinator.snapshot;
+
+    expect(() => coordinator.configureGoogleDrive({
+      workspace: {
+        workspaceFolderId: "drive_workspace_replacement",
+        workspaceName: "Invalid replacement",
+        // Reusing one ID for two folder roles must fail before any authority
+        // cleanup or readiness transition occurs.
+        rootFolderId: "drive_same_folder",
+        segmentsFolderId: "drive_same_folder",
+        namespaceId: "opaque-drive-replacement",
+      },
+      store: new MemoryObjectStore(),
+      workspaceKey: key,
+      accountLabel: "replacement@example.test",
+    })).toThrow("distinct folders");
+
+    expect(coordinator.snapshot).toBe(before);
+    expect(coordinator.readyRuntime()).toBe(runtime);
+    expect(reset).not.toHaveBeenCalled();
+    const written = await runtime.workspace.write("still-mounted.txt", "authority survived", { expectedRevision: null });
+    expect((await runtime.workspace.read("still-mounted.txt"))?.revision).toBe(written.revision);
   });
 
   it("returns a typed redacted degraded state when the credential authority denies access", async () => {

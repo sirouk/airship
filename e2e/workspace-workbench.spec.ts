@@ -46,6 +46,8 @@ test("desktop workbench edits with CAS, keeps tabs, and surfaces the real Git ch
   await page.getByRole("tab", { name: /Source Control/ }).click();
   await expect(page.getByRole("button", { name: /docs\/architecture\.md [AM]/u })).toBeVisible();
   await page.getByRole("button", { name: "Stage docs/architecture.md" }).click();
+  const stageApproval = page.getByRole("dialog", { name: /Allow git_stage once/ });
+  if (await stageApproval.isVisible()) await stageApproval.getByRole("button", { name: "Allow once" }).click();
   await expect(page.getByRole("button", { name: "Unstage docs/architecture.md" })).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("workspace-workbench-desktop.png"), fullPage: true });
 

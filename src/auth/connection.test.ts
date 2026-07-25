@@ -42,7 +42,7 @@ describe("Chutes connection domain", () => {
     expect(connection).toMatchObject({
       kind: "chutes-oauth",
       credentialKind: "oauth-user-token",
-      source: "manual-import",
+      source: "oauth-pkce",
       model: "org/model",
       invokeAuthorization: "unverified",
     });

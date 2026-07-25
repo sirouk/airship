@@ -10,10 +10,33 @@ import {
   messagePlainText,
   reduceMessagePartFact,
   summarizeJson,
+  toolResultCapabilityTier,
   type MessagePartFact,
 } from "./message-parts";
 
 describe("message parts", () => {
+  it("preserves an exact per-result capability tier without accepting assertions outside the contract", () => {
+    const [result] = messagePartsFromFacts([
+      fact("tool-result", "tiered-result", 1, {
+        callId: "call-tiered",
+        name: "execute_code",
+        content: "done",
+        metadata: {
+          capabilityTier: "web-enhanced",
+          authority: "browser",
+          engine: "pyodide-worker",
+        },
+      }),
+    ]);
+
+    expect(result).toMatchObject({
+      kind: "tool-result",
+      capabilityTier: "web-enhanced",
+    });
+    expect(toolResultCapabilityTier({ capabilityTier: "remote-ish" })).toBeUndefined();
+    expect(toolResultCapabilityTier(["web-enhanced"])).toBeUndefined();
+  });
+
   it("preserves durable text → tool → result → text ordering", () => {
     const events = eventSequence([
       draft("assistant.completed", {

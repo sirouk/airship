@@ -49,6 +49,19 @@ messages, vectors, or index snapshots to persist. Workspace text crosses only
 the page-to-same-origin-module-worker boundary. Vectors and the flat index are
 discarded with the page runtime and rebuilt from the active workspace.
 
+That statement describes the currently selected local semantic materialization.
+The separate context-fabric publisher can seal compatible chunk generations as
+independently authenticated encrypted Vault shards, and
+`VaultTurnContextProvider` retrieves selected blocks through exact ranges. The
+active application adopts an already-published, generation-matched Vault mirror
+behind the provider-neutral turn seam and otherwise keeps the local generation
+with an inspectable fallback reason. Adoption is deliberately read-only:
+publishing or replacing encrypted shards requires a separate explicit policy
+decision through the Vault's publish/update action, and a mismatched embedding
+model never masquerades as successful cross-page adoption. A published provider
+is also fenced against the live workspace generation on every turn: recent
+edits use the fresh local index until another explicit encrypted publication.
+
 ## Activation and truth in the UI
 
 The Memory & Context index screen exposes **Bootstrap** and **Local semantic**
@@ -68,8 +81,7 @@ asserts that no model request leaves the application origin:
 
 ```sh
 npm run semantic:prepare
-AIRSHIP_LIVE_SEMANTIC=1 npx playwright test \
-  e2e/live-semantic-embedding.spec.ts --project=desktop-chromium
+AIRSHIP_LIVE_SEMANTIC=1 AIRSHIP_LIVE_SEMANTIC_UI=1 npm run test:e2e:semantic
 ```
 
 Official API references:

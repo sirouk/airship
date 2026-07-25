@@ -52,12 +52,28 @@ liveDescribe("live Airship Chutes E2EE transport", () => {
       model: model!.id,
       claims: {
         encryption: { status: "partial" },
-        conversation: { status: "unavailable" },
+        conversation: {
+          status: "partial",
+          verifier: "airship-client",
+          details: {
+            commitment: "airship-chutes-e2e-response-sha256-chain-v1",
+            authority: "local-client",
+          },
+        },
       },
       bindings: {
         requestDigest: expect.stringMatching(/^sha256:/u),
         responseDigest: expect.stringMatching(/^sha256:/u),
+        requestCiphertextDigest: expect.stringMatching(/^sha256:/u),
+        responseCiphertextDigest: expect.stringMatching(/^sha256:/u),
       },
+      verifications: expect.arrayContaining([
+        expect.objectContaining({
+          verifier: "airship-client",
+          status: "partial",
+          claim: "conversation",
+        }),
+      ]),
     });
 
     const persisted = await journal.getSession(session.id);

@@ -1,5 +1,9 @@
 export const GOOGLE_DRIVE_FILE_SCOPE = "https://www.googleapis.com/auth/drive.file";
 export const GOOGLE_ACCOUNT_SCOPES = Object.freeze(["openid", "email", "profile", GOOGLE_DRIVE_FILE_SCOPE] as const);
+const GOOGLE_IDENTITY_SCRIPT_URL = "https://accounts.google.com/gsi/client";
+const MAX_GOOGLE_USERINFO_BYTES = 64 * 1024;
+const GOOGLE_AUTHORIZATION_TIMEOUT_MS = 2 * 60_000;
+const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
 
 export type GoogleAccessToken = Readonly<{
   accessToken: string;
@@ -84,7 +88,11 @@ type GoogleIdentityNamespace = {
 export class GoogleIdentityServicesAuthorizer {
   readonly scope = GOOGLE_ACCOUNT_SCOPES.join(" ");
   #client?: GoogleTokenClient;
-  #pending?: { resolve(value: GoogleAccessToken): void; reject(reason: unknown): void };
+  #pending?: {
+    resolve(value: GoogleAccessToken): void;
+    reject(reason: unknown): void;
+    timer: ReturnType<typeof globalThis.setTimeout>;
+  };
 
   constructor(
     private readonly clientId: string,
@@ -107,13 +115,45 @@ export class GoogleIdentityServicesAuthorizer {
     const client = this.#client;
     if (!client) throw new Error("Prepare Google Identity Services before requesting access.");
     return new Promise<GoogleAccessToken>((resolve, reject) => {
-      this.#pending = { resolve, reject };
-      client.requestAccessToken({ prompt: options.selectAccount ? "select_account" : "" });
+      const pending = {
+        resolve,
+        reject,
+        timer: globalThis.setTimeout(() => {
+          if (this.#pending !== pending) return;
+          this.#pending = undefined;
+          reject(new GoogleDriveAuthorizationRequiredError("Google authorization did not finish. Close any stale account window and try again."));
+        }, GOOGLE_AUTHORIZATION_TIMEOUT_MS),
+      };
+      this.#pending = pending;
+      try {
+        client.requestAccessToken({ prompt: options.selectAccount ? "select_account" : "" });
+      } catch (error) {
+        this.#pending = undefined;
+        globalThis.clearTimeout(pending.timer);
+        reject(new GoogleDriveAuthorizationRequiredError(
+          error instanceof Error ? boundedMessage(error.message) : "Google authorization could not open.",
+        ));
+      }
     });
   }
 
+  /**
+   * Replace an expired page-memory grant from an explicit user gesture.
+   *
+   * GIS does not issue a browser refresh token, so this intentionally invokes
+   * the token client again instead of attempting background refresh or storing
+   * authority anywhere durable. The existing account is preferred; GIS can
+   * still show consent when Google determines that it is required.
+   */
+  reauthorize(): Promise<GoogleAccessToken> {
+    return this.authorize({ selectAccount: false });
+  }
+
   reset(): void {
-    this.#pending?.reject(new GoogleDriveAuthorizationRequiredError("Google authorization was cleared."));
+    if (this.#pending) {
+      globalThis.clearTimeout(this.#pending.timer);
+      this.#pending.reject(new GoogleDriveAuthorizationRequiredError("Google authorization was cleared."));
+    }
     this.#pending = undefined;
     this.#client = undefined;
     this.provider.reset();
@@ -129,6 +169,7 @@ export class GoogleIdentityServicesAuthorizer {
         const pending = this.#pending;
         this.#pending = undefined;
         if (!pending) return;
+        globalThis.clearTimeout(pending.timer);
         try {
           if (response.error || !response.access_token || !response.expires_in) {
             throw new GoogleDriveAuthorizationRequiredError(
@@ -148,6 +189,7 @@ export class GoogleIdentityServicesAuthorizer {
       error_callback: (error) => {
         const pending = this.#pending;
         this.#pending = undefined;
+        if (pending) globalThis.clearTimeout(pending.timer);
         pending?.reject(new GoogleDriveAuthorizationRequiredError(boundedMessage(error.message ?? error.type ?? "Google authorization was interrupted.")));
       },
     });
@@ -175,11 +217,15 @@ export async function readGoogleAccountIdentity(
   }
   const response = await fetchImplementation("https://openidconnect.googleapis.com/v1/userinfo", {
     headers: { Authorization: `Bearer ${token.accessToken}` },
+    cache: "no-store",
+    credentials: "omit",
+    redirect: "error",
+    referrerPolicy: "no-referrer",
     signal,
   });
   if (!response.ok) throw new GoogleDriveAuthorizationRequiredError(`Google account lookup failed (${response.status}).`);
   let raw: unknown;
-  try { raw = await response.json(); }
+  try { raw = JSON.parse(utf8Decoder.decode(await boundedResponseBytes(response, MAX_GOOGLE_USERINFO_BYTES, signal))); }
   catch { throw new Error("Google account lookup returned invalid JSON."); }
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("Google account lookup returned invalid identity data.");
   const value = raw as Record<string, unknown>;
@@ -197,12 +243,13 @@ export async function readGoogleAccountIdentity(
 let gisPromise: Promise<GoogleIdentityNamespace> | undefined;
 
 function defaultGoogleIdentityServices(): Promise<GoogleIdentityNamespace> {
-  gisPromise ??= new Promise((resolve, reject) => {
+  if (gisPromise) return gisPromise;
+  const attempt = new Promise<GoogleIdentityNamespace>((resolve, reject) => {
     const existing = (globalThis as typeof globalThis & { google?: GoogleIdentityNamespace }).google;
     if (existing?.accounts?.oauth2) { resolve(existing); return; }
     if (typeof document === "undefined") { reject(new Error("Google Identity Services requires a browser document.")); return; }
     const script = document.createElement("script");
-    script.src = "https://accounts.google.com/gsi/client";
+    script.src = trustedGoogleIdentityScriptUrl() as string;
     script.async = true;
     script.defer = true;
     script.onload = () => {
@@ -212,7 +259,52 @@ function defaultGoogleIdentityServices(): Promise<GoogleIdentityNamespace> {
     script.onerror = () => reject(new Error("Google Identity Services could not be loaded."));
     document.head.append(script);
   });
-  return gisPromise;
+  // A transient CSP/network failure must not poison this page forever. A later
+  // explicit retry gets one fresh loader attempt; concurrent callers still
+  // share the same in-flight promise.
+  const guarded = attempt.catch((error) => {
+    if (gisPromise === guarded) gisPromise = undefined;
+    throw error;
+  });
+  gisPromise = guarded;
+  return guarded;
+}
+
+type GoogleIdentityScriptPolicy = Readonly<{ createScriptURL(value: string): unknown }>;
+
+function trustedGoogleIdentityScriptUrl(): string | object {
+  const candidate = new URL(GOOGLE_IDENTITY_SCRIPT_URL);
+  const trustedGlobal = globalThis as typeof globalThis & {
+    trustedTypes?: {
+      createPolicy(
+        name: string,
+        rules: { createScriptURL(value: string): string },
+      ): GoogleIdentityScriptPolicy;
+    };
+    __airshipGoogleIdentityPolicy?: GoogleIdentityScriptPolicy;
+  };
+  const factory = trustedGlobal.trustedTypes;
+  if (!factory) return candidate.href;
+  trustedGlobal.__airshipGoogleIdentityPolicy ??= factory.createPolicy(
+    "airship-google-identity",
+    {
+      createScriptURL(value) {
+        const url = new URL(value);
+        if (
+          url.href !== GOOGLE_IDENTITY_SCRIPT_URL ||
+          url.protocol !== "https:" ||
+          url.username ||
+          url.password ||
+          url.search ||
+          url.hash
+        ) {
+          throw new TypeError("Airship refused an unapproved Google Identity Services script.");
+        }
+        return url.href;
+      },
+    },
+  );
+  return trustedGlobal.__airshipGoogleIdentityPolicy.createScriptURL(candidate.href) as object;
 }
 
 function boundedToken(value: string): string {
@@ -240,4 +332,57 @@ function safeGooglePicture(value: unknown): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+async function boundedResponseBytes(
+  response: Response,
+  maximum: number,
+  signal?: AbortSignal,
+): Promise<Uint8Array> {
+  const declared = response.headers.get("content-length");
+  if (declared !== null) {
+    if (!/^\d+$/u.test(declared) || !Number.isSafeInteger(Number(declared)) || Number(declared) > maximum) {
+      void response.body?.cancel().catch(() => undefined);
+      throw new Error("Google account lookup response exceeded the client limit.");
+    }
+  }
+  if (!response.body) throw new Error("Google account lookup returned an empty body.");
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await abortable(reader.read(), signal);
+      if (done) break;
+      total += value.byteLength;
+      if (total > maximum) {
+        await reader.cancel("Google account lookup response exceeded the client limit.").catch(() => undefined);
+        throw new Error("Google account lookup response exceeded the client limit.");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    if (signal?.aborted) void reader.cancel(signal.reason).catch(() => undefined);
+    try { reader.releaseLock(); } catch { /* an aborted body may retain its reader */ }
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
+function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(signal.reason ?? new DOMException("Google account lookup was aborted.", "AbortError"));
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(signal.reason ?? new DOMException("Google account lookup was aborted.", "AbortError"));
+    signal.addEventListener("abort", abort, { once: true });
+    void promise.then(
+      (value) => { signal.removeEventListener("abort", abort); resolve(value); },
+      (error) => { signal.removeEventListener("abort", abort); reject(error); },
+    );
+  });
 }

@@ -7,11 +7,16 @@ const NOW = Date.parse("2026-07-19T12:00:00.000Z");
 const KEY_DIGEST = `sha256:${"a".repeat(64)}`;
 
 describe("session attestation seal", () => {
-  it("distinguishes an armed proof policy from actual endpoint evidence", () => {
-    expect(describeAttestationSeal({ connected: true, records: [], now: NOW })).toEqual({
+  it("distinguishes strict and record-only policies from actual endpoint evidence", () => {
+    expect(describeAttestationSeal({ connected: true, proofPolicy: "strict", records: [], now: NOW })).toEqual({
       state: "asserted",
       label: "Proof required next turn",
       detail: "The fail-closed endpoint-proof policy is armed, but no active turn receipt currently establishes a hardware claim.",
+    });
+    expect(describeAttestationSeal({ connected: true, proofPolicy: "record", records: [], now: NOW })).toEqual({
+      state: "asserted",
+      label: "Evidence checked per turn",
+      detail: "Verify & record will collect fresh endpoint evidence on the next turn and keep every incomplete claim explicit without blocking encrypted inference.",
     });
   });
 

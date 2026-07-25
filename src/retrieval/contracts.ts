@@ -31,11 +31,19 @@ export type ContextFabricObject = {
 };
 
 export type ContextRoutingMirror = {
-  version: 1;
+  version: 2;
   generation: string;
   workspaceId: string;
   embeddingProvider: string;
   dimensions: number;
+  lineage: Readonly<{
+    sourceRevision: string;
+    sourceDigest: string;
+    extractor: string;
+    chunker: string;
+    embeddingPosture: "deterministic-bootstrap" | "local-semantic";
+    indexFormat: string;
+  }>;
   createdAt: string;
   objects: Record<string, ContextFabricObject>;
   experts: ContextExpert[];
@@ -88,6 +96,11 @@ export type RetrievalCommitment = {
   complete: boolean;
 };
 
+export type ContextFabricSearchHit = SearchHit & Readonly<{
+  contentDigest: string;
+  chunkIndex: number;
+}>;
+
 export type ContextStreamEvent =
   | {
       type: "route";
@@ -98,13 +111,13 @@ export type ContextStreamEvent =
   | {
       type: "partial";
       expertId: string;
-      hits: SearchHit[];
+      hits: ContextFabricSearchHit[];
       bytesRead: number;
       completedExperts: number;
       totalExperts: number;
     }
   | { type: "warning"; expertId?: string; code: "budget" | "timeout" | "unavailable"; message: string }
-  | { type: "complete"; hits: SearchHit[]; commitment: RetrievalCommitment };
+  | { type: "complete"; hits: ContextFabricSearchHit[]; commitment: RetrievalCommitment };
 
 export type ContextDriverOptions = {
   store: ObjectStore;
@@ -112,4 +125,3 @@ export type ContextDriverOptions = {
   embeddings: EmbeddingProvider;
   mirror: ContextRoutingMirror;
 };
-

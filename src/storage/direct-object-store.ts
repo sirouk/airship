@@ -5,6 +5,7 @@ import type {
   ObjectStore,
   ObjectSummary,
   PutIfAbsentResult,
+  ObjectStoreCapabilities,
 } from "./object-store";
 import { ownedArrayBuffer } from "../core/bytes";
 
@@ -31,6 +32,13 @@ const MAX_OBJECT_BYTES = 96 * 1024 * 1024;
 const MAX_RANGE_BYTES = 16 * 1024 * 1024;
 
 export class DirectObjectStore implements ObjectStore {
+  readonly capabilities: ObjectStoreCapabilities = Object.freeze({
+    version: 1,
+    adapter: "direct",
+    rangeRead: Object.freeze({ mode: "exact-or-fail", maxBytes: MAX_RANGE_BYTES, providerEvidence: "live-conformance-required" }),
+    conditionalWrite: Object.freeze({ createIfAbsent: "atomic-or-fail", compareAndSwap: "atomic-or-fail", providerEvidence: "live-conformance-required" }),
+    upload: Object.freeze({ mode: "single-request", interruptionRecovery: "none", persistsResumeCapability: false }),
+  });
   constructor(
     private readonly authorizer: DirectObjectAuthorizer,
     private readonly fetchImplementation: typeof fetch = fetch,
@@ -89,11 +97,9 @@ export class DirectObjectStore implements ObjectStore {
     if (bytes.byteLength !== requestedLength) {
       throw new Error("Cloud storage did not return the exact requested byte range.");
     }
-    if (response.status !== 206 && !(response.status === 200 && start === 0)) {
-      throw new Error("Cloud storage ignored a non-zero byte range request.");
-    }
+    if (response.status !== 206) throw new Error("Cloud storage ignored the exact byte range request.");
     const contentRange = parseContentRange(response.headers.get("content-range"));
-    if (contentRange && (contentRange.start !== start || contentRange.endExclusive !== endExclusive)) {
+    if (!contentRange || contentRange.start !== start || contentRange.endExclusive !== endExclusive) {
       throw new Error("Cloud storage returned a mismatched Content-Range header.");
     }
     return {

@@ -4,9 +4,11 @@ import {
   SEAL_LABELS,
   SEAL_STATES,
   sealRenderedSize,
+  sealStateForReceipt,
   sealStateForProofStatus,
   sealStateForRuntimeStatus,
 } from "./seal";
+import { createLocalReceipt } from "../receipts/types";
 
 describe("canonical seal grammar", () => {
   it("defines seven named states over the canonical six-shape grammar", () => {
@@ -39,6 +41,17 @@ describe("canonical seal grammar", () => {
     expect(postureSeal("plaintext-remote")).toBe("attention");
     expect(postureSeal("encrypted-unattested")).toBe("asserted");
     expect(postureSeal("encrypted-attested")).toBe("verified");
+  });
+
+  it("fails closed when an attested receipt's posture, level, and endpoint claim disagree", () => {
+    const receipt = createLocalReceipt({ sessionId: "session", turnId: "turn", provider: "test", model: "model" });
+    receipt.posture = "encrypted-attested";
+    receipt.proofLevel = "attested-endpoint";
+    expect(sealStateForReceipt(receipt)).toBe("failed");
+    receipt.claims.endpointKey = { status: "verified", summary: "Exact endpoint key verified." };
+    expect(sealStateForReceipt(receipt)).toBe("verified");
+    receipt.proofLevel = "encrypted";
+    expect(sealStateForReceipt(receipt)).toBe("failed");
   });
 
   it("never renders a seal below the 16px legibility floor", () => {

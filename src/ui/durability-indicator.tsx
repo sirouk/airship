@@ -1,5 +1,5 @@
 
-export type DurabilityState = "ephemeral" | "syncing" | "synced";
+export type DurabilityState = "ephemeral" | "local" | "syncing" | "synced";
 
 export function DurabilityIndicator({ state, detail }: { state: DurabilityState; detail?: string }) {
   const label = durabilityLabel(state);
@@ -7,5 +7,7 @@ export function DurabilityIndicator({ state, detail }: { state: DurabilityState;
 }
 
 export function durabilityLabel(state: DurabilityState): string {
-  return state === "ephemeral" ? "Ephemeral · this page only" : state === "syncing" ? "Syncing encrypted state" : "Encrypted state synced";
+  if (state === "ephemeral") return "Ephemeral · this page only";
+  if (state === "local") return "Encrypted · this device";
+  return state === "syncing" ? "Syncing encrypted state" : "Encrypted state synced";
 }

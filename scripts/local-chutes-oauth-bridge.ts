@@ -32,6 +32,12 @@ export function localChutesOAuthBridge(configuration: BridgeConfiguration = {}):
     configureServer(server) {
       server.middlewares.use(async (request, response, next) => {
         if (request.url?.split("?", 1)[0] !== ROUTE) return next();
+        setResponsePolicy(response);
+        if (request.method === "GET") {
+          if (!clientId || !clientSecret) return sendJson(response, 503, { error: "local_bridge_unconfigured" });
+          response.statusCode = 204;
+          return response.end();
+        }
         await handleTokenExchange(request, response, { clientId, clientSecret, redirectUri, fetch: fetchImpl });
       });
     },
@@ -85,22 +91,72 @@ async function handleTokenExchange(
       configuration.clientSecret,
       configuration.redirectUri,
     );
+    const deadline = AbortSignal.timeout(20_000);
     const upstream = await configuration.fetch(UPSTREAM, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: form.toString(),
       cache: "no-store",
       redirect: "error",
-      signal: AbortSignal.timeout(20_000),
+      signal: deadline,
     });
-    const bytes = new Uint8Array(await upstream.arrayBuffer());
-    if (bytes.byteLength > MAX_RESPONSE_BYTES) return sendJson(response, 502, { error: "upstream_response_too_large" });
+    const bytes = await readUpstreamResponse(upstream, deadline);
     response.statusCode = upstream.status;
     response.setHeader("Content-Type", upstream.headers.get("content-type")?.includes("json") ? "application/json" : "application/octet-stream");
     response.end(bytes);
   } catch {
     sendJson(response, 502, { error: "local_bridge_exchange_failed" });
   }
+}
+
+async function readUpstreamResponse(response: Response, signal: AbortSignal): Promise<Uint8Array> {
+  const declared = response.headers.get("content-length");
+  if (declared !== null && (
+    !/^\d+$/u.test(declared) ||
+    !Number.isSafeInteger(Number(declared)) ||
+    Number(declared) > MAX_RESPONSE_BYTES
+  )) {
+    void response.body?.cancel().catch(() => undefined);
+    throw new Error("Chutes token response exceeded the bridge limit.");
+  }
+  if (!response.body) throw new Error("Chutes token response had no body.");
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await abortable(reader.read(), signal);
+      if (done) break;
+      total += value.byteLength;
+      if (total > MAX_RESPONSE_BYTES) {
+        await reader.cancel("Chutes token response exceeded the bridge limit.").catch(() => undefined);
+        throw new Error("Chutes token response exceeded the bridge limit.");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    if (signal.aborted) void reader.cancel(signal.reason).catch(() => undefined);
+    try { reader.releaseLock(); } catch { /* an aborted body may retain its reader */ }
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
+function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(signal.reason ?? new DOMException("Chutes token exchange was aborted.", "AbortError"));
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(signal.reason ?? new DOMException("Chutes token exchange was aborted.", "AbortError"));
+    signal.addEventListener("abort", abort, { once: true });
+    void promise.then(
+      (value) => { signal.removeEventListener("abort", abort); resolve(value); },
+      (error) => { signal.removeEventListener("abort", abort); reject(error); },
+    );
+  });
 }
 
 async function readRequest(request: IncomingMessage): Promise<string> {

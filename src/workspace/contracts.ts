@@ -57,11 +57,38 @@ export function normalizeWorkspacePath(input: string): string {
 export function isWorkspaceControlPlanePath(path: string): boolean {
   const normalized = normalizeWorkspacePath(path);
   return isGitWorkspaceControlPlanePath(normalized)
+    || isBrowserGitControlPlanePath(normalized)
     || normalized === "/workspace/.airship/memory.json"
+    || normalized === "/workspace/.airship/context" || normalized.startsWith("/workspace/.airship/context/")
     || normalized === "/workspace/.airship/terminal" || normalized.startsWith("/workspace/.airship/terminal/");
 }
 
 export function isGitWorkspaceControlPlanePath(path: string): boolean {
   const normalized = normalizeWorkspacePath(path);
+  return isLegacyGitCheckpointPath(normalized)
+    || normalized.split("/").some((segment) => segment === ".git");
+}
+
+/** Old parallel Git checkpoint path; unlike real repository `.git`, do not migrate it as workspace state. */
+export function isLegacyGitCheckpointPath(path: string): boolean {
+  const normalized = normalizeWorkspacePath(path);
   return normalized === "/workspace/.airship/git" || normalized.startsWith("/workspace/.airship/git/");
+}
+
+/**
+ * Real browser Git metadata is part of the authoritative virtual filesystem,
+ * but must never enter the editor tree, terminal snapshots, or model context.
+ *
+ * Keep the browser-native predicate explicit even though
+ * `isGitWorkspaceControlPlanePath` is the broader retrieval/UI filter. Storage
+ * migration skips only `isLegacyGitCheckpointPath`; genuine worktree `.git`
+ * directories and the repository catalog migrate with the workspace so
+ * Editor, Terminal, and Source Control continue to observe one repository
+ * after a Vault transition.
+ */
+export function isBrowserGitControlPlanePath(path: string): boolean {
+  const normalized = normalizeWorkspacePath(path);
+  return normalized === "/workspace/.airship/browser-git-repositories.v1.json"
+    || normalized.includes("/.git/")
+    || normalized.endsWith("/.git");
 }

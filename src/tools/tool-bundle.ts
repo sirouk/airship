@@ -10,6 +10,8 @@ import type { AirshipToolRegistryOptions } from "./airship-tools";
 import { getClientContextRuntime } from "../retrieval/client-context-runtime";
 import { GitSynchronizedWorkspace } from "./git-synchronized-workspace";
 import { registerFederatedMemoryTool } from "./federated-memory";
+import { FederatedTurnContextProvider } from "../retrieval/federated-turn-context";
+import { registerBrowserCapabilityTool } from "./browser-capabilities";
 
 /** One lazy capability chunk keeps startup small without paying per-tool chunk overhead. */
 export function createLoadedAirshipToolRegistry(options: AirshipToolRegistryOptions) {
@@ -20,11 +22,15 @@ export function createLoadedAirshipToolRegistry(options: AirshipToolRegistryOpti
   const workspace = options.git ? new GitSynchronizedWorkspace(observedWorkspace, options.git) : observedWorkspace;
   const registry = createWorkspaceToolRegistry(workspace);
   registry.attachContextRuntime(contextRuntime);
+  const workspaceTurnContext = options.workspaceTurnContextProvider ?? contextRuntime;
+  registry.attachTurnContextProvider(new FederatedTurnContextProvider(workspaceTurnContext, workspace, options.journal));
   registerTaskTools(registry, workspace);
   registerMemoryTools(registry, workspace, options.journal);
   registerFederatedMemoryTool(registry, workspace, options.journal, contextRuntime);
   registerSessionTools(registry, options.journal);
   registerContextTools(registry, contextRuntime);
+  registerBrowserCapabilityTool(registry);
+  for (const tool of options.additionalTools ?? []) registry.register(tool);
   registerLazyExecutionTools(registry, workspace);
   registerNetworkTools(registry, workspace, options.git, options.fetch);
   if (options.git) registerGitTools(registry, options.git);

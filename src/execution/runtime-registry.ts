@@ -1,4 +1,4 @@
-import type { JsonValue } from "../core/contracts";
+import type { JsonValue, ToolOutputChunk } from "../core/contracts";
 import type { WorkspacePort } from "../workspace/contracts";
 
 export type ExecutionRuntimeId =
@@ -10,13 +10,32 @@ export type ExecutionRuntimeId =
 
 export type ExecutionCapabilityState = "ready" | "installable" | "activating" | "failed" | "unavailable";
 
+export type BrowserExecutionTier = "web-baseline" | "web-enhanced";
+
+export type ExecutionOutputChunk = ToolOutputChunk;
+
+export type ExecutionProvenance = Readonly<{
+  capabilityTier: BrowserExecutionTier;
+  authority: "browser";
+  engine: string;
+  /** A named delivery/egress provider is not the execution authority. */
+  providerBoundary?: string;
+  artifactKind: "source" | "shell-script" | "wasi-command" | "workspace-project";
+}>;
+
 export type ExecutionCapability = Readonly<{
   id: ExecutionRuntimeId;
   label: string;
   languages: readonly string[];
   state: ExecutionCapabilityState;
+  tier: BrowserExecutionTier;
   isolation: "disposable-worker" | "dedicated-worker" | "webcontainer";
   persistence: "ephemeral" | "workspace-checkpoint";
+  commandInterface: "javascript-function" | "precompiled-wasi-command" | "python-job" | "bash-script" | "direct-process" | "unavailable";
+  shell: "none" | "wasix-bash" | "webcontainer-jsh" | "unavailable";
+  workspaceAccess: "none" | "bounded-snapshot-writeback" | "unavailable";
+  output: "bounded-stream" | "unavailable";
+  cancellation: "terminate-worker" | "terminate-worker-tree" | "kill-process" | "unavailable";
   detail: string;
 }>;
 
@@ -33,6 +52,8 @@ export type ExecutionRequest = Readonly<{
   writeBack?: boolean;
   timeoutMs: number;
   signal: AbortSignal;
+  /** Ephemeral live output. Durable tool results still contain the bounded final streams. */
+  onOutput?: (chunk: ExecutionOutputChunk) => void;
 }>;
 
 export type ExecutionResult = Readonly<{
@@ -41,12 +62,16 @@ export type ExecutionResult = Readonly<{
   stdout: string;
   stderr: string;
   value?: JsonValue;
+  provenance: ExecutionProvenance;
   workspace?: Readonly<{
     root: string;
     mountedFiles: number;
     changedPaths: readonly string[];
     writtenPaths: readonly string[];
     deletedPaths?: readonly string[];
+    writeBackRequested: boolean;
+    adopted: boolean;
+    /** @deprecated Prefer writeBackRequested and adopted. */
     writeBack: boolean;
   }>;
 }>;
@@ -62,29 +87,82 @@ const OPTIONAL_CAPABILITIES: readonly ExecutionCapability[] = Object.freeze([
     label: "Python · Pyodide",
     languages: ["python"],
     state: "installable",
+    tier: "web-enhanced",
     isolation: "disposable-worker",
     persistence: "ephemeral",
+    commandInterface: "python-job",
+    shell: "none",
+    workspaceAccess: "bounded-snapshot-writeback",
+    output: "bounded-stream",
+    cancellation: "terminate-worker",
     detail: "Optional pinned Pyodide pack; explicit cold install, fresh interpreter per job, bounded virtual workspace snapshots with optional revision-checked text writeback, standard library only, and no runtime network binding.",
   },
   {
     id: "wasix",
-    label: "WASIX toolchains",
-    languages: ["python", "ruby", "php", "bash", "compiled-wasm"],
+    label: "Bash · Wasmer WASIX",
+    languages: ["bash", "shell"],
     state: "unavailable",
+    tier: "web-enhanced",
     isolation: "dedicated-worker",
-    persistence: "workspace-checkpoint",
-    detail: "Real WASIX Bash is documented upstream but is not bundled or installable here. Airship still needs pinned SDK/package artifacts, licenses, registry-origin policy, and a live browser probe; Git and Node are not assumed.",
+    persistence: "ephemeral",
+    commandInterface: "unavailable",
+    shell: "unavailable",
+    workspaceAccess: "unavailable",
+    output: "unavailable",
+    cancellation: "unavailable",
+    detail: "Not promoted: the pinned @wasmer/sdk 0.10.0 browser probe separated output and proved Worker-tree cancellation, but did not preserve nonzero Bash status or bidirectional mounted-workspace mutations. Use Node WebContainer for Node/npm projects or Pyodide for Python. Full browser Bash, Git inside WASIX, and a Rust compiler remain unavailable.",
   },
   {
     id: "node-webcontainer",
     label: "Node.js · WebContainer",
     languages: ["javascript", "typescript", "node", "npm"],
     state: "installable",
+    tier: "web-enhanced",
     isolation: "webcontainer",
     persistence: "workspace-checkpoint",
+    commandInterface: "direct-process",
+    shell: "webcontainer-jsh",
+    workspaceAccess: "bounded-snapshot-writeback",
+    output: "bounded-stream",
+    cancellation: "kill-process",
     detail: "Cold-loaded StackBlitz WebContainer pack; browser compute is local, while runtime delivery and npm egress use third-party services. Requires explicit activation, cross-origin isolation, SharedArrayBuffer, compatible hosting, and production licensing where applicable.",
   },
 ]);
+
+/** Labels for cold or future packs never promote a session capability tier. */
+export function deriveBrowserExecutionTier(
+  capabilities: readonly Pick<ExecutionCapability, "state" | "tier">[],
+): BrowserExecutionTier {
+  return capabilities.some(({ state, tier }) => state === "ready" && tier === "web-enhanced")
+    ? "web-enhanced"
+    : "web-baseline";
+}
+
+/**
+ * Session manifests pin the authority available when the conversation starts.
+ * Activating a heavier pack may improve the page, but never mutates an existing
+ * conversation's execution contract behind its receipt chain.
+ */
+export function sessionAllowsBrowserExecutionTier(
+  pinned: BrowserExecutionTier | "native" | "remote-confidential" | undefined,
+  required: BrowserExecutionTier,
+): boolean {
+  if (required === "web-baseline") return true;
+  return pinned === "web-enhanced" || pinned === "native" || pinned === "remote-confidential";
+}
+
+/** A presentation observer can never poison, delay, or change execution. */
+export function emitExecutionOutput(
+  observer: ExecutionRequest["onOutput"],
+  chunk: ExecutionOutputChunk,
+): void {
+  try {
+    observer?.(Object.freeze({ ...chunk }));
+  } catch {
+    // Output projection is deliberately non-authoritative. The bounded final
+    // ExecutionResult remains the source of truth even when a view unmounts.
+  }
+}
 
 /**
  * Small capability broker shared by the agent tools and future runtime packs.
@@ -144,6 +222,9 @@ export class ClientExecutionRuntime {
     }
     const result = await adapter.execute(request);
     if (result.runtime !== request.runtime) throw new Error("Execution adapter returned a mismatched runtime identity.");
+    if (result.provenance.capabilityTier !== adapter.capability.tier || result.provenance.authority !== "browser") {
+      throw new Error("Execution adapter returned provenance that does not match its registered capability tier.");
+    }
     return result;
   }
 
@@ -151,7 +232,7 @@ export class ClientExecutionRuntime {
     if (typeof Worker === "undefined" || typeof WebAssembly === "undefined") {
       return { ...capability, state: "unavailable", detail: `${capability.detail} This browser has no Worker/WebAssembly runtime.` };
     }
-    if (capability.id === "node-webcontainer") {
+    if (capability.id === "node-webcontainer" || capability.id === "wasix") {
       if (typeof document === "undefined") {
         return { ...capability, state: "unavailable", detail: `${capability.detail} This environment has no browser document.` };
       }

@@ -1,14 +1,32 @@
+import type { JsonValue, ToolContext, ToolExecutionResult } from "../core/contracts";
+import type { BrowserExecutionTier } from "./runtime-registry";
+import type { WorkspacePort } from "../workspace/contracts";
+import type { ToolRegistry } from "../tools/registry";
+
+type ExecutionImplementation = typeof import("./execution-engine");
+
+let implementation: Promise<ExecutionImplementation> | undefined;
+
 /**
- * Second-level optional execution pack. This facade gives the production chunk
- * a stable auditable name while keeping Worker/WASI source out of the agent's
- * baseline capability download.
+ * Small second-level broker. Stable schemas can load without the worker-source,
+ * WASI and Pyodide implementation; those bytes arrive only when capability
+ * inspection or an execution call crosses this boundary.
  */
-export {
-  executeExecutionTool,
-  getClientExecutionRuntime,
-  installExecutionAdapter,
-  installPyodideExecutionRuntime,
-  runDisposablePyodide,
-  runDisposableWasi,
-  runDisposableWorker,
-} from "../tools/execution-tools";
+export async function executeExecutionTool(
+  name: string,
+  argumentsValue: JsonValue,
+  context: ToolContext,
+  workspace?: WorkspacePort,
+  hostRegistry?: ToolRegistry,
+): Promise<ToolExecutionResult> {
+  return (await loadImplementation()).executeExecutionTool(name, argumentsValue, context, workspace, hostRegistry);
+}
+
+export async function getCurrentBrowserExecutionTier(): Promise<BrowserExecutionTier> {
+  return (await loadImplementation()).getCurrentBrowserExecutionTier();
+}
+
+function loadImplementation(): Promise<ExecutionImplementation> {
+  implementation ??= import("./execution-engine");
+  return implementation;
+}

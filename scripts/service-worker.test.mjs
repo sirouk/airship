@@ -13,12 +13,12 @@ describe("production service worker", () => {
       Error,
       Promise,
       self: {
-        location: { origin: "https://airship.example" },
+        location: { origin: "https://airship.example", href: "https://airship.example/airship/sw.js" },
         addEventListener(type, listener) { listeners.set(type, listener); },
         skipWaiting() {},
       },
       fetch: async (url, options) => {
-        expect(url).toBe("/release-manifest.json");
+        expect(url).toBe("/airship/release-manifest.json");
         expect(options).toEqual({ cache: "no-store", credentials: "omit" });
         return {
           ok: true,
@@ -31,6 +31,7 @@ describe("production service worker", () => {
                 { path: "assets/chutes-e2ee-c3.wasm" },
                 { path: "execution-packs/pyodide/python_stdlib.zip" },
                 { path: "../escape.js" },
+                { path: "assets/../scope-escape.js" },
               ],
             };
           },
@@ -49,12 +50,57 @@ describe("production service worker", () => {
     await installation;
 
     expect(cached).toEqual([
-      "/",
-      "/manifest.webmanifest",
-      "/favicon.svg",
-      "/assets/index-a1.js",
-      "/assets/index-b2.css",
-      "/assets/chutes-e2ee-c3.wasm",
+      "/airship/",
+      "/airship/manifest.webmanifest",
+      "/airship/favicon.svg",
+      "/airship/assets/index-a1.js",
+      "/airship/assets/index-b2.css",
+      "/airship/assets/chutes-e2ee-c3.wasm",
     ]);
+  });
+
+  it("cache-first serves the reviewed optional semantic pack without precaching it", async () => {
+    const source = await readFile(new URL("../public/sw.js", import.meta.url), "utf8");
+    const listeners = new Map();
+    const cachedResponse = { source: "semantic-cache" };
+    let networkRequests = 0;
+    const context = {
+      URL,
+      Set,
+      Error,
+      Promise,
+      self: {
+        location: { origin: "https://airship.example", href: "https://airship.example/airship/sw.js" },
+        addEventListener(type, listener) { listeners.set(type, listener); },
+        skipWaiting() {},
+      },
+      async fetch() {
+        networkRequests += 1;
+        throw new Error("The cached semantic artifact should not reach the network.");
+      },
+      caches: {
+        async open() { return { async put() {}, async addAll() {} }; },
+        async keys() { return []; },
+        async delete() { return true; },
+        async match(request) {
+          return request.url.includes("/semantic-pack/v1/") ? cachedResponse : undefined;
+        },
+      },
+    };
+    vm.runInNewContext(source, context);
+    let response;
+    listeners.get("fetch")({
+      request: {
+        url: "https://airship.example/airship/semantic-pack/v1/models/example/model.onnx",
+        method: "GET",
+        mode: "cors",
+        headers: { has() { return false; } },
+      },
+      respondWith(promise) { response = promise; },
+      waitUntil() {},
+    });
+
+    expect(await response).toBe(cachedResponse);
+    expect(networkRequests).toBe(0);
   });
 });

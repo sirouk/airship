@@ -20,7 +20,9 @@ describe("offline runtime UI contract", () => {
   it("blocks only remote composer sends while retaining local slash execution", () => {
     expect(app).toContain("remoteComposerBlocked(");
     expect(app).toContain('composerPlan.kind !== "chat"');
-    expect(app).toContain("disabled={!input.trim() || !sessionId || composerOfflineBlocked}");
+    expect(app).toContain("disabled={!input.trim()");
+    expect(app).toContain("|| composerOfflineBlocked");
+    expect(app).toContain("|| modelSwitching");
     expect(app).toContain('turnTransport.id === "chutes-e2ee-v1"');
     expect(app).toContain("prompt preserved");
   });

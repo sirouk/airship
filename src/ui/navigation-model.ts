@@ -152,19 +152,19 @@ export const MOBILE_MORE_ENTRIES: readonly MobileMoreEntry[] = Object.freeze([
 
 const MOBILE_CONTROL_BY_VIEW: Readonly<Record<NavigationView, MobilePrimaryControlId>> = Object.freeze({
   chat: "chat",
-  sessions: "more",
+  sessions: "chat",
   workspace: "workspace",
   proof: "trust",
-  editor: "more",
-  terminal: "more",
+  editor: "workspace",
+  terminal: "workspace",
   memory: "more",
   context: "more",
   profiles: "more",
   capabilities: "more",
   skills: "more",
-  vault: "more",
-  billing: "more",
-  access: "more",
+  vault: "trust",
+  billing: "trust",
+  access: "trust",
 });
 
 const PARENT_BY_VIEW: Readonly<Record<NavigationView, CanonicalDestinationId>> = Object.freeze({

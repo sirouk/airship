@@ -16,6 +16,7 @@ dependencies installed.
 cd ~/chutes-jumpmaster/airship
 npm install
 npm run lab:start
+npm run lab:status
 ```
 
 An existing confidential Chutes OAuth registration can be exercised without
@@ -27,6 +28,14 @@ AIRSHIP_CHUTES_OAUTH_CLIENT_SECRET='csc_…' \
 npm run lab:start
 ```
 
+If the lab already owns an unconfigured Vite process, the same command safely
+restarts only that process with the bridge enabled while leaving the MinIO
+volume intact. The state file records the public client ID and a configured
+boolean only; it never records the secret or a derivative of it.
+`npm run lab:status` reports **Chutes OAuth bridge ready** after the process is
+actually accepting the same-origin exchange; an unconfigured bridge remains an
+explicit optional status instead of looking like a working sign-in path.
+
 On `http://localhost:4173`, Airship sends the authorization-code and refresh
 exchanges to a same-origin, development-only loopback bridge. The bridge pins
 the Airship client ID, callback, origin, grant types, request fields, response
@@ -35,9 +44,18 @@ sent to JavaScript, written to the lab state file, bundled into `dist/`, logged,
 or stored in MinIO. Hosted static Airship continues to use direct public-client
 PKCE and therefore requires native Chutes public-client support.
 
+Before leaving for Chutes authorization, the browser performs a no-content
+same-origin readiness check. A missing process-held secret now stops locally
+with configuration guidance instead of completing consent and failing on the
+callback. A shared confidential secret must never be embedded in a PWA, WASM
+module, or distributed companion binary: a user who controls that device can
+recover it. Production edge distribution therefore uses public-client PKCE (or
+a provider device flow); the confidential loopback bridge is a local operator
+facility only.
+
 `lab:start` is idempotent for a lab-owned Airship Vite server on
-`http://localhost:4173`; otherwise it starts one and records only its PID/log
-under ignored `.airship-lab/`. It refuses to adopt an unrelated process on the
+`http://localhost:4173`; otherwise it starts one and records its PID, log, and
+non-secret bridge shape under ignored `.airship-lab/`. It refuses to adopt an unrelated process on the
 port because it cannot prove that process is loopback-bound. It starts
 digest-pinned MinIO and `mc` images,
 binds both ports to IPv4 loopback, creates `airship-dev`, applies browser CORS,
@@ -49,13 +67,17 @@ and credential forms are intentionally local. `npm run dev:lan` exists for a
 deliberate UI-only LAN check, but the disposable S3 lab remains loopback-only;
 do not expose its known fixture credentials or ports to a network.
 
-Open <http://localhost:4173>. The default local-lab preference automatically
-configures, probes, and adopts the loopback MinIO vault. Wait for **Encrypted
-state synced** before testing reload durability. Vault still exposes the exact
-fields and manual probe controls for diagnostics. Preferences → Durability can
+Open <http://localhost:4173>. Google Drive remains the ordinary-user default,
+even while this isolated MinIO harness is running. To exercise the disposable
+S3 path, open **Vault** and select **S3-compatible / MinIO**. That explicit
+selection auto-configures, probes, and adopts the baked loopback lab; wait for
+**Encrypted state synced** before testing reload durability. The harness never
+selects or adopts MinIO for an ordinary Google Drive browser session. If the
+automatic handoff fails, `npm run lab:status` prints the exact diagnostic fields
+for **Configure vault** and the manual live probe. Preferences → Durability can
 switch to fully Ephemeral page memory and back; the transition migrates the
-workspace, journal, and Git checkpoint before replacing the active runtime.
-A ready probe proves the tested storage primitives. It does not, by itself,
+workspace, journal, browser-Git registry, and conventional `.git` state before replacing the active runtime. A
+ready probe proves the tested storage primitives. It does not, by itself,
 certify multi-device convergence or make MinIO a production tenant service.
 
 MinIO's operator console is available at <http://127.0.0.1:9901>. Its root
@@ -69,10 +91,10 @@ remain loopback-only and disposable.
    and `/write notes/lab.md` followed by content.
 2. Use Workspace Explorer to expand folders, open multiple editable tabs,
    save with revision fencing, move files by drag/drop or the mobile action
-   sheet, and switch the left rail to Source Control. Use Sources for full
-   diffs, branches, and worktree management. Import a public GitHub snapshot;
-   the same snapshot must appear hierarchically in Workspace and Sources and
-   remain after reload in Vault mode.
+   sheet, then open **Workspace → Editor → Sources** for full diffs,
+   branches, and source-control management. Import a public GitHub snapshot; the
+   same snapshot must appear in both Editor views and remain after reload in
+   Vault mode.
 3. Switch profiles and themes, change global/per-profile Skills, and inspect
    the Memory relationship graph.
 4. Inspect Sessions, fork a session, run Proof audit, and review the local
@@ -85,9 +107,10 @@ remain loopback-only and disposable.
    use `execute_node_project`; provider delivery may fail or exceed the bounded
    30-second boot, in which case Airship must remain non-ready.
 6. Optionally use **Continue to Chutes** through the configured local OAuth
-   bridge, or connect a real Chutes `cpk_`; select a model, invoke a turn, and open the exact receipt in
-   Attestations. Missing deployed CORS/verifiers must remain visibly partial or
-   unavailable; the lab never manufactures a green TEE badge.
+   bridge, or connect a real Chutes `cpk_`; select a model, invoke a turn, and
+   open the exact receipt under **Proof → Endpoint evidence**. Missing deployed
+   CORS/verifiers must remain visibly partial or unavailable; the lab never
+   manufactures a green TEE badge.
 
 ## Full gate
 
@@ -101,7 +124,10 @@ This runs, in order:
 - both Rust suites;
 - an actual MinIO preflight for Airship's signed PUT headers and live MinIO
   conditional create/CAS/range/list plus encrypted journal/workspace
-  conformance; and
+  conformance, followed by a real `runTurn` that publishes an explicitly
+  approved encrypted context generation, retrieves its selected expert over an
+  exact HTTP `Range`, injects it into inference, and verifies the encrypted
+  journal; and
 - Chutes API evidence-scope, OAuth/IDP, and ingress-CORS regression tests.
 
 The Node conformance runner reports browser CORS separately. The bucket itself

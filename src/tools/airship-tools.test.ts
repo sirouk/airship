@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { BrowserGitClient, MemoryGitAdapter } from "../git";
 import { EventJournal } from "../core/journal";
 import { MemoryJournalBackend } from "../core/memory-journal";
@@ -13,14 +13,15 @@ describe("Airship browser capability registry", () => {
     const byName = new Map(definitions.map((definition) => [definition.name, definition]));
 
     for (const name of [
-      "list_files", "read_file", "write_file", "stat_path", "search_text", "replace_text", "move_file", "remove_file",
-      "list_tasks", "update_tasks", "search_context", "fetch_url", "import_github_repository", "git_inspect", "git_change",
+      "list_files", "read_file", "write_file", "stat_path", "search_text", "replace_text", "move_file", "remove_file", "text_editor",
+      "list_tasks", "update_tasks", "search_context", "fetch_url", "import_github_repository", "git_inspect", "git_change", "git_remote",
     ]) expect(byName.has(name), name).toBe(true);
 
     expect(byName.get("search_context")?.effect).toBe("read");
     expect(byName.get("git_inspect")?.effect).toBe("read");
     expect(byName.get("update_tasks")?.effect).toBe("write");
     expect(byName.get("git_change")?.effect).toBe("write");
+    expect(byName.get("git_remote")?.effect).toBe("network");
     expect(byName.get("fetch_url")?.effect).toBe("network");
     expect(byName.get("import_github_repository")?.effect).toBe("network");
     expect(byName.has("terminal")).toBe(false);
@@ -79,6 +80,29 @@ describe("Airship browser capability registry", () => {
       worktreeId: "main",
     }, "git-status");
     expect(JSON.parse(status.content).status[0]).toMatchObject({ path: "README.md" });
+  });
+
+  it("routes agent remote work through the authoritative browser Git client", async () => {
+    const { registry, git } = await harness();
+    const clone = vi.spyOn(git, "clone").mockResolvedValue({
+      repository: { id: "cloned" },
+      changedPaths: [],
+    } as unknown as Awaited<ReturnType<typeof git.clone>>);
+
+    const result = await runTool(registry, "git_remote", {
+      action: "clone",
+      repositoryId: "cloned",
+      name: "owner/repo",
+      remoteUrl: "https://github.com/owner/repo.git",
+      destination: "/workspace/sources/repo",
+    }, "git-clone");
+
+    expect(clone).toHaveBeenCalledWith(expect.objectContaining({
+      repositoryId: "cloned",
+      remoteName: "origin",
+      destination: "/workspace/sources/repo",
+    }), expect.any(AbortSignal));
+    expect(JSON.parse(result.content).repository.id).toBe("cloned");
   });
 
   it("makes an agent-imported GitHub snapshot visible in workspace and Sources atomically", async () => {

@@ -129,6 +129,25 @@ export function validateRemoteUrl(value: string): string {
   return url.toString();
 }
 
+/** Validate an adapter-owned repository root inside Airship's virtual workspace. */
+export function validateGitDestination(value: string): string {
+  if (!value || value !== value.trim() || value.includes("\\") || CONTROL.test(value) || value !== value.normalize("NFC")) {
+    throw new GitValidationError("Git destination must be a normalized workspace path.");
+  }
+  const rooted = value.startsWith("/") ? value : `/workspace/${value}`;
+  if (encoder.encode(rooted).byteLength > GIT_LIMITS.maxPathBytes) throw new GitValidationError("Git destination is too long.");
+  const parts = rooted.slice(1).split("/");
+  if (!rooted.startsWith("/") || parts[0] !== "workspace" || parts.some((part) => part === "." || part === ".." || !part)) {
+    throw new GitValidationError("Git destination must stay inside /workspace without dot segments.");
+  }
+  for (const part of parts.slice(1)) {
+    if (encoder.encode(part).byteLength > GIT_LIMITS.maxSegmentBytes || part.toLowerCase() === ".git" || WINDOWS_DEVICE.test(part) || /[<>:"|?*]/u.test(part) || /[ .]$/u.test(part)) {
+      throw new GitValidationError("Git destination contains a cross-platform unsafe segment.");
+    }
+  }
+  return `/${parts.join("/")}`;
+}
+
 export function validateFileContent(content: string): string {
   if (encoder.encode(content).byteLength > GIT_LIMITS.maxFileBytes) {
     throw new GitValidationError(`In-memory Git files are limited to ${GIT_LIMITS.maxFileBytes} bytes.`);

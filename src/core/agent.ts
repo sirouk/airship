@@ -8,7 +8,6 @@ import type {
   JsonValue,
   SessionManifest,
   ToolCall,
-  ToolDefinition,
 } from "./contracts";
 import { sha256, stableStringify } from "./hash";
 import { randomUuid } from "./id";
@@ -16,11 +15,30 @@ import type { DurableEvent, EventDraft } from "./journal";
 import { EventJournal } from "./journal";
 import { approvalProvenance } from "../approvals/modes";
 import { boundInferenceHistoryImages, canonicalImageInputs } from "./multimodal";
-import { canonicalContextSelection, injectContextSelection } from "./context-selection";
+import {
+  canonicalContextSelection,
+  canonicalTurnContextQuery,
+  contextSelectionScopeMatches,
+  injectContextSelection,
+  verifyContextSelection,
+  verifyContextSelectionQuery,
+  type CanonicalContextSelection,
+} from "./context-selection";
+import {
+  contextCompressionOptionsFromPolicy,
+  createInferenceTransportContextSummarizer,
+  materializeContextSummary,
+  planContextCompression,
+  resolveContextCompressionOptions,
+  type ContextCompressionOptions,
+} from "./context-compressor";
+
+export { createSessionManifest } from "./session-manifest";
 
 export type AgentSignal =
   | { type: "durable"; events: DurableEvent[] }
   | { type: "text-delta"; turnId: string; text: string }
+  | { type: "tool-output"; turnId: string; operationId: string; stream: "stdout" | "stderr" | "combined"; text: string }
   | { type: "status"; turnId: string; status: string };
 
 export type RunTurnOptions = {
@@ -34,6 +52,11 @@ export type RunTurnOptions = {
   approvalPolicy: ApprovalPolicy;
   signal: AbortSignal;
   maxSteps?: number;
+  /**
+   * Deprecated assertion for direct callers. Automatic compression is driven
+   * only by the immutable session contextPolicy; a supplied value must match it.
+   */
+  contextCompression?: ContextCompressionOptions;
   onSignal?: (signal: AgentSignal) => void;
 };
 
@@ -46,42 +69,19 @@ export type TurnResult = {
 
 const MAX_TOOL_CALLS_PER_STEP = 64;
 const MAX_OPERATION_ID_CHARS = 512;
+const MAX_ASSISTANT_RESPONSE_BYTES = 4 * 1024 * 1024;
+const MAX_INFERENCE_EVENTS_PER_STEP = 100_000;
 const UNSAFE_OPERATION_ID = /[\u0000-\u001F\u007F]/u;
-
-export async function createSessionManifest(args: {
-  systemPrompt: string;
-  providerId: string;
-  model: string;
-  tools: ToolDefinition[];
-  workspaceId: string;
-  profile?: SessionManifest["profile"];
-  securityPosture?: SessionManifest["securityPosture"];
-  lineage?: SessionManifest["lineage"];
-  capabilityTier?: SessionManifest["capabilityTier"];
-  now?: string;
-}): Promise<SessionManifest> {
-  const tools = structuredClone(args.tools).sort((left, right) => left.name.localeCompare(right.name));
-  return {
-    protocolVersion: 1,
-    systemPrompt: args.systemPrompt,
-    systemPromptDigest: await sha256(args.systemPrompt),
-    providerId: args.providerId,
-    model: args.model,
-    toolManifestDigest: await sha256(stableStringify(tools as unknown as JsonValue)),
-    tools,
-    workspaceId: args.workspaceId,
-    capabilityTier: args.capabilityTier ?? "web-baseline",
-    ...(args.securityPosture ? { securityPosture: args.securityPosture } : {}),
-    ...(args.profile ? { profile: structuredClone(args.profile) } : {}),
-    ...(args.lineage ? { lineage: structuredClone(args.lineage) } : {}),
-    createdAt: args.now ?? new Date().toISOString(),
-  };
-}
+const UTF8_ENCODER = new TextEncoder();
 
 export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
   const maxSteps = options.maxSteps ?? 8;
   const session = await options.journal.getSession(options.sessionId, options.signal);
   if (!session) throw new Error(`Unknown session: ${options.sessionId}`);
+  assertSupportedTurnManifest(session.manifest);
+  if (session.manifest.protocolVersion === 1) {
+    throw new Error("Protocol-v1 sessions are replay-only; fork the session before starting a new turn.");
+  }
   if (session.manifest.providerId !== options.transport.id) {
     throw new Error(
       `Session provider is pinned to ${session.manifest.providerId}; fork the session to use ${options.transport.id}.`,
@@ -93,23 +93,48 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
   if (currentToolDigest !== session.manifest.toolManifestDigest) {
     throw new Error("The tool manifest changed. Fork the session before using a different tool set.");
   }
+  const existingEvents = await options.journal.readEvents(options.sessionId, 0, options.signal);
+  const unfinishedTurn = findUnfinishedProviderTurn(existingEvents);
+  if (unfinishedTurn) {
+    throw new Error(`Turn ${unfinishedTurn} has no durable terminal event; recover or fork the session before continuing.`);
+  }
+  assertContextHistoryCompatible(existingEvents, session.manifest);
   const reservedOperationIds = new Set(
-    (await options.journal.readEvents(options.sessionId, 0, options.signal))
-      .flatMap((event) => event.operationId ? [event.operationId] : []),
+    existingEvents.flatMap((event) => event.operationId ? [event.operationId] : []),
   );
   const images = canonicalImageInputs(options.images);
   if (!images) throw new TypeError("Turn images do not satisfy the canonical multimodal contract.");
-  const contextSelection = options.content.trim()
-    ? await options.tools.getContextRuntime()?.selectForTurn(options.content, options.signal)
-    : undefined;
 
   const turnId = randomUuid();
   const emitted: DurableEvent[] = [];
-  const append = async (drafts: EventDraft[]) => {
-    const durable = await options.journal.append(options.sessionId, drafts, options.signal);
+  let terminalCommitted = false;
+  const append = async (drafts: EventDraft[], useTurnSignal = true) => {
+    const durable = await options.journal.append(
+      options.sessionId,
+      drafts,
+      useTurnSignal ? options.signal : undefined,
+    );
     emitted.push(...durable);
-    options.onSignal?.({ type: "durable", events: durable });
+    if (durable.some((event) => isTerminalTurnEvent(event.type))) terminalCommitted = true;
+    notifySignal(options.onSignal, { type: "durable", events: durable });
     return durable;
+  };
+  const reconcileTerminal = async (): Promise<boolean> => {
+    const persisted = await options.journal.readEvents(options.sessionId, 0);
+    const terminals = persisted.filter((event) =>
+      event.turnId === turnId && isTerminalTurnEvent(event.type)
+    );
+    if (terminals.length > 1) {
+      throw new Error(`Turn ${turnId} has multiple durable terminal events.`);
+    }
+    const terminal = terminals[0];
+    if (!terminal) return false;
+    terminalCommitted = true;
+    if (!emitted.some((event) => event.eventId === terminal.eventId)) {
+      emitted.push(terminal);
+      notifySignal(options.onSignal, { type: "durable", events: [terminal] });
+    }
+    return true;
   };
 
   await append([
@@ -119,16 +144,77 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
       payload: {
         content: options.content,
         ...(images.length ? { images: images as unknown as JsonValue } : {}),
-        ...(contextSelection ? { contextSelection: contextSelection as unknown as JsonValue } : {}),
       },
     },
   ]);
 
   try {
+    const contextSelection = await prepareTurnContext({
+      content: options.content,
+      sessionId: options.sessionId,
+      manifest: session.manifest,
+      tools: options.tools,
+      signal: options.signal,
+    });
+    if (contextSelection) {
+      await append([{
+        type: "turn.context.selected",
+        turnId,
+        payload: { contextSelection: contextSelection as unknown as JsonValue },
+      }]);
+    }
+
+    // A context window is immutable session semantics, never inferred from a
+    // model name or re-read from a mutable catalog during an old-session replay.
+    const pinnedContextCompression = session.manifest.contextPolicy
+      ? contextCompressionOptionsFromPolicy(session.manifest.contextPolicy)
+      : undefined;
+    if (options.contextCompression) {
+      const asserted = resolveContextCompressionOptions(options.contextCompression);
+      if (!pinnedContextCompression || !sameContextCompressionOptions(asserted, pinnedContextCompression)) {
+        throw new Error("Context compression options must exactly match the policy pinned in the session manifest.");
+      }
+    }
+    const contextSummary = pinnedContextCompression
+      ? await planContextCompression({
+        events: existingEvents,
+        messages: materializeMessages(existingEvents, {
+          injectLatestContext: false,
+          allowEmbeddedContext: session.manifest.turnContext === undefined,
+          allowSelectedContext: session.manifest.turnContext !== "disabled",
+        }),
+        projectedUserContent: injectContextSelection(options.content, contextSelection),
+        systemPrompt: session.manifest.systemPrompt,
+        tools: session.manifest.tools,
+        options: pinnedContextCompression,
+        ...(session.manifest.contextPolicy!.compression.summarizer.mode === "inference-transport" ? {
+          summarizer: createInferenceTransportContextSummarizer({
+            transport: options.transport,
+            model: session.manifest.model,
+            sessionId: session.id,
+          }),
+          summarizerFailure: session.manifest.contextPolicy!.compression.summarizer.onFailure === "extractive-fallback"
+            ? "extractive-fallback" as const
+            : "throw" as const,
+        } : {}),
+        signal: options.signal,
+      })
+      : undefined;
+    if (contextSummary) {
+      await append([{
+        type: "context.summary.updated",
+        turnId,
+        payload: contextSummary as unknown as JsonValue,
+      }]);
+    }
+
     for (let step = 0; step < maxSteps; step += 1) {
       throwIfAborted(options.signal);
       const history = await options.journal.readEvents(options.sessionId, 0, options.signal);
-      const messages = materializeMessages(history);
+      const messages = materializeMessages(history, {
+        allowEmbeddedContext: session.manifest.turnContext === undefined,
+        allowSelectedContext: session.manifest.turnContext !== "disabled",
+      });
       const requestId = randomUuid();
       if (reservedOperationIds.has(requestId)) throw new Error("Generated inference operation ID was already used.");
       reservedOperationIds.add(requestId);
@@ -157,7 +243,7 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
           },
         },
       ]);
-      options.onSignal?.({ type: "status", turnId, status: "thinking" });
+      notifySignal(options.onSignal, { type: "status", turnId, status: "thinking" });
 
       let content = "";
       const toolCalls: ToolCall[] = [];
@@ -177,7 +263,7 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
         options.signal,
         (text) => {
           content += text;
-          options.onSignal?.({ type: "text-delta", turnId, text });
+          notifySignal(options.onSignal, { type: "text-delta", turnId, text });
         },
         (toolCall) => toolCalls.push(toolCall),
         async (usage) => {
@@ -185,7 +271,7 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
         },
         (phase) => {
           if (phase === "reasoning") {
-            options.onSignal?.({ type: "status", turnId, status: "reasoning privately in enclave" });
+            notifySignal(options.onSignal, { type: "status", turnId, status: "reasoning" });
           }
         },
       );
@@ -215,7 +301,16 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
 
         for (const call of toolCalls) {
           throwIfAborted(options.signal);
-          const context = { sessionId: options.sessionId, turnId, operationId: call.id, signal: options.signal };
+          const context = {
+            sessionId: options.sessionId,
+            turnId,
+            operationId: call.id,
+            signal: options.signal,
+            capabilityTier: session.manifest.capabilityTier,
+            onOutput(chunk: Readonly<{ stream: "stdout" | "stderr" | "combined"; text: string }>) {
+              notifySignal(options.onSignal, { type: "tool-output", turnId, operationId: call.id, ...chunk });
+            },
+          };
           let decision: "allow" | "deny";
           try {
             decision = await options.tools.review(call.name, call.arguments, context, options.approvalPolicy);
@@ -250,7 +345,7 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
               payload: { callId: call.id, name: call.name, approval: provenance ?? null },
             },
           ]);
-          options.onSignal?.({ type: "status", turnId, status: `running ${call.name}` });
+          notifySignal(options.onSignal, { type: "status", turnId, status: `running ${call.name}` });
           try {
             const execution = await options.tools.executeApproved(call.name, call.arguments, context);
             await append([
@@ -313,21 +408,146 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
           payload: { responseDigest, receiptId: receipt.receiptId },
         },
       ]);
-      options.onSignal?.({ type: "status", turnId, status: "complete" });
+      notifySignal(options.onSignal, { type: "status", turnId, status: "complete" });
       return { turnId, content, receipt, events: emitted };
     }
 
     throw new Error(`Agent exceeded the ${maxSteps}-step turn limit.`);
   } catch (error) {
     const cancelled = options.signal.aborted || isAbortError(error);
-    await append([
-      {
-        type: cancelled ? "turn.cancelled" : "turn.failed",
-        turnId,
-        payload: { error: errorMessage(error) },
-      },
-    ]).catch(() => undefined);
+    if (!terminalCommitted) {
+      try {
+        terminalCommitted = await reconcileTerminal();
+      } catch (reconciliationError) {
+        throw new AggregateError(
+          [error, reconciliationError],
+          "The turn failed and its durable terminal state could not be reconciled.",
+        );
+      }
+    }
+    if (!terminalCommitted) {
+      // Cancellation must not prevent its own durable terminal record. The
+      // request signal only governs turn work, not the append-only audit trail.
+      try {
+        await append([
+          {
+            type: cancelled ? "turn.cancelled" : "turn.failed",
+            turnId,
+            payload: { error: errorMessage(error) },
+          },
+        ], false);
+      } catch (terminalError) {
+        let terminalRecovered: boolean;
+        try {
+          terminalRecovered = await reconcileTerminal();
+        } catch (reconciliationError) {
+          throw new AggregateError(
+            [error, terminalError, reconciliationError],
+            "The turn failed and its durable terminal state could not be reconciled.",
+          );
+        }
+        if (terminalRecovered) throw error;
+        throw new AggregateError(
+          [error, terminalError],
+          "The turn failed and its terminal audit event could not be persisted.",
+        );
+      }
+    }
     throw error;
+  }
+}
+
+async function prepareTurnContext(args: Readonly<{
+  content: string;
+  sessionId: string;
+  manifest: SessionManifest;
+  tools: ToolRegistry;
+  signal: AbortSignal;
+}>): Promise<CanonicalContextSelection | undefined> {
+  const provider = args.tools.getTurnContextProvider();
+  // Historical protocol-v1 manifests omitted the pin. Preserve their exact
+  // provider-if-present behavior; createSessionManifest now always pins new
+  // sessions so current turns are never governed by this compatibility path.
+  const mode = args.manifest.turnContext ?? (provider ? "required" : "disabled");
+  if (mode === "disabled") return undefined;
+  if (!provider) throw new Error("This session requires turn-context retrieval, but no provider is attached.");
+  const query = canonicalTurnContextQuery(args.content);
+  if (!query) return undefined;
+  const selected = await provider.selectForTurn(query, {
+    sessionId: args.sessionId,
+    signal: args.signal,
+  });
+  const canonical = canonicalContextSelection(selected);
+  if (!canonical) throw new Error("The turn-context provider returned a non-canonical selection.");
+  if (!await verifyContextSelection(canonical)) {
+    throw new Error("The turn-context provider returned a selection whose commitments did not verify.");
+  }
+  if (!await verifyContextSelectionQuery(canonical, query)) {
+    throw new Error("The turn-context provider returned a selection for a different canonical query.");
+  }
+  if (!contextSelectionScopeMatches(canonical, args.sessionId, args.manifest)) {
+    throw new Error("The turn-context provider returned lineage outside this session's pinned scope.");
+  }
+  return canonical;
+}
+
+function isTerminalTurnEvent(type: string): boolean {
+  return type === "turn.completed" || type === "turn.failed" || type === "turn.cancelled";
+}
+
+function findUnfinishedProviderTurn(events: readonly DurableEvent[]): string | undefined {
+  let active: string | undefined;
+  for (const event of events) {
+    if (event.type === "turn.requested" && event.turnId) active = event.turnId;
+    if (active && event.turnId === active && isTerminalTurnEvent(event.type)) active = undefined;
+  }
+  return active;
+}
+
+function assertContextHistoryCompatible(
+  events: readonly DurableEvent[],
+  manifest: SessionManifest,
+): void {
+  if (manifest.turnContext !== undefined && events.some((event) =>
+    event.type === "turn.requested" && record(event.payload)?.contextSelection !== undefined
+  )) {
+    throw new Error("This explicitly pinned session contains legacy request-embedded turn context.");
+  }
+  if (manifest.turnContext === "disabled" && events.some((event) => event.type === "turn.context.selected")) {
+    throw new Error("This session disables turn-context retrieval but its history contains a selection event.");
+  }
+}
+
+function notifySignal(onSignal: RunTurnOptions["onSignal"], signal: AgentSignal): void {
+  try {
+    onSignal?.(signal);
+  } catch {
+    // Observers cannot mutate or interrupt the durable turn state machine.
+  }
+}
+
+function sameContextCompressionOptions(
+  left: Required<ContextCompressionOptions>,
+  right: Required<ContextCompressionOptions>,
+): boolean {
+  return left.contextWindowTokens === right.contextWindowTokens &&
+    left.threshold === right.threshold &&
+    left.targetRatio === right.targetRatio &&
+    left.preserveRecentTurns === right.preserveRecentTurns &&
+    left.maxSummaryDeltaBytes === right.maxSummaryDeltaBytes;
+}
+
+function assertSupportedTurnManifest(manifest: SessionManifest): void {
+  const raw = manifest as SessionManifest & { protocolVersion?: unknown; turnContext?: unknown };
+  if (raw.protocolVersion === 1) {
+    if (raw.turnContext !== undefined) throw new Error("Protocol-v1 session manifests cannot pin turn-context policy.");
+    return;
+  }
+  if (
+    raw.protocolVersion !== 2 ||
+    (raw.turnContext !== "required" && raw.turnContext !== "disabled")
+  ) {
+    throw new Error("The session manifest uses an unsupported protocol or turn-context policy.");
   }
 }
 
@@ -411,11 +631,30 @@ async function collectInference(
   let terminal:
     | { completed: true; finishReason: "stop" | "tool-calls" | "length"; receipt?: ConversationReceipt }
     | undefined;
+  let responseBytes = 0;
+  let toolCallCount = 0;
+  let eventCount = 0;
   for await (const event of transport.stream(request, signal)) {
     throwIfAborted(signal);
+    eventCount += 1;
+    if (eventCount > MAX_INFERENCE_EVENTS_PER_STEP) {
+      throw new Error(`Provider exceeded the ${MAX_INFERENCE_EVENTS_PER_STEP}-event inference step limit.`);
+    }
     if (terminal) throw new Error("Provider emitted events after completion.");
-    if (event.type === "text-delta") onText(event.text);
-    if (event.type === "tool-call") onToolCall(event.call);
+    if (event.type === "text-delta") {
+      responseBytes += UTF8_ENCODER.encode(event.text).byteLength;
+      if (responseBytes > MAX_ASSISTANT_RESPONSE_BYTES) {
+        throw new Error(`Provider response exceeded the ${MAX_ASSISTANT_RESPONSE_BYTES}-byte turn limit.`);
+      }
+      onText(event.text);
+    }
+    if (event.type === "tool-call") {
+      toolCallCount += 1;
+      if (toolCallCount > MAX_TOOL_CALLS_PER_STEP) {
+        throw new Error(`Provider exceeded the ${MAX_TOOL_CALLS_PER_STEP}-tool-call step limit.`);
+      }
+      onToolCall(event.call);
+    }
     if (event.type === "usage") await onUsage(event as unknown as JsonValue);
     if (event.type === "progress") onProgress(event.phase);
     if (event.type === "completed") {
@@ -425,7 +664,14 @@ async function collectInference(
   return terminal ?? { completed: false };
 }
 
-export function materializeMessages(events: DurableEvent[]): CanonicalMessage[] {
+export function materializeMessages(
+  events: DurableEvent[],
+  options: Readonly<{
+    injectLatestContext?: boolean;
+    allowEmbeddedContext?: boolean;
+    allowSelectedContext?: boolean;
+  }> = {},
+): CanonicalMessage[] {
   // Failed and cancelled turns remain in the durable journal for audit and
   // recovery, but they are not provider conversation history. Omitting the
   // complete turn avoids replaying its user intent (or a partial tool phase)
@@ -438,26 +684,54 @@ export function materializeMessages(events: DurableEvent[]): CanonicalMessage[] 
       )
       .map((event) => event.turnId as string),
   );
-  const messages: CanonicalMessage[] = [];
-  const latestRequest = [...events].reverse().find((event) =>
+  const summary = materializeContextSummary(events);
+  const visibleEvents = summary
+    ? events.filter((event) => event.sequence > summary.coveredThroughSequence)
+    : events;
+  const messages: CanonicalMessage[] = summary ? [structuredClone(summary.message)] : [];
+  const requestMessageIndexes = new Map<string, number>();
+  const latestRequest = [...visibleEvents].reverse().find((event) =>
     event.type === "turn.requested" && event.turnId && !nonActionableTurns.has(event.turnId),
   );
-  for (const event of events) {
+  for (const event of visibleEvents) {
     if (event.turnId && nonActionableTurns.has(event.turnId)) continue;
     const payload = record(event.payload);
     if (event.type === "turn.requested" && typeof payload?.content === "string") {
       const images = canonicalImageInputs(payload.images);
-      const contextSelection = payload.contextSelection === undefined
+      const contextSelection = payload.contextSelection === undefined || options.allowEmbeddedContext === false
         ? undefined
         : canonicalContextSelection(payload.contextSelection);
-      if (images && (payload.contextSelection === undefined || contextSelection)) {
+      if (images && (
+        payload.contextSelection === undefined ||
+        options.allowEmbeddedContext === false ||
+        contextSelection
+      )) {
+        const messageIndex = messages.length;
         messages.push({
           role: "user",
-          content: event.eventId === latestRequest?.eventId
+          content: options.injectLatestContext !== false && event.eventId === latestRequest?.eventId
             ? injectContextSelection(payload.content, contextSelection)
             : payload.content,
           ...(images.length ? { images: [...images] } : {}),
         });
+        if (event.turnId) requestMessageIndexes.set(event.turnId, messageIndex);
+      }
+    }
+    if (event.type === "turn.context.selected" && event.turnId && options.allowSelectedContext !== false) {
+      const messageIndex = requestMessageIndexes.get(event.turnId);
+      const contextSelection = canonicalContextSelection(payload?.contextSelection);
+      const message = messageIndex === undefined ? undefined : messages[messageIndex];
+      if (
+        messageIndex !== undefined &&
+        message?.role === "user" &&
+        contextSelection &&
+        options.injectLatestContext !== false &&
+        event.turnId === latestRequest?.turnId
+      ) {
+        messages[messageIndex] = {
+          ...message,
+          content: injectContextSelection(message.content, contextSelection),
+        };
       }
     }
     if (event.type === "assistant.completed") {

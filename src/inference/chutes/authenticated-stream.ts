@@ -70,20 +70,31 @@ export class AuthenticatedOpenAiStream {
   private consumeJson(plaintext: string): { events: InferenceEvent[]; done: boolean } {
     this.pending += plaintext;
     this.assertBounded();
-    const json = this.pending.trim();
-    if (json === "[DONE]") {
-      this.pending = "";
-      return { events: [], done: true };
+    const events: InferenceEvent[] = [];
+    for (;;) {
+      const record = takeJsonRecord(this.pending);
+      if (!record) return { events, done: false };
+      this.pending = record.remainder;
+      if (record.value === "[DONE]") {
+        if (this.pending.trim()) {
+          throw new ChutesTransportError(
+            "INVALID_RESPONSE",
+            "Chutes sent authenticated JSON content after the completion marker.",
+          );
+        }
+        this.pending = "";
+        return { events, done: true };
+      }
+      try {
+        JSON.parse(record.value);
+      } catch {
+        throw new ChutesTransportError(
+          "INVALID_RESPONSE",
+          "Chutes authenticated JSON stream contained a malformed object.",
+        );
+      }
+      events.push(...this.assembler.consume(record.value));
     }
-    try {
-      JSON.parse(json);
-    } catch {
-      // A provider iterator may split one JSON object across authenticated
-      // records. Retain the bounded prefix until the object is complete.
-      return { events: [], done: false };
-    }
-    this.pending = "";
-    return { events: this.assembler.consume(json), done: false };
   }
 
   private assertBounded() {
@@ -101,6 +112,60 @@ export class AuthenticatedOpenAiStream {
       "Chutes authenticated stream is neither SSE nor a JSON object stream.",
     );
   }
+}
+
+/**
+ * Split one complete JSON object without assuming that an authenticated
+ * provider chunk and an OpenAI record share a boundary. Braces inside strings
+ * and nested arrays/objects are tracked; malformed balanced values are left to
+ * JSON.parse so incomplete and invalid records cannot be conflated.
+ */
+function takeJsonRecord(value: string): Readonly<{ value: string; remainder: string }> | undefined {
+  const start = value.search(/\S/u);
+  if (start < 0) return undefined;
+  const prefix = value.slice(start);
+  if (prefix.startsWith("[DONE]")) {
+    return { value: "[DONE]", remainder: prefix.slice("[DONE]".length) };
+  }
+  if ("[DONE]".startsWith(prefix)) return undefined;
+  if (prefix[0] !== "{") {
+    throw new ChutesTransportError(
+      "INVALID_RESPONSE",
+      "Chutes authenticated JSON stream did not begin with an object.",
+    );
+  }
+
+  let depth = 0;
+  let quoted = false;
+  let escaped = false;
+  for (let index = 0; index < prefix.length; index += 1) {
+    const character = prefix[index]!;
+    if (quoted) {
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === '"') quoted = false;
+      continue;
+    }
+    if (character === '"') {
+      quoted = true;
+      continue;
+    }
+    if (character === "{" || character === "[") depth += 1;
+    else if (character === "}" || character === "]") {
+      depth -= 1;
+      if (depth < 0) {
+        throw new ChutesTransportError(
+          "INVALID_RESPONSE",
+          "Chutes authenticated JSON stream closed an unopened structure.",
+        );
+      }
+      if (depth === 0) {
+        const end = index + 1;
+        return { value: prefix.slice(0, end), remainder: prefix.slice(end) };
+      }
+    }
+  }
+  return undefined;
 }
 
 function detectFraming(value: string, final = false): Framing | undefined {

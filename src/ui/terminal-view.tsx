@@ -2,14 +2,19 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import "@xterm/xterm/css/xterm.css";
+import type { BrowserGitClient } from "../git/client";
+import { runTerminalGitCommand, type TerminalGitReview } from "../git/terminal-commands";
 import type { WorkspacePort } from "../workspace/contracts";
 import { getBrowserTerminalManager, type BrowserTerminalManager } from "../terminal/manager";
 import type { TerminalSessionSnapshot } from "../terminal/contracts";
 import { Icon } from "./icons";
 import "./terminal-view.css";
 
-export function TerminalView({ workspace, threadId, workspaceRoot = "/workspace" }: Readonly<{
+export function TerminalView({ workspace, git, reviewGit, onWorkspaceChanged, threadId, workspaceRoot = "/workspace" }: Readonly<{
   workspace: WorkspacePort;
+  git: BrowserGitClient;
+  reviewGit: TerminalGitReview;
+  onWorkspaceChanged?(): void | Promise<void>;
   threadId?: string;
   workspaceRoot?: string;
 }>) {
@@ -20,7 +25,14 @@ export function TerminalView({ workspace, threadId, workspaceRoot = "/workspace"
   const [syncing, setSyncing] = useState(false);
   const [renamingId, setRenamingId] = useState<string>();
   const [renameValue, setRenameValue] = useState("");
+  const [gitCommand, setGitCommand] = useState("git status");
+  const [gitRunning, setGitRunning] = useState(false);
+  const [setupOpen, setSetupOpen] = useState(() => (
+    typeof matchMedia !== "function" || !matchMedia("(max-width: 760px)").matches
+  ));
   const cancelRename = useRef(false);
+  const workspaceChanged = useRef(onWorkspaceChanged);
+  workspaceChanged.current = onWorkspaceChanged;
 
   useEffect(() => {
     let current = true;
@@ -37,7 +49,35 @@ export function TerminalView({ workspace, threadId, workspaceRoot = "/workspace"
     return () => { current = false; unsubscribe(); };
   }, [manager, threadId]);
 
+  useEffect(() => manager.subscribeWorkspace(() => {
+    void workspaceChanged.current?.();
+  }), [manager]);
+
+  useEffect(() => {
+    if (typeof matchMedia !== "function") return;
+    const media = matchMedia("(max-width: 760px)");
+    const syncDisclosure = () => setSetupOpen(!media.matches);
+    media.addEventListener("change", syncDisclosure);
+    return () => media.removeEventListener("change", syncDisclosure);
+  }, []);
+
   const active = sessions.find(({ id }) => id === activeId);
+  const runGit = async () => {
+    if (!active || gitRunning) return;
+    setGitRunning(true);
+    try {
+      const result = await runTerminalGitCommand({ command: gitCommand, cwd: active.cwd, client: git, review: reviewGit });
+      manager.recordBridgeCommand(active.id, gitCommand, result.output);
+      if (result.changed) await onWorkspaceChanged?.();
+      setNotice(result.changed ? "Shared Git state updated; Editor, agent tools, and source control now see the same revision." : "Shared Git command completed against the authoritative browser repository.");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Shared Git command failed safely.";
+      manager.recordBridgeCommand(active.id, gitCommand, `error: ${message}\n`);
+      setNotice(message);
+    } finally {
+      setGitRunning(false);
+    }
+  };
   const createTab = () => {
     const created = manager.create({ ...(threadId ? { threadId } : {}), cwd: workspaceRoot });
     setActiveId(created.id);
@@ -76,19 +116,33 @@ export function TerminalView({ workspace, threadId, workspaceRoot = "/workspace"
   return (
     <section class="terminal-route" aria-labelledby="terminal-title">
       <header class="terminal-route__heading">
-        <div><span class="eyebrow">Workspace · browser process room</span><h1 id="terminal-title">Terminal</h1><p>Real interactive Node processes run inside this page's WebContainer. This is not your device shell, host Bash, SSH, or a remote Airship backend.</p></div>
+        <div><span class="eyebrow">Workspace · browser process room</span><h1 id="terminal-title">Terminal</h1></div>
         <div class="terminal-route__actions">
-          <button type="button" onClick={() => void sync()} disabled={syncing || !sessions.some(({ status }) => status === "running" || status === "exited")}><Icon name="cloud" size={16} />{syncing ? "Syncing…" : "Sync workspace"}</button>
+          <button type="button" onClick={() => void sync()} disabled={syncing || !sessions.some(({ status }) => status === "running" || status === "exited")}><Icon name="cloud" size={16} />{syncing ? "Reconciling…" : "Reconcile workspace"}</button>
           <button type="button" onClick={createTab} disabled={sessions.length >= 8}><span aria-hidden="true">＋</span> New terminal</button>
         </div>
       </header>
 
-      <div class="terminal-assurance" role="note">
-        <span><Icon name="terminal" size={16} /><strong>Browser Node shell</strong></span>
-        <span>Processes stay hot while this page lives</span>
-        <span>Reload requires process restart</span>
-        <span>{threadId ? `Thread ${compactId(threadId)}` : "No conversation thread attached"}</span>
-      </div>
+      <details class="terminal-route__setup" open={setupOpen} onToggle={(event) => setSetupOpen(event.currentTarget.open)}>
+        <summary>
+          <span><Icon name="terminal" size={16} /><strong>Browser Node shell</strong></span>
+          <small>Runtime facts &amp; Shared Git</small>
+        </summary>
+        <div class="terminal-route__setup-body">
+          <p>Real interactive Node processes run inside this page's WebContainer. This is not your device shell, host Bash, SSH, or a remote Airship backend.</p>
+          <div class="terminal-assurance" role="note">
+            <span><Icon name="terminal" size={16} /><strong>Browser Node shell</strong></span>
+            <span>Processes stay hot while this page lives</span>
+            <span>Reload requires process restart</span>
+            <span>{threadId ? `Thread ${compactId(threadId)}` : "No conversation thread attached"}</span>
+          </div>
+          <form class="terminal-git-bridge" onSubmit={(event) => { event.preventDefault(); void runGit(); }}>
+            <label for="terminal-git-command"><strong>Shared Git</strong><span>Authoritative Editor/source-control state · approval policy applies</span></label>
+            <div><input id="terminal-git-command" value={gitCommand} spellcheck={false} onInput={(event) => setGitCommand(event.currentTarget.value)} aria-describedby="terminal-git-detail" /><button type="submit" disabled={!active || gitRunning}>{gitRunning ? "Running…" : "Run"}</button></div>
+            <small id="terminal-git-detail">This deterministic bridge uses browser Git directly; the WebContainer never receives a second copy of <code>.git</code>. Try <code>git help</code>.</small>
+          </form>
+        </div>
+      </details>
 
       <div class="terminal-tabs" role="tablist" aria-label="Terminal tabs">
         {sessions.map((session) => <div key={session.id} class="terminal-tab" role="presentation" data-active={session.id === activeId ? "true" : "false"}>

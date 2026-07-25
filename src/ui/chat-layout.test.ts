@@ -41,7 +41,7 @@ describe("chat role layout", () => {
   it("keeps the session title, model, trust state, and journal identity in a responsive hierarchy", () => {
     expect(styles).toContain("grid-template-columns: minmax(180px, 1fr) minmax(270px, 420px)");
     expect(styles).toContain(".stage-header-title,");
-    expect(styles).toContain(".stage-header-model,");
+    expect(styles).toContain(".stage-header-model {");
     expect(styles).toContain(".session-meta-trust,");
     expect(styles).toContain(".session-meta-record {");
   });

@@ -36,6 +36,7 @@ import {
   validateBranchName,
   validateCommitMessage,
   validateFileContent,
+  validateGitDestination,
   validateGitIdentifier,
   validateGitPath,
   validatePathList,
@@ -319,7 +320,7 @@ export class MemoryGitAdapter implements BrowserGitAdapter {
     if (!tree) throw new GitDomainError("corrupt-ref", `Branch ${branch} does not resolve to a known commit.`);
     const worktree: MemoryWorktree = {
       id,
-      path: validateGitIdentifier(request.path, "Virtual worktree path"),
+      path: validateGitDestination(request.path),
       branch,
       head,
       index: cloneTree(tree),

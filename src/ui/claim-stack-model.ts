@@ -15,7 +15,8 @@ export type ClaimStackItem = Readonly<{
 }>;
 
 export type ClaimStackModel = Readonly<{
-  evidence: "matched" | "stale" | "absent";
+  /** Relationship between the displayed endpoint record and this exact receipt. */
+  evidence: "turn-bound" | "same-endpoint" | "stale-turn-bound" | "stale-same-endpoint" | "absent";
   evidenceSummary: string;
   items: readonly ClaimStackItem[];
   groups: Readonly<{
@@ -34,18 +35,36 @@ export function composeClaimStack(
   now = Date.now(),
 ): ClaimStackModel {
   if (!receipt) {
+    const unavailable = claimKeys.map((key) => Object.freeze({
+      key,
+      status: "unavailable" as const,
+      source: "turn-receipt" as const,
+      claim: Object.freeze({
+        status: "unavailable" as const,
+        summary: absentClaimSummary(key),
+      }),
+      facts: Object.freeze([]),
+    }));
     return Object.freeze({
       evidence: "absent",
       evidenceSummary: "Complete a turn to create a receipt and bind endpoint evidence.",
-      items: Object.freeze([]),
-      groups: freezeGroups({ failed: [], verified: [], asserted: [], unavailable: [] }),
+      items: Object.freeze(unavailable),
+      groups: freezeGroups({ failed: [], verified: [], asserted: [], unavailable }),
     });
   }
 
-  const matches = endpointRecordMatchesReceipt(endpointRecord, receipt);
-  const fresh = matches && isDisplayFresh(endpointRecord!, now);
-  const evidence = fresh ? "matched" : matches ? "stale" : "absent";
-  const endpoint = fresh ? endpointRecord : undefined;
+  const sameEndpoint = endpointRecordMatchesReceiptSubject(endpointRecord, receipt);
+  const turnBound = sameEndpoint && endpointRecordMatchesReceiptEvidence(endpointRecord!, receipt);
+  const fresh = sameEndpoint && isDisplayFresh(endpointRecord!, now);
+  const evidence = turnBound
+    ? fresh ? "turn-bound" : "stale-turn-bound"
+    : sameEndpoint
+      ? fresh ? "same-endpoint" : "stale-same-endpoint"
+      : "absent";
+  // Endpoint claims may alter the composed receipt view only when the receipt
+  // records the exact normalized evidence digest. A later fetch from the same
+  // instance/key remains visible as a comparison, never as turn evidence.
+  const endpoint = turnBound && fresh ? endpointRecord : undefined;
   const items = claimKeys.map((key) => composeItem(key, receipt, endpoint));
   const groups = freezeGroups({
     failed: items.filter((item) => item.status === "failed" || item.status === "expired"),
@@ -55,14 +74,29 @@ export function composeClaimStack(
   });
   return Object.freeze({
     evidence,
-    evidenceSummary: evidence === "matched"
-      ? "Current endpoint evidence is joined to this turn by instance and endpoint-key digest. Each claim retains its own authority."
-      : evidence === "stale"
-        ? "Matching endpoint evidence is outside Airship’s display-freshness window. Refresh it before relying on a current comparison."
-        : "This turn has no matching endpoint evidence. Receipt assertions remain visible, but hardware claims are not inferred.",
+    evidenceSummary: evidence === "turn-bound"
+      ? "The normalized endpoint-evidence payload digest exactly matches the digest recorded by this receipt. Claims retain their separate authorities; this local binding is not an enclave-signed conversation proof."
+      : evidence === "same-endpoint"
+        ? "This separately fetched record matches only the receipt’s instance and endpoint-key digest. It is not bound to this exact turn, so its endpoint claims are not composed into the receipt."
+        : evidence === "stale-turn-bound"
+          ? "The endpoint-evidence payload digest matches this receipt, but the record is outside Airship’s display-freshness window. Its claims are not composed as current evidence."
+          : evidence === "stale-same-endpoint"
+            ? "A record for the same instance and endpoint key is outside Airship’s display-freshness window and is not bound to this exact turn."
+            : "This turn has no matching endpoint evidence. Receipt assertions remain visible, but hardware claims are not inferred.",
     items: Object.freeze(items),
     groups,
   });
+}
+
+function absentClaimSummary(key: ClaimKey): string {
+  if (key === "encryption") return "No completed turn records an authenticated encrypted channel.";
+  if (key === "freshness") return "No turn-bound nonce or fresh endpoint evidence is available.";
+  if (key === "cpuTee") return "No CPU TEE quote has been bound to a completed turn.";
+  if (key === "gpuTee") return "No protected-accelerator evidence has been bound to a completed turn.";
+  if (key === "endpointKey") return "No attested endpoint key has been bound to a completed turn.";
+  if (key === "model") return "No model artifact or runtime policy has been established for a completed turn.";
+  if (key === "conversation") return "No request and response commitment exists before the first completed turn.";
+  return "No account-standing or settlement receipt has been attached to a completed turn.";
 }
 
 function composeItem(
@@ -123,10 +157,17 @@ function composeItem(
   });
 }
 
-function endpointRecordMatchesReceipt(record: ChutesEndpointEvidenceRecord | undefined, receipt: ConversationReceipt): boolean {
+function endpointRecordMatchesReceiptSubject(record: ChutesEndpointEvidenceRecord | undefined, receipt: ConversationReceipt): boolean {
   return Boolean(record && receipt.instanceId && receipt.bindings.endpointKeyDigest &&
     record.subject.instanceId === receipt.instanceId &&
     record.subject.e2ePublicKeyDigest === receipt.bindings.endpointKeyDigest);
+}
+
+function endpointRecordMatchesReceiptEvidence(record: ChutesEndpointEvidenceRecord, receipt: ConversationReceipt): boolean {
+  return Boolean(
+    receipt.bindings.evidenceDigest &&
+    record.evidence.payloadDigest === receipt.bindings.evidenceDigest,
+  );
 }
 
 function isDisplayFresh(record: ChutesEndpointEvidenceRecord, now: number): boolean {

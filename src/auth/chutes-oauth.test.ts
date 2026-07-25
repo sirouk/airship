@@ -1,14 +1,27 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   CHUTES_LOCAL_REGISTRATION,
+  chutesOAuthLocationState,
   consumeChutesAuthorizationCallback,
   createChutesAuthorizationRequest,
   exchangeChutesAuthorizationCode,
+  requireLocalChutesOAuthBridge,
   refreshChutesOAuthToken,
   resolveChutesOAuthRegistration,
 } from "./chutes-oauth";
 
 describe("Chutes OAuth PKCE preparation", () => {
+  it("checks the confidential loopback bridge before leaving for authorization", async () => {
+    const readyFetch = vi.fn(async () => new Response(null, { status: 204 }));
+    await expect(requireLocalChutesOAuthBridge(readyFetch)).resolves.toBeUndefined();
+    expect(readyFetch).toHaveBeenCalledWith("/__airship/chutes/oauth/token", expect.objectContaining({ method: "GET", cache: "no-store" }));
+
+    await expect(requireLocalChutesOAuthBridge(vi.fn(async () => new Response(
+      JSON.stringify({ error: "local_bridge_unconfigured" }),
+      { status: 503, headers: { "Content-Type": "application/json" } },
+    )))).rejects.toThrow("process-held client secret");
+  });
+
   it("builds an S256 authorization request with only the registered least-privilege scopes", async () => {
     const request = await createChutesAuthorizationRequest({ clientId: "cid_airship", now: 1_000 });
     expect(request.url.origin + request.url.pathname).toBe("https://api.chutes.ai/idp/authorize");
@@ -71,6 +84,24 @@ describe("Chutes OAuth PKCE preparation", () => {
       homepageUrl: "https://airship.example",
       redirectUris: ["https://airship.example/auth/chutes/callback"],
     });
+  });
+
+  it("keeps a production PKCE registration and location check inside its non-root deployment", () => {
+    const registration = resolveChutesOAuthRegistration({
+      development: false,
+      publicClientId: "cid_public_browser",
+      publicOrigin: "https://edge.example",
+      publicBasePath: "/airship/",
+    });
+    expect(registration).toMatchObject({
+      configured: true,
+      homepageUrl: "https://edge.example/airship/",
+      redirectUris: ["https://edge.example/airship/auth/chutes/callback"],
+    });
+    expect(chutesOAuthLocationState(registration.homepageUrl, "https://edge.example/airship/#connection"))
+      .toEqual({ available: true });
+    expect(chutesOAuthLocationState(registration.homepageUrl, "https://edge.example/sibling/#connection"))
+      .toMatchObject({ available: false });
   });
 
   it("fails a static release closed when public PKCE build configuration is absent or ambiguous", () => {
@@ -185,6 +216,43 @@ describe("Chutes OAuth PKCE preparation", () => {
       callback,
       fetch: async () => new Response("x", { headers: { "content-length": "32769" } }),
     })).rejects.toThrow("safety limit");
+
+    await expect(exchangeChutesAuthorizationCode({
+      clientId: "cid_airship",
+      callback,
+      fetch: async () => new Response("{}", { headers: { "content-length": "not-a-number" } }),
+    })).rejects.toThrow("invalid length");
+  });
+
+  it("rejects prefix-only access and refresh token placeholders", async () => {
+    const callback = {
+      code: "one-time-code",
+      verifier: "v".repeat(64),
+      redirectUri: CHUTES_LOCAL_REGISTRATION.redirectUris[0],
+    };
+    await expect(exchangeChutesAuthorizationCode({
+      clientId: "cid_airship",
+      callback,
+      fetch: async () => Response.json({
+        access_token: "cak_",
+        refresh_token: "crt_valid.refresh",
+        token_type: "Bearer",
+        expires_in: 60,
+        scope: "profile chutes:invoke billing:read",
+      }),
+    })).rejects.toThrow("invalid access token");
+
+    await expect(exchangeChutesAuthorizationCode({
+      clientId: "cid_airship",
+      callback,
+      fetch: async () => Response.json({
+        access_token: "cak_valid.access",
+        refresh_token: "crt_",
+        token_type: "Bearer",
+        expires_in: 60,
+        scope: "profile chutes:invoke billing:read",
+      }),
+    })).rejects.toThrow("invalid refresh token");
   });
 
   it("reports an HTML gateway failure by status instead of calling it invalid JSON", async () => {

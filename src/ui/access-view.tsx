@@ -1,4 +1,6 @@
+import type { ComponentChildren } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
+import { chutesOAuthLocationState } from "../auth/chutes-oauth";
 import {
   CHUTES_CAPABILITY_MATRIX,
   connectionCapabilities,
@@ -12,6 +14,7 @@ import {
   type EphemeralChutesCredential,
 } from "../auth/connection";
 import {
+  CHUTES_STRICT_ENDPOINT_PROOF_CAPABILITY,
   ChutesInferenceTransport,
   createChutesAttestationGate,
   type ChutesInvocationTelemetry,
@@ -45,6 +48,8 @@ export type AccessViewProps = Readonly<{
   onDisconnect: () => Promise<void>;
   models?: readonly AirshipModel[];
   onSelectModel?: (modelId: string) => Promise<void>;
+  connectionActive?: boolean;
+  onUseConnection?: () => Promise<void>;
   onInvocationTelemetry?: (telemetry: ChutesInvocationTelemetry) => void;
   oauthNotice?: Readonly<{
     tone: "neutral" | "warning" | "error";
@@ -63,6 +68,8 @@ export type AccessViewProps = Readonly<{
     takeCredential: () => string | undefined;
     getBearerToken: () => string | Promise<string>;
   }>;
+  /** Lazily loaded provider-neutral cloud and local inference connections. */
+  additionalProviders?: ComponentChildren;
 }>;
 
 type Candidate = Readonly<{
@@ -82,20 +89,24 @@ export function AccessView({
   onDisconnect,
   models = [],
   onSelectModel,
+  connectionActive = false,
+  onUseConnection,
   onInvocationTelemetry,
   oauthNotice,
   oauthDiagnostic,
   oauthBootstrap,
+  additionalProviders,
 }: AccessViewProps) {
   const localOAuthBridge = oauthDiagnostic?.exchangeMode === "local-confidential-bridge";
   const credentialInput = useRef<HTMLInputElement>(null);
   const ephemeralCredential = useRef<EphemeralChutesCredential>();
+  const ephemeralTokenSource = useRef<(() => string | Promise<string>)>();
   const candidateTransport = useRef<ChutesInferenceTransport>();
   const discoveryAbort = useRef<AbortController>();
   const [candidate, setCandidate] = useState<Candidate>();
   const [modelId, setModelId] = useState("");
   const [detectedKind, setDetectedKind] = useState<ChutesCredentialKind>();
-  const [accepted, setAccepted] = useState(false);
+  const [strictProof, setStrictProof] = useState(false);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string>();
   const [error, setError] = useState<string>();
@@ -104,7 +115,11 @@ export function AccessView({
   function clearEphemeral() {
     discoveryAbort.current?.abort(new DOMException("Model discovery was cleared.", "AbortError"));
     discoveryAbort.current = undefined;
+    candidateTransport.current?.revokeCredential(
+      new DOMException("Candidate Chutes credential was cleared.", "AbortError"),
+    );
     ephemeralCredential.current = undefined;
+    ephemeralTokenSource.current = undefined;
     candidateTransport.current = undefined;
   }
 
@@ -115,7 +130,7 @@ export function AccessView({
     clearEphemeral();
     setCandidate(undefined);
     setDetectedKind(undefined);
-    setAccepted(false);
+    setStrictProof(false);
   }, [connection.kind]);
 
   function inspectInput() {
@@ -158,22 +173,27 @@ export function AccessView({
       const compatibleModels = filterModels(snapshot.models, {
         confidentialCompute: "required",
         requireE2eeCandidate: true,
+        inputModalities: ["text"],
+        outputModalities: ["text"],
       });
       if (compatibleModels.length === 0) {
-        throw new Error("Chutes returned no models explicitly eligible for encrypted confidential-compute invocation.");
+        throw new Error("Chutes returned no text-in/text-out models explicitly eligible for encrypted confidential-compute invocation.");
       }
       const selection = selectModel(snapshot.models);
       const transport = new ChutesInferenceTransport({
         apiKey: tokenSource ?? credential.value,
-        attestationMode: "required",
-        // Real per-turn endpoint verification: promotes the chat claim-stack to
-        // "verified" from the same in-browser DCAP/GPU verifiers, fail-closed.
+        // Evidence is always acquired and evaluated. Ordinary encrypted chat
+        // remains available when one independent verifier can only establish a
+        // partial claim; the receipt—not this connection setting—decides which
+        // per-turn TEE claims may be promoted.
+        attestationMode: "optional",
         attestationGate: createChutesAttestationGate({
           getBearerToken: async () => (tokenSource ? await tokenSource() : credential.value),
         }),
         onInvocationTelemetry,
       });
       ephemeralCredential.current = credential;
+      ephemeralTokenSource.current = tokenSource;
       candidateTransport.current = transport;
       if (input) input.value = "";
       setCandidate(Object.freeze({
@@ -187,8 +207,8 @@ export function AccessView({
       }));
       setModelId(selection.model?.id ?? compatibleModels[0]!.id);
       setDetectedKind(credential.kind);
-      setAccepted(false);
-      setStatus(`${compatibleModels.length} encrypted-inference candidate${compatibleModels.length === 1 ? "" : "s"} found. Catalog metadata is not proof. Finish verifies selected-model authorization and arms the fail-closed proof policy used on every turn.`);
+      setStrictProof(false);
+      setStatus(`${compatibleModels.length} encrypted-inference candidate${compatibleModels.length === 1 ? "" : "s"} found. Catalog metadata is not proof. Finish verifies selected-model authorization and arms fresh per-turn evidence collection.`);
     } catch (caught) {
       clearEphemeral();
       if (input) input.value = "";
@@ -217,16 +237,33 @@ export function AccessView({
 
   async function activate() {
     const credential = ephemeralCredential.current;
-    const transport = candidateTransport.current;
+    const discoveryTransport = candidateTransport.current;
+    const tokenSource = ephemeralTokenSource.current;
     const model = candidate?.models.find((item) => item.id === modelId);
-    if (!credential || !transport || !candidate || !model || !accepted) return;
+    if (!credential || !discoveryTransport || !candidate || !model) return;
     setBusy(true);
     const controller = new AbortController();
     discoveryAbort.current = controller;
     setStatus("Verifying chutes:invoke access and encrypted endpoint availability…");
     setError(undefined);
     try {
-      await transport.verifyModelAccess(model.id, controller.signal);
+      await discoveryTransport.verifyModelAccess(model.id, controller.signal);
+      const transport = strictProof
+        ? new ChutesInferenceTransport({
+            apiKey: tokenSource ?? credential.value,
+            attestationMode: "required",
+            attestationGate: createChutesAttestationGate({
+              getBearerToken: async () => (tokenSource ? await tokenSource() : credential.value),
+            }),
+            onInvocationTelemetry,
+          })
+        : discoveryTransport;
+      if (transport !== discoveryTransport) {
+        discoveryTransport.revokeCredential(
+          new DOMException("The strict-proof Chutes transport replaced discovery.", "AbortError"),
+        );
+        candidateTransport.current = transport;
+      }
       const nextConnection = createChutesConnection({
         credentialKind: credential.kind,
         model: model.id,
@@ -239,16 +276,19 @@ export function AccessView({
         model,
         models: candidate.models,
       });
+      // Ownership moved into App. Do not let candidate cleanup revoke the
+      // committed authority.
+      candidateTransport.current = undefined;
       clearEphemeral();
       setCandidate(undefined);
       setDetectedKind(undefined);
-      setAccepted(false);
+      setStrictProof(false);
       setStatus(undefined);
     } catch (caught) {
       clearEphemeral();
       setCandidate(undefined);
       setDetectedKind(undefined);
-      setAccepted(false);
+      setStrictProof(false);
       setStatus(undefined);
       setError(mapUnknownRequestFailure(caught, online).message);
       requestAnimationFrame(() => credentialInput.current?.focus());
@@ -275,8 +315,10 @@ export function AccessView({
       const models = filterModels(snapshot.models, {
         confidentialCompute: "required",
         requireE2eeCandidate: true,
+        inputModalities: ["text"],
+        outputModalities: ["text"],
       });
-      if (models.length === 0) throw new Error("The enriched catalog contained no compatible encrypted-inference candidates.");
+      if (models.length === 0) throw new Error("The enriched catalog contained no compatible encrypted text-generation candidates.");
       const selection = selectModel(snapshot.models);
       setCandidate(Object.freeze({
         ...prior,
@@ -304,7 +346,7 @@ export function AccessView({
     clearEphemeral();
     setCandidate(undefined);
     setDetectedKind(undefined);
-    setAccepted(false);
+    setStrictProof(false);
     setStatus(undefined);
     setError(undefined);
     requestAnimationFrame(() => credentialInput.current?.focus());
@@ -343,27 +385,47 @@ export function AccessView({
     }
   }
 
+  async function useConnectedChutes() {
+    if (!onUseConnection) return;
+    setBusy(true);
+    setStatus("Creating a new Chutes-pinned conversation…");
+    setError(undefined);
+    try {
+      await onUseConnection();
+      setStatus("Chutes is active in a new pinned conversation; prior history remains intact.");
+    } catch (caught) {
+      setStatus(undefined);
+      setError(mapUnknownRequestFailure(caught, online).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const capabilities = connectionCapabilities(connection);
   const selectedCandidateModel = candidate?.models.find((model) => model.id === modelId);
   const oauthOrigin = oauthDiagnostic
     ? oauthDiagnostic.configurationError
       ? { available: false, reason: oauthDiagnostic.configurationError }
-      : oauthOriginState(oauthDiagnostic.homepageUrl, typeof window === "undefined" ? "" : window.location.origin)
+      : oauthOriginState(oauthDiagnostic.homepageUrl, typeof window === "undefined" ? "" : window.location.href)
     : { available: false, reason: "OAuth registration details are unavailable in this build." };
 
   return (
     <section class="access-connection-view" aria-labelledby="access-connection-title">
       <header class="access-connection-heading">
-        <span>Direct provider connection</span>
-        <h1 id="access-connection-title">Chutes access</h1>
-        <p>Sign in with a scoped Chutes account, or deliberately use a direct API-key session. Credentials stay in page memory. Authentication grants access; fresh endpoint evidence is evaluated separately before each encrypted turn.</p>
+        <span>Inference connections</span>
+        <h1 id="access-connection-title">Connect models</h1>
+        <p>Use Chutes for application-encrypted inference, or connect browser-direct cloud and local models below. Credentials remain in page memory.</p>
+        <nav class="access-provider-jump" aria-label="Choose an inference provider">
+          <a href="#chutes-connection-card"><Icon name="lock" size={15} />Chutes · encrypted</a>
+          {additionalProviders ? <a href="#additional-inference-providers"><Icon name="model" size={15} />Other cloud &amp; local models</a> : null}
+        </nav>
       </header>
 
       <div class="access-connection-layout">
-        <section class="access-connection-card" aria-labelledby="active-connection-title">
+        <section id="chutes-connection-card" class="access-connection-card" aria-labelledby="active-connection-title">
           <div class="access-section-heading">
             <div>
-              <span>Active connection</span>
+              <span>Chutes connection</span>
               <h2 id="active-connection-title">{connectionLabel(connection)}</h2>
             </div>
             <ConnectionBadge connection={connection} />
@@ -392,13 +454,18 @@ export function AccessView({
                     ) : connection.model}
                   </dd>
                 </div>
-                <div><dt>Proof policy</dt><dd>{connection.posture === "encrypted-attested" ? "Fresh endpoint proof required before every turn" : "Encrypted compatibility mode · no required proof gate"}</dd></div>
+                <div><dt>Proof policy</dt><dd>{connection.posture === "encrypted-attested" ? "Strict · block unless every required endpoint claim verifies" : "Verify and record fresh evidence · keep unverified claims explicit"}</dd></div>
                 <div><dt>Inference authorization</dt><dd>{connection.invokeAuthorization === "verified" ? `Verified by protected request${connection.lastInvokeAt ? ` · ${formatCatalogTime(connection.lastInvokeAt)}` : ""}` : "Not tested yet"}</dd></div>
                 <div><dt>Credential lifetime</dt><dd>Not introspected</dd></div>
                 <div><dt>Storage</dt><dd>Page memory only</dd></div>
               </dl>
               <p class="model-pinning-note"><Icon name="proof" size={15} />Changing a model creates a new session manifest. Airship never rewrites the provider or model bound to prior turns.</p>
               <div class="active-connection-actions">
+                {!connectionActive && onUseConnection ? (
+                  <button class="primary" type="button" onClick={() => void useConnectedChutes()} disabled={busy}>
+                    Use Chutes in new conversation
+                  </button>
+                ) : null}
                 <button type="button" onClick={() => void clearConnection(true)} disabled={busy}>Switch credential</button>
                 <button class="danger" type="button" onClick={() => void clearConnection(false)} disabled={busy}>Clear connection</button>
               </div>
@@ -410,7 +477,7 @@ export function AccessView({
                   <Icon name="proof" size={18} />
                   <div>
                     <strong>Chutes sign-in complete · finish connection</strong>
-                    <span>Choose the session model, confirm the fail-closed proof policy, then finish. No second credential is required.</span>
+                    <span>Choose the session model and finish. No second credential or attestation waiver is required.</span>
                   </div>
                 </div>
               ) : null}
@@ -434,13 +501,31 @@ export function AccessView({
                   <details><summary>{candidate.issues.length} catalog notice{candidate.issues.length === 1 ? "" : "s"}</summary>{candidate.issues.map((issue, index) => <p key={`${issue.source}-${issue.code}-${index}`}>{issue.source}: {issue.message}</p>)}</details>
                 ) : null}
               </div>
-              <label class="proof-policy-consent">
-                <input type="checkbox" checked={accepted} onChange={(event) => setAccepted(event.currentTarget.checked)} />
-                <span><strong>Require fresh endpoint proof before every turn</strong><small>Airship must locally accept fresh instance evidence and its endpoint-key binding before sending an encrypted invocation. If proof cannot be established, the turn stops. This policy is not itself proof; completed receipts record what was actually verified.</small></span>
-              </label>
+              <fieldset class="proof-policy-consent">
+                <legend>Turn proof policy</legend>
+                <button type="button" class={!strictProof ? "selected" : ""} aria-pressed={!strictProof} onClick={() => setStrictProof(false)}>
+                  <span><strong>Verify &amp; record</strong><small>Recommended. Evaluate still-current endpoint evidence before every turn and refresh it when needed; leave incomplete CPU or GPU claims visibly unverified without breaking encrypted chat.</small></span>
+                </button>
+                <button
+                  type="button"
+                  class={strictProof ? "selected" : ""}
+                  aria-pressed={strictProof}
+                  disabled={!CHUTES_STRICT_ENDPOINT_PROOF_CAPABILITY.available}
+                  title={CHUTES_STRICT_ENDPOINT_PROOF_CAPABILITY.reason}
+                  onClick={() => {
+                    if (CHUTES_STRICT_ENDPOINT_PROOF_CAPABILITY.available) setStrictProof(true);
+                  }}
+                >
+                  <span>
+                    <strong>Strict fail-closed · unavailable</strong>
+                    <small>{CHUTES_STRICT_ENDPOINT_PROOF_CAPABILITY.reason} Verify &amp; record still evaluates current evidence before every turn and refreshes it when needed.</small>
+                  </span>
+                </button>
+                <p>This policy is not proof. Completed receipts record only what the browser actually verified.</p>
+              </fieldset>
               <div class="candidate-actions">
                 <button type="button" onClick={chooseDifferentCredential} disabled={busy}>Use a different credential</button>
-                <button class="primary" type="button" onClick={() => void activate()} disabled={!accepted || busy}>Finish: verify &amp; connect</button>
+                <button class="primary" type="button" onClick={() => void activate()} disabled={busy}>Finish: verify &amp; connect</button>
               </div>
             </div>
           ) : (
@@ -503,13 +588,11 @@ export function AccessView({
           {error ? <p class="access-live-error" role="alert"><Icon name="warning" size={16} />{error}</p> : null}
         </section>
 
-        <section class="access-connection-card capability-card" aria-labelledby="capability-matrix-title">
-          <div class="access-section-heading">
-            <div><span>Credential boundary</span><h2 id="capability-matrix-title">Capability matrix</h2></div>
-          </div>
+        <details class="access-connection-card capability-card">
+          <summary><span>Connection methods</span><strong id="capability-matrix-title">Compare capabilities</strong></summary>
           <div class="capability-table-wrap">
             <table>
-              <thead><tr><th scope="col">Capability</th><th scope="col">Chutes sign-in</th><th scope="col">API key</th><th scope="col">Active</th></tr></thead>
+              <thead><tr><th scope="col">Capability</th><th scope="col">Sign-in eligible</th><th scope="col">Key eligible</th><th scope="col">Active method</th></tr></thead>
               <tbody>
                 {CHUTES_CAPABILITY_MATRIX.map((row) => (
                   <tr key={row.capability}>
@@ -522,8 +605,8 @@ export function AccessView({
               </tbody>
             </table>
           </div>
-          <p class="capability-caveat"><Icon name="proof" size={16} />This matrix is derived from the credential class, not token introspection. Chutes remains authoritative for actual scopes, account standing, and invocation permission.</p>
-        </section>
+          <p class="capability-caveat"><Icon name="proof" size={16} />These are credential-class eligibility rules, not observed grants. Protected invocation and account reads report their own provider-authoritative result.</p>
+        </details>
       </div>
 
       <aside class="oauth-browser-boundary">
@@ -559,6 +642,11 @@ export function AccessView({
           ) : null}
         </div>
       </aside>
+      {additionalProviders ? (
+        <div id="additional-inference-providers" class="access-additional-providers" aria-label="Additional cloud and local inference providers">
+          {additionalProviders}
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -602,13 +690,7 @@ function errorMessage(error: unknown): string {
 }
 
 export function oauthOriginState(homepageUrl: string, currentOrigin: string): Readonly<{ available: boolean; reason?: string }> {
-  try {
-    const registeredOrigin = new URL(homepageUrl).origin;
-    if (registeredOrigin === currentOrigin) return { available: true };
-    return { available: false, reason: `Sign-in is registered for ${registeredOrigin}. Open Airship there before continuing.` };
-  } catch {
-    return { available: false, reason: "The configured OAuth homepage is invalid; sign-in remains disabled." };
-  }
+  return chutesOAuthLocationState(homepageUrl, currentOrigin);
 }
 
 function ModelCandidateSummary({ model }: { model: AirshipModel }) {

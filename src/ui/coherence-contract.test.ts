@@ -19,8 +19,16 @@ describe("progressive disclosure coherence contract", () => {
   it("advertises the bounded trust navigation contract", async () => {
     const source = await readFile(new URL("./platform-shell.tsx", import.meta.url), "utf8");
     const styles = await readFile(new URL("./platform-shell.css", import.meta.url), "utf8");
-    expect(source).toContain('aria-label="Trust hub, five horizontally scrollable views"');
+    expect(source).toContain('aria-label="Trust hub, four horizontally scrollable views"');
     expect(styles).toContain("scroll-snap-type: x proximity");
-    expect(styles).toContain("box-shadow: inset 16px 0 13px -16px");
+    expect(styles).toContain("overscroll-behavior-inline: contain");
+    expect(styles).toContain(".trust-hub-tabs button { min-height: 44px");
+  });
+
+  it("keeps the Google Drive setup on the active Airship design-token vocabulary", async () => {
+    const styles = await readFile(new URL("./google-drive-setup.css", import.meta.url), "utf8");
+    expect(styles).toContain("var(--density-panel-pad)");
+    expect(styles).toContain("var(--surface-soft)");
+    expect(styles).not.toMatch(/var\(--(?:space-\d|surface-[01]|text\b|muted\b)/u);
   });
 });

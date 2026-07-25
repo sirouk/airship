@@ -3,6 +3,7 @@ import { AIRSHIP_CORE_CHARTER } from "../core/operating-charter";
 import {
   createGlobalSkillSettings,
   createProfileRevision,
+  resolveProfileSilo,
   createSkillRevision,
   createThemeManifest,
   resolveProfileForSession,
@@ -76,6 +77,39 @@ describe("profile domain", () => {
     expect(child.parentRevision).toBe(first.revision);
     expect(Object.isFrozen(child)).toBe(true);
     expect(Object.isFrozen(child.skillModes)).toBe(true);
+  });
+
+  it("pins profile-owned workspace, memory, approvals, and proof posture into a v2 resolution", async () => {
+    const theme = await createThemeManifest(themeDraft(colors));
+    const profile = await createProfileRevision({
+      ...profileDraft(theme, {}),
+      workspaceBinding: { kind: "workspace-id", workspaceId: "vault+gdrive://workspace/root" },
+      memoryScope: "workspace",
+      approvalMode: "auto-approve",
+    });
+    const pin = await resolveProfileForSession({ profile, theme, skills: [], globalSkills: {} });
+
+    expect(profile.version).toBe(2);
+    expect(pin.workspaceBinding).toEqual({ kind: "workspace-id", workspaceId: "vault+gdrive://workspace/root" });
+    expect(pin.memoryScope).toBe("workspace");
+    expect(pin.approvalMode).toBe("auto-approve");
+    expect(pin.minimumPosture).toBe("encrypted-attested");
+    expect(pin.resolutionDigest).toMatch(/^sha256:/u);
+  });
+
+  it("resolves legacy v1 profiles with explicit safe silo defaults without changing their digest", async () => {
+    const theme = await createThemeManifest(themeDraft(colors));
+    const legacy = await createProfileRevision({ ...profileDraft(theme, {}), version: 1 });
+
+    expect(legacy.version).toBe(1);
+    expect(resolveProfileSilo(legacy)).toEqual({
+      workspaceBinding: { kind: "active-workspace" },
+      memoryScope: "profile",
+      approvalMode: "ask-first",
+    });
+    const pin = await resolveProfileForSession({ profile: legacy, theme, skills: [], globalSkills: {} });
+    expect(pin.version).toBe(2);
+    expect(pin.approvalMode).toBe("ask-first");
   });
 
   it("applies inherit/on/off precedence and produces deterministic session pins", async () => {
@@ -166,6 +200,77 @@ describe("profile domain", () => {
     expect(pin.systemPrompt).toBe(
       `${AIRSHIP_CORE_CHARTER}\n\n[Airship profile]\nBe careful and useful.`,
     );
+  });
+
+  it("binds observed browser capabilities into the session prompt digest", async () => {
+    const theme = await createThemeManifest(themeDraft(colors));
+    const profile = await createProfileRevision(profileDraft(theme, {}));
+    const baseline = await resolveProfileForSession({ profile, theme, skills: [], globalSkills: {} });
+    const accelerated = await resolveProfileForSession({
+      profile,
+      theme,
+      skills: [],
+      globalSkills: {},
+      installedTools: [{
+        name: "inspect_browser_capabilities",
+        description: "Report current browser observations.",
+        effect: "read",
+        inputSchema: { type: "object" },
+      }],
+      browserCapabilities: [{
+        id: "wasm-simd",
+        evidence: "probe-passed",
+        detail: "The minimal SIMD module validated.",
+      }],
+    });
+
+    expect(accelerated.systemPrompt).toContain("[Airship observed browser capability pin]");
+    expect(accelerated.systemPrompt).toContain("- wasm-simd [probe-passed]");
+    expect(accelerated.systemPromptDigest).not.toBe(baseline.systemPromptDigest);
+    expect(accelerated.resolutionDigest).not.toBe(baseline.resolutionDigest);
+  });
+
+  it("pins a credential-free multi-provider model roster into new sessions", async () => {
+    const theme = await createThemeManifest(themeDraft(colors));
+    const profile = await createProfileRevision(profileDraft(theme, {}));
+    const pin = await resolveProfileForSession({
+      profile,
+      theme,
+      skills: [],
+      globalSkills: {},
+      inferenceDirectory: {
+        active: {
+          connectionId: "chutes-primary",
+          providerId: "chutes",
+          modelId: "moonshotai/Kimi-K2.6-TEE",
+        },
+        providers: [{
+          connectionId: "chutes-primary",
+          providerId: "chutes",
+          label: "Chutes",
+          state: "connected",
+          authority: "oauth",
+          modelCount: 2,
+          models: [
+            { id: "moonshotai/Kimi-K2.6-TEE", inputModalities: ["text", "image"], features: ["tools"] },
+            { id: "zai-org/GLM-5.2-TEE", inputModalities: ["text"] },
+          ],
+        }, {
+          connectionId: "ollama-local",
+          providerId: "ollama",
+          label: "Ollama on this device",
+          state: "connected",
+          authority: "local-service",
+          modelCount: 1,
+          models: [{ id: "qwen3:8b", inputModalities: ["text"] }],
+        }],
+      },
+    });
+
+    expect(pin.systemPrompt).toContain("[Airship inference roster pin]");
+    expect(pin.systemPrompt).toContain("Active: chutes-primary :: chutes :: moonshotai/Kimi-K2.6-TEE");
+    expect(pin.systemPrompt).toContain("ollama-local | Ollama on this device");
+    expect(pin.systemPrompt).not.toContain("sk-test-secret");
   });
 
   it("fails closed on missing skill revisions, theme mismatches, and tampered revisions", async () => {

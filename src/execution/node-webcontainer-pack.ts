@@ -6,6 +6,31 @@ let instance: WebContainer | undefined;
 let adapter: ExecutionAdapter | undefined;
 let activation: Promise<WebContainer> | undefined;
 let lateBootCleanup: Promise<void> | undefined;
+let hostGeneration = 0;
+const lifecycleListeners = new Set<(event: NodeWebContainerLifecycleEvent) => void>();
+
+export type NodeWebContainerLifecycleEvent = Readonly<{
+  generation: number;
+  state: "ready" | "inactive";
+  reason: "activated" | "deactivated";
+}>;
+
+/**
+ * Monotonic identity for the shared page host. A terminal records this value
+ * when it acquires the host; any later mismatch means the terminal must be
+ * marked restart-required instead of writing to a torn-down WebContainer.
+ */
+export function getNodeWebContainerHostGeneration(): number {
+  return hostGeneration;
+}
+
+/** Subscribe to host replacement/teardown without importing terminal code. */
+export function subscribeNodeWebContainerLifecycle(
+  listener: (event: NodeWebContainerLifecycleEvent) => void,
+): () => void {
+  lifecycleListeners.add(listener);
+  return () => lifecycleListeners.delete(listener);
+}
 
 /**
  * Cold-start the one WebContainer instance allowed per page. This module is a
@@ -37,6 +62,7 @@ export async function activateNodeWebContainerHost(signal: AbortSignal, timeoutM
     try {
       const booted = await awaitBoundedWebContainerBoot(boot, timeoutMs, signal);
       instance = booted;
+      publishLifecycle("ready", "activated");
       return booted;
     } catch (error) {
       // The provider API does not expose cancellation while booting. Fence the
@@ -61,10 +87,27 @@ export async function deactivateNodeWebContainer(): Promise<void> {
     lateBootCleanup,
     new Promise<void>((resolve) => setTimeout(resolve, 1_000)),
   ]);
-  instance?.teardown();
+  const activeInstance = instance;
+  activeInstance?.teardown();
   instance = undefined;
   adapter = undefined;
   activation = undefined;
+  if (activeInstance) publishLifecycle("inactive", "deactivated");
+}
+
+function publishLifecycle(
+  state: NodeWebContainerLifecycleEvent["state"],
+  reason: NodeWebContainerLifecycleEvent["reason"],
+): void {
+  hostGeneration += 1;
+  const event = Object.freeze({ generation: hostGeneration, state, reason });
+  for (const listener of lifecycleListeners) {
+    try {
+      listener(event);
+    } catch {
+      // A presentation observer cannot control runtime lifecycle.
+    }
+  }
 }
 
 export function awaitBoundedWebContainerBoot<T>(

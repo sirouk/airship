@@ -52,6 +52,13 @@ the one-time recovery material for another browser/device. A future same-origin
 IndexedDB cache may store a non-extractable `CryptoKey` for same-browser reloads,
 but it must not be described as hardware-bound or cross-device recovery.
 
+Creation and recovery are deliberately different operations. A newly generated
+key may call `connectOrCreate`; an imported key calls `connectExisting` and is
+not allowed to create any folder. If the user chooses the wrong Google account,
+mistypes the key, or an internal encrypted-data folder was moved, recovery fails
+closed with no replacement hierarchy. This prevents an empty second vault from
+masquerading as a successful cross-device recovery.
+
 ## Object-store mapping and concurrency
 
 `GoogleDriveObjectStore` implements the existing strict interface:
@@ -70,6 +77,14 @@ but it must not be described as hardware-bound or cross-device recovery.
 - every conditional write bypasses that read cache and loads a fresh root before
   applying `If-Match`.
 
+The adapter sends `If-Match`, but Google's current Drive API documentation does
+not publish an object-store-style atomic CAS guarantee for media updates. The
+strict capability therefore remains **live-conformance-required**: deterministic
+fakes prove Airship's reaction to `412`, not that production Drive will enforce
+the precondition. Until release gates 1 and 2 pass against real Google, the
+defensible concurrency mode is one active browser writer or explicit
+conflict/multi-head preservation—not a production CAS claim.
+
 Airship's journal/workspace/vector publishers already envelope content before
 calling `ObjectStore`. The Drive routing index is encrypted inside the adapter.
 A bare storage-conformance probe uses recognizable test bytes by design; it is
@@ -83,14 +98,19 @@ prove ancestry, select authority, and retire the other before reconnection.
 
 ## Bounded and resumable work
 
-The adapter bounds object, range, index, list, and retry sizes. The current
-implementation uses multipart upload for already-segmented objects. Large
-workspace data and vector corpora are expected to arrive as immutable shards,
-so interruption retries only the affected shard. Drive resumable-upload session
-URIs are intentionally not persisted yet: Google's session URL is a bearer
-capability, and persisting it would require a separately reviewed encrypted
-resume journal. Adding resumable uploads must preserve the same commit rule:
-only a completed segment may be referenced by the encrypted CAS index.
+The adapter bounds object, range, index, list, and retry sizes. Small encrypted
+objects use one multipart request. Encrypted immutable shards of at least 8 MiB
+use Drive's resumable upload protocol in 4 MiB chunks. If an acknowledgement is
+lost or a retryable response follows a committed chunk, the client queries the
+session's committed range and resumes within that same active operation.
+
+The resumable session URI is a bearer-like capability. It is kept only on the
+call stack and is never returned, logged, stored, or reused after refresh;
+cross-refresh upload resumption is therefore not implemented. A failed or
+expired session retries the immutable shard in a later operation. Completion
+uploads only ciphertext, and the uploaded file remains an unreferenced orphan
+until the separately encrypted routing index wins its `If-Match` update. Drive
+resumption does not weaken or replace that sole CAS linearization point.
 
 ## Release gates
 
@@ -120,13 +140,20 @@ real-Google and two-context gates pass.
 
 ### Deterministic browser acceptance
 
-`npm run test:e2e:google-drive` builds a production-preview client with a
-syntactically valid test OAuth client ID. Playwright drives the real setup UI,
+`npm run test:e2e:google-drive` starts an isolated strict-port Vite acceptance
+server with a syntactically valid synthetic OAuth client ID. Playwright drives the real setup UI,
 GIS wrapper, workspace manager, object store, coordinator probes, encrypted
 composition, and runtime adoption. Only the external GIS and Google HTTP
 boundaries are deterministic browser fakes. The test proves requested scopes,
 Bearer authorization, encrypted writes, ranges, CAS success/rejection, adopted
-UI state, and absence of token/client-secret/recovery persistence.
+UI state, and absence of token/client-secret/recovery persistence. It then opens
+a storage-empty second browser context, imports only the recovery value, obtains
+an independent page-memory grant, reopens the exact existing hierarchy, and
+proves that no competing authority root was created. Desktop and mobile
+Chromium projects run the same two-context ceremony.
+
+The production build and artifact budgets are covered separately by
+`npm run check`; this provider-boundary test does not replace that gate.
 
 Passing this test is **not** real-Google acceptance and does not satisfy release
 gates 1 or 2.
@@ -138,11 +165,20 @@ gates 1 or 2.
    `http://localhost:4173` for the local lab.
 3. Enable Google Drive API and configure the OAuth consent screen.
 4. Configure the public client ID at deployment time; never add a client secret.
+   Airship reads it from `VITE_GOOGLE_CLIENT_ID`.
 5. Keep exact CSP grants for `accounts.google.com`, `www.googleapis.com`, and
    `openidconnect.googleapis.com`; do not use provider wildcards.
 6. Run object-store conformance and encrypted composition probes before adopting
    the Drive runtime, then complete every release gate above before a production
    synchronization claim.
+
+The shipped application also uses `Cross-Origin-Opener-Policy: same-origin` to
+unlock cross-origin-isolated WASM paths. Google's GIS setup guidance says popup
+communication can require `same-origin-allow-popups` when FedCM is unavailable.
+Real-provider acceptance must therefore prove the token dialog on every target
+browser under the deployed headers; deterministic GIS substitution does not
+clear that compatibility gate. Do not weaken the global runtime header or claim
+Firefox/Safari support merely because Chromium FedCM succeeds.
 
 ## Primary references
 

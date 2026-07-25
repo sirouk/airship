@@ -1,5 +1,6 @@
 import { Icon } from "../icons";
 import { Seal, type SealState } from "../seal";
+import { capabilityTierDetail, capabilityTierLabel } from "./capability-tier";
 import type { MessagePart } from "./message-parts";
 import { MarkdownView } from "./markdown";
 import "./message-parts-view.css";
@@ -19,11 +20,15 @@ export function MessagePartsView({
   const bounded = boundedMessageParts(parts);
   return (
     <div class="message-parts" aria-label="Message contents">
-      {bounded.visible.map((part) => <MessagePartView key={part.id} part={part} />)}
+      {bounded.visible.map((part) => (
+        <MessagePartView key={part.id} part={part} />
+      ))}
       {bounded.overflow.length ? (
         <details class="message-part operation-overflow">
           <summary>{DEFAULT_OPERATION_RENDER_LIMIT} of {bounded.operationCount} tool steps shown · Show chronological remainder</summary>
-          {bounded.overflow.map((part) => <MessagePartView key={part.id} part={part} />)}
+          {bounded.overflow.map((part) => (
+            <MessagePartView key={part.id} part={part} />
+          ))}
         </details>
       ) : null}
       {tail ? <div class="message-part text streaming" aria-live="polite"><MarkdownView source={tail} streaming /></div> : null}
@@ -87,11 +92,20 @@ function MessagePartView({ part }: { part: MessagePart }) {
   }
 
   if (part.kind === "tool-result") {
+    const resultTier = part.capabilityTier;
     return (
       <details class={`message-part operation tool-result ${part.status}`} open={part.status !== "success"}>
         <summary>
           <Seal state={operationSeal(part.status)} label={toolStatusLabel(part.status)} size={16} compact />
-          <span class="operation-title"><small>Tool result</small><strong>{part.name ?? part.callId}</strong></span>
+          <span
+            class="operation-title"
+            title={resultTier ? capabilityTierDetail(resultTier) : undefined}
+          >
+            <small>
+              Tool result{resultTier ? ` · ${capabilityTierLabel(resultTier)}` : ""}
+            </small>
+            <strong>{part.name ?? part.callId}</strong>
+          </span>
           <span class={`operation-state ${part.status}`}>{part.status}</span>
         </summary>
         <div class="operation-body">

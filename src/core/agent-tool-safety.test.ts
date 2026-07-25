@@ -105,6 +105,29 @@ describe("agent tool operation safety", () => {
       },
     });
   });
+
+  it("terminates a runaway provider response at the core turn boundary", async () => {
+    const tools = writeTools(async () => ({ content: "unused" }));
+    const { journal, sessionId } = await sessionFixture(tools);
+    const transport = scriptedTransport([[
+      { type: "text-delta", text: "x".repeat(4 * 1024 * 1024 + 1) },
+      { type: "completed", finishReason: "stop" },
+    ]]);
+
+    await expect(runTurn({
+      sessionId,
+      content: "Return a bounded response.",
+      transport,
+      tools,
+      journal,
+      approvalPolicy: allowAllForTests,
+      signal: new AbortController().signal,
+    })).rejects.toThrow("4194304-byte turn limit");
+
+    const events = await journal.readEvents(sessionId);
+    expect(events.at(-1)?.type).toBe("turn.failed");
+    expect(events.some((event) => event.type === "assistant.completed")).toBe(false);
+  });
 });
 
 function writeTools(execute: Tool["execute"]): ToolRegistry {

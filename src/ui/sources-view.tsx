@@ -172,7 +172,12 @@ export function SourcesView({ client, author, review, workspace, reviewImport, o
       setNotice(success);
       return true;
     } catch (caught) {
-      if (!controller.signal.aborted) setError(publicError(caught));
+      if (!controller.signal.aborted) {
+        setError(publicError(caught));
+        if (caught instanceof GitDomainError && caught.code === "push-outcome-unknown") {
+          setNotice("Push outcome unknown · fetch the remote before reviewing any retry.");
+        }
+      }
       return false;
     } finally {
       if (operationAbort.current === controller) operationAbort.current = undefined;
@@ -396,7 +401,7 @@ export function SourcesView({ client, author, review, workspace, reviewImport, o
               <label>New branch<input value={branchName} onInput={(event) => setBranchName(event.currentTarget.value)} placeholder="feature/evidence" /></label>
               <button type="button" disabled={Boolean(busy) || !branchName.trim()} onClick={createBranch}><Icon name="plus" /> Create branch</button>
               <label>Worktree branch<input value={newWorktreeBranch} onInput={(event) => setNewWorktreeBranch(event.currentTarget.value)} placeholder="feature/evidence" /></label>
-              <label>Adapter path<input value={newWorktreePath} onInput={(event) => setNewWorktreePath(event.currentTarget.value)} placeholder="/worktrees/evidence" /></label>
+                  <label>Workspace path<input value={newWorktreePath} onInput={(event) => setNewWorktreePath(event.currentTarget.value)} placeholder="/workspace/worktrees/evidence" /></label>
               <button type="button" disabled={Boolean(busy) || !client.capabilities.features.worktree.available || !newWorktreeBranch.trim() || !newWorktreePath.trim()} title={client.capabilities.features.worktree.reason} onClick={createWorktree}><Icon name="plus" /> Create worktree</button>
               <button type="button" disabled={Boolean(busy) || !client.capabilities.features.worktree.available || repository.worktrees.length < 2} title={repository.worktrees.length < 2 ? "The repository must retain at least one worktree." : client.capabilities.features.worktree.reason} onClick={removeWorktree}>Remove selected worktree</button>
             </div>
@@ -457,7 +462,10 @@ export function SourcesView({ client, author, review, workspace, reviewImport, o
               <button type="button" disabled={Boolean(busy) || !remote || !client.capabilities.features.fetch.available} onClick={fetchRemote}><Icon name="cloud" /> Fetch direct</button>
               <button type="button" disabled={Boolean(busy) || !remote || !client.capabilities.features.push.available} onClick={pushRemote}><Icon name="source" /> Push {worktree.branch}</button>
               <p class="git-push-warning">Push is always reviewed. A non-fast-forward update is blocked unless the remote is fetched and reconciled first.</p>
-              {!client.capabilities.features.push.available ? <p>{client.capabilities.features.push.reason}</p> : <p>Credentials stay memory-only or under the host provider. Airship does not persist them.</p>}
+              {!client.capabilities.features.push.available ? <p>{client.capabilities.features.push.reason}</p> : <>
+                <p>{gitCredentialBoundary(client)}</p>
+                <p>If the final response is lost, Airship reports the outcome as unknown and never retries automatically. Fetch before retrying.</p>
+              </>}
             </section>
           </aside>
         </div>
@@ -626,6 +634,16 @@ function storageLabel(backend: string): string {
   if (backend === "encrypted-workspace") return "Encrypted vault repository";
   if (backend === "host-managed") return "Host-managed repository";
   return "Page-memory repository";
+}
+
+function gitCredentialBoundary(client: BrowserGitClient): string {
+  if (client.capabilities.remote.credentialPersistence === "memory-only") {
+    return "Authenticated challenges use an integration-supplied credential held only in this page's memory. It is never written to Git config or Vault.";
+  }
+  if (client.capabilities.remote.credentialPersistence === "host-managed") {
+    return "The selected Git host owns credential custody; Airship does not persist or display the credential.";
+  }
+  return "Anonymous direct push only. This build has no Git credential broker, so an authenticated remote will refuse the request.";
 }
 
 function remoteLabel(transport: string): string {

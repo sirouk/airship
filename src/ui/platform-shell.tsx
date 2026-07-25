@@ -218,14 +218,14 @@ export type PreferenceOverrides = Readonly<{
    * transport; local MinIO remains a development adapter and ephemeral keeps
    * everything in page memory.
    */
-  vaultBackend: "google-drive" | "local-lab" | "ephemeral";
+  vaultBackend: "local-device" | "google-drive" | "local-lab" | "ephemeral";
   approvalMode: ApprovalMode;
 }>;
 
 export type VaultBackend = PreferenceOverrides["vaultBackend"];
 
 export function resolveDefaultVaultBackend(value: string | undefined): PreferenceOverrides["vaultBackend"] {
-  return value === "local-lab" || value === "ephemeral" ? value : "google-drive";
+  return value === "local-device" || value === "local-lab" || value === "ephemeral" ? value : "google-drive";
 }
 
 export const DEFAULT_PREFERENCES: PreferenceOverrides = Object.freeze({
@@ -245,7 +245,7 @@ export function loadPreferenceOverrides(storage: Pick<Storage, "getItem"> | unde
       density: value.density === "compact" ? "compact" : "comfortable",
       corners: value.corners === "square" || value.corners === "rounded" ? value.corners : "subtle",
       bodyFont: value.bodyFont === "system-serif" ? "system-serif" : "system-sans",
-      vaultBackend: value.vaultBackend === "ephemeral" || value.vaultBackend === "local-lab" ? value.vaultBackend : "google-drive",
+      vaultBackend: value.vaultBackend === "local-device" || value.vaultBackend === "ephemeral" || value.vaultBackend === "local-lab" ? value.vaultBackend : "google-drive",
       approvalMode: value.approvalMode === "auto-approve" || value.approvalMode === "full-access" ? value.approvalMode : "ask-first",
     });
   } catch { return DEFAULT_PREFERENCES; }
@@ -264,11 +264,16 @@ export function applyPreferenceOverrides(value: PreferenceOverrides, root = docu
   root.style.colorScheme = value.mode;
 }
 
-export function PreferencesDialog({ open, value, onChange, onClose }: Readonly<{
+export function PreferencesDialog({ open, value, onChange, onClose, profileApproval, vaultProviderSwitching = false }: Readonly<{
   open: boolean;
   value: PreferenceOverrides;
   onChange(value: PreferenceOverrides): void;
   onClose(): void;
+  vaultProviderSwitching?: boolean;
+  profileApproval?: Readonly<{
+    mode: ApprovalMode;
+    onManage(): void;
+  }>;
 }>) {
   const dialog = useRef<HTMLDivElement>(null);
   const restore = useRef<HTMLElement>();
@@ -283,15 +288,21 @@ export function PreferencesDialog({ open, value, onChange, onClose }: Readonly<{
   return (
     <div class="platform-scrim" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <div ref={dialog} class="preferences-dialog" role="dialog" aria-modal="true" aria-labelledby="preferences-title" tabIndex={-1} onKeyDown={(event) => { if (event.key === "Escape") onClose(); else if (event.key === "Tab") trapFocus(event, dialog.current); }}>
-        <header><div><span class="eyebrow">Runtime controls</span><h2 id="preferences-title">Preferences</h2><p>Change the interface, browser-agent policy, and durability mode without editing an agent profile.</p></div><button type="button" onClick={onClose}>Done</button></header>
-        <PreferenceSelect label="Agent approvals" value={value.approvalMode} options={[["ask-first","Ask First · prompt before effects"],["auto-approve","Auto Approve · model safety review"],["full-access","Full Access · bounded browser sandbox"]]} onChange={(next) => update("approvalMode", next as PreferenceOverrides["approvalMode"])} />
-        <p><strong>{approvalModeLabel(value.approvalMode)}.</strong> {approvalModeDescription(value.approvalMode)}</p>
+        <header><div><span class="eyebrow">Runtime controls</span><h2 id="preferences-title">Preferences</h2><p>Change presentation and durability. Agent behavior remains pinned to its profile.</p></div><button type="button" onClick={onClose}>Done</button></header>
+        {profileApproval ? <div class="profile-approval-preference">
+          <div><span>Active profile approvals</span><strong>{approvalModeLabel(profileApproval.mode)}</strong></div>
+          <button type="button" onClick={profileApproval.onManage}>Manage in Profiles</button>
+          <p>{approvalModeDescription(profileApproval.mode)} A saved change creates a new profile revision and takes effect in a new pinned conversation.</p>
+        </div> : <>
+          <PreferenceSelect label="Legacy session approvals" value={value.approvalMode} options={[["ask-first","Ask First · prompt before effects"],["auto-approve","Auto Approve · model safety review"],["full-access","Full Access · bounded browser sandbox"]]} onChange={(next) => update("approvalMode", next as PreferenceOverrides["approvalMode"])} />
+          <p><strong>{approvalModeLabel(value.approvalMode)}.</strong> {approvalModeDescription(value.approvalMode)}</p>
+        </>}
         <PreferenceSelect label="Color mode" value={value.mode} options={[['dark','Dark instrument'],['light','Paper']]} onChange={(next) => update("mode", next as PreferenceOverrides["mode"])} />
         <PreferenceSelect label="Type scale" value={value.typeScale} options={[['default','Default'],['large','Large'],['x-large','Extra large']]} onChange={(next) => update("typeScale", next as PreferenceOverrides["typeScale"])} />
         <PreferenceSelect label="Density" value={value.density} options={[['comfortable','Comfortable'],['compact','Compact']]} onChange={(next) => update("density", next as PreferenceOverrides["density"])} />
         <PreferenceSelect label="Corners" value={value.corners} options={[['subtle','Subtle'],['square','Square'],['rounded','Rounded']]} onChange={(next) => update("corners", next as PreferenceOverrides["corners"])} />
         <PreferenceSelect label="Body font" value={value.bodyFont} options={[['system-sans','System sans'],['system-serif','System serif']]} onChange={(next) => update("bodyFont", next as PreferenceOverrides["bodyFont"])} />
-        <PreferenceSelect label="Durability" value={value.vaultBackend} options={[['google-drive','Encrypted Google Drive · recommended'],['local-lab','Encrypted S3 · local MinIO lab'],['ephemeral','Ephemeral · page memory only']]} onChange={(next) => update("vaultBackend", next as PreferenceOverrides["vaultBackend"])} />
+        <PreferenceSelect label="Durability" value={value.vaultBackend} disabled={vaultProviderSwitching} options={[['local-device','Encrypted Local Device · offline'],['google-drive','Encrypted Google Drive · cross-device'],['local-lab','Encrypted S3 · local MinIO lab'],['ephemeral','Ephemeral · page memory only']]} onChange={(next) => update("vaultBackend", next as PreferenceOverrides["vaultBackend"])} />
         <button class="preferences-dialog__reset" type="button" onClick={() => onChange(DEFAULT_PREFERENCES)}>Reset preferences</button>
       </div>
     </div>
@@ -310,8 +321,8 @@ export function approvalModeDescription(mode: ApprovalMode): string {
   return "Read-only actions proceed automatically; write, network, execute, and identity actions require one-time approval.";
 }
 
-function PreferenceSelect({ label, value, options, onChange }: Readonly<{ label: string; value: string; options: readonly (readonly [string,string])[]; onChange(value: string): void }>) {
-  return <div class="preference-row"><span>{label}</span><MenuSelect className="preference-menu" ariaLabel={label} value={value} options={options.map(([id, name]) => ({ value: id, label: name }))} onChange={onChange} /></div>;
+function PreferenceSelect({ label, value, options, onChange, disabled = false }: Readonly<{ label: string; value: string; options: readonly (readonly [string,string])[]; onChange(value: string): void; disabled?: boolean }>) {
+  return <div class="preference-row"><span>{label}</span><MenuSelect className="preference-menu" ariaLabel={label} value={value} disabled={disabled} options={options.map(([id, name]) => ({ value: id, label: name }))} onChange={onChange} /></div>;
 }
 
 export type TrustAxis = Readonly<{ id: "local" | "vault" | "e2ee" | "attestation"; label: string; state: SealState; detail: string; view: NavigationView }>;
@@ -352,7 +363,7 @@ export function TrustHubTabs({ view, onNavigate }: Readonly<{ view: NavigationVi
     });
     return () => cancelAnimationFrame(frame);
   }, [view]);
-  return <nav ref={tabs} class="trust-hub-tabs" aria-label="Trust hub, five horizontally scrollable views">{TRUST_TABS.map((tab) => <button key={tab.view} type="button" class={view === tab.view ? "is-active" : ""} aria-current={view === tab.view ? "page" : undefined} onClick={() => onNavigate(tab.view)}>{tab.label}</button>)}</nav>;
+  return <nav ref={tabs} class="trust-hub-tabs" aria-label="Trust hub, four horizontally scrollable views">{TRUST_TABS.map((tab) => <button key={tab.view} type="button" class={view === tab.view ? "is-active" : ""} aria-current={view === tab.view ? "page" : undefined} onClick={() => onNavigate(tab.view)}>{tab.label}</button>)}</nav>;
 }
 
 type ViewBoundaryProps = { name: string; onRecover(): void; children: ComponentChildren };

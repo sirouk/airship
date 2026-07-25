@@ -63,4 +63,11 @@ export type IndexerOptions = {
   maxFileBytes?: number;
   maxChunkCharacters?: number;
   overlapCharacters?: number;
+  scheduling?: Readonly<{
+    embeddingBatchSize: number;
+    maxIndexingConcurrency: number;
+    cooperativeYieldIntervalMs: number;
+    clock?: () => number;
+    yieldControl?: () => Promise<void>;
+  }>;
 };
