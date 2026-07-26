@@ -31,7 +31,11 @@
 .editor-toolbar > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .editor-toolbar > div { display: flex; flex: 0 0 auto; align-items: center; gap: .65rem; }
 .editor-toolbar button { min-height: 29px; padding: 0 .72rem; }
-.code-editor { box-sizing: border-box; width: 100%; min-height: 0; flex: 1 1 24rem; resize: none; padding: 1rem 1.15rem 2rem; border: 0; border-radius: 0; outline: 0; color: color-mix(in srgb, var(--ink) 92%, white); background: transparent; caret-color: var(--accent); font: 12px/1.72 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; tab-size: 2; white-space: pre; overflow: auto; }
+.code-editor-frame { display: flex; flex: 1 1 24rem; min-height: 0; min-width: 0; }
+/* The gutter must share the textarea's exact metrics or the numbers drift out
+   of register as the file scrolls. Keep the font/line-height/padding paired. */
+.code-gutter { box-sizing: border-box; flex: 0 0 auto; margin: 0; padding: 1rem .55rem 2rem .8rem; border-right: 1px solid var(--line); color: var(--ink-faint); background: var(--surface-soft); font: 12px/1.72 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; text-align: right; overflow: hidden; user-select: none; -webkit-user-select: none; }
+.code-editor { box-sizing: border-box; width: 100%; min-height: 0; flex: 1 1 auto; resize: none; padding: 1rem 1.15rem 2rem; border: 0; border-radius: 0; outline: 0; color: color-mix(in srgb, var(--ink) 92%, white); background: transparent; caret-color: var(--accent); font: 12px/1.72 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; tab-size: 2; white-space: pre; overflow: auto; }
 .code-editor:focus { box-shadow: inset 2px 0 var(--accent); }
 .workspace-binary-preview { display: grid; flex: 1 1 24rem; place-content: center; justify-items: center; gap: .55rem; padding: clamp(1.5rem, 6vw, 4rem); color: var(--ink-faint); text-align: center; }
 .workspace-binary-preview strong { color: var(--ink); font: 600 var(--fs-body)/1.3 var(--font-body); }
@@ -76,10 +80,12 @@
 .workbench-mobile-switch { display: none; }
 
 :root[data-density="comfortable"] .workspace-workbench .code-editor { font-size: 15px; line-height: 1.78; padding: 1.25rem 1.35rem 2.4rem; }
+:root[data-density="comfortable"] .workspace-workbench .code-gutter { font-size: 15px; line-height: 1.78; padding-block: 1.25rem 2.4rem; }
 :root[data-density="comfortable"] .workspace-workbench .editor-tabs { min-height: 46px; }
 :root[data-density="comfortable"] .workspace-workbench .editor-toolbar { min-height: 50px; padding-inline: 1rem; }
 :root[data-density="comfortable"] .workspace-workbench .workbench-mode-tabs { min-height: 48px; }
 :root[data-density="compact"] .workspace-workbench .code-editor { font-size: 11px; line-height: 1.55; padding: .7rem .85rem 1.4rem; }
+:root[data-density="compact"] .workspace-workbench .code-gutter { font-size: 11px; line-height: 1.55; padding-block: .7rem 1.4rem; }
 :root[data-density="compact"] .workspace-workbench .editor-tabs { min-height: 34px; }
 :root[data-density="compact"] .workspace-workbench .editor-toolbar { min-height: 36px; padding-block: .2rem; }
 :root[data-density="compact"] .workspace-workbench .workbench-mode-tabs { min-height: 36px; }
@@ -105,6 +111,8 @@
   .workbench-context { inset: auto .6rem max(4.8rem, env(safe-area-inset-bottom)) .6rem !important; }
   .workbench-context button { min-height: 45px; }
   .code-editor { font-size: 13px; line-height: 1.68; padding-inline: .8rem; }
+  /* A phone column is too narrow to spend on line numbers. */
+  .code-gutter { display: none; }
   .editor-toolbar small { display: none; }
   .scm-row > div button { width: 44px; height: 44px; }
   .workspace-scm button, .workspace-scm textarea { min-height: 44px; }

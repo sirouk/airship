@@ -15,15 +15,22 @@ import {
   WASI_PREVIEW1_MAX_FILES,
   WASI_PREVIEW1_MAX_OUTPUT_BYTES,
   WASI_PREVIEW1_MAX_WORKSPACE_BYTES,
+  WASI_PREVIEW1_MAX_WORKSPACE_ERROR_CHARS,
 } from "./wasi-preview1-contract";
 
 type WorkspaceInput = Readonly<{ path: string; bytes: Uint8Array }>;
 type RunMessage = Readonly<{
   type: "run";
-  wasmBase64: string;
+  /** Structured clone carries the artifact bytes; base64 never crosses here. */
+  wasm: Uint8Array;
   args: readonly string[];
   env: Readonly<Record<string, string>>;
   files: readonly WorkspaceInput[];
+  /**
+   * Only a mounted run collects a workspace. An unmounted run must never be
+   * failed by a scratch file the guest wrote into its throwaway preopen.
+   */
+  collectWorkspace: boolean;
 }>;
 
 const scope = self as DedicatedWorkerGlobalScope;
@@ -41,7 +48,11 @@ scope.onmessage = (event: MessageEvent<RunMessage>) => {
 };
 
 async function run(message: RunMessage): Promise<void> {
-  const binary = decodeArtifact(message.wasmBase64);
+  const binary = message.wasm;
+  // The host enforces the same ceiling before posting. The Worker repeats it
+  // because a Worker must never trust an unbounded structured-clone payload.
+  if (!(binary instanceof Uint8Array) || binary.byteLength === 0) throw new Error("The WASI command artifact is missing.");
+  if (binary.byteLength > WASI_PREVIEW1_MAX_ARTIFACT_BYTES) throw new Error("The WASI command artifact exceeds 4 MiB.");
   if (!WebAssembly.validate(binary as BufferSource)) throw new Error("The WASI command artifact is not valid WebAssembly.");
 
   const root = materializeRoot(message.files);
@@ -80,22 +91,27 @@ async function run(message: RunMessage): Promise<void> {
   stdout.flush();
   stderr.flush();
   if (memory.buffer.byteLength > 64 * 1_024 * 1_024) throw new Error("WASI command memory exceeded 64 MiB.");
+  // A run that completed is reported with its own exit code and streams even
+  // when its generated files exceed the mount budget. The `files` key stays
+  // ABSENT in that case: an empty list is indistinguishable from "the guest
+  // deleted everything" and would make the reconciler report every mounted
+  // path as deleted.
+  let files: readonly WorkspaceInput[] | undefined;
+  let workspaceError: string | undefined;
+  if (message.collectWorkspace) {
+    try {
+      files = collectFiles(preopen.dir);
+    } catch (error) {
+      workspaceError = (error instanceof Error ? error.message : String(error)).slice(0, WASI_PREVIEW1_MAX_WORKSPACE_ERROR_CHARS);
+    }
+  }
   post({
     type: "completed",
     exitCode,
     stdout: stdout.value(),
     stderr: stderr.value(),
-    files: collectFiles(preopen.dir),
+    ...(workspaceError !== undefined ? { workspaceError } : files ? { files } : {}),
   });
-}
-
-function decodeArtifact(value: string): Uint8Array {
-  let binary: string;
-  try { binary = atob(value); } catch { throw new Error("The WASI command artifact is not valid base64."); }
-  if (binary.length > WASI_PREVIEW1_MAX_ARTIFACT_BYTES) throw new Error("The WASI command artifact exceeds 4 MiB.");
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
-  return bytes;
 }
 
 function materializeRoot(files: readonly WorkspaceInput[]): Directory {

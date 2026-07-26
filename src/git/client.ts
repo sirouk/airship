@@ -1,8 +1,23 @@
-import { GitCapabilityError, GitConcurrencyError } from "./errors";
+import { GitCapabilityError, GitConcurrencyError, GitDomainError, GitPartialMutationError } from "./errors";
 import { normalizeGitOperation } from "./operations";
 import type {
   BrowserGitAdapter,
+  GitAddRemoteRequest,
   GitCapability,
+  GitCommitDetail,
+  GitCommitSummary,
+  GitCreateTagRequest,
+  GitDeleteTagRequest,
+  GitLogRequest,
+  GitMergeRequest,
+  GitRemoveRemoteRequest,
+  GitResetRequest,
+  GitRestoreRequest,
+  GitSetRemoteUrlRequest,
+  GitShowRequest,
+  GitStashEntry,
+  GitStashRequest,
+  GitTagSummary,
   GitCommitRequest,
   GitCreateBranchRequest,
   GitCreateWorktreeRequest,
@@ -25,10 +40,26 @@ import type {
   GitCloneRequest,
   GitSnapshotImportRequest,
 } from "./types";
-import { GIT_CAPABILITIES } from "./types";
-import { assertNotAborted, validateFileContent, validateGitIdentifier, validateGitPath, validateVersion } from "./validation";
+import { GIT_CAPABILITIES, GIT_PRE_WRITE_FAILURE_CODES } from "./types";
+import { GIT_LIMITS, asciiCompare, assertNotAborted, validateFileContent, validateGitIdentifier, validateGitPath, validateVersion } from "./validation";
 
 const passiveSignal = new AbortController().signal;
+
+/** The shape chunkedPathMutation needs: a bounded path set behind one optimistic fence. */
+type ChunkablePathRequest = Readonly<{ paths: readonly string[]; expectedWorktreeVersion: string }>;
+
+/**
+ * Codes a chunkable adapter operation can only raise from its pre-flight —
+ * resolving the target, checking the optimistic fence, and admitting every
+ * requested path — all of which `BrowserGitAdapter` requires stage, unstage,
+ * and restore to complete before their first write. Any other failure may have
+ * left part of a chunk applied, so it stays wrapped.
+ */
+const PRE_WRITE_FAILURE_CODES: ReadonlySet<string> = new Set(GIT_PRE_WRITE_FAILURE_CODES);
+
+function isPreWriteFailure(error: unknown): boolean {
+  return error instanceof GitDomainError && PRE_WRITE_FAILURE_CODES.has(error.code);
+}
 
 /**
  * Validation, immutability, capability, cancellation, and single-writer waist.
@@ -111,12 +142,14 @@ export class BrowserGitClient {
 
   stage(request: GitStageRequest, signal: AbortSignal = passiveSignal): Promise<GitMutationResult> {
     const normalized = normalizeGitOperation({ kind: "stage", request }).request;
-    return this.worktreeMutation("stage", normalized, signal, (context) => this.adapter.stage(normalized, context));
+    return this.worktreeMutation("stage", normalized, signal, (context) =>
+      this.chunkedPathMutation("Stage", normalized, context, (chunk, inner) => this.adapter.stage(chunk, inner)));
   }
 
   unstage(request: GitStageRequest, signal: AbortSignal = passiveSignal): Promise<GitMutationResult> {
     const normalized = normalizeGitOperation({ kind: "unstage", request }).request;
-    return this.worktreeMutation("stage", normalized, signal, (context) => this.adapter.unstage(normalized, context));
+    return this.worktreeMutation("stage", normalized, signal, (context) =>
+      this.chunkedPathMutation("Unstage", normalized, context, (chunk, inner) => this.adapter.unstage(chunk, inner)));
   }
 
   commit(request: GitCommitRequest, signal: AbortSignal = passiveSignal): Promise<GitMutationResult> {
@@ -161,6 +194,120 @@ export class BrowserGitClient {
   push(request: GitPushRequest, signal: AbortSignal = passiveSignal): Promise<GitMutationResult> {
     const normalized = normalizeGitOperation({ kind: "push", request }).request;
     return this.repositoryMutation("push", normalized.repositoryId, signal, (context) => this.adapter.push(normalized, context));
+  }
+
+  async log(request: GitLogRequest, signal: AbortSignal = passiveSignal): Promise<readonly GitCommitSummary[]> {
+    this.require("history");
+    const normalized = normalizeGitOperation({ kind: "log", request }).request;
+    assertNotAborted(signal);
+    return cloneAndFreeze(await this.adapter.log(normalized, { signal }));
+  }
+
+  async show(request: GitShowRequest, signal: AbortSignal = passiveSignal): Promise<GitCommitDetail> {
+    this.require("history");
+    const normalized = normalizeGitOperation({ kind: "show", request }).request;
+    assertNotAborted(signal);
+    return cloneAndFreeze(await this.adapter.show(normalized, { signal }));
+  }
+
+  async listTags(repositoryId: string, signal: AbortSignal = passiveSignal): Promise<readonly GitTagSummary[]> {
+    this.require("tag");
+    assertNotAborted(signal);
+    return cloneAndFreeze(await this.adapter.listTags(validateGitIdentifier(repositoryId, "Repository ID"), { signal }));
+  }
+
+  createTag(request: GitCreateTagRequest, signal: AbortSignal = passiveSignal): Promise<GitMutationResult> {
+    const normalized = normalizeGitOperation({ kind: "tag-create", request }).request;
+    return this.repositoryMutation("tag", normalized.repositoryId, signal, (context) => this.adapter.createTag(normalized, context));
+  }
+
+  deleteTag(request: GitDeleteTagRequest, signal: AbortSignal = passiveSignal): Promise<GitMutationResult> {
+    const normalized = normalizeGitOperation({ kind: "tag-delete", request }).request;
+    return this.repositoryMutation("tag", normalized.repositoryId, signal, (context) => this.adapter.deleteTag(normalized, context));
+  }
+
+  async listStash(request: GitStatusRequest, signal: AbortSignal = passiveSignal): Promise<readonly GitStashEntry[]> {
+    this.require("stash");
+    const normalized = normalizeGitOperation({ kind: "status", request }).request;
+    assertNotAborted(signal);
+    return cloneAndFreeze(await this.adapter.listStash(normalized, { signal }));
+  }
+
+  stash(request: GitStashRequest, signal: AbortSignal = passiveSignal): Promise<GitMutationResult> {
+    const normalized = normalizeGitOperation({ kind: "stash", request }).request;
+    return this.worktreeMutation("stash", normalized, signal, (context) => this.adapter.stash(normalized, context));
+  }
+
+  merge(request: GitMergeRequest, signal: AbortSignal = passiveSignal): Promise<GitMutationResult> {
+    const normalized = normalizeGitOperation({ kind: "merge", request }).request;
+    return this.worktreeMutation("merge", normalized, signal, (context) => this.adapter.merge(normalized, context));
+  }
+
+  restore(request: GitRestoreRequest, signal: AbortSignal = passiveSignal): Promise<GitMutationResult> {
+    const normalized = normalizeGitOperation({ kind: "restore", request }).request;
+    return this.worktreeMutation("restore", normalized, signal, (context) =>
+      this.chunkedPathMutation("Restore", normalized, context, (chunk, inner) => this.adapter.restore(chunk, inner)));
+  }
+
+  reset(request: GitResetRequest, signal: AbortSignal = passiveSignal): Promise<GitMutationResult> {
+    const normalized = normalizeGitOperation({ kind: "reset", request }).request;
+    return this.worktreeMutation("restore", normalized, signal, (context) => this.adapter.reset(normalized, context));
+  }
+
+  addRemote(request: GitAddRemoteRequest, signal: AbortSignal = passiveSignal): Promise<GitMutationResult> {
+    const normalized = normalizeGitOperation({ kind: "remote-add", request }).request;
+    return this.repositoryMutation("remote-config", normalized.repositoryId, signal, (context) => this.adapter.addRemote(normalized, context));
+  }
+
+  setRemoteUrl(request: GitSetRemoteUrlRequest, signal: AbortSignal = passiveSignal): Promise<GitMutationResult> {
+    const normalized = normalizeGitOperation({ kind: "remote-set-url", request }).request;
+    return this.repositoryMutation("remote-config", normalized.repositoryId, signal, (context) => this.adapter.setRemoteUrl(normalized, context));
+  }
+
+  removeRemote(request: GitRemoveRemoteRequest, signal: AbortSignal = passiveSignal): Promise<GitMutationResult> {
+    const normalized = normalizeGitOperation({ kind: "remote-remove", request }).request;
+    return this.repositoryMutation("remote-config", normalized.repositoryId, signal, (context) => this.adapter.removeRemote(normalized, context));
+  }
+
+  /**
+   * A reviewed stage/unstage/restore request may cover more paths than one
+   * adapter call is allowed to carry. Execute it as sequential bounded chunks
+   * inside the one mutation scope, chaining each chunk's issued worktree version
+   * so a foreign write between chunks still fails the fence instead of silently
+   * interleaving.
+   */
+  private async chunkedPathMutation<T extends ChunkablePathRequest>(
+    label: string,
+    request: T,
+    context: GitOperationContext,
+    execute: (chunk: T, context: GitOperationContext) => Promise<GitMutationResult>,
+  ): Promise<GitMutationResult> {
+    if (request.paths.length <= GIT_LIMITS.maxPathsPerOperation) return execute(request, context);
+    const changedPaths: string[] = [];
+    let expectedWorktreeVersion = request.expectedWorktreeVersion;
+    let last: GitMutationResult | undefined;
+    for (let offset = 0; offset < request.paths.length; offset += GIT_LIMITS.maxPathsPerOperation) {
+      const paths = request.paths.slice(offset, offset + GIT_LIMITS.maxPathsPerOperation);
+      try {
+        last = await execute({ ...request, paths, expectedWorktreeVersion }, context);
+      } catch (error) {
+        // Nothing has been written yet and the adapter raised this from its
+        // pre-flight, so calling it a partial mutation would both invent a
+        // half-applied change and hide the code callers dispatch on: a failed
+        // fence must stay 'version-conflict', a refused path 'path-not-tracked'.
+        if (!changedPaths.length && isPreWriteFailure(error)) throw error;
+        throw new GitPartialMutationError(label, changedPaths.length, request.paths.length, error);
+      }
+      changedPaths.push(...last.changedPaths);
+      if (!last.worktree?.version) {
+        throw new GitDomainError(
+          "chunked-mutation-unfenced",
+          `${label} completed ${changedPaths.length} of ${request.paths.length} paths, but the adapter returned no worktree version to fence the next chunk with.`,
+        );
+      }
+      expectedWorktreeVersion = last.worktree.version;
+    }
+    return { ...last!, changedPaths: [...new Set(changedPaths)].sort(asciiCompare) };
   }
 
   private worktreeMutation(

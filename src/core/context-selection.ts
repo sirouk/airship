@@ -5,6 +5,17 @@ const DIGEST = /^sha256:[A-Za-z0-9_-]{43}$/u;
 const MAX_HITS = 8;
 const MAX_TEXT_BYTES = 32 * 1024;
 const MAX_QUERY_CHARACTERS = 8_192;
+const TURN_RETRIEVER_IDS = new Set<string>([
+  "airship-federated-turn-context-v1",
+  "airship-workspace-turn-context-v1",
+  "airship-vault-workspace-turn-context-v1",
+]);
+/** Agent-invoked tool retrieval: valid lineage, never a turn selection. */
+const TOOL_RETRIEVER_IDS = new Set<string>([
+  "airship-workspace-tool-search-v1",
+  "airship-profile-memory-tool-v1",
+]);
+const RETRIEVER_IDS = new Set<string>([...TURN_RETRIEVER_IDS, ...TOOL_RETRIEVER_IDS]);
 
 export type CanonicalContextHit = Readonly<{
   path: string;
@@ -38,7 +49,13 @@ export type CanonicalContextGeneration = Readonly<{
 }>;
 
 export type CanonicalContextLineage = Readonly<{
-  retriever: "airship-federated-turn-context-v1" | "airship-workspace-turn-context-v1" | "airship-vault-workspace-turn-context-v1";
+  retriever:
+    | "airship-federated-turn-context-v1"
+    | "airship-workspace-turn-context-v1"
+    | "airship-vault-workspace-turn-context-v1"
+    /** Agent-invoked tool retrieval; rejected by canonicalContextSelection. */
+    | "airship-workspace-tool-search-v1"
+    | "airship-profile-memory-tool-v1";
   scope: Readonly<{
     sessionId?: string;
     profileId?: string;
@@ -156,6 +173,10 @@ export function canonicalContextSelection(value: unknown): CanonicalContextSelec
     ? canonicalRetrievalEvidence(value.retrieval)
     : undefined;
   if (value.version === 2 && !lineage) return undefined;
+  // Enforce the invariant the retriever union only documents: a turn selection
+  // that named a tool retriever would tell the reader the model was handed this
+  // context automatically when in fact it asked for it, or the reverse.
+  if (lineage && !TURN_RETRIEVER_IDS.has(lineage.retriever)) return undefined;
   if (value.retrieval !== undefined && !retrieval) return undefined;
   if (lineage) {
     const generations = new Set(lineage.generations.map((generation) => generation.id));
@@ -299,11 +320,14 @@ function contextHitReference(value: Record<string, unknown>): Pick<CanonicalCont
   };
 }
 
+/** Exported so tool payloads validate their lineage against the same bounds. */
+export function canonicalContextLineage(value: unknown): CanonicalContextLineage | undefined {
+  return canonicalLineage(value);
+}
+
 function canonicalLineage(value: unknown): CanonicalContextLineage | undefined {
   if (!isRecord(value) ||
-      (value.retriever !== "airship-federated-turn-context-v1" &&
-        value.retriever !== "airship-workspace-turn-context-v1" &&
-        value.retriever !== "airship-vault-workspace-turn-context-v1") ||
+      !RETRIEVER_IDS.has(String(value.retriever)) ||
       !isRecord(value.scope) || !Array.isArray(value.generations) || value.generations.length < 1 || value.generations.length > 8) {
     return undefined;
   }
@@ -318,7 +342,7 @@ function canonicalLineage(value: unknown): CanonicalContextLineage | undefined {
     generations.push(generation);
   }
   return Object.freeze({
-    retriever: value.retriever,
+    retriever: value.retriever as CanonicalContextLineage["retriever"],
     scope,
     generations: Object.freeze(generations),
   });

@@ -17,7 +17,7 @@ test("the chat shell stays slim and non-overlapping on narrow and iPhone-class s
     await page.setViewportSize(viewport);
     await page.goto("/#chat");
     await expect(page.getByRole("navigation", { name: "Mobile navigation" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Connect", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Connect a model", exact: true })).toBeVisible();
     await expect(page.locator(".stage-header")).toBeVisible();
     await expect(page.getByRole("button", { name: /Session\./i })).toBeVisible();
     await page.getByRole("combobox", { name: "Message Airship" }).evaluate((element) => element.blur());
@@ -48,10 +48,142 @@ test("the chat shell stays slim and non-overlapping on narrow and iPhone-class s
     expect(geometry!.detailsRight).toBeLessThanOrEqual(geometry!.viewportWidth + 1);
     expect(geometry!.navRight).toBeLessThanOrEqual(geometry!.viewportWidth + 1);
     expect(geometry!.composerHeight).toBeLessThanOrEqual(60);
+
+    // Chrome budget: the conversation, not the session card and guidance
+    // banner, must own the majority of a phone's first screen.
+    const budget = await page.evaluate(() => {
+      const height = (selector: string) => {
+        const element = document.querySelector<HTMLElement>(selector);
+        return element && getComputedStyle(element).display !== "none" ? element.getBoundingClientRect().height : 0;
+      };
+      return {
+        transcript: height(".transcript"),
+        aboveTranscript: height(".topbar") + height(".stage-header") + height(".chat-live-guidance"),
+        viewport: innerHeight,
+      };
+    });
+    expect(budget.aboveTranscript, `${viewport.width}px chrome above the transcript`).toBeLessThanOrEqual(viewport.height * 0.3);
+    expect(budget.transcript, `${viewport.width}px transcript share`).toBeGreaterThan(viewport.height * 0.5);
+
     await page.getByRole("combobox", { name: "Message Airship" }).focus();
     const focusedComposerHeight = await page.locator(".composer").evaluate((element) => element.getBoundingClientRect().height);
     expect(focusedComposerHeight).toBeGreaterThan(geometry!.composerHeight + 20);
   }
+});
+
+test("the left rail advertises its own overflow only while content is hidden", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "desktop rail geometry contract");
+  await page.goto("/#chat");
+  const rail = page.locator(".primary-nav");
+  await expect(rail).toBeVisible();
+
+  for (const height of [700, 800, 900, 1_080] as const) {
+    await page.setViewportSize({ width: 1_440, height });
+    // The affordance is measured, not assumed: whatever the rail's real
+    // overflow is at this height, the painted state has to agree with it.
+    await expect
+      .poll(async () => rail.evaluate((element) => {
+        const scrollable = element.scrollHeight - element.clientHeight > 1;
+        return element.dataset.scrollEdges === (scrollable ? "end" : "none");
+      }), { message: `rail affordance settles at ${height}px` })
+      .toBe(true);
+
+    const state = await rail.evaluate((element) => ({
+      scrollable: element.scrollHeight - element.clientHeight > 1,
+      edges: element.dataset.scrollEdges,
+      masked: getComputedStyle(element).maskImage !== "none",
+      dividerShown: (() => {
+        const divider = document.querySelector<HTMLElement>(".sidebar-spacer");
+        return divider ? getComputedStyle(divider).display !== "none" : false;
+      })(),
+    }));
+    if (state.scrollable) {
+      expect(state.edges, `${height}px rail hides content`).toBe("end");
+      expect(state.masked, `${height}px rail paints an edge fade`).toBe(true);
+      expect(state.dividerShown, `${height}px pinned profile card is bounded`).toBe(true);
+    } else {
+      expect(state.edges, `${height}px rail fits`).toBe("none");
+      expect(state.masked, `${height}px rail must not fake an overflow`).toBe(false);
+      expect(state.dividerShown, `${height}px rail needs no pinned divider`).toBe(false);
+    }
+  }
+
+  await page.setViewportSize({ width: 1_440, height: 800 });
+  await rail.evaluate((element) => { element.scrollTop = element.scrollHeight; });
+  await expect.poll(async () => rail.evaluate((element) => element.dataset.scrollEdges)).toBe("start");
+  await rail.evaluate((element) => { element.scrollTop = Math.round((element.scrollHeight - element.clientHeight) / 2); });
+  await expect.poll(async () => rail.evaluate((element) => element.dataset.scrollEdges)).toBe("both");
+  await page.screenshot({ path: testInfo.outputPath("rail-scroll-affordance.png"), animations: "disabled" });
+});
+
+test("an empty conversation centres its zero state without ever clipping it", async ({ page }) => {
+  const readTranscript = () => page.locator(".transcript").evaluate((element) => {
+    const first = element.firstElementChild as HTMLElement | null;
+    const box = element.getBoundingClientRect();
+    return {
+      centred: element.classList.contains("no-turns"),
+      firstOffsetTop: first?.offsetTop ?? -1,
+      firstTopWithin: first ? first.getBoundingClientRect().top - box.top : -1,
+      clientHeight: element.clientHeight,
+      scrollHeight: element.scrollHeight,
+    };
+  });
+
+  // Tall desktop: the zero state fits, so it is genuinely centred.
+  await page.setViewportSize({ width: 1_440, height: 1_000 });
+  await page.goto("/#chat");
+  await expect(page.locator(".transcript.no-turns")).toBeVisible();
+  const tall = await readTranscript();
+  expect(tall.centred).toBe(true);
+  expect(tall.firstTopWithin, "the welcome card leaves the top of the transcript").toBeGreaterThan(120);
+
+  // Short and phone-class viewports overflow. `safe center` must fall back to
+  // start alignment; bare `center` puts the first card at a negative offset a
+  // scroll container can never reach.
+  for (const viewport of [{ width: 1_100, height: 520 }, { width: 390, height: 844 }] as const) {
+    await page.setViewportSize(viewport);
+    await page.goto("/#chat");
+    await expect(page.locator(".transcript.no-turns")).toBeVisible();
+    const short = await readTranscript();
+    expect(short.firstTopWithin, `${viewport.width}x${viewport.height} first card is reachable`).toBeGreaterThanOrEqual(-1);
+    expect(short.firstOffsetTop, `${viewport.width}x${viewport.height} first card offset`).toBeGreaterThanOrEqual(0);
+  }
+});
+
+test("the composer is two tab stops from the start of the document", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "skip links are a pointer-free desktop path");
+  await page.goto("/#chat");
+  await expect(page.locator(".app-shell")).toBeVisible();
+  const describeFocus = () => page.evaluate(() => {
+    const active = document.activeElement as HTMLElement | null;
+    return {
+      tag: active?.tagName ?? "",
+      label: active?.getAttribute("aria-label") ?? active?.textContent?.trim() ?? "",
+      visible: active ? active.getBoundingClientRect().height : 0,
+    };
+  });
+
+  // The shell claims the composer at mount, so the common case is zero stops.
+  expect((await describeFocus()).label).toBe("Message Airship");
+
+  // Reset to a document with no prior focus. `blur()` alone is not enough:
+  // Chromium keeps the sequential-navigation starting point at the element
+  // that was blurred, so Tab would resume mid-document instead of at the top.
+  await page.evaluate(() => {
+    (document.activeElement as HTMLElement | null)?.blur();
+    document.body.tabIndex = -1;
+    document.body.focus();
+  });
+  await page.keyboard.press("Tab");
+  const first = await describeFocus();
+  expect(first.label).toBe("Skip to conversation");
+  // A skip control the user cannot see is not an affordance.
+  expect(first.visible).toBeGreaterThanOrEqual(44);
+
+  await page.keyboard.press("Tab");
+  expect((await describeFocus()).label).toBe("Skip to composer");
+  await page.keyboard.press("Enter");
+  expect((await describeFocus()).label).toBe("Message Airship");
 });
 
 test("mobile workspace and terminal controls preserve their content lanes", async ({ page }, testInfo) => {

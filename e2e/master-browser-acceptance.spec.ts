@@ -157,10 +157,11 @@ test("high-value controls remain usable without credentials on every device clas
 
   await page.goto("/#connection");
   await expect(page.getByRole("heading", { name: "Connect models", level: 1 })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Continue to Chutes" })).toBeVisible();
-  const advancedKey = page.getByText("Advanced: use a Chutes API key instead", { exact: true });
-  await advancedKey.click();
+  await expect(page.getByRole("button", { name: "Sign in to Chutes", exact: true })).toBeVisible();
+  const keyDisclosure = page.getByText("Use a Chutes API key instead", { exact: true });
+  await keyDisclosure.click();
   await expect(page.getByLabel("Chutes API key")).toBeVisible();
+  await expect(page.getByRole("link", { name: /Create a key at chutes\.ai/u })).toBeVisible();
   await expect(page.getByRole("button", { name: "Discover models with key" })).toBeVisible();
   await expect(page.getByRole("dialog", { name: "Choose a Chutes model" })).toHaveCount(0);
   await expectContainedLayout(page);

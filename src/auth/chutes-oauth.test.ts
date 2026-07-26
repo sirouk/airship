@@ -8,6 +8,7 @@ import {
   requireLocalChutesOAuthBridge,
   refreshChutesOAuthToken,
   resolveChutesOAuthRegistration,
+  revokeChutesToken,
 } from "./chutes-oauth";
 
 describe("Chutes OAuth PKCE preparation", () => {
@@ -325,5 +326,85 @@ describe("Chutes OAuth PKCE preparation", () => {
         scope: "profile chutes:invoke billing:read",
       }),
     })).rejects.toThrow("did not rotate");
+  });
+});
+
+describe("Chutes OAuth revocation", () => {
+  it("posts only the RFC 7009 fields to the published revocation endpoint", async () => {
+    const fetchImpl = vi.fn<typeof globalThis.fetch>(async () => new Response(
+      JSON.stringify({ revoked: true }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    ));
+
+    await expect(revokeChutesToken({
+      token: "crt_released.refresh",
+      tokenTypeHint: "refresh_token",
+      clientId: "cid_airship",
+      fetch: fetchImpl,
+    })).resolves.toEqual({ state: "accepted", status: 200 });
+
+    const [url, init] = fetchImpl.mock.calls[0]!;
+    expect(url).toBe("https://api.chutes.ai/idp/token/revoke");
+    expect(init).toMatchObject({
+      method: "POST",
+      cache: "no-store",
+      credentials: "omit",
+      redirect: "error",
+      referrerPolicy: "no-referrer",
+    });
+    expect([...new URLSearchParams(String(init?.body)).entries()].sort()).toEqual([
+      ["client_id", "cid_airship"],
+      ["token", "crt_released.refresh"],
+      ["token_type_hint", "refresh_token"],
+    ]);
+  });
+
+  it("never transmits a credential that fails the token guards", async () => {
+    const fetchImpl = vi.fn();
+    await expect(revokeChutesToken({
+      token: "cak_wrong.class",
+      tokenTypeHint: "refresh_token",
+      clientId: "cid_airship",
+      fetch: fetchImpl,
+    })).rejects.toThrow("invalid refresh token");
+    await expect(revokeChutesToken({
+      token: "crt_ok.refresh",
+      tokenTypeHint: "refresh_token",
+      clientId: "not-a-client",
+      fetch: fetchImpl,
+    })).rejects.toThrow("client ID is invalid");
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("reports a refused or unreachable provider instead of claiming the grant is gone", async () => {
+    await expect(revokeChutesToken({
+      token: "cak_released.access",
+      tokenTypeHint: "access_token",
+      clientId: "cid_airship",
+      fetch: async () => new Response("no", { status: 401 }),
+    })).resolves.toEqual({ state: "rejected", status: 401 });
+
+    await expect(revokeChutesToken({
+      token: "cak_released.access",
+      tokenTypeHint: "access_token",
+      clientId: "cid_airship",
+      fetch: async () => { throw new TypeError("Failed to fetch"); },
+    })).resolves.toEqual({ state: "unreachable", reason: "network" });
+  });
+
+  it("bounds a revocation that the provider never answers", async () => {
+    vi.useFakeTimers();
+    try {
+      const revocation = revokeChutesToken({
+        token: "crt_released.refresh",
+        tokenTypeHint: "refresh_token",
+        clientId: "cid_airship",
+        fetch: async () => await new Promise<Response>(() => undefined),
+      });
+      await vi.advanceTimersByTimeAsync(5_000);
+      await expect(revocation).resolves.toEqual({ state: "unreachable", reason: "timeout" });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

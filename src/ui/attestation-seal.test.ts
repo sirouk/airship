@@ -20,6 +20,17 @@ describe("session attestation seal", () => {
     });
   });
 
+  it("states the disconnected fallback in plain language without inventing a provider", () => {
+    const seal = describeAttestationSeal({ connected: false, records: [], now: NOW });
+    expect(seal.state).toBe("none");
+    expect(seal.label).toBe("Secure hardware not checked");
+    // P11: the acronym is allowed in the expansion, never in the primary label.
+    expect(seal.label).not.toContain("TEE");
+    expect(seal.detail).toContain("TEE");
+    // There is no demo provider in this product; the old copy asserted one.
+    expect(seal.detail).not.toContain("Demo");
+  });
+
   it("labels post-turn endpoint evidence as a separate local match without upgrading the receipt", () => {
     const receipt = encryptedReceipt();
     const seal = describeAttestationSeal({

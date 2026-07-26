@@ -13,9 +13,10 @@ import type {
   LocalModelDiscovery,
   LocalProviderHealth,
 } from "./local";
-import type {
-  BrowserCloudTransportOptions,
-  InferenceModelDescriptor,
+import {
+  MAX_MODEL_OUTPUT_TOKENS,
+  type BrowserCloudTransportOptions,
+  type InferenceModelDescriptor,
 } from "./providers";
 
 const NOW = Date.parse("2026-07-24T12:00:00.000Z");
@@ -310,6 +311,98 @@ describe("browser inference fabric transactions", () => {
     await expect(fabric.activate("openai-main", replacement.models[0]!.id)).resolves.toMatchObject({
       pin: { connection: { id: "openai-main", generation: 2 } },
     });
+  });
+
+  it("carries an operator-declared model window into the catalog, the agent snapshot, and the request ceiling", async () => {
+    let outputCeilingFor: ((modelId: string) => number | undefined) | undefined;
+    const fabric = new BrowserInferenceFabric({
+      now: () => NOW,
+      connectionIdFactory: () => "declared-1",
+      cloudTransportFactory: (providerId, options) => {
+        if (options.maxOutputTokensForModel) outputCeilingFor = options.maxOutputTokensForModel;
+        return new FakeCloudTransport(providerId, options);
+      },
+    });
+    const connected = await fabric.connectCloud(
+      cloudInput("anthropic", "sk-anthropic-memory-only"),
+    );
+    const modelId = connected.models[0]!.id;
+
+    // Anthropic's directory publishes neither limit, so nothing may appear yet.
+    expect(outputCeilingFor?.(modelId)).toBeUndefined();
+    expect(fabric.availability().connections[0]?.models[0])
+      .not.toHaveProperty("contextWindowTokens");
+
+    const declared = fabric.declareModelMetadata(connected.connection.id, modelId, {
+      contextWindowTokens: 200_000,
+      maxOutputTokens: 64_000,
+    });
+
+    expect(declared).toMatchObject({
+      contextWindowTokens: 200_000,
+      maxOutputTokens: 64_000,
+      source: { kind: "manual", observedAt: OBSERVED_AT },
+    });
+    expect(outputCeilingFor?.(modelId)).toBe(64_000);
+    expect(fabric.availability().connections[0]?.models[0]).toMatchObject({
+      id: modelId,
+      contextWindowTokens: 200_000,
+      maxOutputTokens: 64_000,
+    });
+  });
+
+  it("refuses a model declaration that is empty, unusable, or for an uncataloged model", async () => {
+    const fabric = testFabric(["declared-2"]);
+    const connected = await fabric.connectCloud(cloudInput("openai", "sk-openai-memory-only"));
+    const modelId = connected.models[0]!.id;
+
+    expect(() => fabric.declareModelMetadata(connected.connection.id, modelId, {}))
+      .toThrow("context window or output ceiling");
+    expect(() =>
+      fabric.declareModelMetadata(connected.connection.id, modelId, { contextWindowTokens: 0 })
+    ).toThrow("Model context window is invalid.");
+    expect(() =>
+      fabric.declareModelMetadata(connected.connection.id, "absent-model", {
+        contextWindowTokens: 4_096,
+      })
+    ).toThrow("is not cataloged");
+    expect(fabric.models.require(connected.connection.id, 1, modelId).source.kind)
+      .toBe("provider-directory");
+  });
+
+  it("refuses an output declaration the transport would later reject at request time", async () => {
+    let outputCeilingFor: ((modelId: string) => number | undefined) | undefined;
+    const fabric = new BrowserInferenceFabric({
+      now: () => NOW,
+      connectionIdFactory: () => "declared-3",
+      cloudTransportFactory: (providerId, options) => {
+        if (options.maxOutputTokensForModel) outputCeilingFor = options.maxOutputTokensForModel;
+        return new FakeCloudTransport(providerId, options);
+      },
+    });
+    const connected = await fabric.connectCloud(
+      cloudInput("anthropic", "sk-anthropic-memory-only"),
+    );
+    const modelId = connected.models[0]!.id;
+
+    /*
+     * The catalog and the request path share one ceiling. A declaration one
+     * token above it must be refused here rather than accepted and then
+     * thrown on every subsequent turn, which would brick the model.
+     */
+    expect(() =>
+      fabric.declareModelMetadata(connected.connection.id, modelId, {
+        maxOutputTokens: MAX_MODEL_OUTPUT_TOKENS + 1,
+      })
+    ).toThrow("Model maximum output is invalid.");
+    expect(outputCeilingFor?.(modelId)).toBeUndefined();
+
+    expect(
+      fabric.declareModelMetadata(connected.connection.id, modelId, {
+        maxOutputTokens: MAX_MODEL_OUTPUT_TOKENS,
+      }),
+    ).toMatchObject({ maxOutputTokens: MAX_MODEL_OUTPUT_TOKENS });
+    expect(outputCeilingFor?.(modelId)).toBe(MAX_MODEL_OUTPUT_TOKENS);
   });
 });
 

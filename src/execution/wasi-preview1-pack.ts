@@ -9,20 +9,26 @@ import { emitExecutionOutput, type ExecutionAdapter, type ExecutionRequest, type
 import {
   BROWSER_WASI_SHIM_VERSION,
   WASI_PREVIEW1_EXCLUDED_SEGMENTS,
+  WASI_PREVIEW1_MAX_ARTIFACT_BYTES,
   WASI_PREVIEW1_MAX_FILE_BYTES,
   WASI_PREVIEW1_MAX_FILES,
   WASI_PREVIEW1_MAX_WORKSPACE_BYTES,
+  WASI_PREVIEW1_MAX_WORKSPACE_ERROR_CHARS,
 } from "./wasi-preview1-contract";
 import wasiWorkerUrl from "./wasi-preview1-worker.ts?worker&url";
 
 const MAX_WASM_BASE64_CHARS = 5_600_000;
 const MAX_OUTPUT_CHARS = 256 * 1_024;
+const WORKSPACE_ROOT = "/workspace";
 const EXCLUDED_SEGMENTS = new Set<string>(WASI_PREVIEW1_EXCLUDED_SEGMENTS);
 
 type WorkspaceFile = Readonly<{ path: string; content: string; revision?: string }>;
 type WorkspaceSnapshot = Readonly<{ root: string; files: readonly WorkspaceFile[] }>;
 type WorkerFile = Readonly<{ path: string; bytes: Uint8Array }>;
-type WasiCompletion = ExecutionResult & Readonly<{ workspaceFiles: readonly WorkerFile[] }>;
+type WasiCompletion = ExecutionResult & Readonly<{
+  workspaceFiles: readonly WorkerFile[];
+  workspaceError?: string;
+}>;
 
 let trustedPolicy: Readonly<{ createScriptURL(value: string): unknown }> | undefined;
 
@@ -41,13 +47,19 @@ export function createWasiPreview1Adapter(): ExecutionAdapter {
       workspaceAccess: "bounded-snapshot-writeback",
       output: "bounded-stream",
       cancellation: "terminate-worker",
-      detail: "Runs precompiled WASI Preview 1 command artifacts, including Rust compiled elsewhere for wasm32-wasip1, in a disposable browser Worker with printable-ASCII argv, bounded streaming output, and an optional revision-checked virtual-workspace snapshot/writeback. It is not Bash, rustc, Cargo, a package manager, host filesystem access, or a socket/network runtime.",
+      detail: "Runs precompiled WASI Preview 1 command artifacts, including Rust compiled elsewhere for wasm32-wasip1, in a disposable browser Worker with printable-ASCII argv, bounded streaming output, and an optional revision-checked virtual-workspace snapshot/writeback. The artifact is supplied as a workspace file path or inline base64; Airship does not compile it. It is not Bash, rustc, Cargo, a package manager, host filesystem access, or a socket/network runtime.",
     },
     async execute(request) {
-      if (!request.wasmBase64) throw new Error("WASI execution requires wasmBase64.");
+      if (Boolean(request.wasmBase64) === Boolean(request.wasmPath)) {
+        throw new Error("WASI execution requires exactly one of wasmBase64 or wasmPath.");
+      }
       if (request.code || request.sourcePath) throw new Error("WASI executes a precompiled command artifact, not source code.");
-      if (Boolean(request.workspaceRoot) !== Boolean(request.workspace)) {
+      if (request.workspaceRoot && !request.workspace) {
         throw new Error("WASI workspace execution requires both workspaceRoot and a bound Airship workspace.");
+      }
+      if (request.wasmPath && !request.workspace) throw new Error("A WASI wasmPath artifact requires a bound Airship workspace.");
+      if (request.workspace && !request.workspaceRoot && !request.wasmPath) {
+        throw new Error("WASI received a bound workspace without a workspaceRoot or wasmPath.");
       }
       if (request.writeBack && !request.workspaceRoot) throw new Error("WASI writeback requires a workspaceRoot.");
       return executeWasiPreview1Request(request);
@@ -56,11 +68,19 @@ export function createWasiPreview1Adapter(): ExecutionAdapter {
 }
 
 async function executeWasiPreview1Request(request: ExecutionRequest): Promise<ExecutionResult> {
+  // The artifact is read OUTSIDE captureWorkspace on purpose. The mount budget
+  // caps a mounted file at 512 KiB, while an artifact is separately bounded by
+  // WASI_PREVIEW1_MAX_ARTIFACT_BYTES, so a 1 MiB command placed inside the
+  // mounted root must not fail the run before it starts.
+  const artifactPath = request.wasmPath ? normalizeWorkspacePath(request.wasmPath) : undefined;
+  const wasm = artifactPath
+    ? await readWorkspaceArtifact(request.workspace!, artifactPath)
+    : decodeArtifactBase64(request.wasmBase64!);
   const snapshot = request.workspace && request.workspaceRoot
-    ? await captureWorkspace(request.workspace, request.workspaceRoot)
+    ? await captureWorkspace(request.workspace, request.workspaceRoot, artifactPath)
     : undefined;
-  const result = await runDisposableWasi(
-    request.wasmBase64!,
+  const result = await runDisposableWasiBytes(
+    wasm,
     request.args ?? [],
     request.env ?? {},
     request.timeoutMs,
@@ -69,15 +89,18 @@ async function executeWasiPreview1Request(request: ExecutionRequest): Promise<Ex
     snapshot,
   );
   const workspace = snapshot && request.workspace
-    ? await reconcileWorkspace(request.workspace, snapshot, result.workspaceFiles, request.writeBack === true, result.exitCode)
+    ? result.workspaceError !== undefined
+      ? unreconciledWorkspace(snapshot, request.writeBack === true, result.workspaceError)
+      : await reconcileWorkspace(request.workspace, snapshot, result.workspaceFiles, request.writeBack === true, result.exitCode)
     : undefined;
-  const { workspaceFiles: _workspaceFiles, ...publicResult } = result;
+  const { workspaceFiles: _workspaceFiles, workspaceError: _workspaceError, ...publicResult } = result;
   return { ...publicResult, ...(workspace ? { workspace } : {}) };
 }
 
 /**
- * Low-level command runner retained for the browser execution gate. Product
- * calls should use the registered adapter so workspace adoption is recorded.
+ * Low-level base64 command runner retained for the browser execution gate.
+ * Product calls should use the registered adapter so the workspace artifact
+ * channel and workspace adoption are recorded.
  */
 export async function runDisposableWasi(
   wasmBase64: string,
@@ -88,8 +111,20 @@ export async function runDisposableWasi(
   onOutput?: ExecutionRequest["onOutput"],
   workspace?: WorkspaceSnapshot,
 ): Promise<WasiCompletion> {
+  return runDisposableWasiBytes(decodeArtifactBase64(wasmBase64), args, env, timeoutMs, signal, onOutput, workspace);
+}
+
+async function runDisposableWasiBytes(
+  wasm: Uint8Array,
+  args: readonly string[],
+  env: Readonly<Record<string, string>>,
+  timeoutMs: number,
+  signal: AbortSignal,
+  onOutput?: ExecutionRequest["onOutput"],
+  workspace?: WorkspaceSnapshot,
+): Promise<WasiCompletion> {
   assertBrowserSupport();
-  validateInvocation(wasmBase64, args, env);
+  validateInvocation(wasm, args, env);
   const worker = new Worker(trustedWasiWorkerUrl(wasiWorkerUrl) as string, {
     type: "module",
     name: "airship-wasi-preview1",
@@ -128,9 +163,22 @@ export async function runDisposableWasi(
         finish(new Error("Disposable WASI Worker returned an unknown terminal message."));
         return;
       }
-      let workspaceFiles: readonly WorkerFile[];
-      try { workspaceFiles = parseWorkerFiles(message.files); }
-      catch (error) { finish(error); return; }
+      // A completed run keeps its exit code and streams even when the guest's
+      // generated files could not be collected. Only a mounted run may return
+      // files at all, so an unmounted payload carrying them is malformed.
+      const workspaceError = typeof message.workspaceError === "string"
+        ? message.workspaceError.slice(0, WASI_PREVIEW1_MAX_WORKSPACE_ERROR_CHARS)
+        : undefined;
+      let workspaceFiles: readonly WorkerFile[] = [];
+      if (!workspace) {
+        if (message.files !== undefined || workspaceError !== undefined) {
+          finish(new Error("Disposable WASI Worker returned workspace state for an unmounted run."));
+          return;
+        }
+      } else if (workspaceError === undefined) {
+        try { workspaceFiles = parseWorkerFiles(message.files); }
+        catch (error) { finish(error); return; }
+      }
       finish(undefined, {
         runtime: "wasi-preview1",
         exitCode: typeof message.exitCode === "number" && Number.isSafeInteger(message.exitCode) ? message.exitCode : 1,
@@ -143,27 +191,51 @@ export async function runDisposableWasi(
           artifactKind: "wasi-command",
         },
         workspaceFiles,
+        ...(workspaceError !== undefined ? { workspaceError } : {}),
       });
     };
     if (signal.aborted) onAbort();
     else worker.postMessage({
       type: "run",
-      wasmBase64,
+      wasm,
       args: [...args],
       env: { ...env },
       files: workspace?.files.map(({ path, content }) => ({
         path: relativePath(path, workspace.root),
         bytes: decodeWorkspaceBytes(content),
       })) ?? [],
+      collectWorkspace: workspace !== undefined,
     });
   });
 }
 
-async function captureWorkspace(workspace: WorkspacePort, rootInput: string): Promise<WorkspaceSnapshot> {
+/**
+ * Reads the command artifact through the same control-plane and excluded
+ * segment guards as a mount, so `.airship`, `.git`, and `node_modules` are not
+ * reachable as an execution channel either.
+ */
+async function readWorkspaceArtifact(workspace: WorkspacePort, path: string): Promise<Uint8Array> {
+  assertAllowedWorkspacePath(path, WORKSPACE_ROOT);
+  const file = await workspace.read(path);
+  if (!file) throw new Error(`The WASI command artifact is not in the workspace: ${path}`);
+  const bytes = decodeWorkspaceBytes(file.content);
+  if (bytes.byteLength === 0) throw new Error(`The WASI command artifact is empty: ${path}`);
+  return bytes;
+}
+
+async function captureWorkspace(
+  workspace: WorkspacePort,
+  rootInput: string,
+  artifactPath?: string,
+): Promise<WorkspaceSnapshot> {
   const root = normalizeWorkspacePath(rootInput);
   const entries = (await workspace.list(root))
     .filter(({ path }) => path === root || path.startsWith(`${root}/`))
     .filter(({ path }) => !isWorkspaceControlPlanePath(path))
+    // The artifact is already loaded through its own 4 MiB budget. Leaving it
+    // in the mount would re-apply the 512 KiB per-file mount cap to the very
+    // binary being executed and would offer it back for writeback.
+    .filter(({ path }) => path !== artifactPath)
     .filter(({ path }) => !relativeSegments(path, root).some((segment) => EXCLUDED_SEGMENTS.has(segment)));
   if (entries.length > WASI_PREVIEW1_MAX_FILES) throw new Error(`WASI workspace snapshot exceeds ${WASI_PREVIEW1_MAX_FILES} files.`);
   const files: WorkspaceFile[] = [];
@@ -239,6 +311,29 @@ async function reconcileWorkspace(
   };
 }
 
+/**
+ * The command ran, but its change set is unknown. Nothing is adopted and no
+ * path is reported as changed or deleted, because an incomplete collection
+ * cannot distinguish "not produced" from "not collected".
+ */
+function unreconciledWorkspace(
+  snapshot: WorkspaceSnapshot,
+  writeBackRequested: boolean,
+  workspaceError: string,
+): NonNullable<ExecutionResult["workspace"]> {
+  return {
+    root: snapshot.root,
+    mountedFiles: snapshot.files.length,
+    changedPaths: [],
+    writtenPaths: [],
+    deletedPaths: [],
+    writeBackRequested,
+    adopted: false,
+    writeBack: writeBackRequested,
+    workspaceError,
+  };
+}
+
 function parseWorkerFiles(value: unknown): readonly WorkerFile[] {
   if (!Array.isArray(value) || value.length > WASI_PREVIEW1_MAX_FILES) throw new Error("WASI Worker returned an invalid workspace file list.");
   let total = 0;
@@ -253,9 +348,20 @@ function parseWorkerFiles(value: unknown): readonly WorkerFile[] {
   });
 }
 
-function validateInvocation(wasmBase64: string, args: readonly string[], env: Readonly<Record<string, string>>): void {
-  if (!/^[A-Za-z0-9+/]*={0,2}$/u.test(wasmBase64) || wasmBase64.length > MAX_WASM_BASE64_CHARS) {
+function decodeArtifactBase64(value: string): Uint8Array {
+  if (!/^[A-Za-z0-9+/]*={0,2}$/u.test(value) || value.length > MAX_WASM_BASE64_CHARS) {
     throw new Error("wasmBase64 is malformed or exceeds the 4 MiB artifact limit.");
+  }
+  let binary: string;
+  try { binary = atob(value); } catch { throw new Error("The WASI command artifact is not valid base64."); }
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return bytes;
+}
+
+function validateInvocation(wasm: Uint8Array, args: readonly string[], env: Readonly<Record<string, string>>): void {
+  if (wasm.byteLength === 0 || wasm.byteLength > WASI_PREVIEW1_MAX_ARTIFACT_BYTES) {
+    throw new Error("The WASI command artifact is empty or exceeds the 4 MiB artifact limit.");
   }
   // browser_wasi_shim 0.4.2 sizes argv by JavaScript code units. Keep this
   // exact adapter ASCII-only until the pinned shim fixes its UTF-8 sizing.

@@ -85,3 +85,24 @@ describe("live release acceptance infrastructure", () => {
     expect(pkg.scripts.test).not.toMatch(/CHUTES|release-live/iu);
   });
 });
+
+describe("optional direct-cloud vendor stage", () => {
+  it("is absent when no vendor key is configured and present when one is", () => {
+    const base = {
+      AIRSHIP_CHUTES_API_KEY: "chutes-live-credential-value",
+      AIRSHIP_CHUTES_TOOL_MODEL: "org/tool-model",
+      AIRSHIP_CHUTES_VISION_MODEL: "org/vision-model",
+    };
+    const config = readLiveAcceptanceConfig(base);
+
+    expect(createLiveAcceptancePlan(config, base).map((stage) => stage.label))
+      .not.toContain("direct cloud vendor wire-contract gate (protocol only; no CORS proof)");
+
+    const withVendor = { ...base, AIRSHIP_ANTHROPIC_API_KEY: "sk-ant-disposable" };
+    const plan = createLiveAcceptancePlan(readLiveAcceptanceConfig(withVendor), withVendor);
+    const stage = plan.at(-1);
+    expect(stage?.label).toContain("direct cloud vendor wire-contract gate");
+    expect(stage?.args).toContain("src/inference/providers/browser-cloud.live.test.ts");
+    expect(stage?.environment.AIRSHIP_ANTHROPIC_API_KEY).toBe("sk-ant-disposable");
+  });
+});

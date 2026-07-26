@@ -45,3 +45,23 @@ for (const [path, expected] of Object.entries(manifest.assets)) {
   }
   process.stdout.write(`verified ${path} (${bytes.byteLength} bytes)\n`);
 }
+
+// Read off the now byte- and hash-verified bundle, not off node_modules: ORT's
+// Emscripten factory resolves its own filenames against `env.wasm.wasmPaths`,
+// which the loader repoints at this same-origin directory, so anything the
+// bundle names must be published here or the runtime 404s at session-creation
+// time with no CDN left to fall back to. Deriving the set from the artifact is
+// the point — ONNX Runtime has renamed this pair once already
+// (`ort-wasm-simd-threaded.jsep.*` -> `…asyncify.*`) and a hand-kept list
+// survived the rename while the pack shipped two files nothing ever loaded.
+// The `.mjs`/`.wasm` suffix filter excludes the literal `ort-wasm-proxy-worker`,
+// which is a Worker name rather than a fetched artifact.
+const ortBundle = await readFile(resolve(root, "runtime/ort.webgpu.bundle.min.mjs"), "utf8");
+const namedByBundle = [...new Set(
+  [...ortBundle.matchAll(/ort-wasm[a-z0-9.-]*\.(?:mjs|wasm)/gu)].map((match) => `runtime/${match[0]}`),
+)].sort();
+const unpinned = namedByBundle.filter((name) => manifest.assets[name] === undefined);
+if (unpinned.length) {
+  throw new Error(`The pinned ONNX Runtime bundle loads ${unpinned.join(" and ")}, which the reviewed semantic artifact manifest does not pin.`);
+}
+process.stdout.write(`verified ONNX Runtime binaries named by the bundle: ${namedByBundle.join(", ")}\n`);

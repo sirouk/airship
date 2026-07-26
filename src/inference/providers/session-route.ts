@@ -174,6 +174,10 @@ export function createInferenceAvailabilitySnapshot(args: Readonly<{
           .filter(([, evidence]) => evidence?.state === "supported")
           .map(([capability]) => capability)
           .sort(),
+        ...(model.contextWindowTokens
+          ? { contextWindowTokens: model.contextWindowTokens }
+          : {}),
+        ...(model.maxOutputTokens ? { maxOutputTokens: model.maxOutputTokens } : {}),
       })
     );
     const availableCapabilities = Object.entries(connection.capabilities)
@@ -249,7 +253,8 @@ export function renderInferenceAvailabilityForPrompt(
     } else {
       lines.push(
         `  Models: ${connection.models.map((model) =>
-          `${model.id}[${model.availability};${model.supportedCapabilities.join(",") || "capabilities-unknown"}]`
+          `${model.id}[${model.availability};${model.supportedCapabilities.join(",") || "capabilities-unknown"}`
+          + `${modelLimitFacets(model)}]`
         ).join(" | ")}${connection.omittedModels ? ` | +${connection.omittedModels} omitted` : ""}`,
       );
     }
@@ -266,6 +271,21 @@ export function renderInferenceAvailabilityForPrompt(
   if (rendered.length <= maxChars) return rendered;
   const suffix = "\n[Inference availability projection truncated; inspect the structured snapshot.]";
   return `${rendered.slice(0, Math.max(0, maxChars - suffix.length))}${suffix}`;
+}
+
+/**
+ * Limits are rendered only when the catalog actually holds them. An absent
+ * facet is the honest signal that nothing observed or declared the number, and
+ * the agent must not read the omission as "unlimited".
+ */
+function modelLimitFacets(
+  model: InferenceAvailabilitySnapshot["connections"][number]["models"][number],
+): string {
+  const facets = [
+    ...(model.contextWindowTokens ? [`ctx=${model.contextWindowTokens}`] : []),
+    ...(model.maxOutputTokens ? [`out=${model.maxOutputTokens}`] : []),
+  ];
+  return facets.length ? `;${facets.join(";")}` : "";
 }
 
 function modelSemantics(model: InferenceModelDescriptor): string {

@@ -207,6 +207,74 @@ test("precompiled Rust WASI streams, preserves status, mutates a bounded workspa
   expect(observed.capability?.detail).toContain("not Bash, rustc, Cargo");
 });
 
+test("a workspace-resident Rust artifact runs through the wasmPath channel and stays out of its own mount", async ({ page }) => {
+  await page.goto("/#chat");
+  const observed = await page.evaluate(async ({ wasmBase64 }) => {
+    const [execution, workspaceModule, codec] = await Promise.all([
+      import("/src/tools/execution-tools.ts"),
+      import("/src/workspace/memory.ts"),
+      import("/src/workspace/content-codec.ts"),
+    ]);
+    const binary = atob(wasmBase64);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+
+    const workspace = new workspaceModule.MemoryWorkspace();
+    await workspace.write("/workspace/rust/tool.wasm", codec.encodeWorkspaceBytes(bytes));
+    await workspace.write("/workspace/rust/input.txt", "browser workspace input\n");
+
+    const result = await execution.getClientExecutionRuntime().execute({
+      runtime: "wasi-preview1",
+      wasmPath: "/workspace/rust/tool.wasm",
+      args: ["workspace"],
+      env: {},
+      workspace,
+      workspaceRoot: "/workspace/rust",
+      writeBack: true,
+      timeoutMs: 5_000,
+      signal: new AbortController().signal,
+    });
+
+    let missingArtifact = "unexpectedly completed";
+    try {
+      await execution.getClientExecutionRuntime().execute({
+        runtime: "wasi-preview1",
+        wasmPath: "/workspace/rust/absent.wasm",
+        workspace,
+        timeoutMs: 5_000,
+        signal: new AbortController().signal,
+      });
+    } catch (error) {
+      missingArtifact = error instanceof Error ? error.message : String(error);
+    }
+
+    return {
+      result,
+      output: (await workspace.read("/workspace/rust/output.txt"))?.content,
+      artifactStillIntact: (await workspace.read("/workspace/rust/tool.wasm"))?.content.length,
+      missingArtifact,
+    };
+  }, { wasmBase64: RUST_WASI_PREVIEW1_BASE64 });
+
+  expect(observed.result).toMatchObject({
+    runtime: "wasi-preview1",
+    exitCode: 0,
+    stdout: "rust-stdout:workspace\n",
+    provenance: { artifactKind: "wasi-command" },
+    workspace: {
+      // The artifact itself is loaded through the separate 4 MiB artifact
+      // budget and is deliberately not part of the mounted snapshot.
+      mountedFiles: 1,
+      changedPaths: ["/workspace/rust/output.txt"],
+      writtenPaths: ["/workspace/rust/output.txt"],
+      adopted: true,
+    },
+  });
+  expect(observed.output).toBe("browser workspace input\n");
+  expect(observed.artifactStillIntact).toBeGreaterThan(0);
+  expect(observed.missingArtifact).toContain("not in the workspace");
+});
+
 test("abort hard-terminates a runaway disposable worker", async ({ page }) => {
   await page.goto("/#chat");
   const result = await page.evaluate(async () => {
@@ -427,7 +495,9 @@ test("the pinned WASIX candidate records its live no-go verdict without normaliz
 });
 
 test("the explicit Pyodide pack runs real Python in a fresh bounded worker", async ({ page }) => {
-  test.setTimeout(90_000);
+  // Every job in this gate boots its own interpreter on purpose; the pack is
+  // disposable per job, so the wall clock is several cold starts, not one.
+  test.setTimeout(150_000);
   await page.goto("/#chat");
   const result = await page.evaluate(async () => {
     const [module, workspaceModule, codec] = await Promise.all([
@@ -492,15 +562,55 @@ test("the explicit Pyodide pack runs real Python in a fresh bounded worker", asy
       timeoutMs: 10_000,
       signal: controller.signal,
     });
+    const overflowWorkspace = new workspaceModule.MemoryWorkspace();
+    await overflowWorkspace.write("projects/overflow/input.txt", "keep\n");
+    const overflow = await module.executeExecutionTool(
+      "execute_code",
+      {
+        runtime: "python-pyodide",
+        code: "from pathlib import Path\nPath('big.bin').write_bytes(b'x' * 600_000)\nprint('ok')",
+        workspaceRoot: "/workspace/projects/overflow",
+        writeBack: true,
+        timeoutMs: 10_000,
+      },
+      {
+        sessionId: "enhanced-session",
+        turnId: "overflow-turn",
+        operationId: "overflow-python",
+        capabilityTier: "web-enhanced",
+        signal: controller.signal,
+      },
+      overflowWorkspace,
+    );
+
+    const guardWorkspace = new workspaceModule.MemoryWorkspace();
+    await guardWorkspace.write("projects/guard/input.txt", "keep\n");
+    const guarded = await module.getClientExecutionRuntime().execute({
+      runtime: "python-pyodide",
+      code: "import os\nos.makedirs('.git', exist_ok=True)\nopen('.git/config', 'w').write('[core]\\n')\nprint('guarded')",
+      workspace: guardWorkspace,
+      workspaceRoot: "/workspace/projects/guard",
+      writeBack: true,
+      timeoutMs: 10_000,
+      signal: controller.signal,
+    });
+
     return {
       before,
       activation,
       pinnedSessionError,
       execution,
+      executionBootMs: execution.bootMs,
       boundedOutputChars: bounded.stdout.length,
       project,
       writtenResult: (await workspace.read("projects/python/result.txt"))?.content,
       writtenBlob: [...codec.decodeWorkspaceBytes((await workspace.read("projects/python/blob.bin"))!.content)],
+      overflow,
+      overflowResult: JSON.parse(overflow.content) as Record<string, unknown>,
+      overflowInput: (await overflowWorkspace.read("projects/overflow/input.txt"))?.content,
+      overflowAdoptedBigFile: Boolean(await overflowWorkspace.read("projects/overflow/big.bin")),
+      guarded,
+      adoptedGitConfig: Boolean(await guardWorkspace.read("projects/guard/.git/config")),
     };
   });
 
@@ -533,4 +643,24 @@ test("the explicit Pyodide pack runs real Python in a fresh bounded worker", asy
   });
   expect(result.writtenResult).toBe("42");
   expect(result.writtenBlob).toEqual([128, 2, 255, 0]);
+  // The interpreter cold start is real and is budgeted outside the job's own
+  // timeoutMs, so it is reported rather than charged silently.
+  expect(result.executionBootMs).toBeGreaterThan(0);
+  // A job that ran correctly but generated an over-budget file keeps its exit
+  // code and output, adopts nothing, and is still reported as an error.
+  expect(result.overflow.isError).toBe(true);
+  expect(result.overflowResult).toMatchObject({
+    exitCode: 0,
+    stdout: "ok\n",
+    workspace: { changedPaths: [], writtenPaths: [], adopted: false },
+  });
+  expect(String((result.overflowResult.workspace as Record<string, unknown>).workspaceError)).toContain("512 KiB");
+  expect(result.overflowInput).toBe("keep\n");
+  expect(result.overflowAdoptedBigFile).toBe(false);
+  // Python writeback cannot adopt the browser Git or Airship control plane —
+  // and refusing that one path does not destroy the completed run.
+  expect(result.guarded).toMatchObject({ exitCode: 0, stdout: "guarded\n" });
+  expect(result.guarded.workspace?.refusedPaths).toEqual(["/workspace/projects/guard/.git/config"]);
+  expect(String(result.guarded.workspace?.refusalReason)).toContain("control-plane");
+  expect(result.adoptedGitConfig).toBe(false);
 });

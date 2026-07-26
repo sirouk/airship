@@ -6,7 +6,9 @@ export type ExecutionRuntimeId =
   | "wasi-preview1"
   | "python-pyodide"
   | "wasix"
-  | "node-webcontainer";
+  | "node-webcontainer"
+  /** Airship's own POSIX-sh interpreter. Deliberately not named `bash`. */
+  | "airship-sh";
 
 export type ExecutionCapabilityState = "ready" | "installable" | "activating" | "failed" | "unavailable";
 
@@ -29,13 +31,31 @@ export type ExecutionCapability = Readonly<{
   languages: readonly string[];
   state: ExecutionCapabilityState;
   tier: BrowserExecutionTier;
-  isolation: "disposable-worker" | "dedicated-worker" | "webcontainer";
+  /**
+   * `in-page-interpreter` is a real, narrower isolation claim than a Worker:
+   * the engine interprets the script on the page's own task queue. It is named
+   * rather than borrowed from the Worker tiers because the boundary differs.
+   */
+  isolation: "disposable-worker" | "dedicated-worker" | "webcontainer" | "in-page-interpreter";
   persistence: "ephemeral" | "workspace-checkpoint";
-  commandInterface: "javascript-function" | "precompiled-wasi-command" | "python-job" | "bash-script" | "direct-process" | "unavailable";
-  shell: "none" | "wasix-bash" | "webcontainer-jsh" | "unavailable";
+  commandInterface:
+    | "javascript-function"
+    | "precompiled-wasi-command"
+    | "python-job"
+    | "bash-script"
+    | "posix-sh-script"
+    | "direct-process"
+    | "unavailable";
+  /** `airship-sh` is a POSIX-sh-compatible interpreter, never GNU Bash. */
+  shell: "none" | "airship-sh" | "wasix-bash" | "webcontainer-jsh" | "unavailable";
   workspaceAccess: "none" | "bounded-snapshot-writeback" | "unavailable";
   output: "bounded-stream" | "unavailable";
-  cancellation: "terminate-worker" | "terminate-worker-tree" | "kill-process" | "unavailable";
+  /**
+   * `abort-interpreter` stops work by owning every interpreter step rather
+   * than by killing a thread; it is distinguished from `terminate-worker` so a
+   * reader is never told a thread was killed when none exists.
+   */
+  cancellation: "terminate-worker" | "terminate-worker-tree" | "kill-process" | "abort-interpreter" | "unavailable";
   detail: string;
 }>;
 
@@ -43,6 +63,12 @@ export type ExecutionRequest = Readonly<{
   runtime: ExecutionRuntimeId;
   code?: string;
   wasmBase64?: string;
+  /**
+   * Workspace artifact channel. A model cannot emit megabytes of base64, so a
+   * precompiled command is normally referenced by the workspace path that a
+   * clone, download, or WebContainer writeback already placed there.
+   */
+  wasmPath?: string;
   args?: readonly string[];
   env?: Readonly<Record<string, string>>;
   command?: string;
@@ -62,6 +88,11 @@ export type ExecutionResult = Readonly<{
   stdout: string;
   stderr: string;
   value?: JsonValue;
+  /**
+   * Observed runtime cold start. It is reported separately because it is not
+   * charged against the job's own `timeoutMs` budget.
+   */
+  bootMs?: number;
   provenance: ExecutionProvenance;
   workspace?: Readonly<{
     root: string;
@@ -73,6 +104,22 @@ export type ExecutionResult = Readonly<{
     adopted: boolean;
     /** @deprecated Prefer writeBackRequested and adopted. */
     writeBack: boolean;
+    /**
+     * The command itself finished, but its generated files could not be
+     * collected within the mount budget. No change list can be trusted and
+     * nothing is adopted; the run is reported as an error rather than a
+     * success whose artifacts silently vanished.
+     */
+    workspaceError?: string;
+    /**
+     * Paths the job produced that the egress guard refused to report or adopt
+     * (control-plane, `.git`, `.airship`, `node_modules`). The run keeps its
+     * exit code and streams — a refused write must not destroy a completed
+     * run — but the refusal is named so nothing vanishes silently.
+     */
+    refusedPaths?: readonly string[];
+    /** Bounded reason set for `refusedPaths`, sized like `workspaceError`. */
+    refusalReason?: string;
   }>;
 }>;
 

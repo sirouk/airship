@@ -85,7 +85,9 @@ describe("iterative context compressor", () => {
         id: "test/local-summary-v1",
         async summarize(request) {
           requests.push(request);
-          return "The user established a durable decision and requested that it remain available by reference.";
+          // The port returns a structured output: a bare string cannot carry
+          // provenance, and provenance is not optional for a compacted tier.
+          return { text: "The user established a durable decision and requested that it remain available by reference." };
         },
       },
     });
@@ -111,7 +113,7 @@ describe("iterative context compressor", () => {
       options: { contextWindowTokens: 2_048, threshold: 0.8, preserveRecentTurns: 2, maxSummaryDeltaBytes: 512 },
       summarizer: {
         id: "test/oversized",
-        async summarize() { return "x".repeat(513); },
+        async summarize() { return { text: "x".repeat(513) }; },
       },
     })).rejects.toThrow("full history was retained");
   });

@@ -1,6 +1,7 @@
 import {
   CHUTES_LOCAL_REGISTRATION,
   refreshChutesOAuthToken,
+  revokeChutesToken,
   type ChutesOAuthTokenSet,
 } from "./chutes-oauth";
 import {
@@ -76,6 +77,8 @@ export type ChutesCredentialBrokerOptions = Readonly<{
   now?: () => number;
   /** Trusted token-endpoint adapter. It is the only collaborator given a refresh token. */
   refresh?: typeof refreshChutesOAuthToken;
+  /** Trusted revocation adapter, given the same tokens as `refresh` and nothing else. */
+  revoke?: typeof revokeChutesToken;
 }>;
 
 type ApiKeyState = {
@@ -121,6 +124,7 @@ export class ChutesCredentialBroker {
   readonly #minimumValidityMs: number;
   readonly #now: () => number;
   readonly #refresh: typeof refreshChutesOAuthToken;
+  readonly #revoke: typeof revokeChutesToken;
 
   constructor(options: ChutesCredentialBrokerOptions = {}) {
     this.#clientId = validateClientId(options.clientId ?? CHUTES_LOCAL_REGISTRATION.clientId);
@@ -133,6 +137,7 @@ export class ChutesCredentialBroker {
     );
     this.#now = options.now ?? Date.now;
     this.#refresh = options.refresh ?? refreshChutesOAuthToken;
+    this.#revoke = options.revoke ?? revokeChutesToken;
   }
 
   metadata(): ChutesCredentialMetadata {
@@ -191,8 +196,33 @@ export class ChutesCredentialBroker {
     return this.metadata();
   }
 
+  /**
+   * Drop page-memory custody and ask the provider to drop the grant too.
+   *
+   * Dropping page memory alone leaves a refresh token that leaked through XSS
+   * or an extension valid at the IdP for the rest of its lifetime. The
+   * revocation is fired detached with its own deadline so teardown stays
+   * synchronous and cannot be delayed or failed by the network; its outcome is
+   * deliberately not reported as proof that the provider session ended.
+   */
   clear(): ChutesCredentialMetadata {
+    const released = this.#state;
     this.#replaceState(undefined);
+    if (released?.kind === "oauth-user-token") {
+      const clientId = this.#clientId;
+      const revoke = this.#revoke;
+      const tokens = [
+        ...(released.refreshToken
+          ? [{ token: released.refreshToken, tokenTypeHint: "refresh_token" as const }]
+          : []),
+        { token: released.bearer, tokenTypeHint: "access_token" as const },
+      ];
+      void (async () => {
+        for (const entry of tokens) {
+          await revoke({ ...entry, clientId }).catch(() => undefined);
+        }
+      })();
+    }
     return this.metadata();
   }
 

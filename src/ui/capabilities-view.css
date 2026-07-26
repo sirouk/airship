@@ -38,7 +38,11 @@
 .capability-policy-row small { margin-top: .18rem; color: var(--ink-faint); font-size: var(--fs-micro); }
 .capability-policy-row details summary { color: var(--ink-muted); cursor: pointer; font-size: var(--fs-caption); font-weight: 650; }
 .capability-policy-row details ul { display: grid; gap: .35rem; margin: .55rem 0; padding: 0; list-style: none; }
-.capability-policy-row details li { display: flex; justify-content: space-between; gap: .5rem; color: var(--ink-muted); font-size: var(--fs-micro); }
+.capability-policy-row .capability-policy-inert { color: var(--ink-faint); font-style: italic; line-height: 1.45; }
+/* The per-primitive detail carries the probe's evidence wording (controlling
+   vs merely registered), so it wraps onto its own row instead of being clipped. */
+.capability-policy-row details li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: .5rem .5rem; color: var(--ink-muted); font-size: var(--fs-micro); }
+.capability-policy-row details li small { flex: 1 0 100%; margin-top: 0; color: var(--ink-faint); line-height: 1.4; }
 .capability-policy-row details p { margin: .55rem 0 0; color: var(--ink-faint); font-size: var(--fs-micro); line-height: 1.45; }
 .capability-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--density-gap); }
 .capability-runtime { display: grid; align-content: start; gap: .7rem; min-width: 0; padding: var(--density-panel-pad); border: 1px solid var(--line); border-radius: var(--radius-panel); background: var(--surface); }

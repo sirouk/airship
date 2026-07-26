@@ -205,6 +205,14 @@ export class BrowserInferenceFabric {
           connectionId: connection.id,
           connectionGeneration: connection.generation,
           connections: this.connections,
+          /*
+           * The transport outlives every model selection, so a per-model
+           * output ceiling can only be read at request time. It resolves
+           * against the live catalog row for this exact credential
+           * generation and stays undefined until something declares one.
+           */
+          maxOutputTokensForModel: (modelId) =>
+            this.models.get(connection.id, connection.generation, modelId)?.maxOutputTokens,
         }),
         connection,
       );
@@ -411,6 +419,52 @@ export class BrowserInferenceFabric {
       transport,
       models: this.models.forConnection(connection.id, connection.generation),
     });
+  }
+
+  /**
+   * Record an operator-declared context window / output ceiling for one model
+   * row.
+   *
+   * OpenAI's and Anthropic's model directories publish neither number, and
+   * Airship refuses to infer them from a model-name table, so a declaration is
+   * the only honest way a cloud route can obtain context compression or a
+   * correct Anthropic `max_tokens`. The row is relabelled `manual` because the
+   * numbers were asserted by a person, not observed from the provider.
+   */
+  declareModelMetadata(
+    connectionId: string,
+    modelId: string,
+    declaration: Readonly<{ contextWindowTokens?: number; maxOutputTokens?: number }>,
+  ): InferenceModelDescriptor {
+    const connection = this.connections.require(connectionId);
+    const model = this.models.require(connection.id, connection.generation, modelId);
+    if (
+      declaration.contextWindowTokens === undefined
+      && declaration.maxOutputTokens === undefined
+    ) {
+      throw new Error("A model metadata declaration must carry a context window or output ceiling.");
+    }
+    const observedAt = this.#nowIso();
+    const declared: InferenceModelDescriptor = Object.freeze({
+      ...model,
+      ...(declaration.contextWindowTokens === undefined
+        ? {}
+        : { contextWindowTokens: declaration.contextWindowTokens }),
+      ...(declaration.maxOutputTokens === undefined
+        ? {}
+        : { maxOutputTokens: declaration.maxOutputTokens }),
+      source: Object.freeze({ kind: "manual" as const, observedAt }),
+    });
+    this.models.replaceConnectionModels(
+      connection.id,
+      connection.generation,
+      connection.providerId,
+      this.models
+        .forConnection(connection.id, connection.generation)
+        .map((row) => (row.id === modelId ? declared : row)),
+    );
+    this.#emit();
+    return this.models.require(connection.id, connection.generation, modelId);
   }
 
   /**

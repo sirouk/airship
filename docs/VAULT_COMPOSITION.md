@@ -122,10 +122,28 @@ encrypted workspace file from its manifest, and scans stored ciphertext for
 the private smoke marker. The returned evidence includes every known key and
 per-check timing.
 
-The narrow `ObjectStore` has no delete operation. Probe objects and orphaned
-immutable workspace/event objects therefore require bucket lifecycle expiry or
-out-of-band operator cleanup. Workspace `remove()` removes the file from the
-encrypted manifest; it does not erase the historical ciphertext object. Honest
+The narrow `ObjectStore` has no delete operation, so a lost conditional write can
+never destroy data. Reclamation is an **optional** capability,
+`ReclaimableObjectStore.trash(keys)`, implemented today only by
+`GoogleDriveObjectStore` and forwarded by `CiphertextCachingObjectStore` only
+when the wrapped authority has it — `isReclaimableObjectStore` therefore stays a
+truthful capability report rather than a method that throws.
+
+`VaultCoordinator` uses it for exactly one case: sweeping a successful probe's
+own objects, which nothing else can reference. It removes the index entry by CAS
+first and asks the provider to trash the body second, so a crash can only leak an
+untracked file and can never break a live reference. A key is reported reclaimed
+only when the provider confirms it; anything unconfirmed keeps the original
+out-of-band cleanup warning verbatim, and a provider with no reclamation
+capability keeps that warning unchanged.
+
+Everything else still accumulates. Workspace `remove()` removes the file from the
+encrypted manifest; it does not erase the historical ciphertext object, and
+`write()` mints a new revision-scoped object per edit. Superseded revisions are
+deliberately **not** trashed inline after a manifest CAS, because a reader
+holding an older manifest generation would hard-fail on the missing object; they
+need an aged candidate queue with a fresh-index recheck, which is not
+implemented. Neither is enumeration of untracked lost-race orphans. Honest
 user-facing deletion, retention, recovery, and garbage collection remain
 production gates. A failed probe cannot promise a complete inventory, so its
 degraded snapshot carries both the unique run prefix and adjacent isolation-test

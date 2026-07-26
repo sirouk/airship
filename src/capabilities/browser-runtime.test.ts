@@ -4,6 +4,7 @@ import {
   browserCapabilityPromptEntries,
   deriveAdaptiveSchedulingPolicy,
   probeBrowserRuntimeCapabilities,
+  semanticWasmThreadCount,
   type BrowserCapabilityObservation,
   type BrowserCapabilityProbeHost,
   type BrowserRuntimeCapabilityReport,
@@ -138,6 +139,39 @@ describe("browser runtime capability probes", () => {
   });
 });
 
+describe("WebGPU adapter request options", () => {
+  it("omits powerPreference entirely when the policy expresses none, because the WebIDL enum has no \"default\"", async () => {
+    const requested: unknown[] = [];
+    const report = await probeBrowserRuntimeCapabilities({
+      ...hermeticHost(),
+      navigator: {
+        // A mid-tier device: not constrained, not performance, so the policy's
+        // powerPreference is "default".
+        hardwareConcurrency: 4,
+        deviceMemory: 4,
+        onLine: true,
+        gpu: {
+          async requestAdapter(options?: Readonly<{ powerPreference?: string }>) {
+            requested.push(options);
+            // Exactly what Chromium does: GPUPowerPreference accepts only
+            // "low-power" and "high-performance".
+            if (options && "powerPreference" in options && options.powerPreference !== "low-power" && options.powerPreference !== "high-performance") {
+              throw new TypeError("The provided value 'default' is not a valid enum value of type GPUPowerPreference.");
+            }
+            return { features: new Set<string>(), limits: {}, info: {} };
+          },
+        },
+      } as BrowserCapabilityProbeHost["navigator"],
+    });
+
+    expect(report.scheduling.powerPreference).toBe("default");
+    expect(requested).toEqual([{}]);
+    expect(report.webgpu).toMatchObject({ state: "available", evidence: "probe-passed", powerPreference: "default" });
+    expect(browserCapabilityPromptEntries(report).map(({ id }) => id)).toContain("webgpu-adapter");
+    expect(report.scheduling.preferredSemanticBackend).toBe("webgpu");
+  });
+});
+
 describe("adaptive browser scheduling", () => {
   it("scales down on low battery and data-saving signals without inventing thermal state", () => {
     const signals: BrowserSignalReport = {
@@ -172,6 +206,108 @@ describe("adaptive browser scheduling", () => {
   });
 });
 
+describe("service worker and cache storage page reality", () => {
+  it("promotes to probe-passed only when a worker controls this page and the shell cache exists", async () => {
+    const report = await probeBrowserRuntimeCapabilities({
+      ...hermeticHost(),
+      navigator: {
+        serviceWorker: { controller: { scriptURL: "https://airship.test/sw.js" } },
+      } as BrowserCapabilityProbeHost["navigator"],
+      hasCacheStorage: true,
+      cacheKeys: async () => ["airship-shell-v6", "unrelated"],
+    });
+
+    expect(report.serviceWorker).toMatchObject({ state: "available", evidence: "probe-passed" });
+    expect(report.serviceWorker.detail).toContain("controlling this page");
+    expect(report.cacheStorage).toMatchObject({ state: "available", evidence: "probe-passed" });
+    expect(report.cacheStorage.detail).toContain("airship-shell-v6");
+    expect(browserCapabilityPromptEntries(report)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "service-worker", evidence: "probe-passed" }),
+      expect.objectContaining({ id: "cache-storage", evidence: "probe-passed" }),
+    ]));
+  });
+
+  it("distinguishes a registered-but-not-controlling worker and an empty cache from a controlled page", async () => {
+    const report = await probeBrowserRuntimeCapabilities({
+      ...hermeticHost(),
+      navigator: {
+        serviceWorker: { controller: null, getRegistration: async () => ({ scope: "/" }) },
+      } as BrowserCapabilityProbeHost["navigator"],
+      hasCacheStorage: true,
+      cacheKeys: async () => ["some-other-cache"],
+    });
+
+    expect(report.serviceWorker).toMatchObject({ state: "available", evidence: "api-exposed" });
+    expect(report.serviceWorker.detail).toContain("not yet controlling");
+    expect(report.cacheStorage).toMatchObject({ state: "available", evidence: "api-exposed" });
+    expect(browserCapabilityPromptEntries(report)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "service-worker", evidence: "api-exposed" }),
+    ]));
+  });
+
+  it("reports an unregistered worker and fails closed when cache enumeration throws", async () => {
+    const report = await probeBrowserRuntimeCapabilities({
+      ...hermeticHost(),
+      navigator: {
+        serviceWorker: { getRegistration: async () => undefined },
+      } as BrowserCapabilityProbeHost["navigator"],
+      hasCacheStorage: true,
+      cacheKeys: async () => { throw new DOMException("private browsing", "SecurityError"); },
+    });
+
+    expect(report.serviceWorker.detail).toContain("no worker is registered");
+    expect(report.cacheStorage).toMatchObject({ state: "failed", evidence: "probe-failed" });
+    expect(report.cacheStorage.detail).not.toContain("private browsing");
+    const promptIds = browserCapabilityPromptEntries(report).map(({ id }) => id);
+    expect(promptIds).not.toContain("cache-storage");
+  });
+
+  it("stays unavailable when neither API is exposed", async () => {
+    const report = await probeBrowserRuntimeCapabilities({
+      ...hermeticHost(),
+      navigator: {} as BrowserCapabilityProbeHost["navigator"],
+      hasCacheStorage: false,
+    });
+    expect(report.serviceWorker).toMatchObject({ state: "unavailable", evidence: "not-observed" });
+    expect(report.cacheStorage).toMatchObject({ state: "unavailable", evidence: "not-observed" });
+  });
+});
+
+describe("semantic WASM thread count", () => {
+  it("sizes the ONNX Runtime pool from the worker ceiling only on a threaded tier", () => {
+    const base = deriveAdaptiveSchedulingPolicy({
+      webgpu: { state: "unavailable", evidence: "not-observed", detail: "none" },
+      webnn: { state: "unavailable", evidence: "not-observed", detail: "none" },
+      wasm: {
+        state: "available",
+        evidence: "probe-passed",
+        detail: "live",
+        features: { simd: true, threads: true, memory64: false, "multi-memory": false, "relaxed-simd": false, "tail-call": false },
+        sharedArrayBuffer: true,
+        crossOriginIsolated: true,
+      },
+      opfs: { state: "available", evidence: "probe-passed", detail: "live" },
+      signals: {
+        logicalProcessors: 12,
+        deviceMemoryGiB: 16,
+        online: true,
+        battery: { state: "unavailable", detail: "none" },
+        connection: { state: "unavailable", detail: "none" },
+        thermal: { state: "unavailable", detail: "none" },
+      },
+    });
+
+    expect(base.preferredWasmTier).toBe("simd-threads");
+    expect(semanticWasmThreadCount(base)).toBe(base.maxWorkerConcurrency);
+    expect(semanticWasmThreadCount({ ...base, preferredWasmTier: "threads" })).toBe(base.maxWorkerConcurrency);
+    // Without validated threads ORT would clamp the request itself; asking for
+    // more would be a claim this page cannot keep.
+    expect(semanticWasmThreadCount({ ...base, preferredWasmTier: "simd" })).toBe(1);
+    expect(semanticWasmThreadCount({ ...base, preferredWasmTier: "baseline" })).toBe(1);
+    expect(semanticWasmThreadCount({ ...base, maxWorkerConcurrency: 64 })).toBe(8);
+  });
+});
+
 describe("browser capability lifecycle registry", () => {
   it("re-probes on meaningful lifecycle changes and stops cleanly", async () => {
     const target = new EventTarget();
@@ -202,6 +338,22 @@ describe("browser capability lifecycle registry", () => {
     unsubscribe();
   });
 });
+
+function hermeticHost(): BrowserCapabilityProbeHost {
+  return {
+    navigator: {} as BrowserCapabilityProbeHost["navigator"],
+    isSecureContext: true,
+    crossOriginIsolated: false,
+    hasWebAssembly: true,
+    hasSharedArrayBuffer: false,
+    hasCacheStorage: false,
+    exposedInterfaces: new Set(),
+    validateWasm: () => false,
+    canTransferSharedArrayBuffer: () => false,
+    now: () => new Date("2026-07-22T12:00:00.000Z"),
+    timeoutMs: 50,
+  };
+}
 
 async function minimalReport(observedAt: string): Promise<BrowserRuntimeCapabilityReport> {
   return probeBrowserRuntimeCapabilities({

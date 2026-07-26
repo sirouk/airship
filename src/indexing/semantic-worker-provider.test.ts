@@ -3,6 +3,7 @@ import {
   AIRSHIP_SEMANTIC_MODEL,
   createSemanticWorkerHandler,
   LazySemanticWorkerEmbeddingProvider,
+  type SemanticAccelerationPreference,
   type SemanticBackend,
   type SemanticLoadedModel,
   type SemanticModelLoader,
@@ -20,7 +21,7 @@ describe("LazySemanticWorkerEmbeddingProvider", () => {
     const provider = new LazySemanticWorkerEmbeddingProvider(() => {
       workers += 1;
       return loopback = new LoopbackWorker(loader);
-    }, () => true);
+    }, () => ({ backend: "webgpu" }));
     const states: SemanticProviderState[] = [];
     provider.subscribe((state) => states.push(state));
 
@@ -51,10 +52,51 @@ describe("LazySemanticWorkerEmbeddingProvider", () => {
     expect(provider.posture).toBe("local-semantic");
   });
 
+  it("waits for the accelerator policy before latching a backend and threads it into the loader", async () => {
+    const loader = new MockLoader({});
+    const worker = new LoopbackWorker(loader);
+    let publishPolicy!: (preference: SemanticAccelerationPreference) => void;
+    const policy = new Promise<SemanticAccelerationPreference>((resolve) => { publishPolicy = resolve; });
+    const provider = new LazySemanticWorkerEmbeddingProvider(() => worker, () => policy);
+
+    const embedding = provider.embed(["deferred capability probe"]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // The capability probe is still in flight: nothing may be latched yet.
+    expect(worker.requests).toEqual([]);
+
+    publishPolicy({ backend: "webgpu", powerPreference: "low-power", wasmThreads: 4 });
+    await embedding;
+
+    expect(worker.requests[0]).toEqual({
+      type: "initialize",
+      requestId: "initialize",
+      manifest: AIRSHIP_SEMANTIC_MODEL,
+      preferredBackend: "webgpu",
+      powerPreference: "low-power",
+      wasmThreads: 4,
+    });
+    expect(loader.loads[0]).toMatchObject({ backend: "webgpu", powerPreference: "low-power", wasmThreads: 4 });
+  });
+
+  it("bounds the requested thread count and still starts when the policy resolver fails", async () => {
+    const overRequested = new LoopbackWorker(new MockLoader({}));
+    await new LazySemanticWorkerEmbeddingProvider(() => overRequested, () => ({ backend: "wasm", wasmThreads: 64 }))
+      .embed(["bounded"]);
+    expect(overRequested.requests[0]).toMatchObject({ wasmThreads: 8 });
+
+    const failed = new LoopbackWorker(new MockLoader({}));
+    await new LazySemanticWorkerEmbeddingProvider(() => failed, () => Promise.reject(new Error("probe failed")))
+      .embed(["fallback"]);
+    // A failed probe is not evidence against an accelerator, so the request is
+    // still made; the worker remains the authority on what actually loaded.
+    expect(failed.requests[0]).toMatchObject({ type: "initialize" });
+    expect((failed.requests[0] as { powerPreference?: string }).powerPreference).toBeUndefined();
+  });
+
   it("propagates cancellation into the worker operation", async () => {
     const loader = new MockLoader({ blockEmbedding: true });
     const worker = new LoopbackWorker(loader);
-    const provider = new LazySemanticWorkerEmbeddingProvider(() => worker, () => false);
+    const provider = new LazySemanticWorkerEmbeddingProvider(() => worker, () => ({ backend: "wasm" }));
     await provider.embed(["warmup"]);
 
     const controller = new AbortController();
@@ -72,7 +114,7 @@ describe("LazySemanticWorkerEmbeddingProvider", () => {
         return { async embed() { return [new Float32Array(12)]; } };
       },
     };
-    const provider = new LazySemanticWorkerEmbeddingProvider(() => new LoopbackWorker(loader), () => false);
+    const provider = new LazySemanticWorkerEmbeddingProvider(() => new LoopbackWorker(loader), () => ({ backend: "wasm" }));
     await expect(provider.embed(["invalid"])).rejects.toMatchObject({
       name: "SemanticWorkerError",
       code: "SEMANTIC_EMBED_FAILED",
@@ -112,6 +154,7 @@ class LoopbackWorker implements SemanticWorkerPort {
 
 class MockLoader implements SemanticModelLoader {
   readonly backends: SemanticBackend[] = [];
+  readonly loads: Array<Parameters<SemanticModelLoader["load"]>[0]> = [];
   private startedResolve!: () => void;
   readonly embeddingStarted = new Promise<void>((resolve) => { this.startedResolve = resolve; });
 
@@ -119,6 +162,7 @@ class MockLoader implements SemanticModelLoader {
 
   async load(args: Parameters<SemanticModelLoader["load"]>[0]): Promise<SemanticLoadedModel> {
     this.backends.push(args.backend);
+    this.loads.push(args);
     if (args.backend === "webgpu" && this.options.failWebgpu) throw new Error("WebGPU adapter unavailable");
     args.onProgress({ loadedBytes: 24, totalBytes: 48, message: "Loading pinned same-origin artifacts." });
     return {

@@ -107,6 +107,12 @@
   box-shadow: inset 3px 0 color-mix(in srgb, var(--accent) 70%, transparent);
 }
 
+.provider-setup-card:target,
+.provider-setup-card:focus {
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--line));
+  box-shadow: inset 3px 0 color-mix(in srgb, var(--accent) 70%, transparent);
+}
+
 .provider-connection dl {
   display: grid;
   gap: 7px;

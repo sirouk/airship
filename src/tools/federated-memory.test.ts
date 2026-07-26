@@ -110,6 +110,9 @@ function workspaceHit(path: string, chunkId: string, score: number) {
 
 function fakeRuntime(hits: ReturnType<typeof workspaceHit>[]): ClientContextRuntime {
   return {
+    // No materialized generation: the workspace lane then reports no lineage
+    // rather than inventing one.
+    getState: () => ({ generation: undefined }),
     search: async () => ({
       query: "turbine",
       queryDigest: "sha256:query",

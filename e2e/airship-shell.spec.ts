@@ -47,7 +47,7 @@ test("desktop shell navigates real routes and presents a coherent session header
   await expect(page.getByRole("heading", { name: "Editor", level: 1 })).toBeVisible();
 
   await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Chat" }).click();
-  await expect(page).toHaveURL(/#chat$/);
+  await expect(page).toHaveURL(/#chat\/[^/?#]+$/);
   await expect(page.getByRole("region", { name: "Agent session" })).toBeVisible();
   await capture(page, testInfo, "desktop-shell.png");
 });
@@ -275,6 +275,24 @@ test("profile-owned approval policy clearly switches new pinned conversations", 
 
   await setActiveProfileApproval(page, "Ask First");
   await page.screenshot({ path: testInfo.outputPath("approval-mode-menu.png"), fullPage: true });
+});
+
+test("the composer changes approval policy in place through a new immutable conversation", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "desktop composer approval contract");
+  await openReadyApp(page);
+  const initialUrl = page.url();
+  const picker = page.getByRole("button", { name: "Conversation approval policy" });
+  await expect(picker).toContainText("Ask First");
+  await picker.focus();
+  await picker.press("ArrowDown");
+  await page
+    .getByRole("listbox", { name: "Conversation approval policy" })
+    .getByRole("option", { name: "Auto Approve", exact: true })
+    .click();
+  await expect(picker).toContainText("Auto Approve");
+  await expect(page).toHaveURL(/#chat\/[^/?#]+$/);
+  expect(page.url()).not.toBe(initialUrl);
+  await expect(page.getByText(/Approval policy changed to Auto Approve/u)).toBeVisible();
 });
 
 test("desktop profile menu changes the real active profile and creates a coherent pinned session", async ({ page }, testInfo) => {

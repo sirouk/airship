@@ -197,7 +197,7 @@ export function navigationHashForView(view: NavigationView): NavigationHash {
 }
 
 export function navigationViewFromHash(hash: string): NavigationView {
-  const candidate = hash.replace(/^#/u, "").split("?", 1)[0];
+  const candidate = hash.replace(/^#/u, "").split(/[/?]/u, 1)[0];
   if (candidate === "connection") return "access";
   if (candidate === "account") return "billing";
   // Preserve already-shipped deep links while emitting only label-aligned hashes.

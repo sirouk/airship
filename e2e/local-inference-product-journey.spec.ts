@@ -29,7 +29,7 @@ test("connects, pins, invokes, and disconnects an Ollama model through the mount
   await expect(connected).toContainText("This machine · loopback");
   await connected.getByRole("button", { name: "Use in new conversation" }).click();
 
-  await expect(page).toHaveURL(/#chat$/u, { timeout: 20_000 });
+  await expect(page).toHaveURL(/#chat\/[^/?#]+$/u, { timeout: 20_000 });
   await expect(page.getByRole("button", { name: /Ollama · gemma3:latest/u })).toBeVisible();
 
   const composer = page.getByPlaceholder(/Ask Airship/u);

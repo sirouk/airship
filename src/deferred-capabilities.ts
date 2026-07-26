@@ -9,6 +9,7 @@
 export { ChutesAttestationEvidenceClient } from "./attestation/provider-client";
 export { createIntelDcapVerifierPort } from "./attestation/dcap/intel-dcap";
 export { createIntelDcapQvlVerifierPort } from "./attestation/dcap/intel-dcap-qvl";
+export { loadChutesAccountSnapshot } from "./billing/client";
 export { auditSessionHistory } from "./core/session-audit";
 export { EncryptedWorkspaceGitAdapter } from "./git/encrypted-workspace-adapter";
 export { CanvasMemoryGraphSurface } from "./memory-graph/canvas-renderer";

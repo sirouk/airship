@@ -23,6 +23,21 @@ export const MODEL_CAPABILITIES = [
 
 export type ModelCapability = (typeof MODEL_CAPABILITIES)[number];
 
+/*
+ * Upper bounds every declared model limit has to fall under.
+ *
+ * Both numbers sit far above any published model, so they are typo and
+ * overflow guards rather than a claim about what a vendor supports. They live
+ * here, next to the descriptor they bound, because more than one layer has to
+ * agree on them: `normalizeModel` refuses a declaration above the ceiling, and
+ * `AnthropicBrowserTransport` revalidates the same declaration when it builds
+ * the request. If those two ceilings ever diverged, a number the catalog
+ * accepted would throw on the next turn and brick the model until it was
+ * declared again.
+ */
+export const MAX_MODEL_CONTEXT_WINDOW_TOKENS = 100_000_000;
+export const MAX_MODEL_OUTPUT_TOKENS = 8_000_000;
+
 export type InferenceProtocol =
   | "chutes-e2ee-v1"
   | "openai-responses"
@@ -259,6 +274,13 @@ export type InferenceAvailabilityConnection = Readonly<{
     label: string;
     availability: ModelAvailability["state"];
     supportedCapabilities: readonly ModelCapability[];
+    /*
+     * Both limits stay optional and are omitted rather than defaulted: a
+     * provider directory that publishes no context window must reach the agent
+     * as an absent field, never as a guessed number it could route on.
+     */
+    contextWindowTokens?: number;
+    maxOutputTokens?: number;
   }>[];
   omittedModels: number;
 }>;

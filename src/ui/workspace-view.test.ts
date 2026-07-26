@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { encodeWorkspaceBytes } from "../workspace/content-codec";
-import { boundedWorkspaceContent, resolveGitBinding, workspaceEditorProjection, workspaceFileWindow, WORKSPACE_EDITOR_BYTE_LIMIT } from "./workspace-view";
+import { boundedWorkspaceContent, resolveGitBinding, workspaceEditorProjection, workspaceFileWindow, workspaceGutterLines, WORKSPACE_EDITOR_BYTE_LIMIT, WORKSPACE_GUTTER_LINE_LIMIT } from "./workspace-view";
 
 describe("bounded workspace presentation", () => {
   it("mounts a constant metadata window for a 100k-file workspace", () => {
@@ -35,5 +35,25 @@ describe("bounded workspace presentation", () => {
     } as const;
     expect(resolveGitBinding("/workspace/sources/repo/src/index.ts", [repository])).toMatchObject({ relativePath: "src/index.ts" });
     expect(resolveGitBinding("/workspace/notes/private.md", [repository])).toBeUndefined();
+  });
+});
+
+describe("editor line gutter", () => {
+  it("numbers every line of an ordinary buffer", () => {
+    expect(workspaceGutterLines("a\nb\nc")).toBe("1\n2\n3");
+    expect(workspaceGutterLines("")).toBe("1");
+    // A trailing newline opens a real, editable final line.
+    expect(workspaceGutterLines("a\n")).toBe("1\n2");
+  });
+
+  it("withholds the gutter entirely past its declared line cap", () => {
+    const atLimit = "x\n".repeat(WORKSPACE_GUTTER_LINE_LIMIT - 1) + "x";
+    expect(workspaceGutterLines(atLimit)?.split("\n").length).toBe(WORKSPACE_GUTTER_LINE_LIMIT);
+    expect(workspaceGutterLines("x\n".repeat(WORKSPACE_GUTTER_LINE_LIMIT + 5))).toBeUndefined();
+  });
+
+  it("rejects a nonsensical cap instead of rendering an unbounded gutter", () => {
+    expect(() => workspaceGutterLines("a", 0)).toThrow();
+    expect(() => workspaceGutterLines("a", 1.5)).toThrow();
   });
 });

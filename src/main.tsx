@@ -5,6 +5,14 @@ import "./ui/durability-indicator.css";
 
 render(<App />, document.getElementById("app")!);
 
+// The capability probe chooses the semantic backend, the ORT thread count and
+// the GPU power preference, so start it at boot. Correctness does not depend on
+// this call: every consumer awaits the registry rather than sampling a cold
+// snapshot. It only keeps the probe off the first embed's critical path.
+void import("./capabilities/browser-runtime")
+  .then(({ getBrowserCapabilityRegistry }) => getBrowserCapabilityRegistry().refresh())
+  .catch(() => undefined);
+
 const AIRSHIP_BASE_PATH = import.meta.env.BASE_URL;
 const AIRSHIP_SERVICE_WORKER_PATH = `${AIRSHIP_BASE_PATH}sw.js`;
 

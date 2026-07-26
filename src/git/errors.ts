@@ -51,6 +51,27 @@ export class GitVersionConflictError extends GitDomainError {
   }
 }
 
+/**
+ * A reviewed request that had to be executed as several adapter calls failed
+ * partway through. The completed calls are durable, so the failure must never
+ * be reported as a rollback.
+ */
+export class GitPartialMutationError extends GitDomainError {
+  readonly completedPaths: number;
+  readonly requestedPaths: number;
+
+  constructor(operation: string, completedPaths: number, requestedPaths: number, cause: unknown) {
+    super(
+      "partial-mutation",
+      `${operation} completed for ${completedPaths} of ${requestedPaths} reviewed paths before failing. Those ${completedPaths} paths are already changed and were not rolled back. ${cause instanceof Error ? cause.message : String(cause)}`.slice(0, 1_200),
+    );
+    this.name = "GitPartialMutationError";
+    this.completedPaths = completedPaths;
+    this.requestedPaths = requestedPaths;
+    this.cause = cause;
+  }
+}
+
 export class GitAbortError extends GitDomainError {
   constructor() {
     super("aborted", "The Git operation was aborted before its commit point.");

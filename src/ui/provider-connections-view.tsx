@@ -155,11 +155,11 @@ export function ProviderConnectionsView({
         <section aria-labelledby="cloud-provider-setup-title">
           <div class="provider-fabric__subheading">
             <div><span>Remote</span><h3 id="cloud-provider-setup-title">Cloud providers</h3></div>
-            <small>Advanced · browser-direct API keys</small>
+            <small>API-key methods · page memory</small>
           </div>
-          <details class="provider-fabric__cloud-disclosure">
+          <details class="provider-fabric__cloud-disclosure" open>
             <summary>
-              <span>Configure direct API key connections</span>
+              <span>Configure cloud API keys</span>
               <small>{cloudProviders.length} provider adapters · credentials stay in page memory</small>
             </summary>
             <div class="provider-fabric__cloud-grid">
@@ -168,6 +168,7 @@ export function ProviderConnectionsView({
                 return (
                   <CloudProviderCard
                     key={provider.id}
+                    cardId={`provider-setup-${provider.id}`}
                     provider={provider}
                     online={online}
                     connected={connected}
@@ -349,6 +350,7 @@ function ConnectedProvider({
 }
 
 function CloudProviderCard({
+  cardId,
   provider,
   online,
   connected,
@@ -356,6 +358,7 @@ function CloudProviderCard({
   disabled,
   onConnect,
 }: Readonly<{
+  cardId: string;
   provider: InferenceProviderDescriptor;
   online: boolean;
   connected: boolean;
@@ -373,10 +376,10 @@ function CloudProviderCard({
   if (!apiKeyMethod || apiKeyMethod.kind !== "api-key") return null;
 
   return (
-    <article class="provider-setup-card">
+    <article id={cardId} class="provider-setup-card" tabIndex={-1}>
       <header>
         <Icon name="model" size={18} />
-        <div><h4>{provider.label}</h4><span>Direct API key · advanced</span></div>
+        <div><h4>{provider.label}</h4><span>API key · page memory</span></div>
       </header>
       <details class="provider-auth-contract">
         <summary>Why API key instead of OAuth?</summary>

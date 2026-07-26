@@ -41,5 +41,10 @@ describe("inspect_browser_capabilities tool", () => {
       schedulingClass: report.scheduling.class,
       preferredSemanticBackend: report.scheduling.preferredSemanticBackend,
     });
+    // The whole policy — maxWorkerConcurrency included — is serialized into
+    // the model-facing content, so the description has to say what that
+    // number is rather than leaving it to read as a live worker count.
+    expect(JSON.parse(result.content).scheduling).toHaveProperty("maxWorkerConcurrency");
+    expect(tool?.definition.description).toContain("maxWorkerConcurrency is a derivation ceiling, not a count of running or reserved workers");
   });
 });

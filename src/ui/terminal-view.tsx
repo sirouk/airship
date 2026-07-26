@@ -201,14 +201,15 @@ function TerminalPanel({ manager, session: initial, onNotice }: Readonly<{
 
   useEffect(() => {
     if (!host.current) return;
+    const typography = terminalTypography(document.documentElement.dataset.density);
     const emulator = new Terminal({
       allowProposedApi: false,
       convertEol: false,
       cursorBlink: true,
       cursorStyle: "bar",
       fontFamily: '"SFMono-Regular", Consolas, "Liberation Mono", monospace',
-      fontSize: 13,
-      lineHeight: 1.25,
+      fontSize: typography.fontSize,
+      lineHeight: typography.lineHeight,
       scrollback: 5_000,
       screenReaderMode: true,
       theme: { background: "#0b0e0f", foreground: "#e6e0d2", cursor: "#d5b66f", selectionBackground: "#506a7655", black: "#111517", brightBlack: "#647078", red: "#d97767", green: "#83b99a", yellow: "#d5b66f", blue: "#79a9c8", magenta: "#b495cc", cyan: "#72bbb4", white: "#ded8ca" },
@@ -251,9 +252,17 @@ function TerminalPanel({ manager, session: initial, onNotice }: Readonly<{
     };
     const resize = new ResizeObserver(scheduleLayout);
     resize.observe(host.current);
+    const densityObserver = new MutationObserver(() => {
+      const next = terminalTypography(document.documentElement.dataset.density);
+      emulator.options.fontSize = next.fontSize;
+      emulator.options.lineHeight = next.lineHeight;
+      scheduleLayout();
+    });
+    densityObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["data-density"] });
     scheduleLayout();
     return () => {
       resize.disconnect();
+      densityObserver.disconnect();
       if (frame) cancelAnimationFrame(frame);
       input.dispose();
       binary.dispose();
@@ -292,6 +301,12 @@ function statusLabel(session: TerminalSessionSnapshot): string {
 }
 
 function compactId(value: string): string { return value.length > 14 ? `${value.slice(0, 7)}…${value.slice(-5)}` : value; }
+
+export function terminalTypography(density?: string): Readonly<{ fontSize: number; lineHeight: number }> {
+  if (density === "comfortable") return Object.freeze({ fontSize: 15, lineHeight: 1.35 });
+  if (density === "compact") return Object.freeze({ fontSize: 12, lineHeight: 1.18 });
+  return Object.freeze({ fontSize: 13, lineHeight: 1.25 });
+}
 
 function sessionChromeSignature(session: TerminalSessionSnapshot): string {
   return JSON.stringify([session.name, session.threadId, session.cwd, session.status, session.exitCode, session.detail, session.history]);

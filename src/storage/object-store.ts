@@ -60,6 +60,40 @@ export interface ObjectStore {
   list(prefix: string, signal?: AbortSignal): Promise<ObjectSummary[]>;
 }
 
+export type ObjectReclamationOutcome =
+  | Readonly<{ key: string; reclaimed: true }>
+  | Readonly<{ key: string; reclaimed: false; reason: "not-indexed" | "refused" | "unconfirmed" }>;
+
+export type ObjectReclamationReceipt = Readonly<{
+  requested: number;
+  /** Provider-confirmed removals only; every other key stays in `retained`. */
+  reclaimed: readonly string[];
+  retained: readonly string[];
+  outcomes: readonly ObjectReclamationOutcome[];
+}>;
+
+/**
+ * An optional capability, not part of `ObjectStore`.
+ *
+ * The base contract is deliberately delete-free so that a lost conditional write
+ * can never destroy data. `trash` exists only for objects a caller can prove are
+ * unreachable — probe litter and superseded revisions past a safety age. It
+ * removes the index entry first and only then asks the provider to trash the
+ * body: a crash between the two can leak an untracked file, which a later sweep
+ * recovers, whereas the reverse order would leave an index entry whose `get()`
+ * hard-fails. No cross-system atomicity is achievable here.
+ *
+ * This is index-addressed reclamation. Enumerating untracked provider-side
+ * orphans (lost-race uploads) is a separate, not-yet-implemented job.
+ */
+export interface ReclaimableObjectStore extends ObjectStore {
+  trash(keys: readonly string[], signal?: AbortSignal): Promise<ObjectReclamationReceipt>;
+}
+
+export function isReclaimableObjectStore(store: ObjectStore): store is ReclaimableObjectStore {
+  return typeof (store as Partial<ReclaimableObjectStore>).trash === "function";
+}
+
 export class ObjectConflictError extends Error {
   constructor(message = "The cloud object changed before the conditional write completed.") {
     super(message);

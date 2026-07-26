@@ -4,7 +4,7 @@ import { localChutesOAuthBridge } from "./scripts/local-chutes-oauth-bridge";
 import { airshipPyodideAssets } from "./scripts/pyodide-assets";
 import { airshipSemanticPackAssets } from "./scripts/semantic-pack-assets";
 
-const DEFERRED_HTML_PRELOAD = /(?:^|\/)(?:deferred-capabilities|execution-runtime-pack|execution-engine|runtime-registry|wasi-preview1-worker|node-webcontainer-pack|wasix-pack|wasix-worker|dist|index|agent|tool-bundle|client-context-runtime|context-selection|repository-admission|editor-view|workspace-binding|content-codec|sources-view|source-selection|workspace-adapter|sessions-route|capabilities-view|browser-runtime|memory-view|kind-visual|proof-view|client|terminal-view|semantic\.worker|client-runtime|telemetry|fabric|openai|provider-connections-view|providers|session-route|local-device-vault-setup|local-device-keyring|encrypted-envelope|local-lab)-[A-Za-z0-9_-]+\.(?:js|css)$/u;
+const DEFERRED_HTML_PRELOAD = /(?:^|\/)(?:deferred-capabilities|execution-runtime-pack|execution-engine|runtime-registry|wasi-preview1-worker|node-webcontainer-pack|wasix-pack|wasix-worker|dist|index|agent|tool-bundle|client-context-runtime|context-selection|repository-admission|editor-view|workspace-binding|content-codec|sources-view|source-selection|workspace-adapter|sessions-route|capabilities-view|browser-runtime|memory-view|kind-visual|proof-view|client|terminal-view|semantic\.worker|client-runtime|telemetry|fabric|openai|provider-connections-view|providers|session-route|inference-bridge-pack|local-device-vault-setup|local-device-keyring|encrypted-envelope|local-lab)-[A-Za-z0-9_-]+\.(?:js|css)$/u;
 
 /**
  * Vite may otherwise promote dependencies of dynamic imports into index.html.
@@ -82,6 +82,34 @@ export default defineConfig({
     // disclosure materially enlarges the blast radius of a release compromise.
     sourcemap: false,
     reportCompressedSize: true,
+    rollupOptions: {
+      output: {
+        // The shell interpreter's entry modules are named `pack` and
+        // `contract`, which would emit generic chunk names that the release
+        // gate cannot attribute to an owner. Name them explicitly so the
+        // artifact classifier stays exact rather than matching by accident.
+        chunkFileNames(chunk) {
+          // A shared shell chunk has no facade module, so ownership is decided
+          // by every module it carries rather than by its entry alone.
+          const modules = chunk.moduleIds ?? [];
+          const ownedByShell = modules.length > 0
+            && modules.every((id) => id.includes("/execution/shell/"));
+          if (ownedByShell) return "assets/airship-shell-pack-[hash].js";
+          /*
+           * The extension-bridge client is shared between the provider
+           * transports and the Connect surface's presence observation, so
+           * Rollup splits it out. Its entry module is named `client`, which
+           * three unrelated chunks are also named — an artifact the release
+           * gate could then only attribute by accident.
+           */
+          const ownedByBridge = modules.length > 0
+            && modules.every((id) => id.includes("/inference/bridge/"));
+          return ownedByBridge
+            ? "assets/inference-bridge-pack-[hash].js"
+            : "assets/[name]-[hash].js";
+        },
+      },
+    },
   },
   server: {
     // Credential and recovery-key surfaces are loopback-only by default.

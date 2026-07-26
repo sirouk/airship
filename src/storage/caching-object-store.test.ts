@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { ClientCiphertextCache, MemoryCiphertextPageBackend } from "./client-ciphertext-cache";
 import { CiphertextCachingObjectStore, classifyVaultImmutableCiphertext } from "./caching-object-store";
 import { MemoryObjectStore } from "./memory-object-store";
+import { isReclaimableObjectStore, type ObjectReclamationReceipt, type ReclaimableObjectStore } from "./object-store";
 
 describe("ciphertext caching ObjectStore", () => {
   it("serves encrypted workspace and Git-file objects locally after provider commit", async () => {
@@ -49,13 +50,18 @@ describe("ciphertext caching ObjectStore", () => {
 
   it("treats cache failure as a provider miss without weakening conditional writes", async () => {
     const authority = new CountingObjectStore();
+    const attemptedWrites: string[] = [];
     const cache = new ClientCiphertextCache({
       backend: "opfs-sync-worker",
       durability: "origin-private-persistent",
       syncAccessHandle: "active",
       async read() { throw new Error("evicted"); },
-      async write() { throw new Error("quota"); },
+      async write(storageKey: string) { attemptedWrites.push(storageKey); throw new Error("quota"); },
       async remove() { throw new Error("gone"); },
+      // A healthy but empty listing on purpose: the index must open, otherwise
+      // `put` would refuse at the no-ceiling guard and never reach the failing
+      // page write this test is about.
+      async list(): Promise<readonly Readonly<{ storageKey: string; bytes: number }>[]> { return []; },
       close() {},
     });
     const store = new CiphertextCachingObjectStore(authority, cache);
@@ -64,6 +70,36 @@ describe("ciphertext caching ObjectStore", () => {
     expect(created).toMatchObject({ created: true });
     expect(await store.putIfAbsent(key, Uint8Array.from([6]))).toMatchObject({ created: false, reason: "exists" });
     expect((await store.get(key))?.bytes).toEqual(Uint8Array.from([9, 8, 7]));
+    expect(authority.getCalls).toBe(1);
+    // The reserved index record and the page record are distinct storage keys,
+    // so more than one attempted key proves the quota failure was raised by a
+    // real page write rather than only by the index rewrite.
+    expect(new Set(attemptedWrites).size).toBeGreaterThan(1);
+  });
+});
+
+describe("reclamation forwarding", () => {
+  it("reports no reclamation capability when the authority has none", async () => {
+    const store = cached(new CountingObjectStore());
+    expect(isReclaimableObjectStore(store)).toBe(false);
+    expect(store.trash).toBeUndefined();
+  });
+
+  it("forwards reclamation and drops the cached page for every requested key", async () => {
+    const authority = new ReclaimableCountingObjectStore();
+    const pages = new MemoryCiphertextPageBackend();
+    const store = new CiphertextCachingObjectStore(authority, new ClientCiphertextCache(pages));
+    const key = "state/workspace/v1/files/opaque-file-object";
+    await store.putIfAbsent(key, Uint8Array.from([5, 6, 7]));
+    expect(await store.get(key)).toMatchObject({ key });
+    expect(authority.getCalls).toBe(0);
+
+    expect(isReclaimableObjectStore(store)).toBe(true);
+    const receipt = await store.trash!([key]);
+    expect(receipt).toMatchObject({ requested: 1, reclaimed: [key], retained: [] });
+    // The page must be gone, otherwise an unindexed object would still be
+    // served from cache as though it were live.
+    expect(await store.get(key)).toBeUndefined();
     expect(authority.getCalls).toBe(1);
   });
 });
@@ -97,4 +133,23 @@ function cached(authority: CountingObjectStore): CiphertextCachingObjectStore {
     authority,
     new ClientCiphertextCache(new MemoryCiphertextPageBackend()),
   );
+}
+
+class ReclaimableCountingObjectStore extends CountingObjectStore implements ReclaimableObjectStore {
+  private readonly trashed = new Set<string>();
+
+  override async get(key: string, signal?: AbortSignal) {
+    const record = await super.get(key, signal);
+    return this.trashed.has(key) ? undefined : record;
+  }
+
+  async trash(keys: readonly string[]): Promise<ObjectReclamationReceipt> {
+    for (const key of keys) this.trashed.add(key);
+    return Object.freeze({
+      requested: keys.length,
+      reclaimed: Object.freeze([...keys]),
+      retained: Object.freeze([]),
+      outcomes: Object.freeze(keys.map((key) => Object.freeze({ key, reclaimed: true as const }))),
+    });
+  }
 }

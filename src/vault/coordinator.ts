@@ -3,7 +3,7 @@ import { randomUuid } from "../core/id";
 import { loadDeferredCapabilities } from "../load-deferred-capabilities";
 import type { EncryptedObjectJournalBackend } from "../storage/encrypted-object-journal";
 import type { WorkspaceRootKey } from "../storage/encrypted-envelope";
-import type { ObjectStore } from "../storage/object-store";
+import { isReclaimableObjectStore, type ObjectReclamationReceipt, type ObjectStore } from "../storage/object-store";
 import type { CiphertextCacheCapability } from "../storage/client-ciphertext-cache";
 import type { EncryptedProfileCatalogStore } from "../profiles/persistence";
 import type { VaultContextFabricPort } from "./context-fabric-port";
@@ -51,9 +51,13 @@ export type VaultProbeEvidence = Readonly<{
   checks: readonly Readonly<{ name: string; durationMs: number }>[];
   createdKeys: readonly string[];
   cleanup: Readonly<{
-    deletionAvailableInRuntime: false;
-    policy: "provider-lifecycle-or-out-of-band";
+    deletionAvailableInRuntime: boolean;
+    policy: "provider-lifecycle-or-out-of-band" | "runtime-reclaimed";
     warning: string;
+    /** Provider-confirmed removals only. Absent when the store cannot reclaim. */
+    reclaimedKeys?: readonly string[];
+    /** Probe objects still resident and still needing out-of-band cleanup. */
+    retainedKeys?: readonly string[];
   }>;
   readiness: Readonly<{
     conditionalCreate: "verified";
@@ -249,7 +253,7 @@ export class VaultCoordinator {
     // old `ready` snapshot pointing at a runtime whose token/cache was already
     // destroyed.
     const nextConfig = validatedGoogleDriveConfiguration(request);
-    const nextRequirements = googleDriveRequirements(nextConfig);
+    const nextRequirements = googleDriveRequirements(nextConfig, request.store);
     const nextReauthorize = request.reauthorize;
     const nextReset = request.reset;
     this.invalidateProbe("Vault configuration was replaced.");
@@ -431,6 +435,10 @@ export class VaultCoordinator {
         ...conformance.createdKeys,
         ...composition.createdKeys,
       ])].sort());
+      // Probe litter is provably unreachable — nothing but this run ever
+      // references those keys — so it is the one safe reclamation candidate that
+      // needs no safety age. Anything unconfirmed keeps the original warning.
+      const cleanup = await this.reclaimProbeObjects(store, allCreatedKeys, controller.signal);
       const evidence: VaultProbeEvidence = Object.freeze({
         runId,
         logicalPrefix: conformance.prefix,
@@ -441,11 +449,7 @@ export class VaultCoordinator {
           ...composition.checks.map((check) => Object.freeze({ ...check })),
         ]),
         createdKeys: allCreatedKeys,
-        cleanup: Object.freeze({
-          deletionAvailableInRuntime: false,
-          policy: "provider-lifecycle-or-out-of-band",
-          warning: "Probe objects are immutable. Configure provider lifecycle expiry or remove the listed keys out-of-band.",
-        }),
+        cleanup,
         readiness: Object.freeze({
           conditionalCreate: "verified",
           compareAndSwap: "verified",
@@ -558,6 +562,49 @@ export class VaultCoordinator {
     } catch {
       // Direct OAuth token holders are also best-effort page-memory cleanup.
     }
+  }
+
+  /**
+   * Sweeps this run's probe objects when — and only when — the provider offers a
+   * reclamation capability. Keys the provider did not confirm removed keep the
+   * original out-of-band warning verbatim, so the notice never overstates what
+   * actually happened.
+   */
+  private async reclaimProbeObjects(
+    store: ObjectStore,
+    createdKeys: readonly string[],
+    signal: AbortSignal,
+  ): Promise<VaultProbeEvidence["cleanup"]> {
+    const retainedWarning = "Probe objects are immutable. Configure provider lifecycle expiry or remove the listed keys out-of-band.";
+    if (!isReclaimableObjectStore(store) || !createdKeys.length) {
+      return Object.freeze({
+        deletionAvailableInRuntime: false,
+        policy: "provider-lifecycle-or-out-of-band",
+        warning: retainedWarning,
+      });
+    }
+    let receipt: ObjectReclamationReceipt;
+    try {
+      receipt = await store.trash(createdKeys, signal);
+    } catch {
+      // A failed sweep must not degrade a verified probe, and must not claim a
+      // removal it did not observe.
+      return Object.freeze({
+        deletionAvailableInRuntime: true,
+        policy: "provider-lifecycle-or-out-of-band",
+        warning: `Probe object reclamation did not complete. ${retainedWarning}`,
+      });
+    }
+    const retained = Object.freeze([...receipt.retained].sort());
+    return Object.freeze({
+      deletionAvailableInRuntime: true,
+      policy: retained.length ? "provider-lifecycle-or-out-of-band" : "runtime-reclaimed",
+      warning: retained.length
+        ? `${retained.length} of ${receipt.requested} probe object(s) were not confirmed removed. ${retainedWarning}`
+        : "Probe objects were moved to the provider's trash and confirmed removed from the live index.",
+      reclaimedKeys: Object.freeze([...receipt.reclaimed].sort()),
+      retainedKeys: retained,
+    });
   }
 
   private resetAcceleration(): void {
@@ -692,7 +739,12 @@ export function isGoogleDriveConfiguration(config: VaultCloudConfiguration): con
   return "provider" in config && config.provider === "google-drive";
 }
 
-function googleDriveRequirements(config: GoogleDriveVaultConfiguration): VaultProviderRequirements {
+function googleDriveRequirements(config: GoogleDriveVaultConfiguration, store: ObjectStore): VaultProviderRequirements {
+  // GoogleDriveObjectStore implements `trash`, and reclaimProbeObjects sweeps
+  // this run's probe objects when it does — but the store is caller-supplied,
+  // so the capability is read off the object that was actually handed in rather
+  // than assumed from the provider name.
+  const reclaimable = isReclaimableObjectStore(store);
   return Object.freeze({
     directBrowserOnly: true,
     credentialContract: Object.freeze({
@@ -716,8 +768,11 @@ function googleDriveRequirements(config: GoogleDriveVaultConfiguration): VaultPr
     }),
     probeLifecycle: Object.freeze({
       logicalPrefix: `${config.namespace}/${config.probePrefix}`,
-      deletionAvailableInRuntime: false as const,
-      cleanup: "provider-lifecycle-or-out-of-band" as const,
+      deletionAvailableInRuntime: reclaimable,
+      // Even a reclaiming store keeps the out-of-band path: a sweep reports
+      // only what the provider confirmed, and anything it did not confirm is
+      // still resident.
+      cleanup: reclaimable ? "runtime-reclaimed-then-out-of-band" as const : "provider-lifecycle-or-out-of-band" as const,
     }),
   });
 }

@@ -35,6 +35,7 @@ export function WorkspaceView({
   review,
   onWorkspaceChanged,
   workspaceName = "Page workspace",
+  workspaceIdentity = "page-memory",
   heading = "Workspace",
   onOpenRepositoryManager,
   durability = { state: "ephemeral", detail: "Workspace files exist only in this page-memory adapter. Nothing is synced." },
@@ -47,6 +48,7 @@ export function WorkspaceView({
   review?: Review;
   onWorkspaceChanged: () => void | Promise<void>;
   workspaceName?: string;
+  workspaceIdentity?: string;
   heading?: string;
   onOpenRepositoryManager?: () => void;
   durability?: Readonly<{ state: DurabilityState; detail: string }>;
@@ -62,7 +64,8 @@ export function WorkspaceView({
   const [dropTarget, setDropTarget] = useState("");
   const [mode, setMode] = useState<"explorer" | "source">("explorer");
   const [mobilePane, setMobilePane] = useState<"navigation" | "editor">("navigation");
-  const restoredTabs = useMemo(readTabState, []);
+  const tabStorageKey = useMemo(() => workspaceTabStorageKey(workspaceIdentity), [workspaceIdentity]);
+  const restoredTabs = useMemo(() => readTabState(tabStorageKey), [tabStorageKey]);
   const [tabs, setTabs] = useState<readonly string[]>(restoredTabs.tabs);
   const [activePath, setActivePath] = useState<string>(restoredTabs.activePath);
   const [buffers, setBuffers] = useState<Readonly<Record<string, Buffer>>>(() => PAGE_DRAFTS.get(workspace) ?? {});
@@ -80,6 +83,7 @@ export function WorkspaceView({
   const hoverTimer = useRef<number>();
   const hoverDirectory = useRef("");
   const treeViewport = useRef<HTMLDivElement>(null);
+  const gutter = useRef<HTMLPreElement>(null);
 
   useEffect(() => {
     if (!selected) return;
@@ -95,12 +99,12 @@ export function WorkspaceView({
 
   useEffect(() => {
     try {
-      sessionStorage.setItem(TAB_STORAGE, JSON.stringify({ tabs, activePath }));
+      sessionStorage.setItem(tabStorageKey, JSON.stringify({ tabs, activePath }));
     } catch {
       // Open tabs and drafts remain valid page-memory state when browser
       // privacy policy denies optional session preference storage.
     }
-  }, [tabs, activePath]);
+  }, [tabs, activePath, tabStorageKey]);
 
   useEffect(() => {
     PAGE_DRAFTS.set(workspace, buffers);
@@ -139,6 +143,7 @@ export function WorkspaceView({
 
   const buffer = buffers[activePath];
   const dirty = Boolean(buffer && buffer.draft !== buffer.content);
+  const gutterLines = buffer && !buffer.binary ? workspaceGutterLines(buffer.draft) : undefined;
   const contextIsFile = Boolean(context && files.some((file) => file.path === context.path));
 
   async function refreshSourceControl(preferredRepository = repositoryId, preferredWorktree = worktree?.id): Promise<void> {
@@ -459,7 +464,12 @@ export function WorkspaceView({
             <div class="editor-toolbar"><span title={buffer.path}>{buffer.path.replace("/workspace/", "")}</span><div><small>{buffer.revision.slice(0, 7)} · {formatBytes(buffer.size)}</small><button class="primary" type="button" disabled={!dirty || busy || buffer.truncated || buffer.binary} onClick={() => void saveActive()}>Save</button></div></div>
             {buffer.binary ? <div class="workspace-binary-preview" role="status"><Icon name="file" size={30} /><strong>Binary file · read-only</strong><span>Airship preserves the original bytes for Git and browser execution. The internal storage envelope is never exposed as editable text.</span></div> : <>
               {buffer.truncated ? <div class="workspace-boundary attention" role="status">{buffer.content ? "Bounded preview only." : "Encrypted file not downloaded."} Files above {formatBytes(WORKSPACE_EDITOR_BYTE_LIMIT)} are read-only; full-object AES-GCM verification is never mislabeled as a range stream.</div> : null}
-              <textarea class="code-editor" aria-label={`Edit ${workspaceBaseName(buffer.path)}`} value={buffer.draft} readOnly={buffer.truncated} spellcheck={false} onInput={(event) => setBuffers((current) => ({ ...current, [buffer.path]: { ...buffer, draft: event.currentTarget.value } }))} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") { event.preventDefault(); void saveActive(); } }} />
+              {/* The gutter is presentational and scroll-synced from the
+                  textarea, so the editable surface remains one real control. */}
+              <div class="code-editor-frame">
+                {gutterLines ? <pre class="code-gutter" ref={gutter} aria-hidden="true">{gutterLines}</pre> : null}
+                <textarea class="code-editor" aria-label={`Edit ${workspaceBaseName(buffer.path)}`} value={buffer.draft} readOnly={buffer.truncated} spellcheck={false} onScroll={(event) => { if (gutter.current) gutter.current.scrollTop = event.currentTarget.scrollTop; }} onInput={(event) => setBuffers((current) => ({ ...current, [buffer.path]: { ...buffer, draft: event.currentTarget.value } }))} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") { event.preventDefault(); void saveActive(); } }} />
+              </div>
             </>}
             <footer class="editor-status"><span>{buffer.binary ? "Protected bytes" : dirty ? "Modified" : "Saved"}</span><span>{buffer.binary ? "Binary · read-only" : "UTF-8 · LF"} · client-side</span></footer>
           </> : <div class="workbench-empty"><Icon name="workspace" size={36} /><strong>Open a file from Explorer</strong><span>Nothing is downloaded until you select it.</span></div>}
@@ -507,14 +517,20 @@ export function resolveGitBinding(path: string, repositories: readonly GitReposi
   return resolveGitWorkspaceBinding(path, repositories);
 }
 
-function readTabState(): TabState {
+function readTabState(storageKey: string): TabState {
   if (typeof sessionStorage === "undefined") return { tabs: [], activePath: "" };
   try {
-    const value = JSON.parse(sessionStorage.getItem(TAB_STORAGE) ?? "{}") as Record<string, unknown>;
+    const value = JSON.parse(sessionStorage.getItem(storageKey) ?? "{}") as Record<string, unknown>;
     const tabs = Array.isArray(value.tabs) ? value.tabs.filter((path: unknown): path is string => typeof path === "string" && path.startsWith("/workspace/")) : [];
     const activePath = typeof value.activePath === "string" && tabs.includes(value.activePath) ? value.activePath : tabs[0] ?? "";
     return { tabs, activePath };
   } catch { return { tabs: [], activePath: "" }; }
+}
+
+export function workspaceTabStorageKey(identity: string): string {
+  let digest = 5381;
+  for (const codePoint of identity) digest = ((digest << 5) + digest) ^ codePoint.codePointAt(0)!;
+  return `${TAB_STORAGE}.${(digest >>> 0).toString(36)}`;
 }
 
 function clampedContext(path: string, x: number, y: number) {
@@ -536,6 +552,29 @@ export function workspaceEditorProjection(file: WorkspaceFile) {
     shownBytes: binary ? 0 : shownBytes,
     truncated: binary || file.size > shownBytes,
   });
+}
+
+/**
+ * A line gutter is a rendering cost proportional to the file, so it is only
+ * offered while that cost stays trivial. Past the cap the editor keeps working
+ * without numbers rather than doubling the DOM on a very large buffer.
+ */
+export const WORKSPACE_GUTTER_LINE_LIMIT = 5_000;
+
+/** The gutter's rendered text, or undefined when no gutter may be shown. */
+export function workspaceGutterLines(draft: string, limit = WORKSPACE_GUTTER_LINE_LIMIT): string | undefined {
+  if (!Number.isInteger(limit) || limit < 1) throw new Error("The gutter line limit must be a positive integer.");
+  let lines = 1;
+  for (let index = 0; index < draft.length; index += 1) {
+    if (draft[index] !== "\n") continue;
+    lines += 1;
+    // Stop counting the moment the cap is passed: a 10 MiB paste must not be
+    // walked to the end just to decide the gutter is off.
+    if (lines > limit) return undefined;
+  }
+  let text = "1";
+  for (let line = 2; line <= lines; line += 1) text += `\n${String(line)}`;
+  return text;
 }
 
 export function boundedWorkspaceContent(content: string, byteLimit: number, knownTotalBytes?: number) { if (!Number.isInteger(byteLimit) || byteLimit < 1) throw new Error("Workspace byte limit must be a positive integer."); const bytes = new TextEncoder().encode(content); const totalBytes = Math.max(bytes.byteLength, knownTotalBytes ?? 0); if (bytes.byteLength <= byteLimit) return Object.freeze({ content, shownBytes: bytes.byteLength, totalBytes, truncated: totalBytes > bytes.byteLength }); const bounded = new TextDecoder("utf-8", { fatal: false }).decode(bytes.slice(0, byteLimit)); return Object.freeze({ content: bounded, shownBytes: new TextEncoder().encode(bounded).byteLength, totalBytes, truncated: true }); }

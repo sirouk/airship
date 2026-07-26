@@ -7,15 +7,33 @@ import type {
   ToolCall,
   ToolDefinition,
 } from "../../core/contracts";
-import type {
-  InferenceModelDescriptor,
-  ModelCapability,
-  ModelCapabilityEvidence,
+import {
+  MAX_MODEL_OUTPUT_TOKENS,
+  type InferenceModelDescriptor,
+  type ModelCapability,
+  type ModelCapabilityEvidence,
 } from "./contracts";
 import type { InferenceConnectionRegistry } from "./connection-registry";
+import { ExtensionBridgeClient, pageExtensionBridge } from "../bridge/client";
+import {
+  ANTHROPIC_OAUTH_INFERENCE_HEADERS,
+  ExtensionBridgeError,
+  type BridgeProviderId,
+} from "../bridge/protocol";
 
 export type ProviderApiKeyGetter = () => string | Promise<string>;
 export type ProviderFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+
+/**
+ * What a transport actually borrowed for one request. The kind decides the
+ * route: API keys keep the direct browser path they have always used, while an
+ * OAuth token for a provider that refuses browser-shaped requests can only
+ * leave through the extension bridge.
+ */
+type LeasedCredential = Readonly<{
+  kind: "api-key" | "oauth-access-token";
+  value: string;
+}>;
 
 export type BrowserCloudTransportOptions = Readonly<{
   connectionId: string;
@@ -33,6 +51,25 @@ export type BrowserCloudTransportOptions = Readonly<{
   maxToolCalls?: number;
   maxToolArgumentChars?: number;
   maxOutputTokens?: number;
+  /**
+   * Per-model output ceiling for providers that require an explicit one.
+   *
+   * A transport is constructed once per connection, before any model has been
+   * selected, so a single `maxOutputTokens` cannot express a per-model limit.
+   * Return `undefined` when nothing has been declared for that model; the
+   * connection-wide default then applies.
+   */
+  maxOutputTokensForModel?: (modelId: string) => number | undefined;
+  /**
+   * Page-side extension bridge for OAuth-token routes.
+   *
+   * Left unset, the page's own client is used when this runtime has a window to
+   * relay through — holding a client is not a claim that an extension exists,
+   * which only the live handshake can answer. Pass `null` to state that no
+   * bridge may be used at all, which is what proves the honest `unavailable`
+   * path.
+   */
+  bridge?: ExtensionBridgeClient | null;
   now?: () => number;
 }>;
 
@@ -45,7 +82,13 @@ export type ProviderTransportErrorCode =
   | "response-too-large"
   | "invalid-response"
   | "stream-truncated"
-  | "tool-call-invalid";
+  | "tool-call-invalid"
+  /** No extension answered, or it will not carry this provider. Never a network verdict. */
+  | "bridge-unavailable"
+  /** The bridge exists and declined this exchange. */
+  | "bridge-refused"
+  /** The bridge answered with something the wire contract rejects. */
+  | "bridge-protocol";
 
 export class ProviderTransportError extends Error {
   constructor(
@@ -62,10 +105,11 @@ export class ProviderTransportError extends Error {
 type ResolvedBrowserOptions = Readonly<{
   connectionId: string;
   connectionGeneration: number;
-  withApiKey: <T>(
+  withCredential: <T>(
     signal: AbortSignal,
-    use: (apiKey: string) => Promise<T>,
+    use: (credential: LeasedCredential) => Promise<T>,
   ) => Promise<T>;
+  bridge?: ExtensionBridgeClient;
   fetch: ProviderFetch;
   totalTimeoutMs: number;
   maxJsonBytes: number;
@@ -74,6 +118,7 @@ type ResolvedBrowserOptions = Readonly<{
   maxToolCalls: number;
   maxToolArgumentChars: number;
   maxOutputTokens: number;
+  maxOutputTokensForModel?: (modelId: string) => number | undefined;
   now: () => number;
 }>;
 
@@ -83,6 +128,13 @@ type CloudProviderDefinition = Readonly<{
   transportId: "openai-responses-v1" | "xai-responses-v1";
   origin: "https://api.openai.com" | "https://api.x.ai";
   catalogPath: "/v1/models" | "/v1/language-models";
+  /**
+   * Set only where a page genuinely cannot reach the provider with an OAuth
+   * token. `https://api.x.ai` sends no `access-control-allow-origin`, so the
+   * browser discards the reply even though the request is sent; OpenAI's token
+   * host answers `*`, so its OAuth path stays direct and needs no extension.
+   */
+  oauthBridgeProvider?: BridgeProviderId;
 }>;
 
 const OPENAI: CloudProviderDefinition = Object.freeze({
@@ -99,6 +151,7 @@ const XAI: CloudProviderDefinition = Object.freeze({
   transportId: "xai-responses-v1",
   origin: "https://api.x.ai",
   catalogPath: "/v1/language-models",
+  oauthBridgeProvider: "xai",
 });
 
 const DEFAULTS = Object.freeze({
@@ -108,8 +161,25 @@ const DEFAULTS = Object.freeze({
   maxSseEventChars: 4 * 1024 * 1024,
   maxToolCalls: 128,
   maxToolArgumentChars: 4 * 1024 * 1024,
-  maxOutputTokens: 8_192,
+  /*
+   * Anthropic requires `max_tokens` on every Messages request, and this
+   * transport is bound to a connection rather than to a model, so one number
+   * has to stand in before any model is chosen.
+   *
+   * This is deliberately NOT a claimed ceiling — Anthropic's directory
+   * publishes no per-model limit and Airship refuses to infer one from a model
+   * name. It is the output budget a turn asks for when nothing better is
+   * known, and it is generous on purpose: a budget below a model's real limit
+   * quietly shortens every reply, whereas a budget above it is refused, per
+   * Anthropic's published Messages contract, with a 400 that states the real
+   * limit. `AnthropicBrowserTransport` adopts that stated limit and retries
+   * once, so an over-ask self-corrects while an under-ask would not.
+   */
+  maxOutputTokens: 64_000,
 });
+
+/** Distinct models one Anthropic connection may remember a stated ceiling for. */
+const MAX_OBSERVED_OUTPUT_CEILINGS = 256;
 
 export class OpenAiBrowserTransport implements InferenceTransport {
   readonly id = OPENAI.transportId;
@@ -169,6 +239,7 @@ class OpenAiResponsesBrowserTransport implements InferenceTransport {
         `${this.provider.origin}${this.provider.catalogPath}`,
         { method: "GET" },
         lifetime.signal,
+        false,
       );
       const payload = await readJson(response, this.options.maxJsonBytes, this.provider.displayName);
       const observedAt = new Date(this.options.now()).toISOString();
@@ -226,6 +297,7 @@ class OpenAiResponsesBrowserTransport implements InferenceTransport {
           body: JSON.stringify(buildResponsesPayload(request)),
         },
         lifetime.signal,
+        true,
       );
       requireEventStream(response, this.provider.displayName);
       const assembler = new ResponsesStreamAssembler(this.options);
@@ -233,6 +305,7 @@ class OpenAiResponsesBrowserTransport implements InferenceTransport {
         response,
         lifetime.signal,
         this.options.maxSseEventChars,
+        this.provider.displayName,
       )) {
         for (const event of assembler.consume(message)) {
           if (event.type === "completed") completed = true;
@@ -254,25 +327,31 @@ class OpenAiResponsesBrowserTransport implements InferenceTransport {
     url: string,
     init: RequestInit,
     signal: AbortSignal,
+    streaming: boolean,
   ): Promise<Response> {
-    return this.options.withApiKey(signal, async (apiKey) => {
-      let response: Response;
-      try {
-        response = await this.options.fetch(url, {
-          ...init,
-          cache: "no-store",
-          credentials: "omit",
-          redirect: "error",
-          referrerPolicy: "no-referrer",
-          signal,
-          headers: {
-            ...objectHeaders(init.headers),
-            authorization: `Bearer ${apiKey}`,
-          },
-        });
-      } catch (error) {
-        throw normalizeFetchFailure(error, signal, this.provider.displayName);
-      }
+    return this.options.withCredential(signal, async (credential) => {
+      /*
+       * Both credential kinds present the same bearer header; only the route
+       * differs. An xAI OAuth token cannot travel the direct path at all — the
+       * browser discards a reply that carries no CORS grant — so it goes
+       * through the bridge or the request honestly fails as unavailable.
+       */
+      const headers = {
+        ...objectHeaders(init.headers),
+        authorization: `Bearer ${credential.value}`,
+      };
+      const response = await sendProviderRequest({
+        options: this.options,
+        displayName: this.provider.displayName,
+        bridgeProvider: credential.kind === "oauth-access-token"
+          ? this.provider.oauthBridgeProvider
+          : undefined,
+        url,
+        init,
+        headers,
+        signal,
+        streaming,
+      });
       if (!response.ok) {
         await discardBounded(response, this.options.maxErrorBytes);
         throw new ProviderTransportError(
@@ -290,6 +369,17 @@ export class AnthropicBrowserTransport implements InferenceTransport {
   readonly id = "anthropic-messages-v1";
   readonly posture = "plaintext-remote" as const;
   private readonly options: ResolvedBrowserOptions;
+  /**
+   * Per-model output ceilings Anthropic itself stated while refusing a
+   * request, keyed by model ID.
+   *
+   * This is the only per-model ceiling Airship can obtain without a person
+   * asserting one, so it is remembered for the life of the connection rather
+   * than re-earned on every turn. It is deliberately not written back into the
+   * model catalog: that row's `source` describes the directory listing that
+   * produced its ID and label, and a request refusal is not that listing.
+   */
+  private readonly observedOutputCeilings = new Map<string, number>();
 
   constructor(options: BrowserCloudTransportOptions) {
     this.options = resolveOptions(options);
@@ -306,7 +396,7 @@ export class AnthropicBrowserTransport implements InferenceTransport {
         const url = new URL("https://api.anthropic.com/v1/models");
         url.searchParams.set("limit", "100");
         if (afterId) url.searchParams.set("after_id", afterId);
-        const response = await this.request(url.toString(), { method: "GET" }, lifetime.signal);
+        const response = await this.request(url.toString(), { method: "GET" }, lifetime.signal, {});
         const payload = await readJson(response, this.options.maxJsonBytes, "Anthropic");
         const pageRecords = recordArray(payload, "data");
         records.push(...pageRecords);
@@ -365,21 +455,14 @@ export class AnthropicBrowserTransport implements InferenceTransport {
     const lifetime = new RequestLifetime(parentSignal, this.options.totalTimeoutMs);
     let completed = false;
     try {
-      const response = await this.request(
-        "https://api.anthropic.com/v1/messages",
-        {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(buildAnthropicPayload(request, this.options.maxOutputTokens)),
-        },
-        lifetime.signal,
-      );
+      const response = await this.openMessages(request, lifetime.signal);
       requireEventStream(response, "Anthropic");
       const assembler = new AnthropicStreamAssembler(this.options);
       for await (const message of parseSse(
         response,
         lifetime.signal,
         this.options.maxSseEventChars,
+        "Anthropic",
       )) {
         for (const event of assembler.consume(message)) {
           if (event.type === "completed") completed = true;
@@ -397,35 +480,131 @@ export class AnthropicBrowserTransport implements InferenceTransport {
     }
   }
 
+  /**
+   * Open the Messages stream, allowing at most one corrected re-send.
+   *
+   * The first send carries whatever ceiling Airship currently holds for this
+   * model. Only when Anthropic refuses it by naming the model's own limit is a
+   * second sent, and that second carries a number the vendor itself supplied —
+   * so a second refusal is a real failure and is raised untouched. There is no
+   * third attempt and no fallback to a number nobody chose.
+   *
+   * An operator declaration outranks an observed ceiling, so a declared model
+   * would re-send the identical number and be refused identically. That send
+   * is skipped: the operator's number is authoritative and its refusal is
+   * theirs to see, not something to quietly correct.
+   */
+  private async openMessages(
+    request: InferenceRequest,
+    signal: AbortSignal,
+  ): Promise<Response> {
+    const first = await this.sendMessages(request, signal);
+    if (first.kind === "response") return first.response;
+    if (this.options.maxOutputTokensForModel?.(request.model) !== undefined) throw first.error;
+    /*
+     * One connection is not expected to exercise anywhere near this many
+     * models, but the map is fed by request traffic, so it gets a ceiling like
+     * every other input. Past it the oldest entry is dropped; the only cost of
+     * dropping one is a single re-learning round trip.
+     */
+    if (this.observedOutputCeilings.size >= MAX_OBSERVED_OUTPUT_CEILINGS) {
+      const oldest = this.observedOutputCeilings.keys().next();
+      if (!oldest.done) this.observedOutputCeilings.delete(oldest.value);
+    }
+    this.observedOutputCeilings.set(request.model, first.statedCeiling);
+    const second = await this.sendMessages(request, signal);
+    if (second.kind === "response") return second.response;
+    throw second.error;
+  }
+
+  private async sendMessages(
+    request: InferenceRequest,
+    signal: AbortSignal,
+  ): Promise<AnthropicMessagesAttempt> {
+    const maxOutputTokens = resolveRequestOutputTokens(
+      this.options,
+      request.model,
+      this.observedOutputCeilings,
+    );
+    const refusal: { body: string | undefined } = { body: undefined };
+    try {
+      const response = await this.request(
+        "https://api.anthropic.com/v1/messages",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(buildAnthropicPayload(request, maxOutputTokens)),
+        },
+        signal,
+        {
+          streaming: true,
+          captureErrorBody: (body) => {
+            refusal.body = body;
+          },
+        },
+      );
+      return { kind: "response", response };
+    } catch (error) {
+      if (!(error instanceof ProviderTransportError) || error.status !== 400 || !refusal.body) {
+        throw error;
+      }
+      const statedCeiling = anthropicStatedOutputCeiling(refusal.body, maxOutputTokens);
+      if (statedCeiling === undefined) throw error;
+      return { kind: "ceiling-refused", statedCeiling, error };
+    }
+  }
+
   private async request(
     url: string,
     init: RequestInit,
     signal: AbortSignal,
+    options: Readonly<{ streaming?: boolean; captureErrorBody?: (body: string) => void }>,
   ): Promise<Response> {
-    return this.options.withApiKey(signal, async (apiKey) => {
-      let response: Response;
-      try {
-        response = await this.options.fetch(url, {
-          ...init,
-          cache: "no-store",
-          credentials: "omit",
-          redirect: "error",
-          referrerPolicy: "no-referrer",
-          signal,
-          headers: {
+    return this.options.withCredential(signal, async (credential) => {
+      const oauth = credential.kind === "oauth-access-token";
+      const headers = oauth
+        ? {
             ...objectHeaders(init.headers),
-            "x-api-key": apiKey,
+            authorization: `Bearer ${credential.value}`,
+            "anthropic-version": "2023-06-01",
+            /*
+             * The CLI fingerprint. Anthropic serves the OAuth inference path to
+             * Claude Code, and `user-agent` is a forbidden header name in
+             * JavaScript, so this set exists only because the bridge sets it —
+             * which is exactly why the OAuth route has no direct fallback.
+             */
+            ...ANTHROPIC_OAUTH_INFERENCE_HEADERS,
+          }
+        : {
+            ...objectHeaders(init.headers),
+            "x-api-key": credential.value,
             "anthropic-version": "2023-06-01",
             // Anthropic requires an explicit acknowledgement for direct browser
             // API use. Airship still treats this as a user-opted compatibility path.
             "anthropic-dangerous-direct-browser-access": "true",
-          },
-        });
-      } catch (error) {
-        throw normalizeFetchFailure(error, signal, "Anthropic");
-      }
+          };
+      const response = await sendProviderRequest({
+        options: this.options,
+        displayName: "Anthropic",
+        bridgeProvider: oauth ? "anthropic" : undefined,
+        url,
+        init,
+        headers,
+        signal,
+        streaming: options.streaming === true,
+      });
+      const captureErrorBody = options.captureErrorBody;
       if (!response.ok) {
-        await discardBounded(response, this.options.maxErrorBytes);
+        /*
+         * The refusal body is read only when a caller asked to inspect it, and
+         * even then it never reaches the thrown error: the caller sees the
+         * status plus Airship's own sentence, exactly as before.
+         */
+        if (captureErrorBody) {
+          captureErrorBody(await readErrorBody(response, this.options.maxErrorBytes));
+        } else {
+          await discardBounded(response, this.options.maxErrorBytes);
+        }
         throw new ProviderTransportError(
           "http",
           `Anthropic rejected the request with HTTP ${response.status}.`,
@@ -436,6 +615,11 @@ export class AnthropicBrowserTransport implements InferenceTransport {
     });
   }
 }
+
+/** One Messages send: either a stream, or a refusal that named the real ceiling. */
+type AnthropicMessagesAttempt =
+  | Readonly<{ kind: "response"; response: Response }>
+  | Readonly<{ kind: "ceiling-refused"; statedCeiling: number; error: ProviderTransportError }>;
 
 type SseMessage = Readonly<{ event?: string; data: string }>;
 
@@ -638,15 +822,26 @@ class AnthropicStreamAssembler {
 function buildResponsesPayload(request: InferenceRequest): Record<string, unknown> {
   const input: Record<string, unknown>[] = [];
   for (const message of request.messages) input.push(...toResponsesInput(message));
+  const tools = request.tools.map(toResponsesTool);
   return {
     model: request.model,
     instructions: request.systemPrompt,
     input,
-    tools: request.tools.map(toResponsesTool),
-    tool_choice: "auto",
-    parallel_tool_calls: true,
     stream: true,
     store: false,
+    /*
+     * `tool_choice` and `parallel_tool_calls` are only meaningful alongside a
+     * non-empty `tools` array, and the Responses contract validates a
+     * tool-selection field against the declared list — so a request that sends
+     * them with `tools: []` is one OpenAI or xAI would be entitled to refuse.
+     * Whether either actually refuses it has never been observed here (no
+     * vendor key exists in this repository), which is precisely why the whole
+     * tool block is omitted rather than left to chance: the fabric's mandatory
+     * activation probe (fabric.ts verifyInvocation) is exactly such a request.
+     * This is the same boundary the proven Chutes payload builder already
+     * enforces (chutes/openai.ts).
+     */
+    ...(tools.length ? { tools, tool_choice: "auto", parallel_tool_calls: true } : {}),
   };
 }
 
@@ -703,18 +898,23 @@ function buildAnthropicPayload(
   request: InferenceRequest,
   maxOutputTokens: number,
 ): Record<string, unknown> {
+  const tools = request.tools.map((tool) => ({
+    name: tool.name,
+    description: tool.description,
+    input_schema: tool.inputSchema,
+  }));
   return {
     model: request.model,
     system: request.systemPrompt,
     max_tokens: maxOutputTokens,
     messages: request.messages.map(toAnthropicMessage),
-    tools: request.tools.map((tool) => ({
-      name: tool.name,
-      description: tool.description,
-      input_schema: tool.inputSchema,
-    })),
-    tool_choice: { type: "auto" },
     stream: true,
+    /*
+     * Messages requests validate `tool_choice` against the declared tool list,
+     * so a toolless turn — including the fabric's mandatory activation probe
+     * (fabric.ts verifyInvocation) — must send neither field.
+     */
+    ...(tools.length ? { tools, tool_choice: { type: "auto" } } : {}),
   };
 }
 
@@ -798,6 +998,70 @@ function capabilityEvidence(
   });
 }
 
+/**
+ * Precedence for one request's `max_tokens`: an operator declaration, then a
+ * ceiling the vendor stated while refusing an earlier send, then the
+ * connection-wide budget.
+ *
+ * A declaration wins outright even when it exceeds an observed ceiling — the
+ * operator's number is authoritative and its refusal is theirs to see. A
+ * resolver that answers with something other than a usable token count is a
+ * configuration defect, so it fails the request instead of quietly falling
+ * back to a number the operator did not choose. Its bound is the same
+ * `MAX_MODEL_OUTPUT_TOKENS` the model catalog validates against, so no
+ * declaration can be accepted there and rejected here.
+ */
+function resolveRequestOutputTokens(
+  options: ResolvedBrowserOptions,
+  modelId: string,
+  observedCeilings: ReadonlyMap<string, number>,
+): number {
+  const declared = options.maxOutputTokensForModel?.(modelId);
+  if (declared === undefined) return observedCeilings.get(modelId) ?? options.maxOutputTokens;
+  if (!Number.isSafeInteger(declared) || declared < 1 || declared > MAX_MODEL_OUTPUT_TOKENS) {
+    throw new TypeError(`The declared maximum output for model ${modelId} is invalid.`);
+  }
+  return declared;
+}
+
+/**
+ * Recover the model's own output ceiling from an Anthropic refusal, or nothing.
+ *
+ * Anthropic's published Messages contract answers an over-large `max_tokens`
+ * with a 400 `invalid_request_error` whose message states the model's limit,
+ * in the shape `max_tokens: <asked> > <limit>, which is the maximum allowed
+ * number of output tokens for <model>`. No such response has been observed in
+ * this repository — no Anthropic key exists here — so the match is deliberately
+ * narrow, and anything that does not match returns `undefined`, leaving the
+ * original refusal to propagate. Checked: the error envelope and its
+ * `invalid_request_error` type, the bounded message length, the
+ * `max_tokens: <asked> > <limit>` prefix, the literal
+ * "maximum allowed number of output tokens" clause that must follow it, and
+ * `<asked>` being exactly the value this request sent. Deliberately *not*
+ * checked: the trailing model name, because Anthropic may echo a resolved alias
+ * rather than the id that was requested and this repository has no observation
+ * to settle that on. The stated limit must also be strictly below what was
+ * asked, which is what makes the single retry terminate.
+ */
+function anthropicStatedOutputCeiling(body: string, requested: number): number | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return undefined;
+  }
+  if (!isRecord(parsed) || !isRecord(parsed.error)) return undefined;
+  if (parsed.error.type !== "invalid_request_error") return undefined;
+  const message = parsed.error.message;
+  if (typeof message !== "string" || message.length > 4_096) return undefined;
+  // The bounded gap keeps the lazy quantifier linear against the 4 KiB cap
+  // above; the published clause sits 16 characters after the limit.
+  const stated = /max_tokens:\s*(\d{1,9})\s*>\s*(\d{1,9})\b[\s\S]{0,120}?maximum allowed number of output tokens/u.exec(message);
+  if (!stated || Number(stated[1]) !== requested) return undefined;
+  const ceiling = Number(stated[2]);
+  return Number.isSafeInteger(ceiling) && ceiling >= 1 && ceiling < requested ? ceiling : undefined;
+}
+
 function resolveOptions(options: BrowserCloudTransportOptions): ResolvedBrowserOptions {
   if ((typeof options.getApiKey === "function") === (options.connections !== undefined)) {
     throw new TypeError("Provide exactly one page-memory connection registry or API-key getter.");
@@ -807,25 +1071,37 @@ function resolveOptions(options: BrowserCloudTransportOptions): ResolvedBrowserO
     options.connectionGeneration,
     "connectionGeneration",
   );
-  const withApiKey: ResolvedBrowserOptions["withApiKey"] = options.connections
+  const withCredential: ResolvedBrowserOptions["withCredential"] = options.connections
     ? async (signal, use) => options.connections!.useCredential(
         connectionId,
         { expectedGeneration: connectionGeneration, signal },
         (leased) => {
-          if (leased.kind !== "api-key") {
+          if (leased.kind === "local-none") {
             throw new TypeError(
-              `Inference connection ${connectionId} does not contain an API key.`,
+              `Inference connection ${connectionId} does not contain a cloud credential.`,
             );
           }
-          return use(leased.value);
+          return use(Object.freeze({ kind: leased.kind, value: leased.value }));
         },
       )
-    : async (signal, use) => use(await resolveApiKey(options.getApiKey!, signal));
+    : async (signal, use) => use(Object.freeze({
+        kind: "api-key",
+        value: await resolveApiKey(options.getApiKey!, signal),
+      }));
   if (!globalThis.fetch && !options.fetch) throw new TypeError("Fetch is unavailable.");
+  /*
+   * `undefined` means "use whatever relay this page has"; `null` means "no
+   * bridge may be used". Neither is a claim about an installed extension —
+   * only the live handshake inside the client answers that.
+   */
+  const bridge = options.bridge === undefined
+    ? pageExtensionBridge()
+    : options.bridge ?? undefined;
   return Object.freeze({
     connectionId,
     connectionGeneration,
-    withApiKey,
+    withCredential,
+    ...(bridge ? { bridge } : {}),
     fetch: options.fetch ?? globalThis.fetch.bind(globalThis),
     totalTimeoutMs: positiveInteger(options.totalTimeoutMs ?? DEFAULTS.totalTimeoutMs, "totalTimeoutMs"),
     maxJsonBytes: positiveInteger(options.maxJsonBytes ?? DEFAULTS.maxJsonBytes, "maxJsonBytes"),
@@ -843,6 +1119,9 @@ function resolveOptions(options: BrowserCloudTransportOptions): ResolvedBrowserO
       options.maxOutputTokens ?? DEFAULTS.maxOutputTokens,
       "maxOutputTokens",
     ),
+    ...(options.maxOutputTokensForModel
+      ? { maxOutputTokensForModel: options.maxOutputTokensForModel }
+      : {}),
     now: options.now ?? Date.now,
   });
 }
@@ -889,12 +1168,152 @@ async function resolveApiKey(getter: ProviderApiKeyGetter, signal: AbortSignal):
   }
 }
 
+type ProviderSend = Readonly<{
+  options: ResolvedBrowserOptions;
+  displayName: string;
+  /** Present only when this exact request must leave through the extension. */
+  bridgeProvider?: BridgeProviderId;
+  url: string;
+  init: RequestInit;
+  headers: Readonly<Record<string, string>>;
+  signal: AbortSignal;
+  streaming: boolean;
+}>;
+
+/**
+ * The one place a request chooses its route.
+ *
+ * Without `bridgeProvider` this is byte-for-byte the direct browser fetch
+ * Airship has always issued, including every API-key path. With it, the
+ * request is one a page cannot make at all, so there is deliberately no
+ * fallback to the direct path: an absent bridge is reported as `unavailable`
+ * with its cause named, never as a network failure and never silently.
+ */
+async function sendProviderRequest(request: ProviderSend): Promise<Response> {
+  if (!request.bridgeProvider) {
+    try {
+      return await request.options.fetch(request.url, {
+        ...request.init,
+        cache: "no-store",
+        credentials: "omit",
+        redirect: "error",
+        referrerPolicy: "no-referrer",
+        signal: request.signal,
+        headers: { ...request.headers },
+      });
+    } catch (error) {
+      throw normalizeFetchFailure(error, request.signal, request.displayName);
+    }
+  }
+  const bridge = request.options.bridge;
+  if (!bridge) {
+    throw new ProviderTransportError(
+      "bridge-unavailable",
+      `${request.displayName} OAuth requests cannot be made from a page and require the Airship browser extension. This page has no extension bridge relay, so the OAuth route is unavailable; the API-key route is unaffected.`,
+    );
+  }
+  const method = request.init.method === "POST" ? "POST" : "GET";
+  if (request.init.body !== undefined && request.init.body !== null
+    && typeof request.init.body !== "string") {
+    throw new TypeError("A bridged provider request body must be a string.");
+  }
+  try {
+    return await bridge.fetch({
+      provider: request.bridgeProvider,
+      url: request.url,
+      method,
+      headers: request.headers,
+      ...(typeof request.init.body === "string" ? { body: request.init.body } : {}),
+      stream: request.streaming,
+      signal: request.signal,
+    });
+  } catch (error) {
+    throw normalizeBridgeFailure(error, request.displayName, request.signal);
+  }
+}
+
+/**
+ * Map a bridge failure onto this transport's vocabulary without ever letting it
+ * read as a network verdict: "no extension answered" is a different fact from
+ * "the provider could not be reached", and conflating them would tell an
+ * operator to debug their network.
+ */
+function normalizeBridgeFailure(
+  error: unknown,
+  provider: string,
+  signal?: AbortSignal,
+): ProviderTransportError {
+  if (error instanceof ProviderTransportError) return error;
+  if (!(error instanceof ExtensionBridgeError)) {
+    if (signal?.aborted) return normalizedAbort(signal);
+    return new ProviderTransportError(
+      "bridge-protocol",
+      `The extension bridge failed the ${provider} request in a way this client does not recognize.`,
+      undefined,
+      { cause: error },
+    );
+  }
+  switch (error.code) {
+    case "bridge-unavailable":
+      return new ProviderTransportError(
+        "bridge-unavailable",
+        `${provider} OAuth requests require the Airship browser extension. ${error.message}`,
+        undefined,
+        { cause: error },
+      );
+    case "bridge-refused":
+    case "bridge-busy":
+    case "bridge-error":
+      return new ProviderTransportError(
+        "bridge-refused",
+        `The extension bridge declined or could not complete the ${provider} request. ${error.message}`,
+        undefined,
+        { cause: error },
+      );
+    case "bridge-too-large":
+      return new ProviderTransportError(
+        "response-too-large",
+        `The bridged ${provider} exchange exceeds a client limit. ${error.message}`,
+        undefined,
+        { cause: error },
+      );
+    case "bridge-timeout":
+      return new ProviderTransportError(
+        "timeout",
+        `The bridged ${provider} request timed out.`,
+        undefined,
+        { cause: error },
+      );
+    case "bridge-cancelled":
+      return signal?.aborted
+        ? normalizedAbort(signal)
+        : new ProviderTransportError(
+            "cancelled",
+            `The bridged ${provider} request was cancelled.`,
+            undefined,
+            { cause: error },
+          );
+    default:
+      return new ProviderTransportError(
+        "bridge-protocol",
+        `The extension bridge broke the ${provider} exchange. ${error.message}`,
+        undefined,
+        { cause: error },
+      );
+  }
+}
+
 function normalizeFetchFailure(
   error: unknown,
   signal: AbortSignal,
   provider: string,
 ): ProviderTransportError {
   if (signal.aborted) return normalizedAbort(signal);
+  // A bridged failure that reached here is already a named cause; re-labelling
+  // it "network or CORS" would be a guess the client did not make.
+  if (error instanceof ProviderTransportError || error instanceof ExtensionBridgeError) {
+    return normalizeBridgeFailure(error, provider, signal);
+  }
   return new ProviderTransportError(
     "network-or-cors",
     `${provider} could not be reached from this browser. The cause may be network reachability, provider availability, or CORS policy; no inference completion was accepted.`,
@@ -951,6 +1370,7 @@ async function* parseSse(
   response: Response,
   signal: AbortSignal,
   maxEventChars: number,
+  provider: string,
 ): AsyncIterable<SseMessage> {
   if (!response.body) throw new ProviderTransportError("invalid-response", "SSE body is missing.");
   const reader = response.body.getReader();
@@ -967,6 +1387,9 @@ async function* parseSse(
   } catch (error) {
     if (signal.aborted) throw normalizedAbort(signal);
     if (error instanceof ProviderTransportError) throw error;
+    // A bridged stream reports its own failure through the body, so the cause
+    // arrives here rather than at the request call; it must keep its name.
+    if (error instanceof ExtensionBridgeError) throw normalizeBridgeFailure(error, provider, signal);
     throw new ProviderTransportError("invalid-response", "Provider SSE decoding failed.", undefined, {
       cause: error,
     });
@@ -1047,8 +1470,18 @@ async function readBoundedText(response: Response, maxBytes: number): Promise<st
   let output = "";
   try {
     for (;;) {
-      const { done, value } = await reader.read();
+      let done: boolean;
+      let value: Uint8Array | undefined;
+      try {
+        ({ done, value } = await reader.read());
+      } catch (error) {
+        // A bridged body fails through the stream. Keep the bridge's own cause
+        // rather than letting it surface as an unclassified read error.
+        if (error instanceof ExtensionBridgeError) throw normalizeBridgeFailure(error, "The provider");
+        throw error;
+      }
       if (done) break;
+      if (!value) continue;
       bytes += value.byteLength;
       if (bytes > maxBytes) {
         void reader.cancel();
@@ -1067,6 +1500,22 @@ async function discardBounded(response: Response, maxBytes: number): Promise<voi
     await readBoundedText(response, maxBytes);
   } catch {
     void response.body?.cancel();
+  }
+}
+
+/**
+ * Read a bounded refusal body for Airship's own inspection.
+ *
+ * A body that is oversized, truncated, or not decodable degrades to an empty
+ * string rather than replacing the refusal with a parse failure: the caller's
+ * original error is what the operator must see.
+ */
+async function readErrorBody(response: Response, maxBytes: number): Promise<string> {
+  try {
+    return await readBoundedText(response, maxBytes);
+  } catch {
+    void response.body?.cancel();
+    return "";
   }
 }
 

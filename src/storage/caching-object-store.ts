@@ -1,10 +1,12 @@
-import type {
-  CompareAndSwapResult,
-  ObjectRange,
-  ObjectRecord,
-  ObjectStore,
-  ObjectSummary,
-  PutIfAbsentResult,
+import {
+  isReclaimableObjectStore,
+  type CompareAndSwapResult,
+  type ObjectRange,
+  type ObjectRecord,
+  type ObjectReclamationReceipt,
+  type ObjectStore,
+  type ObjectSummary,
+  type PutIfAbsentResult,
 } from "./object-store";
 import {
   ClientCiphertextCache,
@@ -22,6 +24,12 @@ export type ImmutableCiphertextClassifier = (key: string) => CiphertextCacheKind
 export class CiphertextCachingObjectStore implements ObjectStore {
   readonly capabilities;
   readonly acceleration: CiphertextCacheCapability;
+  /**
+   * Defined only when the wrapped authority can itself reclaim, so that
+   * `isReclaimableObjectStore` on the wrapper stays a truthful capability report
+   * rather than an unconditional method that would throw at call time.
+   */
+  readonly trash?: (keys: readonly string[], signal?: AbortSignal) => Promise<ObjectReclamationReceipt>;
 
   constructor(
     private readonly authority: ObjectStore,
@@ -30,6 +38,16 @@ export class CiphertextCachingObjectStore implements ObjectStore {
   ) {
     this.capabilities = authority.capabilities;
     this.acceleration = cache.capability;
+    if (isReclaimableObjectStore(authority)) {
+      this.trash = async (keys, signal) => {
+        const receipt = await authority.trash(keys, signal);
+        // Cache pages are dropped for every requested key regardless of the
+        // provider outcome: the index entry is gone either way, and a cached
+        // copy of an unindexed object must never be served as if it were live.
+        for (const key of keys) await this.dropSupersededRevision(key);
+        return receipt;
+      };
+    }
   }
 
   async get(key: string, signal?: AbortSignal): Promise<ObjectRecord | undefined> {
@@ -128,6 +146,20 @@ export class CiphertextCachingObjectStore implements ObjectStore {
   list(prefix: string, signal?: AbortSignal): Promise<ObjectSummary[]> {
     // A cache inventory cannot establish provider presence or current heads.
     return this.authority.list(prefix, signal);
+  }
+
+  /**
+   * Drops a revision-scoped immutable page that can never be read again.
+   *
+   * Producers mint a fresh key per revision, so a superseded (or lost-race)
+   * ciphertext object is dead weight the LRU would otherwise hold until it aged
+   * out. This is duck-typed on purpose: producers hold the narrow ObjectStore
+   * type and some facades are frozen records with no such method.
+   */
+  async dropSupersededRevision(key: string): Promise<void> {
+    const kind = this.classifyImmutable(key);
+    if (!kind) return;
+    await this.cache.remove({ objectKey: key, kind }).catch(() => undefined);
   }
 
   closeAcceleration(): void {

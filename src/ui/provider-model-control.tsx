@@ -68,7 +68,7 @@ export function ProviderModelControl({
         <span class="session-runtime-icon"><Icon name="model" size={17} /></span>
         <span>
           <small>Session model</small>
-          <strong>Connect inference</strong>
+          <strong>Connect a model</strong>
         </span>
         <span class="runtime-posture">Local tools ready</span>
       </button>

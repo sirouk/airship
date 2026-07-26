@@ -64,7 +64,7 @@ const EXECUTION_TOOL_DEFINITIONS = Object.freeze([
         type: "object",
         properties: {
           runtime: { type: "string", enum: ["python-pyodide", "node-webcontainer"] },
-          timeoutMs: { type: "integer", minimum: 1_000, maximum: 30_000 },
+          timeoutMs: { type: "integer", minimum: 1_000, maximum: 30_000, description: "Bounds the whole activation, cold start included." },
         },
         required: ["runtime"],
         additionalProperties: false,
@@ -78,7 +78,7 @@ const EXECUTION_TOOL_DEFINITIONS = Object.freeze([
     },
     {
       name: "execute_code",
-      description: "Execute one strictly typed browser job in a ready runtime: JavaScript source; a precompiled WASI Preview 1 command (including Rust compiled elsewhere for wasm32-wasip1) with optional bounded workspace snapshot/writeback; or explicitly installed Pyodide Python. This is not Bash, rustc, Cargo, or host execution. Inspect runtimes first; Node projects use execute_node_project.",
+      description: "Execute one strictly typed browser job in a ready runtime: JavaScript source; a precompiled WASI Preview 1 command (including Rust compiled elsewhere for wasm32-wasip1) supplied as a workspace wasmPath or inline wasmBase64, with optional bounded workspace snapshot/writeback; or explicitly installed Pyodide Python. This is not Bash, rustc, Cargo, or host execution. Inspect runtimes first; Node projects use execute_node_project.",
       effect: "execute",
       inputSchema: {
         type: "object",
@@ -86,14 +86,43 @@ const EXECUTION_TOOL_DEFINITIONS = Object.freeze([
           runtime: { type: "string", enum: ["javascript-worker", "wasi-preview1", "python-pyodide"] },
           code: { type: "string", minLength: 1, maxLength: MAX_CODE_CHARS },
           wasmBase64: { type: "string", minLength: 12, maxLength: MAX_WASM_BASE64_CHARS },
+          wasmPath: { type: "string", minLength: 1, maxLength: 1_024 },
           args: { type: "array", maxItems: 64, items: { type: "string", maxLength: 4_096 } },
           env: { type: "object", maxProperties: 64, additionalProperties: { type: "string", maxLength: 4_096 } },
           workspaceRoot: { type: "string", minLength: 1, maxLength: 1_024 },
           sourcePath: { type: "string", minLength: 1, maxLength: 1_024 },
           writeBack: { type: "boolean" },
-          timeoutMs: { type: "integer", minimum: 50, maximum: 10_000 },
+          timeoutMs: { type: "integer", minimum: 50, maximum: 10_000, description: "Bounds the job's own statements only. A python-pyodide cold start is bounded separately (up to 30 s) and reported as bootMs, so total wall clock can exceed this." },
         },
         required: ["runtime"],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "execute_shell",
+      description:
+        "Run one POSIX sh script in airship-sh, Airship's own in-browser shell interpreter, over a bounded snapshot of a "
+        + "workspace directory. Real shell semantics: single/double/backslash quoting, $VAR and ${VAR:-x}/${VAR:=x}/"
+        + "${VAR:?x}/${VAR:+x}/${VAR#p}/${VAR%p}/${#VAR}, $(...) and backticks, $((...)) arithmetic, tilde and IFS field "
+        + "splitting, * ? [...] globbing against the real workspace, pipelines, ! && || ;, ( ) subshells, { } groups, "
+        + "if/for/while/until/case, functions, > >> < 2> 2>&1 >& redirection, << and <<- here-documents, and utilities "
+        + "including ls cat cp mv rm mkdir rmdir touch head tail wc grep sed sort uniq cut tr find basename dirname "
+        + "realpath xargs env date seq diff stat du. It is NOT GNU Bash and has no subprocesses: no job control or `&`, "
+        + "no signals other than trap EXIT, no arrays, no process substitution, no [[ ]], no host filesystem, no network, "
+        + "and no git/python/node commands. Unsupported syntax is a parse error and an unimplemented utility flag is an "
+        + "error, never a silent no-op. Files change only when writeBack is true and the script exits 0.",
+      effect: "write",
+      inputSchema: {
+        type: "object",
+        properties: {
+          script: { type: "string", minLength: 1, maxLength: MAX_CODE_CHARS },
+          workspaceRoot: { type: "string", minLength: 1, maxLength: 1_024 },
+          args: { type: "array", maxItems: 64, items: { type: "string", maxLength: 4_096 } },
+          env: { type: "object", maxProperties: 64, additionalProperties: { type: "string", maxLength: 4_096 } },
+          writeBack: { type: "boolean" },
+          timeoutMs: { type: "integer", minimum: 50, maximum: 30_000 },
+        },
+        required: ["script"],
         additionalProperties: false,
       },
     },

@@ -2,10 +2,12 @@ import { HashEmbeddingProvider } from "./hash-embeddings";
 import type { EmbeddingProvider } from "./contracts";
 import {
   getBrowserCapabilityRegistry,
+  semanticWasmThreadCount,
   type BrowserRuntimeCapabilityReport,
 } from "../capabilities/browser-runtime";
 import {
   LazySemanticWorkerEmbeddingProvider,
+  type SemanticAccelerationPreference,
   type SemanticProviderState,
   type SemanticWorkerPort,
 } from "./semantic-worker-provider";
@@ -36,9 +38,17 @@ export function writeEmbeddingMode(mode: EmbeddingMode): void {
   }
 }
 
+type CapabilitySource = Pick<BrowserRuntimeCapabilityReport, "scheduling"> | undefined;
+
 export type BrowserSemanticProviderOptions = Readonly<{
   workerFactory?: () => SemanticWorkerPort;
-  capabilities?: () => Pick<BrowserRuntimeCapabilityReport, "scheduling"> | undefined;
+  /**
+   * Resolved, never sampled: the default awaits the capability probe instead of
+   * reading snapshot(), because a cold snapshot at first embed would latch the
+   * worker onto the WASM fallback on a WebGPU-preferring host for the rest of
+   * the page lifetime.
+   */
+  capabilities?: () => CapabilitySource | Promise<CapabilitySource>;
 }>;
 
 export function createBrowserSemanticProvider(options: BrowserSemanticProviderOptions = {}): LazySemanticWorkerEmbeddingProvider {
@@ -50,11 +60,20 @@ export function createBrowserSemanticProvider(options: BrowserSemanticProviderOp
     });
     return worker as SemanticWorkerPort;
   });
-  const capabilities = options.capabilities ?? (() => getBrowserCapabilityRegistry().snapshot());
-  return new LazySemanticWorkerEmbeddingProvider(
-    workerFactory,
-    () => capabilities()?.scheduling.preferredSemanticBackend === "webgpu",
-  );
+  const capabilities = options.capabilities
+    ?? (() => getBrowserCapabilityRegistry().refresh().catch(() => undefined));
+  return new LazySemanticWorkerEmbeddingProvider(workerFactory, async () => {
+    const scheduling = (await capabilities())?.scheduling;
+    // No policy means no observation to act on. Returning undefined hands the
+    // provider its own fallback rather than asserting a backend choice here.
+    if (!scheduling) return undefined;
+    const preference: SemanticAccelerationPreference = {
+      backend: scheduling.preferredSemanticBackend === "webgpu" ? "webgpu" : "wasm",
+      powerPreference: scheduling.powerPreference,
+      wasmThreads: semanticWasmThreadCount(scheduling),
+    };
+    return Object.freeze(preference);
+  });
 }
 
 let semanticWorkerPolicy: { createScriptURL(input: string): object } | undefined;

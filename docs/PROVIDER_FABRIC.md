@@ -167,6 +167,54 @@ Canonical Airship tool results become Anthropic `tool_result` blocks. Inline
 image data is restricted to the media types accepted by the current Messages
 contract.
 
+All three adapters omit the entire tool block — `tools`, `tool_choice`, and
+(for Responses) `parallel_tool_calls` — from a turn that declares no tools.
+Both vendor contracts validate a tool-selection field against the declared tool
+list, and `BrowserInferenceFabric.activate()`'s mandatory invocation probe is
+exactly a toolless turn, so emitting an empty `tools: []` alongside
+`tool_choice` made the probe a request the vendor was entitled to refuse.
+Whether either Responses vendor actually refuses it has never been observed
+here — no vendor key exists in this repository — which is why the block is
+omitted rather than left to chance. The Chutes payload builder already carried
+this boundary; the direct cloud adapters now match it.
+
+### Anthropic `max_tokens`
+
+Anthropic requires `max_tokens` on every Messages request and, per its
+published contract, rejects any value above the selected model's own ceiling
+with a 400 that states that ceiling. A transport is constructed per connection,
+before a model is chosen, so one number has to stand in. Airship resolves it in
+this order:
+
+1. an operator declaration for that exact model
+   (`declareModelMetadata` → `maxOutputTokensForModel`);
+2. a ceiling Anthropic itself stated while refusing an earlier send on this
+   connection;
+3. the connection-wide budget, 64000 tokens.
+
+Step 3 is a requested budget, not a claimed ceiling: Airship still does not
+infer a limit from a model name. It is deliberately generous because the two
+errors are not symmetric — a budget below a model's real limit silently
+shortens every reply, while a budget above it is refused with the real number
+attached. On such a refusal `AnthropicBrowserTransport` adopts the stated
+ceiling and re-sends **once**; a second refusal is raised. The parser requires
+the exact documented shape (a 400 `invalid_request_error` whose message reads
+`max_tokens: <asked> > <limit>, …`) and requires the stated limit to be
+strictly below what was asked, so anything else propagates the original refusal
+untouched. That refusal shape has never been observed here either, which is why
+every part of it is checked rather than assumed.
+
+A learned ceiling lives in the transport for the life of the connection and is
+**not** written into the model catalog: a catalog row's `source` describes the
+provider directory that produced its ID and label, and a request refusal is not
+that directory. So a learned ceiling does not appear as `out=` in the agent's
+availability snapshot; only an operator declaration or a local provider's own
+published limit does.
+
+The declared ceiling is bounded by `MAX_MODEL_OUTPUT_TOKENS`, the same constant
+`normalizeModel` validates against, so the fabric cannot accept a declaration
+the next request would throw on.
+
 All three adapters:
 
 - use fixed HTTPS provider origins;
@@ -182,6 +230,63 @@ OpenAI's basic model list and Anthropic's model list do not currently carry a
 complete machine-readable feature matrix, so their normalized capabilities
 remain unknown. xAI's detailed language-model list supplies input/output
 modalities; undeclared tool and reasoning capabilities remain unknown.
+
+## Model limits and where they come from
+
+`InferenceModelDescriptor` carries optional `contextWindowTokens` and
+`maxOutputTokens`, and the credential-free availability snapshot passes both
+through to the agent's `inspect_inference_connections` result and to the prompt
+projection, where they render as `ctx=` / `out=` facets. Both are omitted, never
+defaulted, when nothing observed them — an absent facet is the honest statement
+that the number is unknown, and the agent must not read it as "unlimited".
+
+Sources today:
+
+- Ollama and LM Studio publish a real context length, which the local catalog
+  adapter records as `local-discovery`.
+- OpenAI, Anthropic, and xAI publish neither limit in their model directories,
+  and Airship forbids inferring one from a model name or family (invariant 5).
+- `BrowserInferenceFabric.declareModelMetadata()` records an operator-declared
+  value and relabels that row's `source.kind` as `manual`, because a person
+  asserted the number rather than the provider publishing it. That relabelling
+  is a deliberate provenance *downgrade* and it applies to the whole row, not
+  just the declared fields: the ID, label, and per-capability evidence still
+  came from the provider directory, and each capability keeps its own `source`,
+  but the row-level `source.kind` now understates where those unchanged fields
+  came from. Understating is the safe direction — nothing claims evidence it
+  does not have — so it is left as is and recorded here rather than fixed with
+  a second provenance field the UI has no way to render.
+- `declareModelMetadata()` has **no UI caller yet**. Nothing in the shipped app
+  invokes it, so in practice every cloud row's limits today are whatever the
+  provider published (nothing, for the three direct vendors) — see the
+  consequence below.
+
+Consequence to state plainly: until a value is declared, a cloud session has no
+context window, so the agent runtime pins no context-compression policy for it
+and a long conversation grows until the vendor refuses it. Because no UI can
+declare one yet, that is the state of *every* direct cloud session today.
+Anthropic output length is the one limit that is not simply absent: it falls
+back to the 64000-token requested budget above, self-corrected downward only if
+the vendor refuses it. That is a known, labeled gap rather than a silent one.
+
+## Live verification status
+
+`src/inference/providers/browser-cloud.live.test.ts` is an env-gated wire gate
+(`AIRSHIP_OPENAI_API_KEY`, `AIRSHIP_ANTHROPIC_API_KEY`, `AIRSHIP_XAI_API_KEY`,
+with optional `AIRSHIP_*_MODEL`). Per vendor it asserts the declared catalog
+route, a toolless probe reaching a terminal event, and a real streamed tool
+call. It runs on Node/undici, which sends no `Origin` and enforces no CORS, so
+it proves protocol only.
+
+Neither that gate nor a cross-origin browser gate has been executed against
+OpenAI, Anthropic, or xAI, so every claim in the compatibility table above about
+those three remains a documentation claim plus the dated 2026-07-24 probes
+below. Only Chutes has an executed live gate
+(`src/inference/chutes/transport.live.test.ts`). A browser reachability gate
+driving the built artifact from a real cross-origin page is still outstanding;
+the successful authenticated streamed turn from such a page — not an
+`access-control-allow-origin` assertion, which browsers do not expose — would be
+the CORS proof.
 
 ## Authoritative sources
 

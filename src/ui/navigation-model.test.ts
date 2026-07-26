@@ -76,6 +76,7 @@ describe("canonical navigation model", () => {
     expect(navigationViewFromHash("#billing")).toBe("billing");
     expect(navigationViewFromHash("#sources")).toBe("editor");
     expect(navigationViewFromHash("#attestations")).toBe("proof");
+    expect(navigationViewFromHash("#chat/018f40e0-7c62-7c70-9db7-6d5de37ae52c")).toBe("chat");
     expect(navigationViewFromHash("#unknown")).toBe("chat");
   });
 

@@ -52,10 +52,29 @@ The defaults are exact loopback origins:
 - Ollama: `http://127.0.0.1:11434`
 - LM Studio: `http://127.0.0.1:1234`
 
-Public, private-LAN, link-local, unique-local IPv6, `.local`, and custom-port
-hosts are rejected. Caller options cannot broaden that boundary. The stock
-runtime allowlist and CSP contain only the exact `localhost`, `127.0.0.1`, and
-`[::1]` origins on ports `11434` and `1234`.
+A caller may pass an `endpoint` on either provider, but only for another origin
+already in Airship's enumerated allowlist. The allowlist is one flat set, not a
+per-provider partition — `resolveLocalEndpoint` takes no provider argument and
+checks the origin against every entry — so either provider may legally be
+pointed at any of these twelve:
+
+- ports: `11434`, `11435`, `11436` (Ollama's default plus the two an extra
+  instance or `OLLAMA_HOST=:11435` usually lands on) and `1234`, `1235`, `1236`
+  (the LM Studio equivalents)
+- hosts: `localhost` and `127.0.0.1` only (`[::1]` is a loopback host but is not
+  an allowlisted origin, because a CSP `connect-src` source cannot express it)
+
+The ports are grouped above by which service usually occupies them, and that
+grouping is documentation only. Nothing rejects an Ollama connection to
+`http://127.0.0.1:1234`; what is enforced is the twelve-origin set itself.
+
+Public, private-LAN, link-local, unique-local IPv6, `.local`, and any other
+port are rejected, and the rejection names the exact origin that was refused.
+Caller options cannot broaden that boundary: the runtime allowlist
+(`DEFAULT_LOCAL_MODEL_ORIGINS`) and the `connect-src` policies in `index.html`
+and `public/_headers` are the same twelve origins, and a unit test fails if
+they ever diverge. A service on any other port must be moved onto one of these,
+because a wildcard `connect-src` is refused by the static-security gate.
 
 HTTP loopback remains browser-dependent and is labeled honestly because CORS
 and browser local-network access policy can still apply. Airship does not

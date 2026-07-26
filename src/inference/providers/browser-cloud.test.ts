@@ -8,6 +8,7 @@ import {
   type ProviderFetch,
 } from "./browser-cloud";
 import { InferenceConnectionRegistry } from "./connection-registry";
+import { MAX_MODEL_OUTPUT_TOKENS } from "./contracts";
 import { OFFICIAL_CLOUD_PROVIDERS } from "./official-providers";
 import { InferenceProviderCatalog } from "./provider-catalog";
 
@@ -181,6 +182,264 @@ describe("browser-direct cloud inference adapters", () => {
     ]);
   });
 
+  it("omits the tool block entirely when a turn declares no tools", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const capture = async (_input: RequestInfo | URL, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return sseResponse([
+        event("response.completed", { type: "response.completed", response: {} }),
+      ]);
+    };
+    const openai = new OpenAiBrowserTransport({
+      connectionId: "openai-main",
+      connectionGeneration: 1,
+      getApiKey: () => "sk-memory-only",
+      fetch: capture,
+    });
+    const xai = new XaiBrowserTransport({
+      connectionId: "xai-main",
+      connectionGeneration: 1,
+      getApiKey: () => "xai-memory-only",
+      fetch: capture,
+    });
+
+    await collect(openai.stream(toollessRequest(), new AbortController().signal));
+    await collect(xai.stream(toollessRequest(), new AbortController().signal));
+
+    expect(bodies).toHaveLength(2);
+    for (const body of bodies) {
+      expect(body).not.toHaveProperty("tools");
+      expect(body).not.toHaveProperty("tool_choice");
+      expect(body).not.toHaveProperty("parallel_tool_calls");
+      expect(body).toMatchObject({ stream: true, store: false });
+    }
+  });
+
+  it("omits Anthropic tool_choice when the connection probe carries no tools", async () => {
+    let body: Record<string, unknown> | undefined;
+    const transport = new AnthropicBrowserTransport({
+      connectionId: "anthropic-main",
+      connectionGeneration: 1,
+      getApiKey: () => "sk-ant-memory-only",
+      fetch: async (_input, init) => {
+        body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return sseResponse([event("message_stop", { type: "message_stop" })]);
+      },
+    });
+
+    await collect(transport.stream(toollessRequest(), new AbortController().signal));
+    expect(body).not.toHaveProperty("tools");
+    expect(body).not.toHaveProperty("tool_choice");
+    // Anthropic still requires max_tokens on every request.
+    expect(body).toMatchObject({ max_tokens: 64_000, stream: true });
+  });
+
+  it("prefers a declared per-model output ceiling over the connection default", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const transport = new AnthropicBrowserTransport({
+      connectionId: "anthropic-main",
+      connectionGeneration: 1,
+      getApiKey: () => "sk-ant-memory-only",
+      maxOutputTokensForModel: (modelId) =>
+        modelId === "declared/model" ? 200_000 : undefined,
+      fetch: async (_input, init) => {
+        bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return sseResponse([event("message_stop", { type: "message_stop" })]);
+      },
+    });
+
+    await collect(
+      transport.stream(
+        { ...toollessRequest(), model: "declared/model" },
+        new AbortController().signal,
+      ),
+    );
+    await collect(
+      transport.stream(
+        { ...toollessRequest(), model: "undeclared/model" },
+        new AbortController().signal,
+      ),
+    );
+
+    expect(bodies[0]).toMatchObject({ model: "declared/model", max_tokens: 200_000 });
+    expect(bodies[1]).toMatchObject({ model: "undeclared/model", max_tokens: 64_000 });
+  });
+
+  it("refuses an out-of-range declared output ceiling instead of falling back", async () => {
+    const fetch = vi.fn<ProviderFetch>();
+    const transport = new AnthropicBrowserTransport({
+      connectionId: "anthropic-main",
+      connectionGeneration: 1,
+      getApiKey: () => "sk-ant-memory-only",
+      maxOutputTokensForModel: () => 0,
+      fetch,
+    });
+
+    await expect(
+      collect(transport.stream(toollessRequest(), new AbortController().signal)),
+    ).rejects.toThrow(/declared maximum output/u);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("accepts a declaration exactly at the shared catalog ceiling and refuses one above it", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const transport = new AnthropicBrowserTransport({
+      connectionId: "anthropic-main",
+      connectionGeneration: 1,
+      getApiKey: () => "sk-ant-memory-only",
+      maxOutputTokensForModel: (modelId) =>
+        modelId === "at-ceiling/model" ? MAX_MODEL_OUTPUT_TOKENS : MAX_MODEL_OUTPUT_TOKENS + 1,
+      fetch: async (_input, init) => {
+        bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return sseResponse([event("message_stop", { type: "message_stop" })]);
+      },
+    });
+
+    await collect(
+      transport.stream(
+        { ...toollessRequest(), model: "at-ceiling/model" },
+        new AbortController().signal,
+      ),
+    );
+    expect(bodies).toEqual([expect.objectContaining({ max_tokens: MAX_MODEL_OUTPUT_TOKENS })]);
+
+    await expect(
+      collect(
+        transport.stream(
+          { ...toollessRequest(), model: "over-ceiling/model" },
+          new AbortController().signal,
+        ),
+      ),
+    ).rejects.toThrow(/declared maximum output/u);
+    expect(bodies).toHaveLength(1);
+  });
+
+  it("adopts the output ceiling Anthropic states in a refusal and re-sends exactly once", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const transport = new AnthropicBrowserTransport({
+      connectionId: "anthropic-main",
+      connectionGeneration: 1,
+      getApiKey: () => "sk-ant-memory-only",
+      fetch: async (_input, init) => {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        bodies.push(body);
+        if (body.max_tokens !== 8_192) return anthropicCeilingRefusal(Number(body.max_tokens), 8_192);
+        return sseResponse([event("message_stop", { type: "message_stop" })]);
+      },
+    });
+
+    await collect(transport.stream(toollessRequest(), new AbortController().signal));
+    expect(bodies.map((body) => body.max_tokens)).toEqual([64_000, 8_192]);
+
+    // The learned ceiling survives the turn, so the next one costs no refusal.
+    await collect(transport.stream(toollessRequest(), new AbortController().signal));
+    expect(bodies.map((body) => body.max_tokens)).toEqual([64_000, 8_192, 8_192]);
+  });
+
+  it("raises a 400 that names no ceiling instead of guessing a smaller one", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const transport = new AnthropicBrowserTransport({
+      connectionId: "anthropic-main",
+      connectionGeneration: 1,
+      getApiKey: () => "sk-ant-memory-only",
+      fetch: async (_input, init) => {
+        bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return new Response(
+          JSON.stringify({
+            type: "error",
+            error: { type: "invalid_request_error", message: "messages: at least one message is required" },
+          }),
+          { status: 400, headers: { "content-type": "application/json" } },
+        );
+      },
+    });
+
+    const error = await collect(transport.stream(toollessRequest(), new AbortController().signal))
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(ProviderTransportError);
+    expect(error).toMatchObject({ code: "http", status: 400 });
+    // No retry, and the vendor's prose never reaches the caller.
+    expect(bodies).toHaveLength(1);
+    expect((error as Error).message).toBe("Anthropic rejected the request with HTTP 400.");
+  });
+
+  it("adopts a ceiling only from a refusal that matches the whole published shape", async () => {
+    // Each of these carries a plausible-looking number that a prefix-only match
+    // would adopt. None is the refusal Anthropic documents, so none may change
+    // what this client asks for; the original 400 has to propagate untouched.
+    const nearMisses: readonly string[] = [
+      // The numeric prefix, but a different sentence: a refusal about the
+      // *input* budget, whose second number is not an output ceiling at all.
+      "max_tokens: 64000 > 8192, which exceeds the remaining prompt budget for this request",
+      // The right clause, but reporting on a request this client never sent.
+      "max_tokens: 12000 > 8192, which is the maximum allowed number of output tokens for provider/model",
+      // The clause, but not attached to a max_tokens comparison.
+      "8192 is the maximum allowed number of output tokens for provider/model",
+      // The clause pushed past the bounded gap the matcher will span.
+      `max_tokens: 64000 > 8192,${" and".repeat(40)} which is the maximum allowed number of output tokens for provider/model`,
+    ];
+
+    for (const message of nearMisses) {
+      const bodies: Record<string, unknown>[] = [];
+      const transport = new AnthropicBrowserTransport({
+        connectionId: "anthropic-main",
+        connectionGeneration: 1,
+        getApiKey: () => "sk-ant-memory-only",
+        fetch: async (_input, init) => {
+          bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+          return new Response(
+            JSON.stringify({ type: "error", error: { type: "invalid_request_error", message } }),
+            { status: 400, headers: { "content-type": "application/json" } },
+          );
+        },
+      });
+
+      await expect(
+        collect(transport.stream(toollessRequest(), new AbortController().signal)),
+      ).rejects.toMatchObject({ code: "http", status: 400 });
+      expect(bodies.map((body) => body.max_tokens)).toEqual([64_000]);
+    }
+  });
+
+  it("stops after one corrected re-send when the stated ceiling is refused again", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const transport = new AnthropicBrowserTransport({
+      connectionId: "anthropic-main",
+      connectionGeneration: 1,
+      getApiKey: () => "sk-ant-memory-only",
+      fetch: async (_input, init) => {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        bodies.push(body);
+        return anthropicCeilingRefusal(Number(body.max_tokens), Number(body.max_tokens) / 2);
+      },
+    });
+
+    await expect(
+      collect(transport.stream(toollessRequest(), new AbortController().signal)),
+    ).rejects.toMatchObject({ code: "http", status: 400 });
+    expect(bodies.map((body) => body.max_tokens)).toEqual([64_000, 32_000]);
+  });
+
+  it("does not re-send a refused operator declaration behind the operator's back", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const transport = new AnthropicBrowserTransport({
+      connectionId: "anthropic-main",
+      connectionGeneration: 1,
+      getApiKey: () => "sk-ant-memory-only",
+      maxOutputTokensForModel: () => 100_000,
+      fetch: async (_input, init) => {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        bodies.push(body);
+        return anthropicCeilingRefusal(Number(body.max_tokens), 8_192);
+      },
+    });
+
+    await expect(
+      collect(transport.stream(toollessRequest(), new AbortController().signal)),
+    ).rejects.toMatchObject({ code: "http", status: 400 });
+    expect(bodies.map((body) => body.max_tokens)).toEqual([100_000]);
+  });
+
   it("reports browser reachability honestly without asserting CORS as fact", async () => {
     const transport = new XaiBrowserTransport({
       connectionId: "xai-main",
@@ -288,6 +547,11 @@ function request(): InferenceRequest {
   };
 }
 
+/** Mirrors the fabric's mandatory activation probe, which declares no tools. */
+function toollessRequest(): InferenceRequest {
+  return { ...request(), tools: [] };
+}
+
 function jsonResponse(value: unknown): Response {
   return new Response(JSON.stringify(value), {
     status: 200,
@@ -295,6 +559,24 @@ function jsonResponse(value: unknown): Response {
   });
 }
 
+/**
+ * The refusal Anthropic's published Messages contract returns for an
+ * over-large `max_tokens`. Reproduced from that contract, not from an observed
+ * response: no Anthropic key exists in this repository.
+ */
+function anthropicCeilingRefusal(asked: number, ceiling: number): Response {
+  return new Response(
+    JSON.stringify({
+      type: "error",
+      error: {
+        type: "invalid_request_error",
+        message:
+          `max_tokens: ${asked} > ${ceiling}, which is the maximum allowed number of output tokens for provider/model`,
+      },
+    }),
+    { status: 400, headers: { "content-type": "application/json" } },
+  );
+}
 function sseResponse(events: readonly string[]): Response {
   return new Response(events.join(""), {
     status: 200,

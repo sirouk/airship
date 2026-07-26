@@ -1,4 +1,6 @@
 import {
+  MAX_MODEL_CONTEXT_WINDOW_TOKENS,
+  MAX_MODEL_OUTPUT_TOKENS,
   MODEL_CAPABILITIES,
   type InferenceModelDescriptor,
   type ModelAvailability,
@@ -144,10 +146,19 @@ export function normalizeModel(raw: InferenceModelDescriptor): InferenceModelDes
   }
   const contextWindowTokens = raw.contextWindowTokens === undefined
     ? undefined
-    : positiveInteger(raw.contextWindowTokens, "Model context window", 100_000_000);
+    : positiveInteger(
+      raw.contextWindowTokens,
+      "Model context window",
+      MAX_MODEL_CONTEXT_WINDOW_TOKENS,
+    );
+  /*
+   * The output ceiling is bounded by the same constant the cloud transports
+   * enforce at request time, so a declaration this catalog accepts can never
+   * be one the next request rejects.
+   */
   const maxOutputTokens = raw.maxOutputTokens === undefined
     ? undefined
-    : positiveInteger(raw.maxOutputTokens, "Model maximum output", 100_000_000);
+    : positiveInteger(raw.maxOutputTokens, "Model maximum output", MAX_MODEL_OUTPUT_TOKENS);
   const observedAt = canonicalTimestamp(raw.source.observedAt, "Model source timestamp");
   const sourceKinds = new Set(["provider-directory", "live-probe", "manual", "local-discovery"]);
   if (!sourceKinds.has(raw.source.kind)) throw new TypeError("The model source kind is invalid.");

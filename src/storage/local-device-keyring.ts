@@ -4,11 +4,13 @@ import {
 } from "../vault/recovery";
 import { WorkspaceRootKey } from "./encrypted-envelope";
 import { openLocalDeviceObjectStore } from "./local-device-object-store";
+// One derivation context, one implementation: a second copy could drift and
+// silently start accepting a different key as equivalent.
+import { equivalentWorkspaceKeys } from "./workspace-key-handle-store";
 
 const DATABASE = "airship-local-device-keyring-v1";
 const DATABASE_VERSION = 1;
 const STORE = "workspace-keys";
-const KEY_EQUIVALENCE_CONTEXT = "airship/local-device-key-equivalence/v1";
 
 export type PersistedWorkspaceKeyRecord = Readonly<{
   version: 1;
@@ -305,19 +307,6 @@ async function authenticateLocalAuthority(
     disposition: "open-existing",
   });
   opened.store.close();
-}
-
-async function equivalentWorkspaceKeys(
-  left: WorkspaceRootKey,
-  right: WorkspaceRootKey,
-  partition: string,
-): Promise<boolean> {
-  const logicalId = `${KEY_EQUIVALENCE_CONTEXT}\0${partition}`;
-  const [leftCommitment, rightCommitment] = await Promise.all([
-    left.opaqueObjectId(logicalId),
-    right.opaqueObjectId(logicalId),
-  ]);
-  return leftCommitment === rightCommitment;
 }
 
 function reopened(record: PersistedWorkspaceKeyRecord, created: boolean): LocalDeviceWorkspaceKey {

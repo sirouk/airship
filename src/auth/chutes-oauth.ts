@@ -2,10 +2,18 @@ const CHUTES_AUTHORIZE_ENDPOINT = "https://api.chutes.ai/idp/authorize";
 const CHUTES_TOKEN_ENDPOINT = import.meta.env.DEV && import.meta.env.MODE !== "test"
   ? "/__airship/chutes/oauth/token"
   : "https://api.chutes.ai/idp/token";
+const CHUTES_REVOCATION_ENDPOINT = import.meta.env.DEV && import.meta.env.MODE !== "test"
+  ? "/__airship/chutes/oauth/revoke"
+  : "https://api.chutes.ai/idp/token/revoke";
 const CHUTES_LOCAL_BRIDGE_ENDPOINT = "/__airship/chutes/oauth/token";
 const MAX_TOKEN_RESPONSE_BYTES = 32 * 1024;
 const MAX_OAUTH_TOKEN_BYTES = 4 * 1024;
 const TOKEN_REQUEST_TIMEOUT_MS = 20_000;
+/*
+ * Sign-out must not wait on the network. Revocation is fired detached from
+ * teardown and given a short deadline of its own.
+ */
+const REVOCATION_TIMEOUT_MS = 5_000;
 const CHUTES_REGISTRATION_SCOPES = ["profile", "chutes:invoke", "billing:read"] as const;
 const CHUTES_REQUEST_SCOPES = ["openid", ...CHUTES_REGISTRATION_SCOPES] as const;
 
@@ -302,6 +310,80 @@ export async function refreshChutesOAuthToken(args: {
   return refreshed;
 }
 
+/**
+ * Outcome of an RFC 7009 revocation attempt.
+ *
+ * `accepted` means the provider accepted the request, NOT that a session is
+ * proven destroyed: the Chutes IdP answers 200 for tokens it never issued, so
+ * nothing downstream may promote this to "the provider session is gone".
+ */
+export type ChutesTokenRevocationResult = Readonly<
+  | { state: "accepted"; status: number }
+  | { state: "rejected"; status: number }
+  | { state: "unreachable"; reason: "network" | "timeout" | "cancelled" }
+>;
+
+/**
+ * Ask the Chutes IdP to invalidate one memory-only token.
+ *
+ * Clearing page memory ends Airship's use of a credential but leaves a leaked
+ * refresh token valid at the provider for the rest of its lifetime, so sign-out
+ * asks the published revocation endpoint to drop it too. A malformed value is
+ * never transmitted; transport failures are reported, not thrown, because the
+ * caller is a best-effort detached teardown step.
+ */
+export async function revokeChutesToken(args: {
+  token: string;
+  tokenTypeHint: "refresh_token" | "access_token";
+  clientId: string;
+  signal?: AbortSignal;
+  fetch?: typeof globalThis.fetch;
+}): Promise<ChutesTokenRevocationResult> {
+  const clientId = validateClientId(args.clientId);
+  const token = validateToken(
+    args.token,
+    args.tokenTypeHint === "refresh_token" ? "crt_" : "cak_",
+    args.tokenTypeHint === "refresh_token" ? "refresh token" : "access token",
+  );
+  const fetchImpl = args.fetch ?? globalThis.fetch;
+  if (!fetchImpl) throw new Error("Fetch is required to revoke a Chutes token.");
+  const lifetime = createTokenRequestLifetime(args.signal, REVOCATION_TIMEOUT_MS);
+  try {
+    const response = await abortable(fetchImpl(CHUTES_REVOCATION_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        token,
+        token_type_hint: args.tokenTypeHint,
+        client_id: clientId,
+      }).toString(),
+      cache: "no-store",
+      credentials: "omit",
+      redirect: "error",
+      referrerPolicy: "no-referrer",
+      signal: lifetime.signal,
+    }), lifetime.signal);
+    // The body carries no authority for this decision and may be unbounded.
+    void response.body?.cancel().catch(() => undefined);
+    return Object.freeze(
+      response.ok
+        ? { state: "accepted" as const, status: response.status }
+        : { state: "rejected" as const, status: response.status },
+    );
+  } catch {
+    return Object.freeze({
+      state: "unreachable" as const,
+      reason: lifetime.didTimeout()
+        ? "timeout" as const
+        : args.signal?.aborted
+          ? "cancelled" as const
+          : "network" as const,
+    });
+  } finally {
+    lifetime.dispose();
+  }
+}
+
 async function requestTokenSet(args: {
   form: Readonly<Record<string, string>>;
   signal?: AbortSignal;
@@ -343,7 +425,10 @@ async function requestTokenSet(args: {
   }
 }
 
-function createTokenRequestLifetime(parent?: AbortSignal): Readonly<{
+function createTokenRequestLifetime(
+  parent?: AbortSignal,
+  timeoutMs: number = TOKEN_REQUEST_TIMEOUT_MS,
+): Readonly<{
   signal: AbortSignal;
   didTimeout: () => boolean;
   dispose: () => void;
@@ -356,7 +441,7 @@ function createTokenRequestLifetime(parent?: AbortSignal): Readonly<{
   const timer = globalThis.setTimeout(() => {
     timedOut = true;
     controller.abort(new DOMException("Chutes OAuth token request timed out.", "TimeoutError"));
-  }, TOKEN_REQUEST_TIMEOUT_MS);
+  }, timeoutMs);
   return Object.freeze({
     signal: controller.signal,
     didTimeout: () => timedOut,

@@ -105,7 +105,10 @@ creation, immediate visibility, exact range size/ETag, special-key injectivity,
 requested-prefix isolation, empty-prefix listing, missing/stale CAS behavior,
 a two-writer CAS race with exactly one winner, and visibility of the winning
 root. It returns the keys it creates because the narrow runtime store does not
-include deletion.
+include deletion. A caller whose store also implements the optional
+`ReclaimableObjectStore` may sweep those keys afterwards — `VaultCoordinator`
+does, and reports only the removals the provider confirmed. Every other caller
+must still configure provider expiry or clean them out-of-band.
 
 Every adapter also exposes a provider-neutral, immutable capability record for
 range limits, conditional-write intent, upload mode, and interruption

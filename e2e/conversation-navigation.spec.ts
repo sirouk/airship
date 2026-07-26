@@ -1,5 +1,26 @@
 import { expect, test } from "@playwright/test";
 
+test("every conversation has a stable addressed URL and new conversations do not overwrite it", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "desktop addressed conversation contract");
+  await page.goto("/#chat");
+  await expect(page.locator(".app-shell")).toBeVisible();
+  await expect(page).toHaveURL(/#chat\/[^/?#]+$/);
+  const firstUrl = page.url();
+
+  await page.getByRole("button", { name: "New conversation" }).click();
+  await expect.poll(() => page.url()).not.toBe(firstUrl);
+  await expect(page).toHaveURL(/#chat\/[^/?#]+$/);
+
+  const firstConversation = page
+    .getByRole("navigation", { name: "Primary" })
+    .locator("#airship-recent-conversations .recent-conversation:not(.active)")
+    .first();
+  if (await firstConversation.count()) {
+    await firstConversation.click();
+    await expect(page).toHaveURL(firstUrl);
+  }
+});
+
 test("desktop treats Chat as the conversation disclosure and preserves the full ledger", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium", "desktop conversation information architecture");
   await page.goto("/#chat");
@@ -16,7 +37,7 @@ test("desktop treats Chat as the conversation disclosure and preserves the full 
   await expect(navigation.locator("#airship-recent-conversations")).toHaveCount(0);
   await expect(navigation.getByRole("button", { name: "Expand recent conversations" })).toHaveAttribute("aria-expanded", "false");
   await navigation.getByRole("button", { name: "Chat", exact: true }).click();
-  await expect(page).toHaveURL(/#chat$/);
+  await expect(page).toHaveURL(/#chat\/[^/?#]+$/);
   await navigation.getByRole("button", { name: "Expand recent conversations" }).click();
   await navigation.getByRole("button", { name: "All conversations", exact: true }).click();
   await expect(page).toHaveURL(/#sessions$/);
@@ -30,6 +51,11 @@ test("desktop treats Chat as the conversation disclosure and preserves the full 
 test("mobile keeps conversations out of the fixed bar and exposes the ledger through More", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile-chromium", "mobile conversation information architecture");
   await page.goto("/#chat");
+  await expect(page).toHaveURL(/#chat\/[^/?#]+$/);
+  const originalConversation = page.url();
+  await page.getByRole("button", { name: "New conversation" }).click();
+  await expect.poll(() => page.url()).not.toBe(originalConversation);
+  await expect(page).toHaveURL(/#chat\/[^/?#]+$/);
   const navigation = page.getByRole("navigation", { name: "Mobile navigation" });
   await expect(navigation.getByRole("button", { name: "Sessions", exact: true })).toHaveCount(0);
   await expect(navigation.getByRole("button")).toHaveCount(4);

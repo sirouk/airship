@@ -173,7 +173,9 @@ export class WorkspaceGitFileSystem {
   private async stat(path: string): Promise<WorkspaceFsStat> {
     const normalized = fsPath(path);
     const file = await this.workspace.read(this.storagePath(normalized));
-    if (file) return new WorkspaceFsStat("file", decodeWorkspaceBytes(file.content).byteLength, Date.parse(file.updatedAt));
+    if (file) {
+      return new WorkspaceFsStat("file", decodeWorkspaceBytes(file.content).byteLength, Date.parse(file.updatedAt), revisionInode(file.revision));
+    }
     if (this.directories.has(normalized) || await this.hasDirectory(normalized)) return new WorkspaceFsStat("directory", 0, 0);
     throw fsError("ENOENT", `No such path: ${normalized}.`);
   }
@@ -242,10 +244,11 @@ class WorkspaceFsStat {
   readonly uid = 0;
   readonly gid = 0;
   readonly dev = 0;
-  readonly ino = 0;
+  readonly ino: number;
 
-  constructor(private readonly kind: "file" | "directory", size: number, modified: number) {
+  constructor(private readonly kind: "file" | "directory", size: number, modified: number, ino = 0) {
     const time = Number.isFinite(modified) ? modified : 0;
+    this.ino = ino;
     this.mode = kind === "file" ? 0o100644 : 0o040755;
     this.size = size;
     this.mtimeMs = time;
@@ -274,6 +277,24 @@ function fsPath(path: string): string {
   } catch (error) {
     throw fsError("EINVAL", error instanceof Error ? error.message : "Invalid workspace path.");
   }
+}
+
+/**
+ * isomorphic-git's index cache declares a file unchanged when mode, size, uid,
+ * gid, ino and *whole-second* mtime all match, so a same-length rewrite inside
+ * one wall-clock second would otherwise be invisible to status, stage, diff and
+ * commit. Every WorkspacePort implementation mints a fresh revision on every
+ * write, so projecting the revision into the inode makes the cache miss exactly
+ * when the bytes may have changed. The value must stay inside a uint32 because
+ * the binary DIRC index writes `ino` with writeUInt32BE.
+ */
+function revisionInode(revision: string): number {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < revision.length; index += 1) {
+    hash ^= revision.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return hash >>> 0;
 }
 
 function isGitMetadataPath(path: string): boolean {

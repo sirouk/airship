@@ -1,9 +1,30 @@
 export const GOOGLE_DRIVE_FILE_SCOPE = "https://www.googleapis.com/auth/drive.file";
+/**
+ * A Google OAuth *Web* client ID. It is a public deployment identifier, never a
+ * secret, so a build may legitimately embed it. This is the single source of the
+ * shape: build-time default selection and runtime authorizer construction must
+ * agree, otherwise a deployment can ship a default provider whose authorizer
+ * throws "Google OAuth client ID is invalid." at construction.
+ */
+const GOOGLE_OAUTH_CLIENT_ID_PATTERN = /^[A-Za-z0-9._-]{12,256}\.apps\.googleusercontent\.com$/u;
 export const GOOGLE_ACCOUNT_SCOPES = Object.freeze(["openid", "email", "profile", GOOGLE_DRIVE_FILE_SCOPE] as const);
 const GOOGLE_IDENTITY_SCRIPT_URL = "https://accounts.google.com/gsi/client";
 const MAX_GOOGLE_USERINFO_BYTES = 64 * 1024;
 const GOOGLE_AUTHORIZATION_TIMEOUT_MS = 2 * 60_000;
 const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
+
+/**
+ * True only when this build can actually open the Google connect flow. Callers
+ * that pick a default vault provider must consult this instead of assuming
+ * Drive: an unconfigured build cannot connect to Drive at all, so offering it
+ * as the default would present a provider that is structurally unreachable.
+ */
+export function isDeployableGoogleOAuthClientId(value: string | undefined | null): boolean {
+  if (typeof value !== "string") return false;
+  const clientId = value.trim();
+  // Bound before the regex so a pathological build-time value cannot be scanned.
+  return clientId.length <= 512 && GOOGLE_OAUTH_CLIENT_ID_PATTERN.test(clientId);
+}
 
 export type GoogleAccessToken = Readonly<{
   accessToken: string;
@@ -87,6 +108,13 @@ type GoogleIdentityNamespace = {
 /** Thin, dependency-free wrapper around the official GIS browser token client. */
 export class GoogleIdentityServicesAuthorizer {
   readonly scope = GOOGLE_ACCOUNT_SCOPES.join(" ");
+  /**
+   * Always the trimmed form. The predicate tolerates a build-time value with
+   * surrounding whitespace, so the accepted value and the value actually sent as
+   * `client_id` must be normalized at the same boundary; otherwise a padded id
+   * would construct here and then fail opaquely inside Google's token client.
+   */
+  readonly #clientId: string;
   #client?: GoogleTokenClient;
   #pending?: {
     resolve(value: GoogleAccessToken): void;
@@ -95,13 +123,14 @@ export class GoogleIdentityServicesAuthorizer {
   };
 
   constructor(
-    private readonly clientId: string,
+    clientId: string,
     private readonly provider: MemoryOnlyGoogleAccessTokenProvider,
     private readonly loadIdentityServices: () => Promise<GoogleIdentityNamespace> = defaultGoogleIdentityServices,
   ) {
-    if (!/^[A-Za-z0-9._-]{12,256}\.apps\.googleusercontent\.com$/u.test(clientId)) {
+    if (!isDeployableGoogleOAuthClientId(clientId)) {
       throw new Error("Google OAuth client ID is invalid.");
     }
+    this.#clientId = clientId.trim();
   }
 
   /** Load GIS when the connection surface opens, before a click is required. */
@@ -163,7 +192,7 @@ export class GoogleIdentityServicesAuthorizer {
     if (this.#client) return this.#client;
     const google = await this.loadIdentityServices();
     this.#client = google.accounts.oauth2.initTokenClient({
-      client_id: this.clientId,
+      client_id: this.#clientId,
       scope: this.scope,
       callback: (response) => {
         const pending = this.#pending;

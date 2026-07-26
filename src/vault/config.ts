@@ -56,8 +56,15 @@ export type VaultProviderRequirements = Readonly<{
   }>;
   probeLifecycle: Readonly<{
     logicalPrefix: string;
-    deletionAvailableInRuntime: false;
-    cleanup: "provider-lifecycle-or-out-of-band";
+    /**
+     * Whether the store this configuration was handed can remove its own probe
+     * objects. It is derived from the store, never asserted per provider: the
+     * same provider can be reached through a store that reclaims and one that
+     * does not, and declaring the wrong one either invents a sweep that never
+     * happens or hides one that does.
+     */
+    deletionAvailableInRuntime: boolean;
+    cleanup: "provider-lifecycle-or-out-of-band" | "runtime-reclaimed-then-out-of-band";
   }>;
 }>;
 

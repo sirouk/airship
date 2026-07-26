@@ -81,6 +81,44 @@ describe("Google Drive encrypted ObjectStore", () => {
     await expect(store.putIfAbsent("must-not-commit", new Uint8Array([1]))).rejects.toMatchObject({ name: "GoogleDriveAmbiguousRootError" });
   });
 
+  it("reclaims indexed objects entry-first and confirms each removal with Drive", async () => {
+    const { drive, store } = await driveFixture();
+    await store.putIfAbsent("probe/alpha", new TextEncoder().encode("alpha"));
+    await store.putIfAbsent("probe/beta", new TextEncoder().encode("beta"));
+    await store.putIfAbsent("keep/gamma", new TextEncoder().encode("gamma"));
+    const liveBefore = drive.liveFilesByRole("encrypted-segment-v1").length;
+
+    const receipt = await store.trash(["probe/alpha", "probe/beta", "probe/never-written"]);
+    expect(receipt).toMatchObject({
+      requested: 3,
+      reclaimed: ["probe/alpha", "probe/beta"],
+      retained: ["probe/never-written"],
+    });
+    expect(receipt.outcomes).toContainEqual({ key: "probe/never-written", reclaimed: false, reason: "not-indexed" });
+
+    // The index entry is gone and the body is out of the live listing.
+    expect(await store.list("probe/")).toEqual([]);
+    expect(await store.get("probe/alpha")).toBeUndefined();
+    expect(drive.liveFilesByRole("encrypted-segment-v1")).toHaveLength(liveBefore - 2);
+    // Untouched objects stay fully readable.
+    expect(new TextDecoder().decode((await store.get("keep/gamma"))!.bytes)).toBe("gamma");
+  });
+
+  it("never claims a removal Drive refused, and still leaves no dangling index reference", async () => {
+    const { drive, store } = await driveFixture();
+    await store.putIfAbsent("probe/refused", new TextEncoder().encode("refused"));
+    drive.refuseTrash = true;
+
+    const receipt = await store.trash(["probe/refused"]);
+    expect(receipt).toMatchObject({ requested: 1, reclaimed: [], retained: ["probe/refused"] });
+    expect(receipt.outcomes).toEqual([{ key: "probe/refused", reclaimed: false, reason: "refused" }]);
+    // Entry-first ordering means the leak is an untracked file, never a live
+    // reference whose get() would hard-fail.
+    expect(await store.list("probe/")).toEqual([]);
+    expect(await store.get("probe/refused")).toBeUndefined();
+    expect(drive.liveFilesByRole("encrypted-segment-v1").length).toBeGreaterThan(0);
+  });
+
   it("fails closed when a duplicate matching workspace hierarchy folder exists", async () => {
     const { drive, provider, key, workspace } = await driveFixture();
     drive.duplicateFolderByRole("workspace", "root");
@@ -195,6 +233,7 @@ type StoredFile = {
   bytes: Uint8Array;
   modifiedTime: string;
   etag: string;
+  trashed: boolean;
 };
 
 class FakeDrive {
@@ -211,6 +250,7 @@ class FakeDrive {
   resumableStatusQueries = 0;
   resumableChunkWrites = 0;
   discardedResumableBodies = 0;
+  refuseTrash = false;
   readonly fetch = async (input: string | URL | Request, init: RequestInit = {}): Promise<Response> => {
     const url = new URL(typeof input === "string" || input instanceof URL ? input.toString() : input.url);
     const headers = new Headers(init.headers);
@@ -227,7 +267,7 @@ class FakeDrive {
     }
     if (method === "POST" && url.pathname === "/upload/drive/v3/files") return this.createMultipart(init);
     if (method === "PUT" && resumableMatch) return this.writeResumable(decodeURIComponent(resumableMatch[1]!), init);
-    if (method === "PATCH" && fileMatch) return this.rename(decodeURIComponent(fileMatch[1]!), init);
+    if (method === "PATCH" && fileMatch) return this.patchMetadata(decodeURIComponent(fileMatch[1]!), init);
     if (method === "PATCH" && uploadMatch) return this.updateMedia(decodeURIComponent(uploadMatch[1]!), init);
     if (method === "GET" && fileMatch && url.searchParams.get("alt") === "media") return this.media(decodeURIComponent(fileMatch[1]!), headers);
     return new Response("", { status: 404 });
@@ -291,6 +331,10 @@ class FakeDrive {
     return [...this.files.values()].filter((file) => file.appProperties.airshipRole === role);
   }
 
+  liveFilesByRole(role: string): StoredFile[] {
+    return this.filesByRole(role).filter((file) => !file.trashed);
+  }
+
   plaintextBodies(): string {
     return [...this.files.values()].map((file) => new TextDecoder().decode(file.bytes)).join("\n");
   }
@@ -339,8 +383,10 @@ class FakeDrive {
     const parent = /'([^']+)' in parents/u.exec(query)?.[1];
     const role = /key='airshipRole' and value='([^']+)'/u.exec(query)?.[1];
     const namespace = /key='airshipNamespace' and value='([^']+)'/u.exec(query)?.[1];
+    const excludeTrashed = query.includes("trashed = false");
     const files = [...this.files.values()].filter((file) =>
-      (!parent || file.parents.includes(parent)) && (!role || file.appProperties.airshipRole === role) && (!namespace || file.appProperties.airshipNamespace === namespace),
+      (!excludeTrashed || !file.trashed)
+      && (!parent || file.parents.includes(parent)) && (!role || file.appProperties.airshipRole === role) && (!namespace || file.appProperties.airshipNamespace === namespace),
     ).map((file) => this.metadata(file));
     return Response.json({ files });
   }
@@ -364,13 +410,17 @@ class FakeDrive {
     return Response.json(this.metadata(file), { headers: { etag: file.etag } });
   }
 
-  private async rename(id: string, init: RequestInit): Promise<Response> {
+  private async patchMetadata(id: string, init: RequestInit): Promise<Response> {
     const file = this.files.get(id);
     if (!file) return new Response("", { status: 404 });
-    const patch = JSON.parse(String(init.body)) as { name?: string };
+    const patch = JSON.parse(String(init.body)) as { name?: string; trashed?: boolean };
     if (patch.name) file.name = patch.name;
+    if (patch.trashed === true) {
+      if (this.refuseTrash) return new Response("", { status: 403 });
+      file.trashed = true;
+    }
     file.modifiedTime = new Date().toISOString();
-    return Response.json(this.metadata(file));
+    return Response.json({ ...this.metadata(file), trashed: file.trashed });
   }
 
   private async updateMedia(id: string, init: RequestInit): Promise<Response> {
@@ -400,7 +450,7 @@ class FakeDrive {
 
   private insert(metadata: { name: string; mimeType: string; parents: string[]; appProperties: Record<string, string> }, bytes: Uint8Array): StoredFile {
     const id = `drive_file_${++this.sequence}`;
-    const file: StoredFile = { id, ...metadata, bytes, modifiedTime: new Date().toISOString(), etag: `"version-${this.sequence}"` };
+    const file: StoredFile = { id, ...metadata, bytes, modifiedTime: new Date().toISOString(), etag: `"version-${this.sequence}"`, trashed: false };
     this.files.set(id, file);
     return file;
   }

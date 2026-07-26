@@ -8,6 +8,13 @@ export const LIVE_ACCEPTANCE_ENVIRONMENT = Object.freeze({
   visionModel: "AIRSHIP_CHUTES_VISION_MODEL",
 });
 
+/** Optional per-vendor keys; absence skips the direct-cloud stage entirely. */
+export const DIRECT_CLOUD_VENDOR_KEYS = Object.freeze([
+  "AIRSHIP_OPENAI_API_KEY",
+  "AIRSHIP_ANTHROPIC_API_KEY",
+  "AIRSHIP_XAI_API_KEY",
+]);
+
 const vitestCli = fileURLToPath(new URL("../node_modules/vitest/vitest.mjs", import.meta.url));
 const playwrightCli = fileURLToPath(new URL("../node_modules/@playwright/test/cli.js", import.meta.url));
 
@@ -59,6 +66,26 @@ export function createLiveAcceptancePlan(config, environment = process.env) {
         AIRSHIP_CHUTES_VISION_MODEL: config.visionModel,
       }),
     }),
+    /*
+     * Direct-cloud vendors are optional stages: a release environment that
+     * supplies no OpenAI/Anthropic/xAI key still passes the Chutes gates, and
+     * one that does supply a key gets the wire contract checked rather than
+     * assumed. Node performs no CORS enforcement, so this stage never
+     * upgrades a browser-reachability claim.
+     */
+    ...(DIRECT_CLOUD_VENDOR_KEYS.some((name) => environment[name]?.trim())
+      ? [Object.freeze({
+          label: "direct cloud vendor wire-contract gate (protocol only; no CORS proof)",
+          command: process.execPath,
+          args: Object.freeze([
+            vitestCli,
+            "run",
+            "src/inference/providers/browser-cloud.live.test.ts",
+            "--reporter=verbose",
+          ]),
+          environment: Object.freeze({ ...sharedEnvironment }),
+        })]
+      : []),
   ]);
 }
 

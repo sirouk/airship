@@ -29,7 +29,13 @@ describe("offline runtime UI contract", () => {
 
   it("disables provider discovery and OAuth while preserving the pending OAuth credential", () => {
     expect(access).toContain("if (!online || !oauthBootstrap");
-    expect(access).toContain("disabled={busy || !oauthDiagnostic || !online || !oauthOrigin.available}");
+    // Sign-in is no longer rendered-but-disabled when the exchange is not
+    // configured: an unconfigured build does not offer it at all, so the only
+    // remaining reason to disable it is the network.
+    expect(access).toContain("const chutesSignInAvailable = Boolean(oauthDiagnostic) && oauthOrigin.available;");
+    expect(access).toContain("{chutesSignInAvailable ? (");
+    expect(access).toMatch(/disabled=\{busy \|\| !online\}\n\s+onClick=\{\(\) => \{\n\s+setOauthDiagnosticError\(undefined\);/u);
+    expect(access).toContain("disabled={!online || !chutesSignInAvailable}");
     expect(access).toContain("disabled={busy || !online}>Discover models with key");
     expect(access).toContain('class="access-network-pause"');
   });

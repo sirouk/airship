@@ -3,6 +3,7 @@ import { ownedArrayBuffer } from "../core/bytes";
 import { CognitoIdentityError } from "../storage/cognito-identity-credentials";
 import { WorkspaceRootKey } from "../storage/encrypted-envelope";
 import { MemoryObjectStore } from "../storage/memory-object-store";
+import type { ObjectReclamationReceipt, ReclaimableObjectStore } from "../storage/object-store";
 import type { S3TemporaryCredentials } from "../storage/s3-object-store";
 import { VaultCoordinator, type ResettableVaultCredentialProvider } from "./coordinator";
 import { createBuiltInProfileCatalog } from "../profiles/catalog";
@@ -128,6 +129,16 @@ describe("VaultCoordinator", () => {
       config: { provider: "google-drive", workspaceName: "Airship Workspace" },
       requirements: { credentialContract: { productionRequiresSessionToken: false, persistence: "memory-only" } },
     });
+    // The store handed in here cannot reclaim, so the declaration must not
+    // promise a runtime sweep just because the provider is Drive.
+    expect(snapshot).toMatchObject({
+      requirements: {
+        probeLifecycle: {
+          deletionAvailableInRuntime: false,
+          cleanup: "provider-lifecycle-or-out-of-band",
+        },
+      },
+    });
 
     const ready = await coordinator.probe({ acknowledgeImmutableProbeObjects: true, nonce: "driveprobe001" });
     expect(ready).toMatchObject({ phase: "ready", config: { provider: "google-drive" } });
@@ -147,6 +158,56 @@ describe("VaultCoordinator", () => {
     coordinator.disconnect();
     expect(reset).toHaveBeenCalledOnce();
     await expect(coordinator.reauthorizeGoogleDrive()).rejects.toThrow("not the configured");
+  });
+
+  it("reclaims probe litter when the provider can, and never claims an unconfirmed removal", async () => {
+    const { key } = await WorkspaceRootKey.generate();
+    const store = new ReclaimingMemoryObjectStore();
+    const coordinator = new VaultCoordinator();
+    const configured = coordinator.configureGoogleDrive({
+      workspace: {
+        workspaceFolderId: "drive_workspace_reclaim",
+        workspaceName: "Airship Reclaim",
+        rootFolderId: "drive_root_reclaim",
+        segmentsFolderId: "drive_segments_reclaim",
+        namespaceId: "opaque-drive-reclaim",
+      },
+      store,
+      workspaceKey: key,
+      accountLabel: "operator@example.test",
+      now: () => new Date(startedAt),
+    });
+    // This store does reclaim, so the static declaration says so before any
+    // probe runs — and still keeps the out-of-band path for keys a sweep
+    // cannot confirm, which the second probe below actually produces.
+    expect(configured).toMatchObject({
+      requirements: {
+        probeLifecycle: {
+          deletionAvailableInRuntime: true,
+          cleanup: "runtime-reclaimed-then-out-of-band",
+        },
+      },
+    });
+
+    const snapshot = await coordinator.probe({ acknowledgeImmutableProbeObjects: true, nonce: "drivesweep001" });
+    if (snapshot.phase !== "ready") throw new Error("expected ready snapshot");
+    expect(snapshot.evidence.cleanup).toMatchObject({
+      deletionAvailableInRuntime: true,
+      policy: "runtime-reclaimed",
+    });
+    expect(snapshot.evidence.cleanup.retainedKeys).toEqual([]);
+    expect(snapshot.evidence.cleanup.reclaimedKeys).toEqual([...snapshot.evidence.createdKeys].sort());
+    for (const probeKey of snapshot.evidence.createdKeys) expect(await store.get(probeKey)).toBeUndefined();
+    // A verified probe must stay verified even after the sweep runs.
+    expect(snapshot.evidence.readiness.compareAndSwap).toBe("verified");
+
+    // A provider that refuses one key must keep the original warning verbatim.
+    store.refuseKeysContaining = "-adjacent/";
+    const second = await coordinator.probe({ acknowledgeImmutableProbeObjects: true, nonce: "drivesweep002" });
+    if (second.phase !== "ready") throw new Error("expected ready snapshot");
+    expect(second.evidence.cleanup.policy).toBe("provider-lifecycle-or-out-of-band");
+    expect(second.evidence.cleanup.retainedKeys?.length).toBeGreaterThan(0);
+    expect(second.evidence.cleanup.warning).toContain("remove the listed keys out-of-band");
   });
 
   it("fails a same-authority re-probe closed without invalidating the adopted runtime", async () => {
@@ -445,6 +506,36 @@ describe("VaultCoordinator", () => {
     expect(JSON.stringify(snapshot)).not.toContain("private-provider-detail");
   });
 });
+
+/** Models a provider (like Drive) that exposes the optional reclamation capability. */
+class ReclaimingMemoryObjectStore extends MemoryObjectStore implements ReclaimableObjectStore {
+  private readonly trashed = new Set<string>();
+  refuseKeysContaining?: string;
+
+  override async get(key: string) {
+    return this.trashed.has(key) ? undefined : super.get(key);
+  }
+
+  override async list(prefix: string) {
+    return (await super.list(prefix)).filter((entry) => !this.trashed.has(entry.key));
+  }
+
+  async trash(keys: readonly string[]): Promise<ObjectReclamationReceipt> {
+    const outcomes = keys.map((key) => {
+      if (this.refuseKeysContaining && key.includes(this.refuseKeysContaining)) {
+        return Object.freeze({ key, reclaimed: false as const, reason: "refused" as const });
+      }
+      this.trashed.add(key);
+      return Object.freeze({ key, reclaimed: true as const });
+    });
+    return Object.freeze({
+      requested: keys.length,
+      reclaimed: Object.freeze(outcomes.filter((outcome) => outcome.reclaimed).map((outcome) => outcome.key)),
+      retained: Object.freeze(outcomes.filter((outcome) => !outcome.reclaimed).map((outcome) => outcome.key)),
+      outcomes: Object.freeze(outcomes),
+    });
+  }
+}
 
 function productionConfig(): VaultS3ConfigurationInput {
   return {

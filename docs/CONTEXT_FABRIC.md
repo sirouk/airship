@@ -86,9 +86,108 @@ journal remains authoritative, replayable, and audit-verifiable. Old source
 messages and prior summary bodies are not copied into each update. A malformed
 range, digest, or chain fails audit and is not trusted.
 
+The reference chain has higher tiers. When appending the next delta would push
+the materialized projection past its byte budget, the same commitment also
+carries a `compaction` record: a higher-tier body that replaces the oldest
+contiguous run of deltas, naming every summary digest it subsumes, the exact
+journal sequence range it covers, its own body digest, its tier level, and
+whether a summarizer or the deterministic extractive path produced it. That last
+label is no longer a bare self-assertion: a tier claiming `summarizer-port-v1`
+must carry summarizer provenance whose `responseDigest` is the tier's own
+`bodyDigest`, and an extractive tier must carry none, so the label cannot be
+moved in either direction without also producing provenance that commits to this
+exact body. The tier now gets the delta's other half too: during audit its
+provenance is cross-checked against the session-pinned summarizer adapter,
+provider, model and posture, so a fabricated-but-self-consistent tier provenance
+naming material this session never pinned fails replay. And when a configured
+summarizer is called for a tier and does not return an evidenced body, the
+commitment records a `compaction.attempt` — the summarizer id and whether the
+failure was `adapter-error` or `invalid-output` — exactly as `summarizerAttempt`
+does for the delta; an extractive tier under a summarizer policy without that
+record is refused rather than accepted as an ordinary extractive tier.
+`src/core/context-compaction-provenance.test.ts` drives each of those refusals
+against a real journal. Replay
+verifies that the named run is exactly the oldest contiguous prefix of the chain
+and that no earlier tier is left outside it, so a tier can never stand in for
+material it does not cover.
+Compaction re-summarizes those deltas instead of dropping them, and its input is
+the previous tier's body plus the deltas added since — never a re-read of the
+whole history. The recursion is real rather than theoretical: a compaction that
+subsumes a compaction commits level 2, and
+`src/core/context-compaction.test.ts` drives a real journal until the observed
+committed level sequence is exactly `[1, 2]`, then asserts that a tier relabelled
+one level higher or lower fails replay. The projection reports
+`omittedDeltaCount`; when the budget is exhausted anyway, the omission is stated
+in the projected text with the journal digests needed to find what was left out.
+The projection budget scales with the pinned context window (12% of the window
+in bytes, 48 KiB floor, 512 KiB ceiling) rather than a fixed 48 KiB.
+
+Both free-text bodies are bounded by the same pinned budget. Replay checks
+`summaryDelta` *and* `compaction.body` against the session-pinned
+`maxSummaryDeltaBytes` through `summaryBodiesWithinPolicy()` in
+`src/core/context-summary-projection.ts`, called from
+`summaryMatchesContextPolicy()` in `src/core/session-audit.ts`. Without the
+second half a tier body would be limited only by the canonicalizer's 64 KiB hard
+ceiling — several times a typical pinned budget — and would ride into every
+future prompt.
+
+The trigger's byte-per-token basis is calibrated from provider-reported
+`prompt_tokens` already recorded in the journal for this session, model and
+tokenizer: the ratio is re-derived from the prefix that actually produced each
+usage event, exponentially averaged over the last three samples, and clamped to
+[2.0, 6.0] because `prompt_tokens` is provider-controlled input feeding a
+client-side control decision. Until a usage event exists the estimate falls back
+to 3.6 bytes/token. The basis used is recorded in the commitment as
+`bytesPerToken` so a replay can see which basis produced `estimatedTokensBefore`.
+
+Compression runs at turn boundaries, so the tool loop inside a turn is bounded
+separately. Each step measures the projected request against a per-turn ceiling
+and gives the step's tool results the bytes that remain; an over-budget result is
+stored truncated with an explicit marker and `contextBudgetTruncated` metadata,
+so the turn survives and the transcript never claims the model saw more than it
+did. If in-loop growth still passes that ceiling, the turn fails with a specific,
+auditable message rather than a provider context-length error.
+
+The ceiling is the pinned window, except for a turn whose opening request is
+already over the window under the byte-per-token estimate: refusing that turn
+outright would destroy turns providers still accept, so it is granted a fixed
+2,048-token allowance above where it opened. One ceiling drives both the refusal
+and the tool-output budget deliberately. Measuring the budget against the window
+while measuring the refusal against the opening size handed such a turn zero
+bytes for its tool results, stored the result as nothing but its truncation
+marker, and then failed the turn for the marker's own bytes — the estimate-based
+refusal the step-0 check exists to avoid, one step later and lossier.
+
 This follows the useful Hermes pattern of iterative re-compression, protected
 recent context, and boundary-aware compaction. Airship's 80–85% policy is a
 product requirement, not a claim that it is Hermes' current default.
+
+### Measured reduction
+
+`src/core/context-compression-benchmark.test.ts` replays the shipped path over a
+corpus pinned inside that test file (three workload families — TypeScript-shaped
+code, markdown-shaped prose, JSON tool output — twelve turns each, 8,192-token
+window, deterministic extractive summarizer) and measures projected prompt bytes
+with the reference chain against the same history without it. Measured on corpus
+digest `sha256:7cHZr7feFeV8RSq0SxqdSWNk7sJywgkQ9cgfcYYKkJM`:
+
+| Family | Prompt-byte reduction |
+| --- | --- |
+| code-editing | 58.8% |
+| doc Q&A | 59.0% |
+| tool-output JSON | 50.9% |
+
+Those are the numbers the harness measured, not a universal ratio, and not the
+master prompt's unproven 60–78%. They use the deterministic extractive
+summarizer, so they are a floor rather than a best case. The corpus is pinned
+rather than read from live repository files precisely so the digest is a real
+anchor: an earlier version of this table was measured against live sources, and
+editing any of those sources silently invalidated it. The digest can now only
+move when the fixture moves, and then the table must be re-measured in the same
+change; a digest that no longer matches means the table above describes a
+different corpus and should be re-measured rather than trusted. No
+storage-reduction figure is published here: content-addressed chunk dedup and
+vault block reuse are not implemented, so there is nothing honest to measure yet.
 
 ## Cloud object layout
 
@@ -205,8 +304,13 @@ Source plaintext, embeddings, lexical terms, paths, profile instructions, and ro
 - Turn selection is capped at eight hits and 32 KiB; the ordinary federated
   policy uses six hits and 24 KiB.
 - Summary deltas default to 12 KiB (64 KiB hard maximum), and the materialized
-  digest-reference chain is capped at 48 KiB. The tokenizer-agnostic estimate
-  and measured reductions are workload evidence, not a universal ratio claim.
+  digest-reference chain is capped at 12% of the pinned context window in bytes,
+  with a 48 KiB floor and a 512 KiB ceiling. Deltas that no longer fit are
+  re-compacted into a higher tier, not dropped. Airship writes tier bodies under
+  the same 12 KiB pinned budget, and replay re-checks that budget for the delta
+  and for every tier body, so a hostile journal cannot smuggle a tier up to the
+  64 KiB hard ceiling. The calibrated byte-per-token estimate and measured
+  reductions are workload evidence, not a universal ratio claim.
 - Recent writes are searchable before compaction.
 - An unavailable expert degrades recall and produces a visible receipt warning; it does not corrupt the session.
 

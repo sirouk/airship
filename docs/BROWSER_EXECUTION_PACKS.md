@@ -11,8 +11,8 @@ pretending that every device contains a Linux host.
 | Runtime | Current state | Useful for | Boundary |
 |---|---|---|---|
 | JavaScript Worker | ready when disposable Workers are available | calculations, transformations, small scripts | 64 KiB source, 10 s maximum, terminated Worker, no DOM/network/storage binding |
-| WASI Preview 1 (`browser_wasi_shim` 0.4.2) | ready when Worker + WebAssembly are available | precompiled command artifacts, including Rust built elsewhere for `wasm32-wasip1` | 4 MiB artifact; 64 MiB memory check; 10 s maximum; printable-ASCII argv, env, stdout/stderr, clock/random; optional 256-file, 4 MiB virtual-workspace snapshot with revision-checked writeback; no sockets, host filesystem, Bash, or compiler |
-| Pyodide Python 314.0.2 | installable, then ready after a live probe | Python standard library, bounded workspace projects, args/env, streams, JSON-compatible results | locked same-origin npm assets; fresh disposable Worker; 64 KiB source, 10 s job, 256 KiB per stream; no packages or runtime network |
+| WASI Preview 1 (`browser_wasi_shim` 0.4.2) | ready when Worker + WebAssembly are available | precompiled command artifacts, including Rust built elsewhere for `wasm32-wasip1` | artifact supplied as a workspace `wasmPath` or inline `wasmBase64`, 4 MiB either way; 64 MiB memory check; 10 s maximum; printable-ASCII argv, env, stdout/stderr, clock/random; optional 256-file, 4 MiB virtual-workspace snapshot with revision-checked writeback; no sockets, host filesystem, Bash, or compiler |
+| Pyodide Python 314.0.2 | installable, then ready after a live probe | Python standard library, bounded workspace projects, args/env, streams, JSON-compatible results | locked same-origin npm assets; fresh disposable Worker; 64 KiB source, 256 KiB per stream; a 10 s job budget that starts after the interpreter reports ready, plus a separate 30 s cold-boot budget; no packages or runtime network |
 | Wasmer/WASIX | unavailable; research-only live promotion gate | possible future real WASIX Bash scripts | `@wasmer/sdk` 0.10.0, Bash 1.0.18, and coreutils 1.0.25 are pinned; separated output and Worker-tree cancellation work, but exit status and bidirectional mounted-workspace semantics do not, so no Bash tool is advertised |
 | Node WebContainer 1.6.4 | explicitly activatable or unavailable | real Node/npm/pnpm/yarn project commands | StackBlitz runtime delivery, cross-origin isolation, provider terms/licensing, network approval, and browser suspension apply |
 
@@ -44,7 +44,18 @@ Creating or forking after activation pins the new exact tier without rewriting
 the earlier journal or receipts.
 
 The WASI runner executes a precompiled Preview 1 command artifact. A Rust
-program compiled elsewhere for `wasm32-wasip1` can run there. An explicitly
+program compiled elsewhere for `wasm32-wasip1` can run there. The artifact
+reaches the runner one of two ways, and `execute_code` requires exactly one of
+them: `wasmPath` names a `.wasm` file that already exists in the encrypted
+workspace — placed there by a Git clone, a download, an editor write, or
+WebContainer writeback — or `wasmBase64` inlines it. Airship does not compile
+the artifact, does not fetch it from a registry, and ships no pinned command
+catalog; "compile elsewhere, run here" is the honest boundary. A `wasmPath`
+artifact is read through the same control-plane and `.airship`/`.git`/
+`node_modules` exclusions as a mount, is bounded by the 4 MiB artifact budget
+rather than the 512 KiB per-file mount budget, and is excluded from its own
+mounted snapshot so a large binary living inside the selected root neither
+fails the mount nor becomes a writeback candidate. An explicitly
 selected workspace root can be projected into a bounded in-memory preopen;
 successful changes use per-file revision checks before adoption, while failed,
 aborted, and timed-out commands adopt nothing. Airship does not ship `rustc`,
@@ -113,7 +124,17 @@ The exact npm dependency is copied at build time into
 release manifest. The explicit installer initializes CPython, executes a
 version probe, and only then registers the adapter as ready. Every job gets a
 new Worker and interpreter. Worker termination is the hard cancellation and
-timeout boundary. `loadPackagesFromImports` is never called; after bootstrap,
+timeout boundary. Because that cold start is paid per job, it is budgeted
+separately: the Worker reports `ready` the moment CPython has initialized, and
+only then does the job's own `timeoutMs` start. The boot itself is bounded by
+the 30 s install budget, and the observed boot time is reported as `bootMs` on
+the result rather than silently redefining what `timeoutMs` bounds. That split
+is stated in the `execute_code` schema the model reads, because it means a
+python-pyodide call whose `timeoutMs` is capped at 10 s can still occupy up to
+roughly 40 s of wall clock. `install_execution_runtime` is the exception: it
+does nothing but boot, so its `timeoutMs` bounds the whole activation —
+cold start included — through both the boot timer and an activation deadline.
+`loadPackagesFromImports` is never called; after bootstrap,
 fetch, XHR, sockets, nested Workers, caches, and IndexedDB are removed. The
 versioned service-worker cache makes the pack available offline after its first
 successful activation and is purged atomically on a shell-version upgrade.
@@ -124,7 +145,18 @@ decodes opaque-byte envelopes before mounting and re-encodes returned bytes, so
 binary files are never executed as their base64 transport text. A snippet runs with that root as
 its working directory, or `sourcePath` executes a selected workspace `.py`
 file. Outputs stay isolated unless `writeBack` is true; successful file changes
-then use exact per-file revision CAS. Control-plane paths are excluded. Because
+then use exact per-file revision CAS. Control-plane paths are excluded on both
+mount and writeback: a returned path is normalized, required to stay under the
+selected root, and refused if it is an Airship control-plane path or contains a
+`.airship`, `.git`, or `node_modules` segment. The refusal applies even when
+`writeBack` is false, because the change list alone is reported back to the
+model. A refusal drops only the offending path: the completed run keeps its
+exit code and streams, the refused paths and their reason are named on the
+result as `refusedPaths`/`refusalReason`, the tool result is marked
+`isError`, and a refused path is never reported as a deletion. A path outside
+the mounted root is different — the worker's collector only walks that root, so
+such a path is a broken or tampered Worker message and fails the whole run.
+Because
 `WorkspacePort` has no multi-file transaction, a cross-device race late in a
 multi-file adoption can produce a reported partial write before the conflict.
 Interpreter and plaintext scratch state are never written to the selected Vault.
@@ -373,7 +405,17 @@ prevent boot: <https://webcontainers.io/guides/troubleshooting>.
 Language runtimes do not mutate the live workspace while executing. A job gets
 a bounded snapshot plus a scratch filesystem. When it exits, Airship computes a
 bounded create/change/delete set. Explicit writeback preflights all affected
-per-file revisions and then uses revision CAS for each mutation. Because the
+per-file revisions and then uses revision CAS for each mutation.
+
+A command that ran to completion keeps its own exit code and bounded streams
+even when that change set cannot be collected — for example because the job
+also wrote a file over the 512 KiB per-file mount budget. WASI and Python then
+report a `workspaceError` on the result, list no changed, written, or deleted
+path, and adopt nothing, because an incomplete collection cannot distinguish
+"not produced" from "not collected". `execute_code` reports such a run as an
+error even when its exit code is zero, so a partial run is never presented as a
+complete one. A run with no mounted workspace never collects at all, so a
+scratch file it writes cannot fail it. Because the
 current `WorkspacePort` has no multi-file transaction, a late competing writer
 can still cause a clearly reported partial adoption; Airship does not yet retain
 that result as a branchable patch.
@@ -429,7 +471,9 @@ capability truthfulness, bounded WebContainer boot, streaming, cancellation,
 manifest-bound workspace composition, failed-command non-adoption, dispatch,
 and unavailable packs. Chromium coverage runs JavaScript, a real Rust-produced
 WASI command covering two output streams, exact exit 23, workspace
-input/output/writeback, failed-command non-adoption, and hard cancellation, plus
+input/output/writeback, failed-command non-adoption, hard cancellation, and the
+same Rust artifact executed from a workspace `wasmPath` while staying out of its
+own mounted snapshot, plus
 a real Pyodide install and Python standard-library workspace jobs
 under the production Trusted Types policy. WebContainer boot is
 provider- and environment-dependent; it is ready only after the live activation

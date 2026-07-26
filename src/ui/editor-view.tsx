@@ -19,6 +19,7 @@ export type EditorViewProps = Readonly<{
   reviewImport(request: SourcesImportRequest): Promise<"allow" | "deny">;
   onWorkspaceChanged(): void | Promise<void>;
   durability: Readonly<{ state: DurabilityState; detail: string }>;
+  workspaceIdentity?: string;
 }>;
 
 /** One Workspace destination with lightweight editing and full source control. */
@@ -49,6 +50,7 @@ export function EditorView(props: EditorViewProps) {
       selected={props.selected}
       onOpen={props.onOpen}
       workspace={props.workspace}
+      workspaceIdentity={props.workspaceIdentity}
       git={props.git}
       review={props.review}
       onWorkspaceChanged={props.onWorkspaceChanged}

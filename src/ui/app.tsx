@@ -8,7 +8,7 @@ import type {
   ChutesEndpointEvidenceRecord,
 } from "../attestation/provider-types";
 import { ApprovalBroker } from "../approvals/broker";
-import { approvalProvenance, createApprovalModePolicy } from "../approvals/modes";
+import { approvalProvenance, createApprovalModePolicy, type ApprovalMode } from "../approvals/modes";
 import { SwitchableApprovalPolicy } from "../approvals/switchable-policy";
 import { reviewToolActionWithModel } from "../approvals/model-reviewer";
 import {
@@ -31,7 +31,6 @@ import {
   type ChutesOAuthTokenSet,
   type ChutesPkceAttempt,
 } from "../auth/chutes-oauth";
-import { loadChutesAccountSnapshot } from "../billing/client";
 import type { BrowserRuntimeCapabilityReport } from "../capabilities/browser-runtime";
 import {
   completeSlashCommand,
@@ -66,14 +65,14 @@ import type {
   InferenceAvailabilitySnapshot,
   InferenceModelDescriptor,
 } from "../inference/providers";
-import {
-  BrowserGitClient,
-  type GitOperation,
-  type GitOperationDescriptor,
-} from "../git";
+// Import the concrete modules, never the "../git" barrel: the barrel also
+// re-exports the in-memory adapter, and that retained graph edge is enough to
+// pull a fixture-only Git backend into the startup chunk.
+import { BrowserGitClient } from "../git/client";
+import type { GitOperation, GitOperationDescriptor } from "../git/types";
 import type { WorkspaceGitRepositorySeed } from "../git/workspace-adapter";
 import type { ChutesInferenceTransport, ChutesInvocationTelemetry } from "../inference/chutes";
-import { modelInputModalityCapability, type AirshipModel } from "../models";
+import { modelInputModalityCapability, modelPopularitySignal, sortModels, type AirshipModel } from "../models";
 import type { ExecutionCapability } from "../execution/runtime-registry";
 import { archiveProfileRevision, createBuiltInProfileCatalog, managedProfileRevisions, type ProfileCatalog } from "../profiles/catalog";
 import {
@@ -131,6 +130,7 @@ import type {
   LocalDeviceActivationReason,
   LocalDeviceAtomicRestoreRequest,
 } from "./local-device-vault-setup";
+import { chatHash, chatSessionIdFromHash } from "./chat-route";
 import { MenuSelect } from "./menu-select";
 import { MobileNavigation } from "./mobile-navigation";
 import { ModelControl } from "./model-control";
@@ -169,6 +169,7 @@ import {
   type ProofSelection,
 } from "./proof-route";
 import { Seal, sealStateForProofStatus, type SealState } from "./seal";
+import { useScrollEdges } from "./scroll-affordance";
 import { enabledSlashSelection, firstEnabledSlashIndex, moveSlashSelection } from "./slash-menu-state";
 import type { SourcesImportRequest } from "./sources-view";
 import { releaseVaultAuthority, transitionVaultProvider } from "./vault-provider-transition";
@@ -187,6 +188,8 @@ import { MessagePartsView } from "./chat/message-parts-view";
 import { capabilityTierDetail, capabilityTierLabel } from "./chat/capability-tier";
 import { useWindowedTranscript } from "./chat/use-windowed-transcript";
 import { composerAttachments, userMessageParts, type ComposerAttachment } from "./chat/composer-state";
+import { COMPOSER_AUTOFOCUS_MAX_WIDTH_QUERY, shouldClaimComposerFocus } from "./chat/composer-focus";
+import { originatingPromptForRow } from "./chat/retry-prompt";
 import { recoverPartialTurn } from "./chat/turn-recovery";
 import {
   refreshCompletedTurnWorkspace,
@@ -201,6 +204,7 @@ import { DurabilityIndicator } from "./durability-indicator";
 import { mapUnknownRequestFailure } from "./request-state";
 import { claimExpiry, claimLanguage, postureLabel, proofLevelLabel, proofStatusLabel, rankedReceiptVerdict, relativeEvidenceAge } from "./trust-language";
 import { RouteSkeleton } from "./route-skeleton";
+import type { LocalProviderProbeResult } from "./connect/connect-surface";
 import {
   OFFLINE_INLINE_REASON,
   OFFLINE_RUNTIME_DETAIL,
@@ -275,6 +279,19 @@ type ChutesAvailabilityAuthority = Readonly<{
   generation: number;
   models: readonly AirshipModel[];
 }>;
+
+/**
+ * The loopback model servers the Connect surface's Local lane may contact, and
+ * nothing else: the endpoints are the fabric's compiled-in defaults, restated
+ * here only so the result line can name the address that was actually tried.
+ */
+const LOCAL_MODEL_SERVERS = Object.freeze([
+  Object.freeze({ kind: "ollama" as const, label: "Ollama", endpoint: "127.0.0.1:11434" }),
+  Object.freeze({ kind: "lm-studio" as const, label: "LM Studio", endpoint: "127.0.0.1:1234" }),
+]);
+
+/** Wall clock for the whole two-server check. A refused port answers far sooner. */
+const LOCAL_PROBE_DEADLINE_MS = 15_000;
 
 const EMPTY_INFERENCE_AVAILABILITY: InferenceAvailabilitySnapshot = Object.freeze({
   version: 1,
@@ -403,26 +420,67 @@ const welcomeMessage: UiMessage = {
   id: "welcome",
   role: "assistant",
   content:
-    "The edge runtime is ready. Airship can edit this private workspace, search context, plan work, use browser-native Git, import public sources, and execute code in available sandboxes. Try /help or ask me to inspect README.md.",
+    "The edge runtime is ready. The workspace, editor, terminal and browser-owned Git already work in this tab with no account. Chat is the one part that needs a model provider.",
 };
 
-/** Shown only on a fresh transcript to give the empty stage an intentional
-    entry point that showcases Airship's differentiators, without overload. */
-const STARTER_PROMPTS: readonly Readonly<{ title: string; hint: string; prompt: string }>[] = Object.freeze([
+/**
+ * Entry points for a fresh transcript.
+ *
+ * A card that cannot work without inference must not render while nothing is
+ * connected: every disconnected card here goes somewhere that already works,
+ * rather than prefilling a prompt whose only possible answer is the demo
+ * responder's canned sentence.
+ */
+type StarterCard = Readonly<{
+  title: string;
+  hint: string;
+  action:
+    | Readonly<{ kind: "prompt"; prompt: string }>
+    | Readonly<{ kind: "route"; view: NavigationView }>;
+}>;
+
+const CONNECTED_STARTERS: readonly StarterCard[] = Object.freeze([
   Object.freeze({
     title: "Explain my trust posture",
     hint: "What's encrypted, attested, and still unverified",
-    prompt: "Walk me through this session's current security posture: what is encrypted, what is attested, and what remains unverified.",
+    action: Object.freeze({
+      kind: "prompt" as const,
+      prompt: "Walk me through this session's current security posture: what is encrypted, what is attested, and what remains unverified.",
+    }),
   }),
   Object.freeze({
     title: "Inspect this workspace",
     hint: "Read README.md and get oriented",
-    prompt: "Inspect README.md and the workspace, then summarize what this project is and suggest a sensible first task.",
+    action: Object.freeze({
+      kind: "prompt" as const,
+      prompt: "Inspect README.md and the workspace, then summarize what this project is and suggest a sensible first task.",
+    }),
   }),
   Object.freeze({
     title: "What can run here?",
     hint: "Available browser execution runtimes",
-    prompt: "What execution runtimes are available in this browser right now, and what needs activation before you can run code?",
+    action: Object.freeze({
+      kind: "prompt" as const,
+      prompt: "What execution runtimes are available in this browser right now, and what needs activation before you can run code?",
+    }),
+  }),
+]);
+
+const DISCONNECTED_STARTERS: readonly StarterCard[] = Object.freeze([
+  Object.freeze({
+    title: "Open a terminal",
+    hint: "Real processes in this tab, no account",
+    action: Object.freeze({ kind: "route" as const, view: "terminal" as const }),
+  }),
+  Object.freeze({
+    title: "Browse the workspace",
+    hint: "Files, the editor and browser-owned Git",
+    action: Object.freeze({ kind: "route" as const, view: "workspace" as const }),
+  }),
+  Object.freeze({
+    title: "Connect a model",
+    hint: "Only chat needs this",
+    action: Object.freeze({ kind: "route" as const, view: "access" as const }),
   }),
 ]);
 
@@ -523,12 +581,16 @@ export function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [preferencesOpen, setPreferencesOpen] = useState(false);
   const [trustSheetOpen, setTrustSheetOpen] = useState(false);
+  const [approvalPending, setApprovalPending] = useState(false);
   const [preferences, setPreferences] = useState<PreferenceOverrides>(loadPreferenceOverrides);
   const [catalog, setCatalog] = useState<ProfileCatalog>();
   const [profileId, setProfileId] = useState("general");
   const [profileHubScope, setProfileHubScope] = useState("global");
   const [sessionId, setSessionId] = useState<string>();
   const [activeSessionRecord, setActiveSessionRecord] = useState<SessionRecord>();
+  const [chatRouteRequest, setChatRouteRequest] = useState<string | undefined>(() =>
+    typeof window === "undefined" ? undefined : chatSessionIdFromHash(window.location.hash)
+  );
   const [sessionLibrary, setSessionLibrary] = useState<SessionLibrary>();
   const [sessionRevision, setSessionRevision] = useState(0);
   const [chatNavExpanded, setChatNavExpanded] = useState(true);
@@ -666,6 +728,7 @@ export function App() {
   const localCommandAdmission = useRef(false);
   const activePrompt = useRef<string>();
   const activeSessionIdentity = useRef<string>();
+  const chatRouteOpening = useRef<string>();
   const textarea = useRef<HTMLTextAreaElement>(null);
   const transcriptElement = useRef<HTMLDivElement>(null);
   const transcriptBoundaryElement = useRef<HTMLDivElement>(null);
@@ -674,6 +737,7 @@ export function App() {
   const attachmentPreviewUrls = useRef(new Set<string>());
   const recentConversationPreviewCache = useRef(new Map<string, RecentConversationCacheEntry>());
   const mainRegion = useRef<HTMLElement>(null);
+  const primaryNav = useRef<HTMLElement>(null);
   const pendingDelta = useRef<{ messageId: string; text: string }>();
   const pendingDeltaFrame = useRef<number>();
   const profileOperation = useRef(0);
@@ -738,6 +802,8 @@ export function App() {
   const activeTheme = activeProfile
     ? catalog?.themes.find((theme) => theme.themeId === activeProfile.theme.themeId && theme.digest === activeProfile.theme.digest)
     : undefined;
+  /** True once the boot screen has been replaced by the real shell chrome. */
+  const shellMounted = Boolean(catalog && activeProfile && activeTheme);
   const chutesConnected = isChutesConnected(connection);
   const activeInferenceBinding = activeSessionRecord?.manifest.inferenceBinding
     ?? runtime.current?.inferenceBinding;
@@ -756,6 +822,16 @@ export function App() {
   const activeExternalResolution = activeExternalRoute && inferenceFabric.current
     ? inferenceFabric.current.resolve(activeExternalRoute.pin)
     : undefined;
+  /*
+   * Which providers hold a live page-memory connection, read from the fabric
+   * this render. `providerFabricRevision` is the fabric's own change signal, so
+   * a released connection stops being claimed on the very next render. Before
+   * the fabric loads this is empty, which can only under-claim.
+   */
+  const connectedInferenceProviderIds = useMemo(
+    () => (inferenceFabric.current?.list() ?? []).map((entry) => entry.provider.id),
+    [providerFabricRevision, Boolean(inferenceFabric.current)],
+  );
   const pinnedExternalRoute = activeExternalRoute
     && activeInferenceBinding
     && inferenceBindingsMatch(activeInferenceBinding, coreInferenceBinding(activeExternalRoute))
@@ -780,7 +856,7 @@ export function App() {
         ? `${pinnedExternalRoute.pin.provider.label} · disconnected`
         : activeInferenceBinding?.providerId === "chutes"
           ? "Chutes · disconnected"
-          : "Connect inference";
+          : "Connect a model";
   const inferenceStatusDetail = activeChutesConnection
     ? `${connection.model} · ${connection.invokeAuthorization === "verified" ? "encrypted invocation verified" : "encrypted invocation ready; permission not tested yet"}`
     : activeExternalConnection
@@ -863,6 +939,48 @@ export function App() {
     });
     return () => controller.abort();
   }, [sessionLibrary, sessionRevision]);
+  useEffect(() => {
+    if (
+      view !== "chat"
+      || !chatRouteRequest
+      || !sessionLibrary
+      || !sessionRuntime
+      || !catalog
+      || busy
+      || chatRouteOpening.current === chatRouteRequest
+    ) return;
+    if (sessionId === chatRouteRequest) {
+      setChatRouteRequest(undefined);
+      return;
+    }
+    const requestedSessionId = chatRouteRequest;
+    chatRouteOpening.current = requestedSessionId;
+    void sessionLibrary.inspect(requestedSessionId, sessionRuntime)
+      .then((detail) => resumeLibrarySession(detail))
+      .then(() => {
+        setChatRouteRequest((current) => current === requestedSessionId ? undefined : current);
+        setComposerNotice(undefined);
+      })
+      .catch((error) => {
+        // Keep the URL intact: a durable conversation can become available
+        // after its Vault or exact inference connection is restored.
+        setComposerNotice(
+          error instanceof Error
+            ? `This conversation link is not available in the current runtime: ${error.message}`
+            : "This conversation link is not available in the current runtime. Connect its Vault and exact inference provider, then retry.",
+        );
+      })
+      .finally(() => {
+        if (chatRouteOpening.current === requestedSessionId) chatRouteOpening.current = undefined;
+      });
+  }, [busy, catalog, chatRouteRequest, sessionId, sessionLibrary, sessionRuntime, view]);
+  useEffect(() => {
+    if (view !== "chat" || chatRouteRequest || !sessionId) return;
+    const target = chatHash(sessionId);
+    if (window.location.hash !== target) {
+      window.history.replaceState({ view: "chat", sessionId }, "", target);
+    }
+  }, [chatRouteRequest, sessionId, view]);
   useEffect(() => {
     if (!sessionLibrary || !profileId) { setRecentProfileConversations([]); return; }
     const controller = new AbortController();
@@ -1014,6 +1132,13 @@ export function App() {
     attestationClient.current = undefined;
     providerCredential.current = undefined;
   }, [approvalBroker]);
+
+  // A capability request is a real modal: the shell chrome behind it must go
+  // inert, or Tab and assistive tech reach controls the scrim claims are gone.
+  useEffect(
+    () => approvalBroker.subscribe((state) => setApprovalPending(state.pending.length > 0)),
+    [approvalBroker],
+  );
 
   useEffect(() => {
     if (previousApprovalMode.current === activeApprovalMode) return;
@@ -1344,14 +1469,25 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view, proofSection, chutesConnected, credentialRevision]);
 
-  function navigate(next: View, targetHash: string = navigationHashForView(next)) {
+  function navigate(next: View, targetHash?: string) {
+    const resolvedTargetHash = targetHash
+      ?? (next === "chat"
+        ? chatHash(activeSessionIdentity.current ?? sessionId)
+        : navigationHashForView(next));
     setMobileMoreOpen(false);
     setView(next);
+    if (next === "chat") setChatRouteRequest(chatSessionIdFromHash(resolvedTargetHash));
     if (next !== "proof") {
       setProofSelection(undefined);
       setProofSection("summary");
     }
-    if (window.location.hash !== targetHash) window.history.pushState({ view: next }, "", targetHash);
+    if (window.location.hash !== resolvedTargetHash) {
+      window.history.pushState(
+        next === "chat" ? { view: next, sessionId: chatSessionIdFromHash(resolvedTargetHash) } : { view: next },
+        "",
+        resolvedTargetHash,
+      );
+    }
   }
 
   function navigatePrimary(next: View) {
@@ -1611,13 +1747,21 @@ export function App() {
   useEffect(() => {
     const updateFromHistory = () => {
       const next = readViewHash();
+      const requestedChatSession = next === "chat" ? chatSessionIdFromHash(window.location.hash) : undefined;
       setMobileMoreOpen(false);
       const nextProofSelection = next === "proof" ? proofSelectionFromHash(window.location.hash) : undefined;
       const nextProofSection = next === "proof" ? proofSectionFromHash(window.location.hash) : "summary";
       setView(next);
+      setChatRouteRequest(requestedChatSession);
       setProofSelection(nextProofSelection);
       setProofSection(nextProofSection);
-      const canonicalHash = next === "proof" ? proofHash(nextProofSelection, nextProofSection) : navigationHashForView(next);
+      const canonicalHash = next === "proof"
+        ? proofHash(nextProofSelection, nextProofSection)
+        : next === "chat"
+          ? requestedChatSession
+            ? chatHash(requestedChatSession)
+            : chatHash(activeSessionIdentity.current)
+          : navigationHashForView(next);
       if (window.location.hash !== canonicalHash) window.history.replaceState({ view: next }, "", canonicalHash);
     };
     window.addEventListener("hashchange", updateFromHistory);
@@ -1684,6 +1828,29 @@ export function App() {
     mainRegion.current?.focus({ preventScroll: true });
     if (view === "chat" && !document.hidden) setUnreadTurnCount(0);
   }, [view]);
+
+  // The rail is a real scroll container at common laptop heights. Re-bind when
+  // a disclosure changes its content height so the fade cannot go stale.
+  useScrollEdges(primaryNav, `${String(chatNavExpanded)}:${String(profileNavExpanded)}:${String(recentProfileConversations.length)}:${view}`);
+
+  // The composer is 35 tab stops from <body> and is the most-used control in
+  // the product. Claim it once the chat stage is actually mounted — the boot
+  // screen renders first, so `view` alone never observes the composer — and
+  // only while nothing else owns focus. Known consequence: the g-prefix
+  // navigation chords stay inert until the user leaves the composer, because
+  // `useGlobalNavigationJumps` correctly refuses to steal keys from a text
+  // field. Command Center (Cmd/Ctrl+K) is unaffected.
+  useEffect(() => {
+    if (!shellMounted) return;
+    if (!shouldClaimComposerFocus({
+      chatView: view === "chat",
+      overlayOpen: mobileMoreOpen || paletteOpen || preferencesOpen || trustSheetOpen || approvalPending,
+      narrowViewport: window.matchMedia(COMPOSER_AUTOFOCUS_MAX_WIDTH_QUERY).matches,
+      focusAtDocumentRoot: document.activeElement === null || document.activeElement === document.body,
+    })) return;
+    const frame = requestAnimationFrame(() => textarea.current?.focus({ preventScroll: true }));
+    return () => cancelAnimationFrame(frame);
+  }, [shellMounted, view, mobileMoreOpen, paletteOpen, preferencesOpen, trustSheetOpen, approvalPending]);
 
   useEffect(() => {
     const reconcileVisibility = () => {
@@ -2807,15 +2974,19 @@ export function App() {
           providerContext: message.providerContext,
         }] : []),
       });
-      const messages = presentation.rows.map((row) => ({
-        id: row.id,
-        role: row.role,
-        content: messagePlainText(row.parts),
-        parts: row.parts,
-        ...(row.receipt ? { receipt: row.receipt } : {}),
-        history: { turnStatus: row.turnStatus, providerContext: row.providerContext },
-        sourcePoint: row.sourcePoint,
-      } satisfies UiMessage));
+      const messages = presentation.rows.map((row, index) => {
+        const originatingPrompt = originatingPromptForRow(presentation.rows, index);
+        return {
+          id: row.id,
+          role: row.role,
+          content: messagePlainText(row.parts),
+          parts: row.parts,
+          ...(row.receipt ? { receipt: row.receipt } : {}),
+          ...(originatingPrompt ? { originatingPrompt } : {}),
+          history: { turnStatus: row.turnStatus, providerContext: row.providerContext },
+          sourcePoint: row.sourcePoint,
+        } satisfies UiMessage;
+      });
       const lastPresentationReceipt = presentation.rows
         .flatMap((row) => row.receipt ? [row.receipt] : [])
         .at(-1);
@@ -3770,6 +3941,64 @@ export function App() {
     }
   }
 
+  /**
+   * The Local lane's "Check this machine" button, wired to the same loopback
+   * connect the provider fabric uses.
+   *
+   * The lane's copy promises that 127.0.0.1 is contacted only when this runs,
+   * so this must issue the request rather than describe one: each server is
+   * either answered, with the roster it returned, or refused, with the cause
+   * the browser gave. A server already held in page memory is reported as such
+   * without a second connect, which would otherwise reserve a duplicate
+   * connection id for a provider that is plainly already there.
+   */
+  async function checkLocalModelServers(): Promise<readonly LocalProviderProbeResult[]> {
+    const fabric = inferenceFabric.current;
+    if (!fabric) throw new Error("The inference connection directory is still starting, so nothing on this machine was contacted.");
+    const controller = new AbortController();
+    const deadline = setTimeout(
+      () => controller.abort(new DOMException("The local model-server check exceeded its deadline.", "TimeoutError")),
+      LOCAL_PROBE_DEADLINE_MS,
+    );
+    try {
+      const results: LocalProviderProbeResult[] = [];
+      for (const server of LOCAL_MODEL_SERVERS) {
+        const held = fabric.list().find((entry) => entry.provider.id === server.kind);
+        if (held) {
+          results.push(Object.freeze({
+            id: server.kind,
+            label: server.label,
+            outcome: "answered" as const,
+            detail: `Already connected in this tab · ${modelCountLabel(held.models.length)}.`,
+          }));
+          continue;
+        }
+        try {
+          const connected = await fabric.connectLocal({ kind: server.kind, signal: controller.signal });
+          results.push(Object.freeze({
+            id: server.kind,
+            label: server.label,
+            outcome: "answered" as const,
+            detail: `Answered on ${server.endpoint} · ${modelCountLabel(connected.models.length)}.`,
+          }));
+        } catch (caught) {
+          // A refusal by one server says nothing about the other, so the loop
+          // continues; a deadline abort is not a refusal and stops everything.
+          controller.signal.throwIfAborted();
+          results.push(Object.freeze({
+            id: server.kind,
+            label: server.label,
+            outcome: "silent" as const,
+            reason: `${server.endpoint} did not answer: ${localProbeCause(caught)}`,
+          }));
+        }
+      }
+      return Object.freeze(results);
+    } finally {
+      clearTimeout(deadline);
+    }
+  }
+
   async function saveProfileRevision(draft: ProfileEditorDraft): Promise<ProfileRevision> {
     let savedProfileId = draft.profileId;
     const committed = await mutateProfileCatalog(async (currentCatalog) => {
@@ -3803,6 +4032,67 @@ export function App() {
       ? `Profile revised in ${profileCatalogAuthorityLabel()}; active session remains pinned`
       : `Profile revision saved in ${profileCatalogAuthorityLabel()}`);
     return revision;
+  }
+
+  async function changeActiveApprovalMode(nextMode: ApprovalMode): Promise<void> {
+    if (nextMode === activeApprovalMode) return;
+    if (
+      busy
+      || !runtime.current
+      || !catalog
+      || !activeSessionRecord
+      || inferenceRouteChanging.current
+      || sessionNavigationChanging.current
+    ) {
+      setComposerNotice("Stop the active turn and wait for model or storage changes before changing this conversation's approval policy.");
+      return;
+    }
+    const active = runtime.current;
+    sessionNavigationChanging.current = true;
+    try {
+      let revisedProfile: ProfileRevision | undefined;
+      const committed = await mutateProfileCatalog(async (current) => {
+        const profile = current.profiles.find((candidate) => candidate.profileId === profileId);
+        if (!profile) throw new Error("The active profile is no longer available.");
+        revisedProfile = await createProfileRevision({
+          ...profile,
+          parentRevision: profile.revision,
+          approvalMode: nextMode,
+          createdAt: new Date().toISOString(),
+        });
+        return replaceProfile(current, revisedProfile);
+      });
+      if (!revisedProfile) throw new Error("The approval profile revision was not created.");
+      // Commit the profile revision before creating the session that pins it.
+      // A catalog failure therefore cannot leave an orphan journal session
+      // referring to a profile revision that never became authoritative.
+      const nextSession = await createProfileSession(
+        active,
+        revisedProfile,
+        committed.catalog,
+        `${activeSessionRecord.title} · ${approvalModeLabel(nextMode)}`.slice(0, 240),
+      );
+      if (runtime.current !== active) throw new Error("The runtime changed before the approval policy could become active.");
+      setProfileId(revisedProfile.profileId);
+      activateSession(nextSession);
+      setMessages([{
+        ...welcomeMessage,
+        id: randomUuid(),
+        content: `Approval policy changed to ${approvalModeLabel(nextMode)} in this new pinned conversation. The previous conversation remains unchanged and addressable from its URL and conversation history.`,
+      }]);
+      setEventCount(nextSession.headSequence);
+      setLastReceipt(undefined);
+      setSessionLifecycle(READY_SESSION_LIFECYCLE);
+      setTranscriptBoundary(undefined);
+      setSessionRevision((value) => value + 1);
+      setComposerNotice(undefined);
+      setRuntimeStatus(`${approvalModeLabel(nextMode)} active · new pinned conversation`);
+      navigate("chat", chatHash(nextSession.id));
+    } catch (error) {
+      setComposerNotice(error instanceof Error ? error.message : "The approval policy could not be changed.");
+    } finally {
+      sessionNavigationChanging.current = false;
+    }
   }
 
   async function forkProfile(source: ProfileRevision): Promise<ProfileRevision> {
@@ -3876,6 +4166,9 @@ export function App() {
     if (!credential || !isChutesConnected(connection)) {
       throw new Error("A connected Chutes credential is required for account telemetry.");
     }
+    // Account telemetry travels with the Billing surface in the deferred pack;
+    // the shell must not carry the Chutes account client on its boot path.
+    const { loadChutesAccountSnapshot } = await loadDeferredCapabilities();
     return loadChutesAccountSnapshot({ credential, signal });
   }
 
@@ -3947,18 +4240,22 @@ export function App() {
       });
       activateSession(audited.session);
       setMessages(presentation.rows.length > 0
-        ? presentation.rows.map((row) => ({
-            id: row.id,
-            role: row.role,
-            content: messagePlainText(row.parts),
-            parts: row.parts,
-            ...(row.receipt ? { receipt: row.receipt } : {}),
-            history: {
-              turnStatus: row.turnStatus,
-              providerContext: row.providerContext,
-            },
-            sourcePoint: row.sourcePoint,
-          }))
+        ? presentation.rows.map((row, index) => {
+            const originatingPrompt = originatingPromptForRow(presentation.rows, index);
+            return {
+              id: row.id,
+              role: row.role,
+              content: messagePlainText(row.parts),
+              parts: row.parts,
+              ...(row.receipt ? { receipt: row.receipt } : {}),
+              ...(originatingPrompt ? { originatingPrompt } : {}),
+              history: {
+                turnStatus: row.turnStatus,
+                providerContext: row.providerContext,
+              },
+              sourcePoint: row.sourcePoint,
+            };
+          })
         : [{ ...welcomeMessage, id: randomUuid(), content: `Resumed ${fresh.session.title}. ${welcomeMessage.content}` }]);
       setEventCount(fresh.session.headSequence);
       setLastReceipt(presentation.rows.flatMap((row) => row.receipt ? [row.receipt] : []).at(-1));
@@ -4020,7 +4317,7 @@ export function App() {
   if (!catalog || !activeProfile || !activeTheme) {
     return <BootScreen status={runtimeStatus} />;
   }
-  const platformOverlayOpen = mobileMoreOpen || paletteOpen || preferencesOpen || trustSheetOpen;
+  const platformOverlayOpen = mobileMoreOpen || paletteOpen || preferencesOpen || trustSheetOpen || approvalPending;
   const vaultTrustAxis = trustAxes.find((axis) => axis.id === "vault")!;
   const sessionDurability = localDeviceRuntimeAdopted
     ? {
@@ -4041,6 +4338,25 @@ export function App() {
 
   return (
     <div class="app-shell" data-connectivity={online ? "online" : "offline"}>
+      {/* Tabbing from the document start otherwise crosses the whole rail, the
+          recent-conversation list and the profile switcher — 35 stops — before
+          reaching the composer, the highest-frequency control in the product.
+          These are buttons, not `href="#..."` anchors: the shell routes on the
+          location hash, so an in-page anchor would navigate the application. */}
+      <div class="skip-links" inert={platformOverlayOpen} aria-hidden={platformOverlayOpen || undefined}>
+        <button
+          class="skip-link"
+          type="button"
+          onClick={() => mainRegion.current?.focus({ preventScroll: true })}
+        >Skip to conversation</button>
+        {view === "chat" ? (
+          <button
+            class="skip-link"
+            type="button"
+            onClick={() => textarea.current?.focus({ preventScroll: true })}
+          >Skip to composer</button>
+        ) : null}
+      </div>
       <header class="topbar" inert={platformOverlayOpen} aria-hidden={platformOverlayOpen || undefined}>
         <button class="brand" type="button" onClick={() => navigate("chat")} aria-label="Open session">
           <Seal class="brand-seal" state="asserted" label="Airship mark" detail="Airship edge runtime" size={25} compact />
@@ -4085,7 +4401,7 @@ export function App() {
         </div>
         <div class="topbar-actions">
           {!inferenceConnected ? (
-            <button class="mobile-inference-action" type="button" onClick={() => navigate("access")}>Connect</button>
+            <button class="mobile-inference-action" type="button" aria-label="Connect a model" onClick={() => navigate("access")}>Connect</button>
           ) : null}
           {inferenceConnected ? (
             <button
@@ -4129,7 +4445,7 @@ export function App() {
       </header>
 
       <aside class="sidebar" inert={platformOverlayOpen} aria-hidden={platformOverlayOpen || undefined}>
-        <nav class="primary-nav" aria-label="Primary">
+        <nav ref={primaryNav} class="primary-nav" aria-label="Primary">
           {(["Work", "Agent", "Trust"] as const).map((group) => (
             <div class="nav-group" key={group}>
               <span class="nav-group-label">{group}</span>
@@ -4265,6 +4581,16 @@ export function App() {
                   <span class="eyebrow">Active session · {activeProfile.name}</span>
                   <h1>{activeSessionRecord?.title ?? activeProfile.name}</h1>
                 </div>
+                <button
+                  class="mobile-new-conversation"
+                  type="button"
+                  aria-label="New conversation"
+                  title="New conversation"
+                  disabled={busy}
+                  onClick={() => void createConversation()}
+                >
+                  <Icon name="plus" size={17} />
+                </button>
                 <div class="stage-header-model">
                   <ModelControl
                     active={activeChutesConnection ? {
@@ -4285,10 +4611,10 @@ export function App() {
                       boundaryLabel: "Disconnected · read-only pin",
                     } : undefined}
                     models={activeChutesConnection
-                      ? availableModels.map((model) => ({
+                      ? sortModels(availableModels, "popularity").map((model) => ({
                           id: model.id,
                           label: compactModelLabel(model.id),
-                          detail: modelInputModalityCapability(model, "image") === "supported" ? "Vision" : undefined,
+                          detail: compactModelCapabilityDetail(model),
                         }))
                       : activeExternalConnection?.models.map((model) => ({
                           id: model.id,
@@ -4325,18 +4651,20 @@ export function App() {
                     <DurabilityIndicator state={sessionDurability.state} detail={sessionDurability.detail} />
                   </div>
                   <div class="session-meta-record">
-                    <span>{eventCount} page-journal event{eventCount === 1 ? "" : "s"}</span>
+                    {/* P11: plain language leads. "page-journal event" is the
+                        internal record name and stays available on hover. */}
+                    <span title={`${eventCount} page-journal event${eventCount === 1 ? "" : "s"}`}>{eventCount} recorded step{eventCount === 1 ? "" : "s"}</span>
                     <button class="session-id" type="button" title="Open conversation details" onClick={() => navigate("sessions")}>#{sessionId ? sessionId.slice(0, 8) : "starting"}</button>
                   </div>
                 </div>
               </div>
               {!inferenceConnected ? <div class="chat-live-guidance" role="note">
-                <span><strong>Slash commands work here without inference.</strong> Connect Chutes, another cloud provider, Ollama, or LM Studio for model turns.</span>
-                <button type="button" onClick={() => navigate("access")}>Connect inference</button>
+                <span><strong>Workspace, editor, terminal and Git work right now.</strong> Chat is the one part that needs a model provider.</span>
+                <button type="button" onClick={() => navigate("access")}>Connect a model</button>
               </div> : null}
               <div
                 ref={transcriptElement}
-                class="transcript"
+                class={messages.length <= 1 ? "transcript no-turns" : "transcript"}
                 onScroll={(event) => {
                   const element = event.currentTarget;
                   const pinned = isNearLastRealCard(element, 64);
@@ -4389,13 +4717,17 @@ export function App() {
                 ))}
                 {messages.length <= 1 ? (
                   <div class="transcript-starters" role="group" aria-label="Suggested ways to begin">
-                    {STARTER_PROMPTS.map((starter) => (
+                    {(inferenceConnected ? CONNECTED_STARTERS : DISCONNECTED_STARTERS).map((starter) => (
                       <button
                         type="button"
                         key={starter.title}
                         class="starter-chip"
                         onClick={() => {
-                          setInput(starter.prompt);
+                          if (starter.action.kind === "route") {
+                            navigate(starter.action.view);
+                            return;
+                          }
+                          setInput(starter.action.prompt);
                           requestAnimationFrame(() => textarea.current?.focus());
                         }}
                       >
@@ -4424,7 +4756,13 @@ export function App() {
                 ) : null}
               </div>
               <div class="composer-wrap">
-                <div class={`composer${busy ? " busy" : ""}${composerFocused ? " composer--expanded" : ""}`}>
+                <div
+                  class={`composer${busy ? " busy" : ""}${composerFocused ? " composer--expanded" : ""}`}
+                  onFocusIn={() => setComposerFocused(true)}
+                  onFocusOut={(event) => {
+                    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setComposerFocused(false);
+                  }}
+                >
                   {slashMenuOpen ? (
                     <div class="slash-command-menu" id="slash-command-menu" role="listbox" aria-label="Available slash commands">
                       {slashCompletions.map((completion, index) => (
@@ -4462,8 +4800,6 @@ export function App() {
                     value={input}
                     placeholder="Ask Airship or type / for tools and session commands…"
                     onInput={(event) => setInput(event.currentTarget.value)}
-                    onFocus={() => setComposerFocused(true)}
-                    onBlur={() => setComposerFocused(false)}
                     onPaste={(event) => {
                       const pasted = Array.from(event.clipboardData?.files ?? []);
                       if (pasted.length) addComposerFiles(pasted);
@@ -4524,7 +4860,18 @@ export function App() {
                           ? "local endpoint"
                           : "credential in memory"
                         : "page memory only"}</span>
-                      <span class={`composer-policy policy-${activeApprovalMode}`}><span class="composer-policy__dot" aria-hidden="true" /><Icon name="check" size={14} /> {approvalModeLabel(activeApprovalMode)}</span>
+                      <MenuSelect
+                        ariaLabel="Conversation approval policy"
+                        className={`composer-approval-select policy-${activeApprovalMode}`}
+                        value={activeApprovalMode}
+                        disabled={busy || modelSwitching || vaultProviderSwitching || localDeviceBusy}
+                        options={[
+                          { value: "ask-first", label: "Ask First", description: "Prompt before effectful actions." },
+                          { value: "auto-approve", label: "Auto Approve", description: "Ask the active model to review each effect; prompt when uncertain." },
+                          { value: "full-access", label: "Full Access", description: "Allow effects inside the bounded browser workspace without prompting." },
+                        ]}
+                        onChange={(value) => void changeActiveApprovalMode(value as ApprovalMode)}
+                      />
                     </div>
                     {busy ? (
                       <button class="send-button stop" type="button" onClick={stopTurn} aria-label="Stop turn"><Icon name="stop" /></button>
@@ -4576,10 +4923,12 @@ export function App() {
           />
         ) : <RouteSkeleton label="Loading session library" /> : null}
         {(view === "workspace" || view === "editor") && runtime.current && gitClient ? EditorScreen ? <EditorScreen
+          key={runtime.current.workspaceId}
           files={files}
           selected={selectedFile}
           onOpen={openFile}
           workspace={runtime.current.workspace}
+          workspaceIdentity={runtime.current.workspaceId}
           git={gitClient}
           review={reviewGitOperation}
           reviewImport={reviewSourceImport}
@@ -4773,6 +5122,8 @@ export function App() {
               takeCredential: takePendingOAuthCredential,
               getBearerToken: currentOAuthBearer,
             }}
+            connectedProviderIds={connectedInferenceProviderIds}
+            onCheckLocalProviders={checkLocalModelServers}
             additionalProviders={ProviderConnectionsScreen ? (
               <ProviderConnectionsScreen
                 online={online}
@@ -4789,6 +5140,7 @@ export function App() {
       <MobileNavigation
         view={view}
         moreOpen={mobileMoreOpen}
+        chromeInert={platformOverlayOpen}
         chatPending={unreadTurnCount}
         proofPending={Boolean(lastReceipt)}
         attestationPending={attestationRecords.length + (attestationFailure ? 1 : 0)}
@@ -5427,6 +5779,19 @@ function compactModelLabel(modelId: string): string {
   return leaf.length > 25 ? `${leaf.slice(0, 22)}…` : leaf;
 }
 
+function compactModelCapabilityDetail(model: AirshipModel): string | undefined {
+  const labels: string[] = [];
+  if (modelInputModalityCapability(model, "image") === "supported") labels.push("Vision");
+  if (model.provenance.capabilities === "llm-models" && model.features.some((feature) => feature.toLowerCase() === "tools")) {
+    labels.push("Tools");
+  }
+  const popularity = modelPopularitySignal(model);
+  if (popularity) labels.push(`${new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 }).format(popularity.value)} ${popularity.basis === "lifetime-invocations" ? "invocations" : "req/h"}`);
+  const utilization = model.telemetry?.freshness === "fresh" ? model.telemetry.utilization.oneHour : undefined;
+  if (utilization !== undefined) labels.push(`${Math.round(utilization * 100)}% load`);
+  return labels.length ? labels.join(" · ") : undefined;
+}
+
 function conversationTitleFromPrompt(prompt: string): string {
   const normalized = prompt.normalize("NFKC").replace(/[\u0000-\u001f\u007f]/gu, " ").replace(/\s+/gu, " ").trim();
   const maximum = 64;
@@ -5547,7 +5912,13 @@ export function describeAttestationSeal(args: {
         label: "Evidence checked per turn",
         detail: "Verify & record will collect fresh endpoint evidence on the next turn and keep every incomplete claim explicit without blocking encrypted inference.",
       }
-    : { state: "none", label: "TEE not checked", detail: "Demo provider" };
+    : {
+      state: "none",
+      // Plain language leads and the acronym follows. "Demo provider" was also
+      // simply untrue — there is no demo provider; nothing is connected.
+      label: "Secure hardware not checked",
+      detail: "No inference provider is connected, so no TEE evidence has been requested for this session.",
+    };
 }
 
 function describeMessageAttestation(
@@ -5603,8 +5974,8 @@ function describeMessageAttestation(
   }
   return {
     state: "none",
-    label: "TEE evidence pending",
-    detail: "Airship has not accepted endpoint evidence for this receipt.",
+    label: "Secure hardware evidence pending",
+    detail: "Airship has not accepted endpoint TEE evidence for this receipt.",
   };
 }
 
@@ -5729,6 +6100,24 @@ function endpointEvidenceForView(record: ChutesEndpointEvidenceRecord): ChutesEn
   });
 }
 
+function modelCountLabel(count: number): string {
+  return `${count} model${count === 1 ? "" : "s"}`;
+}
+
+/**
+ * One bounded sentence for why a loopback server did not answer.
+ *
+ * Local connections carry no credential, but the message is still redacted and
+ * capped rather than passed through: a thrown value is untrusted text and this
+ * lands in the person's page.
+ */
+function localProbeCause(error: unknown): string {
+  const raw = error instanceof Error ? error.message : "";
+  const clean = raw.replace(/[\u0000-\u001f\u007f]+/gu, " ").replace(/\s+/gu, " ").trim();
+  if (!clean) return "the browser reported no reason.";
+  return clean.length > 200 ? `${clean.slice(0, 197)}…` : clean;
+}
+
 function querylessProviderUrl(value: string): string {
   try {
     const url = new URL(value);
@@ -5831,15 +6220,32 @@ function MessageCard({
             ) : null}
           </div>
         ) : null}
-        <details class="message-actions">
-          <summary aria-label="Open message actions">••• <span>Actions</span></summary>
-          <div aria-label="Message actions">
+        {/* Pointer devices get a real toolbar that the hover/focus rule fades
+            in; touch devices get the disclosure below. This is deliberately not
+            one `<details>` for both: engines no longer paint the contents of a
+            closed `<details>`, so a summary hidden at desktop width left the
+            actions laid out, measurable, and permanently unclickable. */}
+        <div class="message-actions" role="toolbar" aria-label="Message actions">
+          <div class="message-actions-row">
             <button type="button" onClick={onCopy}>Copy</button>
-            {message.role === "assistant" && message.error && message.originatingPrompt ? <button type="button" onClick={onRetry}>Retry</button> : null}
+            {/* Retry is the ordinary "ask that again" gesture, not only an
+                error recovery. It re-sends into the same session, so the
+                original turn and its receipt chain stay inspectable — and the
+                earlier answer is still in provider context, which the title
+                states rather than implying a clean regeneration. */}
+            {message.role === "assistant" && message.originatingPrompt ? (
+              <button
+                type="button"
+                title={message.error
+                  ? "Send the same prompt again in this conversation."
+                  : "Ask again in this conversation. The earlier answer stays in the transcript and in provider context."}
+                onClick={onRetry}
+              >Retry</button>
+            ) : null}
             {message.role === "user" ? <button type="button" onClick={onEdit}>Edit &amp; resend</button> : null}
-            <button type="button" onClick={onBranch}><Icon name="branch" size={14} /> Fork session</button>
+            <button type="button" onClick={onBranch}><Icon name="branch" size={14} /> Fork conversation</button>
           </div>
-        </details>
+        </div>
       </div>
     </article>
   );

@@ -5,8 +5,61 @@ import {
   GoogleDriveAuthorizationRequiredError,
   GoogleIdentityServicesAuthorizer,
   MemoryOnlyGoogleAccessTokenProvider,
+  isDeployableGoogleOAuthClientId,
   readGoogleAccountIdentity,
 } from "./google-drive-auth";
+
+describe("deployment configuration for the Google Drive vault", () => {
+  it("accepts exactly the client IDs the authorizer will construct with", () => {
+    const configured = "123456789012-airship-browser-acceptance.apps.googleusercontent.com";
+    expect(isDeployableGoogleOAuthClientId(configured)).toBe(true);
+    expect(isDeployableGoogleOAuthClientId(` ${configured} `)).toBe(true);
+    expect(() => new GoogleIdentityServicesAuthorizer(configured, new MemoryOnlyGoogleAccessTokenProvider())).not.toThrow();
+  });
+
+  it("sends the trimmed client ID it accepted, never the padded build-time value", async () => {
+    const configured = "123456789012-airship-browser-acceptance.apps.googleusercontent.com";
+    let sentClientId: string | undefined;
+    const authorizer = new GoogleIdentityServicesAuthorizer(
+      `\n ${configured}  `,
+      new MemoryOnlyGoogleAccessTokenProvider(),
+      async () => ({ accounts: { oauth2: { initTokenClient: (options) => {
+        sentClientId = options.client_id;
+        return { requestAccessToken: () => {} };
+      } } } }),
+    );
+    await authorizer.prepare();
+    // A padded value would reach Google's token client verbatim and fail there
+    // with an opaque error instead of being normalized at the accepting edge.
+    expect(sentClientId).toBe(configured);
+  });
+
+  it("agrees with the authorizer about which client IDs are constructible", () => {
+    for (const value of [
+      undefined,
+      null,
+      "",
+      "   ",
+      "not-a-client-id",
+      "short.apps.googleusercontent.com",
+      "123456789012-airship.apps.googleusercontent.com.evil.test",
+      `${"a".repeat(600)}.apps.googleusercontent.com`,
+    ]) {
+      expect(isDeployableGoogleOAuthClientId(value)).toBe(false);
+    }
+    // What this pins is agreement between the two edges: a value the predicate
+    // rejects is a value the authorizer refuses to construct with, and vice
+    // versa, so a caller that does consult the predicate is never surprised at
+    // construction. It is *not* a guarantee that a build cannot ship Drive as an
+    // unreachable default — nothing forces provider selection through this
+    // predicate, and a deployment that skips it fails at the authorizer instead.
+    for (const value of ["not-a-client-id", "short.apps.googleusercontent.com", "   "]) {
+      expect(isDeployableGoogleOAuthClientId(value)).toBe(false);
+      expect(() => new GoogleIdentityServicesAuthorizer(value, new MemoryOnlyGoogleAccessTokenProvider()))
+        .toThrow("Google OAuth client ID is invalid.");
+    }
+  });
+});
 
 describe("browser-only Google account authorization", () => {
   it("keeps a narrow, expiring grant in memory and reads bounded account context", async () => {

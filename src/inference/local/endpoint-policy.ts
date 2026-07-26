@@ -20,11 +20,35 @@ export type ResolvedLocalEndpoint = Readonly<{
   diagnostics: readonly LocalProviderDiagnostic[];
 }>;
 
+/**
+ * Every loopback origin Airship will ever open a local-model connection to.
+ *
+ * The set is enumerated rather than widened to a port range because the same
+ * list has to be repeated as exact `connect-src` sources in index.html and
+ * public/_headers, where a wildcard is rejected by the static-security gate.
+ * It covers the two default ports plus the two ports either service is most
+ * often moved to (a second instance, or `OLLAMA_HOST=:11435`); anything else
+ * still fails closed with the origin named in the diagnostic.
+ *
+ * It is one flat set, not a per-provider partition: `resolveLocalEndpoint`
+ * receives no provider and checks the origin against every entry, so an Ollama
+ * connection to :1234 is allowed. Partitioning would be a boundary the CSP
+ * cannot express anyway, since `connect-src` has no notion of which provider
+ * is dialling.
+ */
 export const DEFAULT_LOCAL_MODEL_ORIGINS = Object.freeze([
   "http://127.0.0.1:11434",
   "http://localhost:11434",
+  "http://127.0.0.1:11435",
+  "http://localhost:11435",
+  "http://127.0.0.1:11436",
+  "http://localhost:11436",
   "http://127.0.0.1:1234",
   "http://localhost:1234",
+  "http://127.0.0.1:1235",
+  "http://localhost:1235",
+  "http://127.0.0.1:1236",
+  "http://localhost:1236",
 ] as const);
 
 export function resolveLocalEndpoint(
@@ -58,9 +82,12 @@ export function resolveLocalEndpoint(
   url.pathname = "/";
   const hostname = normalizeHostname(url.hostname);
   if (!isLoopbackHost(hostname)) {
+    // Name the origin the caller supplied. A private-LAN or `.local` host is
+    // usually a typo away from a loopback one, and a refusal that withholds
+    // what it refused sends the operator hunting through the allowlist.
     throw new LocalProviderError(errorDiagnostic(
       "endpoint-not-local",
-      "Direct local-model connections are limited to Airship's exact loopback origins. Private-LAN and public hosts are not supported.",
+      `Direct local-model connections are limited to Airship's exact loopback origins, and ${url.origin} is not one. Private-LAN and public hosts are not supported.`,
     ));
   }
 

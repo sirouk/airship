@@ -16,7 +16,13 @@ import {
   verifyContextSelection,
   verifyContextSelectionQuery,
 } from "./context-selection";
-import { canonicalContextSummary, canonicalSessionContextPolicy, verifyContextSummary } from "./context-compressor";
+import {
+  canonicalContextSummary,
+  canonicalSessionContextPolicy,
+  summaryBodiesWithinPolicy,
+  verifyContextSummary,
+  type ContextSummaryProvenance,
+} from "./context-compressor";
 import { materializeMessages } from "./agent";
 
 const EVENT_FIELDS = new Set([
@@ -1230,29 +1236,74 @@ function summaryMatchesContextPolicy(
     summary.contextWindowTokens !== canonical.contextWindowTokens ||
     summary.thresholdBasisPoints !== canonical.compression.thresholdBasisPoints ||
     summary.targetRatioBasisPoints !== canonical.compression.targetRatioBasisPoints ||
-    encoder.encode(summary.summaryDelta).byteLength > canonical.compression.maxSummaryDeltaBytes ||
+    // Both free-text bodies, not just the delta: a compacted tier is written by
+    // the same summarizer under the same cap, and one that is larger than the
+    // pinned budget was not produced by this session's policy. Bounding only
+    // the delta leaves the tier capped at the 64 KiB hard ceiling, several
+    // times the pinned budget, and it rides into every future prompt.
+    !summaryBodiesWithinPolicy(summary, canonical.compression.maxSummaryDeltaBytes) ||
     summary.estimatedTokensBefore / summary.contextWindowTokens < summary.thresholdBasisPoints / 10_000 ||
     priorEvents.filter((event) =>
       event.type === "turn.completed" && event.sequence > summary.sourceEndSequence
     ).length !== canonical.compression.preserveRecentTurns
   ) return false;
   const summarizer = canonical.compression.summarizer;
+  if (!compactionMatchesContextPolicy(summary.compaction, summarizer, manifest)) return false;
   if (summarizer.mode === "extractive-fallback") {
     return summary.summaryMethod === "extractive-fallback-v1" &&
       summary.summarizerProvenance === undefined &&
       summary.summarizerAttempt === undefined;
   }
   if (summary.summaryMethod === "summarizer-port-v1") {
-    const provenance = summary.summarizerProvenance;
     return summary.summarizerId === summarizer.adapterId &&
-      provenance?.adapterId === summarizer.adapterId &&
-      provenance.providerId === manifest.providerId &&
-      provenance.model === manifest.model &&
-      (manifest.securityPosture === undefined || provenance.posture === manifest.securityPosture);
+      provenanceMatchesContextPolicy(summary.summarizerProvenance, summarizer.adapterId, manifest);
   }
   return summarizer.onFailure === "extractive-fallback" &&
     summary.summaryMethod === "extractive-fallback-v1" &&
     summary.summarizerAttempt?.summarizerId === summarizer.adapterId;
+}
+
+/**
+ * The compacted tier gets the same cross-check the delta gets. Without it a
+ * fabricated tier provenance only has to be internally self-consistent — its
+ * `responseDigest` matching its own body — to pass replay, while naming an
+ * adapter, provider, model, or posture this session never pinned. The tier
+ * stands in for the entire start of the conversation, so it is the last place
+ * an unchecked label belongs.
+ */
+function compactionMatchesContextPolicy(
+  compaction: NonNullable<ReturnType<typeof canonicalContextSummary>>["compaction"],
+  summarizer: NonNullable<ReturnType<typeof canonicalSessionContextPolicy>>["compression"]["summarizer"],
+  manifest: SessionManifest,
+): boolean {
+  if (!compaction) return true;
+  if (summarizer.mode === "extractive-fallback") {
+    // No summarizer was pinned, so no tier this session wrote can claim one.
+    return compaction.method === "extractive-fallback-v1" &&
+      compaction.provenance === undefined &&
+      compaction.attempt === undefined;
+  }
+  if (compaction.method === "summarizer-port-v1") {
+    return compaction.attempt === undefined &&
+      provenanceMatchesContextPolicy(compaction.provenance, summarizer.adapterId, manifest);
+  }
+  // An extractive tier under a summarizer policy is only legitimate when the
+  // policy permits the fallback and the commitment records which summarizer
+  // failed, exactly as the delta must.
+  return summarizer.onFailure === "extractive-fallback" &&
+    compaction.provenance === undefined &&
+    compaction.attempt?.summarizerId === summarizer.adapterId;
+}
+
+function provenanceMatchesContextPolicy(
+  provenance: ContextSummaryProvenance | undefined,
+  adapterId: string,
+  manifest: SessionManifest,
+): boolean {
+  return provenance?.adapterId === adapterId &&
+    provenance.providerId === manifest.providerId &&
+    provenance.model === manifest.model &&
+    (manifest.securityPosture === undefined || provenance.posture === manifest.securityPosture);
 }
 
 function parseToolCalls(

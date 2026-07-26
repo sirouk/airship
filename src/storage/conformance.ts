@@ -17,8 +17,9 @@ export type ObjectStoreConformanceResult = {
 
 /**
  * Destructive-in-the-small live probe for an isolated, disposable prefix.
- * The store contract has no delete operation, so callers must configure expiry
- * or remove the returned keys out-of-band after the run.
+ * The base store contract has no delete operation. A caller whose store also
+ * implements `ReclaimableObjectStore` may sweep `createdKeys` after the run;
+ * every other caller must configure provider expiry or remove them out-of-band.
  */
 export async function runObjectStoreConformance(args: {
   store: ObjectStore;

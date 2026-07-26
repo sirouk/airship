@@ -13,40 +13,95 @@ export const RELEASE_BUDGETS = Object.freeze({
   entryJavaScript: Object.freeze({ raw: 384 * 1024, gzip: 110 * 1024 }),
   // Trust composition adds ~1.8 KiB gzip to the baseline while the actual
   // entry remains below its stricter 110 KiB limit. Heavy QVL stays deferred.
+  // This is the first-paint cost on a phone, so it is the one ceiling that does
+  // not move: three waves of capability were absorbed by deferring startup
+  // weight (the fixture-only in-memory Git backend, reached only through the
+  // src/git barrel, and the Chutes account-telemetry client, which now travels
+  // with the Billing surface it serves) rather than by raising this number.
+  // Measured 405.45 KiB raw / 128.89 KiB gzip.
   allJavaScriptAndWorkers: Object.freeze({ raw: 640 * 1024, gzip: 132 * 1024 }),
-  deferredCapabilities: Object.freeze({ raw: 384 * 1024, gzip: 110 * 1024 }),
+  // The Connect surface's live bridge observation and its local-probe results
+  // panel travel here. Measured 377.88 KiB raw / 109.51 KiB gzip: 110 KiB gzip
+  // would clear that by 0.44%, which is a tripwire rather than the ~0.5%
+  // clearance every other cap in this file is set to.
+  deferredCapabilities: Object.freeze({ raw: 384 * 1024, gzip: 111 * 1024 }),
   // Core plus every optional route except the two independently delivered
   // vendor engines. The former 384 KiB "all routes" meaning became impossible
   // once full isomorphic-git and xterm engines were deliberately installed:
   // they are mutually activated, separately cached, and already individually
   // capped. Keep 384 KiB as the stronger first-party/all-other partition.
   // Local Device custody plus the provider-neutral inference fabric add
-  // independently lazy first-party packs; the reviewed installed first-party
-  // aggregate remains below 1.4 MiB raw and 424 KiB gzip.
-  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 1664 * 1024, gzip: 424 * 1024 }),
+  // independently lazy first-party packs. The reviewed installed first-party
+  // aggregate now measures 1,394.99 KiB raw / 430.45 KiB gzip: the Git engine's
+  // new read/history/tag/stash/merge/remote operations, the Service Worker and
+  // Cache Storage probes, and the expanded Capabilities/Memory/Proof route
+  // chrome are all first-party and all lazily delivered. Every cap raised in
+  // this pass sits at the lowest whole KiB that clears its measurement by at
+  // least ~0.5%; a ceiling a few hundred bytes above the build is a tripwire,
+  // not a budget, and the former "<5% above measured" allowance was slack.
+  // `airship-sh` adds a whole first-party POSIX-sh interpreter — lexer,
+  // parser, expansion, arithmetic, globbing, redirection and the workspace
+  // utilities it runs — measuring 96.32 KiB raw / 28.75 KiB gzip. It is a new
+  // capability rather than growth in an existing one, and it is fetched only
+  // when a shell command runs, so the aggregate rises by roughly its size.
+  // The Connect surface then began doing two things it previously only
+  // described: a live per-page-load extension-bridge handshake whose outcome
+  // the Claude and Grok lanes render, and a real Ollama/LM Studio loopback
+  // probe behind "Check this machine". Both are lazily delivered, and the
+  // bridge client also lost its cross-chunk compression when it became shared.
+  // Measured 473.96 KiB gzip against 471.56 before; raw is unchanged.
+  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 1768 * 1024, gzip: 474 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
-  // own per-pack caps. Their cumulative cap is <5% above the measured pair.
-  optionalVendorRuntimeAggregate: Object.freeze({ raw: 608 * 1024, gzip: 176 * 1024 }),
+  // own per-pack caps. The pair now measures 652.23 KiB raw / 180.61 KiB gzip:
+  // the browser-Git pack grew (see optionalBrowserGit) and the Terminal pack
+  // carries the enlarged in-terminal Git command surface. Both vendor pins are
+  // unchanged, so all of the growth is first-party and separately reviewable.
+  optionalVendorRuntimeAggregate: Object.freeze({ raw: 656 * 1024, gzip: 182 * 1024 }),
   // Absolute installed bundle backstop. It includes first-party/routes, both
   // vendor engines, model catalog chunks, and the service worker. Static
   // Pyodide assets remain governed by their separate pack cap below.
   // Genuine linked worktrees add an isolated worktree administration overlay
-  // while retaining one shared object/ref database. Keep roughly 1 KiB of
-  // headroom over the reviewed installed aggregate; startup, route, and
-  // browser-Git pack ceilings remain independently unchanged.
-  totalJavaScriptAndWorkers: Object.freeze({ raw: 2048 * 1024, gzip: 600 * 1024 }),
+  // while retaining one shared object/ref database. The installed aggregate now
+  // measures 2,047.22 KiB raw / 611.06 KiB gzip. The 2 MiB raw backstop is a
+  // deliberate round product statement and is NOT raised here: it still fits,
+  // with under 1 KiB to spare, and it — not the gzip figure — is what the next
+  // installed capability has to argue against. Only gzip moves, to 612 KiB;
+  // 611 KiB would have left 32 bytes, and a ceiling that cannot survive a
+  // minifier rename is not a ceiling. Startup and every per-route pack ceiling
+  // remain independently enforced.
+  // Raised twice: once for the airship-sh pack, once for provider OAuth plus
+  // the extension-bridge transport. The original 2 MiB raw figure was a
+  // deliberate product statement; a real in-browser shell and real provider
+  // sign-in are deliberate product decisions that supersede it. Both additions
+  // are lazily loaded and contribute nothing to first paint, which is why the
+  // startup cap below has not moved.
+  // Raised a third time, for the Connect surface doing what it had only said:
+  // consuming a real extension-bridge handshake per page load and issuing a
+  // real loopback probe for the local model servers. Measured 2,189.23 KiB raw
+  // / 654.58 KiB gzip; neither addition touches first paint, which is why the
+  // startup cap below still has not moved.
+  totalJavaScriptAndWorkers: Object.freeze({ raw: 2192 * 1024, gzip: 656 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. Keep it visible under a dedicated, deliberately small cap.
   serviceWorker: Object.freeze({ raw: 12 * 1024, gzip: 4 * 1024 }),
   optionalExecutionPack: Object.freeze({ raw: 32 * 1024, gzip: 10 * 1024 }),
   // The stable broker is tiny; Worker/WASI/Pyodide implementation follows as
   // a second-level chunk only when runtime inspection or execution begins.
-  optionalExecutionEngine: Object.freeze({ raw: 48 * 1024, gzip: 12 * 1024 }),
+  // The broker now also registers `airship-sh` and describes its capability,
+  // which is what pushed this chunk past 12 KiB gzip. The interpreter itself
+  // stays in its own pack below; only the registration travels here.
+  optionalExecutionEngine: Object.freeze({ raw: 56 * 1024, gzip: 14 * 1024 }),
   optionalExecutionSupport: Object.freeze({ raw: 8 * 1024, gzip: 3 * 1024 }),
   // Pinned browser_wasi_shim plus Airship's bounded virtual-filesystem Worker.
   // It is fetched only when the precompiled WASI adapter executes a command.
   optionalWasiPreview1Worker: Object.freeze({ raw: 32 * 1024, gzip: 8 * 1024 }),
   optionalNodeExecutionPack: Object.freeze({ raw: 32 * 1024, gzip: 8 * 1024 }),
+  // `airship-sh`, the first-party POSIX-sh interpreter: lexer, parser,
+  // expansion, arithmetic, globbing, redirection, job control, and the
+  // workspace utilities it executes. It is the universal shell tier, so it
+  // needs no Worker, no downloaded pack, and no cross-origin isolation — but
+  // it is fetched only when a shell command actually runs, never at startup.
+  optionalShellPack: Object.freeze({ raw: 100 * 1024, gzip: 30 * 1024 }),
   // The research WASIX candidate is intentionally absent from production
   // until its bidirectional workspace/output promotion probe passes.
   optionalWasixJavaScript: Object.freeze({ raw: 0, gzip: 0 }),
@@ -67,12 +122,25 @@ export const RELEASE_BUDGETS = Object.freeze({
   // Full standards-compatible Git engine. It is loaded once during browser
   // runtime boot, never preloaded with the shell, and remains independently
   // cacheable from the lightweight Source Control presentation pack.
-  optionalBrowserGit: Object.freeze({ raw: 256 * 1024, gzip: 80 * 1024 }),
+  // The adapter gained real log/show/tag/stash/merge/restore/reset/remote
+  // operations, per-operation abort checks, and remote-origin admission, taking
+  // the pack to a measured 274.18 KiB raw / 82.20 KiB gzip. The isomorphic-git
+  // pin is unchanged; all of the growth is first-party.
+  optionalBrowserGit: Object.freeze({ raw: 276 * 1024, gzip: 83 * 1024 }),
   optionalSessionLibrary: Object.freeze({ raw: 48 * 1024, gzip: 14 * 1024 }),
-  optionalCapabilitiesView: Object.freeze({ raw: 8 * 1024, gzip: 3 * 1024 }),
+  // The route now renders the per-primitive probe detail and states the
+  // adaptive policy in terms of what each number actually sizes, which is why
+  // it crossed 3 KiB gzip at all: measured 8,884 B raw / 3,115 B gzip. Both
+  // ceilings step in half-KiB rather than whole-KiB units, because rounding a
+  // 3 KiB presentation route up to 4 KiB would hand it a third more room than
+  // its growth ever asked for.
+  optionalCapabilitiesView: Object.freeze({ raw: 9 * 1024, gzip: 3 * 1024 + 512 }),
   // Hardware/browser feature detection is requested after the shell starts so
   // it can select the strongest runtime without inflating the HTML preload set.
-  optionalBrowserCapabilities: Object.freeze({ raw: 16 * 1024, gzip: 6 * 1024 }),
+  // The Service Worker and Cache Storage probes push the raw pack to a measured
+  // 16.95 KiB, held under a half-KiB step for the same reason as the route
+  // above; gzip stays at 5.49 KiB, well under its unchanged ceiling.
+  optionalBrowserCapabilities: Object.freeze({ raw: 17 * 1024 + 512, gzip: 6 * 1024 }),
   // Graph derivation and relationship controls load only on Memory/Context.
   optionalMemoryView: Object.freeze({ raw: 36 * 1024, gzip: 12 * 1024 }),
   // Small shared node-shape vocabulary split out by Vite because both the
@@ -94,7 +162,16 @@ export const RELEASE_BUDGETS = Object.freeze({
   // free route contracts, and cloud transport adapters load with the
   // Connection route/runtime bootstrap. They are deliberately absent from the
   // HTML preload graph.
-  optionalInferenceProviders: Object.freeze({ raw: 112 * 1024, gzip: 34 * 1024 }),
+  // Raised once for genuinely new capability rather than growth in an existing
+  // one: three provider OAuth grant shapes (paste-code PKCE, RFC 8628 device
+  // code, refresh) plus the extension-bridge transport client. Measured
+  // 116.14 KiB raw / 34.62 KiB gzip; these are the next whole steps above it.
+  // The gzip step moved again for a split, not for new code: the bridge client
+  // is now shared between the provider transports and the Connect surface's
+  // presence observation, so it compresses as its own 10.65 KiB chunk instead
+  // of inside the session route. Raw is unchanged at a measured 116.74 KiB;
+  // only the lost cross-chunk compression is new, at 35.59 KiB gzip.
+  optionalInferenceProviders: Object.freeze({ raw: 117 * 1024, gzip: 36 * 1024 }),
   // Local Device setup and its OPFS/IndexedDB key-custody runtime load only
   // after the user selects that Vault provider.
   optionalLocalDeviceVault: Object.freeze({ raw: 60 * 1024, gzip: 19 * 1024 }),
@@ -289,6 +366,13 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
     throw new Error(`Production must contain exactly one optional Node execution pack; found ${optionalNodeExecutionPacks.length}.`);
   }
   const optionalNodeExecutionPackMeasurement = measure(optionalNodeExecutionPacks[0].payload);
+  // The interpreter may split into more than one chunk; the budget governs
+  // their sum, because a user who runs one shell command fetches all of them.
+  const optionalShellPacks = javaScriptFiles.filter((file) => isOptionalShellPackPath(file.path));
+  if (optionalShellPacks.length === 0) {
+    throw new Error("Production must contain the first-party airship-sh shell pack; found none.");
+  }
+  const optionalShellPackMeasurement = sumMeasurements(optionalShellPacks.map((file) => measure(file.payload)));
   const optionalWasixJavaScriptPacks = javaScriptFiles.filter((file) => isOptionalWasixJavaScriptPath(file.path));
   assertUnpromotedWasixAbsent("JavaScript candidate", optionalWasixJavaScriptPacks.map((file) => file.path));
   const optionalWasixJavaScriptMeasurement = sumMeasurements(
@@ -379,9 +463,12 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
     throw new Error(`Production must contain exactly two optional model-catalog packs; found ${optionalModelCatalogPacks.length}.`);
   }
   const optionalModelCatalogMeasurement = sumMeasurements(optionalModelCatalogPacks.map((file) => measure(file.payload)));
+  // Six since the extension-bridge client became shared: the Connect surface
+  // observes bridge presence with the same client the provider transports use,
+  // so Rollup emits it once instead of embedding it in the session route.
   const optionalInferenceProviderPacks = javaScriptFiles.filter((file) => isOptionalInferenceProviderPath(file.path));
-  if (optionalInferenceProviderPacks.length !== 5) {
-    throw new Error(`Production must contain exactly five optional inference-provider packs; found ${optionalInferenceProviderPacks.length}.`);
+  if (optionalInferenceProviderPacks.length !== 6) {
+    throw new Error(`Production must contain exactly six optional inference-provider packs; found ${optionalInferenceProviderPacks.length}.`);
   }
   const optionalInferenceProviderMeasurement = sumMeasurements(
     optionalInferenceProviderPacks.map((file) => measure(file.payload)),
@@ -418,6 +505,7 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
       && !isOptionalExecutionSupportPath(file.path)
       && !isOptionalWasiPreview1WorkerPath(file.path)
       && !isOptionalNodeExecutionPackPath(file.path)
+      && !isOptionalShellPackPath(file.path)
       && !isOptionalWasixJavaScriptPath(file.path)
       && !isOptionalAgentRuntimePath(file.path)
       && !isOptionalAgentToolsPath(file.path)
@@ -465,6 +553,7 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
       { name: "execution-support", paths: optionalExecutionSupportPacks.map((file) => file.path) },
       { name: "wasi-preview1-worker", paths: optionalWasiPreview1WorkerPacks.map((file) => file.path) },
       { name: "node-runtime", paths: optionalNodeExecutionPacks.map((file) => file.path) },
+      { name: "airship-shell", paths: optionalShellPacks.map((file) => file.path) },
       { name: "wasix-runtime", paths: optionalWasixJavaScriptPacks.map((file) => file.path) },
       { name: "agent-runtime", paths: optionalAgentRuntimePacks.map((file) => file.path) },
       { name: "agent-tools", paths: optionalAgentToolPacks.map((file) => file.path) },
@@ -524,6 +613,7 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
     optionalNodeExecutionPackMeasurement,
     RELEASE_BUDGETS.optionalNodeExecutionPack,
   );
+  assertWithinBudget("Optional airship-sh shell pack", optionalShellPackMeasurement, RELEASE_BUDGETS.optionalShellPack);
   assertWithinBudget(
     "Optional WASIX JavaScript",
     optionalWasixJavaScriptMeasurement,
@@ -781,6 +871,10 @@ export function isOptionalNodeExecutionPackPath(path) {
   return /^assets\/node-webcontainer-pack-[A-Za-z0-9_-]+\.js$/u.test(path);
 }
 
+export function isOptionalShellPackPath(path) {
+  return /^assets\/airship-shell-pack-[A-Za-z0-9_-]+\.js$/u.test(path);
+}
+
 export function isOptionalWasixJavaScriptPath(path) {
   return /^assets\/(?:wasix-pack|wasix-worker|dist)-[A-Za-z0-9_-]+\.js$/u.test(path)
     || /^assets\/index-[A-Za-z0-9_-]+\.mjs$/u.test(path);
@@ -859,7 +953,7 @@ export function isOptionalModelCatalogPath(path) {
 }
 
 export function isOptionalInferenceProviderPath(path) {
-  return /^assets\/(?:fabric|openai|provider-connections-view|providers|session-route)-[A-Za-z0-9_-]+\.js$/u.test(path);
+  return /^assets\/(?:fabric|openai|provider-connections-view|providers|session-route|inference-bridge-pack)-[A-Za-z0-9_-]+\.js$/u.test(path);
 }
 
 export function isOptionalLocalDeviceVaultPath(path) {

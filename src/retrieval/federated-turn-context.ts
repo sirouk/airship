@@ -11,14 +11,15 @@ import type { JsonValue } from "../core/contracts";
 import type { EventJournal } from "../core/journal";
 import type { WorkspacePort } from "../workspace/contracts";
 import { MEMORY_PATH, parseMemoryDocument, type MemoryRecord } from "../tools/memory-tools";
+import { rankProfileMemories } from "./memory-ranking";
 
 const DEFAULT_MAX_HITS = 6;
 const DEFAULT_MAX_BYTES = 24 * 1024;
 const MAX_PROFILE_MEMORY_HITS = 3;
 
 /**
- * Turn retrieval over separately governed corpora. Profile memory is selected
- * lexically and workspace/source material uses the active on-device embedding
+ * Turn retrieval over separately governed corpora. Profile memory is ranked by
+ * the shared bounded BM25 lane and workspace/source material uses the active on-device embedding
  * generation. Scores never cross corpus boundaries; the bounded memory lane is
  * placed first, followed by workspace results in their native rank order.
  */
@@ -146,24 +147,15 @@ function scopedMemories(
 }
 
 async function rankMemories(records: readonly MemoryRecord[], query: string) {
-  const queryTokens = new Set(tokenize(query));
-  const normalizedQuery = query.trim().toLocaleLowerCase();
-  const ranked = await Promise.all(records.map(async (record, index) => {
-    const haystack = `${record.content}\n${record.source}`.toLocaleLowerCase();
-    const available = new Set(tokenize(haystack));
-    let overlap = 0;
-    for (const token of queryTokens) if (available.has(token)) overlap += 1;
-    const lexical = queryTokens.size ? overlap / queryTokens.size : 0;
-    const phrase = normalizedQuery && haystack.includes(normalizedQuery) ? 1 : 0;
-    const score = Math.min(1, 0.75 * Math.max(lexical, phrase) + 0.25 * ((index + 1) / Math.max(records.length, 1)));
-    return { record, score, contentDigest: await sha256(record.content) };
-  }));
-  return ranked
-    .filter((candidate) => candidate.score > 0.25)
-    .sort((left, right) => right.score - left.score || right.record.createdAt.localeCompare(left.record.createdAt));
+  return Promise.all(rankProfileMemories(records, query).map(async (candidate) => ({
+    record: candidate.record,
+    score: candidate.score,
+    contentDigest: await sha256(candidate.record.content),
+  })));
 }
 
-async function memoryLineage(revision: string, content: string): Promise<CanonicalContextGeneration> {
+/** Shared with the agent-facing memory tools so tool lineage matches turn lineage. */
+export async function memoryLineage(revision: string, content: string): Promise<CanonicalContextGeneration> {
   const sourceDigest = await sha256(content);
   const id = await sha256(stableStringify({
     corpus: "profile-memory",
@@ -178,13 +170,9 @@ async function memoryLineage(revision: string, content: string): Promise<Canonic
     sourceDigest,
     extractor: "airship-explicit-memory-v2",
     chunker: "record-boundary-v1",
-    indexFormat: "bounded-lexical-recent-v1",
+    indexFormat: "bounded-bm25-recent-v1",
     persistence: "memory-only",
   });
-}
-
-function tokenize(value: string): string[] {
-  return value.toLocaleLowerCase().match(/[\p{L}\p{N}_-]{2,}/gu) ?? [];
 }
 
 function truncateUtf8(value: string, maxBytes: number): string {

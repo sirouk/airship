@@ -64,13 +64,30 @@ export type BrowserSignalReport = Readonly<{
 
 export type AdaptiveSchedulingPolicy = Readonly<{
   class: "constrained" | "balanced" | "performance";
+  /**
+   * Ceiling on worker threads this page may own at once. It is a derivation
+   * input for maxIndexingConcurrency and the ONNX Runtime WASM thread pool
+   * (semanticWasmThreadCount); it does not by itself size any pool, so it must
+   * never be rendered or reported as a count of running workers.
+   */
   maxWorkerConcurrency: number;
   maxIndexingConcurrency: number;
   embeddingBatchSize: number;
   yieldEveryMs: number;
+  /**
+   * Download posture derived from offline and save-data signals. It gates
+   * nothing by itself: a consumer must gate its own fetch explicitly, so any
+   * surface that renders it must present a posture, not a kept promise.
+   */
   heavyPackLoading: "manual" | "lazy-on-demand";
   preferredSemanticBackend: "webgpu" | "wasm";
+  /** Selects the ONNX Runtime WASM thread count; see semanticWasmThreadCount. */
   preferredWasmTier: "simd-threads" | "threads" | "simd" | "baseline";
+  /**
+   * Derived from the OPFS root probe. It may only ever be used as a hint that
+   * avoids work; the ciphertext cache's own worker-realm probe remains the sole
+   * authority for the backend it reports.
+   */
   preferredWorkspaceStorage: "opfs" | "indexeddb-fallback";
   powerPreference: "high-performance" | "low-power" | "default";
   reasons: readonly string[];
@@ -113,7 +130,10 @@ type BrowserNavigatorLike = Readonly<{
   storage?: Readonly<{
     getDirectory(): Promise<unknown>;
   }>;
-  serviceWorker?: unknown;
+  serviceWorker?: Readonly<{
+    controller?: unknown;
+    getRegistration?: () => Promise<unknown>;
+  }>;
   getBattery?: () => Promise<unknown>;
   connection?: unknown;
 }>;
@@ -125,6 +145,8 @@ export type BrowserCapabilityProbeHost = Readonly<{
   hasWebAssembly: boolean;
   hasSharedArrayBuffer: boolean;
   hasCacheStorage: boolean;
+  /** Injectable so the Cache Storage probe stays hermetic in unit tests. */
+  cacheKeys?: () => Promise<readonly string[]>;
   exposedInterfaces: ReadonlySet<string>;
   validateWasm(feature: WasmFeatureId, bytes: Uint8Array): boolean;
   canTransferSharedArrayBuffer(): boolean;
@@ -169,22 +191,14 @@ export async function probeBrowserRuntimeCapabilities(
   const host = createProbeHost(overrides);
   const signals = await probeSignals(host);
   const powerPreference = schedulingPowerPreference(signals);
-  const [webgpu, webnn, opfs] = await Promise.all([
+  const [webgpu, webnn, opfs, serviceWorker, cacheStorage] = await Promise.all([
     probeWebGpu(host, powerPreference),
     probeWebNn(host, powerPreference),
     probeOpfs(host),
+    probeServiceWorker(host),
+    probeCacheStorage(host),
   ]);
   const wasm = probeWebAssembly(host);
-  const serviceWorker = apiObservation(
-    host.navigator?.serviceWorker !== undefined,
-    "Service Worker API is exposed in this browser.",
-    "Service Worker API was not observed.",
-  );
-  const cacheStorage = apiObservation(
-    host.hasCacheStorage,
-    "Cache Storage API is exposed; cache contents and service-worker control remain separate observations.",
-    "Cache Storage API was not observed.",
-  );
   const codecInterfaces = ["VideoEncoder", "VideoDecoder", "AudioEncoder", "AudioDecoder", "ImageDecoder"]
     .filter((name) => host.exposedInterfaces.has(name));
   const webCodecs = Object.freeze({
@@ -280,20 +294,43 @@ export function deriveAdaptiveSchedulingPolicy(input: Readonly<{
   }) as AdaptiveSchedulingPolicy;
 }
 
+/**
+ * ONNX Runtime thread count for the semantic pack's WASM backend.
+ *
+ * ORT spawns (count - 1) worker threads, so this is the one place the policy's
+ * worker ceiling genuinely sizes a pool. A tier without validated WebAssembly
+ * threads must report 1: ORT would otherwise clamp the request itself, and a
+ * larger number would be a claim this page cannot keep.
+ */
+export function semanticWasmThreadCount(scheduling: AdaptiveSchedulingPolicy): number {
+  const threaded = scheduling.preferredWasmTier === "simd-threads" || scheduling.preferredWasmTier === "threads";
+  if (!threaded) return 1;
+  return Math.max(1, Math.min(8, Math.trunc(scheduling.maxWorkerConcurrency) || 1));
+}
+
 /** Stable, non-volatile session prompt entries. Unavailable probes are omitted. */
 export function browserCapabilityPromptEntries(
   report: BrowserRuntimeCapabilityReport,
 ): readonly BrowserCapabilityPromptEntry[] {
   const entries: BrowserCapabilityPromptEntry[] = [];
   if (report.webgpu.state === "available") {
+    // "default" is this policy's word for "no preference observed", and
+    // probeWebGpu therefore passes requestAdapter no powerPreference at all
+    // (the WebIDL enum has only two members). Saying the adapter was acquired
+    // "with default preference" would tell the model about a request the page
+    // never issued, so that case names the absence instead.
     entries.push({
       id: "webgpu-adapter",
       evidence: "probe-passed",
-      detail: `A usable adapter was acquired with ${report.webgpu.powerPreference} preference; a consuming pack must still report WebGPU as its active backend.`,
+      detail: report.webgpu.powerPreference === "default"
+        ? "A usable adapter was acquired without requesting any power preference; a consuming pack must still report WebGPU as its active backend."
+        : `A usable adapter was acquired with ${report.webgpu.powerPreference} preference; a consuming pack must still report WebGPU as its active backend.`,
     });
   }
   if (report.webnn.state === "available") {
-    entries.push({ id: "webnn-context", evidence: "probe-passed", detail: "A WebNN context was created and released; no model is implicitly loaded." });
+    // Observed, not usable: no shipped Airship workload has a WebNN adapter, so
+    // the entry must not let the model reason about an accelerator it can reach.
+    entries.push({ id: "webnn-context", evidence: "probe-passed", detail: "A WebNN context was created and released; no model is implicitly loaded and no Airship workload can select WebNN in this build." });
   }
   if (report.opfs.state === "available") {
     entries.push({ id: "opfs-root", evidence: "probe-passed", detail: "The origin-private filesystem root was acquired; the active workspace adapter remains authoritative." });
@@ -313,7 +350,16 @@ export function browserCapabilityPromptEntries(
     ["webcodecs", report.webCodecs],
     ["webtransport", report.webTransport],
   ] as const) {
-    if (observation.state === "available") entries.push({ id, evidence: "api-exposed", detail: observation.detail });
+    // Evidence is carried through: the service-worker and cache-storage probes
+    // can now earn probe-passed, and hardcoding api-exposed would understate a
+    // controlling worker or a present shell cache in the session prompt.
+    if (observation.state === "available") {
+      entries.push({
+        id,
+        evidence: observation.evidence === "probe-passed" ? "probe-passed" : "api-exposed",
+        detail: observation.detail,
+      });
+    }
   }
   return Object.freeze(entries.sort((left, right) => left.id.localeCompare(right.id)).map((entry) => Object.freeze(entry)));
 }
@@ -433,6 +479,7 @@ function createProbeHost(overrides: Partial<BrowserCapabilityProbeHost>): Browse
     hasWebAssembly: typeof WebAssembly !== "undefined",
     hasSharedArrayBuffer: typeof SharedArrayBuffer !== "undefined",
     hasCacheStorage: "caches" in globalThis,
+    cacheKeys: "caches" in globalThis ? () => caches.keys() : undefined,
     exposedInterfaces: new Set(["VideoEncoder", "VideoDecoder", "AudioEncoder", "AudioDecoder", "ImageDecoder", "WebTransport"]
       .filter((name) => typeof globalRecord[name] === "function")),
     validateWasm: (_feature, bytes) => {
@@ -521,8 +568,14 @@ async function probeWebGpu(
   if (!gpu?.requestAdapter) return unavailableWebGpu(powerPreference, "WebGPU API was not observed.");
   if (!host.isSecureContext) return unavailableWebGpu(powerPreference, "WebGPU requires a secure browser context.");
   try {
+    // GPUPowerPreference is a two-value WebIDL enum ("low-power",
+    // "high-performance"). Passing this policy's third value, "default", makes
+    // requestAdapter throw a TypeError, which this probe would then have to
+    // report as a failed adapter — so the option is omitted instead, which is
+    // exactly what "no preference" means to the browser. Verified in Chromium:
+    // {powerPreference:"default"} throws while {} returns an adapter.
     const adapter = await withDeadline(
-      gpu.requestAdapter({ powerPreference }),
+      gpu.requestAdapter(powerPreference === "default" ? {} : { powerPreference }),
       host.timeoutMs,
       "WebGPU adapter probe",
     );
@@ -630,6 +683,79 @@ async function probeOpfs(host: BrowserCapabilityProbeHost): Promise<OpfsObservat
     });
   } catch (error) {
     return Object.freeze({ state: "failed", evidence: "probe-failed", detail: boundedFailure("OPFS root probe failed", error), syncAccessHandle });
+  }
+}
+
+/**
+ * Reports page reality, not API presence: a controlling worker is the only
+ * evidence that this document can actually be served from the offline shell.
+ * A registered-but-not-controlling worker stays at api-exposed, because the
+ * current navigation was not served by it.
+ */
+async function probeServiceWorker(host: BrowserCapabilityProbeHost): Promise<BrowserCapabilityObservation> {
+  const container = host.navigator?.serviceWorker;
+  if (container === undefined) return unavailable("Service Worker API was not observed.");
+  if (container.controller != null) {
+    return Object.freeze({
+      state: "available",
+      evidence: "probe-passed",
+      detail: "A service worker is controlling this page; assets may be served from the offline shell cache.",
+    });
+  }
+  if (typeof container.getRegistration !== "function") {
+    return Object.freeze({
+      state: "available",
+      evidence: "api-exposed",
+      detail: "Service Worker API is exposed; no worker is controlling this page.",
+    });
+  }
+  try {
+    const registration = await withDeadline(
+      Promise.resolve(container.getRegistration()),
+      host.timeoutMs,
+      "Service worker registration probe",
+    );
+    return Object.freeze({
+      state: "available",
+      evidence: "api-exposed",
+      detail: registration
+        ? "A service worker is registered but is not yet controlling this page."
+        : "Service Worker API is exposed; no worker is registered for this page.",
+    });
+  } catch (error) {
+    return Object.freeze({ state: "failed", evidence: "probe-failed", detail: boundedFailure("Service worker registration probe failed", error) });
+  }
+}
+
+/**
+ * The shell cache key is matched by pattern, not by literal version: public/sw.js
+ * bumps CACHE_VERSION between releases and the release gate pins only the
+ * `airship-shell-v<n>` shape.
+ */
+const AIRSHIP_SHELL_CACHE_PATTERN = /^airship-shell-v\d+$/u;
+
+async function probeCacheStorage(host: BrowserCapabilityProbeHost): Promise<BrowserCapabilityObservation> {
+  if (!host.hasCacheStorage) return unavailable("Cache Storage API was not observed.");
+  if (!host.cacheKeys) {
+    return Object.freeze({
+      state: "available",
+      evidence: "api-exposed",
+      detail: "Cache Storage API is exposed; cache contents were not enumerable in this realm.",
+    });
+  }
+  try {
+    const keys = await withDeadline(Promise.resolve(host.cacheKeys()), host.timeoutMs, "Cache Storage probe");
+    const shell = [...keys]
+      .slice(0, 256)
+      .find((key) => typeof key === "string" && AIRSHIP_SHELL_CACHE_PATTERN.test(key));
+    const observation: BrowserCapabilityObservation = shell
+      ? { state: "available", evidence: "probe-passed", detail: `The Airship shell cache ${shell} is present in this origin.` }
+      : { state: "available", evidence: "api-exposed", detail: "Cache Storage is usable; no Airship shell cache was found." };
+    return Object.freeze(observation);
+  } catch (error) {
+    // Some engines (Firefox private browsing) raise on caches.keys(); an
+    // unconditional "available" would overstate what this page can do.
+    return Object.freeze({ state: "failed", evidence: "probe-failed", detail: boundedFailure("Cache Storage probe failed", error) });
   }
 }
 

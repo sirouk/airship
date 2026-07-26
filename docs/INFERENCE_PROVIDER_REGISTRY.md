@@ -17,9 +17,9 @@ OAuth is not inferred from a branded "Sign in" screen.
 | Provider | Third-party inference OAuth available to Airship | API authentication | Browser reality encoded by Airship | Implemented wire adapter |
 | --- | --- | --- | --- | --- |
 | Chutes | Yes only when the deployment supplies a reviewed Browser/native registration with Authorization Code, S256 PKCE, and token endpoint authentication `none`. The existing development confidential bridge remains a separate local-companion path. | Chutes API key or the reviewed OAuth access token | Chutes is the reviewed direct E2EE path. Existing Chutes transport and attestation behavior is unchanged. | Existing Chutes E2EE v1 |
-| OpenAI | No published third-party PKCE inference registration. "Sign in with ChatGPT" is documented for OpenAI's own Codex clients, not as an Airship client-registration contract. | Bearer API key (or workload identity for workload federation) | Advanced compatibility only. OpenAI explicitly says not to expose standard keys in browsers/apps; its official TypeScript SDK requires `dangerouslyAllowBrowser` to opt in. | Responses API, SSE, images, usage, and function calls |
-| Anthropic | No published third-party consumer/Claude-login PKCE inference registration. Claude Code's browser login is a first-party Claude Code flow. | `x-api-key`; workload identity is a separate machine identity facility, not consumer OAuth | Advanced compatibility only. Anthropic's official TypeScript SDK disables browsers by default and requires `dangerouslyAllowBrowser`; organization CORS policy can still deny a live probe. | Messages API, SSE, images, usage, and tool use |
-| xAI | No published third-party PKCE inference registration in the inference API documentation. | Bearer API key | Contract-unpublished direct probe. xAI documents browser-safe ephemeral tokens for Realtime only, and those tokens must be minted with a standard key by a server. Airship reports general inference as ready only after its actual request succeeds. | Responses-compatible API, SSE, function calls; `/v1/language-models` modalities |
+| OpenAI | Still no published *third-party* PKCE registration. Airship instead runs OpenAI's own Codex client registration (`openai-codex-oauth`), from the page, because that token endpoint was measured to answer a cross-origin POST with `access-control-allow-origin: *`. | Bearer API key (or workload identity for workload federation), **or** a Codex OAuth access token | Advanced compatibility only for keys. OpenAI explicitly says not to expose standard keys in browsers/apps; its official TypeScript SDK requires `dangerouslyAllowBrowser` to opt in. The OAuth path leaves the page directly. | Responses API, SSE, images, usage, and function calls |
+| Anthropic | No published third-party consumer/Claude-login PKCE inference registration. Claude Code's browser login is a first-party Claude Code flow. Airship can complete that grant **only through the optional browser extension**: the token host answers a browser `User-Agent` with 429, and `User-Agent` is a forbidden header name in the Fetch Standard. | `x-api-key`; workload identity is a separate machine identity facility, not consumer OAuth | Advanced compatibility only. Anthropic's official TypeScript SDK disables browsers by default and requires `dangerouslyAllowBrowser`; organization CORS policy can still deny a live probe. Without the extension the OAuth route reports `unavailable` with that cause named; API keys are unaffected. | Messages API, SSE, images, usage, and tool use |
+| xAI | No published third-party PKCE inference registration in the inference API documentation. Airship uses xAI's RFC 8628 device grant **only through the optional browser extension**: the device endpoint answers 200 with no `access-control-allow-origin`, so a page cannot read the reply. | Bearer API key, **or** a device-grant OAuth access token relayed by the extension | Contract-unpublished direct probe. xAI documents browser-safe ephemeral tokens for Realtime only, and those tokens must be minted with a standard key by a server. Airship reports general inference as ready only after its actual request succeeds. | Responses-compatible API, SSE, function calls; `/v1/language-models` modalities |
 | Ollama / LM Studio / compatible local service | Not applicable | Usually none on an explicitly approved loopback origin | The local adapter owns discovery, CORS/PNA diagnostics, and endpoint policy. The registry permits unauthenticated connections only on `localhost`, `127.0.0.1`, or `[::1]`. | See `src/inference/local/` |
 
 Primary sources:
@@ -63,7 +63,17 @@ The implementation lives in `src/inference/providers/`:
 - `browser-cloud.ts` implements bounded, cancellable direct adapters for OpenAI
   Responses, Anthropic Messages, and xAI Responses compatibility. Requests use
   `credentials: omit`, `redirect: error`, `referrerPolicy: no-referrer`, and
-  `cache: no-store`.
+  `cache: no-store`. Anthropic and xAI OAuth turns are the exception: they are
+  relayed by the extension and have no direct fallback, so an absent extension
+  is reported as `bridge-unavailable` with the cause named, never as a network
+  failure.
+- `bridge/client.ts` gates a bridged request on a handshake observation. That
+  observation is memoized for at most `presenceTtlMs` (30 s) and only when it
+  was positive, so the staleness window is bounded and one-directional: an
+  absence is always re-probed, and a stale presence can only admit a request,
+  which then fails live at the first-byte deadline if the extension has gone.
+  The memo is per page load, is never persisted, and is never what a capability
+  record reports — `probeExtensionBridge()` always runs a fresh handshake.
 
 ### Public PKCE gate
 
@@ -79,9 +89,37 @@ contains reviewed public-client metadata with all of these properties:
 6. A review ID, canonical review timestamp, and HTTPS review source.
 7. No client-secret field.
 
-An OpenAI, Anthropic, or xAI first-party product login does not satisfy this
-gate. Adding one requires official client-registration metadata and a fresh
-review, not a UI-only flag.
+These are structural properties of a descriptor. They are not a judgement about
+whose client registration it is, and the sentence that used to stand here — "an
+OpenAI, Anthropic, or xAI first-party product login does not satisfy this gate"
+— was wrong on both counts by the time it was read, because the product ships
+exactly such a login.
+
+What actually ships, stated plainly:
+
+- `openai-codex-oauth` (`src/inference/providers/official-providers.ts`) is a
+  reviewed `oauth-public-pkce` method that passes all seven properties above. It
+  uses **OpenAI's own Codex client registration** — client id, redirect URI and
+  scopes are OpenAI's, not Airship's — driven from a browser page. Airship is a
+  third party using a first-party client's public registration. That is a
+  different and weaker claim than "OpenAI publishes a third-party PKCE
+  registration", which it still does not.
+- Its `review` record (`openai-codex-live-cors-2026-07`) is asserted metadata.
+  Nothing verifies it at runtime. The reachability fact underneath it is real
+  and was measured — `https://auth.openai.com/oauth/token` answers a
+  cross-origin POST with `access-control-allow-origin: *` — but the review is a
+  human statement recorded in code, exactly like the pre-existing Chutes review
+  record.
+- Anthropic and xAI OAuth are **not** in the generic registry as connectable
+  methods. Both are carried only by the optional browser extension, for reasons
+  that are properties of the network rather than of policy: xAI's endpoints send
+  no CORS grant, and Anthropic's token host rejects browser-shaped requests by
+  `User-Agent`, which page script cannot set. See `src/auth/provider-oauth/
+  registrations.ts` for the measured evidence attached to each, and
+  docs/EXTENSION_BRIDGE.md for the relay contract.
+
+Adding any further OAuth method requires client-registration metadata and a
+fresh review, not a UI-only flag.
 
 ### Credential generations
 
@@ -118,6 +156,36 @@ to switch an active session silently.
 `InspectInferenceConnectionsTool` is the concrete governed read-only tool
 implementation. It shares the same snapshot builder so the system prompt and
 tool result cannot drift into two definitions of availability.
+
+## Integration status (what is actually wired today)
+
+This section is the factual state; the numbered boundaries below it are the
+target design, not a description of the running application.
+
+- `BrowserInferenceFabric` (`src/inference/fabric.ts`) is the single mounted
+  runtime. It registers `OFFICIAL_CLOUD_PROVIDERS` plus any discovered local
+  provider, and it owns the connections, models, transports, and route pins for
+  OpenAI, Anthropic, xAI, Ollama, and LM Studio.
+- Chutes is **not** mirrored into that registry. The Chutes connection remains
+  its own authority in the application shell, and it reaches the agent only
+  through the availability snapshot's `project` hook, which appends a synthetic
+  Chutes connection row. Point 2 below is therefore still unimplemented.
+- Consequently `createChutesProviderDescriptor()` and
+  `InferenceConnectionRegistry.connectOAuth()` have no production caller; they
+  are reviewed, tested contracts waiting for that mirror, not live code paths.
+- `declareModelMetadata()` is the fabric's operator-declared context-window /
+  output-ceiling entry point. It exists and is tested; no UI currently calls it,
+  so cloud model rows carry neither limit in practice. Anthropic turns
+  therefore run on the transport's requested output budget rather than a
+  declared ceiling — see "Anthropic `max_tokens`" in docs/PROVIDER_FABRIC.md.
+- A declaration rewrites the whole row's `source.kind` to `manual`, including
+  fields it did not touch. That is a provenance downgrade, not an upgrade, and
+  it is recorded in docs/PROVIDER_FABRIC.md rather than corrected: per-capability
+  evidence keeps its own `source`, so nothing claims evidence it lacks.
+- Declared values are bounded by `MAX_MODEL_OUTPUT_TOKENS` /
+  `MAX_MODEL_CONTEXT_WINDOW_TOKENS` from `providers/contracts.ts`. The transports
+  revalidate the output ceiling against the same constant, so the catalog cannot
+  accept a number that would then throw on every request.
 
 ## Integration points
 
@@ -207,7 +275,12 @@ through `useCredential()` internally and pass the pinned
 ## Deliberate non-claims
 
 - Airship does not claim that OpenAI, Anthropic, or xAI offer third-party
-  browser OAuth for general inference.
+  browser OAuth for general inference. Running a vendor's own public client
+  registration, which is what `openai-codex-oauth` does, is not the same thing
+  as being offered one.
+- A reviewed OAuth descriptor's `review` record is an asserted human statement.
+  Nothing verifies it at runtime, and it is not evidence of anything beyond
+  someone having written it down.
 - A successful key import does not prove model invocation permission.
 - A provider model list does not prove undeclared capabilities.
 - An API-key form does not make a browser key safe merely because Airship does

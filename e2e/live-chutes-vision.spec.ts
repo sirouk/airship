@@ -15,7 +15,7 @@ test("a catalog-declared vision model receives an encrypted inline image", async
 
   await page.goto("/#access");
   await expect(page.getByRole("heading", { name: "Connect models" })).toBeVisible();
-  await page.getByText("Advanced: use a Chutes API key instead").click();
+  await page.getByText("Use a Chutes API key instead", { exact: true }).click();
   await page.getByLabel("Chutes API key").fill(credential!);
   await page.getByRole("button", { name: "Discover models with key" }).click();
 
@@ -38,7 +38,7 @@ test("a catalog-declared vision model receives an encrypted inline image", async
 
   // connectChutes already navigates to Chat. Do not use page.goto here: a
   // document reload must erase Airship's memory-only credential by design.
-  await expect(page).toHaveURL(/#chat$/u);
+  await expect(page).toHaveURL(/#chat\/[^/?#]+$/u);
   const input = page.locator('input[type="file"][accept="image/*"]');
   await input.setInputFiles({
     name: "airship-vision-smoke.png",

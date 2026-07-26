@@ -14,10 +14,13 @@ import type {
   CompareAndSwapResult,
   ObjectRange,
   ObjectRecord,
+  ObjectReclamationOutcome,
+  ObjectReclamationReceipt,
   ObjectStore,
   ObjectSummary,
   PutIfAbsentResult,
   ObjectStoreCapabilities,
+  ReclaimableObjectStore,
 } from "./object-store";
 
 const DRIVE_API = "https://www.googleapis.com/drive/v3";
@@ -31,6 +34,8 @@ const MAX_INDEX_BYTES = 24 * 1024 * 1024;
 const MAX_DRIVE_JSON_BYTES = 512 * 1024;
 const MAX_OBJECTS = 100_000;
 const MAX_CAS_ATTEMPTS = 5;
+/** One reclamation call is bounded so a sweep cannot become an unbounded job. */
+const MAX_TRASH_KEYS = 1_000;
 const INDEX_CACHE_TTL_MS = 1_500;
 const RESUMABLE_UPLOAD_THRESHOLD_BYTES = 8 * 1024 * 1024;
 const RESUMABLE_UPLOAD_CHUNK_BYTES = 4 * 1024 * 1024;
@@ -84,7 +89,7 @@ export type GoogleDriveObjectStoreOptions = Readonly<{
  * A live conformance probe remains the authority for a deployment's actual
  * conditional-request and CORS behavior.
  */
-export class GoogleDriveObjectStore implements ObjectStore {
+export class GoogleDriveObjectStore implements ReclaimableObjectStore {
   readonly capabilities: ObjectStoreCapabilities = Object.freeze({
     version: 1,
     adapter: "google-drive",
@@ -192,6 +197,87 @@ export class GoogleDriveObjectStore implements ObjectStore {
     return loaded.index.entries
       .filter((entry) => entry.key.startsWith(canonical))
       .map((entry) => ({ key: entry.key, etag: entry.etag, size: entry.size, updatedAt: entry.updatedAt }));
+  }
+
+  /**
+   * Index-entry-first reclamation. The CAS that drops the entries is the single
+   * linearization point; the `trashed: true` PATCH follows. A crash between the
+   * two leaks an untracked file that a later sweep can recover — it can never
+   * break a live reference, which the reverse order would.
+   *
+   * A key is reported reclaimed only when Drive itself echoes `trashed: true`
+   * for that file. Every other outcome stays in `retained` so callers keep the
+   * out-of-band cleanup instruction for it.
+   */
+  async trash(keys: readonly string[], signal?: AbortSignal): Promise<ObjectReclamationReceipt> {
+    if (keys.length > MAX_TRASH_KEYS) throw new Error("Google Drive reclamation exceeds the client key limit.");
+    const requested = [...new Set(keys.map(logicalKey))];
+    if (!requested.length) {
+      return Object.freeze({ requested: 0, reclaimed: Object.freeze([]), retained: Object.freeze([]), outcomes: Object.freeze([]) });
+    }
+    const wanted = new Set(requested);
+    let removed: readonly IndexEntry[] | undefined;
+    for (let attempt = 0; attempt < MAX_CAS_ATTEMPTS && !removed; attempt += 1) {
+      const loaded = await this.loadIndex(signal, true);
+      const matched = loaded.index.entries.filter((entry) => wanted.has(entry.key));
+      if (!matched.length) {
+        removed = [];
+        break;
+      }
+      const next: DriveIndex = Object.freeze({
+        version: 1,
+        generation: loaded.index.generation + 1,
+        entries: Object.freeze(loaded.index.entries.filter((entry) => !wanted.has(entry.key))),
+      });
+      if (await this.advanceIndex(loaded, next, signal)) removed = matched;
+    }
+    if (!removed) throw new Error("Google Drive reclamation retry budget was exhausted.");
+
+    const outcomes: ObjectReclamationOutcome[] = [];
+    const byKey = new Map(removed.map((entry) => [entry.key, entry] as const));
+    for (const key of requested) {
+      const entry = byKey.get(key);
+      if (!entry) {
+        outcomes.push(Object.freeze({ key, reclaimed: false, reason: "not-indexed" as const }));
+        continue;
+      }
+      outcomes.push(Object.freeze(await this.trashSegment(key, entry.fileId, signal)));
+    }
+    const reclaimed = outcomes.filter((outcome) => outcome.reclaimed).map((outcome) => outcome.key);
+    return Object.freeze({
+      requested: requested.length,
+      reclaimed: Object.freeze(reclaimed),
+      retained: Object.freeze(outcomes.filter((outcome) => !outcome.reclaimed).map((outcome) => outcome.key)),
+      outcomes: Object.freeze(outcomes),
+    });
+  }
+
+  private async trashSegment(key: string, fileId: string, signal?: AbortSignal): Promise<ObjectReclamationOutcome> {
+    let response: Response;
+    try {
+      response = await this.driveFetch(`${DRIVE_API}/files/${encodeURIComponent(fileId)}?fields=id,trashed`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ trashed: true }),
+        signal,
+      });
+    } catch {
+      // The index entry is already gone, so this is an untracked leak, not a
+      // broken reference. Report it as retained rather than claiming a removal.
+      return { key, reclaimed: false, reason: "refused" };
+    }
+    // Drive treats a missing file as already unreachable from the live listing.
+    if (response.status === 404) return { key, reclaimed: true };
+    if (!response.ok) return { key, reclaimed: false, reason: "refused" };
+    let body: { trashed?: unknown };
+    try {
+      body = await driveJson<{ trashed?: unknown }>(response, "trash encrypted vault object");
+    } catch {
+      return { key, reclaimed: false, reason: "unconfirmed" };
+    }
+    // Every segment listing filters `trashed = false`, so Drive's own echo of
+    // `trashed: true` is exactly the confirmed-absent condition.
+    return body.trashed === true ? { key, reclaimed: true } : { key, reclaimed: false, reason: "unconfirmed" };
   }
 
   private async loadIndex(signal?: AbortSignal, forceRefresh = false): Promise<LoadedIndex> {

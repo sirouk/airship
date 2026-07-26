@@ -225,6 +225,14 @@ It enables sign-in only when the build supplies both:
 If either value is missing or malformed, the production sign-in control fails
 closed while the deliberate page-memory API-key path remains available.
 
+Anthropic and xAI account flows require the optional Airship browser extension.
+A release that publishes a signed extension should set
+`VITE_AIRSHIP_EXTENSION_INSTALL_URL` to its browser-store or first-party install
+page. When it is absent, Airship deliberately offers no one-click install
+claim: use the reviewed developer packages and instructions in
+[`extension/README.md`](extension/README.md), or use that provider's page-memory
+API-key method. The extension bundle contains no provider client secret.
+
 Google Drive is the default durable Vault provider. A production or real local
 Drive run must also supply `VITE_GOOGLE_CLIENT_ID` for a Google OAuth Web
 application whose exact Airship origin is an Authorized JavaScript origin and

@@ -324,19 +324,160 @@ describe("WorkspaceGitAdapter", () => {
     ]));
   });
 
-  it("fails direct browser remotes honestly when CORS or transport rejects them", async () => {
+  it("sees a same-length rewrite made inside the same wall-clock second", async () => {
     const workspace = new MemoryWorkspace();
-    const client = new BrowserGitClient(await WorkspaceGitAdapter.open(workspace));
-    await expect(client.clone({
-      repositoryId: "blocked",
-      name: "Blocked",
-      remoteUrl: "https://example.invalid/repository.git",
-      destination: "/workspace/sources/blocked",
-    }, signal)).rejects.toThrow(/browser origin CORS[\s\S]*No Airship proxy was used/u);
+    const client = new BrowserGitClient(await WorkspaceGitAdapter.open(workspace, [{
+      id: "airship-workspace",
+      name: "Airship Workspace",
+      worktreePath: "/workspace",
+      files: { "a.txt": "tracked1\n", "b.txt": "tracked2\n" },
+    }]));
+    expect((await client.status({ repositoryId: "airship-workspace", worktreeId: "main" }, signal)).status).toEqual([]);
+
+    // Same byte length, same second: the index stat cache compares only
+    // whole-second mtimes, so only a changing inode can expose this.
+    const current = (await workspace.read("/workspace/a.txt"))!;
+    await workspace.write("/workspace/a.txt", "MUTATED1\n", { expectedRevision: current.revision });
+    expect((await client.status({ repositoryId: "airship-workspace", worktreeId: "main" }, signal)).status)
+      .toEqual([expect.objectContaining({ path: "a.txt", index: null, worktree: { kind: "modified" } })]);
+
+    // The miss was permanent, not merely sub-second, so it must stay visible.
+    await Promise.resolve();
+    const stable = await client.status({ repositoryId: "airship-workspace", worktreeId: "main" }, signal);
+    expect(stable.status.map((entry) => entry.path)).toEqual(["a.txt"]);
+
+    const written = await client.writeWorkingFile({
+      repositoryId: "airship-workspace",
+      worktreeId: "main",
+      path: "b.txt",
+      content: "MUTATED2\n",
+      expectedWorktreeVersion: stable.version,
+    }, signal);
+    expect(written.status.map((entry) => entry.path)).toEqual(["a.txt", "b.txt"]);
+
+    const staged = await client.stage({
+      repositoryId: "airship-workspace",
+      worktreeId: "main",
+      paths: ["a.txt", "b.txt"],
+      expectedWorktreeVersion: written.version,
+    }, signal);
+    expect(staged.changedPaths).toEqual(["a.txt", "b.txt"]);
+    expect(staged.worktree!.status.every((entry) => entry.index?.kind === "modified")).toBe(true);
+  });
+
+  it("stages one reviewed request that covers more paths than a single adapter call may carry", async () => {
+    const workspace = new MemoryWorkspace();
+    const client = new BrowserGitClient(await WorkspaceGitAdapter.open(workspace, [{
+      id: "airship-workspace",
+      name: "Airship Workspace",
+      worktreePath: "/workspace",
+      files: { "README.md": "seeded\n" },
+    }]));
+    const paths = Array.from({ length: 520 }, (_, index) => `generated/file-${String(index).padStart(4, "0")}.txt`);
+    for (const path of paths) await workspace.write(`/workspace/${path}`, `${path}\n`);
+
+    const before = await client.status({ repositoryId: "airship-workspace", worktreeId: "main" }, signal);
+    expect(before.status).toHaveLength(paths.length);
+    const staged = await client.stage({
+      repositoryId: "airship-workspace",
+      worktreeId: "main",
+      paths,
+      expectedWorktreeVersion: before.version,
+    }, signal);
+
+    expect(staged.changedPaths).toHaveLength(paths.length);
+    expect(staged.worktree!.status.every((entry) => entry.index?.kind === "added" && entry.worktree === null)).toBe(true);
+    const committed = await client.commit({
+      repositoryId: "airship-workspace",
+      worktreeId: "main",
+      message: "Commit an imported tree",
+      author: { name: "Airship Test", email: "airship@example.test" },
+      expectedWorktreeVersion: staged.worktree!.version,
+    }, signal);
+    expect(committed.worktree!.status).toEqual([]);
+  }, 120_000);
+
+  it("blames its own Content-Security-Policy for an unreachable Git host instead of the remote, and never sends the request", async () => {
+    const workspace = new MemoryWorkspace();
+    // A page origin is what makes clone reachable at all, so the refusal under
+    // test is the policy's verdict on the *target* host, not the absence of a
+    // document origin.
+    vi.stubGlobal("location", { origin: "https://airship.example.test" });
+    const clone = vi.spyOn(git, "clone");
+    try {
+      const client = new BrowserGitClient(await WorkspaceGitAdapter.open(workspace));
+      expect(client.capabilities.remote.permittedOrigins).not.toContain("https://github.com");
+      expect(client.capabilities.remote.detail).toContain("Content-Security-Policy");
+      expect(client.capabilities.features.clone.available).toBe(true);
+      await expect(client.clone({
+        repositoryId: "blocked",
+        name: "Blocked",
+        remoteUrl: "https://github.com/owner/example.git",
+        destination: "/workspace/sources/blocked",
+      }, signal)).rejects.toMatchObject({ code: "remote-origin-not-permitted" });
+      expect(clone).not.toHaveBeenCalled();
+    } finally {
+      clone.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("reports clone, fetch, and push as available only for the origins the page policy actually permits", async () => {
+    const workspace = new MemoryWorkspace();
+    const clone = vi.spyOn(git, "clone");
+    try {
+      // No document origin: connect-src can reach nothing, so the three remote
+      // verbs must not claim availability the runtime never grants.
+      const blocked = new BrowserGitClient(await WorkspaceGitAdapter.open(workspace));
+      expect(blocked.capabilities.remote.permittedOrigins).toEqual([]);
+      for (const feature of ["clone", "fetch", "push"] as const) {
+        expect(blocked.capabilities.features[feature]).toMatchObject({ available: false });
+        expect(blocked.capabilities.features[feature].reason).toContain("no document origin");
+      }
+      await expect(blocked.clone({
+        repositoryId: "blocked",
+        name: "Blocked",
+        remoteUrl: "https://git.example.test/repository.git",
+        destination: "/workspace/sources/blocked",
+      }, signal)).rejects.toMatchObject({ code: "capability-unavailable" });
+      expect(clone).not.toHaveBeenCalled();
+
+      vi.stubGlobal("location", { origin: "https://airship.example.test" });
+      const reachable = new BrowserGitClient(await WorkspaceGitAdapter.open(new MemoryWorkspace()));
+      for (const feature of ["clone", "fetch", "push"] as const) {
+        expect(reachable.capabilities.features[feature]).toMatchObject({ available: true });
+        // The claim is scoped, and the record says exactly how far it reaches.
+        expect(reachable.capabilities.features[feature].reason).toContain("https://airship.example.test");
+        expect(reachable.capabilities.features[feature].reason).toContain("connect-src");
+      }
+    } finally {
+      clone.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("fails a policy-permitted remote honestly at the transport without inventing a CORS refusal", async () => {
+    vi.stubGlobal("location", { origin: "https://git.example.test" });
+    const clone = vi.spyOn(git, "clone").mockRejectedValue(new TypeError("Failed to fetch"));
+    try {
+      const workspace = new MemoryWorkspace();
+      const client = new BrowserGitClient(await WorkspaceGitAdapter.open(workspace));
+      expect(client.capabilities.remote.permittedOrigins).toEqual(["https://git.example.test"]);
+      await expect(client.clone({
+        repositoryId: "permitted",
+        name: "Permitted",
+        remoteUrl: "https://git.example.test/repository.git",
+        destination: "/workspace/sources/permitted",
+      }, signal)).rejects.toThrow(/this page's own origin, so no CORS grant was required[\s\S]*No Airship proxy was used/u);
+    } finally {
+      clone.mockRestore();
+      vi.unstubAllGlobals();
+    }
   });
 
   it("pushes through real Smart HTTP with separately injected page-memory credentials", async () => {
     const workspace = new MemoryWorkspace();
+    vi.stubGlobal("location", { origin: "https://git.example.test" });
     let brokerCalls = 0;
     let observedAuth: unknown;
     const push = vi.spyOn(git, "push").mockImplementation(async (options) => {
@@ -377,11 +518,13 @@ describe("WorkspaceGitAdapter", () => {
       expect((await workspace.read("/workspace/.airship/browser-git-repositories.v1.json"))?.content).not.toContain("memory-token");
     } finally {
       push.mockRestore();
+      vi.unstubAllGlobals();
     }
   });
 
   it("marks a disconnected push outcome as unknown instead of claiming rollback", async () => {
     const workspace = new MemoryWorkspace();
+    vi.stubGlobal("location", { origin: "https://git.example.test" });
     const push = vi.spyOn(git, "push").mockRejectedValue(new TypeError("stream ended after upload"));
     try {
       const client = new BrowserGitClient(await WorkspaceGitAdapter.open(workspace, [{
@@ -401,6 +544,7 @@ describe("WorkspaceGitAdapter", () => {
       })).rejects.toMatchObject({ code: "push-outcome-unknown" });
     } finally {
       push.mockRestore();
+      vi.unstubAllGlobals();
     }
   });
 });

@@ -1,5 +1,5 @@
 import type { ComponentChildren } from "preact";
-import { useEffect, useRef, useState } from "preact/hooks";
+import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { chutesOAuthLocationState } from "../auth/chutes-oauth";
 import {
   CHUTES_CAPABILITY_MATRIX,
@@ -31,7 +31,20 @@ import { Icon } from "./icons";
 import { mapUnknownRequestFailure } from "./request-state";
 import { ModelPicker } from "./model-picker";
 import { OFFLINE_INLINE_REASON } from "./connectivity";
+import { probeExtensionBridge, type ExtensionBridgeObservation } from "../capabilities/extension-bridge";
+import { ConnectSurface, type LocalProviderProbeResult } from "./connect/connect-surface";
+import type { ConnectLaneInput } from "./connect/connect-lanes";
+import { observeHostExtensionSupport } from "./connect/extension-bridge-presence";
 import "./access-view.css";
+
+/** Where a Chutes personal key is created. Named on every key surface. */
+export const CHUTES_ACCOUNT_URL = "https://chutes.ai/app";
+
+/** Loopback providers whose fabric ids the connect surface names in plain words. */
+const LOCAL_PROVIDER_LABELS: readonly (readonly [string, string])[] = Object.freeze([
+  Object.freeze(["ollama", "Ollama"] as const),
+  Object.freeze(["lm-studio", "LM Studio"] as const),
+]);
 
 export type AccessConnectRequest = Readonly<{
   connection: ActiveChutesConnection;
@@ -70,6 +83,39 @@ export type AccessViewProps = Readonly<{
   }>;
   /** Lazily loaded provider-neutral cloud and local inference connections. */
   additionalProviders?: ComponentChildren;
+  /**
+   * How this view observes the extension bridge. It runs once per mount and
+   * the lanes render only what it returns, so presence is consumed rather than
+   * assumed: the default is the bridge package's own `hello` exchange, and the
+   * seam exists so a harness can supply a different observer, never so a caller
+   * can supply a *result*. Nothing is remembered across page loads.
+   */
+  observeExtensionBridge?: () => Promise<ExtensionBridgeObservation>;
+  /**
+   * Issues the real Ollama/LM Studio loopback probe for the Local lane. Passed
+   * in because reading the provider fabric here would merge its transports into
+   * this chunk and dissolve a release-gate pack boundary.
+   */
+  onCheckLocalProviders?: () => Promise<readonly LocalProviderProbeResult[]>;
+  /** Codex (OpenAI) sign-in, when this build wires the paste-back exchange. */
+  codexSignIn?: Readonly<{
+    /** Opens the vendor tab. Resolves when the tab opened, not when signed in. */
+    onStart: () => Promise<void>;
+    /** Exchanges the code the person pasted back. */
+    onSubmitCode: (code: string, state?: string) => Promise<void>;
+  }>;
+  /** Published extension install page, when this build has one. */
+  extensionInstallUrl?: string;
+  /**
+   * Provider ids holding a live page-memory connection right now, read from the
+   * inference fabric by the host.
+   *
+   * Passed in rather than read here so this view keeps no static dependency on
+   * the fabric module: that import merges the fabric's provider transports into
+   * the deferred-capabilities chunk and dissolves a release-gate pack boundary.
+   * An absent list is an empty list, which can only under-claim.
+   */
+  connectedProviderIds?: readonly string[];
 }>;
 
 type Candidate = Readonly<{
@@ -96,7 +142,15 @@ export function AccessView({
   oauthDiagnostic,
   oauthBootstrap,
   additionalProviders,
+  observeExtensionBridge = probeExtensionBridge,
+  onCheckLocalProviders,
+  codexSignIn,
+  extensionInstallUrl,
+  connectedProviderIds = [],
 }: AccessViewProps) {
+  const publishedExtensionInstallUrl = extensionInstallUrl
+    ?? (import.meta.env.VITE_AIRSHIP_EXTENSION_INSTALL_URL as string | undefined)?.trim()
+    ?? undefined;
   const localOAuthBridge = oauthDiagnostic?.exchangeMode === "local-confidential-bridge";
   const credentialInput = useRef<HTMLInputElement>(null);
   const ephemeralCredential = useRef<EphemeralChutesCredential>();
@@ -107,10 +161,21 @@ export function AccessView({
   const [modelId, setModelId] = useState("");
   const [detectedKind, setDetectedKind] = useState<ChutesCredentialKind>();
   const [strictProof, setStrictProof] = useState(false);
+  const [chutesMethod, setChutesMethod] = useState<"oauth" | "api-key">("oauth");
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string>();
   const [error, setError] = useState<string>();
   const [oauthDiagnosticError, setOauthDiagnosticError] = useState<string>();
+  // `undefined` until the handshake settles. There is no "last known" arm, so
+  // an unfinished observation can only render as "checking" — never as absence,
+  // and never as a presence carried over from an earlier load.
+  const [bridge, setBridge] = useState<ExtensionBridgeObservation>();
+  // Recomputed from the host's live list on every render, so a lane can never
+  // claim a connection that was released.
+  const connectedProviders = useMemo(
+    () => new Set(connectedProviderIds),
+    [connectedProviderIds.join("\u0000")],
+  );
 
   function clearEphemeral() {
     discoveryAbort.current?.abort(new DOMException("Model discovery was cleared.", "AbortError"));
@@ -124,6 +189,38 @@ export function AccessView({
   }
 
   useEffect(() => () => clearEphemeral(), []);
+
+  /*
+   * Ask an extension whether it is there, once, when this surface opens. The
+   * observer captured here is the one this view mounted with: re-running on a
+   * changed prop identity would re-probe on every render, and an extension can
+   * be installed, disabled or removed between page loads anyway, so a fresh
+   * `hello` per mount is the only reading that is true when it is rendered.
+   * `probeExtensionBridge` resolves a named failure rather than rejecting, so
+   * there is no silent-catch path here to hide one.
+   */
+  useEffect(() => {
+    let live = true;
+    void observeExtensionBridge().then(
+      (observation) => {
+        if (live) setBridge(observation);
+      },
+      // An observer that throws is a failed observation with a named cause,
+      // never a quiet return to "no extension here".
+      (caught: unknown) => {
+        if (live) setBridge(Object.freeze({
+          state: "failed" as const,
+          evidence: "probe-failed" as const,
+          detail: `The extension-bridge observation could not be made: ${caught instanceof Error ? caught.message : "the observer failed without naming a cause"}.`,
+          providers: Object.freeze([]),
+          unavailable: Object.freeze([]),
+        }));
+      },
+    );
+    return () => {
+      live = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (!isChutesConnected(connection)) return;
@@ -269,16 +366,27 @@ export function AccessView({
         model: model.id,
         posture: transport.posture,
       });
-      await onConnect({
-        connection: nextConnection,
-        credential: credential.value,
-        transport,
-        model,
-        models: candidate.models,
-      });
-      // Ownership moved into App. Do not let candidate cleanup revoke the
-      // committed authority.
+      // Ownership must leave this view before `onConnect` is awaited, not
+      // after. That call navigates to the conversation, so this view can
+      // unmount while the promise is still pending; an unmount cleanup that
+      // still saw the candidate reference would revoke the authority App just
+      // committed and cancel every later turn before its first request. A
+      // rejected handoff is released explicitly instead.
       candidateTransport.current = undefined;
+      try {
+        await onConnect({
+          connection: nextConnection,
+          credential: credential.value,
+          transport,
+          model,
+          models: candidate.models,
+        });
+      } catch (caught) {
+        transport.revokeCredential(
+          new DOMException("The Chutes connection was not committed.", "AbortError"),
+        );
+        throw caught;
+      }
       clearEphemeral();
       setCandidate(undefined);
       setDetectedKind(undefined);
@@ -408,6 +516,58 @@ export function AccessView({
       ? { available: false, reason: oauthDiagnostic.configurationError }
       : oauthOriginState(oauthDiagnostic.homepageUrl, typeof window === "undefined" ? "" : window.location.href)
     : { available: false, reason: "OAuth registration details are unavailable in this build." };
+  const chutesSignInAvailable = Boolean(oauthDiagnostic) && oauthOrigin.available;
+  const activeChutesMethod = chutesSignInAvailable ? chutesMethod : "api-key";
+
+  /**
+   * Moves to the browser-direct provider list without touching `location.hash`,
+   * which is the router: the anchors this replaced navigated to `#chat` and
+   * ejected people out of the connection route entirely.
+   */
+  function focusDirectProviders(provider?: "openai" | "anthropic" | "xai") {
+    const target = typeof document === "undefined"
+      ? null
+      : document.getElementById(provider ? `provider-setup-${provider}` : "additional-inference-providers");
+    if (!target) return;
+    target.scrollIntoView({ behavior: "smooth", block: "start" });
+    target.focus({ preventScroll: true });
+  }
+
+  function focusConnectSurface() {
+    const target = typeof document === "undefined" ? null : document.getElementById("connect-surface-card");
+    if (!target) return;
+    target.scrollIntoView({ behavior: "smooth", block: "start" });
+    target.focus({ preventScroll: true });
+  }
+
+  const laneInput: ConnectLaneInput = {
+    online,
+    chutes: {
+      connected: isChutesConnected(connection),
+      signInAvailable: chutesSignInAvailable,
+      // Deliberately not `oauthOrigin.reason`: that string is addressed to an
+      // operator restarting a companion process. The person reading this needs
+      // the next step, and the operator detail stays in the boundary card.
+      ...(chutesSignInAvailable ? {} : { signInUnavailableReason: "Chutes sign-in isn’t available in this build." }),
+    },
+    codex: {
+      connected: connectedProviders.has("openai"),
+      available: Boolean(codexSignIn),
+      ...(codexSignIn ? {} : {
+        unavailableReason: "Codex sign-in is not wired into this build. An OpenAI API key connection is listed with the browser-direct providers below.",
+      }),
+    },
+    claude: { connected: connectedProviders.has("anthropic"), signInAvailable: false },
+    grok: { connected: connectedProviders.has("xai"), signInAvailable: false },
+    bridge,
+    host: observeHostExtensionSupport(typeof navigator === "undefined" ? "" : navigator.userAgent),
+    ...(publishedExtensionInstallUrl ? { extensionInstallUrl: publishedExtensionInstallUrl } : {}),
+    local: {
+      connected: LOCAL_PROVIDER_LABELS
+        .filter(([id]) => connectedProviders.has(id))
+        .map(([, label]) => label),
+    },
+  };
 
   return (
     <section class="access-connection-view" aria-labelledby="access-connection-title">
@@ -415,30 +575,46 @@ export function AccessView({
         <span>Inference connections</span>
         <h1 id="access-connection-title">Connect models</h1>
         <p>Use Chutes for application-encrypted inference, or connect browser-direct cloud and local models below. Credentials remain in page memory.</p>
-        <nav class="access-provider-jump" aria-label="Choose an inference provider">
-          <a href="#chutes-connection-card"><Icon name="lock" size={15} />Chutes · encrypted</a>
-          {additionalProviders ? <a href="#additional-inference-providers"><Icon name="model" size={15} />Other cloud &amp; local models</a> : null}
+        {/*
+          Buttons, not anchors: the hash is the router, so `href="#section"`
+          resolved to an unknown route and threw people out to Chat.
+        */}
+        <nav class="access-provider-jump" aria-label="Jump to a section of this page">
+          <button type="button" onClick={focusConnectSurface}><Icon name="lock" size={15} />Providers</button>
+          {additionalProviders ? <button type="button" onClick={() => focusDirectProviders()}><Icon name="model" size={15} />Cloud keys &amp; local models</button> : null}
         </nav>
       </header>
 
       <div class="access-connection-layout">
-        <section id="chutes-connection-card" class="access-connection-card" aria-labelledby="active-connection-title">
-          <div class="access-section-heading">
-            <div>
-              <span>Chutes connection</span>
-              <h2 id="active-connection-title">{connectionLabel(connection)}</h2>
-            </div>
-            <ConnectionBadge connection={connection} />
-          </div>
-
+        {/*
+          The whole surface, always. It used to be replaced by the Chutes
+          summary the moment Chutes connected, which left a connected person
+          with no way to add a second provider — and made the connected lane
+          state unreachable. Chutes state now decides only what sits inside the
+          Chutes lane.
+        */}
+        <section id="connect-surface-card" class="access-connection-card" aria-labelledby="connect-surface-title" tabIndex={-1}>
           {!online ? (
             <p class="access-network-pause" role="status" aria-live="polite">
               <Icon name="warning" size={16} />{OFFLINE_INLINE_REASON}
             </p>
           ) : null}
 
-          {isChutesConnected(connection) ? (
+          <ConnectSurface
+            input={laneInput}
+            onOpenDirectProviders={additionalProviders ? focusDirectProviders : undefined}
+            {...(onCheckLocalProviders ? { onCheckLocalProviders } : {})}
+            {...(codexSignIn ? { onStartCodexSignIn: codexSignIn.onStart, onSubmitCodexCode: codexSignIn.onSubmitCode } : {})}
+            {...(publishedExtensionInstallUrl ? { extensionInstallUrl: publishedExtensionInstallUrl } : {})}
+            chutesPanel={isChutesConnected(connection) ? (
             <div class="active-connection-summary">
+              <div class="access-section-heading">
+                <div>
+                  <span>Chutes connection</span>
+                  <strong>{connectionLabel(connection)}</strong>
+                </div>
+                <ConnectionBadge connection={connection} />
+              </div>
               <dl>
                 <div><dt>Credential class</dt><dd>{connection.kind === "chutes-oauth" ? "Chutes sign-in · scoped user session" : "Chutes API key · direct session"}</dd></div>
                 <div>
@@ -529,60 +705,99 @@ export function AccessView({
               </div>
             </div>
           ) : (
-            <div class="connection-entry-stack">
-              <section class="oauth-primary-entry" aria-labelledby="oauth-primary-title">
-                <Icon name="access" size={22} />
-                <div>
-                  <strong id="oauth-primary-title">Chutes sign-in · scoped user session</strong>
-                  <p>{localOAuthBridge
-                    ? "Recommended for this local lab. The browser creates the S256 PKCE request; the same-origin loopback bridge completes the registered confidential exchange. Its client secret never enters browser JavaScript."
-                    : "Recommended. Connect profile, billing, and inference through Authorization Code + S256 PKCE with a Chutes app registered for public-client token exchange."}</p>
-                  <button
-                    class="primary"
-                    type="button"
-                    disabled={busy || !oauthDiagnostic || !online || !oauthOrigin.available}
-                    onClick={() => {
-                      setOauthDiagnosticError(undefined);
-                      void oauthDiagnostic?.onRun().catch((caught) => setOauthDiagnosticError(errorMessage(caught)));
-                    }}
-                  >
-                    Continue to Chutes
-                  </button>
-                  {!oauthOrigin.available ? <p class="oauth-primary-reason" role="status">{oauthOrigin.reason}</p> : null}
-                  {oauthDiagnosticError ? <p class="oauth-boundary-status error" role="alert">{oauthDiagnosticError}</p> : null}
-                  {oauthNotice?.tone === "error" ? <p class="oauth-boundary-status error" role="alert">{oauthNotice.message}</p> : null}
-                </div>
-              </section>
-
-              <details class="api-key-alternative">
-                <summary>Advanced: use a Chutes API key instead</summary>
-                <form class="credential-entry" onSubmit={(event) => { event.preventDefault(); void discover(); }}>
-                  <div class="credential-types" aria-label="Optional Chutes API-key connection">
-                    <CredentialTypeCard prefix="cpk_" title="Chutes API key" detail="Direct models, inference, profile, and account reads when Chutes authorizes them." active={detectedKind === "inference-api-key"} />
+                <div class="connection-entry-stack">
+                  <div class="connect-method__switch" role="tablist" aria-label="Chutes connection method">
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={activeChutesMethod === "oauth"}
+                      disabled={!chutesSignInAvailable}
+                      onClick={() => setChutesMethod("oauth")}
+                    >
+                      <span>OAuth</span>
+                      <small>{chutesSignInAvailable ? "Primary" : "Unavailable"}</small>
+                    </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={activeChutesMethod === "api-key"}
+                      onClick={() => setChutesMethod("api-key")}
+                    >
+                      <span>API key</span>
+                      <small>Page memory</small>
+                    </button>
                   </div>
-                  <label for="chutes-credential-input">
-                    <span>Chutes API key</span>
-                    <input
-                      ref={credentialInput}
-                      id="chutes-credential-input"
-                      name="chutes-api-key"
-                      type="password"
-                      inputMode="text"
-                      autoComplete="off"
-                      autoCapitalize="none"
-                      spellcheck={false}
-                      placeholder="cpk_…"
-                      aria-describedby="chutes-credential-help"
-                      onInput={inspectInput}
-                      disabled={busy}
-                    />
-                  </label>
-                  <p id="chutes-credential-help">Held only in page memory. Airship uses the key directly for models, inference, profile, and account reads that Chutes authorizes. Never paste a client secret or administrator credential.</p>
-                  <button type="submit" disabled={busy || !online}>Discover models with key</button>
-                </form>
-              </details>
-            </div>
+                  {chutesSignInAvailable && activeChutesMethod === "oauth" ? (
+                    <section class="oauth-primary-entry" aria-labelledby="oauth-primary-title">
+                      <Icon name="access" size={22} />
+                      <div>
+                        <strong id="oauth-primary-title">Sign in to Chutes</strong>
+                        <p>Your password never touches Airship, and the sign-in secret stays outside this browser.</p>
+                        <details class="oauth-mechanism">
+                          <summary>How this works</summary>
+                          <p>{localOAuthBridge
+                            ? "The browser creates the S256 PKCE request; the same-origin loopback bridge completes the registered confidential exchange. Its client secret never enters browser JavaScript."
+                            : "Profile, billing, and inference connect through Authorization Code + S256 PKCE with a Chutes app registered for public-client token exchange."}</p>
+                        </details>
+                        <button
+                          class="primary"
+                          type="button"
+                          disabled={busy || !online}
+                          onClick={() => {
+                            setOauthDiagnosticError(undefined);
+                            void oauthDiagnostic?.onRun().catch((caught) => setOauthDiagnosticError(errorMessage(caught)));
+                          }}
+                        >
+                          Sign in to Chutes
+                        </button>
+                        {oauthDiagnosticError ? <p class="oauth-boundary-status error" role="alert">{oauthDiagnosticError}</p> : null}
+                        {oauthNotice?.tone === "error" ? <p class="oauth-boundary-status error" role="alert">{oauthNotice.message}</p> : null}
+                      </div>
+                    </section>
+                  ) : null}
+
+                  {/*
+                    When the sign-in exchange is not configured, sign-in is not
+                    offered at all and the key panel opens by itself. A primary
+                    "Recommended" control that returns a developer-facing error
+                    is what took cold-visitor conversion to roughly zero.
+                  */}
+                  {activeChutesMethod === "api-key" ? (
+                  <section class="api-key-alternative" aria-labelledby="chutes-api-key-title">
+                    <strong id="chutes-api-key-title">Connect with a Chutes API key</strong>
+                    <form class="credential-entry" onSubmit={(event) => { event.preventDefault(); void discover(); }}>
+                      <div class="credential-types" aria-label="Optional Chutes API-key connection">
+                        <CredentialTypeCard prefix="cpk_" title="Chutes API key" detail="Chutes personal keys start with cpk_. They read models, inference, profile, and account when Chutes authorizes them." active={detectedKind === "inference-api-key"} />
+                      </div>
+                      <label for="chutes-credential-input">
+                        <span>Chutes API key</span>
+                        <input
+                          ref={credentialInput}
+                          id="chutes-credential-input"
+                          name="chutes-api-key"
+                          type="password"
+                          inputMode="text"
+                          autoComplete="off"
+                          autoCapitalize="none"
+                          spellcheck={false}
+                          placeholder="cpk_…"
+                          aria-describedby="chutes-credential-help"
+                          onInput={inspectInput}
+                          disabled={busy}
+                        />
+                      </label>
+                      <p id="chutes-credential-help">
+                        Held only in page memory. Don’t have one?{" "}
+                        <a href={CHUTES_ACCOUNT_URL} target="_blank" rel="noreferrer">Create a key at chutes.ai → API keys ↗</a>{" "}
+                        Never paste a client secret or administrator credential.
+                      </p>
+                      <button type="submit" disabled={busy || !online}>Discover models with key</button>
+                    </form>
+                  </section>
+                  ) : null}
+                </div>
           )}
+          />
 
           {status ? <p class="access-live-status" role="status" aria-live="polite"><span />{status}</p> : null}
           {error ? <p class="access-live-error" role="alert"><Icon name="warning" size={16} />{error}</p> : null}
@@ -628,9 +843,17 @@ export function AccessView({
                 <div><dt>Callback</dt><dd>{oauthDiagnostic.callbackUrl}</dd></div>
                 <div><dt>Scopes</dt><dd>{oauthDiagnostic.scopes.join(" · ")}</dd></div>
               </dl>
+              {/*
+                The operator-addressed cause lives here, beside the rest of the
+                deployment detail. The connect surface above states the
+                consequence and the working alternative instead.
+              */}
+              {!chutesSignInAvailable ? (
+                <p class="oauth-boundary-status warning" role="status">Deployment detail: {oauthOrigin.reason}</p>
+              ) : null}
               <button
                 type="button"
-                disabled={!online}
+                disabled={!online || !chutesSignInAvailable}
                 onClick={() => {
                   setOauthDiagnosticError(undefined);
                   void oauthDiagnostic.onRun().catch((caught) => setOauthDiagnosticError(errorMessage(caught)));
@@ -643,7 +866,7 @@ export function AccessView({
         </div>
       </aside>
       {additionalProviders ? (
-        <div id="additional-inference-providers" class="access-additional-providers" aria-label="Additional cloud and local inference providers">
+        <div id="additional-inference-providers" class="access-additional-providers" aria-label="Additional cloud and local inference providers" tabIndex={-1}>
           {additionalProviders}
         </div>
       ) : null}

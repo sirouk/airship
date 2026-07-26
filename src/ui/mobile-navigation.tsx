@@ -9,10 +9,17 @@ import {
   type NavigationView,
 } from "./navigation-model";
 import { Icon, type IconName } from "./icons";
+import { trapFocus } from "./focus-trap";
 
 export type MobileNavigationProps = Readonly<{
   view: NavigationView;
   moreOpen: boolean;
+  /**
+   * Set while any other modal surface owns the page. The bar is a sibling of
+   * every dialog, so without this it stays tabbable behind a scrim that claims
+   * the rest of the shell is inert.
+   */
+  chromeInert?: boolean;
   chatPending?: boolean | number;
   proofPending?: boolean | number;
   attestationPending?: boolean | number;
@@ -54,6 +61,7 @@ const parentLabels = Object.freeze(Object.fromEntries(
 export function MobileNavigation({
   view,
   moreOpen,
+  chromeInert = false,
   chatPending = false,
   proofPending = false,
   attestationPending = false,
@@ -103,7 +111,7 @@ export function MobileNavigation({
 
   return (
     <>
-      <nav class="mobile-nav fixed-mobile-nav" aria-label="Mobile navigation" inert={moreOpen} aria-hidden={moreOpen || undefined}>
+      <nav class="mobile-nav fixed-mobile-nav" aria-label="Mobile navigation" inert={moreOpen || chromeInert} aria-hidden={moreOpen || chromeInert || undefined}>
         {MOBILE_PRIMARY_CONTROLS.map((control) => {
           const current = activeControl === control.id;
           const open = control.id === "more" && moreOpen;
@@ -278,26 +286,4 @@ function navClass(current: boolean, open: boolean): string {
 
 function activeElement(): HTMLElement | undefined {
   return document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
-}
-
-function trapFocus(event: KeyboardEvent, container: HTMLElement): void {
-  const focusable = [...container.querySelectorAll<HTMLElement>(
-    'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-  )];
-  if (focusable.length === 0) {
-    event.preventDefault();
-    container.focus({ preventScroll: true });
-    return;
-  }
-
-  const first = focusable[0]!;
-  const last = focusable.at(-1)!;
-  const current = document.activeElement;
-  if (event.shiftKey && (current === container || current === first || !container.contains(current))) {
-    event.preventDefault();
-    last.focus({ preventScroll: true });
-  } else if (!event.shiftKey && (current === last || !container.contains(current))) {
-    event.preventDefault();
-    first.focus({ preventScroll: true });
-  }
 }

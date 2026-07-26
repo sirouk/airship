@@ -2,14 +2,17 @@ import { describe, expect, it } from "vitest";
 import { InferenceConnectionRegistry } from "./connection-registry";
 import { InspectInferenceConnectionsTool } from "./availability-tool";
 import type {
+  InferenceAvailabilitySnapshot,
   InferenceModelDescriptor,
   InferenceProviderDescriptor,
   PublicPkceAuthMethod,
 } from "./contracts";
 import { InferenceModelCatalog } from "./model-catalog";
+import { OPENAI_CODEX_OAUTH } from "../../auth/provider-oauth/registrations";
 import {
   ANTHROPIC_PROVIDER,
   BUILTIN_PROVIDER_COMPATIBILITY,
+  BUILTIN_PROVIDER_OAUTH_REACHABILITY,
   OFFICIAL_CLOUD_PROVIDERS,
   OPENAI_PROVIDER,
   XAI_PROVIDER,
@@ -29,13 +32,29 @@ const OBSERVED_AT = "2026-07-24T12:00:02.000Z";
 
 describe("provider-neutral inference catalog", () => {
   it("keeps built-in OAuth claims honest and machine-readable", () => {
-    expect(OPENAI_PROVIDER.oauth.state).toBe("first-party-only");
+    // OpenAI is configured because its exchange was measured working from the page.
+    // The other two keep an unconfigured OAuth state: their grants exist but no page
+    // can complete them, so nothing here may present them as in-page sign-ins.
+    expect(OPENAI_PROVIDER.oauth).toMatchObject({
+      state: "configured-public-pkce",
+      authMethodId: "openai-codex-oauth",
+    });
     expect(ANTHROPIC_PROVIDER.oauth.state).toBe("first-party-only");
     expect(XAI_PROVIDER.oauth.state).toBe("not-documented");
     expect(OFFICIAL_CLOUD_PROVIDERS.flatMap((provider) =>
       provider.authMethods.filter((method) => method.kind === "oauth-public-pkce")
-    )).toEqual([]);
+    ).map((method) => method.id)).toEqual(["openai-codex-oauth"]);
     expect(OPENAI_PROVIDER.authMethods[0]).toMatchObject({
+      id: "openai-codex-oauth",
+      kind: "oauth-public-pkce",
+      // The approved presentation of this connection is Codex, not "OpenAI".
+      label: "Codex",
+      clientId: "app_EMoamEEZ73f0CkXaXp7hrann",
+      tokenEndpointAuthMethod: "none",
+      codeChallengeMethod: "S256",
+      redirectUris: ["http://localhost:1455/auth/callback"],
+    });
+    expect(OPENAI_PROVIDER.authMethods[1]).toMatchObject({
       kind: "api-key",
       browserUse: "dangerous-user-opt-in",
     });
@@ -50,6 +69,37 @@ describe("provider-neutral inference catalog", () => {
     expect(BUILTIN_PROVIDER_COMPATIBILITY
       .filter((provider) => provider.oauth === "published-third-party-pkce")
       .map((provider) => provider.providerId)).toEqual(["chutes"]);
+  });
+
+  it("records which OAuth exchanges the page can actually make", () => {
+    expect(BUILTIN_PROVIDER_OAUTH_REACHABILITY.map((entry) => [
+      entry.providerId,
+      entry.grant,
+      entry.tokenExchange,
+      entry.blockedBy,
+    ])).toEqual([
+      ["openai", "authorization-code-pkce", "direct-from-page", undefined],
+      ["anthropic", "authorization-code-pkce", "extension-bridge", "forbidden-user-agent-header"],
+      ["xai", "device-code", "extension-bridge", "cors"],
+    ]);
+    // Every provider that needs the bridge has to be able to name its cause.
+    for (const entry of BUILTIN_PROVIDER_OAUTH_REACHABILITY) {
+      expect(entry.evidence.length).toBeGreaterThan(32);
+      expect(entry.tokenExchange === "extension-bridge").toBe(entry.blockedBy !== undefined);
+    }
+  });
+
+  it("keeps the Codex descriptor and the OAuth registration from drifting apart", () => {
+    const method = OPENAI_PROVIDER.authMethods
+      .find((candidate) => candidate.kind === "oauth-public-pkce");
+    expect(method).toBeDefined();
+    if (method?.kind !== "oauth-public-pkce") throw new Error("unreachable");
+    expect(method.authorizationEndpoint).toBe(OPENAI_CODEX_OAUTH.authorizationEndpoint);
+    expect(method.tokenEndpoint).toBe(OPENAI_CODEX_OAUTH.tokenEndpoints[0]);
+    expect(method.clientId).toBe(OPENAI_CODEX_OAUTH.clientId);
+    expect(method.redirectUris).toEqual([OPENAI_CODEX_OAUTH.redirectUri]);
+    expect(method.scopes).toEqual([...OPENAI_CODEX_OAUTH.scopes]);
+    expect(OPENAI_CODEX_OAUTH.transport.kind).toBe("direct-from-page");
   });
 
   it("registers frozen metadata with provider-local revisions", () => {
@@ -430,6 +480,62 @@ describe("model catalog, session pins, and agent awareness", () => {
     expect(prompt).toContain("Do not silently switch");
     expect(prompt).not.toContain("sk-ant-never-surface");
     expect(renderInferenceAvailabilityForPrompt(snapshot, 160)).toContain("truncated");
+  });
+
+  it("carries catalog model limits to the agent and omits the ones nobody observed", async () => {
+    const { providers, connections, models } = readyRuntime();
+    const measured = model("chutes", "org/model", ["text-input", "text-output", "tool-calling"]);
+    const { contextWindowTokens, maxOutputTokens, ...unmeasured } = model(
+      "chutes",
+      "org/unmeasured",
+      ["text-input"],
+    );
+    expect(contextWindowTokens).toBe(128_000);
+    expect(maxOutputTokens).toBe(16_384);
+    models.replaceConnectionModels("chutes-main", 1, "chutes", [measured, unmeasured]);
+
+    const snapshot = createInferenceAvailabilitySnapshot({
+      providers,
+      connections,
+      models,
+      capturedAt: OBSERVED_AT,
+    });
+    const rows = snapshot.connections[0]!.models;
+    expect(rows.find((row) => row.id === "org/model")).toMatchObject({
+      contextWindowTokens: 128_000,
+      maxOutputTokens: 16_384,
+    });
+    const unknownRow = rows.find((row) => row.id === "org/unmeasured")!;
+    expect(unknownRow).not.toHaveProperty("contextWindowTokens");
+    expect(unknownRow).not.toHaveProperty("maxOutputTokens");
+
+    const prompt = renderInferenceAvailabilityForPrompt(snapshot);
+    expect(prompt).toContain(
+      "org/model[available;text-input,text-output,tool-calling;ctx=128000;out=16384]",
+    );
+    expect(prompt).toContain("org/unmeasured[available;text-input]");
+
+    // The agent's actual read surface is the tool result, not the renderer.
+    const tool = new InspectInferenceConnectionsTool({
+      providers,
+      connections,
+      models,
+      now: () => Date.parse(OBSERVED_AT),
+    });
+    const result = await tool.execute({}, {
+      sessionId: "session-1",
+      turnId: "turn-1",
+      operationId: "operation-1",
+      signal: new AbortController().signal,
+    });
+    const toolRows = (JSON.parse(result.content) as InferenceAvailabilitySnapshot)
+      .connections[0]!.models;
+    expect(toolRows.find((row) => row.id === "org/model")).toMatchObject({
+      contextWindowTokens: 128_000,
+      maxOutputTokens: 16_384,
+    });
+    expect(toolRows.find((row) => row.id === "org/unmeasured"))
+      .not.toHaveProperty("contextWindowTokens");
   });
 
   it("exposes the snapshot as a governed read-only inspection tool", async () => {

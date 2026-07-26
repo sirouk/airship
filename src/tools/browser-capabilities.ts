@@ -15,7 +15,7 @@ export function registerBrowserCapabilityTool(
   const tool: Tool = {
     definition: Object.freeze({
       name: "inspect_browser_capabilities",
-      description: "Probe this page's actual WebGPU adapter, WebNN context, WebAssembly feature tier, OPFS root, browser primitives, coarse device signals, and adaptive scheduling policy. Availability is not an execution grant or proof that a workload is using an accelerator.",
+      description: "Probe this page's actual WebGPU adapter, WebNN context, WebAssembly feature tier, OPFS root, browser primitives, coarse device signals, and adaptive scheduling policy. Availability is not an execution grant or proof that a workload is using an accelerator. In the returned policy, maxWorkerConcurrency is a derivation ceiling, not a count of running or reserved workers.",
       effect: "read" as const,
       inputSchema: Object.freeze({ type: "object", properties: {}, additionalProperties: false }),
     }),

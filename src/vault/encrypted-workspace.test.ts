@@ -1,10 +1,20 @@
 import { describe, expect, it } from "vitest";
 import { MemoryObjectStore } from "../storage/memory-object-store";
 import { WorkspaceRootKey } from "../storage/encrypted-envelope";
+import { CiphertextCachingObjectStore } from "../storage/caching-object-store";
+import { ClientCiphertextCache, MemoryCiphertextPageBackend } from "../storage/client-ciphertext-cache";
 import { WorkspaceConflictError } from "../workspace/contracts";
 import { EncryptedObjectWorkspace } from "./encrypted-workspace";
 
 const timestamp = "2026-07-18T12:00:00.000Z";
+const CACHE_RECORD_MAGIC = new TextEncoder().encode("AIRCC01\0");
+
+/** Counts cached ciphertext records, excluding the cache's own LRU index page. */
+async function cachedPageCount(pages: MemoryCiphertextPageBackend): Promise<number> {
+  const listed = await pages.list();
+  const records = await Promise.all(listed.map(async ({ storageKey }) => await pages.read(storageKey)));
+  return records.filter((bytes) => bytes && CACHE_RECORD_MAGIC.every((byte, index) => bytes[index] === byte)).length;
+}
 
 describe("EncryptedObjectWorkspace", () => {
   it("keeps empty reads side-effect free", async () => {
@@ -115,6 +125,39 @@ describe("EncryptedObjectWorkspace", () => {
       revision: "revision-1",
     });
     await expect(workspace.readBounded("large.txt", 32)).rejects.toThrow("ETag changed");
+  });
+
+  it("releases superseded and lost-race revisions from the acceleration cache without touching provider authority", async () => {
+    const { key } = await WorkspaceRootKey.generate();
+    const authority = new MemoryObjectStore();
+    const pages = new MemoryCiphertextPageBackend();
+    const cached = new CiphertextCachingObjectStore(authority, new ClientCiphertextCache(pages));
+    let id = 0;
+    // The immutable classifier only recognizes the canonical workspace prefix.
+    const workspace = new EncryptedObjectWorkspace(cached, key, "state/workspace/v1", () => timestamp, () => `revision-${++id}`);
+
+    const first = await workspace.write("notes.md", "one", { expectedRevision: null });
+    const firstKey = (await authority.list("state/workspace/v1/files/"))[0]!.key;
+    expect(await cachedPageCount(pages)).toBe(1);
+
+    await workspace.write("notes.md", "two", { expectedRevision: first.revision });
+    // The superseded ciphertext is still provider-authoritative for a reader
+    // holding the older manifest; only its cache page is released.
+    expect((await authority.list("state/workspace/v1/files/")).map((entry) => entry.key)).toContain(firstKey);
+    expect(await cachedPageCount(pages)).toBe(1);
+
+    // A lost manifest CAS makes the just-minted revision the orphan instead, so
+    // exactly one page survives the race even though both sides uploaded.
+    const base = (await workspace.list())[0]!.revision;
+    const left = new EncryptedObjectWorkspace(cached, key, "state/workspace/v1", () => timestamp, () => "revision-left");
+    const right = new EncryptedObjectWorkspace(cached, key, "state/workspace/v1", () => timestamp, () => "revision-right");
+    const results = await Promise.allSettled([
+      left.write("notes.md", "from left", { expectedRevision: base }),
+      right.write("notes.md", "from right", { expectedRevision: base }),
+    ]);
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+    expect((await authority.list("state/workspace/v1/files/")).length).toBe(4);
+    expect(await cachedPageCount(pages)).toBe(1);
   });
 
   it("rejects oversized plaintext before publishing any immutable object", async () => {

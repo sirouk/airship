@@ -616,9 +616,11 @@ async function execute(client: BrowserGitClient, operation: GitOperation, signal
     case "clone": return client.clone(operation.request, signal);
     case "fetch": return client.fetch(operation.request, signal);
     case "push": return client.push(operation.request, signal);
-    case "status":
-    case "diff":
-      throw new GitDomainError("not-a-mutation", `${operation.kind} is not a mutating operation.`);
+    // Source Control drives one reviewed mutation per button. Read-only kinds
+    // and the verbs this panel does not surface fail closed here rather than
+    // being routed to an approximate neighbour.
+    default:
+      throw new GitDomainError("not-a-source-control-mutation", `${operation.kind} is not a mutation this Source Control panel performs.`);
   }
 }
 

@@ -25,8 +25,10 @@ import {
   type CanonicalContextSelection,
 } from "./context-selection";
 import {
+  calibrateBytesPerToken,
   contextCompressionOptionsFromPolicy,
   createInferenceTransportContextSummarizer,
+  estimateInferenceTokens,
   materializeContextSummary,
   planContextCompression,
   resolveContextCompressionOptions,
@@ -68,11 +70,28 @@ export type TurnResult = {
 };
 
 const MAX_TOOL_CALLS_PER_STEP = 64;
+/**
+ * Tokens held back from the in-loop tool budget so a step that fills the window
+ * still leaves room for the assistant reply that has to read the results.
+ */
+const RESERVED_RESPONSE_TOKENS = 1_024;
+/**
+ * A turn whose opening request already exceeds the pinned window is not refused
+ * on a bytes-per-token estimate — providers still accept many such turns. It is
+ * granted this much room above where it opened so its tool results are truncated
+ * with a marker rather than blanked to nothing and then failed one step later.
+ * Bounded per turn, not per step: every step measures against the same ceiling,
+ * so the whole loop can add at most this allowance minus the response reserve.
+ */
+const OVER_WINDOW_LOOP_ALLOWANCE_TOKENS = RESERVED_RESPONSE_TOKENS * 2;
+/** Matches the compressor's fallback basis when no provider usage exists yet. */
+const DEFAULT_BYTES_PER_TOKEN = 3.6;
 const MAX_OPERATION_ID_CHARS = 512;
 const MAX_ASSISTANT_RESPONSE_BYTES = 4 * 1024 * 1024;
 const MAX_INFERENCE_EVENTS_PER_STEP = 100_000;
 const UNSAFE_OPERATION_ID = /[\u0000-\u001F\u007F]/u;
 const UTF8_ENCODER = new TextEncoder();
+const UTF8_DECODER = new TextDecoder();
 
 export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
   const maxSteps = options.maxSteps ?? 8;
@@ -175,6 +194,19 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
         throw new Error("Context compression options must exactly match the policy pinned in the session manifest.");
       }
     }
+    // Ground truth for this session's tokenizer is already in the journal as
+    // provider-reported prompt_tokens; the 3.6 bytes/token guess is only used
+    // until the first usage event exists.
+    const bytesPerToken = pinnedContextCompression
+      ? calibrateBytesPerToken(existingEvents, {
+        systemPrompt: session.manifest.systemPrompt,
+        tools: session.manifest.tools,
+        materialize: (events) => materializeMessages([...events], {
+          allowEmbeddedContext: session.manifest.turnContext === undefined,
+          allowSelectedContext: session.manifest.turnContext !== "disabled",
+        }),
+      })
+      : undefined;
     const contextSummary = pinnedContextCompression
       ? await planContextCompression({
         events: existingEvents,
@@ -183,6 +215,7 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
           allowEmbeddedContext: session.manifest.turnContext === undefined,
           allowSelectedContext: session.manifest.turnContext !== "disabled",
         }),
+        ...(bytesPerToken !== undefined ? { bytesPerToken } : {}),
         projectedUserContent: injectContextSelection(options.content, contextSelection),
         systemPrompt: session.manifest.systemPrompt,
         tools: session.manifest.tools,
@@ -208,6 +241,7 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
       }]);
     }
 
+    let turnBaselineTokens: number | undefined;
     for (let step = 0; step < maxSteps; step += 1) {
       throwIfAborted(options.signal);
       const history = await options.journal.readEvents(options.sessionId, 0, options.signal);
@@ -215,6 +249,47 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
         allowEmbeddedContext: session.manifest.turnContext === undefined,
         allowSelectedContext: session.manifest.turnContext !== "disabled",
       });
+      // Compression only runs at turn boundaries, so a long tool loop can grow
+      // the request past the window the boundary check just cleared.
+      const projectedTokens = pinnedContextCompression
+        ? estimateInferenceTokens({
+          systemPrompt: session.manifest.systemPrompt,
+          messages,
+          tools: session.manifest.tools,
+          ...(bytesPerToken !== undefined ? { bytesPerToken } : {}),
+        })
+        : undefined;
+      if (step === 0) turnBaselineTokens = projectedTokens;
+      // One ceiling drives both the refusal and the tool-output budget. Two
+      // different ceilings is how a turn ends up handed zero bytes for its tool
+      // results and then failed for spending them: the estimate is distrusted
+      // enough not to refuse the turn at step 0, so it must also be distrusted
+      // when deciding how much of the step's tool output to keep.
+      const ceilingTokens = pinnedContextCompression && turnBaselineTokens !== undefined
+        ? Math.max(
+          pinnedContextCompression.contextWindowTokens,
+          turnBaselineTokens > pinnedContextCompression.contextWindowTokens
+            ? turnBaselineTokens + OVER_WINDOW_LOOP_ALLOWANCE_TOKENS
+            : 0,
+        )
+        : undefined;
+      if (
+        pinnedContextCompression && projectedTokens !== undefined &&
+        ceilingTokens !== undefined && projectedTokens > ceilingTokens
+      ) {
+        throw new Error(
+          `This turn's accumulated tool output no longer fits the session's pinned ${pinnedContextCompression.contextWindowTokens}-token context window (projected ${projectedTokens} tokens). History is intact in the journal; start a new turn so compression can run at the boundary.`,
+        );
+      }
+      // Bytes this step may still add before the next request would overflow.
+      // Spending exactly this much keeps the next request inside the ceiling, so a
+      // verbose tool costs its own tail instead of the user's whole turn.
+      let remainingToolOutputBytes = ceilingTokens !== undefined && projectedTokens !== undefined
+        ? Math.max(0, Math.floor(
+          (ceilingTokens - RESERVED_RESPONSE_TOKENS - projectedTokens) *
+          (bytesPerToken ?? DEFAULT_BYTES_PER_TOKEN),
+        ))
+        : undefined;
       const requestId = randomUuid();
       if (reservedOperationIds.has(requestId)) throw new Error("Generated inference operation ID was already used.");
       reservedOperationIds.add(requestId);
@@ -348,6 +423,13 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
           notifySignal(options.onSignal, { type: "status", turnId, status: `running ${call.name}` });
           try {
             const execution = await options.tools.executeApproved(call.name, call.arguments, context);
+            // A single verbose result must not cost the user the whole turn. What
+            // is stored is exactly what the model will read, and the marker plus
+            // metadata state that the tail was dropped.
+            const bounded = boundToolResultContent(execution.content, remainingToolOutputBytes);
+            if (remainingToolOutputBytes !== undefined) {
+              remainingToolOutputBytes = Math.max(0, remainingToolOutputBytes - bounded.retainedBytes);
+            }
             await append([
               {
                 type: "tool.resulted",
@@ -356,9 +438,16 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
                 payload: {
                   callId: call.id,
                   name: call.name,
-                  content: execution.content,
+                  content: bounded.content,
                   isError: execution.isError ?? false,
-                  metadata: execution.metadata ?? null,
+                  metadata: bounded.truncated
+                    ? {
+                      ...(plainRecord(execution.metadata) ?? {}),
+                      contextBudgetTruncated: true,
+                      originalContentBytes: bounded.originalBytes,
+                      retainedContentBytes: bounded.retainedBytes,
+                    }
+                    : execution.metadata ?? null,
                 },
               },
             ]);
@@ -489,6 +578,41 @@ async function prepareTurnContext(args: Readonly<{
     throw new Error("The turn-context provider returned lineage outside this session's pinned scope.");
   }
   return canonical;
+}
+
+/**
+ * Bound one tool result to the bytes this turn can still send. An unbounded
+ * result would overflow the pinned window and fail the whole turn at the
+ * provider; a silent trim would misrepresent what the model was shown.
+ */
+function boundToolResultContent(
+  content: string,
+  remainingBytes: number | undefined,
+): Readonly<{ content: string; truncated: boolean; originalBytes: number; retainedBytes: number }> {
+  const originalBytes = UTF8_ENCODER.encode(content).byteLength;
+  if (remainingBytes === undefined || originalBytes <= remainingBytes) {
+    return Object.freeze({ content, truncated: false, originalBytes, retainedBytes: originalBytes });
+  }
+  const marker = `\n[Airship truncated this tool result: ${originalBytes} bytes exceeded the ${remainingBytes} bytes left in this turn's pinned context window.]`;
+  const budget = Math.max(0, remainingBytes - UTF8_ENCODER.encode(marker).byteLength);
+  // Cut in the byte array, not by re-encoding a growing string: tool results run
+  // to 1 MiB and a per-character re-encode would be quadratic on the hot path.
+  const bytes = UTF8_ENCODER.encode(content);
+  let cut = Math.min(budget, bytes.byteLength);
+  while (cut > 0 && ((bytes[cut] ?? 0) & 0xc0) === 0x80) cut -= 1;
+  const bounded = `${UTF8_DECODER.decode(bytes.subarray(0, cut))}${marker}`;
+  return Object.freeze({
+    content: bounded,
+    truncated: true,
+    originalBytes,
+    retainedBytes: UTF8_ENCODER.encode(bounded).byteLength,
+  });
+}
+
+function plainRecord(value: JsonValue | undefined): Record<string, JsonValue> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, JsonValue>
+    : undefined;
 }
 
 function isTerminalTurnEvent(type: string): boolean {

@@ -131,6 +131,7 @@ export function MenuSelect({
               type="button"
               class="menu-select-option"
               role="option"
+              aria-label={option.label}
               aria-selected={option.value === value}
               disabled={option.disabled}
               tabIndex={index === activeIndex ? 0 : -1}

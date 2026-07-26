@@ -1,6 +1,6 @@
 import { useEffect, useState } from "preact/hooks";
 import type { ComponentChildren } from "preact";
-import type { BrowserCapabilityObservation, BrowserRuntimeCapabilityReport } from "../capabilities/browser-runtime";
+import { semanticWasmThreadCount, type BrowserCapabilityObservation, type BrowserRuntimeCapabilityReport } from "../capabilities/browser-runtime";
 import type { ExecutionCapability, ExecutionRuntimeId } from "../execution/runtime-registry";
 import { Icon } from "./icons";
 import { Seal, sealStateForCapabilitySummary, type SealState } from "./seal";
@@ -77,6 +77,7 @@ function BrowserCapabilityPanel({ report }: Readonly<{ report: BrowserRuntimeCap
     ["Network", connectionLabel(report)],
   ] as const;
   const wasmFeatures = Object.entries(report.wasm.features).filter(([, supported]) => supported).map(([feature]) => feature);
+  const ortThreads = semanticWasmThreadCount(report.scheduling);
   return <section class="capability-device" aria-labelledby="device-capability-title">
     <header>
       <div><span class="eyebrow">Live page-memory probe</span><h2 id="device-capability-title">Device acceleration</h2><p>Probes select preferences; each workload reports its active backend.</p></div>
@@ -102,8 +103,29 @@ function BrowserCapabilityPanel({ report }: Readonly<{ report: BrowserRuntimeCap
     </div>
 
     <div class="capability-policy-row">
-      <div><span class="eyebrow">Adaptive policy</span><strong>{report.scheduling.maxWorkerConcurrency} workers · {report.scheduling.preferredSemanticBackend} preference · {report.scheduling.preferredWasmTier} WASM</strong><small>{report.scheduling.embeddingBatchSize} vector batch · {report.scheduling.yieldEveryMs} ms cooperative yield · {humanize(report.scheduling.heavyPackLoading)}</small></div>
-      <details><summary>Browser primitives</summary><ul>{primitives.map(([label, observation]) => <li><span>{label}</span><strong>{probePresentation(observation)[1]}</strong></li>)}</ul><p>{report.signals.thermal.detail}</p></details>
+      <div>
+        <span class="eyebrow">Adaptive policy</span>
+        {/* Each number names the thing it actually sizes: indexing lanes reach
+            concurrentMap. The power preference is split on "default" because
+            that value is the probe expressing NO preference — browser-runtime's
+            probeWebGpu calls requestAdapter({}) rather than passing the word
+            "default", which GPUPowerPreference does not accept — so claiming it
+            was "requested" would invent a request that never happened. The ONNX
+            Runtime thread count stays in the conditional mood because this
+            panel cannot observe whether the semantic pack has ever been loaded,
+            and naming a pool that may not exist would be a claim the page has
+            not earned. */}
+        <strong>{report.scheduling.maxIndexingConcurrency} indexing lanes · {report.scheduling.preferredSemanticBackend} semantic backend · {report.scheduling.embeddingBatchSize} vector batch</strong>
+        <small>{report.scheduling.yieldEveryMs} ms cooperative yield · {report.scheduling.powerPreference === "default"
+          ? "no GPU power preference requested — the adapter probe asked for any adapter"
+          : `${humanize(report.scheduling.powerPreference)} GPU power preference requested by the adapter probe`}</small>
+        <small class="capability-policy-inert">{report.scheduling.preferredWasmTier} WASM tier would request {ortThreads} ONNX Runtime thread{ortThreads === 1 ? "" : "s"} the next time the semantic pack loads. This panel does not observe whether that pack is loaded now.</small>
+        {/* These two are derived postures, not activations. Naming them that
+            way keeps the panel from implying a download or storage adapter
+            promised something a workload has not reported. */}
+        <small class="capability-policy-inert">{humanize(report.scheduling.heavyPackLoading)} heavy-pack posture · {humanize(report.scheduling.preferredWorkspaceStorage)} workspace-storage preference — observations, not activations.</small>
+      </div>
+      <details><summary>Browser primitives</summary><ul>{primitives.map(([label, observation]) => <li><span>{label}</span><strong>{probePresentation(observation)[1]}</strong><small>{observation.detail}</small></li>)}</ul><p>{report.signals.thermal.detail}</p></details>
     </div>
   </section>;
 }

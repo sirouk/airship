@@ -4,6 +4,7 @@ import type { SlashCommandDescriptor } from "../commands/types";
 import type { SessionListItem } from "../sessions/domain";
 import { CANONICAL_DESTINATIONS, SETTINGS_OVERLAY_ENTRY, type NavigationView } from "./navigation-model";
 import { Seal, type SealState } from "./seal";
+import { trapFocus } from "./focus-trap";
 import type { ApprovalMode } from "../approvals/modes";
 import { MenuSelect } from "./menu-select";
 
@@ -458,12 +459,4 @@ function shortId(id: string): string { return id.length > 12 ? `${id.slice(0, 8)
 function safeId(id: string): string { return id.replace(/[^a-z0-9_-]/giu, "-"); }
 function isTypingTarget(target: EventTarget | null): boolean {
   return target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/u.test(target.tagName));
-}
-function trapFocus(event: KeyboardEvent, container: HTMLElement | null): void {
-  if (!container) return;
-  const focusable = [...container.querySelectorAll<HTMLElement>('button:not([disabled]),input:not([disabled]),select:not([disabled]),a[href],[tabindex]:not([tabindex="-1"])')];
-  if (!focusable.length) { event.preventDefault(); container.focus(); return; }
-  const first = focusable[0]!; const last = focusable.at(-1)!;
-  if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
-  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
 }

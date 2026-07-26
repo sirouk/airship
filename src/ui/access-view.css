@@ -17,7 +17,7 @@
   margin-top: 14px;
 }
 
-.access-provider-jump a {
+.access-provider-jump button {
   display: inline-flex;
   gap: 7px;
   align-items: center;
@@ -32,8 +32,8 @@
   text-decoration: none;
 }
 
-.access-provider-jump a:hover,
-.access-provider-jump a:focus-visible {
+.access-provider-jump button:hover,
+.access-provider-jump button:focus-visible {
   border-color: var(--line-strong);
   color: var(--ink);
   background: var(--surface-raised);
@@ -90,7 +90,11 @@
   border-bottom: 1px solid var(--line);
 }
 
-.access-section-heading h2 {
+/* The connected-Chutes identity moved inside the Chutes lane, where the lane's
+   own heading is the h2; this line is a name, not a second document heading. */
+.access-section-heading h2,
+.access-section-heading strong {
+  display: block;
   margin: 5px 0 0;
   font-size: 1.2rem;
   line-height: 1.25;
@@ -187,6 +191,13 @@
   cursor: pointer;
   font-size: 0.76rem;
   font-weight: 700;
+}
+
+.api-key-alternative > strong {
+  display: block;
+  padding: 11px 12px;
+  color: var(--ink);
+  font-size: var(--fs-caption);
 }
 
 .api-key-alternative .credential-entry {

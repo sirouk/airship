@@ -191,6 +191,16 @@ data clearing, profile loss, private browsing, quota eviction, and platform
 migration may destroy it. Non-extractable prevents key export through WebCrypto;
 malicious same-origin code can still invoke the key while it is available.
 
+The equivalent cache for a **Google Drive** vault exists in the storage layer
+(`src/storage/workspace-key-handle-store.ts`, database
+`airship-workspace-key-handles-v1`, keyed `google-drive:<googleSubject>`) and
+gates adoption on a live rediscovery of the folder hierarchy rather than on the
+cached descriptor. It is **not yet wired into the Drive setup screen**, so a
+Drive vault today still requires the `airship-wrk-v1…` value on every reload.
+Do not describe Drive as having browser-profile unlock until that lands. The
+shared `equivalentWorkspaceKeys` derivation lives in that module and is imported
+by the Local Device keyring, so both paths compare keys the same way.
+
 ### Optional Bitwarden recovery
 
 Bitwarden Secrets Manager machine-account access tokens are powerful bearer

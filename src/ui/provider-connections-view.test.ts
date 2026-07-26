@@ -97,6 +97,8 @@ describe("provider connection component contract", () => {
     expect(source).toContain('aria-live="polite"');
     expect(source).toContain('class="provider-fabric__cloud-disclosure"');
     expect(source).toContain('placement="down"');
+    expect(source).toContain("cardId={`provider-setup-${provider.id}`}");
+    expect(source).toContain("tabIndex={-1}");
     expect(styles).toContain("@media (max-width: 520px)");
     expect(styles).toContain(":focus-visible");
   });

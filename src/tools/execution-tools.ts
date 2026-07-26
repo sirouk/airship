@@ -15,11 +15,19 @@ import { decodeWorkspaceBytes, encodeWorkspaceBytes, workspaceContentByteLength 
 import { isWorkspaceControlPlanePath, normalizeWorkspacePath, type WorkspacePort } from "../workspace/contracts";
 import { sha256 } from "../core/hash";
 import { createWasiPreview1Adapter } from "../execution/wasi-preview1-pack";
+import { createAirshipShellAdapter } from "../execution/shell/adapter";
+// One ceiling for every runtime's bounded collection diagnostic. The WASI
+// contract owns the number so the Python and WASI paths cannot drift apart.
+import { WASI_PREVIEW1_MAX_WORKSPACE_ERROR_CHARS as MAX_WORKSPACE_ERROR_CHARS } from "../execution/wasi-preview1-contract";
 
 export { runDisposableWasi } from "../execution/wasi-preview1-pack";
 
 const MAX_CODE_CHARS = 64 * 1_024;
 const MAX_WASM_BASE64_CHARS = 5_600_000;
+const MAX_SHELL_SCRIPT_CHARS = 64 * 1_024;
+/** A shell script does real multi-step work, so it gets a larger ceiling than a snippet. */
+const MAX_SHELL_TIMEOUT_MS = 30_000;
+const DEFAULT_SHELL_TIMEOUT_MS = 10_000;
 const DEFAULT_TIMEOUT_MS = 5_000;
 const DEFAULT_INSTALL_TIMEOUT_MS = 30_000;
 const MAX_OUTPUT_CHARS = 256 * 1_024;
@@ -149,7 +157,7 @@ export function registerExecutionTools(registry: ToolRegistry, workspace?: Works
         type: "object",
         properties: {
           runtime: { type: "string", enum: ["python-pyodide", "node-webcontainer"] },
-          timeoutMs: { type: "integer", minimum: 1_000, maximum: 30_000 },
+          timeoutMs: { type: "integer", minimum: 1_000, maximum: 30_000, description: "Bounds the whole activation, cold start included." },
         },
         required: ["runtime"],
         additionalProperties: false,
@@ -198,7 +206,7 @@ export function registerExecutionTools(registry: ToolRegistry, workspace?: Works
   registry.register({
     definition: {
       name: "execute_code",
-      description: "Execute one strictly typed browser job in a ready runtime: JavaScript source; a precompiled WASI Preview 1 command (including Rust compiled elsewhere for wasm32-wasip1) with optional bounded workspace snapshot/writeback; or explicitly installed Pyodide Python. This is not Bash, rustc, Cargo, or host execution. Inspect runtimes first; Node projects use execute_node_project.",
+      description: "Execute one strictly typed browser job in a ready runtime: JavaScript source; a precompiled WASI Preview 1 command (including Rust compiled elsewhere for wasm32-wasip1) supplied as a workspace wasmPath or inline wasmBase64, with optional bounded workspace snapshot/writeback; or explicitly installed Pyodide Python. This is not Bash, rustc, Cargo, or host execution. Inspect runtimes first; Node projects use execute_node_project.",
       effect: "execute",
       inputSchema: {
         type: "object",
@@ -206,12 +214,13 @@ export function registerExecutionTools(registry: ToolRegistry, workspace?: Works
           runtime: { type: "string", enum: ["javascript-worker", "wasi-preview1", "python-pyodide"] },
           code: { type: "string", minLength: 1, maxLength: MAX_CODE_CHARS },
           wasmBase64: { type: "string", minLength: 12, maxLength: MAX_WASM_BASE64_CHARS },
+          wasmPath: { type: "string", minLength: 1, maxLength: 1_024 },
           args: { type: "array", maxItems: 64, items: { type: "string", maxLength: 4_096 } },
           env: { type: "object", maxProperties: 64, additionalProperties: { type: "string", maxLength: 4_096 } },
           workspaceRoot: { type: "string", minLength: 1, maxLength: 1_024 },
           sourcePath: { type: "string", minLength: 1, maxLength: 1_024 },
           writeBack: { type: "boolean" },
-          timeoutMs: { type: "integer", minimum: 50, maximum: 10_000 },
+          timeoutMs: { type: "integer", minimum: 50, maximum: 10_000, description: "Bounds the job's own statements only. A python-pyodide cold start is bounded separately (up to 30 s) and reported as bootMs, so total wall clock can exceed this." },
         },
         required: ["runtime"],
         additionalProperties: false,
@@ -223,17 +232,22 @@ export function registerExecutionTools(registry: ToolRegistry, workspace?: Works
       validateExecuteCodeArguments(runtime, args);
       const workspaceRoot = typeof args.workspaceRoot === "string" ? normalizeWorkspacePath(args.workspaceRoot) : undefined;
       const sourcePath = typeof args.sourcePath === "string" ? normalizeWorkspacePath(args.sourcePath) : undefined;
+      const wasmPath = typeof args.wasmPath === "string" ? normalizeWorkspacePath(args.wasmPath) : undefined;
       if (sourcePath && runtime !== "python-pyodide") throw new Error("sourcePath is available only for Pyodide Python source.");
       if ((sourcePath || args.writeBack === true) && !workspaceRoot) throw new Error("sourcePath and writeBack require a workspaceRoot.");
       if (workspaceRoot && !workspace) throw new Error("Workspace-mounted execute_code has no bound Airship workspace.");
+      if (wasmPath && !workspace) throw new Error("A wasmPath command artifact has no bound Airship workspace.");
       if (sourcePath && args.code !== undefined) throw new Error("Use either Python code or sourcePath, not both.");
       const request: ExecutionRequest = {
         runtime,
         ...(typeof args.code === "string" ? { code: args.code } : {}),
         ...(typeof args.wasmBase64 === "string" ? { wasmBase64: args.wasmBase64 } : {}),
+        ...(wasmPath ? { wasmPath } : {}),
         args: stringArray(args.args, "args"),
         env: stringRecord(args.env, "env"),
-        ...(workspaceRoot ? { workspaceRoot, workspace } : {}),
+        // A wasmPath artifact needs the workspace binding even when no
+        // subtree is mounted for the command to read or write.
+        ...(workspaceRoot ? { workspaceRoot, workspace } : wasmPath ? { workspace } : {}),
         ...(sourcePath ? { sourcePath } : {}),
         writeBack: args.writeBack === true,
         timeoutMs: typeof args.timeoutMs === "number" ? args.timeoutMs : DEFAULT_TIMEOUT_MS,
@@ -256,10 +270,22 @@ export function registerExecutionTools(registry: ToolRegistry, workspace?: Works
           capabilityTier: result.provenance.capabilityTier,
           authority: result.provenance.authority,
           engine: result.provenance.engine,
+          ...(typeof result.bootMs === "number" ? { bootMs: result.bootMs } : {}),
+          ...(result.workspace?.workspaceError ? { workspaceError: result.workspace.workspaceError } : {}),
+          ...(result.workspace?.refusedPaths?.length ? { refusedPaths: [...result.workspace.refusedPaths] } : {}),
         },
-        isError: result.exitCode !== 0,
+        // A run whose generated files could not be collected, or whose writes
+        // the egress guard refused, is not a clean success even when the
+        // command itself exited zero.
+        isError: result.exitCode !== 0
+          || Boolean(result.workspace?.workspaceError)
+          || Boolean(result.workspace?.refusedPaths?.length),
       };
     },
+  });
+  registry.register({
+    definition: EXECUTE_SHELL_DEFINITION,
+    execute: (argumentsValue, context) => executeShellTool(objectArguments(argumentsValue), context, workspace),
   });
   registry.register({
     definition: {
@@ -422,17 +448,22 @@ export async function executeExecutionTool(
       validateExecuteCodeArguments(runtime, args);
       const workspaceRoot = typeof args.workspaceRoot === "string" ? normalizeWorkspacePath(args.workspaceRoot) : undefined;
       const sourcePath = typeof args.sourcePath === "string" ? normalizeWorkspacePath(args.sourcePath) : undefined;
+      const wasmPath = typeof args.wasmPath === "string" ? normalizeWorkspacePath(args.wasmPath) : undefined;
       if (sourcePath && runtime !== "python-pyodide") throw new Error("sourcePath is available only for Pyodide Python source.");
       if ((sourcePath || args.writeBack === true) && !workspaceRoot) throw new Error("sourcePath and writeBack require a workspaceRoot.");
       if (workspaceRoot && !workspace) throw new Error("Workspace-mounted execute_code has no bound Airship workspace.");
+      if (wasmPath && !workspace) throw new Error("A wasmPath command artifact has no bound Airship workspace.");
       if (sourcePath && args.code !== undefined) throw new Error("Use either Python code or sourcePath, not both.");
       const request: ExecutionRequest = {
         runtime,
         ...(typeof args.code === "string" ? { code: args.code } : {}),
         ...(typeof args.wasmBase64 === "string" ? { wasmBase64: args.wasmBase64 } : {}),
+        ...(wasmPath ? { wasmPath } : {}),
         args: stringArray(args.args, "args"),
         env: stringRecord(args.env, "env"),
-        ...(workspaceRoot ? { workspaceRoot, workspace } : {}),
+        // A wasmPath artifact needs the workspace binding even when no
+        // subtree is mounted for the command to read or write.
+        ...(workspaceRoot ? { workspaceRoot, workspace } : wasmPath ? { workspace } : {}),
         ...(sourcePath ? { sourcePath } : {}),
         writeBack: args.writeBack === true,
         timeoutMs: typeof args.timeoutMs === "number" ? args.timeoutMs : DEFAULT_TIMEOUT_MS,
@@ -455,9 +486,20 @@ export async function executeExecutionTool(
           capabilityTier: result.provenance.capabilityTier,
           authority: result.provenance.authority,
           engine: result.provenance.engine,
+          ...(typeof result.bootMs === "number" ? { bootMs: result.bootMs } : {}),
+          ...(result.workspace?.workspaceError ? { workspaceError: result.workspace.workspaceError } : {}),
+          ...(result.workspace?.refusedPaths?.length ? { refusedPaths: [...result.workspace.refusedPaths] } : {}),
         },
-        isError: result.exitCode !== 0,
+        // A run whose generated files could not be collected, or whose writes
+        // the egress guard refused, is not a clean success even when the
+        // command itself exited zero.
+        isError: result.exitCode !== 0
+          || Boolean(result.workspace?.workspaceError)
+          || Boolean(result.workspace?.refusedPaths?.length),
       };
+    }
+    case "execute_shell": {
+      return executeShellTool(args, context, workspace);
     }
     case "deactivate_execution_runtime": {
       const runtimeId = stringArgument(args.runtime, "runtime") as ExecutionRuntimeId;
@@ -518,6 +560,89 @@ export function installExecutionAdapter(adapter: ExecutionAdapter): void {
   getClientExecutionRuntime().register(adapter);
 }
 
+/**
+ * The one shell surface Airship can honestly offer on every browser.
+ *
+ * The description names the engine and its boundary in the same sentence, so a
+ * model reading the manifest cannot conclude that Bash, a subprocess, or a host
+ * filesystem is reachable. `effect` is `write` because an approved run with
+ * `writeBack` adopts workspace files through the ordinary revision-checked
+ * path; nothing here bypasses the approval gate.
+ */
+export const EXECUTE_SHELL_DEFINITION: Tool["definition"] = Object.freeze({
+  name: "execute_shell",
+  description:
+    "Run one POSIX sh script in airship-sh, Airship's own in-browser shell interpreter, over a bounded snapshot of a "
+    + "workspace directory. Real shell semantics: single/double/backslash quoting, $VAR and ${VAR:-x}/${VAR:=x}/"
+    + "${VAR:?x}/${VAR:+x}/${VAR#p}/${VAR%p}/${#VAR}, $(...) and backticks, $((...)) arithmetic, tilde and IFS field "
+    + "splitting, * ? [...] globbing against the real workspace, pipelines, ! && || ;, ( ) subshells, { } groups, "
+    + "if/for/while/until/case, functions, > >> < 2> 2>&1 >& redirection, << and <<- here-documents, and utilities "
+    + "including ls cat cp mv rm mkdir rmdir touch head tail wc grep sed sort uniq cut tr find basename dirname "
+    + "realpath xargs env date seq diff stat du. It is NOT GNU Bash and has no subprocesses: no job control or `&`, "
+    + "no signals other than trap EXIT, no arrays, no process substitution, no [[ ]], no host filesystem, no network, "
+    + "and no git/python/node commands. Unsupported syntax is a parse error and an unimplemented utility flag is an "
+    + "error, never a silent no-op. Files change only when writeBack is true and the script exits 0.",
+  effect: "write",
+  inputSchema: {
+    type: "object",
+    properties: {
+      script: { type: "string", minLength: 1, maxLength: MAX_SHELL_SCRIPT_CHARS },
+      workspaceRoot: { type: "string", minLength: 1, maxLength: 1_024 },
+      args: { type: "array", maxItems: 64, items: { type: "string", maxLength: 4_096 } },
+      env: { type: "object", maxProperties: 64, additionalProperties: { type: "string", maxLength: 4_096 } },
+      writeBack: { type: "boolean" },
+      timeoutMs: { type: "integer", minimum: 50, maximum: MAX_SHELL_TIMEOUT_MS },
+    },
+    required: ["script"],
+    additionalProperties: false,
+  },
+}) as unknown as Tool["definition"];
+
+async function executeShellTool(
+  args: Record<string, JsonValue>,
+  context: ToolContext,
+  workspace?: WorkspacePort,
+): Promise<ToolExecutionResult> {
+  const script = stringArgument(args.script, "script");
+  const workspaceRoot = typeof args.workspaceRoot === "string" ? normalizeWorkspacePath(args.workspaceRoot) : undefined;
+  if (args.writeBack === true && !workspaceRoot) throw new Error("execute_shell writeBack requires a workspaceRoot.");
+  if (workspaceRoot && !workspace) throw new Error("Workspace-mounted execute_shell has no bound Airship workspace.");
+  const timeoutMs = typeof args.timeoutMs === "number" ? args.timeoutMs : DEFAULT_SHELL_TIMEOUT_MS;
+  if (timeoutMs > MAX_SHELL_TIMEOUT_MS) throw new Error(`execute_shell timeoutMs cannot exceed ${MAX_SHELL_TIMEOUT_MS}.`);
+  const request: ExecutionRequest = {
+    runtime: "airship-sh",
+    code: script,
+    args: stringArray(args.args, "args"),
+    env: stringRecord(args.env, "env"),
+    ...(workspaceRoot ? { workspaceRoot, workspace } : {}),
+    writeBack: args.writeBack === true,
+    timeoutMs,
+    signal: context.signal,
+    onOutput: context.onOutput,
+  };
+  const capability = getClientExecutionRuntime().capabilities().find(({ id }) => id === "airship-sh");
+  assertPinnedExecutionTier(context, capability);
+  const result = await getClientExecutionRuntime().execute(request);
+  return {
+    content: JSON.stringify(result, null, 2),
+    metadata: {
+      runtime: result.runtime,
+      exitCode: result.exitCode,
+      isolation: capability?.isolation ?? "unknown",
+      persistence: capability?.persistence ?? "unknown",
+      commandInterface: capability?.commandInterface ?? "unavailable",
+      shell: capability?.shell ?? "unavailable",
+      workspaceAccess: capability?.workspaceAccess ?? "unavailable",
+      capabilityTier: result.provenance.capabilityTier,
+      authority: result.provenance.authority,
+      engine: result.provenance.engine,
+      ...(result.workspace?.refusedPaths?.length ? { refusedPaths: [...result.workspace.refusedPaths] } : {}),
+    },
+    // A refused write is not a clean success, even when the script exited zero.
+    isError: result.exitCode !== 0 || Boolean(result.workspace?.refusedPaths?.length),
+  };
+}
+
 async function activateNodeRuntime(signal: AbortSignal, timeoutMs: number): Promise<ToolExecutionResult> {
   const runtimeId: ExecutionRuntimeId = "node-webcontainer";
   const capability = getClientExecutionRuntime().capabilities().find(({ id }) => id === runtimeId);
@@ -551,6 +676,10 @@ function wasixUnavailableDetail(): string {
 export function getClientExecutionRuntime(): ClientExecutionRuntime {
   if (clientRuntime) return clientRuntime;
   clientRuntime = new ClientExecutionRuntime();
+  // airship-sh is the universal tier: a TypeScript interpreter needs no Worker,
+  // no WebAssembly, and no cross-origin isolation, so it registers before the
+  // Worker-dependent adapters and remains available where they are not.
+  clientRuntime.register(createAirshipShellAdapter());
   if (supportsDisposableWorkers()) {
     clientRuntime.register({
       capability: {
@@ -616,13 +745,25 @@ export async function installPyodideExecutionRuntime(
     `Loading the pinned Pyodide ${PYODIDE_VERSION} same-origin pack and running its interpreter probe.`,
   );
   pyodideInstall ??= (async () => {
-    const probe = await runDisposablePyodide(
-      "import sys\nprint(f'{sys.version_info.major}.{sys.version_info.minor}')",
-      [],
-      {},
-      timeoutMs,
-      signal,
-    );
+    // This tool does nothing but cold-start an interpreter, so the caller's
+    // timeoutMs has to bound the boot as well as the one-line probe that
+    // follows it. The boot timer names boot as the culprit; the deadline
+    // signal is what makes timeoutMs a ceiling on the whole activation rather
+    // than on each phase separately.
+    const deadline = activationDeadline(timeoutMs, signal, `Pyodide ${PYODIDE_VERSION} activation exceeded ${timeoutMs} ms.`);
+    let probe: PyodideWorkerResult;
+    try {
+      probe = await runDisposablePyodide(
+        "import sys\nprint(f'{sys.version_info.major}.{sys.version_info.minor}')",
+        [],
+        {},
+        timeoutMs,
+        deadline.signal,
+        { bootTimeoutMs: timeoutMs },
+      );
+    } finally {
+      deadline.release();
+    }
     if (probe.exitCode !== 0 || !/^3\.\d+/u.test(probe.stdout.trim())) {
       throw new Error(`Pyodide ${PYODIDE_VERSION} did not pass its interpreter probe.`);
     }
@@ -659,6 +800,33 @@ export async function installPyodideExecutionRuntime(
     );
     throw error;
   }
+}
+
+/**
+ * A caller signal plus a wall-clock ceiling, as one signal.
+ *
+ * AbortSignal.any is not assumed here because the worker path must keep
+ * working in the same environments the rest of this module supports; the timer
+ * and the listener are both released by `release()` so a fast activation
+ * leaves nothing armed.
+ */
+function activationDeadline(
+  timeoutMs: number,
+  signal: AbortSignal,
+  message: string,
+): Readonly<{ signal: AbortSignal; release: () => void }> {
+  const controller = new AbortController();
+  const forward = () => controller.abort(signal.reason);
+  if (signal.aborted) controller.abort(signal.reason);
+  else signal.addEventListener("abort", forward, { once: true });
+  const timer = setTimeout(() => controller.abort(new Error(message)), timeoutMs);
+  return Object.freeze({
+    signal: controller.signal,
+    release: () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", forward);
+    },
+  });
 }
 
 type WorkspaceProgramCall = Readonly<{
@@ -875,7 +1043,10 @@ type PythonWorkspaceSnapshot = Readonly<{
   root: string;
   files: readonly PythonWorkspaceFile[];
 }>;
-type PyodideWorkerResult = ExecutionResult & Readonly<{ workspaceFiles?: readonly PythonWorkspaceFile[] }>;
+type PyodideWorkerResult = ExecutionResult & Readonly<{
+  workspaceFiles?: readonly PythonWorkspaceFile[];
+  workspaceError?: string;
+}>;
 
 async function executePythonRequest(request: ExecutionRequest): Promise<ExecutionResult> {
   const snapshot = request.workspace && request.workspaceRoot
@@ -887,20 +1058,67 @@ async function executePythonRequest(request: ExecutionRequest): Promise<Executio
     request.env ?? {},
     request.timeoutMs,
     request.signal,
-    snapshot,
-    request.sourcePath,
-    request.onOutput,
+    { workspace: snapshot, sourcePath: request.sourcePath, onOutput: request.onOutput },
   );
-  if (!snapshot || !request.workspace) return result;
+  if (!snapshot || !request.workspace) {
+    const { workspaceFiles: _files, workspaceError: _error, ...unmounted } = result;
+    return unmounted;
+  }
+  if (result.workspaceError !== undefined) {
+    // The interpreter finished, but its generated files could not be
+    // collected. Nothing is adopted and no path may be reported as changed or
+    // deleted, because an incomplete collection cannot distinguish "not
+    // produced" from "not collected".
+    const { workspaceFiles: _files, workspaceError: _error, ...publicResult } = result;
+    return {
+      ...publicResult,
+      workspace: {
+        root: snapshot.root,
+        mountedFiles: snapshot.files.length,
+        changedPaths: [],
+        writtenPaths: [],
+        deletedPaths: [],
+        writeBackRequested: request.writeBack === true,
+        adopted: false,
+        writeBack: request.writeBack === true,
+        workspaceError: result.workspaceError,
+      },
+    };
+  }
 
   const original = new Map(snapshot.files.map((file) => [file.path, file]));
-  const returned = new Map((result.workspaceFiles ?? []).map((file) => [file.path, file]));
+  // Egress is guarded before any change list is computed, so a guest-created
+  // .git/.airship/node_modules path is refused even when writeBack is false
+  // and only changedPaths would have been reported back to the model.
+  const returned = new Map<string, PythonWorkspaceFile>();
+  const refused = new Map<string, string>();
+  for (const file of result.workspaceFiles ?? []) {
+    const path = normalizeWorkspacePath(file.path);
+    // A path outside the mounted root cannot come from the guest: the worker's
+    // collector only walks the root. It is a broken or tampered Worker
+    // message, so it fails the whole run rather than being refused per file.
+    if (!path.startsWith(`${snapshot.root}/`)) throw new Error(`Python returned a path outside its workspace root: ${path}`);
+    const refusal = pythonEgressRefusal(path, snapshot.root);
+    if (refusal) {
+      // Refuse the write, keep the run: a completed job keeps its exit code
+      // and streams, exactly as an over-budget collection does. The refusal is
+      // reported as a bounded field so the model is told what was dropped.
+      refused.set(path, refusal);
+      continue;
+    }
+    if (returned.has(path)) throw new Error(`Python returned duplicate normalized workspace path: ${path}`);
+    returned.set(path, { ...file, path });
+  }
   const changed = [...returned.values()]
     .filter((file) => original.get(file.path)?.content !== file.content)
     .sort((left, right) => left.path.localeCompare(right.path));
+  // A refused path is excluded from the deletion list as well. The mount
+  // filter already keeps such paths out of the snapshot, so this is defense in
+  // depth: a refusal must never be laundered into "the job deleted this file".
   const deleted = snapshot.files
-    .filter((file) => !returned.has(file.path))
+    .filter((file) => !returned.has(file.path) && !refused.has(file.path))
     .sort((left, right) => left.path.localeCompare(right.path));
+  const refusedPaths = [...refused.keys()].sort();
   const changedPaths = [...changed.map(({ path }) => path), ...deleted.map(({ path }) => path)].sort();
   const writtenPaths: string[] = [];
   const deletedPaths: string[] = [];
@@ -931,7 +1149,7 @@ async function executePythonRequest(request: ExecutionRequest): Promise<Executio
       deletedPaths.push(file.path);
     }
   }
-  const { workspaceFiles: _workspaceFiles, ...publicResult } = result;
+  const { workspaceFiles: _workspaceFiles, workspaceError: _workspaceError, ...publicResult } = result;
   return {
     ...publicResult,
     workspace: {
@@ -943,6 +1161,10 @@ async function executePythonRequest(request: ExecutionRequest): Promise<Executio
       writeBackRequested: request.writeBack === true,
       adopted: request.writeBack === true && result.exitCode === 0 && changedPaths.length > 0,
       writeBack: request.writeBack === true,
+      ...(refusedPaths.length ? {
+        refusedPaths,
+        refusalReason: [...new Set(refused.values())].join(" ").slice(0, MAX_WORKSPACE_ERROR_CHARS),
+      } : {}),
     },
   };
 }
@@ -988,16 +1210,45 @@ function workspaceRelativeSegments(path: string, root: string): string[] {
   return path.slice(root.length + 1).split("/");
 }
 
+/**
+ * Egress twin of the mount filter above. WASI and WASIX already refuse to
+ * adopt control-plane paths; Python must not be the one runtime through which
+ * a job can write the browser Git or terminal control plane.
+ *
+ * It returns a bounded reason instead of throwing: refusing one path must not
+ * destroy a completed run's exit code and streams.
+ */
+function pythonEgressRefusal(path: string, root: string): string | undefined {
+  if (isWorkspaceControlPlanePath(path)) return "Python workspace excludes control-plane paths.";
+  const excluded = workspaceRelativeSegments(path, root).find((segment) => PYTHON_WORKSPACE_EXCLUDED_SEGMENTS.has(segment));
+  return excluded ? `Python workspace excludes the ${excluded} path segment.` : undefined;
+}
+
+/**
+ * Optional bindings for one Pyodide job.
+ *
+ * `bootTimeoutMs` is separate from the job's `timeoutMs` because a fresh
+ * CPython cold start is not the caller's own statements. `execute_code` leaves
+ * it at the install-sized default; `install_execution_runtime` passes its own
+ * budget, because booting is the entire thing that tool does.
+ */
+type PyodideJobOptions = Readonly<{
+  workspace?: PythonWorkspaceSnapshot;
+  sourcePath?: string;
+  onOutput?: ExecutionRequest["onOutput"];
+  bootTimeoutMs?: number;
+}>;
+
 export async function runDisposablePyodide(
   code: string,
   args: readonly string[],
   env: Readonly<Record<string, string>>,
   timeoutMs: number,
   signal: AbortSignal,
-  workspace?: PythonWorkspaceSnapshot,
-  sourcePath?: string,
-  onOutput?: ExecutionRequest["onOutput"],
+  options: PyodideJobOptions = {},
 ): Promise<PyodideWorkerResult> {
+  const { workspace, sourcePath, onOutput } = options;
+  const bootTimeoutMs = options.bootTimeoutMs ?? DEFAULT_INSTALL_TIMEOUT_MS;
   if (!supportsDisposableWorkers() || typeof WebAssembly === "undefined") {
     throw new Error("Disposable Pyodide workers are unavailable in this environment.");
   }
@@ -1028,7 +1279,15 @@ export async function runDisposablePyodide(
       if (error) reject(error);
       else resolve(value!);
     };
-    const timer = setTimeout(() => finish(new Error(`Python execution exceeded ${timeoutMs} ms.`)), timeoutMs);
+    // Every job boots a fresh CPython interpreter. That cold start is bounded
+    // by its own budget so the caller's timeoutMs bounds the caller's own
+    // statements instead of the pack's boot.
+    const bootStarted = Date.now();
+    let bootMs: number | undefined;
+    let timer = setTimeout(
+      () => finish(new Error(`Pyodide boot exceeded ${bootTimeoutMs} ms.`)),
+      bootTimeoutMs,
+    );
     const onAbort = () => finish(signal.reason ?? new DOMException("Aborted", "AbortError"));
     signal.addEventListener("abort", onAbort, { once: true });
     worker.onerror = (event) => finish(new Error(event.message || "Disposable Pyodide worker failed."));
@@ -1043,11 +1302,24 @@ export async function runDisposablePyodide(
         if (typeof message.text === "string") emitExecutionOutput(onOutput, { stream, text: message.text.slice(0, 65_536) });
         return;
       }
+      if (message.type === "ready") {
+        if (bootMs !== undefined) return;
+        bootMs = Date.now() - bootStarted;
+        clearTimeout(timer);
+        timer = setTimeout(() => finish(new Error(`Python execution exceeded ${timeoutMs} ms.`)), timeoutMs);
+        return;
+      }
       if (message.ok !== true) {
         finish(new Error(typeof message.error === "string" ? message.error : "Disposable Pyodide initialization failed."));
         return;
       }
-      const workspaceFiles = Array.isArray(message.workspaceFiles)
+      // A completed job keeps its own exit code and streams even when its
+      // generated files exceeded the mount budget; the collection failure is
+      // reported as a bounded field instead of erasing the run.
+      const workspaceError = typeof message.workspaceError === "string"
+        ? message.workspaceError.slice(0, MAX_WORKSPACE_ERROR_CHARS)
+        : undefined;
+      const workspaceFiles = workspaceError === undefined && Array.isArray(message.workspaceFiles)
         ? message.workspaceFiles
           .map(parsePythonWorkspaceFile)
           .filter((file): file is PythonWorkspaceFile => file !== undefined)
@@ -1059,6 +1331,7 @@ export async function runDisposablePyodide(
         stdout: typeof message.stdout === "string" ? message.stdout.slice(0, MAX_OUTPUT_CHARS) : "",
         stderr: typeof message.stderr === "string" ? message.stderr.slice(0, MAX_OUTPUT_CHARS) : "",
         value: parseWorkerJsonValue(message.valueJson),
+        ...(bootMs !== undefined ? { bootMs } : {}),
         provenance: {
           capabilityTier: "web-enhanced",
           authority: "browser",
@@ -1066,6 +1339,7 @@ export async function runDisposablePyodide(
           artifactKind: "source",
         },
         ...(workspaceFiles ? { workspaceFiles } : {}),
+        ...(workspaceError !== undefined ? { workspaceError } : {}),
       });
     };
     if (signal.aborted) onAbort();
@@ -1275,6 +1549,8 @@ self.onmessage = async ({ data }) => {
     __post({ ok:false, error:"Pyodide initialization failed: " + String(error && error.message || error) });
     return;
   }
+  // The interpreter exists; the host now starts charging the job's own budget.
+  __post({ type:"ready" });
   let stdout = "", stderr = "";
   pyodide.setStdout({ batched: value => { const next=boundedAppend(stdout,value), accepted=next.slice(stdout.length); stdout=next; if(accepted) __post({ type:"output", stream:"stdout", text:accepted }); } });
   pyodide.setStderr({ batched: value => { const next=boundedAppend(stderr,value), accepted=next.slice(stderr.length); stderr=next; if(accepted) __post({ type:"output", stream:"stderr", text:accepted }); } });
@@ -1304,11 +1580,16 @@ self.onmessage = async ({ data }) => {
     stderr = next;
     if (accepted) __post({ type:"output", stream:"stderr", text:accepted });
   }
+  let workspaceFiles, workspaceError;
   try {
-    __post({ ok:true, exitCode, stdout, stderr, valueJson:value, workspaceFiles:collectWorkspace(pyodide, data.workspaceRoot) });
+    workspaceFiles = collectWorkspace(pyodide, data.workspaceRoot);
   } catch (error) {
-    __post({ ok:false, error:"Python workspace collection failed: " + String(error && error.message || error) });
+    // The run itself finished. Report the collection failure as a field and
+    // omit workspaceFiles entirely: an empty list would be read as "the job
+    // deleted every mounted file".
+    workspaceError = "Python workspace collection failed: " + String(error && error.message || error);
   }
+  __post({ ok:true, exitCode, stdout, stderr, valueJson:value, ...(workspaceError ? { workspaceError } : { workspaceFiles }) });
 };`;
 }
 
@@ -1355,18 +1636,21 @@ function activationResultForSession(result: ToolExecutionResult, context: ToolCo
 function validateExecuteCodeArguments(runtime: ExecutionRuntimeId, args: Record<string, JsonValue>): void {
   const hasCode = typeof args.code === "string";
   const hasArtifact = typeof args.wasmBase64 === "string";
+  const hasArtifactPath = typeof args.wasmPath === "string";
   const hasSourcePath = typeof args.sourcePath === "string";
   const hasWorkspace = typeof args.workspaceRoot === "string" || hasSourcePath || args.writeBack !== undefined;
 
   if (runtime === "javascript-worker") {
     if (!hasCode) throw new Error("JavaScript Worker execution requires code.");
-    if (hasArtifact || hasSourcePath || hasWorkspace || args.args !== undefined || args.env !== undefined) {
+    if (hasArtifact || hasArtifactPath || hasSourcePath || hasWorkspace || args.args !== undefined || args.env !== undefined) {
       throw new Error("JavaScript Worker accepts only code and timeoutMs; it has no argv, environment, workspace, or WASI artifact binding.");
     }
     return;
   }
   if (runtime === "wasi-preview1") {
-    if (!hasArtifact) throw new Error("WASI Preview 1 execution requires a precompiled wasmBase64 command artifact.");
+    if (hasArtifact === hasArtifactPath) {
+      throw new Error("WASI Preview 1 execution requires exactly one precompiled command artifact: wasmBase64 or a workspace wasmPath.");
+    }
     if (hasCode || hasSourcePath) {
       throw new Error(
         "WASI Preview 1 accepts a precompiled command artifact, not source code, Bash, rustc, or Cargo; its bounded workspace mount is optional.",
@@ -1376,7 +1660,7 @@ function validateExecuteCodeArguments(runtime: ExecutionRuntimeId, args: Record<
     return;
   }
   if (runtime === "python-pyodide") {
-    if (hasArtifact) throw new Error("Pyodide executes Python source, not a WASI artifact.");
+    if (hasArtifact || hasArtifactPath) throw new Error("Pyodide executes Python source, not a WASI artifact.");
     if (hasCode === hasSourcePath) throw new Error("Pyodide requires exactly one of code or sourcePath.");
     if ((hasSourcePath || args.writeBack === true) && typeof args.workspaceRoot !== "string") {
       throw new Error("Python sourcePath and writeBack require a workspaceRoot.");

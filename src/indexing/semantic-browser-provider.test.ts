@@ -8,7 +8,7 @@ import {
 import { AIRSHIP_SEMANTIC_MODEL, LazySemanticWorkerEmbeddingProvider, type SemanticWorkerRequest, type SemanticWorkerResponse } from "./semantic-worker-provider";
 import { ClientContextRuntime } from "../retrieval/client-context-runtime";
 import { MemoryWorkspace } from "../workspace/memory";
-import type { BrowserRuntimeCapabilityReport } from "../capabilities/browser-runtime";
+import { getBrowserCapabilityRegistry, type BrowserRuntimeCapabilityReport } from "../capabilities/browser-runtime";
 
 describe("semantic embedding selection", () => {
   beforeEach(() => {
@@ -66,11 +66,48 @@ describe("semantic embedding selection", () => {
     expect(wasmWorker.requests[0]).toMatchObject({ type: "initialize", preferredBackend: "wasm" });
   });
 
+  it("awaits the capability probe instead of sampling a cold snapshot at first embed", async () => {
+    const registry = getBrowserCapabilityRegistry();
+    const snapshot = vi.spyOn(registry, "snapshot").mockReturnValue(undefined);
+    const refresh = vi.spyOn(registry, "refresh").mockResolvedValue(
+      { scheduling: scheduling("webgpu") } as BrowserRuntimeCapabilityReport,
+    );
+    try {
+      const worker = new FakeSemanticWorker();
+      const provider = createBrowserSemanticProvider({ workerFactory: () => worker });
+      await provider.embed(["cold registry at first embed"]);
+      // Boot order must not decide the backend: the snapshot is still cold here,
+      // and reading it would have latched the WASM fallback for the page.
+      expect(snapshot).not.toHaveBeenCalled();
+      expect(refresh).toHaveBeenCalled();
+      expect(worker.requests[0]).toMatchObject({ type: "initialize", preferredBackend: "webgpu" });
+    } finally {
+      snapshot.mockRestore();
+      refresh.mockRestore();
+    }
+  });
+
+  it("carries the power preference and WASM thread count of the live policy into the worker", async () => {
+    const constrained = new FakeSemanticWorker();
+    await createBrowserSemanticProvider({
+      workerFactory: () => constrained,
+      capabilities: async () => ({ scheduling: scheduling("wasm", { powerPreference: "low-power", preferredWasmTier: "baseline" }) }),
+    }).embed(["unplugged laptop"]);
+    expect(constrained.requests[0]).toMatchObject({ powerPreference: "low-power", wasmThreads: 1 });
+
+    const threaded = new FakeSemanticWorker();
+    await createBrowserSemanticProvider({
+      workerFactory: () => threaded,
+      capabilities: async () => ({ scheduling: scheduling("webgpu", { powerPreference: "high-performance", preferredWasmTier: "simd-threads", maxWorkerConcurrency: 6 }) }),
+    }).embed(["desktop"]);
+    expect(threaded.requests[0]).toMatchObject({ powerPreference: "high-performance", wasmThreads: 6 });
+  });
+
   it("drops the bootstrap materialization and rebuilds every unchanged revision on semantic activation", async () => {
     const workspace = new MemoryWorkspace();
     await workspace.write("/workspace/engine.md", "compressor turbine thrust", { expectedRevision: null });
     const provider = new SwitchableEmbeddingProvider(384, "bootstrap", () =>
-      new LazySemanticWorkerEmbeddingProvider(() => new FakeSemanticWorker(), () => false),
+      new LazySemanticWorkerEmbeddingProvider(() => new FakeSemanticWorker(), () => ({ backend: "wasm" })),
     );
     const runtime = new ClientContextRuntime(workspace, { embeddings: provider });
     const bootstrap = await runtime.refreshNow();
@@ -100,6 +137,7 @@ class FakeSemanticWorker {
 
 function scheduling(
   preferredSemanticBackend: "webgpu" | "wasm",
+  overrides: Partial<BrowserRuntimeCapabilityReport["scheduling"]> = {},
 ): BrowserRuntimeCapabilityReport["scheduling"] {
   return Object.freeze({
     class: "balanced",
@@ -113,5 +151,6 @@ function scheduling(
     preferredWorkspaceStorage: "opfs",
     powerPreference: "default",
     reasons: Object.freeze(["test policy"]),
+    ...overrides,
   });
 }

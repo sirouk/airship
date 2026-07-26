@@ -48,9 +48,26 @@ click/tap must obtain another token. Disconnect drops the token immediately.
 
 Google account authorization does **not** derive or recover the Airship E2EE
 root key. Google owns ciphertext, not decryption authority. A user must retain
-the one-time recovery material for another browser/device. A future same-origin
-IndexedDB cache may store a non-extractable `CryptoKey` for same-browser reloads,
-but it must not be described as hardware-bound or cross-device recovery.
+the one-time recovery material for another browser/device.
+
+`src/storage/workspace-key-handle-store.ts` implements the same-origin IndexedDB
+cache for that reload case: a structured-cloned non-extractable `CryptoKey`
+keyed by `google-drive:<googleSubject>` alongside the non-secret folder
+descriptor and account label, in its own `airship-workspace-key-handles-v1`
+database. `list()` lets a reconnect affordance render before any click, and
+`adoptCachedWorkspaceKey` gates adoption on a **live** rediscovery of the
+hierarchy whose ids must equal the cached ones — the stored descriptor is a
+lookup hint, never the authority. Raw key bytes are never a fallback. Its
+read-back validator runs in `workspace-key-handle-store.test.ts` against a
+substitute IndexedDB, because Node has none; no browser has yet exercised this
+database.
+
+**Not yet reachable from the product.** The Drive setup screen still requires a
+generated or pasted `airship-wrk-v1…` value on every reload; nothing calls
+`rememberWorkspaceKey` or `adoptCachedWorkspaceKey` yet. Until that wiring lands
+in `src/ui/google-drive-setup.tsx`, this is browser-profile unlock that exists in
+the storage layer only. It must never be described as hardware-bound or as
+cross-device recovery: the recovery value remains the only cross-device route.
 
 Creation and recovery are deliberately different operations. A newly generated
 key may call `connectOrCreate`; an imported key calls `connectExisting` and is
@@ -126,7 +143,24 @@ these gates pass:
 3. **Garbage collection:** a bounded, resumable client job identifies only
    unreferenced opaque segments after an index snapshot, observes a safety age,
    rechecks a fresh index, and moves candidates to trash with an auditable
-   receipt. Until then, losing uploads are retained ciphertext residue.
+   receipt. Until then, losing uploads are retained ciphertext residue, and so
+   is every superseded file revision — `EncryptedObjectWorkspace` mints a new
+   segment per edit, which is by far the larger volume.
+
+   **Partially landed.** `GoogleDriveObjectStore` now implements the optional
+   `ReclaimableObjectStore.trash(keys)` capability, and `VaultCoordinator`
+   sweeps a successful conformance run's own probe objects with it. That is
+   *index-addressed* reclamation with an auditable receipt: the index entry is
+   removed by CAS first, the `trashed: true` PATCH follows, and a key is
+   reported reclaimed only when Drive itself echoes `trashed: true`. Because the
+   entry is dropped first, a crash between the two steps can only leak an
+   untracked file — it can never break a live reference.
+
+   Still absent, and required to close this gate: enumerating the segments
+   folder to find untracked lost-race orphans that no index entry names, and an
+   aged candidate queue for superseded revisions. Superseded revisions are
+   deliberately **not** trashed inline after a manifest CAS: a reader holding an
+   older manifest generation would hard-fail on the missing object.
 4. **Sharded index:** before the single encrypted root approaches its bounded
    size or practical Drive latency limit, route key prefixes into independently
    encrypted index shards under one CAS-protected directory root. Load and list
@@ -171,6 +205,37 @@ gates 1 or 2.
 6. Run object-store conformance and encrypted composition probes before adopting
    the Drive runtime, then complete every release gate above before a production
    synchronization claim.
+
+### An unconfigured build cannot offer Drive
+
+`VITE_GOOGLE_CLIENT_ID` is read at build time. Vite inlines it, so an
+unconfigured build has no connect branch left in the bundle and **no runtime
+toggle can restore Drive on that artifact**. Because of that, the default vault
+provider must move with the client ID rather than assume Drive:
+
+- `isDeployableGoogleOAuthClientId` (`src/storage/google-drive-auth.ts`) is the
+  single source of the accepted shape, and `GoogleIdentityServicesAuthorizer`
+  enforces it at construction — refusing with `Google OAuth client ID is
+  invalid.` and normalizing the accepted value to its trimmed form before it is
+  ever sent as `client_id`. **Nothing consults that predicate when a default
+  provider is selected**: the workflow below tests only for a non-empty
+  variable, and `resolveDefaultVaultBackend` in `src/ui/platform-shell.tsx` does
+  not consult it at all. A maintainer who sets the repository variable to a
+  non-empty but malformed value therefore still ships `google-drive` as the
+  default, and the Drive connect surface fails at authorizer construction.
+  Wiring the predicate into default selection is **not yet implemented**.
+- `.github/workflows/pages.yml` forwards `vars.VITE_GOOGLE_CLIENT_ID` and sets
+  `VITE_AIRSHIP_DEFAULT_VAULT_PROVIDER` to `google-drive` only when that
+  repository variable is non-empty, and to `local-device` otherwise. **This
+  repository ships unconfigured unless a maintainer sets that variable**, so the
+  published GitHub Pages artifact currently defaults to the Local Device vault,
+  which needs no configuration and is fully offline.
+- A browser that already visited a previous build has `vaultBackend` persisted
+  in `airship.display-preferences.v1`. Downgrading that persisted value on an
+  unconfigured build is a UI-layer concern (`loadPreferenceOverrides` in
+  `src/ui/platform-shell.tsx`) and is **not yet implemented**; until it is, a
+  returning visitor to an unconfigured deployment still lands on Drive and sees
+  the operator notice.
 
 The shipped application also uses `Cross-Origin-Opener-Policy: same-origin` to
 unlock cross-origin-isolated WASM paths. Google's GIS setup guidance says popup

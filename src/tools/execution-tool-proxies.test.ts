@@ -11,6 +11,7 @@ describe("lazy execution tool proxies", () => {
       "execute_code",
       "execute_javascript",
       "execute_node_project",
+      "execute_shell",
       "execute_workspace_program",
       "inspect_execution_runtimes",
       "install_execution_runtime",
@@ -56,5 +57,21 @@ describe("lazy execution tool proxies", () => {
     };
     expect(installSchema.properties.runtime.enum).toEqual(["python-pyodide", "node-webcontainer"]);
     expect(deactivateSchema.properties.runtime.enum).toEqual(["node-webcontainer"]);
+  });
+
+  it("tells the model that execute_code's timeoutMs excludes the interpreter cold start", () => {
+    const registry = new ToolRegistry();
+    registerLazyExecutionTools(registry);
+    const timeouts = (name: string) => ((registry.get(name)!.definition.inputSchema as {
+      properties: { timeoutMs: { maximum: number; description?: string } };
+    }).properties.timeoutMs);
+
+    // A 10 s job bound on a runtime whose boot is separately bounded at 30 s
+    // is a ~40 s wall clock. The schema the model reads has to say so.
+    expect(timeouts("execute_code").maximum).toBe(10_000);
+    expect(timeouts("execute_code").description).toMatch(/cold start is bounded separately/u);
+    expect(timeouts("execute_code").description).toMatch(/bootMs/u);
+    // install_execution_runtime does nothing but boot, so its budget is total.
+    expect(timeouts("install_execution_runtime").description).toMatch(/whole activation, cold start included/u);
   });
 });

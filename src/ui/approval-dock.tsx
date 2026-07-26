@@ -2,10 +2,12 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import type { ApprovalBroker, ApprovalBrokerSnapshot, PendingApproval } from "../approvals/broker";
 import { Icon } from "./icons";
 import { remainingApprovalTime, writeApprovalFacts } from "./approval-presentation";
+import { trapFocus } from "./focus-trap";
 
 export function ApprovalDock({ broker }: { broker: ApprovalBroker }) {
   const [snapshot, setSnapshot] = useState<ApprovalBrokerSnapshot>(() => broker.snapshot());
   const panel = useRef<HTMLDivElement>(null);
+  const restore = useRef<HTMLElement>();
   const current = snapshot.pending[0];
   const [clock, setClock] = useState(() => Date.now());
 
@@ -13,7 +15,12 @@ export function ApprovalDock({ broker }: { broker: ApprovalBroker }) {
 
   useEffect(() => {
     if (!current) return;
+    // The request arrives unprompted mid-turn, so the control the user was on
+    // has to be given back when the decision resolves; without this the shell
+    // inerting the background would strand focus on <body>.
+    restore.current = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
     panel.current?.querySelector<HTMLButtonElement>(".approval-deny")?.focus();
+    return () => restore.current?.focus({ preventScroll: true });
   }, [current?.id]);
 
   useEffect(() => {
@@ -34,6 +41,8 @@ export function ApprovalDock({ broker }: { broker: ApprovalBroker }) {
         if (event.key === "Escape") {
           event.preventDefault();
           broker.decide(current.id, "deny");
+        } else if (event.key === "Tab") {
+          trapFocus(event, panel.current);
         }
       }}
     >
