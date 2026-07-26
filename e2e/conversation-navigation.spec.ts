@@ -21,6 +21,45 @@ test("every conversation has a stable addressed URL and new conversations do not
   }
 });
 
+test("conversation branches preserve their source and navigate back through lineage", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "desktop immutable branch contract");
+  await page.goto("/#chat");
+  await expect(page).toHaveURL(/#chat\/[^/?#]+$/);
+  const sourceUrl = page.url();
+  const message = page.locator("[data-transcript-card]").first();
+  await message.hover();
+  const fork = message.getByRole("button", { name: "Fork conversation" });
+  await expect(fork).toBeEnabled();
+  await fork.click();
+  await expect.poll(() => page.url()).not.toBe(sourceUrl);
+  await expect(page.getByRole("combobox", { name: "Message Airship" })).not.toHaveValue("");
+  const lineage = page.getByRole("button", { name: /Branch from #/u });
+  await expect(lineage).toBeVisible();
+  await lineage.click();
+  await expect(page).toHaveURL(sourceUrl);
+});
+
+test("each addressed conversation restores its own unsent draft", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "desktop conversation draft contract");
+  await page.goto("/#chat");
+  await expect(page).toHaveURL(/#chat\/[^/?#]+$/);
+  const sourceUrl = page.url();
+  const composer = page.getByRole("combobox", { name: "Message Airship" });
+  await composer.fill("An unsent source-conversation draft");
+  await page.waitForTimeout(220);
+  await page.getByRole("button", { name: "New conversation" }).click();
+  await expect.poll(() => page.url()).not.toBe(sourceUrl);
+  await expect(composer).toHaveValue("");
+
+  const source = page
+    .getByRole("navigation", { name: "Primary" })
+    .locator("#airship-recent-conversations .recent-conversation:not(.active)")
+    .first();
+  await source.click();
+  await expect(page).toHaveURL(sourceUrl);
+  await expect(composer).toHaveValue("An unsent source-conversation draft");
+});
+
 test("desktop treats Chat as the conversation disclosure and preserves the full ledger", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium", "desktop conversation information architecture");
   await page.goto("/#chat");

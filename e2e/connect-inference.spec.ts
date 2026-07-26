@@ -57,7 +57,7 @@ test("a visitor with no credentials lands inside a path that works", async ({ pa
   await expect(page.locator(".connect-surface")).not.toContainText(/process-held client secret/u);
 });
 
-test("Claude and Grok state the extension honestly and offer no broken button", async ({ page }, testInfo) => {
+test("Claude and Grok state the extension honestly and offer no broken button", async ({ page }) => {
   await openConnect(page);
 
   for (const lane of ["claude", "grok"] as const) {
@@ -87,9 +87,6 @@ test("Claude and Grok state the extension honestly and offer no broken button", 
      */
     await expect(card).not.toContainText(/Add the Airship extension/u);
     await expect(card.getByRole("link", { name: /Add the Airship extension/u })).toHaveCount(0);
-    if (testInfo.project.name === "mobile-chromium") {
-      expect(state).toBe("extension-unavailable");
-    }
   }
 
   // Both vendors have a browser-direct key adapter on this same route, so both

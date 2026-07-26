@@ -191,6 +191,8 @@ import { composerAttachments, userMessageParts, type ComposerAttachment } from "
 import { COMPOSER_AUTOFOCUS_MAX_WIDTH_QUERY, shouldClaimComposerFocus } from "./chat/composer-focus";
 import { originatingPromptForRow } from "./chat/retry-prompt";
 import { recoverPartialTurn } from "./chat/turn-recovery";
+import { readThreadDraft, writeThreadDraft } from "./chat/thread-draft";
+import { appendThreadQueueItem, removeThreadQueueItem } from "./chat/thread-queue";
 import {
   refreshCompletedTurnWorkspace,
   releaseComposerAndReloadSession,
@@ -240,6 +242,12 @@ type UiMessage = {
     providerContext: "included" | "excluded";
   }>;
 };
+
+type QueuedComposerItem = Readonly<{
+  id: string;
+  prompt: string;
+  attachments: readonly ComposerAttachment[];
+}>;
 
 /** The conversation rail is intentionally a light index, rather than a
  * miniature session inspector.  It carries just enough local metadata to let
@@ -610,6 +618,7 @@ export function App() {
   const [attachments, setAttachments] = useState<readonly ComposerAttachment[]>([]);
   const [composerNotice, setComposerNotice] = useState<string>();
   const [composerFocused, setComposerFocused] = useState(false);
+  const [messageQueue, setMessageQueue] = useState<readonly QueuedComposerItem[]>([]);
   const [slashRegistry, setSlashRegistry] = useState<SlashCommandRegistry>();
   const [slashSelection, setSlashSelection] = useState(0);
   const [slashMenuDismissedFor, setSlashMenuDismissedFor] = useState<string>();
@@ -728,6 +737,9 @@ export function App() {
   const localCommandAdmission = useRef(false);
   const activePrompt = useRef<string>();
   const activeSessionIdentity = useRef<string>();
+  const queuedMessagesBySession = useRef(new Map<string, readonly QueuedComposerItem[]>());
+  const queuedDispatch = useRef(false);
+  const skipDraftRestoreFor = useRef<string>();
   const chatRouteOpening = useRef<string>();
   const textarea = useRef<HTMLTextAreaElement>(null);
   const transcriptElement = useRef<HTMLDivElement>(null);
@@ -1037,6 +1049,47 @@ export function App() {
     setTranscriptDetached(false);
   }, [sessionId]);
   useEffect(() => {
+    if (!sessionId) return;
+    if (skipDraftRestoreFor.current === sessionId) {
+      skipDraftRestoreFor.current = undefined;
+      return;
+    }
+    try {
+      setInput(readThreadDraft(sessionId, sessionStorage));
+    } catch {
+      setInput("");
+    }
+    setAttachments([]);
+  }, [sessionId]);
+  useEffect(() => {
+    if (!sessionId) return;
+    const timer = window.setTimeout(() => {
+      try {
+        writeThreadDraft(sessionId, input, sessionStorage);
+      } catch {
+        // Draft persistence is optional; the live composer remains authoritative.
+      }
+    }, 160);
+    return () => window.clearTimeout(timer);
+  }, [input, sessionId]);
+  useEffect(() => {
+    if (
+      !sessionId
+      || busy
+      || queuedDispatch.current
+      || messageQueue.length === 0
+      || inferenceRouteChanging.current
+      || sessionNavigationChanging.current
+    ) return;
+    const next = messageQueue[0]!;
+    queuedDispatch.current = true;
+    void sendMessage(next.prompt, next.attachments, {
+      onAdmitted: () => removeQueuedMessage(sessionId, next.id),
+    }).finally(() => {
+      queuedDispatch.current = false;
+    });
+  }, [busy, messageQueue, sessionId]);
+  useEffect(() => {
     if (view === "chat") transcriptEntryAlignment.current = true;
   }, [view]);
   useEffect(() => {
@@ -1122,6 +1175,7 @@ export function App() {
     activeSessionIdentity.current = session.id;
     setSessionId(session.id);
     setActiveSessionRecord(session);
+    setMessageQueue(queuedMessagesBySession.current.get(session.id) ?? []);
   }
 
   useEffect(() => () => {
@@ -2189,21 +2243,91 @@ export function App() {
   }
 
   async function branchFromMessage(message: UiMessage): Promise<void> {
-    if (!sessionLibrary || !activeSessionRecord) return;
-    const result = await sessionLibrary.fork(activeSessionRecord.id, {
-      title: `${activeSessionRecord.title} · fork`.slice(0, 240),
-      expectedSourceHead: { sequence: activeSessionRecord.headSequence, digest: activeSessionRecord.headDigest },
-      ...(message.sourcePoint ? { sourcePoint: message.sourcePoint } : {}),
+    if (!sessionLibrary || !activeSessionRecord) {
+      setComposerNotice("Conversation branching will be available when the local session journal is ready.");
+      return;
+    }
+    try {
+      const result = await sessionLibrary.fork(activeSessionRecord.id, {
+        title: `${activeSessionRecord.title} · fork`.slice(0, 240),
+        expectedSourceHead: { sequence: activeSessionRecord.headSequence, digest: activeSessionRecord.headDigest },
+        ...(message.sourcePoint ? { sourcePoint: message.sourcePoint } : {}),
+      });
+      // This fork intentionally restores the selected message into the new
+      // composer. Do not let the ordinary empty-draft hydration overwrite it
+      // after Preact commits the new addressed session identity.
+      skipDraftRestoreFor.current = result.session.id;
+      await activateForkedSession(result);
+      setInput(message.originatingPrompt ?? message.content);
+      setAttachments(message.originatingAttachments ?? []);
+      setComposerNotice(undefined);
+      setRuntimeStatus("Pinned fork created; review the restored prompt before sending");
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "The source conversation changed before its branch could be committed.";
+      setComposerNotice(`Conversation branch was not created: ${detail}`);
+      setRuntimeStatus("Conversation branch could not be created");
+    }
+  }
+
+  function publishMessageQueue(
+    targetSessionId: string,
+    update: (current: readonly QueuedComposerItem[]) => readonly QueuedComposerItem[],
+  ): void {
+    const next = Object.freeze([...update(queuedMessagesBySession.current.get(targetSessionId) ?? [])]);
+    if (next.length) queuedMessagesBySession.current.set(targetSessionId, next);
+    else queuedMessagesBySession.current.delete(targetSessionId);
+    if (activeSessionIdentity.current === targetSessionId) setMessageQueue(next);
+  }
+
+  function removeQueuedMessage(targetSessionId: string, queuedMessageId: string): void {
+    publishMessageQueue(targetSessionId, (current) => removeThreadQueueItem(current, queuedMessageId));
+  }
+
+  function discardQueuedMessage(targetSessionId: string, item: QueuedComposerItem): void {
+    for (const attachment of item.attachments) {
+      if (!attachment.previewUrl || !attachmentPreviewUrls.current.has(attachment.previewUrl)) continue;
+      URL.revokeObjectURL(attachment.previewUrl);
+      attachmentPreviewUrls.current.delete(attachment.previewUrl);
+    }
+    removeQueuedMessage(targetSessionId, item.id);
+  }
+
+  function enqueueCurrentComposer(): void {
+    const prompt = input.trim();
+    if (!prompt || !sessionId) return;
+    const item: QueuedComposerItem = Object.freeze({
+      id: randomUuid(),
+      prompt,
+      attachments: Object.freeze([...attachments]),
     });
-    await activateForkedSession(result);
-    setInput(message.originatingPrompt ?? message.content);
-    setAttachments(message.originatingAttachments ?? []);
-    setRuntimeStatus("Pinned fork created; review the restored prompt before sending");
+    publishMessageQueue(sessionId, (current) => appendThreadQueueItem(current, item));
+    setInput("");
+    setAttachments([]);
+    setComposerNotice(`Queued for this conversation · ${String(messageQueue.length + 1)} waiting`);
+  }
+
+  function editQueuedMessage(item: QueuedComposerItem): void {
+    if (!sessionId) return;
+    removeQueuedMessage(sessionId, item.id);
+    setInput(item.prompt);
+    setAttachments(item.attachments);
+    requestAnimationFrame(() => textarea.current?.focus());
+  }
+
+  function sendQueuedMessageNow(item: QueuedComposerItem): void {
+    if (!sessionId || busy) return;
+    queuedDispatch.current = true;
+    void sendMessage(item.prompt, item.attachments, {
+      onAdmitted: () => removeQueuedMessage(sessionId, item.id),
+    }).finally(() => {
+      queuedDispatch.current = false;
+    });
   }
 
   async function sendMessage(
     retryPrompt?: string,
     retryAttachments: readonly ComposerAttachment[] = [],
+    queue?: Readonly<{ onAdmitted(): void }>,
   ) {
     let content = (retryPrompt ?? input).trim();
     if (
@@ -2359,8 +2483,11 @@ export function App() {
         return;
       }
     }
-    setInput("");
-    setAttachments([]);
+    queue?.onAdmitted();
+    if (retryPrompt === undefined) {
+      setInput("");
+      setAttachments([]);
+    }
     setComposerNotice(undefined);
     setBusy(true);
     setRuntimeStatus("Persisting turn intent");
@@ -4651,6 +4778,17 @@ export function App() {
                     <DurabilityIndicator state={sessionDurability.state} detail={sessionDurability.detail} />
                   </div>
                   <div class="session-meta-record">
+                    {activeSessionRecord?.manifest.lineage?.kind === "fork" ? (
+                      <button
+                        class="session-branch-link"
+                        type="button"
+                        title={`Open source conversation ${activeSessionRecord.manifest.lineage.sourceSessionId}`}
+                        onClick={() => void openPaletteSession(activeSessionRecord.manifest.lineage!.sourceSessionId)}
+                      >
+                        <Icon name="branch" size={13} />
+                        Branch from #{activeSessionRecord.manifest.lineage.sourceSessionId.slice(0, 8)}
+                      </button>
+                    ) : null}
                     {/* P11: plain language leads. "page-journal event" is the
                         internal record name and stays available on hover. */}
                     <span title={`${eventCount} page-journal event${eventCount === 1 ? "" : "s"}`}>{eventCount} recorded step{eventCount === 1 ? "" : "s"}</span>
@@ -4711,6 +4849,7 @@ export function App() {
                         textarea.current?.focus();
                       }}
                       onBranch={() => void branchFromMessage(entry.item)}
+                      branchDisabled={!sessionLibrary || !activeSessionRecord}
                       streamStore={transcriptStreams}
                     />
                   </div>
@@ -4784,6 +4923,25 @@ export function App() {
                       ))}
                     </div>
                   ) : null}
+                  {messageQueue.length ? (
+                    <div class="composer-queue" aria-label="Queued messages" aria-live="polite">
+                      <header>
+                        <strong>Up next</strong>
+                        <span>{messageQueue.length} queued</span>
+                      </header>
+                      {messageQueue.map((item, index) => (
+                        <div class="composer-queue__item" key={item.id}>
+                          <span>{item.prompt}</span>
+                          {item.attachments.length ? <small>{item.attachments.length} attachment{item.attachments.length === 1 ? "" : "s"}</small> : null}
+                          <div>
+                            {index === 0 ? <button type="button" disabled={busy} onClick={() => sendQueuedMessageNow(item)}>Send now</button> : null}
+                            <button type="button" onClick={() => editQueuedMessage(item)}>Edit</button>
+                            <button type="button" aria-label={`Remove queued message ${index + 1}`} onClick={() => sessionId && discardQueuedMessage(sessionId, item)}>×</button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
                   {attachments.length ? <div class="composer-attachments" aria-label="Pending attachments">
                     {attachments.map((attachment) => <span key={attachment.id}>{attachment.previewUrl ? <img src={attachment.previewUrl} alt="" /> : <Icon name="file" size={14} />}<span>{attachment.name}</span><small>{imageInputCapability === "supported" ? "encrypted vision ready" : "vision model required"}</small><button type="button" aria-label={`Remove ${attachment.name}`} onClick={() => { if (attachment.previewUrl) { URL.revokeObjectURL(attachment.previewUrl); attachmentPreviewUrls.current.delete(attachment.previewUrl); } setAttachments((current) => current.filter((item) => item.id !== attachment.id)); }}>×</button></span>)}
                   </div> : null}
@@ -4841,8 +4999,9 @@ export function App() {
                         && (busy || modelSwitching || vaultProviderSwitching || localDeviceBusy)
                       ) {
                         event.preventDefault();
-                        setComposerNotice(busy
-                          ? "Agent is busy. Stop the current turn or wait before sending another prompt."
+                        if (busy && input.trim()) enqueueCurrentComposer();
+                        else setComposerNotice(busy
+                          ? "Type a follow-up and press Enter to queue it, or stop the current turn."
                           : "Wait for the active model or storage transition. Your prompt remains in the composer.");
                         return;
                       }
@@ -4874,7 +5033,10 @@ export function App() {
                       />
                     </div>
                     {busy ? (
-                      <button class="send-button stop" type="button" onClick={stopTurn} aria-label="Stop turn"><Icon name="stop" /></button>
+                      <div class="composer-primary-actions">
+                        {input.trim() ? <button class="queue-button" type="button" onClick={enqueueCurrentComposer}>Queue</button> : null}
+                        <button class="send-button stop" type="button" onClick={stopTurn} aria-label="Stop turn"><Icon name="stop" /></button>
+                      </div>
                     ) : (
                       <button
                         class="send-button"
@@ -6143,6 +6305,7 @@ function MessageCard({
   onRetry,
   onEdit,
   onBranch,
+  branchDisabled,
   streamStore,
 }: {
   message: UiMessage;
@@ -6154,6 +6317,7 @@ function MessageCard({
   onRetry: () => void;
   onEdit: () => void;
   onBranch: () => void;
+  branchDisabled: boolean;
   streamStore: TranscriptStreamStore;
 }) {
   return (
@@ -6224,10 +6388,25 @@ function MessageCard({
             in; touch devices get the disclosure below. This is deliberately not
             one `<details>` for both: engines no longer paint the contents of a
             closed `<details>`, so a summary hidden at desktop width left the
-            actions laid out, measurable, and permanently unclickable. */}
+            actions laid out, measurable, and permanently unclickable.
+
+            Pointer activation is admitted on primary press. The variable-height
+            transcript can commit its first measurement between pointer-down and
+            pointer-up, moving the overlay while the page settles; waiting for a
+            native click would then silently target the card beneath it. Keyboard
+            and assistive activation still arrives through the zero-detail click. */}
         <div class="message-actions" role="toolbar" aria-label="Message actions">
           <div class="message-actions-row">
-            <button type="button" onClick={onCopy}>Copy</button>
+            <button
+              type="button"
+              onPointerDown={(event) => {
+                if (event.button !== 0) return;
+                event.preventDefault();
+                event.currentTarget.focus({ preventScroll: true });
+                onCopy();
+              }}
+              onClick={(event) => { if (event.detail === 0) onCopy(); }}
+            >Copy</button>
             {/* Retry is the ordinary "ask that again" gesture, not only an
                 error recovery. It re-sends into the same session, so the
                 original turn and its receipt chain stay inspectable — and the
@@ -6239,13 +6418,51 @@ function MessageCard({
                 title={message.error
                   ? "Send the same prompt again in this conversation."
                   : "Ask again in this conversation. The earlier answer stays in the transcript and in provider context."}
-                onClick={onRetry}
+                onPointerDown={(event) => {
+                  if (event.button !== 0) return;
+                  event.preventDefault();
+                  event.currentTarget.focus({ preventScroll: true });
+                  onRetry();
+                }}
+                onClick={(event) => { if (event.detail === 0) onRetry(); }}
               >Retry</button>
             ) : null}
-            {message.role === "user" ? <button type="button" onClick={onEdit}>Edit &amp; resend</button> : null}
-            <button type="button" onClick={onBranch}><Icon name="branch" size={14} /> Fork conversation</button>
+            {message.role === "user" ? (
+              <button
+                type="button"
+                onPointerDown={(event) => {
+                  if (event.button !== 0) return;
+                  event.preventDefault();
+                  event.currentTarget.focus({ preventScroll: true });
+                  onEdit();
+                }}
+                onClick={(event) => { if (event.detail === 0) onEdit(); }}
+              >Edit &amp; resend</button>
+            ) : null}
+            <button
+              type="button"
+              onPointerDown={(event) => {
+                if (event.button !== 0 || branchDisabled) return;
+                event.preventDefault();
+                event.currentTarget.focus({ preventScroll: true });
+                onBranch();
+              }}
+              onClick={(event) => { if (event.detail === 0 && !branchDisabled) onBranch(); }}
+              disabled={branchDisabled}
+            ><Icon name="branch" size={14} /> Fork conversation</button>
           </div>
         </div>
+        <details class="message-actions-touch">
+          <summary role="button" aria-label="Message actions">•••</summary>
+          <div role="menu" aria-label="Message actions">
+            <button role="menuitem" type="button" onClick={onCopy}>Copy</button>
+            {message.role === "assistant" && message.originatingPrompt ? (
+              <button role="menuitem" type="button" onClick={onRetry}>Retry</button>
+            ) : null}
+            {message.role === "user" ? <button role="menuitem" type="button" onClick={onEdit}>Edit &amp; resend</button> : null}
+            <button role="menuitem" type="button" onClick={onBranch} disabled={branchDisabled}><Icon name="branch" size={14} /> Fork conversation</button>
+          </div>
+        </details>
       </div>
     </article>
   );

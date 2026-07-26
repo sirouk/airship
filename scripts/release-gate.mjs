@@ -50,7 +50,12 @@ export const RELEASE_BUDGETS = Object.freeze({
   // probe behind "Check this machine". Both are lazily delivered, and the
   // bridge client also lost its cross-chunk compression when it became shared.
   // Measured 473.96 KiB gzip against 471.56 before; raw is unchanged.
-  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 1768 * 1024, gzip: 474 * 1024 }),
+  // Addressed per-conversation drafts, immutable message forks, a tab-local
+  // follow-up queue, and touch/pointer message disclosures add installed chat
+  // behavior without moving any individual route or first-paint ceiling.
+  // Measured 1,549.33 KiB raw / 477.36 KiB gzip; the gzip ceiling is the
+  // smallest whole-KiB step that retains roughly 0.5% tripwire clearance.
+  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 1768 * 1024, gzip: 480 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now measures 652.23 KiB raw / 180.61 KiB gzip:
   // the browser-Git pack grew (see optionalBrowserGit) and the Terminal pack
@@ -80,7 +85,11 @@ export const RELEASE_BUDGETS = Object.freeze({
   // real loopback probe for the local model servers. Measured 2,189.23 KiB raw
   // / 654.58 KiB gzip; neither addition touches first paint, which is why the
   // startup cap below still has not moved.
-  totalJavaScriptAndWorkers: Object.freeze({ raw: 2192 * 1024, gzip: 656 * 1024 }),
+  // The same chat milestone measures the complete installed bundle at
+  // 2,202.99 KiB raw / 658.38 KiB gzip. These are the smallest even-KiB
+  // ceilings that preserve roughly 0.5% clearance; startup stays separately
+  // fixed at 640/132 KiB raw/gzip above.
+  totalJavaScriptAndWorkers: Object.freeze({ raw: 2216 * 1024, gzip: 662 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. Keep it visible under a dedicated, deliberately small cap.
   serviceWorker: Object.freeze({ raw: 12 * 1024, gzip: 4 * 1024 }),

@@ -32,14 +32,19 @@ test("revealing message actions on hover does not change message or transcript g
   expect(transcriptAfter, "transcript geometry must remain stable when hover actions appear").toEqual(transcriptBefore);
 });
 
-test("touch messages expose their actions as real, tappable targets", async ({ page }, testInfo) => {
+test("touch messages expose one calm action trigger and tappable actions", async ({ page }, testInfo) => {
   test.skip(!testInfo.project.name.includes("mobile"), "touch layout contract");
   await page.goto("/#chat");
   const message = page.locator("[data-transcript-card]").first();
-  const copy = message.locator(".message-actions button").first();
+  const trigger = message.getByRole("button", { name: "Message actions" });
 
   await expect(message).toBeVisible();
-  // Touch has no hover, so the row is available without a disclosure step.
+  await expect(message.locator(".message-actions")).toBeHidden();
+  await expect(trigger).toBeVisible();
+  const triggerBox = await trigger.boundingBox();
+  expect(triggerBox?.height, "touch disclosure stays at the 44px minimum").toBeGreaterThanOrEqual(44);
+  await trigger.click();
+  const copy = message.getByRole("menuitem", { name: "Copy" });
   await expect(copy).toBeVisible();
   const box = await copy.boundingBox();
   expect(box?.height, "touch targets stay at the 44px minimum").toBeGreaterThanOrEqual(44);

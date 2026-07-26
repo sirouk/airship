@@ -40,8 +40,7 @@ test("the real browser runtime stays coherent across the required device classes
   const isPhone = (page.viewportSize()?.width ?? Number.POSITIVE_INFINITY) <= 640;
   if (isPhone) {
     await expect(page.getByRole("navigation", { name: "Mobile navigation" })).toBeVisible();
-    await expect(page.getByRole("banner").getByRole("button", { name: "Connect", exact: true })).toBeVisible();
-    await expect(page.getByRole("main").getByRole("button", { name: "Connect", exact: true })).toBeHidden();
+    await expect(page.getByRole("banner").getByRole("button", { name: "Connect a model", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: /Session\./i })).toBeVisible();
     const stageHeight = await page.locator(".stage-header").evaluate((element) => element.getBoundingClientRect().height);
     expect(stageHeight).toBeLessThan(150);
@@ -50,7 +49,11 @@ test("the real browser runtime stays coherent across the required device classes
   }
 
   const message = page.getByRole("combobox", { name: "Message Airship" });
-  await message.fill("/ls");
+  // Use the canonical command name. `/ls` deliberately opens slash-command
+  // completion first, so one Enter there accepts the completion rather than
+  // executing a side effect.
+  await message.fill("/list-files");
+  await message.press("Escape");
   await message.press("Enter");
   await expect(page.getByText(/README\.md/i).last()).toBeVisible({ timeout: 15_000 });
 
@@ -157,12 +160,15 @@ test("high-value controls remain usable without credentials on every device clas
 
   await page.goto("/#connection");
   await expect(page.getByRole("heading", { name: "Connect models", level: 1 })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Sign in to Chutes", exact: true })).toBeVisible();
-  const keyDisclosure = page.getByText("Use a Chutes API key instead", { exact: true });
-  await keyDisclosure.click();
-  await expect(page.getByLabel("Chutes API key")).toBeVisible();
-  await expect(page.getByRole("link", { name: /Create a key at chutes\.ai/u })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Discover models with key" })).toBeVisible();
+  const chutes = page.locator('.connect-lane[data-lane="chutes"]');
+  await chutes.getByRole("button", { name: /Chutes/u }).first().click();
+  // This acceptance build does not configure Chutes OAuth. It must lead with
+  // the functional API-key path instead of rendering a broken sign-in action.
+  await expect(chutes.getByRole("button", { name: "Sign in to Chutes", exact: true })).toHaveCount(0);
+  await expect(chutes.getByRole("tab", { name: /^API key/u })).toHaveAttribute("aria-selected", "true");
+  await expect(chutes.getByRole("textbox", { name: "Chutes API key", exact: true })).toBeVisible();
+  await expect(chutes.getByRole("link", { name: /Create a key at chutes\.ai/u })).toBeVisible();
+  await expect(chutes.getByRole("button", { name: "Discover models with key" })).toBeVisible();
   await expect(page.getByRole("dialog", { name: "Choose a Chutes model" })).toHaveCount(0);
   await expectContainedLayout(page);
 

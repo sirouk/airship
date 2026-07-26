@@ -33,7 +33,9 @@ describe("offline runtime UI contract", () => {
     // configured: an unconfigured build does not offer it at all, so the only
     // remaining reason to disable it is the network.
     expect(access).toContain("const chutesSignInAvailable = Boolean(oauthDiagnostic) && oauthOrigin.available;");
-    expect(access).toContain("{chutesSignInAvailable ? (");
+    expect(access).toContain('const activeChutesMethod = chutesSignInAvailable ? chutesMethod : "api-key";');
+    expect(access).toContain('{chutesSignInAvailable && activeChutesMethod === "oauth" ? (');
+    expect(access).toContain('{activeChutesMethod === "api-key" ? (');
     expect(access).toMatch(/disabled=\{busy \|\| !online\}\n\s+onClick=\{\(\) => \{\n\s+setOauthDiagnosticError\(undefined\);/u);
     expect(access).toContain("disabled={!online || !chutesSignInAvailable}");
     expect(access).toContain("disabled={busy || !online}>Discover models with key");

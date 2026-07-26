@@ -250,6 +250,7 @@ app-created hierarchy or fail closed; only a newly generated key may create one.
 - [Attestation receipts](docs/ATTESTATION_RECEIPTS.md)
 - [Context Fabric](docs/CONTEXT_FABRIC.md)
 - [Session library](docs/SESSION_LIBRARY.md)
+- [Open WebUI clean-room chat study](docs/OPENWEBUI_CLEANROOM_CHAT.md)
 - [Browser-native Git](docs/BROWSER_GIT.md)
 - [Browser-native coding execution](docs/BROWSER_EXECUTION_PACKS.md)
 - [Chutes model discovery](docs/MODEL_DISCOVERY.md)

@@ -52,7 +52,11 @@ test("every desktop and mobile route remains usable in the live local lab", asyn
   for (const route of routes) {
     activeRoute = route.hash;
     await navigate(page, route, mobile);
-    await expect(page).toHaveURL(new RegExp(`#${route.hash}(?:\\?.*)?$`));
+    await expect(page).toHaveURL(new RegExp(
+      route.hash === "chat"
+        ? "#chat/[^/?#]+$"
+        : `#${route.hash}(?:\\?.*)?$`,
+    ));
     const main = page.getByRole("main");
     const heading = main.getByRole("heading", { name: route.heading }).first();
     await expect(heading).toBeVisible({ timeout: 10_000 });
