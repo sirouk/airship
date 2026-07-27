@@ -1,6 +1,8 @@
 const CHUTES_AUTHORIZE_ENDPOINT = "https://api.chutes.ai/idp/authorize";
 const CHUTES_PUBLIC_TOKEN_ENDPOINT = "https://api.chutes.ai/idp/token";
 const CHUTES_PUBLIC_REVOCATION_ENDPOINT = "https://api.chutes.ai/idp/token/revoke";
+const CHUTES_LOCAL_TOKEN_ENDPOINT = "/__airship/chutes/oauth/token";
+const CHUTES_LOCAL_REVOCATION_ENDPOINT = "/__airship/chutes/oauth/revoke";
 const MAX_TOKEN_RESPONSE_BYTES = 32 * 1024;
 const MAX_OAUTH_TOKEN_BYTES = 4 * 1024;
 const TOKEN_REQUEST_TIMEOUT_MS = 20_000;
@@ -27,6 +29,8 @@ export type ChutesOAuthRegistration = Readonly<{
   configurationError?: string;
 }>;
 
+export type ChutesOAuthExchangeMode = "local-confidential-bridge" | "public-pkce";
+
 export const CHUTES_LOCAL_REGISTRATION: ChutesOAuthRegistration = Object.freeze({
   name: "Airship",
   clientId: "cid_n2tusjazqmkkwon12jy3bo3u",
@@ -35,10 +39,12 @@ export const CHUTES_LOCAL_REGISTRATION: ChutesOAuthRegistration = Object.freeze(
   redirectUris: ["http://localhost:4173/auth/chutes/callback"] as const,
   registrationScopes: CHUTES_REGISTRATION_SCOPES,
   scopes: CHUTES_REQUEST_SCOPES,
-  // This registration is Browser/native PKCE. Localhost and hosted builds use
-  // the same secretless exchange; the browser extension is not a credential
-  // broker and no development process has to hold a Chutes client secret.
-  tokenEndpointAuthMethod: "none" as "none" | "client_secret_post",
+  // Chutes production currently registers this localhost app as confidential.
+  // The browser still creates and proves S256 PKCE; the same-origin Vite
+  // handler adds the process-held secret during token operations. The secret
+  // is never compiled into, returned to, or accepted from browser JavaScript.
+  tokenEndpointAuthMethod: "client_secret_post" as "none" | "client_secret_post",
+  // `public` is Chutes directory visibility, not OAuth client authentication.
   public: true,
   refreshTokenLifetimeDays: 30,
   configured: true,
@@ -142,6 +148,23 @@ export type ChutesOAuthTokenSet = Readonly<{
   scopes: readonly string[];
 }>;
 
+/**
+ * Resolve the one honest token boundary for a registration.
+ *
+ * A confidential app is accepted only for the checked-in localhost callback,
+ * where the development server can keep its secret outside browser JavaScript.
+ * Static deployments must use a public (`none`) registration.
+ */
+export function chutesOAuthExchangeMode(
+  registration: ChutesOAuthRegistration,
+): ChutesOAuthExchangeMode {
+  if (registration.tokenEndpointAuthMethod === "none") return "public-pkce";
+  if (registration === CHUTES_LOCAL_REGISTRATION) return "local-confidential-bridge";
+  throw new Error(
+    "Confidential Chutes OAuth is supported only by Airship's localhost handler.",
+  );
+}
+
 type ChutesTokenResponse = Readonly<{
   access_token?: unknown;
   token_type?: unknown;
@@ -157,11 +180,10 @@ export async function createChutesAuthorizationRequest(args: {
   now?: number;
   crypto?: Pick<Crypto, "getRandomValues" | "subtle">;
 }): Promise<{ url: URL; attempt: ChutesPkceAttempt }> {
-  const clientId = args.clientId.trim();
-  if (!clientId) throw new TypeError("A Chutes OAuth client ID is required.");
   const registration = args.registration ?? CHUTES_LOCAL_REGISTRATION;
   if (!registration.configured) throw new Error(registration.configurationError ?? "Chutes OAuth is not configured.");
-  requirePublicPkceRegistration(registration);
+  const clientId = validateRegistrationClientId(args.clientId, registration);
+  chutesOAuthExchangeMode(registration);
   const redirectUri = validateRedirectUri(
     args.redirectUri ?? registration.redirectUris[0] ?? "",
     registration.redirectUris,
@@ -218,9 +240,9 @@ export function consumeChutesAuthorizationCallback(args: {
 
 /**
  * Exchange a one-time authorization code with PKCE. Browser/native
- * registrations call Chutes directly from localhost or a hosted static build.
- * Confidential registrations fail closed because browser JavaScript must
- * never accept their secret. Returned tokens remain page-memory values.
+ * registrations call Chutes directly. The checked-in confidential localhost
+ * registration calls its same-origin process handler; every other confidential
+ * registration fails closed. Returned tokens remain page-memory values.
  */
 export async function exchangeChutesAuthorizationCode(args: {
   callback: ChutesAuthorizationCallback;
@@ -232,8 +254,7 @@ export async function exchangeChutesAuthorizationCode(args: {
 }): Promise<ChutesOAuthTokenSet> {
   const registration = args.registration ?? CHUTES_LOCAL_REGISTRATION;
   if (!registration.configured) throw new Error(registration.configurationError ?? "Chutes OAuth is not configured.");
-  requirePublicPkceRegistration(registration);
-  const clientId = validateClientId(args.clientId);
+  const clientId = validateRegistrationClientId(args.clientId, registration);
   const code = validateOpaqueValue(args.callback.code, "authorization code", 4 * 1024);
   const verifier = validatePkceVerifier(args.callback.verifier);
   const redirectUri = validateRedirectUri(args.callback.redirectUri, registration.redirectUris);
@@ -248,12 +269,13 @@ export async function exchangeChutesAuthorizationCode(args: {
     signal: args.signal,
     now: args.now,
     fetch: args.fetch,
+    registration,
   });
   requireGrantedScopes(tokenSet.scopes, registration.registrationScopes);
   return tokenSet;
 }
 
-/** Rotate a public client's memory-only refresh token without a client secret. */
+/** Rotate a memory-only refresh token through the registration's token boundary. */
 export async function refreshChutesOAuthToken(args: {
   refreshToken: string;
   clientId: string;
@@ -264,8 +286,7 @@ export async function refreshChutesOAuthToken(args: {
 }): Promise<ChutesOAuthTokenSet> {
   const registration = args.registration ?? CHUTES_LOCAL_REGISTRATION;
   if (!registration.configured) throw new Error(registration.configurationError ?? "Chutes OAuth is not configured.");
-  requirePublicPkceRegistration(registration);
-  const clientId = validateClientId(args.clientId);
+  const clientId = validateRegistrationClientId(args.clientId, registration);
   const refreshToken = validateToken(args.refreshToken, "crt_", "refresh token");
   const refreshed = await requestTokenSet({
     form: {
@@ -276,6 +297,7 @@ export async function refreshChutesOAuthToken(args: {
     signal: args.signal,
     now: args.now,
     fetch: args.fetch,
+    registration,
   });
   if (!refreshed.refreshToken || refreshed.refreshToken === refreshToken) {
     throw new Error("Chutes OAuth refresh did not rotate the one-time refresh token.");
@@ -312,8 +334,11 @@ export async function revokeChutesToken(args: {
   clientId: string;
   signal?: AbortSignal;
   fetch?: typeof globalThis.fetch;
+  registration?: ChutesOAuthRegistration;
 }): Promise<ChutesTokenRevocationResult> {
-  const clientId = validateClientId(args.clientId);
+  const registration = args.registration ?? CHUTES_LOCAL_REGISTRATION;
+  if (!registration.configured) throw new Error(registration.configurationError ?? "Chutes OAuth is not configured.");
+  const clientId = validateRegistrationClientId(args.clientId, registration);
   const token = validateToken(
     args.token,
     args.tokenTypeHint === "refresh_token" ? "crt_" : "cak_",
@@ -322,8 +347,11 @@ export async function revokeChutesToken(args: {
   const fetchImpl = args.fetch ?? globalThis.fetch;
   if (!fetchImpl) throw new Error("Fetch is required to revoke a Chutes token.");
   const lifetime = createTokenRequestLifetime(args.signal, REVOCATION_TIMEOUT_MS);
+  const endpoint = chutesOAuthExchangeMode(registration) === "local-confidential-bridge"
+    ? CHUTES_LOCAL_REVOCATION_ENDPOINT
+    : CHUTES_PUBLIC_REVOCATION_ENDPOINT;
   try {
-    const response = await abortable(fetchImpl(CHUTES_PUBLIC_REVOCATION_ENDPOINT, {
+    const response = await abortable(fetchImpl(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
@@ -363,12 +391,16 @@ async function requestTokenSet(args: {
   signal?: AbortSignal;
   now?: number;
   fetch?: typeof globalThis.fetch;
+  registration: ChutesOAuthRegistration;
 }): Promise<ChutesOAuthTokenSet> {
   const fetchImpl = args.fetch ?? globalThis.fetch;
   if (!fetchImpl) throw new Error("Fetch is required to complete Sign in with Chutes.");
   const lifetime = createTokenRequestLifetime(args.signal);
+  const endpoint = chutesOAuthExchangeMode(args.registration) === "local-confidential-bridge"
+    ? CHUTES_LOCAL_TOKEN_ENDPOINT
+    : CHUTES_PUBLIC_TOKEN_ENDPOINT;
   try {
-    const response = await abortable(fetchImpl(CHUTES_PUBLIC_TOKEN_ENDPOINT, {
+    const response = await abortable(fetchImpl(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams(args.form).toString(),
@@ -399,10 +431,15 @@ async function requestTokenSet(args: {
   }
 }
 
-function requirePublicPkceRegistration(registration: ChutesOAuthRegistration): void {
-  if (registration.tokenEndpointAuthMethod !== "none") {
-    throw new Error("Chutes needs Browser/native PKCE (auth: none).");
+function validateRegistrationClientId(
+  value: string,
+  registration: ChutesOAuthRegistration,
+): string {
+  const clientId = validateClientId(value);
+  if (clientId !== registration.clientId) {
+    throw new Error("The Chutes OAuth client ID does not match the active registration.");
   }
+  return clientId;
 }
 
 function createTokenRequestLifetime(

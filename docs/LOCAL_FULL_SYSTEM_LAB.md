@@ -19,11 +19,10 @@ npm run lab:start
 npm run lab:status
 ```
 
-The checked-in Airship registration is Browser/native PKCE, so Chutes sign-in
-works directly from localhost without configuring the lab or installing the
-browser extension. A separately supplied legacy confidential registration can
-still exercise the compatibility handler by starting the lab with its secret in
-the local process only:
+The checked-in Airship registration is confidential in the currently deployed
+Chutes service. Start the lab with its client ID and secret in the local process
+to enable Chutes sign-in; the browser extension is not an OAuth credential
+broker:
 
 ```sh
 AIRSHIP_CHUTES_OAUTH_CLIENT_ID='cid_…' \
@@ -31,29 +30,27 @@ AIRSHIP_CHUTES_OAUTH_CLIENT_SECRET='csc_…' \
 npm run lab:start
 ```
 
-If the lab already owns an unconfigured Vite process, the same command safely
-restarts only that process with the bridge enabled while leaving the MinIO
-volume intact. The state file records the public client ID and a configured
-boolean only; it never records the secret or a derivative of it.
-`npm run lab:status` reports **Legacy OAuth handler ready** after the process is
-actually accepting the same-origin exchange; otherwise it states that ordinary
-Browser/native PKCE needs no handler.
+If the lab already owns a Vite process, the same command safely restarts only
+that process while leaving the MinIO volume intact. A configured invocation
+always restarts so a rotated secret cannot remain captured by the old process.
+The state file records the public client ID and a configured boolean only; it
+never records the secret or a derivative of it. `npm run lab:status` reports
+**localhost token handler ready** after the same-origin exchange is available.
 
-On `http://localhost:4173`, Airship sends Browser/native authorization-code and
-refresh exchanges directly to Chutes with S256 PKCE. The optional same-origin
-handler exists only for protocol/integration testing with an explicitly
-confidential registration; the Airship browser client never selects it. That
-handler pins the Airship client ID, callback, origin, grant types, request
-fields, response size, and upstream token endpoint before adding the secret.
+On `http://localhost:4173`, Airship creates the authorization request and S256
+PKCE proof in the browser, then sends authorization-code, refresh, and
+revocation operations to the same-origin handler. That handler pins the Airship
+client ID, callback, origin, grant types, request fields, response size, and
+upstream token endpoint before adding the secret.
 The secret is never sent to JavaScript, written to the lab state file, bundled
 into `dist/`, logged, or stored in MinIO.
 
-Only an explicitly confidential registration performs the no-content
-same-origin readiness check before authorization. A shared confidential secret
+The no-content same-origin readiness check must pass before authorization. A
+shared confidential secret
 must never be embedded in a PWA, WASM module, browser extension, or distributed
 companion binary: a user who controls that device can recover it. Ordinary edge
 distribution therefore uses public-client PKCE; the confidential loopback
-handler is a local operator facility only.
+handler is the working local operator facility.
 
 `lab:start` is idempotent for a lab-owned Airship Vite server on
 `http://localhost:4173`; otherwise it starts one and records its PID, log, and

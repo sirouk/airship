@@ -76,6 +76,16 @@ export function chutesOAuthBridgeRequest(environment = process.env) {
   return Object.freeze({ configured: Boolean(clientId), ...(clientId ? { clientId } : {}) });
 }
 
+/**
+ * A configured request always restarts the owned Vite process. The state file
+ * deliberately stores neither the app secret nor a secret fingerprint, so
+ * reusing a process could otherwise keep a rotated secret indefinitely.
+ * Removing bridge configuration also restarts once to drop the old authority.
+ */
+export function requiresOwnedViteRestartForOAuth(requested, running) {
+  return requested.configured || running.configured;
+}
+
 const requiredCorsRequestHeaders = Object.freeze([
   "authorization",
   "content-type",
@@ -227,12 +237,13 @@ async function ensureVite() {
         configured: previous.vite.oauthBridgeConfigured === true,
         ...(previous.vite.oauthClientId ? { clientId: previous.vite.oauthClientId } : {}),
       });
-      const needsOAuthUpgrade = requestedOAuth.configured && (
-        !runningOAuth.configured || runningOAuth.clientId !== requestedOAuth.clientId
-      );
-      if (!needsOAuthUpgrade) return previous.vite;
+      if (!requiresOwnedViteRestartForOAuth(requestedOAuth, runningOAuth)) return previous.vite;
       await stopProcessGroup(previous.vite.pid);
-      console.log("Restarting the lab-owned Airship process with the requested local OAuth bridge.");
+      console.log(
+        requestedOAuth.configured
+          ? "Restarting the lab-owned Airship process with the requested local OAuth handler."
+          : "Restarting the lab-owned Airship process without the previous local OAuth handler.",
+      );
     } else {
       throw new Error(
         "Port 4173 already serves an unowned Airship process. Stop it before `npm run lab:start`; the lab will not adopt a listener whose network binding it cannot prove.",
@@ -357,7 +368,7 @@ function printSnapshot(snapshot) {
   console.log(`  Dev S3 CSP  ${snapshot.ui.localS3Csp ? "ready" : "missing"}`);
   console.log(`  MinIO       ${snapshot.s3.ready ? "ready" : "unreachable"}  ${LOCAL_LAB.s3Endpoint}`);
   console.log(`  S3 preflight ${snapshot.s3Cors.ready ? "ready" : "rejected"}  Origins ${LOCAL_LAB_UI_ORIGINS.join(", ")}`);
-  console.log(`  Legacy OAuth handler ${snapshot.oauthBridge.ready ? "ready" : "not configured (Browser/native PKCE needs no handler)"}`);
+  console.log(`  Chutes OAuth ${snapshot.oauthBridge.ready ? "localhost token handler ready" : "localhost token handler not configured"}`);
   console.log(`  Console     ${LOCAL_LAB.s3Console}`);
 }
 

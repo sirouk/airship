@@ -22,6 +22,7 @@ import {
 } from "../auth/connection";
 import {
   CHUTES_ACTIVE_REGISTRATION,
+  chutesOAuthExchangeMode,
   chutesOAuthLocationState,
   consumeChutesAuthorizationCallback,
   createChutesAuthorizationRequest,
@@ -1823,7 +1824,13 @@ export function App() {
     }
     window.history.replaceState({ view: "access" }, "", `${import.meta.env.BASE_URL}#connection`);
     setView("access");
-    setOauthCallbackStatus({ kind: "blocked", message: "Exchanging the one-time authorization code directly with Chutes…" });
+    const exchangeMode = chutesOAuthExchangeMode(CHUTES_ACTIVE_REGISTRATION);
+    setOauthCallbackStatus({
+      kind: "blocked",
+      message: exchangeMode === "local-confidential-bridge"
+        ? "oauth:exchange-local"
+        : "oauth:exchange-public",
+    });
     void (async () => {
       try {
         if (!rawAttempt) throw new Error("No matching Chutes authorization attempt was found in this tab.");
@@ -1841,13 +1848,15 @@ export function App() {
         setOauthBootstrapRevision((value) => value + 1);
         setOauthCallbackStatus({
           kind: "verified",
-          message: "Chutes sign-in complete with S256 PKCE. Finish below: choose a model, confirm the required endpoint-proof policy, then select Finish: verify & connect. No API key is needed.",
+          message: exchangeMode === "local-confidential-bridge"
+            ? "oauth:complete-local"
+            : "oauth:complete-public",
         });
       } catch (error) {
         if (disposed) return;
         oauthTokens.current = undefined;
         pendingOAuthCredential.current = undefined;
-        setOauthCallbackStatus({ kind: "error", message: oauthPublicClientError(error) });
+        setOauthCallbackStatus({ kind: "error", message: oauthExchangeError(error, exchangeMode) });
       }
     })();
     return () => { disposed = true; };
@@ -1924,7 +1933,10 @@ export function App() {
         });
       }).catch((error) => {
         if (disposed || controller.signal.aborted) return;
-        setOauthCallbackStatus({ kind: "error", message: oauthPublicClientError(error) });
+        setOauthCallbackStatus({
+          kind: "error",
+          message: oauthExchangeError(error, chutesOAuthExchangeMode(CHUTES_ACTIVE_REGISTRATION)),
+        });
         releaseChutesAuthority("Chutes OAuth rotation failed · reconnect inference; this conversation remains intact");
       });
     }, refreshAt);
@@ -5355,7 +5367,7 @@ export function App() {
               homepageUrl: CHUTES_ACTIVE_REGISTRATION.homepageUrl,
               callbackUrl: CHUTES_ACTIVE_REGISTRATION.redirectUris[0] ?? "Unavailable",
               scopes: CHUTES_ACTIVE_REGISTRATION.scopes,
-              exchangeMode: "public-pkce",
+              exchangeMode: chutesOAuthExchangeMode(CHUTES_ACTIVE_REGISTRATION),
               configurationError: CHUTES_ACTIVE_REGISTRATION.configurationError,
               onRun: startOAuthSignIn,
             }}
@@ -5980,10 +5992,15 @@ function parsePkceAttempt(value: string): ChutesPkceAttempt {
   };
 }
 
-function oauthPublicClientError(error: unknown): string {
+function oauthExchangeError(
+  error: unknown,
+  exchangeMode: ReturnType<typeof chutesOAuthExchangeMode>,
+): string {
   const message = error instanceof Error ? error.message : "Chutes sign-in could not be completed.";
   if (message.includes("invalid_client")) {
-    return "Chutes rejected this Browser/native registration. Set token authentication to “none”, then consent again. Airship never embeds client secrets.";
+    return exchangeMode === "local-confidential-bridge"
+      ? "oauth:invalid-local"
+      : "oauth:invalid-public";
   }
   if (message.includes("HTTP 502")) {
     return "Chutes identity gateway returned 502. Retry sign-in in a fresh browser window.";

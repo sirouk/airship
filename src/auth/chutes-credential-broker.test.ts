@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   CHUTES_LOCAL_REGISTRATION,
   refreshChutesOAuthToken,
+  resolveChutesOAuthRegistration,
   revokeChutesToken,
   type ChutesOAuthTokenSet,
 } from "./chutes-oauth";
@@ -12,6 +13,11 @@ import {
 
 const BASELINE_SCOPES = ["profile", "chutes:invoke", "billing:read"] as const;
 const START = 2_000_000;
+const PUBLIC_REGISTRATION = resolveChutesOAuthRegistration({
+  development: false,
+  publicClientId: "cid_public_broker",
+  publicOrigin: "https://airship.example",
+});
 
 describe("ChutesCredentialBroker", () => {
   it("owns an API key without serializing it and fails closed for OAuth-only use", async () => {
@@ -133,6 +139,34 @@ describe("ChutesCredentialBroker", () => {
     now = START + 100;
     await expect(broker.getBearerToken()).resolves.toBe("cak_rotated.access");
     expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("binds hosted refresh and revocation to the broker's public registration", async () => {
+    const refresh = vi.fn(async () => oauthSet({
+      accessToken: "cak_public.rotated",
+      refreshToken: "crt_public.rotated",
+      expiresAt: START + 3_600_000,
+    }));
+    const revoke = vi.fn<typeof revokeChutesToken>(
+      async () => ({ state: "accepted" as const, status: 200 }),
+    );
+    const broker = new ChutesCredentialBroker({
+      registration: PUBLIC_REGISTRATION,
+      now: () => START,
+      refresh,
+      revoke,
+      minimumValidityMs: 30_000,
+    });
+    broker.installOAuthTokenSet(oauthSet({ expiresAt: START + 1 }));
+
+    await expect(broker.getBearerToken()).resolves.toBe("cak_public.rotated");
+    expect(refresh).toHaveBeenCalledWith(expect.objectContaining({
+      clientId: PUBLIC_REGISTRATION.clientId,
+      registration: PUBLIC_REGISTRATION,
+    }));
+    broker.clear();
+    await vi.waitFor(() => expect(revoke).toHaveBeenCalledTimes(2));
+    expect(revoke.mock.calls.every(([request]) => request.registration === PUBLIC_REGISTRATION)).toBe(true);
   });
 
   it("fences a late refresh after clear and never resurrects the cleared session", async () => {
@@ -306,11 +340,13 @@ describe("ChutesCredentialBroker sign-out revocation", () => {
         token: "crt_initial.refresh",
         tokenTypeHint: "refresh_token",
         clientId: CHUTES_LOCAL_REGISTRATION.clientId,
+        registration: CHUTES_LOCAL_REGISTRATION,
       },
       {
         token: "cak_initial.access",
         tokenTypeHint: "access_token",
         clientId: CHUTES_LOCAL_REGISTRATION.clientId,
+        registration: CHUTES_LOCAL_REGISTRATION,
       },
     ]);
   });

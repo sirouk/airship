@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   CHUTES_LOCAL_REGISTRATION,
+  chutesOAuthExchangeMode,
   chutesOAuthLocationState,
   consumeChutesAuthorizationCallback,
   createChutesAuthorizationRequest,
@@ -10,14 +11,26 @@ import {
   revokeChutesToken,
 } from "./chutes-oauth";
 
+const PUBLIC_REGISTRATION = resolveChutesOAuthRegistration({
+  development: false,
+  publicClientId: CHUTES_LOCAL_REGISTRATION.clientId,
+  publicOrigin: "https://airship.example",
+});
+const PUBLIC_REDIRECT_URI = PUBLIC_REGISTRATION.redirectUris[0]!;
+
 describe("Chutes OAuth PKCE preparation", () => {
+  it("selects the localhost handler only for the checked-in confidential registration", () => {
+    expect(chutesOAuthExchangeMode(CHUTES_LOCAL_REGISTRATION)).toBe("local-confidential-bridge");
+    expect(chutesOAuthExchangeMode(PUBLIC_REGISTRATION)).toBe("public-pkce");
+  });
+
   it("builds an S256 authorization request with only the registered least-privilege scopes", async () => {
-    const request = await createChutesAuthorizationRequest({ clientId: "cid_airship", now: 1_000 });
+    const request = await createChutesAuthorizationRequest({ clientId: CHUTES_LOCAL_REGISTRATION.clientId, now: 1_000 });
     expect(request.url.origin + request.url.pathname).toBe("https://api.chutes.ai/idp/authorize");
     expect(request.url.searchParams.get("redirect_uri")).toBe(CHUTES_LOCAL_REGISTRATION.redirectUris[0]);
     expect(request.url.searchParams.get("scope")).toBe("openid profile chutes:invoke billing:read");
     expect(CHUTES_LOCAL_REGISTRATION.registrationScopes).toEqual(["profile", "chutes:invoke", "billing:read"]);
-    expect(CHUTES_LOCAL_REGISTRATION.tokenEndpointAuthMethod).toBe("none");
+    expect(CHUTES_LOCAL_REGISTRATION.tokenEndpointAuthMethod).toBe("client_secret_post");
     expect(CHUTES_LOCAL_REGISTRATION.public).toBe(true);
     expect(request.url.searchParams.get("code_challenge_method")).toBe("S256");
     expect(request.url.searchParams.get("code_challenge")).toMatch(/^[A-Za-z0-9_-]{43}$/u);
@@ -55,7 +68,7 @@ describe("Chutes OAuth PKCE preparation", () => {
 
   it("rejects non-HTTPS non-localhost callbacks", async () => {
     await expect(createChutesAuthorizationRequest({
-      clientId: "cid_airship",
+      clientId: CHUTES_LOCAL_REGISTRATION.clientId,
       redirectUri: "http://example.com/auth/chutes/callback",
     })).rejects.toThrow("must use HTTPS");
   });
@@ -108,11 +121,11 @@ describe("Chutes OAuth PKCE preparation", () => {
 
   it("rejects an HTTPS callback that is not an exact registered Airship redirect", async () => {
     await expect(createChutesAuthorizationRequest({
-      clientId: "cid_airship",
+      clientId: CHUTES_LOCAL_REGISTRATION.clientId,
       redirectUri: "https://attacker.example/auth/chutes/callback",
     })).rejects.toThrow("not an exact registered Airship callback");
     await expect(createChutesAuthorizationRequest({
-      clientId: "cid_airship",
+      clientId: CHUTES_LOCAL_REGISTRATION.clientId,
       redirectUri: `${CHUTES_LOCAL_REGISTRATION.redirectUris[0]}/extra`,
     })).rejects.toThrow("not an exact registered Airship callback");
   });
@@ -121,11 +134,12 @@ describe("Chutes OAuth PKCE preparation", () => {
     let requestUrl = "";
     let requestInit: RequestInit | undefined;
     const tokenSet = await exchangeChutesAuthorizationCode({
-      clientId: "cid_airship",
+      clientId: PUBLIC_REGISTRATION.clientId,
+      registration: PUBLIC_REGISTRATION,
       callback: {
         code: "one-time-code",
         verifier: "v".repeat(64),
-        redirectUri: CHUTES_LOCAL_REGISTRATION.redirectUris[0],
+        redirectUri: PUBLIC_REDIRECT_URI,
       },
       now: 10_000,
       fetch: async (input, init) => {
@@ -147,7 +161,7 @@ describe("Chutes OAuth PKCE preparation", () => {
     expect(requestInit?.referrerPolicy).toBe("no-referrer");
     const body = new URLSearchParams(String(requestInit?.body));
     expect(body.get("grant_type")).toBe("authorization_code");
-    expect(body.get("client_id")).toBe("cid_airship");
+    expect(body.get("client_id")).toBe(PUBLIC_REGISTRATION.clientId);
     expect(body.get("code_verifier")).toBe("v".repeat(64));
     expect(body.has("client_secret")).toBe(false);
     expect(tokenSet).toEqual({
@@ -158,28 +172,83 @@ describe("Chutes OAuth PKCE preparation", () => {
     });
   });
 
-  it("fails closed instead of silently using a confidential registration", async () => {
-    const confidentialRegistration = {
-      ...CHUTES_LOCAL_REGISTRATION,
-      tokenEndpointAuthMethod: "client_secret_post" as const,
-      public: false,
+  it("routes localhost code exchange and refresh through the same-origin handler without a browser secret", async () => {
+    const requests: Array<{ url: string; body: URLSearchParams }> = [];
+    const fetchImpl: typeof globalThis.fetch = async (input, init) => {
+      requests.push({
+        url: String(input),
+        body: new URLSearchParams(String(init?.body)),
+      });
+      return Response.json({
+        access_token: requests.length === 1 ? "cak_first.access" : "cak_second.access",
+        refresh_token: requests.length === 1 ? "crt_first.refresh" : "crt_second.refresh",
+        token_type: "Bearer",
+        expires_in: 60,
+        scope: "openid profile chutes:invoke billing:read",
+      });
     };
-    await expect(exchangeChutesAuthorizationCode({
-      clientId: "cid_airship",
-      registration: confidentialRegistration,
+
+    await exchangeChutesAuthorizationCode({
+      clientId: CHUTES_LOCAL_REGISTRATION.clientId,
       callback: {
         code: "one-time-code",
         verifier: "v".repeat(64),
         redirectUri: CHUTES_LOCAL_REGISTRATION.redirectUris[0],
       },
+      fetch: fetchImpl,
+    });
+    await refreshChutesOAuthToken({
+      clientId: CHUTES_LOCAL_REGISTRATION.clientId,
+      refreshToken: "crt_first.refresh",
+      fetch: fetchImpl,
+    });
+
+    expect(requests.map(({ url }) => url)).toEqual([
+      "/__airship/chutes/oauth/token",
+      "/__airship/chutes/oauth/token",
+    ]);
+    expect(requests[0]?.body.get("code_verifier")).toBe("v".repeat(64));
+    expect(requests[1]?.body.get("refresh_token")).toBe("crt_first.refresh");
+    expect(requests.every(({ body }) => !body.has("client_secret"))).toBe(true);
+  });
+
+  it("fails closed instead of sending a hosted confidential registration through browser JavaScript", async () => {
+    const confidentialRegistration = {
+      ...PUBLIC_REGISTRATION,
+      tokenEndpointAuthMethod: "client_secret_post" as const,
+    };
+    await expect(exchangeChutesAuthorizationCode({
+      clientId: PUBLIC_REGISTRATION.clientId,
+      registration: confidentialRegistration,
+      callback: {
+        code: "one-time-code",
+        verifier: "v".repeat(64),
+        redirectUri: PUBLIC_REDIRECT_URI,
+      },
       fetch: vi.fn(),
-    })).rejects.toThrow("Browser/native");
+    })).rejects.toThrow("supported only by Airship's localhost handler");
+  });
+
+  it("rejects a client ID that is not bound to the selected registration before network use", async () => {
+    const fetchImpl = vi.fn();
+    await expect(exchangeChutesAuthorizationCode({
+      clientId: "cid_someone_else",
+      registration: PUBLIC_REGISTRATION,
+      callback: {
+        code: "one-time-code",
+        verifier: "v".repeat(64),
+        redirectUri: PUBLIC_REDIRECT_URI,
+      },
+      fetch: fetchImpl,
+    })).rejects.toThrow("does not match");
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it("rotates a public refresh token without sending a client secret", async () => {
     let requestInit: RequestInit | undefined;
     const tokenSet = await refreshChutesOAuthToken({
-      clientId: "cid_airship",
+      clientId: PUBLIC_REGISTRATION.clientId,
+      registration: PUBLIC_REGISTRATION,
       refreshToken: "crt_old.refresh",
       now: 20_000,
       fetch: async (_input, init) => {
@@ -210,7 +279,7 @@ describe("Chutes OAuth PKCE preparation", () => {
     };
     const leaked = "cak_provider-must-not-be-reflected";
     await expect(exchangeChutesAuthorizationCode({
-      clientId: "cid_airship",
+      clientId: CHUTES_LOCAL_REGISTRATION.clientId,
       callback,
       fetch: async () => Response.json(
         { error: "invalid_grant", error_description: leaked },
@@ -219,13 +288,13 @@ describe("Chutes OAuth PKCE preparation", () => {
     })).rejects.not.toThrow(leaked);
 
     await expect(exchangeChutesAuthorizationCode({
-      clientId: "cid_airship",
+      clientId: CHUTES_LOCAL_REGISTRATION.clientId,
       callback,
       fetch: async () => new Response("x", { headers: { "content-length": "32769" } }),
     })).rejects.toThrow("safety limit");
 
     await expect(exchangeChutesAuthorizationCode({
-      clientId: "cid_airship",
+      clientId: CHUTES_LOCAL_REGISTRATION.clientId,
       callback,
       fetch: async () => new Response("{}", { headers: { "content-length": "not-a-number" } }),
     })).rejects.toThrow("invalid length");
@@ -238,7 +307,7 @@ describe("Chutes OAuth PKCE preparation", () => {
       redirectUri: CHUTES_LOCAL_REGISTRATION.redirectUris[0],
     };
     await expect(exchangeChutesAuthorizationCode({
-      clientId: "cid_airship",
+      clientId: CHUTES_LOCAL_REGISTRATION.clientId,
       callback,
       fetch: async () => Response.json({
         access_token: "cak_",
@@ -250,7 +319,7 @@ describe("Chutes OAuth PKCE preparation", () => {
     })).rejects.toThrow("invalid access token");
 
     await expect(exchangeChutesAuthorizationCode({
-      clientId: "cid_airship",
+      clientId: CHUTES_LOCAL_REGISTRATION.clientId,
       callback,
       fetch: async () => Response.json({
         access_token: "cak_valid.access",
@@ -264,7 +333,7 @@ describe("Chutes OAuth PKCE preparation", () => {
 
   it("reports an HTML gateway failure by status instead of calling it invalid JSON", async () => {
     await expect(exchangeChutesAuthorizationCode({
-      clientId: "cid_airship",
+      clientId: CHUTES_LOCAL_REGISTRATION.clientId,
       callback: {
         code: "one-time-code",
         verifier: "v".repeat(64),
@@ -282,7 +351,7 @@ describe("Chutes OAuth PKCE preparation", () => {
     let requestSignal: AbortSignal | null | undefined;
     try {
       const exchange = exchangeChutesAuthorizationCode({
-        clientId: "cid_airship",
+        clientId: CHUTES_LOCAL_REGISTRATION.clientId,
         callback: {
           code: "one-time-code",
           verifier: "v".repeat(64),
@@ -311,7 +380,7 @@ describe("Chutes OAuth PKCE preparation", () => {
       redirectUri: CHUTES_LOCAL_REGISTRATION.redirectUris[0],
     };
     await expect(exchangeChutesAuthorizationCode({
-      clientId: "cid_airship",
+      clientId: CHUTES_LOCAL_REGISTRATION.clientId,
       callback,
       fetch: async () => Response.json({
         access_token: "cak_partial.access",
@@ -323,7 +392,8 @@ describe("Chutes OAuth PKCE preparation", () => {
     })).rejects.toThrow("billing:read");
 
     await expect(refreshChutesOAuthToken({
-      clientId: "cid_airship",
+      clientId: PUBLIC_REGISTRATION.clientId,
+      registration: PUBLIC_REGISTRATION,
       refreshToken: "crt_old.refresh",
       fetch: async () => Response.json({
         access_token: "cak_new.access",
@@ -336,6 +406,20 @@ describe("Chutes OAuth PKCE preparation", () => {
 });
 
 describe("Chutes OAuth revocation", () => {
+  it("routes localhost revocation through the handler without a browser secret", async () => {
+    const fetchImpl = vi.fn<typeof globalThis.fetch>(async () => new Response(null, { status: 200 }));
+    await expect(revokeChutesToken({
+      token: "crt_released.refresh",
+      tokenTypeHint: "refresh_token",
+      clientId: CHUTES_LOCAL_REGISTRATION.clientId,
+      fetch: fetchImpl,
+    })).resolves.toEqual({ state: "accepted", status: 200 });
+
+    const [url, init] = fetchImpl.mock.calls[0]!;
+    expect(url).toBe("/__airship/chutes/oauth/revoke");
+    expect(new URLSearchParams(String(init?.body)).has("client_secret")).toBe(false);
+  });
+
   it("posts only the RFC 7009 fields to the published revocation endpoint", async () => {
     const fetchImpl = vi.fn<typeof globalThis.fetch>(async () => new Response(
       JSON.stringify({ revoked: true }),
@@ -345,7 +429,8 @@ describe("Chutes OAuth revocation", () => {
     await expect(revokeChutesToken({
       token: "crt_released.refresh",
       tokenTypeHint: "refresh_token",
-      clientId: "cid_airship",
+      clientId: PUBLIC_REGISTRATION.clientId,
+      registration: PUBLIC_REGISTRATION,
       fetch: fetchImpl,
     })).resolves.toEqual({ state: "accepted", status: 200 });
 
@@ -359,7 +444,7 @@ describe("Chutes OAuth revocation", () => {
       referrerPolicy: "no-referrer",
     });
     expect([...new URLSearchParams(String(init?.body)).entries()].sort()).toEqual([
-      ["client_id", "cid_airship"],
+      ["client_id", PUBLIC_REGISTRATION.clientId],
       ["token", "crt_released.refresh"],
       ["token_type_hint", "refresh_token"],
     ]);
@@ -370,7 +455,7 @@ describe("Chutes OAuth revocation", () => {
     await expect(revokeChutesToken({
       token: "cak_wrong.class",
       tokenTypeHint: "refresh_token",
-      clientId: "cid_airship",
+      clientId: CHUTES_LOCAL_REGISTRATION.clientId,
       fetch: fetchImpl,
     })).rejects.toThrow("invalid refresh token");
     await expect(revokeChutesToken({
@@ -386,14 +471,14 @@ describe("Chutes OAuth revocation", () => {
     await expect(revokeChutesToken({
       token: "cak_released.access",
       tokenTypeHint: "access_token",
-      clientId: "cid_airship",
+      clientId: CHUTES_LOCAL_REGISTRATION.clientId,
       fetch: async () => new Response("no", { status: 401 }),
     })).resolves.toEqual({ state: "rejected", status: 401 });
 
     await expect(revokeChutesToken({
       token: "cak_released.access",
       tokenTypeHint: "access_token",
-      clientId: "cid_airship",
+      clientId: CHUTES_LOCAL_REGISTRATION.clientId,
       fetch: async () => { throw new TypeError("Failed to fetch"); },
     })).resolves.toEqual({ state: "unreachable", reason: "network" });
   });
@@ -404,7 +489,7 @@ describe("Chutes OAuth revocation", () => {
       const revocation = revokeChutesToken({
         token: "crt_released.refresh",
         tokenTypeHint: "refresh_token",
-        clientId: "cid_airship",
+        clientId: CHUTES_LOCAL_REGISTRATION.clientId,
         fetch: async () => await new Promise<Response>(() => undefined),
       });
       await vi.advanceTimersByTimeAsync(5_000);

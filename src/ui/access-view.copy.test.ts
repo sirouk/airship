@@ -16,6 +16,17 @@ describe("Chutes connection method copy", () => {
     expect(source).not.toContain("cak_ · OAuth user token");
   });
 
+  it("describes both OAuth boundaries without claiming the extension holds a secret", () => {
+    expect(source).toContain('exchangeMode: "local-confidential-bridge" | "public-pkce"');
+    expect(source).toContain('oauthDiagnostic?.exchangeMode === "local-confidential-bridge"');
+    expect(source).toContain("The app secret stays in the localhost process, outside browser JavaScript.");
+    expect(source).toContain("no client secret is used.");
+    expect(source).toContain("only the same-origin handler performs token operations");
+    expect(source).toContain('fetch("/__airship/chutes/oauth/token"');
+    expect(source).toContain("The local Chutes OAuth handler is not configured.");
+    expect(source).not.toContain("extension adds the client secret");
+  });
+
   it("uses capability names instead of credential prefixes as table headers", () => {
     expect(source).toContain('<th scope="col">Sign-in eligible</th><th scope="col">Key eligible</th><th scope="col">Active method</th>');
     expect(source).toContain("These are credential-class eligibility rules, not observed grants");

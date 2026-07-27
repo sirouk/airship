@@ -72,7 +72,7 @@ export type AccessViewProps = Readonly<{
     homepageUrl: string;
     callbackUrl: string;
     scopes: readonly string[];
-    exchangeMode: "public-pkce";
+    exchangeMode: "local-confidential-bridge" | "public-pkce";
     configurationError?: string;
     onRun: () => Promise<void>;
   }>;
@@ -151,6 +151,8 @@ export function AccessView({
   const publishedExtensionInstallUrl = extensionInstallUrl
     ?? (import.meta.env.VITE_AIRSHIP_EXTENSION_INSTALL_URL as string | undefined)?.trim()
     ?? `${import.meta.env.BASE_URL}extension/index.html`;
+  const localOAuthHandler = oauthDiagnostic?.exchangeMode === "local-confidential-bridge";
+  const oauthNoticeMessage = oauthNotice ? presentOAuthNotice(oauthNotice.message) : "";
   const credentialInput = useRef<HTMLInputElement>(null);
   const ephemeralCredential = useRef<EphemeralChutesCredential>();
   const ephemeralTokenSource = useRef<(() => string | Promise<string>)>();
@@ -185,6 +187,37 @@ export function AccessView({
     ephemeralCredential.current = undefined;
     ephemeralTokenSource.current = undefined;
     candidateTransport.current = undefined;
+  }
+
+  async function beginChutesSignIn(): Promise<void> {
+    if (!oauthDiagnostic) return;
+    if (localOAuthHandler) {
+      let response: Response;
+      try {
+        response = await fetch("/__airship/chutes/oauth/token", {
+          method: "GET",
+          cache: "no-store",
+          credentials: "omit",
+          redirect: "error",
+          referrerPolicy: "no-referrer",
+          signal: AbortSignal.timeout(5_000),
+        });
+      } catch {
+        throw new Error("The local Chutes OAuth handler is unavailable. Restart the Airship lab with its OAuth registration configured.");
+      }
+      if (response.status === 503) {
+        throw new Error("The local Chutes OAuth handler is not configured. Restart the Airship lab with its process-held client secret.");
+      }
+      if (response.status !== 204) {
+        throw new Error(`The local Chutes OAuth handler readiness check failed with HTTP ${response.status}.`);
+      }
+    }
+    await oauthDiagnostic.onRun();
+  }
+
+  function startChutesSignIn(): void {
+    setOauthDiagnosticError(undefined);
+    void beginChutesSignIn().catch((caught) => setOauthDiagnosticError(errorMessage(caught)));
   }
 
   useEffect(() => () => clearEphemeral(), []);
@@ -731,24 +764,25 @@ export function AccessView({
                       <Icon name="access" size={22} />
                       <div>
                         <strong id="oauth-primary-title">Sign in to Chutes</strong>
-                        <p>Your password never touches Airship, and no client secret is used.</p>
+                        <p>{localOAuthHandler
+                          ? "Your password never touches Airship. The app secret stays in the localhost process, outside browser JavaScript."
+                          : "Your password never touches Airship, and no client secret is used."}</p>
                         <details class="oauth-mechanism">
                           <summary>How this works</summary>
-                          <p>Profile, billing, and inference connect through Authorization Code + S256 PKCE with a Chutes app registered for public-client token exchange.</p>
+                          <p>{localOAuthHandler
+                            ? "The browser creates the Authorization Code + S256 PKCE request. The same-origin localhost handler adds the registered app secret only during token exchange; it never stores tokens or exposes the secret to the page."
+                            : "Profile, billing, and inference connect through Authorization Code + S256 PKCE with a Chutes app registered for public-client token exchange."}</p>
                         </details>
                         <button
                           class="primary"
                           type="button"
                           disabled={busy || !online}
-                          onClick={() => {
-                            setOauthDiagnosticError(undefined);
-                            void oauthDiagnostic?.onRun().catch((caught) => setOauthDiagnosticError(errorMessage(caught)));
-                          }}
+                          onClick={startChutesSignIn}
                         >
                           Sign in to Chutes
                         </button>
                         {oauthDiagnosticError ? <p class="oauth-boundary-status error" role="alert">{oauthDiagnosticError}</p> : null}
-                        {oauthNotice?.tone === "error" ? <p class="oauth-boundary-status error" role="alert">{oauthNotice.message}</p> : null}
+                        {oauthNotice?.tone === "error" ? <p class="oauth-boundary-status error" role="alert">{oauthNoticeMessage}</p> : null}
                       </div>
                     </section>
                   ) : null}
@@ -824,13 +858,17 @@ export function AccessView({
       <aside class="oauth-browser-boundary">
         <Icon name="lock" size={19} />
         <div>
-          <strong>Public-client OAuth boundary</strong>
-          <p>The client ID is public. A one-time PKCE verifier survives only the authorization redirect; access and rotating refresh tokens remain in this page's memory. Directory visibility is a separate provider setting.</p>
-          {oauthNotice ? <p class={`oauth-boundary-status ${oauthNotice.tone}`} role={oauthNotice.tone === "error" ? "alert" : "status"}>{oauthNotice.message}</p> : null}
+          <strong>{localOAuthHandler ? "Local token-handler boundary" : "Public-client OAuth boundary"}</strong>
+          <p>{localOAuthHandler
+            ? "The localhost handler receives only the one-time code, PKCE verifier, and memory-only token requests. It adds its process-held app secret and returns the provider response without persisting it. Access and rotating refresh tokens remain in this page's memory."
+            : "The client ID is public. A one-time PKCE verifier survives only the authorization redirect; access and rotating refresh tokens remain in this page's memory. Directory visibility is a separate provider setting."}</p>
+          {oauthNotice ? <p class={`oauth-boundary-status ${oauthNotice.tone}`} role={oauthNotice.tone === "error" ? "alert" : "status"}>{oauthNoticeMessage}</p> : null}
           {oauthDiagnostic ? (
             <details class="oauth-diagnostic">
               <summary>Registration details</summary>
-              <p>The registered callback must match exactly, and the Chutes app must be a Browser/native PKCE client with token endpoint authentication set to <code>none</code>.</p>
+              <p>{localOAuthHandler
+                ? <>The callback must match exactly. This localhost registration uses <code>client_secret_post</code>; only the same-origin handler performs token operations.</>
+                : <>The callback must match exactly, and the Chutes app must be a Browser/native PKCE client with token endpoint authentication set to <code>none</code>.</>}</p>
               <dl>
                 <div><dt>Homepage</dt><dd>{oauthDiagnostic.homepageUrl}</dd></div>
                 <div><dt>Callback</dt><dd>{oauthDiagnostic.callbackUrl}</dd></div>
@@ -847,10 +885,7 @@ export function AccessView({
               <button
                 type="button"
                 disabled={!online || !chutesSignInAvailable}
-                onClick={() => {
-                  setOauthDiagnosticError(undefined);
-                  void oauthDiagnostic.onRun().catch((caught) => setOauthDiagnosticError(errorMessage(caught)));
-                }}
+                onClick={startChutesSignIn}
               >
                 Start sign-in again
               </button>
@@ -885,6 +920,24 @@ function CredentialTypeCard({
   active: boolean;
 }) {
   return <div class={active ? "credential-type active" : "credential-type"}><code>{prefix}</code><strong>{title}</strong><span>{detail}</span></div>;
+}
+
+function presentOAuthNotice(message: string): string {
+  if (message === "oauth:exchange-local") return "Exchanging the code through the localhost handler…";
+  if (message === "oauth:exchange-public") return "Exchanging the code with Chutes…";
+  if (message === "oauth:complete-local") {
+    return "Chutes sign-in complete with S256 PKCE through the localhost handler. Choose a model, then finish the connection.";
+  }
+  if (message === "oauth:complete-public") {
+    return "Chutes sign-in complete with S256 PKCE. Choose a model, then finish the connection.";
+  }
+  if (message === "oauth:invalid-local") {
+    return "Chutes rejected the localhost app credentials. Restart the lab with its registered process credentials, then sign in again.";
+  }
+  if (message === "oauth:invalid-public") {
+    return "Chutes rejected this Browser/native registration. Its token authentication must be “none”; update it, then sign in again.";
+  }
+  return message;
 }
 
 function CapabilityMark({ available }: { available: boolean }) {

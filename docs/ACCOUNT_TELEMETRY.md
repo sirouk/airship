@@ -1,6 +1,6 @@
 # Chutes account telemetry
 
-Status: implemented browser client with direct public-client PKCE and API-key compatibility  
+Status: implemented browser client with localhost confidential PKCE, hosted public-client PKCE, and API-key compatibility  
 Date: 2026-07-18
 
 ## Purpose
@@ -128,17 +128,17 @@ standing. Airship never asks for an admin key.
 Credentials live in page memory only and never appear in URLs, error messages,
 storage, telemetry, or receipts.
 
-The checked-in localhost registration is a Chutes Browser/native client with
-token endpoint authentication `none`, so localhost performs the same direct
-S256 PKCE exchange as a hosted static build. No client secret or browser
-extension is involved. Static production supplies its reviewed Browser/native
-registration as
+The checked-in localhost registration is confidential in the deployed Chutes
+service. The browser creates and proves S256 PKCE, while the same-origin local
+token handler adds a process-held app secret. The secret never enters browser
+JavaScript, the extension, the bundle, logs, or lab state. Static production
+instead supplies its reviewed Browser/native registration as
 `VITE_AIRSHIP_CHUTES_PUBLIC_CLIENT_ID` alongside an exact HTTPS
 `VITE_AIRSHIP_PUBLIC_ORIGIN`. The build fails sign-in closed when those public
-values are absent. The local confidential bridge remains only a protocol-test
-harness for a separately supplied legacy registration; the browser client does
-not select it, and no client secret may enter the bundle. Any client secret
-pasted into chat, source, or a browser must be rotated at Chutes immediately.
+values are absent. A hosted registration must use token authentication `none`;
+the discovery document alone does not convert a confidential app. Any client
+secret pasted into chat, source, an extension, or a browser must be rotated at
+Chutes immediately.
 
 ## Commerce boundary
 

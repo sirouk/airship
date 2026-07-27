@@ -92,10 +92,12 @@ test("a visitor with no credentials lands inside a path that works", async ({ pa
   await expect(page.locator(".connect-surface")).not.toContainText(/process-held client secret/u);
 });
 
-test("localhost Chutes sign-in starts secretless PKCE without consulting the legacy bridge", async ({ page }) => {
-  let bridgeRequests = 0;
-  page.on("request", (request) => {
-    if (new URL(request.url()).pathname === "/__airship/chutes/oauth/token") bridgeRequests += 1;
+test("localhost Chutes sign-in proves its token handler is ready before starting S256 PKCE", async ({ page }) => {
+  let handlerChecks = 0;
+  await page.route("http://localhost:4173/__airship/chutes/oauth/token", async (route) => {
+    handlerChecks += 1;
+    expect(route.request().method()).toBe("GET");
+    await route.fulfill({ status: 204 });
   });
   await page.route("https://api.chutes.ai/idp/authorize?**", async (route) => {
     await route.fulfill({
@@ -116,7 +118,75 @@ test("localhost Chutes sign-in starts secretless PKCE without consulting the leg
   expect(authorize.searchParams.get("code_challenge_method")).toBe("S256");
   expect(authorize.searchParams.get("code_challenge")).toMatch(/^[A-Za-z0-9_-]{43}$/u);
   expect(authorize.searchParams.get("scope")).toBe("openid profile chutes:invoke billing:read");
-  expect(bridgeRequests).toBe(0);
+  expect(handlerChecks).toBe(1);
+});
+
+test("localhost Chutes callback exchanges through the handler without exposing its app secret", async ({ page }) => {
+  let tokenForm: URLSearchParams | undefined;
+  await page.route("http://localhost:4173/__airship/chutes/oauth/token", async (route) => {
+    if (route.request().method() === "GET") {
+      await route.fulfill({ status: 204 });
+      return;
+    }
+    tokenForm = new URLSearchParams(route.request().postData() ?? "");
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        access_token: "cak_browser-roundtrip.access",
+        refresh_token: "crt_browser-roundtrip.refresh",
+        token_type: "Bearer",
+        expires_in: 3_600,
+        scope: "openid profile chutes:invoke billing:read",
+      }),
+    });
+  });
+  await page.route("https://api.chutes.ai/idp/authorize?**", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "text/html",
+      body: "<title>Chutes authorization boundary reached</title>",
+    });
+  });
+
+  await openConnect(page, "http://localhost:4173/#connection");
+  const chutes = await openLane(page, "chutes");
+  await chutes.getByRole("button", { name: "Sign in to Chutes" }).click();
+  await expect(page).toHaveURL(/^https:\/\/api\.chutes\.ai\/idp\/authorize\?/u);
+  const authorize = new URL(page.url());
+  const state = authorize.searchParams.get("state");
+  expect(state).toMatch(/^[A-Za-z0-9_-]{32,128}$/u);
+
+  await page.goto(
+    `http://localhost:4173/auth/chutes/callback?code=one-time-code&state=${encodeURIComponent(state!)}`,
+  );
+  await expect(page.getByText(/Chutes sign-in complete with S256 PKCE through the localhost handler/u))
+    .toBeVisible();
+
+  expect(tokenForm?.get("grant_type")).toBe("authorization_code");
+  expect(tokenForm?.get("client_id")).toBe("cid_n2tusjazqmkkwon12jy3bo3u");
+  expect(tokenForm?.get("redirect_uri")).toBe("http://localhost:4173/auth/chutes/callback");
+  expect(tokenForm?.get("code_verifier")).toMatch(/^[A-Za-z0-9_-]{43,128}$/u);
+  expect(tokenForm?.has("client_secret")).toBe(false);
+});
+
+test("localhost Chutes sign-in stays on Airship when its token handler is unconfigured", async ({ page }) => {
+  await page.route("http://localhost:4173/__airship/chutes/oauth/token", async (route) => {
+    await route.fulfill({
+      status: 503,
+      contentType: "application/json",
+      body: JSON.stringify({ error: "local_bridge_unconfigured" }),
+    });
+  });
+
+  await openConnect(page, "http://localhost:4173/#connection");
+  const chutes = await openLane(page, "chutes");
+  await chutes.getByRole("button", { name: "Sign in to Chutes" }).click();
+
+  await expect(page).toHaveURL("http://localhost:4173/#connection");
+  await expect(chutes.getByRole("alert")).toContainText(
+    "local Chutes OAuth handler is not configured",
+  );
 });
 
 test("Claude and Grok state the extension honestly and offer no broken button", async ({ page }) => {

@@ -9,6 +9,27 @@ import {
 } from "./local-chutes-oauth-bridge";
 
 describe("local confidential Chutes OAuth bridge", () => {
+  it("reports readiness only when both process-held app credentials exist", async () => {
+    const unreachable = () => {
+      throw new Error("Readiness must not contact Chutes.");
+    };
+    await expect(driveBridge(
+      "/__airship/chutes/oauth/token",
+      "",
+      unreachable,
+      { method: "GET" },
+    )).resolves.toEqual({ status: 204, body: "" });
+    await expect(driveBridge(
+      "/__airship/chutes/oauth/token",
+      "",
+      unreachable,
+      { method: "GET", clientSecret: "" },
+    )).resolves.toEqual({
+      status: 503,
+      body: JSON.stringify({ error: "local_bridge_unconfigured" }),
+    });
+  });
+
   it("adds the device-held secret to a PKCE exchange", () => {
     const form = confidentialTokenForm(
       new URLSearchParams({
@@ -58,6 +79,30 @@ describe("local confidential Chutes revocation bridge", () => {
 });
 
 describe("local confidential Chutes bridge upstream body policy", () => {
+  it("adds the secret only after the browser request crosses the localhost handler", async () => {
+    let upstreamBody = "";
+    const browserBody = new URLSearchParams({
+      grant_type: "authorization_code",
+      code: "one-time-code",
+      client_id: "cid_airship",
+      redirect_uri: "http://localhost:4173/auth/chutes/callback",
+      code_verifier: "v".repeat(43),
+    }).toString();
+    expect(new URLSearchParams(browserBody).has("client_secret")).toBe(false);
+
+    await driveBridge(
+      "/__airship/chutes/oauth/token",
+      browserBody,
+      (_url, init) => {
+        upstreamBody = String(init?.body);
+        return Response.json({ access_token: "cak_new" });
+      },
+    );
+
+    expect(new URLSearchParams(upstreamBody).get("client_secret")).toBe("device-secret");
+    expect(new URLSearchParams(upstreamBody).get("code_verifier")).toBe("v".repeat(43));
+  });
+
   it("passes a bodyless revocation through, because RFC 7009 permits one", async () => {
     const result = await driveBridge(
       "/__airship/chutes/oauth/revoke",
@@ -102,12 +147,16 @@ describe("local confidential Chutes bridge upstream body policy", () => {
 async function driveBridge(
   route: string,
   body: string,
-  upstream: (url: string) => Response,
+  upstream: (url: string, init?: RequestInit) => Response,
+  options: Readonly<{
+    method?: "GET" | "POST";
+    clientSecret?: string;
+  }> = {},
 ): Promise<{ status: number; body: string }> {
   const plugin = localChutesOAuthBridge({
     clientId: "cid_airship",
-    clientSecret: "device-secret",
-    fetch: async (input) => upstream(String(input)),
+    clientSecret: options.clientSecret ?? "device-secret",
+    fetch: async (input, init) => upstream(String(input), init),
   });
   let handler: ((
     request: IncomingMessage,
@@ -122,7 +171,7 @@ async function driveBridge(
   if (!handler) throw new Error("The bridge registered no request handler.");
 
   const request = Readable.from([Buffer.from(body)]) as unknown as IncomingMessage;
-  request.method = "POST";
+  request.method = options.method ?? "POST";
   request.url = route;
   request.headers = {
     origin: "http://localhost:4173",

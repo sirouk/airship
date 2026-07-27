@@ -36,10 +36,19 @@ describe("offline runtime UI contract", () => {
     expect(access).toContain('const activeChutesMethod = chutesSignInAvailable ? chutesMethod : "api-key";');
     expect(access).toContain('{chutesSignInAvailable && activeChutesMethod === "oauth" ? (');
     expect(access).toContain('{activeChutesMethod === "api-key" ? (');
-    expect(access).toMatch(/disabled=\{busy \|\| !online\}\n\s+onClick=\{\(\) => \{\n\s+setOauthDiagnosticError\(undefined\);/u);
+    expect(access).toMatch(/disabled=\{busy \|\| !online\}\n\s+onClick=\{startChutesSignIn\}/u);
     expect(access).toContain("disabled={!online || !chutesSignInAvailable}");
     expect(access).toContain("disabled={busy || !online}>Discover models with key");
     expect(access).toContain('class="access-network-pause"');
+  });
+
+  it("maps OAuth rejection to the active token boundary instead of prescribing the wrong client type", () => {
+    expect(app).toContain('exchangeMode === "local-confidential-bridge"');
+    expect(app).toContain('"oauth:invalid-local"');
+    expect(app).toContain('"oauth:invalid-public"');
+    expect(access).toContain("Chutes rejected the localhost app credentials.");
+    expect(access).toContain("Chutes rejected this Browser/native registration.");
+    expect(access).toContain("registered process credentials");
   });
 
   it("pauses account reads, retains the last observation, and disables refresh", () => {

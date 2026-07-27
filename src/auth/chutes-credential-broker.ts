@@ -2,6 +2,7 @@ import {
   CHUTES_LOCAL_REGISTRATION,
   refreshChutesOAuthToken,
   revokeChutesToken,
+  type ChutesOAuthRegistration,
   type ChutesOAuthTokenSet,
 } from "./chutes-oauth";
 import {
@@ -71,6 +72,7 @@ export type ChutesBearerRequest = Readonly<{
 }>;
 
 export type ChutesCredentialBrokerOptions = Readonly<{
+  registration?: ChutesOAuthRegistration;
   clientId?: string;
   requiredOAuthScopes?: readonly string[];
   minimumValidityMs?: number;
@@ -119,6 +121,7 @@ export class ChutesCredentialBroker {
   #revision = 0;
   #refreshTask?: RefreshTask;
   readonly #retiredRefreshTokenDigests = new Set<string>();
+  readonly #registration: ChutesOAuthRegistration;
   readonly #clientId: string;
   readonly #requiredOAuthScopes: readonly string[];
   readonly #minimumValidityMs: number;
@@ -127,9 +130,13 @@ export class ChutesCredentialBroker {
   readonly #revoke: typeof revokeChutesToken;
 
   constructor(options: ChutesCredentialBrokerOptions = {}) {
-    this.#clientId = validateClientId(options.clientId ?? CHUTES_LOCAL_REGISTRATION.clientId);
+    this.#registration = options.registration ?? CHUTES_LOCAL_REGISTRATION;
+    this.#clientId = validateClientId(options.clientId ?? this.#registration.clientId);
+    if (this.#clientId !== this.#registration.clientId) {
+      throw new TypeError("The Chutes credential broker client ID does not match its OAuth registration.");
+    }
     this.#requiredOAuthScopes = normalizeScopes(
-      options.requiredOAuthScopes ?? CHUTES_LOCAL_REGISTRATION.registrationScopes,
+      options.requiredOAuthScopes ?? this.#registration.registrationScopes,
       "required OAuth scopes",
     );
     this.#minimumValidityMs = normalizeMinimumValidity(
@@ -210,6 +217,7 @@ export class ChutesCredentialBroker {
     this.#replaceState(undefined);
     if (released?.kind === "oauth-user-token") {
       const clientId = this.#clientId;
+      const registration = this.#registration;
       const revoke = this.#revoke;
       const tokens = [
         ...(released.refreshToken
@@ -219,7 +227,7 @@ export class ChutesCredentialBroker {
       ];
       void (async () => {
         for (const entry of tokens) {
-          await revoke({ ...entry, clientId }).catch(() => undefined);
+          await revoke({ ...entry, clientId, registration }).catch(() => undefined);
         }
       })();
     }
@@ -301,6 +309,7 @@ export class ChutesCredentialBroker {
         refreshToken: oldRefreshToken,
         signal: task.controller.signal,
         now: this.#readNow(),
+        registration: this.#registration,
       });
     } catch {
       if (!this.#isCurrent(task.state, task.revision)) {
