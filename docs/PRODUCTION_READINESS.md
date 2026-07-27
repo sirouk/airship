@@ -14,7 +14,7 @@ work that cannot be completed by source code alone.
 
 | Surface | Repository state | Production distribution state |
 | --- | --- | --- |
-| Airship PWA | Static build, release budgets, CSP/security checks, PWA assets, and GitHub Pages workflow are present | Ready to deploy after the production OAuth identifiers and origin variables are configured |
+| Airship PWA | Static build, release budgets, CSP/security checks, PWA assets, and GitHub Pages workflow are present | Not deployed: the public URL is currently 404, Pages run `29720716701` was blocked before execution by account billing/spending limits, and the audited branch is not merged to `main` |
 | Chrome | Manifest V3 release package, deterministic ZIP, checksum, install instructions, privacy disclosure, popup, provider relay, encrypted cache, and background compute are present | Chrome Web Store publisher upload, review, and signing remain external |
 | Microsoft Edge | Uses the reviewed Chromium Manifest V3 package | Microsoft Partner Center upload, review, and signing remain external |
 | Firefox desktop | Firefox-specific WebExtension package and temporary-install path are present | Permanent installation requires Mozilla AMO signing/review |
@@ -68,23 +68,65 @@ Run from the repository root:
 npm ci
 npm run check
 npm run test:e2e
+npm run test:e2e:master
+npm run test:e2e:static-host
 ```
 
 Before a tagged public release, also run:
 
 ```sh
 npm run test:e2e:portability
+npm run semantic:prepare
 npm run test:e2e:semantic
 ```
+
+The semantic command enables both the direct worker and production-UI gates.
+It fails if the prepared, hash-pinned same-origin pack is absent or cannot
+execute; it does not turn missing assets into skipped release evidence.
+
+`npm audit --omit=dev --audit-level=high` currently reports zero production
+dependency vulnerabilities. The full development audit still reports the
+no-fix `sharp`/libvips advisory inherited by the pinned Transformers.js build
+tool. Airship neither invokes that Node image path nor ships `sharp` or libvips
+in the PWA, extension, or semantic pack; Transformers.js therefore remains a
+development dependency and this upstream build-environment advisory stays
+visible rather than being misrepresented as client runtime exposure.
 
 Where credentials and infrastructure are available, run the opt-in live gates:
 
 ```sh
 npm run test:e2e:live
 npm run test:e2e:google-drive
+npm run test:e2e:dcap-live
 npm run test:vault:live
 npm run test:chutes:live
 ```
+
+`test:chutes:live` requires `CHUTES_TEST_API_KEY`; `CHUTES_TEST_MODEL` may
+override its reviewed default. The command fails when the credential is absent
+and must never report a release pass composed only of skipped live tests.
+
+The master matrix explicitly enables and runs `e2e/live-webcontainer.spec.ts`
+on its one authoritative desktop Chromium project; tablet and phone projects
+continue to prove the supported fallback surfaces. The DCAP live gate owns
+strict port 4191 and requires a captured
+`.airship-lab/attest/fixtures/evidence.json` plus outbound access to current
+Intel collateral. Invoking its npm script enables the gated spec, so a missing
+fixture or failed collateral verification is a failure rather than a silent
+release pass.
+
+The static-host command first rebuilds and release-validates `dist/`, then
+serves that exact output from an ordinary Node server that deliberately sends
+no COOP, COEP, or CORP headers. A fresh Chromium
+profile must observe the first headerless document, one service-worker takeover
+reload, an isolated controlled document with `SharedArrayBuffer`, no reload
+loop, and a browser-owned WebContainer terminal that executes a real Node
+command. This is the release proof that Airship does not quietly depend on
+deployment-specific `_headers` support for its browser execution tier.
+The same gate delays first install, begins an unsent chat draft, and verifies
+that takeover is deferred behind an explicit reload once the user has
+interacted. It then installs a changed worker and proves one click promotes and
+reloads it without losing the draft.
 
 The checked-in companion acceptance launches a real Chromium extension context,
 opens the actual popup, enables the encrypted cache, performs a ciphertext
@@ -95,6 +137,11 @@ capability remains live.
 
 Airship is production-distributable only after all of the following are true:
 
+- [ ] Resolve the GitHub account billing/spending-limit failure that currently
+  prevents the Pages workflow from starting.
+- [ ] Merge the reviewed release commit to `main`, run required checks against
+  that exact SHA, publish its Pages artifact, and verify the public URL no
+  longer returns 404.
 - [ ] Set the GitHub Pages repository variables documented in
   `.github/workflows/pages.yml`, including the production origin and public
   OAuth client identifiers.

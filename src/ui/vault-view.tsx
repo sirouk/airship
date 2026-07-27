@@ -46,6 +46,11 @@ export function VaultView({
   const localDevice = provider === "local-device";
   const ephemeral = provider === "ephemeral";
   const googleDrive = snapshot.phase !== "disconnected" && isGoogleDriveConfiguration(snapshot.config);
+  const s3Configuration = snapshot.phase !== "disconnected"
+    && !isGoogleDriveConfiguration(snapshot.config)
+    ? snapshot.config
+    : undefined;
+  const localObjectStore = s3Configuration?.mode === "local-development";
   const adoptedDrive = runtimeAdopted && googleDrive;
   return (
     <section class="vault-view" aria-labelledby="vault-heading">
@@ -55,13 +60,19 @@ export function VaultView({
             ? "Private device state"
             : ephemeral
               ? "Private page state"
-              : "Private cloud state"}</p>
+              : googleDrive
+                ? "Private Drive state"
+                : localObjectStore
+                  ? "Private local object state"
+                  : "Private object-store state"}</p>
           <h1 id="vault-heading">Vault</h1>
           <p>{localDevice
             ? "Encrypted journal and workspace state remain in browser-managed storage on this device and work offline."
             : ephemeral
               ? "Workspace and journal state remain only in this page-memory runtime. Nothing is synchronized, and closing the page releases it."
-              : "Encrypted journal and workspace state travel directly between this device and the selected object store."}</p>
+              : localObjectStore
+                ? "Encrypted journal and workspace state move directly between this page and the selected loopback S3-compatible store. Nothing is cloud-synchronized."
+                : "Encrypted journal and workspace state travel directly between this device and the selected storage provider."}</p>
         </div>
         <span class={`vault-view__phase vault-view__phase--${snapshot.phase}`} role="status" aria-live="polite">
           {localDevice && localDeviceStatus

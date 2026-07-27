@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  COMPOSER_AUTOFOCUS_MAX_WIDTH_QUERY,
+  MOBILE_SHELL_MEDIA_QUERY,
   shouldClaimComposerFocus,
   type ComposerFocusContext,
 } from "./composer-focus";
@@ -34,6 +34,7 @@ describe("shouldClaimComposerFocus", () => {
   });
 
   it("uses the same phone breakpoint the mobile shell is built on", () => {
-    expect(COMPOSER_AUTOFOCUS_MAX_WIDTH_QUERY).toBe("(max-width: 640px)");
+    expect(MOBILE_SHELL_MEDIA_QUERY)
+      .toBe("(max-width: 640px), (max-width: 950px) and (max-height: 500px)");
   });
 });

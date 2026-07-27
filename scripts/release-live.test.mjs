@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import masterConfig, { MASTER_ACCEPTANCE_ORIGIN } from "../playwright.master.config.ts";
 import liveConfig, { LIVE_ACCEPTANCE_ORIGIN } from "../playwright.live.config.ts";
+import dcapLiveConfig, { DCAP_LIVE_ACCEPTANCE_ORIGIN } from "../playwright.dcap-live.config.ts";
 import {
   createLiveAcceptancePlan,
   readLiveAcceptanceConfig,
@@ -20,8 +21,10 @@ describe("live release acceptance infrastructure", () => {
   it("owns dedicated strict-port servers instead of reusing developer state", () => {
     expect(MASTER_ACCEPTANCE_ORIGIN).toBe("http://127.0.0.1:4186");
     expect(LIVE_ACCEPTANCE_ORIGIN).toBe("http://127.0.0.1:4188");
+    expect(DCAP_LIVE_ACCEPTANCE_ORIGIN).toBe("http://127.0.0.1:4191");
     expect(masterConfig.use?.baseURL).toBe(MASTER_ACCEPTANCE_ORIGIN);
     expect(liveConfig.use?.baseURL).toBe(LIVE_ACCEPTANCE_ORIGIN);
+    expect(dcapLiveConfig.use?.baseURL).toBe(DCAP_LIVE_ACCEPTANCE_ORIGIN);
     expect(masterConfig.webServer).toMatchObject({
       url: MASTER_ACCEPTANCE_ORIGIN,
       reuseExistingServer: false,
@@ -30,10 +33,35 @@ describe("live release acceptance infrastructure", () => {
       url: LIVE_ACCEPTANCE_ORIGIN,
       reuseExistingServer: false,
     });
+    expect(dcapLiveConfig.webServer).toMatchObject({
+      url: DCAP_LIVE_ACCEPTANCE_ORIGIN,
+      reuseExistingServer: false,
+    });
     expect(liveConfig.use).toMatchObject({ screenshot: "off", trace: "off", video: "off" });
+    expect(dcapLiveConfig.use).toMatchObject({ screenshot: "off", trace: "off", video: "off" });
     expect(liveConfig.reporter).toBe("list");
     expect(masterConfig.webServer?.command).toContain("--port 4186 --strictPort");
     expect(liveConfig.webServer?.command).toContain("--port 4188 --strictPort");
+    expect(dcapLiveConfig.webServer?.command).toContain("--port 4191 --strictPort");
+  });
+
+  it("attaches the provider-backed browser probes to explicit release scripts", () => {
+    const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+    const readiness = readFileSync(new URL("../docs/PRODUCTION_READINESS.md", import.meta.url), "utf8");
+    const requiredGates = readiness.slice(
+      readiness.indexOf("## Required release gates"),
+      readiness.indexOf("Before a tagged public release"),
+    );
+    expect(masterConfig.testMatch).toEqual(expect.arrayContaining([
+      "master-browser-acceptance.spec.ts",
+      "live-webcontainer.spec.ts",
+    ]));
+    expect(pkg.scripts["test:e2e:master"]).toContain("AIRSHIP_LIVE_WEBCONTAINER=1");
+    expect(pkg.scripts["test:e2e:master"]).toContain("playwright.master.config.ts");
+    expect(dcapLiveConfig.testMatch).toBe("live-dcap-qvl.spec.ts");
+    expect(pkg.scripts["test:e2e:dcap-live"]).toContain("AIRSHIP_DCAP_LIVE=1");
+    expect(pkg.scripts["test:e2e:dcap-live"]).toContain("playwright.dcap-live.config.ts");
+    expect(requiredGates).toContain("npm run test:e2e:master");
   });
 
   it("cannot redirect the master suite through caller-supplied base URLs", () => {

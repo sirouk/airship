@@ -1,6 +1,27 @@
 const DRAFT_PREFIX = "airship.chat-draft.v1.";
 const MAX_DRAFT_CHARS = 100_000;
 
+export type ThreadDraftHydrationAction = "hydrate" | "preserve" | "unchanged";
+
+/**
+ * Claims one composer-hydration pass for an effective conversation identity.
+ *
+ * A route request and the active session can represent the same conversation
+ * during two consecutive renders (`#chat/B` first, then active session `B`
+ * after the route request normalizes). Keeping the claim in a ref makes that
+ * transition idempotent without preventing a later A → B → A navigation from
+ * restoring A again.
+ */
+export function claimThreadDraftHydration(
+  fence: { current: string | undefined },
+  identity: string | undefined,
+  preserveIdentity?: string,
+): ThreadDraftHydrationAction {
+  if (!identity || fence.current === identity) return "unchanged";
+  fence.current = identity;
+  return preserveIdentity === identity ? "preserve" : "hydrate";
+}
+
 export function readThreadDraft(sessionId: string, storage: Pick<Storage, "getItem">): string {
   try {
     const value = storage.getItem(threadDraftKey(sessionId));

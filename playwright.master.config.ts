@@ -4,7 +4,7 @@ export const MASTER_ACCEPTANCE_ORIGIN = "http://127.0.0.1:4186";
 
 export default defineConfig({
   testDir: "./e2e",
-  testMatch: "master-browser-acceptance.spec.ts",
+  testMatch: ["master-browser-acceptance.spec.ts", "live-webcontainer.spec.ts"],
   outputDir: "test-results/master-browser-acceptance",
   fullyParallel: false,
   workers: 1,

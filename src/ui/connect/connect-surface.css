@@ -639,6 +639,43 @@
 }
 
 @media (max-width: 640px) {
+  /*
+   * A phone-sized first visit must lead with the connection that can actually
+   * make chat useful. The companion remains fully available below the provider
+   * lanes (and inside the lanes that require it), but it must not push the
+   * already-open Chutes credential path below the first viewport.
+   */
+  .connect-lane-list {
+    order: 1;
+  }
+
+  .companion-overview {
+    order: 2;
+  }
+
+  /*
+   * The route heading already explains the provider boundary. Repeating a
+   * second heading and four-line introduction here delayed the first usable
+   * credential control by more than a viewport on a 390px phone.
+   */
+  .connect-surface__heading {
+    display: none;
+  }
+
+  .connect-lane__header {
+    min-height: 48px;
+    padding: 7px 10px;
+  }
+
+  .connect-lane__body {
+    gap: 7px;
+    padding: 0 10px 10px;
+  }
+
+  .connect-lane__detail {
+    display: none;
+  }
+
   .connect-lane__header,
   .connect-surface button,
   .connect-surface a.primary,

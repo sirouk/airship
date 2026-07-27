@@ -1,7 +1,12 @@
-const CACHE_VERSION = "airship-shell-v6";
+const CACHE_VERSION = "airship-shell-v7";
 const BASE_URL = new URL("./", self.location.href);
 const BASE_PATH = BASE_URL.pathname;
 const SHELL = [BASE_PATH, scopedPath("manifest.webmanifest"), scopedPath("favicon.svg")];
+const DOCUMENT_ISOLATION_HEADERS = Object.freeze({
+  "Cross-Origin-Embedder-Policy": "credentialless",
+  "Cross-Origin-Opener-Policy": "same-origin",
+  "Cross-Origin-Resource-Policy": "same-origin",
+});
 
 function scopedPath(path) {
   return new URL(path, BASE_URL).pathname;
@@ -40,9 +45,16 @@ self.addEventListener("message", (event) => {
 
 self.addEventListener("activate", (event) => {
   event.waitUntil(
-    caches
-      .keys()
-      .then((keys) => Promise.all(keys.filter((key) => key !== CACHE_VERSION).map((key) => caches.delete(key))))
+    Promise.all([
+      caches
+        .keys()
+        .then((keys) => Promise.all(keys.filter((key) => key !== CACHE_VERSION).map((key) => caches.delete(key)))),
+      // Claim the first document immediately. Airship's existing
+      // controllerchange listener reloads it once, after which this worker can
+      // provide the navigation response carrying the isolation policy even on
+      // static hosts (such as GitHub Pages) that ignore `_headers`.
+      self.clients.claim(),
+    ]),
   );
 });
 
@@ -58,9 +70,11 @@ self.addEventListener("fetch", (event) => {
           if (response.ok && response.type === "basic") {
             event.waitUntil(caches.open(CACHE_VERSION).then((cache) => cache.put(BASE_PATH, response.clone())));
           }
-          return response;
+          return isolatedNavigationResponse(response);
         })
-        .catch(() => caches.match(BASE_PATH).then((cached) => cached ?? Response.error())),
+        .catch(() => caches.match(BASE_PATH).then((cached) =>
+          cached ? isolatedNavigationResponse(cached) : Response.error()
+        )),
     );
     return;
   }
@@ -85,3 +99,18 @@ self.addEventListener("fetch", (event) => {
     ),
   );
 });
+
+/**
+ * A navigation response is the authority for cross-origin isolation. Preserve
+ * every byte and origin-provided header, adding only the three reviewed
+ * document-policy headers that a header-capable host already serves.
+ */
+function isolatedNavigationResponse(response) {
+  const headers = new Headers(response.headers);
+  for (const [name, value] of Object.entries(DOCUMENT_ISOLATION_HEADERS)) headers.set(name, value);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}

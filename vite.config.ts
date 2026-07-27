@@ -1,11 +1,11 @@
 import preact from "@preact/preset-vite";
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 import { localChutesOAuthBridge } from "./scripts/local-chutes-oauth-bridge";
 import { airshipPyodideAssets } from "./scripts/pyodide-assets";
 import { airshipSemanticPackAssets } from "./scripts/semantic-pack-assets";
 
 const DEFERRED_HTML_PRELOAD = /(?:^|\/)(?:deferred-capabilities|execution-runtime-pack|execution-engine|runtime-registry|wasi-preview1-worker|node-webcontainer-pack|wasix-pack|wasix-worker|dist|index|agent|tool-bundle|client-context-runtime|context-selection|repository-admission|editor-view|workspace-binding|content-codec|sources-view|source-selection|workspace-adapter|sessions-route|capabilities-view|browser-runtime|memory-view|kind-visual|proof-view|client|terminal-view|semantic\.worker|client-runtime|telemetry|fabric|openai|provider-connections-view|providers|session-route|inference-bridge-pack|local-device-vault-setup|local-device-keyring|encrypted-envelope|local-lab)-[A-Za-z0-9_-]+\.(?:js|css)$/u;
-
 /**
  * Vite may otherwise promote dependencies of dynamic imports into index.html.
  * Preserve its just-in-time JS-host preloads, but keep optional Airship packs
@@ -57,6 +57,14 @@ export const DEVELOPMENT_WATCH_IGNORES = Object.freeze([
 
 export default defineConfig({
   base: resolvePublicBasePath(process.env.AIRSHIP_PUBLIC_BASE_PATH),
+  resolve: {
+    // isomorphic-git's standard fallback drags a Node Buffer-inspection graph
+    // into the otherwise browser-native Git pack. Airship keeps the same
+    // constructor contract in a reviewed, byte-view-only implementation.
+    alias: {
+      "sha.js/sha1.js": fileURLToPath(new URL("./src/git/sha1-fallback.ts", import.meta.url)),
+    },
+  },
   plugins: [
     preact(),
     airshipPyodideAssets(),

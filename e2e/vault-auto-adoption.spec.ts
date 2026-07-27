@@ -23,9 +23,12 @@ async function expectLocalVaultAdopted(page: Page, timeout = 20_000): Promise<vo
     // the same runtime state remains exposed through its live-region contract.
     await expect(page.getByRole("status").filter({ hasText: /Encrypted S3 vault active/u }).first())
       .toContainText("Encrypted S3 vault active");
+    const sessionDetails = page.getByRole("button", { name: /Session\. Encrypted state synced\./u });
+    await expect(sessionDetails).toBeVisible();
+    await expect(sessionDetails.getByRole("status")).toHaveText("Encrypted state synced");
   } else {
-    await expect(page.locator(".topbar-center").getByText("Cloud Vault active", { exact: true })).toBeVisible();
-    await expect(page.getByText("Encrypted state synced", { exact: true }).first()).toBeVisible();
+    await expect(page.locator(".topbar-center").getByText("Local S3 Vault active", { exact: true })).toBeVisible();
+    await expect(page.locator(".session-meta .durability-indicator")).toHaveText("Encrypted state synced");
   }
 }
 

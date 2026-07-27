@@ -822,9 +822,55 @@
     gap: 13px;
   }
 
+  /*
+   * Treat provider setup as a compact utility surface on a phone. The Trust
+   * tab and the Chutes lane already provide the surrounding context, so a
+   * desktop-sized introduction only delays the first usable control.
+   */
+  .access-connection-heading > span,
+  .access-connection-heading > p {
+    display: none;
+  }
+
+  .access-connection-heading h1 {
+    margin: 0;
+    font-size: 1.65rem;
+    line-height: 1.1;
+  }
+
+  /*
+   * On a phone the provider cards immediately follow this header, so duplicate
+   * in-page jump controls only consume the exact space needed by the first
+   * credential field. Desktop keeps them for long, multi-column scanning.
+   */
+  .access-provider-jump {
+    display: none;
+  }
+
   .access-connection-card {
-    padding: 13px;
+    padding: 9px;
     border-radius: var(--radius-control);
+  }
+
+  .connection-entry-stack,
+  .api-key-alternative .credential-entry {
+    gap: 8px;
+    padding-top: 0;
+  }
+
+  /*
+   * The selected API-key tab, field label, placeholder, and help line already
+   * identify this credential. Repeating a titled wrapper and a large
+   * credential taxonomy card hid the input beneath the fixed navigation.
+   */
+  .api-key-alternative > strong,
+  .api-key-alternative .credential-types {
+    display: none;
+  }
+
+  .api-key-alternative .credential-entry {
+    padding: 10px;
+    border-top: 0;
   }
 
   .access-section-heading,

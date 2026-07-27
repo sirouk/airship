@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { BrowserGitClient, MemoryGitAdapter } from "../git";
+import { BrowserGitClient } from "../git";
+import { MemoryGitAdapter } from "../git/memory-adapter";
 import { EventJournal } from "../core/journal";
 import { MemoryJournalBackend } from "../core/memory-journal";
 import { MemoryWorkspace } from "../workspace/memory";

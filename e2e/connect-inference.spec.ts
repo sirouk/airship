@@ -138,8 +138,12 @@ test("the API-key alternative moves to the direct providers without leaving the 
   await expect(page.locator("#provider-setup-anthropic")).toBeFocused();
 });
 
-test("the section jump controls do not eject the visitor to Chat", async ({ page }) => {
+test("the section jump controls do not eject the visitor to Chat", async ({ page }, testInfo) => {
   await openConnect(page);
+  if (testInfo.project.name === "mobile-chromium") {
+    await expect(page.locator(".access-provider-jump")).toBeHidden();
+    return;
+  }
   await page.getByRole("button", { name: /Cloud keys & local models/u }).click();
   await expect(page).toHaveURL(/#connection$/);
   await expect(page.getByRole("heading", { name: "Connect models", level: 1 })).toBeVisible();
@@ -245,15 +249,33 @@ test("the connect surface is usable on a phone", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile-chromium", "phone layout contract");
   await openConnect(page);
 
-  const overflow = await page.evaluate(() => ({
-    document: document.documentElement.scrollWidth - document.documentElement.clientWidth,
-    surface: (() => {
+  const layout = await page.evaluate(() => ({
+    overflow: {
+      document: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      surface: (() => {
       const element = document.querySelector(".connect-surface");
       return element ? element.scrollWidth - element.clientWidth : 0;
-    })(),
+      })(),
+    },
+    chutesTop: document.querySelector<HTMLElement>('.connect-lane[data-lane="chutes"]')?.getBoundingClientRect().top,
+    companionTop: document.querySelector<HTMLElement>(".companion-overview")?.getBoundingClientRect().top,
   }));
-  expect(overflow.document).toBeLessThanOrEqual(1);
-  expect(overflow.surface).toBeLessThanOrEqual(1);
+  expect(layout.overflow.document).toBeLessThanOrEqual(1);
+  expect(layout.overflow.surface).toBeLessThanOrEqual(1);
+  expect(layout.chutesTop, "the immediately usable Chutes lane has measurable placement").toBeDefined();
+  expect(layout.companionTop, "the optional companion overview has measurable placement").toBeDefined();
+  expect(layout.chutesTop!, "the usable provider path leads optional extension detail").toBeLessThan(layout.companionTop!);
+  expect(layout.chutesTop!, "the usable provider path begins in the first phone viewport").toBeLessThan(844);
+  const keyInput = page.locator('input[name="chutes-api-key"]');
+  if (await keyInput.count()) {
+    const keyInputBox = await keyInput.boundingBox();
+    const mobileNavigationBox = await page.getByRole("navigation", { name: "Mobile navigation" }).boundingBox();
+    expect(keyInputBox, "the Chutes key field has measurable placement").not.toBeNull();
+    expect(mobileNavigationBox, "the mobile navigation has measurable placement").not.toBeNull();
+    expect(keyInputBox!.y, "the first usable credential control begins in the first phone viewport").toBeLessThan(844);
+    expect(keyInputBox!.y + keyInputBox!.height, "the first usable credential control is not hidden behind mobile navigation")
+      .toBeLessThanOrEqual(mobileNavigationBox!.y + 1);
+  }
 
   const headers = page.locator("button.connect-lane__header");
   const count = await headers.count();

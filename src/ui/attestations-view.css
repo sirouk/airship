@@ -400,6 +400,7 @@
 .attestations-empty p { max-width: 58ch; margin: 0; font-size: 0.76rem; line-height: 1.5; }
 .attestations-empty__intro { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 14px; align-items: start; max-width: 700px; margin-inline: auto; }
 .attestations-empty__intro p { margin-top: 5px; }
+.attestations-empty__connection { margin-top: 14px; }
 .attestations-empty__flow { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; width: min(760px, 100%); margin-inline: auto; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--line); }
 .attestations-empty__flow > div { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 3px 9px; align-content: start; min-width: 0; padding: 13px; background: var(--surface-soft); }
 .attestations-empty__flow span { grid-row: 1 / span 2; color: var(--accent-bright); font: var(--fs-micro)/1.3 var(--font-mono); }

@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   RELEASE_BUDGETS,
+  assertNoSimulatedGitRuntime,
   assertWithinBudget,
   assertUnpromotedWasixAbsent,
   assertExclusiveArtifactClassifications,
@@ -130,6 +131,15 @@ describe("release gate", () => {
         { name: "optional", paths: ["assets/optional-B.js"] },
       ],
     )).not.toThrow();
+  });
+
+  it("keeps the deterministic memory-Git fixture out of production JavaScript", () => {
+    expect(() => assertNoSimulatedGitRuntime([
+      { path: "assets/workspace-adapter-A.js", payload: Buffer.from("real browser Git") },
+    ])).not.toThrow();
+    expect(() => assertNoSimulatedGitRuntime([
+      { path: "assets/deferred-capabilities-A.js", payload: Buffer.from("airship-memory-git") },
+    ])).toThrow(/simulated browser-Git runtime.*deferred-capabilities-A\.js/iu);
   });
 
   it("recognizes only the hashed execution pack and forbids optional-pack preloads", () => {

@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState } from "preact/hooks";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
 import type {
   AttestationEvidenceClientErrorCode,
   ChutesAttestationEvidenceClient,
@@ -188,10 +188,10 @@ import { MessagePartsView } from "./chat/message-parts-view";
 import { capabilityTierDetail, capabilityTierLabel } from "./chat/capability-tier";
 import { useWindowedTranscript } from "./chat/use-windowed-transcript";
 import { composerAttachments, userMessageParts, type ComposerAttachment } from "./chat/composer-state";
-import { COMPOSER_AUTOFOCUS_MAX_WIDTH_QUERY, shouldClaimComposerFocus } from "./chat/composer-focus";
+import { MOBILE_SHELL_MEDIA_QUERY, shouldClaimComposerFocus } from "./chat/composer-focus";
 import { originatingPromptForRow } from "./chat/retry-prompt";
 import { recoverPartialTurn } from "./chat/turn-recovery";
-import { readThreadDraft, writeThreadDraft } from "./chat/thread-draft";
+import { claimThreadDraftHydration, readThreadDraft, writeThreadDraft } from "./chat/thread-draft";
 import { appendThreadQueueItem, removeThreadQueueItem } from "./chat/thread-queue";
 import {
   refreshCompletedTurnWorkspace,
@@ -202,7 +202,7 @@ import { isNearLastRealCard, preferredJumpBehavior, scrollToLastRealCard } from 
 import { TabPresenceNote } from "./tab-presence";
 import { ProfileThemeSwatch } from "./profile-theme-swatch";
 import { PostureChip } from "./posture-chip";
-import { DurabilityIndicator } from "./durability-indicator";
+import { DurabilityIndicator, durabilityLabel } from "./durability-indicator";
 import { mapUnknownRequestFailure } from "./request-state";
 import { claimExpiry, claimLanguage, postureLabel, proofLevelLabel, proofStatusLabel, rankedReceiptVerdict, relativeEvidenceAge } from "./trust-language";
 import { RouteSkeleton } from "./route-skeleton";
@@ -401,23 +401,6 @@ const LOCAL_LAB_DEV_KEY = Object.freeze([
   0xc2, 0x0b, 0x9a, 0x46, 0xe3, 0x71, 0x58, 0xbd, 0x2f, 0x84, 0xd0, 0x6a, 0x39, 0xf7, 0x1c, 0x50,
 ]);
 
-const AIRSHIP_WORKSPACE_GUIDE = `# Airship workspace
-
-This is the agent's private virtual workspace, rooted at \`/workspace\`. The local lab adopts its client-encrypted MinIO vault by default; Preferences can deliberately move the active runtime to Ephemeral page memory and back.
-
-## What the agent can do here
-
-- Inspect, read, search, create, patch, move, and remove workspace files with revision checks.
-- Build and query an on-device hybrid context index bound to exact file revisions.
-- Maintain a validated task plan in \`.airship/tasks.json\`.
-- Inspect and change browser-owned Git state (status, diffs, staging, commits, and branches).
-- Fetch bounded textual HTTPS resources when CORS permits it.
-- Import a bounded public GitHub repository snapshot into \`/workspace/sources\` without an Airship backend.
-- Inspect available coding runtimes, execute bounded JavaScript, and run compact WASI Preview 1 command artifacts entirely in disposable browser workers.
-
-The model has no ambient host shell or unrestricted filesystem. It should inspect its current tool manifest, use the available browser executors, verify results, and name any exact browser or service boundary that prevents an operation.
-`;
-
 const navigationIcons: Readonly<Record<CanonicalDestinationId, IconName>> = Object.freeze({
   chat: "chat", workspace: "workspace", memory: "memory",
   profiles: "profiles", vault: "cloud", attestations: "attestation", proof: "proof", access: "access",
@@ -428,8 +411,10 @@ const welcomeMessage: UiMessage = {
   id: "welcome",
   role: "assistant",
   content:
-    "The edge runtime is ready. The workspace, editor, terminal and browser-owned Git already work in this tab with no account. Chat is the one part that needs a model provider.",
+    "The edge runtime is ready. The workspace, editor, terminal and browser-owned Git already work in this tab with no account. Real model-backed chat needs a provider; until you connect one, the composer uses a deterministic local demo.",
 };
+
+const PROFILE_DRAFT_DISCARD_PROMPT = "Discard unsaved profile edits?";
 
 /**
  * Entry points for a fresh transcript.
@@ -617,7 +602,6 @@ export function App() {
   const [input, setInput] = useState("");
   const [attachments, setAttachments] = useState<readonly ComposerAttachment[]>([]);
   const [composerNotice, setComposerNotice] = useState<string>();
-  const [composerFocused, setComposerFocused] = useState(false);
   const [messageQueue, setMessageQueue] = useState<readonly QueuedComposerItem[]>([]);
   const [slashRegistry, setSlashRegistry] = useState<SlashCommandRegistry>();
   const [slashSelection, setSlashSelection] = useState(0);
@@ -739,7 +723,8 @@ export function App() {
   const activeSessionIdentity = useRef<string>();
   const queuedMessagesBySession = useRef(new Map<string, readonly QueuedComposerItem[]>());
   const queuedDispatch = useRef(false);
-  const skipDraftRestoreFor = useRef<string>();
+  const draftHydrationIdentity = useRef<string>();
+  const preserveComposerForDraftIdentity = useRef<string>();
   const chatRouteOpening = useRef<string>();
   const textarea = useRef<HTMLTextAreaElement>(null);
   const transcriptElement = useRef<HTMLDivElement>(null);
@@ -757,6 +742,7 @@ export function App() {
   const catalogAuthorityChanging = useRef(false);
   const vaultAdoptionBusy = useRef(false);
   const ephemeralAdoptionBusy = useRef(false);
+  const profileDraftDirty = useRef(false);
   const currentView = useRef<View>(view);
   currentView.current = view;
   const searchMemoryForUi = useMemo(() => async (query: string, signal: AbortSignal): Promise<FederatedMemoryResult> => {
@@ -913,6 +899,7 @@ export function App() {
     Boolean(inferenceConnected && activeRemoteInference),
     Boolean(composerPlan && composerPlan.kind !== "chat"),
   );
+  const composerUsesDemo = !inferenceConnected && (!composerPlan || composerPlan.kind === "chat");
   const windowedTranscript = useWindowedTranscript({
     items: messages,
     scrollContainerRef: transcriptElement,
@@ -926,16 +913,39 @@ export function App() {
     [messages],
   );
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const element = textarea.current;
     if (!element) return;
-    if (!composerFocused) {
-      element.style.height = "52px";
-      return;
-    }
-    element.style.height = "auto";
-    element.style.height = `${String(Math.min(180, Math.max(56, element.scrollHeight)))}px`;
-  }, [composerFocused, input]);
+    const inputRow = element.closest<HTMLElement>(".composer-input-row");
+    const fit = () => {
+      const style = getComputedStyle(element);
+      const minimum = parseFloat(style.minHeight) || 52;
+      const maximum = parseFloat(style.maxHeight) || 180;
+      element.style.height = `${minimum}px`;
+      if (!input) {
+        inputRow?.removeAttribute("data-multiline");
+        element.style.overflowY = "hidden";
+        return;
+      }
+      // Measure against the full composer width before deciding whether the
+      // footer needs its own row. This avoids a narrow inline toolbar making a
+      // short prompt oscillate between compact and multiline layouts.
+      inputRow?.toggleAttribute("data-multiline", Boolean(input));
+      let natural = element.scrollHeight;
+      if (natural <= minimum + 1) {
+        inputRow?.removeAttribute("data-multiline");
+        natural = element.scrollHeight;
+      }
+      element.style.height = `${Math.min(maximum, Math.max(minimum, natural))}px`;
+      element.style.overflowY = natural > maximum ? "auto" : "hidden";
+    };
+    fit();
+    const resizeTargets = [window, window.visualViewport];
+    resizeTargets.forEach((target) => target?.addEventListener("resize", fit));
+    return () => {
+      resizeTargets.forEach((target) => target?.removeEventListener("resize", fit));
+    };
+  }, [input]);
 
   useEffect(() => setSlashSelection(Math.max(0, firstEnabledSlashIndex(slashCompletions))), [input, slashCompletions]);
   useEffect(() => observeConnectivity(window, navigator, setOnline), []);
@@ -1053,29 +1063,37 @@ export function App() {
     setTranscriptDetached(false);
   }, [sessionId]);
   useEffect(() => {
-    if (!sessionId) return;
-    if (skipDraftRestoreFor.current === sessionId) {
-      skipDraftRestoreFor.current = undefined;
+    const draftSessionId = chatRouteRequest ?? sessionId;
+    if (!draftSessionId) return;
+    const hydration = claimThreadDraftHydration(
+      draftHydrationIdentity,
+      draftSessionId,
+      preserveComposerForDraftIdentity.current,
+    );
+    if (hydration === "unchanged") return;
+    if (hydration === "preserve") {
+      preserveComposerForDraftIdentity.current = undefined;
       return;
     }
     try {
-      setInput(readThreadDraft(sessionId, sessionStorage));
+      setInput(readThreadDraft(draftSessionId, sessionStorage));
     } catch {
       setInput("");
     }
     setAttachments([]);
-  }, [sessionId]);
+  }, [chatRouteRequest, sessionId]);
   useEffect(() => {
-    if (!sessionId) return;
+    const draftSessionId = chatRouteRequest ?? sessionId;
+    if (!draftSessionId) return;
     const timer = window.setTimeout(() => {
       try {
-        writeThreadDraft(sessionId, input, sessionStorage);
+        writeThreadDraft(draftSessionId, input, sessionStorage);
       } catch {
         // Draft persistence is optional; the live composer remains authoritative.
       }
     }, 160);
     return () => window.clearTimeout(timer);
-  }, [input, sessionId]);
+  }, [chatRouteRequest, input, sessionId]);
   useEffect(() => {
     if (
       !sessionId
@@ -1133,6 +1151,10 @@ export function App() {
   const cloudVaultRuntimeAdopted = vaultSnapshot.phase === "ready"
     && runtime.current?.workspaceId.startsWith("vault+") === true
     && !runtime.current?.workspaceId.startsWith("vault+local-device://");
+  const localS3VaultRuntimeAdopted = cloudVaultRuntimeAdopted
+    && vaultSnapshot.phase === "ready"
+    && !isGoogleDriveConfiguration(vaultSnapshot.config)
+    && vaultSnapshot.config.mode === "local-development";
   const vaultRuntimeAdopted = localDeviceRuntimeAdopted || cloudVaultRuntimeAdopted;
   const trustAxes: readonly TrustAxis[] = Object.freeze([
     { id: "local", label: online ? "Browser / Edge runtime" : OFFLINE_RUNTIME_LABEL, state: online ? "none" : "attention", detail: online ? "The agent kernel executes in this browser." : OFFLINE_RUNTIME_DETAIL, view: "proof" },
@@ -1140,7 +1162,9 @@ export function App() {
       id: "vault",
       label: localDeviceRuntimeAdopted
         ? "Local Device Vault active"
-        : cloudVaultRuntimeAdopted
+        : localS3VaultRuntimeAdopted
+          ? "Local S3 Vault active"
+          : cloudVaultRuntimeAdopted
           ? "Cloud Vault active"
           : preferences.vaultBackend === "local-device"
             ? localDeviceBusy ? "Opening Local Device Vault" : "Local Device setup"
@@ -1156,6 +1180,8 @@ export function App() {
               : "none",
       detail: localDeviceRuntimeAdopted
         ? "Workspace, journal, profiles, Git objects, and context state are encrypted and persistent in this browser profile. No cloud synchronization is active."
+        : localS3VaultRuntimeAdopted
+          ? "This page uses the tested client-encrypted local S3 workspace, journal, and profile adapters. No remote cloud synchronization is active."
         : cloudVaultRuntimeAdopted
           ? "This page uses the tested client-encrypted cloud workspace, journal, and profile adapters; cross-device convergence is not certified."
           : localDeviceError ?? (vaultSnapshot.phase === "ready"
@@ -1527,7 +1553,35 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view, proofSection, chutesConnected, credentialRevision]);
 
-  function navigate(next: View, targetHash?: string) {
+  function confirmProfileDraftDiscard(): boolean {
+    const allowed = !profileDraftDirty.current || window.confirm(PROFILE_DRAFT_DISCARD_PROMPT);
+    // The accepted transition unmounts or retargets the editor immediately.
+    // Clear synchronously so hashchange/popstate cannot ask a second time
+    // before Preact runs the ProfileManagerView cleanup.
+    if (allowed) profileDraftDirty.current = false;
+    return allowed;
+  }
+
+  function mayNavigateFromProfileDraft(next: View): boolean {
+    return currentView.current !== "profiles"
+      || next === "profiles"
+      || confirmProfileDraftDiscard();
+  }
+
+  function openProfileManager(profileIdToOpen?: string): boolean {
+    if (
+      currentView.current === "profiles"
+      && profileIdToOpen !== undefined
+      && profileIdToOpen !== profileHubScope
+      && !confirmProfileDraftDiscard()
+    ) return false;
+    if (profileIdToOpen !== undefined) setProfileHubScope(profileIdToOpen);
+    navigate("profiles");
+    return true;
+  }
+
+  function navigate(next: View, targetHash?: string): boolean {
+    if (!mayNavigateFromProfileDraft(next)) return false;
     const resolvedTargetHash = targetHash
       ?? (next === "chat"
         ? chatHash(activeSessionIdentity.current ?? sessionId)
@@ -1546,6 +1600,7 @@ export function App() {
         resolvedTargetHash,
       );
     }
+    return true;
   }
 
   function navigatePrimary(next: View) {
@@ -1651,17 +1706,15 @@ export function App() {
       const profile = nextCatalog.profiles.find((candidate) => candidate.profileId === "general") ?? nextCatalog.profiles[0];
       if (!profile) throw new Error("Airship has no built-in agent profile.");
       const workspace = new MemoryWorkspace();
-      await workspace.write("README.md", AIRSHIP_WORKSPACE_GUIDE);
-      await workspace.write(
-        "docs/architecture.md",
-        "The browser owns orchestration. Chutes owns inference. Encrypted object storage owns durable state.",
-      );
-      await workspace.write("notes/retrieval.md", "Context experts are selected by directory, Git, profile, and task focus.");
-      const [{ WorkspaceGitAdapter }, { browserInferenceFabric }, { InspectInferenceConnectionsTool }] = await Promise.all([
+      const [{ WorkspaceGitAdapter, AIRSHIP_BOOTSTRAP_FILES }, { browserInferenceFabric }, { InspectInferenceConnectionsTool }] = await Promise.all([
         loadBrowserGit(),
         import("../inference/fabric"),
         import("../inference/providers"),
       ]);
+      const { readme, architecture, retrieval } = AIRSHIP_BOOTSTRAP_FILES;
+      await workspace.write("README.md", readme);
+      await workspace.write("docs/architecture.md", architecture);
+      await workspace.write("notes/retrieval.md", retrieval);
       inferenceFabric.current = browserInferenceFabric;
       const availabilityTool = new InspectInferenceConnectionsTool({
         providers: browserInferenceFabric.providers,
@@ -1684,9 +1737,9 @@ export function App() {
         worktreePath: "/workspace",
         files: { "README.md": "# Private workspace\n\nInitial browser repository snapshot." },
         workingFiles: {
-          "README.md": AIRSHIP_WORKSPACE_GUIDE,
-          "docs/architecture.md": "The browser owns orchestration. Chutes owns inference. Encrypted object storage owns durable state.",
-          "notes/retrieval.md": "Context experts are selected by directory, Git, profile, and task focus.",
+          "README.md": readme,
+          "docs/architecture.md": architecture,
+          "notes/retrieval.md": retrieval,
         },
       }]);
       const nextGitClient = new BrowserGitClient(gitAdapter);
@@ -1805,6 +1858,13 @@ export function App() {
   useEffect(() => {
     const updateFromHistory = () => {
       const next = readViewHash();
+      if (!mayNavigateFromProfileDraft(next)) {
+        const restoredHash = currentView.current === "chat"
+          ? chatHash(activeSessionIdentity.current)
+          : navigationHashForView(currentView.current);
+        window.history.pushState({ view: currentView.current }, "", restoredHash);
+        return;
+      }
       const requestedChatSession = next === "chat" ? chatSessionIdFromHash(window.location.hash) : undefined;
       setMobileMoreOpen(false);
       const nextProofSelection = next === "proof" ? proofSelectionFromHash(window.location.hash) : undefined;
@@ -1832,7 +1892,7 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    const media = window.matchMedia("(max-width: 640px)");
+    const media = window.matchMedia(MOBILE_SHELL_MEDIA_QUERY);
     const closeAboveMobile = () => {
       if (!media.matches) setMobileMoreOpen(false);
     };
@@ -1903,7 +1963,7 @@ export function App() {
     if (!shouldClaimComposerFocus({
       chatView: view === "chat",
       overlayOpen: mobileMoreOpen || paletteOpen || preferencesOpen || trustSheetOpen || approvalPending,
-      narrowViewport: window.matchMedia(COMPOSER_AUTOFOCUS_MAX_WIDTH_QUERY).matches,
+      narrowViewport: window.matchMedia(MOBILE_SHELL_MEDIA_QUERY).matches,
       focusAtDocumentRoot: document.activeElement === null || document.activeElement === document.body,
     })) return;
     const frame = requestAnimationFrame(() => textarea.current?.focus({ preventScroll: true }));
@@ -2260,7 +2320,7 @@ export function App() {
       // This fork intentionally restores the selected message into the new
       // composer. Do not let the ordinary empty-draft hydration overwrite it
       // after Preact commits the new addressed session identity.
-      skipDraftRestoreFor.current = result.session.id;
+      preserveComposerForDraftIdentity.current = result.session.id;
       await activateForkedSession(result);
       setInput(message.originatingPrompt ?? message.content);
       setAttachments(message.originatingAttachments ?? []);
@@ -4639,7 +4699,7 @@ export function App() {
                       <button class="chat-nav-disclosure" type="button" aria-label={`${profileNavExpanded ? "Collapse" : "Expand"} profiles`} aria-expanded={profileNavExpanded} aria-controls="airship-profile-navigation" onClick={() => setProfileNavExpanded((expanded) => !expanded)}><span aria-hidden="true">›</span></button>
                     </div>
                     {profileNavExpanded ? <div id="airship-profile-navigation" class="recent-conversations profile-navigation" aria-label="Profiles">
-                      {profileOptions.map((profile) => <button key={profile.profileId} class={profile.profileId === profileId ? "recent-conversation active" : "recent-conversation"} type="button" title={`Open ${profile.name} in the profile manager`} onClick={() => { setProfileHubScope(profile.profileId); navigate("profiles"); }}><span class="profile-monogram" aria-hidden="true">{profileMonogram(profile.name)}</span><span>{profile.name}</span></button>)}
+                      {profileOptions.map((profile) => <button key={profile.profileId} class={profile.profileId === profileId ? "recent-conversation active" : "recent-conversation"} type="button" title={`Open ${profile.name} in the profile manager`} onClick={() => { openProfileManager(profile.profileId); }}><span class="profile-monogram" aria-hidden="true">{profileMonogram(profile.name)}</span><span>{profile.name}</span></button>)}
                     </div> : null}
                   </div>;
                 }
@@ -4761,7 +4821,8 @@ export function App() {
                   class="mobile-session-details"
                   type="button"
                   onClick={() => navigate("sessions")}
-                  title={`Open details for session ${sessionId ?? "starting"}`}
+                  aria-label={`Session. ${durabilityLabel(sessionDurability.state)}. ${attestationSeal.label}.`}
+                  title={`Open details for session ${sessionId ?? "starting"}. ${sessionDurability.detail}`}
                 >
                   <Seal
                     state={attestationSeal.state}
@@ -4770,6 +4831,7 @@ export function App() {
                     size={15}
                     compact
                   />
+                  <DurabilityIndicator state={sessionDurability.state} detail={sessionDurability.detail} />
                 </button>
                 <div class="session-meta">
                   <div class="session-meta-trust">
@@ -4800,8 +4862,8 @@ export function App() {
                   </div>
                 </div>
               </div>
-              {!inferenceConnected ? <div class="chat-live-guidance" role="note">
-                <span><strong>Workspace, editor, terminal and Git work right now.</strong> Chat is the one part that needs a model provider.</span>
+              {!inferenceConnected ? <div class="chat-live-guidance" id="chat-demo-guidance" role="note">
+                <span><strong>Workspace, editor, terminal and Git work right now.</strong> Chat needs a model provider; this composer is a deterministic demo.</span>
                 <button type="button" onClick={() => navigate("access")}>Connect a model</button>
               </div> : null}
               <div
@@ -4900,11 +4962,7 @@ export function App() {
               </div>
               <div class="composer-wrap">
                 <div
-                  class={`composer${busy ? " busy" : ""}${composerFocused ? " composer--expanded" : ""}`}
-                  onFocusIn={() => setComposerFocused(true)}
-                  onFocusOut={(event) => {
-                    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setComposerFocused(false);
-                  }}
+                  class={`composer${busy ? " busy" : ""}`}
                 >
                   {slashMenuOpen ? (
                     <div class="slash-command-menu" id="slash-command-menu" role="listbox" aria-label="Available slash commands">
@@ -4949,113 +5007,120 @@ export function App() {
                   {attachments.length ? <div class="composer-attachments" aria-label="Pending attachments">
                     {attachments.map((attachment) => <span key={attachment.id}>{attachment.previewUrl ? <img src={attachment.previewUrl} alt="" /> : <Icon name="file" size={14} />}<span>{attachment.name}</span><small>{imageInputCapability === "supported" ? "encrypted vision ready" : "vision model required"}</small><button type="button" aria-label={`Remove ${attachment.name}`} onClick={() => { if (attachment.previewUrl) { URL.revokeObjectURL(attachment.previewUrl); attachmentPreviewUrls.current.delete(attachment.previewUrl); } setAttachments((current) => current.filter((item) => item.id !== attachment.id)); }}>×</button></span>)}
                   </div> : null}
-                  <textarea
-                    ref={textarea}
-                    role="combobox"
-                    aria-label="Message Airship"
-                    aria-autocomplete="list"
-                    aria-expanded={slashMenuOpen}
-                    aria-haspopup="listbox"
-                    aria-controls={slashMenuOpen ? "slash-command-menu" : undefined}
-                    aria-activedescendant={slashMenuOpen && slashSelection >= 0 ? `slash-option-${slashSelection}` : undefined}
-                    rows={1}
-                    value={input}
-                    placeholder="Ask Airship or type / for tools and session commands…"
-                    onInput={(event) => setInput(event.currentTarget.value)}
-                    onPaste={(event) => {
-                      const pasted = Array.from(event.clipboardData?.files ?? []);
-                      if (pasted.length) addComposerFiles(pasted);
-                    }}
-                    onDrop={(event) => {
-                      const dropped = Array.from(event.dataTransfer?.files ?? []);
-                      if (!dropped.length) return;
-                      event.preventDefault();
-                      addComposerFiles(dropped);
-                    }}
-                    onDragOver={(event) => event.preventDefault()}
-                    onKeyDown={(event) => {
-                      if (slashMenuOpen && event.key === "ArrowDown") {
+                  <div class="composer-input-row">
+                    <textarea
+                      ref={textarea}
+                      role="combobox"
+                      aria-label="Message Airship"
+                      aria-autocomplete="list"
+                      aria-expanded={slashMenuOpen}
+                      aria-haspopup="listbox"
+                      aria-controls={slashMenuOpen ? "slash-command-menu" : undefined}
+                      aria-activedescendant={slashMenuOpen && slashSelection >= 0 ? `slash-option-${slashSelection}` : undefined}
+                      rows={1}
+                      value={input}
+                      placeholder="Ask Airship or type / for tools and session commands…"
+                      onInput={(event) => setInput(event.currentTarget.value)}
+                      onPaste={(event) => {
+                        const pasted = Array.from(event.clipboardData?.files ?? []);
+                        if (pasted.length) addComposerFiles(pasted);
+                      }}
+                      onDrop={(event) => {
+                        const dropped = Array.from(event.dataTransfer?.files ?? []);
+                        if (!dropped.length) return;
                         event.preventDefault();
-                        setSlashSelection((index) => moveSlashSelection(slashCompletions, index, 1));
-                        return;
-                      }
-                      if (slashMenuOpen && event.key === "ArrowUp") {
-                        event.preventDefault();
-                        setSlashSelection((index) => moveSlashSelection(slashCompletions, index, -1));
-                        return;
-                      }
-                      if (slashMenuOpen && (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey && !event.isComposing))) {
-                        const completion = enabledSlashSelection(slashCompletions, slashSelection);
-                        if (!completion) return;
-                        event.preventDefault();
-                        acceptSlashCompletion(completion);
-                        return;
-                      }
-                      if (slashMenuOpen && event.key === "Escape") {
-                        event.preventDefault();
-                        setSlashMenuDismissedFor(input);
-                        return;
-                      }
-                      if (
-                        event.key === "Enter"
-                        && !event.shiftKey
-                        && !event.isComposing
-                        && (busy || modelSwitching || vaultProviderSwitching || localDeviceBusy)
-                      ) {
-                        event.preventDefault();
-                        if (busy && input.trim()) enqueueCurrentComposer();
-                        else setComposerNotice(busy
-                          ? "Type a follow-up and press Enter to queue it, or stop the current turn."
-                          : "Wait for the active model or storage transition. Your prompt remains in the composer.");
-                        return;
-                      }
-                      if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
-                        event.preventDefault();
-                        void sendMessage();
-                      }
-                    }}
-                  />
-                  <div class="composer-footer">
-                    <div class="composer-tools">
-                      <label class="composer-attach"><input type="file" accept="image/*" multiple onChange={(event) => { addComposerFiles(Array.from(event.currentTarget.files ?? [])); event.currentTarget.value = ""; }} /><Icon name="plus" size={14} /><span>Attach image</span></label>
-                      <span><Icon name="lock" size={14} /> {inferenceConnected
-                        ? activeInferenceBinding?.authMethod === "local-none"
-                          ? "local endpoint"
-                          : "credential in memory"
-                        : "page memory only"}</span>
-                      <MenuSelect
-                        ariaLabel="Conversation approval policy"
-                        className={`composer-approval-select policy-${activeApprovalMode}`}
-                        value={activeApprovalMode}
-                        disabled={busy || modelSwitching || vaultProviderSwitching || localDeviceBusy}
-                        options={[
-                          { value: "ask-first", label: "Ask First", description: "Prompt before effectful actions." },
-                          { value: "auto-approve", label: "Auto Approve", description: "Ask the active model to review each effect; prompt when uncertain." },
-                          { value: "full-access", label: "Full Access", description: "Allow effects inside the bounded browser workspace without prompting." },
-                        ]}
-                        onChange={(value) => void changeActiveApprovalMode(value as ApprovalMode)}
-                      />
-                    </div>
-                    {busy ? (
-                      <div class="composer-primary-actions">
-                        {input.trim() ? <button class="queue-button" type="button" onClick={enqueueCurrentComposer}>Queue</button> : null}
-                        <button class="send-button stop" type="button" onClick={stopTurn} aria-label="Stop turn"><Icon name="stop" /></button>
+                        addComposerFiles(dropped);
+                      }}
+                      onDragOver={(event) => event.preventDefault()}
+                      onKeyDown={(event) => {
+                        if (slashMenuOpen && event.key === "ArrowDown") {
+                          event.preventDefault();
+                          setSlashSelection((index) => moveSlashSelection(slashCompletions, index, 1));
+                          return;
+                        }
+                        if (slashMenuOpen && event.key === "ArrowUp") {
+                          event.preventDefault();
+                          setSlashSelection((index) => moveSlashSelection(slashCompletions, index, -1));
+                          return;
+                        }
+                        if (slashMenuOpen && (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey && !event.isComposing))) {
+                          const completion = enabledSlashSelection(slashCompletions, slashSelection);
+                          if (!completion) return;
+                          event.preventDefault();
+                          acceptSlashCompletion(completion);
+                          return;
+                        }
+                        if (slashMenuOpen && event.key === "Escape") {
+                          event.preventDefault();
+                          setSlashMenuDismissedFor(input);
+                          return;
+                        }
+                        if (
+                          event.key === "Enter"
+                          && !event.shiftKey
+                          && !event.isComposing
+                          && (busy || modelSwitching || vaultProviderSwitching || localDeviceBusy)
+                        ) {
+                          event.preventDefault();
+                          if (busy && input.trim()) enqueueCurrentComposer();
+                          else setComposerNotice(busy
+                            ? "Type a follow-up and press Enter to queue it, or stop the current turn."
+                            : "Wait for the active model or storage transition. Your prompt remains in the composer.");
+                          return;
+                        }
+                        if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+                          event.preventDefault();
+                          void sendMessage();
+                        }
+                      }}
+                    />
+                    <div class="composer-footer">
+                      <div class="composer-tools">
+                        <label class="composer-attach"><input type="file" aria-label="Attach image" accept="image/*" multiple onChange={(event) => { addComposerFiles(Array.from(event.currentTarget.files ?? [])); event.currentTarget.value = ""; }} /><Icon name="plus" size={14} /><span>Attach image</span></label>
+                        <span><Icon name="lock" size={14} /> {inferenceConnected
+                          ? activeInferenceBinding?.authMethod === "local-none"
+                            ? "local endpoint"
+                            : "credential in memory"
+                          : "local demo · page memory"}</span>
+                        <MenuSelect
+                          ariaLabel="Conversation approval policy"
+                          className={`composer-approval-select policy-${activeApprovalMode}`}
+                          value={activeApprovalMode}
+                          disabled={busy || modelSwitching || vaultProviderSwitching || localDeviceBusy}
+                          options={[
+                            { value: "ask-first", label: "Ask First", description: "Prompt before effectful actions." },
+                            { value: "auto-approve", label: "Auto Approve", description: "Ask the active model to review each effect; prompt when uncertain." },
+                            { value: "full-access", label: "Full Access", description: "Allow effects inside the bounded browser workspace without prompting." },
+                          ]}
+                          onChange={(value) => void changeActiveApprovalMode(value as ApprovalMode)}
+                        />
                       </div>
-                    ) : (
-                      <button
-                        class="send-button"
-                        type="button"
-                        onClick={() => void sendMessage()}
-                        disabled={!input.trim()
-                          || !sessionId
-                          || composerOfflineBlocked
-                          || modelSwitching
+                      {busy ? (
+                        <div class="composer-primary-actions">
+                          {input.trim() ? <button class="queue-button" type="button" onClick={enqueueCurrentComposer}>Queue</button> : null}
+                          <button class="send-button stop" type="button" onClick={stopTurn} aria-label="Stop turn"><Icon name="stop" /></button>
+                        </div>
+                      ) : (
+                        <button
+                          class="send-button"
+                          type="button"
+                          onClick={() => void sendMessage()}
+                          disabled={!input.trim()
+                            || !sessionId
+                            || composerOfflineBlocked
+                            || modelSwitching
                           || vaultProviderSwitching
                           || localDeviceBusy}
-                        aria-label={composerOfflineBlocked ? "Send unavailable while remote inference is offline" : "Send message"}
-                        title={composerOfflineBlocked ? "Remote inference is paused offline. Local slash commands remain available." : undefined}
-                      ><Icon name="send" /></button>
-                    )}
+                          aria-label={composerOfflineBlocked ? "Send unavailable while remote inference is offline" : "Send message"}
+                          aria-describedby={composerUsesDemo ? "chat-demo-guidance" : undefined}
+                          title={composerOfflineBlocked
+                            ? "Remote inference is paused offline. Local slash commands remain available."
+                            : composerUsesDemo
+                              ? "Deterministic local demo response. Connect a model for real inference."
+                              : undefined}
+                        ><Icon name="send" /></button>
+                      )}
+                    </div>
                   </div>
                 </div>
                 {composerNotice ? <p class="composer-notice" role="status">{composerNotice}</p> : null}
@@ -5137,6 +5202,7 @@ export function App() {
         </nav> : null}
         {view === "profiles" ? (
           <ProfileManagerView
+            key={profileHubScope}
             catalog={catalog}
             catalogDurability={runtime.current?.profiles.durability ?? "ephemeral"}
             activeProfileId={profileId}
@@ -5144,6 +5210,7 @@ export function App() {
             onSave={saveProfileRevision}
             onFork={forkProfile}
             onDelete={deleteProfile}
+            draftState={profileDraftDirty}
             selectedProfileId={profileHubScope === "global" ? undefined : profileHubScope}
           />
         ) : null}
@@ -5256,6 +5323,7 @@ export function App() {
               selectedRecordId={selectedAttestationRecordId}
               onSelectRecord={(recordId) => setSelectedAttestationRecordId(recordId)}
               acquisitionNotice={!online ? OFFLINE_INLINE_REASON : attestationFailure ? `${attestationFailure.label}. Current endpoint evidence was not accepted, and no TEE claim was inferred.` : undefined}
+              onOpenConnection={!chutesConnected ? () => navigate("access") : undefined}
               onRefresh={online && chutesConnected ? refreshAttestation : undefined}
               onCancel={() => attestationClient.current?.cancel()}
               embedded
@@ -5337,9 +5405,7 @@ export function App() {
       }} onClose={() => setPreferencesOpen(false)} vaultProviderSwitching={vaultProviderSwitching} profileApproval={{
         mode: activeApprovalMode,
         onManage: () => {
-          setPreferencesOpen(false);
-          setProfileHubScope(profileId);
-          navigate("profiles");
+          if (openProfileManager(profileId)) setPreferencesOpen(false);
         },
       }} />
       <TrustPostureSheet open={trustSheetOpen} axes={trustAxes} onClose={() => setTrustSheetOpen(false)} onNavigate={navigatePrimary} />
@@ -5838,10 +5904,11 @@ async function existingWorkspaceFallbackSeed(workspace: WorkspacePort): Promise<
 }
 
 async function isPristineBootstrapRuntime(runtime: Runtime): Promise<boolean> {
+  const { readme, architecture, retrieval } = (await loadBrowserGit()).AIRSHIP_BOOTSTRAP_FILES;
   const expected = new Map<string, string>([
-    ["/workspace/README.md", AIRSHIP_WORKSPACE_GUIDE],
-    ["/workspace/docs/architecture.md", "The browser owns orchestration. Chutes owns inference. Encrypted object storage owns durable state."],
-    ["/workspace/notes/retrieval.md", "Context experts are selected by directory, Git, profile, and task focus."],
+    ["/workspace/README.md", readme],
+    ["/workspace/docs/architecture.md", architecture],
+    ["/workspace/notes/retrieval.md", retrieval],
   ]);
   const [allEntries, sessions] = await Promise.all([
     runtime.workspace.list(),
@@ -6490,6 +6557,7 @@ function ProfileManagerView({
   onSave,
   onFork,
   onDelete,
+  draftState,
   selectedProfileId,
 }: {
   catalog: ProfileCatalog;
@@ -6499,6 +6567,7 @@ function ProfileManagerView({
   onSave: (draft: ProfileEditorDraft) => Promise<ProfileRevision>;
   onFork: (profile: ProfileRevision) => Promise<ProfileRevision>;
   onDelete: (profileId: string, replacementProfileId?: string) => Promise<void>;
+  draftState: { current: boolean };
   selectedProfileId?: string;
 }) {
   const profiles = useMemo(() => managedProfiles(catalog), [catalog]);
@@ -6511,6 +6580,7 @@ function ProfileManagerView({
   const [replacementProfileId, setReplacementProfileId] = useState("");
   const dirty = JSON.stringify(draft) !== JSON.stringify(profileDraftForEditor(selected));
   useBeforeUnloadGuard(dirty || busy);
+  draftState.current = dirty;
 
   useEffect(() => {
     setDraft(profileDraftForEditor(selected));
@@ -6595,7 +6665,7 @@ function ProfileManagerView({
           <div class="panel-heading"><span>Profiles</span><button class="small-button" type="button" onClick={() => void fork()} disabled={busy}><Icon name="plus" size={14} /> Fork</button></div>
           <div class="profile-card-list">
             {profiles.map((profile) => (
-              <button key={profile.profileId} class={profile.profileId === selected.profileId ? "profile-card active" : "profile-card"} type="button" onClick={() => { if (!dirty || window.confirm("Discard unsaved profile edits?")) { setStatus(undefined); setSelectedId(profile.profileId); } }}>
+              <button key={profile.profileId} class={profile.profileId === selected.profileId ? "profile-card active" : "profile-card"} type="button" onClick={() => { if (!dirty || window.confirm(PROFILE_DRAFT_DISCARD_PROMPT)) { setStatus(undefined); setSelectedId(profile.profileId); } }}>
                 <span class="profile-monogram">{profileMonogram(profile.name)}</span>
                 <span><strong>{profile.name}</strong><small>{profile.description}</small><PostureChip posture={profile.minimumPosture} prefix="Minimum posture" /></span>
                 {profile.profileId === activeProfileId ? <em>active</em> : null}
@@ -6806,7 +6876,7 @@ function ProofInspector({
             <div><dt>Instance</dt><dd>{endpointRecord.subject.instanceId}</dd></div>
             <div><dt>Evidence</dt><dd>{relativeEvidenceAge(endpointRecord.acquisition.fetchedAt, now)}</dd></div>
           </dl> : null}
-          {onOpenAttestations ? <button class="evidence-join__action" type="button" onClick={onOpenAttestations}>{endpointRecord ? "Inspect endpoint evidence" : "Acquire endpoint evidence"} <span aria-hidden="true">→</span></button> : null}
+          {onOpenAttestations ? <button class="evidence-join__action" type="button" onClick={onOpenAttestations}>{endpointRecord ? "Inspect endpoint evidence" : "Inspect evidence"} <span aria-hidden="true">→</span></button> : null}
         </section>
       ) : null}
       <div class="claim-groups">

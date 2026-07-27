@@ -184,7 +184,7 @@ body {
 :root[data-density] .file-list button,
 :root[data-density] .slash-command-menu button { min-height: var(--density-control); }
 
-@media (max-width: 640px) {
+@media (max-width: 640px), (max-width: 950px) and (max-height: 500px) {
   :root[data-density="compact"] { --density-control: 44px; --density-row: 44px; }
 
   /* A phone column is roughly half the measure of the desktop chat column, so
@@ -1998,10 +1998,9 @@ button.runtime-posture {
 .composer textarea {
   display: block;
   width: 100%;
-  min-height: 44px;
+  min-height: 52px;
   max-height: 180px;
-  padding: 11px 14px 5px;
-  field-sizing: content;
+  padding: 12px 6px 10px 14px;
   resize: none;
   border: 0;
   outline: 0;
@@ -2011,31 +2010,19 @@ button.runtime-posture {
   line-height: 1.45;
 }
 
-.composer--expanded textarea { min-height: 56px; padding-top: 14px; padding-bottom: 8px; }
-
-/* A quiet composer is a compact invitation. Focusing it expands the writing
-   surface and restores the full capability/status vocabulary without making
-   a blank conversation feel like a dashboard. */
-.composer:not(.composer--expanded) { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
-.composer:not(.composer--expanded) .composer-attachments { grid-column: 1 / -1; }
-.composer:not(.composer--expanded) .composer-queue { grid-column: 1 / -1; }
-:root[data-density] .composer:not(.composer--expanded) textarea {
-  height: 52px;
-  min-height: 52px;
-  max-height: 52px;
-  padding: 9px 4px 9px 13px;
-  field-sizing: fixed;
-  line-height: 1.4;
-  overflow: hidden;
+.composer-input-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
 }
-.composer:not(.composer--expanded) .composer-footer { min-height: 0; gap: 1px; padding: 4px 6px 4px 1px; }
-.composer:not(.composer--expanded) .composer-tools { gap: 4px; }
-.composer:not(.composer--expanded) .composer-attach span { display: none; }
-.composer:not(.composer--expanded) .composer-tools > span:not(.composer-policy) { display: none; }
-.composer:not(.composer--expanded) .composer-policy { gap: 0; padding: 0 .35rem; }
-.composer:not(.composer--expanded) .composer-policy > svg,
-.composer:not(.composer--expanded) .composer-policy > :not(.composer-policy__dot) { display: none; }
-.composer:not(.composer--expanded) .composer-attach { min-height: 34px; padding-inline: .25rem; }
+
+.composer-input-row[data-multiline] {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.composer-input-row[data-multiline] .composer-footer {
+  justify-content: flex-end;
+}
 
 .composer textarea::placeholder {
   color: var(--ink-faint);
@@ -2043,14 +2030,17 @@ button.runtime-posture {
 
 .composer-footer {
   display: flex;
-  justify-content: space-between;
+  gap: 4px;
+  justify-content: flex-end;
   align-items: center;
-  padding: 4px 6px 6px 12px;
+  min-height: 52px;
+  padding: 4px 6px 4px 1px;
 }
 
 .composer-tools {
   display: flex;
-  gap: 14px;
+  gap: 8px;
+  align-items: center;
   color: var(--ink-faint);
   font-size: var(--fs-micro);
 }
@@ -2119,11 +2109,17 @@ button.runtime-posture {
 }
 .composer-queue__item button:hover,
 .queue-button:hover { color: var(--ink); border-color: var(--line-strong); }
-.composer-primary-actions { display: flex; gap: 5px; align-items: center; }
+.composer-primary-actions {
+  display: flex;
+  gap: 5px;
+  min-width: 98px;
+  align-items: center;
+  justify-content: flex-end;
+}
 
 .composer-approval-select {
-  width: auto;
-  min-width: 112px;
+  width: 120px;
+  min-width: 120px;
 }
 
 .composer-approval-select .menu-select-trigger {
@@ -2258,6 +2254,8 @@ button.runtime-posture {
 .composer-attachments small { color: var(--v-caution); }
 .composer-attachments button { display: grid; place-items: center; min-width: 1.75rem; min-height: 1.75rem; border: 0; color: var(--ink-muted); background: transparent; cursor: pointer; }
 .composer-attach { display: inline-flex; gap: .3rem; align-items: center; min-height: 2rem; padding: 0 .35rem; border-radius: var(--radius-control); color: var(--ink-muted); cursor: pointer; }
+.composer-attach:hover,
+.composer-attach:focus-within { color: var(--ink); background: var(--surface-soft); }
 .composer-attach input { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 .composer-notice { color: var(--v-caution) !important; font-size: var(--fs-micro) !important; }
 
@@ -5017,7 +5015,7 @@ button.runtime-posture {
   }
 }
 
-@media (max-width: 640px) {
+@media (max-width: 640px), (max-width: 950px) and (max-height: 500px) {
   html,
   body,
   #app {
@@ -5359,14 +5357,39 @@ button.runtime-posture {
     display: inline-flex;
     grid-row: 2;
     grid-column: 2;
+    gap: 6px;
     align-items: center;
+    max-width: 100%;
     min-height: 36px;
     padding: 4px 8px;
+    overflow: hidden;
     border: 1px solid var(--line-strong);
     border-radius: var(--radius-control);
     color: var(--ink-muted);
     background: var(--surface-soft);
     cursor: pointer;
+  }
+
+  .mobile-session-details .seal {
+    flex: 0 0 auto;
+  }
+
+  .mobile-session-details .seal__label {
+    display: none;
+  }
+
+  .mobile-session-details .durability-indicator {
+    min-width: 0;
+    padding: 0;
+    overflow: hidden;
+    border: 0;
+    font-size: var(--fs-micro);
+  }
+
+  .mobile-session-details .durability-indicator > span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .stage-header h1 {
@@ -5512,8 +5535,7 @@ button.runtime-posture {
   }
 
   .composer textarea {
-    min-height: 48px;
-    padding: 11px 11px 5px;
+    padding: 12px 4px 10px 11px;
     font-size: 16px;
   }
 
@@ -5528,6 +5550,23 @@ button.runtime-posture {
 
   .composer-tools span:nth-child(2) {
     display: none;
+  }
+
+  .composer-attach > span {
+    display: none;
+  }
+
+  .composer-tools {
+    gap: 4px;
+  }
+
+  .composer-attach {
+    min-height: 44px;
+    padding-inline: .25rem;
+  }
+
+  .composer-approval-select .menu-select-trigger {
+    min-height: 44px;
   }
 
   .composer-wrap > p {
@@ -5865,6 +5904,100 @@ button.runtime-posture {
   .memory-legend {
     max-height: 92px;
     overflow-y: auto;
+  }
+}
+
+/* A rotated phone reports a tablet-like CSS width but has a much smaller
+   vertical budget. Keep the full mobile information architecture, then
+   collapse only redundant chat chrome so the transcript remains usable. */
+@media (min-width: 641px) and (max-width: 950px) and (max-height: 500px) {
+  .app-shell {
+    grid-template-rows:
+      calc(44px + env(safe-area-inset-top))
+      minmax(0, 1fr)
+      calc(44px + env(safe-area-inset-bottom));
+  }
+
+  .brand {
+    padding-left: max(10px, env(safe-area-inset-left));
+  }
+
+  .mobile-trust-chip {
+    min-height: 40px;
+  }
+
+  .mobile-nav__tab {
+    min-height: 44px;
+    padding-block: 2px;
+  }
+
+  .stage-header {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    gap: 5px 7px;
+  }
+
+  :root[data-density] .stage-header {
+    padding: 0 max(9px, env(safe-area-inset-right));
+  }
+
+  .stage-header-title {
+    display: none;
+  }
+
+  .stage-header-model {
+    grid-row: 1;
+    grid-column: 1;
+  }
+
+  .mobile-session-details {
+    grid-row: 1;
+    grid-column: 2;
+  }
+
+  .mobile-new-conversation {
+    position: static;
+    grid-row: 1;
+    grid-column: 3;
+  }
+
+  .chat-live-guidance {
+    min-height: 0;
+    padding:
+      2px
+      max(9px, env(safe-area-inset-right))
+      2px
+      max(9px, env(safe-area-inset-left));
+    font-size: 11px;
+    line-height: 1.25;
+  }
+
+  .chat-live-guidance > span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .transcript {
+    padding:
+      7px
+      max(9px, env(safe-area-inset-right))
+      7px
+      max(9px, env(safe-area-inset-left));
+  }
+
+  :root[data-density] .composer-wrap {
+    padding:
+      2px
+      max(8px, env(safe-area-inset-right))
+      2px
+      max(8px, env(safe-area-inset-left));
+  }
+
+  .composer-wrap > p {
+    max-height: 1.35em;
+    margin-top: 2px;
+    line-height: 1.25;
+    -webkit-line-clamp: 1;
   }
 }
 

@@ -10,6 +10,9 @@ import { ChutesInferenceTransport } from "./transport";
 
 const apiKey = process.env.CHUTES_TEST_API_KEY?.trim();
 const requestedModel = process.env.CHUTES_TEST_MODEL?.trim() || "zai-org/GLM-5.2-TEE";
+if (process.env.AIRSHIP_CHUTES_LIVE === "1" && !apiKey) {
+  throw new Error("Live Chutes acceptance requires CHUTES_TEST_API_KEY.");
+}
 const liveDescribe = apiKey ? describe : describe.skip;
 const stressDescribe = apiKey && process.env.AIRSHIP_CHUTES_STRESS === "1" ? describe : describe.skip;
 

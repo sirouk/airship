@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 
-test("opt-in live WebContainer executes Node entirely in the browser tab", async ({ page }) => {
+test("opt-in live WebContainer executes Node entirely in the browser tab", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "one authoritative live browser process");
   test.skip(process.env.AIRSHIP_LIVE_WEBCONTAINER !== "1", "Set AIRSHIP_LIVE_WEBCONTAINER=1 for the provider-backed live browser probe.");
   test.setTimeout(90_000);
   await page.goto("/#workspace");

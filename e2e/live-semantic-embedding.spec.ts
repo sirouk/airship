@@ -93,7 +93,11 @@ test("production UI activates the same-origin semantic worker and rebuilds the i
     const url = new URL(request.url());
     if ((url.pathname.includes("mxbai-embed") || url.pathname.includes("transformers.web")) && url.origin !== appOrigin) offOriginRequests.push(request.url());
   });
-  await page.getByRole("tab", { name: "Index" }).click();
+  const index = page.locator("#memory-index");
+  if (!await index.evaluate((element: HTMLDetailsElement) => element.open)) {
+    await page.getByRole("button", { name: /Local index/u }).click();
+  }
+  await expect(index).toHaveJSProperty("open", true);
   await page.getByRole("button", { name: "Local semantic" }).click();
   const semanticStatus = page.locator(".embedding-engine-state");
   await expect(semanticStatus).toContainText(/semantic model ready|semantic unavailable/i, { timeout: 180_000 });

@@ -1,5 +1,6 @@
 import type { ComponentChildren } from "preact";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "preact/hooks";
+import { MOBILE_SHELL_MEDIA_QUERY } from "./chat/composer-focus";
 
 export type MenuSelectOption = Readonly<{
   value: string;
@@ -69,7 +70,7 @@ export function MenuSelect({
     if (!open || placement !== "down" || !popover.current || !trigger.current) return;
     const listbox = popover.current;
     const control = trigger.current;
-    const narrowViewport = window.matchMedia("(max-width: 640px)").matches;
+    const narrowViewport = window.matchMedia(MOBILE_SHELL_MEDIA_QUERY).matches;
     if (!narrowViewport) {
       const bounds = listbox.getBoundingClientRect();
       if (bounds.right > window.innerWidth - 8) {

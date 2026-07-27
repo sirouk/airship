@@ -3,11 +3,16 @@ import { applyPreferenceOverrides, buildPaletteEntries, DEFAULT_PREFERENCES, fil
 import { CANONICAL_DESTINATIONS } from "./navigation-model";
 
 describe("platform shell contracts", () => {
-  it("defaults ordinary builds to Drive while allowing an explicit local-lab provider", () => {
-    expect(resolveDefaultVaultBackend(undefined)).toBe("google-drive");
-    expect(resolveDefaultVaultBackend("google-drive")).toBe("google-drive");
-    expect(resolveDefaultVaultBackend("local-lab")).toBe("local-lab");
-    expect(resolveDefaultVaultBackend("unexpected")).toBe("google-drive");
+  it("defaults to Drive only when this build can open Google authorization", () => {
+    const configuredClientId = "123456789012-airship.apps.googleusercontent.com";
+    expect(resolveDefaultVaultBackend(undefined, configuredClientId)).toBe("google-drive");
+    expect(resolveDefaultVaultBackend("google-drive", configuredClientId)).toBe("google-drive");
+    expect(resolveDefaultVaultBackend(undefined)).toBe("local-device");
+    expect(resolveDefaultVaultBackend(undefined, undefined)).toBe("local-device");
+    expect(resolveDefaultVaultBackend("google-drive", "malformed")).toBe("local-device");
+    expect(resolveDefaultVaultBackend("local-lab", undefined)).toBe("local-lab");
+    expect(resolveDefaultVaultBackend("unexpected", configuredClientId)).toBe("google-drive");
+    expect(resolveDefaultVaultBackend("unexpected", undefined)).toBe("local-device");
   });
 
   it("makes every canonical and nested destination plus preferences reachable", () => {
@@ -48,6 +53,24 @@ describe("platform shell contracts", () => {
     expect(loadPreferenceOverrides(storage)).toEqual(compact);
     raw = "not-json";
     expect(loadPreferenceOverrides(storage)).toEqual(DEFAULT_PREFERENCES);
+  });
+
+  it("downgrades a stale Drive preference to the configured available default", () => {
+    const configuredClientId = "123456789012-airship.apps.googleusercontent.com";
+    const staleDrive = JSON.stringify({ ...DEFAULT_PREFERENCES, vaultBackend: "google-drive" });
+    const storage = { getItem: () => staleDrive };
+    expect(loadPreferenceOverrides(storage, {
+      googleClientId: undefined,
+      defaultVaultBackend: "local-device",
+    }).vaultBackend).toBe("local-device");
+    expect(loadPreferenceOverrides(storage, {
+      googleClientId: undefined,
+      defaultVaultBackend: "local-lab",
+    }).vaultBackend).toBe("local-lab");
+    expect(loadPreferenceOverrides(storage, {
+      googleClientId: configuredClientId,
+      defaultVaultBackend: "local-device",
+    }).vaultBackend).toBe("google-drive");
   });
 
   it("picks the weakest trust axis without changing its claim", () => {

@@ -78,6 +78,30 @@ import {
 } from "./validation";
 import { WorkspaceGitFileSystem } from "./workspace-fs";
 
+/**
+ * Content for the disposable repository created with the browser Git runtime.
+ * It travels with that already-deferred runtime instead of inflating the
+ * document bootstrap with a workspace payload that cannot be used before Git
+ * has loaded.
+ */
+export const AIRSHIP_BOOTSTRAP_FILES = Object.freeze({
+  readme: `# Airship workspace
+
+This private virtual workspace is rooted at \`/workspace\`. Its live durability follows the selected Vault: Local Device, Google Drive, S3-compatible object storage, or Ephemeral page memory. Inference uses the selected authenticated provider or local runtime.
+
+The agent can:
+
+- Read, search, patch, move, and remove revision-checked files.
+- Build a revision-bound local hybrid context index and maintain \`.airship/tasks.json\`.
+- Operate real browser-owned Git state: status, diff, stage, commit, branch, and direct CORS-permitted remotes.
+- Fetch bounded HTTPS text, import pinned public GitHub snapshots, and use only the coding runtimes reported live.
+
+There is no ambient host shell or unrestricted filesystem. Inspect the live tool manifest, verify effects, and name the exact browser or service boundary when blocked.
+`,
+  architecture: "The browser owns orchestration; the selected provider owns inference; the selected Vault owns durable state.",
+  retrieval: "Context experts are selected by directory, Git, profile, and task focus.",
+});
+
 const REGISTRY_PATH = "/workspace/.airship/browser-git-repositories.v1.json";
 const REGISTRY_FORMAT = "airship-browser-git-registry";
 const MAX_REPOSITORIES = 1_000;

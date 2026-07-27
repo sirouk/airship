@@ -16,6 +16,7 @@ describe("production service worker", () => {
         location: { origin: "https://airship.example", href: "https://airship.example/airship/sw.js" },
         addEventListener(type, listener) { listeners.set(type, listener); },
         skipWaiting() {},
+        clients: { async claim() {} },
       },
       fetch: async (url, options) => {
         expect(url).toBe("/airship/release-manifest.json");
@@ -73,6 +74,7 @@ describe("production service worker", () => {
         location: { origin: "https://airship.example", href: "https://airship.example/airship/sw.js" },
         addEventListener(type, listener) { listeners.set(type, listener); },
         skipWaiting() {},
+        clients: { async claim() {} },
       },
       async fetch() {
         networkRequests += 1;
@@ -102,5 +104,63 @@ describe("production service worker", () => {
 
     expect(await response).toBe(cachedResponse);
     expect(networkRequests).toBe(0);
+  });
+
+  it("claims the first page and adds cross-origin isolation to network and offline navigations", async () => {
+    const source = await readFile(new URL("../public/sw.js", import.meta.url), "utf8");
+    const listeners = new Map();
+    let claimed = 0;
+    const online = new Response("<!doctype html><title>Airship</title>", {
+      status: 200,
+      headers: { "Content-Type": "text/html", "X-Origin-Proof": "preserved" },
+    });
+    const context = {
+      URL,
+      Set,
+      Error,
+      Promise,
+      Object,
+      Headers,
+      Response,
+      self: {
+        location: { origin: "https://airship.example", href: "https://airship.example/airship/sw.js" },
+        addEventListener(type, listener) { listeners.set(type, listener); },
+        skipWaiting() {},
+        clients: { async claim() { claimed += 1; } },
+      },
+      async fetch() { return online.clone(); },
+      caches: {
+        async open() { return { async put() {}, async addAll() {} }; },
+        async keys() { return ["airship-shell-v6", "airship-shell-v7"]; },
+        async delete() { return true; },
+        async match() { return undefined; },
+      },
+    };
+    vm.runInNewContext(source, context);
+
+    let activation;
+    listeners.get("activate")({ waitUntil(promise) { activation = promise; } });
+    await activation;
+    expect(claimed).toBe(1);
+
+    let response;
+    let cacheWrite;
+    listeners.get("fetch")({
+      request: {
+        url: "https://airship.example/airship/",
+        method: "GET",
+        mode: "navigate",
+        headers: { has() { return false; } },
+      },
+      respondWith(promise) { response = promise; },
+      waitUntil(promise) { cacheWrite = promise; },
+    });
+    const isolated = await response;
+    await cacheWrite;
+    expect(await isolated.text()).toContain("<title>Airship</title>");
+    expect(isolated.headers.get("X-Origin-Proof")).toBe("preserved");
+    expect(isolated.headers.get("Cross-Origin-Opener-Policy")).toBe("same-origin");
+    expect(isolated.headers.get("Cross-Origin-Embedder-Policy")).toBe("credentialless");
+    expect(isolated.headers.get("Cross-Origin-Resource-Policy")).toBe("same-origin");
   });
 });

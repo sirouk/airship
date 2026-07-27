@@ -7,6 +7,7 @@ import type { ContextFabricDriver } from "../retrieval/context-driver";
 import type { RetrievalCommitment, RoutedExpert } from "../retrieval/contracts";
 import type { EmbeddingMode } from "../indexing/semantic-browser-provider";
 import type { SemanticProviderState } from "../indexing/semantic-worker-provider";
+import type { FederatedMemorySearchState } from "../tools/federated-memory";
 import "./context-view.css";
 
 export type ContextViewProps = Readonly<{
@@ -16,28 +17,47 @@ export type ContextViewProps = Readonly<{
   resultLimit?: number;
   fabricDriver?: ContextFabricDriver;
   embedded?: boolean;
+  searchQuery?: string;
+  sharedSearch?: FederatedMemorySearchState;
+  onGenerationChange?: (generationDigest?: string) => void;
+  onReady?: () => void;
 }>;
 
-export function ContextView({ workspace, entries, dimensions = 384, resultLimit = 8, fabricDriver, embedded = false }: ContextViewProps) {
+export function ContextView({ workspace, entries, dimensions = 384, resultLimit = 8, fabricDriver, embedded = false, searchQuery, sharedSearch, onGenerationChange, onReady }: ContextViewProps) {
   const runtime = useMemo(() => getClientContextRuntime(workspace, { dimensions }), [dimensions, workspace]);
   const [engineState, setEngineState] = useState<ClientContextEngineState>(() => runtime.getState());
   const [embeddingMode, setEmbeddingMode] = useState<EmbeddingMode>(() => runtime.getEmbeddingMode());
   const [semanticState, setSemanticState] = useState<SemanticProviderState | undefined>(() => runtime.getSemanticState());
   const [embeddingChange, setEmbeddingChange] = useState<"idle" | "changing">("idle");
-  const [query, setQuery] = useState("");
-  const [searchResult, setSearchResult] = useState<ClientContextSearchResult>();
-  const [searchStatus, setSearchStatus] = useState<"idle" | "searching" | "cancelled" | "complete">("idle");
-  const [searchError, setSearchError] = useState<string>();
+  const [draftQuery, setDraftQuery] = useState("");
+  const [localSearchResult, setLocalSearchResult] = useState<ClientContextSearchResult>();
+  const [localSearchStatus, setLocalSearchStatus] = useState<"idle" | "searching" | "cancelled" | "complete">("idle");
+  const [localSearchError, setLocalSearchError] = useState<string>();
   const [fabric, setFabric] = useState<Readonly<{ experts: readonly RoutedExpert[]; warnings: readonly string[]; commitment?: RetrievalCommitment }>>({ experts: [], warnings: [] });
   const searchController = useRef<AbortController>();
   const searchSequence = useRef(0);
+  const query = searchQuery ?? draftQuery;
+  const generationDigest = engineState.generation?.lineage.generationDigest;
+  const sharedResult = sharedContextResult(sharedSearch, query, generationDigest);
+  const searchResult = searchQuery === undefined ? localSearchResult : sharedResult;
+  const searchStatus = searchQuery === undefined
+    ? localSearchStatus
+    : sharedSearch?.searching ? "searching" : sharedResult ? "complete" : "idle";
+  const searchError = searchQuery === undefined
+    ? localSearchError
+    : sharedSearch?.searching ? undefined : sharedSearch?.status;
 
   useEffect(() => runtime.subscribe(setEngineState), [runtime]);
   useEffect(() => runtime.subscribeSemantic(setSemanticState), [runtime]);
+  useEffect(() => {
+    if (!onReady) return;
+    const frame = window.requestAnimationFrame(onReady);
+    return () => window.cancelAnimationFrame(frame);
+  }, [onReady]);
 
   useEffect(() => {
     void runtime.updateWorkspace(entries).catch((error: unknown) => {
-      if (!isContextSupersession(error)) setSearchError(undefined);
+      if (!isContextSupersession(error)) setLocalSearchError(undefined);
     });
   }, [runtime, entries]);
 
@@ -45,24 +65,24 @@ export function ContextView({ workspace, entries, dimensions = 384, resultLimit 
     searchController.current?.abort(new DOMException("Context view closed.", "AbortError"));
   }, [runtime]);
 
-  const generationDigest = engineState.generation?.lineage.generationDigest;
+  useEffect(() => onGenerationChange?.(generationDigest), [generationDigest, onGenerationChange]);
   useEffect(() => {
-    setSearchResult((current) => current?.generationDigest === generationDigest ? current : undefined);
+    setLocalSearchResult((current) => current?.generationDigest === generationDigest ? current : undefined);
     if (engineState.phase !== "ready") {
       searchController.current?.abort(new DOMException("The context generation changed.", "AbortError"));
-      setSearchStatus("idle");
+      setLocalSearchStatus("idle");
     }
   }, [engineState.phase, generationDigest]);
 
-  async function search() {
-    const normalized = query.trim();
+  async function search(candidate = query) {
+    const normalized = candidate.trim();
     if (!normalized || engineState.phase !== "ready") return;
     const sequence = ++searchSequence.current;
     searchController.current?.abort(new DOMException("A newer search started.", "AbortError"));
     const controller = new AbortController();
     searchController.current = controller;
-    setSearchStatus("searching");
-    setSearchError(undefined);
+    setLocalSearchStatus("searching");
+    setLocalSearchError(undefined);
     try {
       if (fabricDriver) {
         const experts: RoutedExpert[] = [];
@@ -77,15 +97,15 @@ export function ContextView({ workspace, entries, dimensions = 384, resultLimit 
       }
       const result = await runtime.search(normalized, { limit: resultLimit, signal: controller.signal });
       if (sequence !== searchSequence.current) return;
-      setSearchResult(result);
-      setSearchStatus("complete");
+      setLocalSearchResult(result);
+      setLocalSearchStatus("complete");
     } catch (error) {
       if (sequence !== searchSequence.current) return;
       if (isCancellation(error) || isContextSupersession(error)) {
-        setSearchStatus("cancelled");
+        setLocalSearchStatus("cancelled");
       } else {
-        setSearchStatus("idle");
-        setSearchError(error instanceof Error ? error.message : "Context search failed.");
+        setLocalSearchStatus("idle");
+        setLocalSearchError(error instanceof Error ? error.message : "Context search failed.");
       }
     } finally {
       if (searchController.current === controller) searchController.current = undefined;
@@ -97,7 +117,7 @@ export function ContextView({ workspace, entries, dimensions = 384, resultLimit 
     searchController.current?.abort(new DOMException("Search cancelled by the user.", "AbortError"));
     runtime.cancelSearch();
     searchController.current = undefined;
-    setSearchStatus("cancelled");
+    setLocalSearchStatus("cancelled");
   }
 
   const generation = engineState.generation;
@@ -107,21 +127,21 @@ export function ContextView({ workspace, entries, dimensions = 384, resultLimit 
   async function changeEmbeddingMode(mode: EmbeddingMode) {
     if (mode === embeddingMode || embeddingChange === "changing") return;
     setEmbeddingChange("changing");
-    setSearchError(undefined);
+    setLocalSearchError(undefined);
     try {
       await runtime.setEmbeddingMode(mode);
       setEmbeddingMode(mode);
-      setSearchResult(undefined);
+      setLocalSearchResult(undefined);
     } catch (error) {
       setEmbeddingMode(runtime.getEmbeddingMode());
-      setSearchError(error instanceof Error ? error.message : "The local embedding engine could not be changed.");
+      setLocalSearchError(error instanceof Error ? error.message : "The local embedding engine could not be changed.");
     } finally {
       setEmbeddingChange("idle");
     }
   }
 
   return (
-    <section class="client-context-view" aria-labelledby="client-context-title">
+    <section class="client-context-view" aria-labelledby={embedded ? undefined : "client-context-title"} aria-label={embedded ? "Workspace context index" : undefined}>
       {!embedded ? <header class="client-context-heading">
         <div>
           <span>On-device context index</span>
@@ -168,29 +188,37 @@ export function ContextView({ workspace, entries, dimensions = 384, resultLimit 
         <p class="context-engine-error" role="alert"><Icon name="warning" size={17} /><span><strong>{engineState.error.code}</strong>{engineState.error.message}</span></p>
       ) : null}
 
-      <form class="context-search" role="search" onSubmit={(event) => { event.preventDefault(); void search(); }}>
-        <label for="client-context-query"><span>Hybrid local search</span><small>72% deterministic dense score · 28% lexical overlap</small></label>
-        <div>
-          <Icon name="context" size={18} />
-          <input
-            id="client-context-query"
-            type="search"
-            value={query}
-            autoComplete="off"
-            spellcheck={false}
-            placeholder={engineState.phase === "ready" ? "Search this exact workspace generation…" : "Index refresh must complete first…"}
-            disabled={engineState.phase !== "ready" || searchStatus === "searching"}
-            onInput={(event) => setQuery(event.currentTarget.value)}
-          />
-          {searchStatus === "searching" ? (
-            <button type="button" onClick={cancelSearch}><Icon name="stop" size={15} />Cancel</button>
-          ) : (
-            <button class="primary" type="submit" disabled={!query.trim() || engineState.phase !== "ready"}><Icon name="context" size={15} />Search</button>
-          )}
-        </div>
-        <p class="context-search-status" role="status" aria-live="polite">{searchStatusText(searchStatus, searchResult)}</p>
-        {searchError ? <p class="context-search-error" role="alert">{searchError}</p> : null}
-      </form>
+      {searchQuery !== undefined ? (
+        <section class="context-managed-search" role="search" aria-label="Shared Memory query in the workspace index">
+          <div><span>Shared Memory query</span><strong>{query.trim() ? `Following “${query.trim().slice(0, 160)}”` : "Waiting for a query above"}</strong></div>
+          <p role="status" aria-live="polite">{managedSearchStatusText(query, engineState.phase, searchStatus, searchResult)}</p>
+          {searchError ? <p class="context-search-error" role="alert">{searchError}</p> : null}
+        </section>
+      ) : (
+        <form class="context-search" role="search" onSubmit={(event) => { event.preventDefault(); void search(); }}>
+          <label for="client-context-query"><span>Hybrid local search</span><small>72% deterministic dense score · 28% lexical overlap</small></label>
+          <div>
+            <Icon name="context" size={18} />
+            <input
+              id="client-context-query"
+              type="search"
+              value={query}
+              autoComplete="off"
+              spellcheck={false}
+              placeholder={engineState.phase === "ready" ? "Search this exact workspace generation…" : "Index refresh must complete first…"}
+              disabled={engineState.phase !== "ready" || searchStatus === "searching"}
+              onInput={(event) => setDraftQuery(event.currentTarget.value)}
+            />
+            {searchStatus === "searching" ? (
+              <button type="button" onClick={cancelSearch}><Icon name="stop" size={15} />Cancel</button>
+            ) : (
+              <button class="primary" type="submit" disabled={!query.trim() || engineState.phase !== "ready"}><Icon name="context" size={15} />Search</button>
+            )}
+          </div>
+          <p class="context-search-status" role="status" aria-live="polite">{searchStatusText(searchStatus, searchResult)}</p>
+          {searchError ? <p class="context-search-error" role="alert">{searchError}</p> : null}
+        </form>
+      )}
 
       <p class="context-injection-disclosure" role="note"><strong>Shared runtime.</strong> This screen, the search_context tool, and automatic turn grounding use the same memory-only generation. Selected turn context is bounded and committed to the session journal with source digests.</p>
       {fabricDriver ? <section class="context-fabric-results" aria-labelledby="context-fabric-title"><div class="context-surface-heading"><div><span>Encrypted segmented routing</span><h2 id="context-fabric-title">Selected context experts</h2></div><span>{fabric.commitment ? `${formatBytes(fabric.commitment.bytesRead)} streamed` : `${fabric.experts.length} routed`}</span></div>{fabric.warnings.map((warning) => <p class="context-recall-warning" role="alert"><Icon name="warning" size={16} />Recall reduced · {warning}</p>)}<div>{fabric.experts.map((expert) => <article key={expert.expertId}><span>{expert.kind}</span><strong>{expert.label}</strong><small>{expert.score.toFixed(3)} relevance · {formatBytes(expert.bytes)} budget</small></article>)}</div>{fabric.commitment ? <details><summary>Retrieval commitment</summary><code>{fabric.commitment.resultDigest}</code><small> generation {fabric.commitment.generation} · {fabric.commitment.complete ? "complete" : "incomplete"}</small></details> : null}</section> : null}
@@ -329,6 +357,35 @@ function searchStatusText(status: "idle" | "searching" | "cancelled" | "complete
   if (status === "cancelled") return "Search cancelled; no stale result was committed.";
   if (status === "complete" && result) return `${result.hits.length} result${result.hits.length === 1 ? "" : "s"} sealed to ${result.generationDigest}.`;
   return "Search is cancellable and automatically invalidated by a workspace refresh.";
+}
+
+function sharedContextResult(state: FederatedMemorySearchState | undefined, query: string, generationDigest?: string): ClientContextSearchResult | undefined {
+  const result = state?.result;
+  if (!result || state.query !== query.trim()) return undefined;
+  const workspace = result.groups[2];
+  if (!generationDigest || workspace.generationDigest !== generationDigest) return undefined;
+  return {
+    query: result.query,
+    queryDigest: result.queryDigest,
+    generationDigest: workspace.generationDigest,
+    workspaceSnapshotDigest: workspace.workspaceSnapshotDigest,
+    durationMs: workspace.durationMs,
+    completedAt: workspace.completedAt,
+    hits: workspace.hits,
+  };
+}
+
+function managedSearchStatusText(
+  query: string,
+  phase: ClientContextEngineState["phase"],
+  status: "idle" | "searching" | "cancelled" | "complete",
+  result?: ClientContextSearchResult,
+): string {
+  if (!query.trim()) return "The index stays ready while the shared query is empty.";
+  if (phase !== "ready") return "The query will run when the current workspace generation becomes searchable.";
+  if (status === "searching") return "Searching the active in-memory generation with the query above…";
+  if (status === "complete" && result) return `${result.hits.length} index result${result.hits.length === 1 ? "" : "s"} sealed to ${result.generationDigest}.`;
+  return "The shared query is ready to run against this exact workspace generation.";
 }
 
 function isCancellation(error: unknown): boolean {

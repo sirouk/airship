@@ -241,12 +241,14 @@ paths. The extension contains no provider client secret and persists no token.
 The repository/distribution distinction and exact signed-store launch gates are
 tracked in [Production readiness](docs/PRODUCTION_READINESS.md).
 
-Google Drive is the default durable Vault provider. A production or real local
-Drive run must also supply `VITE_GOOGLE_CLIENT_ID` for a Google OAuth Web
-application whose exact Airship origin is an Authorized JavaScript origin and
-whose project has the Drive API and `drive.file` consent configured. This is a
-public identifier, not a client secret. Recovery imports open an existing
-app-created hierarchy or fail closed; only a newly generated key may create one.
+Google Drive is the default durable Vault provider only for builds that supply
+a valid `VITE_GOOGLE_CLIENT_ID`; unconfigured builds safely default to the
+encrypted Local Device Vault. A production or real local Drive run uses a
+Google OAuth Web application whose exact Airship origin is an Authorized
+JavaScript origin and whose project has the Drive API and `drive.file` consent
+configured. This is a public identifier, not a client secret. Recovery imports
+open an existing app-created hierarchy or fail closed; only a newly generated
+key may create one.
 
 ## Design and trust records
 

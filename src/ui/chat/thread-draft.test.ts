@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { readThreadDraft, threadDraftKey, writeThreadDraft } from "./thread-draft";
+import {
+  claimThreadDraftHydration,
+  readThreadDraft,
+  threadDraftKey,
+  writeThreadDraft,
+} from "./thread-draft";
 
 describe("thread drafts", () => {
   it("isolates drafts by opaque conversation identity", () => {
@@ -24,5 +29,24 @@ describe("thread drafts", () => {
       removeItem: (key) => { values.set(key, "removed"); },
     });
     expect([...values.values()]).toContain("removed");
+  });
+
+  it("hydrates each effective identity once while route state normalizes", () => {
+    const fence: { current: string | undefined } = { current: undefined };
+
+    expect(claimThreadDraftHydration(fence, "session-b")).toBe("hydrate");
+    // The route request cleared after session-b became active. The effective
+    // identity did not change, so this must not hydrate an empty draft again.
+    expect(claimThreadDraftHydration(fence, "session-b")).toBe("unchanged");
+
+    expect(claimThreadDraftHydration(fence, "session-a")).toBe("hydrate");
+    expect(claimThreadDraftHydration(fence, "session-b")).toBe("hydrate");
+  });
+
+  it("protects a fork prefill through the same-identity normalization pass", () => {
+    const fence: { current: string | undefined } = { current: "source-session" };
+
+    expect(claimThreadDraftHydration(fence, "fork-session", "fork-session")).toBe("preserve");
+    expect(claimThreadDraftHydration(fence, "fork-session")).toBe("unchanged");
   });
 });

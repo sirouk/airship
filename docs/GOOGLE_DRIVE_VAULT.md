@@ -213,29 +213,25 @@ unconfigured build has no connect branch left in the bundle and **no runtime
 toggle can restore Drive on that artifact**. Because of that, the default vault
 provider must move with the client ID rather than assume Drive:
 
-- `isDeployableGoogleOAuthClientId` (`src/storage/google-drive-auth.ts`) is the
-  single source of the accepted shape, and `GoogleIdentityServicesAuthorizer`
-  enforces it at construction — refusing with `Google OAuth client ID is
-  invalid.` and normalizing the accepted value to its trimmed form before it is
-  ever sent as `client_id`. **Nothing consults that predicate when a default
-  provider is selected**: the workflow below tests only for a non-empty
-  variable, and `resolveDefaultVaultBackend` in `src/ui/platform-shell.tsx` does
-  not consult it at all. A maintainer who sets the repository variable to a
-  non-empty but malformed value therefore still ships `google-drive` as the
-  default, and the Drive connect surface fails at authorizer construction.
-  Wiring the predicate into default selection is **not yet implemented**.
+- `isDeployableGoogleOAuthClientId`
+  (`src/storage/google-drive-configuration.ts`) is the single source of the
+  accepted shape. Both `GoogleIdentityServicesAuthorizer` and
+  `resolveDefaultVaultBackend` consult it, so a missing or malformed deployment
+  value cannot make an unreachable Drive provider the default. The authorizer
+  still refuses invalid direct construction and normalizes an accepted value
+  before it is ever sent as `client_id`.
 - `.github/workflows/pages.yml` forwards `vars.VITE_GOOGLE_CLIENT_ID` and sets
   `VITE_AIRSHIP_DEFAULT_VAULT_PROVIDER` to `google-drive` only when that
   repository variable is non-empty, and to `local-device` otherwise. **This
   repository ships unconfigured unless a maintainer sets that variable**, so the
   published GitHub Pages artifact currently defaults to the Local Device vault,
   which needs no configuration and is fully offline.
-- A browser that already visited a previous build has `vaultBackend` persisted
-  in `airship.display-preferences.v1`. Downgrading that persisted value on an
-  unconfigured build is a UI-layer concern (`loadPreferenceOverrides` in
-  `src/ui/platform-shell.tsx`) and is **not yet implemented**; until it is, a
-  returning visitor to an unconfigured deployment still lands on Drive and sees
-  the operator notice.
+- A browser that already visited a previous build may have
+  `vaultBackend="google-drive"` persisted in
+  `airship.display-preferences.v1`. `loadPreferenceOverrides` revalidates that
+  preference against the current build and falls back to the configured
+  available provider—Local Device in an unconfigured release—rather than
+  stranding the returning user on an unavailable setup surface.
 
 The shipped application also uses `Cross-Origin-Opener-Policy: same-origin` to
 unlock cross-origin-isolated WASM paths. Google's GIS setup guidance says popup

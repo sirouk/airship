@@ -137,10 +137,12 @@ export const RELEASE_BUDGETS = Object.freeze({
   // Full standards-compatible Git engine. It is loaded once during browser
   // runtime boot, never preloaded with the shell, and remains independently
   // cacheable from the lightweight Source Control presentation pack.
-  // The adapter gained real log/show/tag/stash/merge/restore/reset/remote
-  // operations, per-operation abort checks, and remote-origin admission, taking
-  // the pack to a measured 274.18 KiB raw / 82.20 KiB gzip. The isomorphic-git
-  // pin is unchanged; all of the growth is first-party.
+  // The adapter includes real log/show/tag/stash/merge/restore/reset/remote
+  // operations, per-operation abort checks, and remote-origin admission.
+  // isomorphic-git's broad CommonJS SHA-1 fallback is replaced at build time
+  // by Airship's byte-view-only equivalent; modern Web Crypto remains the
+  // preferred path and legacy/pack hashing remains available. The reviewed
+  // pack measures 256.78 KiB raw / 77.72 KiB gzip.
   optionalBrowserGit: Object.freeze({ raw: 276 * 1024, gzip: 83 * 1024 }),
   optionalSessionLibrary: Object.freeze({ raw: 48 * 1024, gzip: 14 * 1024 }),
   // The route now renders the per-primitive probe detail and states the
@@ -300,6 +302,23 @@ export function assertExclusiveArtifactClassifications(paths, classifications) {
   }
 }
 
+/**
+ * The in-memory Git adapter is a deterministic test fixture, not a production
+ * runtime. Keep a literal sentinel in that adapter and fail the release if a
+ * production JavaScript graph accidentally imports it again.
+ */
+export function assertNoSimulatedGitRuntime(files) {
+  const sentinel = Buffer.from("airship-memory-git");
+  const offenders = files
+    .filter((file) => file.payload.includes(sentinel))
+    .map((file) => file.path);
+  if (offenders.length > 0) {
+    throw new Error(
+      `Production must not contain the simulated browser-Git runtime; found ${offenders.join(", ")}.`,
+    );
+  }
+}
+
 export async function runReleaseGate(outputDirectory = defaultOutput) {
   const output = resolve(outputDirectory);
   const files = await collectFiles(output);
@@ -376,6 +395,7 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
       && file.path !== "sw.js"
       && !isOptionalPythonPackPath(file.path),
   );
+  assertNoSimulatedGitRuntime(javaScriptFiles);
   const optionalExecutionPacks = javaScriptFiles.filter((file) => isOptionalExecutionPackPath(file.path));
   if (optionalExecutionPacks.length !== 1) {
     throw new Error(`Production must contain exactly one optional execution pack; found ${optionalExecutionPacks.length}.`);
@@ -1154,6 +1174,10 @@ function validateServiceWorker(source) {
     ["authorization bypass", /headers\.has\("authorization"\)/u],
     ["range bypass", /headers\.has\("range"\)/u],
     ["network-first navigation", /request\.mode === "navigate"[\s\S]*?fetch\(event\.request\)[\s\S]*?caches\.match\((?:"\/"|BASE_PATH)\)/u],
+    ["first-document control", /self\.clients\.claim\(\)/u],
+    ["static-host navigation wrapping", /return isolatedNavigationResponse\(response\)/u],
+    ["static-host embedder isolation", /"Cross-Origin-Embedder-Policy":\s*"credentialless"/u],
+    ["static-host opener isolation", /"Cross-Origin-Opener-Policy":\s*"same-origin"/u],
     ["hashed asset scope", /pathname\.startsWith\((?:"\/assets\/"|scopedPath\("assets\/"\))\)/u],
     ["optional semantic pack cache", /pathname\.startsWith\((?:"\/semantic-pack\/v1\/"|scopedPath\("semantic-pack\/v1\/"\))\)/u],
     ["Set-Cookie exclusion", /!response\.headers\.has\("set-cookie"\)/u],

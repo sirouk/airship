@@ -94,6 +94,8 @@ test("every desktop and mobile route remains usable in the live local lab", asyn
     if (route.hash === "vault") {
       await expect(main.getByText("Encrypted runtime active", { exact: true })).toBeVisible({ timeout: 60_000 });
       await expect(main).toContainText("Cross-device sync is not evaluated by this probe.");
+      await expect(main).toContainText("Private local object state");
+      await expect(main).not.toContainText("Private cloud state");
     }
     if (["proof", "vault", "connection", "account"].includes(route.hash)) {
       const activeTrustTab = main.getByRole("navigation", { name: "Trust hub" }).locator("button[aria-current='page']");

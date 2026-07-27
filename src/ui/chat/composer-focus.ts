@@ -21,5 +21,10 @@ export function shouldClaimComposerFocus(context: ComposerFocusContext): boolean
   return context.focusAtDocumentRoot;
 }
 
-/** The width below which the composer must not pull up the soft keyboard. */
-export const COMPOSER_AUTOFOCUS_MAX_WIDTH_QUERY = "(max-width: 640px)";
+/**
+ * The responsive shell treats short phone-landscape viewports as mobile even
+ * when their CSS width is tablet-like. Autofocus must follow that same contract
+ * or rotating a phone can raise the keyboard before the user asks for it.
+ */
+export const MOBILE_SHELL_MEDIA_QUERY =
+  "(max-width: 640px), (max-width: 950px) and (max-height: 500px)";

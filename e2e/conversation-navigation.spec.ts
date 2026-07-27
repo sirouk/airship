@@ -27,12 +27,19 @@ test("conversation branches preserve their source and navigate back through line
   await expect(page).toHaveURL(/#chat\/[^/?#]+$/);
   const sourceUrl = page.url();
   const message = page.locator("[data-transcript-card]").first();
+  const restoredPrompt = (await message.locator(".message-body > p").textContent())?.trim();
+  expect(restoredPrompt).toBeTruthy();
   await message.hover();
   const fork = message.getByRole("button", { name: "Fork conversation" });
   await expect(fork).toBeEnabled();
   await fork.click();
   await expect.poll(() => page.url()).not.toBe(sourceUrl);
-  await expect(page.getByRole("combobox", { name: "Message Airship" })).not.toHaveValue("");
+  const composer = page.getByRole("combobox", { name: "Message Airship" });
+  await expect(composer).toHaveValue(restoredPrompt!);
+  // Cross the draft debounce and the route-request → active-session
+  // normalization. Neither is allowed to erase the intentional fork prefill.
+  await page.waitForTimeout(240);
+  await expect(composer).toHaveValue(restoredPrompt!);
   const lineage = page.getByRole("button", { name: /Branch from #/u });
   await expect(lineage).toBeVisible();
   await lineage.click();
@@ -58,6 +65,22 @@ test("each addressed conversation restores its own unsent draft", async ({ page 
   await source.click();
   await expect(page).toHaveURL(sourceUrl);
   await expect(composer).toHaveValue("An unsent source-conversation draft");
+});
+
+test("an addressed draft survives a full page reload before session resume", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "desktop reload draft contract");
+  await page.goto("/#chat");
+  await expect(page).toHaveURL(/#chat\/[^/?#]+$/);
+  const addressedUrl = page.url();
+  const composer = page.getByRole("combobox", { name: "Message Airship" });
+  await composer.fill("Restore this addressed draft after reload");
+  await page.waitForTimeout(220);
+
+  await page.reload();
+
+  await expect(page).toHaveURL(addressedUrl);
+  await expect(page.locator(".app-shell")).toBeVisible();
+  await expect(composer).toHaveValue("Restore this addressed draft after reload");
 });
 
 test("desktop treats Chat as the conversation disclosure and preserves the full ledger", async ({ page }, testInfo) => {
@@ -153,16 +176,108 @@ test("Memory unifies federated search, graph, and the legacy Context index deep 
   await page.goto("/#memory");
   const navigation = page.getByRole("navigation", { name: "Primary" });
   await expect(navigation.getByRole("button", { name: "Context", exact: true })).toHaveCount(0);
-  await expect(page.getByRole("tab", { name: "Search" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tab", { name: /Search|Graph|Index/u })).toHaveCount(0);
+  const query = page.getByRole("searchbox", { name: "Search every memory surface" });
+  await expect(query).toBeVisible();
   await expect(page.getByText("Current conversation", { exact: true })).toBeVisible();
   await expect(page.getByText("Active profile memory", { exact: true })).toBeVisible();
   await expect(page.getByText("Workspace & sources", { exact: true })).toBeVisible();
-  await page.getByRole("tab", { name: "Graph" }).click();
+  const relationships = page.locator("#memory-relationships");
+  await expect.poll(() => relationships.evaluate((element: HTMLDetailsElement) => element.open)).toBe(true);
   await expect(page.getByLabel("Interactive memory relationship graph")).toBeVisible();
+  await query.fill("workspace");
+  await expect(relationships.getByText("Graph matches for “workspace”", { exact: true })).toBeVisible();
+  await expect(page.locator("#memory-results").getByRole("status")).toContainText(/Searching|current/u);
+  const index = page.locator("#memory-index");
+  await expect.poll(() => index.evaluate((element: HTMLDetailsElement) => element.open)).toBe(false);
+  await index.locator("summary").click();
+  await expect(page.getByRole("search", { name: "Shared Memory query in the workspace index" })).toContainText("Following “workspace”");
+
   await page.goto("/#context");
   await expect(page.getByRole("heading", { name: "Memory", level: 1 })).toBeVisible();
-  await expect(page.getByRole("tab", { name: "Index" })).toHaveAttribute("aria-selected", "true");
+  const deepLinkedIndex = page.locator("#memory-index");
+  await expect.poll(() => deepLinkedIndex.evaluate((element: HTMLDetailsElement) => element.open)).toBe(true);
   await expect(page.getByLabel("Context index status")).toBeVisible();
+  await expect.poll(() => page.locator("main").evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  await expect.poll(() => deepLinkedIndex.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    const topbar = document.querySelector<HTMLElement>(".topbar")?.getBoundingClientRect();
+    return bounds.top >= (topbar?.bottom ?? 0) - 1 && bounds.top <= (topbar?.bottom ?? 0) + 32;
+  })).toBe(true);
+});
+
+test("Memory disclosures and graph stay inside the mobile viewport", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile-chromium", "mobile memory overflow contract");
+  await page.goto("/#memory");
+  await page.getByRole("searchbox", { name: "Search every memory surface" }).fill("workspace");
+  await expect(page.locator("#memory-relationships")).toBeVisible();
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+  const jumpNavigation = page.getByRole("navigation", { name: "Memory page sections" });
+  const overflow = await jumpNavigation.evaluate((element) => ({
+    clientWidth: element.clientWidth,
+    overflowX: getComputedStyle(element).overflowX,
+    scrollWidth: element.scrollWidth,
+  }));
+  expect(overflow.overflowX).toBe("auto");
+  expect(overflow.scrollWidth).toBeGreaterThanOrEqual(overflow.clientWidth);
+  const graph = page.getByLabel("Interactive memory relationship graph");
+  await expect(graph).toBeVisible();
+  const graphBounds = await graph.boundingBox();
+  expect(graphBounds?.x ?? -1).toBeGreaterThanOrEqual(0);
+  expect((graphBounds?.x ?? 0) + (graphBounds?.width ?? Number.POSITIVE_INFINITY)).toBeLessThanOrEqual((await page.evaluate(() => window.innerWidth)) + 1);
+  const match = page.locator("#memory-relationships .memory-graph-query button").first();
+  await expect(match).toBeVisible();
+  await match.click();
+  await expect(page.locator("#memory-relationships .memory-node-detail h2")).toBeVisible();
+  await page.getByRole("button", { name: /Local index/u }).click();
+  await expect(page.getByRole("search", { name: "Shared Memory query in the workspace index" })).toContainText("Following “workspace”");
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+});
+
+test("Memory keeps its shared-query contract at the 768px tablet boundary", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "controlled tablet acceptance uses the desktop browser context");
+  await page.setViewportSize({ width: 768, height: 1024 });
+  await page.goto("/#memory");
+  const query = page.getByRole("searchbox", { name: "Search every memory surface" });
+  await query.fill("workspace");
+  const relationships = page.locator("#memory-relationships");
+  await expect(relationships.getByText("Graph matches for “workspace”", { exact: true })).toBeVisible();
+  const match = relationships.locator(".memory-graph-query button").first();
+  await expect(match).toBeVisible();
+  await match.click();
+  await expect(relationships.locator(".memory-node-detail h2")).toBeVisible();
+  await page.getByRole("button", { name: /Local index/u }).click();
+  await expect(page.getByRole("search", { name: "Shared Memory query in the workspace index" })).toContainText("Following “workspace”");
+  await expect.poll(() => page.evaluate(() => ({
+    documentOverflow: document.documentElement.scrollWidth - innerWidth,
+    mainOverflow: document.querySelector<HTMLElement>("main")!.scrollWidth - document.querySelector<HTMLElement>("main")!.clientWidth,
+  }))).toEqual({ documentOverflow: 0, mainOverflow: 0 });
+});
+
+test("an open Index shares one slow search authority with Recall", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "single browser context owns the instrumented Memory harness");
+  await page.goto("/");
+  await page.evaluate(async () => {
+    document.body.replaceChildren(Object.assign(document.createElement("main"), { id: "memory-authority-root" }));
+    const { mountSlowMemoryAuthorityHarness } = await import("/e2e/fixtures/memory-authority-harness.tsx");
+    await mountSlowMemoryAuthorityHarness(document.querySelector("#memory-authority-root")!);
+  });
+  const index = page.locator("#memory-index");
+  await expect.poll(() => index.evaluate((element: HTMLDetailsElement) => element.open)).toBe(true);
+  await expect(page.getByRole("search", { name: "Shared Memory query in the workspace index" })).toBeVisible();
+  await expect(page.getByLabel("Context index status")).toContainText("Searchable");
+  await page.getByRole("searchbox", { name: "Search every memory surface" }).fill("workspace slow");
+  await expect(page.locator("#memory-results").getByText("Searching this scope…").first()).toBeVisible();
+  await expect(page.getByRole("search", { name: "Shared Memory query in the workspace index" })).toContainText("Searching");
+  await expect(page.locator("#memory-results").getByText("/workspace/docs/slow.md")).toBeVisible();
+  await expect(index.getByRole("heading", { name: "Search hits" }).locator("../..")).toContainText("1 in");
+  await expect(index.getByRole("region", { name: "Search hits" }).getByText("docs/slow.md", { exact: true })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => globalThis.airshipMemoryAuthorityInvocations)).toBe(1);
+  await page.evaluate(() => globalThis.airshipMemoryAuthorityUpdate());
+  await expect(page.locator("#memory-results").getByText("Searching this scope…").first()).toBeVisible();
+  await expect(page.locator("#memory-results").getByText("workspace slow refreshed authority")).toBeVisible();
+  await expect(index.getByRole("region", { name: "Search hits" })).toContainText("workspace slow refreshed authority");
+  await expect.poll(() => page.evaluate(() => globalThis.airshipMemoryAuthorityInvocations)).toBe(2);
 });
 
 test("Profiles opens by default, remains collapsible, and uses one scoped tabbed manager", async ({ page }, testInfo) => {

@@ -836,9 +836,15 @@ portability matrices are separate:
 
 ```sh
 npm run test:e2e:master
+npm run test:e2e:static-host
 npm run test:e2e:portability
 ```
 
+The static-host gate owns strict port 4193 and serves the built release without
+COOP/COEP response headers. A fresh Chromium context must cross exactly one
+service-worker takeover reload, become cross-origin isolated with
+`SharedArrayBuffer`, avoid a reload loop, and execute Node in the real browser
+terminal.
 The portability matrix owns strict port 4189 and exercises stable Chrome,
 Firefox, WebKit iPhone emulation, Chromium tablet emulation, and a constrained
 signal profile. Emulation and API probes are not physical-device certification.

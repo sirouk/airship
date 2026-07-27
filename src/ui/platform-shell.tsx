@@ -7,6 +7,7 @@ import { Seal, type SealState } from "./seal";
 import { trapFocus } from "./focus-trap";
 import type { ApprovalMode } from "../approvals/modes";
 import { MenuSelect } from "./menu-select";
+import { isDeployableGoogleOAuthClientId } from "../storage/google-drive-configuration";
 
 export type PaletteEntry = Readonly<{
   id: string;
@@ -215,9 +216,9 @@ export type PreferenceOverrides = Readonly<{
   corners: "subtle" | "square" | "rounded";
   bodyFont: "system-sans" | "system-serif";
   /**
-   * Durable-storage backend. Google Drive is the default user-owned encrypted
-   * transport; local MinIO remains a development adapter and ephemeral keeps
-   * everything in page memory.
+   * Durable-storage backend. A configured build may default to the user-owned
+   * Google Drive transport; Local Device is the safe deployable fallback,
+   * local MinIO remains a development adapter, and ephemeral stays page-only.
    */
   vaultBackend: "local-device" | "google-drive" | "local-lab" | "ephemeral";
   approvalMode: ApprovalMode;
@@ -225,28 +226,57 @@ export type PreferenceOverrides = Readonly<{
 
 export type VaultBackend = PreferenceOverrides["vaultBackend"];
 
-export function resolveDefaultVaultBackend(value: string | undefined): PreferenceOverrides["vaultBackend"] {
-  return value === "local-device" || value === "local-lab" || value === "ephemeral" ? value : "google-drive";
+function availableVaultBackend(
+  value: unknown,
+  googleClientId?: string | null,
+): VaultBackend | undefined {
+  if (value === "google-drive") {
+    return isDeployableGoogleOAuthClientId(googleClientId) ? value : undefined;
+  }
+  return value === "local-device" || value === "local-lab" || value === "ephemeral"
+    ? value
+    : undefined;
+}
+
+export function resolveDefaultVaultBackend(
+  value: string | undefined,
+  googleClientId?: string | null,
+): PreferenceOverrides["vaultBackend"] {
+  return availableVaultBackend(value, googleClientId)
+    ?? (isDeployableGoogleOAuthClientId(googleClientId) ? "google-drive" : "local-device");
 }
 
 export const DEFAULT_PREFERENCES: PreferenceOverrides = Object.freeze({
-  mode: "dark", typeScale: "default", density: "comfortable", corners: "subtle", bodyFont: "system-sans", vaultBackend: resolveDefaultVaultBackend(import.meta.env.VITE_AIRSHIP_DEFAULT_VAULT_PROVIDER), approvalMode: "ask-first",
+  mode: "dark", typeScale: "default", density: "comfortable", corners: "subtle", bodyFont: "system-sans", vaultBackend: resolveDefaultVaultBackend(import.meta.env.VITE_AIRSHIP_DEFAULT_VAULT_PROVIDER, import.meta.env.VITE_GOOGLE_CLIENT_ID), approvalMode: "ask-first",
 });
 
 const PREFERENCE_STORAGE_KEY = "airship.display-preferences.v1";
 
-export function loadPreferenceOverrides(storage: Pick<Storage, "getItem"> | undefined = typeof localStorage === "undefined" ? undefined : localStorage): PreferenceOverrides {
+export function loadPreferenceOverrides(
+  storage: Pick<Storage, "getItem"> | undefined = typeof localStorage === "undefined" ? undefined : localStorage,
+  availability: Readonly<{
+    googleClientId?: string | null;
+    defaultVaultBackend?: VaultBackend;
+  }> = {},
+): PreferenceOverrides {
   if (!storage) return DEFAULT_PREFERENCES;
   try {
     const value = JSON.parse(storage.getItem(PREFERENCE_STORAGE_KEY) ?? "null") as Partial<PreferenceOverrides> | null;
     if (!value) return DEFAULT_PREFERENCES;
+    const googleClientId = "googleClientId" in availability
+      ? availability.googleClientId
+      : import.meta.env.VITE_GOOGLE_CLIENT_ID;
+    const availableDefault = resolveDefaultVaultBackend(
+      availability.defaultVaultBackend ?? DEFAULT_PREFERENCES.vaultBackend,
+      googleClientId,
+    );
     return Object.freeze({
       mode: value.mode === "light" ? "light" : "dark",
       typeScale: value.typeScale === "large" || value.typeScale === "x-large" ? value.typeScale : "default",
       density: value.density === "compact" ? "compact" : "comfortable",
       corners: value.corners === "square" || value.corners === "rounded" ? value.corners : "subtle",
       bodyFont: value.bodyFont === "system-serif" ? "system-serif" : "system-sans",
-      vaultBackend: value.vaultBackend === "local-device" || value.vaultBackend === "ephemeral" || value.vaultBackend === "local-lab" ? value.vaultBackend : "google-drive",
+      vaultBackend: availableVaultBackend(value.vaultBackend, googleClientId) ?? availableDefault,
       approvalMode: value.approvalMode === "auto-approve" || value.approvalMode === "full-access" ? value.approvalMode : "ask-first",
     });
   } catch { return DEFAULT_PREFERENCES; }
@@ -418,9 +448,14 @@ export function useVisualViewport(root = typeof document === "undefined" ? undef
 export function usePwaUpdate(): Readonly<{ updateReady: boolean; reload(): void }> {
   const [registration, setRegistration] = useState<ServiceWorkerRegistration>();
   const [updateReady, setUpdateReady] = useState(false);
+  const reloadRequested = useRef(false);
+  const userInteracted = useRef(false);
   useEffect(() => {
     if (!("serviceWorker" in navigator)) return;
     let current = true;
+    const markInteraction = (event: Event) => { if (event.isTrusted) userInteracted.current = true; };
+    const interactionEvents = ["pointerdown", "keydown", "beforeinput", "drop"] as const;
+    interactionEvents.forEach((type) => window.addEventListener(type, markInteraction, true));
     const watch = (candidate: ServiceWorkerRegistration) => {
       if (!current) return;
       setRegistration(candidate);
@@ -433,16 +468,26 @@ export function usePwaUpdate(): Readonly<{ updateReady: boolean; reload(): void 
       });
     };
     void navigator.serviceWorker.getRegistration().then((candidate) => candidate && watch(candidate));
-    const controllerChange = () => window.location.reload();
+    const controllerChange = () => {
+      // The first static-host takeover must establish COOP/COEP, but never
+      // interrupt work a person has already started. A page that observed a
+      // trusted input gesture keeps running and offers the explicit reload.
+      if (!reloadRequested.current && userInteracted.current) setUpdateReady(true);
+      else window.location.reload();
+    };
     navigator.serviceWorker.addEventListener("controllerchange", controllerChange);
-    return () => { current = false; navigator.serviceWorker.removeEventListener("controllerchange", controllerChange); };
+    return () => {
+      current = false;
+      interactionEvents.forEach((type) => window.removeEventListener(type, markInteraction, true));
+      navigator.serviceWorker.removeEventListener("controllerchange", controllerChange);
+    };
   }, []);
-  return Object.freeze({ updateReady, reload() { if (registration?.waiting) registration.waiting.postMessage({ type: "SKIP_WAITING" }); else window.location.reload(); } });
+  return Object.freeze({ updateReady, reload() { reloadRequested.current = true; if (registration?.waiting) registration.waiting.postMessage({ type: "SKIP_WAITING" }); else window.location.reload(); } });
 }
 
 export function PwaUpdateBanner({ updateReady, onReload }: Readonly<{ updateReady: boolean; onReload(): void }>) {
   if (!updateReady) return null;
-  return <div class="pwa-update" role="status"><span><strong>New version available</strong><small>The current shell stays active until you choose to reload.</small></span><button type="button" onClick={onReload}>Reload Airship</button></div>;
+  return <div class="pwa-update" role="status"><span><strong>Runtime update ready</strong><small>Your current work stays active until you choose to reload.</small></span><button type="button" onClick={onReload}>Reload Airship</button></div>;
 }
 
 export function filterPaletteEntries(entries: readonly PaletteEntry[], query: string): readonly PaletteEntry[] {

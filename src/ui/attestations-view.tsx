@@ -30,6 +30,8 @@ export type AttestationsViewProps = Readonly<{
   onCancel?: (recordId: string) => void;
   /** Public, pre-redacted acquisition state from the mounted controller. */
   acquisitionNotice?: string;
+  /** Opens the provider connection surface when acquisition is unavailable. */
+  onOpenConnection?: () => void;
   /** Receives an unsigned, privacy-safe status summary. Raw evidence is never passed here. */
   onExport?: (json: string) => void;
   /** Renders inside the unified Proof route without introducing a second page heading. */
@@ -48,6 +50,7 @@ export function AttestationsView({
   onRefresh,
   onCancel,
   acquisitionNotice,
+  onOpenConnection,
   onExport,
   embedded = false,
 }: AttestationsViewProps) {
@@ -185,11 +188,18 @@ export function AttestationsView({
             <div><h2>{inputOverflow ? "Evidence page rejected" : "No evidence records yet"}</h2>
               <p>{inputOverflow
                 ? "Load a bounded evidence page before opening the ledger. No records from the oversized input were interpreted."
-                : "Run a protected Chutes invocation or acquire endpoint evidence. Nothing is inferred while the ledger is empty."}</p>
+                : onOpenConnection
+                  ? "No Chutes inference provider is connected. Endpoint evidence cannot be acquired until you connect one; existing records remain inspectable."
+                  : "Run a protected Chutes invocation or acquire endpoint evidence. Nothing is inferred while the ledger is empty."}</p>
+              {!inputOverflow && onOpenConnection
+                ? <button class="attestations-empty__connection primary" type="button" onClick={onOpenConnection}>Connect inference</button>
+                : null}
             </div>
           </div>
           {!inputOverflow ? <div class="attestations-empty__flow" aria-label="Evidence lifecycle">
-            <div><span>01</span><strong>Acquire</strong><small>Fetch fresh endpoint evidence for the selected Chutes runtime.</small></div>
+            <div><span>01</span><strong>Acquire</strong><small>{onOpenConnection
+              ? "Connect Chutes inference, then fetch fresh endpoint evidence for that runtime."
+              : "Fetch fresh endpoint evidence for the selected Chutes runtime."}</small></div>
             <div><span>02</span><strong>Bind</strong><small>Match the instance and endpoint-key digest to the exact turn.</small></div>
             <div><span>03</span><strong>Inspect</strong><small>Review each claim, authority, measurement, and warning separately.</small></div>
           </div> : null}

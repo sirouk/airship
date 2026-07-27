@@ -1,30 +1,12 @@
+import { isDeployableGoogleOAuthClientId } from "./google-drive-configuration";
+
+export { isDeployableGoogleOAuthClientId } from "./google-drive-configuration";
 export const GOOGLE_DRIVE_FILE_SCOPE = "https://www.googleapis.com/auth/drive.file";
-/**
- * A Google OAuth *Web* client ID. It is a public deployment identifier, never a
- * secret, so a build may legitimately embed it. This is the single source of the
- * shape: build-time default selection and runtime authorizer construction must
- * agree, otherwise a deployment can ship a default provider whose authorizer
- * throws "Google OAuth client ID is invalid." at construction.
- */
-const GOOGLE_OAUTH_CLIENT_ID_PATTERN = /^[A-Za-z0-9._-]{12,256}\.apps\.googleusercontent\.com$/u;
 export const GOOGLE_ACCOUNT_SCOPES = Object.freeze(["openid", "email", "profile", GOOGLE_DRIVE_FILE_SCOPE] as const);
 const GOOGLE_IDENTITY_SCRIPT_URL = "https://accounts.google.com/gsi/client";
 const MAX_GOOGLE_USERINFO_BYTES = 64 * 1024;
 const GOOGLE_AUTHORIZATION_TIMEOUT_MS = 2 * 60_000;
 const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
-
-/**
- * True only when this build can actually open the Google connect flow. Callers
- * that pick a default vault provider must consult this instead of assuming
- * Drive: an unconfigured build cannot connect to Drive at all, so offering it
- * as the default would present a provider that is structurally unreachable.
- */
-export function isDeployableGoogleOAuthClientId(value: string | undefined | null): boolean {
-  if (typeof value !== "string") return false;
-  const clientId = value.trim();
-  // Bound before the regex so a pathological build-time value cannot be scanned.
-  return clientId.length <= 512 && GOOGLE_OAUTH_CLIENT_ID_PATTERN.test(clientId);
-}
 
 export type GoogleAccessToken = Readonly<{
   accessToken: string;

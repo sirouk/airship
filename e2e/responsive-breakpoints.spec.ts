@@ -28,14 +28,14 @@ test("the chat shell stays slim and non-overlapping on narrow and iPhone-class s
     await expect(page.locator(".stage-header")).toBeVisible();
     await expect(page.getByRole("button", { name: /Session\./i })).toBeVisible();
     await page.getByRole("combobox", { name: "Message Airship" }).evaluate((element) => element.blur());
-    await expect(page.locator(".composer")).not.toHaveClass(/composer--expanded/u);
     const geometry = await page.evaluate(() => {
       const top = document.querySelector<HTMLElement>(".topbar")?.getBoundingClientRect();
       const stage = document.querySelector<HTMLElement>(".stage-header")?.getBoundingClientRect();
       const details = document.querySelector<HTMLElement>(".mobile-session-details")?.getBoundingClientRect();
       const nav = document.querySelector<HTMLElement>(".mobile-nav")?.getBoundingClientRect();
       const composer = document.querySelector<HTMLElement>(".composer")?.getBoundingClientRect();
-      return top && stage && details && nav && composer ? {
+      const approval = document.querySelector<HTMLElement>('[aria-label="Conversation approval policy"]')?.getBoundingClientRect();
+      return top && stage && details && nav && composer && approval ? {
         overflow: document.documentElement.scrollWidth - innerWidth,
         topHeight: top.height,
         stageHeight: stage.height,
@@ -44,6 +44,8 @@ test("the chat shell stays slim and non-overlapping on narrow and iPhone-class s
         detailsRight: details.right,
         navRight: nav.right,
         composerHeight: composer.height,
+        approvalX: approval.x,
+        approvalY: approval.y,
         viewportWidth: innerWidth,
       } : undefined;
     });
@@ -73,8 +75,94 @@ test("the chat shell stays slim and non-overlapping on narrow and iPhone-class s
     expect(budget.transcript, `${viewport.width}px transcript share`).toBeGreaterThan(viewport.height * 0.5);
 
     await page.getByRole("combobox", { name: "Message Airship" }).focus();
-    const focusedComposerHeight = await page.locator(".composer").evaluate((element) => element.getBoundingClientRect().height);
-    expect(focusedComposerHeight).toBeGreaterThan(geometry!.composerHeight + 20);
+    const focused = await page.evaluate(() => {
+      const composer = document.querySelector<HTMLElement>(".composer")!.getBoundingClientRect();
+      const approval = document.querySelector<HTMLElement>('[aria-label="Conversation approval policy"]')!.getBoundingClientRect();
+      return { composerHeight: composer.height, approvalX: approval.x, approvalY: approval.y };
+    });
+    expect(Math.abs(focused.composerHeight - geometry!.composerHeight)).toBeLessThanOrEqual(1);
+    expect(Math.abs(focused.approvalX - geometry!.approvalX)).toBeLessThanOrEqual(1);
+    expect(Math.abs(focused.approvalY - geometry!.approvalY)).toBeLessThanOrEqual(1);
+  }
+});
+
+test("short phone landscapes keep a bounded transcript and never autofocus or overlap the composer", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile-chromium", "mobile landscape geometry contract");
+  await page.addInitScript(() => localStorage.setItem("airship.display-preferences.v1", JSON.stringify({
+    mode: "dark", typeScale: "default", density: "comfortable", corners: "subtle", bodyFont: "system-sans",
+    vaultBackend: "ephemeral", approvalMode: "ask-first",
+  })));
+
+  for (const viewport of [{ width: 932, height: 430 }, { width: 667, height: 375 }] as const) {
+    await page.setViewportSize(viewport);
+    await page.goto(`/?landscapeWidth=${String(viewport.width)}#chat`);
+    const textarea = page.getByRole("combobox", { name: "Message Airship" });
+    const approval = page.getByRole("button", { name: "Conversation approval policy" });
+    await expect(textarea).toBeVisible();
+    await expect(page.getByRole("navigation", { name: "Mobile navigation" })).toBeVisible();
+    await expect(page.getByRole("navigation", { name: "Primary" })).toBeHidden();
+    await expect(page.getByRole("button", { name: /Session\. Ephemeral · this page only\./u })).toBeVisible();
+    await expect(textarea).not.toBeFocused();
+
+    const geometry = await page.evaluate(() => {
+      const bounds = (selector: string) => {
+        const element = document.querySelector<HTMLElement>(selector);
+        if (!element) return undefined;
+        const { x, y, width, height, top, right, bottom, left } = element.getBoundingClientRect();
+        return { x, y, width, height, top, right, bottom, left };
+      };
+      return {
+        overflow: document.documentElement.scrollWidth - innerWidth,
+        main: bounds(".main"),
+        stage: bounds(".chat-stage"),
+        header: bounds(".stage-header"),
+        guidance: bounds(".chat-live-guidance"),
+        transcript: bounds(".transcript"),
+        composerWrap: bounds(".composer-wrap"),
+        composer: bounds(".composer"),
+        approval: bounds('[aria-label="Conversation approval policy"]'),
+        attachment: bounds(".composer-attach"),
+        nav: bounds(".mobile-nav"),
+      };
+    });
+
+    expect(geometry.overflow, `${viewport.width}×${viewport.height} document overflow`).toBeLessThanOrEqual(1);
+    expect(geometry.main).toBeDefined();
+    expect(geometry.stage).toBeDefined();
+    expect(geometry.header).toBeDefined();
+    expect(geometry.guidance).toBeDefined();
+    expect(geometry.transcript).toBeDefined();
+    expect(geometry.composerWrap).toBeDefined();
+    expect(geometry.composer).toBeDefined();
+    expect(geometry.approval).toBeDefined();
+    expect(geometry.attachment).toBeDefined();
+    expect(geometry.nav).toBeDefined();
+    expect(geometry.transcript!.height, `${viewport.width}×${viewport.height} transcript height`).toBeGreaterThanOrEqual(120);
+    expect(geometry.header!.height + geometry.guidance!.height, `${viewport.width}×${viewport.height} chat chrome`).toBeLessThanOrEqual(74);
+    expect(geometry.transcript!.bottom).toBeLessThanOrEqual(geometry.composerWrap!.top + 1);
+    expect(geometry.composerWrap!.bottom).toBeLessThanOrEqual(geometry.main!.bottom + 1);
+    expect(geometry.main!.bottom).toBeLessThanOrEqual(geometry.nav!.top + 1);
+    expect(geometry.composer!.left).toBeGreaterThanOrEqual(geometry.stage!.left);
+    expect(geometry.composer!.right).toBeLessThanOrEqual(geometry.stage!.right + 1);
+    expect(geometry.approval!.height).toBeGreaterThanOrEqual(44);
+    expect(geometry.attachment!.height).toBeGreaterThanOrEqual(44);
+
+    await textarea.focus();
+    await textarea.fill("Plan");
+    const focused = await page.evaluate(() => {
+      const composer = document.querySelector<HTMLElement>(".composer")!.getBoundingClientRect();
+      const approvalControl = document.querySelector<HTMLElement>('[aria-label="Conversation approval policy"]')!.getBoundingClientRect();
+      return {
+        composerHeight: composer.height,
+        composerBottom: composer.bottom,
+        approvalX: approvalControl.x,
+        approvalY: approvalControl.y,
+      };
+    });
+    expect(Math.abs(focused.composerHeight - geometry.composer!.height)).toBeLessThanOrEqual(1);
+    expect(Math.abs(focused.approvalX - geometry.approval!.x)).toBeLessThanOrEqual(1);
+    expect(Math.abs(focused.approvalY - geometry.approval!.y)).toBeLessThanOrEqual(1);
+    expect(focused.composerBottom).toBeLessThanOrEqual(geometry.main!.bottom + 1);
   }
 });
 
@@ -266,14 +354,17 @@ for (const density of densities) {
         await expect(main.getByRole("heading", { name: headingName }).first()).toBeVisible({ timeout: 10_000 });
         await expect(page.locator("html")).toHaveAttribute("data-density", density);
 
-        const geometry = await page.evaluate(() => {
+        const geometry = await page.evaluate((routeHash) => {
           const main = document.querySelector<HTMLElement>("main.main");
           const heading = main?.querySelector<HTMLElement>("h1, .stage-header h1");
           const mobileNav = document.querySelector<HTMLElement>(".mobile-navigation");
           const topbar = document.querySelector<HTMLElement>(".topbar");
           if (!main || !heading || !topbar) return undefined;
           const mainBox = main.getBoundingClientRect();
-          const headingBox = heading.getBoundingClientRect();
+          const routeAnchor = routeHash === "context"
+            ? main.querySelector<HTMLElement>("#memory-index > summary") ?? heading
+            : heading;
+          const headingBox = routeAnchor.getBoundingClientRect();
           const topbarBox = topbar.getBoundingClientRect();
           const mobileBox = mobileNav && getComputedStyle(mobileNav).display !== "none" ? mobileNav.getBoundingClientRect() : undefined;
           return {
@@ -288,7 +379,7 @@ for (const density of densities) {
             viewportWidth: innerWidth,
             rootFont: Number.parseFloat(getComputedStyle(document.documentElement).fontSize),
           };
-        });
+        }, hash);
         expect(geometry, `${width}px ${hash} rendered measurable geometry`).toBeDefined();
         expect(geometry!.documentOverflow, `${width}px ${hash} document overflow`).toBeLessThanOrEqual(1);
         expect(geometry!.mainOverflow, `${width}px ${hash} main overflow`).toBeLessThanOrEqual(1);

@@ -27,5 +27,5 @@
 .profile-manage-link { width:100%; margin-top:7px; padding:5px 7px; border:0; color:var(--ink-faint); background:transparent; cursor:pointer; font-size:var(--fs-micro); text-align:left; }
 .profile-manage-link:hover { color:var(--accent-bright); }
 @media (max-width:860px) { .compact-profile-menu { display:block; } }
-@media (max-width:640px) { .menu-select-popover, .menu-select.placement-down .menu-select-popover { position:fixed; inset:auto 8px max(8px,env(safe-area-inset-bottom)) 8px; width:auto; max-width:none; max-height:70dvh; padding:8px; } }
+@media (max-width:640px), (max-width:950px) and (max-height:500px) { .menu-select-popover, .menu-select.placement-down .menu-select-popover { position:fixed; inset:auto 8px max(8px,env(safe-area-inset-bottom)) 8px; width:auto; max-width:none; max-height:70dvh; padding:8px; } }
 @media (prefers-reduced-motion:reduce) { .menu-select-caret { transition:none; } }

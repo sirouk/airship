@@ -124,7 +124,7 @@ button.status-seal:hover { border-color: var(--line-strong); background: var(--s
 :root[data-keyboard-open="true"] .fixed-mobile-nav { visibility: hidden; pointer-events: none; }
 :root[data-keyboard-open="true"] .composer-wrap { bottom: var(--visual-viewport-bottom, 0); }
 
-@media (max-width: 640px) {
+@media (max-width: 640px), (max-width: 950px) and (max-height: 500px) {
   .trust-hub-tabs { box-sizing: border-box; min-height: 45px; padding-block: 0; padding-inline-start: max(8px, env(safe-area-inset-left)); padding-inline-end: max(8px, env(safe-area-inset-right)); background: var(--ground); box-shadow: none; scrollbar-width: none; overscroll-behavior-inline: contain; }
   .trust-hub-tabs::-webkit-scrollbar { display: none; }
   .trust-hub-tabs button { min-height: 44px; padding-inline: 12px; border: 0; border-radius: 0; background: transparent; white-space: nowrap; }

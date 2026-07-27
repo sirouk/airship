@@ -356,7 +356,10 @@ test("mobile session header groups wrap without overlap and profile switching re
   expect(stage).not.toBeNull();
   expect(details).not.toBeNull();
   await expect(page.locator(".session-meta")).toBeHidden();
-  await expect(sessionDetails).toContainText("Session");
+  await expect(sessionDetails).toHaveAccessibleName(/Session\. Ephemeral · this page only\./u);
+  await expect(sessionDetails.getByRole("status")).toHaveText("Ephemeral · this page only");
+  await expect(sessionDetails.getByRole("status")).toHaveClass(/ephemeral/u);
+  await expect(sessionDetails.getByRole("status")).toHaveAttribute("title", "This session journal exists only in page memory. Nothing is synced.");
   expect(details!.x).toBeGreaterThanOrEqual(stage!.x);
   expect(details!.x + details!.width).toBeLessThanOrEqual(stage!.x + stage!.width + 1);
   expect(details!.y).toBeGreaterThanOrEqual(stage!.y);

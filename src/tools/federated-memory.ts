@@ -2,6 +2,7 @@ import type { JsonValue, Tool, ToolContext } from "../core/contracts";
 import { sha256 } from "../core/hash";
 import type { DurableEvent, EventJournal } from "../core/journal";
 import type { ClientContextRuntime } from "../retrieval/client-context-runtime";
+import type { ClientContextSearchHit } from "../indexing/client-context-engine";
 import type { WorkspacePort } from "../workspace/contracts";
 import { memoryLineage } from "../retrieval/federated-turn-context";
 import { rankProfileMemories } from "../retrieval/memory-ranking";
@@ -17,6 +18,14 @@ export type FederatedMemoryResult = Readonly<{
   queryDigest: string;
   authority: Readonly<{ sessionId: string; profileId: string; profileRevision: string }>;
   groups: readonly [ThreadGroup, ProfileGroup, WorkspaceGroup];
+}>;
+
+export type FederatedMemorySearchState = Readonly<{
+  authority: object;
+  query: string;
+  result?: FederatedMemoryResult;
+  status?: string;
+  searching: boolean;
 }>;
 
 type ThreadGroup = Readonly<{
@@ -35,15 +44,21 @@ type ProfileGroup = Readonly<{
   hits: readonly Readonly<Record<string, JsonValue>>[];
 }>;
 
+type FederatedWorkspaceHit = Readonly<ClientContextSearchHit & {
+  scoreScope: "shared-workspace-index-only";
+}>;
+
 type WorkspaceGroup = Readonly<{
   corpus: "shared-workspace-index";
   priority: 3;
   ranking: "hybrid score within this corpus only; never comparable across groups";
   generationDigest: string;
   workspaceSnapshotDigest: string;
+  durationMs: number;
+  completedAt: string;
   lineage?: JsonValue;
   duplicatesSuppressed: number;
-  hits: readonly Readonly<Record<string, JsonValue>>[];
+  hits: readonly FederatedWorkspaceHit[];
 }>;
 
 export function registerFederatedMemoryTool(
@@ -147,19 +162,14 @@ export async function searchFederatedMemory(args: Readonly<{
     : undefined;
   const seen = new Set<string>();
   let duplicatesSuppressed = 0;
-  const workspaceHits: Readonly<Record<string, JsonValue>>[] = [];
+  const workspaceHits: FederatedWorkspaceHit[] = [];
   for (const hit of workspaceResult.hits) {
     const key = `${hit.path}\u0000${hit.chunkId}`;
     if (seen.has(key)) { duplicatesSuppressed += 1; continue; }
     seen.add(key);
     workspaceHits.push(Object.freeze({
-      path: hit.path,
-      text: hit.text,
-      score: hit.score,
+      ...hit,
       scoreScope: "shared-workspace-index-only",
-      revision: hit.revision,
-      contentDigest: hit.contentDigest,
-      chunkId: hit.chunkId,
     }));
   }
   return Object.freeze({
@@ -192,6 +202,8 @@ export async function searchFederatedMemory(args: Readonly<{
         ranking: "hybrid score within this corpus only; never comparable across groups",
         generationDigest: workspaceResult.generationDigest,
         workspaceSnapshotDigest: workspaceResult.workspaceSnapshotDigest,
+        durationMs: workspaceResult.durationMs,
+        completedAt: workspaceResult.completedAt,
         ...(workspaceLineage ? { lineage: workspaceLineage as unknown as JsonValue } : {}),
         duplicatesSuppressed,
         hits: Object.freeze(workspaceHits),
