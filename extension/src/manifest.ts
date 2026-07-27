@@ -50,9 +50,10 @@ export function buildManifest(
   channel: BridgeChannel,
   destinations: readonly BridgeDestination[] = BRIDGE_DESTINATIONS,
 ): Readonly<Record<string, unknown>> {
+  const displayName = channel === "development" ? `${EXTENSION_NAME} (development)` : EXTENSION_NAME;
   const common = {
     manifest_version: 3,
-    name: channel === "development" ? `${EXTENSION_NAME} (development)` : EXTENSION_NAME,
+    name: displayName,
     version: EXTENSION_VERSION,
     description: DESCRIPTION,
     content_scripts: [
@@ -67,7 +68,7 @@ export function buildManifest(
     ],
     host_permissions: [...destinationMatchPatterns(destinations)],
     action: {
-      default_title: EXTENSION_NAME,
+      default_title: displayName,
       default_popup: "popup.html",
       default_icon: {
         "16": "icons/icon-16.png",
@@ -95,7 +96,7 @@ export function buildManifest(
       // Firefox's declarativeNetRequest has no header rewriting, so the
       // `User-Agent` override needs a blocking webRequest listener, which
       // Firefox — unlike Chromium — still supports under MV3.
-      permissions: ["webRequest", "webRequestBlocking", "unlimitedStorage"],
+      permissions: ["activeTab", "webRequest", "webRequestBlocking", "unlimitedStorage"],
       browser_specific_settings: {
         gecko: { id: GECKO_EXTENSION_ID, strict_min_version: FIREFOX_MIN_VERSION },
       },
@@ -116,6 +117,7 @@ export function buildManifest(
       // notably on iOS, where the extension shares the host app's lifetime —
       // and the relay is already written to hold no state across a wake.
       background: { scripts: ["background.js"], persistent: false },
+      permissions: ["activeTab"],
       browser_specific_settings: {
         safari: { strict_min_version: SAFARI_MIN_VERSION },
       },
@@ -127,7 +129,7 @@ export function buildManifest(
     background: { service_worker: "background.js" },
     // `declarativeNetRequestWithHostAccess` scopes rules to hosts the user
     // already granted, rather than asking for the broader rule permission.
-    permissions: ["declarativeNetRequestWithHostAccess", "unlimitedStorage"],
+    permissions: ["activeTab", "declarativeNetRequestWithHostAccess", "unlimitedStorage"],
     // The first Chromium with stable MV3 session-rule support this relies on.
     minimum_chrome_version: "116",
   });

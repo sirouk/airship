@@ -72,7 +72,7 @@ export type AccessViewProps = Readonly<{
     homepageUrl: string;
     callbackUrl: string;
     scopes: readonly string[];
-    exchangeMode: "local-confidential-bridge" | "public-pkce";
+    exchangeMode: "public-pkce";
     configurationError?: string;
     onRun: () => Promise<void>;
   }>;
@@ -151,7 +151,6 @@ export function AccessView({
   const publishedExtensionInstallUrl = extensionInstallUrl
     ?? (import.meta.env.VITE_AIRSHIP_EXTENSION_INSTALL_URL as string | undefined)?.trim()
     ?? `${import.meta.env.BASE_URL}extension/index.html`;
-  const localOAuthBridge = oauthDiagnostic?.exchangeMode === "local-confidential-bridge";
   const credentialInput = useRef<HTMLInputElement>(null);
   const ephemeralCredential = useRef<EphemeralChutesCredential>();
   const ephemeralTokenSource = useRef<(() => string | Promise<string>)>();
@@ -732,12 +731,10 @@ export function AccessView({
                       <Icon name="access" size={22} />
                       <div>
                         <strong id="oauth-primary-title">Sign in to Chutes</strong>
-                        <p>Your password never touches Airship, and the sign-in secret stays outside this browser.</p>
+                        <p>Your password never touches Airship, and no client secret is used.</p>
                         <details class="oauth-mechanism">
                           <summary>How this works</summary>
-                          <p>{localOAuthBridge
-                            ? "The browser creates the S256 PKCE request; the same-origin loopback bridge completes the registered confidential exchange. Its client secret never enters browser JavaScript."
-                            : "Profile, billing, and inference connect through Authorization Code + S256 PKCE with a Chutes app registered for public-client token exchange."}</p>
+                          <p>Profile, billing, and inference connect through Authorization Code + S256 PKCE with a Chutes app registered for public-client token exchange.</p>
                         </details>
                         <button
                           class="primary"
@@ -827,17 +824,13 @@ export function AccessView({
       <aside class="oauth-browser-boundary">
         <Icon name="lock" size={19} />
         <div>
-          <strong>{localOAuthBridge ? "Local OAuth bridge boundary" : "Public-client OAuth boundary"}</strong>
-          <p>{localOAuthBridge
-            ? "The localhost bridge is only a development token handler. It receives the one-time authorization code and PKCE verifier, adds the process-held client secret, and returns the provider token response without persisting it. Access and rotating refresh tokens remain in this page's memory."
-            : "The client ID is public. A one-time PKCE verifier survives only the authorization redirect; access and rotating refresh tokens remain in this page's memory. Directory visibility is a separate provider setting."}</p>
+          <strong>Public-client OAuth boundary</strong>
+          <p>The client ID is public. A one-time PKCE verifier survives only the authorization redirect; access and rotating refresh tokens remain in this page's memory. Directory visibility is a separate provider setting.</p>
           {oauthNotice ? <p class={`oauth-boundary-status ${oauthNotice.tone}`} role={oauthNotice.tone === "error" ? "alert" : "status"}>{oauthNotice.message}</p> : null}
           {oauthDiagnostic ? (
             <details class="oauth-diagnostic">
               <summary>Registration details</summary>
-              <p>{localOAuthBridge
-                ? <>The registered callback must match exactly. This localhost app remains a confidential <code>client_secret_post</code> registration; only the loopback bridge performs the exchange.</>
-                : <>The registered callback must match exactly, and the Chutes app must be a Browser/native PKCE client with token endpoint authentication set to <code>none</code>.</>}</p>
+              <p>The registered callback must match exactly, and the Chutes app must be a Browser/native PKCE client with token endpoint authentication set to <code>none</code>.</p>
               <dl>
                 <div><dt>Homepage</dt><dd>{oauthDiagnostic.homepageUrl}</dd></div>
                 <div><dt>Callback</dt><dd>{oauthDiagnostic.callbackUrl}</dd></div>

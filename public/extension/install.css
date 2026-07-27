@@ -116,6 +116,34 @@ section { margin-top: 34px; }
   line-height: 1.5;
 }
 
+.channel-guidance {
+  display: grid;
+  gap: 4px;
+  margin: 0 0 10px;
+  padding: 14px 16px;
+  border: 1px solid #3b484a;
+  border-radius: 9px;
+  background: rgba(25, 34, 35, 0.96);
+}
+
+.channel-guidance strong {
+  color: #d8d5cb;
+  font-size: 13px;
+}
+
+.channel-guidance span {
+  color: #969e9b;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.channel-guidance[data-channel="development"] {
+  border-color: #7a6850;
+  box-shadow: inset 3px 0 #c49b67;
+}
+
+.channel-guidance[data-channel="development"] strong { color: #e0bd8a; }
+
 article,
 .local-test,
 .boundary {
@@ -200,6 +228,10 @@ code { color: #d5b781; font: 11px/1.4 ui-monospace, monospace; }
 }
 
 .local-test h2 { margin-bottom: 8px; }
+.local-test.selected {
+  border-color: #7a6850;
+  box-shadow: inset 3px 0 #c49b67, inset 0 1px rgba(255, 255, 255, 0.025);
+}
 
 .local-actions {
   display: grid;

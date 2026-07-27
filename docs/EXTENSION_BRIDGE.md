@@ -192,6 +192,16 @@ Airship selects the extension cache only after a live `hello` reports that the
 person enabled it; otherwise it falls through to OPFS, page-origin IndexedDB,
 then page memory.
 
+The popup keeps these observations separate. It visibly names the immutable
+**Release** or **Development** build channel, lists the exact caller rules
+compiled into that build, and inspects the current tab only after the user opens
+the popup. The narrow `activeTab` grant exposes that one tab's URL for this
+diagnostic; there is no persistent browsing-history permission. A matching URL
+is labelled **in the caller allowlist**, never “connected” or “relay ready”.
+The only live relay result is the bounded `hello` shown by Airship's Connection
+screen. Cache or compute availability by itself proves nothing about current-tab
+reachability.
+
 ## Browser coverage
 
 | browser | source support | distribution state | note |
@@ -241,3 +251,6 @@ every other provider keeps working.
   attestation claim is created or upgraded by installing the extension.
 - Background compute is an execution-lane observation, not proof that work is
   faster. The encrypted cache is acceleration only, not a source of truth.
+- The popup's current-tab label is an allowlist diagnostic, not a provider
+  handshake. A healthy extension-local cache may coexist with a release build
+  that intentionally refuses a localhost Airship tab.

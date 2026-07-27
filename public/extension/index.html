@@ -36,12 +36,25 @@
           </div>
           <a href="./releases/SHA256SUMS">Verify SHA-256 checksums</a>
         </div>
+        <div class="channel-guidance" id="channel-guidance" role="status">
+          <strong>Checking this Airship origin…</strong>
+          <span>The package channel must match the Airship page that will use it.</span>
+        </div>
         <div class="browser-guidance" id="browser-guidance" role="status" hidden></div>
         <div class="browser-grid">
           <article data-browser="chrome">
             <div class="browser-title"><strong>Chrome</strong><small>Desktop · Chromium MV3</small></div>
             <p>Production source is ready. Chrome Web Store review and signing require the Airship publisher account.</p>
-            <a class="download" href="./releases/airship-companion-chromium-release.zip" download>Download Chrome package</a>
+            <a
+              class="download"
+              href="./releases/airship-companion-chromium-release.zip"
+              data-channel-download
+              data-release-href="./releases/airship-companion-chromium-release.zip"
+              data-development-href="./releases/airship-companion-chromium-development.zip"
+              data-release-label="Download Chrome release package"
+              data-development-label="Download Chrome development package"
+              download
+            >Download Chrome release package</a>
             <details>
               <summary>Install the reviewed package now</summary>
               <ol>
@@ -55,7 +68,16 @@
           <article data-browser="edge">
             <div class="browser-title"><strong>Microsoft Edge</strong><small>Desktop · Chromium MV3</small></div>
             <p>The Chromium package is shared. Edge Add-ons publication requires the Airship Partner Center account.</p>
-            <a class="download" href="./releases/airship-companion-chromium-release.zip" download>Download Edge package</a>
+            <a
+              class="download"
+              href="./releases/airship-companion-chromium-release.zip"
+              data-channel-download
+              data-release-href="./releases/airship-companion-chromium-release.zip"
+              data-development-href="./releases/airship-companion-chromium-development.zip"
+              data-release-label="Download Edge release package"
+              data-development-label="Download Edge development package"
+              download
+            >Download Edge release package</a>
             <details>
               <summary>Install the reviewed package now</summary>
               <ol>
@@ -69,7 +91,16 @@
           <article data-browser="firefox">
             <div class="browser-title"><strong>Firefox</strong><small>Desktop + Android · WebExtensions</small></div>
             <p>The Firefox source is ready. Permanent installation requires Mozilla AMO review and signing.</p>
-            <a class="download" href="./releases/airship-companion-firefox-release.zip" download>Download Firefox source</a>
+            <a
+              class="download"
+              href="./releases/airship-companion-firefox-release.zip"
+              data-channel-download
+              data-release-href="./releases/airship-companion-firefox-release.zip"
+              data-development-href="./releases/airship-companion-firefox-development.zip"
+              data-release-label="Download Firefox release source"
+              data-development-label="Download Firefox development source"
+              download
+            >Download Firefox release source</a>
             <details>
               <summary>Temporary desktop test</summary>
               <ol>
@@ -83,7 +114,16 @@
           <article data-browser="safari">
             <div class="browser-title"><strong>Safari</strong><small>macOS + iOS/iPadOS · Safari Web Extension</small></div>
             <p>The source is ready for Apple’s Safari Web Extension Packager. Public installation requires an Apple Developer account, signed containing app, and App Store review.</p>
-            <a class="download" href="./releases/airship-companion-safari-release.zip" download>Download Safari source</a>
+            <a
+              class="download"
+              href="./releases/airship-companion-safari-release.zip"
+              data-channel-download
+              data-release-href="./releases/airship-companion-safari-release.zip"
+              data-development-href="./releases/airship-companion-safari-development.zip"
+              data-release-label="Download Safari release source"
+              data-development-label="Download Safari development source"
+              download
+            >Download Safari release source</a>
             <details>
               <summary>What remains account-bound</summary>
               <p>Package through App Store Connect or Apple’s command-line packager, assign owned bundle IDs, then sign and submit the containing app.</p>
@@ -92,7 +132,7 @@
         </div>
       </section>
 
-      <section class="local-test" aria-labelledby="local-test">
+      <section class="local-test" aria-labelledby="local-test" data-local-test>
         <div>
           <span>Local Airship at port 4173</span>
           <h2 id="local-test">Testing the development build</h2>

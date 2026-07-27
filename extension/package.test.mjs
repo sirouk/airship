@@ -15,6 +15,13 @@ describe("companion release packages", () => {
     expect(metadata.schema).toBe("airship-companion-release:1");
     expect(metadata.artifacts).toHaveLength(6);
     expect(installHub).toContain(`Airship Companion · ${metadata.version}`);
+    // With JavaScript unavailable the safe published-origin default remains
+    // the release package. The runtime hub promotes the exact development
+    // artifact only after observing localhost:4173.
+    expect(installHub).toContain('href="./releases/airship-companion-chromium-release.zip"');
+    expect(installHub).toContain(
+      'data-development-href="./releases/airship-companion-chromium-development.zip"',
+    );
 
     for (const artifact of metadata.artifacts) {
       const bytes = await readFile(resolve(releaseRoot, artifact.file));

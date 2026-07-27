@@ -17,6 +17,8 @@ header div, label span { display: grid; gap: 1px; }
 header strong { font: 600 18px/1.2 Georgia, serif; }
 header span, small, footer, section > p { color: #98a1a2; }
 header span { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
+header span b { color: #b7c5c2; font-weight: 700; }
+header span b[data-channel="development"] { color: #d6ae75; }
 
 .status {
   margin: 0;
@@ -42,6 +44,46 @@ label { display: flex; gap: 12px; align-items: center; justify-content: space-be
 label small { max-width: 245px; font-size: 11px; }
 input { width: 38px; height: 22px; accent-color: #6d9d98; }
 section > p { margin: 0; font-size: 12px; }
+
+.tab-diagnostic { gap: 9px; }
+.tab-diagnostic__heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 9px;
+  align-items: start;
+}
+.tab-diagnostic__heading > span {
+  max-width: 190px;
+  color: #aab2af;
+  font-size: 11px;
+  text-align: right;
+}
+.tab-diagnostic__heading > span[data-state="allowlisted"] { color: #8ebdb4; }
+.tab-diagnostic__heading > span[data-state="not-allowlisted"] { color: #d6ae75; }
+.tab-diagnostic > code {
+  overflow: hidden;
+  color: #d9c4a7;
+  font: 11px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.caller-rules {
+  display: grid;
+  gap: 3px;
+  margin-top: 5px;
+}
+.caller-rules code {
+  color: #899596;
+  font: 10px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.tab-diagnostic > small { font-size: 10px; line-height: 1.45; }
+.tab-diagnostic > a {
+  width: max-content;
+  color: #d9c4a7;
+  font-size: 11px;
+  text-decoration: none;
+}
+.tab-diagnostic > a:hover { color: #f0d5b0; }
 
 button {
   min-height: 38px;

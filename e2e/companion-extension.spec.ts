@@ -44,8 +44,15 @@ test("the real Chromium companion reports, computes, and stores only after opt-i
     const extensionOrigin = `${workerUrl.protocol}//${workerUrl.host}`;
     const popup = await context.newPage();
     await popup.goto(`${extensionOrigin}/popup.html`);
+    await expect(popup.locator("[data-build-channel]")).toHaveText("Development channel");
+    await expect(popup.locator("[data-caller-rules]")).toContainText("http://localhost:4173/");
+    await expect(popup.locator("[data-caller-rules]")).toContainText("http://127.0.0.1:4173/");
+    await expect(popup.locator("[data-tab-state]")).toContainText(
+      /caller allowlist|address is not available/u,
+    );
+    await expect(popup.locator("body")).not.toContainText("Provider relay is ready");
     await popup.locator("[data-cache-toggle]").check();
-    await expect(popup.locator("[data-status]")).toContainText("Encrypted acceleration cache is available");
+    await expect(popup.locator("[data-status]")).toHaveText("Extension-local encrypted cache is on.");
 
     const namespace = "n".repeat(43);
     const key = "k".repeat(43);

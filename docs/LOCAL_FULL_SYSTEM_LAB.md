@@ -19,8 +19,11 @@ npm run lab:start
 npm run lab:status
 ```
 
-An existing confidential Chutes OAuth registration can be exercised without
-changing Chutes by starting the lab with its secret in the local process only:
+The checked-in Airship registration is Browser/native PKCE, so Chutes sign-in
+works directly from localhost without configuring the lab or installing the
+browser extension. A separately supplied legacy confidential registration can
+still exercise the compatibility handler by starting the lab with its secret in
+the local process only:
 
 ```sh
 AIRSHIP_CHUTES_OAUTH_CLIENT_ID='cid_…' \
@@ -32,26 +35,25 @@ If the lab already owns an unconfigured Vite process, the same command safely
 restarts only that process with the bridge enabled while leaving the MinIO
 volume intact. The state file records the public client ID and a configured
 boolean only; it never records the secret or a derivative of it.
-`npm run lab:status` reports **Chutes OAuth bridge ready** after the process is
-actually accepting the same-origin exchange; an unconfigured bridge remains an
-explicit optional status instead of looking like a working sign-in path.
+`npm run lab:status` reports **Legacy OAuth handler ready** after the process is
+actually accepting the same-origin exchange; otherwise it states that ordinary
+Browser/native PKCE needs no handler.
 
-On `http://localhost:4173`, Airship sends the authorization-code and refresh
-exchanges to a same-origin, development-only loopback bridge. The bridge pins
-the Airship client ID, callback, origin, grant types, request fields, response
-size, and upstream token endpoint before adding the secret. The secret is never
-sent to JavaScript, written to the lab state file, bundled into `dist/`, logged,
-or stored in MinIO. Hosted static Airship continues to use direct public-client
-PKCE and therefore requires native Chutes public-client support.
+On `http://localhost:4173`, Airship sends Browser/native authorization-code and
+refresh exchanges directly to Chutes with S256 PKCE. The optional same-origin
+handler exists only for protocol/integration testing with an explicitly
+confidential registration; the Airship browser client never selects it. That
+handler pins the Airship client ID, callback, origin, grant types, request
+fields, response size, and upstream token endpoint before adding the secret.
+The secret is never sent to JavaScript, written to the lab state file, bundled
+into `dist/`, logged, or stored in MinIO.
 
-Before leaving for Chutes authorization, the browser performs a no-content
-same-origin readiness check. A missing process-held secret now stops locally
-with configuration guidance instead of completing consent and failing on the
-callback. A shared confidential secret must never be embedded in a PWA, WASM
-module, or distributed companion binary: a user who controls that device can
-recover it. Production edge distribution therefore uses public-client PKCE (or
-a provider device flow); the confidential loopback bridge is a local operator
-facility only.
+Only an explicitly confidential registration performs the no-content
+same-origin readiness check before authorization. A shared confidential secret
+must never be embedded in a PWA, WASM module, browser extension, or distributed
+companion binary: a user who controls that device can recover it. Ordinary edge
+distribution therefore uses public-client PKCE; the confidential loopback
+handler is a local operator facility only.
 
 `lab:start` is idempotent for a lab-owned Airship Vite server on
 `http://localhost:4173`; otherwise it starts one and records its PID, log, and

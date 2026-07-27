@@ -357,7 +357,7 @@ function printSnapshot(snapshot) {
   console.log(`  Dev S3 CSP  ${snapshot.ui.localS3Csp ? "ready" : "missing"}`);
   console.log(`  MinIO       ${snapshot.s3.ready ? "ready" : "unreachable"}  ${LOCAL_LAB.s3Endpoint}`);
   console.log(`  S3 preflight ${snapshot.s3Cors.ready ? "ready" : "rejected"}  Origins ${LOCAL_LAB_UI_ORIGINS.join(", ")}`);
-  console.log(`  Chutes OAuth ${snapshot.oauthBridge.ready ? "bridge ready" : "not configured (optional)"}`);
+  console.log(`  Legacy OAuth handler ${snapshot.oauthBridge.ready ? "ready" : "not configured (Browser/native PKCE needs no handler)"}`);
   console.log(`  Console     ${LOCAL_LAB.s3Console}`);
 }
 

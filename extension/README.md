@@ -138,6 +138,12 @@ development origins.
 The `development` channel is a separate build precisely so a shipped extension
 can never be reached by an unrelated page on a developer's machine.
 
+The popup names that channel and lists the exact compiled caller rules. Its
+current-tab check uses the narrow, invocation-scoped `activeTab` permission. A
+matching tab is reported only as **allowlisted**; cache/compute health never
+becomes a provider-relay claim. Open Airship's Connection screen for the live
+bridge handshake.
+
 ### Self-hosting Airship
 
 The caller allowlist is compiled in. If you serve Airship from your own origin,
@@ -146,10 +152,13 @@ patterns are generated from that same list, so they cannot drift apart.
 
 ## Install
 
-The first-party install hub is always available at `/extension/`. It links the
-reviewed release packages and separately marked localhost packages. Permanent
-one-click installation still requires publication/signing by each browser
-store; source ZIPs are not mislabeled as store-signed products.
+The first-party install hub is always available at `/extension/`. When that hub
+is served from exactly `http://localhost:4173` or
+`http://127.0.0.1:4173`, its primary browser cards select the reviewed
+**development** packages. Everywhere else the release package remains the safe
+default, with separately marked localhost artifacts. Permanent one-click
+installation still requires publication/signing by each browser store; source
+ZIPs are not mislabeled as store-signed products.
 
 ### Chrome / Edge / Brave / Opera / Vivaldi / Arc
 
@@ -197,12 +206,13 @@ The App Store Connect packager is the preferred account-owned release path
 because it can create the containing application without a checked-in Xcode
 project. The CLI remains useful for local Apple-platform engineering.
 
-The Safari target differs from the other two in exactly two ways, both in
-`src/manifest.ts`: an MV3 **non-persistent background page** rather than a
-service worker, and `browser_specific_settings.safari.strict_min_version`
-`16.4` — the same release `build.mjs` compiles the bundle for, so the manifest
-cannot admit a Safari that would not parse it. No rewrite permission is
-requested, because Safari has no mechanism to honour one.
+The Safari target differs in its MV3 **non-persistent background page** rather
+than a service worker and in
+`browser_specific_settings.safari.strict_min_version` `16.4` — the same release
+`build.mjs` compiles the bundle for, so the manifest cannot admit a Safari that
+would not parse it. It requests the same narrow `activeTab` diagnostic
+permission as the other targets, but no header-rewrite permission because
+Safari has no mechanism to honour one.
 
 **Route 1 — run it locally, unsigned.** No paid account needed. Current macOS
 Safari can add the built folder as a temporary extension:

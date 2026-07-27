@@ -257,10 +257,13 @@ keeps working state in page memory and makes no durability claim.
    endpoint-key claim verifies.
 6. The completed turn exposes its receipt and claim stack in Chat and Proof.
 
-The local development lab can use a same-origin confidential OAuth bridge whose
-secret exists only in the local process. A static production PWA uses a distinct
-public Browser/native PKCE registration. A shared secret is never embedded in
-JavaScript, WASM, or a distributed binary.
+Localhost and the static production PWA use reviewed public Browser/native PKCE
+registrations and exchange directly with Chutes. A same-origin confidential
+OAuth handler remains only a protocol-test harness for a separately supplied
+legacy registration whose secret exists only in the local process; the browser
+client does not select it. A
+shared secret is never embedded in JavaScript, WASM, an extension, or a
+distributed binary.
 
 ### 7.4 Work on code
 
@@ -958,10 +961,10 @@ design history:
   production-scale persisted semantic generations remain a later gate.
 - The optional Node/WebContainer execution pack is implemented but conditional
   on browser and provider boot support; it is not universal host Node.
-- The confidential Chutes OAuth bridge is local development infrastructure. A
-  production static client requires public-client PKCE or a provider-supported
-  device flow; no distributed binary can keep a shared embedded secret
-  confidential from its owner.
+- Chutes OAuth uses public-client S256 PKCE on localhost and hosted static
+  deployments. The confidential localhost handler is protocol-test
+  infrastructure, not a product sign-in path; no extension or distributed
+  binary can keep a shared embedded secret confidential from its owner.
 - Browser-readable endpoint evidence and local Intel DCAP verification exist
   today. Stronger model, NVIDIA, conversation, and settlement proofs remain
   separate future/provider protocol gates.

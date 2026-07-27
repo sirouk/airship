@@ -61,9 +61,10 @@ describe("extension build", () => {
     });
     const manifest = JSON.parse(await readFile(resolve(scratch, "safari", "manifest.json"), "utf8"));
     // A non-persistent background page, not a service worker, and no rewrite
-    // permission — Safari has no mechanism to honour one.
+    // header-rewrite permission — Safari has no mechanism to honour one. The
+    // narrow activeTab grant powers only the user-invoked popup diagnostic.
     expect(manifest.background).toEqual({ scripts: ["background.js"], persistent: false });
-    expect(manifest.permissions).toBeUndefined();
+    expect(manifest.permissions).toEqual(["activeTab"]);
     // The declared engine minimum and the compiled syntax target are the same
     // release, so the manifest cannot admit a Safari the bundle will not parse.
     expect(manifest.browser_specific_settings.safari.strict_min_version).toBe("16.4");

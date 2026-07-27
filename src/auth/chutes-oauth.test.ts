@@ -5,32 +5,20 @@ import {
   consumeChutesAuthorizationCallback,
   createChutesAuthorizationRequest,
   exchangeChutesAuthorizationCode,
-  requireLocalChutesOAuthBridge,
   refreshChutesOAuthToken,
   resolveChutesOAuthRegistration,
   revokeChutesToken,
 } from "./chutes-oauth";
 
 describe("Chutes OAuth PKCE preparation", () => {
-  it("checks the confidential loopback bridge before leaving for authorization", async () => {
-    const readyFetch = vi.fn(async () => new Response(null, { status: 204 }));
-    await expect(requireLocalChutesOAuthBridge(readyFetch)).resolves.toBeUndefined();
-    expect(readyFetch).toHaveBeenCalledWith("/__airship/chutes/oauth/token", expect.objectContaining({ method: "GET", cache: "no-store" }));
-
-    await expect(requireLocalChutesOAuthBridge(vi.fn(async () => new Response(
-      JSON.stringify({ error: "local_bridge_unconfigured" }),
-      { status: 503, headers: { "Content-Type": "application/json" } },
-    )))).rejects.toThrow("process-held client secret");
-  });
-
   it("builds an S256 authorization request with only the registered least-privilege scopes", async () => {
     const request = await createChutesAuthorizationRequest({ clientId: "cid_airship", now: 1_000 });
     expect(request.url.origin + request.url.pathname).toBe("https://api.chutes.ai/idp/authorize");
     expect(request.url.searchParams.get("redirect_uri")).toBe(CHUTES_LOCAL_REGISTRATION.redirectUris[0]);
     expect(request.url.searchParams.get("scope")).toBe("openid profile chutes:invoke billing:read");
     expect(CHUTES_LOCAL_REGISTRATION.registrationScopes).toEqual(["profile", "chutes:invoke", "billing:read"]);
-    expect(CHUTES_LOCAL_REGISTRATION.tokenEndpointAuthMethod).toBe("client_secret_post");
-    expect(CHUTES_LOCAL_REGISTRATION.public).toBe(false);
+    expect(CHUTES_LOCAL_REGISTRATION.tokenEndpointAuthMethod).toBe("none");
+    expect(CHUTES_LOCAL_REGISTRATION.public).toBe(true);
     expect(request.url.searchParams.get("code_challenge_method")).toBe("S256");
     expect(request.url.searchParams.get("code_challenge")).toMatch(/^[A-Za-z0-9_-]{43}$/u);
     expect(request.attempt.verifier).toMatch(/^[A-Za-z0-9_-]{64}$/u);
@@ -168,6 +156,24 @@ describe("Chutes OAuth PKCE preparation", () => {
       expiresAt: 3_610_000,
       scopes: ["openid", "profile", "chutes:invoke", "billing:read"],
     });
+  });
+
+  it("fails closed instead of silently using a confidential registration", async () => {
+    const confidentialRegistration = {
+      ...CHUTES_LOCAL_REGISTRATION,
+      tokenEndpointAuthMethod: "client_secret_post" as const,
+      public: false,
+    };
+    await expect(exchangeChutesAuthorizationCode({
+      clientId: "cid_airship",
+      registration: confidentialRegistration,
+      callback: {
+        code: "one-time-code",
+        verifier: "v".repeat(64),
+        redirectUri: CHUTES_LOCAL_REGISTRATION.redirectUris[0],
+      },
+      fetch: vi.fn(),
+    })).rejects.toThrow("Browser/native");
   });
 
   it("rotates a public refresh token without sending a client secret", async () => {

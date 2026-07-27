@@ -26,7 +26,6 @@ import {
   consumeChutesAuthorizationCallback,
   createChutesAuthorizationRequest,
   exchangeChutesAuthorizationCode,
-  requireLocalChutesOAuthBridge,
   refreshChutesOAuthToken,
   type ChutesOAuthTokenSet,
   type ChutesPkceAttempt,
@@ -1639,7 +1638,6 @@ export function App() {
     }
     const locationState = chutesOAuthLocationState(CHUTES_ACTIVE_REGISTRATION.homepageUrl, window.location.href);
     if (!locationState.available) throw new Error(locationState.reason);
-    if (import.meta.env.DEV) await requireLocalChutesOAuthBridge();
     pendingOAuthCredential.current = undefined;
     setOauthCallbackStatus(undefined);
     const request = await createChutesAuthorizationRequest({
@@ -5357,7 +5355,7 @@ export function App() {
               homepageUrl: CHUTES_ACTIVE_REGISTRATION.homepageUrl,
               callbackUrl: CHUTES_ACTIVE_REGISTRATION.redirectUris[0] ?? "Unavailable",
               scopes: CHUTES_ACTIVE_REGISTRATION.scopes,
-              exchangeMode: import.meta.env.DEV ? "local-confidential-bridge" : "public-pkce",
+              exchangeMode: "public-pkce",
               configurationError: CHUTES_ACTIVE_REGISTRATION.configurationError,
               onRun: startOAuthSignIn,
             }}
@@ -5985,9 +5983,7 @@ function parsePkceAttempt(value: string): ChutesPkceAttempt {
 function oauthPublicClientError(error: unknown): string {
   const message = error instanceof Error ? error.message : "Chutes sign-in could not be completed.";
   if (message.includes("invalid_client")) {
-    return import.meta.env.DEV
-      ? "Chutes rejected the local app credentials. Restart the lab with its registered client ID and process-held secret. Never put the secret in the browser."
-      : "Chutes rejected this public registration. Its token authentication must be “none”; after the owner converts it, consent again. Airship never embeds client secrets.";
+    return "Chutes rejected this Browser/native registration. Set token authentication to “none”, then consent again. Airship never embeds client secrets.";
   }
   if (message.includes("HTTP 502")) {
     return "Chutes identity gateway returned 502. Retry sign-in in a fresh browser window.";

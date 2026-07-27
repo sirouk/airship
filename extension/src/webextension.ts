@@ -28,6 +28,9 @@ export type WebExtensionApi = Readonly<{
     onConnect: Listenable<(port: ExtensionPort) => void>;
     connect(info: Readonly<{ name: string }>): ExtensionPort;
   }>;
+  tabs?: Readonly<{
+    query(query: Readonly<{ active: true; currentWindow: true }>): Promise<readonly Readonly<{ url?: string }>[]>;
+  }>;
   permissions?: Readonly<{
     contains(query: Readonly<{ origins: readonly string[] }>): Promise<boolean>;
   }>;

@@ -15,8 +15,8 @@ test.beforeEach(async ({ page }) => {
   })));
 });
 
-async function openConnect(page: Page) {
-  await page.goto("/#connection");
+async function openConnect(page: Page, url = "/#connection") {
+  await page.goto(url);
   await expect(page.getByRole("heading", { name: "Connect models", level: 1 })).toBeVisible();
   await expect(page.locator(".connect-surface")).toBeVisible();
   // The bridge lanes start as "checking" and settle only when the handshake
@@ -40,17 +40,20 @@ test("the companion install hub offers verified packages with device-appropriate
   await page.goto("/extension/index.html");
   await expect(page.getByRole("heading", { name: "More reach. More local headroom." })).toBeVisible();
   await expect(page.getByRole("link", { name: "Verify SHA-256 checksums" })).toHaveAttribute("href", "./releases/SHA256SUMS");
-  await expect(page.getByRole("link", { name: "Download Chrome package" })).toHaveAttribute(
-    "href",
-    "./releases/airship-companion-chromium-release.zip",
+  await expect(page.locator("#channel-guidance")).toContainText(
+    "Local Airship detected · Development channel selected",
   );
-  await expect(page.getByRole("link", { name: "Download Firefox source" })).toHaveAttribute(
+  await expect(page.getByRole("link", { name: "Download Chrome development package" })).toHaveAttribute(
     "href",
-    "./releases/airship-companion-firefox-release.zip",
+    "./releases/airship-companion-chromium-development.zip",
   );
-  await expect(page.getByRole("link", { name: "Download Safari source" })).toHaveAttribute(
+  await expect(page.getByRole("link", { name: "Download Firefox development source" })).toHaveAttribute(
     "href",
-    "./releases/airship-companion-safari-release.zip",
+    "./releases/airship-companion-firefox-development.zip",
+  );
+  await expect(page.getByRole("link", { name: "Download Safari development source" })).toHaveAttribute(
+    "href",
+    "./releases/airship-companion-safari-development.zip",
   );
   const guidance = page.locator("#browser-guidance");
   await expect(guidance).toBeVisible();
@@ -64,7 +67,7 @@ test("the companion install hub offers verified packages with device-appropriate
     );
   } else {
     await expect(page.locator('[data-browser="chrome"]')).toHaveClass(/recommended/u);
-    await expect(guidance).toContainText("highlighted the package");
+    await expect(guidance).toContainText("highlighted the development package");
   }
 });
 
@@ -87,6 +90,33 @@ test("a visitor with no credentials lands inside a path that works", async ({ pa
   // The operator sentence must not be what a person is asked to act on.
   await expect(page.locator(".connect-surface")).not.toContainText(/Restart the Airship companion/u);
   await expect(page.locator(".connect-surface")).not.toContainText(/process-held client secret/u);
+});
+
+test("localhost Chutes sign-in starts secretless PKCE without consulting the legacy bridge", async ({ page }) => {
+  let bridgeRequests = 0;
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname === "/__airship/chutes/oauth/token") bridgeRequests += 1;
+  });
+  await page.route("https://api.chutes.ai/idp/authorize?**", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "text/html",
+      body: "<title>Chutes authorization boundary reached</title>",
+    });
+  });
+
+  await openConnect(page, "http://localhost:4173/#connection");
+  const chutes = await openLane(page, "chutes");
+  await chutes.getByRole("button", { name: "Sign in to Chutes" }).click();
+  await expect(page).toHaveURL(/^https:\/\/api\.chutes\.ai\/idp\/authorize\?/u);
+
+  const authorize = new URL(page.url());
+  expect(authorize.searchParams.get("client_id")).toBe("cid_n2tusjazqmkkwon12jy3bo3u");
+  expect(authorize.searchParams.get("redirect_uri")).toBe("http://localhost:4173/auth/chutes/callback");
+  expect(authorize.searchParams.get("code_challenge_method")).toBe("S256");
+  expect(authorize.searchParams.get("code_challenge")).toMatch(/^[A-Za-z0-9_-]{43}$/u);
+  expect(authorize.searchParams.get("scope")).toBe("openid profile chutes:invoke billing:read");
+  expect(bridgeRequests).toBe(0);
 });
 
 test("Claude and Grok state the extension honestly and offer no broken button", async ({ page }) => {

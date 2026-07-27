@@ -22,9 +22,13 @@ work that cannot be completed by source code alone.
 | Safari macOS / iOS / iPadOS | Safari-targeted WebExtension source package is present | Requires Apple’s Safari Web Extension Packager (App Store Connect or command line), owned bundle/team identifiers, a containing native app, signing, real-device testing, and App Store review |
 | Chrome / Edge Android | Airship PWA remains usable | These browsers do not provide a general mobile extension installation path; the UI must not offer an impossible install |
 
-The install hub is served at `/extension/index.html`. It exposes source packages today
-and must switch to signed store links when the store listings exist. Developer
-or temporary-install packages are acceptance artifacts, not a substitute for a
+The install hub is served at `/extension/index.html`. It exposes source packages
+today and selects the package channel from the exact page origin: on
+`http://localhost:4173` and `http://127.0.0.1:4173`, the primary browser cards
+link the **development** packages because release packages intentionally refuse
+loopback callers. Other origins retain the fail-safe release default. The hub
+must switch to signed store links when the store listings exist. Developer or
+temporary-install packages are acceptance artifacts, not a substitute for a
 signed production release.
 
 ## Companion boundary
@@ -41,6 +45,13 @@ The extension has three independent, inspectable capabilities:
 3. **Background compute.** Bounded SHA-256 and cosine top-k work can move off the
    Airship interface thread. This is a measured responsiveness benefit; the UI
    does not claim GPU or native acceleration that was not actually activated.
+
+The popup reports those local capabilities independently from page access. It
+names the build channel, lists its exact caller rules, and uses only the
+one-shot `activeTab` grant created by opening the popup to say whether the
+current tab is *allowlisted*. That is not a live relay claim. A person verifies
+the actual extension handshake and provider availability on Airship's
+Connection screen.
 
 The provider grant and the transport are deliberately separate. Installing the
 extension can make an already-supported OAuth or API protocol reachable. It
@@ -129,9 +140,9 @@ interacted. It then installs a changed worker and proves one click promotes and
 reloads it without losing the draft.
 
 The checked-in companion acceptance launches a real Chromium extension context,
-opens the actual popup, enables the encrypted cache, performs a ciphertext
-round-trip, invokes background hashing, reloads Airship, and confirms the
-capability remains live.
+opens the actual popup, verifies its development-channel/caller diagnostic,
+enables the encrypted cache, performs a ciphertext round-trip, invokes
+background hashing, reloads Airship, and confirms the capability remains live.
 
 ## External launch checklist
 

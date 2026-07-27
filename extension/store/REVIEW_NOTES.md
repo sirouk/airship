@@ -30,6 +30,10 @@ live UI report.
 
 ## Permission justification
 
+- `activeTab` (all targets): after the user opens the popup, inspect that one
+  tab's URL and report whether it falls inside this build's compiled Airship
+  caller allowlist. It does not grant persistent tab history or page contents,
+  and an allowlist match is not reported as a live relay.
 - Host permissions: exact provider API/auth prefixes compiled into
   `src/policy.ts`. They are the only relay destinations.
 - `declarativeNetRequestWithHostAccess` (Chromium): applies a fixed
@@ -41,7 +45,8 @@ live UI report.
   from small extension-origin quotas. Airship still enforces 4 MiB per record,
   256 MiB total, and 4,096 records.
 
-Safari requests no unavailable header-rewrite or unlimited-storage permission.
+Safari requests no unavailable header-rewrite or unlimited-storage permission;
+it requests only `activeTab` for the same popup diagnostic.
 
 ## Data separation
 

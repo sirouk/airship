@@ -38,6 +38,7 @@ describe("extension source boundary", () => {
       "content-script.ts",
       "manifest.ts",
       "policy.ts",
+      "popup-diagnostics.ts",
       "popup.ts",
       "protocol.ts",
       "relay.ts",

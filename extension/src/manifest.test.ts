@@ -37,13 +37,22 @@ describe("manifests", () => {
   it("asks each browser only for the mechanism that browser actually has", () => {
     const chromium = buildManifest("chromium", "release");
     expect(chromium.background).toEqual({ service_worker: "background.js" });
-    expect(chromium.permissions).toEqual(["declarativeNetRequestWithHostAccess", "unlimitedStorage"]);
+    expect(chromium.permissions).toEqual([
+      "activeTab",
+      "declarativeNetRequestWithHostAccess",
+      "unlimitedStorage",
+    ]);
 
     const firefox = buildManifest("firefox", "release");
     // An MV3 event page, non-persistent by definition; `persistent` is not a
     // valid Gecko MV3 key and must not appear.
     expect(firefox.background).toEqual({ scripts: ["background.js"] });
-    expect(firefox.permissions).toEqual(["webRequest", "webRequestBlocking", "unlimitedStorage"]);
+    expect(firefox.permissions).toEqual([
+      "activeTab",
+      "webRequest",
+      "webRequestBlocking",
+      "unlimitedStorage",
+    ]);
     expect(firefox.browser_specific_settings).toMatchObject({
       gecko: { id: expect.any(String), strict_min_version: FIREFOX_MIN_VERSION },
     });
@@ -52,7 +61,7 @@ describe("manifests", () => {
     // the worker will report the Anthropic OAuth hosts as unavailable.
     const safari = buildManifest("safari", "release");
     expect(safari.background).toEqual({ scripts: ["background.js"], persistent: false });
-    expect(safari).not.toHaveProperty("permissions");
+    expect(safari.permissions).toEqual(["activeTab"]);
     expect(safari.browser_specific_settings).toEqual({
       safari: { strict_min_version: SAFARI_MIN_VERSION },
     });
