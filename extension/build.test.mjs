@@ -22,6 +22,7 @@ describe("extension build", () => {
     expect(result.artifacts.map((artifact) => artifact.file)).toEqual([
       "background.js",
       "content-script.js",
+      "popup.js",
     ]);
     expect(result.artifacts.every((artifact) => artifact.bytes > 0)).toBe(true);
 
@@ -100,9 +101,9 @@ describe("extension build", () => {
     expect([...CHANNELS]).toEqual(["release", "development"]);
   });
 
-  it("rejects a bundle that reached for storage, logging or another door", () => {
-    expect(verifyBundle("x.js", "chrome.storage.local.set({})"))
-      .toEqual([expect.stringContaining("storage")]);
+  it("rejects a bundle that reached for page storage, logging or another door", () => {
+    expect(verifyBundle("x.js", "window.localStorage.setItem('token', value)"))
+      .toEqual([expect.stringContaining("outside the companion boundary")]);
     expect(verifyBundle("x.js", "console.log(headers)")).toEqual([expect.stringContaining("console")]);
     expect(verifyBundle("x.js", "\"externally_connectable\""))
       .toEqual([expect.stringContaining("externally_connectable")]);

@@ -988,6 +988,10 @@ export function App() {
   }, [busy, catalog, chatRouteRequest, sessionId, sessionLibrary, sessionRuntime, view]);
   useEffect(() => {
     if (view !== "chat" || chatRouteRequest || !sessionId) return;
+    // A hash navigation can land between this effect being scheduled and
+    // committed. Do not let a stale chat render rewrite a newer route such as
+    // #sessions back to its canonical conversation URL.
+    if (navigationViewFromHash(window.location.hash) !== "chat") return;
     const target = chatHash(sessionId);
     if (window.location.hash !== target) {
       window.history.replaceState({ view: "chat", sessionId }, "", target);
@@ -5071,7 +5075,7 @@ export function App() {
             /></aside> : null}
           </>
         ) : null}
-        {view === "sessions" && sessionLibrary ? SessionsScreen ? (
+        {view === "sessions" ? sessionLibrary && SessionsScreen ? (
           <SessionsScreen
             library={sessionLibrary}
             runtime={sessionRuntime}
@@ -5083,7 +5087,17 @@ export function App() {
             onOpenProof={openSessionProof}
             durability={sessionDurability}
           />
-        ) : <RouteSkeleton label="Loading session library" /> : null}
+        ) : (
+          <section class="work-view panel" aria-labelledby="session-library-loading-title">
+            <div class="page-heading">
+              <div>
+                <span class="eyebrow">Conversation history</span>
+                <h1 id="session-library-loading-title">All conversations</h1>
+              </div>
+            </div>
+            <RouteSkeleton label="Loading conversation history" />
+          </section>
+        ) : null}
         {(view === "workspace" || view === "editor") && runtime.current && gitClient ? EditorScreen ? <EditorScreen
           key={runtime.current.workspaceId}
           files={files}

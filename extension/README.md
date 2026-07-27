@@ -9,8 +9,14 @@ Airship is a static page. Two providers cannot be reached from a page at all:
   reaches code validation for a non-browser one. `User-Agent` is a forbidden
   header name, so no page script can set it.
 
-This extension is the smallest thing that fixes both while keeping every secret
-on the device. It relays five URL prefixes, for one origin, with no storage.
+This extension is the smallest transport that can reach both while keeping every
+secret on the device. It relays five fixed URL prefixes for one Airship origin.
+It does **not** create a provider OAuth grant: provider account controls remain
+unavailable until an Airship-usable registration and controller are reviewed.
+
+The same companion also offers an opt-in, ciphertext-only IndexedDB acceleration
+cache and bounded background hashing/vector ranking. Those services use a
+separate port and protocol from the provider relay. No provider token is stored.
 
 Full contract: [`docs/EXTENSION_BRIDGE.md`](../docs/EXTENSION_BRIDGE.md).
 
@@ -23,7 +29,7 @@ Full contract: [`docs/EXTENSION_BRIDGE.md`](../docs/EXTENSION_BRIDGE.md).
 | Sends | `credentials: "omit"`, `cache: "no-store"`, `redirect: "manual"`, `referrer: none`, `GET`/`POST` only |
 | Path | only unreserved characters and `/` in the destination *path*, so `%2f`, `%25` (double encoding) and `;` path parameters are refused. The **query** is untouched — it cannot move the path, and an OAuth `redirect_uri` needs `%2F` |
 | Forwards | `accept`, `anthropic-beta`, `anthropic-version`, `authorization`, `content-type`, `x-app`. Everything else is dropped and the drop is *reported back* |
-| Stores | nothing. No `storage`, no `localStorage`, no `indexedDB`, no cookies, no logging of relayed traffic |
+| Stores | no token, provider request, or provider response. Optional extension-origin IndexedDB accepts bounded encrypted Airship pages only; disabled by default and clearable in the popup |
 | Bounds | 256 KiB request body, 8 MiB response (16 MiB streamed), 32 KiB chunks, 8192 chunks, 4 concurrent requests (handshakes have their own budget of 4), 60 s deadline (300 s streamed, 45 s idle) |
 
 Refusals are explicit messages, never silence: a page that asks for something
@@ -99,7 +105,7 @@ provider it cannot carry. xAI needs no override and keeps working.
 | Chrome, Edge, Brave, Opera, Vivaldi, Arc (desktop) | yes | `build/release/chromium`, MV3 service worker, Chrome 116+ |
 | Firefox desktop | yes | `build/release/firefox`, MV3 event page, Firefox 128+ |
 | Firefox for Android | yes | same Firefox build; the only mobile browser with real extension support |
-| Safari desktop / iOS / iPadOS | yes, **xAI only** | `build/release/safari` — MV3 non-persistent background page, Safari 16.4+, loaded through an Xcode wrapper (below). Safari has neither header-rewrite mechanism, so Anthropic reports unavailable and xAI works |
+| Safari desktop / iOS / iPadOS | source ready, **xAI transport only** | `build/release/safari` — MV3 non-persistent background page, Safari 16.4+, packaged as an Apple containing app (below). Safari has neither header-rewrite mechanism, so Anthropic relay reports unavailable; xAI fixed-host transport remains available to a future approved controller |
 | **Chrome for Android** | **no** | Chrome on Android has no extension support at all. Anthropic and xAI stay unavailable there. Every other provider is unaffected |
 | Chrome OS, Chromium forks with MV3 | yes | Chromium build |
 
@@ -115,17 +121,19 @@ and no absence of an extension can ever read as presence.
 ```sh
 node extension/build.mjs                        # release, all three targets
 node extension/build.mjs --target=firefox       # one target
-node extension/build.mjs --target=safari        # input to the Xcode wrapper
+node extension/build.mjs --target=safari        # input to Apple's Web Extension Packager
 node extension/build.mjs --channel=development  # adds http://localhost:4173 and http://127.0.0.1:4173
+npm run build:extension                         # six deterministic ZIPs + SHA256SUMS in public/extension/releases
 ```
 
 Output goes to `extension/build/<channel>/<target>/`, printing the byte size and
 SHA-256 of each artifact. Builds are **not minified**: a browser reviewer and a
 suspicious user both have to be able to read what they are installing.
 
-The build fails closed if a bundle contains a storage API, a logging call, or
-`externally_connectable`, and `build.test.mjs` asserts that a release artifact
-does not so much as *contain* the development origins.
+The build fails closed if a bundle reaches page storage, cookies, logging, or
+`externally_connectable`. Source-boundary tests assert that IndexedDB appears
+only in the companion module and that the release artifact does not contain the
+development origins.
 
 The `development` channel is a separate build precisely so a shipped extension
 can never be reached by an unrelated page on a developer's machine.
@@ -137,6 +145,11 @@ edit `RELEASE_CALLERS` in `src/policy.ts` and rebuild; the content-script match
 patterns are generated from that same list, so they cannot drift apart.
 
 ## Install
+
+The first-party install hub is always available at `/extension/`. It links the
+reviewed release packages and separately marked localhost packages. Permanent
+one-click installation still requires publication/signing by each browser
+store; source ZIPs are not mislabeled as store-signed products.
 
 ### Chrome / Edge / Brave / Opera / Vivaldi / Arc
 
@@ -171,16 +184,18 @@ same `--target=firefox` output; no separate source.
 
 ### Safari (desktop, iOS, iPadOS)
 
-Safari cannot load an unpacked extension directly: a Safari web extension is
-delivered inside a native app bundle. The same source tree is the input.
+Public Safari distribution uses a containing app. The same reviewed source tree
+is the input to Apple’s Safari Web Extension Packager, available through App
+Store Connect or from the command line alongside Xcode.
 
 ```sh
 node extension/build.mjs --target=safari
-xcrun safari-web-extension-converter extension/build/release/safari \
-  --project-location extension/build/safari-xcode \
-  --app-name "Airship Bridge" --bundle-identifier ai.chutes.airship.bridge \
-  --swift --no-open
+xcrun safari-web-extension-packager extension/build/release/safari
 ```
+
+The App Store Connect packager is the preferred account-owned release path
+because it can create the containing application without a checked-in Xcode
+project. The CLI remains useful for local Apple-platform engineering.
 
 The Safari target differs from the other two in exactly two ways, both in
 `src/manifest.ts`: an MV3 **non-persistent background page** rather than a
@@ -189,33 +204,31 @@ service worker, and `browser_specific_settings.safari.strict_min_version`
 cannot admit a Safari that would not parse it. No rewrite permission is
 requested, because Safari has no mechanism to honour one.
 
-**Route 1 — run it locally, unsigned.** No paid account needed.
+**Route 1 — run it locally, unsigned.** No paid account needed. Current macOS
+Safari can add the built folder as a temporary extension:
 
-1. Open `extension/build/safari-xcode/Airship Bridge/Airship Bridge.xcodeproj`.
-2. Set the signing team to *None* / your personal team, and build & run once
-   (⌘R). The container app launches and registers the extension.
-3. Safari → Settings → **Advanced** → tick *Show features for web developers*.
-4. Safari → **Develop** → **Allow Unsigned Extensions**. This resets every time
-   Safari restarts, so it is a development route, not an install.
-5. Safari → Settings → **Extensions** → enable *Airship Bridge*, then grant it
-   access to the provider hosts (Safari asks per host).
-6. Reload the Airship tab.
+1. Safari → Settings → **Advanced** → enable the web-developer features.
+2. Safari → Settings → **Developer** → **Add Temporary Extension**.
+3. Select `extension/build/development/safari`, enable *Airship Companion*, and
+   grant it access to the Airship and provider hosts.
+4. Reload the Airship tab.
 
-On iOS/iPadOS the equivalent is running the converted app on a device from
-Xcode, then Settings → Safari → Extensions → enable and allow the hosts.
+For iOS/iPadOS development, package a containing app and run it in the simulator
+or on a device, then enable it under Settings → Safari → Extensions.
 
 **Route 2 — distribute through the App Store.** Requires a paid Apple Developer
-account. Sign the container app with a Developer ID (macOS) or a distribution
-profile (iOS), notarise it, and submit; App Review reads the extension source,
-which is why `build.mjs` never minifies. This repository ships no signed Safari
-build and no committed Xcode project — the converter regenerates one from the
-manifest above, so there is no second copy of the boundary to drift.
+account. Package through App Store Connect or Apple’s command-line packager,
+assign the owned bundle identifiers, sign the containing app, and submit it for
+review. App Review reads the extension source, which is why `build.mjs` never
+minifies. This repository ships no signed Safari build and no committed
+containing-app project, so there is no second copy of the boundary to drift.
 
 **Known Safari limitation, and its consequence.** Safari offers neither
 declarativeNetRequest header rewriting nor blocking `webRequest`. `User-Agent`
 therefore cannot be rewritten, so:
 
-- **xAI works.** It needs no override.
+- **xAI transport is available.** It needs no override, but Airship still needs
+  a reviewed provider grant/controller before account authorization is offered.
 - **Anthropic reports unavailable**, with the reason, and Airship must not
   offer it. Anthropic **API keys** are unaffected — they never use the bridge.
 
@@ -253,6 +266,8 @@ outstanding id with `bridge-disconnected` rather than leaving the page waiting.
 | `src/content-bridge.ts` | page framing and the per-page port |
 | `src/user-agent.ts` | the rewrite rules and the honest report of whether they installed |
 | `src/manifest.ts` | one manifest per target, generated from the allowlists |
+| `src/companion.ts`, `src/companion-content.ts` | opt-in encrypted cache and bounded background compute protocol |
+| `src/popup.ts`, `popup.html`, `popup.css` | cache opt-in, usage, and clear controls |
 | `src/background.ts`, `src/content-script.ts` | thin entries; they supply the platform and nothing else |
 
 ## Tests
@@ -261,6 +276,7 @@ outstanding id with `bridge-disconnected` rather than leaving the page waiting.
 npx vitest run extension/src extension/build.test.mjs   # this package only
 npm test                                                # the repository suite picks these up too
 npx tsc -p extension/tsconfig.json --noEmit             # the root tsconfig covers src/, not this tree
+npx playwright test e2e/companion-extension.spec.ts --project=desktop-chromium
 ```
 
 They are plain vitest against the handlers as pure functions — no browser, no

@@ -26,21 +26,25 @@ Anthropic additionally rejects browser-shaped token requests by `User-Agent`
 `User-Agent` is a forbidden header name, so no page script can satisfy it.
 
 An extension background worker is the mechanism browsers explicitly sanction for
-cross-origin access, granted by `host_permissions` and reviewable by the user. It
-is the smallest addition that keeps every secret on the user's device.
+cross-origin access, granted by `host_permissions` and reviewable by the user.
+Airship Companion also exposes two strictly separate, optional services: a
+ciphertext-only acceleration cache and bounded background hashing/vector
+ranking. Neither service handles provider credentials, and neither is a backend.
 
 ## Provider matrix
 
-| provider | authorization | token exchange | inference | extension required |
-|---|---|---|---|---|
-| Chutes | PKCE / API key | direct | direct | no |
-| OpenAI | PKCE, code pasted back | direct (`access-control-allow-origin: *`) | direct | **no** |
-| xAI | RFC 8628 device code | via bridge | via bridge | **yes** (any host browser) |
-| Anthropic | PKCE, code pasted back | via bridge (`User-Agent`) | via bridge | **yes**, and only where the browser can rewrite `User-Agent` — not Safari |
-| Ollama / LM Studio | none | none | direct loopback | no |
+| provider | Airship account authorization | transport | extension role |
+|---|---|---|---|
+| Chutes | Available only with a reviewed Airship Browser/native PKCE registration | direct E2EE | not required |
+| OpenAI | No reviewed third-party Airship OAuth grant is published; UI remains unavailable | API-key traffic is browser-direct | install hub only; no permission is manufactured |
+| xAI | No reviewed third-party Airship OAuth grant is published; UI remains unavailable | bridge is technically ready for fixed xAI OAuth/API hosts | transport only; a future approved controller may use it |
+| Anthropic | No reviewed third-party Airship OAuth grant is published; UI remains unavailable | bridge is technically ready where `User-Agent` rewriting is live | transport only; Safari cannot provide the rewrite |
+| Ollama / LM Studio | no account authorization | direct loopback | not required |
 
 API-key paths are unchanged and never require the extension. Anthropic API keys
 keep using `anthropic-dangerous-direct-browser-access` directly from the page.
+An installed relay is not evidence that a provider authorized Airship, so the UI
+does not offer a provider OAuth control from relay presence alone.
 
 ## Transport
 
@@ -143,8 +147,13 @@ page that could talk to it.
 4. **Header allowlist.** Only headers the protocols require are forwarded
    (`authorization`, `content-type`, `accept`, `anthropic-version`,
    `anthropic-beta`, `user-agent`, `x-app`). Unknown headers are dropped.
-5. **No credential storage.** The extension holds no tokens and writes nothing
-   durable. The page owns credentials, in memory, exactly as it does today.
+5. **No credential storage.** The relay holds no tokens and no provider request
+   or response is written durably. The page owns credentials in memory.
+   Separately, the companion cache is disabled by default and accepts only
+   caller-declared encrypted Airship pages addressed by opaque identifiers. It
+   has per-record, byte, and entry ceilings, verifies SHA-256 on read, evicts
+   least-recently-used pages, and can be cleared from the popup. The Vault
+   remains authoritative.
 6. **Bounded everything.** Request and response byte ceilings, a wall-clock
    deadline, and a concurrent-request cap, mirroring the runtime packs.
 
@@ -165,15 +174,33 @@ page that could talk to it.
    restricted: it cannot move the request off the path prefix, and an OAuth
    `redirect_uri` legitimately carries `%2F`.
 
+## Companion cache and compute protocol
+
+The companion channel uses a separate `{ airshipCompanion: 1, from, id, … }`
+envelope and a separate extension port. Relay messages can never enter its
+IndexedDB store. The page can ask for:
+
+- `hello`: live cache/compute capability evidence;
+- `cache get|put|remove|list|stats`: one opaque namespace, one opaque page key,
+  and base64 ciphertext. `put` must explicitly set `ciphertext: true`;
+- `compute sha256`: bounded byte hashing; and
+- `compute cosine-top-k`: bounded Float32 candidate ranking.
+
+The compute lane moves work off the Airship interface thread. It uses the same
+browser machine and makes no unmeasured GPU, native-code, or throughput claim.
+Airship selects the extension cache only after a live `hello` reports that the
+person enabled it; otherwise it falls through to OPFS, page-origin IndexedDB,
+then page memory.
+
 ## Browser coverage
 
-| browser | support | carries | note |
+| browser | source support | distribution state | note |
 |---|---|---|---|
-| Chrome, Edge, Brave, Opera, Vivaldi, Arc | MV3 service worker, Chrome 116+ | xAI + Anthropic | one build |
-| Firefox desktop | MV3 event page, Firefox 128+ | xAI + Anthropic | same source, `browser_specific_settings.gecko` |
-| Firefox for Android | yes | xAI + Anthropic | the only mobile browser with real extension support |
-| Safari desktop, iOS, iPadOS | MV3 non-persistent background page, Safari 16.4+ | **xAI only** | same source, `--target=safari`, loaded through an Xcode wrapper. See the limitation below |
-| Chrome for Android | **no extension support** | neither | Anthropic and xAI stay unavailable |
+| Chrome, Edge, Brave, Opera, Vivaldi, Arc | MV3 service worker, Chrome 116+ | deterministic unpacked package ready; store signing pending | one Chromium build |
+| Firefox desktop | MV3 event page, Firefox 128+ | temporary package ready; AMO signing pending | same source, Gecko manifest |
+| Firefox for Android | same Gecko source | AMO listing/collection required | mobile extension support varies by Firefox channel |
+| Safari desktop, iOS, iPadOS | MV3 non-persistent background page, Safari 16.4+ | converter source ready; Xcode wrapper and Apple signing pending | Anthropic relay unavailable without header rewriting |
+| Chrome for Android | **cannot host extensions** | not applicable | Airship remains fully usable without companion services |
 
 ### The Safari `User-Agent` limitation
 
@@ -200,15 +227,17 @@ every other provider keeps working.
 
 ## What Airship may claim
 
-- With the bridge absent: Chutes, OpenAI, Ollama, and LM Studio are live;
-  Anthropic and xAI are `unavailable` with the cause named. API keys remain
-  available for Anthropic.
+- With the bridge absent: Chutes, local providers, and explicit supported
+  API-key routes retain their own availability. Provider OAuth is not inferred.
 - With the bridge present: the capability record names the extension version
   actually returned by `hello`, and only the providers `hello` said it will
-  carry — so on Safari, an installed bridge still leaves Anthropic unavailable
-  with the `User-Agent` reason. Presence is a live observation per page load,
+  transport — so on Safari, an installed bridge still leaves Anthropic relay
+  transport unavailable with the `User-Agent` reason. This does not make an
+  OAuth controller or provider grant available. Presence is a live observation per page load,
   memoized for at most `presenceTtlMs` (30 s) within that page load and never
   persisted; it is never a cached assumption across loads.
 - The bridge changes *reachability*, not trust. Traffic still terminates at the
   vendor under provider TLS, so `transportBoundary` stays `provider-tls` and no
   attestation claim is created or upgraded by installing the extension.
+- Background compute is an execution-lane observation, not proof that work is
+  faster. The encrypted cache is acceleration only, not a source of truth.

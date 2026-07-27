@@ -11,6 +11,13 @@ const routes = [
 const widths = [768, 820, 1024] as const;
 const densities = ["comfortable", "compact"] as const;
 
+test("a cold conversation-history URL remains authoritative while its deferred view loads", async ({ page }) => {
+  await page.goto("/#sessions");
+  await expect(page).toHaveURL(/#sessions$/u);
+  await expect(page.getByRole("main").getByRole("heading", { name: "All conversations", exact: true })).toBeVisible();
+  await expect(page).toHaveURL(/#sessions$/u);
+});
+
 test("the chat shell stays slim and non-overlapping on narrow and iPhone-class screens", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile-chromium", "mobile geometry contract");
   for (const viewport of [{ width: 320, height: 700 }, { width: 430, height: 932 }] as const) {

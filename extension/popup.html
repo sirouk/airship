@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Airship Companion</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main>
+      <header>
+        <img src="icons/icon-48.png" width="38" height="38" alt="">
+        <div><strong>Airship Companion</strong><span>Edge runtime extension</span></div>
+      </header>
+      <p class="status" data-status data-state="ready">Inspecting this extension…</p>
+      <section>
+        <label>
+          <span><strong>Encrypted cache</strong><small>Optional Vault acceleration only. No OAuth token or plaintext is accepted.</small></span>
+          <input type="checkbox" role="switch" data-cache-toggle disabled>
+        </label>
+        <p data-cache-usage>Inspecting local storage…</p>
+        <button type="button" data-cache-clear disabled>Clear encrypted cache</button>
+      </section>
+      <footer>
+        Provider traffic is relayed from fixed Airship and vendor allowlists.
+        Compute runs in the extension background context; it does not add new hardware.
+      </footer>
+    </main>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

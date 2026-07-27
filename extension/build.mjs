@@ -15,7 +15,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "esbuild";
@@ -42,17 +42,16 @@ export const SYNTAX_TARGETS = Object.freeze({
 const ENTRIES = Object.freeze([
   Object.freeze({ input: "src/background.ts", output: "background.js" }),
   Object.freeze({ input: "src/content-script.ts", output: "content-script.js" }),
+  Object.freeze({ input: "src/popup.ts", output: "popup.js", format: "esm" }),
 ]);
 
 /**
- * Things that must not appear in a shipped bundle. The extension holds no
- * tokens and writes nothing durable, so any storage API in the output is a
- * boundary violation rather than a style question.
+ * Things that must not appear in a shipped bundle. The companion now owns a
+ * ciphertext-only IndexedDB cache, but tokens, cookies, page storage, logging,
+ * and a second external entry point remain forbidden.
  */
 const FORBIDDEN_PATTERNS = Object.freeze([
-  Object.freeze({ pattern: /localStorage|sessionStorage/u, why: "the extension stores nothing" }),
-  Object.freeze({ pattern: /indexedDB/u, why: "the extension stores nothing" }),
-  Object.freeze({ pattern: /\.storage\b/u, why: "the extension stores nothing" }),
+  Object.freeze({ pattern: /localStorage|sessionStorage/u, why: "page storage is outside the companion boundary" }),
   Object.freeze({ pattern: /\bcookies\b/u, why: "the extension never touches cookies" }),
   Object.freeze({ pattern: /console\s*\./u, why: "relayed traffic is never logged" }),
   Object.freeze({ pattern: /externally_connectable/u, why: "the bridge is postMessage-only" }),
@@ -96,6 +95,13 @@ export async function buildExtension(options) {
   const { buildManifest } = await loadManifestModule(scratch);
   const manifest = buildManifest(target, channel);
   await writeFile(resolve(outDir, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+  await mkdir(resolve(outDir, "icons"), { recursive: true });
+  await Promise.all([
+    copyFile(resolve(here, "popup.html"), resolve(outDir, "popup.html")),
+    copyFile(resolve(here, "popup.css"), resolve(outDir, "popup.css")),
+    ...[16, 32, 48, 128].map((size) =>
+      copyFile(resolve(here, "icons", `icon-${size}.png`), resolve(outDir, "icons", `icon-${size}.png`))),
+  ]);
 
   const artifacts = [];
   for (const entry of ENTRIES) {
@@ -105,7 +111,7 @@ export async function buildExtension(options) {
       bundle: true,
       // Content scripts are classic scripts and a bundled worker needs no
       // module semantics, so one IIFE format serves every target.
-      format: "iife",
+      format: entry.format ?? "iife",
       platform: "browser",
       target: SYNTAX_TARGETS[target],
       define: { __AIRSHIP_BRIDGE_CHANNEL__: JSON.stringify(channel) },

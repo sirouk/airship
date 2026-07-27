@@ -12,6 +12,7 @@
     "preview": "vite preview --host 127.0.0.1 --port 4173 --strictPort",
     "preview:lan": "vite preview --host 0.0.0.0 --port 4173 --strictPort",
     "typecheck": "tsc --noEmit",
+    "typecheck:extension": "tsc -p extension/tsconfig.json --noEmit",
     "test": "vitest run --maxWorkers=4 --exclude '.airship-lab/**' --exclude 'e2e/**' --exclude '**/*.live.test.ts'",
     "test:e2e": "playwright test",
     "test:e2e:master": "playwright test --config=playwright.master.config.ts",
@@ -32,10 +33,11 @@
     "check:release": "node scripts/release-gate.mjs",
     "check:release:live": "node scripts/release-live.mjs",
     "build:static": "vite build",
+    "build:extension": "npm run typecheck:extension && node extension/package.mjs",
     "build:dcap-wasm": "bash scripts/build-dcap-qvl-wasm.sh",
     "semantic:prepare": "node scripts/prepare-semantic-pack.mjs",
-    "build": "npm run typecheck && npm run check:security && npm run build:static && npm run check:release",
-    "check": "npm run typecheck && npm run check:security && npm run test && npm run build:static && npm run check:release"
+    "build": "npm run typecheck && npm run check:security && npm run build:extension && npm run build:static && npm run check:release",
+    "check": "npm run typecheck && npm run typecheck:extension && npm run check:security && npm run test && npm run build:extension && npm run build:static && npm run check:release"
   },
   "dependencies": {
     "@bjorn3/browser_wasi_shim": "0.4.2",

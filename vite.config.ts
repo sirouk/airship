@@ -84,6 +84,17 @@ export default defineConfig({
     reportCompressedSize: true,
     rollupOptions: {
       output: {
+        /*
+         * The provider relay and companion client are reached from several
+         * independent dynamic routes. Group their small, shared wire clients
+         * into one optional pack so adding another consumer cannot duplicate
+         * the protocol shell or silently grow the optional-pack count.
+         */
+        manualChunks(id) {
+          return id.includes("/src/inference/bridge/")
+            ? "inference-bridge-pack"
+            : undefined;
+        },
         // The shell interpreter's entry modules are named `pack` and
         // `contract`, which would emit generic chunk names that the release
         // gate cannot attribute to an owner. Name them explicitly so the

@@ -8,6 +8,7 @@
 
 import { BRIDGE_PORT_NAME, RELEASE_CALLERS, developmentCallers } from "./policy";
 import { createPageChannel } from "./content-bridge";
+import { installCompanionContentBridge } from "./companion-content";
 import { resolveExtensionApi } from "./webextension";
 
 declare const __AIRSHIP_BRIDGE_CHANNEL__: string;
@@ -27,5 +28,11 @@ if (api && window.top === window) {
   });
   window.addEventListener("message", (event) => {
     bridge.receive({ data: event.data, origin: event.origin, source: event.source });
+  });
+  installCompanionContentBridge({
+    runtime: api.runtime,
+    self: window,
+    documentUrl: location.href,
+    callers,
   });
 }

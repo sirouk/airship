@@ -24,6 +24,10 @@ import type {
   BrowserCapabilityObservation,
   BrowserCapabilityPromptEntry,
 } from "./browser-runtime";
+import type {
+  CompanionCapabilities,
+  CompanionHandshakeResult,
+} from "../inference/bridge/companion-client";
 
 export type ExtensionBridgeObservation = BrowserCapabilityObservation & Readonly<{
   /** Exactly what the extension answered with; absent when nothing answered. */
@@ -34,6 +38,8 @@ export type ExtensionBridgeObservation = BrowserCapabilityObservation & Readonly
   unavailable: readonly BridgeProviderUnavailability[];
   /** Round trip of the handshake that produced an `available` record. */
   handshakeMs?: number;
+  /** Optional services reported by the same installed extension, live now. */
+  companion?: CompanionCapabilities;
 }>;
 
 /**
@@ -95,9 +101,22 @@ export function extensionBridgeObservation(
  */
 export async function probeExtensionBridge(
   handshake: () => Promise<BridgeHandshakeResult> = defaultHandshake,
+  companionHandshake: () => Promise<CompanionHandshakeResult> = defaultCompanionHandshake,
 ): Promise<ExtensionBridgeObservation> {
   try {
-    return extensionBridgeObservation(await handshake());
+    const observation = extensionBridgeObservation(await handshake());
+    if (observation.state !== "available") return observation;
+    const companion = await companionHandshake();
+    if (companion.kind !== "answered") return observation;
+    const storage = companion.capabilities.storage;
+    const compute = companion.capabilities.compute;
+    return Object.freeze({
+      ...observation,
+      companion: companion.capabilities,
+      detail: `${observation.detail} Companion services: encrypted cache ${
+        storage.state === "available" ? (storage.enabled ? "enabled" : "available but off") : "unavailable"
+      }; background compute ${compute.state === "available" ? "available" : "unavailable"}.`,
+    });
   } catch (error) {
     return Object.freeze({
       state: "failed" as const,
@@ -129,6 +148,18 @@ export function extensionBridgePromptEntries(
 async function defaultHandshake(): Promise<BridgeHandshakeResult> {
   const { pageExtensionBridge } = await import("../inference/bridge/client");
   const client = pageExtensionBridge();
+  if (!client) {
+    return Object.freeze({
+      kind: "unsupported" as const,
+      detail: "this runtime has no page window to relay one through",
+    });
+  }
+  return client.handshake();
+}
+
+async function defaultCompanionHandshake(): Promise<CompanionHandshakeResult> {
+  const { pageCompanionClient } = await import("../inference/bridge/companion-client");
+  const client = pageCompanionClient();
   if (!client) {
     return Object.freeze({
       kind: "unsupported" as const,

@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="description" content="Install and verify the Airship Companion browser extension." />
+    <link rel="icon" href="../favicon.svg" />
+    <link rel="stylesheet" href="./install.css" />
+    <script src="./install.js" defer></script>
+    <title>Airship Companion</title>
+  </head>
+  <body>
+    <main>
+      <a class="back" href="../">← Return to Airship</a>
+      <header>
+        <span class="eyebrow">Airship Companion · 1.1.0</span>
+        <h1>More reach. More local headroom.</h1>
+        <p>
+          One reviewed extension source for Chrome, Edge, Firefox, and Safari.
+          It adds a bounded provider relay, an opt-in ciphertext-only cache,
+          and background hash/vector work without becoming a backend.
+        </p>
+        <div class="truth">
+          <span><i class="ready"></i>Source packages ready</span>
+          <span><i></i>Store signing pending</span>
+          <span><i class="ready"></i>No tokens persisted</span>
+        </div>
+      </header>
+
+      <section aria-labelledby="choose-browser">
+        <div class="section-heading">
+          <div>
+            <span>Choose a browser</span>
+            <h2 id="choose-browser">Install packages</h2>
+          </div>
+          <a href="./releases/SHA256SUMS">Verify SHA-256 checksums</a>
+        </div>
+        <div class="browser-guidance" id="browser-guidance" role="status" hidden></div>
+        <div class="browser-grid">
+          <article data-browser="chrome">
+            <div class="browser-title"><strong>Chrome</strong><small>Desktop · Chromium MV3</small></div>
+            <p>Production source is ready. Chrome Web Store review and signing require the Airship publisher account.</p>
+            <a class="download" href="./releases/airship-companion-chromium-release.zip" download>Download Chrome package</a>
+            <details>
+              <summary>Install the reviewed package now</summary>
+              <ol>
+                <li>Download and extract the ZIP.</li>
+                <li>Open <code>chrome://extensions</code> and enable Developer mode.</li>
+                <li>Choose Load unpacked and select the extracted folder.</li>
+              </ol>
+            </details>
+          </article>
+
+          <article data-browser="edge">
+            <div class="browser-title"><strong>Microsoft Edge</strong><small>Desktop · Chromium MV3</small></div>
+            <p>The Chromium package is shared. Edge Add-ons publication requires the Airship Partner Center account.</p>
+            <a class="download" href="./releases/airship-companion-chromium-release.zip" download>Download Edge package</a>
+            <details>
+              <summary>Install the reviewed package now</summary>
+              <ol>
+                <li>Download and extract the ZIP.</li>
+                <li>Open <code>edge://extensions</code> and enable Developer mode.</li>
+                <li>Choose Load unpacked and select the extracted folder.</li>
+              </ol>
+            </details>
+          </article>
+
+          <article data-browser="firefox">
+            <div class="browser-title"><strong>Firefox</strong><small>Desktop + Android · WebExtensions</small></div>
+            <p>The Firefox source is ready. Permanent installation requires Mozilla AMO review and signing.</p>
+            <a class="download" href="./releases/airship-companion-firefox-release.zip" download>Download Firefox source</a>
+            <details>
+              <summary>Temporary desktop test</summary>
+              <ol>
+                <li>Download and extract the ZIP.</li>
+                <li>Open <code>about:debugging#/runtime/this-firefox</code>.</li>
+                <li>Choose Load Temporary Add-on and select <code>manifest.json</code>.</li>
+              </ol>
+            </details>
+          </article>
+
+          <article data-browser="safari">
+            <div class="browser-title"><strong>Safari</strong><small>macOS + iOS/iPadOS · Safari Web Extension</small></div>
+            <p>The source is ready for Apple’s Safari Web Extension Packager. Public installation requires an Apple Developer account, signed containing app, and App Store review.</p>
+            <a class="download" href="./releases/airship-companion-safari-release.zip" download>Download Safari source</a>
+            <details>
+              <summary>What remains account-bound</summary>
+              <p>Package through App Store Connect or Apple’s command-line packager, assign owned bundle IDs, then sign and submit the containing app.</p>
+            </details>
+          </article>
+        </div>
+      </section>
+
+      <section class="local-test" aria-labelledby="local-test">
+        <div>
+          <span>Local Airship at port 4173</span>
+          <h2 id="local-test">Testing the development build</h2>
+          <p>The production package only answers the published Airship origin. Use this separately marked build for localhost acceptance.</p>
+        </div>
+        <div class="local-actions">
+          <a href="./releases/airship-companion-chromium-development.zip" download>Chromium development package</a>
+          <a href="./releases/airship-companion-firefox-development.zip" download>Firefox development package</a>
+          <a href="./releases/airship-companion-safari-development.zip" download>Safari development source</a>
+        </div>
+      </section>
+
+      <section class="boundary" aria-labelledby="boundary">
+        <div>
+          <span>Exact boundary</span>
+          <h2 id="boundary">What installation does—and does not—grant</h2>
+        </div>
+        <dl>
+          <div><dt>Provider OAuth</dt><dd>The extension can transport only a supported, reviewed grant flow. It does not manufacture provider permission or embed a client secret.</dd></div>
+          <div><dt>Local storage</dt><dd>Disabled by default. When enabled from the popup, it accepts bounded encrypted Airship pages only; the Vault remains authoritative.</dd></div>
+          <div><dt>Compute</dt><dd>Moves bounded hashing and vector ranking off the interface thread. It uses the browser’s available execution context and makes no unmeasured GPU claim.</dd></div>
+          <div><dt>Trust</dt><dd>Installing the extension changes reachability, not attestation. Provider and TEE evidence remain independently reported in Airship Proof.</dd></div>
+        </dl>
+      </section>
+      <footer class="page-footer">
+        <a href="./privacy.html">Privacy disclosure</a>
+        <a href="./releases/release.json">Machine-readable release record</a>
+      </footer>
+    </main>
+  </body>
+</html>

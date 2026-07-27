@@ -40,7 +40,7 @@ ceilings are both blocking.
 | --- | ---: | ---: |
 | HTML-referenced entry JavaScript | 384 KiB | 110 KiB |
 | Initial JavaScript and module preloads | 640 KiB | 132 KiB |
-| Deferred advanced capability bundle | 384 KiB | 110 KiB |
+| Deferred advanced capability bundle | 388 KiB | 113 KiB |
 | First-party and other non-vendor JS/workers | 1,768 KiB | 462 KiB |
 | Browser Git + Terminal vendor runtime aggregate | 656 KiB | 182 KiB |
 | Absolute installed JavaScript/worker backstop | 2,152 KiB | 643 KiB |
@@ -55,6 +55,7 @@ ceilings are both blocking.
 | Optional Sessions / Memory / Memory support / Proof | 48 / 36 / 2 / 64 KiB | 14 / 12 / 1 / 20 KiB |
 | Optional Terminal | 384 KiB | 100 KiB |
 | Optional semantic worker / model catalog | 16 / 32 KiB | 6 / 10 KiB |
+| Optional inference/provider + Companion protocol packs | 124 KiB | 38 KiB |
 | Optional Intel DCAP QVL JS / WASM | 32 / 1,536 KiB | 8 / 512 KiB |
 | Pinned same-origin Pyodide distribution | 16 MiB | 8 MiB |
 | HTML-referenced entry CSS | 160 KiB | 32 KiB |

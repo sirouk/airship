@@ -19,6 +19,7 @@ import {
 import { type BridgeClock, type RelayFetch, createBridgeRelay } from "./relay";
 import { installUserAgentOverride } from "./user-agent";
 import { type WebExtensionApi, resolveExtensionApi } from "./webextension";
+import { COMPANION_PORT_NAME, installCompanionPort } from "./companion";
 
 declare const __AIRSHIP_BRIDGE_CHANNEL__: string;
 
@@ -74,7 +75,7 @@ const clock: BridgeClock = Object.freeze({
 const relayFetch: RelayFetch = (url, init) => fetch(url, init);
 
 api?.runtime.onConnect.addListener((port) => {
-  if (port.name !== BRIDGE_PORT_NAME) {
+  if (port.name !== BRIDGE_PORT_NAME && port.name !== COMPANION_PORT_NAME) {
     port.disconnect();
     return;
   }
@@ -83,6 +84,10 @@ api?.runtime.onConnect.addListener((port) => {
   const sender = checkSender(port.sender, callers);
   if (!sender.ok) {
     port.disconnect();
+    return;
+  }
+  if (port.name === COMPANION_PORT_NAME) {
+    installCompanionPort(port);
     return;
   }
   const relay = createBridgeRelay({

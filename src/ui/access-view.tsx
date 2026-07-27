@@ -150,7 +150,7 @@ export function AccessView({
 }: AccessViewProps) {
   const publishedExtensionInstallUrl = extensionInstallUrl
     ?? (import.meta.env.VITE_AIRSHIP_EXTENSION_INSTALL_URL as string | undefined)?.trim()
-    ?? undefined;
+    ?? `${import.meta.env.BASE_URL}extension/index.html`;
   const localOAuthBridge = oauthDiagnostic?.exchangeMode === "local-confidential-bridge";
   const credentialInput = useRef<HTMLInputElement>(null);
   const ephemeralCredential = useRef<EphemeralChutesCredential>();

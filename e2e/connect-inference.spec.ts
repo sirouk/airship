@@ -36,6 +36,38 @@ async function openLane(page: Page, lane: string) {
   return card;
 }
 
+test("the companion install hub offers verified packages with device-appropriate guidance", async ({ page }, testInfo) => {
+  await page.goto("/extension/index.html");
+  await expect(page.getByRole("heading", { name: "More reach. More local headroom." })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Verify SHA-256 checksums" })).toHaveAttribute("href", "./releases/SHA256SUMS");
+  await expect(page.getByRole("link", { name: "Download Chrome package" })).toHaveAttribute(
+    "href",
+    "./releases/airship-companion-chromium-release.zip",
+  );
+  await expect(page.getByRole("link", { name: "Download Firefox source" })).toHaveAttribute(
+    "href",
+    "./releases/airship-companion-firefox-release.zip",
+  );
+  await expect(page.getByRole("link", { name: "Download Safari source" })).toHaveAttribute(
+    "href",
+    "./releases/airship-companion-safari-release.zip",
+  );
+  const guidance = page.locator("#browser-guidance");
+  await expect(guidance).toBeVisible();
+  if (testInfo.project.name === "mobile-chromium") {
+    // The mobile project intentionally combines Chromium with an iPhone
+    // profile; platform UA policy may therefore expose either the Chromium
+    // no-extension path or the iOS containing-app path. Both are truthful and
+    // neither offers a desktop ZIP as one-tap mobile installation.
+    await expect(guidance).toContainText(
+      /does not install desktop WebExtensions|requires the signed Airship containing app/u,
+    );
+  } else {
+    await expect(page.locator('[data-browser="chrome"]')).toHaveClass(/recommended/u);
+    await expect(guidance).toContainText("highlighted the package");
+  }
+});
+
 test("a visitor with no credentials lands inside a path that works", async ({ page }) => {
   await openConnect(page);
 
@@ -80,13 +112,10 @@ test("Claude and Grok state the extension honestly and offer no broken button", 
     // No control in a blocked lane may look like a working sign-in.
     await expect(card.getByRole("button", { name: /^Sign in/u })).toHaveCount(0);
 
-    /*
-     * This build publishes no install page, so no lane may print an instruction
-     * that has nowhere to go — on any browser, not only the ones that cannot
-     * host an extension at all.
-     */
-    await expect(card).not.toContainText(/Add the Airship extension/u);
-    await expect(card.getByRole("link", { name: /Add the Airship extension/u })).toHaveCount(0);
+    // A real install hub now exists even before store signing, so there is
+    // always a truthful route to reviewed packages and browser-specific steps.
+    await expect(page.locator(".companion-overview").getByRole("link", { name: /Get the extension/u }))
+      .toHaveAttribute("href", /\/extension\/index\.html$/u);
   }
 
   // Both vendors have a browser-direct key adapter on this same route, so both

@@ -10,15 +10,16 @@ const sources = readdirSync(here)
   .map((name) => Object.freeze({ name, text: readFileSync(join(here, name), "utf8") }));
 
 /**
- * Rule 5 of the bridge contract is "no credential storage", and rule 3 is
- * `credentials: "omit"`. Both are properties of the whole source tree rather
- * than of any one function, so they are asserted over the tree.
+ * Rule 5 of the relay contract is "no credential storage", and rule 3 is
+ * `credentials: "omit"`. The optional companion cache is a different,
+ * ciphertext-only boundary in `companion.ts`; it never receives relay
+ * messages. These are properties of the whole source tree rather than of any
+ * one function, so they are asserted over the tree.
  */
 const FORBIDDEN = Object.freeze([
-  Object.freeze({ pattern: /\blocalStorage\b/u, why: "the extension writes nothing durable" }),
-  Object.freeze({ pattern: /\bsessionStorage\b/u, why: "the extension writes nothing durable" }),
-  Object.freeze({ pattern: /\bindexedDB\b/u, why: "the extension writes nothing durable" }),
-  Object.freeze({ pattern: /\.storage\b/u, why: "the extension uses no extension storage area" }),
+  Object.freeze({ pattern: /\blocalStorage\b/u, why: "page storage must never hold extension state" }),
+  Object.freeze({ pattern: /\bsessionStorage\b/u, why: "page storage must never hold extension state" }),
+  Object.freeze({ pattern: /(?:chrome|browser)\.storage\b/u, why: "provider credentials must never enter extension storage" }),
   Object.freeze({ pattern: /\.cookies\b/u, why: "the extension never reads cookies" }),
   Object.freeze({ pattern: /\bconsole\s*\./u, why: "relayed traffic is never logged" }),
   Object.freeze({ pattern: /\beval\s*\(/u, why: "no dynamic code" }),
@@ -31,10 +32,13 @@ describe("extension source boundary", () => {
   it("scans a source tree that is actually there", () => {
     expect(sources.map((source) => source.name).sort()).toEqual([
       "background.ts",
+      "companion-content.ts",
+      "companion.ts",
       "content-bridge.ts",
       "content-script.ts",
       "manifest.ts",
       "policy.ts",
+      "popup.ts",
       "protocol.ts",
       "relay.ts",
       "user-agent.ts",
@@ -42,7 +46,7 @@ describe("extension source boundary", () => {
     ]);
   });
 
-  it("contains no storage, logging, dynamic-code or credential-bearing call anywhere", () => {
+  it("contains no page/credential storage, logging, dynamic-code or credential-bearing call anywhere", () => {
     const violations: string[] = [];
     for (const source of sources) {
       for (const { pattern, why } of FORBIDDEN) {
@@ -50,6 +54,17 @@ describe("extension source boundary", () => {
       }
     }
     expect(violations).toEqual([]);
+  });
+
+  it("keeps durable storage inside the ciphertext-only companion boundary", () => {
+    const durableUsers = sources
+      .filter((source) => /\bindexedDB\b/u.test(source.text))
+      .map((source) => source.name);
+    expect(durableUsers).toEqual(["companion.ts"]);
+    const companion = sources.find((source) => source.name === "companion.ts")?.text ?? "";
+    expect(companion).toContain("ciphertext-cache-only");
+    expect(companion).toContain("plaintext-refused");
+    expect(companion).not.toMatch(/\bauthorization\b|\baccess[_-]?token\b|\brefresh[_-]?token\b/iu);
   });
 
   it("keeps the one credential-free fetch shape in the relay", () => {

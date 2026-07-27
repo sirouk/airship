@@ -27,8 +27,8 @@ export const EXTENSION_TARGETS: readonly ExtensionTarget[] = Object.freeze([
   "safari",
 ]);
 
-export const EXTENSION_NAME = "Airship Bridge";
-export const GECKO_EXTENSION_ID = "airship-bridge@airship.chutes.ai";
+export const EXTENSION_NAME = "Airship Companion";
+export const GECKO_EXTENSION_ID = "airship-companion@airship.chutes.ai";
 
 /**
  * Oldest engine each target is built and declared for. The values match
@@ -43,8 +43,7 @@ export const GECKO_EXTENSION_ID = "airship-bridge@airship.chutes.ai";
 export const FIREFOX_MIN_VERSION = "128.0";
 export const SAFARI_MIN_VERSION = "16.4";
 
-const DESCRIPTION = "Relays only Airship's xAI and Anthropic OAuth and inference calls, from"
-  + " airship pages only, with no stored credentials.";
+const DESCRIPTION = "Airship's bounded provider relay, encrypted local cache, and background compute companion.";
 
 export function buildManifest(
   target: ExtensionTarget,
@@ -67,6 +66,22 @@ export function buildManifest(
       },
     ],
     host_permissions: [...destinationMatchPatterns(destinations)],
+    action: {
+      default_title: EXTENSION_NAME,
+      default_popup: "popup.html",
+      default_icon: {
+        "16": "icons/icon-16.png",
+        "32": "icons/icon-32.png",
+        "48": "icons/icon-48.png",
+        "128": "icons/icon-128.png",
+      },
+    },
+    icons: {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png",
+    },
   };
 
   if (target === "firefox") {
@@ -80,7 +95,7 @@ export function buildManifest(
       // Firefox's declarativeNetRequest has no header rewriting, so the
       // `User-Agent` override needs a blocking webRequest listener, which
       // Firefox — unlike Chromium — still supports under MV3.
-      permissions: ["webRequest", "webRequestBlocking"],
+      permissions: ["webRequest", "webRequestBlocking", "unlimitedStorage"],
       browser_specific_settings: {
         gecko: { id: GECKO_EXTENSION_ID, strict_min_version: FIREFOX_MIN_VERSION },
       },
@@ -112,7 +127,7 @@ export function buildManifest(
     background: { service_worker: "background.js" },
     // `declarativeNetRequestWithHostAccess` scopes rules to hosts the user
     // already granted, rather than asking for the broader rule permission.
-    permissions: ["declarativeNetRequestWithHostAccess"],
+    permissions: ["declarativeNetRequestWithHostAccess", "unlimitedStorage"],
     // The first Chromium with stable MV3 session-rule support this relies on.
     minimum_chrome_version: "116",
   });

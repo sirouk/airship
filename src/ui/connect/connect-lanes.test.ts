@@ -153,7 +153,7 @@ describe("connect lanes", () => {
     if (!withoutPage) throw new Error("missing Claude OAuth status");
     expect(withoutPage.kind).toBe("extension-unavailable");
     expect(withoutPage.label).not.toMatch(/add the airship extension/iu);
-    expect(withoutPage.detail).toContain("built from source");
+    expect(withoutPage.detail).toContain("did not configure the Airship Companion install hub");
   });
 
   it("explains why the extension exists and offers each vendor's key alternative", () => {

@@ -1,5 +1,9 @@
 import { ownedArrayBuffer } from "../core/bytes";
 import { sha256 } from "../core/hash";
+import {
+  pageCompanionClient,
+  type PageCompanionClient,
+} from "../inference/bridge/companion-client";
 
 const CACHE_VERSION = 1;
 const RECORD_MAGIC = "AIRCC01\0";
@@ -53,15 +57,21 @@ const MAX_SWEPT_PARTITIONS = 64;
  * lock must degrade to "reclaim nothing", never to a cache that fails to open.
  */
 const PARTITION_LOCK_TIMEOUT_MS = 2_000;
+const DEFAULT_COMPANION_RECORD_LIMIT = 4 * 1024 * 1024;
 
 export type CiphertextCacheKind = "workspace" | "git-object" | "index-page";
-export type CiphertextCacheBackend = "opfs-sync-worker" | "opfs-async-worker" | "indexeddb" | "memory";
+export type CiphertextCacheBackend =
+  | "extension-indexeddb"
+  | "opfs-sync-worker"
+  | "opfs-async-worker"
+  | "indexeddb"
+  | "memory";
 
 export type CiphertextCacheCapability = Readonly<{
   version: 1;
   active: true;
   backend: CiphertextCacheBackend;
-  durability: "origin-private-persistent" | "page-memory";
+  durability: "extension-origin-persistent" | "origin-private-persistent" | "page-memory";
   persistenceBoundary: "ciphertext-only";
   authority: "vault-provider-remains-authoritative";
   syncAccessHandle: "active" | "unavailable";
@@ -111,6 +121,7 @@ type CacheHeader = Readonly<{
 
 export type ClientCiphertextCacheOptions = Readonly<{
   partition: string;
+  openExtension?: (partitionKey: string) => Promise<CiphertextPageBackend>;
   openOpfs?: (partitionKey: string) => Promise<CiphertextPageBackend>;
   openIndexedDb?: (partitionKey: string) => Promise<CiphertextPageBackend>;
   budget?: ClientCiphertextCacheBudget;
@@ -507,6 +518,7 @@ export async function createClientCiphertextCache(
     throw new Error("Ciphertext cache partition must be a bounded non-empty identifier.");
   }
   const partitionKey = (await sha256(partition)).slice("sha256:".length);
+  const openExtension = options.openExtension ?? openExtensionCiphertextPageBackend;
   const openOpfs = options.openOpfs ?? openOpfsWorkerBackend;
   const openIndexedDb = options.openIndexedDb ?? openIndexedDbBackend;
   // Two tabs on one partition share one OPFS directory, so the LRU index lock
@@ -516,14 +528,84 @@ export async function createClientCiphertextCache(
     ...options.budget,
   });
   try {
-    return new ClientCiphertextCache(await openOpfs(partitionKey), budget);
+    return new ClientCiphertextCache(await openExtension(partitionKey), Object.freeze({
+      ...budget,
+      estimateStorage: options.budget?.estimateStorage ?? (async () => ({})),
+    }));
   } catch {
     try {
-      return new ClientCiphertextCache(await openIndexedDb(partitionKey), budget);
+      return new ClientCiphertextCache(await openOpfs(partitionKey), budget);
     } catch {
-      return new ClientCiphertextCache(new MemoryCiphertextPageBackend(), budget);
+      try {
+        return new ClientCiphertextCache(await openIndexedDb(partitionKey), budget);
+      } catch {
+        return new ClientCiphertextCache(new MemoryCiphertextPageBackend(), budget);
+      }
     }
   }
+}
+
+export class ExtensionCiphertextPageBackend implements CiphertextPageBackend {
+  readonly backend = "extension-indexeddb" as const;
+  readonly durability = "extension-origin-persistent" as const;
+  readonly syncAccessHandle = "unavailable" as const;
+
+  constructor(
+    private readonly client: PageCompanionClient,
+    private readonly namespace: string,
+    private readonly maxRecordBytes = DEFAULT_COMPANION_RECORD_LIMIT,
+  ) {}
+
+  async read(storageKey: string): Promise<Uint8Array | undefined> {
+    const result = await this.client.cacheGet(this.namespace, validateStorageKey(storageKey));
+    if (!result.found) return undefined;
+    const bytes = decodeBase64Bytes(result.data);
+    if (bytes.byteLength !== result.bytes) throw new Error("Extension cache page size mismatch.");
+    return bytes;
+  }
+
+  async write(storageKey: string, bytes: Uint8Array): Promise<void> {
+    validateStorageKey(storageKey);
+    validateEncodedRecordSize(bytes);
+    if (bytes.byteLength > this.maxRecordBytes) {
+      throw new Error("The ciphertext page exceeds this companion extension's record limit.");
+    }
+    await this.client.cachePut(this.namespace, storageKey, encodeBase64Bytes(bytes));
+  }
+
+  async remove(storageKey: string): Promise<void> {
+    await this.client.cacheRemove(this.namespace, validateStorageKey(storageKey));
+  }
+
+  async list(): Promise<readonly CiphertextPageSummary[]> {
+    const result = await this.client.cacheList(this.namespace);
+    return result.pages.map((page) => Object.freeze({
+      storageKey: validateStorageKey(page.key),
+      bytes: page.bytes,
+    }));
+  }
+
+  close(): void {
+    // The page-scoped bridge client is shared by all extension-backed caches.
+  }
+}
+
+async function openExtensionCiphertextPageBackend(partitionKey: string): Promise<CiphertextPageBackend> {
+  const client = pageCompanionClient();
+  if (!client) throw new Error("The Airship Companion is unavailable.");
+  const handshake = await client.handshake();
+  if (
+    handshake.kind !== "answered"
+    || handshake.capabilities.storage.state !== "available"
+    || !handshake.capabilities.storage.enabled
+  ) {
+    throw new Error("The Airship Companion encrypted cache is not enabled.");
+  }
+  return new ExtensionCiphertextPageBackend(
+    client,
+    partitionKey,
+    handshake.capabilities.storage.maxRecordBytes,
+  );
 }
 
 export class MemoryCiphertextPageBackend implements CiphertextPageBackend {
@@ -1010,6 +1092,29 @@ function validateEncodedRecordSize(bytes: Uint8Array): void {
   if (!(bytes instanceof Uint8Array) || bytes.byteLength < HEADER_PREFIX_BYTES || bytes.byteLength > MAX_PERSISTED_RECORD_BYTES) {
     throw new Error("Ciphertext cache record has an invalid persisted size.");
   }
+}
+
+function encodeBase64Bytes(bytes: Uint8Array): string {
+  let binary = "";
+  for (let offset = 0; offset < bytes.byteLength; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+  }
+  return btoa(binary);
+}
+
+function decodeBase64Bytes(value: string): Uint8Array {
+  if (typeof value !== "string" || value.length > Math.ceil(DEFAULT_COMPANION_RECORD_LIMIT * 4 / 3) + 8) {
+    throw new Error("The extension cache page is invalid or too large.");
+  }
+  let binary: string;
+  try {
+    binary = atob(value);
+  } catch (error) {
+    throw new Error("The extension cache page is not valid base64.", { cause: error });
+  }
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index) & 0xff;
+  return bytes;
 }
 
 function parseRange(value: unknown): Readonly<{ start: number; endExclusive: number }> {

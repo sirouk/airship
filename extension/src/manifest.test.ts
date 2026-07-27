@@ -21,7 +21,7 @@ describe("manifests", () => {
       // externally_connectable is Chromium-only and would be a second, weaker
       // door into the worker.
       expect(manifest).not.toHaveProperty("externally_connectable");
-      expect(JSON.stringify(manifest)).not.toContain("storage");
+      expect(JSON.stringify(manifest)).not.toContain("externally_connectable");
     }
   });
 
@@ -37,13 +37,13 @@ describe("manifests", () => {
   it("asks each browser only for the mechanism that browser actually has", () => {
     const chromium = buildManifest("chromium", "release");
     expect(chromium.background).toEqual({ service_worker: "background.js" });
-    expect(chromium.permissions).toEqual(["declarativeNetRequestWithHostAccess"]);
+    expect(chromium.permissions).toEqual(["declarativeNetRequestWithHostAccess", "unlimitedStorage"]);
 
     const firefox = buildManifest("firefox", "release");
     // An MV3 event page, non-persistent by definition; `persistent` is not a
     // valid Gecko MV3 key and must not appear.
     expect(firefox.background).toEqual({ scripts: ["background.js"] });
-    expect(firefox.permissions).toEqual(["webRequest", "webRequestBlocking"]);
+    expect(firefox.permissions).toEqual(["webRequest", "webRequestBlocking", "unlimitedStorage"]);
     expect(firefox.browser_specific_settings).toMatchObject({
       gecko: { id: expect.any(String), strict_min_version: FIREFOX_MIN_VERSION },
     });

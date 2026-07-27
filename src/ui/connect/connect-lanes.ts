@@ -96,7 +96,7 @@ export type ConnectLaneInput = Readonly<{
 const CHUTES_KEY_SENTENCE = "Chutes personal keys start with cpk_.";
 const CHUTES_LANE = "Encrypted inference with per-turn evidence.";
 const IN_THIS_TAB = "Connected in page memory for this tab.";
-const NO_INSTALL_PAGE = "Airship publishes no install page for it yet, so there is nothing to add from here; it is built from source in the Airship repository.";
+const NO_INSTALL_PAGE = "This embedding did not configure the Airship Companion install hub.";
 
 /** Lower sorts first. Anything a person can act on now outranks anything else. */
 const STATUS_RANK: Readonly<Record<ConnectLaneStatus["kind"], number>> = Object.freeze({

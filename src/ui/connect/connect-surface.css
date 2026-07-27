@@ -25,6 +25,110 @@
   line-height: 1.5;
 }
 
+.companion-overview {
+  display: grid;
+  gap: 10px;
+  padding: 12px 13px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-panel);
+  background: linear-gradient(135deg, var(--surface-raised), var(--surface));
+}
+
+.companion-overview__heading {
+  display: flex;
+  gap: 9px;
+  align-items: center;
+  min-width: 0;
+}
+
+.companion-overview__dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--ink-faint);
+}
+
+.companion-overview__dot.ready {
+  border-color: var(--v-verified);
+  background: var(--v-verified);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--v-verified) 14%, transparent);
+}
+
+.companion-overview__heading > div {
+  display: grid;
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 1px;
+}
+
+.companion-overview__heading strong {
+  font-size: var(--fs-meta);
+}
+
+.companion-overview__heading small,
+.companion-overview__host {
+  color: var(--ink-faint);
+  font-size: var(--fs-micro);
+  line-height: 1.4;
+}
+
+.companion-overview__heading a {
+  flex: 0 0 auto;
+}
+
+.companion-overview__link {
+  color: var(--accent-bright);
+  font-size: var(--fs-caption);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.companion-overview > p {
+  max-width: 76ch;
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: var(--fs-caption);
+  line-height: 1.5;
+}
+
+.companion-overview__facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  background: var(--line);
+}
+
+.companion-overview__facts > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+  padding: 8px 9px;
+  background: var(--surface-soft);
+}
+
+.companion-overview__facts dt {
+  color: var(--ink-faint);
+  font: var(--fs-micro)/1.25 var(--font-mono);
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.companion-overview__facts dd {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: var(--fs-caption);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .connect-lane-list {
   display: grid;
   gap: 8px;
@@ -557,5 +661,18 @@
 
   .connect-method__switch > button {
     width: auto;
+  }
+
+  .companion-overview__heading {
+    flex-wrap: wrap;
+  }
+
+  .companion-overview__heading a {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .companion-overview__facts {
+    grid-template-columns: 1fr;
   }
 }

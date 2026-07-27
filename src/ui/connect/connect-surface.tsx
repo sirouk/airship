@@ -101,6 +101,12 @@ export function ConnectSurface({
         </div>
       </header>
 
+      <CompanionOverview
+        observation={input.bridge}
+        host={input.host}
+        installUrl={extensionInstallUrl}
+      />
+
       <ul class="connect-lane-list">
         {lanes.map((lane) => (
           <ConnectLaneCard
@@ -154,6 +160,70 @@ export function ConnectSurface({
 }
 
 type CloudProviderId = "openai" | "anthropic" | "xai";
+
+function CompanionOverview({
+  observation,
+  host,
+  installUrl,
+}: Readonly<{
+  observation: ConnectLaneInput["bridge"];
+  host: ConnectLaneInput["host"];
+  installUrl?: string;
+}>) {
+  const available = observation?.state === "available";
+  const storage = observation?.companion?.storage;
+  const compute = observation?.companion?.compute;
+  const status = !observation
+    ? "Checking this tab"
+    : available
+      ? `Extension ${observation.extensionVersion ?? ""} connected`.trim()
+      : "Extension not detected";
+  const hostDetail = host.kind === "installable"
+    ? "This browser can load the Airship Companion."
+    : host.reason;
+
+  return (
+    <section class="companion-overview" aria-labelledby="companion-overview-title">
+      <div class="companion-overview__heading">
+        <span class={`companion-overview__dot ${available ? "ready" : "idle"}`} aria-hidden="true" />
+        <div>
+          <strong id="companion-overview-title">Airship Companion</strong>
+          <small>{status}</small>
+        </div>
+        {installUrl ? (
+          <a
+            class={available ? "companion-overview__link" : "primary"}
+            href={installUrl}
+            target="_blank"
+            rel="noreferrer"
+          >
+            {available ? "Downloads & setup ↗" : "Get the extension ↗"}
+          </a>
+        ) : null}
+      </div>
+      <p>
+        Adds a reviewed provider relay, opt-in encrypted local cache, and bounded
+        background hash/vector work. Provider account authorization is offered
+        only when Airship also has a supported provider grant flow.
+      </p>
+      <dl class="companion-overview__facts">
+        <div>
+          <dt>Provider relay</dt>
+          <dd>{available ? `${observation.providers.length} route${observation.providers.length === 1 ? "" : "s"} live` : "Not observed"}</dd>
+        </div>
+        <div>
+          <dt>Encrypted cache</dt>
+          <dd>{storage?.state === "available" ? (storage.enabled ? `${storage.records ?? 0} page${storage.records === 1 ? "" : "s"}` : "Available · off") : "Not active"}</dd>
+        </div>
+        <div>
+          <dt>Background compute</dt>
+          <dd>{compute?.state === "available" ? "Hash + vector ranking" : "Not active"}</dd>
+        </div>
+      </dl>
+      {!available ? <small class="companion-overview__host">{hostDetail}</small> : null}
+    </section>
+  );
+}
 
 function CloudMethodPanel({
   provider,
@@ -463,7 +533,8 @@ function ExtensionPanel({
           <li>It reaches a fixed list of vendor addresses compiled into it. Nothing else, and no address supplied by this page.</li>
           <li>Every request it carries is sent with cookies omitted, so it can never ride a session you are already signed into.</li>
           <li>It forwards only the headers these protocols need and drops the rest.</li>
-          <li>It stores no token and writes nothing durable. Credentials stay in this page’s memory, exactly as they do today.</li>
+          <li>It stores no token. Its optional local cache accepts only encrypted Airship pages, is bounded, and can be cleared from the extension popup.</li>
+          <li>Hashing and vector ranking can run in its background context to keep work off the interface thread; Airship does not call that a hardware boost.</li>
           <li>Request size, response size, deadline and concurrency are all bounded.</li>
         </ul>
         <p>Installing it changes what Airship can reach, not what Airship can prove. Traffic still ends at the vendor under the vendor’s own TLS.</p>

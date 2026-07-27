@@ -24,7 +24,9 @@ export const RELEASE_BUDGETS = Object.freeze({
   // panel travel here. Measured 377.88 KiB raw / 109.51 KiB gzip: 110 KiB gzip
   // would clear that by 0.44%, which is a tripwire rather than the ~0.5%
   // clearance every other cap in this file is set to.
-  deferredCapabilities: Object.freeze({ raw: 384 * 1024, gzip: 111 * 1024 }),
+  // Includes the extension-backed ciphertext page backend; the extension
+  // protocol itself remains in the separately budgeted inference pack.
+  deferredCapabilities: Object.freeze({ raw: 388 * 1024, gzip: 113 * 1024 }),
   // Core plus every optional route except the two independently delivered
   // vendor engines. The former 384 KiB "all routes" meaning became impossible
   // once full isomorphic-git and xterm engines were deliberately installed:
@@ -93,6 +95,10 @@ export const RELEASE_BUDGETS = Object.freeze({
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. Keep it visible under a dedicated, deliberately small cap.
   serviceWorker: Object.freeze({ raw: 12 * 1024, gzip: 4 * 1024 }),
+  // Browser-aware guidance on the static Companion install hub. This is not
+  // app startup code, but it is executable release payload and therefore gets
+  // its own tiny ceiling instead of disappearing into an aggregate.
+  companionInstallScript: Object.freeze({ raw: 4 * 1024, gzip: 2 * 1024 }),
   optionalExecutionPack: Object.freeze({ raw: 32 * 1024, gzip: 10 * 1024 }),
   // The stable broker is tiny; Worker/WASI/Pyodide implementation follows as
   // a second-level chunk only when runtime inspection or execution begins.
@@ -180,7 +186,9 @@ export const RELEASE_BUDGETS = Object.freeze({
   // presence observation, so it compresses as its own 10.65 KiB chunk instead
   // of inside the session route. Raw is unchanged at a measured 116.74 KiB;
   // only the lost cross-chunk compression is new, at 35.59 KiB gzip.
-  optionalInferenceProviders: Object.freeze({ raw: 117 * 1024, gzip: 36 * 1024 }),
+  // Includes the shared page-side companion protocol client used by both the
+  // live Providers observation and the opt-in ciphertext cache backend.
+  optionalInferenceProviders: Object.freeze({ raw: 124 * 1024, gzip: 38 * 1024 }),
   // Local Device setup and its OPFS/IndexedDB key-custody runtime load only
   // after the user selects that Vault provider.
   optionalLocalDeviceVault: Object.freeze({ raw: 60 * 1024, gzip: 19 * 1024 }),
@@ -308,7 +316,25 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
     throw new Error(`Release payload rejected:\n- ${failures.join("\n- ")}`);
   }
 
-  const required = ["_headers", "favicon.svg", "index.html", "manifest.webmanifest", "sw.js"];
+  const required = [
+    "_headers",
+    "favicon.svg",
+    "index.html",
+    "manifest.webmanifest",
+    "sw.js",
+    "extension/index.html",
+    "extension/install.css",
+    "extension/install.js",
+    "extension/privacy.html",
+    "extension/releases/release.json",
+    "extension/releases/SHA256SUMS",
+    "extension/releases/airship-companion-chromium-development.zip",
+    "extension/releases/airship-companion-chromium-release.zip",
+    "extension/releases/airship-companion-firefox-development.zip",
+    "extension/releases/airship-companion-firefox-release.zip",
+    "extension/releases/airship-companion-safari-development.zip",
+    "extension/releases/airship-companion-safari-release.zip",
+  ];
   const fileMap = new Map(releasableFiles.map((file) => [file.path, file]));
   for (const path of required) {
     if (!fileMap.has(path)) throw new Error(`Required static artifact is missing: ${path}.`);
@@ -536,7 +562,8 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
       && !isOptionalInferenceProviderPath(file.path)
       && !isOptionalLocalDeviceVaultPath(file.path)
       && !isOptionalDcapQvlPath(file.path)
-      && !isDeferredCapabilityPackPath(file.path),
+      && !isDeferredCapabilityPackPath(file.path)
+      && !isCompanionInstallScriptPath(file.path),
   );
   const baselineJavaScriptMeasurement = sumMeasurements(baselineJavaScriptFiles.map((file) => measure(file.payload)));
   const vendorRuntimeFiles = [...optionalBrowserGitPacks, ...optionalTerminalPacks];
@@ -544,15 +571,25 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
   const firstPartyJavaScriptFiles = [
     serviceWorker,
     ...javaScriptFiles.filter(
-      (file) => !isOptionalBrowserGitPath(file.path) && !isOptionalTerminalPath(file.path),
+      (file) => !isOptionalBrowserGitPath(file.path)
+        && !isOptionalTerminalPath(file.path)
+        && !isCompanionInstallScriptPath(file.path),
     ),
   ];
   const firstPartyJavaScriptMeasurement = sumMeasurements(firstPartyJavaScriptFiles.map((file) => measure(file.payload)));
-  const installedJavaScriptFiles = [serviceWorker, ...javaScriptFiles];
+  const installedJavaScriptFiles = [
+    serviceWorker,
+    ...javaScriptFiles.filter((file) => !isCompanionInstallScriptPath(file.path)),
+  ];
   const totalJavaScriptMeasurement = sumMeasurements(installedJavaScriptFiles.map((file) => measure(file.payload)));
+  const companionInstallScripts = javaScriptFiles.filter((file) => isCompanionInstallScriptPath(file.path));
+  if (companionInstallScripts.length !== 1) {
+    throw new Error(`Production must contain exactly one Companion install script; found ${companionInstallScripts.length}.`);
+  }
+  const companionInstallScriptMeasurement = measure(companionInstallScripts[0].payload);
 
   assertExclusiveArtifactClassifications(
-    installedJavaScriptFiles.map((file) => file.path),
+    [serviceWorker, ...javaScriptFiles].map((file) => file.path),
     [
       { name: "core-entry-and-preloads", paths: initialJavaScriptFiles.map((file) => file.path) },
       { name: "service-worker", paths: [serviceWorker.path] },
@@ -584,6 +621,7 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
       { name: "inference-providers", paths: optionalInferenceProviderPacks.map((file) => file.path) },
       { name: "local-device-vault", paths: optionalLocalDeviceVaultPacks.map((file) => file.path) },
       { name: "dcap-qvl", paths: optionalDcapQvlPacks.map((file) => file.path) },
+      { name: "companion-install", paths: companionInstallScripts.map((file) => file.path) },
     ],
   );
   const baselineWasmFiles = wasmFiles.filter(
@@ -707,6 +745,11 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
     RELEASE_BUDGETS.totalJavaScriptAndWorkers,
   );
   assertWithinBudget("Service worker", serviceWorkerMeasurement, RELEASE_BUDGETS.serviceWorker);
+  assertWithinBudget(
+    "Companion install script",
+    companionInstallScriptMeasurement,
+    RELEASE_BUDGETS.companionInstallScript,
+  );
   assertWithinBudget("Optional Python pack", optionalPythonPackMeasurement, RELEASE_BUDGETS.optionalPythonPack);
   assertWithinBudget("Entry CSS", entryCssMeasurement, RELEASE_BUDGETS.entryCss);
   for (const wasm of baselineWasmFiles) {
@@ -845,6 +888,10 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
       optionalVendorRuntimeAggregate: optionalVendorRuntimeMeasurement,
       totalJavaScriptAndWorkers: totalJavaScriptMeasurement,
       serviceWorker: Object.freeze({ path: serviceWorker.path, ...serviceWorkerMeasurement }),
+      companionInstallScript: Object.freeze({
+        path: companionInstallScripts[0].path,
+        ...companionInstallScriptMeasurement,
+      }),
       entryCss: entryCssMeasurement,
       allWasm: allWasmMeasurement,
       wasm: Object.freeze(wasmFiles.map((file) => Object.freeze({ path: file.path, ...measure(file.payload) }))),
@@ -854,6 +901,10 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
 
 export function isOptionalExecutionPackPath(path) {
   return /^assets\/execution-runtime-pack-[A-Za-z0-9_-]+\.js$/u.test(path);
+}
+
+export function isCompanionInstallScriptPath(path) {
+  return path === "extension/install.js";
 }
 
 export function isOptionalExecutionEnginePath(path) {

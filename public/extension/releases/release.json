@@ -1,0 +1,60 @@
+{
+  "schema": "airship-companion-release:1",
+  "version": "1.1.0",
+  "stores": {
+    "chrome": "awaiting-developer-account-publication",
+    "edge": "awaiting-developer-account-publication",
+    "firefox": "awaiting-amo-signing",
+    "safari": "awaiting-apple-packaging-signing-and-review"
+  },
+  "artifacts": [
+    {
+      "target": "chromium",
+      "channel": "release",
+      "file": "airship-companion-chromium-release.zip",
+      "bytes": 36276,
+      "sha256": "855951b472e2f5368b1e80815dcf645af9c169820d80d0dc581ac142ea0a629b",
+      "installable": "unpacked"
+    },
+    {
+      "target": "firefox",
+      "channel": "release",
+      "file": "airship-companion-firefox-release.zip",
+      "bytes": 36303,
+      "sha256": "33a24c7ac95c7acc45a509363028729c783daaf38f3ef2ab5b3ca7c26d3eebde",
+      "installable": "temporary-until-amo-signed"
+    },
+    {
+      "target": "safari",
+      "channel": "release",
+      "file": "airship-companion-safari-release.zip",
+      "bytes": 36255,
+      "sha256": "32e23c134e8242b367e17f68a6937b36368e8363223130e70dd4cbd8ac338635",
+      "installable": "safari-web-extension-packager-required"
+    },
+    {
+      "target": "chromium",
+      "channel": "development",
+      "file": "airship-companion-chromium-development.zip",
+      "bytes": 36417,
+      "sha256": "abc46854f6876b1033b97b842023bb950d0f86d486a71eff3522538b6d065924",
+      "installable": "unpacked"
+    },
+    {
+      "target": "firefox",
+      "channel": "development",
+      "file": "airship-companion-firefox-development.zip",
+      "bytes": 36443,
+      "sha256": "7d2a373909c2b2e296550d8379fd6d06cd2dfcfe38cbdf8fd818878797a86348",
+      "installable": "temporary-until-amo-signed"
+    },
+    {
+      "target": "safari",
+      "channel": "development",
+      "file": "airship-companion-safari-development.zip",
+      "bytes": 36396,
+      "sha256": "aa43c0696e784f88fbcaf377bec71cfd0f6fac680b5d7b7a79fe887867a68edf",
+      "installable": "safari-web-extension-packager-required"
+    }
+  ]
+}

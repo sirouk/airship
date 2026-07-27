@@ -11,10 +11,24 @@ import {
 const RECORD_MAGIC = new TextEncoder().encode("AIRCC01\0");
 
 describe("client ciphertext acceleration cache", () => {
-  it("selects OPFS first, then IndexedDB, then a page-memory ciphertext fallback", async () => {
+  it("selects the opt-in extension cache first, then OPFS, IndexedDB, and page memory", async () => {
+    const extension = new InspectableBackend("extension-indexeddb");
+    const accelerated = await createClientCiphertextCache({
+      partition: "provider/workspace",
+      openExtension: vi.fn(async () => extension),
+      openOpfs: vi.fn(async () => new InspectableBackend("opfs-sync-worker")),
+      openIndexedDb: vi.fn(async () => new InspectableBackend("indexeddb")),
+    });
+    expect(accelerated.capability).toMatchObject({
+      backend: "extension-indexeddb",
+      persistenceBoundary: "ciphertext-only",
+      authority: "vault-provider-remains-authoritative",
+    });
+
     const sync = new InspectableBackend("opfs-sync-worker");
     const preferred = await createClientCiphertextCache({
       partition: "provider/workspace",
+      openExtension: vi.fn(async () => { throw new Error("disabled"); }),
       openOpfs: vi.fn(async () => sync),
       openIndexedDb: vi.fn(async () => new InspectableBackend("indexeddb")),
     });
@@ -28,6 +42,7 @@ describe("client ciphertext acceleration cache", () => {
 
     const indexed = await createClientCiphertextCache({
       partition: "provider/workspace",
+      openExtension: vi.fn(async () => { throw new Error("disabled"); }),
       openOpfs: vi.fn(async () => { throw new Error("unsupported"); }),
       openIndexedDb: vi.fn(async () => new InspectableBackend("indexeddb")),
     });
@@ -35,6 +50,7 @@ describe("client ciphertext acceleration cache", () => {
 
     const memory = await createClientCiphertextCache({
       partition: "provider/workspace",
+      openExtension: vi.fn(async () => { throw new Error("disabled"); }),
       openOpfs: vi.fn(async () => { throw new Error("unsupported"); }),
       openIndexedDb: vi.fn(async () => { throw new Error("blocked"); }),
     });
@@ -251,7 +267,11 @@ class InspectableBackend implements CiphertextPageBackend {
   listFailure?: Error;
 
   constructor(readonly backend: CiphertextCacheBackend) {
-    this.durability = backend === "memory" ? "page-memory" as const : "origin-private-persistent" as const;
+    this.durability = backend === "memory"
+      ? "page-memory" as const
+      : backend === "extension-indexeddb"
+        ? "extension-origin-persistent" as const
+        : "origin-private-persistent" as const;
     this.syncAccessHandle = backend === "opfs-sync-worker" ? "active" as const : "unavailable" as const;
   }
 
