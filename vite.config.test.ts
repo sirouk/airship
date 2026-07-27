@@ -3,6 +3,7 @@ import {
   applyLocalDevelopmentPolicy,
   DEVELOPMENT_WATCH_IGNORES,
   resolveAirshipModulePreloadDependencies,
+  rewriteLocalExtensionHubRequest,
 } from "./vite.config";
 
 describe("local development CSP", () => {
@@ -27,6 +28,16 @@ describe("local development CSP", () => {
     ]));
     expect(DEVELOPMENT_WATCH_IGNORES).not.toContain("**/src/**");
     expect(Object.isFrozen(DEVELOPMENT_WATCH_IGNORES)).toBe(true);
+  });
+
+  it("serves the Companion installer at the natural development hub path", () => {
+    expect(rewriteLocalExtensionHubRequest("/extension/", "/")).toBe("/extension/index.html");
+    expect(rewriteLocalExtensionHubRequest("/extension?source=connect", "/"))
+      .toBe("/extension/index.html?source=connect");
+    expect(rewriteLocalExtensionHubRequest("/airship/extension/", "/airship/"))
+      .toBe("/airship/extension/index.html");
+    expect(rewriteLocalExtensionHubRequest("/extension/privacy.html", "/"))
+      .toBe("/extension/privacy.html");
   });
 
   it("keeps optional packs out of HTML preloads without disabling just-in-time dynamic preloads", () => {

@@ -1172,7 +1172,8 @@ function serializePolicy(policy) {
 
 function validateServiceWorker(source) {
   const requirements = [
-    ["versioned cache", /const CACHE_VERSION = "airship-shell-v\d+";/u],
+    ["release-coupled cache", /searchParams\.get\("revision"\)[\s\S]*?const CACHE_VERSION = `\$\{CACHE_PREFIX\}\$\{RELEASE_REVISION\}`;/u],
+    ["scoped cache cleanup", /key\.startsWith\(CACHE_PREFIX\) && key !== CACHE_VERSION/u],
     ["release-manifest precache", /fetch\((?:"\/release-manifest\.json"|scopedPath\("release-manifest\.json"\))[\s\S]*?manifest\.artifacts[\s\S]*?cache\.addAll\(\[\.\.\.SHELL, \.\.\.new Set\(assets\)\]\)/u],
     ["same-origin boundary", /requestUrl\.origin !== self\.location\.origin/u],
     ["GET-only cache boundary", /event\.request\.method !== "GET"/u],

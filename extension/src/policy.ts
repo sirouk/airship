@@ -10,7 +10,7 @@
  */
 
 export const BRIDGE_PROTOCOL_VERSION = 1;
-export const EXTENSION_VERSION = "1.1.0";
+export const EXTENSION_VERSION = "1.1.1";
 
 /** Port name used by the content script; the background worker accepts no other. */
 export const BRIDGE_PORT_NAME = "airship-bridge/1";

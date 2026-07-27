@@ -7,13 +7,17 @@ describe("production service worker", () => {
     const source = await readFile(new URL("../public/sw.js", import.meta.url), "utf8");
     const listeners = new Map();
     const cached = [];
+    const opened = [];
     const context = {
       URL,
       Set,
       Error,
       Promise,
       self: {
-        location: { origin: "https://airship.example", href: "https://airship.example/airship/sw.js" },
+        location: {
+          origin: "https://airship.example",
+          href: "https://airship.example/airship/sw.js?revision=index-a1.js",
+        },
         addEventListener(type, listener) { listeners.set(type, listener); },
         skipWaiting() {},
         clients: { async claim() {} },
@@ -39,7 +43,10 @@ describe("production service worker", () => {
         };
       },
       caches: {
-        async open() { return { async addAll(urls) { cached.push(...urls); } }; },
+        async open(name) {
+          opened.push(name);
+          return { async addAll(urls) { cached.push(...urls); } };
+        },
         async keys() { return []; },
         async delete() { return true; },
         async match() { return undefined; },
@@ -50,6 +57,7 @@ describe("production service worker", () => {
     listeners.get("install")({ waitUntil(promise) { installation = promise; } });
     await installation;
 
+    expect(opened).toEqual(["airship-shell-index-a1.js"]);
     expect(cached).toEqual([
       "/airship/",
       "/airship/manifest.webmanifest",
@@ -110,6 +118,7 @@ describe("production service worker", () => {
     const source = await readFile(new URL("../public/sw.js", import.meta.url), "utf8");
     const listeners = new Map();
     let claimed = 0;
+    const deleted = [];
     const online = new Response("<!doctype html><title>Airship</title>", {
       status: 200,
       headers: { "Content-Type": "text/html", "X-Origin-Proof": "preserved" },
@@ -123,7 +132,10 @@ describe("production service worker", () => {
       Headers,
       Response,
       self: {
-        location: { origin: "https://airship.example", href: "https://airship.example/airship/sw.js" },
+        location: {
+          origin: "https://airship.example",
+          href: "https://airship.example/airship/sw.js?revision=index-current.js",
+        },
         addEventListener(type, listener) { listeners.set(type, listener); },
         skipWaiting() {},
         clients: { async claim() { claimed += 1; } },
@@ -131,8 +143,14 @@ describe("production service worker", () => {
       async fetch() { return online.clone(); },
       caches: {
         async open() { return { async put() {}, async addAll() {} }; },
-        async keys() { return ["airship-shell-v6", "airship-shell-v7"]; },
-        async delete() { return true; },
+        async keys() {
+          return [
+            "airship-shell-index-old.js",
+            "airship-shell-index-current.js",
+            "unrelated-application-cache",
+          ];
+        },
+        async delete(key) { deleted.push(key); return true; },
         async match() { return undefined; },
       },
     };
@@ -142,6 +160,7 @@ describe("production service worker", () => {
     listeners.get("activate")({ waitUntil(promise) { activation = promise; } });
     await activation;
     expect(claimed).toBe(1);
+    expect(deleted).toEqual(["airship-shell-index-old.js"]);
 
     let response;
     let cacheWrite;

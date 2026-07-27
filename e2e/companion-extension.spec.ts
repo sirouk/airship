@@ -24,7 +24,7 @@ test("the real Chromium companion reports, computes, and stores only after opt-i
     const hello = await companionRequest(page, { kind: "hello" });
     expect(hello).toMatchObject({
       kind: "hello",
-      version: "1.1.0",
+      version: "1.1.1",
       capabilities: {
         storage: {
           state: "available",
@@ -88,7 +88,7 @@ test("the real Chromium companion reports, computes, and stores only after opt-i
     });
 
     await page.reload();
-    await expect(page.locator(".companion-overview")).toContainText("Extension 1.1.0 connected", {
+    await expect(page.locator(".companion-overview")).toContainText("Extension 1.1.1 connected", {
       timeout: 15_000,
     });
     await expect(page.locator(".companion-overview")).toContainText("1 page");

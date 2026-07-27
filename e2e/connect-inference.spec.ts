@@ -37,7 +37,7 @@ async function openLane(page: Page, lane: string) {
 }
 
 test("the companion install hub offers verified packages with device-appropriate guidance", async ({ page }, testInfo) => {
-  await page.goto("/extension/index.html");
+  await page.goto("/extension/");
   await expect(page.getByRole("heading", { name: "More reach. More local headroom." })).toBeVisible();
   await expect(page.getByRole("link", { name: "Verify SHA-256 checksums" })).toHaveAttribute("href", "./releases/SHA256SUMS");
   await expect(page.locator("#channel-guidance")).toContainText(

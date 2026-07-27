@@ -152,7 +152,8 @@ patterns are generated from that same list, so they cannot drift apart.
 
 ## Install
 
-The first-party install hub is always available at `/extension/`. When that hub
+The first-party install hub is available at `/extension/index.html`; the
+development server also resolves the natural `/extension/` path to it. When the hub
 is served from exactly `http://localhost:4173` or
 `http://127.0.0.1:4173`, its primary browser cards select the reviewed
 **development** packages. Everywhere else the release package remains the safe
@@ -162,13 +163,19 @@ ZIPs are not mislabeled as store-signed products.
 
 ### Chrome / Edge / Brave / Opera / Vivaldi / Arc
 
-1. `node extension/build.mjs --target=chromium`
+For localhost testing:
+
+1. `node extension/build.mjs --target=chromium --channel=development`
 2. Open `chrome://extensions` (`edge://extensions`, `brave://extensions`, …).
 3. Turn on **Developer mode**.
-4. **Load unpacked** → select `extension/build/release/chromium`.
+4. Remove any older Airship Companion card, then choose **Load unpacked** →
+   `extension/build/development/chromium`.
 5. Reload the Airship tab. Connect → the bridge reports itself.
 
-To reload after a rebuild, press the ↻ icon on the extension card.
+The card and popup must say **Airship Companion (development)**. A release
+build intentionally refuses localhost. To reload after a rebuild, press the ↻
+icon on the extension card and reload the Airship tab because the content
+script attaches at document start.
 
 ### Firefox (desktop)
 

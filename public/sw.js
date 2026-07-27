@@ -1,6 +1,8 @@
-const CACHE_VERSION = "airship-shell-v7";
 const BASE_URL = new URL("./", self.location.href);
 const BASE_PATH = BASE_URL.pathname;
+const CACHE_PREFIX = "airship-shell-";
+const RELEASE_REVISION = safeRevision(new URL(self.location.href).searchParams.get("revision"));
+const CACHE_VERSION = `${CACHE_PREFIX}${RELEASE_REVISION}`;
 const SHELL = [BASE_PATH, scopedPath("manifest.webmanifest"), scopedPath("favicon.svg")];
 const DOCUMENT_ISOLATION_HEADERS = Object.freeze({
   "Cross-Origin-Embedder-Policy": "credentialless",
@@ -10,6 +12,12 @@ const DOCUMENT_ISOLATION_HEADERS = Object.freeze({
 
 function scopedPath(path) {
   return new URL(path, BASE_URL).pathname;
+}
+
+function safeRevision(value) {
+  return typeof value === "string" && /^[A-Za-z0-9._-]{1,128}$/u.test(value)
+    ? value
+    : "unversioned";
 }
 
 function reviewedAssetPath(path) {
@@ -48,7 +56,11 @@ self.addEventListener("activate", (event) => {
     Promise.all([
       caches
         .keys()
-        .then((keys) => Promise.all(keys.filter((key) => key !== CACHE_VERSION).map((key) => caches.delete(key)))),
+        .then((keys) => Promise.all(
+          keys
+            .filter((key) => key.startsWith(CACHE_PREFIX) && key !== CACHE_VERSION)
+            .map((key) => caches.delete(key)),
+        )),
       // Claim the first document immediately. Airship's existing
       // controllerchange listener reloads it once, after which this worker can
       // provide the navigation response carrying the isolation policy even on

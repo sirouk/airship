@@ -38,6 +38,16 @@ export function resolvePublicBasePath(value: string | undefined): string {
   return candidate.endsWith("/") ? candidate : `${candidate}/`;
 }
 
+export function rewriteLocalExtensionHubRequest(value: string, basePath: string): string {
+  const queryIndex = value.indexOf("?");
+  const pathname = queryIndex < 0 ? value : value.slice(0, queryIndex);
+  const query = queryIndex < 0 ? "" : value.slice(queryIndex);
+  const hubPath = `${basePath}extension`;
+  return pathname === hubPath || pathname === `${hubPath}/`
+    ? `${hubPath}/index.html${query}`
+    : value;
+}
+
 /**
  * Generated acceptance artifacts live below the repository root, but they are
  * not application inputs. Watching them makes Playwright traces and reports
@@ -55,8 +65,10 @@ export const DEVELOPMENT_WATCH_IGNORES = Object.freeze([
   "**/.wrangler/**",
 ]);
 
+const PUBLIC_BASE_PATH = resolvePublicBasePath(process.env.AIRSHIP_PUBLIC_BASE_PATH);
+
 export default defineConfig({
-  base: resolvePublicBasePath(process.env.AIRSHIP_PUBLIC_BASE_PATH),
+  base: PUBLIC_BASE_PATH,
   resolve: {
     // isomorphic-git's standard fallback drags a Node Buffer-inspection graph
     // into the otherwise browser-native Git pack. Airship keeps the same
@@ -78,6 +90,18 @@ export default defineConfig({
         // The loopback origins are the disposable MinIO lab only. The source
         // and production response remain on the reviewed strict policy.
         return applyLocalDevelopmentPolicy(html);
+      },
+    },
+    {
+      name: "airship-local-extension-hub",
+      apply: "serve",
+      configureServer(server) {
+        server.middlewares.use((request, _response, next) => {
+          if (request.url) {
+            request.url = rewriteLocalExtensionHubRequest(request.url, PUBLIC_BASE_PATH);
+          }
+          next();
+        });
       },
     },
   ],
