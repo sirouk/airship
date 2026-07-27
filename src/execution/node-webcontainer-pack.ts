@@ -1,11 +1,13 @@
 import { WebContainer } from "@webcontainer/api";
-import { createNodeWebContainerAdapter } from "./node-webcontainer-adapter";
+import { createNodeWebContainerAdapter, waitForNodeProcess } from "./node-webcontainer-adapter";
 import type { ExecutionAdapter } from "./runtime-registry";
 
 let instance: WebContainer | undefined;
 let adapter: ExecutionAdapter | undefined;
+let adapterActivation: Promise<ExecutionAdapter> | undefined;
 let activation: Promise<WebContainer> | undefined;
 let lateBootCleanup: Promise<void> | undefined;
+let activationEvidence: NodeWebContainerActivationEvidence | undefined;
 let hostGeneration = 0;
 const lifecycleListeners = new Set<(event: NodeWebContainerLifecycleEvent) => void>();
 
@@ -14,6 +16,18 @@ export type NodeWebContainerLifecycleEvent = Readonly<{
   state: "ready" | "inactive";
   reason: "activated" | "deactivated";
 }>;
+
+export type NodeWebContainerActivationEvidence = Readonly<{
+  probe: "npm --version";
+  npmVersion: string;
+  hostGeneration: number;
+  activationMs: number;
+  hostReused: boolean;
+}>;
+
+export function getNodeWebContainerActivationEvidence(): NodeWebContainerActivationEvidence | undefined {
+  return activationEvidence ? Object.freeze({ ...activationEvidence }) : undefined;
+}
 
 /**
  * Monotonic identity for the shared page host. A terminal records this value
@@ -38,9 +52,41 @@ export function subscribeNodeWebContainerLifecycle(
  */
 export async function activateNodeWebContainer(signal: AbortSignal, timeoutMs = 30_000): Promise<ExecutionAdapter> {
   if (adapter) return adapter;
-  const host = await activateNodeWebContainerHost(signal, timeoutMs);
-  adapter = createNodeWebContainerAdapter(host);
-  return adapter;
+  if (!adapterActivation) {
+    adapterActivation = (async () => {
+      const startedAt = Date.now();
+      const deadline = startedAt + timeoutMs;
+      const hostReused = Boolean(instance);
+      const host = await activateNodeWebContainerHost(signal, timeoutMs);
+      try {
+        const npmVersion = await probeNodeWebContainerRuntime(
+          host,
+          Math.max(1, deadline - Date.now()),
+          signal,
+        );
+        activationEvidence = Object.freeze({
+          probe: "npm --version",
+          npmVersion,
+          hostGeneration,
+          activationMs: Math.max(0, Date.now() - startedAt),
+          hostReused,
+        });
+        adapter = createNodeWebContainerAdapter(host, {
+          invalidateHost: async () => resetNodeWebContainerState(),
+        });
+        return adapter;
+      } catch (error) {
+        await resetNodeWebContainerState();
+        throw error;
+      }
+    })();
+  }
+  const pending = adapterActivation;
+  try {
+    return await pending;
+  } finally {
+    if (adapterActivation === pending) adapterActivation = undefined;
+  }
 }
 
 /** Shared page-lifetime host for the interactive terminal and bounded jobs. */
@@ -82,17 +128,32 @@ export async function activateNodeWebContainerHost(signal: AbortSignal, timeoutM
 }
 
 export async function deactivateNodeWebContainer(): Promise<void> {
+  const pendingAdapter = adapterActivation;
+  if (pendingAdapter) await pendingAdapter.catch(() => undefined);
+  await resetNodeWebContainerState();
+}
+
+async function resetNodeWebContainerState(): Promise<void> {
   if (activation) await activation.catch(() => undefined);
   if (lateBootCleanup) await Promise.race([
     lateBootCleanup,
     new Promise<void>((resolve) => setTimeout(resolve, 1_000)),
   ]);
   const activeInstance = instance;
-  activeInstance?.teardown();
-  instance = undefined;
-  adapter = undefined;
-  activation = undefined;
-  if (activeInstance) publishLifecycle("inactive", "deactivated");
+  let teardownError: unknown;
+  try {
+    activeInstance?.teardown();
+  } catch (error) {
+    teardownError = error;
+  } finally {
+    instance = undefined;
+    adapter = undefined;
+    adapterActivation = undefined;
+    activation = undefined;
+    activationEvidence = undefined;
+    if (activeInstance) publishLifecycle("inactive", "deactivated");
+  }
+  if (teardownError) throw teardownError;
 }
 
 function publishLifecycle(
@@ -134,6 +195,42 @@ export function awaitBoundedWebContainerBoot<T>(
     boot.then((value) => finish(undefined, value), finish);
     if (signal.aborted) onAbort();
   });
+}
+
+/** A booted provider frame is not enough: readiness requires a real npm process. */
+export async function probeNodeWebContainerRuntime(
+  host: Pick<WebContainer, "spawn">,
+  timeoutMs: number,
+  signal: AbortSignal,
+): Promise<string> {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw new Error("WebContainer activation left no time for its npm probe.");
+  }
+  if (signal.aborted) throw signal.reason ?? new DOMException("Aborted", "AbortError");
+  const startedAt = Date.now();
+  const spawn = host.spawn("npm", ["--version"], {
+    env: { AIRSHIP_RUNTIME_PROBE: "node-webcontainer" },
+    terminal: { cols: 80, rows: 12 },
+  });
+  let process: Awaited<typeof spawn>;
+  try {
+    process = await awaitBoundedWebContainerBoot(spawn, timeoutMs, signal);
+  } catch (error) {
+    void spawn.then((lateProcess) => {
+      try { lateProcess.kill(); } catch { /* The late provider process may already be gone. */ }
+    }, () => undefined);
+    throw error;
+  }
+  const remainingMs = Math.max(1, timeoutMs - (Date.now() - startedAt));
+  const result = await waitForNodeProcess(process, remainingMs, signal);
+  const plainOutput = result.output.replace(/\u001b\[[0-?]*[ -/]*[@-~]/gu, "");
+  const version = plainOutput.match(/(?:^|\s)(\d+\.\d+(?:\.\d+)?(?:[-+][0-9A-Za-z.-]+)?)(?:\s|$)/u)?.[1];
+  if (result.exitCode !== 0 || !version) {
+    throw new Error(
+      `WebContainer did not pass its real npm version probe (exit ${result.exitCode}; output ${JSON.stringify(plainOutput.trim().slice(0, 512))}).`,
+    );
+  }
+  return version;
 }
 
 export function assertNodeWebContainerHost(): void {

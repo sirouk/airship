@@ -185,19 +185,6 @@ export function deriveBrowserExecutionTier(
     : "web-baseline";
 }
 
-/**
- * Session manifests pin the authority available when the conversation starts.
- * Activating a heavier pack may improve the page, but never mutates an existing
- * conversation's execution contract behind its receipt chain.
- */
-export function sessionAllowsBrowserExecutionTier(
-  pinned: BrowserExecutionTier | "native" | "remote-confidential" | undefined,
-  required: BrowserExecutionTier,
-): boolean {
-  if (required === "web-baseline") return true;
-  return pinned === "web-enhanced" || pinned === "native" || pinned === "remote-confidential";
-}
-
 /** A presentation observer can never poison, delay, or change execution. */
 export function emitExecutionOutput(
   observer: ExecutionRequest["onOutput"],

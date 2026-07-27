@@ -58,7 +58,7 @@ const EXECUTION_TOOL_DEFINITIONS = Object.freeze([
     },
     {
       name: "install_execution_runtime",
-      description: "Cold-start an optional browser runtime; it reports ready only after a real probe.",
+      description: "Cold-start an optional browser runtime; it reports ready only after a real probe, then it is usable immediately in this conversation.",
       effect: "network",
       inputSchema: {
         type: "object",
@@ -139,7 +139,7 @@ const EXECUTION_TOOL_DEFINITIONS = Object.freeze([
     },
     {
       name: "execute_node_project",
-      description: "Spawn one direct Node/npm-family process in an activated in-browser WebContainer over a bounded workspace snapshot. No shell string or host Bash is involved; writeBack adopts revision-checked text changes.",
+      description: "Spawn one finite Node/npm-family process in an activated in-browser WebContainer. Commands for the same workspace root reuse page-local dependencies, so install then build/test works in this conversation; use Workspace Terminal for a long-running dev server. node_modules is never persisted. No host Bash is involved; writeBack preflights the full source snapshot, then adopts revision-checked text changes.",
       effect: "network",
       inputSchema: {
         type: "object",

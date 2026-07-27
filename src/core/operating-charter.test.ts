@@ -8,10 +8,10 @@ import {
 
 describe("Airship core operating charter", () => {
   it("is versioned, deterministic, and byte-stable", async () => {
-    expect(AIRSHIP_CORE_CHARTER_VERSION).toBe(6);
+    expect(AIRSHIP_CORE_CHARTER_VERSION).toBe(7);
     expect(AIRSHIP_CORE_CHARTER).not.toMatch(/\{\{|\$\{|20\d\d-/u);
     expect(await sha256(AIRSHIP_CORE_CHARTER)).toBe(
-      "sha256:WziI7-LpWZnLkG-yzwS-K0SQQiy3G1LyfKG1a3tMc7E",
+      "sha256:UgrKbFZ7qhk-rYxvXBGRgwWDjWIZvomdzo-Q9pHJ1e4",
     );
   });
 
@@ -21,6 +21,9 @@ describe("Airship core operating charter", () => {
       "inspect-act-verify",
       "current tool manifest",
       "only a runtime whose current state is ready can execute",
+      "continue the task immediately in this same conversation",
+      "Never ask for a fork or a new conversation merely because a page-local runtime became ready",
+      "use the interactive Workspace Terminal for a long-running development server",
       "it is not a Rust compiler or Bash shell",
       "optional bounded virtual-workspace snapshot and revision-checked writeback",
       "virtual filesystem rooted at /workspace",

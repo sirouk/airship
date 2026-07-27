@@ -519,22 +519,17 @@ test("the explicit Pyodide pack runs real Python in a fresh bounded worker", asy
     );
     const before = module.getClientExecutionRuntime().capabilities()
       .find(({ id }) => id === "python-pyodide");
-    let pinnedSessionError = "";
-    try {
-      await module.executeExecutionTool(
-        "execute_code",
-        { runtime: "python-pyodide", code: "40 + 2", timeoutMs: 10_000 },
-        {
-          sessionId: "baseline-session",
-          turnId: "execution-turn",
-          operationId: "execute-python",
-          capabilityTier: "web-baseline",
-          signal: controller.signal,
-        },
-      );
-    } catch (error) {
-      pinnedSessionError = error instanceof Error ? error.message : String(error);
-    }
+    const sameSessionExecution = await module.executeExecutionTool(
+      "execute_code",
+      { runtime: "python-pyodide", code: "40 + 2", timeoutMs: 10_000 },
+      {
+        sessionId: "baseline-session",
+        turnId: "activation-turn",
+        operationId: "execute-python",
+        capabilityTier: "web-baseline",
+        signal: controller.signal,
+      },
+    );
     const execution = await module.getClientExecutionRuntime().execute({
       runtime: "python-pyodide",
       code: "import os, sys, statistics\nprint(sys.argv[1])\nprint(os.environ['AIRSHIP_MODE'])\nstatistics.mean([40, 42, 44])",
@@ -598,7 +593,7 @@ test("the explicit Pyodide pack runs real Python in a fresh bounded worker", asy
     return {
       before,
       activation,
-      pinnedSessionError,
+      sameSessionExecution,
       execution,
       executionBootMs: execution.bootMs,
       boundedOutputChars: bounded.stdout.length,
@@ -620,11 +615,21 @@ test("the explicit Pyodide pack runs real Python in a fresh bounded worker", asy
     persistence: "ephemeral",
   });
   expect(result.activation.metadata).toMatchObject({
-    requiresSessionFork: true,
-    pinnedCapabilityTier: "web-baseline",
+    usableNow: true,
+    requiresNewConversation: false,
+    initialCapabilityTier: "web-baseline",
+    liveCapabilityTier: "web-enhanced",
   });
-  expect(JSON.parse(result.activation.content)).toMatchObject({ sessionCompatibility: "fork-required" });
-  expect(result.pinnedSessionError).toContain("Create or fork a conversation after activation");
+  expect(JSON.parse(result.activation.content)).toMatchObject({
+    usableNow: true,
+    sessionCompatibility: "ready-in-current-session",
+  });
+  expect(JSON.parse(result.sameSessionExecution.content)).toMatchObject({
+    runtime: "python-pyodide",
+    exitCode: 0,
+    value: 42,
+    provenance: { capabilityTier: "web-enhanced", authority: "browser" },
+  });
   expect(result.execution).toMatchObject({
     runtime: "python-pyodide",
     exitCode: 0,

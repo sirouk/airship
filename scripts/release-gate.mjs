@@ -110,7 +110,12 @@ export const RELEASE_BUDGETS = Object.freeze({
   // Pinned browser_wasi_shim plus Airship's bounded virtual-filesystem Worker.
   // It is fetched only when the precompiled WASI adapter executes a command.
   optionalWasiPreview1Worker: Object.freeze({ raw: 32 * 1024, gzip: 8 * 1024 }),
-  optionalNodeExecutionPack: Object.freeze({ raw: 32 * 1024, gzip: 8 * 1024 }),
+  // Page-local dependency reuse, full-source preflight, single-flight
+  // activation, cancellation cleanup, and real npm readiness evidence make
+  // install → build reliable in one conversation. The pack remains a
+  // second-level lazy download and measures 26.14 KiB raw / 9.78 KiB gzip;
+  // 11 KiB is the smallest whole-KiB ceiling with useful tripwire room.
+  optionalNodeExecutionPack: Object.freeze({ raw: 32 * 1024, gzip: 11 * 1024 }),
   // `airship-sh`, the first-party POSIX-sh interpreter: lexer, parser,
   // expansion, arithmetic, globbing, redirection, job control, and the
   // workspace utilities it executes. It is the universal shell tier, so it

@@ -5513,8 +5513,8 @@ function sessionManifestMatches(actual: SessionManifest, expected: SessionManife
   return actual.providerId === expected.providerId
     && actual.model === expected.model
     && actual.workspaceId === expected.workspaceId
+    && sessionCapabilityTiersMatch(actual.capabilityTier, expected.capabilityTier)
     && actual.securityPosture === expected.securityPosture
-    && actual.capabilityTier === expected.capabilityTier
     && (actual.turnContext ?? "disabled") === (expected.turnContext ?? "disabled")
     && sessionContextPoliciesMatch(actual.contextPolicy, expected.contextPolicy)
     && actual.systemPromptDigest === expected.systemPromptDigest
@@ -5525,6 +5525,16 @@ function sessionManifestMatches(actual: SessionManifest, expected: SessionManife
     && actualProfile?.themeDigest === expectedProfile?.themeDigest
     && actualProfile?.skillSetDigest === expectedProfile?.skillSetDigest
     && actualProfile?.resolutionDigest === expectedProfile?.resolutionDigest;
+}
+
+function sessionCapabilityTiersMatch(
+  actual: SessionManifest["capabilityTier"],
+  expected: SessionManifest["capabilityTier"],
+): boolean {
+  if (actual === expected) return true;
+  const actualIsBrowser = actual === "web-baseline" || actual === "web-enhanced";
+  const expectedIsBrowser = expected === "web-baseline" || expected === "web-enhanced";
+  return actualIsBrowser && expectedIsBrowser;
 }
 
 function inferenceBindingsMatch(
@@ -6415,9 +6425,9 @@ function MessageCard({
           {message.role === "assistant" && capabilityTier ? (
             <span
               class={`message-capability-tier ${capabilityTier}`}
-              title={capabilityTierDetail(capabilityTier)}
+              title={`Initial session observation. ${capabilityTierDetail(capabilityTier)} Tool results name their live producing runtime separately.`}
             >
-              <span aria-hidden="true" />{capabilityTierLabel(capabilityTier)}
+              <span aria-hidden="true" />Initial · {capabilityTierLabel(capabilityTier)}
             </span>
           ) : null}
           {message.status ? <span class="message-status"><span class="pulse-dot" />{message.status}</span> : null}

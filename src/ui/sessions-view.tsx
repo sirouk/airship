@@ -412,7 +412,7 @@ function SessionDetail({
             <div><dt>Provider</dt><dd>{detail.pins.providerId}</dd></div>
             <div><dt>Model</dt><dd>{detail.pins.model}</dd></div>
             <div><dt>Security posture</dt><dd>{postureLabel(detail.pins.posture.value)}<small>{postureBasis(detail.pins.posture.basis)}</small></dd></div>
-            <div><dt>Capability tier</dt><dd>{detail.pins.capabilityTier}</dd></div>
+            <div><dt>Initial page tier</dt><dd>{detail.pins.capabilityTier}</dd></div>
             <div><dt>Workspace</dt><dd title={detail.pins.workspaceId}>{detail.pins.workspaceId}</dd></div>
             <div><dt>Profile</dt><dd>{detail.pins.profile?.profileId ?? "Unbound"}{detail.pins.profile ? <small>revision {shortDigest(detail.pins.profile.profileRevision)}</small> : null}</dd></div>
           </dl>

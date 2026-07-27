@@ -3,9 +3,7 @@ import {
   ClientExecutionRuntime,
   deriveBrowserExecutionTier,
   emitExecutionOutput,
-  sessionAllowsBrowserExecutionTier,
   type ExecutionAdapter,
-  type ExecutionCapability,
   type ExecutionRequest,
   type ExecutionResult,
   type ExecutionRuntimeId,
@@ -64,6 +62,7 @@ let workerPolicy: TrustedWorkerPolicy | undefined;
 let clientRuntime: ClientExecutionRuntime | undefined;
 let pyodideInstall: Promise<void> | undefined;
 let nodePack: Promise<typeof import("../execution/node-webcontainer-pack")> | undefined;
+let nodePackLifecycleBound = false;
 
 export function registerExecutionTools(registry: ToolRegistry, workspace?: WorkspacePort, hostRegistry?: ToolRegistry): void {
   const executeJavascript: Tool = {
@@ -151,7 +150,7 @@ export function registerExecutionTools(registry: ToolRegistry, workspace?: Works
   registry.register({
     definition: {
       name: "install_execution_runtime",
-      description: "Cold-start an optional browser runtime; it reports ready only after a real probe.",
+      description: "Cold-start an optional browser runtime; it reports ready only after a real probe, then it is usable immediately in this conversation.",
       effect: "network",
       inputSchema: {
         type: "object",
@@ -169,12 +168,12 @@ export function registerExecutionTools(registry: ToolRegistry, workspace?: Works
       const timeoutMs = typeof args.timeoutMs === "number" ? args.timeoutMs : DEFAULT_INSTALL_TIMEOUT_MS;
       if (runtime === "node-webcontainer") {
         const activated = await activateNodeRuntime(context.signal, timeoutMs);
-        return activationResultForSession(activated, context);
+        return activationResultForCurrentPage(activated, context);
       }
       if (runtime !== "python-pyodide") throw new Error(`${runtime} cannot be installed by this Airship release.`);
       await installPyodideExecutionRuntime(timeoutMs, context.signal);
       const capability = getClientExecutionRuntime().capabilities().find(({ id }) => id === runtime);
-      return activationResultForSession({
+      return activationResultForCurrentPage({
         content: JSON.stringify(capability, null, 2),
         metadata: {
           runtime,
@@ -254,7 +253,6 @@ export function registerExecutionTools(registry: ToolRegistry, workspace?: Works
         signal: context.signal,
         onOutput: context.onOutput,
       };
-      assertPinnedExecutionTier(context, getClientExecutionRuntime().capabilities().find(({ id }) => id === runtime));
       const result = await getClientExecutionRuntime().execute(request);
       const capability = getClientExecutionRuntime().capabilities().find(({ id }) => id === result.runtime);
       return {
@@ -318,7 +316,7 @@ export function registerExecutionTools(registry: ToolRegistry, workspace?: Works
   registry.register({
     definition: {
       name: "execute_node_project",
-      description: "Spawn one direct Node/npm-family process in an activated in-browser WebContainer over a bounded workspace snapshot. No shell string or host Bash is involved; writeBack adopts revision-checked text changes.",
+      description: "Spawn one finite Node/npm-family process in an activated in-browser WebContainer. Commands for the same workspace root reuse page-local dependencies, so install then build/test works in this conversation; use Workspace Terminal for a long-running dev server. node_modules is never persisted. No host Bash is involved; writeBack preflights the full source snapshot, then adopts revision-checked text changes.",
       effect: "network",
       inputSchema: {
         type: "object",
@@ -349,7 +347,6 @@ export function registerExecutionTools(registry: ToolRegistry, workspace?: Works
         signal: context.signal,
         onOutput: context.onOutput,
       };
-      assertPinnedExecutionTier(context, getClientExecutionRuntime().capabilities().find(({ id }) => id === "node-webcontainer"));
       const result = await getClientExecutionRuntime().execute(request);
       return {
         content: JSON.stringify(result, null, 2),
@@ -417,13 +414,13 @@ export async function executeExecutionTool(
       const runtime = stringArgument(args.runtime, "runtime");
       const timeoutMs = typeof args.timeoutMs === "number" ? args.timeoutMs : DEFAULT_INSTALL_TIMEOUT_MS;
       if (runtime === "node-webcontainer") {
-        return activationResultForSession(await activateNodeRuntime(context.signal, timeoutMs), context);
+        return activationResultForCurrentPage(await activateNodeRuntime(context.signal, timeoutMs), context);
       }
       if (runtime === "wasix") throw new Error(wasixUnavailableDetail());
       if (runtime !== "python-pyodide") throw new Error(`${runtime} cannot be installed by this Airship release.`);
       await installPyodideExecutionRuntime(timeoutMs, context.signal);
       const capability = getClientExecutionRuntime().capabilities().find(({ id }) => id === runtime);
-      return activationResultForSession({
+      return activationResultForCurrentPage({
         content: JSON.stringify(capability, null, 2),
         metadata: {
           runtime,
@@ -470,7 +467,6 @@ export async function executeExecutionTool(
         signal: context.signal,
         onOutput: context.onOutput,
       };
-      assertPinnedExecutionTier(context, getClientExecutionRuntime().capabilities().find(({ id }) => id === runtime));
       const result = await getClientExecutionRuntime().execute(request);
       const capability = getClientExecutionRuntime().capabilities().find(({ id }) => id === result.runtime);
       return {
@@ -532,7 +528,6 @@ export async function executeExecutionTool(
         signal: context.signal,
         onOutput: context.onOutput,
       };
-      assertPinnedExecutionTier(context, getClientExecutionRuntime().capabilities().find(({ id }) => id === "node-webcontainer"));
       const result = await getClientExecutionRuntime().execute(request);
       return {
         content: JSON.stringify(result, null, 2),
@@ -621,7 +616,6 @@ async function executeShellTool(
     onOutput: context.onOutput,
   };
   const capability = getClientExecutionRuntime().capabilities().find(({ id }) => id === "airship-sh");
-  assertPinnedExecutionTier(context, capability);
   const result = await getClientExecutionRuntime().execute(request);
   return {
     content: JSON.stringify(result, null, 2),
@@ -647,18 +641,41 @@ async function activateNodeRuntime(signal: AbortSignal, timeoutMs: number): Prom
   const runtimeId: ExecutionRuntimeId = "node-webcontainer";
   const capability = getClientExecutionRuntime().capabilities().find(({ id }) => id === runtimeId);
   if (!capability) throw new Error(`Unknown optional runtime: ${runtimeId}`);
-  if (capability.state === "ready") return { content: JSON.stringify(capability, null, 2) };
+  if (capability.state === "ready") {
+    const evidence = nodePack ? (await nodePack).getNodeWebContainerActivationEvidence() : undefined;
+    return {
+      content: JSON.stringify(capability, null, 2),
+      metadata: {
+        runtime: runtimeId,
+        state: "ready",
+        alreadyReady: true,
+        ...(evidence ?? {}),
+      },
+    };
+  }
   if (capability.state === "unavailable") throw new Error(capability.detail);
   getClientExecutionRuntime().setOptionalState(runtimeId, "activating", "Loading StackBlitz WebContainers.");
   try {
+    const startedAt = Date.now();
     nodePack ??= import("../execution/node-webcontainer-pack");
-    const adapter = await (await nodePack).activateNodeWebContainer(signal, timeoutMs);
+    const pack = await awaitActivationPhase(nodePack, timeoutMs, signal, "Node runtime pack load");
+    bindNodePackLifecycle(pack);
+    const remainingMs = timeoutMs - (Date.now() - startedAt);
+    if (remainingMs < 1) throw new Error(`Node runtime activation exceeded ${timeoutMs} ms while loading its pack.`);
+    const adapter = await pack.activateNodeWebContainer(signal, remainingMs);
     if (!getClientExecutionRuntime().capabilities().some(({ id, state }) => id === runtimeId && state === "ready")) {
       getClientExecutionRuntime().register(adapter);
     }
     return {
       content: JSON.stringify(adapter.capability, null, 2),
-      metadata: { runtime: runtimeId, provider: "StackBlitz WebContainers", browserCompute: true, remoteRuntimeDelivery: true },
+      metadata: {
+        runtime: runtimeId,
+        provider: "StackBlitz WebContainers",
+        browserCompute: true,
+        remoteRuntimeDelivery: true,
+        alreadyReady: false,
+        ...(pack.getNodeWebContainerActivationEvidence() ?? {}),
+      },
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown WebContainer activation failure.";
@@ -667,6 +684,21 @@ async function activateNodeRuntime(signal: AbortSignal, timeoutMs: number): Prom
     }
     throw error;
   }
+}
+
+function bindNodePackLifecycle(pack: typeof import("../execution/node-webcontainer-pack")): void {
+  if (nodePackLifecycleBound) return;
+  nodePackLifecycleBound = true;
+  pack.subscribeNodeWebContainerLifecycle((event) => {
+    if (event.state !== "inactive") return;
+    const runtime = getClientExecutionRuntime();
+    runtime.unregister("node-webcontainer");
+    runtime.setOptionalState(
+      "node-webcontainer",
+      "failed",
+      "The WebContainer host stopped or could not prove process termination. Activate Node again before executing.",
+    );
+  });
 }
 
 function wasixUnavailableDetail(): string {
@@ -1597,23 +1629,16 @@ function supportsDisposableWorkers(): boolean {
   return typeof Worker !== "undefined" && typeof URL.createObjectURL === "function";
 }
 
-function assertPinnedExecutionTier(context: ToolContext, capability: ExecutionCapability | undefined): void {
-  if (!capability || capability.state !== "ready" || sessionAllowsBrowserExecutionTier(context.capabilityTier, capability.tier)) return;
-  throw new Error(
-    `${capability.label} is ready in this page but this session is pinned ${context.capabilityTier ?? "web-baseline"}. ` +
-    "Create or fork a conversation after activation before using the enhanced runtime.",
-  );
-}
-
-function activationResultForSession(result: ToolExecutionResult, context: ToolContext): ToolExecutionResult {
-  const requiresSessionFork = !sessionAllowsBrowserExecutionTier(context.capabilityTier, "web-enhanced");
+function activationResultForCurrentPage(result: ToolExecutionResult, context: ToolContext): ToolExecutionResult {
+  const liveCapabilityTier = deriveBrowserExecutionTier(getClientExecutionRuntime().capabilities());
   let content = result.content;
   try {
     const capability = JSON.parse(result.content) as JsonValue;
     if (capability && typeof capability === "object" && !Array.isArray(capability)) {
       content = JSON.stringify({
         ...capability,
-        sessionCompatibility: requiresSessionFork ? "fork-required" : "ready-in-current-session",
+        usableNow: true,
+        sessionCompatibility: "ready-in-current-session",
       }, null, 2);
     }
   } catch {
@@ -1627,10 +1652,37 @@ function activationResultForSession(result: ToolExecutionResult, context: ToolCo
     content,
     metadata: {
       ...metadata,
-      requiresSessionFork,
-      pinnedCapabilityTier: context.capabilityTier ?? "web-baseline",
+      usableNow: true,
+      requiresNewConversation: false,
+      initialCapabilityTier: context.capabilityTier ?? "web-baseline",
+      liveCapabilityTier,
+      capabilityTier: liveCapabilityTier,
     },
   };
+}
+
+function awaitActivationPhase<T>(
+  operation: Promise<T>,
+  timeoutMs: number,
+  signal: AbortSignal,
+  label: string,
+): Promise<T> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (error?: unknown, value?: T) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+      if (error) reject(error);
+      else resolve(value as T);
+    };
+    const timer = setTimeout(() => finish(new Error(`${label} exceeded ${timeoutMs} ms.`)), timeoutMs);
+    const onAbort = () => finish(signal.reason ?? new DOMException("Aborted", "AbortError"));
+    signal.addEventListener("abort", onAbort, { once: true });
+    operation.then((value) => finish(undefined, value), finish);
+    if (signal.aborted) onAbort();
+  });
 }
 
 function validateExecuteCodeArguments(runtime: ExecutionRuntimeId, args: Record<string, JsonValue>): void {

@@ -110,6 +110,12 @@ workspace, and proof policy.
 Changing any pinned meaning creates a new session or explicit fork; Airship does
 not rewrite prior history to make it fit current settings.
 
+The pinned capability tier is the page observation at session creation, not a
+ceiling on the stable installed tool schema. An explicitly approved optional
+runtime may become ready and run in that same session. Its install and execution
+events append normally, and each result binds the live tier and engine that
+actually produced it; no earlier event or manifest byte is mutated.
+
 ### 3.5 Capabilities are explicit and fail closed
 
 Browser, network, write, execute, identity, and destructive effects are exposed
@@ -534,7 +540,9 @@ interfaces, not a mirrored native checkout.
 - Pyodide Python is an explicit, lazy, disposable execution pack with bounded
   workspace snapshot/writeback behavior;
 - Node/npm projects can use a lazy WebContainer pack when the browser and
-  provider boot successfully;
+  provider boot and a real npm process probe successfully; sequential commands
+  for one workspace root share page-local dependencies without persisting
+  `node_modules`;
 - a governed workspace-program Worker can compose only exact, predeclared
   workspace reads and revision-checked `text_editor` batches under one
   manifest-bound write approval;

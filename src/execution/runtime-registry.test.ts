@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   ClientExecutionRuntime,
   deriveBrowserExecutionTier,
-  sessionAllowsBrowserExecutionTier,
   type ExecutionAdapter,
 } from "./runtime-registry";
 
@@ -44,13 +43,6 @@ describe("ClientExecutionRuntime", () => {
       { state: "ready", tier: "web-baseline" },
       { state: "ready", tier: "web-enhanced" },
     ])).toBe("web-enhanced");
-  });
-
-  it("does not let a page-lifetime activation promote an existing baseline session", () => {
-    expect(sessionAllowsBrowserExecutionTier("web-baseline", "web-baseline")).toBe(true);
-    expect(sessionAllowsBrowserExecutionTier("web-baseline", "web-enhanced")).toBe(false);
-    expect(sessionAllowsBrowserExecutionTier(undefined, "web-enhanced")).toBe(false);
-    expect(sessionAllowsBrowserExecutionTier("web-enhanced", "web-enhanced")).toBe(true);
   });
 
   it("reports installed and optional runtimes without claiming that packs are ready", () => {

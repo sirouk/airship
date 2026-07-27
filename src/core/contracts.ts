@@ -146,6 +146,7 @@ type SessionManifestBase = {
   toolManifestDigest: string;
   tools: ToolDefinition[];
   workspaceId: string;
+  /** Page-capability observation at creation; live tool results bind their producing tier. */
   capabilityTier: "web-baseline" | "web-enhanced" | "native" | "remote-confidential";
   /** Security posture pinned when the session is created. Older protocol-v1 manifests may omit it. */
   securityPosture?: SecurityPosture;
@@ -209,7 +210,12 @@ export type ToolContext = {
   turnId: string;
   operationId: string;
   signal: AbortSignal;
-  /** Immutable capability tier pinned by the session manifest. */
+  /**
+   * Immutable page-capability observation recorded when the session began.
+   * It is evidence context, not an authorization ceiling: optional runtimes
+   * activated later are governed by readiness, approvals, and result-level
+   * provenance in the same conversation.
+   */
   capabilityTier?: SessionManifest["capabilityTier"];
   /** Live, page-memory output. The terminal tool result remains the durable authority. */
   onOutput?: (chunk: ToolOutputChunk) => void;

@@ -261,8 +261,10 @@ that a single bucket or chain handles a billion concurrent writers.
 | Native shell | Tauri/mobile wrapper | selected host files, PTY/process tools, OS keychain, background jobs |
 | Remote sandbox | attested or isolated worker | Linux CLI, builds, browsers, long-running jobs |
 
-A session records the capability tier used by every tool result so a replay or
-audit never implies that a browser performed a native action.
+A session records its initial page-capability observation, while every execution
+result records the live producing tier and engine. Optional page-local runtimes
+can be activated and used immediately without rewriting the session or implying
+that a browser performed a native action.
 
 ## Compliance posture
 

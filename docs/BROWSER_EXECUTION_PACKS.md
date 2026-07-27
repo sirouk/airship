@@ -25,8 +25,9 @@ The agent can call `inspect_execution_runtimes` before choosing an implementatio
 `execute_code` dispatches only to a registered `ready` adapter. The legacy
 `execute_javascript` tool remains for stable sessions. Optional labels never
 become phantom executable capabilities. The user or agent must call
-`install_execution_runtime` with `python-pyodide`; Airship initializes and runs
-a version probe before registering the adapter.
+`install_execution_runtime` with `python-pyodide` or `node-webcontainer`;
+Airship initializes and runs a real interpreter/package-manager probe before
+registering the adapter.
 
 Every runtime result names its capability tier, browser execution authority,
 engine, and artifact kind. JavaScript, WASI, and Pyodide emit bounded stdout and
@@ -36,12 +37,13 @@ terminates the Worker or kills the WebContainer process, and the bounded final
 result remains the durable authority even if a view unmounts or its observer
 throws.
 
-Capability tier is immutable session state, not a mutable page badge. A new
-session derives `web-enhanced` only when an enhanced adapter is actually
-`ready`. Activating Python or Node from a `web-baseline` conversation reports
-`fork-required`; that existing conversation cannot execute the new adapter.
-Creating or forking after activation pins the new exact tier without rewriting
-the earlier journal or receipts.
+The manifest capability tier is an immutable observation of page state when the
+session began, not an execution authorization ceiling. A new session derives
+`web-enhanced` only when an enhanced adapter is already `ready`. A baseline
+conversation may explicitly activate Python or Node and use it immediately:
+the approved install event and every later execution result are appended to the
+same receipt chain, and each result names its actual producing tier, authority,
+engine, and workspace adoption. Earlier baseline evidence is never rewritten.
 
 The WASI runner executes a precompiled Preview 1 command artifact. A Rust
 program compiled elsewhere for `wasm32-wasip1` can run there. The artifact
@@ -307,19 +309,35 @@ in a second-level dynamic pack. `inspect_execution_runtimes` reports the pack as
 installable or unavailable; it does not fetch the WebContainer client.
 `install_execution_runtime({ runtime: "node-webcontainer" })` is a separately
 approved network operation that cold-loads the pack, boots one instance, and
-promotes the capability to ready only after boot succeeds. Deactivation tears
-down the instance and releases its in-tab processes and memory.
+promotes the capability to ready only after a real bounded `npm --version`
+process succeeds. Its activation receipt names the observed npm version, host
+generation, duration, and whether an already-live terminal host was reused.
+Deactivation tears down the instance and releases its in-tab processes and
+memory.
 
-`execute_node_project` mounts a selected Airship workspace directory into a
-unique scratch directory, directly spawns one command without an intermediary
-shell, bounds input/output/time, exports a byte-safe delta, and removes the
-scratch directory. `writeBack: false` only reports the delta. `writeBack: true`
-preflights every source revision and adopts at most 512 changes / 8 MiB; a
-concurrent edit fails rather than being overwritten. `.git`, `.airship`, and
-`node_modules` are never copied back. Package-manager networking remains visible
-because the tool is classified as a network effect. Host activation and
-teardown advance a monotonic lifecycle generation; terminal sessions holding
-an older generation become restart-required and reacquire/remount instead of
+`execute_node_project` runs one finite command and mounts the selected Airship workspace directory into a
+page-lifetime project directory keyed by the exact Workspace authority and
+normalized root, directly spawns one command without an intermediary shell,
+bounds input/output/time, and exports a byte-safe delta. Sequential commands for
+that root reuse the project, so `npm install` can be followed by `npm run build`
+or tests without copying dependency trees into durable storage. At most eight
+projects are retained; least-recently-used project state is evicted.
+The declared deadline spans snapshot, mount, spawn, process, and export phases;
+cancellation is checked again before reconciliation and every adopted mutation.
+If a killed process cannot confirm exit, Airship invalidates and tears down the
+whole host instead of reusing a directory a zombie could still mutate.
+Long-running development servers belong in the interactive Workspace Terminal;
+the finite agent tool does not fabricate a durable service handle and cancels a
+process that exceeds its declared deadline.
+`writeBack: false` only reports the delta. `writeBack: true` fences the complete
+mounted source revision set before adopting at most 512 changes / 8 MiB; any
+concurrent source addition, deletion, or edit fails the whole preflight rather
+than accepting stale derived output. `.git`, `.airship`, and `node_modules` are
+never copied back. Results name the snapshot digest, page-project ID, page-only
+dependency persistence, and excluded paths. Package-manager networking remains
+visible because the tool is classified as a network effect. Host activation and
+teardown advance a monotonic lifecycle generation; terminal sessions holding an
+older generation become restart-required and reacquire/remount instead of
 retaining a torn-down host.
 
 The host must use HTTPS (loopback is accepted), COOP `same-origin`, COEP
@@ -351,13 +369,14 @@ this provider dependency as an Airship backend.
 
 The current project pack uses this implemented sequence:
 
-1. capture a bounded, per-file revisioned workspace snapshot;
-2. mount only that selected subtree in a unique scratch directory;
+1. capture a bounded, per-file revisioned workspace snapshot and digest;
+2. reconcile that selected subtree into its bounded page-lifetime project;
 3. execute one direct command through the existing network-effect approval path;
 4. bound runtime, combined process output, and exported text changes;
-5. return the delta without mutation, or preflight every source revision and
+5. return the delta without mutation, or preflight the complete source set and
    adopt it only after a successful command when `writeBack` is explicit;
-6. delete the disposable scratch directory.
+6. retain only page-local project/dependency state until eviction, deactivation,
+   or page destruction; never persist `node_modules` to the Workspace or Vault.
 
 WebContainer output is a combined terminal stream; Airship does not fabricate a
 separate stderr channel. Browser suspension can interrupt work and there is no

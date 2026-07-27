@@ -120,7 +120,7 @@ At session creation Airship freezes:
 - system prompt bytes and version;
 - tool definitions and their canonical order;
 - provider/model compatibility settings;
-- policy-visible capability tier.
+- initial policy-visible page-capability observation.
 
 The prefix is reused byte-for-byte for the life of that session. New plugins or
 configuration apply to a new session/fork. Context compression is the only
