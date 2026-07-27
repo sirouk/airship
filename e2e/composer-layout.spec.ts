@@ -76,7 +76,16 @@ test("composer focus, hover, and one-line typing do not move approval controls",
 
   await textarea.fill("Plan");
   const typed = await readComposerGeometry(page);
-  await expect(page.locator(".chat-live-guidance")).toContainText("this composer is a deterministic demo");
+  // §7.2 amendment. The band is deleted, so the sentence is asserted where
+  // it now lives: verbatim in the permanently-mounted sr-only description
+  // Send points at, and again on the model chip, whose accessible name
+  // says what is actually answering. Stronger than the band assertion —
+  // the band unmounted the moment a provider connected and its id could
+  // dangle mid-render, while this target has the same lifetime as the
+  // `aria-describedby` reference asserted three lines below.
+  await expect(page.locator("#chat-demo-guidance"))
+    .toHaveText("Chat needs a model provider; this composer is a deterministic demo.");
+  await expect(page.locator(".session-model-chip")).toHaveAttribute("aria-label", /Demo/u);
   await expect(page.getByRole("button", { name: "Send message" }))
     .toHaveAttribute("title", "Deterministic local demo response. Connect a model for real inference.");
   await expect(page.getByRole("button", { name: "Send message" })).toHaveAttribute("aria-describedby", "chat-demo-guidance");

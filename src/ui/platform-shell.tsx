@@ -8,6 +8,12 @@ import { trapFocus } from "./focus-trap";
 import type { ApprovalMode } from "../approvals/modes";
 import { MenuSelect } from "./menu-select";
 import { isDeployableGoogleOAuthClientId } from "../storage/google-drive-configuration";
+import {
+  DEFAULT_TRANSCRIPT_OPERATIONS,
+  parseTranscriptOperationsMode,
+  setTranscriptOperationsMode,
+  type TranscriptOperationsMode,
+} from "./chat/transcript-operations";
 
 export type PaletteEntry = Readonly<{
   id: string;
@@ -222,6 +228,13 @@ export type PreferenceOverrides = Readonly<{
    */
   vaultBackend: "local-device" | "google-drive" | "local-lab" | "ephemeral";
   approvalMode: ApprovalMode;
+  /**
+   * Expert override for the transcript's tool rows. `summary` collapses a
+   * settled, wholly-completed run of four or more steps to its header;
+   * `rows` never collapses. Neither hides that a step occurred or which
+   * tool ran, and any failure or denial keeps the rows open in both.
+   */
+  transcriptOperations: TranscriptOperationsMode;
 }>;
 
 export type VaultBackend = PreferenceOverrides["vaultBackend"];
@@ -247,7 +260,7 @@ export function resolveDefaultVaultBackend(
 }
 
 export const DEFAULT_PREFERENCES: PreferenceOverrides = Object.freeze({
-  mode: "dark", typeScale: "default", density: "comfortable", corners: "subtle", bodyFont: "system-sans", vaultBackend: resolveDefaultVaultBackend(import.meta.env.VITE_AIRSHIP_DEFAULT_VAULT_PROVIDER, import.meta.env.VITE_GOOGLE_CLIENT_ID), approvalMode: "ask-first",
+  mode: "dark", typeScale: "default", density: "comfortable", corners: "subtle", bodyFont: "system-sans", vaultBackend: resolveDefaultVaultBackend(import.meta.env.VITE_AIRSHIP_DEFAULT_VAULT_PROVIDER, import.meta.env.VITE_GOOGLE_CLIENT_ID), approvalMode: "ask-first", transcriptOperations: DEFAULT_TRANSCRIPT_OPERATIONS,
 });
 
 const PREFERENCE_STORAGE_KEY = "airship.display-preferences.v1";
@@ -278,6 +291,7 @@ export function loadPreferenceOverrides(
       bodyFont: value.bodyFont === "system-serif" ? "system-serif" : "system-sans",
       vaultBackend: availableVaultBackend(value.vaultBackend, googleClientId) ?? availableDefault,
       approvalMode: value.approvalMode === "auto-approve" || value.approvalMode === "full-access" ? value.approvalMode : "ask-first",
+      transcriptOperations: parseTranscriptOperationsMode(value.transcriptOperations),
     });
   } catch { return DEFAULT_PREFERENCES; }
 }
@@ -293,6 +307,9 @@ export function applyPreferenceOverrides(value: PreferenceOverrides, root = docu
   root.dataset.corners = value.corners;
   root.dataset.bodyFont = value.bodyFont;
   root.style.colorScheme = value.mode;
+  // The transcript renderer sits below the prop tree that carries preferences,
+  // so applying one is also how it becomes live there.
+  setTranscriptOperationsMode(value.transcriptOperations);
 }
 
 export function PreferencesDialog({ open, value, onChange, onClose, profileApproval, vaultProviderSwitching = false }: Readonly<{
@@ -332,6 +349,8 @@ export function PreferencesDialog({ open, value, onChange, onClose, profileAppro
         <PreferenceSelect label="Type scale" value={value.typeScale} options={[['default','Default'],['large','Large'],['x-large','Extra large']]} onChange={(next) => update("typeScale", next as PreferenceOverrides["typeScale"])} />
         <PreferenceSelect label="Density" value={value.density} options={[['comfortable','Comfortable'],['compact','Compact']]} onChange={(next) => update("density", next as PreferenceOverrides["density"])} />
         <PreferenceSelect label="Corners" value={value.corners} options={[['subtle','Subtle'],['square','Square'],['rounded','Rounded']]} onChange={(next) => update("corners", next as PreferenceOverrides["corners"])} />
+        <PreferenceSelect label="Tool steps" value={value.transcriptOperations} options={[['summary','Summary'],['rows','Every step']]} onChange={(next) => update("transcriptOperations", next as PreferenceOverrides["transcriptOperations"])} />
+        <p>A folded run still states how many steps ran, which tools ran them and how they ended. A failed or denied step is never folded.</p>
         <PreferenceSelect label="Body font" value={value.bodyFont} options={[['system-sans','System sans'],['system-serif','System serif']]} onChange={(next) => update("bodyFont", next as PreferenceOverrides["bodyFont"])} />
         <PreferenceSelect label="Durability" value={value.vaultBackend} disabled={vaultProviderSwitching} options={[['local-device','Encrypted Local Device · offline'],['google-drive','Encrypted Google Drive · cross-device'],['local-lab','Encrypted S3 · local MinIO lab'],['ephemeral','Ephemeral · page memory only']]} onChange={(next) => update("vaultBackend", next as PreferenceOverrides["vaultBackend"])} />
         <button class="preferences-dialog__reset" type="button" onClick={() => onChange(DEFAULT_PREFERENCES)}>Reset preferences</button>
@@ -369,11 +388,36 @@ export function worstTrustAxis(axes: readonly TrustAxis[]): TrustAxis | undefine
   undefined);
 }
 
+/**
+ * One claim, rendered in full: seal, verbatim label, verbatim sentence, and the
+ * route that owns the record. This is the body of every level-1 disclosure in
+ * the product — the runtime trust sheet and the chat session-status popover
+ * render the same rows from different scopes, so a claim reads identically
+ * wherever the user reaches it.
+ */
+export type ClaimRow = Readonly<{
+  id: string;
+  state: SealState;
+  label: string;
+  detail: string;
+  /** Absent only for a claim with no route of its own; the row then states it without a target. */
+  action?: Readonly<{ label: string; onSelect(): void }>;
+}>;
+
+export function ClaimRows({ rows }: Readonly<{ rows: readonly ClaimRow[] }>) {
+  return <div class="claim-rows">{rows.map((row) => {
+    const body = <><Seal state={row.state} label={row.label} detail={row.detail} /><small>{row.detail}</small>{row.action ? <span aria-hidden="true">→</span> : null}</>;
+    return row.action
+      ? <button key={row.id} type="button" onClick={row.action.onSelect}>{body}</button>
+      : <p key={row.id}>{body}</p>;
+  })}</div>;
+}
+
 export function TrustPostureSheet({ open, axes, onClose, onNavigate }: Readonly<{ open: boolean; axes: readonly TrustAxis[]; onClose(): void; onNavigate(view: NavigationView): void }>) {
   const dialog = useRef<HTMLDivElement>(null);
   useEffect(() => { if (open) requestAnimationFrame(() => dialog.current?.focus({ preventScroll: true })); }, [open]);
   if (!open) return null;
-  return <div class="platform-scrim trust-sheet-scrim" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><div ref={dialog} class="trust-sheet" role="dialog" aria-modal="true" aria-labelledby="trust-sheet-title" tabIndex={-1} onKeyDown={(event) => { if (event.key === "Escape") onClose(); else if (event.key === "Tab") trapFocus(event, dialog.current); }}><header><div><span class="eyebrow">Four-axis posture</span><h2 id="trust-sheet-title">Runtime trust</h2></div><button type="button" onClick={onClose}>Close</button></header><p>Each axis is independently scoped. The weakest claim is shown in the topbar.</p><div>{axes.map((axis) => <button key={axis.id} type="button" onClick={() => { onClose(); onNavigate(axis.view); }}><Seal state={axis.state} label={axis.label} detail={axis.detail} /><small>{axis.detail}</small><span aria-hidden="true">→</span></button>)}</div></div></div>;
+  return <div class="platform-scrim trust-sheet-scrim" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><div ref={dialog} class="trust-sheet" role="dialog" aria-modal="true" aria-labelledby="trust-sheet-title" tabIndex={-1} onKeyDown={(event) => { if (event.key === "Escape") onClose(); else if (event.key === "Tab") trapFocus(event, dialog.current); }}><header><div><span class="eyebrow">Four-axis posture</span><h2 id="trust-sheet-title">Runtime trust</h2></div><button type="button" onClick={onClose}>Close</button></header><p>Each axis is independently scoped. The weakest claim is shown in the topbar.</p><ClaimRows rows={axes.map((axis) => Object.freeze({ id: axis.id, state: axis.state, label: axis.label, detail: axis.detail, action: Object.freeze({ label: axis.label, onSelect: () => { onClose(); onNavigate(axis.view); } }) }))} /></div></div>;
 }
 
 const TRUST_TABS: readonly Readonly<{ view: NavigationView; label: string }>[] = Object.freeze([

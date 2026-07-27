@@ -1,0 +1,299 @@
+/*
+ * Airship tokens: the design system every other sheet consumes.
+ *
+ * This file is the head of the `styles.css` @import barrel. The cascade is
+ * source-ordered, so the barrel order (tokens, shell, chat, routes) is load
+ * bearing: a sheet may only be reordered if no equal-specificity selector
+ * crosses the boundary.
+ */
+:root {
+  color: #ece8de;
+  background: #111518;
+  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  --ground: #101417;
+  --surface: #171c20;
+  --surface-raised: #1c2226;
+  --surface-soft: #14191c;
+  --ink: #ece8de;
+  --ink-muted: #9fa5a3;
+  /* 6.59:1 on --surface / 5.72:1 on --surface-raised, up from 5.44/4.73. A
+     caption is where provenance lives, so the faintest ink in the product is
+     still required to clear AA. Note that a profile theme re-declares this
+     role on the document element (`profiles/domain.ts` THEME_CSS_VARIABLES),
+     so the shipped palettes have to be revised with it before the contrast
+     gain is what a user actually sees. */
+  --ink-faint: #949c99;
+  /* Disabled is carried by explicit colour, never by transparency, so it
+     composites predictably over any surface. 3.48:1 on --surface. */
+  --ink-disabled: #6b726f;
+  --surface-disabled: #1a1f23;
+  --steel: var(--truth-local);
+  --accent: #c19a58;
+  --accent-bright: #dfba72;
+  --focus: var(--accent-bright);
+  --font-display: Georgia, "Times New Roman", serif;
+  --font-body: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --type-scale: 1;
+  --density-control: 44px;
+  --density-row: 48px;
+  --density-gap: 12px;
+  --density-panel-pad: 15px;
+  --density-message-pad-block: 13px;
+  --density-message-pad-inline: 15px;
+  --density-chat-measure: 820px;
+  --density-sidebar: 232px;
+  /* The rail's three states resolve to one width token so `.app-shell` and
+     `.topbar` can share a grid template and the brand block keeps tracking the
+     rail exactly. Unconsumed until the rail is rebuilt; `--density-sidebar` is
+     still the value in force. */
+  --rail-width: var(--density-sidebar);
+  /* One measure for the Connect surface, inherited by every descendant, in
+     place of the four competing max-widths it carries today. */
+  --connect-measure: 760px;
+  --message-action-height: 32px;
+  /* Eight steps, three weights. Every size in the product is one of these;
+     the exclusive use of each step is tabulated in docs/DESIGN_DIRECTION.md
+     §4.1. No px-literal clamp() anywhere — --type-scale must be able to move
+     the largest text in the product (WCAG 1.4.4). */
+  --fs-micro: calc(.6875rem * var(--type-scale));
+  --fs-caption: calc(.75rem * var(--type-scale));
+  --fs-meta: calc(.8125rem * var(--type-scale));
+  --fs-body: calc(.9375rem * var(--type-scale));
+  --fs-lead: calc(1.0625rem * var(--type-scale));
+  --fs-title: calc(1.25rem * var(--type-scale));
+  --fs-display: calc(1.75rem * var(--type-scale));
+  --fs-hero: calc(2.375rem * var(--type-scale));
+  /* Deprecated alias, retained for exactly one release so the five remaining
+     call sites are re-homed by role rather than by nearest value. A second
+     22px title step would rebuild the size spread being deleted. */
+  --fs-h3: var(--fs-title);
+  --fw-body: 400;
+  --fw-strong: 600;
+  --fw-title: 700;
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --sp-6: 32px;
+  --sp-7: 48px;
+  --lh-tight: 1.2;
+  --lh-body: 1.6;
+  --signal: var(--v-verified);
+  --danger: var(--v-failed);
+  --brass: var(--accent);
+  --brass-bright: var(--accent-bright);
+  --copper: #b8734f;
+  --verdigris: var(--v-verified);
+  --signal-red: var(--v-failed);
+  --line: rgba(225, 217, 200, 0.105);
+  --line-strong: rgba(225, 217, 200, 0.18);
+  /* 3.07:1. WCAG 1.4.11 requires 3:1 for the boundary of a control, and --line
+     is 1.26:1 — decorative dividers only. Every button, input, select,
+     textarea, tab and clickable card boundary moves here. */
+  --line-control: rgba(225, 217, 200, 0.40);
+  --shadow: 0 16px 45px rgba(0, 0, 0, 0.22);
+  --radius-control: 6px;
+  --radius-panel: 10px;
+  /* Deliberately outside the data-corners remap below: a seal chip is round
+     because roundness is what says "chip", not because the user picked a
+     corner style. Square corners must not turn a chip into a control. */
+  --radius-chip: 999px;
+  /* Immutable verdict colors. Profile themes may not remap these tokens. */
+  --v-neutral: var(--ink-faint);
+  --v-info: #7fa8c9;
+  --v-verified: #67a39a;
+  --v-caution: #d9a441;
+  --v-failed: #c86758;
+  --truth-local: #8ba0a6;
+  --truth-remote: #bd6f4c;
+  /* Code tokens are a two-hue family of their own — one violet for syntax,
+     one warm neutral for literals — deliberately outside the verdict palette
+     so a keyword can never be mistaken for a proof state. */
+  --tok-com: var(--ink-faint);
+  --tok-kw: #b394d1;
+  --tok-fn: #cbb6e2;
+  --tok-str: #d5c9b6;
+  --tok-num: #bfae95;
+  --state-acting: var(--v-info);
+  --state-wait: var(--ink-faint);
+  --cost-ok: var(--v-verified);
+  --cost-warning: var(--v-caution);
+  --cost-exhausted: var(--v-failed);
+}
+
+:root[data-mode="light"] {
+  --copper: #925038;
+  --tok-kw: #6a4b95;
+  --tok-fn: #7f61ab;
+  --tok-str: #5b4c37;
+  --tok-num: #6d5c44;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  width: 100%;
+  min-width: 320px;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  background:
+    radial-gradient(circle at 68% -20%, color-mix(in srgb, var(--accent) 8%, transparent), transparent 32rem),
+    var(--ground);
+}
+
+:root[data-corners="square"] {
+  --radius-control: 3px;
+  --radius-panel: 5px;
+}
+
+:root[data-corners="rounded"] {
+  --radius-control: 9px;
+  --radius-panel: 14px;
+}
+
+:root[data-corners="subtle"] {
+  --radius-control: 5px;
+  --radius-panel: 8px;
+}
+
+:root[data-body-font="system-serif"] {
+  font-family: Georgia, "Times New Roman", serif;
+}
+
+:root[data-type-scale="large"] {
+  --type-scale: 1.125;
+}
+
+:root[data-type-scale="x-large"] {
+  --type-scale: 1.25;
+}
+
+:root[data-type-scale="compact"] {
+  --type-scale: 0.94;
+}
+
+:root[data-density="compact"] {
+  font-size: 15px;
+  --density-control: 36px;
+  --density-row: 40px;
+  --density-gap: 8px;
+  --density-panel-pad: 11px;
+  --density-message-pad-block: 9px;
+  --density-message-pad-inline: 11px;
+  --density-chat-measure: 740px;
+  --density-sidebar: 210px;
+  --message-action-height: 30px;
+  --lh-body: 1.48;
+}
+
+:root[data-density="comfortable"] {
+  font-size: 17px;
+  --density-control: 46px;
+  --density-row: 52px;
+  --density-gap: 14px;
+  --density-panel-pad: 17px;
+  --density-message-pad-block: 14px;
+  --density-message-pad-inline: 16px;
+  --density-chat-measure: 840px;
+  --density-sidebar: 232px;
+  --message-action-height: 36px;
+  --lh-body: 1.68;
+}
+
+:root[data-density] .nav-item { min-height: var(--density-control); }
+:root[data-density] .panel-heading { min-height: var(--density-control); padding-inline: var(--density-panel-pad); }
+:root[data-density] .profile-card { min-height: var(--density-row); padding: calc(var(--density-panel-pad) * .55); }
+:root[data-density] .profile-form,
+:root[data-density] .skill-card { gap: var(--density-gap); padding: var(--density-panel-pad); }
+:root[data-density] .page-heading { margin-bottom: calc(var(--density-gap) * 2); }
+:root[data-density] .page-heading > p,
+:root[data-density] .message-body p,
+:root[data-density] .skill-card > p { line-height: var(--lh-body); }
+:root[data-density] .message { width: min(100%, var(--density-chat-measure)); max-width: var(--density-chat-measure); margin-bottom: calc(var(--density-gap) + 6px); }
+:root[data-density] .message.user { width: min(88%, 540px); max-width: min(88%, 540px); margin-left: auto; margin-right: 0; }
+:root[data-density] .message-rail { padding-top: var(--density-message-pad-block); }
+:root[data-density] .message-body { padding: var(--density-message-pad-block) var(--density-message-pad-inline); }
+/* The session bar is one row at both densities: comfortable buys 4px and a
+   larger title, not a second row. A header that grows with the preference is
+   how 88px became 98px on the surface with the least to say. */
+:root[data-density="compact"] .session-bar { min-height: 32px; padding-block: 0; }
+:root[data-density="compact"] .session-bar__identity-button { min-height: 28px; }
+:root[data-density="comfortable"] .session-bar { min-height: 40px; }
+:root[data-density="comfortable"] .session-bar__title { font-size: calc(1.0625rem * var(--type-scale)); }
+:root[data-density] .composer { max-width: var(--density-chat-measure); }
+:root[data-density] .composer-wrap { padding-block: calc(var(--density-gap) * .7) var(--density-gap); }
+/* Density owns the composer's gutter, never its height. `min-height:
+   calc(var(--density-control) + 12px)` with 17px block padding pinned the
+   textarea to a single fixed line at every density, which is the half of the
+   width-theft bug that clipped the placeholder: a box whose height is a
+   preference cannot also be a box that grows with what you type. The resting
+   height belongs to the 44px touch row and to `fit()`. */
+:root[data-density] .composer textarea { padding-inline: var(--density-panel-pad); }
+:root[data-density] .file-list button,
+:root[data-density] .slash-command-menu button { min-height: var(--density-control); }
+
+@media (max-width: 640px), (max-width: 950px) and (max-height: 500px) {
+  :root[data-density="compact"] { --density-control: 44px; --density-row: 44px; }
+
+  /* A phone column is roughly half the measure of the desktop chat column, so
+     the desktop leading pushes an ordinary answer past the fold. Tighten the
+     body rhythm only — the reading size itself is untouched. */
+  :root[data-density="comfortable"] { --lh-body: 1.5; }
+  :root[data-density="compact"] { --lh-body: 1.4; }
+}
+
+button,
+textarea,
+select {
+  color: inherit;
+  font: inherit;
+}
+
+button,
+select {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+summary:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--brass-bright);
+  outline-offset: 2px;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+/* Baseline primary-action affordance. Views may still scope their own
+   .primary treatment; this guarantees every primary button reads as a
+   pressable brass action (never a muted/disabled-looking native button)
+   and clears WCAG AA contrast (ground ink on accent-bright). */
+button.primary {
+  color: var(--ground);
+  border: 1px solid var(--accent-bright);
+  border-radius: var(--radius-control);
+  background: var(--accent-bright);
+  font-weight: 600;
+}
+
+button.primary:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--accent);
+}

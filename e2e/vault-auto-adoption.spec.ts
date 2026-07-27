@@ -25,10 +25,19 @@ async function expectLocalVaultAdopted(page: Page, timeout = 20_000): Promise<vo
       .toContainText("Encrypted S3 vault active");
     const sessionDetails = page.getByRole("button", { name: /Session\. Encrypted state synced\./u });
     await expect(sessionDetails).toBeVisible();
-    await expect(sessionDetails.getByRole("status")).toHaveText("Encrypted state synced");
   } else {
-    await expect(page.locator(".topbar-center").getByText("Local S3 Vault active", { exact: true })).toBeVisible();
-    await expect(page.locator(".session-meta .durability-indicator")).toHaveText("Encrypted state synced");
+    // The four axis pills are one chip that states the weakest claim. A healthy
+    // vault is not the weakest claim, so it reads in the sheet the chip opens —
+    // where it now arrives with its full detail sentence rather than a
+    // hover-only tooltip.
+    await page.locator(".topbar-posture-chip").click();
+    const runtimeTrust = page.getByRole("dialog", { name: "Runtime trust" });
+    await expect(runtimeTrust).toContainText("Local S3 Vault active");
+    await runtimeTrust.getByRole("button", { name: "Close" }).click();
+    // The meta row is gone; durability is the session-status chip's second
+    // claim, stated in full in its accessible name and its popover.
+    await expect(page.locator(".session-status-chip"))
+      .toHaveAccessibleName(/Session\. Encrypted state synced\./u);
   }
 }
 

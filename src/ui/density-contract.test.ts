@@ -1,7 +1,7 @@
-import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
+import { readAirshipStyles } from "./style-sheets.test-helper";
 
-const styles = await readFile(new URL("./styles.css", import.meta.url), "utf8");
+const styles = await readAirshipStyles();
 
 describe("global density contract", () => {
   it("defines systemic comfortable and compact tokens", () => {

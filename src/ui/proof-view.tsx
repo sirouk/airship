@@ -4,9 +4,14 @@ import { serializePortableReceipt } from "../attestation/receipt";
 import type { ChutesEndpointEvidenceRecord } from "../attestation/provider-types";
 import type { SessionAuditReport } from "../core/session-audit";
 import type { ConversationReceipt } from "../receipts/types";
+import { claimStackPopoverFacts } from "./claim-stack-facts";
+import { composeClaimStack } from "./claim-stack-model";
 import { Icon } from "./icons";
+import { Popover } from "./popover";
+import "./popover.css";
 import type { ProofSection } from "./proof-route";
-import { sealStateForReceipt, SEAL_LABELS, Seal } from "./seal";
+import { sealStateForProofStatus, SEAL_LABELS, Seal } from "./seal";
+import { sealStateForReceipt } from "./seal-states";
 import { proofLevelLabel, relativeEvidenceAge } from "./trust-language";
 
 export function ProofView({
@@ -131,6 +136,12 @@ export function ProofView({
         : auditLoading ? "Checking journal" : "Not checked";
   const receiptSeal = sealStateForReceipt(receipt);
   const teeVerified = receiptSeal === "verified";
+  // The hero's popover body. Composed from the same model the inspector uses,
+  // so the two renderings of the claim stack cannot drift apart.
+  const claimStack = composeClaimStack(
+    receipt,
+    endpointEvidenceRecords.find((record) => record.subject.instanceId === receipt?.instanceId),
+  );
 
   return (
     <section class="work-view">
@@ -143,8 +154,38 @@ export function ProofView({
       <div id="proof-panel-summary" class="proof-surface-panel" role="tabpanel" aria-labelledby="proof-tab-summary" hidden={section !== "summary"}>
         <div class="proof-overview">
           <div class="proof-hero panel">
-            <Seal class="proof-hero-seal" state={receiptSeal} origin={receipt?.posture === "local" ? "local" : "remote"} label={SEAL_LABELS[receiptSeal]} detail={receipt ? summarizeReceipt(receipt) : "No completed turn receipt is selected."} size={44} />
-            <div><span class="eyebrow">Current proof level</span><h2>{receipt ? proofLevelLabel(receipt.proofLevel) : requestedReceiptId ? "Receipt unavailable" : "No completed turn"}</h2><p>{receipt ? summarizeReceipt(receipt) : requestedReceiptId ? "The selected receipt is not available in this page runtime. Airship will not substitute a different turn receipt." : "Complete a turn to create the first local receipt."}</p></div>
+            {/* The route's one hero seal, and the one place a seal renders its
+                detail as visible text rather than a tooltip. It is a button
+                because §4.4's disclosure contract is universal: every chip and
+                hero expands into the claim stack, so the eight claims behind
+                this single word are one gesture away on a touch device too. */}
+            <Popover
+              class="proof-hero-claims"
+              heading="Claim stack"
+              label={`Proof level ${SEAL_LABELS[receiptSeal]}. ${claimStack.items.length} claims. Open the claim stack.`}
+              trigger={<Seal
+                class="proof-hero-seal"
+                state={receiptSeal}
+                density="hero"
+                origin={receipt?.posture === "local" ? "local" : "remote"}
+                label={SEAL_LABELS[receiptSeal]}
+                detail={receipt ? summarizeReceipt(receipt) : "No completed turn receipt is selected."}
+              />}
+            >
+              <p class="proof-hero-claims__evidence">{claimStack.evidenceSummary}</p>
+              {claimStack.items.map((item) => (
+                <section key={item.key} class="claim-popover-row">
+                  <Seal state={sealStateForProofStatus(item.status)} density="dot" />
+                  <strong>{item.claim.summary}</strong>
+                  <dl>
+                    {claimStackPopoverFacts(item).map((fact) => (
+                      <div key={fact.label}><dt>{fact.label}</dt><dd>{fact.value}</dd></div>
+                    ))}
+                  </dl>
+                </section>
+              ))}
+            </Popover>
+            <div><span class="eyebrow">Current proof level</span><h2>{receipt ? proofLevelLabel(receipt.proofLevel) : requestedReceiptId ? "Receipt unavailable" : "No completed turn"}</h2>{receipt ? null : <p>{requestedReceiptId ? "The selected receipt is not available in this page runtime. Airship will not substitute a different turn receipt." : "Complete a turn to create the first local receipt."}</p>}</div>
           </div>
           <div class="metric"><span>Session journal</span><strong>{auditLabel}</strong><small>{audit ? `${audit.counts.events} event${audit.counts.events === 1 ? "" : "s"} · ${audit.commitment.digest.slice(0, 18)}…` : `${eventCount} observed event${eventCount === 1 ? "" : "s"}`}</small></div>
           <div class="metric"><span>TEE verification</span><strong>{teeVerified ? "Receipt-attested" : "Not established"}</strong><small>{receipt?.posture === "encrypted-unattested" ? "compatibility mode" : receipt?.posture === "encrypted-attested" && !teeVerified ? "receipt fields disagree; verification failed closed" : "production remote mode must fail closed"}</small></div>

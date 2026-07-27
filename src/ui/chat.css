@@ -1,0 +1,1905 @@
+/*
+ * Airship chat: stage, session header, transcript, message parts, composer
+ * and the proof inspector that shares the chat layout. Third in the barrel.
+ */
+
+.chat-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 310px;
+  overflow: hidden;
+}
+
+.chat-layout.no-inspector { grid-template-columns: minmax(0, 1fr); }
+.chat-layout.no-inspector .chat-stage { border-right: 0; }
+
+.chat-stage {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  min-width: 0;
+  min-height: 0;
+  border-right: 1px solid var(--line);
+  background: color-mix(in srgb, var(--ground) 76%, transparent);
+}
+
+/*
+ * One 40px row for everything that is true of this conversation.
+ *
+ * It replaces an 88px two-column header, a 42px guidance band and a phone-only
+ * details strip: 219px of chrome above an empty conversation on a 900px
+ * viewport. Every claim those objects rendered still renders — as a chip that
+ * expands, which is one gesture rather than one quarter of the screen.
+ */
+.session-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--sp-2) var(--sp-4);
+  align-items: center;
+  min-height: 40px;
+  padding: var(--sp-1) var(--sp-5);
+  border-bottom: 1px solid var(--line);
+}
+
+/* The conversation title is still the document's H1. The control lives inside
+   it rather than around it because a heading is not phrasing content. */
+.session-bar__identity {
+  min-width: 0;
+  overflow: hidden;
+  margin: 0;
+  font-weight: var(--fw-body);
+}
+
+.session-bar__identity-button {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  min-height: 32px;
+  padding: 0 var(--sp-2) 0 0;
+  border: 0;
+  border-radius: var(--radius-control);
+  color: inherit;
+  background: none;
+  cursor: pointer;
+  text-align: left;
+}
+
+.session-bar__identity-button:hover .session-bar__title { color: var(--accent-bright); }
+
+/* The retired `ACTIVE SESSION · GENERAL` eyebrow now lives in this mark's
+   accessible name, so it shrinks to a glyph without becoming a mystery. */
+.session-bar .profile-monogram {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+}
+
+.session-bar__title {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font: var(--fw-body) var(--fs-body)/1.2 var(--font-display);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-bar__chips {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+  min-width: 0;
+  justify-self: end;
+}
+
+/*
+ * The one chip recipe the whole right cluster is an instance of.
+ *
+ * `--line-control` rather than `--line`: WCAG 1.4.11 asks 3:1 of a control
+ * boundary, and these are the four controls a reader looks at most.
+ */
+.session-status-chip,
+.journal-chip,
+.session-model-chip,
+.session-bar__new,
+.session-bar .session-runtime {
+  min-height: 28px;
+  border: 1px solid var(--line-control);
+  border-radius: var(--radius-chip);
+  background: color-mix(in srgb, var(--surface-soft) 80%, transparent);
+  color: var(--ink-muted);
+}
+
+.session-status-chip,
+.session-model-chip {
+  display: inline-flex;
+  gap: var(--sp-1);
+  align-items: center;
+  min-width: 0;
+  padding: 0 var(--sp-2);
+  font: var(--fw-strong) var(--fs-caption)/1 var(--font-body);
+}
+
+.session-status-chip .seal,
+.session-model-chip .seal { flex: 0 0 auto; }
+
+.session-status-chip__word {
+  overflow: hidden;
+  color: var(--ink);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-status-chip__word[data-state="failed"] { color: var(--v-failed); }
+.session-status-chip__word[data-state="attention"] { color: var(--v-caution); }
+.session-status-chip__word[data-state="verified"] { color: var(--v-verified); }
+
+/* A chip that stands in front of four claims says four. The affordance states
+   its own cost, so nothing is quietly folded away. */
+.session-status-chip__count,
+.journal-chip__count {
+  flex: 0 0 auto;
+  color: var(--ink-faint);
+  font-size: var(--fs-micro);
+  font-variant-numeric: tabular-nums;
+}
+
+.journal-chip {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.journal-chip__branch,
+.journal-chip__record {
+  display: inline-flex;
+  gap: var(--sp-1);
+  align-items: center;
+  min-width: 0;
+  min-height: 26px;
+  padding: 0 var(--sp-2);
+  border: 0;
+  color: inherit;
+  background: none;
+  cursor: pointer;
+  font: var(--fw-body) var(--fs-caption)/1 var(--font-body);
+}
+
+.journal-chip__branch { border-right: 1px solid var(--line); color: var(--accent-bright); }
+.journal-chip__record:hover,
+.journal-chip__branch:hover { color: var(--ink); }
+.journal-chip__glyph { color: var(--ink-faint); }
+.journal-chip__id { color: var(--ink-faint); font-size: var(--fs-micro); }
+
+/* Promoted out of its phone-only slot to every width. That promotion is what
+   permanently removes the tablet collision between this button and the model
+   card, because the two are now siblings in one track instead of one being
+   absolutely positioned over the other. */
+.session-bar__new {
+  display: grid;
+  width: 28px;
+  flex: 0 0 auto;
+  padding: 0;
+  place-items: center;
+  color: var(--accent-bright);
+  cursor: pointer;
+}
+
+.session-bar__new:disabled {
+  color: var(--ink-disabled);
+  background: var(--surface-disabled);
+  cursor: not-allowed;
+}
+
+/*
+ * The model chip while nothing is connected.
+ *
+ * Brass, because §4.3 reserves brass for "act here" and connecting a provider
+ * is the only thing a disconnected user has to do here.
+ */
+.session-model-chip--demo {
+  border-color: color-mix(in srgb, var(--accent-bright) 45%, var(--line-control));
+  color: var(--accent-bright);
+}
+
+.session-model-chip__glyph { flex: 0 0 auto; }
+
+.session-model-chip__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+ * The connected model control, resized to the bar it now sits in.
+ *
+ * The component itself is untouched — a later package rebuilds its popover into
+ * the real picker — but a 45px-tall, 330px-minimum card cannot live in a 40px
+ * row, and the two-column header that used to hold it is what starved the model
+ * name to 169px in the first place.
+ */
+.session-bar .session-runtime {
+  width: auto;
+  min-width: 12ch;
+  max-width: 32ch;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: var(--sp-1);
+  padding: 0 var(--sp-2);
+}
+
+.session-bar .session-runtime-icon {
+  width: 18px;
+  height: 18px;
+  border: 0;
+  background: none;
+}
+
+/* `SESSION MODEL` was a label, not a fact. It is the prefix of the control's
+   accessible name now, so it is clipped from the layout rather than removed
+   from the accessibility tree. */
+.session-bar .session-runtime label small {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+.session-bar .session-runtime select { margin-top: 0; line-height: 1.2; }
+
+.session-bar .runtime-posture {
+  max-width: 16ch;
+  overflow: hidden;
+  font-size: var(--fs-micro);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+ * Collapse trigger 1 of 4, and the only scroll-driven one in the product.
+ *
+ * Fine pointer only: a 44px touch target may not shrink under a thumb, so a
+ * coarse pointer never enters this state at all. Labels are clipped, never
+ * removed — every word stays in the accessible name and in `title`, and the
+ * bar restores itself at scrollTop 0.
+ */
+@media (pointer: fine) {
+  .chat-stage[data-scrolled="true"] .session-bar {
+    min-height: 32px;
+    padding-block: 0;
+  }
+
+  .chat-stage[data-scrolled="true"] .session-bar__title { font-size: var(--fs-caption); }
+
+  .chat-stage[data-scrolled="true"] .session-status-chip__word,
+  .chat-stage[data-scrolled="true"] .journal-chip__id,
+  .chat-stage[data-scrolled="true"] .session-model-chip__label,
+  .chat-stage[data-scrolled="true"] .session-bar .runtime-posture {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+}
+
+/*
+ * What an empty conversation says, in one place.
+ *
+ * Bottom-docked with the transcript's `align-content: end`, so the 374px of
+ * void that used to sit under a centred welcome card is gone rather than
+ * redistributed.
+ */
+.transcript-intro {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--sp-2) var(--sp-4);
+  align-items: start;
+  margin: 0 0 var(--sp-3);
+}
+
+.transcript-intro__copy {
+  display: grid;
+  gap: var(--sp-1);
+  max-width: 62ch;
+}
+
+.transcript-intro__lead {
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: var(--fs-body);
+  line-height: 1.5;
+}
+
+.transcript-intro__lead strong {
+  color: var(--ink);
+  font-weight: var(--fw-strong);
+}
+
+.transcript-intro__note,
+.transcript-intro__runtime {
+  margin: 0;
+  color: var(--ink-faint);
+  font-size: var(--fs-meta);
+  line-height: 1.45;
+}
+
+/* The pill's own rule pushes it left inside a message label row; here it is
+   the right-hand cell and has nothing to push against. */
+.transcript-intro__tier { justify-self: end; margin-right: 0; }
+
+.page-heading h1,
+.proof-hero h2,
+.inspector-heading h2 {
+  margin: 4px 0 0;
+  font-family: Georgia, "Times New Roman", serif;
+  font-weight: 500;
+}
+
+.session-runtime {
+  position: relative;
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) auto;
+  gap: 9px;
+  align-items: center;
+  flex-shrink: 0;
+  width: min(440px, 42%);
+  min-width: 330px;
+  min-height: 45px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  color: var(--ink);
+  background: color-mix(in srgb, var(--surface-soft) 88%, transparent);
+  text-align: left;
+}
+
+button.session-runtime {
+  cursor: pointer;
+}
+
+.session-runtime-icon {
+  display: grid;
+  place-items: center;
+  width: 29px;
+  height: 29px;
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, transparent);
+  border-radius: 50%;
+  color: var(--accent-bright);
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+}
+
+.session-runtime label,
+.session-runtime label small {
+  display: block;
+  min-width: 0;
+}
+
+.session-runtime label small,
+.session-runtime.local small {
+  overflow: hidden;
+  color: var(--ink-faint);
+  font: var(--fs-micro)/1.25 ui-monospace, SFMono-Regular, Menlo, monospace;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.session-runtime.local strong {
+  display: block;
+  margin-top: 3px;
+  font: var(--fs-micro)/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.session-runtime select {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  margin-top: 2px;
+  padding: 0 18px 0 0;
+  overflow: hidden;
+  border: 0;
+  color: var(--ink);
+  background: transparent;
+  font: var(--fs-micro)/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+  text-overflow: ellipsis;
+}
+
+button.runtime-posture {
+  cursor: pointer;
+}
+
+.session-runtime-error {
+  position: absolute;
+  top: calc(100% + 5px);
+  right: 0;
+  z-index: 4;
+  max-width: 100%;
+  padding: 6px 8px;
+  border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
+  border-radius: var(--radius-control);
+  color: #e6a393;
+  background: var(--surface-raised);
+  font: var(--fs-micro)/1.35 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.transcript {
+  --transcript-scrim: 24px;
+  position: relative;
+  min-height: 0;
+  padding: 20px max(22px, calc((100% - 790px) / 2));
+  overflow-y: auto;
+}
+
+/*
+ * The scrim under the session bar.
+ *
+ * A hard 1px rule with content sliding under it reads as a rendering fault
+ * rather than as a boundary. Sticky rather than fixed, so it belongs to the
+ * scroll container and cannot outlive it, and `pointer-events: none` so a
+ * message under the fade is still a message you can click.
+ */
+.transcript::before {
+  content: "";
+  position: sticky;
+  z-index: 3;
+  top: 0;
+  display: block;
+  height: var(--transcript-scrim);
+  margin-bottom: calc(-1 * var(--transcript-scrim));
+  background: linear-gradient(to bottom, var(--ground), transparent);
+  pointer-events: none;
+}
+
+/* A conversation with no turns docks its intro to the composer instead of
+   floating a card in the middle of ~400px of void. `end`, not `center`: the
+   next thing to happen is a keystroke, and the intro belongs beside it. */
+.transcript.no-turns {
+  display: grid;
+  align-content: end;
+  padding-bottom: var(--sp-5);
+}
+
+/* `float` does not apply to a grid item, so restore the pill's right edge. */
+.transcript.no-turns .transcript-jump {
+  justify-self: end;
+}
+
+.transcript-row {
+  display: flow-root;
+}
+
+.transcript-spacer {
+  width: 100%;
+  pointer-events: none;
+}
+
+.transcript-jump {
+  position: sticky;
+  z-index: 4;
+  bottom: 10px;
+  float: right;
+  min-height: 36px;
+  margin: 0 2px 8px 12px;
+  padding: 0 12px;
+  border: 1px solid color-mix(in srgb, var(--accent-bright) 44%, var(--line));
+  border-radius: 999px;
+  color: var(--accent-bright);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow);
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.transcript-boundary {
+  display: flex;
+  gap: 9px;
+  align-items: flex-start;
+  width: min(100%, 780px);
+  margin: 0 auto 18px;
+  padding: 9px 11px;
+  border: 1px solid color-mix(in srgb, var(--brass) 26%, var(--line));
+  border-radius: var(--radius-control);
+  color: var(--ink-muted);
+  background: color-mix(in srgb, var(--brass) 5%, var(--surface-soft));
+  font-size: var(--fs-micro);
+  line-height: 1.5;
+}
+
+.transcript-boundary svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: var(--brass-bright);
+}
+
+.transcript-boundary strong {
+  color: var(--brass-bright);
+  font-weight: 600;
+}
+
+.message {
+  display: grid;
+  grid-template-columns: 31px minmax(0, 1fr);
+  gap: 8px;
+  width: min(100%, 780px);
+  max-width: 780px;
+  margin: 0 auto 18px 0;
+}
+
+.message.user {
+  grid-template-columns: minmax(0, 1fr) 31px;
+  width: min(78%, 650px);
+  margin-right: 0;
+  margin-left: auto;
+}
+
+.message.user .message-rail {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.message.user .message-body {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.message-rail {
+  align-self: start;
+  padding-top: 13px;
+}
+
+.message-rail span {
+  display: grid;
+  place-items: center;
+  width: 29px;
+  height: 29px;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  color: var(--ink-muted);
+  background: var(--surface-soft);
+  font: var(--fs-micro) ui-monospace, monospace;
+}
+
+.message.assistant .message-rail span {
+  color: var(--brass-bright);
+  border-color: rgba(193, 154, 88, 0.3);
+  background: rgba(193, 154, 88, 0.065);
+  font-family: Georgia, serif;
+  font-size: 12px;
+}
+
+.message.user .message-rail span {
+  font-size: var(--fs-micro);
+  letter-spacing: -0.02em;
+}
+
+.message-body {
+  position: relative;
+  min-width: 0;
+  padding: 11px 13px;
+  border: 1px solid var(--line);
+  border-radius: 4px var(--radius-panel) var(--radius-panel) var(--radius-panel);
+  background: rgba(28, 34, 38, 0.73);
+}
+
+.message.user .message-body {
+  border-color: color-mix(in srgb, var(--accent) 22%, var(--line));
+  border-radius: var(--radius-panel) 4px var(--radius-panel) var(--radius-panel);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface-soft));
+}
+
+.message.error .message-body {
+  border-color: rgba(200, 103, 88, 0.35);
+}
+
+.message-label {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+}
+
+.message.user .message-label {
+  flex-direction: row-reverse;
+}
+
+.message-label strong {
+  color: var(--ink-muted);
+  font-size: var(--fs-micro);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.message-capability-tier {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  margin-right: auto;
+  padding: 2px 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--ink-faint);
+  background: rgba(255, 255, 255, 0.012);
+  font: var(--fs-micro)/1.2 var(--font-mono);
+  white-space: nowrap;
+}
+
+.message-capability-tier > span {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--v-info);
+}
+
+.message-capability-tier.web-enhanced > span,
+.message-capability-tier.native > span {
+  background: var(--v-verified);
+}
+
+.message-capability-tier.remote-confidential > span {
+  background: var(--accent);
+}
+
+.message-status {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  color: var(--ink-faint);
+  font-size: var(--fs-micro);
+  white-space: nowrap;
+}
+
+.message-body p {
+  margin: 7px 0 0;
+  color: var(--ink);
+  font-size: var(--fs-meta);
+  line-height: 1.62;
+  white-space: pre-wrap;
+}
+
+.message-parts {
+  display: grid;
+  gap: 8px;
+  margin-top: 7px;
+}
+
+.live-tool-output {
+  overflow: hidden;
+  margin-top: 8px;
+  border: 1px solid color-mix(in srgb, var(--v-info) 30%, var(--line));
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--surface-soft) 92%, transparent);
+}
+
+.live-tool-output header {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  min-height: 32px;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--line);
+  color: var(--ink-muted);
+  font: var(--fs-micro)/1.3 var(--font-mono);
+}
+
+.live-tool-output header code {
+  margin-left: auto;
+  color: var(--ink-faint);
+}
+
+.live-tool-output pre {
+  max-height: 13rem;
+  margin: 0;
+  padding: 8px;
+  overflow: auto;
+  color: var(--ink);
+  font: var(--fs-micro)/1.5 var(--font-mono);
+  white-space: pre-wrap;
+}
+
+.message-parts .message-part {
+  min-width: 0;
+  margin: 0;
+}
+
+/* Interstitial narration: planning between steps is supporting text, and is
+   now distinguishable from the answer it precedes. */
+.message-parts .message-part.text {
+  color: var(--ink-muted);
+  font-size: var(--fs-meta);
+  line-height: 1.62;
+  white-space: pre-wrap;
+}
+
+/* The answer is what the person asked for, so it outranks the machinery that
+   produced it. 15px prose over 11px rows, not 13px prose under 17px labels. */
+.message-parts .message-part.text--answer {
+  color: var(--ink);
+  font-size: var(--fs-body);
+}
+
+/* One indicator per turn: an active operation strip already says "Working",
+   so the composing pulse stays only where it is the sole indicator. */
+.message-body:has(.op-strip[data-active="true"]) .message-thinking {
+  display: none;
+}
+
+.message-parts .message-part.text.streaming::after {
+  display: inline-block;
+  width: 0.45em;
+  height: 1em;
+  margin-left: 3px;
+  border-right: 1px solid var(--state-acting);
+  content: "";
+  vertical-align: -0.12em;
+  animation: stream-caret 1s steps(1, end) infinite;
+}
+
+@keyframes stream-caret {
+  50% { opacity: 0; }
+}
+
+.message-part.reasoning-summary {
+  overflow: clip;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--surface-soft) 91%, transparent);
+}
+
+.message-part.reasoning-summary > summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+  min-height: 38px;
+  padding: 7px 9px;
+  color: var(--ink-muted);
+  cursor: pointer;
+  list-style: none;
+}
+
+.message-part.reasoning-summary > summary::-webkit-details-marker {
+  display: none;
+}
+
+.message-part.reasoning-summary > summary::after {
+  grid-column: 3;
+  grid-row: 1;
+  color: var(--ink-faint);
+  content: "+";
+  font: var(--fs-caption)/1 var(--font-mono);
+}
+
+.message-part.reasoning-summary[open] > summary::after {
+  content: "\2212";
+}
+
+.message-part.reasoning-summary > summary:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.message-part.reference header > span,
+.message-part.reasoning-summary summary small {
+  color: var(--ink-faint);
+  font: var(--fs-micro)/1.3 var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.message-part.reasoning-summary > summary span {
+  color: var(--ink-muted);
+  font-size: 11px;
+}
+
+.message-part.reasoning-summary > p {
+  margin: 0;
+  padding: 0 10px 10px 32px;
+  color: var(--ink-muted);
+  font-size: 12px;
+}
+
+.message-part.reference {
+  display: grid;
+  gap: 7px;
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--v-info) 4%, var(--surface-soft));
+}
+
+.message-part.reference header {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  min-width: 0;
+  color: var(--v-info);
+}
+
+.message-part.reference header strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.message-part.reference header small {
+  margin-left: auto;
+  color: var(--ink-faint);
+  font: var(--fs-micro) ui-monospace, SFMono-Regular, Menlo, monospace;
+  text-transform: uppercase;
+}
+
+.message-part.reference p {
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: 11px;
+}
+
+.message-part.reference code {
+  overflow: hidden;
+  color: var(--ink-faint);
+  font-size: var(--fs-micro);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-meta {
+  display: flex;
+  gap: 7px;
+  color: var(--ink-faint);
+  font: var(--fs-micro) ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.message-part.part-error {
+  display: flex;
+  gap: 8px;
+  padding: 9px;
+  border: 1px solid color-mix(in srgb, var(--v-failed) 34%, var(--line));
+  border-radius: var(--radius-control);
+  color: var(--v-failed);
+  background: color-mix(in srgb, var(--v-failed) 5%, var(--surface-soft));
+}
+
+.message-part.part-error strong {
+  color: var(--ink);
+  font: 600 var(--fs-micro)/1.4 var(--font-mono);
+}
+
+.message-part.part-error p {
+  margin: 3px 0 0;
+  color: var(--ink-muted);
+  font-size: 11px;
+}
+
+.message-part.part-error small {
+  color: var(--ink-faint);
+  font-size: var(--fs-micro);
+}
+
+.message-part.part-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+  color: var(--ink-faint);
+  font: var(--fs-micro)/1.4 var(--font-mono);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.message-evidence-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  align-items: center;
+  margin-top: 8px;
+}
+
+.message-history {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.message-history span {
+  padding: 3px 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--ink-faint);
+  background: rgba(255, 255, 255, 0.015);
+  font: var(--fs-micro)/1.2 var(--font-mono);
+  text-transform: uppercase;
+}
+
+.message-history .completed,
+.message-history .included {
+  color: var(--verdigris);
+}
+
+.message-history .failed,
+.message-history .excluded {
+  color: #e6a393;
+  border-color: color-mix(in srgb, var(--danger) 30%, var(--line));
+}
+
+.message-history .cancelled,
+.message-history .incomplete {
+  color: var(--brass-bright);
+}
+
+/* Box, border, radius and type now come from the one chip recipe in shell.css;
+   these two keep only what is theirs — that they are pressable. */
+.receipt-chip,
+.attestation-chip {
+  cursor: pointer;
+}
+
+/* Pointer actions overlay the card instead of reserving an empty gutter under
+   every message. Reveal changes only opacity and hit-testing, never geometry. */
+.message-actions { position: absolute; z-index: 2; top: 6px; right: 7px; height: var(--message-action-height); margin: 0; opacity: 0; pointer-events: none; transition: opacity 100ms ease; }
+.message-actions-row { display: flex; flex-wrap: nowrap; gap: .25rem; justify-content: flex-end; height: 100%; overflow: hidden; }
+.message:hover .message-actions, .message:focus-within .message-actions { opacity: 1; pointer-events: auto; }
+.message-actions button { display: inline-flex; gap: .3rem; align-items: center; height: 100%; min-height: 24px; padding: 0 .5rem; border: 1px solid transparent; border-radius: var(--radius-control); color: var(--ink-faint); background: transparent; cursor: pointer; font-size: var(--fs-micro); white-space: nowrap; }
+.message-actions button:hover { color: var(--ink); border-color: var(--line); background: var(--surface-soft); }
+/* Keyboard users never hover, so focus alone must both reveal the row and
+   leave the focused control legible against the raised surface. */
+.message-actions button:focus-visible { color: var(--ink); border-color: var(--line); background: var(--surface-soft); }
+.message-actions-touch { display: none; }
+
+@media (hover: none), (max-width: 640px) {
+  .message-actions { display: none; }
+  .message-actions-touch { position: relative; display: block; width: 44px; margin: 6px 0 0 auto; }
+  .message-actions-touch > summary {
+    display: grid;
+    width: 44px;
+    height: 44px;
+    place-items: center;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-control);
+    color: var(--ink-muted);
+    background: var(--surface-soft);
+    cursor: pointer;
+    list-style: none;
+    letter-spacing: .08em;
+  }
+  .message-actions-touch > summary::-webkit-details-marker { display: none; }
+  .message-actions-touch > div {
+    position: absolute;
+    z-index: 12;
+    right: 0;
+    bottom: calc(100% + 5px);
+    display: grid;
+    width: min(220px, calc(100vw - 42px));
+    padding: 5px;
+    border: 1px solid var(--line-strong);
+    border-radius: var(--radius-panel);
+    background: var(--surface-raised);
+    box-shadow: var(--shadow);
+  }
+  .message-actions-touch button {
+    display: flex;
+    gap: 7px;
+    align-items: center;
+    min-height: 44px;
+    padding: 8px 10px;
+    border: 0;
+    border-radius: var(--radius-control);
+    color: var(--ink-muted);
+    background: transparent;
+    text-align: left;
+  }
+  .message-actions-touch button:hover,
+  .message-actions-touch button:focus-visible { color: var(--ink); background: var(--surface-soft); }
+}
+
+.receipt-chip > span:not(.seal) {
+  color: var(--ink-faint);
+  font-family: ui-monospace, monospace;
+}
+
+.composer-wrap {
+  padding: 9px max(22px, calc((100% - 790px) / 2)) 13px;
+  border-top: 1px solid var(--line);
+  background: rgba(16, 20, 23, 0.88);
+  backdrop-filter: blur(12px);
+}
+
+.composer {
+  position: relative;
+  /* The footer sheds labels on its own width, not the viewport's: the same
+     composer is 758px wide beside a rail and ~380px on a phone, and an
+     inspector opening should not change what the strip is allowed to say. */
+  container-type: inline-size;
+  max-width: 780px;
+  margin: auto;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-panel);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow);
+  transition: border-color 140ms ease;
+}
+
+.slash-command-menu {
+  position: absolute;
+  z-index: 30;
+  right: 0;
+  bottom: calc(100% + 8px);
+  left: 0;
+  display: grid;
+  max-height: min(360px, 48vh);
+  padding: 6px;
+  overflow-y: auto;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-panel);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow);
+}
+
+.slash-command-menu button {
+  display: grid;
+  grid-template-columns: minmax(128px, 0.35fr) minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  min-height: 42px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: var(--radius-control);
+  color: var(--ink-muted);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.slash-command-menu button:hover,
+.slash-command-menu button.selected {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--accent) 9%, var(--surface-soft));
+}
+
+.slash-command-menu button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.slash-command-menu code {
+  color: var(--accent-bright);
+  font: 700 0.75rem/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.slash-command-menu span {
+  overflow: hidden;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.slash-command-menu small {
+  color: var(--ink-faint);
+  font: var(--fs-micro)/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.composer:focus-within {
+  border-color: rgba(193, 154, 88, 0.45);
+}
+
+.composer.busy {
+  border-color: rgba(103, 163, 154, 0.28);
+}
+
+.composer textarea {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  max-height: 180px;
+  padding: 10px var(--sp-4) var(--sp-2);
+  resize: none;
+  border: 0;
+  outline: 0;
+  color: var(--ink);
+  background: transparent;
+  font: var(--fw-body) var(--fs-body) / 24px var(--font-body);
+}
+
+/*
+ * The composer is two rows at every width.
+ *
+ * It used to be `minmax(0, 1fr) auto`, which handed the footer a fixed
+ * intrinsic 449.6px on every desktop-class viewport and left the textarea a
+ * 33px content box against a 23.2px line box — a width-theft bug, not a height
+ * bug. The single-column layout that fixes it already existed here, gated
+ * behind having already typed a newline; the gate is what is deleted. Nothing
+ * in the footer can move when the textarea grows now, because the footer is a
+ * separate grid row.
+ */
+.composer-input-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.composer textarea::placeholder {
+  color: var(--ink-faint);
+}
+
+/* Content scrolled above the cap must read as scrolled, not as a rendering
+   fault: the half-sliced top line was the single most confusing pixel in the
+   surface. Both fades are keyed on real scroll state, never assumed. */
+.composer-input-row[data-scrolled="top"] .composer textarea,
+.composer-input-row[data-scrolled="both"] .composer textarea {
+  mask-image: linear-gradient(to bottom, transparent 0, #000 14px);
+}
+
+.composer-input-row[data-scrolled="bottom"] .composer textarea {
+  mask-image: linear-gradient(to top, transparent 0, #000 14px);
+}
+
+.composer-input-row[data-scrolled="both"] .composer textarea {
+  mask-image: linear-gradient(to bottom, transparent 0, #000 14px, #000 calc(100% - 14px), transparent 100%);
+}
+
+.composer-footer {
+  display: flex;
+  gap: var(--sp-2);
+  justify-content: space-between;
+  align-items: center;
+  min-height: 36px;
+  padding: 0 var(--sp-2) 0 var(--sp-3);
+}
+
+.composer-tools {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+  min-width: 0;
+  color: var(--ink-faint);
+  font-size: var(--fs-micro);
+}
+
+.composer-tools > span {
+  display: inline-flex;
+  gap: var(--sp-1);
+  align-items: center;
+}
+
+/* What holds the credential for the keystroke about to be made. This shipped
+   as a caption that was `display: none` on phones; it is a chip at every
+   breakpoint now, and the chip expands to the whole sentence. */
+.composer-posture {
+  min-height: 28px;
+  padding: 0 var(--sp-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-chip);
+  color: var(--ink-muted);
+  font-size: var(--fs-micro);
+}
+
+.composer-posture:hover,
+.composer-posture[aria-expanded="true"] {
+  border-color: var(--line-control);
+  color: var(--ink);
+  background: var(--surface-soft);
+}
+
+.composer-posture__word {
+  white-space: nowrap;
+}
+
+.composer-posture__word[data-state="attention"] {
+  color: var(--v-caution);
+}
+
+.composer-posture__blocked {
+  margin: 0;
+  color: var(--v-caution);
+}
+
+.composer-posture__detail {
+  margin: 0;
+}
+
+/* Every footer disclosure opens upward: the strip sits against the bottom of
+   the viewport, so the primitive's default downward anchor would render the
+   claim off-screen. */
+.composer-posture-popover .popover__panel {
+  top: auto;
+  bottom: calc(100% + var(--sp-2));
+}
+
+/*
+ * The Enter contract. Shipped since the first wave, stated nowhere in the UI
+ * until now — the queue-on-Enter behaviour in particular was discoverable only
+ * by pressing Enter mid-turn and being surprised.
+ */
+.composer-keyhint {
+  display: inline-flex;
+  gap: var(--sp-2);
+  align-items: center;
+  color: var(--ink-faint);
+  font-size: var(--fs-micro);
+  white-space: nowrap;
+}
+
+.composer-keyhint > span {
+  display: inline-flex;
+  gap: var(--sp-1);
+  align-items: center;
+}
+
+.composer-keyhint kbd {
+  display: inline-grid;
+  place-items: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 var(--sp-1);
+  border: 1px solid var(--line-control);
+  border-radius: var(--radius-control);
+  color: var(--ink-muted);
+  background: var(--surface-soft);
+  font: var(--fw-body) var(--fs-micro)/1 var(--font-body);
+}
+
+.composer-primary-cluster {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+}
+
+/*
+ * The only thing the strip is allowed to do when it runs out of room is shed
+ * labels down one rung of the ladder — never `display: none`, never a
+ * horizontal scroll. Both words survive in the chip's accessible name and in
+ * the popover the same tap opens, so the fact is one gesture away rather than
+ * gone, and the glyph and the tap target are unchanged.
+ */
+@container (max-width: 380px) {
+  .composer-posture__word,
+  .composer-approval-select .menu-select-value strong {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+
+  .composer-approval-select {
+    min-width: 0;
+  }
+}
+
+.composer-queue {
+  display: grid;
+  gap: 4px;
+  max-height: min(210px, 30dvh);
+  margin: 8px 8px 0;
+  padding: 7px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--surface-soft) 82%, transparent);
+}
+
+.composer-queue > header,
+.composer-queue__item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 3px 9px;
+  align-items: center;
+}
+
+.composer-queue > header {
+  padding: 1px 4px 4px;
+  color: var(--ink-faint);
+  font: var(--fs-micro)/1.2 var(--font-mono);
+  text-transform: uppercase;
+}
+
+.composer-queue__item {
+  min-height: 38px;
+  padding: 5px 5px 5px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  background: var(--surface-raised);
+}
+
+.composer-queue__item > span {
+  overflow: hidden;
+  color: var(--ink-muted);
+  font-size: var(--fs-meta);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-queue__item > small { color: var(--ink-faint); }
+.composer-queue__item > div { grid-row: 1 / 3; grid-column: 2; display: flex; gap: 3px; }
+.composer-queue__item button,
+.queue-button {
+  min-height: 30px;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  color: var(--ink-muted);
+  background: var(--surface-soft);
+  cursor: pointer;
+  font-size: var(--fs-micro);
+}
+.composer-queue__item button:hover,
+.queue-button:hover { color: var(--ink); border-color: var(--line-strong); }
+.composer-primary-actions {
+  display: flex;
+  gap: 5px;
+  min-width: 98px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+/*
+ * The approval trigger is sized by its own longest label, not by a px literal.
+ *
+ * `120px` was a guess that truncated at large type scales; `13ch` is the same
+ * guarantee expressed in the units of the text it has to hold, so it scales
+ * with `--type-scale` instead of clipping under it. It stays a *single* width
+ * for all three policies on purpose: `e2e/composer-layout.spec.ts` measures
+ * that changing the policy does not resize or move the control, and a control
+ * that jumps under the cursor as you pick from it is its own defect.
+ */
+.composer-approval-select {
+  /* `width: auto` with only a floor still let the longest label ("Auto
+     Approve") widen the trigger by ~25px when selected, which is the jump the
+     comment above says must not happen. The width is fixed to the longest
+     label instead, still in `ch` so it tracks the type scale rather than
+     clipping under it. */
+  width: 17ch;
+}
+
+.composer-approval-select .menu-select-trigger {
+  min-height: 28px;
+  padding: 0 var(--sp-2);
+  border-color: transparent;
+  color: var(--ink-muted);
+  background: transparent;
+  font-size: var(--fs-micro);
+}
+
+/* 700 on an 11px muted label was the loudest thing in the strip while saying
+   the least. The escalation dot and the verbatim Title Case word carry the
+   state; the weight was carrying nothing. */
+.composer-approval-select .menu-select-value strong {
+  font-weight: var(--fw-body);
+}
+
+/*
+ * The measured defect: option labels truncating to "Auto …" and "Full …".
+ *
+ * `display: contents` promotes the label and its description out of their
+ * shared wrapper and onto the option's own grid, so the label sits in a
+ * max-content track that cannot truncate and the description takes the
+ * flexible one. Every word of all three descriptions is still rendered, and the
+ * option is one row instead of two, which is what makes room for the header and
+ * footer that promote the policy's scope from an `aria-label` to visible text.
+ */
+.composer-approval-select .menu-select-option {
+  grid-template-columns: minmax(max-content, auto) minmax(0, 1fr) auto;
+}
+
+.composer-approval-select .menu-select-option-copy {
+  display: contents;
+}
+
+.composer-approval-select .menu-select-popover {
+  width: min(400px, calc(100vw - 20px));
+  max-width: min(400px, calc(100vw - 20px));
+}
+
+.composer-approval-select .menu-select-trigger:hover,
+.composer-approval-select .menu-select-trigger[aria-expanded="true"] {
+  border-color: var(--line);
+  color: var(--ink);
+  background: var(--surface-soft);
+}
+
+.composer-approval-select .menu-select-value {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.composer-approval-select .menu-select-value::before {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--verdigris);
+  content: "";
+}
+
+.composer-approval-select.policy-auto-approve .menu-select-value::before { background: var(--v-caution); }
+.composer-approval-select.policy-full-access .menu-select-value::before { background: var(--signal-red); }
+.composer-approval-select .menu-select-value small { display: none; }
+
+/* The agent-approval policy is a safety-critical state, not a passive caption:
+   give it a color-coded dot that escalates with how much autonomy is granted. */
+.composer-policy__dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--ink-faint);
+}
+
+.composer-policy.policy-ask-first .composer-policy__dot { background: var(--verdigris); }
+.composer-policy.policy-auto-approve .composer-policy__dot { background: var(--v-caution); }
+.composer-policy.policy-full-access .composer-policy__dot { background: var(--signal-red); }
+
+.send-button {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid rgba(193, 154, 88, 0.42);
+  border-radius: var(--radius-control);
+  color: #17130c;
+  background: var(--brass-bright);
+  cursor: pointer;
+}
+
+.send-button.stop {
+  color: #f5e9e4;
+  border-color: rgba(200, 103, 88, 0.45);
+  background: var(--signal-red);
+}
+
+/* Fresh-transcript entry points: give the empty chat stage intent, not void. */
+.transcript-starters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 18px 0 6px;
+}
+
+.starter-chip {
+  display: grid;
+  flex: 1 1 200px;
+  gap: 3px;
+  max-width: 300px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-panel);
+  background: var(--surface-soft);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+.starter-chip:hover {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  background: var(--surface-raised);
+}
+
+.starter-chip strong {
+  color: var(--ink);
+  font-size: var(--fs-meta);
+  font-weight: 600;
+}
+
+.starter-chip span {
+  color: var(--ink-muted);
+  font-size: var(--fs-micro);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .starter-chip { transition: none; }
+}
+
+.composer-wrap > p {
+  max-width: 780px;
+  margin: 7px auto 0;
+  color: var(--ink-faint);
+  font-size: var(--fs-micro);
+  text-align: center;
+}
+
+.composer-wrap > p.connectivity-inline-reason {
+  color: var(--v-caution);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.composer-attachments { display: flex; gap: .375rem; padding: .5rem .75rem 0; overflow-x: auto; }
+.composer-attachments > span { display: inline-flex; flex: 0 0 auto; gap: .35rem; align-items: center; max-width: 18rem; min-height: 2rem; padding: .25rem .35rem .25rem .55rem; border: 1px solid var(--line); border-radius: var(--radius-control); color: var(--ink-muted); background: var(--surface-soft); font-size: var(--fs-micro); }
+.composer-attachments > span > img { width: 2.25rem; height: 2.25rem; flex: 0 0 auto; border-radius: 3px; object-fit: cover; }
+.composer-attachments > span > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.composer-attachments small { color: var(--v-caution); }
+.composer-attachments button { display: grid; place-items: center; min-width: 1.75rem; min-height: 1.75rem; border: 0; color: var(--ink-muted); background: transparent; cursor: pointer; }
+.composer-attach { display: inline-flex; gap: .3rem; align-items: center; min-height: 2rem; padding: 0 .35rem; border-radius: var(--radius-control); color: var(--ink-muted); cursor: pointer; }
+.composer-attach:hover,
+.composer-attach:focus-within { color: var(--ink); background: var(--surface-soft); }
+.composer-attach input { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.composer-notice { color: var(--v-caution) !important; font-size: var(--fs-micro) !important; }
+
+.inspector {
+  min-width: 0;
+  overflow-y: auto;
+  background: color-mix(in srgb, var(--surface-soft) 82%, transparent);
+}
+
+.proof-inspector.compact {
+  padding: 17px 15px;
+}
+
+.inspector-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: flex-start;
+  margin-bottom: 13px;
+}
+
+.inspector-heading h2 {
+  font-size: 18px;
+}
+
+.evidence-join {
+  margin-bottom: 12px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--ink-faint);
+  border-radius: var(--radius-panel);
+  background: color-mix(in srgb, var(--surface) 72%, transparent);
+}
+
+.evidence-join--matched { border-left-color: var(--v-caution); }
+.evidence-join--stale { border-left-color: var(--v-caution); }
+
+.evidence-join__heading {
+  display: grid;
+  gap: 5px;
+}
+
+.evidence-join__heading > span:last-child {
+  color: var(--ink-faint);
+  font: var(--fs-micro)/1.3 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.evidence-join__state {
+  display: inline-flex;
+  gap: 7px;
+  align-items: center;
+  color: var(--ink-muted);
+  font-size: var(--fs-caption);
+}
+
+.evidence-join__state > span {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+}
+
+.evidence-join__state--matched { color: var(--v-caution); }
+.evidence-join__state--stale { color: var(--v-caution); }
+
+.evidence-join > p {
+  margin: 8px 0 0;
+  color: var(--ink-muted);
+  font-size: var(--fs-micro);
+  line-height: 1.5;
+}
+
+.evidence-join__facts {
+  display: grid;
+  gap: 4px;
+  margin: 8px 0 0;
+  padding-top: 7px;
+  border-top: 1px solid var(--line);
+}
+
+.evidence-join__facts div { display: grid; grid-template-columns: 60px minmax(0, 1fr); gap: 8px; }
+.evidence-join__facts dt { color: var(--ink-faint); font-size: var(--fs-micro); }
+.evidence-join__facts dd { min-width: 0; margin: 0; color: var(--ink-muted); font: var(--fs-micro)/1.35 ui-monospace, monospace; overflow-wrap: anywhere; }
+
+.evidence-join__action {
+  width: 100%;
+  min-height: 32px;
+  margin-top: 8px;
+  padding: 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+  color: var(--accent-bright);
+  background: transparent;
+  font-size: var(--fs-micro);
+  text-align: left;
+  cursor: pointer;
+}
+
+.claim-groups { display: grid; gap: 10px; }
+
+.claim-group > header {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  margin: 0 2px 5px;
+  color: var(--ink-faint);
+  font: var(--fs-micro)/1.2 ui-monospace, monospace;
+  text-transform: uppercase;
+}
+
+.claim-group > header strong {
+  display: inline-grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  color: var(--ink-muted);
+  font-size: 11px;
+}
+
+.claim-group--failed > header { color: var(--v-failed); }
+.claim-group--verified > header { color: var(--v-verified); }
+.claim-group--asserted > header { color: var(--v-caution); }
+
+.claim-list {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-panel);
+}
+
+.claim-row {
+  border-bottom: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.012);
+  font-size: var(--fs-micro);
+}
+
+.claim-row:last-child {
+  border-bottom: 0;
+}
+
+.claim-row summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 10px;
+  align-items: center;
+  min-height: 50px;
+  padding: 8px 10px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.claim-row summary::-webkit-details-marker {
+  display: none;
+}
+
+.claim-row[open] summary {
+  color: var(--ink);
+  background: rgba(193, 154, 88, 0.035);
+}
+
+.claim-title {
+  min-width: 0;
+  color: var(--ink);
+  font-size: var(--fs-caption);
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.claim-disclosure {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  justify-self: end;
+  color: var(--ink-faint);
+  font: var(--fs-micro) ui-monospace, monospace;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.claim-disclosure > span {
+  width: 6px;
+  height: 6px;
+  border-right: 1px solid currentColor;
+  border-bottom: 1px solid currentColor;
+  transform: rotate(45deg) translateY(-2px);
+  transition: transform 120ms ease;
+}
+
+.claim-row[open] .claim-disclosure > span {
+  transform: rotate(225deg) translate(-1px, -1px);
+}
+
+.claim-meta {
+  grid-column: 1 / -1;
+  display: flex;
+  min-width: 0;
+  gap: 7px;
+  align-items: center;
+}
+
+.claim-source {
+  min-width: 0;
+  color: var(--ink-faint);
+  font: var(--fs-micro)/1.3 ui-monospace, SFMono-Regular, Menlo, monospace;
+  overflow-wrap: anywhere;
+}
+
+.claim-source--endpoint-evidence { color: var(--v-caution); }
+
+.claim-absence {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-panel);
+  color: var(--ink-muted);
+  background: rgba(255, 255, 255, 0.008);
+}
+
+.claim-absence > summary {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  min-height: 42px;
+  padding: 8px 10px;
+  cursor: pointer;
+  list-style: none;
+  font-size: var(--fs-caption);
+}
+
+.claim-absence > summary::-webkit-details-marker { display: none; }
+.claim-absence > summary strong { color: var(--ink-faint); font: var(--fs-micro) ui-monospace, monospace; }
+.claim-absence > summary small { color: var(--ink-faint); font-size: var(--fs-micro); text-align: right; }
+.claim-absence__list { border-top: 1px solid var(--line); }
+.claim-absence__list > div { padding: 8px 10px; border-bottom: 1px solid var(--line); }
+.claim-absence__list > div:last-child { border-bottom: 0; }
+.claim-absence__list span { display: block; color: var(--ink-muted); font-size: var(--fs-micro); font-weight: 600; }
+.claim-absence__list small { display: block; margin-top: 3px; color: var(--ink-faint); font-size: var(--fs-micro); line-height: 1.4; }
+
+.claim-meta .claim-seal {
+  flex: 0 0 auto;
+}
+
+.claim-meta .seal__label {
+  overflow: visible;
+  text-overflow: clip;
+}
+
+.claim-technical {
+  min-width: 0;
+  padding-left: 7px;
+  border-left: 1px solid var(--line-strong);
+  color: var(--ink-faint);
+  font: var(--fs-micro)/1.3 ui-monospace, SFMono-Regular, Menlo, monospace;
+  overflow-wrap: anywhere;
+}
+
+.claim-detail {
+  padding: 2px 10px 12px;
+  color: var(--ink-muted);
+  font-size: var(--fs-micro);
+  line-height: 1.55;
+}
+
+.claim-detail p {
+  margin: 0 0 8px;
+}
+
+.claim-detail dl {
+  display: grid;
+  grid-template-columns: 78px minmax(0, 1fr);
+  gap: 8px;
+  margin: 4px 0 0;
+}
+
+.claim-detail dt {
+  color: var(--ink-faint);
+}
+
+.claim-detail dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.claim-detail pre {
+  max-height: 180px;
+  margin: 9px 0 0;
+  padding: 8px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface-soft);
+  font: var(--fs-micro)/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.claim-seal {
+  font-size: var(--fs-micro);
+}
+
+.inspector-note {
+  margin: 13px 2px;
+  color: var(--ink-faint);
+  font-size: var(--fs-micro);
+  line-height: 1.55;
+}
+
+.receipt-id {
+  margin-top: 13px;
+}
+
+.receipt-id span {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--ink-faint);
+  font-size: var(--fs-micro);
+  text-transform: uppercase;
+}
+
+.receipt-id code {
+  display: block;
+  color: var(--ink-muted);
+  font-size: var(--fs-micro);
+  overflow-wrap: anywhere;
+}
+
+.receipt-metadata {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 14px;
+  margin: 13px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.receipt-metadata div {
+  min-width: 0;
+}
+
+.receipt-metadata dt {
+  color: var(--ink-faint);
+  font-size: var(--fs-micro);
+  text-transform: uppercase;
+}
+
+.receipt-metadata dd {
+  margin: 4px 0 0;
+  color: var(--ink-muted);
+  font: var(--fs-micro)/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+  overflow-wrap: anywhere;
+}
+
+.binding-record {
+  display: grid;
+  gap: 7px;
+  margin: 12px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.binding-record div {
+  min-width: 0;
+}
+
+.binding-record dt {
+  color: var(--ink-faint);
+  font-size: var(--fs-micro);
+  text-transform: uppercase;
+}
+
+.binding-record dd {
+  margin: 4px 0 0;
+  color: var(--ink-muted);
+  font: var(--fs-micro)/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+  overflow-wrap: anywhere;
+}

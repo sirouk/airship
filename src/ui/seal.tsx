@@ -1,6 +1,5 @@
 import type { JSX } from "preact";
-import type { SecurityPosture } from "../core/contracts";
-import type { ConversationReceipt, ProofStatus } from "../receipts/types";
+import type { ProofStatus } from "../receipts/types";
 
 export const SEAL_STATES = [
   "none",
@@ -24,11 +23,17 @@ export const SEAL_LABELS: Readonly<Record<SealState, string>> = Object.freeze({
   failed: "Failed",
 });
 
+export const SEAL_DENSITIES = ["dot", "chip", "hero"] as const;
+
+export type SealDensity = (typeof SEAL_DENSITIES)[number];
+
 export type SealProps = Readonly<{
   state: SealState;
   label?: string;
   detail?: string;
   size?: number;
+  /** Container weight. `chip` is the default because a status is a chip. */
+  density?: SealDensity;
   compact?: boolean;
   origin?: "local" | "remote";
   acting?: boolean;
@@ -40,29 +45,48 @@ export function sealRenderedSize(size: number): number {
 }
 
 /**
+ * The well a density renders in, honoring an explicit override and the floor.
+ *
+ * `dot` is not an exception to the 16px legibility floor, it *is* the floor:
+ * the density that hides its label still renders a full-size mark, because the
+ * label is what scales down the ladder, never the glyph. Only `hero` — the one
+ * per route — is larger.
+ */
+export function sealDensitySize(density: SealDensity, size?: number): number {
+  return sealRenderedSize(size ?? (density === "hero" ? 28 : 16));
+}
+
+/**
  * Airship's single proof/status mark.
  *
  * Six SVG shapes express seven named states: checking and stale deliberately
  * share the arc shape, with stale rendered as the static dashed variant.
  * The adjacent word is part of the component contract so color is never the
- * only carrier of meaning.
+ * only carrier of meaning — which is why `dot` clips its label out of the
+ * layout rather than dropping it: the word stays in the accessible name.
+ *
+ * `hero` is the only density that renders `detail` as visible text. Elsewhere
+ * the detail is the popover body the chip expands into, so promoting it here
+ * would restate on the resting surface what the ladder already owns.
  */
 export function Seal({
   state,
   label = SEAL_LABELS[state],
   detail,
-  size = 18,
+  size,
+  density = "chip",
   compact = false,
   origin,
   acting = false,
   class: className,
 }: SealProps) {
-  const renderedSize = sealRenderedSize(size);
+  const renderedSize = sealDensitySize(density, size);
   const accessibleLabel = detail ? `${label}. ${detail}` : label;
   return (
     <span
       class={["seal", compact ? "seal--compact" : undefined, className].filter(Boolean).join(" ")}
       data-state={state}
+      data-density={density}
       data-origin={origin}
       data-acting={acting ? "true" : "false"}
       title={detail}
@@ -84,6 +108,7 @@ export function Seal({
         {sealShape(state)}
       </svg>
       <span class="seal__label">{label}</span>
+      {density === "hero" && detail ? <small class="seal__detail">{detail}</small> : null}
     </span>
   );
 }
@@ -102,36 +127,6 @@ export function sealStateForRuntimeStatus(
   if (status === "stale") return "stale";
   if (status === "degraded" || status === "conflicted" || status === "attention") return "attention";
   return "none";
-}
-
-export function sealStateForCapabilitySummary(
-  runtimes: readonly Readonly<{ state: string }>[],
-  failed = false,
-): SealState {
-  if (failed) return "failed";
-  if (!runtimes.length) return "checking";
-  const ready = runtimes.filter(({ state }) => state === "ready").length;
-  if (!ready) return runtimes.some(({ state }) => state === "failed") ? "failed" : "none";
-  return ready === runtimes.length ? "verified" : "asserted";
-}
-
-/** Maps runtime posture to the canonical proof-hero shape. */
-export function postureSeal(posture: SecurityPosture | undefined): SealState {
-  if (posture === "encrypted-attested") return "verified";
-  if (posture === "encrypted-unattested") return "asserted";
-  if (posture === "plaintext-remote") return "attention";
-  return "none";
-}
-
-/** A stored receipt earns a green hero only when its attested fields agree. */
-export function sealStateForReceipt(receipt: ConversationReceipt | undefined): SealState {
-  if (!receipt) return "none";
-  if (receipt.posture !== "encrypted-attested") return postureSeal(receipt.posture);
-  const attestedLevel = receipt.proofLevel === "attested-endpoint"
-    || receipt.proofLevel === "model-bound"
-    || receipt.proofLevel === "conversation-bound"
-    || receipt.proofLevel === "settled";
-  return receipt.claims.endpointKey.status === "verified" && attestedLevel ? "verified" : "failed";
 }
 
 function sealShape(state: SealState): JSX.Element {

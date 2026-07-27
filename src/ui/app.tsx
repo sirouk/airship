@@ -1,4 +1,4 @@
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
 import type {
   AttestationEvidenceClientErrorCode,
   ChutesAttestationEvidenceClient,
@@ -10,7 +10,6 @@ import type {
 import { ApprovalBroker } from "../approvals/broker";
 import { approvalProvenance, createApprovalModePolicy, type ApprovalMode } from "../approvals/modes";
 import { SwitchableApprovalPolicy } from "../approvals/switchable-policy";
-import { reviewToolActionWithModel } from "../approvals/model-reviewer";
 import {
   DISCONNECTED_CHUTES_CONNECTION,
   isChutesConnected,
@@ -68,7 +67,7 @@ import type {
 // Import the concrete modules, never the "../git" barrel: the barrel also
 // re-exports the in-memory adapter, and that retained graph edge is enough to
 // pull a fixture-only Git backend into the startup chunk.
-import { BrowserGitClient } from "../git/client";
+import type { BrowserGitClient } from "../git/client";
 import type { GitOperation, GitOperationDescriptor } from "../git/types";
 import type { WorkspaceGitRepositorySeed } from "../git/workspace-adapter";
 import type { ChutesInferenceTransport, ChutesInvocationTelemetry } from "../inference/chutes";
@@ -153,7 +152,6 @@ import {
   useGlobalPaletteShortcut,
   usePwaUpdate,
   useVisualViewport,
-  worstTrustAxis,
   type PreferenceOverrides,
   type VaultBackend,
   type TrustAxis,
@@ -168,7 +166,7 @@ import {
   type ProofSection,
   type ProofSelection,
 } from "./proof-route";
-import { Seal, sealStateForProofStatus, type SealState } from "./seal";
+import { SEAL_LABELS, Seal, sealStateForProofStatus, type SealState } from "./seal";
 import { useScrollEdges } from "./scroll-affordance";
 import { enabledSlashSelection, firstEnabledSlashIndex, moveSlashSelection } from "./slash-menu-state";
 import type { SourcesImportRequest } from "./sources-view";
@@ -189,6 +187,12 @@ import { capabilityTierDetail, capabilityTierLabel } from "./chat/capability-tie
 import { useWindowedTranscript } from "./chat/use-windowed-transcript";
 import { composerAttachments, userMessageParts, type ComposerAttachment } from "./chat/composer-state";
 import { MOBILE_SHELL_MEDIA_QUERY, shouldClaimComposerFocus } from "./chat/composer-focus";
+import {
+  composerGrowthCap,
+  composerPlaceholder,
+  COMPOSER_NARROW_PLACEHOLDER_QUERY,
+  COMPOSER_PLACEHOLDER_TITLE,
+} from "./chat/composer";
 import { originatingPromptForRow } from "./chat/retry-prompt";
 import { recoverPartialTurn } from "./chat/turn-recovery";
 import { claimThreadDraftHydration, readThreadDraft, writeThreadDraft } from "./chat/thread-draft";
@@ -199,10 +203,19 @@ import {
 } from "./chat/turn-housekeeping";
 import { StreamingMessageSlot, TranscriptStreamStore } from "./chat/streaming-slot";
 import { isNearLastRealCard, preferredJumpBehavior, scrollToLastRealCard } from "./chat/transcript-anchor";
+import { DemoModelChip, SessionBar } from "./chat/session-bar";
+import { sessionStatusShort, type SessionStatusFact } from "./chat/session-status-chip";
+import {
+  TRANSCRIPT_INTRO_DEMO_LINE,
+  TRANSCRIPT_SEED_BODY,
+  TranscriptIntro,
+  transcriptIntroNote,
+} from "./chat/transcript-intro";
+import { TopbarPostureChip } from "./topbar";
 import { TabPresenceNote } from "./tab-presence";
 import { ProfileThemeSwatch } from "./profile-theme-swatch";
 import { PostureChip } from "./posture-chip";
-import { DurabilityIndicator, durabilityLabel } from "./durability-indicator";
+import { durabilityLabel } from "./durability-indicator";
 import { mapUnknownRequestFailure } from "./request-state";
 import { claimExpiry, claimLanguage, postureLabel, proofLevelLabel, proofStatusLabel, rankedReceiptVerdict, relativeEvidenceAge } from "./trust-language";
 import { RouteSkeleton } from "./route-skeleton";
@@ -221,6 +234,14 @@ type UiMessage = {
   id: string;
   role: "user" | "assistant";
   content: string;
+  /**
+   * Set only on a conversation seed — the message that states what runtime the
+   * conversation opened in. It is real agent context but it is not a turn, so
+   * the transcript renders it as its intro rather than as a card with an
+   * avatar and a Retry no model's output is behind. The flag is what keeps a
+   * genuine first message from ever being mistaken for chrome.
+   */
+  seed?: true;
   /** Immutable public projection of durable message/tool facts. */
   parts?: readonly MessagePart[];
   status?: string;
@@ -407,14 +428,48 @@ const navigationIcons: Readonly<Record<CanonicalDestinationId, IconName>> = Obje
 });
 const navigation = CANONICAL_DESTINATIONS.map((item) => Object.freeze({ ...item, icon: navigationIcons[item.id] }));
 
+/**
+ * The seed that opens an empty conversation.
+ *
+ * It stays in `messages` because it is real agent context — the model is told
+ * what runtime it woke up in — but it stopped rendering as a turn card: the
+ * transcript intro states its claims once, deduplicated against the guidance
+ * band's two sentences, and `transcriptIntroNote` keeps whatever per-session
+ * sentence a caller prefixed to it.
+ */
 const welcomeMessage: UiMessage = {
   id: "welcome",
   role: "assistant",
-  content:
-    "The edge runtime is ready. The workspace, editor, terminal and browser-owned Git already work in this tab with no account. Real model-backed chat needs a provider; until you connect one, the composer uses a deterministic local demo.",
+  seed: true,
+  content: TRANSCRIPT_SEED_BODY,
 };
 
 const PROFILE_DRAFT_DISCARD_PROMPT = "Discard unsaved profile edits?";
+
+/**
+ * The resting word for a lifecycle whose full label is too long for a chip.
+ *
+ * Every entry is the shipped `SessionLifecycle["label"]` said shorter, never
+ * said differently: the full sentence is one gesture away in the popover, and
+ * the chip only ever speaks for the lifecycle while a turn is running or has
+ * ended badly — the two states a user cannot infer from the transcript alone.
+ */
+/**
+ * How far the transcript scrolls before the session bar collapses to 32px.
+ *
+ * Deliberately larger than the bar itself: a collapse that fires on the first
+ * wheel notch reads as a rendering fault rather than a response, and anything
+ * shorter makes the boundary oscillate on a trackpad's momentum tail.
+ */
+const SESSION_BAR_COLLAPSE_SCROLL = 48;
+
+const SESSION_LIFECYCLE_SHORT: Readonly<Record<SessionLifecycle["state"], string>> = Object.freeze({
+  ready: "Ready",
+  running: "Working",
+  completed: "Turn done",
+  failed: "Turn failed",
+  cancelled: "Cancelled",
+});
 
 /**
  * Entry points for a fresh transcript.
@@ -571,6 +626,7 @@ export function App() {
     typeof navigator === "undefined" ? undefined : navigator,
   ));
   const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
+  const [narrowComposer, setNarrowComposer] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [preferencesOpen, setPreferencesOpen] = useState(false);
   const [trustSheetOpen, setTrustSheetOpen] = useState(false);
@@ -623,6 +679,7 @@ export function App() {
   }>>();
   const [transcriptLeadingHeight, setTranscriptLeadingHeight] = useState(0);
   const [transcriptDetached, setTranscriptDetached] = useState(false);
+  const [stageScrolled, setStageScrolled] = useState(false);
   const [invocationTelemetry, setInvocationTelemetry] = useState<ChutesInvocationTelemetry>();
   const [credentialRevision, setCredentialRevision] = useState(0);
   const [oauthCallbackStatus, setOauthCallbackStatus] = useState<OAuthCallbackStatus>();
@@ -672,6 +729,10 @@ export function App() {
     safetyReview: async (tool, argumentsValue, context) => {
       const active = runtime.current;
       if (!active) return { verdict: "indeterminate", reason: "No active inference runtime is available." };
+      // The model reviewer only runs when a governed tool action actually needs
+      // adjudicating, so it is fetched then rather than carried through first
+      // paint by every visitor who never triggers one.
+      const { reviewToolActionWithModel } = await import("../approvals/model-reviewer");
       return reviewToolActionWithModel({
         transport: active.transport,
         model: active.model,
@@ -917,33 +978,45 @@ export function App() {
     const element = textarea.current;
     if (!element) return;
     const inputRow = element.closest<HTMLElement>(".composer-input-row");
+    // The measure/toggle/re-measure branch this replaces existed only to damp
+    // an oscillation between a one-row and a two-row composer. The composer is
+    // two rows at every width now, so the textarea's width is constant while it
+    // grows and the oscillation is not reachable — which also means a 23-char
+    // prompt can no longer be forced onto two lines by a footer stealing 450px.
     const fit = () => {
       const style = getComputedStyle(element);
-      const minimum = parseFloat(style.minHeight) || 52;
-      const maximum = parseFloat(style.maxHeight) || 180;
+      const minimum = parseFloat(style.minHeight) || 44;
+      // The cap is a share of what is *visible*, not of the document: with a
+      // soft keyboard up, the flat 180px ceiling left the transcript 24px.
+      const maximum = composerGrowthCap(
+        parseFloat(style.maxHeight),
+        window.visualViewport?.height ?? window.innerHeight,
+        minimum,
+      );
       element.style.height = `${minimum}px`;
-      if (!input) {
-        inputRow?.removeAttribute("data-multiline");
-        element.style.overflowY = "hidden";
-        return;
-      }
-      // Measure against the full composer width before deciding whether the
-      // footer needs its own row. This avoids a narrow inline toolbar making a
-      // short prompt oscillate between compact and multiline layouts.
-      inputRow?.toggleAttribute("data-multiline", Boolean(input));
-      let natural = element.scrollHeight;
-      if (natural <= minimum + 1) {
-        inputRow?.removeAttribute("data-multiline");
-        natural = element.scrollHeight;
-      }
+      element.style.maxHeight = `${maximum}px`;
+      const natural = element.scrollHeight;
       element.style.height = `${Math.min(maximum, Math.max(minimum, natural))}px`;
       element.style.overflowY = natural > maximum ? "auto" : "hidden";
+      markComposerScroll();
+    };
+    // Text scrolled above the cap has to read as scrolled rather than as a
+    // half-sliced rendering fault, so the fade is driven by real scroll state.
+    const markComposerScroll = () => {
+      if (!inputRow) return;
+      const top = element.scrollTop > 0;
+      const bottom = element.scrollHeight - element.scrollTop - element.clientHeight > 1;
+      const state = top && bottom ? "both" : top ? "top" : bottom ? "bottom" : undefined;
+      if (state) inputRow.dataset.scrolled = state;
+      else delete inputRow.dataset.scrolled;
     };
     fit();
     const resizeTargets = [window, window.visualViewport];
     resizeTargets.forEach((target) => target?.addEventListener("resize", fit));
+    element.addEventListener("scroll", markComposerScroll, { passive: true });
     return () => {
       resizeTargets.forEach((target) => target?.removeEventListener("resize", fit));
+      element.removeEventListener("scroll", markComposerScroll);
     };
   }, [input]);
 
@@ -1139,11 +1212,6 @@ export function App() {
     failure: attestationFailure,
     now: attestationNow,
   });
-  const connectivitySeal = online ? undefined : {
-    state: "attention" as const,
-    label: OFFLINE_RUNTIME_LABEL,
-    detail: OFFLINE_RUNTIME_DETAIL,
-  };
   const localDeviceRuntimeAdopted = Boolean(
     localDeviceStatus
     && runtime.current?.workspaceId.startsWith("vault+local-device://"),
@@ -1168,7 +1236,13 @@ export function App() {
           ? "Cloud Vault active"
           : preferences.vaultBackend === "local-device"
             ? localDeviceBusy ? "Opening Local Device Vault" : "Local Device setup"
-            : vaultSnapshot.phase === "ready" ? "Vault adoption pending" : vaultSnapshot.phase === "probing" ? "Vault testing" : vaultSnapshot.phase === "configured" ? "Vault configured" : vaultSnapshot.phase === "degraded" ? "Vault blocked" : "Ephemeral",
+            // "Ephemeral" here answered "is a vault backend adopted in this
+            // tab", while the session chip's "Ephemeral · this page only"
+            // answers "where does *this conversation's* journal live". Two
+            // different claims that read identically only because both are
+            // currently empty. Naming the axis for what it measures is what
+            // stops one screen printing the same word twice for two facts.
+            : vaultSnapshot.phase === "ready" ? "Vault adoption pending" : vaultSnapshot.phase === "probing" ? "Vault testing" : vaultSnapshot.phase === "configured" ? "Vault configured" : vaultSnapshot.phase === "degraded" ? "Vault blocked" : "No vault adopted",
       state: vaultRuntimeAdopted
         ? "verified"
         : localDeviceBusy || vaultSnapshot.phase === "ready" || vaultSnapshot.phase === "probing"
@@ -1192,7 +1266,6 @@ export function App() {
     { id: "e2ee", label: inferenceStatusLabel, state: activeChutesConnection ? (connection.invokeAuthorization === "verified" ? "verified" : "asserted") : activeExternalConnection ? "asserted" : "none", detail: inferenceStatusDetail, view: "access" },
     { id: "attestation", label: attestationSeal.label, state: attestationSeal.state, detail: attestationSeal.detail, view: "proof" },
   ]);
-  const mobilePostureSeal = worstTrustAxis(trustAxes) ?? trustAxes[0]!;
   const attestationReceipts = useMemo(() => sessionAttestationReceipts({
     messages,
     sessionId,
@@ -1705,7 +1778,7 @@ export function App() {
       const profile = nextCatalog.profiles.find((candidate) => candidate.profileId === "general") ?? nextCatalog.profiles[0];
       if (!profile) throw new Error("Airship has no built-in agent profile.");
       const workspace = new MemoryWorkspace();
-      const [{ WorkspaceGitAdapter, AIRSHIP_BOOTSTRAP_FILES }, { browserInferenceFabric }, { InspectInferenceConnectionsTool }] = await Promise.all([
+      const [{ WorkspaceGitAdapter, AIRSHIP_BOOTSTRAP_FILES, BrowserGitClient }, { browserInferenceFabric }, { InspectInferenceConnectionsTool }] = await Promise.all([
         loadBrowserGit(),
         import("../inference/fabric"),
         import("../inference/providers"),
@@ -1905,6 +1978,17 @@ export function App() {
     };
     media.addEventListener("change", closeAboveMobile);
     return () => media.removeEventListener("change", closeAboveMobile);
+  }, []);
+
+  // The placeholder is measured, not guessed: the long form overflowed a phone
+  // content box and was sliced mid-line. The words it drops stay on the control
+  // as its title and in the slash menu, so nothing is lost by shortening it.
+  useEffect(() => {
+    const media = window.matchMedia(COMPOSER_NARROW_PLACEHOLDER_QUERY);
+    const sync = () => setNarrowComposer(media.matches);
+    sync();
+    media.addEventListener("change", sync);
+    return () => media.removeEventListener("change", sync);
   }, []);
 
   useEffect(() => {
@@ -3068,7 +3152,7 @@ export function App() {
         "Storage authority changed to an encrypted Vault. Restart this terminal against the adopted workspace.",
       );
     }
-    const [{ WorkspaceGitAdapter }, pristineBootstrap] = await Promise.all([
+    const [{ WorkspaceGitAdapter, BrowserGitClient }, pristineBootstrap] = await Promise.all([
       loadBrowserGit(),
       targetAuthoritative ? Promise.resolve(true) : isPristineBootstrapRuntime(prior),
     ]);
@@ -3352,7 +3436,7 @@ export function App() {
     await migrateWorkspaceState(prior.workspace, workspace);
     await migrateJournalState(prior.journal, journalBackend);
 
-    const { WorkspaceGitAdapter } = await loadBrowserGit();
+    const { WorkspaceGitAdapter, BrowserGitClient } = await loadBrowserGit();
     const nextGitClient = new BrowserGitClient(await WorkspaceGitAdapter.open(
       workspace,
       () => existingWorkspaceFallbackSeed(workspace),
@@ -4519,7 +4603,6 @@ export function App() {
     return <BootScreen status={runtimeStatus} />;
   }
   const platformOverlayOpen = mobileMoreOpen || paletteOpen || preferencesOpen || trustSheetOpen || approvalPending;
-  const vaultTrustAxis = trustAxes.find((axis) => axis.id === "vault")!;
   const sessionDurability = localDeviceRuntimeAdopted
     ? {
         state: "local" as const,
@@ -4536,6 +4619,73 @@ export function App() {
           ? "The cloud object-store contract is verified, but this active runtime has not adopted it; this session remains in page memory."
           : "This session journal exists only in page memory. Nothing is synced.",
       };
+  /*
+   * An empty conversation renders its intro, not a card. The seed flag — not
+   * the message count — is the fence: a materialized session can legitimately
+   * hold exactly one real message, and re-presenting that as chrome would
+   * delete a turn from the screen.
+   */
+  const seedOnlyTranscript = messages.length === 0
+    || (messages.length === 1 && messages[0]!.seed === true);
+  const e2eeTrustAxis = trustAxes.find((axis) => axis.id === "e2ee")!;
+  // Page memory is `none`, not `failed`: nothing has gone wrong, no durability
+  // evidence has been requested. Mirrors `DurabilityIndicator`'s own mapping,
+  // which is the vocabulary this claim belongs to.
+  const sessionDurabilitySeal: SealState = sessionDurability.state === "ephemeral" ? "none" : "verified";
+  /**
+   * The four claims the session bar used to render as four separate objects —
+   * an attestation button, a lifecycle dot, a durability pill and a boundary
+   * pill 140px away in the model card. They are assembled here rather than
+   * inside the chip because every string is quoted verbatim from the vocabulary
+   * that owns it, and none of those vocabularies belong to the chip.
+   */
+  const sessionStatusFacts: readonly SessionStatusFact[] = Object.freeze([
+    Object.freeze({
+      id: "posture" as const,
+      state: e2eeTrustAxis.state,
+      label: activeChutesConnection ? activeConnectionBoundaryLabel(connection) : e2eeTrustAxis.label,
+      detail: e2eeTrustAxis.detail,
+      short: sessionStatusShort(
+        activeChutesConnection ? activeConnectionBoundaryLabel(connection) : e2eeTrustAxis.label,
+        SEAL_LABELS[e2eeTrustAxis.state],
+      ),
+      action: Object.freeze({ label: "Models", onSelect: () => navigate("access") }),
+    }),
+    Object.freeze({
+      id: "attestation" as const,
+      state: attestationSeal.state,
+      // Verbatim from `.session-attestation`, which stated the scope clause and
+      // then hid the sentence explaining it in a `title`. Both are visible now.
+      label: `${attestationSeal.label} · this session`,
+      detail: attestationSeal.detail,
+      short: sessionStatusShort(attestationSeal.label, SEAL_LABELS[attestationSeal.state]),
+      action: Object.freeze({ label: "Proof", onSelect: () => openSessionProof() }),
+    }),
+    Object.freeze({
+      id: "durability" as const,
+      state: sessionDurabilitySeal,
+      label: durabilityLabel(sessionDurability.state),
+      detail: sessionDurability.detail,
+      short: sessionStatusShort(durabilityLabel(sessionDurability.state), SEAL_LABELS[sessionDurabilitySeal]),
+      action: Object.freeze({ label: "Vault", onSelect: () => navigate("vault") }),
+    }),
+    Object.freeze({
+      id: "lifecycle" as const,
+      // A completed turn is not `verified`: nothing cryptographic was checked by
+      // finishing. It stays `none` so the seal vocabulary keeps meaning what
+      // §4.4 says it means.
+      state: sessionLifecycle.state === "running"
+        ? "checking"
+        : sessionLifecycle.state === "failed"
+          ? "failed"
+          : sessionLifecycle.state === "cancelled" ? "attention" : "none",
+      label: sessionLifecycle.label,
+      detail: sessionLifecycle.turnId
+        ? `Turn ${sessionLifecycle.turnId} in this session.`
+        : "No turn has started in this session.",
+      short: sessionStatusShort(sessionLifecycle.label, SESSION_LIFECYCLE_SHORT[sessionLifecycle.state]),
+    }),
+  ]);
 
   return (
     <div class="app-shell" data-connectivity={online ? "online" : "offline"}>
@@ -4565,61 +4715,23 @@ export function App() {
           <span class="edition">edge runtime</span>
         </button>
         <TabPresenceNote />
+        {/* One chip, every width, every connection state. The four axis pills
+            (398px, the fourth truncated) and the phone-only `.mobile-trust-chip`
+            were two components rendering one fact at two sizes; the sheet they
+            both open still renders all four axes verbatim. */}
         <div class="topbar-center" aria-label="Runtime state">
-          <StatusSeal state="none" origin="local" label="Browser / Edge runtime" detail="The agent kernel is executing in this browser; no remote proof is implied." onClick={() => openSessionProof()} />
-          <StatusSeal
-            state={vaultTrustAxis.state}
-            label={vaultTrustAxis.label}
-            detail={vaultTrustAxis.detail}
-            onClick={() => navigate("vault")}
-          />
-          <StatusSeal
-            state={activeChutesConnection
-              ? (connection.invokeAuthorization === "verified" ? "verified" : "asserted")
-              : activeExternalConnection ? "asserted" : "none"}
-            label={inferenceStatusLabel}
-            detail={inferenceStatusDetail}
-            action={!inferenceConnected}
-            onClick={() => navigate("access")}
-          />
-          {activeChutesConnection || lastReceipt || attestationRecords.length > 0 || attestationFailure ? (
-            <StatusSeal
-              state={attestationSeal.state}
-              label={attestationSeal.label}
-              detail={attestationSeal.detail}
-              onClick={() => openAttestationEvidence()}
-            />
-          ) : null}
-          {connectivitySeal ? (
-            <StatusSeal
-              state={connectivitySeal.state}
-              origin="local"
-              label={connectivitySeal.label}
-              detail={connectivitySeal.detail}
-              onClick={() => navigate("access")}
-            />
-          ) : null}
+          <TopbarPostureChip axes={trustAxes} onOpen={() => setTrustSheetOpen(true)} />
         </div>
         <div class="topbar-actions">
+          {/* The `e2ee` axis used to render its own action pill here on desktop
+              and a second one inside the guidance band 130px below it, while a
+              phone got a third, differently-worded one. This is the one button:
+              same verb at every width, and the only brass object above the fold,
+              because connecting a provider is the only thing a disconnected user
+              has to do. Its visible text and its accessible name are the same
+              string, so the shipped `exact: true` selector reads what is drawn. */}
           {!inferenceConnected ? (
-            <button class="mobile-inference-action" type="button" aria-label="Connect a model" onClick={() => navigate("access")}>Connect</button>
-          ) : null}
-          {inferenceConnected ? (
-            <button
-              class="mobile-trust-chip"
-              type="button"
-              onClick={() => setTrustSheetOpen(true)}
-              aria-label={`Open runtime trust details. Weakest claim: ${mobilePostureSeal.label}`}
-            >
-              <Seal
-                state={mobilePostureSeal.state}
-                acting={mobilePostureSeal.state === "checking"}
-                label={mobilePostureSeal.label}
-                detail={mobilePostureSeal.detail}
-                size={16}
-                compact
-              />
-            </button>
+            <button class="topbar-connect-action" type="button" onClick={() => navigate("access")}>Connect a model</button>
           ) : null}
           <MenuSelect
             className="compact-profile-menu"
@@ -4776,23 +4888,27 @@ export function App() {
         {["proof", "vault", "access", "billing"].includes(view) ? <TrustHubTabs view={view} onNavigate={navigatePrimary} /> : null}
         {view === "chat" ? (
           <>
-            <section class="chat-stage" aria-label="Agent session">
-              <div class="stage-header">
-                <div class="stage-header-title">
-                  <span class="eyebrow">Active session · {activeProfile.name}</span>
-                  <h1>{activeSessionRecord?.title ?? activeProfile.name}</h1>
-                </div>
-                <button
-                  class="mobile-new-conversation"
-                  type="button"
-                  aria-label="New conversation"
-                  title="New conversation"
-                  disabled={busy}
-                  onClick={() => void createConversation()}
-                >
-                  <Icon name="plus" size={17} />
-                </button>
-                <div class="stage-header-model">
+            <section class="chat-stage" aria-label="Agent session" data-scrolled={stageScrolled ? "true" : undefined}>
+              <SessionBar
+                title={activeSessionRecord?.title ?? activeProfile.name}
+                profileName={activeProfile.name}
+                monogram={profileMonogram(activeProfile.name)}
+                statusFacts={sessionStatusFacts}
+                durabilityLabel={durabilityLabel(sessionDurability.state)}
+                journal={{
+                  eventCount,
+                  sessionId,
+                  lineage: activeSessionRecord?.manifest.lineage?.kind === "fork"
+                    ? {
+                        sourceSessionId: activeSessionRecord.manifest.lineage.sourceSessionId,
+                        onOpen: () => void openPaletteSession(activeSessionRecord.manifest.lineage!.sourceSessionId),
+                      }
+                    : undefined,
+                }}
+                onOpenSession={() => navigate("sessions")}
+                onNewConversation={() => void createConversation()}
+                newConversationDisabled={busy}
+                model={inferenceConnected || pinnedExternalRoute || activeInferenceBinding?.providerId === "chutes" ? (
                   <ModelControl
                     active={activeChutesConnection ? {
                       providerLabel: "Chutes",
@@ -4826,56 +4942,8 @@ export function App() {
                     onSelect={activeChutesConnection ? switchChutesModel : switchExternalModel}
                     onOpenConnection={() => navigate("access")}
                   />
-                </div>
-                <button
-                  class="mobile-session-details"
-                  type="button"
-                  onClick={() => navigate("sessions")}
-                  aria-label={`Session. ${durabilityLabel(sessionDurability.state)}. ${attestationSeal.label}.`}
-                  title={`Open details for session ${sessionId ?? "starting"}. ${sessionDurability.detail}`}
-                >
-                  <Seal
-                    state={attestationSeal.state}
-                    label="Session"
-                    detail={`${attestationSeal.label}. ${attestationSeal.detail}`}
-                    size={15}
-                    compact
-                  />
-                  <DurabilityIndicator state={sessionDurability.state} detail={sessionDurability.detail} />
-                </button>
-                <div class="session-meta">
-                  <div class="session-meta-trust">
-                    <button class="session-attestation" type="button" onClick={() => openSessionProof()} title="Open this session's proof">
-                      <Seal state={attestationSeal.state} label={`${attestationSeal.label} · this session`} detail={`Session ${sessionId ?? "starting"}. ${attestationSeal.detail}`} size={16} compact />
-                    </button>
-                    <span class={`session-lifecycle ${sessionLifecycle.state}`} title={sessionLifecycle.turnId ? `Turn ${sessionLifecycle.turnId}` : "No turn has started in this session"}>
-                      <span aria-hidden="true" />{sessionLifecycle.label}
-                    </span>
-                    <DurabilityIndicator state={sessionDurability.state} detail={sessionDurability.detail} />
-                  </div>
-                  <div class="session-meta-record">
-                    {activeSessionRecord?.manifest.lineage?.kind === "fork" ? (
-                      <button
-                        class="session-branch-link"
-                        type="button"
-                        title={`Open source conversation ${activeSessionRecord.manifest.lineage.sourceSessionId}`}
-                        onClick={() => void openPaletteSession(activeSessionRecord.manifest.lineage!.sourceSessionId)}
-                      >
-                        <Icon name="branch" size={13} />
-                        Branch from #{activeSessionRecord.manifest.lineage.sourceSessionId.slice(0, 8)}
-                      </button>
-                    ) : null}
-                    {/* P11: plain language leads. "page-journal event" is the
-                        internal record name and stays available on hover. */}
-                    <span title={`${eventCount} page-journal event${eventCount === 1 ? "" : "s"}`}>{eventCount} recorded step{eventCount === 1 ? "" : "s"}</span>
-                    <button class="session-id" type="button" title="Open conversation details" onClick={() => navigate("sessions")}>#{sessionId ? sessionId.slice(0, 8) : "starting"}</button>
-                  </div>
-                </div>
-              </div>
-              {!inferenceConnected ? <div class="chat-live-guidance" id="chat-demo-guidance" role="note">
-                <span><strong>Workspace, editor, terminal and Git work right now.</strong> Chat needs a model provider; this composer is a deterministic demo.</span>
-                <button type="button" onClick={() => navigate("access")}>Connect a model</button>
-              </div> : null}
+                ) : <DemoModelChip onConnect={() => navigate("access")} />}
+              />
               <div
                 ref={transcriptElement}
                 class={messages.length <= 1 ? "transcript no-turns" : "transcript"}
@@ -4884,6 +4952,11 @@ export function App() {
                   const pinned = isNearLastRealCard(element, 64);
                   transcriptPinned.current = pinned;
                   setTranscriptDetached(!pinned);
+                  // The only scroll-driven collapse in the product. The bar sheds
+                  // chip labels, never chips: every `title` and `aria-label`
+                  // survives, and `(pointer: coarse)` opts out entirely in CSS so
+                  // a 44px target can never shrink under a thumb.
+                  setStageScrolled(element.scrollTop > SESSION_BAR_COLLAPSE_SCROLL);
                 }}
               >
                 {transcriptBoundary ? (
@@ -4899,6 +4972,20 @@ export function App() {
                     </span>
                   </div>
                 ) : null}
+                {/* An empty transcript has no turns, so it renders no turn
+                    cards. The seed "message" was an assistant card no model
+                    produced, with an avatar attributing a speaker and a
+                    Retry/Branch menu whose operations had no referent; its two
+                    real claims are the intro's own lines and its per-context
+                    note is passed through verbatim. */}
+                {seedOnlyTranscript ? (
+                  <TranscriptIntro
+                    note={transcriptIntroNote(messages[0]?.content)}
+                    demo={composerUsesDemo}
+                    tier={activeSessionRecord?.manifest.capabilityTier}
+                    onOpenCapabilities={() => navigate("capabilities")}
+                  />
+                ) : <>
                 {windowedTranscript.topSpacerHeight > 0
                   ? <div class="transcript-spacer" style={{ height: windowedTranscript.topSpacerHeight }} aria-hidden="true" />
                   : null}
@@ -4930,6 +5017,7 @@ export function App() {
                     />
                   </div>
                 ))}
+                </>}
                 {messages.length <= 1 ? (
                   <div class="transcript-starters" role="group" aria-label="Suggested ways to begin">
                     {(inferenceConnected ? CONNECTED_STARTERS : DISCONNECTED_STARTERS).map((starter) => (
@@ -4971,6 +5059,15 @@ export function App() {
                 ) : null}
               </div>
               <div class="composer-wrap">
+                {/* Send's `aria-describedby` points here. The guidance band that
+                    used to own this id was a 42px banner; the transcript intro
+                    that now says the same sentence unmounts after the first
+                    turn, and a popover unmounts when it closes. This paragraph
+                    is the only carrier whose lifetime matches the reference, so
+                    the description can never dangle. */}
+                {composerUsesDemo ? (
+                  <p class="sr-only" id="chat-demo-guidance">{TRANSCRIPT_INTRO_DEMO_LINE}</p>
+                ) : null}
                 <div
                   class={`composer${busy ? " busy" : ""}`}
                 >
@@ -5029,7 +5126,8 @@ export function App() {
                       aria-activedescendant={slashMenuOpen && slashSelection >= 0 ? `slash-option-${slashSelection}` : undefined}
                       rows={1}
                       value={input}
-                      placeholder="Ask Airship or type / for tools and session commands…"
+                      placeholder={composerPlaceholder(narrowComposer)}
+                      title={COMPOSER_PLACEHOLDER_TITLE}
                       onInput={(event) => setInput(event.currentTarget.value)}
                       onPaste={(event) => {
                         const pasted = Array.from(event.clipboardData?.files ?? []);
@@ -6091,14 +6189,6 @@ function BootScreen({ status }: { status: string }) {
       <p role="status" aria-live="polite">{status}</p>
     </main>
   );
-}
-
-function StatusSeal({ state, label, detail, origin, action = false, onClick }: { state: SealState; label: string; detail: string; origin?: "local" | "remote"; action?: boolean; onClick(): void }) {
-  const detailId = useId();
-  return <button class={`status-seal${action ? " status-seal--action" : ""}`} type="button" data-state={state} aria-describedby={detailId} onClick={onClick}>
-    <Seal state={state} origin={origin} acting={state === "checking"} label={label} detail={detail} size={16} />
-    <span id={detailId} class="status-seal-detail" role="tooltip">{detail}</span>
-  </button>;
 }
 
 function receiptSealState(receipt?: ConversationReceipt): SealState {

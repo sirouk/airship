@@ -11,10 +11,16 @@ describe("offline runtime UI contract", () => {
   it("owns browser connectivity and projects it into desktop and mobile posture", () => {
     expect(app).toContain("observeConnectivity(window, navigator, setOnline)");
     expect(app).toContain('data-connectivity={online ? "online" : "offline"}');
-    expect(app).toContain("label={connectivitySeal.label}");
-    expect(app).toContain("const mobilePostureSeal = worstTrustAxis(trustAxes)");
-    expect(app).toContain("OFFLINE_RUNTIME_LABEL");
-    expect(app).toContain("setTrustSheetOpen(true)");
+    // Offline used to be a fifth topbar pill on desktop and a separate chip
+    // component on a phone, both fed from a bespoke `connectivitySeal`. It is
+    // now one claim on the `local` axis, projected into one chip at every
+    // width — so this asserts the axis carries the offline label and detail
+    // rather than asserting that two components exist. Stronger: the previous
+    // assertions passed while the phone chip was gated on being connected,
+    // which meant a disconnected phone rendered no posture at all.
+    expect(app).toMatch(/id: "local", label: online \? "Browser \/ Edge runtime" : OFFLINE_RUNTIME_LABEL/u);
+    expect(app).toMatch(/detail: online \? "[^"]+" : OFFLINE_RUNTIME_DETAIL/u);
+    expect(app).toContain("<TopbarPostureChip axes={trustAxes} onOpen={() => setTrustSheetOpen(true)} />");
   });
 
   it("blocks only remote composer sends while retaining local slash execution", () => {

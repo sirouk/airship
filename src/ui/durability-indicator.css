@@ -1,9 +1,14 @@
-.durability-indicator { display:inline-flex; align-items:center; gap:7px; width:max-content; padding:5px 8px; border:1px solid var(--line-strong); border-radius:var(--radius-control); color:var(--ink-muted); font-size:var(--fs-caption); }
-.durability-indicator i { width:8px; height:8px; border:1px solid currentColor; border-radius:50%; }
-.durability-indicator.ephemeral { border-style:dashed; color:var(--truth-local); }
-.durability-indicator.local { border-style:solid; color:var(--v-info); }
-.durability-indicator.local i { background:currentColor; }
-.durability-indicator.syncing { border-style:dashed; color:var(--v-info); }
-.durability-indicator.syncing i { border-top-color:transparent; }
-.durability-indicator.synced { border-style:solid; color:var(--v-verified); }
-.durability-indicator.synced i { background:currentColor; }
+/*
+ * Layout and the live region only. The pill, the border tone, the type size and
+ * the bespoke 8px fully-rounded dot are all gone: the <Seal> chip inside is the
+ * chip, and the four durability states are four seal states rather than four
+ * bespoke border treatments.
+ */
+/* `flex: 0 0 auto` because a chip that a flex sibling is allowed to squeeze
+   ellipsises the claim it exists to state — which is how `Ephemeral · this
+   page only` became `Ephemeral · this p…` in a heading with 550px to spare. */
+.durability-indicator { display:inline-flex; min-width:0; width:max-content; flex:0 0 auto; }
+/* Page memory is unchecked, not broken, and `--truth-local` is the tone that
+   says "this is happening here". Expressed in the sheet rather than as an
+   `origin` prop so the claim costs no startup bytes. */
+.durability-indicator.ephemeral .seal { color:var(--truth-local); }

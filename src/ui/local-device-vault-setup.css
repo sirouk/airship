@@ -279,16 +279,11 @@
   margin: 2px 0 0;
 }
 
-.local-device-vault__notice {
-  padding: 10px 12px;
-  border: 1px solid currentColor;
-  border-radius: var(--radius-control);
-  line-height: 1.45;
-}
-
-.local-device-vault__notice--success { color: var(--v-verified); }
-.local-device-vault__notice--info { color: var(--v-info); }
-.local-device-vault__notice--error { color: var(--v-caution); }
+/* Box, border and radius come from the one `.notice` recipe in shell.css; the
+   state tints the boundary and the sentence keeps a readable ink. */
+.local-device-vault__notice--success { --notice-tone: var(--v-verified); }
+.local-device-vault__notice--info { --notice-tone: var(--v-info); }
+.local-device-vault__notice--error { --notice-tone: var(--v-caution); }
 
 @media (max-width: 760px) {
   .local-device-vault { padding: 13px; }

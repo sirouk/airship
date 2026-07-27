@@ -1,8 +1,21 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
+
+/**
+ * The empty transcript is an intro panel now, not a seeded message card, so a
+ * test about message chrome has to produce a real message first. The local
+ * demo provider answers deterministically with no credential, which keeps this
+ * a layout contract rather than a provider test.
+ */
+async function seedOneTurn(page: Page) {
+  await page.goto("/#chat");
+  await page.getByRole("combobox", { name: "Message Airship" }).fill("hello");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(page.locator("[data-transcript-card]").first()).toBeVisible({ timeout: 30_000 });
+}
 
 test("revealing message actions on hover does not change message or transcript geometry", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name.includes("mobile"), "desktop hover layout contract");
-  await page.goto("/#chat");
+  await seedOneTurn(page);
   const transcript = page.locator(".transcript");
   const message = page.locator("[data-transcript-card]").first();
   const actions = message.locator(".message-actions");
@@ -34,7 +47,7 @@ test("revealing message actions on hover does not change message or transcript g
 
 test("touch messages expose one calm action trigger and tappable actions", async ({ page }, testInfo) => {
   test.skip(!testInfo.project.name.includes("mobile"), "touch layout contract");
-  await page.goto("/#chat");
+  await seedOneTurn(page);
   const message = page.locator("[data-transcript-card]").first();
   const trigger = message.getByRole("button", { name: "Message actions" });
 
@@ -65,7 +78,7 @@ test("touch messages expose one calm action trigger and tappable actions", async
  */
 test("pointer messages expose actions that can actually be clicked and tabbed to", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name.includes("mobile"), "pointer layout contract");
-  await page.goto("/#chat");
+  await seedOneTurn(page);
   const message = page.locator("[data-transcript-card]").first();
   const copy = message.locator(".message-actions button", { hasText: "Copy" }).first();
 

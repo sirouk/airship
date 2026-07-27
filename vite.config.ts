@@ -147,8 +147,26 @@ export default defineConfig({
            */
           const ownedByBridge = modules.length > 0
             && modules.every((id) => id.includes("/inference/bridge/"));
-          return ownedByBridge
-            ? "assets/inference-bridge-pack-[hash].js"
+          if (ownedByBridge) return "assets/inference-bridge-pack-[hash].js";
+          /*
+           * `git/client.ts` moved off the startup path so a visitor who never
+           * opens the Workspace does not pay for Git. Alone it emits a chunk
+           * named `client`, a shape the release gate's Proof-surface classifier
+           * already claims. Name it for what it is so the classifier stays
+           * exact rather than matching by accident.
+           */
+          /*
+           * Any chunk made purely of Git modules that is not the adapter facade
+           * belongs to this pack. Moving the client off first paint split
+           * `git/operations.ts` out beside it, and a second generically named
+           * chunk is exactly what the classifier must not have to guess about.
+           */
+          const GIT_CLIENT_MODULES = ["/src/git/client.ts", "/src/git/operations.ts"];
+          const ownedByGitClient = modules.length > 0
+            && modules.every((id) => id.includes("/src/git/"))
+            && modules.some((id) => GIT_CLIENT_MODULES.some((entry) => id.includes(entry)));
+          return ownedByGitClient
+            ? "assets/browser-git-client-[hash].js"
             : "assets/[name]-[hash].js";
         },
       },

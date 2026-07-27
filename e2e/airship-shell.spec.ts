@@ -32,11 +32,22 @@ test("desktop shell navigates real routes and presents a coherent session header
   await expect(page.getByRole("navigation", { name: "Primary" })).toBeVisible();
   await expect(page.getByRole("navigation", { name: "Mobile navigation" })).toBeHidden();
   await expect(page.getByRole("region", { name: "Agent session" })).toBeVisible();
-  await expect(page.locator(".stage-header .eyebrow")).toContainText("Active session");
-  await expect(page.locator(".stage-header h1")).not.toHaveText("");
-  await expect(page.locator(".session-lifecycle")).toContainText("Ready");
-  await expect(page.locator(".session-id")).toHaveText(/^#[a-z0-9-]{1,8}$/i);
-  await expect(page.locator(".stage-header").getByRole("button").first()).toBeVisible();
+  // The 15px `ACTIVE SESSION · GENERAL` band is gone as text; it is the
+  // profile mark's accessible name now, which is *more* reachable than a
+  // decorative eyebrow was — a screen reader hears it as part of the H1.
+  await expect(page.getByRole("heading", { level: 1 }))
+    .toHaveAccessibleName(/Active session · General profile/u);
+  await expect(page.locator(".session-bar__title")).not.toHaveText("");
+  // `Ready` and the session id were two separate 11px strings in a meta row.
+  // Both survive: the lifecycle in the session-status popover, the id on the
+  // journal chip, which additionally states the step count it used to omit.
+  await expect(page.locator(".journal-chip__id")).toHaveText(/^#[a-z0-9-]{1,8}$/i);
+  await page.locator(".session-status-chip").click();
+  await expect(page.locator(".session-status-popover .popover__panel")).toContainText("Ready");
+  await expect(page.locator(".session-status-popover .popover__panel"))
+    .toContainText("No turn has started in this session.");
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".session-bar").getByRole("button").first()).toBeVisible();
 
   await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "All conversations" }).click();
   await expect(page).toHaveURL(/#sessions$/);
@@ -56,19 +67,34 @@ test("compact runtime indicators disclose scoped detail without expanding the to
   test.skip(testInfo.project.name !== "desktop-chromium", "desktop indicator disclosure contract");
   await openReadyApp(page);
 
-  const runtime = page.locator(".topbar-center .status-seal").filter({ hasText: "Browser / Edge runtime" });
+  // Four axis pills — the fourth truncated to `Secure hardware not c…` — are
+  // one chip that states the weakest claim in full and counts the rest. The
+  // detail sentence used to exist only in a `role="tooltip"` a touch user could
+  // never open; it is now a row in the sheet the chip opens, which is a
+  // stronger disclosure than the one this test was written to protect.
+  const runtime = page.locator(".topbar-posture-chip");
+  await expect(runtime).toContainText("Browser / Edge runtime");
+  await expect(runtime).toContainText("4 axes");
   const initialTopbar = await page.locator(".topbar").boundingBox();
   expect(initialTopbar).not.toBeNull();
-  await runtime.hover();
-  const detail = runtime.getByRole("tooltip");
-  await expect(detail).toBeVisible();
-  await expect(detail).toContainText("agent kernel is executing in this browser");
+  await runtime.click();
+  const sheet = page.getByRole("dialog", { name: "Runtime trust" });
+  await expect(sheet).toContainText("The agent kernel executes in this browser.");
+  // The chip says four; the sheet must render four. The count is the chip's
+  // statement of its own cost, so it may not drift from what it hides.
+  await expect(sheet.locator(".claim-rows > button")).toHaveCount(4);
   const disclosedTopbar = await page.locator(".topbar").boundingBox();
   expect(disclosedTopbar).not.toBeNull();
   expect(disclosedTopbar!.height).toBe(initialTopbar!.height);
 
+  // The sheet is the disclosure, so it must be dismissible and re-openable by
+  // keyboard alone — the tooltip it replaces was hover-only and unreachable.
+  await sheet.getByRole("button", { name: "Close" }).click();
+  await expect(sheet).toBeHidden();
   await runtime.focus();
-  await expect(detail).toBeVisible();
+  await expect(runtime).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("dialog", { name: "Runtime trust" })).toBeVisible();
 });
 
 test("the first user turn gives a new conversation a useful thread title", async ({ page }, testInfo) => {
@@ -304,8 +330,8 @@ test("desktop profile menu changes the real active profile and creates a coheren
   const listbox = page.getByRole("listbox", { name: "Agent profile" });
   await expect(listbox).toBeVisible();
   await listbox.getByRole("option", { name: /Research/ }).click();
-  await expect(page.locator(".stage-header .eyebrow")).toContainText("Research");
-  await expect(page.locator(".stage-header h1")).toContainText("Research");
+  await expect(page.getByRole("heading", { level: 1 })).toHaveAccessibleName(/Research profile/u);
+  await expect(page.locator(".session-bar__title")).toContainText("Research");
   await expect(profile).toContainText("Research");
   await expect(listbox).toBeHidden();
   await page.screenshot({ path: testInfo.outputPath("profile-switched.png"), fullPage: true });
@@ -314,7 +340,7 @@ test("desktop profile menu changes the real active profile and creates a coheren
 test("route gutter and density preferences apply consistently to the whole layout", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium", "desktop layout contract");
   await openReadyApp(page);
-  const comfortableHeader = await page.locator(".stage-header").boundingBox();
+  const comfortableHeader = await page.locator(".session-bar").boundingBox();
   const comfortableFont = await page.locator("html").evaluate((element) => Number.parseFloat(getComputedStyle(element).fontSize));
   expect(comfortableHeader).not.toBeNull();
   expect(comfortableFont).toBeGreaterThanOrEqual(17);
@@ -322,11 +348,19 @@ test("route gutter and density preferences apply consistently to the whole layou
   const offsets: number[] = [];
   for (const route of ["All conversations", "Workspace", "Profiles"] as const) {
     await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: route, exact: true }).click();
-    const main = await page.locator("main.main").boundingBox();
-    const content = await page.getByRole("heading", { level: 1 }).boundingBox();
-    expect(main).not.toBeNull();
-    expect(content).not.toBeNull();
-    offsets.push(content!.x - main!.x);
+    // Two separate `boundingBox()` calls race the lazy route swap: the outgoing
+    // route's H1 can satisfy the first and be detached by the second, and
+    // `boundingBox()` does not retry a null. One evaluate measures both boxes
+    // against the same frame. The gutter assertions below are unchanged.
+    const heading = page.locator("main.main h1");
+    await expect(heading).toBeVisible();
+    const offset = await page.evaluate(() => {
+      const main = document.querySelector<HTMLElement>("main.main")?.getBoundingClientRect();
+      const title = document.querySelector<HTMLElement>("main.main h1")?.getBoundingClientRect();
+      return main && title ? title.x - main.x : undefined;
+    });
+    expect(offset).toBeDefined();
+    offsets.push(offset!);
   }
   expect(Math.max(...offsets) - Math.min(...offsets)).toBeLessThanOrEqual(1);
   expect(offsets[0]).toBeGreaterThanOrEqual(14);
@@ -339,7 +373,7 @@ test("route gutter and density preferences apply consistently to the whole layou
   await expect(page.locator("html")).toHaveAttribute("data-density", "compact");
   const compactFont = await page.locator("html").evaluate((element) => Number.parseFloat(getComputedStyle(element).fontSize));
   await page.getByRole("dialog", { name: "Preferences" }).getByRole("button", { name: "Done" }).click();
-  const compactHeader = await page.locator(".stage-header").boundingBox();
+  const compactHeader = await page.locator(".session-bar").boundingBox();
   expect(compactHeader).not.toBeNull();
   expect(compactFont).toBeLessThan(comfortableFont);
   expect(compactHeader!.height).toBeLessThan(comfortableHeader!.height);
@@ -349,17 +383,23 @@ test("route gutter and density preferences apply consistently to the whole layou
 test("mobile session header groups wrap without overlap and profile switching remains usable", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile-chromium", "mobile profile and geometry contract");
   await openReadyApp(page);
-  const sessionDetails = page.locator(".mobile-session-details");
+  // `.mobile-session-details` was a third rendering of a pair the desktop meta
+  // row and the topbar already showed, and it stacked two seal glyphs to do it.
+  // One chip renders one glyph; the durability sentence it kept in a `title` is
+  // visible body text in its popover for the first time.
+  const sessionDetails = page.locator(".session-status-chip");
   await expect(sessionDetails).toBeVisible();
-  const stage = await page.locator(".stage-header").boundingBox();
-  const details = await sessionDetails.boundingBox();
+  const stage = await page.locator(".session-bar").boundingBox();
+  const details = await page.locator(".session-bar__chips").boundingBox();
   expect(stage).not.toBeNull();
   expect(details).not.toBeNull();
-  await expect(page.locator(".session-meta")).toBeHidden();
   await expect(sessionDetails).toHaveAccessibleName(/Session\. Ephemeral · this page only\./u);
-  await expect(sessionDetails.getByRole("status")).toHaveText("Ephemeral · this page only");
-  await expect(sessionDetails.getByRole("status")).toHaveClass(/ephemeral/u);
-  await expect(sessionDetails.getByRole("status")).toHaveAttribute("title", "This session journal exists only in page memory. Nothing is synced.");
+  await expect(sessionDetails.locator(".seal")).toHaveCount(1);
+  await sessionDetails.click();
+  const sessionState = page.locator(".session-status-popover .popover__panel");
+  await expect(sessionState).toContainText("Ephemeral · this page only");
+  await expect(sessionState).toContainText("This session journal exists only in page memory. Nothing is synced.");
+  await page.keyboard.press("Escape");
   expect(details!.x).toBeGreaterThanOrEqual(stage!.x);
   expect(details!.x + details!.width).toBeLessThanOrEqual(stage!.x + stage!.width + 1);
   expect(details!.y).toBeGreaterThanOrEqual(stage!.y);
@@ -368,7 +408,7 @@ test("mobile session header groups wrap without overlap and profile switching re
   const profile = page.locator(".compact-profile-menu").getByRole("button", { name: "Agent profile" });
   await profile.click();
   await page.getByRole("listbox", { name: "Agent profile" }).getByRole("option", { name: /Builder \/ Systems/ }).click();
-  await expect(page.locator(".stage-header .eyebrow")).toContainText("Builder / Systems");
+  await expect(page.getByRole("heading", { level: 1 })).toHaveAccessibleName(/Builder \/ Systems profile/u);
   await expect(profile.locator(".profile-monogram")).toHaveText("BS");
   await page.screenshot({ path: testInfo.outputPath("mobile-header-profile.png"), fullPage: true });
 });

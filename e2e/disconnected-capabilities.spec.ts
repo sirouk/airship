@@ -9,7 +9,10 @@ test.beforeEach(async ({ page }) => {
 
 test("disconnected Chat keeps local commands live and offers one clear inference handoff", async ({ page }) => {
   await page.goto("/#chat");
-  const guidance = page.locator(".chat-live-guidance");
+  // The 42px band is deleted; both of its sentences render verbatim in the
+  // transcript intro, which is where an empty conversation says what it
+  // can and cannot do. Same strings, same test.
+  const guidance = page.locator(".transcript-intro");
   await expect(guidance).toContainText("Workspace, editor, terminal and Git work right now");
   await expect(guidance).toContainText("needs a model provider");
 
@@ -19,11 +22,12 @@ test("disconnected Chat keeps local commands live and offers one clear inference
   const localResult = page.getByRole("article", { name: "Airship message" }).last();
   await expect(localResult.locator(".message-capability-tier")).toContainText(/Browser (?:baseline|enhanced)/u);
 
-  // One connect verb: the inline handoff and the header chip now carry the
-  // same accessible name, on every viewport.
-  const inlineHandoff = guidance.getByRole("button", { name: "Connect a model", exact: true });
-  if (await inlineHandoff.isVisible()) await inlineHandoff.click();
-  else await page.getByRole("banner").getByRole("button", { name: "Connect a model", exact: true }).click();
+  // One connect verb, and now exactly one control carrying it at every width:
+  // the band's button, the desktop axis pill and the phone-only chip were three
+  // renderings of one action. The banner button's visible text and accessible
+  // name are the same string, so this reads what a sighted user reads.
+  await expect(page.getByRole("button", { name: "Connect a model", exact: true })).toHaveCount(1);
+  await page.getByRole("banner").getByRole("button", { name: "Connect a model", exact: true }).click();
   await expect(page).toHaveURL(/#connection$/);
   await expect(page.getByRole("heading", { name: "Connect models" })).toBeVisible();
 });

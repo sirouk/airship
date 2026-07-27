@@ -7,7 +7,7 @@ test("every conversation has a stable addressed URL and new conversations do not
   await expect(page).toHaveURL(/#chat\/[^/?#]+$/);
   const firstUrl = page.url();
 
-  await page.getByRole("button", { name: "New conversation" }).click();
+  await page.getByRole("region", { name: "Agent session" }).getByRole("button", { name: "New conversation" }).click();
   await expect.poll(() => page.url()).not.toBe(firstUrl);
   await expect(page).toHaveURL(/#chat\/[^/?#]+$/);
 
@@ -26,6 +26,13 @@ test("conversation branches preserve their source and navigate back through line
   await page.goto("/#chat");
   await expect(page).toHaveURL(/#chat\/[^/?#]+$/);
   const sourceUrl = page.url();
+  // Forked from a real turn rather than from the welcome card. That card is
+  // gone: it attributed a speaker for a message no model produced and offered
+  // Retry and Branch on it, neither of which had a referent. Branching a turn
+  // that actually happened is the stronger version of this contract.
+  const seedComposer = page.getByRole("combobox", { name: "Message Airship" });
+  await seedComposer.fill("/help");
+  await page.getByRole("button", { name: "Send message" }).click();
   const message = page.locator("[data-transcript-card]").first();
   const restoredPrompt = (await message.locator(".message-body > p").textContent())?.trim();
   expect(restoredPrompt).toBeTruthy();
@@ -54,7 +61,7 @@ test("each addressed conversation restores its own unsent draft", async ({ page 
   const composer = page.getByRole("combobox", { name: "Message Airship" });
   await composer.fill("An unsent source-conversation draft");
   await page.waitForTimeout(220);
-  await page.getByRole("button", { name: "New conversation" }).click();
+  await page.getByRole("region", { name: "Agent session" }).getByRole("button", { name: "New conversation" }).click();
   await expect.poll(() => page.url()).not.toBe(sourceUrl);
   await expect(composer).toHaveValue("");
 
@@ -106,7 +113,10 @@ test("desktop treats Chat as the conversation disclosure and preserves the full 
   await expect(page.getByRole("heading", { name: "All conversations", level: 1 })).toBeVisible();
 
   await navigation.getByRole("button", { name: "Chat", exact: true }).click();
-  await page.locator(".session-id").click();
+  // `.session-id` and its "20 recorded steps" sibling are one journal chip
+  // now: same target, same destination, and the count is no longer a
+  // separate string beside the id.
+  await page.locator(".journal-chip__record").click();
   await expect(page).toHaveURL(/#sessions$/);
 });
 
@@ -115,7 +125,7 @@ test("mobile keeps conversations out of the fixed bar and exposes the ledger thr
   await page.goto("/#chat");
   await expect(page).toHaveURL(/#chat\/[^/?#]+$/);
   const originalConversation = page.url();
-  await page.getByRole("button", { name: "New conversation" }).click();
+  await page.getByRole("region", { name: "Agent session" }).getByRole("button", { name: "New conversation" }).click();
   await expect.poll(() => page.url()).not.toBe(originalConversation);
   await expect(page).toHaveURL(/#chat\/[^/?#]+$/);
   const navigation = page.getByRole("navigation", { name: "Mobile navigation" });

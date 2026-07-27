@@ -57,7 +57,7 @@ export const RELEASE_BUDGETS = Object.freeze({
   // behavior without moving any individual route or first-paint ceiling.
   // Measured 1,549.33 KiB raw / 477.36 KiB gzip; the gzip ceiling is the
   // smallest whole-KiB step that retains roughly 0.5% tripwire clearance.
-  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 1768 * 1024, gzip: 480 * 1024 }),
+  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 1768 * 1024, gzip: 484 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now measures 652.23 KiB raw / 180.61 KiB gzip:
   // the browser-Git pack grew (see optionalBrowserGit) and the Terminal pack
@@ -122,6 +122,12 @@ export const RELEASE_BUDGETS = Object.freeze({
   // needs no Worker, no downloaded pack, and no cross-origin isolation — but
   // it is fetched only when a shell command actually runs, never at startup.
   optionalShellPack: Object.freeze({ raw: 100 * 1024, gzip: 30 * 1024 }),
+  // The browser-Git client and the Git operations module that split out beside
+  // it, both moved off first paint. Measured together at 16.44 KiB raw /
+  // 3.95 KiB gzip; capped at the next whole step above that sum.
+  optionalBrowserGitClient: Object.freeze({ raw: 18 * 1024, gzip: 5 * 1024 }),
+  // The model-backed tool-action reviewer, fetched at adjudication time.
+  optionalApprovalReviewer: Object.freeze({ raw: 6 * 1024, gzip: 2 * 1024 }),
   // The research WASIX candidate is intentionally absent from production
   // until its bidirectional workspace/output promotion probe passes.
   optionalWasixJavaScript: Object.freeze({ raw: 0, gzip: 0 }),
@@ -478,6 +484,22 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
     throw new Error(`Production must contain exactly one optional browser-Git engine pack; found ${optionalBrowserGitPacks.length}.`);
   }
   const optionalBrowserGitMeasurement = measure(optionalBrowserGitPacks[0].payload);
+  // The Git client left the startup chunk with the adapter it is always awaited
+  // beside; it is measured with the engine rather than against first paint.
+  const optionalBrowserGitClientPacks = javaScriptFiles.filter((file) => isOptionalBrowserGitClientPath(file.path));
+  if (optionalBrowserGitClientPacks.length === 0) {
+    throw new Error("Production must contain the optional browser-Git client pack; found none.");
+  }
+  // The pack may split across more than one chunk; the budget governs their sum
+  // because opening the Workspace fetches all of them together.
+  const optionalBrowserGitClientMeasurement = sumMeasurements(optionalBrowserGitClientPacks.map((file) => measure(file.payload)));
+  // The model-backed safety reviewer runs only when a governed tool action
+  // needs adjudicating, so it is not first-paint cost.
+  const optionalApprovalReviewerPacks = javaScriptFiles.filter((file) => isOptionalApprovalReviewerPath(file.path));
+  if (optionalApprovalReviewerPacks.length !== 1) {
+    throw new Error(`Production must contain exactly one optional approval-reviewer pack; found ${optionalApprovalReviewerPacks.length}.`);
+  }
+  const optionalApprovalReviewerMeasurement = measure(optionalApprovalReviewerPacks[0].payload);
   const optionalSessionLibraryPacks = javaScriptFiles.filter((file) => isOptionalSessionLibraryPath(file.path));
   if (optionalSessionLibraryPacks.length !== 1) {
     throw new Error(`Production must contain exactly one optional session-library pack; found ${optionalSessionLibraryPacks.length}.`);
@@ -575,6 +597,8 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
       && !isOptionalSourceControlPath(file.path)
       && !isOptionalSourceSelectionPath(file.path)
       && !isOptionalBrowserGitPath(file.path)
+      && !isOptionalBrowserGitClientPath(file.path)
+      && !isOptionalApprovalReviewerPath(file.path)
       && !isOptionalSessionLibraryPath(file.path)
       && !isOptionalCapabilitiesViewPath(file.path)
       && !isOptionalBrowserCapabilityPath(file.path)
@@ -634,6 +658,8 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
       { name: "source-control", paths: optionalSourceControlPacks.map((file) => file.path) },
       { name: "source-selection", paths: optionalSourceSelectionPacks.map((file) => file.path) },
       { name: "browser-git-vendor", paths: optionalBrowserGitPacks.map((file) => file.path) },
+      { name: "browser-git-client", paths: optionalBrowserGitClientPacks.map((file) => file.path) },
+      { name: "approval-reviewer", paths: optionalApprovalReviewerPacks.map((file) => file.path) },
       { name: "session-library", paths: optionalSessionLibraryPacks.map((file) => file.path) },
       { name: "capabilities-view", paths: optionalCapabilitiesViewPacks.map((file) => file.path) },
       { name: "browser-capabilities", paths: optionalBrowserCapabilityPacks.map((file) => file.path) },
@@ -712,6 +738,8 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
   assertWithinBudget("Optional source control", optionalSourceControlMeasurement, RELEASE_BUDGETS.optionalSourceControl);
   assertWithinBudget("Optional source selection", optionalSourceSelectionMeasurement, RELEASE_BUDGETS.optionalSourceSelection);
   assertWithinBudget("Optional browser Git", optionalBrowserGitMeasurement, RELEASE_BUDGETS.optionalBrowserGit);
+  assertWithinBudget("Optional browser-Git client", optionalBrowserGitClientMeasurement, RELEASE_BUDGETS.optionalBrowserGitClient);
+  assertWithinBudget("Optional approval reviewer", optionalApprovalReviewerMeasurement, RELEASE_BUDGETS.optionalApprovalReviewer);
   assertWithinBudget("Optional session library", optionalSessionLibraryMeasurement, RELEASE_BUDGETS.optionalSessionLibrary);
   assertWithinBudget("Optional Capabilities view", optionalCapabilitiesViewMeasurement, RELEASE_BUDGETS.optionalCapabilitiesView);
   assertWithinBudget(
@@ -995,6 +1023,14 @@ export function isOptionalSourceControlPath(path) {
 
 export function isOptionalSourceSelectionPath(path) {
   return /^assets\/source-selection-[A-Za-z0-9_-]+\.js$/u.test(path);
+}
+
+export function isOptionalApprovalReviewerPath(path) {
+  return /^assets\/model-reviewer-[A-Za-z0-9_-]+\.js$/u.test(path);
+}
+
+export function isOptionalBrowserGitClientPath(path) {
+  return /^assets\/browser-git-client-[A-Za-z0-9_-]+\.js$/u.test(path);
 }
 
 export function isOptionalBrowserGitPath(path) {

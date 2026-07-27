@@ -1,7 +1,6 @@
 import { render } from "preact";
 import { App } from "./ui/app";
 import "./ui/styles.css";
-import "./ui/durability-indicator.css";
 
 render(<App />, document.getElementById("app")!);
 

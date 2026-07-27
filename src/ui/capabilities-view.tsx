@@ -3,7 +3,7 @@ import type { ComponentChildren } from "preact";
 import { semanticWasmThreadCount, type BrowserCapabilityObservation, type BrowserRuntimeCapabilityReport } from "../capabilities/browser-runtime";
 import type { ExecutionCapability, ExecutionRuntimeId } from "../execution/runtime-registry";
 import { Icon } from "./icons";
-import { Seal, sealStateForCapabilitySummary, type SealState } from "./seal";
+import { Seal, type SealState } from "./seal";
 import "./capabilities-view.css";
 
 export type CapabilitiesViewProps = Readonly<{
@@ -12,6 +12,22 @@ export type CapabilitiesViewProps = Readonly<{
   onCommand(command: string): void;
   onOpenSkills(): void;
 }>;
+
+/**
+ * Lives here rather than in `seal.tsx` because this surface is its only
+ * consumer and `seal.tsx` is reachable from the entry chunk: a mapping only the
+ * Capabilities route reads should not be paid for at first paint.
+ */
+export function sealStateForCapabilitySummary(
+  runtimes: readonly Readonly<{ state: string }>[],
+  failed = false,
+): SealState {
+  if (failed) return "failed";
+  if (!runtimes.length) return "checking";
+  const ready = runtimes.filter(({ state }) => state === "ready").length;
+  if (!ready) return runtimes.some(({ state }) => state === "failed") ? "failed" : "none";
+  return ready === runtimes.length ? "verified" : "asserted";
+}
 
 export function CapabilitiesView({ inspect, inspectBrowser, onCommand, onOpenSkills }: CapabilitiesViewProps) {
   const [runtimes, setRuntimes] = useState<readonly ExecutionCapability[]>([]);

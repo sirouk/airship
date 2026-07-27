@@ -1,13 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
-  postureSeal,
+  SEAL_DENSITIES,
   SEAL_LABELS,
   SEAL_STATES,
+  sealDensitySize,
   sealRenderedSize,
-  sealStateForReceipt,
   sealStateForProofStatus,
   sealStateForRuntimeStatus,
 } from "./seal";
+import { postureSeal, sealStateForReceipt } from "./seal-states";
 import { createLocalReceipt } from "../receipts/types";
 
 describe("canonical seal grammar", () => {
@@ -58,5 +59,27 @@ describe("canonical seal grammar", () => {
     expect(sealRenderedSize(8)).toBe(16);
     expect(sealRenderedSize(16)).toBe(16);
     expect(sealRenderedSize(44)).toBe(44);
+  });
+
+  it("offers exactly three densities and no fourth escape hatch", () => {
+    expect(SEAL_DENSITIES).toEqual(["dot", "chip", "hero"]);
+  });
+
+  it("renders every density in a well of at least 16px", () => {
+    // The label is what scales down the disclosure ladder; the glyph does not.
+    // `dot` hides its word, so it is the density most tempting to shrink and the
+    // one where shrinking would leave colour as the only carrier of meaning.
+    for (const density of SEAL_DENSITIES) {
+      expect(sealDensitySize(density)).toBeGreaterThanOrEqual(16);
+    }
+    expect(sealDensitySize("dot")).toBe(16);
+    expect(sealDensitySize("chip")).toBe(16);
+    expect(sealDensitySize("hero")).toBe(28);
+  });
+
+  it("floors an explicit size override rather than trusting the call site", () => {
+    expect(sealDensitySize("dot", 10)).toBe(16);
+    expect(sealDensitySize("hero", 13)).toBe(16);
+    expect(sealDensitySize("chip", 44)).toBe(44);
   });
 });

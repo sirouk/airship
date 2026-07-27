@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { sealStateForCapabilitySummary } from "./seal";
+import { sealStateForCapabilitySummary } from "./capabilities-view";
 
 describe("capability summary evidence", () => {
   it("does not verify a completed inspection unless every reported runtime is ready", () => {

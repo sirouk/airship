@@ -1,5 +1,6 @@
 import { readdir, readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
+import { readAirshipStyles } from "./style-sheets.test-helper";
 
 const uiDirectory = new URL("./", import.meta.url);
 const cssFiles = await collectCss(uiDirectory);
@@ -7,7 +8,7 @@ const sources = await Promise.all(cssFiles.map(async (url) => ({ url, source: aw
 
 describe("global typography floor", () => {
   it("defines the scalable 11px floor as the canonical micro token", async () => {
-    const styles = await readFile(new URL("./styles.css", import.meta.url), "utf8");
+    const styles = await readAirshipStyles();
     expect(styles).toContain("--fs-micro: calc(.6875rem * var(--type-scale))");
     expect(styles).toMatch(/data-type-scale="large"[^}]*--type-scale:\s*1\.125/su);
     expect(styles).toMatch(/data-type-scale="x-large"[^}]*--type-scale:\s*1\.25/su);

@@ -43,8 +43,12 @@
 .editor-status { display: flex; justify-content: space-between; min-height: 25px; padding: 0 .7rem; border-top: 1px solid var(--line); color: var(--ink-faint); font: 11px/25px var(--font-mono); }
 .workbench-empty { display: flex; flex: 1; flex-direction: column; align-items: center; justify-content: center; gap: .5rem; color: var(--ink-faint); }
 .workbench-empty strong { color: var(--ink-muted); }
-.workbench-notice { margin-bottom: .55rem; padding: .48rem .7rem; border: 1px solid color-mix(in srgb, var(--v-verified) 25%, var(--line)); border-radius: var(--radius-control); color: var(--ink-muted); background: color-mix(in srgb, var(--v-verified) 5%, var(--surface)); font-size: var(--fs-micro); }
-.workbench-notice.error { border-color: color-mix(in srgb, var(--danger) 35%, var(--line)); color: var(--danger); }
+/* Box, border and radius come from the one `.notice` recipe in shell.css. */
+.workbench-notice { margin-bottom: var(--sp-2); --notice-tone: var(--v-verified); }
+/* The error tone moves to the boundary and the ink goes up, not down: --danger
+   as body text measures 4.24:1 on this surface, and the sentence naming the
+   failure is the one that most needs reading. */
+.workbench-notice.error { --notice-tone: var(--danger); color: var(--ink); }
 .workspace-boundary { padding: .5rem .75rem; border-bottom: 1px solid var(--line); color: var(--ink-faint); background: var(--surface-soft); font: var(--fs-micro)/1.4 var(--font-mono); }
 .workspace-boundary.attention { color: var(--v-caution); }
 .workbench-context { position: fixed; z-index: 100; display: grid; min-width: 12rem; padding: .35rem; border: 1px solid var(--line-strong); border-radius: var(--radius-control); background: var(--surface-raised); box-shadow: 0 18px 55px rgba(0,0,0,.4); }

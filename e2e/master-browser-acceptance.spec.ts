@@ -42,7 +42,7 @@ test("the real browser runtime stays coherent across the required device classes
     await expect(page.getByRole("navigation", { name: "Mobile navigation" })).toBeVisible();
     await expect(page.getByRole("banner").getByRole("button", { name: "Connect a model", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: /Session\./i })).toBeVisible();
-    const stageHeight = await page.locator(".stage-header").evaluate((element) => element.getBoundingClientRect().height);
+    const stageHeight = await page.locator(".session-bar").evaluate((element) => element.getBoundingClientRect().height);
     expect(stageHeight).toBeLessThan(150);
   } else {
     await expect(page.getByText("Browser / Edge runtime", { exact: true })).toBeVisible({ timeout: 10_000 });
@@ -107,7 +107,7 @@ test("high-value controls remain usable without credentials on every device clas
   const profileMenu = page.getByRole("listbox", { name: "Agent profile" });
   await expect(profileMenu).toBeVisible();
   await profileMenu.getByRole("option", { name: /Builder \/ Systems/ }).click();
-  await expect(page.locator(".stage-header .eyebrow")).toContainText("Builder / Systems");
+  await expect(page.getByRole("heading", { level: 1 })).toHaveAccessibleName(/Builder \/ Systems profile/u);
 
   await page.goto("/#profiles");
   const cards = page.locator(".profile-card");
