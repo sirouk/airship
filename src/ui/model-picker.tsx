@@ -2,6 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState } from "preact/hooks";
 import { filterModels, modelPopularitySignal, sortModels } from "../models";
 import type { AirshipModel, ModelSort } from "../models";
 import { MenuSelect } from "./menu-select";
+import { TRUST_LABEL_CONNECT_TRUST_READINESS } from "./trust-language";
 
 /**
  * Choosing a model, with the catalogue travelling on the model.
@@ -89,10 +90,13 @@ export function modelFacts(model: AirshipModel): readonly ModelFact[] {
     Object.freeze({
       label: "Trust readiness",
       value: model.trust.consistency === "conflict" ? "metadata conflict" : "evidence candidate",
-      captions: Object.freeze([
-        `verification remains ${model.trust.verification}`,
-        "catalog metadata is not proof",
-      ]),
+      // `verification remains unverified` is a retired name: `trust.verification`
+      // is the literal `"unverified"` (models/types.ts), so the template said
+      // the same word twice and neither time said when the check happens. Its
+      // written successor carries both facts — the readiness AND "catalog
+      // metadata is not proof", verbatim — so the second caption would now be a
+      // duplicate of a clause inside the first rather than a fact of its own.
+      captions: Object.freeze([TRUST_LABEL_CONNECT_TRUST_READINESS]),
     }),
   ]);
 }

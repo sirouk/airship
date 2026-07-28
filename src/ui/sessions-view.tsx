@@ -45,6 +45,16 @@ export type SessionsViewProps = Readonly<{
   onForked?: (result: SessionForkResult, source: SessionLibraryDetail) => void | Promise<void>;
   onOpenProof?: (sessionId: string) => void;
   durability?: Readonly<{ state: DurabilityState; detail: string }>;
+  /**
+   * The conversation whose transcript the active runtime could not replay.
+   *
+   * Set by vault adoption when it quarantines one session instead of stranding
+   * the whole vault. It is plumbed here in the same change rather than as a
+   * follow-up, because a list that goes on showing "Structure passed / Ready to
+   * resume" for a conversation the runtime just refused to open is asserting an
+   * intactness it did not establish.
+   */
+  quarantine?: Readonly<{ sessionId: string; title: string; reason: string; historyVerified: boolean }>;
 }>;
 
 /** The journal-adapter sentence, unchanged, chosen by the adapter that is live. */
@@ -68,6 +78,7 @@ export function SessionsView({
   onForked,
   onOpenProof,
   durability = { state: "ephemeral", detail: "This journal exists only in page memory. Nothing is synced." },
+  quarantine,
 }: SessionsViewProps) {
   const [draftSearch, setDraftSearch] = useState("");
   const [search, setSearch] = useState("");
@@ -496,6 +507,7 @@ export function SessionsView({
               onCreateFork={() => void createFork()}
               onResume={() => void resumeSelected()}
               onOpenProof={onOpenProof ? () => onOpenProof(detail.session.id) : undefined}
+              quarantine={quarantine?.sessionId === detail.session.id ? quarantine : undefined}
             />
           ) : null}
         </main>
@@ -527,6 +539,7 @@ function SessionDetail({
   onCreateFork,
   onResume,
   onOpenProof,
+  quarantine,
 }: {
   detail: SessionLibraryDetail;
   active: boolean;
@@ -551,15 +564,25 @@ function SessionDetail({
   onCreateFork: () => void;
   onResume: () => void;
   onOpenProof?: () => void;
+  quarantine?: Readonly<{ sessionId: string; title: string; reason: string; historyVerified: boolean }>;
 }) {
   const compatibility = detail.compatibility;
   // Every state-mutating verb is withdrawn while the pane is out of scope.
   // Read-only controls — Proof, the disclosures, the transcript — stay live,
   // because the facts on this pane are real and the reader may still want them.
   const mutationBlocked = busy || outOfResults;
-  const resumeDisabled = mutationBlocked || active || !runtimeAvailable || compatibility?.action !== "resume";
+  const resumeDisabled = mutationBlocked || active || !runtimeAvailable || Boolean(quarantine) || compatibility?.action !== "resume";
   const requirement = forkRequirement(compatibility, detail.history);
-  const resumeLabel = active ? "Active session" : !runtimeAvailable ? "No active runtime" : compatibility?.action === "resume" ? "Resume session" : compatibility?.label ?? "Cannot resume";
+  const resumeLabel = active
+    ? "Active session"
+    : !runtimeAvailable
+      ? "No active runtime"
+      // Not "Cannot resume", and emphatically not "Session damaged": the audit
+      // verified this chain. Only the replay failed, and only the replay is
+      // named here.
+      : quarantine
+        ? "Transcript cannot be replayed"
+        : compatibility?.action === "resume" ? "Resume session" : compatibility?.label ?? "Cannot resume";
   const forkPrimary = requirement.required;
   const lineage = detail.pins.lineage;
   const integrity = sessionIntegrityRow({
@@ -567,6 +590,7 @@ function SessionDetail({
     receiptCount: detail.transcript.receipts.length,
     lifecycle: detail.transcript.lifecycle,
     ...(compatibility ? { compatibility } : {}),
+    ...(quarantine ? { transcriptReplayFailed: true } : {}),
   });
   const bodyId = useId();
   const renameInput = useRef<HTMLInputElement>(null);
@@ -661,6 +685,36 @@ function SessionDetail({
             <div><span>Receipt chain</span><strong>{detail.transcript.receipts.length} recovered</strong></div>
             <div><span>Journal head</span><strong>{sessionEventCount(detail.session.headSequence)}</strong></div>
           </section>
+
+          {quarantine ? (
+            /*
+             * Both halves of the truth, in one place, in this order.
+             *
+             * "History verified" is not a courtesy: `auditSessionHistory` rated
+             * this chain `verified`, and a user who is told only that a session
+             * "failed" will reasonably conclude their work is gone and wipe the
+             * store to start over — destroying data the product could have
+             * handed back. What actually failed is named immediately after it,
+             * verbatim, and the read-only routes that still work are named too.
+             *
+             * It is only a courtesy the product has earned when the audit
+             * actually ran and passed. The adoption path once wrapped the
+             * audit and the presentation in one `try`, so a chain rated
+             * `invalid` reached this panel and read "every event is intact"
+             * directly above the product's own "History suspect". The claim is
+             * gated on `historyVerified` now; when the audit did not establish
+             * it, this says what is actually known instead.
+             */
+            <section class="session-library-compatibility unavailable" aria-labelledby="session-quarantine-title">
+              <div><span id="session-quarantine-title">{quarantine.historyVerified
+                ? "History verified · transcript cannot be replayed"
+                : "Transcript cannot be replayed"}</span></div>
+              <p>{quarantine.reason}</p>
+              <p>{quarantine.historyVerified
+                ? "The digest chain passed its audit and every event is intact. This runtime could not rebuild the transcript from them, so this conversation was not resumed and the rest of the vault was adopted without it. Proof stays available here."
+                : "This runtime could not rebuild the transcript, and the digest audit did not complete, so nothing here establishes whether the stored events are intact. The conversation was not resumed and the rest of the vault was adopted without it. Proof stays available here."}</p>
+            </section>
+          ) : null}
 
           {compatibility ? (
             // The verdict word is the resting `resume` pill on the row this
@@ -846,6 +900,16 @@ function formatDateTime(value: string): string {
     : "Unknown time";
 }
 
+/*
+ * Deliberately no `SessionMessagePresentationError` branch here.
+ *
+ * A transcript fault reaches this route only through `onResume`, and the host
+ * describes it there — `resumeLibrarySession` rethrows it already carrying its
+ * session, sequence and event type, instead of the bare event UUID this route
+ * used to print. Importing the presentation module to re-describe it would pull
+ * `session-message-presentation` into the sessions-route chunk, which is a
+ * release-gate classification change for a string this route is already given.
+ */
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "The session operation could not be completed.";
 }

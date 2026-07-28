@@ -1,6 +1,8 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
+import { describeAttestationSeal } from "../app";
 import { durabilityLabel } from "../durability-indicator";
+import { SEAL_LABELS } from "../seal";
 import {
   SESSION_STATUS_SHORT_MAX,
   sessionStatusName,
@@ -86,6 +88,52 @@ describe("worstSessionFact", () => {
 
   it("returns nothing for an empty set rather than inventing a verdict", () => {
     expect(worstSessionFact([])).toBeUndefined();
+  });
+
+  /*
+   * The shipped consequence of taking a proof *policy* off the verdict ladder,
+   * pinned here rather than discovered by the next audit.
+   *
+   * Before the fix the attestation fact arrived as `asserted` on a connected
+   * session with zero turns, tied with the posture fact, and won the tie — so
+   * the highest-traffic trust surface in the product rested on the word
+   * "Asserted" at the exact moment it held no receipt, no evidence record and
+   * nothing fetched. The attestation claim now arrives as `none`, so the chip
+   * speaks for the posture instead: a provider-served E2EE endpoint key really
+   * is a party's statement, which is a rung the code can stand on.
+   *
+   * The attestation claim is not lost — it is the second row of the popover,
+   * verbatim, which the assertions below hold.
+   */
+  it("rests on the posture, not on an attestation policy, before the first turn", () => {
+    const seal = describeAttestationSeal({
+      connected: true,
+      proofPolicy: "record",
+      records: [],
+      now: Date.parse("2026-07-19T12:00:00.000Z"),
+    });
+    const attestationFact = fact({
+      id: "attestation",
+      state: seal.state,
+      label: `${seal.label} · this session`,
+      detail: seal.detail,
+      short: sessionStatusShort(seal.label, SEAL_LABELS[seal.state]),
+    });
+    const e2ee = fact({
+      id: "posture",
+      state: "asserted",
+      label: "E2EE · no proof gate",
+      short: sessionStatusShort("E2EE · no proof gate", SEAL_LABELS.asserted),
+    });
+    const ready = fact({ id: "lifecycle", state: "none", label: "Ready" });
+    const facts = [e2ee, attestationFact, fact({ id: "durability", state: "none" }), ready];
+
+    expect(worstSessionFact(facts)).toBe(e2ee);
+    expect(worstSessionFact(facts)?.short).toBe("E2EE");
+    expect(worstSessionFact(facts)?.short).not.toBe(SEAL_LABELS.asserted);
+    // The policy sentence still renders in full, one gesture away.
+    expect(attestationFact.label).toBe("Evidence checked per turn · this session");
+    expect(attestationFact.detail).toContain("No turn receipt currently establishes a hardware claim.");
   });
 });
 

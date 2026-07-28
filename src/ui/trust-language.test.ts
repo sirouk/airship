@@ -17,6 +17,10 @@ import {
   type TurnEvidenceState,
 } from "./trust-language";
 import { CLAIM_STATE_LEGEND } from "./claim-stack-facts";
+import { describeAttestationSeal } from "./app";
+import { encryptedReceiptFixture, endpointRecordFixture } from "./attestation-seal.fixtures";
+import { SEAL_LABELS } from "./seal";
+import { sessionStatusShort } from "./chat/session-status-chip";
 import { turnEvidenceVerdict } from "./turn-evidence";
 import type { ClaimStackItem, ClaimStackModel } from "./claim-stack-model";
 import type { ProofStatus } from "../receipts/types";
@@ -137,6 +141,46 @@ describe("the trust ladder is three rungs, and a rung is a predicate", () => {
     expect(asserted.seal).toBe("asserted");
   });
 
+  /*
+   * The same rule, over the *other* reducer that speaks this vocabulary.
+   *
+   * The guard above ran only over `turnEvidenceVerdict`, and a second, older
+   * describer — `describeAttestationSeal` — emitted the same seal states from
+   * the session bar without ever being covered. It shipped `asserted` for a
+   * proof *policy*: a setting about the next turn, reached with no receipt, no
+   * evidence record and no failure. One reducer under guard is not a guard.
+   */
+  it("never lets the session reducer reach an asserted rung without a receipt", () => {
+    for (const connected of [true, false]) {
+      for (const proofPolicy of [undefined, "record", "strict"] as const) {
+        const seal = describeAttestationSeal({
+          connected,
+          ...(proofPolicy ? { proofPolicy } : {}),
+          records: [],
+          now: Date.parse("2026-07-19T12:00:00.000Z"),
+        });
+        const where = `connected=${String(connected)} policy=${String(proofPolicy)}`;
+        expect(seal.state, where).not.toBe("asserted");
+        expect(ASSERTED_WORD.test(seal.label), `${where}: "${seal.label}"`).toBe(false);
+        // The mechanism that promoted a DOM attribute into a printed rung word:
+        // the session bar shortens a label longer than the chip by falling back
+        // to its state's own word, so a wrong `state` is *spoken*, not merely
+        // recorded. This is the assertion that actually caught the shipped bug.
+        expect(sessionStatusShort(seal.label, SEAL_LABELS[seal.state]), where)
+          .not.toBe(SEAL_LABELS.asserted);
+      }
+    }
+    // …and the arm that does hold a receipt still says it, so this guard is not
+    // passing by having emptied the word out of the reducer.
+    const withRecord = describeAttestationSeal({
+      connected: true,
+      receipt: encryptedReceiptFixture(),
+      records: [endpointRecordFixture()],
+      now: Date.parse("2026-07-19T12:00:00.000Z"),
+    });
+    expect(withRecord.state).toBe("asserted");
+  });
+
   it("keeps every retired name out of the words it actually emits", () => {
     const emitted = [
       ...Object.values(TRUST_LABELS).map((spec) => spec.text),
@@ -152,6 +196,59 @@ describe("the trust ladder is three rungs, and a rung is a predicate", () => {
     }
   });
 
+  /*
+   * The ledger, enforced against what renders rather than against itself.
+   *
+   * The check above compares the dictionary to the dictionary: it passes as
+   * long as no *entry in the table* spells a retired name, which is a property
+   * the table trivially has. It never looked at a surface, and two surfaces
+   * were printing retired names the whole time it was green — "Secure hardware
+   * evidence pending" from the session/turn evidence reducer, and one assembled
+   * by interpolation from a literal enum, which no whole-string search would
+   * have found either.
+   *
+   * So this walks the shipped `src/ui` sources, reads only their string and
+   * template literals (a retired name inside a comment is how a retirement is
+   * *recorded*, and must stay legible), and matches a pattern that tolerates
+   * interpolation in any position.
+   */
+  it("keeps every retired name off every surface that renders, including by interpolation", async () => {
+    const { readdir, readFile } = await import("node:fs/promises");
+    const root = new URL("./", import.meta.url);
+    const files: string[] = [];
+    const walk = async (relative: string): Promise<void> => {
+      for (const entry of await readdir(new URL(relative, root), { withFileTypes: true })) {
+        const path = `${relative}${entry.name}`;
+        if (entry.isDirectory()) { await walk(`${path}/`); continue; }
+        if (!/\.tsx?$/u.test(entry.name) || /\.(?:test|fixtures)\.tsx?$/u.test(entry.name)) continue;
+        // The two modules that name the retired words in order to retire them.
+        if (path === "trust-language.ts" || path === "trust-label-contract.ts") continue;
+        files.push(path);
+      }
+    };
+    await walk("");
+    expect(files.length).toBeGreaterThan(20);
+
+    for (const path of files) {
+      const literals = stringLiterals(await readFile(new URL(path, root), "utf8"));
+      for (const retired of RETIRED_TRUST_LABELS) {
+        for (const literal of literals) {
+          expect(retiredNamePattern(retired).test(literal), `${path}: ${retired}`).toBe(false);
+        }
+      }
+    }
+
+    // A test that cannot fail is not a test: prove the scanner sees literals it
+    // is pointed at, and that the interpolation tolerance is doing real work.
+    const sample = stringLiterals([
+      "// a comment naming 'Secure hardware evidence pending' stays legible",
+      "const live = `verification remains ${model.trust.verification}`;",
+    ].join("\n"));
+    expect(sample).toEqual(["verification remains ${model.trust.verification}"]);
+    expect(retiredNamePattern("verification remains unverified").test(sample[0]!)).toBe(true);
+    expect(retiredNamePattern("Evidence not pulled").test(sample[0]!)).toBe(false);
+  });
+
   it("states the same three definitions the Proof route's legend states", () => {
     // One dictionary in effect: the shell reaches the ladder without the Proof
     // chunk, and this fails the moment the two copies drift by one character.
@@ -160,3 +257,69 @@ describe("the trust ladder is three rungs, and a rung is a predicate", () => {
     expect(TRUST_LADDER.map((rung) => rung.rung)).toEqual(["verified", "asserted", "no-evidence"]);
   });
 });
+
+/**
+ * A retired name as it can actually appear in source: spelled out, or with one
+ * word supplied by an interpolation. `verification remains ${…}` printed a
+ * retired name for months without any whole-string search being able to see it.
+ *
+ * At most *one* word may be interpolated, and that bound is the whole design.
+ * Allowing every word to be a `${…}` made this match any template of three
+ * consecutive interpolations — it flagged
+ * `${verb} ${total} ${total === 1 ? "file" : "files"}` in the workbench as
+ * "Evidence not pulled". A caption assembled entirely from variables is not
+ * spelling a retired name; a caption that spells all but one word of one is.
+ */
+function retiredNamePattern(retired: string): RegExp {
+  const escape = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  const words = retired.split(" ");
+  const variants = [words.map(escape)];
+  for (let hole = 0; hole < words.length; hole += 1) {
+    variants.push(words.map((word, index) => index === hole ? "\\$\\{[^}]*\\}" : escape(word)));
+  }
+  return new RegExp(`(?:${variants.map((variant) => variant.join("\\s+")).join("|")})`, "iu");
+}
+
+/**
+ * Every string and template literal in one TypeScript source, comments excluded.
+ *
+ * Deliberately a scanner rather than a regex: a comment is where a retirement
+ * is *explained*, so it must be able to name the retired words, and a regex
+ * that cannot tell a comment from a caption would either forbid the explanation
+ * or miss the caption.
+ */
+function stringLiterals(source: string): string[] {
+  const literals: string[] = [];
+  let index = 0;
+  while (index < source.length) {
+    const character = source[index]!;
+    if (character === "/" && source[index + 1] === "/") {
+      while (index < source.length && source[index] !== "\n") index += 1;
+      continue;
+    }
+    if (character === "/" && source[index + 1] === "*") {
+      index += 2;
+      while (index < source.length && !(source[index] === "*" && source[index + 1] === "/")) index += 1;
+      index += 2;
+      continue;
+    }
+    if (character === '"' || character === "'" || character === "`") {
+      index += 1;
+      let value = "";
+      while (index < source.length && source[index] !== character) {
+        if (source[index] === "\\") { value += source.slice(index, index + 2); index += 2; continue; }
+        // An unterminated single/double-quoted literal means the scanner lost
+        // sync (a regex literal holding an odd quote). Stop rather than swallow
+        // the rest of the file, which would hide every caption after it.
+        if (source[index] === "\n" && character !== "`") break;
+        value += source[index]!;
+        index += 1;
+      }
+      index += 1;
+      literals.push(value);
+      continue;
+    }
+    index += 1;
+  }
+  return literals;
+}

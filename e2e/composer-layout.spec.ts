@@ -28,7 +28,31 @@ async function readComposerGeometry(page: Page): Promise<ComposerGeometry> {
    */
   await page.evaluate(async () => {
     await (document as Document & { fonts?: { ready: Promise<unknown> } }).fonts?.ready;
-    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const frame = () => new Promise((resolve) => requestAnimationFrame(resolve));
+    /*
+     * Two frames were enough for a font, but not for a transition. The composer
+     * animates its height now, so clearing a multi-line draft leaves the box
+     * mid-collapse: the flake was a 136px difference, not a sub-pixel one. Poll
+     * until the height stops moving instead of guessing a frame count — this
+     * measures the settled layout the assertion is about, and a genuine drift
+     * still fails because the value it settles on is the one compared.
+     */
+    const measured = [".composer", '[aria-label="Message Airship"]',
+      '[aria-label="Conversation approval policy"]', ".composer-attach", ".composer-footer"];
+    const geometry = () => measured.map((selector) => {
+      const rect = document.querySelector(selector)?.getBoundingClientRect();
+      return rect ? `${rect.x},${rect.y},${rect.width},${rect.height}` : "-";
+    }).join("|");
+    // Every box the assertions compare, not just the composer: the footer and
+    // the approval trigger settle on their own schedules, so polling one of
+    // them left the others mid-transition and the failing test varied by run.
+    let previous = "";
+    for (let attempt = 0; attempt < 90; attempt += 1) {
+      await frame();
+      const current = geometry();
+      if (current === previous) return;
+      previous = current;
+    }
   });
   return page.evaluate(() => {
     const snapshot = (element: Element): DOMRectSnapshot => {

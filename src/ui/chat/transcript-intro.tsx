@@ -1,4 +1,5 @@
 import { capabilityTierDetail, capabilityTierLabel, type CapabilityTier } from "./capability-tier";
+import type { SessionPresentationMarker } from "./session-message-presentation";
 
 /**
  * What an empty conversation says, in one place.
@@ -90,5 +91,39 @@ export function TranscriptIntro({ note, demo, tier, onOpenCapabilities }: Transc
         </button>
       ) : null}
     </section>
+  );
+}
+
+export type TranscriptMarkerProps = Readonly<{
+  marker: SessionPresentationMarker;
+}>;
+
+/**
+ * One session-scoped durable record, in the transcript, in sequence order.
+ *
+ * A rename is not a turn: it has no speaker, no answer, nothing to retry or
+ * branch from, so it is a divider rather than a card. It is here at all because
+ * the alternative that was shipped — a renderer that threw on it — cost users
+ * an entire vault, and the alternative that is tempting — skipping it — would
+ * quietly delete a record the user created while the page kept reporting its
+ * turn count as though nothing were missing.
+ *
+ * The provenance line is not decoration. It states the durable sequence and the
+ * event type, so a marker on screen can be found in the journal it came from,
+ * and so a record this build cannot read still says exactly where it is.
+ */
+export function TranscriptMarker({ marker }: TranscriptMarkerProps) {
+  return (
+    <div
+      class="transcript-marker"
+      data-presentable={marker.presentable ? "true" : "false"}
+      role="note"
+      aria-label={`Session record. ${marker.detail}`}
+    >
+      <p class="transcript-marker__detail">{marker.detail}</p>
+      <p class="transcript-marker__provenance">
+        {`Event ${String(marker.sequence)} · ${marker.kind} · ${marker.digest.slice(0, 15)}…`}
+      </p>
+    </div>
   );
 }

@@ -119,6 +119,9 @@ import { isWorkspaceControlPlanePath, type WorkspaceEntry, type WorkspaceFile, t
 import { MemoryWorkspace } from "../workspace/memory";
 import { composeClaimStack, type ClaimStackFact, type ClaimStackItem } from "./claim-stack-model";
 import { TURN_EVIDENCE_COPY, turnEvidenceVerdict } from "./turn-evidence";
+// The two per-message rung words, taken from the one dictionary rather than
+// retyped, so `RETIRED_TRUST_LABELS` cannot be re-spelled back into this file.
+import { TRUST_LABEL_MESSAGE_ASSERTED_NO_ENDPOINT, TRUST_LABEL_MESSAGE_NO_EVIDENCE } from "./trust-language";
 // The one fail-closed rule for a stored receipt, imported rather than restated.
 // `#proof` renders the hero verdict and this inspector on the same screen; if
 // they fed their shared reducer from two different predicates the route would
@@ -209,6 +212,14 @@ import {
   COMPOSER_PLACEHOLDER_TITLE,
 } from "./chat/composer";
 import { originatingPromptForRow } from "./chat/retry-prompt";
+// Types only: the reducer itself stays in the deferred capability pack.
+import type {
+  SessionMessagePresentation,
+  SessionPresentationHistory,
+  SessionPresentationMarker,
+  SessionPresentationProviderContext,
+  SessionPresentationTurnStatus,
+} from "./chat/session-message-presentation";
 import { recoverPartialTurn } from "./chat/turn-recovery";
 import { claimThreadDraftHydration, readThreadDraft, writeThreadDraft } from "./chat/thread-draft";
 import { appendThreadQueueItem, removeThreadQueueItem } from "./chat/thread-queue";
@@ -224,6 +235,7 @@ import {
   TRANSCRIPT_INTRO_DEMO_LINE,
   TRANSCRIPT_SEED_BODY,
   TranscriptIntro,
+  TranscriptMarker,
   transcriptIntroNote,
 } from "./chat/transcript-intro";
 import { TopbarPostureChip } from "./topbar";
@@ -256,6 +268,16 @@ type UiMessage = {
    * genuine first message from ever being mistaken for chrome.
    */
   seed?: true;
+  /**
+   * A durable record that belongs to the session rather than to a turn.
+   *
+   * A rename, a context summary, or a record this build cannot replay. Set on a
+   * row that is not a turn: the transcript renders it as a divider rather than
+   * as a card, because it has no speaker and nothing to retry. It is a row at
+   * all — rather than being skipped — because it is a record the user created,
+   * and skipping it is how a page comes to imply it is complete when it is not.
+   */
+  marker?: SessionPresentationMarker;
   /** Immutable public projection of durable message/tool facts. */
   parts?: readonly MessagePart[];
   status?: string;
@@ -277,6 +299,33 @@ type UiMessage = {
     providerContext: "included" | "excluded";
   }>;
 };
+
+/**
+ * A conversation whose durable history is intact but whose transcript this
+ * runtime could not replay.
+ *
+ * The two halves of that sentence must stay separate everywhere this is
+ * rendered. The audit really did verify the chain, so "session damaged" would
+ * be a false claim in the *understating* direction — it would tell a user their
+ * data is gone when every byte is recoverable. "Ready to resume" would be the
+ * false claim in the other direction. The honest reading is both facts at once:
+ * history verified, transcript not replayable, and here is why.
+ */
+type QuarantinedSession = Readonly<{
+  sessionId: string;
+  title: string;
+  /** Verbatim from `describeSessionPresentationFault` — never a bare UUID. */
+  reason: string;
+  /**
+   * Whether `auditSessionHistory` actually returned `verified` before the
+   * failure. One `try` used to cover the inspect, the read, the audit AND the
+   * presentation, so a session whose audit came back `invalid` still reached a
+   * panel headed "History verified · every event is intact" — printed three
+   * lines above the product's own "History suspect". The surfaces that make
+   * that claim must read this rather than assume it.
+   */
+  historyVerified: boolean;
+}>;
 
 type QueuedComposerItem = Readonly<{
   id: string;
@@ -579,7 +628,84 @@ function messagePartRevision(part: MessagePart): string {
 }
 
 function uiMessageEstimate(message: UiMessage): number {
+  if (message.marker) return MARKER_MESSAGE_ESTIMATE;
   return message.role === "assistant" ? ASSISTANT_MESSAGE_ESTIMATE : USER_MESSAGE_ESTIMATE;
+}
+
+/** One line of text and one provenance line, at the transcript's line height. */
+const MARKER_MESSAGE_ESTIMATE = 56;
+
+/**
+ * The materializer's per-turn metadata, in the shape the presentation checks it
+ * against. Written out twice, identically, at the two call sites — which is one
+ * copy more than a projection this mechanical can be trusted to keep in step.
+ */
+function presentationHistory(
+  messages: readonly Readonly<{
+    turnId?: string;
+    turnStatus: SessionPresentationTurnStatus;
+    providerContext: SessionPresentationProviderContext;
+  }>[],
+): SessionPresentationHistory[] {
+  return messages.flatMap((message) => message.turnId ? [{
+    turnId: message.turnId,
+    turnStatus: message.turnStatus,
+    providerContext: message.providerContext,
+  }] : []);
+}
+
+/** The last turn in the page that carried a receipt, if any. */
+function lastPresentationRowReceipt(presentation: SessionMessagePresentation): ConversationReceipt | undefined {
+  return presentation.rows.flatMap((row) => row.receipt ? [row.receipt] : []).at(-1);
+}
+
+/**
+ * The transcript rows for an audited presentation: its turns AND its markers.
+ *
+ * Two call sites built this list from `presentation.rows` alone — vault
+ * adoption and library resume — and they were byte-for-byte the same twenty
+ * lines, which is exactly the shape in which one of them would have gained the
+ * session-scoped records and the other would not. They are one function now.
+ *
+ * Markers are merged in durable sequence order rather than appended: a rename
+ * that happened between turn 3 and turn 4 belongs between turn 3 and turn 4,
+ * and a divider floating at the end of a transcript is a record whose position
+ * has quietly been lost.
+ */
+function transcriptMessagesFromPresentation(presentation: SessionMessagePresentation): UiMessage[] {
+  const rows = presentation.rows.map((row, index) => {
+    const originatingPrompt = originatingPromptForRow(presentation.rows, index);
+    return {
+      id: row.id,
+      role: row.role,
+      content: messagePlainText(row.parts),
+      parts: row.parts,
+      ...(row.receipt ? { receipt: row.receipt } : {}),
+      ...(originatingPrompt ? { originatingPrompt } : {}),
+      history: { turnStatus: row.turnStatus, providerContext: row.providerContext },
+      sourcePoint: row.sourcePoint,
+    } satisfies UiMessage;
+  });
+  if (presentation.markers.length === 0) return rows;
+  const merged: UiMessage[] = [];
+  let cursor = 0;
+  for (const marker of presentation.markers) {
+    while (cursor < rows.length && presentation.rows[cursor]!.sequence < marker.sequence) {
+      merged.push(rows[cursor]!);
+      cursor += 1;
+    }
+    merged.push({
+      id: `marker:${marker.eventId}`,
+      // Neither party said this; the journal did. The role only decides the
+      // height estimate, because a marker never reaches `MessageCard`.
+      role: "assistant",
+      content: marker.detail,
+      marker,
+      sourcePoint: { sequence: marker.sequence, digest: marker.digest },
+    });
+  }
+  merged.push(...rows.slice(cursor));
+  return merged;
 }
 
 async function loadRecentConversations(
@@ -737,6 +863,7 @@ export function App() {
   const [LocalLabSetupScreen, setLocalLabSetupScreen] = useState<LocalLabSetupComponent>();
   const [LocalDeviceVaultSetupScreen, setLocalDeviceVaultSetupScreen] = useState<LocalDeviceVaultSetupComponent>();
   const [SessionsScreen, setSessionsScreen] = useState<SessionsScreenComponent>();
+  const [quarantinedSession, setQuarantinedSession] = useState<QuarantinedSession>();
   const [VaultScreen, setVaultScreen] = useState<VaultScreenComponent>();
   const [vaultViewError, setVaultViewError] = useState<string>();
   const [AccessScreen, setAccessScreen] = useState<AccessScreenComponent>();
@@ -1109,11 +1236,13 @@ export function App() {
       .catch((error) => {
         // Keep the URL intact: a durable conversation can become available
         // after its Vault or exact inference connection is restored.
-        setComposerNotice(
-          error instanceof Error
-            ? `This conversation link is not available in the current runtime: ${error.message}`
-            : "This conversation link is not available in the current runtime. Connect its Vault and exact inference provider, then retry.",
-        );
+        void loadDeferredCapabilities().then(({ describeSessionPresentationFault }) => {
+          setComposerNotice(
+            error instanceof Error
+              ? `This conversation link is not available in the current runtime: ${describeSessionPresentationFault(error)}`
+              : "This conversation link is not available in the current runtime. Connect its Vault and exact inference provider, then retry.",
+          );
+        });
       })
       .finally(() => {
         if (chatRouteOpening.current === requestedSessionId) chatRouteOpening.current = undefined;
@@ -1778,7 +1907,10 @@ export function App() {
       const detail = await sessionLibrary.inspect(targetSessionId, sessionRuntime);
       await resumeLibrarySession(detail);
     } catch (error) {
-      setRuntimeStatus(error instanceof Error ? error.message : "The recent session could not be opened.");
+      const { describeSessionPresentationFault } = await loadDeferredCapabilities();
+      setRuntimeStatus(error instanceof Error
+        ? describeSessionPresentationFault(error)
+        : "The recent session could not be opened.");
       navigate("sessions");
     }
   }
@@ -3248,6 +3380,8 @@ export function App() {
     const { ready, workspaceId } = authority;
     const prior = runtime.current;
     const priorCheckpoint = catalogCheckpoint.current;
+    /** The one session, if any, whose transcript could not be replayed. */
+    let quarantined: QuarantinedSession | undefined;
     if (!prior || !priorCheckpoint || !activeProfile || !gitClient) {
       throw new Error("The active browser runtime is not ready for vault adoption.");
     }
@@ -3333,74 +3467,89 @@ export function App() {
       ? catalogMigration.checkpoint
       : await ready.profiles.commit(catalogMigration.checkpoint, nextCatalog);
     const library = new SessionLibrary(journal);
-    const resumableSession = pristineBootstrap
+    const candidateSession = pristineBootstrap
       ? await latestCompatibleProfileSession(nextRuntime, profile, nextCatalog)
       : undefined;
-    const nextSession = resumableSession ?? await createProfileSession(
-      nextRuntime,
-      profile,
-      nextCatalog,
-      `${profile.name} · encrypted vault`,
-    );
+    let resumableSession = candidateSession;
     let resumedPresentation: Readonly<{
       messages: readonly UiMessage[];
       lastReceipt?: ConversationReceipt;
       lifecycle: SessionLifecycle;
       boundary?: Readonly<{ omittedMessages: number; shortened: boolean }>;
     }> | undefined;
-    if (resumableSession) {
-      const detail = await library.inspect(
-        resumableSession.id,
-        activeSessionRuntime(nextRuntime, resumableSession),
-      );
-      if (detail.compatibility?.action !== "resume") {
-        throw new Error("The latest encrypted session no longer matches the adopted runtime.");
+    /*
+     * Fail closed on the transcript, open on the storage authority.
+     *
+     * This block used to run outside any `try`, and it runs *before*
+     * `runtime.current = nextRuntime`. One session that could not be replayed
+     * therefore aborted the whole adoption: the workspace, every other session,
+     * every profile, memory and the stored provider credential all became
+     * unreachable, and the only fault detail anywhere in the product was an
+     * event UUID in the topbar. The most likely response to that screen is to
+     * wipe the store — destroying data that was never damaged.
+     *
+     * One conversation that cannot be replayed is one conversation's problem.
+     * The vault is adopted either way, the failure is named rather than
+     * swallowed, and the affected session is carried in `quarantinedSession` so
+     * its row cannot go on offering a resume it cannot perform.
+     */
+    if (candidateSession) {
+      let historyVerified = false;
+      try {
+        const detail = await library.inspect(
+          candidateSession.id,
+          activeSessionRuntime(nextRuntime, candidateSession),
+        );
+        if (detail.compatibility?.action !== "resume") {
+          throw new Error("The latest encrypted session no longer matches the adopted runtime.");
+        }
+        const events = await journal.readEvents(candidateSession.id);
+        const { auditSessionHistory, presentSessionMessages } = await loadDeferredCapabilities();
+        const audit = await auditSessionHistory({ session: candidateSession, events });
+        if (audit.status !== "verified") {
+          throw new Error("The latest encrypted session failed its digest/protocol audit and was not resumed.");
+        }
+        // Past this line the audit really did pass, so the quarantine panel may
+        // say so. Before it, nothing about the history has been established.
+        historyVerified = true;
+        const presentation = presentSessionMessages({
+          session: candidateSession,
+          audit,
+          events: boundedSessionPresentationEvents(events),
+          receipts: detail.transcript.receipts,
+          history: presentationHistory(detail.transcript.messages),
+        });
+        const messages = transcriptMessagesFromPresentation(presentation);
+        const lastPresentationReceipt = lastPresentationRowReceipt(presentation);
+        resumedPresentation = Object.freeze({
+          messages: Object.freeze(messages),
+          ...(lastPresentationReceipt ? { lastReceipt: lastPresentationReceipt } : {}),
+          lifecycle: detail.transcript.lifecycle,
+          ...(detail.transcript.truncated ? {
+            boundary: Object.freeze({
+              omittedMessages: detail.transcript.omittedMessages,
+              shortened: detail.transcript.messages.some((message) => message.truncated),
+            }),
+          } : {}),
+        });
+      } catch (error) {
+        const { describeSessionPresentationFault } = await loadDeferredCapabilities();
+        quarantined = Object.freeze({
+          sessionId: candidateSession.id,
+          title: candidateSession.title,
+          reason: describeSessionPresentationFault(error),
+          historyVerified,
+        });
+        resumableSession = undefined;
+        resumedPresentation = undefined;
       }
-      const events = await journal.readEvents(resumableSession.id);
-      const { auditSessionHistory, presentSessionMessages } = await loadDeferredCapabilities();
-      const audit = await auditSessionHistory({ session: resumableSession, events });
-      if (audit.status !== "verified") {
-        throw new Error("The latest encrypted session failed its digest/protocol audit and was not resumed.");
-      }
-      const presentation = presentSessionMessages({
-        session: resumableSession,
-        audit,
-        events: boundedSessionPresentationEvents(events),
-        receipts: detail.transcript.receipts,
-        history: detail.transcript.messages.flatMap((message) => message.turnId ? [{
-          turnId: message.turnId,
-          turnStatus: message.turnStatus,
-          providerContext: message.providerContext,
-        }] : []),
-      });
-      const messages = presentation.rows.map((row, index) => {
-        const originatingPrompt = originatingPromptForRow(presentation.rows, index);
-        return {
-          id: row.id,
-          role: row.role,
-          content: messagePlainText(row.parts),
-          parts: row.parts,
-          ...(row.receipt ? { receipt: row.receipt } : {}),
-          ...(originatingPrompt ? { originatingPrompt } : {}),
-          history: { turnStatus: row.turnStatus, providerContext: row.providerContext },
-          sourcePoint: row.sourcePoint,
-        } satisfies UiMessage;
-      });
-      const lastPresentationReceipt = presentation.rows
-        .flatMap((row) => row.receipt ? [row.receipt] : [])
-        .at(-1);
-      resumedPresentation = Object.freeze({
-        messages: Object.freeze(messages),
-        ...(lastPresentationReceipt ? { lastReceipt: lastPresentationReceipt } : {}),
-        lifecycle: detail.transcript.lifecycle,
-        ...(detail.transcript.truncated ? {
-          boundary: Object.freeze({
-            omittedMessages: detail.transcript.omittedMessages,
-            shortened: detail.transcript.messages.some((message) => message.truncated),
-          }),
-        } : {}),
-      });
     }
+    const nextSession = resumableSession ?? await createProfileSession(
+      nextRuntime,
+      profile,
+      nextCatalog,
+      `${profile.name} · encrypted vault`,
+    );
 
     runtime.current = nextRuntime;
     activeDurableAuthority.current = authority;
@@ -3424,6 +3573,7 @@ export function App() {
               : "The verified Vault contract is now active. This new pinned session writes workspace files, explicit memories, task state, and session events as client-encrypted cloud objects; the previous page-memory sessions were migrated and remain separately inspectable.",
         }]);
     setEventCount(nextSession.headSequence);
+    setQuarantinedSession(quarantined);
     setSessionRevision((value) => value + 1);
     setLastReceipt(resumedPresentation?.lastReceipt);
     setSessionLifecycle(resumedPresentation?.lifecycle ?? READY_SESSION_LIFECYCLE);
@@ -3442,9 +3592,15 @@ export function App() {
     setVaultContextPublicationMessage(vaultTools.contextMode === "encrypted-ranged"
       ? "A matching encrypted context generation was adopted without uploading new shards."
       : "No matching encrypted generation was found. Turns continue with the on-device index until you publish one.");
-    setRuntimeStatus(resumableSession
-      ? `${authority.label} active · audited session resumed · ${contextLabel}${workspaceRefreshDeferred ? " · file view refresh due" : ""}`
-      : `${authority.label} active · ${contextLabel}${workspaceRefreshDeferred ? " · file view refresh due" : ""}`);
+    // The quarantine is named in full — title, short id and reason — because the
+    // version of this line that shipped said only "Local vault adoption failed"
+    // and a UUID, which tells a user nothing they can act on and everything
+    // they need to panic about.
+    setRuntimeStatus(quarantined
+      ? `${authority.label} active · “${quarantined.title}” (session ${quarantined.sessionId.slice(0, 8)}) could not be replayed: ${quarantined.reason} ${quarantined.historyVerified ? "Its history is intact — open Sessions to inspect it" : "Its history was not verified — open Sessions to inspect it"} · ${contextLabel}${workspaceRefreshDeferred ? " · file view refresh due" : ""}`
+      : resumableSession
+        ? `${authority.label} active · audited session resumed · ${contextLabel}${workspaceRefreshDeferred ? " · file view refresh due" : ""}`
+        : `${authority.label} active · ${contextLabel}${workspaceRefreshDeferred ? " · file view refresh due" : ""}`);
   }
 
   async function publishEncryptedContextIndex(): Promise<void> {
@@ -4629,39 +4785,36 @@ export function App() {
         if (!profile) throw new Error("The exact profile revision pinned by this session is unavailable; create a fork instead.");
         setProfileId(profile.profileId);
       }
-      const { presentSessionMessages } = await loadDeferredCapabilities();
-      const presentation = presentSessionMessages({
-        session: audited.session,
-        audit: audited.report,
-        events: audited.events,
-        receipts: fresh.transcript.receipts,
-        history: fresh.transcript.messages.flatMap((message) => message.turnId ? [{
-          turnId: message.turnId,
-          turnStatus: message.turnStatus,
-          providerContext: message.providerContext,
-        }] : []),
-      });
+      const { describeSessionPresentationFault, presentSessionMessages } = await loadDeferredCapabilities();
+      // A transcript fault is described here, once, before it leaves this
+      // function. Every caller — the Sessions route, the deep link, the command
+      // palette — then renders a sentence that names the session, the sequence
+      // and the event type, instead of the bare event UUID they each used to
+      // print because the raw `Error.message` was all they were handed.
+      const presentation = (() => {
+        try {
+          return presentSessionMessages({
+            session: audited.session,
+            audit: audited.report,
+            events: audited.events,
+            receipts: fresh.transcript.receipts,
+            history: presentationHistory(fresh.transcript.messages),
+          });
+        } catch (error) {
+          throw new Error(`“${fresh.session.title}” could not be replayed: ${describeSessionPresentationFault(error)} Its history is intact — open Proof.`);
+        }
+      })();
       activateSession(audited.session);
-      setMessages(presentation.rows.length > 0
-        ? presentation.rows.map((row, index) => {
-            const originatingPrompt = originatingPromptForRow(presentation.rows, index);
-            return {
-              id: row.id,
-              role: row.role,
-              content: messagePlainText(row.parts),
-              parts: row.parts,
-              ...(row.receipt ? { receipt: row.receipt } : {}),
-              ...(originatingPrompt ? { originatingPrompt } : {}),
-              history: {
-                turnStatus: row.turnStatus,
-                providerContext: row.providerContext,
-              },
-              sourcePoint: row.sourcePoint,
-            };
-          })
+      // Markers are not rows. Gating on rows alone dropped a conversation whose
+      // only presentable content was a session-scoped record — a rename, say —
+      // and replaced it with the welcome copy, silently discarding a durable
+      // event the adoption path at the top of this file correctly keeps. The
+      // adoption path tests `messages.length` for exactly this reason.
+      setMessages(presentation.rows.length + presentation.markers.length > 0
+        ? transcriptMessagesFromPresentation(presentation)
         : [{ ...welcomeMessage, id: randomUuid(), content: `Resumed ${fresh.session.title}. ${welcomeMessage.content}` }]);
       setEventCount(fresh.session.headSequence);
-      setLastReceipt(presentation.rows.flatMap((row) => row.receipt ? [row.receipt] : []).at(-1));
+      setLastReceipt(lastPresentationRowReceipt(presentation));
       setSessionLifecycle(fresh.transcript.lifecycle);
       setTranscriptBoundary(fresh.transcript.truncated ? {
         omittedMessages: fresh.transcript.omittedMessages,
@@ -5025,7 +5178,7 @@ export function App() {
                     key={entry.key}
                     ref={(element) => windowedTranscript.observeElement(entry.key, entry.revision, element)}
                   >
-                    <MessageCard
+                    {entry.item.marker ? <TranscriptMarker marker={entry.item.marker} /> : <MessageCard
                       message={entry.item}
                       capabilityTier={activeSessionRecord?.manifest.capabilityTier}
                       onProof={() => entry.item.receipt && openReceiptProof(entry.item.receipt)}
@@ -5044,7 +5197,7 @@ export function App() {
                       onBranch={() => void branchFromMessage(entry.item)}
                       branchDisabled={!sessionLibrary || !activeSessionRecord}
                       streamStore={transcriptStreams}
-                    />
+                    />}
                   </div>
                 ))}
                 </>}
@@ -5289,6 +5442,7 @@ export function App() {
             onForked={activateForkedSession}
             onOpenProof={openSessionProof}
             durability={sessionDurability}
+            quarantine={quarantinedSession}
           />
         ) : (
           <section class="work-view panel" aria-labelledby="session-library-loading-title">
@@ -6334,23 +6488,55 @@ function describeEndpointEvidence(args: {
   // The only genuinely scope-dependent branch: a live session has a next turn
   // its policy can speak about, and a settled receipt does not.
   if (args.scope === "turn") {
-    return {
-      state: "none",
-      label: "Secure hardware evidence pending",
-      detail: "Airship has not accepted endpoint TEE evidence for this receipt.",
-    };
+    // "Secure hardware evidence pending" is a retired name: it promised an
+    // arrival nothing is waiting for. The fact it carried — that no endpoint
+    // TEE evidence was accepted — leads the sentence below, unchanged.
+    //
+    // The rung now follows the receipt, which is the rule the whole ladder is
+    // built on. `describeMessageAttestation` returns undefined without one, so
+    // in this build the first arm is the live one, and it lands on exactly the
+    // rung `turnEvidenceVerdict` reaches for a settled receipt with no verified
+    // claim. The two reducers agree instead of describing one turn twice.
+    return args.receipt
+      ? {
+        state: "asserted",
+        label: TRUST_LABEL_MESSAGE_ASSERTED_NO_ENDPOINT,
+        detail: "Airship has not accepted endpoint TEE evidence for this receipt. The receipt records what the provider stated about this turn; nothing independent checked it.",
+      }
+      : {
+        state: "none",
+        label: TRUST_LABEL_MESSAGE_NO_EVIDENCE,
+        detail: "Airship has not accepted endpoint TEE evidence for this turn, and no receipt records a claim about it.",
+      };
   }
+  /*
+   * A proof *policy* is not a verdict, so neither arm below may stand on the
+   * `asserted` rung.
+   *
+   * Both arms are reached with `args.receipt`, `args.records` and
+   * `args.failure` all empty: the only inputs are whether a provider is
+   * connected and what the user asked Airship to do on the *next* turn. A
+   * setting about future turns is nobody's statement about this session, and
+   * `trust-label-contract.ts` names the consequence — "an assertion nobody made
+   * is not a weak assertion, it is an absence". `none` is the rung an absence
+   * stands on, it is what the disconnected arm eight lines below already
+   * returns, and it can only under-claim.
+   *
+   * The labels and the forward-tense sentences are unchanged; the record arm's
+   * sentence gains the emptiness clause the strict arm always carried, so the
+   * grey glyph and the forward-tense words cannot read as contradicting.
+   */
   return args.connected
     ? args.proofPolicy === "strict"
       ? {
-        state: "asserted",
+        state: "none",
         label: "Proof required next turn",
         detail: "The fail-closed endpoint-proof policy is armed, but no active turn receipt currently establishes a hardware claim.",
       }
       : {
-        state: "asserted",
+        state: "none",
         label: "Evidence checked per turn",
-        detail: "Verify & record will collect fresh endpoint evidence on the next turn and keep every incomplete claim explicit without blocking encrypted inference.",
+        detail: "Verify & record will collect fresh endpoint evidence on the next turn and keep every incomplete claim explicit without blocking encrypted inference. No turn receipt currently establishes a hardware claim.",
       }
     : {
       state: "none",

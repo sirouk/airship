@@ -146,6 +146,57 @@ test("profile revisions recover from the encrypted Vault in a fresh browser cont
   await second.context().close();
 });
 
+/*
+ * The one ordinary click that used to cost a whole vault.
+ *
+ * `session.renamed` carries no `turnId` — protocol-v1 defines it that way and
+ * `auditSessionHistory` requires it — but the transcript renderer assumed every
+ * event after `session.created` belonged to a turn and threw. That throw
+ * escapes vault adoption before the runtime is swapped in, so nothing was
+ * adopted at all: workspace, every session, every profile, memory and the
+ * stored provider credential were unreachable behind an event UUID in the
+ * topbar. Renaming also bumps `updatedAt`, which is the sort key that elects
+ * the session adoption tries to resume, so the act elected itself as the target.
+ *
+ * Nothing here is poisoned or hand-crafted: it is the shipped Rename control,
+ * then a reload.
+ */
+test("a renamed conversation still adopts its vault, and the rename is on screen", async ({ browser }, testInfo) => {
+  const namespace = isolatedNamespace(testInfo.project.name, "rename");
+  const first = await openFreshVaultPage(browser, namespace);
+  await first.goto(`/?airshipLabNamespace=${encodeURIComponent(namespace)}#sessions`);
+  await first.getByRole("button", { name: /encrypted vault/u }).first().click();
+  await first.getByRole("button", { name: "Rename", exact: true }).first().click();
+  const titleField = first.getByRole("textbox", { name: "Conversation title" });
+  await expect(titleField).toBeVisible();
+  await titleField.fill("Renamed before reload");
+  await first.getByRole("button", { name: "Save rename" }).click();
+  // The durable append is what this test is about: creation, then the rename.
+  // (The detail heading keeps showing the pre-rename title until the list is
+  // refreshed — pre-existing, unrelated, and not what stranded the vault.)
+  await expect(first.getByText("2 events", { exact: true }).first()).toBeVisible();
+  await first.context().close();
+
+  const second = await openFreshVaultPage(browser, namespace);
+  // `openFreshVaultPage` already asserts the vault adopted. This is the part
+  // the shipped build could not do: resume the renamed session rather than
+  // strand everything behind it.
+  await expect(second.locator(".runtime-line")).toHaveAttribute("title", /audited session resumed/u);
+  await expect(second.locator(".runtime-line")).not.toHaveAttribute("title", /could not be replayed/u);
+
+  // The durable record is re-presented, not skipped: its sentence, its
+  // sequence, its type and its digest.
+  const marker = second.locator(".transcript-marker").first();
+  await expect(marker).toContainText("Renamed to “Renamed before reload”");
+  await expect(marker).toContainText("session.renamed");
+  await expect(marker).toContainText(/Event \d+/u);
+  await expect(marker).toContainText(/sha256:/u);
+
+  // And no surface is left holding a bare identifier as its only explanation.
+  await expect(second.getByText(/has no valid turn identity/u)).toHaveCount(0);
+  await second.context().close();
+});
+
 async function openFreshVaultPage(browser: Browser, namespace: string): Promise<Page> {
   const context = await browser.newContext({
     baseURL: "http://127.0.0.1:4173",

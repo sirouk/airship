@@ -72,6 +72,33 @@ describe("sessionIntegrityRow", () => {
     expect(row.pills.map((pill) => pill.label)).toEqual(["Structure passed", "Ready to resume", "0 receipts"]);
   });
 
+  /*
+   * The compatibility verdict answers a different question from the one this
+   * pill appears to answer.
+   *
+   * A conversation whose transcript the runtime just refused to replay still
+   * has matching manifest pins, so `compatibility.action` stays `resume` — and
+   * the row went on printing a green "Ready to resume" beside a disabled resume
+   * control. Both halves of the truth have to survive: the chain really did
+   * pass its audit, so the structure pill stays `verified`, and `attention`
+   * rather than `failed` is deliberate, because "failed" here would tell a user
+   * their conversation is damaged when every byte of it is recoverable.
+   */
+  it("never says a conversation is ready to resume after its transcript failed to replay", () => {
+    const row = sessionIntegrityRow(integrityInput({ transcriptReplayFailed: true }));
+
+    expect(row.pills.map((pill) => pill.label)).not.toContain("Ready to resume");
+    expect(row.pills[1]?.label).toBe("Transcript cannot be replayed");
+    expect(row.pills[1]?.state).toBe("attention");
+    expect(row.pills[1]?.state).not.toBe("failed");
+    // The audit's own verdict is not withdrawn by the replay failure.
+    expect(row.pills[0]?.label).toBe("Structure passed");
+    expect(row.pills[1]?.detail).toContain("History verified");
+    // …and the explanation cannot be hidden behind a collapsed control.
+    expect(row.autoExpanded).toBe(true);
+    expect(row.label).toContain("Transcript cannot be replayed");
+  });
+
   it("fails open on a structural problem and carries the source label verbatim", () => {
     const row = sessionIntegrityRow(integrityInput({
       history: { status: "incomplete", label: "Journal is incomplete", checkedEvents: 2, totalEvents: 9, turnCount: 1 },

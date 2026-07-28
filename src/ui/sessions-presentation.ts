@@ -114,6 +114,17 @@ export type SessionIntegrityInput = Readonly<{
   receiptCount: number;
   lifecycle: Readonly<{ state: string; label: string }>;
   compatibility?: Readonly<{ action: string; label: string }>;
+  /**
+   * True when the active runtime refused to replay this conversation.
+   *
+   * The compatibility verdict answers "do the manifest pins still match", and
+   * that answer stays `resume` for a session whose transcript the renderer
+   * could not rebuild — so the row went on showing a green "Ready to resume"
+   * beside a disabled resume control, asserting a readiness the runtime had
+   * just failed to deliver. The chain really did pass its audit; what did not
+   * hold is the replay, and only the replay is restated here.
+   */
+  transcriptReplayFailed?: boolean;
 }>;
 
 /**
@@ -136,16 +147,26 @@ export function sessionIntegrityRow(input: SessionIntegrityInput): SessionIntegr
     detail: `${input.history.checkedEvents} of ${input.history.totalEvents} events inspected · ${input.history.turnCount} turn${input.history.turnCount === 1 ? "" : "s"}`,
   });
 
-  const resumeState: SealState = !input.compatibility
-    ? "none"
-    : input.compatibility.action === "resume"
-      ? "verified"
-      : input.compatibility.action === "blocked" ? "failed" : "attention";
+  const resumeState: SealState = input.transcriptReplayFailed
+    ? "attention"
+    : !input.compatibility
+      ? "none"
+      : input.compatibility.action === "resume"
+        ? "verified"
+        : input.compatibility.action === "blocked" ? "failed" : "attention";
   const resume: SessionIntegrityPill = Object.freeze({
     key: "resume",
     state: resumeState,
-    label: input.compatibility?.label ?? "No active runtime",
-    detail: input.lifecycle.label,
+    // `attention`, not `failed`: a failure verdict here would say the session is
+    // damaged, and it is not — the audit verified the chain. The runtime pins
+    // still match too, which is why the compatibility label alone was not
+    // enough to tell the truth on this row.
+    label: input.transcriptReplayFailed
+      ? "Transcript cannot be replayed"
+      : input.compatibility?.label ?? "No active runtime",
+    detail: input.transcriptReplayFailed
+      ? `History verified · ${input.lifecycle.label}`
+      : input.lifecycle.label,
   });
 
   // A recovered receipt is a record that exists, not a record that was checked

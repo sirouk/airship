@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { AirshipModel } from "../models";
 import { catalogTokens, facetCounts, facetModels, modelFacts, MODEL_PICKER_PROVENANCE, nextModelIndex, visibleModelCount } from "./model-picker";
+import { TRUST_LABEL_CONNECT_TRUST_READINESS } from "./trust-language";
 
 const source = readFileSync(new URL("./model-picker.tsx", import.meta.url), "utf8");
 const styles = readFileSync(new URL("./model-picker.css", import.meta.url), "utf8");
@@ -123,7 +124,14 @@ describe("the catalogue metadata travels with the model", () => {
     expect(facts[1]!.captions).toEqual(["41K max output"]);
     expect(facts[2]!.captions).toEqual(["USD per million tokens"]);
     expect(facts[3]!.value).toBe("evidence candidate");
-    expect(facts[3]!.captions).toEqual(["verification remains unverified", "catalog metadata is not proof"]);
+    // "verification remains unverified" is a retired name (RETIRED_TRUST_LABELS)
+    // and was assembled by interpolating a literal enum, so no whole-string
+    // search could find it here. Its written successor carries BOTH facts the
+    // two captions carried — the readiness, and "catalog metadata is not proof"
+    // verbatim — which is why one caption now stands where two did. The caveat
+    // that stops `evidence candidate` reading as a verdict is still on screen.
+    expect(facts[3]!.captions).toEqual([TRUST_LABEL_CONNECT_TRUST_READINESS]);
+    expect(facts[3]!.captions[0]).toContain("catalog metadata is not proof");
   });
 
   it("names an unavailable availability source rather than implying a live read", () => {

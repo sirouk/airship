@@ -1,25 +1,60 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
-import type { ChutesEndpointEvidenceRecord } from "../attestation/provider-types";
-import { createLocalReceipt } from "../receipts/types";
+import {
+  encryptedReceiptFixture as encryptedReceipt,
+  endpointRecordFixture as endpointRecord,
+} from "./attestation-seal.fixtures";
 import { describeAttestationSeal } from "./app";
+import { SEAL_LABELS } from "./seal";
+import { sessionStatusShort } from "./chat/session-status-chip";
 import { TURN_EVIDENCE_COPY } from "./turn-evidence";
 
 const NOW = Date.parse("2026-07-19T12:00:00.000Z");
-const KEY_DIGEST = `sha256:${"a".repeat(64)}`;
 
 describe("session attestation seal", () => {
-  it("distinguishes strict and record-only policies from actual endpoint evidence", () => {
+  /*
+   * A proof policy is not a verdict.
+   *
+   * This case used to pin `asserted` on both arms, and its own title admitted
+   * what they were: *policies*. Both are reached with no receipt, no evidence
+   * record and no acquisition failure — the only inputs are "is a provider
+   * connected" and "what should Airship do on the NEXT turn". A setting about
+   * future turns is nobody's statement about this session, so the rung it can
+   * stand on is absence. Every word of both labels and both sentences is
+   * unchanged; only the rung moved, and it moved down.
+   */
+  it("keeps a proof policy off the verdict ladder, because a setting is not a claim", () => {
     expect(describeAttestationSeal({ connected: true, proofPolicy: "strict", records: [], now: NOW })).toEqual({
-      state: "asserted",
+      state: "none",
       label: "Proof required next turn",
       detail: "The fail-closed endpoint-proof policy is armed, but no active turn receipt currently establishes a hardware claim.",
     });
     expect(describeAttestationSeal({ connected: true, proofPolicy: "record", records: [], now: NOW })).toEqual({
-      state: "asserted",
+      state: "none",
       label: "Evidence checked per turn",
-      detail: "Verify & record will collect fresh endpoint evidence on the next turn and keep every incomplete claim explicit without blocking encrypted inference.",
+      // The strict arm always carried the emptiness clause; the record arm now
+      // carries it too, so the grey glyph and the forward-tense label agree.
+      detail: "Verify & record will collect fresh endpoint evidence on the next turn and keep every incomplete claim explicit without blocking encrypted inference. No turn receipt currently establishes a hardware claim.",
     });
+  });
+
+  /*
+   * The mechanism, pinned separately from the state.
+   *
+   * `state` is not merely a DOM attribute here: the session bar shortens a
+   * label longer than 14 characters by falling back to that state's own word,
+   * so a wrong `state` becomes the *printed* resting verdict on the highest
+   * traffic trust surface in the product. Both policy labels are longer than
+   * the chip, so both of them go through that fallback.
+   */
+  it("never lets a policy print the word Asserted in the resting session chip", () => {
+    for (const proofPolicy of ["record", "strict"] as const) {
+      const seal = describeAttestationSeal({ connected: true, proofPolicy, records: [], now: NOW });
+      expect(sessionStatusShort(seal.label, SEAL_LABELS[seal.state]), proofPolicy)
+        .not.toBe(SEAL_LABELS.asserted);
+      expect(sessionStatusShort(seal.label, SEAL_LABELS[seal.state]), proofPolicy)
+        .toBe(SEAL_LABELS.none);
+    }
   });
 
   it("states the disconnected fallback in plain language without inventing a provider", () => {
@@ -103,76 +138,3 @@ describe("session attestation seal", () => {
     expect(source).toContain('describeEndpointEvidence({ scope: "turn", receipt, records, failure, now })');
   });
 });
-
-function encryptedReceipt() {
-  const receipt = createLocalReceipt({
-    sessionId: "session-1",
-    turnId: "turn-1",
-    provider: "chutes-e2ee-v1",
-    model: "model-1",
-  });
-  receipt.instanceId = "instance-1";
-  receipt.posture = "encrypted-unattested";
-  receipt.proofLevel = "encrypted";
-  receipt.bindings.endpointKeyDigest = KEY_DIGEST;
-  return receipt;
-}
-
-function endpointRecord(): ChutesEndpointEvidenceRecord {
-  const claim = (state: ChutesEndpointEvidenceRecord["claims"][keyof ChutesEndpointEvidenceRecord["claims"]]["state"]) => ({
-    state,
-    title: "fixture",
-    summary: "fixture",
-    checkedAt: "2026-07-19T12:00:00.000Z",
-  });
-  return {
-    version: 1,
-    recordId: "urn:airship:attestation:fixture",
-    provider: "chutes",
-    kind: "endpoint-evidence",
-    verdict: "evidence-only",
-    subject: {
-      scope: "endpoint",
-      chuteId: "chute-1",
-      instanceId: "instance-1",
-      e2ePublicKey: "",
-      e2ePublicKeyDigest: KEY_DIGEST,
-    },
-    acquisition: {
-      endpoint: "instance-evidence",
-      requestUrl: "https://api.chutes.ai/fixture",
-      requestNonce: "",
-      fetchedAt: "2026-07-19T12:00:00.000Z",
-      cacheFreshUntil: "2026-07-19T12:05:00.000Z",
-      freshUntil: "2026-07-19T12:05:00.000Z",
-      authorization: "bearer",
-      auth: "bearer",
-      cache: "network",
-    },
-    evidence: {
-      format: "chutes-tee-instance-evidence/v1",
-      payloadDigest: KEY_DIGEST,
-      quoteBytes: 1,
-      certificateBytes: 1,
-      gpuDeviceCount: 0,
-      quote: { format: "intel-tdx-quote-v4", base64: "", byteLength: 1, version: 4, attestationKeyType: 2, teeType: "0x81", signatureDataLength: 1, reportDataHex: "" },
-      gpu: { reportedEvidenceCount: 0, payloads: [] },
-      certificate: { format: "der", base64: "", byteLength: 1, binding: "not-established" },
-    },
-    binding: { construction: "SHA-256(UTF8(nonce + e2e_pubkey))", state: "matched", expectedDigestHex: "", quotedDigestHex: "", reportDataHex: "" },
-    claims: {
-      evidenceStructure: claim("present"),
-      nonceFreshness: claim("matched"),
-      endpointKey: claim("matched"),
-      cpuTee: claim("unverified"),
-      gpuTee: claim("unavailable"),
-      runtimePolicy: claim("unavailable"),
-      modelArtifact: claim("unavailable"),
-      conversation: claim("unavailable"),
-      request: claim("unavailable"),
-      response: claim("unavailable"),
-      payment: claim("unavailable"),
-    },
-    warnings: [],
-  };
-}
