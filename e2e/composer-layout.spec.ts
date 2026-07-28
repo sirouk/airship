@@ -18,6 +18,18 @@ type DOMRectSnapshot = Readonly<{
 }>;
 
 async function readComposerGeometry(page: Page): Promise<ComposerGeometry> {
+  /*
+   * These are 1px-tolerance geometry comparisons. Sampled the instant a value
+   * changes they are correct in isolation and flaky under a loaded suite,
+   * because a webfont or a still-settling layout can move a box by more than
+   * the tolerance after the read. Waiting for fonts and for two animation
+   * frames measures the settled layout the assertion is actually about, which
+   * makes the test stricter rather than looser: a real drift still fails.
+   */
+  await page.evaluate(async () => {
+    await (document as Document & { fonts?: { ready: Promise<unknown> } }).fonts?.ready;
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  });
   return page.evaluate(() => {
     const snapshot = (element: Element): DOMRectSnapshot => {
       const rect = element.getBoundingClientRect();

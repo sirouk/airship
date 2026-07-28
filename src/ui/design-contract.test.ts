@@ -65,10 +65,15 @@ describe("Airship Instrument design contract", () => {
     // entry still draws its own chip because its call site lives in a file
     // another package owns; they share this recipe verbatim, so the list may
     // shrink but no entry may reacquire a border, radius or type size.
-    const ledger = styles.match(/\.status-seal,\n(?:\.[a-z-]+,\n)*\.proof-level \{([^}]+)\}/u);
-    expect(ledger?.[0]).toContain(".receipt-chip,\n.attestation-chip,\n.audit-state,\n.runtime-posture,\n");
+    const ledger = styles.match(/\.status-seal,\n(?:\.[a-z-]+,\n)*\.runtime-posture \{([^}]+)\}/u);
+    expect(ledger?.[0]).toContain(".receipt-chip,\n.attestation-chip,\n.audit-state,\n");
     expect(ledger?.[1]).toContain("border-radius: var(--radius-chip)");
     expect(ledger?.[1]).toContain("color-mix(in srgb, currentColor 34%, transparent)");
+    // `.proof-level` left the ledger by losing its call site, not by being
+    // restyled: the Proof route's claim-stack heading drew a verdict-shaped
+    // pill ~40px under the route's hero verdict, so the declaration it carried
+    // moved into the receipt record as a labelled "Declared proof level" field.
+    expect(styles).not.toContain(".proof-level");
     // The literal radii these families used to carry: 999px, 5px hard-coded,
     // 4px, and an 8px dot at 50%.
     expect(durabilityStyles).not.toMatch(/border-radius:\s*50%/u);

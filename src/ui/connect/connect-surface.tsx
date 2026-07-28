@@ -295,12 +295,15 @@ function CloudMethodPanel({
           </div>
         )}
       </div>
-      <div id={keyPanelId} role="tabpanel" hidden={method !== "api-key"}>
+      <div id={keyPanelId} role="tabpanel" hidden={method !== "api-key"} aria-label={`Use a ${providerLabel} API key`}>
         <div class="connect-method__key">
-          <div>
-            <strong>Use a {providerLabel} API key</strong>
-            <p>The key is held only in this page’s memory and is released when the connection is cleared or the page closes.</p>
-          </div>
+          {/*
+            The heading is the tabpanel's accessible name rather than a fourth
+            visible rendering of two words that are already on screen: the lane
+            header says the provider 60px above, and the tab a person just
+            pressed is literally labelled `API key`.
+          */}
+          <p>The key is held only in this page’s memory and is released when the connection is cleared or the page closes.</p>
           <button
             type="button"
             class="primary"

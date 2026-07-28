@@ -40,13 +40,28 @@ describe("offline runtime UI contract", () => {
   it("disables provider discovery and OAuth while preserving the pending OAuth credential", () => {
     expect(access).toContain("if (!online || !oauthBootstrap");
     expect(access).toContain("const chutesSignInAvailable = Boolean(oauthDiagnostic) && oauthOrigin.available;");
-    expect(access).toContain('const activeChutesMethod = chutesSignInAvailable ? chutesMethod : "api-key";');
-    // The OAuth *explanation* renders whenever the method is selected; only the
-    // control that would fail is gated on availability. Gating the whole block
-    // on `chutesSignInAvailable` made the boundary text, the registration
-    // details and the one sentence that says WHY sign-in is unavailable
-    // unreachable in exactly the build that needed them — and left the
-    // `!chutesSignInAvailable` branch inside it as provable dead code.
+    /*
+     * AMENDED — the invariant is kept and finally satisfied.
+     *
+     * The OAuth *explanation* renders whenever the method is selected; only the
+     * control that would fail is gated on availability. Gating the whole block
+     * on `chutesSignInAvailable` made the boundary text, the registration
+     * details and the one sentence that says WHY sign-in is unavailable
+     * unreachable in exactly the build that needed them.
+     *
+     * `activeChutesMethod = chutesSignInAvailable ? chutesMethod : "api-key"`
+     * reinstated that unreachability by a second route: it pinned the method to
+     * `api-key`, and the tab that would change it carried `disabled`. Driven
+     * live at 1440×900 against this build, the OAuth tab reported
+     * `element is not enabled` and could not be clicked, so the block above was
+     * still provable dead code — the fix had no rendering path. The method now
+     * *defaults* to what can work and stays selectable, which is the shape
+     * `initialConnectMethod()` already uses for the cloud lanes, and the two
+     * assertions below pin that: no availability gate on the tab, and the panel
+     * keyed on the selected method alone.
+     */
+    expect(access).toContain('const activeChutesMethod = chutesMethod ?? (chutesSignInAvailable ? "oauth" : "api-key");');
+    expect(access).not.toContain("disabled={!chutesSignInAvailable}");
     expect(access).toContain('{activeChutesMethod === "oauth" ? (');
     expect(access).not.toContain('{chutesSignInAvailable && activeChutesMethod === "oauth" ? (');
     expect(access).toContain('{activeChutesMethod === "api-key" ? (');

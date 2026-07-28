@@ -315,8 +315,11 @@ export function AttestationsView({
 
 function RecordHeader({ record }: { record: NormalizedAttestationRecord }) {
   const counts = countStates(record);
+  // The record-level ceiling, in the direction it runs. "Every non-unavailable
+  // claim is shown as an assertion" described the rule as it was
+  // mis-implemented, and it stood above a matrix that may now read "Failed".
   const receiptTrust = record.source === "conversation-receipt"
-    ? "Receipt integrity is unauthenticated; every non-unavailable claim is shown as an assertion."
+    ? "Receipt integrity is unauthenticated; a declared verification is shown as an assertion, and a declared failure keeps its full weight."
     : "This is endpoint acquisition evidence, not a conversation receipt.";
   return (
     <header class="attestation-record-heading">
@@ -469,11 +472,20 @@ export function attestationQualifierLabel(qualifier: string): string | undefined
   return qualifier.includes("/") ? qualifier.replace("/", " · ") : undefined;
 }
 
+/**
+ * The four authority classes, as noun phrases.
+ *
+ * `none` reads "No verification authority" — byte-identical to the label
+ * `authorityFor()` already computes for the same case in `attestations-model`.
+ * It replaces a phrasing built on the retired state verb, which meant
+ * *recorded* on the claim rail and *unproven* in the metric 183px away, and is
+ * therefore banned from this file outright.
+ */
 function authorityLabel(kind: AttestationDimension["authorityKind"]): string {
   if (kind === "external") return "External verifier";
   if (kind === "mixed") return "Mixed local and external chain";
   if (kind === "local") return "Local client check";
-  return "No trusted authority established";
+  return "No verification authority";
 }
 
 function sameTimestamp(left: string, right: string): boolean {

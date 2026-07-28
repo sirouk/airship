@@ -67,6 +67,14 @@
 /* The three section names stop rendering as UA notches cut into a fieldset
    border and read as the route's own section headers instead. Same words. */
 .local-lab legend {
+  /*
+   * The fieldset is a two-column grid, and a `float` on a grid item is
+   * ignored — so the section name was occupying cell 1 of row 1 and pushing
+   * the first field into cell 2. Measured: "Disposable local credentials"
+   * sitting left of Access key, with Secret key alone on the row below.
+   * Spanning both tracks is what `float: left; width: 100%` was reaching for.
+   */
+  grid-column: 1 / -1;
   float: left;
   width: 100%;
   margin-bottom: var(--sp-2);

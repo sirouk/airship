@@ -221,13 +221,32 @@ export function ContextView({ workspace, entries, dimensions = 384, resultLimit 
           </div>
         </div>
 
+        {/*
+          * One line where a 76px card stood.
+          *
+          * `SHARED MEMORY QUERY / Waiting for a query above` existed only to
+          * report that the field 1,600px up the page was being followed, and
+          * then said it a second time in a sentence underneath. The sentence
+          * is the part that carries a fact, so the sentence is what survives;
+          * when a query is running it names the query it is bound to, which
+          * the label pair never did.
+          */}
         {searchQuery !== undefined ? (
-          <section class="context-managed-search" role="search" aria-label="Shared Memory query in the workspace index">
-            <div><span>Shared Memory query</span><strong>{query.trim() ? `Following “${query.trim().slice(0, 160)}”` : "Waiting for a query above"}</strong></div>
-            <p role="status" aria-live="polite" title={managedSearchStatusText(query, engineState.phase, searchStatus, searchResult)}>{managedSearchStatusText(query, engineState.phase, searchStatus, searchResult)}</p>
-            {searchError ? <p class="context-search-error" role="alert">{searchError}</p> : null}
-          </section>
+          <p
+            class="context-shared-status"
+            role="status"
+            aria-live="polite"
+            /* The label pair this replaced carried the only accessible name for
+               the shared-query binding. Keeping the name on the sentence that
+               replaced it means the region is still addressable by assistive
+               technology and by tests, rather than only findable by its text. */
+            aria-label="Shared Memory query in the workspace index"
+          >
+            {query.trim() ? <b>Following “{query.trim().slice(0, 160)}”</b> : null}
+            {managedSearchStatusText(query, engineState.phase, searchStatus, searchResult)}
+          </p>
         ) : null}
+        {searchQuery !== undefined && searchError ? <p class="context-search-error" role="alert">{searchError}</p> : null}
 
         {/*
           * The bootstrap caveat is promoted from a paragraph inside a card to
@@ -310,7 +329,15 @@ export function ContextView({ workspace, entries, dimensions = 384, resultLimit 
               ))}
             </div>
           ) : (
-            <ContextEmpty icon={engineState.phase === "error" ? "warning" : "context"} title={entries.length ? "Index generation pending" : "No workspace files"} body={entries.length ? "The current revision set has not passed staging validation yet." : "Add a supported text or code file to surface the first candidate."} />
+            <ContextEmpty
+              icon={engineState.phase === "error" ? "warning" : "context"}
+              title={entries.length ? "Index generation pending" : "No workspace files"}
+              body={entries.length ? "The current revision set has not passed staging validation yet." : "Add a supported text or code file to surface the first candidate."}
+              /* Staging is the engine's own work; offering a button there would
+                 name an action the reader does not have. Creating a file is an
+                 action they do have, and the workspace is where it is taken. */
+              {...(entries.length ? {} : { action: { label: "Open the workspace", onAct: () => { window.location.hash = "#workspace"; } } })}
+            />
           )}
         </section>
 
@@ -333,9 +360,19 @@ export function ContextView({ workspace, entries, dimensions = 384, resultLimit 
               ))}
             </div>
           ) : searchResult ? (
-            <ContextEmpty icon="context" title="No local matches" body="The active flat index returned no candidates for this generation and result limit." />
+            <ContextEmpty
+              icon="context"
+              title="No local matches"
+              body={`The active flat index returned no candidates for this generation and result limit. ${candidateSummary(stats?.byStatus ?? {})} in this generation.`}
+              action={{ label: "Change the query", onAct: () => focusContextQuery(embedded) }}
+            />
           ) : (
-            <ContextEmpty icon="context" title="Search the active generation" body="Results include exact file revisions, content digests, chunk identifiers, and inspectable dense/lexical scores." />
+            <ContextEmpty
+              icon="context"
+              title="Nothing searched yet"
+              body="Results include exact file revisions, content digests, chunk identifiers, and inspectable dense/lexical scores."
+              action={{ label: embedded ? "Search memory" : "Search the active generation", onAct: () => focusContextQuery(embedded) }}
+            />
           )}
         </section>
       </div>
@@ -527,8 +564,44 @@ function whyMatched(dense: number, lexical: number): string {
   return "Matched both words and local semantic signals.";
 }
 
-function ContextEmpty({ icon, title, body }: { icon: "context" | "warning"; title: string; body: string }) {
-  return <div class="context-empty"><Icon name={icon} size={24} /><strong>{title}</strong><p>{body}</p></div>;
+/**
+ * An empty panel that ends in something to press.
+ *
+ * Every state on this route was accurate and terminal: "Search the active
+ * generation" describes what would happen if the reader found the field, which
+ * on the embedded surface is 1,600px above and on the standalone surface is
+ * below the panel doing the describing. The action is optional because a state
+ * with no honest action — an index that has not finished staging — must not
+ * grow a button that pretends otherwise.
+ */
+function ContextEmpty({ icon, title, body, action }: {
+  icon: "context" | "warning";
+  title: string;
+  body: string;
+  action?: Readonly<{ label: string; onAct: () => void }>;
+}) {
+  return (
+    <div class="context-empty">
+      <Icon name={icon} size={24} />
+      <strong>{title}</strong>
+      <p>{body}</p>
+      {action ? <button class="context-empty__action" type="button" onClick={action.onAct}>{action.label}</button> : null}
+    </div>
+  );
+}
+
+/**
+ * Puts the caret in the field this panel is describing.
+ *
+ * The embedded index is driven by the Memory route's own search box, so the
+ * only honest destination is that box — not a second field, which is the thing
+ * this surface deliberately does not have.
+ */
+function focusContextQuery(embedded: boolean): void {
+  const field = document.getElementById(embedded ? "memory-query-input" : "client-context-query");
+  if (!(field instanceof HTMLInputElement)) return;
+  field.scrollIntoView({ block: "center" });
+  field.focus();
 }
 
 function phaseLabel(phase: ClientContextEngineState["phase"], degraded: boolean): string {

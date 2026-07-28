@@ -11,9 +11,29 @@ import {
 import { requestPersistentLocalDeviceStorage } from "../storage/local-device-object-store";
 import type { LocalDeviceVaultStatus } from "../vault/local-device";
 import { importWorkspaceRecoveryKey } from "../vault/recovery";
+import { Seal, type SealState } from "./seal";
 import "./local-device-vault-setup.css";
 
 export const LOCAL_DEVICE_BACKUP_MAX_FILE_BYTES = 256 * 1024 * 1024;
+
+/** Whether the one-time key has left Airship, by the only two routes that exist. */
+export type RecoveryCustody = "none" | "copied" | "downloaded";
+
+/**
+ * The custody line, in the one status family.
+ *
+ * Same three sentences as before. What changes is their weight: "Not copied or
+ * downloaded yet." was `--ink-faint` micro text sitting directly above the one
+ * control on this route that destroys a value permanently, which made the
+ * quietest thing on screen the most consequential. `attention` is the honest
+ * state for a one-time secret that has not left the page yet, and the seal puts
+ * a mark and a colour behind the words rather than replacing them.
+ */
+export function recoveryCustodyStatus(custody: RecoveryCustody): Readonly<{ state: SealState; label: string }> {
+  if (custody === "copied") return Object.freeze({ state: "verified" as SealState, label: "Copied to your clipboard." });
+  if (custody === "downloaded") return Object.freeze({ state: "verified" as SealState, label: "Download requested." });
+  return Object.freeze({ state: "attention" as SealState, label: "Not copied or downloaded yet." });
+}
 
 export type LocalDeviceActivationReason =
   | "opened"
@@ -129,7 +149,7 @@ export function LocalDeviceVaultSetup({
    * It gates nothing — the acknowledgement is the user's to make — but a
    * one-time secret should never sit on screen next to a silent checkbox.
    */
-  const [custody, setCustody] = useState<"none" | "copied" | "downloaded">("none");
+  const [custody, setCustody] = useState<RecoveryCustody>("none");
   const [recoveryInputReady, setRecoveryInputReady] = useState(false);
   const [restoreFile, setRestoreFile] = useState<File>();
   const [restoreRecoveryReady, setRestoreRecoveryReady] = useState(false);
@@ -555,11 +575,9 @@ export function LocalDeviceVaultSetup({
                       Cancel
                     </button>
                   </div>
-                  <p class="local-device-vault__custody" data-custody={custody}>{custody === "none"
-                    ? "Not copied or downloaded yet."
-                    : custody === "copied"
-                      ? "Copied to your clipboard."
-                      : "Download requested."}</p>
+                  <p class="local-device-vault__custody" data-custody={custody}>
+                    <Seal {...recoveryCustodyStatus(custody)} density="chip" />
+                  </p>
                   <label class="local-device-vault__check">
                     <input type="checkbox" onChange={(event) => {
                       if (event.currentTarget.checked) acknowledgeGeneratedRecovery();
@@ -570,6 +588,15 @@ export function LocalDeviceVaultSetup({
               ) : (
                 <>
                   <p>The recovery value is no longer rendered. Creation is the only remaining step.</p>
+                  {/* The one screen where a misunderstanding loses data
+                      permanently, and until now its last words were "the only
+                      remaining step" — which reads as "there is no way back"
+                      to the person who ticked the box before saving the key.
+                      There is a way back, right here, and it is only safe
+                      while nothing has been enrolled. Say so. */}
+                  <p class="local-device-vault__escape">
+                    Did not save it? Cancel. Nothing is enrolled until you create, and a new ceremony issues a different key.
+                  </p>
                   <div class="local-device-vault__actions">
                     <button type="button" onClick={() => void commitEnrollment()} disabled={busy}>
                       {operation === "creating" ? "Creating…" : "Create encrypted Vault"}

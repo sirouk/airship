@@ -41,17 +41,30 @@
 
 .profile-governs__cell small {
   color: var(--ink-muted, #9fa5a3);
-  font: var(--fs-micro)/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font: var(--fw-strong, 600) var(--fs-micro)/1.2 var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
   letter-spacing: 0.11em;
   text-transform: uppercase;
 }
 
+/*
+ * The value wraps; it never ellipsises.
+ *
+ * The whole point of the strip is that the six governed values are legible
+ * with zero clicks, and `Shared workspace` clipped to `Shared work…` is the
+ * four-accordion editor again with an extra step. A cell is allowed to be two
+ * lines tall — a truncated value is a fact with its second half removed, and
+ * nothing on this row carries it anywhere else.
+ */
 .profile-governs__cell strong {
-  overflow: hidden;
   font-size: var(--fs-meta, 13px);
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-weight: var(--fw-strong, 600);
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.profile-governs__cell:focus-visible {
+  outline: 2px solid var(--focus, #dfba72);
+  outline-offset: -2px;
 }
 
 .profile-governs__cell[aria-expanded="true"] {

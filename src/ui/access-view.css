@@ -167,72 +167,68 @@
   margin-top: 12px;
 }
 
+/*
+ * No border and no background.
+ *
+ * This region sat inside the lane card, which sits inside the route card, and
+ * it opened with a heading that repeated the tab above it and the field label
+ * below it. Three boxes and four renderings of `Chutes API key` stood between
+ * the tab a person had just pressed and the field they pressed it for. What is
+ * left is the form.
+ */
 .api-key-alternative {
-  border: 1px solid var(--line);
-  border-radius: var(--radius-control);
-  background: var(--surface-soft);
-}
-
-.api-key-alternative > summary {
-  padding: 11px 12px;
-  color: var(--ink-muted);
-  cursor: pointer;
-  font-size: var(--fs-caption);
-  font-weight: 700;
-}
-
-.api-key-alternative > strong {
   display: block;
-  padding: 11px 12px;
-  color: var(--ink);
-  font-size: var(--fs-caption);
 }
 
 .api-key-alternative .credential-entry {
-  padding: 2px 12px 12px;
-  border-top: 1px solid var(--line);
+  padding-top: var(--sp-2);
 }
 
-.api-key-alternative .credential-types {
-  grid-template-columns: 1fr;
-}
-
+/* The credential class reads as a hint under its field, not as an 88px tile
+   above it. Every word it carried is still here, at the same contrast. */
 .credential-types {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 9px;
+  gap: var(--sp-1);
 }
 
 .credential-type {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
-  gap: 4px 9px;
-  min-height: 88px;
-  padding: 11px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-control);
-  background: var(--surface-soft);
+  gap: 0 var(--sp-2);
+  padding: 0 0 0 var(--sp-2);
+  border-left: 2px solid var(--line-strong);
 }
 
 .credential-type.active {
-  border-color: color-mix(in srgb, var(--accent-bright) 50%, transparent);
-  box-shadow: inset 3px 0 var(--accent-bright);
+  border-left-color: var(--accent-bright);
 }
 
 .credential-type code {
   grid-row: 1 / span 2;
+  align-self: start;
   color: var(--accent-bright);
-  font: 700 var(--fs-caption)/1.4 var(--font-mono);
+  font: 700 var(--fs-caption)/1.5 var(--font-mono);
 }
 
 .credential-type strong {
-  font-size: var(--fs-meta);
+  color: var(--ink-muted);
+  font-size: var(--fs-caption);
 }
 
 .credential-type span {
+  color: var(--ink-faint);
+  font-size: var(--fs-micro);
+  line-height: 1.5;
+}
+
+/* The live reading of what was typed. It states its own negative arm: the only
+   previous signal for "this is not a Chutes credential" was an absent
+   highlight, which is a claim nobody can see being made. */
+.credential-reading {
+  margin: 0;
   color: var(--ink-muted);
   font-size: var(--fs-caption);
-  line-height: 1.45;
+  line-height: 1.5;
 }
 
 .credential-entry label,
@@ -383,20 +379,17 @@
 }
 
 /*
- * Row 3: the evidence about the model beside the policy that governs it. The
- * two used to stack to 324px, and the picker popover then covered both.
+ * Row 3: the policy that governs the turn.
+ *
+ * The four catalogue tiles that used to occupy the left column moved inside
+ * `<ModelPicker>` — they describe the model, so they belong to the control that
+ * chooses it, and beside it they were also what the open popover covered.
  */
 .candidate-decision {
   display: grid;
-  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--sp-3);
   align-items: start;
-}
-
-@media (max-width: 720px) {
-  .candidate-decision {
-    grid-template-columns: minmax(0, 1fr);
-  }
 }
 
 .oauth-finish-banner {
@@ -424,63 +417,6 @@
   color: var(--ink-muted);
   font-size: var(--fs-caption);
   line-height: 1.45;
-}
-
-.model-candidate-summary {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-control);
-  background: color-mix(in srgb, var(--surface-soft) 92%, var(--accent) 8%);
-}
-
-.model-candidate-summary > div {
-  min-width: 0;
-  padding: 10px;
-  border-bottom: 1px solid var(--line);
-}
-
-.model-candidate-summary > div:nth-child(odd) {
-  border-right: 1px solid var(--line);
-}
-
-.model-candidate-summary > div:nth-last-child(-n + 2) {
-  border-bottom: 0;
-}
-
-.model-candidate-summary span,
-.model-candidate-summary strong {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* Captions wrap. They are the provenance of the value above them — "provider
-   management snapshot", "catalog metadata is not proof" — and a caveat clipped
-   to `catalog metadata is not p…` is a caveat that was not made. */
-.model-candidate-summary small {
-  display: block;
-  line-height: 1.35;
-}
-
-.model-candidate-summary span {
-  color: var(--ink-faint);
-  font: var(--fs-micro)/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
-  text-transform: uppercase;
-}
-
-.model-candidate-summary strong {
-  margin-top: var(--sp-1);
-  color: var(--ink);
-  font-size: var(--fs-caption);
-}
-
-.model-candidate-summary small {
-  margin-top: 2px;
-  color: var(--ink-muted);
-  font-size: var(--fs-micro);
 }
 
 .catalog-provenance-popover .popover__body > p.complete {
@@ -982,22 +918,15 @@
   }
 
   /*
-   * The selected API-key tab, field label, placeholder, and help line already
-   * identify this credential. Repeating a titled wrapper and a large
-   * credential taxonomy card hid the input beneath the fixed navigation.
+   * `display: none` on `.credential-types` is deleted, not moved.
+   *
+   * It existed because a titled wrapper plus an 88px credential taxonomy card
+   * pushed the input under the fixed navigation. Neither exists now: the class
+   * is two lines beneath the field it describes, so the phone reads the same
+   * words as the desktop instead of losing the sentence that says what a cpk_
+   * key can reach.
    */
-  .api-key-alternative > strong,
-  .api-key-alternative .credential-types {
-    display: none;
-  }
-
-  .api-key-alternative .credential-entry {
-    padding: 10px;
-    border-top: 0;
-  }
-
   .access-section-heading,
-  .credential-types,
   .candidate-actions,
   .active-connection-actions {
     grid-template-columns: 1fr;
@@ -1014,21 +943,6 @@
   .active-connection-summary dl > div {
     grid-template-columns: 1fr;
     gap: 4px;
-  }
-
-  .model-candidate-summary {
-    grid-template-columns: 1fr;
-  }
-
-  .model-candidate-summary > div,
-  .model-candidate-summary > div:nth-child(odd),
-  .model-candidate-summary > div:nth-last-child(-n + 2) {
-    border-right: 0;
-    border-bottom: 1px solid var(--line);
-  }
-
-  .model-candidate-summary > div:last-child {
-    border-bottom: 0;
   }
 
   .capability-card th,

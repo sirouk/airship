@@ -90,4 +90,34 @@ describe("lane rows", () => {
     expect(styles).toContain("--lane-gutter: 32px");
     expect(styles).toContain("padding: 0 var(--sp-3) var(--sp-3) calc(var(--sp-3) + var(--lane-gutter));");
   });
+
+  it("renders every lane at once, so connecting one cannot close the others", () => {
+    /*
+     * The regression this guards was shipped once: an early `return null` after
+     * the first connected lane left a connected person with no way to add a
+     * second provider, and called a hook after an early return. The list is
+     * built from the whole resolved model with one open lane, so the guard is
+     * that nothing filters the array and nothing exits before it is mapped.
+     */
+    expect(source).toContain("{lanes.map((lane) => (");
+    expect(source).not.toMatch(/lanes\s*\.\s*filter\([^)]*\)\s*\.\s*map/u);
+    expect(source).not.toMatch(/if \([^)]*connected[^)]*\) return null/u);
+    // Openness is a per-card prop, never a reason not to render a card.
+    expect(source).toContain("open={openLane === lane.id}");
+  });
+});
+
+describe("one name per fact inside a lane", () => {
+  it("does not re-render the provider and the method the tab above already names", () => {
+    /*
+     * `Use a {provider} API key` was a fourth rendering, inside one 120px block,
+     * of two words already carried by the lane header 60px above and by the tab
+     * the person had just pressed. It is not deleted: it is the tabpanel's
+     * accessible name, so a screen reader still hears the region named.
+     */
+    expect(source).toContain("aria-label={`Use a ${providerLabel} API key`}");
+    expect(source).not.toContain("<strong>Use a {providerLabel} API key</strong>");
+    // The sentence that is not a duplicate stays exactly where it was.
+    expect(source).toContain("The key is held only in this page’s memory and is released when the connection is cleared or the page closes.");
+  });
 });

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "preact/hooks";
+import { useEffect, useId, useMemo, useRef, useState } from "preact/hooks";
 import type { BrowserGitClient } from "../git/client";
 import { describeGitOperation } from "../git/operations";
 import { preferredSourceRepositoryId } from "../git/source-selection";
@@ -8,13 +8,16 @@ import type { WorkspaceEntry, WorkspaceFile, WorkspacePort } from "../workspace/
 import { normalizeWorkspacePath } from "../workspace/contracts";
 import { isWorkspaceBinaryEnvelope } from "../workspace/content-codec";
 import { moveWorkspaceFile } from "../workspace/mutations";
-import { buildWorkspaceTree, visibleWorkspaceTree, workspaceBaseName, workspaceDirectories, workspaceParentPath } from "../workspace/tree";
+import { buildWorkspaceTree, visibleWorkspaceTree, workspaceBaseName, workspaceDirectories, workspaceFilesUnder, workspaceFolderRenamePlan, workspaceParentPath, type WorkspaceMove } from "../workspace/tree";
 import { trapFocus } from "./focus-trap";
 import { Icon } from "./icons";
 import { MenuSelect } from "./menu-select";
 import { Seal } from "./seal";
 import { middleTruncate, Tabs, type TabItem } from "./tabs";
 import {
+  defaultEditorWrap,
+  editorSurfaceNote,
+  folderOperationReport,
   settledWorkbenchNotice,
   WORKBENCH_DESCRIPTION,
   WORKBENCH_DONE_NOTICE_MS,
@@ -22,13 +25,19 @@ import {
   WORKBENCH_RAIL_MAX_PERCENT,
   WORKBENCH_RAIL_MIN_PERCENT,
   WORKBENCH_RAIL_STEP_PERCENT,
+  WORKSPACE_FOLDER_NOT_ATOMIC_NOTE,
+  WORKSPACE_FOLDER_PLACEHOLDER,
+  WORKSPACE_FOLDER_PLACEHOLDER_NOTE,
   workbenchBufferState,
+  workbenchDialogCopy,
   workbenchFilterMatches,
   workbenchNotice,
   workbenchNoticeState,
   workbenchRailPercent,
   workbenchSuggestedFiles,
   workbenchTabQualifiers,
+  workspaceNameError,
+  type WorkbenchDialogKind,
   type WorkbenchNotice,
   type WorkbenchPane,
 } from "./workbench-model";
@@ -47,12 +56,16 @@ export const WORKSPACE_EDITOR_BYTE_LIMIT = 128 * 1024;
  */
 export const WORKSPACE_FILE_VIEWPORT_HEIGHT = 432;
 const TAB_STORAGE = "airship.workspace.tabs.v1";
+/** How many doomed paths a delete confirmation names before it counts the rest. */
+const DIALOG_PATH_PREVIEW = 8;
+/** The dialogs whose subject is the path itself, so an empty field is fine. */
+const DIALOG_KINDS_WITHOUT_VALUE: readonly string[] = Object.freeze(["delete", "delete-folder", "discard"]);
 const PAGE_DRAFTS = new WeakMap<WorkspacePort, Readonly<Record<string, Buffer>>>();
 
 type Review = (operation: GitOperation, descriptor: GitOperationDescriptor) => Promise<"allow" | "deny">;
 type Buffer = WorkspaceFile & { draft: string; truncated: boolean; binary: boolean };
-type Dialog = Readonly<{ kind: "create" | "rename" | "move" | "delete" | "discard"; path: string }>;
-type TabState = Readonly<{ tabs: readonly string[]; activePath: string; rail: number }>;
+type Dialog = Readonly<{ kind: WorkbenchDialogKind; path: string }>;
+type TabState = Readonly<{ tabs: readonly string[]; activePath: string; rail: number; wrap: boolean }>;
 
 export function WorkspaceView({
   files,
@@ -78,6 +91,7 @@ export function WorkspaceView({
   /** Which pane the destination that opened this workbench asks for. */
   opensPane?: WorkbenchPane;
 }) {
+  const dialogTitleId = useId();
   const [filter, setFilter] = useState("");
   const filtered = useMemo(() => workbenchFilterMatches(files, filter), [files, filter]);
   const filtering = filtered.shown !== filtered.total;
@@ -106,6 +120,7 @@ export function WorkspaceView({
   const [tabs, setTabs] = useState<readonly string[]>(restoredTabs.tabs);
   const [activePath, setActivePath] = useState<string>(restoredTabs.activePath);
   const [rail, setRail] = useState(restoredTabs.rail);
+  const [wrap, setWrap] = useState(restoredTabs.wrap);
   const [buffers, setBuffers] = useState<Readonly<Record<string, Buffer>>>(() => PAGE_DRAFTS.get(workspace) ?? {});
   const [context, setContext] = useState<Readonly<{ path: string; x: number; y: number }>>();
   const [dialog, setDialog] = useState<Dialog>();
@@ -140,12 +155,12 @@ export function WorkspaceView({
 
   useEffect(() => {
     try {
-      sessionStorage.setItem(tabStorageKey, JSON.stringify({ tabs, activePath, rail }));
+      sessionStorage.setItem(tabStorageKey, JSON.stringify({ tabs, activePath, rail, wrap }));
     } catch {
       // Open tabs and drafts remain valid page-memory state when browser
       // privacy policy denies optional session preference storage.
     }
-  }, [tabs, activePath, rail, tabStorageKey]);
+  }, [tabs, activePath, rail, wrap, tabStorageKey]);
 
   useEffect(() => {
     PAGE_DRAFTS.set(workspace, buffers);
@@ -219,6 +234,20 @@ export function WorkspaceView({
   const dirty = Boolean(buffer && buffer.draft !== buffer.content);
   const gutterLines = buffer && !buffer.binary ? workspaceGutterLines(buffer.draft) : undefined;
   const contextIsFile = Boolean(context && files.some((file) => file.path === context.path));
+  // A folder operation is a set of file operations, so the dialog computes the
+  // set before it offers the button and prints its size in the confirmation.
+  const dialogFolderFiles = useMemo(
+    () => dialog?.kind === "rename-folder" || dialog?.kind === "delete-folder" ? workspaceFilesUnder(files, dialog.path) : [],
+    [dialog?.kind, dialog?.path, files],
+  );
+  const dialogCopy = dialog ? workbenchDialogCopy(dialog.kind, dialog.path, dialogFolderFiles.length) : undefined;
+  // Only once something has been typed: "Enter a name." beside an empty field
+  // the dialog just opened is a scold, not an explanation. Whitespace-only
+  // still counts as typed, because that is the case a disabled button cannot
+  // explain on its own.
+  const dialogNameError = (dialog?.kind === "create-folder" || dialog?.kind === "rename-folder") && dialogValue.length > 0
+    ? workspaceNameError(dialogValue)
+    : undefined;
   const changeCount = worktree?.status.length ?? 0;
   const tabQualifiers = useMemo(() => workbenchTabQualifiers(tabs), [tabs]);
   const suggestions = useMemo(() => workbenchSuggestedFiles(files), [files]);
@@ -355,6 +384,60 @@ export function WorkspaceView({
     }
   }
 
+  /**
+   * One version-fenced move, workspace and Git together, with no UI side effects.
+   *
+   * Bindings are re-resolved per call because `expectedWorktreeVersion` moves
+   * with every accepted Git write: a folder rename is N of these back to back,
+   * and reusing the snapshot taken before the first one would make step two
+   * fail a version fence it should have passed.
+   */
+  async function moveOne(source: string, target: string): Promise<WorkspaceFile> {
+    const currentRepositories = git ? await git.listRepositories() : repositories;
+    setRepositories(currentRepositories);
+    const sourceBinding = resolveGitBinding(source, currentRepositories);
+    const targetBinding = resolveGitBinding(target, currentRepositories);
+    if ((sourceBinding || targetBinding) && (!sourceBinding || !targetBinding || targetBinding.repository.id !== sourceBinding.repository.id || targetBinding.worktree.id !== sourceBinding.worktree.id)) {
+      throw new Error("Moving a repository file across repository roots is not atomic. Move it within its worktree or use the full Sources view.");
+    }
+    const moved = await moveWorkspaceFile(workspace, source, target);
+    try {
+      if (sourceBinding && targetBinding && git) await git.moveWorkingFile({ repositoryId: sourceBinding.repository.id, worktreeId: sourceBinding.worktree.id, sourcePath: sourceBinding.relativePath, targetPath: targetBinding.relativePath, expectedWorktreeVersion: sourceBinding.worktree.version });
+    } catch (cause) {
+      await moveWorkspaceFile(workspace, target, source);
+      throw cause;
+    }
+    return moved;
+  }
+
+  /** Re-points open tabs, the active tab and page drafts at moved paths. */
+  function remapPaths(moves: readonly WorkspaceMove[]): void {
+    if (moves.length === 0) return;
+    const map = new Map(moves.map((move) => [move.source, move.target] as const));
+    setTabs((current) => current.map((path) => map.get(path) ?? path));
+    setActivePath((current) => map.get(current) ?? current);
+    setBuffers((current) => Object.fromEntries(Object.entries(current).map(([path, value]) => {
+      const target = map.get(path);
+      // The draft travels with the tab; the durable revision is the new one, so
+      // the next save is still compare-and-swapped against a revision that exists.
+      return target ? [target, { ...value, path: target }] : [path, value];
+    })));
+  }
+
+  /** Drops paths that no longer exist from the tab strip and the draft store. */
+  function forgetPaths(removed: readonly string[]): void {
+    if (removed.length === 0) return;
+    const gone = new Set(removed);
+    const remaining = tabs.filter((path) => !gone.has(path));
+    setTabs(remaining);
+    setBuffers((current) => Object.fromEntries(Object.entries(current).filter(([path]) => !gone.has(path))));
+    if (!gone.has(activePath)) return;
+    const next = remaining.at(-1) ?? "";
+    setActivePath(next);
+    if (next) void onOpen(next);
+    else setMobilePane("navigation");
+  }
+
   async function moveFile(source: string, destinationDirectory: string, nextName = workspaceBaseName(source)): Promise<void> {
     const pending = buffers[source];
     const parent = workspaceParentPath(source);
@@ -364,20 +447,7 @@ export function WorkspaceView({
     }
     const target = normalizeWorkspacePath(`${destinationDirectory}/${nextName}`);
     await transact("Moving file", async () => {
-      const currentRepositories = git ? await git.listRepositories() : repositories;
-      setRepositories(currentRepositories);
-      const sourceBinding = resolveGitBinding(source, currentRepositories);
-      const targetBinding = resolveGitBinding(target, currentRepositories);
-      if ((sourceBinding || targetBinding) && (!sourceBinding || !targetBinding || targetBinding.repository.id !== sourceBinding.repository.id || targetBinding.worktree.id !== sourceBinding.worktree.id)) {
-        throw new Error("Moving a repository file across repository roots is not atomic. Move it within its worktree or use the full Sources view.");
-      }
-      const moved = await moveWorkspaceFile(workspace, source, target);
-      try {
-        if (sourceBinding && targetBinding && git) await git.moveWorkingFile({ repositoryId: sourceBinding.repository.id, worktreeId: sourceBinding.worktree.id, sourcePath: sourceBinding.relativePath, targetPath: targetBinding.relativePath, expectedWorktreeVersion: sourceBinding.worktree.version });
-      } catch (cause) {
-        await moveWorkspaceFile(workspace, target, source);
-        throw cause;
-      }
+      const moved = await moveOne(source, target);
       setTabs((current) => current.map((path) => path === source ? target : path));
       setActivePath((current) => current === source ? target : current);
       setBuffers((current) => {
@@ -390,6 +460,95 @@ export function WorkspaceView({
     });
   }
 
+  /**
+   * Creates a folder by creating the one file that makes it exist.
+   *
+   * There is no `mkdir` on `WorkspacePort` and there is no directory object in
+   * the tree — `buildWorkspaceTree` derives folders from file paths. The dialog
+   * states this before the write, and the completion notice names the file that
+   * was written, so nothing here implies a capability the storage lacks.
+   */
+  async function createFolder(parent: string, name: string): Promise<void> {
+    const folder = normalizeWorkspacePath(`${parent}/${name}`);
+    const placeholder = `${folder}/${WORKSPACE_FOLDER_PLACEHOLDER}`;
+    await transact("Creating folder", async () => {
+      await writeWorkspaceAndGit(placeholder, "", null);
+      setExpanded((current) => new Set([...current, folder]));
+      await refreshAll();
+      setNotice(workbenchNotice("done", `Created ${folder.replace("/workspace/", "")}/ holding an empty ${WORKSPACE_FOLDER_PLACEHOLDER}.`));
+    });
+  }
+
+  /**
+   * Runs a folder operation as the sequence of file operations it really is.
+   *
+   * Each step is individually compare-and-swapped, so stopping half way is a
+   * genuine partial outcome, not a clean failure. The loop stops at the first
+   * rejection, settles the UI against the steps that *did* run, and reports the
+   * split — "Renamed 9 of 14 files … then stopped" — because "failed safely"
+   * becomes a false statement the moment step one succeeds.
+   */
+  async function runFolderPlan<Step>(input: Readonly<{
+    label: string;
+    verb: "Renamed" | "Deleted";
+    target: string;
+    steps: readonly Step[];
+    run(step: Step): Promise<void>;
+    settle(done: readonly Step[]): void;
+  }>): Promise<void> {
+    await transact(input.label, async () => {
+      const done: Step[] = [];
+      let failure: string | undefined;
+      for (const step of input.steps) {
+        try {
+          await input.run(step);
+          done.push(step);
+        } catch (cause) {
+          failure = cause instanceof Error ? cause.message : "The operation was rejected.";
+          break;
+        }
+      }
+      input.settle(done);
+      await refreshAll();
+      const report = folderOperationReport({ verb: input.verb, done: done.length, total: input.steps.length, target: input.target, failure });
+      if (failure) throw new Error(report);
+      setNotice(workbenchNotice("done", report));
+    });
+  }
+
+  async function renameFolder(folder: string, nextName: string): Promise<void> {
+    const target = normalizeWorkspacePath(`${workspaceParentPath(folder)}/${nextName}`);
+    if (target === folder) {
+      setNotice(workbenchNotice("done", "That folder already has this name."));
+      return;
+    }
+    await runFolderPlan<WorkspaceMove>({
+      label: "Renaming folder",
+      verb: "Renamed",
+      target: target.replace("/workspace/", ""),
+      steps: workspaceFolderRenamePlan(files, folder, nextName),
+      run: async (step) => { await moveOne(step.source, step.target); },
+      settle: (done) => {
+        remapPaths(done);
+        // Without this the folder the user just renamed would collapse, and
+        // the tree would look as though the files had gone somewhere else.
+        setExpanded((current) => new Set([...current].map((path) => path === folder || path.startsWith(`${folder}/`) ? `${target}${path.slice(folder.length)}` : path).concat(target)));
+      },
+    });
+  }
+
+  /** Deletes a folder as the revision-checked removal of every file under it. */
+  async function deleteFolder(folder: string): Promise<void> {
+    await runFolderPlan<WorkspaceEntry>({
+      label: "Deleting folder",
+      verb: "Deleted",
+      target: folder.replace("/workspace/", ""),
+      steps: workspaceFilesUnder(files, folder),
+      run: (entry) => removeWorkspaceAndGit(entry.path),
+      settle: (done) => forgetPaths(done.map((entry) => entry.path)),
+    });
+  }
+
   async function runDialog(): Promise<void> {
     if (!dialog) return;
     if (dialog.kind === "create") {
@@ -399,6 +558,14 @@ export function WorkspaceView({
         await refreshAll(target);
         setNotice(workbenchNotice("done", `Created ${target.replace("/workspace/", "")}.`));
       });
+    } else if (dialog.kind === "create-folder") {
+      if (workspaceNameError(dialogValue)) return;
+      await createFolder(dialog.path, dialogValue.trim());
+    } else if (dialog.kind === "rename-folder") {
+      if (workspaceNameError(dialogValue)) return;
+      await renameFolder(dialog.path, dialogValue.trim());
+    } else if (dialog.kind === "delete-folder") {
+      await deleteFolder(dialog.path);
     } else if (dialog.kind === "rename") {
       await moveFile(dialog.path, workspaceParentPath(dialog.path), dialogValue.trim());
     } else if (dialog.kind === "move") {
@@ -456,9 +623,16 @@ export function WorkspaceView({
 
   function openDialog(kind: Dialog["kind"], path: string): void {
     setContext(undefined);
-    dialogOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
+    const active = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
+    // A context-menu item unmounts with its menu, so "return focus to whatever
+    // opened this" would return it to a detached node and the keyboard would
+    // land on `<body>`. Measured doing exactly that: after Escape, the active
+    // element was the document. Fall back to the tree row the menu came from.
+    dialogOpener.current = active?.closest(".workbench-context")
+      ? treeRowElement(visible.findIndex((node) => node.path === path)) ?? undefined
+      : active;
     setDialog({ kind, path });
-    setDialogValue(kind === "rename" ? workspaceBaseName(path) : kind === "move" ? workspaceParentPath(path) : "");
+    setDialogValue(kind === "rename" || kind === "rename-folder" ? workspaceBaseName(path) : kind === "move" ? workspaceParentPath(path) : "");
   }
 
   /** Closes the modal and returns the keyboard to the control that opened it. */
@@ -511,7 +685,7 @@ export function WorkspaceView({
       if (top < viewport.scrollTop) viewport.scrollTop = top;
       else if (top + rowHeight > viewport.scrollTop + viewport.clientHeight) viewport.scrollTop = top + rowHeight - viewport.clientHeight;
     }
-    requestAnimationFrame(() => document.querySelector<HTMLButtonElement>(`[data-workspace-tree-index="${String(bounded)}"]`)?.focus());
+    requestAnimationFrame(() => treeRowElement(bounded)?.focus());
   }
 
   function handleTreeKey(event: KeyboardEvent, path: string): void {
@@ -538,8 +712,7 @@ export function WorkspaceView({
       if (node.kind === "directory") toggleDirectory(node.path); else void openTab(node.path);
     } else if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
       event.preventDefault();
-      const target = document.querySelector<HTMLElement>(`[data-workspace-tree-index="${String(index)}"]`);
-      const bounds = target?.getBoundingClientRect();
+      const bounds = treeRowElement(index)?.getBoundingClientRect();
       setContext(clampedContext(node.path, bounds?.left ?? 24, bounds?.bottom ?? 48));
     }
   }
@@ -604,15 +777,25 @@ export function WorkspaceView({
                   focusTreeIndex(0);
                 }}
               />
-              {/* The only creation affordance used to be a 26x26 bare "+". */}
+            </div>
+            {/*
+              Creation used to be a 26x26 bare "+" that made files only; a folder
+              could be had exactly one way — by typing a slash into a filename.
+              Both are now named buttons on the same row as the count, so the
+              count is not paying for a line of its own.
+            */}
+            <div class="workspace-actions">
+              {/* A filtered tree must never be mistakable for an empty workspace. */}
+              <p class="workspace-filter-count" role="status">
+                {filtering ? `${String(filtered.shown)} of ${String(filtered.total)} files` : `${String(filtered.total)} files`}
+              </p>
               <button class="workspace-new" type="button" onClick={() => openDialog("create", "/workspace")}>
                 <span aria-hidden="true">+</span> New file
               </button>
+              <button class="workspace-new" type="button" onClick={() => openDialog("create-folder", "/workspace")}>
+                <span aria-hidden="true">+</span> New folder
+              </button>
             </div>
-            {/* A filtered tree must never be mistakable for an empty workspace. */}
-            <p class="workspace-filter-count" role="status">
-              {filtering ? `${String(filtered.shown)} of ${String(filtered.total)} files` : `${String(filtered.total)} files`}
-            </p>
             <div ref={treeViewport} class="workspace-tree" role="tree" aria-label="Workspace files" onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) clearHoverExpansion(); }}>
               <div style={{ height: visible.length * rowHeight, position: "relative" }}><div style={{ position: "absolute", top: rowWindow.start * rowHeight, left: 0, right: 0 }}>
                 {visible.slice(rowWindow.start, rowWindow.end).map((node, offset) => <div class="tree-row-wrap" style={{ height: rowHeight }} key={node.path}>
@@ -675,8 +858,11 @@ export function WorkspaceView({
               {/* The gutter is presentational and scroll-synced from the
                   textarea, so the editable surface remains one real control. */}
               <div class="code-editor-frame">
-                {gutterLines ? <pre class="code-gutter" ref={gutter} aria-hidden="true">{gutterLines}</pre> : null}
-                <textarea class="code-editor" aria-label={`Edit ${workspaceBaseName(buffer.path)}`} value={buffer.draft} readOnly={buffer.truncated} spellcheck={false} onScroll={(event) => { if (gutter.current) gutter.current.scrollTop = event.currentTarget.scrollTop; }} onInput={(event) => setBuffers((current) => ({ ...current, [buffer.path]: { ...buffer, draft: event.currentTarget.value } }))} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") { event.preventDefault(); void saveActive(); } }} />
+                {/* Numbers down the side of a soft-wrapped buffer count visual
+                    rows, not file lines, so wrapping retires the gutter rather
+                    than mislabelling it — and the file strip says so. */}
+                {gutterLines && !wrap ? <pre class="code-gutter" ref={gutter} aria-hidden="true">{gutterLines}</pre> : null}
+                <textarea class="code-editor" data-wrap={wrap ? "on" : "off"} aria-label={`Edit ${workspaceBaseName(buffer.path)}`} value={buffer.draft} readOnly={buffer.truncated} spellcheck={false} onScroll={(event) => { if (gutter.current) gutter.current.scrollTop = event.currentTarget.scrollTop; }} onInput={(event) => setBuffers((current) => ({ ...current, [buffer.path]: { ...buffer, draft: event.currentTarget.value } }))} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") { event.preventDefault(); void saveActive(); } }} />
               </div>
             </>}
             {/*
@@ -692,11 +878,31 @@ export function WorkspaceView({
               <span class="editor-strip__meta">
                 <span title={`Revision ${buffer.revision} — every save is compare-and-swapped against this exact revision.`}>rev {buffer.revision.slice(0, 7)}</span>
                 <span>{formatBytes(buffer.size)}</span>
-                <span>{buffer.binary ? "Binary · read-only" : "UTF-8 · LF"} · client-side</span>
+                {/*
+                  `.code-editor` was `white-space: pre` at every width, so on a
+                  390px pane a markdown paragraph was reachable only by
+                  horizontal scrolling one line at a time. Wrap is a real
+                  control now, defaulted by width and persisted with the tabs,
+                  and this sentence states what the editing surface is rather
+                  than letting the line numbers vanish silently below 760px.
+                */}
+                <span>{editorSurfaceNote({ wrap, binary: buffer.binary })}</span>
               </span>
+              {/* One group so the strip's two controls stay together when it
+                  wraps: a Save button on a line of its own reads as belonging
+                  to whatever ends up beside it. */}
+              <span class="editor-strip__controls">
+              <button
+                class="editor-strip__wrap"
+                type="button"
+                aria-pressed={wrap}
+                title="Soft-wrap long lines. Wrapping hides the line-number gutter, because the numbers would count wrapped rows rather than file lines."
+                onClick={() => setWrap((current) => !current)}
+              >Wrap</button>
               <span class="editor-strip__save">
                 <button class="primary" type="button" title="Save this file — ⌘S or Ctrl+S" disabled={!dirty || busy || buffer.truncated || buffer.binary} onClick={() => void saveActive()}>Save</button>
                 <kbd aria-hidden="true">⌘S</kbd>
+              </span>
               </span>
             </div>
           </> : <div class="workbench-empty">
@@ -712,6 +918,7 @@ export function WorkspaceView({
             </div> : null}
             <div class="workbench-empty__actions">
               <button class="primary" type="button" onClick={() => openDialog("create", "/workspace")}>New file</button>
+              <button type="button" onClick={() => openDialog("create-folder", "/workspace")}>New folder</button>
               {onOpenRepositoryManager ? <button type="button" onClick={onOpenRepositoryManager}>Import a repository snapshot</button> : null}
             </div>
             {/*
@@ -732,20 +939,30 @@ export function WorkspaceView({
         <button role="menuitem" onClick={() => { if (contextIsFile) void openTab(context.path); else { toggleDirectory(context.path); setContext(undefined); } }}>{contextIsFile ? "Open" : expanded.has(context.path) ? "Collapse" : "Expand"}</button>
         <button role="menuitem" onClick={() => openDialog("create", contextIsFile ? workspaceParentPath(context.path) : context.path)}>New file…</button>
         {contextIsFile ? <>
-          <button role="menuitem" onClick={() => openDialog("rename", context.path)}>Rename</button>
+          <button role="menuitem" onClick={() => openDialog("rename", context.path)}>Rename…</button>
           <button role="menuitem" onClick={() => openDialog("move", context.path)}>Move…</button>
-          <button class="danger" role="menuitem" onClick={() => openDialog("delete", context.path)}>Delete</button>
-        </> : null}
+          <button class="danger" role="menuitem" onClick={() => openDialog("delete", context.path)}>Delete…</button>
+        </> : <>
+          {/*
+            A folder used to offer Expand and New file and nothing else, so the
+            only way to rename or remove one was to move its files out by hand,
+            one drag at a time. These three run exactly that, in one confirmed
+            step, and each dialog says how many files it is really touching.
+          */}
+          <button role="menuitem" onClick={() => openDialog("create-folder", context.path)}>New folder…</button>
+          <button role="menuitem" onClick={() => openDialog("rename-folder", context.path)}>Rename folder…</button>
+          <button class="danger" role="menuitem" onClick={() => openDialog("delete-folder", context.path)}>Delete folder…</button>
+        </>}
         {/* Replaces a "Close" row that duplicated behaviour already bound. */}
         <p class="workbench-context__hint">Esc or a tap outside dismisses this menu.</p>
       </div> : null}
-      {dialog ? <div class="workbench-dialog-scrim" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) closeDialog(); }}>
+      {dialog && dialogCopy ? <div class="workbench-dialog-scrim" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) closeDialog(); }}>
         <div
           class="workbench-dialog"
           ref={dialogBox}
           role="dialog"
           aria-modal="true"
-          aria-label={`${dialog.kind} workspace file`}
+          aria-labelledby={dialogTitleId}
           tabIndex={-1}
           onKeyDown={(event) => {
             // The one modal in Airship that shipped without either. Verified
@@ -754,9 +971,7 @@ export function WorkspaceView({
             else if (event.key === "Tab") trapFocus(event, dialogBox.current);
           }}
         >
-          <h2 title={dialog.path}>
-            {dialog.kind === "create" ? "New file" : dialog.kind === "rename" ? "Rename file" : dialog.kind === "move" ? `Move ${workspaceBaseName(dialog.path)}` : dialog.kind === "discard" ? "Unsaved changes" : "Delete file"}
-          </h2>
+          <h2 id={dialogTitleId} title={dialog.path}>{dialogCopy.title}</h2>
           {dialog.kind === "move" ? <>
             <p class="workbench-dialog__where">Currently in {workspaceParentPath(dialog.path).replace("/workspace", "workspace")}.</p>
             <div class="move-targets" role="listbox" aria-label="Destination folder">{directories.map((directory) => {
@@ -774,15 +989,30 @@ export function WorkspaceView({
             })}</div>
           </> : dialog.kind === "discard" ? <p>Save <strong>{workspaceBaseName(dialog.path)}</strong> before closing, keep editing, or permanently discard its unsaved in-browser draft.</p>
             : dialog.kind === "delete" ? <p>Delete <strong>{dialog.path.replace("/workspace/", "")}</strong>? The exact revision is checked before removal.{buffers[dialog.path]?.draft !== buffers[dialog.path]?.content ? " Its unsaved draft will also be discarded." : ""}</p>
-            : <label>{dialog.kind === "create" ? "Path relative to this folder" : "New name"}
-              <input autofocus value={dialogValue} onInput={(event) => setDialogValue(event.currentTarget.value)} onKeyDown={(event) => { if (event.key === "Enter") void runDialog(); }} />
+            : dialog.kind === "delete-folder" ? <>
+              {/* The count is the headline: a folder row hides how much a
+                  single "Delete" is about to remove. Names follow, bounded. */}
+              <p>Delete <strong>{dialog.path.replace("/workspace/", "")}</strong> and the {dialogFolderFiles.length} {dialogFolderFiles.length === 1 ? "file" : "files"} in it? Each file&rsquo;s exact revision is checked before removal.</p>
+              <ul class="workbench-dialog__paths">
+                {dialogFolderFiles.slice(0, DIALOG_PATH_PREVIEW).map((entry) => <li key={entry.path}>{entry.path.replace("/workspace/", "")}</li>)}
+                {dialogFolderFiles.length > DIALOG_PATH_PREVIEW ? <li class="workbench-dialog__paths-more">and {dialogFolderFiles.length - DIALOG_PATH_PREVIEW} more under this folder</li> : null}
+              </ul>
+              <p class="workbench-dialog__caveat">{WORKSPACE_FOLDER_NOT_ATOMIC_NOTE}</p>
+            </>
+            : <label>{dialog.kind === "create" ? "Path relative to this folder" : dialog.kind === "create-folder" ? "Folder name" : dialog.kind === "rename-folder" ? "New folder name" : "New name"}
+              <input autofocus value={dialogValue} aria-invalid={dialogNameError ? "true" : undefined} onInput={(event) => setDialogValue(event.currentTarget.value)} onKeyDown={(event) => { if (event.key === "Enter") void runDialog(); }} />
               {dialog.kind === "create" ? <small>In {dialog.path.replace("/workspace", "workspace")}. A path with slashes creates the folders it names — <code>notes/2026/plan.md</code>.</small> : null}
+              {dialog.kind === "create-folder" ? <small>In {dialog.path.replace("/workspace", "workspace")}. {WORKSPACE_FOLDER_PLACEHOLDER_NOTE}</small> : null}
+              {dialog.kind === "rename-folder" ? <small>Moves the {dialogFolderFiles.length} {dialogFolderFiles.length === 1 ? "file" : "files"} under {dialog.path.replace("/workspace/", "")}. {WORKSPACE_FOLDER_NOT_ATOMIC_NOTE}</small> : null}
+              {/* Stated beside the field rather than expressed only as a
+                  disabled button, which is a dead end that never says why. */}
+              {dialogNameError ? <small class="workbench-dialog__error" role="alert">{dialogNameError}</small> : null}
             </label>}
           {(dialog.kind === "move" || dialog.kind === "rename") && buffers[dialog.path]?.draft !== buffers[dialog.path]?.content ? <p class="workspace-boundary attention">The unsaved draft will move with this tab; the durable file is not changed until you save.</p> : null}
           <div>
             <button type="button" onClick={closeDialog}>Cancel</button>
             {dialog.kind === "discard" && !buffers[dialog.path]?.truncated ? <button class="primary" type="button" disabled={busy} onClick={() => void saveAndClose(dialog.path)}>Save and close</button> : null}
-            <button class={dialog.kind === "delete" || dialog.kind === "discard" ? "danger" : "primary"} type="button" disabled={busy || (!(["delete", "discard"] as string[]).includes(dialog.kind) && !dialogValue.trim())} onClick={() => void runDialog()}>{dialog.kind === "delete" ? "Delete" : dialog.kind === "discard" ? "Discard and close" : dialog.kind === "move" ? "Move here" : "Apply"}</button>
+            <button class={dialogCopy.destructive ? "danger" : "primary"} type="button" disabled={busy || Boolean(dialogNameError) || (!DIALOG_KINDS_WITHOUT_VALUE.includes(dialog.kind) && !dialogValue.trim())} onClick={() => void runDialog()}>{dialogCopy.confirm}</button>
           </div>
         </div>
       </div> : null}
@@ -827,14 +1057,15 @@ export function resolveGitBinding(path: string, repositories: readonly GitReposi
 }
 
 function readTabState(storageKey: string): TabState {
-  const empty: TabState = { tabs: [], activePath: "", rail: WORKBENCH_RAIL_DEFAULT_PERCENT };
+  const wrapDefault = defaultEditorWrap(typeof innerWidth === "number" ? innerWidth : undefined);
+  const empty: TabState = { tabs: [], activePath: "", rail: WORKBENCH_RAIL_DEFAULT_PERCENT, wrap: wrapDefault };
   if (typeof sessionStorage === "undefined") return empty;
   try {
     const value = JSON.parse(sessionStorage.getItem(storageKey) ?? "{}") as Record<string, unknown>;
     const tabs = Array.isArray(value.tabs) ? value.tabs.filter((path: unknown): path is string => typeof path === "string" && path.startsWith("/workspace/")) : [];
     const activePath = typeof value.activePath === "string" && tabs.includes(value.activePath) ? value.activePath : tabs[0] ?? "";
     const rail = typeof value.rail === "number" ? workbenchRailPercent(value.rail) : WORKBENCH_RAIL_DEFAULT_PERCENT;
-    return { tabs, activePath, rail };
+    return { tabs, activePath, rail, wrap: typeof value.wrap === "boolean" ? value.wrap : wrapDefault };
   } catch { return empty; }
 }
 
@@ -842,6 +1073,12 @@ export function workspaceTabStorageKey(identity: string): string {
   let digest = 5381;
   for (const codePoint of identity) digest = ((digest << 5) + digest) ^ codePoint.codePointAt(0)!;
   return `${TAB_STORAGE}.${(digest >>> 0).toString(36)}`;
+}
+
+/** The rendered tree row at a flattened index, if the window is showing it. */
+function treeRowElement(index: number): HTMLButtonElement | null {
+  if (index < 0 || typeof document === "undefined") return null;
+  return document.querySelector<HTMLButtonElement>(`[data-workspace-tree-index="${String(index)}"]`);
 }
 
 function clampedContext(path: string, x: number, y: number) {

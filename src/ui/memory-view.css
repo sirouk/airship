@@ -141,6 +141,69 @@
   line-height: 1.6;
 }
 
+/*
+ * The unsearched state, with something to press in it.
+ *
+ * Every chip is a term read out of live page state at render time, and each
+ * one says which surface it came from — the label is a claim about the corpus,
+ * so it has to be as checkable as any other claim on this route.
+ */
+.memory-starters {
+  display: grid;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-panel);
+  background: color-mix(in srgb, var(--surface-soft) 94%, transparent);
+}
+
+.memory-starters > p {
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: var(--fs-caption);
+  line-height: 1.55;
+}
+
+.memory-starters > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.memory-starters button {
+  display: grid;
+  gap: 1px;
+  min-height: 44px;
+  min-width: 0;
+  max-width: 100%;
+  padding: var(--sp-1) var(--sp-3);
+  border: 1px solid var(--line-control);
+  border-radius: var(--radius-control);
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.memory-starters button:hover,
+.memory-starters button:focus-visible {
+  border-color: var(--accent);
+  background: var(--surface-raised);
+}
+
+.memory-starters button > strong {
+  overflow: hidden;
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-strong);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memory-starters button > small {
+  color: var(--ink-faint);
+  font: var(--fs-micro)/1.3 var(--font-mono);
+}
+
 .memory-view .memory-result-lanes {
   display: grid;
   gap: var(--sp-3);
@@ -732,52 +795,23 @@
 }
 
 /*
- * The shared-query status line inside the embedded Index. It says the field
- * 1,600px above is being followed, so it is a caption on the index status row
- * rather than a 76px card of its own.
+ * The shared-query status, on one line.
+ *
+ * Its predecessor was a card whose label pair — `SHARED MEMORY QUERY /
+ * Waiting for a query above` — existed only to report that the field 1,600px
+ * up the page was being followed, and then said it a second time in a sentence
+ * underneath. The sentence is the part that carries a fact and the part the
+ * live region announces; the query it is bound to is now named inside it.
+ *
+ * The full generation digest is inside this sentence, so a screen reader hears
+ * every character. The visible row ellipsises it and the canonical, copyable
+ * copy is the Index lineage panel below — which is what stops the same digest
+ * being printed three times on one screen.
  */
-.memory-view .context-managed-search {
-  display: flex;
-  gap: var(--sp-2);
-  flex-wrap: wrap;
-  align-items: center;
-  min-height: 32px;
-  padding: 0;
-  border: 0;
-  background: none;
-}
-
-.memory-view .context-managed-search > div {
-  display: flex;
-  gap: var(--sp-2);
-  align-items: baseline;
+.memory-view .context-shared-status {
+  display: block;
   min-width: 0;
-}
-
-.memory-view .context-managed-search div span {
-  flex: 0 0 auto;
-  color: var(--ink-faint);
-  font: var(--fs-micro)/1.2 var(--font-mono);
-  text-transform: uppercase;
-}
-
-.memory-view .context-managed-search div strong {
-  overflow: hidden;
-  font-size: var(--fs-caption);
-  font-weight: var(--fw-body);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/*
- * The status sentence carries the full generation digest. It stays a live
- * region, so a screen reader hears every character; the visible row ellipsises
- * it and the canonical, copyable copy is the Index lineage panel below —
- * which is what stops the same digest being printed three times on one screen.
- */
-.memory-view .context-managed-search > p {
-  flex: 1 1 240px;
-  min-width: 0;
+  min-height: 24px;
   overflow: hidden;
   margin: 0;
   padding: 0 var(--sp-2);
@@ -789,9 +823,14 @@
   white-space: nowrap;
 }
 
-.memory-view .context-managed-search > .context-search-error {
-  flex-basis: 100%;
-  color: var(--danger);
+.memory-view .context-shared-status > b {
+  color: var(--ink);
+  font-weight: var(--fw-body);
+}
+
+.memory-view .context-shared-status > b::after {
+  content: " · ";
+  color: var(--ink-faint);
 }
 
 @media (max-width: 1050px) {

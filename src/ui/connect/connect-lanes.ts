@@ -113,6 +113,12 @@ export type ConnectLaneInput = Readonly<{
   local: Readonly<{ connected: readonly string[] }>;
 }>;
 
+/*
+ * Only the sign-in-available arm carries this, and deliberately: that arm opens
+ * on the OAuth tab, so the key field — and the verbatim copy of this sentence
+ * that sits under it — is not rendered. Where the key panel *is* the open one,
+ * repeating it here is a second rendering of a sentence 150px below.
+ */
 const CHUTES_KEY_SENTENCE = "Chutes personal keys start with cpk_.";
 /*
  * The lane's defining sentence, promoted out of every summary arm and into the
@@ -277,11 +283,18 @@ function chutesLane(input: ConnectLaneInput): LaneCopy {
    * cold visitor. When the sign-in exchange is not configured in this build the
    * lane is still `ready`, because the key path genuinely works — but neither
    * the summary nor the detail may offer sign-in as a route.
+   *
+   * The detail is the cause and nothing else. It used to append two sentences
+   * that both render elsewhere in the same open lane: the offer of the key
+   * route is the summary one line above, and `CHUTES_KEY_SENTENCE` is under the
+   * field itself — which in this arm is the *open* panel, because the key tab is
+   * the default whenever sign-in cannot work. On a phone those two sentences
+   * were 54px of restatement between a person and the field they came for.
    */
   return copy("Paste an API key to connect.", {
     kind: "ready",
     label: "Use an API key",
-    detail: `${input.chutes.signInUnavailableReason ?? "Chutes sign-in is not available in this build."} You can connect with a Chutes API key instead. ${CHUTES_KEY_SENTENCE}`,
+    detail: input.chutes.signInUnavailableReason ?? "Chutes sign-in is not available in this build.",
   });
 }
 

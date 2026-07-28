@@ -31,21 +31,20 @@
   text-transform: uppercase;
 }
 
+/*
+ * The route's live state, rendered by the one status family.
+ *
+ * This was a bespoke pill with its own four-colour ramp keyed off the raw
+ * snapshot phase. The mark, the colour and the word now all come from <Seal>,
+ * fed by the same `vaultState()` the band below it reads, so the two cannot
+ * disagree about whether the Vault is adopted.
+ */
 .vault-view__phase {
+  display: flex;
   flex: none;
+  align-items: center;
   margin-inline-start: auto;
-  padding: var(--sp-1) var(--sp-2);
-  border: 1px solid color-mix(in srgb, currentColor 45%, transparent);
-  border-radius: var(--radius-chip);
-  color: var(--ink-muted);
-  font-size: var(--fs-caption);
-  font-weight: var(--fw-strong);
 }
-
-.vault-view__phase--ready { color: var(--v-caution); }
-.vault-view__phase--degraded { color: var(--v-caution); }
-.vault-view__phase--probing { color: var(--v-info); }
-.vault-view__phase[data-adopted="true"] { color: var(--v-verified); }
 
 /* One state band replaces the phase pill + truth card + empty card, which
    between them said "not connected" four times before the first real control. */

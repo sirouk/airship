@@ -107,7 +107,11 @@ export const CLAIM_CEILING_LABELS: Readonly<Record<ClaimCeiling, string>> = Obje
  * mechanism ("not signed by a trusted authority") the product does not have.
  */
 export const CLAIM_CEILING_SENTENCES: Readonly<Record<ClaimCeiling, string>> = Object.freeze({
-  "receipt-integrity": "Receipt integrity and embedded claim authority were not authenticated; non-unavailable claim states are shown as assertions only.",
+  // This used to say every state but absence was shown as an assertion, which
+  // described the rule as `assertedState()` mis-implemented it: a declared
+  // failure was flattened into "Asserted" while the Receipt & journal tab kept
+  // calling it "Failed". The rule, in the one direction it now runs.
+  "receipt-integrity": "Receipt integrity and embedded claim authority were not authenticated, so a claim this receipt declares verified is shown as an assertion. A declared failure keeps its full weight.",
   authority: "The claim declared verification without naming an authority, so Airship shows it as an assertion.",
 });
 

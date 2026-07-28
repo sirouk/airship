@@ -6,6 +6,7 @@ import {
   attachedRows,
   readinessTally,
   sealForState,
+  vaultPhaseLabel,
   vaultState,
 } from "./vault-view";
 import type { VaultSnapshot } from "../vault/coordinator";
@@ -78,6 +79,43 @@ describe("vault state honesty", () => {
     expect(vaultState({
       phase: "disconnected", localDevice: true, localDeviceOpened: true, ephemeral: false, runtimeAdopted: true,
     })).toBe("adopted");
+  });
+});
+
+describe("route bar phase label", () => {
+  const label = (input: Partial<Parameters<typeof vaultPhaseLabel>[0]>) => vaultPhaseLabel({
+    state: "unset",
+    phase: "disconnected",
+    phaseLabel: "Disconnected",
+    localDevice: false,
+    ...input,
+  });
+
+  it("keeps every string the e2e suite reads off this bar", () => {
+    expect(label({ state: "adopted", phase: "ready" })).toBe("Encrypted runtime active");
+    expect(label({ state: "adopted", phase: "disconnected", localDevice: true }))
+      .toBe("Encrypted device Vault ready");
+    expect(label({ state: "verified", phase: "disconnected", localDevice: true }))
+      .toBe("Encrypted device Vault ready");
+    expect(label({ state: "ephemeral" })).toBe("Page memory · by choice");
+  });
+
+  it("never lets a passed contract report itself as an adopted runtime", () => {
+    expect(label({ state: "verified", phase: "ready" })).toBe("Contract verified · not adopted");
+    expect(sealForState("verified")).not.toBe("verified");
+  });
+
+  it("stops calling a Vault that was never created 'Disconnected'", () => {
+    // Airship's failure grammar for what is a first-run default. The word is
+    // kept for the providers that genuinely were connected and are not.
+    expect(label({ state: "unset", localDevice: true })).toBe("Not set up yet");
+    expect(label({ state: "unset", localDevice: false })).toBe("Disconnected");
+  });
+
+  it("carries a probing and a blocked phase through in the coordinator's own word", () => {
+    expect(label({ state: "probing", phase: "probing", phaseLabel: "Testing" })).toBe("Testing");
+    expect(label({ state: "blocked", phase: "degraded", phaseLabel: "Not ready" })).toBe("Not ready");
+    expect(sealForState("blocked")).toBe("failed");
   });
 });
 

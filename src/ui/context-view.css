@@ -138,13 +138,20 @@
   font-size: var(--fs-meta);
 }
 
+/*
+ * The counts wrap instead of losing their tail.
+ *
+ * `3 sources · 3 chunks · 4.5 Ki…` on a 430px phone deleted the vector size
+ * and the embedding engine — and which engine ranked a result is exactly the
+ * caveat this route is built to keep. A second line is cheaper than a dropped
+ * qualifier.
+ */
 .context-index-status__toggle > span:not(.context-index-status__dot) {
   flex: 1 1 auto;
-  overflow: hidden;
+  min-width: 0;
   color: var(--ink-muted);
   font: var(--fs-micro)/1.3 var(--font-mono);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .context-index-status__chevron {
@@ -387,9 +394,17 @@
   color: var(--danger);
 }
 
+/*
+ * Candidates take the wider track.
+ *
+ * The ratio was set when a hit was 627px of unclamped chunk text; a hit is now
+ * a clamped four-line card, while a candidate row has to fit a path, a shape
+ * line and a lineage chip on one line or wrap. Width goes to the column that
+ * always has rows in it.
+ */
 .client-context-layout {
   display: grid;
-  grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.08fr);
+  grid-template-columns: minmax(0, 1.12fr) minmax(0, 0.88fr);
   gap: 14px;
   align-items: start;
 }
@@ -422,27 +437,35 @@
   border-bottom: 1px solid var(--line);
 }
 
+/*
+ * The heading wraps rather than clipping.
+ *
+ * At 1440px the two-column Index rendered `AUTOMATIC DISCO…` beside
+ * `Vectorization candi…` — a panel whose own name and whose own eyebrow were
+ * both cut, on a route whose argument is that it never hides anything. A
+ * second line costs 20px on the rare width where it is needed and nothing on
+ * every other width.
+ */
 .context-surface-heading > div {
   display: flex;
-  gap: var(--sp-2);
+  flex-wrap: wrap;
+  gap: 0 var(--sp-2);
   align-items: baseline;
   min-width: 0;
 }
 
 .context-surface-heading h2 {
-  overflow: hidden;
+  min-width: 0;
   margin: 0;
   font-size: var(--fs-lead);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .client-context-heading > div:first-child > span,
 .context-surface-heading > div > span {
   flex: 0 1 auto;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .context-surface-heading > span {
@@ -473,17 +496,22 @@
 }
 
 /* A source is a row, not a card: status, path, shape, destination, lineage. */
+/* Wrapping, not eliding. A source row's whole job is to name the source, and
+   in a two-column Index the shape line was shrinking the path to
+   `docs/architect…` while itself ending in `· …` — two truncations to save one
+   line. The shape line drops to a second line first. */
 .context-candidate__row,
 .context-hit-heading {
   display: flex;
-  gap: var(--sp-2);
+  flex-wrap: wrap;
+  gap: 0 var(--sp-2);
   align-items: center;
   min-height: 44px;
 }
 
 .context-candidate__row > strong,
 .context-hit-heading > strong {
-  flex: 0 1 auto;
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   font-size: var(--fs-meta);
@@ -496,7 +524,10 @@
 .context-candidate__row > small,
 .context-hit-heading > small {
   flex: 1 1 auto;
-  min-width: 0;
+  /* Never shrinks below its own text: `text/markdown · 108 B · 1 chu…` is a
+     content type, a size and a chunk count, and the one that gets cut is
+     always the count. It takes a second line instead. */
+  min-width: fit-content;
   overflow: hidden;
   color: var(--ink-faint);
   font: var(--fs-micro)/1.3 var(--font-mono);
@@ -658,6 +689,27 @@
   margin: 6px 0 0;
   font-size: 0.72rem;
   line-height: 1.5;
+}
+
+/* The verb an empty panel earns. It never appears where the reader has no
+   action — a staging index has no button, because pressing one would be a
+   promise the engine has not made. */
+.context-empty__action {
+  min-height: 44px;
+  margin-top: var(--sp-3);
+  padding: 0 var(--sp-4);
+  border: 1px solid var(--line-control);
+  border-radius: var(--radius-control);
+  color: var(--ink);
+  background: transparent;
+  cursor: pointer;
+  font-size: var(--fs-caption);
+}
+
+.context-empty__action:hover,
+.context-empty__action:focus-visible {
+  border-color: var(--accent);
+  background: var(--surface-raised);
 }
 
 .context-lineage > dl {

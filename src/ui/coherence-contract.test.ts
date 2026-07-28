@@ -35,6 +35,71 @@ describe("progressive disclosure coherence contract", () => {
     expect(styles).toContain(".trust-hub-tabs button { min-height: 44px");
   });
 
+  /*
+   * The last four places one turn was described in more than one language.
+   *
+   * Each of these is a string a reader meets, so each is asserted against the
+   * source that renders it rather than against a helper. They are source scans
+   * because the defect is always a *second* spelling appearing beside the
+   * canonical one, and only the file can prove the second spelling is gone.
+   */
+  it("speaks one vocabulary for a connection boundary, a profile field and an authority class", async () => {
+    const app = await readFile(new URL("./app.tsx", import.meta.url), "utf8");
+    const attestations = await readFile(new URL("./attestations-view.tsx", import.meta.url), "utf8");
+
+    // One boundary label, defined once, in the file that renders the model
+    // card. "E2EE · evidence recorded" read as a verdict about the turn when
+    // the fact it stated was that this connection has no proof gate.
+    expect(app).not.toContain('return "E2EE');
+    expect(app).not.toContain("function activeConnectionBoundaryLabel");
+    expect(app).toContain('import { activeConnectionProofLabel, ModelControl } from "./model-control";');
+    expect(app.match(/activeConnectionProofLabel\(connection\)/gu)).toHaveLength(1);
+    expect(app.match(/e2eeBoundaryLabel/gu)).toHaveLength(4);
+
+    // One name for the profile field the catalog card, the select and the
+    // revision strip all show within 400px of each other.
+    expect(app).not.toContain("Minimum posture");
+    expect(app.match(/prefix="Minimum proof"/gu)).toHaveLength(2);
+
+    // "Established" is retired as a state word: it meant *recorded* on the
+    // claim rail and *unproven* in the metric 183px away.
+    expect(attestations).toContain('return "No verification authority";');
+    expect(attestations).not.toContain("established");
+  });
+
+  it("states one ceiling sentence, in one direction, on every surface that states it", async () => {
+    const facts = await readFile(new URL("./claim-stack-facts.ts", import.meta.url), "utf8");
+    const model = await readFile(new URL("./attestations-model.ts", import.meta.url), "utf8");
+    const view = await readFile(new URL("./attestations-view.tsx", import.meta.url), "utf8");
+    // The rule caps a declared verification and stops there. Three surfaces
+    // stated it as "every non-unavailable claim is shown as an assertion",
+    // which was the rule as `assertedState()` mis-implemented it — and which
+    // now stands above a matrix that may read "Failed".
+    for (const source of [facts, model, view]) {
+      expect(source).not.toContain("non-unavailable claim");
+      expect(source).toMatch(/declared failure keeps (?:its )?full weight/u);
+    }
+  });
+
+  it("gives the claim-state legend one word per state in the accessible tree too", async () => {
+    const proof = await readFile(new URL("./proof-view.tsx", import.meta.url), "utf8");
+    // Left to `SEAL_LABELS`, the `none` dot announced "Not checked" directly
+    // before the visible "No evidence": a fifth state word audible only to the
+    // readers who cannot see the one beside it.
+    expect(proof).toContain('density="dot" size={16} label={entry.word} />{entry.word}');
+  });
+
+  it("renders no second verdict-shaped pill beside the Proof route's hero verdict", async () => {
+    const inspector = await readFile(new URL("./proof-inspector.tsx", import.meta.url), "utf8");
+    const styles = await readFile(new URL("./shell.css", import.meta.url), "utf8");
+    // The chip is gone from the heading and the CSS family retired with it …
+    expect(inspector).not.toContain('class="proof-level"');
+    expect(styles).not.toContain(".proof-level");
+    // … and the declaration it carried is re-presented, under the label that
+    // names its author, beside the posture and provider it belongs with.
+    expect(inspector).toContain("<dt>Declared proof level</dt><dd>{proofLevelLabel(receipt.proofLevel)}</dd>");
+  });
+
   it("keeps the Google Drive setup on the active Airship design-token vocabulary", async () => {
     const styles = await readFile(new URL("./google-drive-setup.css", import.meta.url), "utf8");
     expect(styles).toContain("var(--density-panel-pad)");

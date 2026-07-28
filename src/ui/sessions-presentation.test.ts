@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
   SESSION_SEARCH_SCOPE_NOTE,
+  forkRequirement,
+  historyIncompleteMessage,
   forkTitleFor,
   relativeSessionTime,
-  sessionEmptyStateBody,
+  sessionEmptyState,
   sessionEventCount,
   sessionIntegrityRow,
   sessionLineage,
   shortSessionId,
+  titleMatchSegments,
   type SessionIntegrityInput,
 } from "./sessions-presentation";
 
@@ -140,12 +143,101 @@ describe("shortSessionId", () => {
   });
 });
 
-describe("sessionEmptyStateBody", () => {
+describe("sessionEmptyState", () => {
   it("names the unindexed surface only when a search actually ran", () => {
-    expect(sessionEmptyStateBody({ filtered: true, searched: true })).toContain(SESSION_SEARCH_SCOPE_NOTE);
-    expect(sessionEmptyStateBody({ filtered: true, searched: false })).not.toContain(SESSION_SEARCH_SCOPE_NOTE);
-    expect(sessionEmptyStateBody({ filtered: false, searched: false })).toEqual([
+    expect(sessionEmptyState({ filtered: true, query: "plan.md" }).lines).toContain(SESSION_SEARCH_SCOPE_NOTE);
+    expect(sessionEmptyState({ filtered: true, query: "" }).lines).not.toContain(SESSION_SEARCH_SCOPE_NOTE);
+    expect(sessionEmptyState({ filtered: false, query: "" }).lines).toEqual([
       "A conversation appears here after the journal creates it.",
     ]);
+  });
+
+  it("quotes the term that failed and names the fields that were compared", () => {
+    const state = sessionEmptyState({ filtered: true, query: "  plan.md  " });
+    expect(state.heading).toBe("No conversation matches “plan.md”");
+    expect(state.lines[0]).toBe("Searched every conversation in this journal by title, model, profile and fork source.");
+    expect(state.offersClear).toBe(true);
+  });
+
+  it("states the searched size only as of the read that produced it, and never invents one", () => {
+    expect(sessionEmptyState({ filtered: true, query: "x", loadedTotal: 25 }).lines)
+      .toContain("25 conversations at the last unfiltered read.");
+    expect(sessionEmptyState({ filtered: true, query: "x", loadedTotal: 1 }).lines)
+      .toContain("1 conversation at the last unfiltered read.");
+    expect(sessionEmptyState({ filtered: true, query: "x" }).lines.some((line) => /unfiltered read/u.test(line))).toBe(false);
+  });
+
+  it("offers no verb when nothing has been filtered, because there is nothing to undo", () => {
+    const state = sessionEmptyState({ filtered: false, query: "" });
+    expect(state.heading).toBe("No conversations yet");
+    expect(state.offersClear).toBe(false);
+  });
+
+  it("says the filters failed when no term was typed at all", () => {
+    expect(sessionEmptyState({ filtered: true, query: "" }).heading).toBe("No conversation matches these filters");
+  });
+});
+
+describe("titleMatchSegments", () => {
+  it("reassembles the title character for character around every match", () => {
+    const segments = titleMatchSegments("Refactor the retrieval index", "the");
+    expect(segments.map((segment) => segment.text).join("")).toBe("Refactor the retrieval index");
+    expect(segments.filter((segment) => segment.matched).map((segment) => segment.text)).toEqual(["the"]);
+  });
+
+  it("marks every occurrence, case-insensitively, without altering the rendered case", () => {
+    const segments = titleMatchSegments("Vault probe, vault reset", "VAULT");
+    expect(segments.filter((segment) => segment.matched).map((segment) => segment.text)).toEqual(["Vault", "vault"]);
+    expect(segments.map((segment) => segment.text).join("")).toBe("Vault probe, vault reset");
+  });
+
+  it("marks nothing for an empty or absent term", () => {
+    expect(titleMatchSegments("General conversation", "   ")).toEqual([{ text: "General conversation", matched: false }]);
+    expect(titleMatchSegments("General conversation", "zzz")).toEqual([{ text: "General conversation", matched: false }]);
+  });
+});
+
+describe("forkRequirement", () => {
+  const reasons = [
+    { code: "POSTURE_OBSERVED_ONLY", severity: "info", message: "Observed only." },
+    { code: "MODEL_MISMATCH", severity: "warning", message: "Pinned model differs." },
+    { code: "POSTURE_AMBIGUOUS", severity: "error", message: "No coherent posture." },
+  ];
+
+  it("ranks the reasons worst first and keeps every message verbatim", () => {
+    const requirement = forkRequirement({ action: "blocked", label: "Resume blocked", reasons });
+    expect(requirement.required).toBe(true);
+    expect(requirement.reasons.map((reason) => reason.code)).toEqual([
+      "POSTURE_AMBIGUOUS",
+      "MODEL_MISMATCH",
+      "POSTURE_OBSERVED_ONLY",
+    ]);
+    expect(requirement.reasons.map((reason) => reason.message)).toEqual(reasons.map((reason) => reason.message).reverse());
+  });
+
+  it("narrows the fixed HISTORY_INCOMPLETE disjunction to the disjunct that holds", () => {
+    const incomplete = [{ code: "HISTORY_INCOMPLETE", severity: "warning", message: "The session ended mid-turn or was only partially inspected; fork before continuing." }];
+    const message = (history: Parameters<typeof historyIncompleteMessage>[0]) =>
+      forkRequirement({ action: "fork-required", label: "Fork required", reasons: incomplete }, history).reasons[0]!.message;
+
+    // Neither disjunct holds: 8 of 8 inspected, no unterminated turn.
+    expect(message({ checkedEvents: 8, totalEvents: 8, issues: [{ code: "SESSION_UPDATE_TIME_MISMATCH" }] }))
+      .toBe("1 structural observation on a fully inspected history; fork before continuing.");
+    expect(message({ checkedEvents: 6, totalEvents: 8, issues: [{ code: "SESSION_UPDATE_TIME_MISMATCH" }] }))
+      .toBe("Only 6 of 8 events were inspected; fork before continuing.");
+    expect(message({ checkedEvents: 8, totalEvents: 8, issues: [{ code: "TURN_INCOMPLETE" }] }))
+      .toBe("The most recent turn has no durable terminal event; fork before continuing.");
+  });
+
+  it("leaves every other reason's message byte-identical", () => {
+    const reasons = [{ code: "MODEL_MISMATCH", severity: "warning", message: "Pinned model a differs from active model b." }];
+    const scoped = forkRequirement({ action: "fork-required", label: "Fork required", reasons }, { checkedEvents: 1, totalEvents: 1, issues: [] });
+    expect(scoped.reasons[0]!.message).toBe("Pinned model a differs from active model b.");
+  });
+
+  it("does not claim a fork is required when the runtime says the session resumes", () => {
+    expect(forkRequirement({ action: "resume", label: "Ready to resume", reasons: [] }).required).toBe(false);
+    expect(forkRequirement(undefined).required).toBe(false);
+    expect(forkRequirement(undefined).label).toBe("No active runtime supplied");
   });
 });

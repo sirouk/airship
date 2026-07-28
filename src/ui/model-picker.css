@@ -10,6 +10,24 @@
 .model-picker-badge { flex:0 1 auto; min-width:0; overflow:hidden; color:var(--accent-bright); font:var(--fs-micro)/1.2 var(--font-body); text-overflow:ellipsis; }
 .model-picker-caret { margin-left:auto; color:var(--ink-faint); }
 
+/* The selected model's catalogue facts, inside the control rather than beside
+   it: one label column and one flowing value column, replacing a 2x2 tile grid
+   that measured 210px on desktop and 306px on a phone. */
+/* It hangs off the trigger rather than sitting under it as a second box: the
+   facts and the control that changes them are one object, which is the whole
+   point of moving them out of a tile grid parked beside the picker. */
+.model-picker-meta { display:grid; gap:var(--sp-1) 0; margin:-1px 0 0; padding:var(--sp-2); border:1px solid var(--line-strong); border-top-color:var(--line); border-radius:0 0 var(--radius-control) var(--radius-control); background:color-mix(in srgb, var(--surface-soft) 92%, var(--accent) 8%); }
+.model-picker:has(.model-picker-meta) .model-picker-trigger { border-radius:var(--radius-control) var(--radius-control) 0 0; }
+.model-picker-meta > div { display:grid; grid-template-columns:minmax(0,11em) minmax(0,1fr); gap:0 var(--sp-2); align-items:baseline; min-width:0; }
+.model-picker-meta dt { color:var(--ink-faint); font:var(--fs-micro)/1.5 var(--font-mono); text-transform:uppercase; }
+.model-picker-meta dd { display:flex; flex-wrap:wrap; gap:0 var(--sp-2); align-items:baseline; min-width:0; margin:0; }
+.model-picker-meta strong { color:var(--ink); font-size:var(--fs-caption); overflow-wrap:anywhere; }
+/* Captions wrap, never ellipsise: they are the provenance of the value beside
+   them, and `catalog metadata is not p…` is a caveat that was not made. */
+.model-picker-meta small { color:var(--ink-muted); font-size:var(--fs-micro); line-height:1.5; overflow-wrap:anywhere; }
+.model-picker-meta small + small::before { content:"· "; color:var(--ink-faint); }
+.model-row-catalog { color:var(--ink-faint); }
+
 /* Three regions, and only the middle one scrolls. The whole popover used to be
    one `overflow: auto` box, so search, facets, sort and the provenance caveat
    all left the screen at scrollTop 400. */
@@ -87,4 +105,8 @@
   .model-row > .model-row-price { grid-area:2 / 2 / 3 / 3; white-space:normal; }
   .model-row > .model-row-capabilities { grid-area:3 / 1 / 4 / 3; }
   .model-row > .model-row-metrics { grid-area:4 / 1 / 5 / 3; white-space:normal; }
+  /* One column: an 11em label column leaves ~120px for a value plus two
+     provenance captions, which is where a caption starts breaking one word per
+     line. The label stacks above its value instead. */
+  .model-picker-meta > div { grid-template-columns:minmax(0,1fr); }
 }

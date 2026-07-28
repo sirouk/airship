@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  defaultEditorWrap,
+  editorSurfaceNote,
+  folderOperationReport,
   settledWorkbenchNotice,
+  workbenchDialogCopy,
+  WORKBENCH_WRAP_DEFAULT_MAX_WIDTH,
+  workspaceNameError,
   WORKBENCH_DESCRIPTION,
   workbenchBufferState,
   workbenchFilterMatches,
@@ -146,5 +152,77 @@ describe("tree filter", () => {
     expect(workbenchFilterMatches(files, "  ")).toMatchObject({ shown: 3, total: 3 });
     expect(workbenchFilterMatches(files, "MD").shown).toBe(3);
     expect(workbenchFilterMatches(files, "nothing-here").shown).toBe(0);
+  });
+});
+
+describe("workbench dialog copy", () => {
+  it("never lets a title fall back to the enum", () => {
+    // The shipped `aria-label` was `${dialog.kind} workspace file`, so a screen
+    // reader heard "discard workspace file" and never the file. The heading is
+    // now the accessible name, so there is exactly one name to keep honest.
+    for (const kind of ["create", "create-folder", "rename", "rename-folder", "move", "delete", "delete-folder", "discard"] as const) {
+      const copy = workbenchDialogCopy(kind, "/workspace/notes/plan.md", 3);
+      expect(copy.title).not.toContain(kind);
+      expect(copy.title).not.toMatch(/workspace file$/u);
+      expect(copy.confirm.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("puts the file name in the title of every dialog that has one", () => {
+    expect(workbenchDialogCopy("move", "/workspace/a/b/really-long-name.tsx").title).toBe("Move really-long-name.tsx");
+    expect(workbenchDialogCopy("rename", "/workspace/a/b/plan.md").title).toBe("Rename plan.md");
+    expect(workbenchDialogCopy("delete", "/workspace/a/b/plan.md").title).toBe("Delete plan.md");
+  });
+
+  it("states the size of a folder operation in its own button", () => {
+    expect(workbenchDialogCopy("delete-folder", "/workspace/notes", 14).confirm).toBe("Delete 14 files");
+    expect(workbenchDialogCopy("delete-folder", "/workspace/notes", 1).confirm).toBe("Delete 1 file");
+    expect(workbenchDialogCopy("rename-folder", "/workspace/notes", 14).confirm).toBe("Rename 14 files");
+  });
+
+  it("marks exactly the kinds that destroy something", () => {
+    const destructive = (["create", "create-folder", "rename", "rename-folder", "move", "delete", "delete-folder", "discard"] as const)
+      .filter((kind) => workbenchDialogCopy(kind, "/workspace/x").destructive);
+    expect(destructive).toEqual(["delete", "delete-folder", "discard"]);
+  });
+});
+
+describe("workspace name validation", () => {
+  it("says why, rather than only disabling the button", () => {
+    expect(workspaceNameError("notes")).toBeUndefined();
+    expect(workspaceNameError("  ")).toBe("Enter a name.");
+    expect(workspaceNameError("a/b")).toContain("one segment");
+    expect(workspaceNameError("..")).toContain("not names this workspace can address");
+  });
+});
+
+describe("folder operation reporting", () => {
+  it("reports a partial outcome as partial instead of as a clean failure", () => {
+    const report = folderOperationReport({ verb: "Renamed", done: 9, total: 14, target: "journal", failure: "Revision conflict." });
+    expect(report).toContain("Renamed 9 of 14 files");
+    expect(report).toContain("Revision conflict.");
+    expect(report).toContain("The remaining files were not touched.");
+  });
+
+  it("counts the whole set when nothing failed", () => {
+    expect(folderOperationReport({ verb: "Deleted", done: 3, total: 3, target: "notes" })).toBe("Deleted 3 files in notes.");
+    expect(folderOperationReport({ verb: "Deleted", done: 1, total: 1, target: "notes" })).toBe("Deleted 1 file in notes.");
+  });
+});
+
+describe("editor wrap", () => {
+  it("defaults on at phone widths and off where a line of code fits", () => {
+    expect(defaultEditorWrap(390)).toBe(true);
+    expect(defaultEditorWrap(WORKBENCH_WRAP_DEFAULT_MAX_WIDTH)).toBe(true);
+    expect(defaultEditorWrap(WORKBENCH_WRAP_DEFAULT_MAX_WIDTH + 1)).toBe(false);
+    expect(defaultEditorWrap(1440)).toBe(false);
+    expect(defaultEditorWrap(undefined)).toBe(false);
+  });
+
+  it("states that wrapping retires the gutter, instead of numbers vanishing", () => {
+    expect(editorSurfaceNote({ wrap: true, binary: false })).toBe("UTF-8 · LF · client-side · wrapped, no line numbers");
+    expect(editorSurfaceNote({ wrap: false, binary: false })).toBe("UTF-8 · LF · client-side");
+    // A binary buffer has no editable surface to describe either way.
+    expect(editorSurfaceNote({ wrap: true, binary: true })).toBe("Binary · read-only · client-side");
   });
 });

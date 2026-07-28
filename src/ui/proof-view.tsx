@@ -244,7 +244,11 @@ export function ProofView({
           <dl class="proof-counts" aria-label="Claim states in this turn">
             {CLAIM_STATE_LEGEND.map((entry) => (
               <div key={entry.status} data-status={entry.status}>
-                <dt><Seal state={sealStateForProofStatus(entry.status)} density="dot" size={16} />{entry.word}</dt>
+                {/* The dot's label is the legend's own word. Left to default,
+                    the `none` seal announced "Not checked" immediately before
+                    the visible "No evidence" — a fifth state word, audible
+                    only to the readers who cannot see the one beside it. */}
+                <dt><Seal state={sealStateForProofStatus(entry.status)} density="dot" size={16} label={entry.word} />{entry.word}</dt>
                 <dd>{entry.status === "verified" ? verdict.counts.verified : entry.status === "partial" ? verdict.counts.asserted : verdict.counts.noEvidence}</dd>
                 <small>{entry.meaning}</small>
               </div>
@@ -277,7 +281,9 @@ export function ProofView({
         {renderInspector(() => onSectionChange("attestations"))}
         <details class={`proof-journal panel ${audit?.status ?? "pending"}`} open={!audit || audit.findings.length > 0 || audit.status !== "verified"}>
           <summary class="proof-journal__row">
-            <Seal state={journalSeal(audit, auditLoading)} density="dot" size={16} />
+            {/* Same rule as the claim rows: the visible state word is the
+                label, so the seal cannot announce a fifth vocabulary. */}
+            <Seal state={journalSeal(audit, auditLoading)} density="dot" size={16} label={auditLabel} />
             <h2 id="journal-audit-title">Session journal integrity</h2>
             <span class="proof-journal__state">{auditLabel}{audit ? ` · ${passedChecks(audit)} of 6 structure checks passed` : ""}{audit && audit.findings.length > 0 ? ` · ${audit.findings.length} finding${audit.findings.length === 1 ? "" : "s"} to read` : ""}</span>
             <span class="proof-journal__facts">{audit ? `${audit.counts.events} event${audit.counts.events === 1 ? "" : "s"} · ${audit.commitment.digest.slice(0, 18)}…` : `${eventCount} observed event${eventCount === 1 ? "" : "s"}`}</span>
@@ -285,7 +291,7 @@ export function ProofView({
           <div class="proof-journal__body">
             <p class="proof-journal__scope"><span class="eyebrow">Independent local consistency check</span></p>
             {audit ? <>
-              <div class="audit-boundary"><Icon name={audit.status === "invalid" ? "warning" : "proof"} size={18} /><p><strong>A valid hash chain is not proof of authorship.</strong> This report checks schema, ordering, manifest bindings, turn/tool protocol, and receipt bindings. No separately trusted author identity was established.</p></div>
+              <div class="audit-boundary"><Icon name={audit.status === "invalid" ? "warning" : "proof"} size={18} /><p><strong>A valid hash chain is not proof of authorship.</strong> This report checks schema, ordering, manifest bindings, turn/tool protocol, and receipt bindings. No separately trusted author identity was verified.</p></div>
               <div class="audit-check-grid" aria-label="Journal audit checks">{auditChecks(audit).map(([label, passed]) => <div key={label} class={passed ? "pass" : "fail"}><Seal state={passed ? "verified" : "failed"} label={passed ? "Passed" : "Failed"} size={16} compact /><strong>{label}</strong><small>{passed ? "consistent" : "attention required"}</small></div>)}</div>
               <dl class="audit-commitment"><div><dt>Session</dt><dd>{audit.sessionId}</dd></div><div><dt>Journal events</dt><dd>{audit.commitment.sequence}</dd></div><div><dt>Checked</dt><dd><time dateTime={audit.checkedAt} title={new Date(audit.checkedAt).toLocaleString()}>{relativeEvidenceAge(audit.checkedAt)}</time></dd></div><div><dt>External anchor</dt><dd>{audit.anchor.status === "not-supplied" ? "Not supplied" : audit.anchor.status === "matched" ? "Matched" : "Did not match"}</dd></div></dl>
               <details><summary>Technical journal details</summary><code>{audit.commitment.digest}</code></details>
@@ -326,7 +332,14 @@ function ClaimPopoverRow({ item }: Readonly<{ item: ClaimStackItem }>) {
   const delta = claimQualifierLabel(item.qualifier);
   return (
     <section class="claim-popover-row">
-      <Seal state={sealStateForProofStatus(item.status)} density="dot" />
+      {/* The same defect the legend above fixes, at the call site that
+          actually renders per claim. Left to default, the seal announces
+          SEAL_LABELS[state] — "Not checked" for `none` and "Failed" for
+          `expired` — while the word rendered two nodes away says "No evidence"
+          and "Expired". In the default local-demo state seven of eight rows
+          did it, so a screen-reader user heard a different verdict from the
+          one on screen. The visible word is the label. */}
+      <Seal state={sealStateForProofStatus(item.status)} density="dot" label={proofStatusLabel(item.status)} />
       <strong>{language.primary}</strong>
       <span class="claim-popover-row__state">{proofStatusLabel(item.status)}{delta ? ` · ${delta}` : ""}</span>
       <p>{item.claim.summary}</p>

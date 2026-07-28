@@ -63,7 +63,15 @@ export function ProofInspector({
           : "Turn receipt only";
   return (
     <div class={compact ? "proof-inspector compact" : "proof-inspector panel"}>
-      <div class="inspector-heading"><div><span class="eyebrow">Claim stack</span><h2>Verification</h2></div><span class="proof-level">{receipt ? proofLevelLabel(receipt.proofLevel) : "Not checked"}</span></div>
+      {/* No chip here. The heading used to carry a `.proof-level` pill reading
+          `proofLevelLabel(receipt.proofLevel)` — "Endpoint attested" — or "Not
+          checked" with no receipt, which is a fifth verdict-shaped object about
+          this turn rendering ~40px under the Proof hero's own verdict. The
+          declaration is not deleted: it is a *declaration*, so it moves into
+          the technical record below under the label that names its author,
+          beside the posture and provider it belongs with, and the Proof route
+          also states it as "Declared proof level" in `.proof-posture`. */}
+      <div class="inspector-heading"><div><span class="eyebrow">Claim stack</span><h2>Verification</h2></div></div>
       {receipt ? <p class="proof-bottom-line" data-state={verdict.state}><strong>{verdict.chip}</strong> <span>{verdict.line}</span></p> : null}
       {receipt ? (
         <section class={`evidence-join evidence-join--${evidenceTone}`} aria-label="Evidence composition">
@@ -110,6 +118,11 @@ export function ProofInspector({
           <div class="receipt-id"><span>Receipt</span><code>{receipt.receiptId}</code></div>
           <dl class="receipt-metadata">
              <div><dt>Created</dt><dd><time dateTime={receipt.createdAt}>{relativeEvidenceAge(receipt.createdAt)}</time></dd></div>
+             {/* Labelled with its author. As a bare pill this string read as
+                 Airship's verdict; as "Declared proof level" it reads as what
+                 it is — the receipt's own claim about itself, which the eight
+                 rows above are the evidence for. */}
+             <div><dt>Declared proof level</dt><dd>{proofLevelLabel(receipt.proofLevel)}</dd></div>
              <div><dt>Posture</dt><dd>{postureLabel(receipt.posture)}</dd></div>
             <div><dt>Provider</dt><dd>{receipt.provider}</dd></div>
             <div><dt>Model</dt><dd>{receipt.model ?? "not recorded"}</dd></div>

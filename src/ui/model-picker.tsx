@@ -44,6 +44,85 @@ const SORTS: readonly Readonly<{ value: PickerSort; label: string }>[] = Object.
  */
 export const MODEL_PICKER_PROVENANCE = "Capabilities are source-declared; catalog metadata is not proof. Popularity and load use fresh provider telemetry when available.";
 
+/**
+ * One catalogue fact about one model: a label, a value, and its provenance.
+ *
+ * These are the four cells the `#access` panel used to render *beside* the
+ * picker, in a 210px 2×2 tile grid that described whatever was already chosen.
+ * That put the evidence about a model outside the control you choose it with,
+ * so comparing two models meant choosing one, closing the popover, reading a
+ * grid, reopening, choosing the other. The facts now belong to the picker and
+ * move when the selection moves.
+ */
+export type ModelFact = Readonly<{ label: string; value: string; captions: readonly string[] }>;
+
+/**
+ * The four facts, verbatim from the tiles they replace.
+ *
+ * Every caption is provenance and is rendered in full: `provider management
+ * snapshot` qualifies a live-looking availability word, and `catalog metadata
+ * is not proof` is the caveat that stops `evidence candidate` from reading as
+ * a verdict. A caption is never a `title`; touch has no hover.
+ */
+export function modelFacts(model: AirshipModel): readonly ModelFact[] {
+  const context = model.contextTokens ?? model.maxModelTokens;
+  return Object.freeze([
+    Object.freeze({
+      label: "Availability",
+      value: model.availability,
+      captions: Object.freeze([
+        model.provenance.availability === "unavailable" ? "live status unavailable" : "provider management snapshot",
+      ]),
+    }),
+    Object.freeze({
+      label: "Context",
+      value: context ? COMPACT_NUMBER.format(context) : "unknown",
+      captions: Object.freeze([
+        model.maxOutputTokens ? `${COMPACT_NUMBER.format(model.maxOutputTokens)} max output` : "output limit unavailable",
+      ]),
+    }),
+    Object.freeze({
+      label: "Input / output",
+      value: `${formatUsd(model.pricing.input.usdPerMillion)} / ${formatUsd(model.pricing.output.usdPerMillion)}`,
+      captions: Object.freeze(["USD per million tokens"]),
+    }),
+    Object.freeze({
+      label: "Trust readiness",
+      value: model.trust.consistency === "conflict" ? "metadata conflict" : "evidence candidate",
+      captions: Object.freeze([
+        `verification remains ${model.trust.verification}`,
+        "catalog metadata is not proof",
+      ]),
+    }),
+  ]);
+}
+
+/**
+ * The selected model's catalogue facts, rendered inside the control itself.
+ *
+ * One label column and one flowing value column, rather than the four boxed
+ * tiles this replaces: at a 664px measure four columns are ~150px each, which
+ * wrapped `provider management snapshot` onto three lines and made the block
+ * taller than the tile grid it was meant to compress. Nothing is truncated —
+ * every caption is provenance, and a caption cut in half is a claim with its
+ * qualifier removed.
+ */
+function ModelFactStrip({ model }: Readonly<{ model: AirshipModel }>) {
+  return (
+    <dl class="model-picker-meta" aria-label={`Catalog metadata for ${model.id}`}>
+      {modelFacts(model).map((fact) => (
+        <div key={fact.label}>
+          <dt>{fact.label}</dt>
+          <dd>
+            <strong>{fact.value}</strong>
+            {fact.captions.map((caption) => <small key={caption}>{caption}</small>)}
+          </dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
 /** Provider/model badge: real Chutes logo when available, provider monogram otherwise. */
 export function ModelLogo({ model }: Readonly<{ model: AirshipModel }>) {
   return (
@@ -61,6 +140,7 @@ export function ModelPicker({
   disabled,
   onSelect,
   recommendedModelId,
+  attachFacts = false,
 }: Readonly<{
   models: readonly AirshipModel[];
   value?: string;
@@ -73,6 +153,14 @@ export function ModelPicker({
    * and the first row of whatever sort happens to be active is not that claim.
    */
   recommendedModelId?: string;
+  /**
+   * Renders the selected model's catalogue facts inside the control.
+   *
+   * Opt-in because the connected-summary `<dl>` already states the connection's
+   * own facts around it; the credential panel is where the four tiles used to
+   * sit beside the picker, and it is the surface that asks for a *choice*.
+   */
+  attachFacts?: boolean;
 }>) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState("");
@@ -113,6 +201,11 @@ export function ModelPicker({
       {recommended ? <span class="model-picker-badge">✦ privacy-first recommendation</span> : null}
       <span class="model-picker-caret" aria-hidden="true">⌄</span>
     </button>
+    {/* The catalogue facts travel with the model, inside the control that
+        chooses it. They used to be a 210px tile grid parked beside the picker,
+        describing the current selection from outside the thing that changes
+        it — and the open popover then covered them. */}
+    {attachFacts && selected ? <ModelFactStrip model={selected} /> : null}
     {open ? <div id={`${optionsId}-dialog`} class="model-picker-popover" role="dialog" aria-label="Choose a Chutes model" onKeyDown={(event) => {
       if (event.key === "Escape") { event.preventDefault(); close(); }
       if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); setActive((current) => nextModelIndex(visible.length, current, event.key === "ArrowDown" ? 1 : -1)); }
@@ -170,6 +263,14 @@ export function ModelPicker({
           {capabilityLabels(model).length > 0
             ? capabilityLabels(model).map((label) => <span key={label}>{label}</span>)
             : <span>Capabilities not declared</span>}
+          {/*
+            Availability and trust readiness are per-model catalogue facts that
+            existed only in the tile grid outside this control, so comparing two
+            models on them was impossible without choosing one first. Words, not
+            glyphs: `metadata conflict` and `cold` are the cases that decide a
+            choice, and an absent glyph is a negative nobody reads.
+          */}
+          {catalogTokens(model).map((label) => <span key={label} class="model-row-catalog">{label}</span>)}
         </span>
         <span class="model-row-metrics" title={operationalTitle(model)}>{formatContext(model)} · {operationalLabel(model)}</span>
         </span>
@@ -223,6 +324,23 @@ function capabilityLabels(model: AirshipModel): string[] {
   if (model.features.some((value) => value.toLowerCase() === "tools")) labels.push("Tools");
   if (model.trust.confidentialCompute === "asserted") labels.push("Confidential candidate");
   return labels;
+}
+/**
+ * The two catalogue facts a row could not previously carry.
+ *
+ * `trust.consistency === "conflict"` is the one state a person must not choose
+ * blind, so it is named on the row rather than only after selection.
+ */
+export function catalogTokens(model: AirshipModel): readonly string[] {
+  return Object.freeze([
+    model.availability,
+    model.trust.consistency === "conflict" ? "metadata conflict" : "evidence candidate",
+  ]);
+}
+function formatUsd(value: number | undefined): string {
+  return value === undefined
+    ? "unknown"
+    : new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 4 }).format(value);
 }
 function operationalLabel(model: AirshipModel): string {
   const popularity = modelPopularitySignal(model);

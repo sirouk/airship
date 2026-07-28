@@ -149,11 +149,27 @@ describe("connect lanes", () => {
     expect(chutes.status.kind).toBe("ready");
     expect(chutes.status.label).toBe("Use an API key");
     expect(chutes.status.detail).toContain("not configured in this build");
-    expect(chutes.status.detail).toContain("API key instead");
-    expect(chutes.status.detail).toContain("cpk_");
     // The summary sits one line above the detail and is bound by the same rule.
     expect(chutes.summary).not.toMatch(/sign in/iu);
     expect(chutes.summary).toContain("API key");
+    /*
+     * AMENDED. The detail used to append `You can connect with a Chutes API key
+     * instead.` and `Chutes personal keys start with cpk_.` — the first is this
+     * lane's own summary one line above, and the second renders verbatim under
+     * the key field, which in this arm is the panel that is already open. Two
+     * restatements, 54px of a phone viewport, between a person and the field.
+     * The cause is the one thing only this string can say, so the assertion
+     * moves to the invariant that matters: the detail names the cause and does
+     * not re-say what the line above it already said.
+     */
+    expect(chutes.status.detail).not.toContain("API key instead");
+    expect(chutes.summary).toBe("Paste an API key to connect.");
+  });
+
+  it("keeps the key sentence in the arm where the key panel is not the open one", () => {
+    // With sign-in available the lane opens on OAuth, so nothing else on screen
+    // says what a Chutes key looks like. The sentence is not optional there.
+    expect(lane(describeConnectLanes(input()), "chutes").status.detail).toContain("cpk_");
   });
 
   it("offers sign-in in the Chutes summary only when the exchange exists", () => {

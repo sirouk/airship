@@ -2,7 +2,7 @@ import type { SecurityPosture } from "../core/contracts";
 import { Seal, type SealState } from "./seal";
 
 /**
- * The prefix is a scope label ("Minimum posture"), not a claim, so it stays
+ * The prefix is a scope label ("Minimum proof"), not a claim, so it stays
  * outside the chip: the chip is the posture, and only the posture, which is
  * what lets it share one recipe with every other status in the product.
  */

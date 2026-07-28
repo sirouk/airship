@@ -83,6 +83,18 @@
   font: inherit;
 }
 
+/*
+ * The four filters are a group in the DOM and grid items in the layout, so a
+ * phone can collapse them as one unit without the wide layout gaining a box.
+ */
+.session-library-filters {
+  display: contents;
+}
+
+.session-library-filter-toggle {
+  display: none;
+}
+
 .session-library-toolbar .session-filter-menu {
   min-width: 126px;
 }
@@ -511,38 +523,41 @@
 }
 
 .session-library-compatibility p,
-.session-library-compatibility ul {
+.session-library-reason-list {
   margin: 0;
   color: var(--ink-muted, #9fa5a3);
   font-size: 11px;
   line-height: 1.55;
 }
 
-.session-library-compatibility ul {
+/* One list, both readers: the integrity row's verdict and the fork panel's
+   "why this needs a fork" render the same rows with the same severity. */
+.session-library-reason-list {
   display: grid;
   gap: 6px;
   padding: 0;
   list-style: none;
 }
 
-.session-library-compatibility li {
+.session-library-reason-list li {
   display: grid;
   grid-template-columns: minmax(130px, 0.35fr) minmax(0, 1fr);
   gap: 8px;
 }
 
-.session-library-compatibility li > span {
+.session-library-reason-list li > span {
   color: var(--ink-faint, #858d8a);
   font: var(--fs-micro)/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
   text-transform: uppercase;
 }
 
-.session-library-compatibility li.error,
-.session-library-compatibility li.warning {
+.session-library-reason-list li.warning,
+.session-library-reason-list li.warning > span {
   color: var(--accent-bright, #dfba72);
 }
 
-.session-library-compatibility li.error {
+.session-library-reason-list li.error,
+.session-library-reason-list li.error > span {
   color: var(--danger, #c86758);
 }
 
@@ -968,6 +983,105 @@
   line-height: 1.5;
 }
 
+/*
+ * An empty state that ends in a verb.
+ *
+ * "Clear or widen the current filters." named the reader's own action and gave
+ * them nothing to press. The control is the same `clearFilters` the toolbar
+ * runs, so the state and the toolbar cannot disagree.
+ */
+.session-library-empty-action {
+  min-height: 44px;
+  margin-top: var(--sp-2, 8px);
+  padding: 0 var(--sp-4, 16px);
+  border: 1px solid var(--line-control, rgba(225, 217, 200, 0.4));
+  border-radius: var(--radius-control, 6px);
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--ink, #ece8de);
+  background: transparent;
+  cursor: pointer;
+  font-size: var(--fs-caption, 12px);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-library-empty-action:hover,
+.session-library-empty-action:focus-visible {
+  border-color: var(--accent, #c19a58);
+  background: var(--surface-raised, #1c2226);
+}
+
+/*
+ * The pane says it is out of scope before its buttons say they are off.
+ *
+ * Amber, not red: nothing has failed. The conversation is real and every fact
+ * on the pane below stays readable; what is withdrawn is the ability to act on
+ * a target the list has just declared out of the current results.
+ */
+.session-library-out-of-results {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2, 8px);
+  align-items: center;
+  min-height: 44px;
+  margin: var(--sp-3, 12px) var(--sp-3, 12px) 0;
+  padding: var(--sp-2, 8px) var(--sp-3, 12px);
+  border: 1px solid color-mix(in srgb, var(--accent, #c19a58) 40%, transparent);
+  border-left-width: 3px;
+  border-radius: var(--radius-control, 6px);
+  color: var(--accent-bright, #dfba72);
+  background: color-mix(in srgb, var(--accent, #c19a58) 6%, var(--surface-soft, #14191c));
+  font-size: var(--fs-caption, 12px);
+}
+
+.session-library-out-of-results > span {
+  flex: 1 1 14em;
+  min-width: 0;
+}
+
+.session-library-out-of-results button {
+  flex: 0 0 auto;
+  min-height: 44px;
+  padding: 0 var(--sp-3, 12px);
+  border: 1px solid color-mix(in srgb, var(--accent, #c19a58) 55%, transparent);
+  border-radius: var(--radius-control, 6px);
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+  font-size: var(--fs-caption, 12px);
+}
+
+.session-library-out-of-results button:hover,
+.session-library-out-of-results button:focus-visible {
+  background: var(--surface-raised, #1c2226);
+}
+
+.session-library-actions-caption {
+  flex: 1 1 100%;
+  margin: 0;
+  color: var(--accent-bright, #dfba72);
+  font-size: var(--fs-micro);
+  text-align: right;
+}
+
+/* The reasons the runtime itself gave, at the point the fork is chosen. */
+.session-library-fork-why {
+  display: grid;
+  gap: var(--sp-1, 4px);
+  margin-top: var(--sp-3, 12px);
+  padding-top: var(--sp-2, 8px);
+  border-top: 1px solid var(--line, rgba(225, 217, 200, 0.105));
+}
+
+/* Marks where the filter matched. Presentation only: the title is
+   reassembled character for character around the marked run. */
+.session-library-card-top mark {
+  border-radius: 2px;
+  color: var(--ink, #ece8de);
+  background: color-mix(in srgb, var(--accent, #c19a58) 30%, transparent);
+}
+
 .session-library-visually-hidden {
   position: absolute !important;
   width: 1px !important;
@@ -1020,18 +1134,27 @@
 }
 
 @media (max-width: 860px) {
+  /*
+   * Wraps rather than scrolls.
+   *
+   * As `overflow-x: auto` the row put `All providers` half off the right edge
+   * of a 430px phone with no scrollbar, no fade and no chevron — three of the
+   * four filters were unreachable and nothing said they existed. Wrapping
+   * cannot hide a control, so no affordance has to be invented to admit that
+   * it did.
+   */
   .session-library-toolbar {
     display: flex;
-    overflow-x: auto;
-    scrollbar-width: thin;
+    flex-wrap: wrap;
+    overflow-x: visible;
   }
 
   .session-library-search {
-    flex: 1 0 min(72vw, 380px);
+    flex: 1 1 min(60vw, 300px);
   }
 
   .session-library-toolbar .session-filter-menu {
-    flex: 0 0 auto;
+    flex: 1 1 126px;
   }
 
   .session-library-sort-menu {
@@ -1079,6 +1202,64 @@
   }
 }
 
+/*
+ * The counted filter disclosure.
+ *
+ * 640px is the widest viewport at which the four menus cannot all sit on one
+ * row; above it they are always visible and the toggle does not exist, which
+ * is also what keeps the 768px/820px menu-anchoring spec driving real
+ * controls. The count on the toggle is what makes the collapse honest: a
+ * filter that is set says so from the collapsed row.
+ */
+@media (max-width: 640px) {
+  .session-library-filter-toggle {
+    display: inline-flex;
+    flex: 0 0 auto;
+    gap: var(--sp-1, 4px);
+    align-items: center;
+    justify-content: center;
+    min-height: 46px;
+    padding: 0 var(--sp-3, 12px);
+    border: 1px solid var(--line, rgba(225, 217, 200, 0.105));
+    border-radius: var(--radius-control, 6px);
+    color: inherit;
+    background: var(--surface-soft, #14191c);
+    cursor: pointer;
+    font-size: 11px;
+  }
+
+  .session-library-toolbar[data-filters-open="true"] .session-library-filter-toggle {
+    border-color: var(--accent, #c19a58);
+    color: var(--accent-bright, #dfba72);
+  }
+
+  .session-library-filters {
+    display: none;
+    flex: 1 1 100%;
+    flex-wrap: wrap;
+    gap: var(--sp-2, 8px);
+  }
+
+  .session-library-toolbar[data-filters-open="true"] .session-library-filters {
+    display: flex;
+  }
+
+  .session-library-filters .session-filter-menu {
+    flex: 1 1 calc(50% - 4px);
+    min-width: 0;
+  }
+
+  /* Search, the filter count and the refresh verb share one 46px row; only a
+     `Clear` that has something to clear can push the row to two. */
+  .session-library-search {
+    flex: 1 1 40%;
+  }
+
+  .session-library-toolbar > button:not(.session-library-filter-toggle) {
+    flex: 0 1 auto;
+  }
+}
+
 @media (max-width: 560px) {
   .session-library-view {
     gap: 12px;
@@ -1121,7 +1302,7 @@
     grid-template-columns: 1fr;
   }
 
-  .session-library-compatibility li,
+  .session-library-reason-list li,
   .session-library-issues li {
     grid-template-columns: 1fr;
     gap: 3px;

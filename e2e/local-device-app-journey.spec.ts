@@ -247,12 +247,22 @@ async function expectLocalDeviceReady(page: Page): Promise<void> {
 }
 
 async function runLocalCommand(page: Page, command: string) {
-  const before = await page.locator(".message.assistant").count();
   const composer = page.getByRole("combobox", { name: "Message Airship" });
   await expect(composer).toBeEnabled({ timeout: 30_000 });
+  // AMENDED: the answer used to be addressed as `nth(count-before-send)`, a
+  // number read the instant the route mounted. The transcript is windowed now,
+  // so a card that has not been measured yet is not in the DOM: the count read
+  // 0 while the session's opening message was still pending, and the assertion
+  // then interrogated that welcome card as if it were the answer. Anchoring on
+  // this command's own echo and taking the assistant card that follows it is
+  // stronger than any index — it cannot be satisfied by an earlier turn's
+  // output, and it fails if the composer silently drops the send.
+  const echo = page.locator(".message.user").filter({ hasText: command });
+  const echoesBefore = await echo.count();
   await composer.fill(command);
   await page.getByRole("button", { name: "Send message" }).click();
-  const response = page.locator(".message.assistant").nth(before);
+  await expect(echo).toHaveCount(echoesBefore + 1, { timeout: 30_000 });
+  const response = page.locator(".message.assistant").last();
   const approval = page.getByRole("dialog", { name: /Allow .* once/u });
   const policyOutcome = await Promise.race([
     approval.waitFor({ state: "visible", timeout: 15_000 }).then(() => "approval" as const),

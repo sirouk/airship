@@ -200,6 +200,62 @@ describe("embedded index surface", () => {
     // The 72/28 split only existed on the standalone route's label before.
     expect(contextSource).toContain("72% deterministic dense score · 28% lexical overlap. Hybrid score within this corpus only");
   });
+
+  /**
+   * A state slot holds a state; an empty panel ends in a verb.
+   *
+   * These are the two failures the last pass left on this route: the graph
+   * inspector's heading printed the instruction "select a node" where the
+   * reader looks for what is currently true, and every empty panel described
+   * its own absence and stopped. Both are honesty questions as much as layout
+   * ones — an accurate dead end is still a dead end.
+   */
+  it("states what is true rather than instructing, and every empty panel offers the action it is describing", () => {
+    expect(source).toContain('{selectedNode ? selectedNode.kind : "nothing selected"}');
+    expect(source).not.toContain('selectedNode.kind : "select a node"');
+    // The retired placeholder's own sentence keeps its documented fate as the
+    // overview panel's footer, so the words survive where they read as help.
+    expect(source).toContain("Pan, zoom, search, or select a node to inspect relationships and source metadata.");
+
+    // The unsearched recall state offers terms this page can prove it holds.
+    expect(source).toContain("{!state.query && starters.length ? <MemoryStarters");
+    expect(source).toContain("no search history is kept");
+    expect(source).toContain('push(dot > 0 ? base.slice(0, dot) : base, "workspace source")');
+    expect(source).toContain('push(profileName, "active profile")');
+
+    // The Index panels reach the field they are describing rather than naming it.
+    expect(contextSource).toContain('action={{ label: embedded ? "Search memory" : "Search the active generation"');
+    expect(contextSource).toContain('action={{ label: "Change the query", onAct: () => focusContextQuery(embedded) }}');
+    expect(contextSource).toContain('document.getElementById(embedded ? "memory-query-input" : "client-context-query")');
+    // Staging is the engine's own work, so that state stays without a button:
+    // a verb there would name an action the reader does not have.
+    expect(contextSource).toContain('{...(entries.length ? {} : { action: { label: "Open the workspace"');
+  });
+
+  it("says the shared query is followed once instead of a card that restates the field above it", () => {
+    expect(contextSource).not.toContain('class="context-managed-search"');
+    expect(contextSource).not.toContain("<span>Shared Memory query</span>");
+    // The sentence, the live region and the query it is bound to all survive.
+    // The region also carries an accessible name now: the label pair it replaced
+    // was the only name the shared-query binding had, and dropping it left the
+    // region addressable only by its text.
+    expect(contextSource).toContain('class="context-shared-status"');
+    expect(contextSource).toContain('role="status"');
+    expect(contextSource).toContain('aria-label="Shared Memory query in the workspace index"');
+    expect(contextSource).toContain("managedSearchStatusText(query, engineState.phase, searchStatus, searchResult)");
+    expect(contextSource).toContain("Following “{query.trim().slice(0, 160)}”");
+    expect(styles).toContain(".memory-view .context-shared-status {");
+    expect(styles).not.toContain(".memory-view .context-managed-search");
+  });
+
+  it("stops the Index clipping its own panel names and its own embedding engine", () => {
+    // `AUTOMATIC DISCO…` beside `Vectorization candi…`, and `4.5 Ki…` on a
+    // phone, were a route that never hides anything hiding four facts.
+    expect(cssRule(contextStyles, ".context-surface-heading h2")).toContain("overflow-wrap: anywhere");
+    expect(cssRule(contextStyles, ".context-surface-heading h2")).not.toContain("white-space: nowrap");
+    expect(cssRule(contextStyles, ".context-index-status__toggle > span:not(.context-index-status__dot)"))
+      .not.toContain("text-overflow: ellipsis");
+  });
 });
 
 function cssRule(sourceText: string, selector: string): string {

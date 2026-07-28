@@ -38,7 +38,7 @@ test.describe("Local Device Vault product journey", () => {
 
     await expect(setup.getByText("Ready", { exact: true })).toBeVisible({ timeout: 20_000 });
     await expect(page.getByText("Local Device · encrypted and offline")).toBeVisible();
-    await expect(page.getByRole("button", { name: /Local Device Vault active/u })).toBeVisible();
+    await expectTabTrustAxis(page, /^Local Device Vault active/u);
 
     const downloadPromise = page.waitForEvent("download");
     await setup.getByRole("button", { name: "Download backup" }).click();
@@ -68,3 +68,28 @@ test.describe("Local Device Vault product journey", () => {
     await expect(page.locator("body")).not.toHaveCSS("overflow-x", "scroll");
   });
 });
+
+/**
+ * AMENDED: the four trust axes are no longer four topbar buttons.
+ *
+ * The topbar carries one chip whose accessible name states the weakest claim
+ * true of this browser tab and counts every axis behind it, and each axis keeps
+ * its own verbatim label, sentence and destination as a row in the sheet that
+ * chip opens (`topbar.tsx:30`, `platform-shell.tsx:454`). No claim was deleted,
+ * so this follows the disclosure rather than dropping the assertion — and it is
+ * strictly stronger than the button check it replaces: it additionally proves
+ * the chip is honest about how many claims it stands in front of, that the
+ * sheet actually opens, and that the axis is filed under the browser-tab band
+ * rather than silently rescoped to the conversation.
+ */
+async function expectTabTrustAxis(page: import("@playwright/test").Page, label: RegExp): Promise<void> {
+  const chip = page.getByRole("button", { name: /^Runtime trust for this browser tab\./u });
+  await expect(chip).toHaveAccessibleName(/\s\d+ axes\./u);
+  await chip.click();
+  const sheet = page.getByRole("dialog", { name: "Runtime trust" });
+  await expect(sheet).toBeVisible();
+  await expect(sheet.getByRole("region", { name: "This browser tab" }).getByRole("button", { name: label }))
+    .toBeVisible();
+  await sheet.getByRole("button", { name: "Close", exact: true }).click();
+  await expect(sheet).toBeHidden();
+}

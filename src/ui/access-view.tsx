@@ -56,8 +56,17 @@ import "./access-view.css";
 const CONNECT_ROUTE_DESCRIPTION = "Use Chutes for application-encrypted inference, or connect browser-direct cloud and local models here. Credentials remain in page memory.";
 /** The Providers paragraph, verbatim, from the heading block this replaces. */
 const CONNECT_PROVIDERS_NOTE = "Everything else in Airship — workspace, editor, terminal and Git — already works without this. Only chat needs a model, and connecting one never closes the others.";
-/** The `ONE, OR SEVERAL AT ONCE` eyebrow, as the sentence its own count proves. */
-const CONNECT_COUNT_NOTE = "Connect one, or several at once. Connecting one never closes the others.";
+/**
+ * The `ONE, OR SEVERAL AT ONCE` eyebrow, as the sentence its own count proves.
+ *
+ * It carried a second sentence that is a verbatim clause of
+ * `CONNECT_PROVIDERS_NOTE` above — the never-closes-the-others promise. Two
+ * disclosures on the same 44px row were making that promise in the same words,
+ * which is how a reader learns to stop reading either. The promise is not
+ * dropped: it stays verbatim in the route paragraph, and this chip's number is
+ * the thing that demonstrates it.
+ */
+const CONNECT_COUNT_NOTE = "Connect one, or several at once.";
 
 /** Where a Chutes personal key is created. Named on every key surface. */
 export const CHUTES_ACCOUNT_URL = "https://chutes.ai/app";
@@ -183,8 +192,15 @@ export function AccessView({
   const [candidate, setCandidate] = useState<Candidate>();
   const [modelId, setModelId] = useState("");
   const [detectedKind, setDetectedKind] = useState<ChutesCredentialKind>();
+  // Whether anything has been typed at all, kept separate from what it parsed
+  // as: without it, "nothing entered" and "entered and not recognised" collapse
+  // into one silent state, and the only signal for the second was the *absence*
+  // of a highlight — a negative nobody can read.
+  const [credentialTyped, setCredentialTyped] = useState(false);
   const [strictProof, setStrictProof] = useState(false);
-  const [chutesMethod, setChutesMethod] = useState<"oauth" | "api-key">("oauth");
+  // `undefined` means "follow what can actually work". A hardcoded initial
+  // method made the tab a statement about the build rather than about a choice.
+  const [chutesMethod, setChutesMethod] = useState<"oauth" | "api-key">();
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string>();
   const [error, setError] = useState<string>();
@@ -286,6 +302,7 @@ export function AccessView({
 
   function inspectInput() {
     const value = credentialInput.current?.value ?? "";
+    setCredentialTyped(Boolean(value.trim()));
     if (!value.trim()) {
       setDetectedKind(undefined);
       return;
@@ -568,14 +585,22 @@ export function AccessView({
   }
 
   const capabilities = connectionCapabilities(connection);
-  const selectedCandidateModel = candidate?.models.find((model) => model.id === modelId);
   const oauthOrigin = oauthDiagnostic
     ? oauthDiagnostic.configurationError
       ? { available: false, reason: oauthDiagnostic.configurationError }
       : oauthOriginState(oauthDiagnostic.homepageUrl, typeof window === "undefined" ? "" : window.location.href)
     : { available: false, reason: "OAuth registration details are unavailable in this build." };
   const chutesSignInAvailable = Boolean(oauthDiagnostic) && oauthOrigin.available;
-  const activeChutesMethod = chutesSignInAvailable ? chutesMethod : "api-key";
+  /*
+   * The default is the method that works; the other one stays selectable.
+   *
+   * This mirrors `initialConnectMethod()` in the connect package, and it is the
+   * fix for a lane that could not say why it could not work: the OAuth tab was
+   * `disabled` whenever sign-in was unavailable, and the OAuth panel — the only
+   * surface that renders `oauthOrigin.reason`, the sentence naming the cause —
+   * was therefore unreachable in exactly the deployments that needed it.
+   */
+  const activeChutesMethod = chutesMethod ?? (chutesSignInAvailable ? "oauth" : "api-key");
 
   /**
    * Moves to the browser-direct provider list without touching `location.hash`,
@@ -791,9 +816,15 @@ export function AccessView({
                 </Popover>
               </div>
               {/*
-                Row 2: the task. `Model · privacy-first recommendation` was a
-                22px label floating above the control; the recommendation now
-                travels inside the trigger, with the model it describes.
+                Row 2: the task, and only the task. `Model · privacy-first
+                recommendation` was a 22px label floating above the control; the
+                recommendation travels inside the trigger. The four catalogue
+                tiles that used to sit *beside* this control — availability,
+                context, input/output and trust readiness, all four captions
+                included — now render inside it via `attachFacts`, so the
+                evidence about a model moves when the model does, and every row
+                in the open list carries its own availability and trust
+                readiness for comparison before a choice is made.
               */}
               <label class="candidate-model">
                 <span>Model</span>
@@ -802,11 +833,11 @@ export function AccessView({
                   models={candidate.models}
                   onSelect={setModelId}
                   disabled={busy}
+                  attachFacts
                   {...(candidate.recommendedModelId ? { recommendedModelId: candidate.recommendedModelId } : {})}
                 />
               </label>
               <div class="candidate-decision">
-                {selectedCandidateModel ? <ModelCandidateSummary model={selectedCandidateModel} /> : null}
                 <ProofPolicyControl strict={strictProof} onChange={setStrictProof} />
               </div>
               {/*
@@ -827,7 +858,6 @@ export function AccessView({
                       type="button"
                       role="tab"
                       aria-selected={activeChutesMethod === "oauth"}
-                      disabled={!chutesSignInAvailable}
                       onClick={() => setChutesMethod("oauth")}
                     >
                       <span>OAuth</span>
@@ -852,6 +882,21 @@ export function AccessView({
                           ? "Your password never touches Airship. The app secret stays in the localhost process, outside browser JavaScript."
                           : "Your password never touches Airship, and no client secret is used."}</p>
                         {/*
+                          The cause, at lane altitude, never behind a disclosure.
+                          It used to render only inside the closed
+                          `.oauth-mechanism` — and only when the OAuth tab was
+                          selected, which was impossible while the tab was
+                          `disabled`. A lane that cannot work has to say why
+                          where the person is standing, and the way out is a
+                          control rather than an instruction.
+                        */}
+                        {!chutesSignInAvailable ? (
+                          <div class="connect-method__blocked">
+                            <p><Icon name="warning" size={16} />Deployment detail: {oauthOrigin.reason}</p>
+                            <button type="button" onClick={() => setChutesMethod("api-key")}>Use an API key</button>
+                          </div>
+                        ) : null}
+                        {/*
                           Every word about Chutes OAuth now lives inside Chutes
                           OAuth. The 168px/240px page-level boundary aside used
                           to sit between the lane list and the provider fabric,
@@ -868,18 +913,6 @@ export function AccessView({
                           <p>{localOAuthHandler
                             ? "The localhost handler receives only the one-time code, PKCE verifier, and memory-only token requests. It adds its process-held app secret and returns the provider response without persisting it. Access and rotating refresh tokens remain in this page's memory."
                             : "The client ID is public. A one-time PKCE verifier survives only the authorization redirect; access and rotating refresh tokens remain in this page's memory. Directory visibility is a separate provider setting."}</p>
-                          {/*
-                            The operator-addressed cause sits with the boundary
-                            it explains, and outside the registration block —
-                            that block renders only when a diagnostic exists,
-                            which is precisely the case where this sentence is
-                            not needed. Gating the explanation on availability
-                            made the one string that says WHY sign-in is
-                            unavailable renderable only when it was available.
-                          */}
-                          {!chutesSignInAvailable ? (
-                            <p class="oauth-boundary-status warning" role="status">Deployment detail: {oauthOrigin.reason}</p>
-                          ) : null}
                           {oauthDiagnostic ? (
                             <details class="oauth-diagnostic">
                               <summary>Registration details</summary>
@@ -904,9 +937,11 @@ export function AccessView({
                         <button
                           class="primary"
                           type="button"
-                          // The explanation above is now reachable whether or
-                          // not this deployment can start the flow; the control
-                          // that would fail is the only part still gated.
+                          // The explanation above is now genuinely reachable —
+                          // the tab beside this panel is no longer `disabled`,
+                          // so this branch can be rendered rather than only
+                          // written. The control that would fail stays gated,
+                          // and the route that works is a button above it.
                           disabled={busy || !online || !chutesSignInAvailable}
                           onClick={startChutesSignIn}
                         >
@@ -924,12 +959,17 @@ export function AccessView({
                     is what took cold-visitor conversion to roughly zero.
                   */}
                   {activeChutesMethod === "api-key" ? (
-                  <section class="api-key-alternative" aria-labelledby="chutes-api-key-title">
-                    <strong id="chutes-api-key-title">Connect with a Chutes API key</strong>
+                  /*
+                    Two boxes and three headings used to stand between the tab
+                    and the field. `Connect with a Chutes API key` is the tab's
+                    own label beside the lane's own title, so it becomes this
+                    region's accessible name rather than a fourth rendering of
+                    the same three words; the panel's own border is gone because
+                    it sat inside the lane card, inside the route card. What is
+                    left before the input is the tab you just pressed.
+                  */
+                  <section class="api-key-alternative" aria-label="Connect with a Chutes API key">
                     <form class="credential-entry" onSubmit={(event) => { event.preventDefault(); void discover(); }}>
-                      <div class="credential-types" aria-label="Optional Chutes API-key connection">
-                        <CredentialTypeCard prefix="cpk_" title="Chutes API key" detail="Chutes personal keys start with cpk_. They read models, inference, profile, and account when Chutes authorizes them." active={detectedKind === "inference-api-key"} />
-                      </div>
                       <label for="chutes-credential-input">
                         <span>Chutes API key</span>
                         <input
@@ -947,6 +987,19 @@ export function AccessView({
                           disabled={busy}
                         />
                       </label>
+                      {/*
+                        The credential class moves below the field it describes,
+                        where it is also the live reading of what was typed. Its
+                        words are unchanged; it is no longer an 88px bordered
+                        tile above the control, and its negative arm is now
+                        stated rather than implied by an absent highlight.
+                      */}
+                      <div class="credential-types" aria-label="Optional Chutes API-key connection">
+                        <CredentialTypeCard prefix="cpk_" title="Chutes API key" detail="Chutes personal keys start with cpk_. They read models, inference, profile, and account when Chutes authorizes them." active={detectedKind === "inference-api-key"} />
+                        {credentialTyped ? (
+                          <p class="credential-reading" role="status">{credentialReading(detectedKind)}</p>
+                        ) : null}
+                      </div>
                       <p id="chutes-credential-help">
                         Held only in page memory. Don’t have one?{" "}
                         <a href={CHUTES_ACCOUNT_URL} target="_blank" rel="noreferrer">Create a key at chutes.ai → API keys ↗</a>{" "}
@@ -1105,6 +1158,19 @@ function credentialKindLabel(kind: ChutesCredentialKind): string {
   return kind === "oauth-user-token" ? "Chutes sign-in · scoped user session" : "Chutes API key · direct session";
 }
 
+/**
+ * What Airship has read from the field so far — and only that.
+ *
+ * The prefix is all `parseChutesCredential` inspects, so this may never say
+ * "valid": nothing has been offered to Chutes at this point, and a reading that
+ * implied acceptance would claim more than the code establishes.
+ */
+export function credentialReading(kind: ChutesCredentialKind | undefined): string {
+  if (kind === "inference-api-key") return "Read as a Chutes personal key (cpk_). Nothing has been sent yet.";
+  if (kind === "oauth-user-token") return "Read as a Chutes sign-in token (cak_). Nothing has been sent yet.";
+  return "Not read as a Chutes credential. Chutes personal keys start with cpk_.";
+}
+
 function credentialKindDetail(kind: ChutesCredentialKind): string {
   return kind === "oauth-user-token"
     ? "Account and read-only billing surfaces can be requested in addition to inference."
@@ -1117,41 +1183,6 @@ function errorMessage(error: unknown): string {
 
 export function oauthOriginState(homepageUrl: string, currentOrigin: string): Readonly<{ available: boolean; reason?: string }> {
   return chutesOAuthLocationState(homepageUrl, currentOrigin);
-}
-
-function ModelCandidateSummary({ model }: { model: AirshipModel }) {
-  const context = model.contextTokens ?? model.maxModelTokens;
-  return (
-    <div class="model-candidate-summary">
-      <div><span>Availability</span><strong>{model.availability}</strong><small>{model.provenance.availability === "unavailable" ? "live status unavailable" : "provider management snapshot"}</small></div>
-      <div><span>Context</span><strong>{context ? formatCompactNumber(context) : "unknown"}</strong><small>{model.maxOutputTokens ? `${formatCompactNumber(model.maxOutputTokens)} max output` : "output limit unavailable"}</small></div>
-      <div><span>Input / output</span><strong>{formatModelPrice(model.pricing.input.usdPerMillion)} / {formatModelPrice(model.pricing.output.usdPerMillion)}</strong><small>USD per million tokens</small></div>
-      {/*
-        The caveat attaches to the model rather than living in a paragraph
-        somewhere else on the page: "evidence candidate" is a catalogue claim,
-        and this is the tile that says so.
-      */}
-      <div><span>Trust readiness</span><strong>{model.trust.consistency === "conflict" ? "metadata conflict" : "evidence candidate"}</strong><small>verification remains {model.trust.verification}</small><small>catalog metadata is not proof</small></div>
-    </div>
-  );
-}
-
-function modelOptionLabel(model: AirshipModel, recommendedModelId?: string): string {
-  const markers = [
-    model.id === recommendedModelId ? "recommended" : undefined,
-    model.availability === "hot" ? "hot" : undefined,
-    model.contextTokens ? `${formatCompactNumber(model.contextTokens)} ctx` : undefined,
-  ].filter((value): value is string => Boolean(value));
-  return markers.length > 0 ? `${model.id} — ${markers.join(" · ")}` : model.id;
-}
-
-function formatModelPrice(value: number | undefined): string {
-  if (value === undefined) return "unknown";
-  return new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 4 }).format(value);
-}
-
-function formatCompactNumber(value: number): string {
-  return new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 }).format(value);
 }
 
 function formatCatalogTime(value: string): string {

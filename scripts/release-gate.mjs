@@ -62,7 +62,7 @@ export const RELEASE_BUDGETS = Object.freeze({
   // aggregate and nothing at all to the first-paint set, which is measured
   // byte-identical at 411.63 KiB raw / 131.94 KiB gzip. Measured 487.0 KiB
   // gzip; the ceiling keeps the same ~0.5% tripwire clearance as before.
-  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 1768 * 1024, gzip: 508 * 1024 }),
+  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 1768 * 1024, gzip: 512 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now measures 652.23 KiB raw / 180.61 KiB gzip:
   // the browser-Git pack grew (see optionalBrowserGit) and the Terminal pack
@@ -99,7 +99,7 @@ export const RELEASE_BUDGETS = Object.freeze({
   // The Memory route milestone above carries through to the installed total:
   // measured 663.25 KiB gzip, raw unchanged inside its ceiling. First paint is
   // untouched and stays separately fixed at 640/132 KiB raw/gzip below.
-  totalJavaScriptAndWorkers: Object.freeze({ raw: 2264 * 1024, gzip: 684 * 1024 }),
+  totalJavaScriptAndWorkers: Object.freeze({ raw: 2276 * 1024, gzip: 688 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. Keep it visible under a dedicated, deliberately small cap.
   serviceWorker: Object.freeze({ raw: 12 * 1024, gzip: 4 * 1024 }),
@@ -159,8 +159,19 @@ export const RELEASE_BUDGETS = Object.freeze({
   // The shared `<Tabs>`, `<RouteHeader>` and `<Popover>` primitives it adopted
   // are their own lazy chunks and are not counted here; first paint is
   // unchanged, because this pack is fetched only when the route opens.
-  // Measured 32.84 KiB raw / 11.25 KiB gzip.
-  optionalWorkspaceWorkbench: Object.freeze({ raw: 34 * 1024, gzip: 11 * 1024 + 512 }),
+  // It then gained folder operations, which the shipped route simply did not
+  // have: a folder could be created only by typing a slash into a filename, and
+  // could never be renamed or deleted at all. Because `WorkspacePort` stores
+  // files and `buildWorkspaceTree` *derives* directories, each of those is a
+  // per-file compare-and-swapped plan plus the copy that states its real cost
+  // and its real partial outcome — that copy is most of the delta. The editor
+  // also gained a persisted soft-wrap mode, replacing a `display: none` that
+  // deleted the line-number gutter below 760px with nothing said.
+  // Measured 33.00 → 38.95 KiB raw / 11.31 → 13.08 KiB gzip. First paint is
+  // unchanged and measured: `Baseline JS/workers` stays at 128.80 KiB gzip
+  // against the 132 KiB ceiling that does not move, because this pack is still
+  // fetched only when the route opens.
+  optionalWorkspaceWorkbench: Object.freeze({ raw: 40 * 1024, gzip: 13 * 1024 + 512 }),
   optionalWorkspaceBinding: Object.freeze({ raw: 2 * 1024, gzip: 1 * 1024 }),
   optionalWorkspaceCodec: Object.freeze({ raw: 2 * 1024, gzip: 1 * 1024 }),
   optionalSourceControl: Object.freeze({ raw: 48 * 1024, gzip: 14 * 1024 }),

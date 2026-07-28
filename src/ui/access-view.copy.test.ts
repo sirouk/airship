@@ -1,7 +1,10 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 
+import { credentialReading } from "./access-view";
+
 const source = await readFile(new URL("./access-view.tsx", import.meta.url), "utf8");
+const styles = await readFile(new URL("./access-view.css", import.meta.url), "utf8");
 
 describe("Chutes connection method copy", () => {
   it("pins the connection to the transport's actual security posture", () => {
@@ -156,7 +159,17 @@ describe("Chutes connection method copy", () => {
     // number now demonstrates.
     expect(source).toContain("Use Chutes for application-encrypted inference, or connect browser-direct cloud and local models here. Credentials remain in page memory.");
     expect(source).toContain("Everything else in Airship — workspace, editor, terminal and Git — already works without this. Only chat needs a model, and connecting one never closes the others.");
-    expect(source).toContain("Connect one, or several at once. Connecting one never closes the others.");
+    expect(source).toContain("Connect one, or several at once.");
+    /*
+     * AMENDED, and strengthened: the count chip's own eyebrow sentence still
+     * has to survive, but the clause it had grown — the never-closes-the-others
+     * promise — is a verbatim clause of the paragraph asserted one line above.
+     * Two disclosures on the same 44px row stating one promise in one wording
+     * is how a reader learns to skip both, so this now pins that the promise is
+     * rendered exactly once. Deleting it from both places fails this assertion,
+     * which is what the old `toContain` could not catch.
+     */
+    expect(source.match(/onnecting one never closes the others\./gu) ?? []).toHaveLength(1);
   });
 
   it("keeps the whole OAuth boundary aside, verbatim, inside the flow it describes", () => {
@@ -184,5 +197,85 @@ describe("Chutes connection method copy", () => {
     expect(source).toContain("CHUTES_STRICT_ENDPOINT_PROOF_CAPABILITY.reason");
     expect(source).toContain("Recommended. Evaluate still-current endpoint evidence before every turn");
     expect(source).toContain('<p class="proof-policy__caveat">This policy is not proof.');
+  });
+});
+
+describe("the Chutes lane says when it cannot work, and why, where a person is standing", () => {
+  it("keeps the OAuth tab selectable so its reason is reachable at all", () => {
+    /*
+     * The tab was `disabled` whenever sign-in was unavailable and the panel was
+     * never mounted, so `oauthOrigin.reason` — the one string naming the cause —
+     * rendered in no deployment that had a cause. The tab is the default only
+     * where it works; it is selectable everywhere, which is the shape
+     * `initialConnectMethod()` already uses for the cloud lanes.
+     */
+    expect(source).toContain('const activeChutesMethod = chutesMethod ?? (chutesSignInAvailable ? "oauth" : "api-key");');
+    expect(source).not.toContain("disabled={!chutesSignInAvailable}");
+  });
+
+  it("renders the cause outside every disclosure, with a control that works beside it", () => {
+    const blocked = source.indexOf('<div class="connect-method__blocked">');
+    const mechanism = source.indexOf('<details class="oauth-mechanism">');
+    expect(blocked).toBeGreaterThan(-1);
+    // Above the disclosure, not inside it.
+    expect(blocked).toBeLessThan(mechanism);
+    expect(source).toContain("Deployment detail: {oauthOrigin.reason}");
+    expect(source).toContain('<button type="button" onClick={() => setChutesMethod("api-key")}>Use an API key</button>');
+  });
+
+  it("keeps the control that cannot run explicitly disabled, beside one that can", () => {
+    // A gold "Recommended" button returning a developer-facing error is the
+    // measured cold-visitor drop-off. It stays gated — and it is no longer the
+    // only thing in the panel, because the blocked block above it carries both
+    // the cause and a control that works.
+    expect(source).toContain("disabled={busy || !online || !chutesSignInAvailable}");
+    expect(source.indexOf('<div class="connect-method__blocked">'))
+      .toBeLessThan(source.indexOf("Sign in to Chutes\n"));
+  });
+});
+
+describe("what stands between the tab and the field", () => {
+  it("stops rendering a heading that is the tab beside it and the label under it", () => {
+    // `Connect with a Chutes API key` was the fourth rendering of the same
+    // three words inside one open lane. It survives as this region's accessible
+    // name, so the region is still announced.
+    expect(source).toContain('<section class="api-key-alternative" aria-label="Connect with a Chutes API key">');
+    expect(source).not.toContain('<strong id="chutes-api-key-title">');
+  });
+
+  it("puts the field before the class that describes it, and keeps every word of that class", () => {
+    expect(source.indexOf('id="chutes-credential-input"')).toBeLessThan(source.indexOf('<div class="credential-types"'));
+    expect(source).toContain("Chutes personal keys start with cpk_.");
+    expect(source).toContain("read models, inference, profile, and account when Chutes authorizes them");
+    expect(source).toContain('prefix="cpk_"');
+  });
+
+  it("states the negative arm of credential recognition instead of implying it", () => {
+    // The only previous signal for "this is not a Chutes credential" was an
+    // absent highlight, which is a claim nobody can see being made.
+    expect(credentialReading("inference-api-key")).toBe("Read as a Chutes personal key (cpk_). Nothing has been sent yet.");
+    expect(credentialReading("oauth-user-token")).toBe("Read as a Chutes sign-in token (cak_). Nothing has been sent yet.");
+    expect(credentialReading(undefined)).toContain("Not read as a Chutes credential.");
+    // Only the prefix is inspected here, so nothing may read as accepted.
+    for (const kind of ["inference-api-key", "oauth-user-token", undefined] as const) {
+      expect(credentialReading(kind)).not.toMatch(/valid|accepted|verified/iu);
+    }
+  });
+
+  it("keeps the credential class on a phone instead of deleting it at 640px", () => {
+    // The override that hid it existed because it was an 88px bordered tile
+    // above the input; it is now two lines beneath the input, so a phone reads
+    // the same sentence a desktop does.
+    expect(styles).not.toMatch(/\.api-key-alternative \.credential-types \{\s*display: none/u);
+    expect(styles).not.toMatch(/\.credential-types \{\s*display: none/u);
+  });
+});
+
+describe("the model metadata is inside the picker, not beside it", () => {
+  it("hands the picker the facts instead of restating them in a parallel grid", () => {
+    expect(source).toContain("attachFacts");
+    expect(source).not.toContain("ModelCandidateSummary");
+    expect(source).not.toContain("model-candidate-summary");
+    expect(styles).not.toContain("model-candidate-summary");
   });
 });

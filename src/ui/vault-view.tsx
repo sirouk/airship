@@ -163,6 +163,14 @@ export function VaultView({
   const localObjectStore = s3Configuration?.mode === "local-development";
   const adoptedDrive = runtimeAdopted && googleDrive;
   const driveInBuild = googleDriveConfiguredInBuild();
+  /**
+   * Drive is the selected provider and this build cannot open it.
+   *
+   * `googleDrive` above is false here on purpose — it reads the *configuration*,
+   * which does not exist while disconnected. This reads the preference, which is
+   * what decides whether the route's primary action leads anywhere.
+   */
+  const driveUnavailable = provider === "google-drive" && !driveInBuild;
   const compare = useRef<HTMLDetailsElement>(null);
   const providerControl = useRef<HTMLDivElement>(null);
   const [attachmentsOpen, setAttachmentsOpen] = useState(false);
@@ -200,27 +208,21 @@ export function VaultView({
               : localObjectStore
                 ? "Private local object state"
                 : "Private object-store state"}</p>
-        <span
-          class={`vault-view__phase vault-view__phase--${ephemeral ? "ephemeral" : snapshot.phase}`}
-          // The pill is green only when a runtime actually adopted the Vault.
-          // A verified contract alone is amber, because that is what it is.
-          data-adopted={runtimeAdopted || (localDevice && Boolean(localDeviceStatus)) ? "true" : "false"}
-          role="status"
-          aria-live="polite"
-        >
-          {localDevice && localDeviceStatus
-            ? "Encrypted device Vault ready"
-            : runtimeAdopted
-              ? "Encrypted runtime active"
-              // Ephemeral is a chosen operating mode, not a failed connection.
-              : ephemeral
-                ? "Page memory · by choice"
-                : snapshot.phase === "ready"
-                  // A verified contract is not an adopted runtime. Saying only
-                  // "Contract verified" while the workspace is still in page
-                  // memory is the overclaim this product exists to avoid.
-                  ? "Contract verified · not adopted"
-                  : status.label}
+        {/* One status family. The pill used to carry its own colour ramp keyed
+            off `snapshot.phase` and a `data-adopted` flag, while the band 40px
+            below coloured itself from `vaultState()` — two encodings of one
+            state that could disagree. Both now read the same seal. */}
+        <span class="vault-view__phase" role="status" aria-live="polite">
+          <Seal
+            state={sealForState(state)}
+            label={vaultPhaseLabel({
+              state,
+              phase: snapshot.phase,
+              phaseLabel: status.label,
+              localDevice,
+            })}
+            density="chip"
+          />
         </span>
       </div>
 
@@ -266,7 +268,13 @@ export function VaultView({
           {ephemeral ? (
             <button type="button" onClick={openChooser}>Choose a durable provider</button>
           ) : null}
-          {!localDevice && !ephemeral && snapshot.phase === "disconnected" ? (
+          {/* The route's one brass action must lead somewhere that works. With
+              Drive selected in a build that has no OAuth client, `Configure
+              connection` promised a form that the panel below correctly refuses
+              to render, so the loudest control on the screen was a dead end. */}
+          {driveUnavailable && snapshot.phase === "disconnected" ? (
+            <button type="button" onClick={openChooser}>Choose a provider this build can open</button>
+          ) : !localDevice && !ephemeral && snapshot.phase === "disconnected" ? (
             <button type="button" onClick={() => {
               // The setup slot renders unconditionally for some providers, so a
               // blind toggle can be a no-op. Move to the fields when they are
@@ -569,6 +577,39 @@ const SEAL_WORD: Readonly<Record<VaultStateId, string>> = Object.freeze({
   adopted: "Verified",
   blocked: "Failed",
 });
+
+/**
+ * The route bar's one-line answer to "where is my data", in the state's own
+ * words.
+ *
+ * Every string here already shipped on this bar. The one change is the
+ * local-device case: a Vault that has never been created was reporting
+ * `Disconnected` — Airship's failure grammar — for what is a default. The word
+ * itself is not retired; it still reports every provider that genuinely was
+ * connected and is not (`google-drive-vault.spec.ts` pins that case), and the
+ * itemised `What's attached (0 of 3)` rows below say which prerequisite is
+ * missing, which is strictly more than the word did.
+ */
+export function vaultPhaseLabel(input: Readonly<{
+  state: VaultStateId;
+  phase: VaultSnapshot["phase"];
+  /** `phaseCopy().label` — the provider-agnostic phase word. */
+  phaseLabel: string;
+  localDevice: boolean;
+}>): string {
+  if (input.state === "ephemeral") return "Page memory · by choice";
+  if (input.state === "adopted") {
+    return input.localDevice ? "Encrypted device Vault ready" : "Encrypted runtime active";
+  }
+  if (input.localDevice) {
+    return input.state === "verified" ? "Encrypted device Vault ready" : "Not set up yet";
+  }
+  // A verified contract is not an adopted runtime. Saying only "Contract
+  // verified" while the workspace is still in page memory is the overclaim
+  // this product exists to avoid.
+  if (input.phase === "ready") return "Contract verified · not adopted";
+  return input.phaseLabel;
+}
 
 export function sealForState(state: VaultStateId): SealState {
   switch (state) {

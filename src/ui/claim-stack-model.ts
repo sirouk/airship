@@ -235,10 +235,12 @@ function composeItem(
  * runtime" for the exact turn whose Attestation tab read "Asserted".
  *
  * Both ceilings run in one direction only: they may lower a declared
- * `verified` and may never soften a negative. `assertedState()` also maps
- * `failed` to `partial`, which prints "Asserted" on a claim its own record
- * says failed — fail-closed means a stated failure keeps full weight even when
- * nobody authenticated the statement, so this model does not copy that half.
+ * `verified` and may never soften a negative. `assertedState()` used to map
+ * `failed` to `partial` as well, which printed "Asserted" on the Attestation
+ * tab for a claim this tab already called "Failed" — one turn, two verdicts,
+ * one click apart. It now stops at `verified` for the same reason this model
+ * always did: fail-closed means a stated failure keeps full weight even when
+ * nobody authenticated the statement.
  */
 function endpointQualifier(declared: AttestationClaimState, status: ProofStatus): ClaimQualifier {
   return declared === "verified" && status !== "verified" ? "verified-without-authority" : declared;

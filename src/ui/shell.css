@@ -273,8 +273,7 @@
 .receipt-chip,
 .attestation-chip,
 .audit-state,
-.runtime-posture,
-.proof-level {
+.runtime-posture {
   display: inline-flex;
   min-width: 0;
   gap: var(--sp-1);

@@ -91,8 +91,15 @@
    top of the panel and stays there while the user scrolls the ceremony. */
 .local-device-vault__ceremony-alert {
   position: sticky;
-  top: 0;
-  z-index: 1;
+  /*
+   * Not `top: 0`. This panel only ever renders on `#vault`, whose trust-hub tab
+   * strip is itself `position: sticky; top: 0` at 44px desktop / 45px phone
+   * (`platform-shell.css:20,148`) with `z-index: 8`. Pinning to 0 parked the
+   * one page-level warning about a live one-time secret *behind* that strip —
+   * measured, scrolled to the bottom of the ceremony on iPhone 14 Pro Max.
+   */
+  top: 45px;
+  z-index: 7;
   margin: 0;
   padding: var(--sp-2) var(--sp-3);
   border: 1px solid color-mix(in srgb, var(--v-caution) 55%, transparent);
@@ -168,14 +175,22 @@
   font-weight: var(--fw-title);
 }
 
+/* Whether the one-time key has left Airship. It reads in the one status
+   family now, so the mark, the colour and the sentence arrive together. */
 .local-device-vault__custody {
+  display: flex;
   margin: 0;
-  color: var(--v-caution);
-  font-size: var(--fs-caption);
 }
 
-.local-device-vault__custody[data-custody="copied"],
-.local-device-vault__custody[data-custody="downloaded"] { color: var(--v-verified); }
+/* The escape hatch, stated where a person discovers they acknowledged too
+   early. Caution ink because acting on it is time-limited: it is only true
+   while nothing has been enrolled. */
+.local-device-vault__ceremony .local-device-vault__escape {
+  margin: 0;
+  color: var(--v-caution);
+  font-size: var(--fs-meta);
+  line-height: 1.45;
+}
 
 /* A 44px hit row: the acknowledgement is the highest-consequence control on
    the route and it was an 18px box in a 25px line. */
@@ -195,6 +210,18 @@
   width: 18px;
   height: 18px;
   margin: 2px 0 0;
+}
+
+/*
+ * On a coarse pointer the box itself is the thing a thumb aims at, and 18px is
+ * under the floor even inside a 44px row. The row keeps its 44px; the box grows
+ * to a target a thumb can hit without hitting the sentence next to it.
+ */
+@media (pointer: coarse) {
+  .local-device-vault__check input {
+    width: 24px;
+    height: 24px;
+  }
 }
 
 .local-device-vault__actions {

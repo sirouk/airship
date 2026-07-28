@@ -143,7 +143,14 @@ export function GoogleDriveSetup({ onConfigure }: Readonly<{
 
   return <section class="google-drive-setup" data-available={clientId ? "true" : "false"} aria-labelledby="google-drive-setup-title">
     <header>
-      <h2 id="google-drive-setup-title">Connect your Google Drive</h2>
+      {/* A heading is an instruction. Printing "Connect your Google Drive"
+          over a build that cannot open a Drive folder tells a person to do
+          something no control on the page can do, and a state chip one line
+          right does not undo a heading. The heading states the state; the
+          panel below states what to do instead. */}
+      <h2 id="google-drive-setup-title">{clientId
+        ? "Connect your Google Drive"
+        : "Google Drive is not available in this build"}</h2>
       {clientId ? <p class="google-drive-setup__eyebrow">Recommended durability</p> : null}
       <span data-state={clientId ? "ready" : "unavailable"}>{clientId ? "Browser → Drive" : "Unavailable in this build"}</span>
     </header>
@@ -162,7 +169,11 @@ export function GoogleDriveSetup({ onConfigure }: Readonly<{
       </div>
       <details class="google-drive-setup__deploy">
         <summary>For the person deploying Airship — the exact build variable this needs</summary>
-        <div class="google-drive-setup__notice" role="alert">
+        {/* Not `role="alert"`: it sits inside a closed <details>, so the role
+            promised an interruption that the hidden subtree can never deliver.
+            The sentence is a standing deployment instruction, and the summary
+            above says who it is for and what it contains. */}
+        <div class="google-drive-setup__notice">
           Set <code>VITE_GOOGLE_CLIENT_ID</code> to a Google OAuth Web client ID, enable the Drive API, and allow this page origin.
         </div>
       </details>

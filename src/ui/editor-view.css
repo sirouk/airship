@@ -36,8 +36,14 @@
  * default, so this route's title starts on the same vertical line as every
  * other route's — the invariant `airship-shell.spec.ts` measures. The workbench
  * below it is deliberately full-bleed: it is a frame, not a page.
+ *
+ * The selector is a child chain rather than a bare class pair so it outranks
+ * `routes.css`'s `.route-layout > * > .route-header { padding-inline: 0 }`,
+ * which is appended later in the barrel. That rule strips the second page edge
+ * from routes whose shell already supplies one; this route zeroed the shell's
+ * padding above, so the gutter has to come from the bar itself.
  */
-.route-header.editor-route__header {
+.main > .editor-route > .route-header.editor-route__header {
   padding-inline: var(--route-gutter-inline-start, var(--sp-6)) var(--route-gutter-inline-end, var(--sp-6));
 }
 

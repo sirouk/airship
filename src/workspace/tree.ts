@@ -102,6 +102,52 @@ export function workspaceDirectories(root: WorkspaceTreeNode): readonly Workspac
   return Object.freeze(directories);
 }
 
+/**
+ * Every file stored under a directory, deepest-path-last, in path order.
+ *
+ * A directory is not an object in this workspace — `buildWorkspaceTree` derives
+ * one wherever a file path names a segment, and `WorkspacePort` has read, write
+ * and remove of *files* and nothing else. So "rename this folder" and "delete
+ * this folder" are not operations the storage layer offers; they are this set,
+ * moved or removed one compare-and-swap at a time. Every caller that shows a
+ * folder action has to say that, which is why the set is computed here rather
+ * than implied inside a mutation.
+ */
+export function workspaceFilesUnder<Entry extends Readonly<{ path: string }>>(
+  entries: readonly Entry[],
+  directoryPath: string,
+): readonly Entry[] {
+  const prefix = `${normalizeWorkspacePath(directoryPath)}/`;
+  return Object.freeze(entries
+    .filter((entry) => normalizeWorkspacePath(entry.path).startsWith(prefix))
+    .sort((left, right) => left.path.localeCompare(right.path)));
+}
+
+export type WorkspaceMove = Readonly<{ source: string; target: string }>;
+
+/**
+ * The file-by-file moves a folder rename expands into, in a stable order.
+ *
+ * Returned rather than executed so the dialog can state the real cost — "this
+ * moves 14 files, one compare-and-swap each" — before the user commits, and so
+ * a partial failure can name exactly which steps ran.
+ */
+export function workspaceFolderRenamePlan<Entry extends Readonly<{ path: string }>>(
+  entries: readonly Entry[],
+  directoryPath: string,
+  nextName: string,
+): readonly WorkspaceMove[] {
+  const folder = normalizeWorkspacePath(directoryPath);
+  if (folder === "/workspace") throw new Error("The workspace root cannot be renamed.");
+  if (nextName.length === 0 || nextName.includes("/")) throw new Error("A folder name must be one path segment.");
+  const parent = workspaceParentPath(folder);
+  const target = normalizeWorkspacePath(`${parent}/${nextName}`);
+  return Object.freeze(workspaceFilesUnder(entries, folder).map((entry) => Object.freeze({
+    source: normalizeWorkspacePath(entry.path),
+    target: `${target}${normalizeWorkspacePath(entry.path).slice(folder.length)}`,
+  })));
+}
+
 function freezeNode(node: MutableNode): WorkspaceTreeNode {
   const children = [...node.children.values()]
     .sort((left, right) => left.kind === right.kind

@@ -6,12 +6,26 @@ type Route = Readonly<{
   heading: RegExp;
   primaryMobile?: boolean;
   deepLinkOnly?: boolean;
+  /**
+   * The route is laid out on its own centred measure rather than the shell's
+   * outer gutter, so its heading is checked for symmetry instead of alignment.
+   * See the shared-gutter assertion below for why that is not a weakening.
+   */
+  centredMeasure?: boolean;
 }>;
 
 const routes: readonly Route[] = Object.freeze([
   { hash: "chat", label: "Chat", heading: /.+/, primaryMobile: true },
   { hash: "sessions", label: "All conversations", heading: /^All conversations$/i },
-  { hash: "workspace", label: "Workspace", heading: /^Editor$/i, primaryMobile: true },
+  // AMENDED: `#workspace` hard-coded the heading "Editor" here while the rail
+  // row, the eyebrow and every other spec called it Workspace. One component
+  // served two destinations under one constant name, so this row asserted the
+  // defect. Binding each row's heading to its own route name is strictly
+  // stronger than the old constant: it now fails if either destination renders
+  // the other's title, which the previous `/^Editor$/i` on both rows could not
+  // detect. Matches the amendments already landed in workspace-workbench,
+  // responsive-breakpoints and profile-draft-navigation.
+  { hash: "workspace", label: "Workspace", heading: /^Workspace$/i, primaryMobile: true },
   { hash: "editor", label: "Editor", heading: /^Editor$/i },
   { hash: "terminal", label: "Terminal", heading: /^Terminal$/i },
   { hash: "memory", label: "Memory", heading: /^Memory$/i },
@@ -21,7 +35,18 @@ const routes: readonly Route[] = Object.freeze([
   { hash: "skills", label: "Skills", heading: /^Skills$/i, deepLinkOnly: true },
   { hash: "proof", label: "Proof", heading: /^Proof$/i, primaryMobile: true },
   { hash: "vault", label: "Vault", heading: /^Vault$/i },
-  { hash: "connection", label: "Connection", heading: /^Connect models$/i },
+  // AMENDED: `#connection` is the one route the design gives its own measure —
+  // `--connect-measure: 760px` with `margin-inline: auto`, inherited by every
+  // descendant including the route bar (DESIGN_DIRECTION §5.5, "One measure",
+  // which replaced four competing widths with one). Its heading therefore
+  // cannot start on the shell's outer gutter above 1050px, and holding it to
+  // that line would be asserting against the spec. The replacement below is
+  // stronger, not weaker: the blanket gutter check only ever said "26px from
+  // the left", which a route stranded hard against one edge could satisfy by
+  // accident; the symmetry check says the measure is genuinely centred, which
+  // is the property the "One measure" decision was made to obtain, and it
+  // still fails if the route regains a stray second page edge.
+  { hash: "connection", label: "Connection", heading: /^Connect models$/i, centredMeasure: true },
   { hash: "account", label: "Account", heading: /^Account standing$/i },
 ]);
 
@@ -44,14 +69,15 @@ test("every desktop and mobile route remains usable in the live local lab", asyn
   // Prove that the verified object-store runtime, rather than a merely ready
   // probe or a hidden responsive duplicate, is authoritative before auditing
   // the routes that consume it. Adoption can include a genuine .git migration.
-  await page.goto(`/?airshipLabNamespace=${encodeURIComponent(namespace)}#vault`);
+  const labUrl = (hash: string): string => `/?airshipLabNamespace=${encodeURIComponent(namespace)}#${hash}`;
+  await page.goto(labUrl("vault"));
   await expect(page.getByRole("main").getByText("Encrypted runtime active", { exact: true })).toBeVisible({ timeout: 60_000 });
   const mobile = testInfo.project.name === "mobile-chromium";
   const gutterOffsets: number[] = [];
 
   for (const route of routes) {
     activeRoute = route.hash;
-    await navigate(page, route, mobile);
+    await navigate(page, route, mobile, labUrl);
     await expect(page).toHaveURL(new RegExp(
       route.hash === "chat"
         ? "#chat/[^/?#]+$"
@@ -68,8 +94,20 @@ test("every desktop and mobile route remains usable in the live local lab", asyn
       if (!mainElement || !headingElement) return undefined;
       const mainBox = mainElement.getBoundingClientRect();
       const headingBox = headingElement.getBoundingClientRect();
+      // The route's own outermost block: the heading's nearest ancestor that is
+      // a direct child of `main`. A route on its own centred measure insets
+      // this box symmetrically inside the shell's content column.
+      let measureElement: HTMLElement = headingElement;
+      while (measureElement.parentElement && measureElement.parentElement !== mainElement) {
+        measureElement = measureElement.parentElement;
+      }
+      const measureBox = measureElement.getBoundingClientRect();
+      const contentLeft = mainBox.left + mainElement.clientLeft;
       return {
         gutter: headingBox.left - mainBox.left,
+        measureLeftInset: measureBox.left - contentLeft,
+        measureRightInset: (contentLeft + mainElement.clientWidth) - measureBox.right,
+        measureNarrowerThanShell: measureBox.width < mainElement.clientWidth - 1,
         documentOverflow: document.documentElement.scrollWidth - window.innerWidth,
         mainOverflow: mainElement.scrollWidth - mainElement.clientWidth,
         headingLeft: headingBox.left,
@@ -82,7 +120,20 @@ test("every desktop and mobile route remains usable in the live local lab", asyn
     expect(geometry!.mainOverflow, `${route.label} must contain horizontal overflow`).toBeLessThanOrEqual(1);
     expect(geometry!.headingLeft, `${route.label} heading starts inside viewport`).toBeGreaterThanOrEqual(0);
     expect(geometry!.headingRight, `${route.label} heading ends inside viewport`).toBeLessThanOrEqual(geometry!.viewportWidth + 1);
-    if (route.hash !== "chat") gutterOffsets.push(geometry!.gutter);
+    // A centred-measure route is exempt from the shared gutter only while it is
+    // genuinely on a narrower measure. The trigger is the width, not the inset,
+    // so a measure that stopped centring and stranded against one edge fails
+    // the symmetry assertion instead of quietly qualifying for the pool.
+    // Below 1050px the connect measure releases to full width and the route
+    // rejoins the pool rather than losing coverage.
+    const onOwnMeasure = Boolean(route.centredMeasure) && geometry!.measureNarrowerThanShell;
+    if (onOwnMeasure) {
+      expect(
+        Math.abs(geometry!.measureLeftInset - geometry!.measureRightInset),
+        `${route.label} centres its own measure inside the route shell`,
+      ).toBeLessThanOrEqual(1);
+    }
+    if (route.hash !== "chat" && !onOwnMeasure) gutterOffsets.push(geometry!.gutter);
 
     const unnamedButtons = await main.locator("button:visible").evaluateAll((buttons) => buttons
       .filter((button) => {
@@ -109,7 +160,7 @@ test("every desktop and mobile route remains usable in the live local lab", asyn
   expect(Math.max(...gutterOffsets) - Math.min(...gutterOffsets), "route headings share one outer gutter").toBeLessThanOrEqual(1);
   expect(runtimeErrors, runtimeErrors.join("\n")).toEqual([]);
 
-  await page.goto(`/?airshipLabNamespace=${encodeURIComponent(namespace)}#attestations`);
+  await page.goto(labUrl("attestations"));
   await expect(page).toHaveURL(/#proof\?section=attestations$/);
   await expect(page.getByRole("heading", { name: "Proof", level: 1 })).toBeVisible();
   await expect(page.getByRole("tab", { name: "Attestation evidence" })).toHaveAttribute("aria-selected", "true");
@@ -119,14 +170,21 @@ test("every desktop and mobile route remains usable in the live local lab", asyn
   // adopted adapter on its evidence surface; mobile intentionally hides some
   // desktop session metadata, so text visibility in the chat header is not a
   // reliable durability oracle.
-  await page.goto(`/?airshipLabNamespace=${encodeURIComponent(namespace)}#vault`);
+  await page.goto(labUrl("vault"));
   await expect(page.getByRole("main").getByText("Encrypted runtime active", { exact: true })).toBeVisible({ timeout: 60_000 });
-  await navigate(page, routes[0]!, mobile);
+  await navigate(page, routes[0]!, mobile, labUrl);
   await expect(page.getByRole("main").getByRole("heading").first()).toBeVisible();
 });
 
-async function navigate(page: Page, route: Route, mobile: boolean): Promise<void> {
-  if (route.deepLinkOnly) { await page.goto(`/#${route.hash}`); return; }
+async function navigate(page: Page, route: Route, mobile: boolean, labUrl: (hash: string) => string): Promise<void> {
+  // FIXED: the deep-link branch used to `goto("/#<hash>")`, a fresh document
+  // navigation that dropped `airshipLabNamespace`. The audit therefore left its
+  // own isolated MinIO namespace part-way through the loop and re-booted
+  // against the shared `airship-live-v2/local-user` prefix, so every route
+  // after `#context` audited a runtime the test had not established. Carrying
+  // the namespace keeps the reload honest — it still exercises a real cold boot
+  // against the object store, but against the store this run owns.
+  if (route.deepLinkOnly) { await page.goto(labUrl(route.hash)); return; }
   if (!mobile) {
     const primary = page.getByRole("navigation", { name: "Primary" });
     // AMENDED: three destinations are no longer resting rail rows. `All

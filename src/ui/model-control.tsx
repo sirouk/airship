@@ -134,8 +134,21 @@ export function safeModelControlErrorMessage(error: unknown): string {
   return redacted.length > 240 ? `${redacted.slice(0, 237)}…` : redacted;
 }
 
-export function activeConnectionProofLabel(connection: ActiveChutesConnection, busy = false): string {
-  if (busy) return "E2EE · Switching…";
+/**
+ * The one string every surface uses for a live connection's proof boundary.
+ *
+ * The topbar E2EE axis, the session status chip and this card's own
+ * `boundaryLabel` all read it; `app.tsx` used to keep a second copy that still
+ * said "E2EE · evidence recorded" for an ungated connection, which states a
+ * *turn* outcome where the fact is a *policy* one.
+ *
+ * The `busy` parameter is gone with that duplication. It returned a
+ * switching transient and had no caller outside its own test, so making this
+ * the shared reader would have shipped a test-only branch into the entry chunk;
+ * the transient it described is stated by this control's own live region above,
+ * which is the surface that actually knows a switch is in flight.
+ */
+export function activeConnectionProofLabel(connection: ActiveChutesConnection): string {
   if (connection.posture !== "encrypted-attested") return "E2EE · no proof gate";
   return connection.invokeAuthorization === "verified"
     ? "E2EE · last turn proved"

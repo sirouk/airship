@@ -1,0 +1,1334 @@
+{
+  "desktop-vault-ephemeral": {
+    "viewport": {
+      "w": 1440,
+      "h": 900
+    },
+    "chromeBandPx": 128.5,
+    "chromeBandPct": 14.3,
+    "mainClientHeight": 842,
+    "mainScrollHeight": 927,
+    "screens": 1.1,
+    "firstControl": {
+      "label": "Proof",
+      "y": 6.4
+    },
+    "boxes": {
+      "routeHeader": null,
+      "vaultBar": {
+        "top": 142.5,
+        "height": 44,
+        "width": 1156
+      },
+      "vaultState": {
+        "top": 210.5,
+        "height": 218,
+        "width": 1156
+      },
+      "chooser": {
+        "top": 452.5,
+        "height": 467,
+        "width": 1156
+      },
+      "configuration": null,
+      "evidence": null,
+      "ceremony": null,
+      "localLab": null,
+      "drive": null,
+      "gate": null,
+      "metrics": null,
+      "profileCatalog": null,
+      "governs": null
+    },
+    "phase": "Page memory · by choice",
+    "stateHeadline": "Ephemeral · page memory only",
+    "smallTargets": [],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    }
+  },
+  "desktop-vault-local-device": {
+    "viewport": {
+      "w": 1440,
+      "h": 900
+    },
+    "chromeBandPx": 128.5,
+    "chromeBandPct": 14.3,
+    "mainClientHeight": 842,
+    "mainScrollHeight": 1334,
+    "screens": 1.6,
+    "firstControl": {
+      "label": "Proof",
+      "y": 6.4
+    },
+    "boxes": {
+      "routeHeader": null,
+      "vaultBar": {
+        "top": 142.5,
+        "height": 44,
+        "width": 1156
+      },
+      "vaultState": {
+        "top": 210.5,
+        "height": 214,
+        "width": 1156
+      },
+      "chooser": {
+        "top": 448.5,
+        "height": 467,
+        "width": 1156
+      },
+      "configuration": null,
+      "evidence": null,
+      "ceremony": null,
+      "localLab": null,
+      "drive": null,
+      "gate": null,
+      "metrics": null,
+      "profileCatalog": null,
+      "governs": null
+    },
+    "phase": "Disconnected",
+    "stateHeadline": "Local Device setup required",
+    "smallTargets": [
+      {
+        "label": "",
+        "h": 18
+      },
+      {
+        "label": "",
+        "h": 18
+      },
+      {
+        "label": "",
+        "h": 18
+      }
+    ],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    }
+  },
+  "desktop-vault-ceremony": {
+    "viewport": {
+      "w": 1440,
+      "h": 900
+    },
+    "chromeBandPx": -765.5,
+    "chromeBandPct": -85.1,
+    "mainClientHeight": 842,
+    "mainScrollHeight": 1736,
+    "screens": 2.1,
+    "firstControl": {
+      "label": "Proof",
+      "y": 900.4
+    },
+    "boxes": {
+      "routeHeader": null,
+      "vaultBar": {
+        "top": -751.5,
+        "height": 44,
+        "width": 1156
+      },
+      "vaultState": {
+        "top": -683.5,
+        "height": 214,
+        "width": 1156
+      },
+      "chooser": {
+        "top": -445.5,
+        "height": 467,
+        "width": 1156
+      },
+      "configuration": null,
+      "evidence": null,
+      "ceremony": {
+        "top": 375.8,
+        "height": 344.1,
+        "width": 1120
+      },
+      "localLab": null,
+      "drive": null,
+      "gate": null,
+      "metrics": null,
+      "profileCatalog": null,
+      "governs": null
+    },
+    "phase": "Disconnected",
+    "stateHeadline": "Local Device setup required",
+    "smallTargets": [
+      {
+        "label": "",
+        "h": 18
+      },
+      {
+        "label": "",
+        "h": 18
+      },
+      {
+        "label": "",
+        "h": 18
+      },
+      {
+        "label": "",
+        "h": 18
+      }
+    ],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    }
+  },
+  "desktop-vault-drive-unavailable": {
+    "viewport": {
+      "w": 1440,
+      "h": 900
+    },
+    "chromeBandPx": 128.5,
+    "chromeBandPct": 14.3,
+    "mainClientHeight": 842,
+    "mainScrollHeight": 1263,
+    "screens": 1.5,
+    "firstControl": {
+      "label": "Proof",
+      "y": 6.4
+    },
+    "boxes": {
+      "routeHeader": null,
+      "vaultBar": {
+        "top": 142.5,
+        "height": 44,
+        "width": 1156
+      },
+      "vaultState": {
+        "top": 210.5,
+        "height": 218,
+        "width": 1156
+      },
+      "chooser": {
+        "top": 452.5,
+        "height": 480,
+        "width": 1156
+      },
+      "configuration": null,
+      "evidence": null,
+      "ceremony": null,
+      "localLab": null,
+      "drive": {
+        "top": 989.5,
+        "height": 289.3,
+        "width": 1156
+      },
+      "gate": null,
+      "metrics": null,
+      "profileCatalog": null,
+      "governs": null
+    },
+    "phase": "Disconnected",
+    "stateHeadline": "No vault claim",
+    "smallTargets": [],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    }
+  },
+  "desktop-vault-drive-panel": {
+    "viewport": {
+      "w": 1440,
+      "h": 900
+    },
+    "chromeBandPx": -292.5,
+    "chromeBandPct": -32.5,
+    "mainClientHeight": 842,
+    "mainScrollHeight": 1263,
+    "screens": 1.5,
+    "firstControl": {
+      "label": "Proof",
+      "y": 427.4
+    },
+    "boxes": {
+      "routeHeader": null,
+      "vaultBar": {
+        "top": -278.5,
+        "height": 44,
+        "width": 1156
+      },
+      "vaultState": {
+        "top": -210.5,
+        "height": 218,
+        "width": 1156
+      },
+      "chooser": {
+        "top": 31.5,
+        "height": 480,
+        "width": 1156
+      },
+      "configuration": null,
+      "evidence": null,
+      "ceremony": null,
+      "localLab": null,
+      "drive": {
+        "top": 568.5,
+        "height": 289.3,
+        "width": 1156
+      },
+      "gate": null,
+      "metrics": null,
+      "profileCatalog": null,
+      "governs": null
+    },
+    "phase": "Disconnected",
+    "stateHeadline": "No vault claim",
+    "smallTargets": [],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    }
+  },
+  "desktop-vault-lab-form": {
+    "viewport": {
+      "w": 1440,
+      "h": 900
+    },
+    "chromeBandPx": -1117.5,
+    "chromeBandPct": -124.2,
+    "mainClientHeight": 842,
+    "mainScrollHeight": 2540,
+    "screens": 3,
+    "firstControl": {
+      "label": "Proof",
+      "y": 1252.4
+    },
+    "boxes": {
+      "routeHeader": null,
+      "vaultBar": {
+        "top": -1103.5,
+        "height": 44,
+        "width": 1156
+      },
+      "vaultState": {
+        "top": -1035.5,
+        "height": 110,
+        "width": 1156
+      },
+      "chooser": {
+        "top": -763,
+        "height": 126,
+        "width": 1156
+      },
+      "configuration": {
+        "top": -613,
+        "height": 246.3,
+        "width": 1156
+      },
+      "evidence": {
+        "top": -342.7,
+        "height": 206,
+        "width": 1156
+      },
+      "ceremony": null,
+      "localLab": {
+        "top": 58.3,
+        "height": 1252.1,
+        "width": 1156
+      },
+      "drive": null,
+      "gate": null,
+      "metrics": null,
+      "profileCatalog": null,
+      "governs": null
+    },
+    "phase": "Contract verified · not adopted",
+    "stateHeadline": "Storage contract verified · runtime not adopted",
+    "smallTargets": [
+      {
+        "label": "",
+        "h": 21
+      },
+      {
+        "label": "",
+        "h": 21
+      }
+    ],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    }
+  },
+  "desktop-vault-lab-configured": {
+    "viewport": {
+      "w": 1440,
+      "h": 900
+    },
+    "chromeBandPx": 128.5,
+    "chromeBandPct": 14.3,
+    "mainClientHeight": 842,
+    "mainScrollHeight": 927,
+    "screens": 1.1,
+    "firstControl": {
+      "label": "Proof",
+      "y": 6.4
+    },
+    "boxes": {
+      "routeHeader": null,
+      "vaultBar": {
+        "top": 142.5,
+        "height": 44,
+        "width": 1156
+      },
+      "vaultState": {
+        "top": 210.5,
+        "height": 136.5,
+        "width": 1156
+      },
+      "chooser": {
+        "top": 371,
+        "height": 126,
+        "width": 1156
+      },
+      "configuration": {
+        "top": 521,
+        "height": 246.3,
+        "width": 1156
+      },
+      "evidence": null,
+      "ceremony": null,
+      "localLab": null,
+      "drive": null,
+      "gate": null,
+      "metrics": null,
+      "profileCatalog": null,
+      "governs": null
+    },
+    "phase": "Configured",
+    "stateHeadline": "Configuration only",
+    "smallTargets": [],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    }
+  },
+  "desktop-vault-lab-connected": {
+    "viewport": {
+      "w": 1440,
+      "h": 900
+    },
+    "chromeBandPx": 128.5,
+    "chromeBandPct": 14.3,
+    "mainClientHeight": 842,
+    "mainScrollHeight": 1231,
+    "screens": 1.5,
+    "firstControl": {
+      "label": "Proof",
+      "y": 6.4
+    },
+    "boxes": {
+      "routeHeader": null,
+      "vaultBar": {
+        "top": 142.5,
+        "height": 44,
+        "width": 1156
+      },
+      "vaultState": {
+        "top": 210.5,
+        "height": 110,
+        "width": 1156
+      },
+      "chooser": {
+        "top": 483,
+        "height": 126,
+        "width": 1156
+      },
+      "configuration": {
+        "top": 633,
+        "height": 246.3,
+        "width": 1156
+      },
+      "evidence": {
+        "top": 903.3,
+        "height": 206,
+        "width": 1156
+      },
+      "ceremony": null,
+      "localLab": null,
+      "drive": null,
+      "gate": null,
+      "metrics": null,
+      "profileCatalog": null,
+      "governs": null
+    },
+    "phase": "Contract verified · not adopted",
+    "stateHeadline": "Storage contract verified · runtime not adopted",
+    "smallTargets": [],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    }
+  },
+  "desktop-profiles": {
+    "viewport": {
+      "w": 1440,
+      "h": 900
+    },
+    "chromeBandPx": 201.8,
+    "chromeBandPct": 22.4,
+    "mainClientHeight": 842,
+    "mainScrollHeight": 889,
+    "screens": 1.1,
+    "firstControl": {
+      "label": "Profiles",
+      "y": 28
+    },
+    "boxes": {
+      "routeHeader": null,
+      "vaultBar": null,
+      "vaultState": null,
+      "chooser": null,
+      "configuration": null,
+      "evidence": null,
+      "ceremony": null,
+      "localLab": null,
+      "drive": null,
+      "gate": null,
+      "metrics": null,
+      "profileCatalog": {
+        "top": 287.8,
+        "height": 411.1,
+        "width": 362.2
+      },
+      "governs": null
+    },
+    "phase": null,
+    "stateHeadline": null,
+    "smallTargets": [
+      {
+        "label": "Profiles",
+        "h": 39
+      },
+      {
+        "label": "Capabilities",
+        "h": 39
+      },
+      {
+        "label": "Skills",
+        "h": 39
+      },
+      {
+        "label": "Fork",
+        "h": 26
+      },
+      {
+        "label": "",
+        "h": 32
+      },
+      {
+        "label": "",
+        "h": 32
+      },
+      {
+        "label": "Profile workspace binding",
+        "h": 38
+      },
+      {
+        "label": "Profile memory scope",
+        "h": 38
+      },
+      {
+        "label": "Profile approval policy",
+        "h": 38
+      },
+      {
+        "label": "Profile minimum proof posture",
+        "h": 38
+      },
+      {
+        "label": "Save new revision",
+        "h": 40
+      },
+      {
+        "label": "Apply in a new session",
+        "h": 40
+      },
+      {
+        "label": "Replacement profile",
+        "h": 40
+      },
+      {
+        "label": "Remove profile",
+        "h": 40
+      },
+      {
+        "label": "Storage status · page memory",
+        "h": 42
+      }
+    ],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    }
+  },
+  "desktop-account-disconnected": {
+    "viewport": {
+      "w": 1440,
+      "h": 900
+    },
+    "chromeBandPx": 129.5,
+    "chromeBandPct": 14.4,
+    "mainClientHeight": 842,
+    "mainScrollHeight": 927,
+    "screens": 1.1,
+    "firstControl": {
+      "label": "Proof",
+      "y": 6.4
+    },
+    "boxes": {
+      "routeHeader": {
+        "top": 142.5,
+        "height": 45,
+        "width": 1156
+      },
+      "vaultBar": null,
+      "vaultState": null,
+      "chooser": null,
+      "configuration": null,
+      "evidence": null,
+      "ceremony": null,
+      "localLab": null,
+      "drive": null,
+      "gate": {
+        "top": 203.5,
+        "height": 356.7,
+        "width": 1156
+      },
+      "metrics": {
+        "top": 394.7,
+        "height": 110.4,
+        "width": 1106
+      },
+      "profileCatalog": null,
+      "governs": null
+    },
+    "phase": null,
+    "stateHeadline": null,
+    "smallTargets": [
+      {
+        "label": "Connect Chutes",
+        "h": 40
+      }
+    ],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    }
+  },
+  "desktop-account-connected": {
+    "viewport": {
+      "w": 1440,
+      "h": 900
+    },
+    "chromeBandPx": 129.5,
+    "chromeBandPct": 14.4,
+    "mainClientHeight": 842,
+    "mainScrollHeight": 927,
+    "screens": 1.1,
+    "firstControl": {
+      "label": "Proof",
+      "y": 6.4
+    },
+    "boxes": {
+      "routeHeader": {
+        "top": 142.5,
+        "height": 45,
+        "width": 1156
+      },
+      "vaultBar": null,
+      "vaultState": null,
+      "chooser": null,
+      "configuration": null,
+      "evidence": null,
+      "ceremony": null,
+      "localLab": null,
+      "drive": null,
+      "gate": {
+        "top": 203.5,
+        "height": 356.7,
+        "width": 1156
+      },
+      "metrics": {
+        "top": 394.7,
+        "height": 110.4,
+        "width": 1106
+      },
+      "profileCatalog": null,
+      "governs": null
+    },
+    "phase": null,
+    "stateHeadline": null,
+    "smallTargets": [
+      {
+        "label": "Connect Chutes",
+        "h": 40
+      }
+    ],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    }
+  },
+  "phone-vault-ephemeral": {
+    "viewport": {
+      "w": 430,
+      "h": 740
+    },
+    "chromeBandPx": 135.2,
+    "chromeBandPct": 18.3,
+    "mainClientHeight": 632,
+    "mainScrollHeight": 719,
+    "screens": 1.1,
+    "firstControl": {
+      "label": "Proof",
+      "y": 0
+    },
+    "boxes": {
+      "routeHeader": null,
+      "vaultBar": {
+        "top": 111,
+        "height": 76.2,
+        "width": 404
+      },
+      "vaultState": {
+        "top": 203.2,
+        "height": 326.5,
+        "width": 404
+      },
+      "chooser": {
+        "top": 545.7,
+        "height": 205,
+        "width": 404
+      },
+      "configuration": null,
+      "evidence": null,
+      "ceremony": null,
+      "localLab": null,
+      "drive": null,
+      "gate": null,
+      "metrics": null,
+      "profileCatalog": null,
+      "governs": null
+    },
+    "phase": "Page memory · by choice",
+    "stateHeadline": "Ephemeral · page memory only",
+    "smallTargets": [],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    }
+  },
+  "phone-vault-local-device": {
+    "viewport": {
+      "w": 430,
+      "h": 740
+    },
+    "chromeBandPx": 103,
+    "chromeBandPct": 13.9,
+    "mainClientHeight": 632,
+    "mainScrollHeight": 1360,
+    "screens": 2.2,
+    "firstControl": {
+      "label": "Proof",
+      "y": 0
+    },
+    "boxes": {
+      "routeHeader": null,
+      "vaultBar": {
+        "top": 111,
+        "height": 44,
+        "width": 404
+      },
+      "vaultState": {
+        "top": 171,
+        "height": 374.5,
+        "width": 404
+      },
+      "chooser": {
+        "top": 561.5,
+        "height": 205,
+        "width": 404
+      },
+      "configuration": null,
+      "evidence": null,
+      "ceremony": null,
+      "localLab": null,
+      "drive": null,
+      "gate": null,
+      "metrics": null,
+      "profileCatalog": null,
+      "governs": null
+    },
+    "phase": "Disconnected",
+    "stateHeadline": "Local Device setup required",
+    "smallTargets": [
+      {
+        "label": "",
+        "h": 18
+      },
+      {
+        "label": "",
+        "h": 18
+      },
+      {
+        "label": "",
+        "h": 18
+      }
+    ],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    }
+  },
+  "phone-vault-ceremony": {
+    "viewport": {
+      "w": 430,
+      "h": 740
+    },
+    "chromeBandPx": -1144,
+    "chromeBandPct": -154.6,
+    "mainClientHeight": 632,
+    "mainScrollHeight": 1999,
+    "screens": 3.2,
+    "firstControl": {
+      "label": "Proof",
+      "y": 1247
+    },
+    "boxes": {
+      "routeHeader": null,
+      "vaultBar": {
+        "top": -1136,
+        "height": 44,
+        "width": 404
+      },
+      "vaultState": {
+        "top": -1076,
+        "height": 374.5,
+        "width": 404
+      },
+      "chooser": {
+        "top": -685.5,
+        "height": 205,
+        "width": 404
+      },
+      "configuration": null,
+      "evidence": null,
+      "ceremony": {
+        "top": 85.4,
+        "height": 564.8,
+        "width": 376
+      },
+      "localLab": null,
+      "drive": null,
+      "gate": null,
+      "metrics": null,
+      "profileCatalog": null,
+      "governs": null
+    },
+    "phase": "Disconnected",
+    "stateHeadline": "Local Device setup required",
+    "smallTargets": [
+      {
+        "label": "",
+        "h": 18
+      },
+      {
+        "label": "",
+        "h": 18
+      },
+      {
+        "label": "",
+        "h": 18
+      },
+      {
+        "label": "",
+        "h": 18
+      }
+    ],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    }
+  },
+  "phone-vault-drive-unavailable": {
+    "viewport": {
+      "w": 430,
+      "h": 740
+    },
+    "chromeBandPx": 135.2,
+    "chromeBandPct": 18.3,
+    "mainClientHeight": 632,
+    "mainScrollHeight": 1096,
+    "screens": 1.7,
+    "firstControl": {
+      "label": "Proof",
+      "y": 0
+    },
+    "boxes": {
+      "routeHeader": null,
+      "vaultBar": {
+        "top": 111,
+        "height": 76.2,
+        "width": 404
+      },
+      "vaultState": {
+        "top": 203.2,
+        "height": 275.5,
+        "width": 404
+      },
+      "chooser": {
+        "top": 494.7,
+        "height": 205,
+        "width": 404
+      },
+      "configuration": null,
+      "evidence": null,
+      "ceremony": null,
+      "localLab": null,
+      "drive": {
+        "top": 756.7,
+        "height": 371.1,
+        "width": 404
+      },
+      "gate": null,
+      "metrics": null,
+      "profileCatalog": null,
+      "governs": null
+    },
+    "phase": "Disconnected",
+    "stateHeadline": "No vault claim",
+    "smallTargets": [],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    }
+  },
+  "phone-vault-drive-panel": {
+    "viewport": {
+      "w": 430,
+      "h": 740
+    },
+    "chromeBandPx": -328.8,
+    "chromeBandPct": -44.4,
+    "mainClientHeight": 632,
+    "mainScrollHeight": 1096,
+    "screens": 1.7,
+    "firstControl": {
+      "label": "Proof",
+      "y": 464
+    },
+    "boxes": {
+      "routeHeader": null,
+      "vaultBar": {
+        "top": -353,
+        "height": 76.2,
+        "width": 404
+      },
+      "vaultState": {
+        "top": -260.8,
+        "height": 275.5,
+        "width": 404
+      },
+      "chooser": {
+        "top": 30.7,
+        "height": 205,
+        "width": 404
+      },
+      "configuration": null,
+      "evidence": null,
+      "ceremony": null,
+      "localLab": null,
+      "drive": {
+        "top": 292.7,
+        "height": 371.1,
+        "width": 404
+      },
+      "gate": null,
+      "metrics": null,
+      "profileCatalog": null,
+      "governs": null
+    },
+    "phase": "Disconnected",
+    "stateHeadline": "No vault claim",
+    "smallTargets": [],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    }
+  },
+  "phone-vault-lab-form": {
+    "viewport": {
+      "w": 430,
+      "h": 740
+    },
+    "chromeBandPx": -1704.8,
+    "chromeBandPct": -230.4,
+    "mainClientHeight": 632,
+    "mainScrollHeight": 3644,
+    "screens": 5.8,
+    "firstControl": {
+      "label": "Proof",
+      "y": 1840
+    },
+    "boxes": {
+      "routeHeader": null,
+      "vaultBar": {
+        "top": -1729,
+        "height": 76.2,
+        "width": 404
+      },
+      "vaultState": {
+        "top": -1636.8,
+        "height": 160,
+        "width": 404
+      },
+      "chooser": {
+        "top": -1175.5,
+        "height": 205,
+        "width": 404
+      },
+      "configuration": {
+        "top": -954.5,
+        "height": 330.6,
+        "width": 404
+      },
+      "evidence": {
+        "top": -607.8,
+        "height": 345,
+        "width": 404
+      },
+      "ceremony": null,
+      "localLab": {
+        "top": 52.2,
+        "height": 1783.4,
+        "width": 404
+      },
+      "drive": null,
+      "gate": null,
+      "metrics": null,
+      "profileCatalog": null,
+      "governs": null
+    },
+    "phase": "Contract verified · not adopted",
+    "stateHeadline": "Storage contract verified · runtime not adopted",
+    "smallTargets": [
+      {
+        "label": "",
+        "h": 21
+      },
+      {
+        "label": "",
+        "h": 21
+      }
+    ],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    }
+  },
+  "phone-vault-lab-configured": {
+    "viewport": {
+      "w": 430,
+      "h": 740
+    },
+    "chromeBandPx": 135.2,
+    "chromeBandPct": 18.3,
+    "mainClientHeight": 632,
+    "mainScrollHeight": 1216,
+    "screens": 1.9,
+    "firstControl": {
+      "label": "Proof",
+      "y": 0
+    },
+    "boxes": {
+      "routeHeader": null,
+      "vaultBar": {
+        "top": 111,
+        "height": 76.2,
+        "width": 404
+      },
+      "vaultState": {
+        "top": 203.2,
+        "height": 219.5,
+        "width": 404
+      },
+      "chooser": {
+        "top": 438.7,
+        "height": 205,
+        "width": 404
+      },
+      "configuration": {
+        "top": 659.7,
+        "height": 330.6,
+        "width": 404
+      },
+      "evidence": null,
+      "ceremony": null,
+      "localLab": null,
+      "drive": null,
+      "gate": null,
+      "metrics": null,
+      "profileCatalog": null,
+      "governs": null
+    },
+    "phase": "Configured",
+    "stateHeadline": "Configuration only",
+    "smallTargets": [],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    }
+  },
+  "phone-vault-lab-connected": {
+    "viewport": {
+      "w": 430,
+      "h": 740
+    },
+    "chromeBandPx": 135.2,
+    "chromeBandPct": 18.3,
+    "mainClientHeight": 632,
+    "mainScrollHeight": 1803,
+    "screens": 2.9,
+    "firstControl": {
+      "label": "Proof",
+      "y": 0
+    },
+    "boxes": {
+      "routeHeader": null,
+      "vaultBar": {
+        "top": 111,
+        "height": 76.2,
+        "width": 404
+      },
+      "vaultState": {
+        "top": 203.2,
+        "height": 160,
+        "width": 404
+      },
+      "chooser": {
+        "top": 664.5,
+        "height": 205,
+        "width": 404
+      },
+      "configuration": {
+        "top": 885.5,
+        "height": 330.6,
+        "width": 404
+      },
+      "evidence": {
+        "top": 1232.2,
+        "height": 345,
+        "width": 404
+      },
+      "ceremony": null,
+      "localLab": null,
+      "drive": null,
+      "gate": null,
+      "metrics": null,
+      "profileCatalog": null,
+      "governs": null
+    },
+    "phase": "Contract verified · not adopted",
+    "stateHeadline": "Storage contract verified · runtime not adopted",
+    "smallTargets": [],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    }
+  },
+  "phone-profiles": {
+    "viewport": {
+      "w": 430,
+      "h": 740
+    },
+    "chromeBandPx": 192.5,
+    "chromeBandPct": 26,
+    "mainClientHeight": 632,
+    "mainScrollHeight": 1136,
+    "screens": 1.8,
+    "firstControl": {
+      "label": "Profiles",
+      "y": 18
+    },
+    "boxes": {
+      "routeHeader": null,
+      "vaultBar": null,
+      "vaultState": null,
+      "chooser": null,
+      "configuration": null,
+      "evidence": null,
+      "ceremony": null,
+      "localLab": null,
+      "drive": null,
+      "gate": null,
+      "metrics": null,
+      "profileCatalog": {
+        "top": 272.5,
+        "height": 125.7,
+        "width": 404
+      },
+      "governs": null
+    },
+    "phase": null,
+    "stateHeadline": null,
+    "smallTargets": [
+      {
+        "label": "Profiles",
+        "h": 39
+      },
+      {
+        "label": "Capabilities",
+        "h": 39
+      },
+      {
+        "label": "Skills",
+        "h": 39
+      },
+      {
+        "label": "",
+        "h": 38
+      },
+      {
+        "label": "",
+        "h": 38
+      },
+      {
+        "label": "Profile workspace binding",
+        "h": 38
+      },
+      {
+        "label": "Profile memory scope",
+        "h": 38
+      },
+      {
+        "label": "Profile approval policy",
+        "h": 38
+      },
+      {
+        "label": "Profile minimum proof posture",
+        "h": 38
+      },
+      {
+        "label": "Replacement profile",
+        "h": 40
+      },
+      {
+        "label": "Remove profile",
+        "h": 40
+      },
+      {
+        "label": "Storage status · page memory",
+        "h": 42
+      }
+    ],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    }
+  },
+  "phone-account-disconnected": {
+    "viewport": {
+      "w": 430,
+      "h": 740
+    },
+    "chromeBandPx": 104,
+    "chromeBandPct": 14.1,
+    "mainClientHeight": 632,
+    "mainScrollHeight": 774,
+    "screens": 1.2,
+    "firstControl": {
+      "label": "Proof",
+      "y": 0
+    },
+    "boxes": {
+      "routeHeader": {
+        "top": 111,
+        "height": 45,
+        "width": 404
+      },
+      "vaultBar": null,
+      "vaultState": null,
+      "chooser": null,
+      "configuration": null,
+      "evidence": null,
+      "ceremony": null,
+      "localLab": null,
+      "drive": null,
+      "gate": {
+        "top": 172,
+        "height": 622.3,
+        "width": 404
+      },
+      "metrics": {
+        "top": 441.3,
+        "height": 298,
+        "width": 354
+      },
+      "profileCatalog": null,
+      "governs": null
+    },
+    "phase": null,
+    "stateHeadline": null,
+    "smallTargets": [],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    }
+  },
+  "phone-account-connected": {
+    "viewport": {
+      "w": 430,
+      "h": 740
+    },
+    "chromeBandPx": 104,
+    "chromeBandPct": 14.1,
+    "mainClientHeight": 632,
+    "mainScrollHeight": 774,
+    "screens": 1.2,
+    "firstControl": {
+      "label": "Proof",
+      "y": 0
+    },
+    "boxes": {
+      "routeHeader": {
+        "top": 111,
+        "height": 45,
+        "width": 404
+      },
+      "vaultBar": null,
+      "vaultState": null,
+      "chooser": null,
+      "configuration": null,
+      "evidence": null,
+      "ceremony": null,
+      "localLab": null,
+      "drive": null,
+      "gate": {
+        "top": 172,
+        "height": 622.3,
+        "width": 404
+      },
+      "metrics": {
+        "top": 441.3,
+        "height": 298,
+        "width": 354
+      },
+      "profileCatalog": null,
+      "governs": null
+    },
+    "phase": null,
+    "stateHeadline": null,
+    "smallTargets": [],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    }
+  }
+}

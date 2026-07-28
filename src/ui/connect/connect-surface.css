@@ -457,15 +457,6 @@
   justify-items: start;
 }
 
-.connect-method__key > div {
-  display: grid;
-  gap: 3px;
-}
-
-.connect-method__key strong {
-  font-size: var(--fs-meta);
-}
-
 .connect-method__key p {
   max-width: 64ch;
   margin: 0;

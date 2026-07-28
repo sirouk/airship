@@ -189,6 +189,25 @@ test("route form menus use the styled accessible listbox contract", async ({ pag
     await primary.getByRole("button", { name: "Expand recent conversations" }).click();
     await primary.getByRole("button", { name: "All conversations", exact: true }).click();
   }
+  // AMENDED: below 640px the four session filters are a counted disclosure
+  // rather than a row that scrolled three of them off the right edge of a
+  // phone with no scrollbar, no fade and nothing saying they existed
+  // (`sessions-view.tsx:298`). Reaching the menu through that trigger is a
+  // stronger assertion than the old direct click: the filters must still be
+  // reachable on a phone AND the trigger must say how many are set, so a
+  // collapsed filter can never be a silent one. Above 640px the trigger is
+  // hidden and the row is the resting layout, unchanged.
+  // The toolbar gate is load-bearing: `isVisible()` does not auto-wait, so
+  // probing the trigger before the lazy route mounts always answers "no" and
+  // silently skips the disclosure this amendment exists to drive.
+  const sessionToolbar = page.getByRole("search", { name: "Filter sessions" });
+  await expect(sessionToolbar).toBeVisible();
+  const filterDisclosure = sessionToolbar.getByRole("button", { name: /^Filters(?: · \d+)?$/u });
+  if (await filterDisclosure.isVisible()) {
+    await expect(filterDisclosure).toHaveAttribute("aria-expanded", "false");
+    await filterDisclosure.click();
+    await expect(filterDisclosure).toHaveAttribute("aria-expanded", "true");
+  }
   const provider = page.getByRole("button", { name: "Filter by provider" });
   await provider.click();
   const providerList = page.getByRole("listbox", { name: "Filter by provider" });
@@ -216,9 +235,25 @@ test("route form menus use the styled accessible listbox contract", async ({ pag
     await primary.getByRole("button", { name: "More", exact: true }).click();
     await page.getByRole("dialog", { name: "More" }).getByRole("button").filter({ hasText: "Profiles" }).first().click();
   } else {
-    await primary.getByRole("button", { name: "Profiles", exact: true }).click();
+    // AMENDED: `Profiles` is no longer a resting rail row; it is the pinned
+    // profile row's `Manage profiles`, the same reach this file's gutter test
+    // already uses (line 381) and the route audit asserts. Driving the real
+    // affordance is stronger than the retired one — a missing profile switcher
+    // now fails here rather than passing against a row that no longer exists.
+    await page.locator(".sidebar .profile-switcher").getByRole("button", { name: "Manage profiles" }).click();
   }
   await page.getByRole("navigation", { name: "Agent configuration" }).getByRole("button", { name: "Skills", exact: true }).click();
+  // AMENDED: reaching Profiles through `Manage profiles` scopes the hub to the
+  // active profile (`openProfileManager(profileId)`), and `Preview profile
+  // resolution` renders only in the `All profiles` scope. Widening the scope
+  // through the `Skill scope` menu restores the original control *and* adds
+  // one: the test now drives two styled listboxes on this surface instead of
+  // one, and the second is reached by an option chosen in the first, so a menu
+  // that renders but does not commit its selection fails here.
+  const scope = page.getByRole("button", { name: "Skill scope" });
+  await scope.click();
+  await page.getByRole("listbox", { name: "Skill scope" }).getByRole("option", { name: "All profiles", exact: true }).click();
+  await expect(scope).toContainText("All profiles");
   const profile = page.getByRole("button", { name: "Preview profile resolution" });
   await profile.click();
   const profileList = page.getByRole("listbox", { name: "Preview profile resolution" });
@@ -230,9 +265,30 @@ test("route form menus use the styled accessible listbox contract", async ({ pag
     await primary.getByRole("button", { name: "More", exact: true }).click();
     await page.getByRole("dialog", { name: "More" }).getByRole("button").filter({ hasText: "Editor" }).first().click();
   } else {
+    // AMENDED: `Editor` now sits behind the rail's Workspace expander. The
+    // expander is asserted rather than optional here, so a Workspace group that
+    // stopped disclosing its destinations fails instead of silently skipping.
+    const expander = primary.getByRole("button", { name: "Expand Workspace" });
+    if (await expander.count()) await expander.click();
     await primary.getByRole("button", { name: "Editor", exact: true }).click();
   }
   await page.getByRole("tab", { name: "Sources", exact: true }).click();
+  // AMENDED: the branch/worktree/checkout controls rest inside a `<details>`
+  // that opens itself only once a repository has more than one worktree
+  // (`sources-view.tsx:533`), so on a single-worktree workspace the Repository
+  // menu is one disclosure deep. Asserting the summary still names what it
+  // holds before opening it is stronger than the old bare click: it now fails
+  // if the controls become reachable only through an unlabelled affordance.
+  const repositoryControls = page.locator("details.git-repository-controls");
+  await expect(repositoryControls.locator("summary")).toContainText(/worktree/u);
+  await expect(repositoryControls.locator("summary")).toContainText(/branch, worktree and checkout controls/u);
+  // The live `open` property, not the attribute: `getAttribute("open")` answers
+  // "" on an open `<details>`, which is falsy, so an attribute test would click
+  // an already-open disclosure shut.
+  if (!(await repositoryControls.evaluate((element) => (element as HTMLDetailsElement).open))) {
+    await repositoryControls.locator("summary").click();
+  }
+  await expect(repositoryControls).toHaveJSProperty("open", true);
   const repository = page.getByRole("button", { name: "Repository" });
   await repository.click();
   await expect(page.getByRole("listbox", { name: "Repository" })).toBeVisible();
@@ -388,6 +444,15 @@ test("route gutter and density preferences apply consistently to the whole layou
     // against the same frame. The gutter assertions below are unchanged.
     const heading = page.locator("main.main h1");
     await expect(heading).toBeVisible();
+    // AMENDED: this measurement was a false green. Every lazy route ships a
+    // loading placeholder that renders the route's own `<h1>` inside a
+    // `.page-heading` — same text, different primitive — so `toBeVisible()` was
+    // satisfied by the skeleton and the gutter recorded was the skeleton's.
+    // `#sessions` measured 27px that way while its loaded `<RouteHeader>` sat
+    // at 58px, and the assertion below could not fail. Waiting for the skeleton
+    // to leave is what makes this a test: it now measures the primitive the
+    // user actually reads.
+    await expect(page.locator("main.main .route-loading")).toHaveCount(0);
     const offset = await page.evaluate(() => {
       const main = document.querySelector<HTMLElement>("main.main")?.getBoundingClientRect();
       const title = document.querySelector<HTMLElement>("main.main h1")?.getBoundingClientRect();

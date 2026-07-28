@@ -135,7 +135,7 @@ import type {
 import { chatHash, chatSessionIdFromHash } from "./chat-route";
 import { MenuSelect } from "./menu-select";
 import { MobileNavigation } from "./mobile-navigation";
-import { ModelControl } from "./model-control";
+import { activeConnectionProofLabel, ModelControl } from "./model-control";
 import { CANONICAL_DESTINATIONS, navigationHashForView, navigationViewFromHash, type NavigationView } from "./navigation-model";
 import {
   CommandPalette,
@@ -232,7 +232,6 @@ import { ProfileThemeSwatch } from "./profile-theme-swatch";
 import { PostureChip } from "./posture-chip";
 import { durabilityLabel } from "./durability-indicator";
 import { mapUnknownRequestFailure } from "./request-state";
-import { claimExpiry, claimLanguage, postureLabel, proofLevelLabel, proofStatusLabel, relativeEvidenceAge } from "./trust-language";
 import { RouteSkeleton } from "./route-skeleton";
 import type { LocalProviderProbeResult } from "./connect/connect-surface";
 import {
@@ -4061,9 +4060,7 @@ export function App() {
       setCredentialRevision((value) => value + 1);
       setInvocationTelemetry(undefined);
       setConnection(connectionMetadata);
-      setRuntimeStatus(connectionMetadata.posture === "encrypted-attested"
-        ? "Encrypted session ready · endpoint proof required on every turn"
-        : "Encrypted session ready · endpoint evidence recorded after completed turns");
+      setRuntimeStatus(encryptedSessionReadyStatus(connectionMetadata.posture));
       navigate("chat");
     });
   }
@@ -4219,9 +4216,7 @@ export function App() {
       setAttestationFailure(undefined);
       setInvocationTelemetry(undefined);
       setConnection(nextConnection);
-      setRuntimeStatus(connection.posture === "encrypted-attested"
-        ? "Encrypted session ready · endpoint proof required on next turn"
-        : "Encrypted session ready · endpoint evidence recorded after the next completed turn");
+      setRuntimeStatus(encryptedSessionReadyStatus(connection.posture));
     });
   }
 
@@ -4762,16 +4757,23 @@ export function App() {
    * inside the chip because every string is quoted verbatim from the vocabulary
    * that owns it, and none of those vocabularies belong to the chip.
    */
+  /*
+   * One string, read by the session chip, its abbreviation and the model card.
+   *
+   * These are the three surfaces the auditor found describing one connection
+   * in two languages, and they were three separate expressions of the same
+   * ternary. Computed once, they cannot drift; `activeConnectionProofLabel`
+   * (in `model-control.tsx`, beside its test) is the only definition of the
+   * words themselves.
+   */
+  const e2eeBoundaryLabel = activeChutesConnection ? activeConnectionProofLabel(connection) : e2eeTrustAxis.label;
   const sessionStatusFacts: readonly SessionStatusFact[] = Object.freeze([
     Object.freeze({
       id: "posture" as const,
       state: e2eeTrustAxis.state,
-      label: activeChutesConnection ? activeConnectionBoundaryLabel(connection) : e2eeTrustAxis.label,
+      label: e2eeBoundaryLabel,
       detail: e2eeTrustAxis.detail,
-      short: sessionStatusShort(
-        activeChutesConnection ? activeConnectionBoundaryLabel(connection) : e2eeTrustAxis.label,
-        SEAL_LABELS[e2eeTrustAxis.state],
-      ),
+      short: sessionStatusShort(e2eeBoundaryLabel, SEAL_LABELS[e2eeTrustAxis.state]),
       action: Object.freeze({ label: "Models", onSelect: () => navigate("access") }),
     }),
     Object.freeze({
@@ -4941,7 +4943,7 @@ export function App() {
                     active={activeChutesConnection ? {
                       providerLabel: "Chutes",
                       modelId: connection.model,
-                      boundaryLabel: activeConnectionBoundaryLabel(connection),
+                      boundaryLabel: e2eeBoundaryLabel,
                     } : activeExternalConnection ? {
                       providerLabel: activeExternalConnection.pin.provider.label,
                       modelId: activeExternalConnection.pin.model.id,
@@ -5789,12 +5791,33 @@ function inferenceBoundaryLabel(
   }
 }
 
-function activeConnectionBoundaryLabel(connection: ActiveChutesConnection): string {
-  if (connection.posture !== "encrypted-attested") return "E2EE · evidence recorded";
-  return connection.invokeAuthorization === "verified"
-    ? "E2EE · last turn proved"
-    : "E2EE · proof required";
+/**
+ * The one sentence a ready encrypted session states about its proof gate.
+ *
+ * Connecting said "…required on every turn" / "…recorded after completed
+ * turns"; switching model said "…required on next turn" / "…recorded after the
+ * next completed turn". Four spellings of two facts, and the pairs are not
+ * different claims: a gate that fires on every turn fires on the next one.
+ * Stated once, in the form that covers both moments.
+ */
+function encryptedSessionReadyStatus(posture: SecurityPosture): string {
+  return posture === "encrypted-attested"
+    ? "Encrypted session ready · endpoint proof required on every turn"
+    : "Encrypted session ready · endpoint evidence recorded after completed turns";
 }
+
+/*
+ * The boundary label is `activeConnectionProofLabel`, and only that.
+ *
+ * This file carried a second copy which still said "E2EE · evidence recorded"
+ * for an unattested connection — a phrase that reads as a verdict about the
+ * turn ("evidence was recorded") when the fact it states is about the *policy*:
+ * this connection has no proof gate. The shared function says "E2EE · no proof
+ * gate", so the topbar axis, the session status chip and the model card now
+ * quote one string. `model-control` is already a static import of this module,
+ * so the shared reader costs no startup bytes and the duplicate is deleted
+ * rather than re-synchronised.
+ */
 
 function combinedInferenceAvailability(
   providerSnapshot: InferenceAvailabilitySnapshot,
@@ -6805,7 +6828,12 @@ function ProfileManagerView({
             {profiles.map((profile) => (
               <button key={profile.profileId} class={profile.profileId === selected.profileId ? "profile-card active" : "profile-card"} type="button" onClick={() => { if (!dirty || window.confirm(PROFILE_DRAFT_DISCARD_PROMPT)) { setStatus(undefined); setSelectedId(profile.profileId); } }}>
                 <span class="profile-monogram">{profileMonogram(profile.name)}</span>
-                <span><strong>{profile.name}</strong><small>{profile.description}</small><PostureChip posture={profile.minimumPosture} prefix="Minimum posture" /></span>
+                <span><strong>{profile.name}</strong><small>{profile.description}</small>{/* "Minimum proof", verbatim from PROFILE_POSTURE_FIELD_LABEL — the same
+                    field is named that by the select 400px below and by the revision
+                    strip beside it. Spelled rather than imported because
+                    `profiles-governance` is not otherwise reachable from the startup
+                    chunk and one label is not worth the module. */}
+                <PostureChip posture={profile.minimumPosture} prefix="Minimum proof" /></span>
                 {profile.profileId === activeProfileId ? <em>active</em> : null}
               </button>
             ))}
@@ -7018,9 +7046,9 @@ function effectiveSkillIds(profile: ProfileRevision, catalog: ProfileCatalog): s
 }
 
 function receiptSummary(receipt: ConversationReceipt): string {
-  if (receipt.posture === "local") return "Client request and response digests were recorded locally. No external signer or hardware identity is established.";
+  if (receipt.posture === "local") return "Client request and response digests were recorded locally. No external signer or hardware identity was verified.";
   if (receipt.posture === "encrypted-unattested") return "Encrypted request and response bindings were recorded, but the endpoint's hardware identity was not independently verified.";
-  if (receipt.posture === "encrypted-attested") return "The receipt includes encrypted conversation bindings and endpoint evidence; expand each claim to inspect exactly what its verifier established.";
+  if (receipt.posture === "encrypted-attested") return "The receipt includes encrypted conversation bindings and endpoint evidence; expand each claim to inspect exactly what its verifier checked.";
   return "A remote conversation receipt was recorded without an encrypted transport claim.";
 }
 

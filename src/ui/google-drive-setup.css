@@ -42,9 +42,12 @@
   font: var(--fs-caption)/1.3 var(--font-mono);
   white-space: nowrap;
 }
+/* A build without an OAuth client is a deployment fact, not a fault the reader
+   caused or can fix here, so it reads muted rather than in caution amber. The
+   heading beside it already states the condition in full. */
 .google-drive-setup header > span[data-state="unavailable"] {
-  border-color: color-mix(in srgb, var(--v-caution) 45%, var(--line));
-  color: var(--v-caution);
+  border-color: var(--line-strong);
+  color: var(--ink-muted);
 }
 .google-drive-setup label {
   display: grid;

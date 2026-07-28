@@ -24,7 +24,11 @@ describe("active model proof label", () => {
     };
     expect(activeConnectionProofLabel(connection)).toBe("E2EE · proof required");
     expect(activeConnectionProofLabel({ ...connection, invokeAuthorization: "verified", lastInvokeAt: "2026-07-20T00:01:00.000Z" })).toBe("E2EE · last turn proved");
-    expect(activeConnectionProofLabel(connection, true)).toBe("E2EE · Switching…");
+    // The transient belongs to the control, not to the shared label: a
+    // `busy` branch here would have shipped a string with no production caller
+    // into the entry chunk once `app.tsx` started reading this function.
+    expect(source).not.toContain("E2EE · Switching");
+    expect(source).toContain('<span class="runtime-posture" role="status">Switching…</span>');
   });
 
   it("does not imply proof when the compatibility posture has no required gate", () => {

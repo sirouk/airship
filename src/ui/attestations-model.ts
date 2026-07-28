@@ -90,7 +90,7 @@ export type NormalizedAttestationRecord = Readonly<{
 
 export type NormalizeAttestationInput = Readonly<{
   endpointRecords?: readonly ChutesEndpointEvidenceRecord[];
-  /** Structurally valid but unauthenticated receipts; non-unavailable claim states render as assertions. */
+  /** Structurally valid but unauthenticated receipts; a declared verification renders as an assertion, a declared failure keeps its full weight. */
   receipts?: readonly ConversationReceipt[];
 }>;
 
@@ -296,7 +296,10 @@ function receiptRecord(receipt: ConversationReceipt): NormalizedAttestationRecor
     payment: receiptDimension("payment", receipt.claims.payment),
   } satisfies Record<AttestationDimensionKey, AttestationDimension>;
   const warnings = [
-    "Receipt integrity and embedded claim authority were not authenticated; non-unavailable claim states are shown as assertions only.",
+    // Byte-identical to CLAIM_CEILING_SENTENCES["receipt-integrity"] in
+    // `claim-stack-facts.ts`. Not imported: that module travels with the
+    // disclosure surfaces, and this one is reached by the evidence pack.
+    "Receipt integrity and embedded claim authority were not authenticated, so a claim this receipt declares verified is shown as an assertion. A declared failure keeps its full weight.",
     ...(receipt.evidence && !receipt.bindings.evidenceDigest
       ? ["Evidence is present without a receipt-level evidence digest."]
       : []),
@@ -401,7 +404,7 @@ function receiptDimension(
     title: dimensionTitles[key],
     state,
     qualifier: `asserted-${declaredState}`,
-    summary: assertedSummary(claim.summary),
+    summary: assertedSummary(claim.summary, declaredState),
     authority: authority.label,
     authorityKind: authority.kind,
     checkedAt: validTimestamp(claim.checkedAt),
@@ -473,7 +476,7 @@ function normalizeVerification(record: VerificationRecord, index: number): Attes
     version: publicText(record.version, 64),
     checkedAt: validTimestamp(record.checkedAt),
     policyDigest: safeDigest(record.policyDigest),
-    summary: assertedSummary(record.detail ?? "No verifier detail was supplied."),
+    summary: assertedSummary(record.detail ?? "No verifier detail was supplied.", declaredState),
     facts: compactFacts([digestFact("verification-policy", "Verifier policy", record.policyDigest)]),
   });
 }
@@ -596,7 +599,7 @@ function proofStatus(value: unknown): ProofStatus {
 
 function displayProviderState(state: AttestationClaimState): string {
   if (state === "matched") return "Locally matched; not independently verified";
-  if (state === "present") return "Present; authenticity not established";
+  if (state === "present") return "Present; authenticity not verified";
   if (state === "unverified") return "Not independently verified";
   return state;
 }
@@ -631,8 +634,23 @@ function statusWithAuthority(
   return state === "verified" && authority.kind === "none" ? "partial" : state;
 }
 
+/**
+ * Ceiling 1: a receipt Airship never authenticated cannot promote itself.
+ *
+ * It runs in one direction only. A declared `verified` becomes `partial`
+ * because nothing checked the declaration; a declared `failed` or `expired`
+ * keeps its full weight, because fail-closed means an unauthenticated *bad*
+ * report is still a bad report and softening it is the one edit that turns a
+ * disclosure into a cover.
+ *
+ * This used to map every non-`unavailable` state to `partial`, so one turn read
+ * "Failed" on the Receipt & journal tab (`composeClaimStack`, which never
+ * copied that half) and "Asserted" on the Attestation evidence tab, one click
+ * apart. The qualifier still carries the declaration verbatim as
+ * `asserted-${declaredState}`, so the ceiling is read, never inferred.
+ */
 function assertedState(state: ProofStatus): ProofStatus {
-  return state === "unavailable" ? "unavailable" : "partial";
+  return state === "verified" ? "partial" : state;
 }
 
 function authorityBoundSummary(summary: string, downgraded: boolean): string {
@@ -642,9 +660,21 @@ function authorityBoundSummary(summary: string, downgraded: boolean): string {
     : safe;
 }
 
-function assertedSummary(summary: string): string {
-  const safe = publicText(summary, MAX_TEXT - 112);
-  return `${safe}${safe ? " " : ""}Receipt authenticity and claim-authority policy were not established, so this result is assertion-only.`;
+/**
+ * The receipt-integrity caveat, in the direction the ceiling actually runs.
+ *
+ * A declared negative is no longer described as "assertion-only": that phrasing
+ * beneath a "Failed" verdict reads as a softening of the very failure the
+ * receipt is reporting. Both branches say the same unauthenticated fact; only
+ * the consequence differs, because the consequence genuinely differs.
+ */
+function assertedSummary(summary: string, declared: ProofStatus): string {
+  const negative = declared === "failed" || declared === "expired";
+  const safe = publicText(summary, MAX_TEXT - (negative ? 124 : 112));
+  const caveat = negative
+    ? "Airship did not authenticate this receipt; this negative result is the receipt's own report and keeps full weight."
+    : "Receipt authenticity and claim-authority policy were not checked, so this result is assertion-only.";
+  return `${safe}${safe ? " " : ""}${caveat}`;
 }
 
 function expiryFromFacts(facts: readonly AttestationFact[]): string | undefined {

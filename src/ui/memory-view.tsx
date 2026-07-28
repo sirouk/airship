@@ -154,6 +154,7 @@ export function MemoryView({
   }, [alignIndex, initialTab]);
   useEffect(() => setRelationshipLimit(18), [selectedNodeId]);
   const normalizedQuery = query.trim();
+  const starters = useMemo(() => memoryStarters(files, activeProfile.name, graph), [activeProfile.name, files, graph]);
   const graphResults = normalizedQuery ? graph.search(normalizedQuery, { limit: 12 }) : [];
   const selectedNode = selectedNodeId ? graph.getNode(selectedNodeId) : undefined;
   const selectedEdges = selectedNodeId ? graph.getIncidentEdges(selectedNodeId) : [];
@@ -253,6 +254,8 @@ export function MemoryView({
         graphMatchCount={graphResults.length}
         onShowGraphMatches={revealGraphMatches}
         onOpenSource={onOpenSource}
+        starters={starters}
+        onStart={setQuery}
       />
 
       <details
@@ -319,7 +322,13 @@ export function MemoryView({
                 : "Filters never alter memory."}</p>
             </div>
             <aside class="memory-detail panel" aria-labelledby="memory-inspector-title">
-              <div class="panel-heading"><span id="memory-inspector-title">Relationship inspector</span><span>{selectedNode ? selectedNode.kind : "select a node"}</span></div>
+              {/*
+                * The state slot of a heading holds a state.
+                * "select a node" was an instruction filed where the reader
+                * looks for what is currently true, and it was still there
+                * while the panel below already offered five nodes to press.
+                */}
+              <div class="panel-heading"><span id="memory-inspector-title">Relationship inspector</span><span>{selectedNode ? selectedNode.kind : "nothing selected"}</span></div>
               {selectedNode ? (
                 <div class="memory-node-detail">
                   <span class="eyebrow">{selectedNode.kind}</span>
@@ -435,11 +444,13 @@ type MemoryLaneView = Readonly<{
   hits: ComponentChildren;
 }>;
 
-function FederatedMemorySearch({ state, graphMatchCount, onShowGraphMatches, onOpenSource }: Readonly<{
+function FederatedMemorySearch({ state, graphMatchCount, onShowGraphMatches, onOpenSource, starters, onStart }: Readonly<{
   state: FederatedMemorySearchState;
   graphMatchCount: number;
   onShowGraphMatches: () => void;
   onOpenSource?: MemoryViewProps["onOpenSource"];
+  starters: readonly MemoryStarter[];
+  onStart: (query: string) => void;
 }>) {
   const result = state.result;
   const sessionId = result?.authority.sessionId;
@@ -458,12 +469,82 @@ function FederatedMemorySearch({ state, graphMatchCount, onShowGraphMatches, onO
       */}
     <h2 id="memory-search-title" class="sr-only">Federated client recall · Results across private scopes</h2>
     <p class="memory-search-status" role={state.status && !state.searching ? "alert" : "status"} aria-live="polite">{state.status ?? (state.query ? "Search complete · results pinned to reported revisions." : "Ready for a private on-device query.")}</p>
+    {/*
+      * The unsearched state used to be three empty boxes and one sentence
+      * reporting that nothing had happened. The three scope headers stay —
+      * they are the route's structural claim about where it looks — and the
+      * dead end below them becomes the one thing there is to do, built from
+      * terms this page can already prove it holds.
+      */}
+    {!state.query && starters.length ? <MemoryStarters starters={starters} onStart={onStart} /> : null}
     {settled && total === 0
       ? <MemoryNoMatchPanel query={state.query} lanes={lanes} graphMatchCount={graphMatchCount} onShowGraphMatches={onShowGraphMatches} />
       : <div class="memory-result-lanes">
         {lanes.map((lane) => <MemorySearchLane key={lane.id} lane={lane} query={state.query} searching={state.searching} />)}
       </div>}
   </section>;
+}
+
+export type MemoryStarter = Readonly<{
+  /** The exact string the field is filled with. */
+  term: string;
+  /** Where this page got the term. Never "popular" or "recent" — nothing tracks either. */
+  origin: string;
+}>;
+
+/**
+ * Search terms this page can prove it holds.
+ *
+ * A suggestion is a claim about the corpus, so every one of these is read out
+ * of live state at render time: an indexed workspace source, the pinned
+ * profile, and the most connected idea in the derived graph. Nothing here is a
+ * search history — none is kept — and each button says which of the three it
+ * came from, so pressing it is a statement about the data, not a guess.
+ */
+export function memoryStarters(
+  files: readonly WorkspaceEntry[],
+  profileName: string,
+  graph: MemoryRelationshipGraph,
+  /** As many as fit one row without the strip becoming a menu. */
+  limit = 4,
+): readonly MemoryStarter[] {
+  const seen = new Set<string>();
+  const starters: MemoryStarter[] = [];
+  const push = (term: string, origin: string) => {
+    const trimmed = term.trim();
+    const key = trimmed.toLowerCase();
+    if (!trimmed || trimmed.length > 48 || seen.has(key) || starters.length >= limit) return;
+    seen.add(key);
+    starters.push(Object.freeze({ term: trimmed, origin }));
+  };
+  for (const file of files) {
+    const base = file.path.slice(file.path.lastIndexOf("/") + 1);
+    const dot = base.lastIndexOf(".");
+    push(dot > 0 ? base.slice(0, dot) : base, "workspace source");
+  }
+  push(profileName, "active profile");
+  for (const node of mostConnectedNodes(graph, new Set(), limit)) {
+    push(node.label, `most connected ${node.kind}`);
+  }
+  return Object.freeze(starters);
+}
+
+function MemoryStarters({ starters, onStart }: Readonly<{ starters: readonly MemoryStarter[]; onStart: (query: string) => void }>) {
+  return (
+    <div class="memory-starters">
+      <p>Nothing searched yet. Each term below is read from this page's own index, profile and graph; no search history is kept.</p>
+      <div>
+        {starters.map((starter) => (
+          <button
+            key={starter.term}
+            type="button"
+            aria-label={`Search memory for ${starter.term}, from this page's ${starter.origin}`}
+            onClick={() => onStart(starter.term)}
+          ><strong>{starter.term}</strong><small>{starter.origin}</small></button>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 /**

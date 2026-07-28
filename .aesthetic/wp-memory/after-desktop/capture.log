@@ -1,0 +1,16 @@
+[desktop] memory rest {"viewport":{"w":1440,"h":900},"mainTop":58,"firstContentTop":257,"scrollWidth":1440,"overflowX":false}
+[desktop] memory hits {"viewport":{"w":1440,"h":900},"mainTop":58,"firstContentTop":null,"scrollWidth":1440,"overflowX":false}
+[desktop] sessions {"viewport":{"w":1440,"h":900},"mainTop":58,"firstContentTop":282,"scrollWidth":1440,"overflowX":false}
+[desktop] sessions rows 14 cardH {"x":269,"y":282,"width":265,"height":56}
+[desktop] zero-state text "No conversation matches “plan.md”\n\nSearched every conversation in this journal by title, model, profile and fork source.\n\n14 conversations at the last unfiltered read.\n\nTranscript text is not indexed in this build.\n\nClear filters"
+[desktop] detail still rendered: 1 forkEnabled=false
+[desktop] out-of-results strip: 1
+[desktop] toolbar overflow {"scrollWidth":1154,"clientWidth":1154,"lastRight":1403,"barRight":1414,"height":66}
+[phone] memory rest {"viewport":{"w":430,"h":740},"mainTop":52,"firstContentTop":229,"scrollWidth":430,"overflowX":false}
+[phone] memory hits {"viewport":{"w":430,"h":740},"mainTop":52,"firstContentTop":null,"scrollWidth":430,"overflowX":false}
+[phone] sessions {"viewport":{"w":430,"h":740},"mainTop":52,"firstContentTop":312,"scrollWidth":430,"overflowX":false}
+[phone] sessions rows 14 cardH {"x":24,"y":312,"width":338,"height":56}
+[phone] zero-state text "No conversation matches “plan.md”\n\nSearched every conversation in this journal by title, model, profile and fork source.\n\n14 conversations at the last unfiltered read.\n\nTranscript text is not indexed in this build.\n\nClear filters"
+[phone] detail still rendered: 1 forkEnabled=false
+[phone] out-of-results strip: 1
+[phone] toolbar overflow {"scrollWidth":402,"clientWidth":402,"lastRight":406,"barRight":417,"height":68}

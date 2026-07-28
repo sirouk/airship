@@ -231,9 +231,160 @@ export function sessionLineage(
 export const SESSION_SEARCH_PLACEHOLDER = "Search titles, models and profiles";
 export const SESSION_SEARCH_SCOPE_NOTE = "Transcript text is not indexed in this build.";
 
-export function sessionEmptyStateBody(input: Readonly<{ filtered: boolean; searched: boolean }>): readonly string[] {
-  if (!input.filtered) return Object.freeze(["A conversation appears here after the journal creates it."]);
-  const lines = ["Clear or widen the current filters."];
-  if (input.searched) lines.push(SESSION_SEARCH_SCOPE_NOTE);
-  return Object.freeze(lines);
+/**
+ * Exactly the fields `querySessionRecords` compares a search term against.
+ *
+ * `src/sessions/domain.ts` matches title, session id, provider id, model,
+ * profile id and source session id. Naming five of them and eliding the id —
+ * which nobody types — is the shortest true sentence; naming fewer would make
+ * a zero result look like a broken index rather than a scope.
+ */
+export const SESSION_SEARCH_SCOPE = "title, model, profile and fork source";
+
+export type SessionEmptyState = Readonly<{
+  heading: string;
+  lines: readonly string[];
+  /** True when there is a filter to clear — an empty state with a verb in it. */
+  offersClear: boolean;
+}>;
+
+/**
+ * What an empty conversation list says, and what it offers.
+ *
+ * "Clear or widen the current filters." is accurate and is a dead end: it
+ * describes the user's own action back at them without naming what was
+ * searched, how much was searched, or providing the control that would undo
+ * it. Every line here is a fact the route already holds; the difference is that
+ * the state now ends in something to press.
+ */
+export function sessionEmptyState(input: Readonly<{
+  filtered: boolean;
+  query: string;
+  /** Conversations counted by the most recent unfiltered read, when there was one. */
+  loadedTotal?: number;
+}>): SessionEmptyState {
+  if (!input.filtered) {
+    return Object.freeze({
+      heading: "No conversations yet",
+      lines: Object.freeze(["A conversation appears here after the journal creates it."]),
+      offersClear: false,
+    });
+  }
+  const query = input.query.trim();
+  const lines: string[] = [`Searched every conversation in this journal by ${SESSION_SEARCH_SCOPE}.`];
+  // Stated as of the read that produced it. The library re-reads the journal on
+  // every filter change, so a bare "25 conversations searched" would be a claim
+  // about a number this render never saw.
+  if (input.loadedTotal !== undefined) {
+    lines.push(`${input.loadedTotal} conversation${input.loadedTotal === 1 ? "" : "s"} at the last unfiltered read.`);
+  }
+  if (query) lines.push(SESSION_SEARCH_SCOPE_NOTE);
+  return Object.freeze({
+    heading: query ? `No conversation matches “${query}”` : "No conversation matches these filters",
+    lines: Object.freeze(lines),
+    offersClear: true,
+  });
 }
+
+export type TitleSegment = Readonly<{ text: string; matched: boolean }>;
+
+/**
+ * The title split around every occurrence of the search term.
+ *
+ * At forty conversations the title is the only discriminating pixel on a row,
+ * and a filtered list that does not say *where* it matched makes the reader
+ * re-run the search with their eyes. Marking is presentation only: the string
+ * is reassembled character for character, so nothing is dropped or reordered.
+ */
+export function titleMatchSegments(title: string, query: string): readonly TitleSegment[] {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return Object.freeze([Object.freeze({ text: title, matched: false })]);
+  const haystack = title.toLowerCase();
+  const segments: TitleSegment[] = [];
+  let cursor = 0;
+  for (;;) {
+    const index = haystack.indexOf(needle, cursor);
+    if (index < 0) break;
+    if (index > cursor) segments.push(Object.freeze({ text: title.slice(cursor, index), matched: false }));
+    segments.push(Object.freeze({ text: title.slice(index, index + needle.length), matched: true }));
+    cursor = index + needle.length;
+  }
+  if (cursor < title.length) segments.push(Object.freeze({ text: title.slice(cursor), matched: false }));
+  return Object.freeze(segments.length ? segments : [Object.freeze({ text: title, matched: false })]);
+}
+
+export type ForkRequirement = Readonly<{
+  /** True when the runtime will not continue this conversation as it stands. */
+  required: boolean;
+  /** The verdict word the runtime itself produced. */
+  label: string;
+  /** The reasons that carry the requirement, worst first, verbatim. */
+  reasons: readonly Readonly<{ code: string; severity: string; message: string }>[];
+}>;
+
+/**
+ * Why this conversation needs a fork, said where the fork is decided.
+ *
+ * The route advertises that "a fork appears only when its meaning genuinely
+ * changes" and then offers `Fork to continue` with no statement of what
+ * changed — the reasons exist, and they were only readable inside a collapsed
+ * integrity row several hundred pixels away. This re-presents them at the
+ * moment of the decision; it does not move them out of the integrity row.
+ */
+export function forkRequirement(
+  compatibility: Readonly<{
+    action: string;
+    label: string;
+    reasons: readonly Readonly<{ code: string; severity: string; message: string }>[];
+  }> | undefined,
+  /** The assessment that produced `HISTORY_INCOMPLETE`, when there is one. */
+  history?: Readonly<{ checkedEvents: number; totalEvents: number; issues: readonly Readonly<{ code: string }>[] }>,
+): ForkRequirement {
+  const rank = (item: Readonly<{ severity: string }>): number => INTEGRITY_SEVERITY[item.severity === "error" ? "failed" : item.severity === "warning" ? "attention" : "none"];
+  const scope = (reason: Readonly<{ code: string; severity: string; message: string }>) =>
+    reason.code === "HISTORY_INCOMPLETE" && history
+      ? Object.freeze({ ...reason, message: historyIncompleteMessage(history) })
+      : reason;
+  return Object.freeze({
+    required: Boolean(compatibility) && compatibility!.action !== "resume",
+    label: compatibility?.label ?? "No active runtime supplied",
+    reasons: Object.freeze(compatibility ? [...compatibility.reasons].sort((left, right) => rank(right) - rank(left)).map(scope) : []),
+  });
+}
+
+/**
+ * The disjunct that actually holds, instead of both of them.
+ *
+ * `decideSessionResume` raises `HISTORY_INCOMPLETE` for *any* non-fatal
+ * observation and describes it with a fixed disjunction — "The session ended
+ * mid-turn or was only partially inspected" — so a fully inspected session
+ * whose sole observation was a timestamp drift was told both, beside its own
+ * "8 of 8 events inspected · last turn completed" 60px above. Selecting the
+ * true disjunct removes a false claim rather than adding one; when neither
+ * disjunct holds, the real basis is named. The recommendation is unchanged.
+ */
+export function historyIncompleteMessage(history: Readonly<{
+  checkedEvents: number;
+  totalEvents: number;
+  issues: readonly Readonly<{ code: string }>[];
+}>): string {
+  const basis = history.issues.some((issue) => issue.code === "TURN_INCOMPLETE")
+    ? "The most recent turn has no durable terminal event"
+    : history.checkedEvents < history.totalEvents
+      ? `Only ${history.checkedEvents} of ${history.totalEvents} events were inspected`
+      : `${history.issues.length} structural observation${history.issues.length === 1 ? "" : "s"} on a fully inspected history`;
+  return `${basis}; fork before continuing.`;
+}
+
+/**
+ * The strip shown when the selected conversation is outside the current filter.
+ *
+ * A stale detail pane beside "No matching conversations" is a correctness
+ * hazard, not a cosmetic one: `Fork to continue` writes a new manifest, and
+ * offering it, enabled, next to a list that has just declared the target out of
+ * scope invites acting on the wrong conversation. The pane keeps every fact it
+ * was rendering; only its mutating verbs are withdrawn, and the reason is said
+ * where the buttons are.
+ */
+export const SESSION_OUT_OF_RESULTS_NOTICE = "Not in the current results. Showing the last conversation you opened.";
+export const SESSION_OUT_OF_RESULTS_CAPTION = "Clear the filter to act on this conversation.";

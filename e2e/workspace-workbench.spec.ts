@@ -52,8 +52,14 @@ test("desktop workbench edits with CAS, keeps tabs, and surfaces the real Git ch
 
   await editor.fill("The saved revision.\nThis draft must not disappear.\n");
   await page.getByRole("button", { name: "Close architecture.md" }).click();
-  const discard = page.getByRole("dialog", { name: "discard workspace file" });
+  // AMENDED: this selected the dialog by `aria-label="discard workspace file"`,
+  // an interpolation of the internal enum. The dialog's accessible name is now
+  // its own visible heading, so there is one name instead of two that can
+  // drift. Naming it by the heading is the stronger assertion: it fails if the
+  // heading and the accessible name ever separate again.
+  const discard = page.getByRole("dialog", { name: "Unsaved changes" });
   await expect(discard).toContainText("permanently discard");
+  await expect(page.getByRole("dialog", { name: /workspace file$/u })).toHaveCount(0);
   await discard.getByRole("button", { name: "Cancel" }).click();
   await expect(editor).toHaveValue(/must not disappear/u);
   await page.getByRole("button", { name: "Save", exact: true }).click();
@@ -73,7 +79,7 @@ test("desktop workbench edits with CAS, keeps tabs, and surfaces the real Git ch
   await expect(restored).toBeVisible();
   await restored.fill("Save-and-close is explicit.\n");
   await page.getByRole("button", { name: "Close architecture.md" }).click();
-  const closeDialog = page.getByRole("dialog", { name: "discard workspace file" });
+  const closeDialog = page.getByRole("dialog", { name: "Unsaved changes" });
   await closeDialog.getByRole("button", { name: "Save and close" }).click();
   await expect(page.getByRole("tab", { name: /architecture\.md/ })).toHaveCount(0);
 });
@@ -94,13 +100,17 @@ test("each workbench destination names itself and its modal closes on Escape", a
   await target.focus();
   await target.press("Shift+F10");
   await page.getByRole("menuitem", { name: "Move…" }).click();
-  const move = page.getByRole("dialog", { name: "move workspace file" });
+  // AMENDED with the discard dialog above: the accessible name is the heading.
+  const move = page.getByRole("dialog", { name: "Move retrieval.md" });
   await expect(move).toBeVisible();
   // The dialog never named the file it was about, or where that file was.
   await expect(move).toContainText("Move retrieval.md");
   await expect(move).toContainText("Currently in workspace/notes");
   await move.press("Escape");
   await expect(move).toHaveCount(0);
+  // A context-menu item unmounts with its menu, so restoring focus to "whatever
+  // opened this" dropped the keyboard on `<body>`. It lands back on the row.
+  await expect(page.locator(":focus")).toHaveClass(/tree-row/u);
 });
 
 test("mobile workbench uses pane switching and an explicit folder move sheet", async ({ page }, testInfo) => {
@@ -120,11 +130,95 @@ test("mobile workbench uses pane switching and an explicit folder move sheet", a
   await page.getByRole("tab", { name: "Files", exact: true }).click();
   await page.getByRole("button", { name: "Actions for retrieval.md" }).click();
   await page.getByRole("menuitem", { name: "Move…" }).click();
-  const move = page.getByRole("dialog", { name: "move workspace file" });
+  const move = page.getByRole("dialog", { name: "Move retrieval.md" });
   await expect(move).toBeVisible();
   await move.getByRole("option", { name: "workspace/docs" }).click();
   await move.getByRole("button", { name: "Move here" }).click();
   await expect(page.locator(".workbench-notice")).toContainText("Unsaved edits moved with the tab");
   await expect(page.getByRole("textbox", { name: "Edit retrieval.md" })).toHaveValue(/follows its tab/u);
   await page.screenshot({ path: testInfo.outputPath("workspace-workbench-mobile.png"), fullPage: true });
+});
+
+test("folders can be created, renamed and deleted, and every step states its real cost", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "desktop workbench contract");
+  await openIsolatedWorkspace(page);
+
+  // The shipped folder menu was Expand / New file… and nothing else, so a
+  // folder could be created only by typing a slash into a filename and could
+  // never be renamed or deleted at all.
+  const notes = page.getByRole("treeitem", { name: /notes$/u });
+  await notes.focus();
+  await notes.press("Shift+F10");
+  await page.getByRole("menuitem", { name: "New folder…" }).click();
+
+  const create = page.getByRole("dialog", { name: "New folder" });
+  await expect(create).toBeVisible();
+  // Directories are derived from file paths and `WorkspacePort` has no mkdir,
+  // so the dialog states the file it is really about to write.
+  await expect(create).toContainText(".gitkeep");
+  const createButton = create.getByRole("button", { name: "Create folder" });
+  await expect(createButton).toBeDisabled();
+  // A rejected name says why, rather than only disabling the button.
+  await create.getByRole("textbox").fill("a/b");
+  await expect(create).toContainText("one segment");
+  await expect(createButton).toBeDisabled();
+  await create.getByRole("textbox").fill("2026");
+  await createButton.click();
+  await expect(page.locator(".workbench-notice")).toContainText("Created notes/2026/");
+  await expect(page.getByRole("treeitem", { name: /2026/u })).toBeVisible();
+
+  // Rename: N moves, and the confirmation counts them before it runs.
+  await notes.focus();
+  await notes.press("Shift+F10");
+  await page.getByRole("menuitem", { name: "Rename folder…" }).click();
+  const rename = page.getByRole("dialog", { name: "Rename notes" });
+  await expect(rename).toContainText("Moves the 2 files under notes");
+  await expect(rename).toContainText("one compare-and-swapped file operation per file");
+  await rename.getByRole("textbox").fill("journal");
+  await rename.getByRole("button", { name: "Rename 2 files" }).click();
+  await expect(page.locator(".workbench-notice")).toContainText("Renamed 2 files in journal.");
+  await expect(page.getByRole("treeitem", { name: /notes$/u })).toHaveCount(0);
+
+  // Delete: the folder row hides how much one "Delete" removes, so the dialog
+  // names every doomed path and the button carries the count.
+  const journal = page.getByRole("treeitem", { name: /journal$/u });
+  await journal.focus();
+  await journal.press("Shift+F10");
+  await page.getByRole("menuitem", { name: "Delete folder…" }).click();
+  const remove = page.getByRole("dialog", { name: "Delete journal" });
+  await expect(remove).toContainText("journal/retrieval.md");
+  await expect(remove).toContainText("journal/2026/.gitkeep");
+  await remove.getByRole("button", { name: "Delete 2 files" }).click();
+  await expect(page.locator(".workbench-notice")).toContainText("Deleted 2 files in journal.");
+  await expect(page.getByRole("treeitem", { name: /journal$/u })).toHaveCount(0);
+  await expect(page.getByRole("treeitem", { name: /README\.md/u })).toBeVisible();
+});
+
+test("the editor states whether it is wrapping, and stops overflowing when it is", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "desktop workbench contract");
+  await openIsolatedWorkspace(page);
+  await page.getByRole("treeitem", { name: /README\.md/u }).click();
+
+  // `.code-editor` was `white-space: pre` at every width with no control, so a
+  // prose file ran off the pane and the gutter was `display: none` below 760px
+  // with nothing said. Wrap is now a stated, persisted mode.
+  const wrap = page.getByRole("button", { name: "Wrap" });
+  await expect(wrap).toHaveAttribute("aria-pressed", "false");
+  const overflow = () => page.evaluate(() => {
+    const node = document.querySelector(".code-editor");
+    return node ? node.scrollWidth - node.clientWidth : -1;
+  });
+  expect(await overflow()).toBeGreaterThan(0);
+  await expect(page.locator(".code-gutter")).toBeVisible();
+
+  await wrap.click();
+  await expect(wrap).toHaveAttribute("aria-pressed", "true");
+  expect(await overflow()).toBe(0);
+  // Numbers beside a soft-wrapped buffer would count visual rows, so the gutter
+  // is retired — and the strip says so instead of letting it vanish silently.
+  await expect(page.locator(".code-gutter")).toHaveCount(0);
+  await expect(page.locator(".editor-strip")).toContainText("wrapped, no line numbers");
+
+  await page.reload();
+  await expect(page.getByRole("button", { name: "Wrap" })).toHaveAttribute("aria-pressed", "true");
 });

@@ -232,7 +232,11 @@ export function BillingView({
       <p class="billing-headroom-facts">
         <span>Latest invocation</span>
         <span>User rate limit {invocationTelemetry?.rateLimit?.user === undefined ? NOT_READ : invocationTelemetry.rateLimit.user === "unlimited" ? "Unlimited" : formatCompact(invocationTelemetry.rateLimit.user)}</span>
-        <span>Chute rate limit {invocationTelemetry?.rateLimit?.chute === undefined ? "Unavailable" : formatCompact(invocationTelemetry.rateLimit.chute)}</span>
+        {/* Both limits are absent for the same reason — the header was not on
+            the last invocation. "Unavailable" asserted that Chutes has no such
+            figure; the em dash states the non-claim the other three cells
+            already state. One absence, one word. */}
+        <span>Chute rate limit {invocationTelemetry?.rateLimit?.chute === undefined ? NOT_READ : formatCompact(invocationTelemetry.rateLimit.chute)}</span>
         <span>Observed {invocationTelemetry ? formatDateTime(invocationTelemetry.capturedAt) : NOT_READ}</span>
       </p>
 

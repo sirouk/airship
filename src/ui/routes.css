@@ -3293,6 +3293,26 @@
   border-bottom: 1px solid var(--line);
 }
 
+/*
+ * WHY this exists: `.route-layout` at the head of this sheet already applied
+ * the one outer content gutter, and the rule there is that a feature view
+ * "never [owns] a second page edge". A route bar mounted straight into the
+ * shell was doing exactly that — 26px of shell gutter plus the primitive's own
+ * 32px — so `<RouteHeader>` routes (`#sessions`, `#terminal`, `#memory`,
+ * `#proof`, `#account`) started their title 58px in while `.page-heading`
+ * routes (`#profiles`, `#vault`, `#capabilities`, `#skills`) and the editor
+ * route started at 26px. Two heading primitives disagreeing about where a page
+ * begins is visible on every route change; `route-adversarial-audit.spec.ts`
+ * is what measures it.
+ *
+ * The `> * >` chain is load-bearing: it matches the route's own bar and only
+ * that. A `<RouteHeader>` nested inside a panel — `.git-sources-header` in the
+ * editor's Sources pane — is not a page edge and keeps the primitive's inset.
+ */
+.route-layout > * > .route-header {
+  padding-inline: 0;
+}
+
 .route-header__bar {
   display: flex;
   flex-wrap: wrap;

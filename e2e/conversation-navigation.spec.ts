@@ -214,7 +214,7 @@ test("Memory unifies federated search, graph, and the legacy Context index deep 
   const index = page.locator("#memory-index");
   await expect.poll(() => index.evaluate((element: HTMLDetailsElement) => element.open)).toBe(false);
   await index.locator("summary").click();
-  await expect(page.getByRole("search", { name: "Shared Memory query in the workspace index" })).toContainText("Following “workspace”");
+  await expect(page.getByRole("status", { name: "Shared Memory query in the workspace index" })).toContainText("Following “workspace”");
 
   await page.goto("/#context");
   await expect(page.getByRole("heading", { name: "Memory", level: 1 })).toBeVisible();
@@ -253,7 +253,7 @@ test("Memory disclosures and graph stay inside the mobile viewport", async ({ pa
   await match.click();
   await expect(page.locator("#memory-relationships .memory-node-detail h2")).toBeVisible();
   await page.getByRole("button", { name: /Local index/u }).click();
-  await expect(page.getByRole("search", { name: "Shared Memory query in the workspace index" })).toContainText("Following “workspace”");
+  await expect(page.getByRole("status", { name: "Shared Memory query in the workspace index" })).toContainText("Following “workspace”");
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
 });
 
@@ -270,7 +270,7 @@ test("Memory keeps its shared-query contract at the 768px tablet boundary", asyn
   await match.click();
   await expect(relationships.locator(".memory-node-detail h2")).toBeVisible();
   await page.getByRole("button", { name: /Local index/u }).click();
-  await expect(page.getByRole("search", { name: "Shared Memory query in the workspace index" })).toContainText("Following “workspace”");
+  await expect(page.getByRole("status", { name: "Shared Memory query in the workspace index" })).toContainText("Following “workspace”");
   await expect.poll(() => page.evaluate(() => ({
     documentOverflow: document.documentElement.scrollWidth - innerWidth,
     mainOverflow: document.querySelector<HTMLElement>("main")!.scrollWidth - document.querySelector<HTMLElement>("main")!.clientWidth,
@@ -287,11 +287,11 @@ test("an open Index shares one slow search authority with Recall", async ({ page
   });
   const index = page.locator("#memory-index");
   await expect.poll(() => index.evaluate((element: HTMLDetailsElement) => element.open)).toBe(true);
-  await expect(page.getByRole("search", { name: "Shared Memory query in the workspace index" })).toBeVisible();
+  await expect(page.getByRole("status", { name: "Shared Memory query in the workspace index" })).toBeVisible();
   await expect(page.getByLabel("Context index status")).toContainText("Searchable");
   await page.getByRole("searchbox", { name: "Search every memory surface" }).fill("workspace slow");
   await expect(page.locator("#memory-results").getByText("Searching this scope…").first()).toBeVisible();
-  await expect(page.getByRole("search", { name: "Shared Memory query in the workspace index" })).toContainText("Searching");
+  await expect(page.getByRole("status", { name: "Shared Memory query in the workspace index" })).toContainText("Searching");
   await expect(page.locator("#memory-results").getByText("/workspace/docs/slow.md")).toBeVisible();
   await expect(index.getByRole("heading", { name: "Search hits" }).locator("../..")).toContainText("1 in");
   await expect(index.getByRole("region", { name: "Search hits" }).getByText("docs/slow.md", { exact: true })).toBeVisible();

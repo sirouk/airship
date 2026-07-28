@@ -19,15 +19,19 @@ import { RouteHeader } from "./route-header";
 import { Seal, type SealState } from "./seal";
 import { groupPinnedSessions, pagePinnedSessionIds, setPageSessionPinned } from "./session-pins";
 import {
+  SESSION_OUT_OF_RESULTS_CAPTION,
+  SESSION_OUT_OF_RESULTS_NOTICE,
   SESSION_SEARCH_PLACEHOLDER,
   SESSION_TITLE_MAX,
+  forkRequirement,
   forkTitleFor,
   relativeSessionTime,
-  sessionEmptyStateBody,
+  sessionEmptyState,
   sessionEventCount,
   sessionIntegrityRow,
   sessionLineage,
   shortSessionId,
+  titleMatchSegments,
 } from "./sessions-presentation";
 
 export type SessionsViewProps = Readonly<{
@@ -86,6 +90,17 @@ export function SessionsView({
   const [renameTitle, setRenameTitle] = useState("");
   const [renaming, setRenaming] = useState(false);
   const [pinned, setPinned] = useState<ReadonlySet<string>>(pagePinnedSessionIds);
+  /*
+   * How many conversations the last *unfiltered* read found.
+   *
+   * The filtered page only knows its own total, so a zero result cannot say
+   * how much was searched without a number from somewhere. This is that
+   * number, and the empty state labels it as what it is — a figure from the
+   * last unfiltered read — rather than asserting a live count it never saw.
+   */
+  const [loadedTotal, setLoadedTotal] = useState<number>();
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const toolbarId = useId();
 
   const runtimeKey = useMemo(() => runtimeFingerprint(runtime), [runtime]);
 
@@ -108,6 +123,7 @@ export function SessionsView({
     }, controller.signal).then(
       (next) => {
         setPage(next);
+        if (!search && !providerId && !model && !profileId) setLoadedTotal(next.total);
         setSelectedId((current) => current ?? (activeSessionId && next.items.some((item) => item.id === activeSessionId)
           ? activeSessionId
           : next.items[0]?.id));
@@ -216,6 +232,9 @@ export function SessionsView({
   }
 
   const filterActive = Boolean(search || providerId || model || profileId);
+  // Only the collapsible menus are counted; the search term is on the row that
+  // stays visible, so counting it would name a filter the reader can already see.
+  const activeFilterCount = [providerId, model, profileId].filter(Boolean).length + (sort === "updated-desc" ? 0 : 1);
   const groupedSessions = groupPinnedSessions(page?.items ?? [], pinned);
   // Lineage is only navigable to a conversation the current filter actually
   // loaded, so the parent lookup is built from what is on screen rather than
@@ -225,6 +244,17 @@ export function SessionsView({
     [page?.items],
   );
   const ordered = [...groupedSessions.pinned, ...groupedSessions.other];
+  const emptyState = sessionEmptyState({ filtered: filterActive, query: search, ...(loadedTotal === undefined ? {} : { loadedTotal }) });
+  /*
+   * The pane and the list must agree about what is in scope.
+   *
+   * A selection survives a filter change, so the detail pane went on offering
+   * `Fork to continue` — which writes a new session manifest — beside a list
+   * that had just declared the target out of scope. The pane keeps every fact
+   * it was rendering; the mismatch is stated, and the verbs are withdrawn
+   * until the filter that hid the conversation is cleared.
+   */
+  const outOfResults = Boolean(page && selectedId && filterActive && !page.items.some((item) => item.id === selectedId));
 
   return (
     <section class="session-library-view" aria-labelledby="session-library-title">
@@ -253,7 +283,7 @@ export function SessionsView({
         }
       />
 
-      <div class="session-library-toolbar" role="search" aria-label="Filter sessions">
+      <div class="session-library-toolbar" role="search" aria-label="Filter sessions" data-filters-open={filtersOpen ? "true" : "false"}>
         <label class="session-library-search">
           <span class="session-library-visually-hidden">{SESSION_SEARCH_PLACEHOLDER}</span>
           <Icon name="context" size={17} />
@@ -266,6 +296,24 @@ export function SessionsView({
             spellcheck={false}
           />
         </label>
+        {/*
+          * Below 640px the four filters are a counted disclosure rather than a
+          * row that scrolls: as `overflow-x: auto` three of them sat off the
+          * right edge of a 430px phone with no scrollbar, no fade and nothing
+          * saying they existed, and wrapping them into the resting layout cost
+          * 160px of a 740px viewport. The control states how many are set, so
+          * a collapsed filter can never be a silent one. Hidden at every width
+          * where all four already fit, which includes the 768px and 820px the
+          * menu-anchoring spec drives.
+          */}
+        <button
+          class="session-library-filter-toggle"
+          type="button"
+          aria-expanded={filtersOpen}
+          aria-controls={`${toolbarId}-filters`}
+          onClick={() => setFiltersOpen((value) => !value)}
+        >Filters{activeFilterCount ? ` · ${activeFilterCount}` : ""}</button>
+        <div class="session-library-filters" id={`${toolbarId}-filters`}>
         <MenuSelect
           className="session-filter-menu"
           placement="down"
@@ -306,6 +354,7 @@ export function SessionsView({
           ]}
           onChange={(next) => setSort(next as SessionListSort)}
         />
+        </div>
         {filterActive ? <button type="button" onClick={clearFilters}>Clear</button> : null}
         <button type="button" onClick={() => setRefresh((value) => value + 1)} disabled={loadingList} aria-label="Refresh session library">
           {loadingList ? "Reading…" : "Refresh"}
@@ -344,7 +393,15 @@ export function SessionsView({
                       <span class="session-library-card-mark" data-active={active ? "true" : "false"} aria-hidden="true">
                         {lineage ? <Icon name="branch" size={13} /> : <span class="session-library-card-dot" />}
                       </span>
-                      <strong>{item.title}</strong>
+                      {/* The matched run is marked, not re-worded: the title is
+                          reassembled character for character, so a filtered
+                          list says where it matched instead of making the
+                          reader re-run the search by eye. */}
+                      <strong>{titleMatchSegments(item.title, search).map((segment, part) => (
+                        segment.matched
+                          ? <mark key={`${part}:${segment.text}`}>{segment.text}</mark>
+                          : <>{segment.text}</>
+                      ))}</strong>
                       <time dateTime={item.updatedAt}>{relativeSessionTime(item.updatedAt)}</time>
                     </span>
                     <span class="session-library-card-line2">
@@ -380,8 +437,14 @@ export function SessionsView({
             {!loadingList && page?.items.length === 0 ? (
               <div class="session-library-empty">
                 <Icon name="chat" size={24} />
-                <strong>No matching conversations</strong>
-                {sessionEmptyStateBody({ filtered: filterActive, searched: Boolean(search) }).map((line) => <p key={line}>{line}</p>)}
+                {/* Names the term, the scope and the size of what was read, and
+                    ends in the control that undoes it. The old body described
+                    the reader's own action back at them and stopped there. */}
+                <strong>{emptyState.heading}</strong>
+                {emptyState.lines.map((line) => <p key={line}>{line}</p>)}
+                {emptyState.offersClear ? (
+                  <button class="session-library-empty-action" type="button" onClick={clearFilters}>Clear filters</button>
+                ) : null}
               </div>
             ) : null}
           </div>
@@ -390,11 +453,30 @@ export function SessionsView({
         <main class="session-library-detail" aria-live="polite">
           {loadingDetail ? <div class="session-library-loading" role="status" aria-live="polite">Auditing history…</div> : null}
           {detailError ? <div class="session-library-alert error" role="alert"><Icon name="warning" /><span>{detailError}</span></div> : null}
-          {!loadingDetail && !detail ? <div class="session-library-empty detail"><Icon name="chat" size={28} /><strong>Select a session</strong><p>Its pinned runtime, structural history status, and bounded transcript will appear here.</p></div> : null}
+          {!loadingDetail && !detail ? (
+            <div class="session-library-empty detail">
+              <Icon name="chat" size={28} />
+              <strong>No conversation open</strong>
+              <p>Its pinned runtime, structural history status, and bounded transcript will appear here.</p>
+              {/* An empty pane beside a populated list is a state with an
+                  obvious next move; it used to only describe itself. */}
+              {ordered[0] ? (
+                <button class="session-library-empty-action" type="button" onClick={() => setSelectedId(ordered[0]!.id)}>Open the first conversation</button>
+              ) : null}
+            </div>
+          ) : null}
+          {!loadingDetail && detail && outOfResults ? (
+            <div class="session-library-out-of-results" role="status">
+              <Icon name="warning" size={16} />
+              <span>{SESSION_OUT_OF_RESULTS_NOTICE}</span>
+              <button type="button" onClick={clearFilters}>Clear filters and show it</button>
+            </div>
+          ) : null}
           {!loadingDetail && detail ? (
             <SessionDetail
               detail={detail}
               active={detail.session.id === activeSessionId}
+              outOfResults={outOfResults}
               busy={busy}
               forkOpen={forkOpen}
               forkTitle={forkTitle}
@@ -425,6 +507,7 @@ export function SessionsView({
 function SessionDetail({
   detail,
   active,
+  outOfResults,
   busy,
   forkOpen,
   forkTitle,
@@ -447,6 +530,8 @@ function SessionDetail({
 }: {
   detail: SessionLibraryDetail;
   active: boolean;
+  /** True while the current filter excludes this conversation from the list. */
+  outOfResults: boolean;
   busy: boolean;
   forkOpen: boolean;
   forkTitle: string;
@@ -468,9 +553,14 @@ function SessionDetail({
   onOpenProof?: () => void;
 }) {
   const compatibility = detail.compatibility;
-  const resumeDisabled = busy || active || !runtimeAvailable || compatibility?.action !== "resume";
+  // Every state-mutating verb is withdrawn while the pane is out of scope.
+  // Read-only controls — Proof, the disclosures, the transcript — stay live,
+  // because the facts on this pane are real and the reader may still want them.
+  const mutationBlocked = busy || outOfResults;
+  const resumeDisabled = mutationBlocked || active || !runtimeAvailable || compatibility?.action !== "resume";
+  const requirement = forkRequirement(compatibility, detail.history);
   const resumeLabel = active ? "Active session" : !runtimeAvailable ? "No active runtime" : compatibility?.action === "resume" ? "Resume session" : compatibility?.label ?? "Cannot resume";
-  const forkPrimary = compatibility?.action === "fork-required" || compatibility?.action === "blocked";
+  const forkPrimary = requirement.required;
   const lineage = detail.pins.lineage;
   const integrity = sessionIntegrityRow({
     history: detail.history,
@@ -531,10 +621,11 @@ function SessionDetail({
           <p>Created <time dateTime={detail.session.createdAt}>{formatDateTime(detail.session.createdAt)}</time> · updated <time dateTime={detail.session.updatedAt}>{formatDateTime(detail.session.updatedAt)}</time></p>
         </div>
         <div class="session-library-actions">
-          <button type="button" onClick={onStartRename} disabled={busy || renaming} aria-expanded={renaming}>Rename</button>
+          <button type="button" onClick={onStartRename} disabled={mutationBlocked || renaming} aria-expanded={renaming}>Rename</button>
           {onOpenProof ? <button type="button" onClick={onOpenProof}><Icon name="proof" size={16} />Proof</button> : null}
-          <button class={forkPrimary ? "primary" : ""} type="button" onClick={onPrepareFork} disabled={busy}><Icon name="branch" size={16} />{forkPrimary ? "Fork to continue" : "Fork"}</button>
+          <button class={forkPrimary ? "primary" : ""} type="button" onClick={onPrepareFork} disabled={mutationBlocked}><Icon name="branch" size={16} />{forkPrimary ? "Fork to continue" : "Fork"}</button>
           <button class={!forkPrimary ? "primary" : ""} type="button" onClick={onResume} disabled={resumeDisabled}>{resumeLabel}</button>
+          {outOfResults ? <p class="session-library-actions-caption">{SESSION_OUT_OF_RESULTS_CAPTION}</p> : null}
         </div>
       </header>
 
@@ -553,7 +644,10 @@ function SessionDetail({
         <div class="session-integrity__body" id={bodyId} hidden={!expanded}>
           <div class="session-integrity__scope">
             <strong>{detail.history.status === "consistent" ? "Journal structure passed" : detail.history.label}</strong>
-            <small>{detail.history.checkedEvents} of {detail.history.totalEvents} events inspected · {detail.history.turnCount} turn{detail.history.turnCount === 1 ? "" : "s"}</small>
+            {/* "Unfinished" beside "8 of 8 events inspected" reads as a
+                contradiction until the verdict names what produced it. The
+                observations themselves stay in their own list below. */}
+            <small>{detail.history.checkedEvents} of {detail.history.totalEvents} events inspected · {detail.history.turnCount} turn{detail.history.turnCount === 1 ? "" : "s"}{detail.history.issues.length ? ` · ${detail.history.issues.length} structural observation${detail.history.issues.length === 1 ? "" : "s"} below` : ""}</small>
             <span class="session-library-proof-scope">Structural linkage only · digests not recomputed · authenticity not proven</span>
           </div>
 
@@ -569,30 +663,54 @@ function SessionDetail({
           </section>
 
           {compatibility ? (
+            // The verdict word is the resting `resume` pill on the row this
+            // panel expands from, so it is not printed a second time 60px
+            // below itself; what this panel owns is the reasons behind it.
             <section class={`session-library-compatibility ${compatibility.action}`} aria-labelledby="session-compatibility-title">
-              <div><span>Runtime decision</span><strong id="session-compatibility-title">{compatibility.label}</strong></div>
-              {compatibility.reasons.length ? <ul>{compatibility.reasons.map((reason) => <li class={reason.severity} key={reason.code}><span>{reason.code.replaceAll("_", " ")}</span>{reason.message}</li>)}</ul> : <p>Provider, model, posture, tool manifest, workspace, and profile digests match the active runtime.</p>}
+              <div><span id="session-compatibility-title">Why the runtime decided that</span></div>
+              {compatibility.reasons.length ? <ReasonList reasons={requirement.reasons} /> : <p>Provider, model, posture, tool manifest, workspace, and profile digests match the active runtime.</p>}
               {/* The fork contract is stated once, where the decision is made —
                   in the fork panel. Here it only says what is required. */}
               {forkPrimary ? <p>Continuing here requires a fork.</p> : null}
             </section>
           ) : (
-            <section class="session-library-compatibility unavailable"><div><span>Runtime decision</span><strong>No active runtime supplied</strong></div><p>Inspection remains available, but this component cannot authorize a resume.</p></section>
+            <section class="session-library-compatibility unavailable"><div><span>Why the runtime decided that</span></div><p>Inspection remains available, but this component cannot authorize a resume.</p></section>
           )}
         </div>
       </section>
 
       {forkOpen ? (
         <section class="session-library-fork" aria-labelledby="session-fork-title">
-          <div><span class="session-library-eyebrow">Explicit fork</span><h3 id="session-fork-title">Create a new session identity</h3><p>Fork = new identity · empty transcript · source untouched. The new manifest records the source head as immutable lineage.</p></div>
+          <div>
+            <span class="session-library-eyebrow">Explicit fork</span>
+            <h3 id="session-fork-title">Create a new session identity</h3>
+            <p>Fork = new identity · empty transcript · source untouched. The new manifest records the source head as immutable lineage.</p>
+            {/*
+              * The route claims a fork appears only when the meaning genuinely
+              * changes, and then offered `Fork to continue` with nothing on
+              * screen saying what changed. These are the runtime's own reasons,
+              * verbatim, re-presented at the moment of the decision; they still
+              * render in the integrity row's expansion, which is where the
+              * verdict lives.
+              */}
+            {requirement.required && requirement.reasons.length ? (
+              <div class="session-library-fork-why">
+                <span class="session-library-eyebrow">Why this needs a fork · {requirement.label}</span>
+                <ReasonList reasons={requirement.reasons} />
+              </div>
+            ) : null}
+          </div>
           <label><span>Fork title</span><input value={forkTitle} maxlength={SESSION_TITLE_MAX} onInput={(event) => onForkTitle(event.currentTarget.value)} /></label>
           <div class="session-library-fork-note"><Icon name="lock" size={16} /><span>{forkUsesActiveManifest ? "The host supplied the active runtime manifest for this fork." : "The fork keeps the source runtime pins; only its session identity and lineage change."}</span></div>
           <div class="session-library-fork-actions"><button type="button" onClick={onCancelFork} disabled={busy}>Cancel</button><button class="primary" type="button" onClick={onCreateFork} disabled={busy || !forkTitle.trim()}>{busy ? "Creating…" : "Create clean fork"}</button></div>
         </section>
       ) : null}
 
+      {/* The transcript is inside this disclosure and nowhere else, so the
+          summary states its size: "Manifest pins and transcript" alone gave a
+          returning reader no reason to believe their messages were in there. */}
       <details class="session-library-technical">
-        <summary><span>Runtime record</span><strong>Manifest pins and transcript</strong></summary>
+        <summary><span>Runtime record</span><strong>Manifest pins and transcript · {detail.transcript.messages.length} message{detail.transcript.messages.length === 1 ? "" : "s"}{detail.transcript.truncated ? ` of ${detail.transcript.messages.length + detail.transcript.omittedMessages}` : ""}</strong></summary>
         <div class="session-library-detail-grid">
         <section class="session-library-panel" aria-labelledby="session-pins-title">
           <div class="session-library-panel-heading"><span>Immutable manifest</span><strong id="session-pins-title">Runtime pins</strong></div>
@@ -647,6 +765,23 @@ function SessionDetail({
         </details>
       ) : null}
     </article>
+  );
+}
+
+/**
+ * One rendering of the runtime's reasons, used by both places that need them.
+ *
+ * The integrity row states the verdict; the fork panel states why the verdict
+ * forces a fork. Same rows, same severity classes, same words — a second
+ * markup for the same list is how two renderings of one fact drift apart.
+ */
+function ReasonList({ reasons }: { reasons: readonly Readonly<{ code: string; severity: string; message: string }>[] }) {
+  return (
+    <ul class="session-library-reason-list">
+      {reasons.map((reason) => (
+        <li class={reason.severity} key={reason.code}><span>{reason.code.replaceAll("_", " ")}</span>{reason.message}</li>
+      ))}
+    </ul>
   );
 }
 

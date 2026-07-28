@@ -100,6 +100,141 @@ export function workbenchRailPercent(percent: number): number {
   return Math.round(Math.min(WORKBENCH_RAIL_MAX_PERCENT, Math.max(WORKBENCH_RAIL_MIN_PERCENT, percent)) * 10) / 10;
 }
 
+/**
+ * The file a new folder is created holding.
+ *
+ * `WorkspacePort` stores files. A folder exists exactly while a path names it,
+ * so "create an empty folder" is not a thing this storage can represent. Rather
+ * than refuse the action or pretend directories are objects, Airship creates the
+ * folder the only way it can and says so — the same `.gitkeep` idiom Git itself
+ * uses for the identical reason.
+ */
+export const WORKSPACE_FOLDER_PLACEHOLDER = ".gitkeep";
+
+/** Printed in the New folder dialog, at rest, before anything is written. */
+export const WORKSPACE_FOLDER_PLACEHOLDER_NOTE =
+  "A folder here is the path of the files inside it, so this creates the folder holding one empty .gitkeep file. Delete that file and the folder goes with it.";
+
+/** Printed on every folder rename and delete: these are not atomic operations. */
+export const WORKSPACE_FOLDER_NOT_ATOMIC_NOTE =
+  "Folders are not stored objects, so this runs one compare-and-swapped file operation per file. If one fails the rest are left alone and the count that finished is reported.";
+
+/**
+ * Why a proposed single-segment name cannot be used, or `undefined`.
+ *
+ * Returned as a sentence rather than a boolean so the dialog can show the
+ * reason beside the field instead of silently disabling its own primary button,
+ * which is the shipped failure mode the review called a dead end.
+ */
+export function workspaceNameError(name: string): string | undefined {
+  const trimmed = name.trim();
+  if (trimmed.length === 0) return "Enter a name.";
+  if (trimmed.includes("/")) return "A folder name is one segment — it cannot contain “/”.";
+  if (trimmed === "." || trimmed === "..") return "“.” and “..” are not names this workspace can address.";
+  return undefined;
+}
+
+/**
+ * Whether the editor soft-wraps by default at this pane width.
+ *
+ * Off is right where a line of code fits; at phone widths `white-space: pre`
+ * made a markdown paragraph reachable only by horizontal scrolling, one line at
+ * a time. The default follows the width; the toggle then belongs to the user
+ * and is persisted with the open tabs.
+ */
+export const WORKBENCH_WRAP_DEFAULT_MAX_WIDTH = 760;
+
+export function defaultEditorWrap(width: number | undefined): boolean {
+  return typeof width === "number" && Number.isFinite(width) && width <= WORKBENCH_WRAP_DEFAULT_MAX_WIDTH;
+}
+
+/**
+ * What the file strip says about the editing surface itself.
+ *
+ * The gutter and the wrap mode are one decision: numbers down the side of a
+ * soft-wrapped buffer label visual rows, not file lines, so a wrapped editor
+ * shows no gutter — and then has to say that rather than letting the numbers
+ * disappear silently, which is what the ≤760px stylesheet used to do.
+ */
+export function editorSurfaceNote(input: Readonly<{ wrap: boolean; binary: boolean }>): string {
+  if (input.binary) return "Binary · read-only · client-side";
+  return input.wrap
+    ? "UTF-8 · LF · client-side · wrapped, no line numbers"
+    : "UTF-8 · LF · client-side";
+}
+
+export type WorkbenchDialogKind =
+  | "create"
+  | "create-folder"
+  | "rename"
+  | "rename-folder"
+  | "move"
+  | "delete"
+  | "delete-folder"
+  | "discard";
+
+export type WorkbenchDialogCopy = Readonly<{
+  /**
+   * The visible H2, which is also the dialog's accessible name via
+   * `aria-labelledby`. Kept as one string on purpose: a separate `aria-label`
+   * is a second name that can drift from the one on screen, and the shipped
+   * drift was total — `aria-label={`${dialog.kind} workspace file`}` announced
+   * "discard workspace file" while the heading said something else entirely.
+   * The full path stays on the heading's `title` and in the dialog body.
+   */
+  title: string;
+  /** The primary button. Destructive kinds state the size of what they remove. */
+  confirm: string;
+  destructive: boolean;
+}>;
+
+/**
+ * The one place a workbench modal's words are decided.
+ *
+ * Every title names its subject rather than its enum, and every folder
+ * confirmation states the file count it is about to act on, because a folder
+ * row hides how much a single "Delete" is really removing.
+ */
+export function workbenchDialogCopy(
+  kind: WorkbenchDialogKind,
+  path: string,
+  affectedFiles = 0,
+): WorkbenchDialogCopy {
+  const name = path === "/workspace" ? "workspace" : path.slice(path.lastIndexOf("/") + 1);
+  const files = `${String(affectedFiles)} ${affectedFiles === 1 ? "file" : "files"}`;
+  const copy = (title: string, confirm: string, destructive = false): WorkbenchDialogCopy =>
+    Object.freeze({ title, confirm, destructive });
+  switch (kind) {
+    case "create": return copy("New file", "Create");
+    case "create-folder": return copy("New folder", "Create folder");
+    case "rename": return copy(`Rename ${name}`, "Rename");
+    case "rename-folder": return copy(`Rename ${name}`, `Rename ${files}`);
+    case "move": return copy(`Move ${name}`, "Move here");
+    case "delete": return copy(`Delete ${name}`, "Delete", true);
+    case "delete-folder": return copy(`Delete ${name}`, `Delete ${files}`, true);
+    case "discard": return copy("Unsaved changes", "Discard and close", true);
+  }
+}
+
+/**
+ * What a multi-file folder operation actually did, in one sentence.
+ *
+ * A folder rename is N moves. When step 9 of 14 fails, "Renaming folder failed
+ * safely" is a lie: nine files moved. This reports the split every time,
+ * including the whole-success case, so the message never has to be trusted to
+ * mean more than it says.
+ */
+export function folderOperationReport(input: Readonly<{
+  verb: "Renamed" | "Deleted";
+  done: number;
+  total: number;
+  target: string;
+  failure?: string;
+}>): string {
+  if (!input.failure) return `${input.verb} ${String(input.total)} ${input.total === 1 ? "file" : "files"} in ${input.target}.`;
+  return `${input.verb} ${String(input.done)} of ${String(input.total)} files in ${input.target}, then stopped: ${input.failure} The remaining files were not touched.`;
+}
+
 export type WorkbenchNoticeKind = "progress" | "done" | "error";
 
 export type WorkbenchNotice = Readonly<{

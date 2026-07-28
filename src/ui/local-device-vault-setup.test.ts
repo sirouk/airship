@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   formatLocalDeviceBytes,
   readBoundedLocalDeviceBackup,
+  recoveryCustodyStatus,
 } from "./local-device-vault-setup";
 
 describe("local device Vault setup boundaries", () => {
@@ -27,6 +28,23 @@ describe("local device Vault setup boundaries", () => {
       8,
       controller.signal,
     )).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("calls an unsaved one-time key an attention state, in its own words", () => {
+    // The acknowledgement directly below this line blanks the key for good, so
+    // "you have not saved it yet" must not be the quietest thing on the screen.
+    expect(recoveryCustodyStatus("none")).toEqual({
+      state: "attention",
+      label: "Not copied or downloaded yet.",
+    });
+    expect(recoveryCustodyStatus("copied")).toEqual({
+      state: "verified",
+      label: "Copied to your clipboard.",
+    });
+    expect(recoveryCustodyStatus("downloaded")).toEqual({
+      state: "verified",
+      label: "Download requested.",
+    });
   });
 
   it("renders bounded human-readable byte counts", () => {

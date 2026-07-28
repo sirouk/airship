@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { AirshipModel } from "../models";
-import { facetCounts, facetModels, MODEL_PICKER_PROVENANCE, nextModelIndex, visibleModelCount } from "./model-picker";
+import { catalogTokens, facetCounts, facetModels, modelFacts, MODEL_PICKER_PROVENANCE, nextModelIndex, visibleModelCount } from "./model-picker";
 
 const source = readFileSync(new URL("./model-picker.tsx", import.meta.url), "utf8");
 const styles = readFileSync(new URL("./model-picker.css", import.meta.url), "utf8");
@@ -89,5 +89,60 @@ describe("row honesty", () => {
   it("marks the recommendation from the caller's claim, not from row order", () => {
     expect(source).toContain("recommendedModelId");
     expect(source).not.toContain('class={index === 0 ? "recommended" : ""}');
+  });
+
+  it("carries availability and trust readiness on the row, as words", () => {
+    // Both were catalogue facts that existed only in the tile grid *outside*
+    // this control, so two models could not be compared on them without
+    // choosing one first. `metadata conflict` is the arm that decides a choice.
+    expect(catalogTokens(model({ availability: "hot" }))).toEqual(["hot", "evidence candidate"]);
+    expect(catalogTokens(model({
+      trust: { confidentialCompute: "unknown", verification: "unverified", consistency: "conflict" } as AirshipModel["trust"],
+    }))).toEqual(["warm", "metadata conflict"]);
+    expect(source).toContain('catalogTokens(model).map((label) => <span key={label} class="model-row-catalog">{label}</span>)');
+  });
+});
+
+describe("the catalogue metadata travels with the model", () => {
+  const facts = modelFacts(model({
+    availability: "hot",
+    contextTokens: 41_000,
+    maxOutputTokens: 41_000,
+    pricing: { input: { usdPerMillion: 0.104 }, output: { usdPerMillion: 0.416 } },
+  } as Partial<AirshipModel>));
+
+  it("keeps all four tiles, every value and every provenance caption", () => {
+    // The tile grid this replaces sat beside the picker at 210px desktop /
+    // 306px phone, and the open popover then covered it. Not one cell of it may
+    // be lost in the move: these are the exact four labels and the exact
+    // captions, including the caveat that stops `evidence candidate` reading as
+    // a verdict.
+    expect(facts.map((fact) => fact.label)).toEqual(["Availability", "Context", "Input / output", "Trust readiness"]);
+    expect(facts[0]!.value).toBe("hot");
+    expect(facts[0]!.captions).toEqual(["provider management snapshot"]);
+    expect(facts[1]!.captions).toEqual(["41K max output"]);
+    expect(facts[2]!.captions).toEqual(["USD per million tokens"]);
+    expect(facts[3]!.value).toBe("evidence candidate");
+    expect(facts[3]!.captions).toEqual(["verification remains unverified", "catalog metadata is not proof"]);
+  });
+
+  it("names an unavailable availability source rather than implying a live read", () => {
+    const stale = modelFacts(model({
+      provenance: { capabilities: "llm-models", availability: "unavailable", pricing: "llm-models" },
+    } as Partial<AirshipModel>));
+    expect(stale[0]!.captions).toEqual(["live status unavailable"]);
+    const noContext = modelFacts(model({ contextTokens: undefined, maxModelTokens: undefined } as Partial<AirshipModel>));
+    expect(noContext[1]!.value).toBe("unknown");
+    expect(noContext[1]!.captions).toEqual(["output limit unavailable"]);
+  });
+
+  it("renders those facts inside the control, so they move when the model does", () => {
+    expect(source).toContain("{attachFacts && selected ? <ModelFactStrip model={selected} /> : null}");
+    expect(source).toContain('<dl class="model-picker-meta"');
+    // Captions wrap in full: a provenance line cut in half is a claim with its
+    // qualifier removed.
+    expect(styles).toContain(".model-picker-meta small {");
+    expect(styles).toMatch(/\.model-picker-meta small \{[^}]*overflow-wrap:anywhere/u);
+    expect(styles).not.toMatch(/\.model-picker-meta small \{[^}]*text-overflow:ellipsis/u);
   });
 });
