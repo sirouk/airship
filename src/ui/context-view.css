@@ -5,6 +5,22 @@
   color: var(--ink);
 }
 
+/*
+ * Grid and flex children default to `min-width: auto`, which is the intrinsic
+ * width of the longest unbreakable thing inside them — here a 51-character
+ * sha256. Without this the Index pushes its own panels past a 430px viewport
+ * and clips the sentence that says why a hit matched.
+ */
+.client-context-view > *,
+.client-context-layout > *,
+.context-index-status > *,
+.context-index-status__row > *,
+.context-index-status__detail > *,
+.context-candidate > *,
+.context-hit > * {
+  min-width: 0;
+}
+
 .client-context-heading {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(290px, 420px);
@@ -20,11 +36,17 @@
   text-transform: uppercase;
 }
 
+/*
+ * The px-literal `clamp()` is gone: it pinned the largest text on the route
+ * against the user's type-scale preference (WCAG 1.4.4). The size is now the
+ * one route-title step. Retiring the serif here belongs to the WP-9 sweep,
+ * which counts these declarations across four sheets at once.
+ */
 .client-context-heading h1 {
   margin: 7px 0 8px;
   font-family: var(--font-display);
-  font-size: clamp(1.75rem, 4vw, 2.7rem);
-  line-height: 1;
+  font-size: var(--fs-display);
+  line-height: 1.15;
 }
 
 .client-context-heading p {
@@ -60,6 +82,109 @@
   color: var(--ink-muted);
   font-size: 0.73rem;
   line-height: 1.45;
+}
+
+/*
+ * The index status row: one 56px band where 470px of preamble used to stand.
+ * Everything it replaced is either on this row, one gesture below it, or in
+ * the caption line beneath — nothing left the surface.
+ */
+.context-index-status {
+  display: grid;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-panel);
+  background: var(--surface);
+}
+
+.context-index-status__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-3);
+  align-items: center;
+}
+
+.context-index-status__toggle {
+  display: flex;
+  flex: 1 1 240px;
+  gap: var(--sp-2);
+  align-items: center;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  text-align: left;
+}
+
+.context-index-status__dot {
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
+  border: 1px solid currentColor;
+  border-radius: var(--radius-chip);
+  color: var(--ink-faint);
+}
+
+.context-index-status__dot.ready { color: var(--v-verified); background: currentColor; }
+.context-index-status__dot.caution { color: var(--v-caution); background: currentColor; }
+.context-index-status__dot.error { color: var(--danger); background: currentColor; }
+
+.context-index-status__toggle > strong {
+  flex: 0 0 auto;
+  font-size: var(--fs-meta);
+}
+
+.context-index-status__toggle > span:not(.context-index-status__dot) {
+  flex: 1 1 auto;
+  overflow: hidden;
+  color: var(--ink-muted);
+  font: var(--fs-micro)/1.3 var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.context-index-status__chevron {
+  flex: 0 0 auto;
+  width: 9px;
+  height: 9px;
+  border-right: 1.5px solid var(--ink-faint);
+  border-bottom: 1.5px solid var(--ink-faint);
+  transform: rotate(45deg) translate(-2px, 2px);
+  transition: transform 140ms ease;
+}
+
+.context-index-status__toggle[aria-expanded="true"] .context-index-status__chevron {
+  transform: rotate(225deg) translate(-2px, 2px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .context-index-status__chevron { transition: none; }
+}
+
+.context-index-status__detail {
+  display: grid;
+  gap: var(--sp-2);
+}
+
+.context-engine-note {
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: var(--fs-caption);
+  line-height: 1.55;
+}
+
+.context-bootstrap-caution {
+  margin: 0;
+  padding: var(--sp-2);
+  border-left: 2px solid var(--v-caution);
+  color: var(--ink);
+  background: color-mix(in srgb, var(--v-caution) 7%, transparent);
+  font-size: var(--fs-caption);
+  line-height: 1.5;
 }
 
 .context-live-strip {
@@ -269,28 +394,55 @@
   align-items: start;
 }
 
+/* No clipping: these panels hold provenance chips, and an anchored panel
+   inside a clipping box is a disclosure nobody can read. */
 .context-surface,
 .context-lineage {
   min-width: 0;
-  overflow: hidden;
   border: 1px solid var(--line);
   border-radius: var(--radius-panel);
   background: var(--surface);
   box-shadow: var(--shadow);
 }
 
+/*
+ * One 44px column header per region. The eyebrow keeps its exact words and
+ * moves onto the same line as the heading it qualifies, rather than owning a
+ * row: five stacked eyebrow/heading pairs stood between the top of the Index
+ * and its first indexed file.
+ */
 .context-surface-heading {
+  border-radius: calc(var(--radius-panel) - 1px) calc(var(--radius-panel) - 1px) 0 0;
   display: flex;
-  gap: 14px;
-  align-items: start;
+  gap: var(--sp-2) var(--sp-3);
+  align-items: center;
   justify-content: space-between;
-  padding: 14px;
+  min-height: 44px;
+  padding: 0 var(--sp-3);
   border-bottom: 1px solid var(--line);
 }
 
+.context-surface-heading > div {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: baseline;
+  min-width: 0;
+}
+
 .context-surface-heading h2 {
-  margin: 5px 0 0;
-  font-size: 1.05rem;
+  overflow: hidden;
+  margin: 0;
+  font-size: var(--fs-lead);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.client-context-heading > div:first-child > span,
+.context-surface-heading > div > span {
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .context-surface-heading > span {
@@ -299,19 +451,19 @@
   text-align: right;
 }
 
+/* One scroll region per route. These were 720px inner scrollers holding rows
+   that are now 44px each, so the page scroll is enough — and an inner scroller
+   would clip every row's lineage chip. */
 .context-candidate-list,
 .context-hit-list {
   display: grid;
-  max-height: 720px;
-  overflow: auto;
-  overscroll-behavior: contain;
 }
 
 .context-candidate,
 .context-hit {
   display: grid;
-  gap: 9px;
-  padding: 13px 14px;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-3);
   border-bottom: 1px solid var(--line);
 }
 
@@ -320,34 +472,99 @@
   border-bottom: 0;
 }
 
-.context-candidate-title,
+/* A source is a row, not a card: status, path, shape, destination, lineage. */
+.context-candidate__row,
 .context-hit-heading {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 10px;
+  display: flex;
+  gap: var(--sp-2);
   align-items: center;
+  min-height: 44px;
 }
 
-.context-candidate-title strong,
-.context-candidate-title small,
-.context-hit-heading strong,
-.context-hit-heading small {
-  display: block;
+.context-candidate__row > strong,
+.context-hit-heading > strong {
+  flex: 0 1 auto;
+  min-width: 0;
   overflow: hidden;
+  font-size: var(--fs-meta);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.context-candidate-title strong,
-.context-hit-heading strong {
-  font-size: 0.8rem;
+/* The shape line is the flexible track: it absorbs slack and gives it back
+   first, so the path and the lineage chip are never the things cut off. */
+.context-candidate__row > small,
+.context-hit-heading > small {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink-faint);
+  font: var(--fs-micro)/1.3 var(--font-mono);
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.context-candidate-title small,
-.context-hit-heading small {
-  margin-top: 4px;
-  color: var(--ink-faint);
-  font: var(--fs-micro)/1.3 ui-monospace, SFMono-Regular, Menlo, monospace;
+.client-context-view .context-open {
+  flex: 0 0 auto;
+  min-height: 44px;
+  padding: 0 var(--sp-3);
+  color: var(--accent-bright);
+  background: transparent;
+  font-size: var(--fs-caption);
+}
+
+.context-hit__why {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: baseline;
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--fs-caption);
+  line-height: 1.5;
+}
+
+.context-hit__why > span {
+  flex: 0 0 auto;
+  padding: 2px var(--sp-2);
+  border: 1px solid var(--line-control);
+  border-radius: var(--radius-chip);
+  color: var(--accent-bright);
+  font: var(--fs-micro)/1.4 var(--font-mono);
+}
+
+.context-hit__chunk {
+  margin: 0;
+  padding: var(--sp-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  background: var(--surface-soft);
+  color: var(--ink-muted);
+  font-size: var(--fs-caption);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+/* Block padding is zero while clamped: `-webkit-line-clamp` cuts at line six,
+   and any bottom padding then leaks a sliced seventh line under the ellipsis. */
+.context-hit__chunk[data-expanded="false"] {
+  display: -webkit-box;
+  overflow: hidden;
+  padding-block: 0;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 6;
+  line-clamp: 6;
+}
+
+.client-context-view .context-hit__more {
+  justify-self: start;
+  min-height: 44px;
+  padding: 0 var(--sp-2);
+  border: 0;
+  color: var(--accent-bright);
+  background: transparent;
+  font-size: var(--fs-caption);
 }
 
 .context-index-state {
@@ -376,75 +593,32 @@
   color: var(--ink-faint);
 }
 
-.context-candidate > p,
-.context-hit > p {
-  margin: 0;
-  color: var(--ink-muted);
-  font-size: 0.74rem;
+/* The reason a degraded candidate could not be indexed, stated in place. */
+.context-candidate > p {
+  margin: 0 0 var(--sp-2);
+  color: var(--v-caution);
+  font-size: var(--fs-caption);
   line-height: 1.55;
 }
 
-.context-hit > p {
-  padding: 10px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-control);
-  background: var(--surface-soft);
-  white-space: pre-wrap;
-}
-
 .context-hit-heading > span {
+  flex: 0 0 auto;
   color: var(--accent-bright);
-  font: 0.72rem/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font: var(--fs-caption)/1 var(--font-mono);
 }
 
-.context-score-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-control);
-}
-
-.context-score-grid > span {
-  display: grid;
-  gap: 4px;
-  padding: 8px;
-  border-right: 1px solid var(--line);
-}
-
-.context-score-grid > span:last-child {
-  border-right: 0;
-}
-
-.context-score-grid small {
-  color: var(--ink-faint);
-  font-size: var(--fs-micro);
-}
-
-.context-score-grid strong {
-  font: 0.72rem/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-
-.context-exact-record,
-.context-query-lineage,
 .context-lineage > dl {
   display: grid;
   gap: 6px;
   margin: 0;
 }
 
-.context-exact-record > div,
-.context-query-lineage > div,
 .context-lineage > dl > div {
   display: grid;
   grid-template-columns: 94px minmax(0, 1fr);
   gap: 8px;
 }
 
-.context-exact-record dt,
-.context-exact-record dd,
-.context-query-lineage dt,
-.context-query-lineage dd,
 .context-lineage dt,
 .context-lineage dd {
   min-width: 0;
@@ -454,47 +628,14 @@
   line-height: 1.45;
 }
 
-.context-exact-record dd,
-.context-query-lineage dd,
 .context-lineage dd {
   color: var(--ink-muted);
   overflow-wrap: anywhere;
 }
 
-.context-exact-record code,
-.context-query-lineage code,
 .context-lineage code {
   color: var(--ink-muted);
   font: inherit;
-}
-
-.candidate-chunks {
-  color: var(--ink-faint);
-  font-size: var(--fs-micro);
-}
-
-.candidate-chunks summary {
-  min-height: 28px;
-  cursor: pointer;
-}
-
-.candidate-chunks ol {
-  display: grid;
-  gap: 5px;
-  margin: 6px 0 0;
-  padding-left: 26px;
-}
-
-.candidate-chunks code {
-  overflow-wrap: anywhere;
-  color: var(--ink-muted);
-  font: var(--fs-micro)/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-
-.context-query-lineage {
-  padding: 12px 14px;
-  border-top: 1px solid var(--line);
-  background: var(--surface-soft);
 }
 
 .context-empty {
@@ -618,29 +759,36 @@
     border-radius: 0 0 var(--radius-control) var(--radius-control);
   }
 
-  .context-surface-heading,
-  .context-candidate-title {
-    align-items: start;
-  }
-
   .context-surface-heading {
     display: grid;
+    align-items: start;
   }
 
   .context-surface-heading > span {
     text-align: left;
   }
 
-  .context-candidate-title {
-    grid-template-columns: 1fr;
+  /* Rows wrap rather than clip: the path and the lineage both survive. */
+  .context-candidate__row,
+  .context-hit-heading {
+    flex-wrap: wrap;
+    padding: var(--sp-1) 0;
+  }
+
+  .context-candidate__row > small,
+  .context-hit-heading > small {
+    flex-basis: 100%;
+    text-align: left;
+  }
+
+  .context-surface-heading > div {
+    flex-wrap: wrap;
   }
 
   .context-index-state {
     width: fit-content;
   }
 
-  .context-exact-record > div,
-  .context-query-lineage > div,
   .context-lineage > dl > div {
     grid-template-columns: 1fr;
     gap: 3px;
@@ -669,43 +817,21 @@
 }
 .context-injection-disclosure,.context-recall-warning { display:flex; gap:8px; margin:0; padding:10px 14px; border:1px solid var(--line); border-radius:var(--radius-control); color:var(--ink-muted); font-size:var(--fs-caption); }
 .context-recall-warning { border-color:var(--v-caution); color:var(--v-caution); }
-.context-human-route { display:grid; grid-template-columns:auto minmax(0,1fr) auto; gap:8px; align-items:center; margin:8px 0; padding:8px; border-left:2px solid var(--accent); background:var(--surface-soft); }
-.context-human-route span { color:var(--accent-bright); font-size:var(--fs-caption); }
-.context-human-route strong { font-size:var(--fs-meta); font-weight:500; }
-.context-human-route small { color:var(--ink-faint); }
 .context-metric.caution { color:var(--v-caution); }
 .context-fabric-results { margin:12px 0; border:1px solid var(--line-strong); background:var(--surface); }
 .context-fabric-results>div:last-of-type { display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:1px; background:var(--line); }
 .context-fabric-results article { display:grid; gap:4px; padding:11px; background:var(--surface-soft); }
 .context-fabric-results article span { color:var(--accent-bright); font-size:var(--fs-caption); text-transform:capitalize; }
 .context-fabric-results article small { color:var(--ink-faint); }
-.embedding-engine-card {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: calc(var(--density-gap) * .75) calc(var(--density-gap) * 1.25);
-  align-items: center;
-  padding: var(--density-panel-pad);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-panel);
-  background: color-mix(in srgb, var(--surface) 92%, var(--accent) 8%);
-}
-
-.embedding-engine-card > div:first-child > span,
-.embedding-engine-card h2 { margin: 0; }
-.embedding-engine-card > div:first-child > span {
-  color: var(--ink-muted);
-  font: 600 0.7rem/1.2 var(--font-mono);
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-}
-.embedding-engine-card h2 { margin-top: 0.3rem; font-size: 1rem; }
-.embedding-engine-card p { max-width: 76ch; margin: 0.45rem 0 0; color: var(--ink-muted); font-size: 0.82rem; line-height: 1.55; }
-.embedding-engine-actions { display: inline-flex; padding: 0.2rem; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--surface); }
-.embedding-engine-actions button { min-height: 2rem; padding: 0 0.75rem; border: 0; border-radius: 4px; background: transparent; color: var(--ink-muted); font: 600 0.74rem/1 var(--font-body); }
+.embedding-engine-actions { display: inline-flex; flex: 0 0 auto; padding: 2px; border: 1px solid var(--line-control); border-radius: var(--radius-control); background: var(--surface); }
+/* 44px, because a mode switch that changes how every score was computed is not
+   a 34px control. The two mode paragraphs ride on these buttons' `title` and
+   are printed in full in the status expansion. */
+.embedding-engine-actions button { min-height: 44px; padding: 0 var(--sp-3); border: 0; border-radius: var(--radius-control); background: transparent; color: var(--ink-muted); font: var(--fw-strong) var(--fs-caption)/1 var(--font-body); }
 .embedding-engine-actions button.selected { background: var(--surface-raised); color: var(--ink); box-shadow: inset 0 0 0 1px var(--line-strong); }
-.embedding-engine-actions button:disabled { opacity: 0.55; }
-.embedding-engine-state { grid-column: 1 / -1; display: flex; align-items: center; gap: 0.5rem; min-height: 1.25rem; color: var(--ink-muted); font: 0.72rem/1.3 var(--font-mono); }
-.embedding-engine-state > span { width: 0.55rem; height: 0.55rem; border: 1px solid currentColor; border-radius: 50%; }
+.embedding-engine-actions button:disabled { color: var(--ink-disabled); }
+.embedding-engine-state { display: flex; flex: 1 1 200px; align-items: center; gap: var(--sp-2); min-width: 0; min-height: 20px; margin: 0; color: var(--ink-muted); font: var(--fs-micro)/1.3 var(--font-mono); }
+.embedding-engine-state > span { flex: 0 0 auto; width: 9px; height: 9px; border: 1px solid currentColor; border-radius: var(--radius-chip); }
 .embedding-engine-state > span.ready { color: var(--v-verified); background: currentColor; }
 .embedding-engine-state > span.working { color: var(--accent); animation: context-semantic-pulse 1.3s ease-in-out infinite; }
 .embedding-engine-state > span.error { color: var(--danger); background: currentColor; }
@@ -714,8 +840,6 @@
 @keyframes context-semantic-pulse { 50% { opacity: 0.35; } }
 
 @media (max-width: 720px) {
-  .embedding-engine-card { grid-template-columns: 1fr; }
   .embedding-engine-actions { width: 100%; }
   .embedding-engine-actions button { flex: 1; }
-  .embedding-engine-state { grid-column: 1; flex-wrap: wrap; }
 }

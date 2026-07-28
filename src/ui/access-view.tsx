@@ -33,9 +33,31 @@ import { ModelPicker } from "./model-picker";
 import { OFFLINE_INLINE_REASON } from "./connectivity";
 import { probeExtensionBridge, type ExtensionBridgeObservation } from "../capabilities/extension-bridge";
 import { ConnectSurface, type LocalProviderProbeResult } from "./connect/connect-surface";
-import type { ConnectLaneInput } from "./connect/connect-lanes";
+import {
+  connectLaneCountLabel,
+  connectLaneCountSeal,
+  describeConnectLanes,
+  type ConnectLaneInput,
+} from "./connect/connect-lanes";
 import { observeHostExtensionSupport } from "./connect/extension-bridge-presence";
+import { Popover } from "./popover";
+import { RouteHeader } from "./route-header";
+import { Seal } from "./seal";
 import "./access-view.css";
+
+/**
+ * The page paragraph, verbatim, with the one word the layout falsified.
+ *
+ * It said "below", and after the jump nav and the second heading block were
+ * removed there is no below — the lanes are here. Moving a sentence one rung
+ * down the ladder is allowed; leaving it pointing at something that no longer
+ * exists is not.
+ */
+const CONNECT_ROUTE_DESCRIPTION = "Use Chutes for application-encrypted inference, or connect browser-direct cloud and local models here. Credentials remain in page memory.";
+/** The Providers paragraph, verbatim, from the heading block this replaces. */
+const CONNECT_PROVIDERS_NOTE = "Everything else in Airship — workspace, editor, terminal and Git — already works without this. Only chat needs a model, and connecting one never closes the others.";
+/** The `ONE, OR SEVERAL AT ONCE` eyebrow, as the sentence its own count proves. */
+const CONNECT_COUNT_NOTE = "Connect one, or several at once. Connecting one never closes the others.";
 
 /** Where a Chutes personal key is created. Named on every key surface. */
 export const CHUTES_ACCOUNT_URL = "https://chutes.ai/app";
@@ -338,6 +360,10 @@ export function AccessView({
       setDetectedKind(credential.kind);
       setStrictProof(false);
       setStatus(`${compatibleModels.length} encrypted-inference candidate${compatibleModels.length === 1 ? "" : "s"} found. Catalog metadata is not proof. Finish verifies selected-model authorization and arms fresh per-turn evidence collection.`);
+      // The answer lands where the question was asked. Previously the panel
+      // appeared and the confirmation rendered 340px *below* the button that
+      // caused it, after four other lanes.
+      requestAnimationFrame(() => focusConnectSurface());
     } catch (caught) {
       clearEphemeral();
       if (input) input.value = "";
@@ -555,6 +581,11 @@ export function AccessView({
    * Moves to the browser-direct provider list without touching `location.hash`,
    * which is the router: the anchors this replaced navigated to `#chat` and
    * ejected people out of the connection route entirely.
+   *
+   * This remains a scroll rather than an in-lane render because the cloud and
+   * local key cards live in `provider-connections-view.tsx`, which this package
+   * does not own. Lifting them into each lane's `api-key` tabpanel is the one
+   * remaining half of the fabric merge.
    */
   function focusDirectProviders(provider?: "openai" | "anthropic" | "xai") {
     const target = typeof document === "undefined"
@@ -601,21 +632,42 @@ export function AccessView({
     },
   };
 
+  const lanes = describeConnectLanes(laneInput);
+
   return (
     <section class="access-connection-view" aria-labelledby="access-connection-title">
-      <header class="access-connection-heading">
-        <span>Inference connections</span>
-        <h1 id="access-connection-title">Connect models</h1>
-        <p>Use Chutes for application-encrypted inference, or connect browser-direct cloud and local models below. Credentials remain in page memory.</p>
-        {/*
-          Buttons, not anchors: the hash is the router, so `href="#section"`
-          resolved to an unknown route and threw people out to Chat.
-        */}
-        <nav class="access-provider-jump" aria-label="Jump to a section of this page">
-          <button type="button" onClick={focusConnectSurface}><Icon name="lock" size={15} />Providers</button>
-          {additionalProviders ? <button type="button" onClick={() => focusDirectProviders()}><Icon name="model" size={15} />Cloud keys &amp; local models</button> : null}
-        </nav>
-      </header>
+      {/*
+        Six levels of chrome — eyebrow, 45.9px H1, paragraph, two scroll anchors
+        dressed as tabs, a second eyebrow, a second H2 and a second paragraph —
+        become one 44px row. Not one word is dropped: the eyebrow is the ⓘ
+        panel's heading, both paragraphs are its body, and `ONE, OR SEVERAL AT
+        ONCE` is the count chip's own sentence, beside a number that proves it.
+      */}
+      <RouteHeader
+        routeId="access"
+        density="tool"
+        title="Connect models"
+        eyebrow="Inference connections"
+        description={CONNECT_ROUTE_DESCRIPTION}
+        headingId="access-connection-title"
+        notes={<p class="access-route-note">{CONNECT_PROVIDERS_NOTE}</p>}
+        status={
+          <Popover
+            class="access-count-popover"
+            triggerClass="access-count-chip"
+            label={`${connectLaneCountLabel(lanes)}. ${CONNECT_COUNT_NOTE}`}
+            heading="Connections held in this tab"
+            trigger={<Seal state={connectLaneCountSeal(lanes)} density="chip" label={connectLaneCountLabel(lanes)} />}
+          >
+            <p>{CONNECT_COUNT_NOTE}</p>
+            <ul class="access-count-list">
+              {lanes.map((lane) => (
+                <li key={lane.id}><strong>{lane.title}</strong> — {lane.status.label}</li>
+              ))}
+            </ul>
+          </Popover>
+        }
+      />
 
       <div class="access-connection-layout">
         {/*
@@ -631,6 +683,13 @@ export function AccessView({
               <Icon name="warning" size={16} />{OFFLINE_INLINE_REASON}
             </p>
           ) : null}
+          {/*
+            Above the lanes, not below them. These two lines answer the button a
+            person just pressed, and they used to render after every remaining
+            lane — 340px past the control, which is not an answer.
+          */}
+          {status ? <p class="access-live-status" role="status" aria-live="polite"><span />{status}</p> : null}
+          {error ? <p class="access-live-error" role="alert"><Icon name="warning" size={16} />{error}</p> : null}
 
           <ConnectSurface
             input={laneInput}
@@ -638,7 +697,16 @@ export function AccessView({
             {...(onCheckLocalProviders ? { onCheckLocalProviders } : {})}
             {...(codexSignIn ? { onStartCodexSignIn: codexSignIn.onStart, onSubmitCodexCode: codexSignIn.onSubmitCode } : {})}
             {...(publishedExtensionInstallUrl ? { extensionInstallUrl: publishedExtensionInstallUrl } : {})}
-            chutesPanel={isChutesConnected(connection) ? (
+            chutesPanel={<>
+            {/*
+              The OAuth notice, at lane level and in every tone, never behind a
+              disclosure. It used to render only inside the page-level boundary
+              aside (all tones) and inside the sign-in card (error only), so the
+              in-flight and completion messages had a single home on a card that
+              no longer exists.
+            */}
+            {oauthNotice ? <p class={`oauth-boundary-status ${oauthNotice.tone}`} role={oauthNotice.tone === "error" ? "alert" : "status"}>{oauthNoticeMessage}</p> : null}
+            {isChutesConnected(connection) ? (
             <div class="active-connection-summary">
               <div class="access-section-heading">
                 <div>
@@ -689,48 +757,64 @@ export function AccessView({
                   </div>
                 </div>
               ) : null}
-              <div class="credential-kind-result" role="status">
-                <Icon name={candidate.credentialKind === "oauth-user-token" ? "access" : "lock"} size={20} />
-                <div>
+              {/*
+                Row 1: who you are connecting as, and when the catalogue was
+                read. The credential class's second sentence and the whole
+                58px provenance band are one gesture away, verbatim.
+              */}
+              <div class="candidate-identity">
+                <p class="credential-kind-result" role="status">
+                  <Icon name={candidate.credentialKind === "oauth-user-token" ? "access" : "lock"} size={18} />
                   <strong>{credentialKindLabel(candidate.credentialKind)}</strong>
-                  <span>{credentialKindDetail(candidate.credentialKind)}</span>
-                </div>
-              </div>
-              <label>
-                <span>Model {modelId === candidate.recommendedModelId ? "· privacy-first recommendation" : ""}</span>
-                <ModelPicker value={modelId} models={candidate.models} onSelect={setModelId} disabled={busy} />
-              </label>
-              {selectedCandidateModel ? <ModelCandidateSummary model={selectedCandidateModel} /> : null}
-              <div class="catalog-provenance">
-                <span><Icon name="proof" size={14} />Catalog read {formatCatalogTime(candidate.fetchedAt)}</span>
-                <span class={candidate.sourceComplete ? "complete" : "partial"}>{candidate.managementState === "fresh" ? "Inference + management metadata loaded" : candidate.sourceComplete ? "Authoritative inference catalog · management enrichment deferred" : "Partial provider metadata"}</span>
-                {candidate.managementState === "disabled" ? <button type="button" onClick={() => void enrichCatalog()} disabled={busy || !online}>Load live availability metadata</button> : null}
-                {candidate.issues.length > 0 ? (
-                  <details><summary>{candidate.issues.length} catalog notice{candidate.issues.length === 1 ? "" : "s"}</summary>{candidate.issues.map((issue, index) => <p key={`${issue.source}-${issue.code}-${index}`}>{issue.source}: {issue.message}</p>)}</details>
-                ) : null}
-              </div>
-              <fieldset class="proof-policy-consent">
-                <legend>Turn proof policy</legend>
-                <button type="button" class={!strictProof ? "selected" : ""} aria-pressed={!strictProof} onClick={() => setStrictProof(false)}>
-                  <span><strong>Verify &amp; record</strong><small>Recommended. Evaluate still-current endpoint evidence before every turn and refresh it when needed; leave incomplete CPU or GPU claims visibly unverified without breaking encrypted chat.</small></span>
-                </button>
-                <button
-                  type="button"
-                  class={strictProof ? "selected" : ""}
-                  aria-pressed={strictProof}
-                  disabled={!CHUTES_STRICT_ENDPOINT_PROOF_CAPABILITY.available}
-                  title={CHUTES_STRICT_ENDPOINT_PROOF_CAPABILITY.reason}
-                  onClick={() => {
-                    if (CHUTES_STRICT_ENDPOINT_PROOF_CAPABILITY.available) setStrictProof(true);
-                  }}
+                </p>
+                <Popover
+                  class="candidate-help"
+                  triggerClass="candidate-help__trigger"
+                  label={`About this credential class. ${credentialKindDetail(candidate.credentialKind)}`}
+                  heading={credentialKindLabel(candidate.credentialKind)}
+                  trigger={<span aria-hidden="true">?</span>}
                 >
-                  <span>
-                    <strong>Strict fail-closed · unavailable</strong>
-                    <small>{CHUTES_STRICT_ENDPOINT_PROOF_CAPABILITY.reason} Verify &amp; record still evaluates current evidence before every turn and refreshes it when needed.</small>
-                  </span>
-                </button>
-                <p>This policy is not proof. Completed receipts record only what the browser actually verified.</p>
-              </fieldset>
+                  <p>{credentialKindDetail(candidate.credentialKind)}</p>
+                </Popover>
+                <Popover
+                  class="catalog-provenance-popover"
+                  triggerClass="catalog-provenance-chip"
+                  label={`Catalog read ${formatCatalogTime(candidate.fetchedAt)}. Freshness, optional enrichment${candidate.issues.length > 0 ? `, and ${String(candidate.issues.length)} catalog notice${candidate.issues.length === 1 ? "" : "s"}` : ""}.`}
+                  heading="Catalog read"
+                  trigger={<><Icon name="proof" size={14} />Catalog read {formatCatalogTime(candidate.fetchedAt)}</>}
+                >
+                  <p class={candidate.sourceComplete ? "complete" : "partial"}>{candidate.managementState === "fresh" ? "Inference + management metadata loaded" : candidate.sourceComplete ? "Authoritative inference catalog · management enrichment deferred" : "Partial provider metadata"}</p>
+                  {candidate.managementState === "disabled" ? <button type="button" onClick={() => void enrichCatalog()} disabled={busy || !online}>Load live availability metadata</button> : null}
+                  {candidate.issues.length > 0 ? (
+                    <details><summary>{candidate.issues.length} catalog notice{candidate.issues.length === 1 ? "" : "s"}</summary>{candidate.issues.map((issue, index) => <p key={`${issue.source}-${issue.code}-${index}`}>{issue.source}: {issue.message}</p>)}</details>
+                  ) : null}
+                </Popover>
+              </div>
+              {/*
+                Row 2: the task. `Model · privacy-first recommendation` was a
+                22px label floating above the control; the recommendation now
+                travels inside the trigger, with the model it describes.
+              */}
+              <label class="candidate-model">
+                <span>Model</span>
+                <ModelPicker
+                  value={modelId}
+                  models={candidate.models}
+                  onSelect={setModelId}
+                  disabled={busy}
+                  {...(candidate.recommendedModelId ? { recommendedModelId: candidate.recommendedModelId } : {})}
+                />
+              </label>
+              <div class="candidate-decision">
+                {selectedCandidateModel ? <ModelCandidateSummary model={selectedCandidateModel} /> : null}
+                <ProofPolicyControl strict={strictProof} onChange={setStrictProof} />
+              </div>
+              {/*
+                The honesty line. Always visible, outside every disclosure, at
+                lane altitude — it is the sentence the whole fieldset exists to
+                qualify, and it does not get progressive-disclosed.
+              */}
+              <p class="proof-policy__caveat">This policy is not proof. Completed receipts record only what the browser actually verified.</p>
               <div class="candidate-actions">
                 <button type="button" onClick={chooseDifferentCredential} disabled={busy}>Use a different credential</button>
                 <button class="primary" type="button" onClick={() => void activate()} disabled={busy}>Finish: verify &amp; connect</button>
@@ -759,7 +843,7 @@ export function AccessView({
                       <small>Page memory</small>
                     </button>
                   </div>
-                  {chutesSignInAvailable && activeChutesMethod === "oauth" ? (
+                  {activeChutesMethod === "oauth" ? (
                     <section class="oauth-primary-entry" aria-labelledby="oauth-primary-title">
                       <Icon name="access" size={22} />
                       <div>
@@ -767,22 +851,68 @@ export function AccessView({
                         <p>{localOAuthHandler
                           ? "Your password never touches Airship. The app secret stays in the localhost process, outside browser JavaScript."
                           : "Your password never touches Airship, and no client secret is used."}</p>
+                        {/*
+                          Every word about Chutes OAuth now lives inside Chutes
+                          OAuth. The 168px/240px page-level boundary aside used
+                          to sit between the lane list and the provider fabric,
+                          where it was read by people who will never touch this
+                          flow. Its summary names the second half of what it
+                          holds, so the disclosure states its own contents.
+                        */}
                         <details class="oauth-mechanism">
-                          <summary>How this works</summary>
+                          <summary>How this works · what the handler can see</summary>
                           <p>{localOAuthHandler
                             ? "The browser creates the Authorization Code + S256 PKCE request. The same-origin localhost handler adds the registered app secret only during token exchange; it never stores tokens or exposes the secret to the page."
                             : "Profile, billing, and inference connect through Authorization Code + S256 PKCE with a Chutes app registered for public-client token exchange."}</p>
+                          <strong>{localOAuthHandler ? "Local token-handler boundary" : "Public-client OAuth boundary"}</strong>
+                          <p>{localOAuthHandler
+                            ? "The localhost handler receives only the one-time code, PKCE verifier, and memory-only token requests. It adds its process-held app secret and returns the provider response without persisting it. Access and rotating refresh tokens remain in this page's memory."
+                            : "The client ID is public. A one-time PKCE verifier survives only the authorization redirect; access and rotating refresh tokens remain in this page's memory. Directory visibility is a separate provider setting."}</p>
+                          {/*
+                            The operator-addressed cause sits with the boundary
+                            it explains, and outside the registration block —
+                            that block renders only when a diagnostic exists,
+                            which is precisely the case where this sentence is
+                            not needed. Gating the explanation on availability
+                            made the one string that says WHY sign-in is
+                            unavailable renderable only when it was available.
+                          */}
+                          {!chutesSignInAvailable ? (
+                            <p class="oauth-boundary-status warning" role="status">Deployment detail: {oauthOrigin.reason}</p>
+                          ) : null}
+                          {oauthDiagnostic ? (
+                            <details class="oauth-diagnostic">
+                              <summary>Registration details</summary>
+                              <p>{localOAuthHandler
+                                ? <>The callback must match exactly. This localhost registration uses <code>client_secret_post</code>; only the same-origin handler performs token operations.</>
+                                : <>The callback must match exactly, and the Chutes app must be a Browser/native PKCE client with token endpoint authentication set to <code>none</code>.</>}</p>
+                              <dl>
+                                <div><dt>Homepage</dt><dd>{oauthDiagnostic.homepageUrl}</dd></div>
+                                <div><dt>Callback</dt><dd>{oauthDiagnostic.callbackUrl}</dd></div>
+                                <div><dt>Scopes</dt><dd>{oauthDiagnostic.scopes.join(" · ")}</dd></div>
+                              </dl>
+                              <button
+                                type="button"
+                                disabled={!online || !chutesSignInAvailable}
+                                onClick={startChutesSignIn}
+                              >
+                                Start sign-in again
+                              </button>
+                            </details>
+                          ) : null}
                         </details>
                         <button
                           class="primary"
                           type="button"
-                          disabled={busy || !online}
+                          // The explanation above is now reachable whether or
+                          // not this deployment can start the flow; the control
+                          // that would fail is the only part still gated.
+                          disabled={busy || !online || !chutesSignInAvailable}
                           onClick={startChutesSignIn}
                         >
                           Sign in to Chutes
                         </button>
                         {oauthDiagnosticError ? <p class="oauth-boundary-status error" role="alert">{oauthDiagnosticError}</p> : null}
-                        {oauthNotice?.tone === "error" ? <p class="oauth-boundary-status error" role="alert">{oauthNoticeMessage}</p> : null}
                       </div>
                     </section>
                   ) : null}
@@ -828,14 +958,18 @@ export function AccessView({
                   ) : null}
                 </div>
           )}
+          </>}
           />
-
-          {status ? <p class="access-live-status" role="status" aria-live="polite"><span />{status}</p> : null}
-          {error ? <p class="access-live-error" role="alert"><Icon name="warning" size={16} />{error}</p> : null}
         </section>
 
         <details class="access-connection-card capability-card">
-          <summary><span>Connection methods</span><strong id="capability-matrix-title">Compare capabilities</strong></summary>
+          {/*
+            `CONNECTION METHODS` was a category label for a one-item category,
+            so it merges into the summary the row already needed. The four
+            headers, four rows, twelve marks and the eligibility caveat below
+            are untouched.
+          */}
+          <summary><strong id="capability-matrix-title">Compare what each method can do</strong></summary>
           <div class="capability-table-wrap">
             <table>
               <thead><tr><th scope="col">Capability</th><th scope="col">Sign-in eligible</th><th scope="col">Key eligible</th><th scope="col">Active method</th></tr></thead>
@@ -855,50 +989,73 @@ export function AccessView({
         </details>
       </div>
 
-      <aside class="oauth-browser-boundary">
-        <Icon name="lock" size={19} />
-        <div>
-          <strong>{localOAuthHandler ? "Local token-handler boundary" : "Public-client OAuth boundary"}</strong>
-          <p>{localOAuthHandler
-            ? "The localhost handler receives only the one-time code, PKCE verifier, and memory-only token requests. It adds its process-held app secret and returns the provider response without persisting it. Access and rotating refresh tokens remain in this page's memory."
-            : "The client ID is public. A one-time PKCE verifier survives only the authorization redirect; access and rotating refresh tokens remain in this page's memory. Directory visibility is a separate provider setting."}</p>
-          {oauthNotice ? <p class={`oauth-boundary-status ${oauthNotice.tone}`} role={oauthNotice.tone === "error" ? "alert" : "status"}>{oauthNoticeMessage}</p> : null}
-          {oauthDiagnostic ? (
-            <details class="oauth-diagnostic">
-              <summary>Registration details</summary>
-              <p>{localOAuthHandler
-                ? <>The callback must match exactly. This localhost registration uses <code>client_secret_post</code>; only the same-origin handler performs token operations.</>
-                : <>The callback must match exactly, and the Chutes app must be a Browser/native PKCE client with token endpoint authentication set to <code>none</code>.</>}</p>
-              <dl>
-                <div><dt>Homepage</dt><dd>{oauthDiagnostic.homepageUrl}</dd></div>
-                <div><dt>Callback</dt><dd>{oauthDiagnostic.callbackUrl}</dd></div>
-                <div><dt>Scopes</dt><dd>{oauthDiagnostic.scopes.join(" · ")}</dd></div>
-              </dl>
-              {/*
-                The operator-addressed cause lives here, beside the rest of the
-                deployment detail. The connect surface above states the
-                consequence and the working alternative instead.
-              */}
-              {!chutesSignInAvailable ? (
-                <p class="oauth-boundary-status warning" role="status">Deployment detail: {oauthOrigin.reason}</p>
-              ) : null}
-              <button
-                type="button"
-                disabled={!online || !chutesSignInAvailable}
-                onClick={startChutesSignIn}
-              >
-                Start sign-in again
-              </button>
-            </details>
-          ) : null}
-        </div>
-      </aside>
       {additionalProviders ? (
         <div id="additional-inference-providers" class="access-additional-providers" aria-label="Additional cloud and local inference providers" tabIndex={-1}>
           {additionalProviders}
         </div>
       ) : null}
     </section>
+  );
+}
+
+/** The recommended option's full description, verbatim, at either altitude. */
+const VERIFY_AND_RECORD_DETAIL = "Recommended. Evaluate still-current endpoint evidence before every turn and refresh it when needed; leave incomplete CPU or GPU claims visibly unverified without breaking encrypted chat.";
+const STRICT_UNAVAILABLE_DETAIL = `${CHUTES_STRICT_ENDPOINT_PROOF_CAPABILITY.reason} Verify & record still evaluates current evidence before every turn and refreshes it when needed.`;
+
+/**
+ * Turn proof policy, keyed on capability rather than on taste.
+ *
+ * When strict fail-closed is unavailable in this build — always, today — a
+ * 465×108px tile of grey prose for a permanently `disabled` control is 28% of
+ * the panel spent on a choice with one option. So the choice collapses to the
+ * option that exists plus a disclosure that says exactly what is inside it, and
+ * both option descriptions live there verbatim. The moment the capability flips
+ * to `true` the full two-tile fieldset returns with no design change, because
+ * the branch is the capability record itself.
+ */
+function ProofPolicyControl({
+  strict,
+  onChange,
+}: Readonly<{ strict: boolean; onChange: (value: boolean) => void }>) {
+  if (!CHUTES_STRICT_ENDPOINT_PROOF_CAPABILITY.available) {
+    return (
+      <div class="proof-policy">
+        <p class="proof-policy__legend">Turn proof policy</p>
+        <p class="proof-policy__selected">
+          <Icon name="check" size={15} />
+          <strong>Verify &amp; record</strong>
+          <span>recommended</span>
+        </p>
+        <details class="proof-policy__why">
+          <summary>Strict fail-closed is unavailable in this build. Why, and what each policy does</summary>
+          <p><strong>Verify &amp; record.</strong> {VERIFY_AND_RECORD_DETAIL}</p>
+          <p><strong>Strict fail-closed · unavailable.</strong> {STRICT_UNAVAILABLE_DETAIL}</p>
+        </details>
+      </div>
+    );
+  }
+  return (
+    <fieldset class="proof-policy-consent">
+      <legend>Turn proof policy</legend>
+      <button type="button" class={!strict ? "selected" : ""} aria-pressed={!strict} onClick={() => onChange(false)}>
+        <span><strong>Verify &amp; record</strong><small>{VERIFY_AND_RECORD_DETAIL}</small></span>
+      </button>
+      <button
+        type="button"
+        class={strict ? "selected" : ""}
+        aria-pressed={strict}
+        disabled={!CHUTES_STRICT_ENDPOINT_PROOF_CAPABILITY.available}
+        title={CHUTES_STRICT_ENDPOINT_PROOF_CAPABILITY.reason}
+        onClick={() => {
+          if (CHUTES_STRICT_ENDPOINT_PROOF_CAPABILITY.available) onChange(true);
+        }}
+      >
+        <span>
+          <strong>Strict fail-closed</strong>
+          <small>Block the turn unless every required endpoint claim verifies first.</small>
+        </span>
+      </button>
+    </fieldset>
   );
 }
 
@@ -969,7 +1126,12 @@ function ModelCandidateSummary({ model }: { model: AirshipModel }) {
       <div><span>Availability</span><strong>{model.availability}</strong><small>{model.provenance.availability === "unavailable" ? "live status unavailable" : "provider management snapshot"}</small></div>
       <div><span>Context</span><strong>{context ? formatCompactNumber(context) : "unknown"}</strong><small>{model.maxOutputTokens ? `${formatCompactNumber(model.maxOutputTokens)} max output` : "output limit unavailable"}</small></div>
       <div><span>Input / output</span><strong>{formatModelPrice(model.pricing.input.usdPerMillion)} / {formatModelPrice(model.pricing.output.usdPerMillion)}</strong><small>USD per million tokens</small></div>
-      <div><span>Trust readiness</span><strong>{model.trust.consistency === "conflict" ? "metadata conflict" : "evidence candidate"}</strong><small>verification remains {model.trust.verification}</small></div>
+      {/*
+        The caveat attaches to the model rather than living in a paragraph
+        somewhere else on the page: "evidence candidate" is a catalogue claim,
+        and this is the tile that says so.
+      */}
+      <div><span>Trust readiness</span><strong>{model.trust.consistency === "conflict" ? "metadata conflict" : "evidence candidate"}</strong><small>verification remains {model.trust.verification}</small><small>catalog metadata is not proof</small></div>
     </div>
   );
 }

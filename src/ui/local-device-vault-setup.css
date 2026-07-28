@@ -13,19 +13,18 @@
   margin: 0;
 }
 
+/* One 44px row: the panel names itself and states its live readiness. The
+   route above it already carries the title, the state and the provider. */
 .local-device-vault__header {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 18px;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-3);
+  min-height: 44px;
 }
 
-.local-device-vault__header > div {
-  display: grid;
-  gap: 4px;
-}
+.local-device-vault__header h2 { font-size: var(--fs-lead); }
 
-.local-device-vault__header > div > p:last-child,
 .local-device-vault__choice span,
 .local-device-vault__durability span,
 .local-device-vault__ceremony p,
@@ -38,6 +37,7 @@
 
 .local-device-vault__header > span {
   flex: none;
+  margin-inline-start: auto;
   padding: 5px 9px;
   border: 1px solid var(--line);
   border-radius: 999px;
@@ -50,10 +50,12 @@
   color: var(--v-verified);
 }
 
+/* Brass encodes "you are here" or "act here". A category label is neither. */
 .local-device-vault__eyebrow {
-  color: var(--brass);
-  font: 700 var(--fs-caption)/1.2 var(--font-mono);
-  letter-spacing: .1em;
+  margin: 0;
+  color: var(--ink-muted);
+  font: var(--fw-strong) var(--fs-micro)/1.2 var(--font-mono);
+  letter-spacing: .11em;
   text-transform: uppercase;
 }
 
@@ -82,7 +84,24 @@
 }
 
 .local-device-vault button {
-  min-height: 40px;
+  min-height: 44px;
+}
+
+/* A one-time secret on screen is a page-level condition, so it says so at the
+   top of the panel and stays there while the user scrolls the ceremony. */
+.local-device-vault__ceremony-alert {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid color-mix(in srgb, var(--v-caution) 55%, transparent);
+  border-left-width: 3px;
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--v-caution) 10%, var(--surface));
+  color: var(--v-caution);
+  font-size: var(--fs-meta);
+  font-weight: var(--fw-strong);
 }
 
 .local-device-vault__secondary {
@@ -111,26 +130,64 @@
   gap: 3px;
 }
 
+.local-device-vault__ceremony {
+  scroll-margin-block: var(--sp-5);
+}
+
+.local-device-vault__ceremony:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* 11 groups of four on a tabular grid: transcribable, and a wrong character is
+   visible rather than lost inside one 57-character run. */
 .local-device-vault__ceremony output {
-  display: block;
-  width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-3);
   box-sizing: border-box;
-  padding: 12px;
-  border: 1px solid var(--line-strong);
+  max-width: 46ch;
+  padding: var(--sp-3);
+  border: 1px solid var(--line-control);
   border-radius: var(--radius-control);
-  overflow-wrap: anywhere;
   user-select: all;
   color: var(--accent-bright);
   background: var(--ground);
-  font: 600 var(--fs-meta)/1.55 var(--font-mono);
+  font: var(--fw-strong) var(--fs-body)/1.6 var(--font-mono);
+  font-variant-numeric: tabular-nums;
 }
 
+.local-device-vault__ceremony output .recovery-key__prefix { color: var(--ink-muted); }
+
+/* Copy is the primary here: the measured route to losing this key was that
+   the only action was a download and the only affordance was select-all. */
+.local-device-vault__ceremony .local-device-vault__actions > button:first-child {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--ground);
+  font-weight: var(--fw-title);
+}
+
+.local-device-vault__custody {
+  margin: 0;
+  color: var(--v-caution);
+  font-size: var(--fs-caption);
+}
+
+.local-device-vault__custody[data-custody="copied"],
+.local-device-vault__custody[data-custody="downloaded"] { color: var(--v-verified); }
+
+/* A 44px hit row: the acknowledgement is the highest-consequence control on
+   the route and it was an 18px box in a 25px line. */
 .local-device-vault__check {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
-  align-items: start;
+  align-items: center;
   gap: 9px;
+  min-height: 44px;
+  padding: var(--sp-1) 0;
   color: var(--ink);
+  cursor: pointer;
   line-height: 1.45;
 }
 
@@ -200,42 +257,6 @@
   letter-spacing: .08em;
 }
 
-.local-device-vault__readiness {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 1px;
-  overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-control);
-  background: var(--line);
-}
-
-.local-device-vault__readiness > div {
-  display: grid;
-  gap: 3px;
-  min-width: 0;
-  padding: 12px;
-  background: var(--surface-soft);
-}
-
-.local-device-vault__readiness span {
-  color: var(--ink-muted);
-  font: var(--fs-caption)/1.2 var(--font-mono);
-  text-transform: uppercase;
-}
-
-.local-device-vault__readiness strong {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.local-device-vault__readiness > p {
-  grid-column: 1 / -1;
-  padding: 10px 12px;
-  color: var(--v-caution);
-  background: var(--surface-soft);
-}
-
 .local-device-vault__restore-intro {
   display: grid;
   gap: 4px;
@@ -258,10 +279,19 @@
   border-radius: var(--radius-control);
 }
 
+/* A section header inside the panel, not a UA notch cut into a border. */
 .local-device-vault__restore legend {
-  padding: 0 5px;
-  font-weight: 700;
+  float: left;
+  width: 100%;
+  margin-bottom: var(--sp-2);
+  padding: 0;
+  color: var(--ink-muted);
+  font: var(--fw-strong) var(--fs-caption)/1.2 var(--font-mono);
+  letter-spacing: .11em;
+  text-transform: uppercase;
 }
+
+.local-device-vault__restore legend + * { clear: both; }
 
 .local-device-vault__restore fieldset label {
   grid-template-columns: auto minmax(0, 1fr);
@@ -273,10 +303,56 @@
   gap: 2px;
 }
 
+.local-device-vault__restore fieldset label {
+  min-height: 44px;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--line-control);
+  border-radius: var(--radius-control);
+  cursor: pointer;
+}
+
+.local-device-vault__restore fieldset label:focus-within {
+  border-color: var(--focus);
+}
+
 .local-device-vault__restore input[type="radio"] {
   width: 18px;
   height: 18px;
   margin: 2px 0 0;
+}
+
+/* The one irreversible action on this route stops wearing the same colour as
+   Publish. The native file control gets the route's own 44px control box. */
+.local-device-vault input[type="file"] {
+  min-height: 44px;
+  padding: var(--sp-2) var(--sp-3);
+  border-color: var(--line-control);
+  cursor: pointer;
+}
+
+.local-device-vault input[type="file"]::file-selector-button {
+  min-height: 32px;
+  margin-inline-end: var(--sp-3);
+  padding: var(--sp-1) var(--sp-3);
+  border: 1px solid var(--line-control);
+  border-radius: var(--radius-control);
+  color: var(--ink);
+  background: var(--surface-raised);
+  cursor: pointer;
+  font: inherit;
+}
+
+.local-device-vault__restore-ack {
+  padding: var(--sp-3);
+  border: 1px solid color-mix(in srgb, var(--v-caution) 55%, transparent);
+  border-left-width: 3px;
+  border-radius: var(--radius-control);
+}
+
+.local-device-vault .local-device-vault__restore .local-device-vault__actions > button:first-child {
+  border-color: var(--v-caution);
+  background: color-mix(in srgb, var(--v-caution) 22%, var(--surface));
+  color: var(--ink);
 }
 
 /* Box, border and radius come from the one `.notice` recipe in shell.css; the
@@ -296,11 +372,9 @@
   .local-device-vault__header > span { justify-self: start; }
   .local-device-vault__choice button,
   .local-device-vault__durability button { justify-self: start; }
-  .local-device-vault__readiness { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 440px) {
-  .local-device-vault__readiness { grid-template-columns: 1fr; }
   .local-device-vault__actions { display: grid; }
   .local-device-vault__actions button { width: 100%; }
 }

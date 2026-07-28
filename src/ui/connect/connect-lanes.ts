@@ -2,6 +2,7 @@ import type { SealState } from "../seal";
 import {
   bridgeCarriesProvider,
   bridgeRefusalReason,
+  bridgeSummary,
   type ExtensionBridgeObservation,
   type ExtensionBridgeProviderId,
   type HostExtensionSupport,
@@ -27,6 +28,7 @@ export const CONNECT_LANE_IDS = Object.freeze([
   "claude",
   "grok",
   "local",
+  "companion",
 ] as const);
 
 export type ConnectLaneId = (typeof CONNECT_LANE_IDS)[number];
@@ -47,10 +49,26 @@ export type ConnectLaneStatus =
   | Readonly<{ kind: "offline"; label: string; detail: string }>
   | Readonly<{ kind: "unavailable"; label: string; detail: string }>;
 
+/**
+ * A `dt`/`dd` pair a lane can show without being opened.
+ *
+ * Only used where the value is an observation rather than a default: the
+ * Companion's relay/cache/compute readings are promoted onto its collapsed row
+ * when the extension is actually answering, because a truthful positive state
+ * that needs a click to see is a state nobody sees.
+ */
+export type ConnectLaneFact = Readonly<{ label: string; value: string }>;
+
 export type ConnectLane = Readonly<{
   id: ConnectLaneId;
   /** The product name a person recognises, not the vendor's API name. */
   title: string;
+  /**
+   * The qualifier rendered on the same baseline as the title.
+   *
+   * Never the title again: a lane whose qualifier repeats its own name spends a
+   * whole row saying nothing, which is what `Chutes` over `Chutes` did.
+   */
   vendor: string;
   /** One line describing this lane in the state it is actually in. */
   summary: string;
@@ -59,6 +77,8 @@ export type ConnectLane = Readonly<{
   oauthStatus?: ConnectLaneStatus;
   /** Rendered glyph state, from the app's single seal family. */
   seal: SealState;
+  /** Observed values worth showing before the lane is opened. */
+  facts?: readonly ConnectLaneFact[];
 }>;
 
 export type ConnectLaneInput = Readonly<{
@@ -94,9 +114,17 @@ export type ConnectLaneInput = Readonly<{
 }>;
 
 const CHUTES_KEY_SENTENCE = "Chutes personal keys start with cpk_.";
-const CHUTES_LANE = "Encrypted inference with per-turn evidence.";
+/*
+ * The lane's defining sentence, promoted out of every summary arm and into the
+ * header qualifier, where it is legible while the lane is *closed*. It used to
+ * be prefixed onto four summaries and the qualifier was the word "Chutes" under
+ * the title "Chutes" — one string said four times, one said twice, and the
+ * thing the lane is for said nowhere a closed lane could show it.
+ */
+const CHUTES_LANE_QUALIFIER = "Encrypted inference with per-turn evidence";
 const IN_THIS_TAB = "Connected in page memory for this tab.";
 const NO_INSTALL_PAGE = "This embedding did not configure the Airship Companion install hub.";
+const COMPANION_TITLE = "Airship Companion";
 
 /** Lower sorts first. Anything a person can act on now outranks anything else. */
 const STATUS_RANK: Readonly<Record<ConnectLaneStatus["kind"], number>> = Object.freeze({
@@ -134,19 +162,47 @@ type LaneCopy = Readonly<{ summary: string; status: ConnectLaneStatus }>;
  * itself between renders for reasons a person cannot see.
  */
 export function describeConnectLanes(input: ConnectLaneInput): readonly ConnectLane[] {
-  const lanes: readonly ConnectLane[] = Object.freeze([
-    lane("chutes", "Chutes", "Chutes", chutesLane(input)),
-    lane("codex", "OpenAI", "Codex account or API", codexLane(input)),
+  const providers: readonly ConnectLane[] = Object.freeze([
+    lane("chutes", "Chutes", CHUTES_LANE_QUALIFIER, chutesLane(input)),
+    codexProviderLane(input),
     bridgeProviderLane("claude", "Anthropic", "Claude account or API", input, "anthropic"),
     bridgeProviderLane("grok", "xAI", "Grok account or API", input, "xai"),
     lane("local", "Ollama & LM Studio", "This machine", localLane(input)),
   ]);
-  return Object.freeze(
-    lanes
+  return Object.freeze([
+    ...providers
       .map((value, index) => Object.freeze({ value, index }))
       .sort((a, b) => (STATUS_RANK[a.value.status.kind] - STATUS_RANK[b.value.status.kind]) || (a.index - b.index))
       .map(({ value }) => value),
-  );
+    /*
+     * The Companion is pinned last rather than ranked, and deliberately: it is
+     * the only row that connects nothing. Ranking it would let "extension
+     * detected" outrank every provider on the page a person opened to connect a
+     * provider — which is the 219px-desktop / 415px-phone advert this row
+     * replaces, in the same vocabulary as everything around it.
+     */
+    companionLane(input),
+  ]);
+}
+
+/**
+ * What the count chip above the lane list says, and it can only say what is.
+ *
+ * Derived from the same resolved lanes the list renders, so the number and the
+ * rows can never disagree the way a separately-computed `0 connections` badge
+ * did while a connection was live.
+ */
+export function connectLaneCountLabel(lanes: readonly ConnectLane[]): string {
+  const connected = lanes.filter((entry) => entry.status.kind === "connected");
+  const ready = lanes.filter((entry) => entry.status.kind === "ready").length;
+  if (connected.length === 0) return `No model connected · ${String(ready)} ready`;
+  if (connected.length === 1) return `${connected[0]!.title} connected · ${String(ready)} more ready`;
+  return `${String(connected.length)} connected · ${String(ready)} more ready`;
+}
+
+/** The seal beside that count: connected is the only verified state here. */
+export function connectLaneCountSeal(lanes: readonly ConnectLane[]): SealState {
+  return lanes.some((entry) => entry.status.kind === "connected") ? "verified" : "none";
 }
 
 function lane(id: ConnectLaneId, title: string, vendor: string, copy: LaneCopy): ConnectLane {
@@ -199,15 +255,18 @@ function copy(summary: string, status: ConnectLaneStatus): LaneCopy {
 
 function chutesLane(input: ConnectLaneInput): LaneCopy {
   if (input.chutes.connected) {
-    return copy(`${CHUTES_LANE} ${IN_THIS_TAB}`, {
+    return copy(IN_THIS_TAB, {
       kind: "connected",
       label: "Connected",
       detail: "Chutes is connected in page memory for this tab.",
     });
   }
-  if (!input.online) return copy(CHUTES_LANE, offline("Chutes"));
+  if (!input.online) {
+    const status = offline("Chutes");
+    return copy(status.detail, status);
+  }
   if (input.chutes.signInAvailable) {
-    return copy(`${CHUTES_LANE} Sign in, or paste an API key.`, {
+    return copy("Sign in, or paste an API key.", {
       kind: "ready",
       label: "Sign in or use a key",
       detail: `Sign in with your Chutes account, or paste a key. ${CHUTES_KEY_SENTENCE}`,
@@ -219,10 +278,41 @@ function chutesLane(input: ConnectLaneInput): LaneCopy {
    * lane is still `ready`, because the key path genuinely works — but neither
    * the summary nor the detail may offer sign-in as a route.
    */
-  return copy(`${CHUTES_LANE} Paste an API key to connect.`, {
+  return copy("Paste an API key to connect.", {
     kind: "ready",
     label: "Use an API key",
     detail: `${input.chutes.signInUnavailableReason ?? "Chutes sign-in is not available in this build."} You can connect with a Chutes API key instead. ${CHUTES_KEY_SENTENCE}`,
+  });
+}
+
+/**
+ * OpenAI, described at the altitude of the lane rather than of its OAuth leg.
+ *
+ * `Not available here` was true of Codex sign-in and false of the lane: an
+ * OpenAI API key connects from this page, and `STATUS_RANK.unavailable` sorted
+ * that working route dead last. The sign-in state is not softened — it moves to
+ * `oauthStatus`, which is where the method tab and its panel read from, and
+ * where it is true. This is the same shape `bridgeProviderLane` already uses.
+ */
+function codexProviderLane(input: ConnectLaneInput): ConnectLane {
+  const oauth = codexLane(input);
+  const laneStatus: ConnectLaneStatus = input.codex.connected || input.codex.available || !input.online
+    ? oauth.status
+    : Object.freeze({
+        kind: "ready" as const,
+        label: "API key only",
+        detail: "A page-memory OpenAI API key works without an account sign-in. The ChatGPT sign-in route has its own availability check below.",
+      });
+  return Object.freeze({
+    id: "codex" as const,
+    title: "OpenAI",
+    vendor: "Codex account or API",
+    summary: laneStatus === oauth.status
+      ? oauth.summary
+      : "OpenAI models through a page-memory API key. This build carries no ChatGPT sign-in.",
+    status: laneStatus,
+    oauthStatus: oauth.status,
+    seal: sealForConnectLane(laneStatus),
   });
 }
 
@@ -248,6 +338,105 @@ function codexLane(input: ConnectLaneInput): LaneCopy {
     label: "Sign in",
     detail: "Opens OpenAI in a new tab. The page you land on afterwards will look like an error — that is expected, and the code you need is in its address bar.",
   });
+}
+
+/**
+ * The Companion, as a row in the same list and the same vocabulary.
+ *
+ * Its state is read from the live handshake only. `undefined` is `checking`,
+ * never "not installed": absence of an answer is not an answer, and the row
+ * that says so must say so while the probe is still in flight.
+ */
+function companionLane(input: ConnectLaneInput): ConnectLane {
+  const observation = input.bridge;
+  const available = observation?.state === "available";
+  const status = companionStatus(input);
+  return Object.freeze({
+    id: "companion" as const,
+    title: COMPANION_TITLE,
+    vendor: companionQualifier(input),
+    summary: "Adds a reviewed provider relay, opt-in encrypted local cache, and bounded background hash/vector work. Provider account authorization is offered only when Airship also has a supported provider grant flow.",
+    status,
+    seal: sealForConnectLane(status),
+    // Promoted onto the collapsed row only when the extension is answering:
+    // three cells reading "Not observed / Not active / Not active" are the
+    // negation the closed row's own qualifier already states.
+    ...(available ? { facts: companionFacts(observation) } : {}),
+  });
+}
+
+function companionQualifier(input: ConnectLaneInput): string {
+  const observation = input.bridge;
+  if (!observation) return "Checking this tab";
+  if (observation.state === "available") {
+    return observation.extensionVersion ? `Extension ${observation.extensionVersion}` : "Extension connected";
+  }
+  // The two not-here cases are different facts and keep different words: one
+  // browser cannot load an extension at all, the other could but Airship has
+  // not published one for it. Collapsing them would blame the browser for a
+  // gap that is Airship's.
+  if (input.host.kind === "cannot-host") return "Not possible in this browser";
+  if (input.host.kind === "not-published") return "Not published for this browser";
+  return input.extensionInstallUrl ? "Not installed" : "No install page in this build";
+}
+
+function companionStatus(input: ConnectLaneInput): ConnectLaneStatus {
+  const observation = input.bridge;
+  if (!observation) {
+    return Object.freeze({
+      kind: "checking" as const,
+      label: "Checking",
+      detail: bridgeSummary(observation),
+    });
+  }
+  if (observation.state === "available") {
+    return Object.freeze({
+      kind: "connected" as const,
+      label: "Connected",
+      detail: bridgeSummary(observation),
+    });
+  }
+  const hostDetail = input.host.kind === "installable"
+    ? "This browser can load the Airship Companion."
+    : input.host.reason;
+  if (input.host.kind === "installable" && input.extensionInstallUrl) {
+    return Object.freeze({
+      kind: "needs-extension" as const,
+      label: "Get the extension",
+      detail: `${bridgeSummary(observation)} ${hostDetail}`,
+    });
+  }
+  return Object.freeze({
+    kind: "extension-unavailable" as const,
+    label: input.host.kind === "installable"
+      ? "Unavailable here"
+      : input.host.kind === "cannot-host" ? "Not supported" : "Not published here",
+    detail: `${bridgeSummary(observation)} ${input.host.kind === "installable" ? NO_INSTALL_PAGE : hostDetail}`,
+  });
+}
+
+/** The three readings, with the exact value strings the `<dl>` grid carried. */
+export function companionFacts(observation: ExtensionBridgeObservation | undefined): readonly ConnectLaneFact[] {
+  const available = observation?.state === "available";
+  const storage = observation?.companion?.storage;
+  const compute = observation?.companion?.compute;
+  const routes = available ? observation.providers.length : 0;
+  return Object.freeze([
+    Object.freeze({
+      label: "Provider relay",
+      value: available ? `${String(routes)} route${routes === 1 ? "" : "s"} live` : "Not observed",
+    }),
+    Object.freeze({
+      label: "Encrypted cache",
+      value: storage?.state === "available"
+        ? (storage.enabled ? `${String(storage.records ?? 0)} page${storage.records === 1 ? "" : "s"}` : "Available · off")
+        : "Not active",
+    }),
+    Object.freeze({
+      label: "Background compute",
+      value: compute?.state === "available" ? "Hash + vector ranking" : "Not active",
+    }),
+  ]);
 }
 
 function bridgeLane(

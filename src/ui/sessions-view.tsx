@@ -11,10 +11,24 @@ import {
 } from "../sessions/library";
 import { Icon } from "./icons";
 import { MenuSelect } from "./menu-select";
-import { useEffect, useMemo, useState } from "preact/hooks";
+import { useEffect, useId, useMemo, useRef, useState } from "preact/hooks";
 import "./sessions-view.css";
-import { DurabilityIndicator, type DurabilityState } from "./durability-indicator";
+import { DurabilityIndicator, durabilityLabel, type DurabilityState } from "./durability-indicator";
+import { Popover } from "./popover";
+import { RouteHeader } from "./route-header";
+import { Seal, type SealState } from "./seal";
 import { groupPinnedSessions, pagePinnedSessionIds, setPageSessionPinned } from "./session-pins";
+import {
+  SESSION_SEARCH_PLACEHOLDER,
+  SESSION_TITLE_MAX,
+  forkTitleFor,
+  relativeSessionTime,
+  sessionEmptyStateBody,
+  sessionEventCount,
+  sessionIntegrityRow,
+  sessionLineage,
+  shortSessionId,
+} from "./sessions-presentation";
 
 export type SessionsViewProps = Readonly<{
   library: SessionLibrary;
@@ -28,6 +42,17 @@ export type SessionsViewProps = Readonly<{
   onOpenProof?: (sessionId: string) => void;
   durability?: Readonly<{ state: DurabilityState; detail: string }>;
 }>;
+
+/** The journal-adapter sentence, unchanged, chosen by the adapter that is live. */
+function journalAdapterSentence(state: DurabilityState): string {
+  return state === "synced"
+    ? "Client-encrypted cloud journal; writes commit directly from this browser."
+    : "Page-memory journal; remote availability is not inferred.";
+}
+
+function durabilitySeal(state: DurabilityState): SealState {
+  return state === "ephemeral" ? "none" : state === "syncing" ? "checking" : "verified";
+}
 
 export function SessionsView({
   library,
@@ -59,6 +84,7 @@ export function SessionsView({
   const [forkTitle, setForkTitle] = useState("");
   const [announcement, setAnnouncement] = useState("");
   const [renameTitle, setRenameTitle] = useState("");
+  const [renaming, setRenaming] = useState(false);
   const [pinned, setPinned] = useState<ReadonlySet<string>>(pagePinnedSessionIds);
 
   const runtimeKey = useMemo(() => runtimeFingerprint(runtime), [runtime]);
@@ -104,6 +130,7 @@ export function SessionsView({
     setLoadingDetail(true);
     setDetailError(undefined);
     setForkOpen(false);
+    setRenaming(false);
     void library.inspect(selectedId, runtime, controller.signal).then(
       setDetail,
       (caught: unknown) => {
@@ -134,7 +161,7 @@ export function SessionsView({
 
   function prepareFork() {
     if (!detail) return;
-    setForkTitle(`${detail.session.title} · fork`.slice(0, 240));
+    setForkTitle(forkTitleFor(detail.session.title));
     setForkOpen(true);
     setDetailError(undefined);
   }
@@ -163,12 +190,21 @@ export function SessionsView({
       setBusy(false);
     }
   }
+
   async function renameSelected() {
     if (!detail || !renameTitle.trim()) return;
     setBusy(true);
-    try { const renamed = await library.rename(detail.session.id, renameTitle); setRenameTitle(""); setRefresh((value) => value + 1); setAnnouncement(`Renamed session to ${renamed.title}.`); }
-    catch (caught) { setDetailError(errorMessage(caught)); }
-    finally { setBusy(false); }
+    try {
+      const renamed = await library.rename(detail.session.id, renameTitle);
+      setRenameTitle("");
+      setRenaming(false);
+      setRefresh((value) => value + 1);
+      setAnnouncement(`Renamed session to ${renamed.title}.`);
+    } catch (caught) {
+      setDetailError(errorMessage(caught));
+    } finally {
+      setBusy(false);
+    }
   }
 
   function clearFilters() {
@@ -181,26 +217,51 @@ export function SessionsView({
 
   const filterActive = Boolean(search || providerId || model || profileId);
   const groupedSessions = groupPinnedSessions(page?.items ?? [], pinned);
+  // Lineage is only navigable to a conversation the current filter actually
+  // loaded, so the parent lookup is built from what is on screen rather than
+  // from a promise that a second read would succeed.
+  const titleById = useMemo(
+    () => new Map((page?.items ?? []).map((item) => [item.id, item.title] as const)),
+    [page?.items],
+  );
+  const ordered = [...groupedSessions.pinned, ...groupedSessions.other];
+
   return (
     <section class="session-library-view" aria-labelledby="session-library-title">
-      <header class="session-library-heading">
-        <div>
-          <span class="session-library-eyebrow">Conversation history</span>
-          <h1 id="session-library-title">All conversations</h1>
-          <p>Open a thread where you left it. Pinned runtime details remain available for audit; a fork appears only when its meaning genuinely changes.</p>
-        </div>
-        <div class="session-library-origin"><Icon name="workspace" size={17} /><span><strong>Current journal adapter</strong><small>{durability.state === "synced" ? "Client-encrypted cloud journal; writes commit directly from this browser." : "Page-memory journal; remote availability is not inferred."}</small></span><DurabilityIndicator state={durability.state} detail={durability.detail} /></div>
-      </header>
+      <RouteHeader
+        routeId="sessions"
+        density="tool"
+        title="All conversations"
+        headingId="session-library-title"
+        eyebrow="Conversation history"
+        description="Open a thread where you left it. Pinned runtime details remain available for audit; a fork appears only when its meaning genuinely changes."
+        status={
+          /* The journal-adapter panel used to be a 52px card that `display:none`d
+             itself below 1180px — the storage claim vanished on every tablet and
+             phone. As a header chip it renders at every width, and its sentence
+             and its durability seal are both one gesture away instead of one
+             breakpoint away. */
+          <Popover
+            class="session-journal-chip"
+            label={`Current journal adapter. ${durabilityLabel(durability.state)}. Opens where this journal is written and what is not inferred from it.`}
+            heading="Current journal adapter"
+            trigger={<Seal state={durabilitySeal(durability.state)} label={durabilityLabel(durability.state)} density="chip" />}
+          >
+            <p class="session-journal-chip__body">{journalAdapterSentence(durability.state)}</p>
+            <DurabilityIndicator state={durability.state} detail={durability.detail} />
+          </Popover>
+        }
+      />
 
       <div class="session-library-toolbar" role="search" aria-label="Filter sessions">
         <label class="session-library-search">
-          <span class="session-library-visually-hidden">Search conversations</span>
+          <span class="session-library-visually-hidden">{SESSION_SEARCH_PLACEHOLDER}</span>
           <Icon name="context" size={17} />
           <input
             type="search"
             value={draftSearch}
             onInput={(event) => setDraftSearch(event.currentTarget.value)}
-            placeholder="Search conversations"
+            placeholder={SESSION_SEARCH_PLACEHOLDER}
             autocomplete="off"
             spellcheck={false}
           />
@@ -259,34 +320,69 @@ export function SessionsView({
         <aside class="session-library-list-panel" aria-label="Conversations">
           <div class="session-library-list-heading">
             <span>{page?.total ?? 0} conversation{page?.total === 1 ? "" : "s"}</span>
-            <small>{loadingList ? "Reading journal…" : "Metadata only"}</small>
+            {/* "Metadata only" used to be a bare eyebrow; the sentence it stood
+                for now travels with it instead of living in nobody's head. */}
+            <small title="Metadata only; transcripts are read on selection.">{loadingList ? "Reading journal…" : "Metadata only"}</small>
           </div>
-          <div class="session-library-list" role="listbox" aria-label="Available conversations">
+          <div class="session-library-list" role="list" aria-label="Available conversations">
             {groupedSessions.pinned.length ? <div class="session-library-group-label" role="presentation">Pinned · page memory</div> : null}
-            {[...groupedSessions.pinned, ...groupedSessions.other].map((item, index) => {
-              const selected = item.id === selectedId;
+            {ordered.map((item, index) => {
+              const lineage = sessionLineage(item.sourceSessionId, titleById);
               const active = item.id === activeSessionId;
               return (
                 <>{index === groupedSessions.pinned.length && groupedSessions.pinned.length && groupedSessions.other.length ? <div class="session-library-group-label" role="presentation">All sessions</div> : null}
-                <button
-                  class={`session-library-card${selected ? " selected" : ""}`}
-                  type="button"
-                  role="option"
-                  aria-selected={selected}
-                  aria-label={`${item.title}, ${item.providerId}, ${item.model}${active ? ", active session" : ""}`}
-                  key={item.id}
-                  onClick={() => setSelectedId(item.id)}
-                >
-                  <span class="session-library-card-top"><strong>{item.title}</strong>{pinned.has(item.id) ? <em>Pinned</em> : null}{active ? <em>Active</em> : null}</span>
-                  <span class="session-library-card-runtime"><span>{item.providerId}</span><span>{item.model}</span></span>
-                  <span class="session-library-card-meta"><time dateTime={item.updatedAt}>{formatRelativeDate(item.updatedAt)}</time><span>{item.headSequence} event{item.headSequence === 1 ? "" : "s"}</span></span>
-                  {item.profileId ? <span class="session-library-card-profile"><Icon name="profiles" size={13} />{item.profileId}</span> : null}
-                  <span class="session-library-pin" role="button" tabIndex={0} aria-label={`${pinned.has(item.id) ? "Unpin" : "Pin"} ${item.title}`} onClick={(event) => { event.stopPropagation(); setPinned(setPageSessionPinned(item.id, !pinned.has(item.id))); }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") event.currentTarget.click(); }}>★</span>
-                </button></>
+                <div class="session-library-row" role="listitem" key={item.id}>
+                  <button
+                    class={`session-library-card${item.id === selectedId ? " selected" : ""}`}
+                    type="button"
+                    aria-current={item.id === selectedId ? "true" : undefined}
+                    aria-label={`${item.title}. ${relativeSessionTime(item.updatedAt)}. ${sessionEventCount(item.headSequence)}. ${item.providerId} ${item.model}${item.profileId ? `, profile ${item.profileId}` : ""}${lineage ? `, forked from ${lineage.label}` : ""}${active ? ", active session" : ""}`}
+                    title={`${item.title}\n${item.providerId} · ${item.model}\nUpdated ${formatDateTime(item.updatedAt)}`}
+                    onClick={() => setSelectedId(item.id)}
+                  >
+                    <span class="session-library-card-top">
+                      <span class="session-library-card-mark" data-active={active ? "true" : "false"} aria-hidden="true">
+                        {lineage ? <Icon name="branch" size={13} /> : <span class="session-library-card-dot" />}
+                      </span>
+                      <strong>{item.title}</strong>
+                      <time dateTime={item.updatedAt}>{relativeSessionTime(item.updatedAt)}</time>
+                    </span>
+                    <span class="session-library-card-line2">
+                      {/* `ACTIVE` was a 42px uppercase pill. It survives as a
+                          word, not as the dot's colour: P2 forbids colour as
+                          the only carrier, so the mark and the word ship
+                          together. */}
+                      {active ? <em class="session-library-card-active">Active</em> : null}
+                      {lineage ? <em class="session-library-card-lineage">↳ from {lineage.label}</em> : null}
+                      <span>{sessionEventCount(item.headSequence)}</span>
+                      {item.profileId ? <span class="session-library-card-profile">{item.profileId}</span> : null}
+                      <span class="session-library-card-model" title={`${item.providerId} · ${item.model}`}>{item.model}</span>
+                    </span>
+                  </button>
+                  {lineage?.navigable ? (
+                    <button
+                      class="session-library-lineage-jump"
+                      type="button"
+                      aria-label={`Open the source conversation, ${lineage.label}`}
+                      onClick={() => setSelectedId(lineage.parentId)}
+                    >↳</button>
+                  ) : null}
+                  <button
+                    class="session-library-pin"
+                    type="button"
+                    aria-pressed={pinned.has(item.id)}
+                    aria-label={`${pinned.has(item.id) ? "Unpin" : "Pin"} ${item.title}`}
+                    onClick={() => setPinned(setPageSessionPinned(item.id, !pinned.has(item.id)))}
+                  >★</button>
+                </div></>
               );
             })}
             {!loadingList && page?.items.length === 0 ? (
-              <div class="session-library-empty"><Icon name="chat" size={24} /><strong>No matching conversations</strong><p>{filterActive ? "Clear or widen the current filters." : "A conversation appears here after the journal creates it."}</p></div>
+              <div class="session-library-empty">
+                <Icon name="chat" size={24} />
+                <strong>No matching conversations</strong>
+                {sessionEmptyStateBody({ filtered: filterActive, searched: Boolean(search) }).map((line) => <p key={line}>{line}</p>)}
+              </div>
             ) : null}
           </div>
         </aside>
@@ -296,7 +392,6 @@ export function SessionsView({
           {detailError ? <div class="session-library-alert error" role="alert"><Icon name="warning" /><span>{detailError}</span></div> : null}
           {!loadingDetail && !detail ? <div class="session-library-empty detail"><Icon name="chat" size={28} /><strong>Select a session</strong><p>Its pinned runtime, structural history status, and bounded transcript will appear here.</p></div> : null}
           {!loadingDetail && detail ? (
-            <><details class="session-library-rename-disclosure"><summary>Rename conversation</summary><form class="session-library-rename" onSubmit={(event) => { event.preventDefault(); void renameSelected(); }}><label>Title<input value={renameTitle} maxlength={240} placeholder={detail.session.title} onInput={(event) => setRenameTitle(event.currentTarget.value)} /></label><button type="submit" disabled={busy || !renameTitle.trim()}>Save rename</button></form></details>
             <SessionDetail
               detail={detail}
               active={detail.session.id === activeSessionId}
@@ -305,13 +400,21 @@ export function SessionsView({
               forkTitle={forkTitle}
               forkUsesActiveManifest={Boolean(forkManifest)}
               runtimeAvailable={Boolean(runtime)}
+              renaming={renaming}
+              renameTitle={renameTitle}
+              parentTitle={detail.pins.lineage ? titleById.get(detail.pins.lineage.sourceSessionId) : undefined}
+              onSelectSession={setSelectedId}
+              onStartRename={() => { setRenameTitle(detail.session.title); setRenaming(true); }}
+              onCancelRename={() => { setRenaming(false); setRenameTitle(""); }}
+              onRenameTitle={setRenameTitle}
+              onCommitRename={() => void renameSelected()}
               onForkTitle={setForkTitle}
               onPrepareFork={prepareFork}
               onCancelFork={() => setForkOpen(false)}
               onCreateFork={() => void createFork()}
               onResume={() => void resumeSelected()}
               onOpenProof={onOpenProof ? () => onOpenProof(detail.session.id) : undefined}
-            /></>
+            />
           ) : null}
         </main>
       </div>
@@ -327,6 +430,14 @@ function SessionDetail({
   forkTitle,
   forkUsesActiveManifest,
   runtimeAvailable,
+  renaming,
+  renameTitle,
+  parentTitle,
+  onSelectSession,
+  onStartRename,
+  onCancelRename,
+  onRenameTitle,
+  onCommitRename,
   onForkTitle,
   onPrepareFork,
   onCancelFork,
@@ -341,6 +452,14 @@ function SessionDetail({
   forkTitle: string;
   forkUsesActiveManifest: boolean;
   runtimeAvailable: boolean;
+  renaming: boolean;
+  renameTitle: string;
+  parentTitle?: string;
+  onSelectSession: (id: string) => void;
+  onStartRename: () => void;
+  onCancelRename: () => void;
+  onRenameTitle: (value: string) => void;
+  onCommitRename: () => void;
   onForkTitle: (value: string) => void;
   onPrepareFork: () => void;
   onCancelFork: () => void;
@@ -352,52 +471,121 @@ function SessionDetail({
   const resumeDisabled = busy || active || !runtimeAvailable || compatibility?.action !== "resume";
   const resumeLabel = active ? "Active session" : !runtimeAvailable ? "No active runtime" : compatibility?.action === "resume" ? "Resume session" : compatibility?.label ?? "Cannot resume";
   const forkPrimary = compatibility?.action === "fork-required" || compatibility?.action === "blocked";
+  const lineage = detail.pins.lineage;
+  const integrity = sessionIntegrityRow({
+    history: detail.history,
+    receiptCount: detail.transcript.receipts.length,
+    lifecycle: detail.transcript.lifecycle,
+    ...(compatibility ? { compatibility } : {}),
+  });
+  const bodyId = useId();
+  const renameInput = useRef<HTMLInputElement>(null);
+  // The row opens itself whenever anything disagrees, and re-opens if the
+  // selection changes to a session that disagrees — collapse may only ever hide
+  // agreement, so the open state is keyed on the verdict, not on the click.
+  const [expanded, setExpanded] = useState(integrity.autoExpanded);
+  useEffect(() => setExpanded(integrity.autoExpanded), [detail.session.id, integrity.autoExpanded]);
+  useEffect(() => { if (renaming) renameInput.current?.focus(); }, [renaming]);
+
   return (
     <article class="session-library-inspector">
       <header class="session-library-detail-heading">
         <div>
-          <span class="session-library-eyebrow">Session {shortId(detail.session.id)}</span>
+          <span class="session-library-eyebrow">Session {shortSessionId(detail.session.id)}</span>
           <h2>{detail.session.title}</h2>
+          {/* Rename used to open a form *above* the title it renames. It is now
+              the title's own adjacent verb, and its field opens beneath the
+              heading, in reading order. */}
+          {renaming ? (
+            <form
+              class="session-library-rename"
+              onSubmit={(event) => { event.preventDefault(); onCommitRename(); }}
+            >
+              <label class="session-library-visually-hidden" for={`${bodyId}-rename`}>Conversation title</label>
+              <input
+                id={`${bodyId}-rename`}
+                ref={renameInput}
+                value={renameTitle}
+                maxlength={SESSION_TITLE_MAX}
+                placeholder={detail.session.title}
+                onInput={(event) => onRenameTitle(event.currentTarget.value)}
+                onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); onCancelRename(); } }}
+              />
+              <button type="submit" disabled={busy || !renameTitle.trim()}>Save rename</button>
+              <button type="button" onClick={onCancelRename} disabled={busy}>Cancel</button>
+            </form>
+          ) : null}
+          {lineage ? (
+            <p class="session-library-lineage-line">
+              <Icon name="branch" size={14} />
+              Forked from{" "}
+              <button
+                type="button"
+                class="session-library-lineage-link"
+                aria-label={`Open the source conversation, ${parentTitle ?? shortSessionId(lineage.sourceSessionId)}`}
+                onClick={() => onSelectSession(lineage.sourceSessionId)}
+              >{parentTitle ?? shortSessionId(lineage.sourceSessionId)}</button>
+              {" "}at head {lineage.sourceHeadSequence} · source untouched
+            </p>
+          ) : null}
           <p>Created <time dateTime={detail.session.createdAt}>{formatDateTime(detail.session.createdAt)}</time> · updated <time dateTime={detail.session.updatedAt}>{formatDateTime(detail.session.updatedAt)}</time></p>
         </div>
         <div class="session-library-actions">
+          <button type="button" onClick={onStartRename} disabled={busy || renaming} aria-expanded={renaming}>Rename</button>
           {onOpenProof ? <button type="button" onClick={onOpenProof}><Icon name="proof" size={16} />Proof</button> : null}
           <button class={forkPrimary ? "primary" : ""} type="button" onClick={onPrepareFork} disabled={busy}><Icon name="branch" size={16} />{forkPrimary ? "Fork to continue" : "Fork"}</button>
           <button class={!forkPrimary ? "primary" : ""} type="button" onClick={onResume} disabled={resumeDisabled}>{resumeLabel}</button>
         </div>
       </header>
 
-      <div class={`session-library-health ${detail.history.status}`}>
-        <span class="session-library-health-mark"><Icon name={detail.history.status === "consistent" ? "check" : "warning"} size={18} /></span>
-        <div><strong>{detail.history.status === "consistent" ? "Journal structure passed" : detail.history.label}</strong><small>{detail.history.checkedEvents} of {detail.history.totalEvents} events inspected · {detail.history.turnCount} turn{detail.history.turnCount === 1 ? "" : "s"}</small></div>
-        <span class="session-library-proof-scope">Structural linkage only · digests not recomputed · authenticity not proven</span>
-      </div>
+      <section class="session-integrity" data-state={integrity.state}>
+        <button
+          class="session-integrity__row"
+          type="button"
+          aria-expanded={expanded}
+          aria-controls={bodyId}
+          aria-label={integrity.label}
+          onClick={() => setExpanded((value) => !value)}
+        >
+          {integrity.pills.map((pill) => <Seal key={pill.key} state={pill.state} label={pill.label} density="chip" />)}
+          <span class="session-integrity__caret" aria-hidden="true">{expanded ? "⌃" : "⌄"}</span>
+        </button>
+        <div class="session-integrity__body" id={bodyId} hidden={!expanded}>
+          <div class="session-integrity__scope">
+            <strong>{detail.history.status === "consistent" ? "Journal structure passed" : detail.history.label}</strong>
+            <small>{detail.history.checkedEvents} of {detail.history.totalEvents} events inspected · {detail.history.turnCount} turn{detail.history.turnCount === 1 ? "" : "s"}</small>
+            <span class="session-library-proof-scope">Structural linkage only · digests not recomputed · authenticity not proven</span>
+          </div>
 
-      <section class="session-library-continuity" aria-label="Session continuity">
-        <div class={`session-library-lifecycle ${detail.transcript.lifecycle.state}`}>
-          <span aria-hidden="true" />
-          <strong>{detail.transcript.lifecycle.label}</strong>
-          <small>{detail.transcript.lifecycle.turnId ? `turn ${shortId(detail.transcript.lifecycle.turnId)}` : "no turn has started"}</small>
+          <section class="session-library-continuity" aria-label="Session continuity">
+            <div class={`session-library-lifecycle ${detail.transcript.lifecycle.state}`}>
+              <span aria-hidden="true" />
+              <strong>{detail.transcript.lifecycle.label}</strong>
+              <small>{detail.transcript.lifecycle.turnId ? `turn ${shortSessionId(detail.transcript.lifecycle.turnId)}` : "no turn has started"}</small>
+            </div>
+            <div><span>Model pin</span><strong title={`${detail.pins.providerId} · ${detail.pins.model}`}>{detail.pins.model}</strong></div>
+            <div><span>Receipt chain</span><strong>{detail.transcript.receipts.length} recovered</strong></div>
+            <div><span>Journal head</span><strong>{sessionEventCount(detail.session.headSequence)}</strong></div>
+          </section>
+
+          {compatibility ? (
+            <section class={`session-library-compatibility ${compatibility.action}`} aria-labelledby="session-compatibility-title">
+              <div><span>Runtime decision</span><strong id="session-compatibility-title">{compatibility.label}</strong></div>
+              {compatibility.reasons.length ? <ul>{compatibility.reasons.map((reason) => <li class={reason.severity} key={reason.code}><span>{reason.code.replaceAll("_", " ")}</span>{reason.message}</li>)}</ul> : <p>Provider, model, posture, tool manifest, workspace, and profile digests match the active runtime.</p>}
+              {/* The fork contract is stated once, where the decision is made —
+                  in the fork panel. Here it only says what is required. */}
+              {forkPrimary ? <p>Continuing here requires a fork.</p> : null}
+            </section>
+          ) : (
+            <section class="session-library-compatibility unavailable"><div><span>Runtime decision</span><strong>No active runtime supplied</strong></div><p>Inspection remains available, but this component cannot authorize a resume.</p></section>
+          )}
         </div>
-        <div><span>Model pin</span><strong>{detail.pins.model}</strong></div>
-        <div><span>Receipt chain</span><strong>{detail.transcript.receipts.length} recovered</strong></div>
-        <div><span>Journal head</span><strong>{detail.session.headSequence} events</strong></div>
       </section>
-
-      {compatibility ? (
-        <section class={`session-library-compatibility ${compatibility.action}`} aria-labelledby="session-compatibility-title">
-          <div><span>Runtime decision</span><strong id="session-compatibility-title">{compatibility.label}</strong></div>
-          {compatibility.reasons.length ? <ul>{compatibility.reasons.map((reason) => <li class={reason.severity} key={reason.code}><span>{reason.code.replaceAll("_", " ")}</span>{reason.message}</li>)}</ul> : <p>Provider, model, posture, tool manifest, workspace, and profile digests match the active runtime.</p>}
-          {forkPrimary ? <p><strong>Fork = new identity · empty transcript · source untouched.</strong> Continuing here creates a clean session and retains this record unchanged.</p> : null}
-        </section>
-      ) : (
-        <section class="session-library-compatibility unavailable"><div><span>Runtime decision</span><strong>No active runtime supplied</strong></div><p>Inspection remains available, but this component cannot authorize a resume.</p></section>
-      )}
 
       {forkOpen ? (
         <section class="session-library-fork" aria-labelledby="session-fork-title">
           <div><span class="session-library-eyebrow">Explicit fork</span><h3 id="session-fork-title">Create a new session identity</h3><p>Fork = new identity · empty transcript · source untouched. The new manifest records the source head as immutable lineage.</p></div>
-          <label><span>Fork title</span><input value={forkTitle} maxlength={240} onInput={(event) => onForkTitle(event.currentTarget.value)} /></label>
+          <label><span>Fork title</span><input value={forkTitle} maxlength={SESSION_TITLE_MAX} onInput={(event) => onForkTitle(event.currentTarget.value)} /></label>
           <div class="session-library-fork-note"><Icon name="lock" size={16} /><span>{forkUsesActiveManifest ? "The host supplied the active runtime manifest for this fork." : "The fork keeps the source runtime pins; only its session identity and lineage change."}</span></div>
           <div class="session-library-fork-actions"><button type="button" onClick={onCancelFork} disabled={busy}>Cancel</button><button class="primary" type="button" onClick={onCreateFork} disabled={busy || !forkTitle.trim()}>{busy ? "Creating…" : "Create clean fork"}</button></div>
         </section>
@@ -426,7 +614,7 @@ function SessionDetail({
             </> : null}
             <Digest label={`Journal head · ${detail.session.headSequence}`} value={detail.session.headDigest} />
           </div>
-          {detail.pins.lineage ? <div class="session-library-lineage"><Icon name="branch" size={16} /><span><strong>Forked from {shortId(detail.pins.lineage.sourceSessionId)}</strong><small>source head {detail.pins.lineage.sourceHeadSequence} · {shortDigest(detail.pins.lineage.sourceHeadDigest)}</small></span></div> : null}
+          {lineage ? <div class="session-library-lineage"><Icon name="branch" size={16} /><span><strong>Forked from {shortSessionId(lineage.sourceSessionId)}</strong><small>source head {lineage.sourceHeadSequence} · {shortDigest(lineage.sourceHeadDigest)}</small></span></div> : null}
         </section>
 
         <section class="session-library-panel transcript" aria-labelledby="session-transcript-title">
@@ -442,7 +630,7 @@ function SessionDetail({
                     <span class={message.turnStatus}>{message.turnStatus} turn</span>
                     <span class={message.providerContext}>{message.providerContext === "included" ? "Provider context included" : "Excluded from provider context"}</span>
                   </div>
-                  {message.receipt ? <small class="session-library-message-receipt"><Icon name="proof" size={12} />Receipt {shortId(message.receipt.receiptId)}</small> : null}
+                  {message.receipt ? <small class="session-library-message-receipt"><Icon name="proof" size={12} />Receipt {shortSessionId(message.receipt.receiptId)}</small> : null}
                   {message.truncated ? <small>Message bounded for display</small> : null}
                 </li>
               ))}
@@ -463,7 +651,26 @@ function SessionDetail({
 }
 
 function Digest({ label, value }: { label: string; value: string }) {
-  return <div><span>{label}</span><code title={value}>{shortDigest(value)}</code></div>;
+  const [copied, setCopied] = useState(false);
+  return (
+    <div>
+      <span>{label}</span>
+      <code title={value}>{shortDigest(value)}</code>
+      {/* A digest is the one value on this pane a person retypes into a proof
+          comparison, and it was only ever available as a hover tooltip. */}
+      <button
+        class="session-library-copy"
+        type="button"
+        aria-label={`Copy the full ${label} digest`}
+        onClick={() => {
+          void navigator.clipboard?.writeText(value).then(
+            () => { setCopied(true); window.setTimeout(() => setCopied(false), 1600); },
+            () => setCopied(false),
+          );
+        }}
+      >{copied ? "Copied" : "Copy"}</button>
+    </div>
+  );
 }
 
 function postureLabel(value: string | undefined): string {
@@ -492,10 +699,6 @@ function runtimeFingerprint(runtime: ActiveSessionRuntime | undefined): string {
   ].join("\u0000");
 }
 
-function shortId(value: string): string {
-  return value.length <= 12 ? value : `${value.slice(0, 8)}…${value.slice(-4)}`;
-}
-
 function shortDigest(value: string): string {
   if (value === "genesis") return value;
   return value.length <= 22 ? value : `${value.slice(0, 14)}…${value.slice(-7)}`;
@@ -506,12 +709,6 @@ function formatDateTime(value: string): string {
   return Number.isFinite(date.getTime())
     ? new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(date)
     : "Unknown time";
-}
-
-function formatRelativeDate(value: string): string {
-  const date = new Date(value);
-  if (!Number.isFinite(date.getTime())) return "Unknown time";
-  return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(date);
 }
 
 function errorMessage(error: unknown): string {

@@ -375,7 +375,45 @@ function PreferenceSelect({ label, value, options, onChange, disabled = false }:
   return <div class="preference-row"><span>{label}</span><MenuSelect className="preference-menu" ariaLabel={label} value={value} disabled={disabled} options={options.map(([id, name]) => ({ value: id, label: name }))} onChange={onChange} /></div>;
 }
 
-export type TrustAxis = Readonly<{ id: "local" | "vault" | "e2ee" | "attestation"; label: string; state: SealState; detail: string; view: NavigationView }>;
+/**
+ * Which band owns a claim, and therefore which band may state it as text.
+ *
+ * `tab` — true of this browser tab regardless of which conversation is open:
+ * where the kernel runs, whether a vault backend has been adopted, whether the
+ * page is online. `conversation` — true only of the open conversation: its
+ * connection posture and the endpoint evidence collected under it.
+ *
+ * The distinction is not decorative. All four axes used to render in the topbar
+ * as four pills, so a turn whose endpoint evidence could not be fetched printed
+ * "Evidence unavailable" in the topbar *and* "Evidence unavailable · this
+ * session" in the session bar 40px below it — one fact, two bands, two
+ * sentences. Tagging the scope lets the topbar speak for the tab and reference
+ * the conversation band for the rest, without any axis ceasing to exist.
+ */
+export type TrustAxisScope = "tab" | "conversation";
+
+export type TrustAxis = Readonly<{ id: "local" | "vault" | "e2ee" | "attestation"; label: string; state: SealState; detail: string; view: NavigationView; scope: TrustAxisScope }>;
+
+/**
+ * Where a scope's claims are stated at rest, named so a reference can say it.
+ *
+ * A collapse that does not say what it contains is a burial, so every surface
+ * that stops printing a claim points at the band that still does.
+ */
+export const TRUST_SCOPE_BANDS: Readonly<Record<TrustAxisScope, Readonly<{ heading: string; restingHome: string }>>> = Object.freeze({
+  tab: Object.freeze({
+    heading: "This browser tab",
+    restingHome: "Stated at rest in the topbar chip.",
+  }),
+  conversation: Object.freeze({
+    heading: "This conversation",
+    restingHome: "Stated at rest in the session bar, on the conversation these claims belong to.",
+  }),
+});
+
+export function trustAxesInScope(axes: readonly TrustAxis[], scope: TrustAxisScope): readonly TrustAxis[] {
+  return axes.filter((axis) => axis.scope === scope);
+}
 
 const TRUST_STATE_SEVERITY: Readonly<Record<SealState, number>> = Object.freeze({
   failed: 7, attention: 6, stale: 5, asserted: 4, none: 3, checking: 2, verified: 1,
@@ -417,7 +455,19 @@ export function TrustPostureSheet({ open, axes, onClose, onNavigate }: Readonly<
   const dialog = useRef<HTMLDivElement>(null);
   useEffect(() => { if (open) requestAnimationFrame(() => dialog.current?.focus({ preventScroll: true })); }, [open]);
   if (!open) return null;
-  return <div class="platform-scrim trust-sheet-scrim" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><div ref={dialog} class="trust-sheet" role="dialog" aria-modal="true" aria-labelledby="trust-sheet-title" tabIndex={-1} onKeyDown={(event) => { if (event.key === "Escape") onClose(); else if (event.key === "Tab") trapFocus(event, dialog.current); }}><header><div><span class="eyebrow">Four-axis posture</span><h2 id="trust-sheet-title">Runtime trust</h2></div><button type="button" onClick={onClose}>Close</button></header><p>Each axis is independently scoped. The weakest claim is shown in the topbar.</p><ClaimRows rows={axes.map((axis) => Object.freeze({ id: axis.id, state: axis.state, label: axis.label, detail: axis.detail, action: Object.freeze({ label: axis.label, onSelect: () => { onClose(); onNavigate(axis.view); } }) }))} /></div></div>;
+  /*
+   * Grouped by scope, not merged. Every axis still renders its own row with its
+   * own verbatim label, sentence and destination — the devil's advocate pass
+   * rejected replacing the four-axis posture with a claim count, and this sheet
+   * is where the independent-axis property is guaranteed. The headings are the
+   * only addition, and they exist because the topbar chip now speaks for two of
+   * these axes and defers to the session bar for the other two: a reader who
+   * follows the deferral has to be able to see which group they arrived at.
+   */
+  const groups = (["tab", "conversation"] as const)
+    .map((scope) => ({ scope, band: TRUST_SCOPE_BANDS[scope], axes: trustAxesInScope(axes, scope) }))
+    .filter((group) => group.axes.length > 0);
+  return <div class="platform-scrim trust-sheet-scrim" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><div ref={dialog} class="trust-sheet" role="dialog" aria-modal="true" aria-labelledby="trust-sheet-title" tabIndex={-1} onKeyDown={(event) => { if (event.key === "Escape") onClose(); else if (event.key === "Tab") trapFocus(event, dialog.current); }}><header><div><span class="eyebrow">Four-axis posture</span><h2 id="trust-sheet-title">Runtime trust</h2></div><button type="button" onClick={onClose}>Close</button></header><p>Each axis is independently scoped. The weakest claim in this browser tab is shown in the topbar; the conversation's own claims are shown in its session bar.</p>{groups.map((group) => <section key={group.scope} class="trust-sheet__scope" aria-label={group.band.heading}><h3 class="eyebrow">{group.band.heading}</h3><p class="trust-sheet__where">{group.band.restingHome}</p><ClaimRows rows={group.axes.map((axis) => Object.freeze({ id: axis.id, state: axis.state, label: axis.label, detail: axis.detail, action: Object.freeze({ label: axis.label, onSelect: () => { onClose(); onNavigate(axis.view); } }) }))} /></section>)}</div></div>;
 }
 
 const TRUST_TABS: readonly Readonly<{ view: NavigationView; label: string }>[] = Object.freeze([

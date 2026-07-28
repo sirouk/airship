@@ -5,7 +5,9 @@
 
 .app-shell {
   display: grid;
-  grid-template-columns: var(--density-sidebar) minmax(0, 1fr);
+  /* One token for the rail's three states, shared with `.topbar` below so the
+     brand block keeps tracking the rail exactly at every width. */
+  grid-template-columns: var(--rail-width) minmax(0, 1fr);
   grid-template-rows: 58px minmax(0, 1fr);
   width: 100%;
   height: 100%;
@@ -15,7 +17,15 @@
   z-index: 20;
   display: grid;
   grid-column: 1 / -1;
-  grid-template-columns: var(--density-sidebar) minmax(280px, 1fr) auto;
+  /* `minmax(0, auto)` on the action track, not bare `auto`.
+     A bare `auto` track refuses to shrink below its content, so when the
+     runtime status line grew to 340px the whole action cluster grew with it
+     and squeezed the centre band from 256px to 32px — at 834px the runtime
+     posture chip was pushed entirely under the brass `Connect a model` and
+     could not be seen or clicked. A trust chip nobody can reach is worse than
+     a truncated status sentence, and the sentence has an ellipsis, a `title`
+     and a live region; the chip has none of those. */
+  grid-template-columns: var(--rail-width) minmax(280px, 1fr) minmax(0, auto);
   align-items: center;
   min-width: 0;
   border-bottom: 1px solid var(--line-strong);
@@ -451,6 +461,7 @@
   display: flex;
   gap: 9px;
   align-items: center;
+  min-width: 0;
   padding-right: 12px;
 }
 
@@ -505,8 +516,10 @@
 
 .runtime-line {
   display: flex;
+  flex: 0 1 auto;
   gap: 7px;
   align-items: center;
+  min-width: 0;
   max-width: min(42vw, 380px);
   overflow: hidden;
   color: var(--ink-muted);
@@ -551,9 +564,26 @@
   background: rgba(255, 255, 255, 0.03);
 }
 
+/* ── The rail, in three states on one width token ───────────────────────────
+ *
+ * `.sidebar` is the grid *column* and never moves; `.rail` is what is painted
+ * inside it, and is the only thing that changes width. The separation is what
+ * makes hover-peek possible without reflowing the conversation: the peeked
+ * panel overflows its column instead of widening the grid track, so a person
+ * skimming destinations never watches the transcript jump sideways.
+ */
 .sidebar {
+  position: relative;
+  min-height: 0;
+}
+
+.rail {
+  position: absolute;
+  inset-block: 0;
+  left: 0;
   display: flex;
   flex-direction: column;
+  width: 100%;
   min-height: 0;
   border-right: 1px solid var(--line-strong);
   background: var(--surface-soft);
@@ -609,48 +639,39 @@
 
 .nav-group {
   display: grid;
-  gap: 3px;
+  gap: var(--sp-1);
 }
 
-.chat-nav-section { min-width: 0; }
-
-.chat-nav-primary {
+/* A destination and the controls that belong to it, on one line. */
+.rail-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 30px 26px;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 2px;
   align-items: center;
+  min-width: 0;
 }
 
 .chat-nav-new {
   display: grid;
   place-items: center;
-  width: 26px;
-  min-height: 34px;
+  min-width: 32px;
+  min-height: 32px;
   padding: 0;
   border: 1px solid transparent;
   border-radius: var(--radius-control);
   color: var(--ink-faint);
   background: transparent;
+  cursor: pointer;
   font-size: 16px;
 }
-.chat-nav-new:hover:not(:disabled) { color: var(--accent-bright); border-color: var(--line); background: rgba(255, 255, 255, 0.026); }
-.profile-nav-primary { grid-template-columns: minmax(0, 1fr) 30px; }
-.recent-conversations.profile-navigation {
-  /* Ten full profile rows remain immediately available; larger catalogs stay
-     inside this rail instead of pushing Trust navigation off-screen. */
-  max-height: min(310px, 38vh);
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  scrollbar-gutter: stable;
-}
-.profile-navigation .recent-conversation { grid-template-columns: 23px minmax(0, 1fr); min-height: 31px; }
-.profile-navigation .profile-monogram { display: grid; place-items: center; width: 21px; height: 21px; border: 1px solid var(--line); border-radius: 50%; color: var(--accent-bright); font-size: 11px; }
+.chat-nav-new:hover:not(:disabled) { color: var(--accent-bright); border-color: var(--line-control); background: rgba(255, 255, 255, 0.026); }
 
-.chat-nav-disclosure {
+.chat-nav-disclosure,
+.rail-expander {
   display: grid;
   place-items: center;
-  width: 30px;
-  min-height: 38px;
+  width: 28px;
+  min-height: 32px;
   padding: 0;
   border: 1px solid transparent;
   border-radius: var(--radius-control);
@@ -659,34 +680,70 @@
   cursor: pointer;
 }
 
-.chat-nav-disclosure:hover { color: var(--ink); background: rgba(255, 255, 255, 0.026); }
-.chat-nav-disclosure > span { font-size: 17px; transform: rotate(0); transition: transform 120ms ease; }
-.chat-nav-disclosure[aria-expanded="true"] > span { transform: rotate(90deg); }
+.chat-nav-disclosure:hover,
+.rail-expander:hover { color: var(--ink); background: rgba(255, 255, 255, 0.026); }
+.chat-nav-disclosure > span,
+.rail-expander > span { font-size: 17px; transform: rotate(0); transition: transform 120ms ease; }
+.chat-nav-disclosure[aria-expanded="true"] > span,
+.rail-expander[aria-expanded="true"] > span { transform: rotate(90deg); }
+
+/* The conversation disclosure escapes its scroll container.
+ *
+ * `.primary-nav` keeps `overflow-y: auto` — the measured scroll-edge mask is
+ * still correct and must still fire at heights where the rail genuinely does
+ * not fit — and a block-axis scroller clips the inline axis too. `fixed`
+ * placement, positioned from the trigger's own rect, is what lets a 320px
+ * panel hang off a 60px rail without either widening the grid or being sliced.
+ */
+.rail-recents { position: relative; display: contents; }
 
 .recent-conversations {
+  position: fixed;
+  z-index: 40;
   display: grid;
   align-content: start;
-  max-height: min(250px, 30vh);
-  margin: 3px 0 2px 23px;
-  padding-left: 8px;
+  width: 320px;
+  max-width: calc(100vw - 24px);
+  max-height: min(420px, 60vh);
+  padding: var(--sp-1);
   overflow-y: auto;
-  border-left: 1px solid var(--line-strong);
+  border: 1px solid var(--line-control);
+  border-radius: var(--radius-panel);
+  background: var(--surface-raised);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.46);
   scrollbar-width: thin;
   scrollbar-color: var(--line-strong) transparent;
 }
 
+.rail-recents__header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: var(--sp-2);
+  align-items: center;
+  min-height: 36px;
+  padding: 0 var(--sp-1) 0 var(--sp-2);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-raised);
+}
+
+.rail-recents__header strong { font-size: var(--fs-caption); font-weight: var(--fw-strong); }
+.rail-recents__header small { color: var(--ink-faint); font-size: var(--fs-micro); font-variant-numeric: tabular-nums; }
+
 .recent-conversation {
   display: grid;
   grid-template-columns: 12px minmax(0, 1fr);
-  gap: 5px;
+  gap: var(--sp-2);
   align-items: center;
-  min-height: 27px;
-  padding: 3px 6px;
+  min-height: 32px;
+  padding: var(--sp-1) var(--sp-2);
   border: 0;
   border-radius: var(--radius-control);
   color: var(--ink-faint);
   background: transparent;
-  font-size: 11px;
+  font-size: var(--fs-caption);
   text-align: left;
   cursor: pointer;
 }
@@ -709,12 +766,20 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.recent-conversation--thread .recent-conversation__copy strong { color: inherit; font-size: 11px; font-weight: 620; }
+.recent-conversation--thread .recent-conversation__copy strong { color: inherit; font-size: var(--fs-caption); font-weight: var(--fw-strong); }
 .recent-conversation--thread .recent-conversation__copy small { color: var(--ink-faint); font-size: var(--fs-micro); }
 .recent-conversation--thread time { align-self: start; padding-top: 1px; color: var(--ink-faint); font-size: var(--fs-micro); white-space: nowrap; }
 .recent-conversation--thread.active .recent-conversation__copy small,
 .recent-conversation--thread:hover .recent-conversation__copy small { color: var(--ink-muted); }
-.recent-conversations .nav-item--nested { margin-left: 0; width: 100%; min-height: 29px; padding-left: 4px; }
+/* The ledger link, pinned as the panel's last row rather than the sixth row of
+   a 250px scroller where nine threads pushed it out of reach entirely. */
+.recent-conversations .nav-item--nested {
+  margin: var(--sp-1) 0 0;
+  width: 100%;
+  padding-left: var(--sp-2);
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+}
 
 .nav-group-label {
   padding: 3px 10px 4px;
@@ -727,19 +792,31 @@
 .nav-item {
   position: relative;
   display: grid;
-  grid-template-columns: 25px 1fr auto;
+  grid-template-columns: 25px minmax(0, 1fr) auto;
   gap: 7px;
   align-items: center;
   width: 100%;
-  min-height: 38px;
+  /* Composed, not collided. `:root[data-density] .nav-item` (0-2-1) used to
+     beat the tablet block's `.sidebar .nav-item` (0-2-0), so the intermediate
+     rail's own row height silently never applied. One custom property means
+     the state that wants a different row can set it and the density block
+     still provides the floor. */
+  min-height: var(--rail-item-height, var(--density-control, 38px));
   padding: 0 10px;
   border: 1px solid transparent;
   border-radius: var(--radius-control);
   color: var(--ink-muted);
   background: transparent;
   cursor: pointer;
-  font-size: 12px;
+  font-size: var(--fs-caption);
   text-align: left;
+}
+
+.nav-item__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .nav-item:hover {
@@ -751,20 +828,18 @@
   color: var(--ink);
 }
 
+/* Nesting is carried by the indent, the 1px rule and `aria-level`. The forty
+   brass `↳` glyphs are gone: a tree marker encodes nothing a 12px indent does
+   not already say, and brass means "you are here" or "act here". */
 .nav-item--nested {
-  grid-template-columns: 25px 1fr;
-  min-height: 32px;
-  margin-left: 13px;
-  width: calc(100% - 13px);
+  --rail-item-height: 36px;
+  margin-left: var(--sp-3);
+  width: calc(100% - var(--sp-3));
+  padding-left: var(--sp-3);
+  border-left: 1px solid var(--line);
+  border-radius: 0 var(--radius-control) var(--radius-control) 0;
   color: var(--ink-faint);
-  font-size: 11px;
-}
-
-.nav-nested-marker {
-  justify-self: center;
-  color: var(--brass);
-  font: 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
-  opacity: .72;
+  font-size: var(--fs-caption);
 }
 
 .nav-item.active {
@@ -808,13 +883,28 @@
   display: none;
 }
 
+/*
+ * The pinned profile, at 48px instead of 120px.
+ *
+ * It was a card: a brass eyebrow, a full-width menu and a link, 211x120px —
+ * 14.2% of the rail spent restating a fact the topbar's compact picker already
+ * carries. It is one row now. Nothing is lost: the eyebrow became this
+ * control's accessible name ("Agent profile"), `Manage profiles` kept its own
+ * target, and the per-profile *descriptions* the old rail rows dropped are
+ * rendered by the menu.
+ */
 .profile-switcher {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--sp-1);
+  align-items: center;
   flex: 0 0 auto;
-  margin: 10px;
-  padding: 11px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-panel);
-  background: rgba(255, 255, 255, 0.018);
+  min-height: 48px;
+  margin: 0;
+  padding: var(--sp-1) var(--sp-2);
+  border: 0;
+  border-top: 1px solid var(--line);
+  background: transparent;
 }
 
 .eyebrow {
@@ -825,38 +915,249 @@
   text-transform: uppercase;
 }
 
-.profile-current {
-  display: grid;
-  grid-template-columns: 30px minmax(0, 1fr);
-  gap: 7px;
-  align-items: center;
-  width: 100%;
-  margin-top: 9px;
-  padding: 0;
-  border: 0;
-  color: var(--ink);
-  background: transparent;
-  cursor: pointer;
-  text-align: left;
-}
-
-.profile-current > span:last-child {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
-
-.profile-current strong {
+/* ── Rail state: 60px, icon only ────────────────────────────────────────────
+ *
+ * The labels are clipped out of the layout, never removed — the accessible
+ * name, the `<title>` (which carries the scope, i.e. *more* than the visible
+ * label) and the hover-peek panel all still say the word. `display: none` here
+ * would take the name off the button as well, which is how an icon rail ends up
+ * shipping nine anonymous glyphs.
+ */
+.sidebar[data-rail-state="rail"] .nav-item__label,
+.sidebar[data-rail-state="rail"] .nav-group-label,
+.sidebar[data-rail-state="rail"] .profile-manage-link__label,
+.sidebar[data-rail-state="rail"] .menu-select-value {
+  position: absolute;
+  width: 1px;
+  height: 1px;
   overflow: hidden;
-  font-size: 11px;
-  font-weight: 600;
-  text-overflow: ellipsis;
+  clip-path: inset(50%);
   white-space: nowrap;
 }
 
-.profile-current small {
+.sidebar[data-rail-state="rail"] .primary-nav { padding: var(--sp-2) var(--sp-1); }
+.sidebar[data-rail-state="rail"] .nav-item { grid-template-columns: minmax(0, 1fr); justify-items: center; padding: 0; }
+.sidebar[data-rail-state="rail"] .nav-item--nested { margin-left: var(--sp-1); width: calc(100% - var(--sp-1)); padding-left: 0; }
+.sidebar[data-rail-state="rail"] .rail-row { position: relative; grid-template-columns: minmax(0, 1fr); }
+.sidebar[data-rail-state="rail"] .rail-expander,
+.sidebar[data-rail-state="rail"] .chat-nav-disclosure { justify-self: center; }
+
+/* A 60px column has no second track. Where there is a pointer precise enough
+   to hit an 18px glyph, the expander rides the row's right edge instead of
+   taking a line of its own — which is what stopped the collapsed rail reading
+   as a column of stray arrows. A coarse pointer keeps the full-height target;
+   the two-line layout is the price of a thumb, and it is the right price. */
+@media (hover: hover) and (pointer: fine) {
+  .sidebar[data-rail-state="rail"] .rail-expander,
+  .sidebar[data-rail-state="rail"] .chat-nav-disclosure {
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 18px;
+    min-height: 100%;
+  }
+
+  .sidebar[data-rail-state="rail"] .rail-expander > span,
+  .sidebar[data-rail-state="rail"] .chat-nav-disclosure > span { font-size: 12px; }
+}
+.sidebar[data-rail-state="rail"] .profile-switcher { grid-template-columns: minmax(0, 1fr); justify-items: center; }
+
+/* The unread count and the receipt dot stay *on the row* in every state — they
+   are the one thing the rail says without being asked, and a collapsed rail
+   that dropped them would hide a fact rather than a label. In a single-track
+   row they ride the glyph's corner instead of taking a line. */
+.sidebar[data-rail-state="rail"] .nav-turn-badge,
+.sidebar[data-rail-state="rail"] .nav-proof-dot {
+  position: absolute;
+  top: 3px;
+  right: 5px;
+  margin: 0;
+}
+
+/*
+ * Hover-peek: an overlay, never a reflow.
+ *
+ * The panel widens over the conversation instead of widening the grid track,
+ * so nothing in the transcript moves while a person skims the rail. 180ms of
+ * dwell before it opens is the difference between intent and transit; 240ms
+ * before it closes is what stops it flickering on the way to the composer.
+ * `:focus-within` pins it open, because a keyboard user reading a label must
+ * not lose it to a mouse that happened to move.
+ */
+.sidebar[data-rail-state="rail"] .rail {
+  transition: width 140ms ease 240ms;
+}
+
+@media (hover: hover) {
+  .sidebar[data-rail-state="rail"]:hover .rail {
+    z-index: 30;
+    width: 268px;
+    box-shadow: 0 18px 44px rgba(0, 0, 0, 0.46);
+    transition-delay: 180ms;
+  }
+
+  .sidebar[data-rail-state="rail"]:hover .nav-item__label,
+  .sidebar[data-rail-state="rail"]:hover .nav-group-label,
+  .sidebar[data-rail-state="rail"]:hover .profile-manage-link__label,
+  .sidebar[data-rail-state="rail"]:hover .menu-select-value,
+  .sidebar[data-rail-state="rail"]:focus-within .nav-item__label,
+  .sidebar[data-rail-state="rail"]:focus-within .nav-group-label,
+  .sidebar[data-rail-state="rail"]:focus-within .profile-manage-link__label,
+  .sidebar[data-rail-state="rail"]:focus-within .menu-select-value {
+    position: static;
+    width: auto;
+    height: auto;
+    clip-path: none;
+  }
+
+  .sidebar[data-rail-state="rail"]:hover .nav-item,
+  .sidebar[data-rail-state="rail"]:focus-within .nav-item {
+    grid-template-columns: 25px minmax(0, 1fr) auto;
+    justify-items: stretch;
+    padding: 0 10px;
+  }
+
+  .sidebar[data-rail-state="rail"]:hover .rail-row,
+  .sidebar[data-rail-state="rail"]:focus-within .rail-row {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+  }
+
+  .sidebar[data-rail-state="rail"]:hover .nav-turn-badge,
+  .sidebar[data-rail-state="rail"]:focus-within .nav-turn-badge,
+  .sidebar[data-rail-state="rail"]:hover .nav-proof-dot,
+  .sidebar[data-rail-state="rail"]:focus-within .nav-proof-dot {
+    position: static;
+  }
+
+  .sidebar[data-rail-state="rail"]:hover .profile-switcher,
+  .sidebar[data-rail-state="rail"]:focus-within .profile-switcher {
+    grid-template-columns: minmax(0, 1fr) auto;
+    justify-items: stretch;
+  }
+}
+
+.sidebar[data-rail-state="rail"]:focus-within .rail {
+  z-index: 30;
+  width: 268px;
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.46);
+  transition-delay: 0ms;
+}
+
+/*
+ * No hover, no tooltip, so no unlabelled icons.
+ *
+ * The 60px rail pays for its width with a hover-revealed label, and a touch
+ * viewport narrow enough to land in `rail` has nothing to hover with. It gets
+ * the label permanently, stacked under the glyph at the micro step — the one
+ * thing the retired tablet block got right — and 16px more width to hold the
+ * longest destination name without cutting it.
+ */
+@media (hover: none) {
+  /* Measured, not guessed: 84px is the narrowest column in which `Connection`
+     — the longest destination name — renders without `scrollWidth` exceeding
+     `clientWidth` at the comfortable density's micro step. */
+  :root[data-rail="rail"] { --rail-width: 84px; }
+
+  .sidebar[data-rail-state="rail"] .nav-item {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    justify-content: center;
+    padding: 0 var(--sp-1);
+  }
+
+  .sidebar[data-rail-state="rail"] .nav-item__label {
+    position: static;
+    width: auto;
+    max-width: 100%;
+    height: auto;
+    clip-path: none;
+    font-size: var(--fs-micro);
+    text-align: center;
+  }
+}
+
+/* ── Focus state: the rail is not painted at all ────────────────────────────
+ *
+ * `--rail-width: 0px` closes the grid track; this stops the rail painting into
+ * the column it no longer has. There is deliberately no trigger for this state
+ * in the shell yet: entering it hides destinations, and the honesty strip that
+ * keeps the weakest claim and the session model visible while chrome is hidden
+ * is specified as part of focus mode itself. The state exists so that work
+ * package has a rail to switch into, not so a stray class can hide navigation.
+ */
+.sidebar[data-rail-state="focus"] { display: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar[data-rail-state="rail"] .rail { transition: none; }
+}
+
+/*
+ * The collapse control, and the only place the rail states are named in the UI.
+ * 24px of glyph in a target that clears 44px wherever a finger might use it.
+ */
+.rail-collapse {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  min-height: 28px;
+  padding: 0 var(--sp-2);
+  border: 0;
+  border-top: 1px solid var(--line);
   color: var(--ink-faint);
-  font: var(--fs-micro)/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: transparent;
+  cursor: pointer;
+  font-size: 15px;
+}
+
+.rail-collapse:hover { color: var(--ink); background: rgba(255, 255, 255, 0.026); }
+
+@media (pointer: coarse) {
+  .rail-collapse { min-height: 44px; }
+  .chat-nav-disclosure,
+  .rail-expander,
+  .chat-nav-new { min-height: 44px; min-width: 44px; }
+  .recent-conversation { min-height: 44px; }
+}
+
+/* In `rail` and `focus` the wordmark has no column to live in; the mark keeps
+   the brand's target and its accessible name, and the words come back with the
+   peek and on exit. */
+:root[data-rail="rail"] .brand-name,
+:root[data-rail="rail"] .edition,
+:root[data-rail="focus"] .brand { display: none; }
+
+:root[data-rail="rail"] .brand { justify-content: center; padding: 0; }
+
+/* `.topbar-center` is deliberately absent from the rule above. Focus mode may
+   hide chrome; it may not hide a claim, and the posture chip is the only
+   always-visible statement of what this tab's runtime and vault actually are.
+   Whoever wires the focus trigger owns the honesty strip that re-homes it. */
+
+/* `Manage profiles` beside the picker rather than under it: the row is 48px,
+   so the link is a target on the same line, not a third one. */
+.profile-switcher .profile-menu { margin-top: 0; }
+.profile-switcher .profile-menu .menu-select-trigger { gap: var(--sp-2); min-height: 40px; padding: 0 var(--sp-1); }
+.profile-switcher .profile-menu .profile-monogram { width: 26px; height: 26px; }
+
+.profile-switcher .profile-manage-link {
+  display: flex;
+  gap: var(--sp-1);
+  align-items: center;
+  width: auto;
+  min-height: 40px;
+  margin: 0;
+  padding: 0 var(--sp-2);
+  border-radius: var(--radius-control);
+  white-space: nowrap;
+}
+
+.profile-switcher .profile-manage-link.active { color: var(--ink); background: color-mix(in srgb, var(--accent) 11%, transparent); }
+.profile-switcher .profile-manage-link svg { flex: 0 0 auto; width: 16px; height: 16px; }
+
+@media (pointer: coarse) {
+  .profile-switcher .profile-manage-link,
+  .profile-switcher .profile-menu .menu-select-trigger { min-height: 44px; }
 }
 
 .profile-monogram {
@@ -892,3 +1193,29 @@
    landmark itself is not an interactive control and should not paint a
    viewport-sized browser outline. */
 .main:focus { outline: none; }
+
+/*
+ * The reference clause, not a second verdict.
+ *
+ * The topbar chip speaks for this browser tab. The claims scoped to the open
+ * conversation are stated at rest in the session bar, and this clause names
+ * how many they are so the deferral states its own cost. It only takes a seal
+ * and a state colour when one of those claims is actually alarming, because a
+ * pointer that shouts on every healthy turn stops being read, and one that
+ * stays quiet through a failure is a burial. The word travels with the colour
+ * in both cases, so colour is never the sole carrier.
+ */
+.topbar-posture-chip__elsewhere {
+  display: inline-flex;
+  gap: var(--sp-1);
+  align-items: center;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink-faint);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topbar-posture-chip__elsewhere[data-state="failed"] { color: var(--v-failed); }
+.topbar-posture-chip__elsewhere[data-state="attention"] { color: var(--v-caution); }

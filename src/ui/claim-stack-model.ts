@@ -5,9 +5,52 @@ export type ClaimStackSource = "turn-receipt" | "endpoint-evidence";
 
 export type ClaimStackFact = Readonly<{ label: string; value: string }>;
 
+/**
+ * The two independent reasons a claim cannot rise above what is shown.
+ *
+ * They are not one rule and they must never be spoken as one. Nothing in
+ * Airship checks a signature, so any copy claiming a receipt "is not signed by
+ * a trusted authority" would assert a mechanism the product does not implement.
+ * What the code actually computes is:
+ *
+ * - `receipt-integrity` — `assertedState()` in `attestations-model.ts`: the
+ *   receipt's own integrity and the authority embedded in its claims were never
+ *   authenticated, so a claim the receipt *declares* verified is shown as an
+ *   assertion. Applies to every conversation-receipt claim.
+ * - `authority` — `statusWithAuthority()` in `attestations-model.ts`: the
+ *   evidence record declared a claim verified without naming any verifier, so
+ *   the declaration has no author to check. Applies to endpoint evidence.
+ *
+ * Both are rendered, separately and by name, wherever a capped figure is shown.
+ */
+export type ClaimCeiling = "receipt-integrity" | "authority";
+
+/**
+ * The model's own word for why a claim sits where it does.
+ *
+ * The strings are byte-identical to the vocabulary `attestations-model.ts`
+ * already emits (`asserted-${declaredState}`, `verified-without-authority`, and
+ * the raw provider states) so the Proof route's two tabs share one qualifier
+ * dictionary instead of each inventing a second opinion about the same turn.
+ */
+export type ClaimQualifier =
+  | `asserted-${ProofStatus}`
+  | "verified-without-authority"
+  | AttestationClaimState;
+
 export type ClaimStackItem = Readonly<{
   key: ClaimKey;
+  /**
+   * The standing Airship will stand behind, after every ceiling is applied.
+   *
+   * `qualifier` records what the source declared and which rule capped it, so
+   * the declared status and the ceiling are read back from it rather than
+   * stored beside it — this module is entry-reachable and the startup cap has
+   * tens of bytes of headroom. `declaredClaimStatus()` and `claimCeiling()` in
+   * `claim-stack-facts.ts` are the readers.
+   */
   status: ProofStatus;
+  qualifier: ClaimQualifier;
   source: ClaimStackSource;
   claim: ReceiptClaim;
   verification?: VerificationRecord;
@@ -38,6 +81,7 @@ export function composeClaimStack(
     const unavailable = claimKeys.map((key) => Object.freeze({
       key,
       status: "unavailable" as const,
+      qualifier: "asserted-unavailable" as const,
       source: "turn-receipt" as const,
       claim: Object.freeze({
         status: "unavailable" as const,
@@ -88,15 +132,26 @@ export function composeClaimStack(
   });
 }
 
+/**
+ * What is missing, named, for each of the eight axes.
+ *
+ * The five bindable axes share one sentence shape because they share one fact:
+ * nothing has been bound to a turn. Saying it five different ways ("bound to",
+ * "established for", "attached to") suggested five different mechanisms where
+ * there is one — and "established" is retired as a verdict word throughout,
+ * because the claim rail counted "7 established" to mean *recorded* while the
+ * metric beside it read "Not established" to mean *unproven*.
+ */
 function absentClaimSummary(key: ClaimKey): string {
   if (key === "encryption") return "No completed turn records an authenticated encrypted channel.";
   if (key === "freshness") return "No turn-bound nonce or fresh endpoint evidence is available.";
-  if (key === "cpuTee") return "No CPU TEE quote has been bound to a completed turn.";
-  if (key === "gpuTee") return "No protected-accelerator evidence has been bound to a completed turn.";
-  if (key === "endpointKey") return "No attested endpoint key has been bound to a completed turn.";
-  if (key === "model") return "No model artifact or runtime policy has been established for a completed turn.";
   if (key === "conversation") return "No request and response commitment exists before the first completed turn.";
-  return "No account-standing or settlement receipt has been attached to a completed turn.";
+  const subject = key === "cpuTee" ? "CPU TEE quote"
+    : key === "gpuTee" ? "protected-accelerator evidence"
+      : key === "endpointKey" ? "attested endpoint key"
+        : key === "model" ? "model artifact or runtime policy"
+          : "account-standing or settlement receipt";
+  return `No ${subject} has been bound to a completed turn.`;
 }
 
 function composeItem(
@@ -106,33 +161,45 @@ function composeItem(
 ): ClaimStackItem {
   const verification = receipt.verifications.find((candidate) => candidate.claim === key);
   if (!endpoint || key === "encryption" || key === "conversation" || key === "payment") {
-    return Object.freeze({ key, status: receipt.claims[key].status, source: "turn-receipt", claim: receipt.claims[key], verification, facts: Object.freeze([]) });
+    const claim = receipt.claims[key];
+    return Object.freeze({
+      key,
+      // Ceiling 1, applied to every claim a receipt carries.
+      status: claim.status === "verified" ? "partial" : claim.status,
+      qualifier: `asserted-${claim.status}` as const,
+      source: "turn-receipt",
+      claim,
+      verification,
+      facts: Object.freeze([]),
+    });
   }
 
   if (key === "model") {
     const artifact = endpoint.claims.modelArtifact;
     const policy = endpoint.claims.runtimePolicy;
-    const status = combineEndpointStates([artifact.state, policy.state]);
+    const verifier = policy.verifier ?? artifact.verifier;
+    const status = combineEndpointStates([artifact.state, policy.state], verifier);
     return Object.freeze({
       key,
       status,
+      qualifier: endpointQualifier(policy.state, status),
       source: "endpoint-evidence",
       claim: Object.freeze({
         status,
         summary: [policy.summary, artifact.summary].filter(Boolean).join(" "),
-        verifier: policy.verifier ?? artifact.verifier,
+        verifier,
         checkedAt: policy.checkedAt ?? artifact.checkedAt,
       }),
       facts: Object.freeze([
         ...(endpoint.publishedPolicy ? [{ label: "Policy", value: `${endpoint.publishedPolicy.matches[0]?.name ?? `${endpoint.publishedPolicy.policyCount} published candidate${endpoint.publishedPolicy.policyCount === 1 ? "" : "s"}`} · ${endpoint.publishedPolicy.state}` }] : []),
-        { label: "Expected GPUs", value: endpoint.publishedPolicy?.matches[0]?.gpuCount?.toString() ?? "Not established" },
+        { label: "Expected GPUs", value: endpoint.publishedPolicy?.matches[0]?.gpuCount?.toString() ?? "Not recorded" },
       ]),
     });
   }
 
   const providerKey = key === "freshness" ? "nonceFreshness" : key;
   const providerClaim = endpoint.claims[providerKey];
-  const status = endpointState(providerClaim.state);
+  const status = endpointState(providerClaim.state, providerClaim.verifier);
   const facts: ClaimStackFact[] = key === "freshness"
     ? [
         { label: "Fetched", value: endpoint.acquisition.fetchedAt },
@@ -151,10 +218,30 @@ function composeItem(
   return Object.freeze({
     key,
     status,
+    qualifier: endpointQualifier(providerClaim.state, status),
     source: "endpoint-evidence",
     claim: Object.freeze({ status, summary: providerClaim.summary, verifier: providerClaim.verifier, checkedAt: providerClaim.checkedAt }),
     facts: Object.freeze(facts),
   });
+}
+
+/**
+ * Ceiling 2: "verified" needs somebody who did the verifying.
+ *
+ * Mirrors `statusWithAuthority()` in `attestations-model.ts`. A record that
+ * declares a claim verified without naming a verifier has made an assertion,
+ * because there is no author to check. This is the ceiling that stopped the
+ * Proof route's primary tab printing a green "VERIFIED · Protected CPU
+ * runtime" for the exact turn whose Attestation tab read "Asserted".
+ *
+ * Both ceilings run in one direction only: they may lower a declared
+ * `verified` and may never soften a negative. `assertedState()` also maps
+ * `failed` to `partial`, which prints "Asserted" on a claim its own record
+ * says failed — fail-closed means a stated failure keeps full weight even when
+ * nobody authenticated the statement, so this model does not copy that half.
+ */
+function endpointQualifier(declared: AttestationClaimState, status: ProofStatus): ClaimQualifier {
+  return declared === "verified" && status !== "verified" ? "verified-without-authority" : declared;
 }
 
 function endpointRecordMatchesReceiptSubject(record: ChutesEndpointEvidenceRecord | undefined, receipt: ConversationReceipt): boolean {
@@ -175,16 +262,16 @@ function isDisplayFresh(record: ChutesEndpointEvidenceRecord, now: number): bool
   return Number.isFinite(deadline) && deadline > now;
 }
 
-function endpointState(state: AttestationClaimState): ProofStatus {
-  if (state === "verified") return "verified";
+function endpointState(state: AttestationClaimState, verifier?: string): ProofStatus {
+  if (state === "verified") return verifier && verifier !== "unavailable" ? "verified" : "partial";
   if (state === "failed") return "failed";
   if (state === "expired") return "expired";
   if (state === "matched" || state === "present" || state === "unverified") return "partial";
   return "unavailable";
 }
 
-function combineEndpointStates(states: readonly AttestationClaimState[]): ProofStatus {
-  const normalized = states.map(endpointState);
+function combineEndpointStates(states: readonly AttestationClaimState[], verifier?: string): ProofStatus {
+  const normalized = states.map((state) => endpointState(state, verifier));
   if (normalized.some((state) => state === "failed")) return "failed";
   if (normalized.some((state) => state === "expired")) return "expired";
   if (normalized.every((state) => state === "verified")) return "verified";
@@ -192,16 +279,8 @@ function combineEndpointStates(states: readonly AttestationClaimState[]): ProofS
   return "unavailable";
 }
 
-function freezeGroups(groups: {
-  failed: ClaimStackItem[];
-  verified: ClaimStackItem[];
-  asserted: ClaimStackItem[];
-  unavailable: ClaimStackItem[];
-}): ClaimStackModel["groups"] {
-  return Object.freeze({
-    failed: Object.freeze(groups.failed),
-    verified: Object.freeze(groups.verified),
-    asserted: Object.freeze(groups.asserted),
-    unavailable: Object.freeze(groups.unavailable),
-  });
+/** Freezes the group container and each list inside it, in one pass. */
+function freezeGroups(groups: ClaimStackModel["groups"]): ClaimStackModel["groups"] {
+  for (const items of Object.values(groups)) Object.freeze(items);
+  return Object.freeze(groups);
 }

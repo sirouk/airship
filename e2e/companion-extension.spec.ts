@@ -88,11 +88,18 @@ test("the real Chromium companion reports, computes, and stores only after opt-i
     });
 
     await page.reload();
-    await expect(page.locator(".companion-overview")).toContainText("Extension 1.1.1 connected", {
-      timeout: 15_000,
-    });
-    await expect(page.locator(".companion-overview")).toContainText("1 page");
-    await expect(page.locator(".companion-overview")).toContainText("Hash + vector ranking");
+    /*
+     * The Companion is now the sixth row of the lane list rather than a 219px
+     * card above it, so the selector moves. The invariant is *stronger* than
+     * the one it replaces: all three readings are asserted on the COLLAPSED
+     * row, which means a truthful positive state is observable without opening
+     * anything — the card required no gesture either, but it also spent 66% of
+     * a phone viewport saying "Not active" three times when it was false.
+     */
+    const companion = page.locator('.connect-lane[data-lane="companion"]');
+    await expect(companion).toContainText("Extension 1.1.1", { timeout: 15_000 });
+    await expect(companion.locator(".connect-lane__facts")).toContainText("1 page");
+    await expect(companion.locator(".connect-lane__facts")).toContainText("Hash + vector ranking");
   } finally {
     await context?.close();
   }

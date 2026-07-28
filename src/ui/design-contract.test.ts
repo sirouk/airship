@@ -3,7 +3,13 @@ import { describe, expect, it } from "vitest";
 import { readAirshipStyles } from "./style-sheets.test-helper";
 
 const [appSource, attestationSource, sealSource, sessionsSource, sourcesSource, styles, vaultStyles, localLabStyles, menuStyles, routeStyles, durabilityStyles] = await Promise.all([
-  readFile(new URL("./app.tsx", import.meta.url), "utf8"),
+  // The shell is two files since the rail was extracted: the compact topbar
+  // picker still lives in `app.tsx`, the pinned rail picker in `rail.tsx`.
+  // The contract is about the *pair* existing, so it reads the pair.
+  Promise.all([
+    readFile(new URL("./app.tsx", import.meta.url), "utf8"),
+    readFile(new URL("./rail.tsx", import.meta.url), "utf8"),
+  ]).then((sources) => sources.join("\n")),
   readFile(new URL("./attestations-view.tsx", import.meta.url), "utf8"),
   readFile(new URL("./seal.tsx", import.meta.url), "utf8"),
   readFile(new URL("./sessions-view.tsx", import.meta.url), "utf8"),
@@ -117,7 +123,12 @@ describe("Airship Instrument design contract", () => {
     expect(`${vaultStyles}\n${localLabStyles}`).not.toMatch(/--signal-(?:good|warn|info)|#8db8df|var\(--focus,/u);
     expect(vaultStyles).toContain("var(--v-verified)");
     expect(localLabStyles).toContain("var(--v-caution)");
-    expect(routeStyles.match(/font-family:\s*var\(--font-display\)/gu)).toHaveLength(4);
+    // The serif has exactly one job — `.route-title`, owned by <RouteHeader> —
+    // so a route sheet that re-declares the display face is re-forking the
+    // heading rule it was meant to retire. `access-view.css` and
+    // `sources-view.css` have handed theirs back; the two that remain are
+    // counted here so a third cannot reappear unnoticed.
+    expect(routeStyles.match(/font-family:\s*var\(--font-display\)/gu)).toHaveLength(2);
   });
 
   it("renders the mobile shell as four fixed primary controls without horizontal scrolling", () => {

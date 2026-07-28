@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { loadDeferredCapabilities } from "../load-deferred-capabilities";
+import { RecoveryKeyGroups } from "./google-drive-setup";
 import type { WorkspaceRootKey } from "../storage/encrypted-envelope";
 import type { ConfigureVaultRequest } from "../vault/coordinator";
 import type { LocalLabRecoveryMaterial } from "../vault/local-lab";
@@ -17,6 +18,44 @@ const LOCAL_LAB_FIXTURE = Object.freeze({
   accessKeyId: "airship-vault-probe",
   secretAccessKey: "airship-vault-probe-only-2026",
 });
+
+export const LOCAL_LAB_FIELDS = Object.freeze([
+  "endpoint", "region", "bucket", "namespace", "accessKeyId", "secretAccessKey",
+] as const);
+
+export type LocalLabField = (typeof LOCAL_LAB_FIELDS)[number];
+
+type FieldErrors = Readonly<Partial<Record<LocalLabField, string>>>;
+
+const NO_FIELD_ERRORS: FieldErrors = Object.freeze({});
+
+const LOCAL_LAB_FIELD_LABELS: Readonly<Record<LocalLabField, string>> = Object.freeze({
+  endpoint: "Endpoint",
+  region: "Region",
+  bucket: "Bucket",
+  namespace: "Private namespace",
+  accessKeyId: "Access key",
+  secretAccessKey: "Secret key",
+});
+
+/**
+ * Anchor a refused configuration to the field that caused it.
+ *
+ * The coordinator raises one sentence for the whole form. Until it carries a
+ * field code, this maps its own wording to the input it is about — and returns
+ * nothing when it cannot, so an unmatched refusal keeps its summary rather than
+ * being pinned to a guessed field.
+ */
+export function localLabFieldForError(message: string): LocalLabField | undefined {
+  const text = message.toLocaleLowerCase();
+  if (/loopback|localhost|127\.0\.0\.1|::1|endpoint|https?/u.test(text)) return "endpoint";
+  if (/namespace|prefix/u.test(text)) return "namespace";
+  if (/bucket/u.test(text)) return "bucket";
+  if (/region/u.test(text)) return "region";
+  if (/secret/u.test(text)) return "secretAccessKey";
+  if (/access key/u.test(text)) return "accessKeyId";
+  return undefined;
+}
 
 /** Loopback-only setup. It hands memory objects to the coordinator and never probes storage. */
 function LocalLabSetupForm({ onConfigure }: LocalLabSetupProps) {
@@ -37,6 +76,31 @@ function LocalLabSetupForm({ onConfigure }: LocalLabSetupProps) {
   const [recoveryAcknowledged, setRecoveryAcknowledged] = useState(false);
   const [loopbackAcknowledged, setLoopbackAcknowledged] = useState(false);
   const [status, setStatus] = useState<{ kind: "error" | "success"; message: string }>();
+  const [fieldErrors, setFieldErrors] = useState<FieldErrors>(NO_FIELD_ERRORS);
+  const endpointField = useRef<HTMLInputElement>(null);
+  const regionField = useRef<HTMLInputElement>(null);
+  const bucketField = useRef<HTMLInputElement>(null);
+  const namespaceField = useRef<HTMLInputElement>(null);
+  const accessKeyField = useRef<HTMLInputElement>(null);
+  const secretKeyField = useRef<HTMLInputElement>(null);
+  const fieldRefs: Readonly<Record<LocalLabField, { current: HTMLInputElement | null }>> = {
+    endpoint: endpointField,
+    region: regionField,
+    bucket: bucketField,
+    namespace: namespaceField,
+    accessKeyId: accessKeyField,
+    secretAccessKey: secretKeyField,
+  };
+  const invalidFields = LOCAL_LAB_FIELDS.filter((field) => fieldErrors[field] !== undefined);
+
+  const clearFieldError = (field: LocalLabField): void => {
+    setFieldErrors((current) => {
+      if (current[field] === undefined) return current;
+      const next = { ...current };
+      delete next[field];
+      return Object.freeze(next);
+    });
+  };
 
   useEffect(() => () => {
     recoveryGeneration.current += 1;
@@ -84,6 +148,7 @@ function LocalLabSetupForm({ onConfigure }: LocalLabSetupProps) {
     recoveryRef.current?.clear();
     recoveryRef.current = undefined;
     setRecovery(undefined);
+    setFieldErrors(NO_FIELD_ERRORS);
     setRecoveryMode("generate");
     setImportedRecovery("");
     setShowImportedRecovery(false);
@@ -104,6 +169,7 @@ function LocalLabSetupForm({ onConfigure }: LocalLabSetupProps) {
     if (handingOff) return;
     setHandingOff(true);
     setStatus(undefined);
+    setFieldErrors(NO_FIELD_ERRORS);
     if ((recoveryMode === "generate" && !recovery) || (recoveryMode === "import" && !importedRecovery.trim())) {
       setHandingOff(false);
       setStatus({ kind: "error", message: recoveryMode === "generate"
@@ -139,8 +205,19 @@ function LocalLabSetupForm({ onConfigure }: LocalLabSetupProps) {
       )
         ? error.message
         : "The local lab handoff was refused. Recheck the loopback configuration and acknowledgements.";
-      clearForm();
+      // A refused configuration is a correction, not a reset. Wiping six fields
+      // and destroying the one-time recovery key the user was just told to save
+      // is a worse outcome than the mistake being reported. The post-handoff
+      // clearForm() below still covers the secret-hygiene case.
+      const field = localLabFieldForError(message);
+      setFieldErrors(field ? Object.freeze({ [field]: message }) : NO_FIELD_ERRORS);
+      setHandingOff(false);
       setStatus({ kind: "error", message });
+      if (field) {
+        const input = fieldRefs[field].current;
+        input?.scrollIntoView({ block: "center" });
+        input?.focus();
+      }
       return;
     }
     // The request owns the key/provider references now; clear DOM/component
@@ -180,90 +257,119 @@ function LocalLabSetupForm({ onConfigure }: LocalLabSetupProps) {
       <form class="local-lab__form" autoComplete="off" onSubmit={submit} aria-describedby="local-lab-boundary">
         <fieldset>
           <legend>Loopback object store</legend>
-          <label class="local-lab__wide">
+          <label class="local-lab__wide" data-invalid={fieldErrors.endpoint ? "true" : "false"}>
             <span>Endpoint</span>
             <input
+              ref={endpointField}
               type="url"
               name="airship-local-endpoint"
               value={endpoint}
-              onInput={(event) => setEndpoint(event.currentTarget.value)}
+              onInput={(event) => { setEndpoint(event.currentTarget.value); clearFieldError("endpoint"); }}
               placeholder={LOCAL_LAB_DEFAULT_ENDPOINT}
               autoComplete="off"
               autoCapitalize="none"
               spellcheck={false}
+              aria-invalid={fieldErrors.endpoint ? "true" : undefined}
+              aria-describedby="local-lab-endpoint-hint"
               required
             />
-            <small>Only localhost, 127.0.0.1, or [::1] is accepted. Path-style access is forced.</small>
+            {/* The neutral hint is replaced by the refusal while invalid, so
+                one line at one place answers "what should this say". */}
+            <small id="local-lab-endpoint-hint" class={fieldErrors.endpoint ? "local-lab__field-error" : undefined}>
+              {fieldErrors.endpoint
+                ? `${fieldErrors.endpoint} Use localhost, 127.0.0.1, or [::1]. This is a loopback-only development lab.`
+                : "Only localhost, 127.0.0.1, or [::1] is accepted. Path-style access is forced."}
+            </small>
           </label>
-          <label>
+          <label data-invalid={fieldErrors.region ? "true" : "false"}>
             <span>Region</span>
             <input
+              ref={regionField}
               name="airship-local-region"
               value={region}
-              onInput={(event) => setRegion(event.currentTarget.value)}
+              onInput={(event) => { setRegion(event.currentTarget.value); clearFieldError("region"); }}
               placeholder="auto"
               autoComplete="off"
               autoCapitalize="none"
               spellcheck={false}
+              aria-invalid={fieldErrors.region ? "true" : undefined}
+              aria-describedby={fieldErrors.region ? "local-lab-region-error" : undefined}
               required
             />
+            {fieldErrors.region ? <small id="local-lab-region-error" class="local-lab__field-error">{fieldErrors.region}</small> : null}
           </label>
-          <label>
+          <label data-invalid={fieldErrors.bucket ? "true" : "false"}>
             <span>Bucket</span>
             <input
+              ref={bucketField}
               name="airship-local-bucket"
               value={bucket}
-              onInput={(event) => setBucket(event.currentTarget.value)}
+              onInput={(event) => { setBucket(event.currentTarget.value); clearFieldError("bucket"); }}
               placeholder="airship-dev"
               autoComplete="off"
               autoCapitalize="none"
               spellcheck={false}
+              aria-invalid={fieldErrors.bucket ? "true" : undefined}
+              aria-describedby={fieldErrors.bucket ? "local-lab-bucket-error" : undefined}
               required
             />
+            {fieldErrors.bucket ? <small id="local-lab-bucket-error" class="local-lab__field-error">{fieldErrors.bucket}</small> : null}
           </label>
-          <label class="local-lab__wide">
+          <label class="local-lab__wide" data-invalid={fieldErrors.namespace ? "true" : "false"}>
             <span>Private namespace</span>
             <input
+              ref={namespaceField}
               name="airship-local-namespace"
               value={namespace}
-              onInput={(event) => setNamespace(event.currentTarget.value)}
+              onInput={(event) => { setNamespace(event.currentTarget.value); clearFieldError("namespace"); }}
               placeholder="users/local-test"
               autoComplete="off"
               autoCapitalize="none"
               spellcheck={false}
+              aria-invalid={fieldErrors.namespace ? "true" : undefined}
+              aria-describedby={fieldErrors.namespace ? "local-lab-namespace-error" : undefined}
               required
             />
+            {fieldErrors.namespace ? <small id="local-lab-namespace-error" class="local-lab__field-error">{fieldErrors.namespace}</small> : null}
           </label>
         </fieldset>
 
         <fieldset>
           <legend>Disposable local credentials</legend>
-          <label>
+          <label data-invalid={fieldErrors.accessKeyId ? "true" : "false"}>
             <span>Access key</span>
             <input
+              ref={accessKeyField}
               value={accessKeyId}
-              onInput={(event) => setAccessKeyId(event.currentTarget.value)}
+              onInput={(event) => { setAccessKeyId(event.currentTarget.value); clearFieldError("accessKeyId"); }}
               autoComplete="off"
               autoCapitalize="none"
               spellcheck={false}
               data-lpignore="true"
               data-1p-ignore="true"
+              aria-invalid={fieldErrors.accessKeyId ? "true" : undefined}
+              aria-describedby={fieldErrors.accessKeyId ? "local-lab-access-error" : undefined}
               required
             />
+            {fieldErrors.accessKeyId ? <small id="local-lab-access-error" class="local-lab__field-error">{fieldErrors.accessKeyId}</small> : null}
           </label>
-          <label>
+          <label data-invalid={fieldErrors.secretAccessKey ? "true" : "false"}>
             <span>Secret key</span>
             <input
+              ref={secretKeyField}
               type="password"
               value={secretAccessKey}
-              onInput={(event) => setSecretAccessKey(event.currentTarget.value)}
+              onInput={(event) => { setSecretAccessKey(event.currentTarget.value); clearFieldError("secretAccessKey"); }}
               autoComplete="new-password"
               autoCapitalize="none"
               spellcheck={false}
               data-lpignore="true"
               data-1p-ignore="true"
+              aria-invalid={fieldErrors.secretAccessKey ? "true" : undefined}
+              aria-describedby={fieldErrors.secretAccessKey ? "local-lab-secret-error" : undefined}
               required
             />
+            {fieldErrors.secretAccessKey ? <small id="local-lab-secret-error" class="local-lab__field-error">{fieldErrors.secretAccessKey}</small> : null}
           </label>
           <p class="local-lab__wide local-lab__note">
             These values remain in page memory only. The form clears after handoff; disconnecting the vault calls the provider reset hook.
@@ -301,14 +407,14 @@ function LocalLabSetupForm({ onConfigure }: LocalLabSetupProps) {
               <div class="local-lab__recovery">
                 <label>
                   <span>Save this now</span>
-                  <textarea
-                    value={recovery.displayValue}
-                    readOnly
-                    rows={3}
-                    autoComplete="off"
-                    spellcheck={false}
+                  {/* Same 4-character grid as the other two provider panels;
+                      grouping is layout, so the value stays exact. */}
+                  <output
+                    aria-label="One-time loopback lab recovery key"
                     aria-describedby="local-lab-recovery-warning"
-                  />
+                  >
+                    <RecoveryKeyGroups value={recovery.displayValue} />
+                  </output>
                 </label>
                 <p id="local-lab-recovery-warning">
                   Airship does not upload or persist this recovery key. Losing it means losing access to encrypted lab data.
@@ -359,6 +465,7 @@ function LocalLabSetupForm({ onConfigure }: LocalLabSetupProps) {
         </fieldset>
 
         <div class="local-lab__acknowledgements">
+          <p class="local-lab__eyebrow">Before handoff</p>
           <label>
             <input
               type="checkbox"
@@ -381,6 +488,18 @@ function LocalLabSetupForm({ onConfigure }: LocalLabSetupProps) {
         </div>
 
         {status && <p class={`local-lab__status local-lab__status--${status.kind}`} role={status.kind === "error" ? "alert" : "status"}>{status.message}</p>}
+
+        {invalidFields.length > 0 ? (
+          <p class="local-lab__status local-lab__status--error">
+            {`Fix ${invalidFields.length} field${invalidFields.length === 1 ? "" : "s"} to continue — `}
+            <button type="button" class="local-lab__link" onClick={() => {
+              const field = invalidFields[0]!;
+              const input = fieldRefs[field].current;
+              input?.scrollIntoView({ block: "center" });
+              input?.focus();
+            }}>{invalidFields.map((field) => LOCAL_LAB_FIELD_LABELS[field]).join(", ")}</button>
+          </p>
+        ) : null}
 
         <div class="local-lab__actions">
           <button

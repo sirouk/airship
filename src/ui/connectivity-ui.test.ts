@@ -18,7 +18,11 @@ describe("offline runtime UI contract", () => {
     // rather than asserting that two components exist. Stronger: the previous
     // assertions passed while the phone chip was gated on being connected,
     // which meant a disconnected phone rendered no posture at all.
-    expect(app).toMatch(/id: "local", label: online \? "Browser \/ Edge runtime" : OFFLINE_RUNTIME_LABEL/u);
+    // The axis now also declares the band that owns it. Connectivity is true of
+    // this browser tab whichever conversation is open, so it is `tab`-scoped —
+    // and asserting the scope here is what keeps a later refactor from moving
+    // the offline claim into a band that unmounts with the conversation.
+    expect(app).toMatch(/id: "local", scope: "tab", label: online \? "Browser \/ Edge runtime" : OFFLINE_RUNTIME_LABEL/u);
     expect(app).toMatch(/detail: online \? "[^"]+" : OFFLINE_RUNTIME_DETAIL/u);
     expect(app).toContain("<TopbarPostureChip axes={trustAxes} onOpen={() => setTrustSheetOpen(true)} />");
   });
@@ -35,14 +39,18 @@ describe("offline runtime UI contract", () => {
 
   it("disables provider discovery and OAuth while preserving the pending OAuth credential", () => {
     expect(access).toContain("if (!online || !oauthBootstrap");
-    // Sign-in is no longer rendered-but-disabled when the exchange is not
-    // configured: an unconfigured build does not offer it at all, so the only
-    // remaining reason to disable it is the network.
     expect(access).toContain("const chutesSignInAvailable = Boolean(oauthDiagnostic) && oauthOrigin.available;");
     expect(access).toContain('const activeChutesMethod = chutesSignInAvailable ? chutesMethod : "api-key";');
-    expect(access).toContain('{chutesSignInAvailable && activeChutesMethod === "oauth" ? (');
+    // The OAuth *explanation* renders whenever the method is selected; only the
+    // control that would fail is gated on availability. Gating the whole block
+    // on `chutesSignInAvailable` made the boundary text, the registration
+    // details and the one sentence that says WHY sign-in is unavailable
+    // unreachable in exactly the build that needed them — and left the
+    // `!chutesSignInAvailable` branch inside it as provable dead code.
+    expect(access).toContain('{activeChutesMethod === "oauth" ? (');
+    expect(access).not.toContain('{chutesSignInAvailable && activeChutesMethod === "oauth" ? (');
     expect(access).toContain('{activeChutesMethod === "api-key" ? (');
-    expect(access).toMatch(/disabled=\{busy \|\| !online\}\n\s+onClick=\{startChutesSignIn\}/u);
+    expect(access).toMatch(/disabled=\{busy \|\| !online \|\| !chutesSignInAvailable\}/u);
     expect(access).toContain("disabled={!online || !chutesSignInAvailable}");
     expect(access).toContain("disabled={busy || !online}>Discover models with key");
     expect(access).toContain('class="access-network-pause"');

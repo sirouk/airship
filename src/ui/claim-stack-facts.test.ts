@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ChutesEndpointEvidenceRecord } from "../attestation/provider-types";
 import { createLocalReceipt } from "../receipts/types";
-import { claimStackPopoverFacts } from "./claim-stack-facts";
+import { claimCeiling, claimQualifierLabel, claimStackPopoverFacts, readClaimQualifier, CLAIM_STATE_LEGEND } from "./claim-stack-facts";
 import { composeClaimStack } from "./claim-stack-model";
 
 const NOW = Date.parse("2026-07-19T12:00:00.000Z");
@@ -26,9 +26,58 @@ describe("claim-stack popover rows", () => {
     // An unlabelled blank on a proof surface reads as "nothing to see"; the
     // honest reading is that nobody has asserted this yet.
     const facts = claimStackPopoverFacts(composeClaimStack(undefined, undefined, NOW).items[0]!);
-    expect(facts.find((fact) => fact.label === "Issuer")?.value).toBe("Not established");
+    // "Not established" is retired as a value word: the claim rail counted
+    // "7 established" to mean recorded while the metric beside it said "Not
+    // established" to mean unproven, 183px apart in one viewport.
+    expect(facts.find((fact) => fact.label === "Issuer")?.value).toBe("None recorded");
     expect(facts.find((fact) => fact.label === "Checked")?.value).toBe("Never");
     expect(facts).toHaveLength(3);
+    expect(facts.some((fact) => fact.value.includes("established"))).toBe(false);
+  });
+
+  it("names the ceiling on the row it capped, and only there", () => {
+    // A capped claim must say what capped it. An uncapped one must not carry a
+    // boilerplate row, or the one that matters reads as furniture.
+    const receipt = encryptedReceipt();
+    receipt.claims.cpuTee = { status: "verified", summary: "Receipt declares a verified CPU TEE.", verifier: "chutes" };
+    const model = composeClaimStack(receipt, undefined, NOW);
+    const capped = claimStackPopoverFacts(model.items.find((item) => item.key === "cpuTee")!);
+    expect(claimCeiling(model.items.find((item) => item.key === "cpuTee")!)).toBe("receipt-integrity");
+    expect(claimCeiling(model.items.find((item) => item.key === "payment")!)).toBeUndefined();
+    const uncapped = claimStackPopoverFacts(model.items.find((item) => item.key === "payment")!);
+
+    expect(capped.find((fact) => fact.label === "Declared")?.value)
+      .toBe("Verified · capped by receipt integrity not authenticated");
+    expect(uncapped.some((fact) => fact.label === "Declared")).toBe(false);
+  });
+
+  it("returns only the delta so a status word is never printed twice", () => {
+    // The shipped inspector rendered "ASSERTED · ASSERTED PARTIAL · RECEIPT
+    // UNAUTHENTICATED" because the qualifier re-prefixed the status word the
+    // line already began with.
+    expect(claimQualifierLabel("asserted-verified"))
+      .toBe("record declares verified · receipt integrity not authenticated");
+    expect(claimQualifierLabel("asserted-verified", { ceilingStatedElsewhere: true }))
+      .toBe("record declares verified");
+    expect(claimQualifierLabel("asserted-unavailable")).toBeUndefined();
+    for (const qualifier of ["asserted-verified", "verified-without-authority", "matched", "present", "unverified"]) {
+      expect(claimQualifierLabel(qualifier)?.toLowerCase()).not.toContain("asserted");
+    }
+  });
+
+  it("keeps the two ceilings separate and never speaks of signatures", () => {
+    // Nothing in Airship checks a signature. Copy saying a receipt "is not
+    // signed by a trusted authority" would assert a mechanism the product does
+    // not implement, to explain a contradiction caused by overclaiming.
+    expect(readClaimQualifier("asserted-verified").ceiling).toBe("receipt-integrity");
+    expect(readClaimQualifier("verified-without-authority").ceiling).toBe("authority");
+    expect(readClaimQualifier("matched").ceiling).toBeUndefined();
+    expect(claimQualifierLabel("verified-without-authority")).not.toContain("sign");
+  });
+
+  it("publishes a legend containing exactly the three emitted state words", () => {
+    expect(CLAIM_STATE_LEGEND.map((entry) => entry.word)).toEqual(["Verified", "Asserted", "No evidence"]);
+    expect(CLAIM_STATE_LEGEND.every((entry) => entry.meaning.length > 30)).toBe(true);
   });
 
   it("distinguishes a turn receipt's own assertion from separately fetched endpoint evidence", () => {

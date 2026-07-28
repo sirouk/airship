@@ -80,15 +80,19 @@ export function ModelControl({
           }}
         />
       </label>
-      <button
-        class="runtime-posture"
-        type="button"
-        onClick={onOpenConnection}
-        aria-label={`Open inference connections. Current boundary: ${active.boundaryLabel}`}
-        title="Open inference connections and credential details"
-      >
-        {switching ? "Switching…" : active.boundaryLabel}
-      </button>
+      {/*
+        The posture pill is gone from this control, and only from this control.
+        It rendered `activeConnectionBoundaryLabel(connection)` — the identical
+        string the session status chip carries 140px away, whose popover shows
+        it in full with the same `→ Models` navigation into `#access`. Two click
+        targets for one fact, 140px apart, and the 185px it took was measured
+        against a 169px model field: the name this control exists to show was
+        ellipsised to `Qwen3-32B-T…` so a duplicate could be spelled out.
+
+        The transient stays. "Switching…" is a lifecycle state of *this* control
+        and is stated nowhere else, so it keeps its own live region.
+      */}
+      {switching ? <span class="runtime-posture" role="status">Switching…</span> : null}
       {error ? <span class="session-runtime-error" role="alert">{error}</span> : null}
     </div>
   );

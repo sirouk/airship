@@ -65,8 +65,11 @@ test("each addressed conversation restores its own unsent draft", async ({ page 
   await expect.poll(() => page.url()).not.toBe(sourceUrl);
   await expect(composer).toHaveValue("");
 
-  const source = page
-    .getByRole("navigation", { name: "Primary" })
+  // AMENDED: the conversation list is a disclosure now, so it is opened before
+  // it is read. The rows, their order and their targets are unchanged.
+  const navigation = page.getByRole("navigation", { name: "Primary" });
+  await navigation.getByRole("button", { name: "Expand recent conversations" }).click();
+  const source = navigation
     .locator("#airship-recent-conversations .recent-conversation:not(.active)")
     .first();
   await source.click();
@@ -97,18 +100,28 @@ test("desktop treats Chat as the conversation disclosure and preserves the full 
   await expect(navigation.getByRole("button", { name: "Sessions", exact: true })).toHaveCount(0);
   await expect(navigation.getByRole("button", { name: "Chat", exact: true })).toHaveAttribute("aria-current", "page");
 
-  const disclosure = navigation.getByRole("button", { name: "Collapse recent conversations" });
-  await expect(disclosure).toHaveAttribute("aria-expanded", "true");
+  // AMENDED. The conversation list is a disclosure rather than a permanent
+  // 250px scroller in the rail, so it rests closed instead of open: the ten
+  // sessions, the ledger link and the collapse control are all unchanged, and
+  // the title column went from ~105px to ~232px by leaving the rail. What the
+  // replacement asserts that the original could not: the panel is 320px wide,
+  // and `All conversations` — which used to be the last row of a hard-clipped
+  // scroller and was measured *invisible* at six or more threads — is always
+  // inside the panel's own box.
+  const disclosure = navigation.getByRole("button", { name: "Expand recent conversations" });
+  await expect(disclosure).toHaveAttribute("aria-expanded", "false");
+  await expect(navigation.locator("#airship-recent-conversations")).toHaveCount(0);
+  await disclosure.click();
   const recent = navigation.locator("#airship-recent-conversations");
   await expect(recent).toBeVisible();
   expect(await recent.locator(".recent-conversation").count()).toBeLessThanOrEqual(10);
-  await disclosure.click();
-  await expect(navigation.locator("#airship-recent-conversations")).toHaveCount(0);
-  await expect(navigation.getByRole("button", { name: "Expand recent conversations" })).toHaveAttribute("aria-expanded", "false");
-  await navigation.getByRole("button", { name: "Chat", exact: true }).click();
-  await expect(page).toHaveURL(/#chat\/[^/?#]+$/);
-  await navigation.getByRole("button", { name: "Expand recent conversations" }).click();
-  await navigation.getByRole("button", { name: "All conversations", exact: true }).click();
+  expect(Math.round((await recent.boundingBox())!.width)).toBe(320);
+  await expect(navigation.getByRole("button", { name: "Collapse recent conversations" })).toHaveAttribute("aria-expanded", "true");
+  const ledger = recent.getByRole("button", { name: "All conversations", exact: true });
+  const ledgerBox = await ledger.boundingBox();
+  const panelBox = await recent.boundingBox();
+  expect(ledgerBox!.y + ledgerBox!.height).toBeLessThanOrEqual(panelBox!.y + panelBox!.height + 1);
+  await ledger.click();
   await expect(page).toHaveURL(/#sessions$/);
   await expect(page.getByRole("heading", { name: "All conversations", level: 1 })).toBeVisible();
 
@@ -290,29 +303,36 @@ test("an open Index shares one slow search authority with Recall", async ({ page
   await expect.poll(() => page.evaluate(() => globalThis.airshipMemoryAuthorityInvocations)).toBe(2);
 });
 
-test("Profiles opens by default, remains collapsible, and uses one scoped tabbed manager", async ({ page }, testInfo) => {
+test("the pinned profile row switches profiles, names each one, and reaches the manager", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium", "desktop profile information architecture");
   await page.goto("/#chat");
   const navigation = page.getByRole("navigation", { name: "Primary" });
   await expect(navigation.getByRole("button", { name: "Skills", exact: true })).toHaveCount(0);
   await expect(navigation.getByRole("button", { name: "Capabilities", exact: true })).toHaveCount(0);
-  await expect(navigation.getByRole("button", { name: "Collapse profiles" })).toHaveAttribute("aria-expanded", "true");
-  const profileList = navigation.locator("#airship-profile-navigation");
-  await expect(profileList).toBeVisible();
-  expect(await profileList.locator(".recent-conversation").count()).toBeGreaterThan(0);
-  const profileRailStyle = await profileList.evaluate((element) => ({
-    overflowY: getComputedStyle(element).overflowY,
-    maxHeight: getComputedStyle(element).maxHeight,
-  }));
-  expect(profileRailStyle.overflowY).toBe("auto");
-  expect(profileRailStyle.maxHeight).toContain("310px");
-  await navigation.getByRole("button", { name: "Collapse profiles" }).click();
-  await expect(profileList).toHaveCount(0);
-  await navigation.getByRole("button", { name: "Profiles", exact: true }).click();
-  await expect(navigation.getByRole("button", { name: "Collapse profiles" })).toHaveAttribute("aria-expanded", "true");
-  const reopenedProfileList = navigation.locator("#airship-profile-navigation");
-  await reopenedProfileList.getByRole("button", { name: /Research/u }).click();
+  // AMENDED. The `AGENT` group was a group of exactly one destination whose
+  // children duplicated the pinned profile card 300px below them, and its
+  // inner 310px scroller was one of the two reasons the rail could not fit.
+  // The catalog now lives in the pinned row's own menu. Nothing is lost and
+  // one thing is gained: these rows never carried the profile *descriptions*,
+  // and the menu does. Profiles remains reachable from `Manage profiles`, the
+  // command palette and `#profiles`.
+  await expect(navigation.locator("#airship-profile-navigation")).toHaveCount(0);
+  const profileRow = page.locator(".sidebar .profile-switcher");
+  await expect(profileRow).toBeVisible();
+  expect(Math.round((await profileRow.boundingBox())!.height)).toBeLessThanOrEqual(56);
+  const picker = profileRow.getByRole("button", { name: "Agent profile" });
+  await picker.click();
+  const listbox = page.getByRole("listbox", { name: "Agent profile" });
+  await expect(listbox).toBeVisible();
+  expect(await listbox.getByRole("option").count()).toBeGreaterThan(0);
+  // Every option states what the profile governs, which the rail rows did not.
+  for (const option of await listbox.getByRole("option").all()) {
+    await expect(option.locator("small")).not.toHaveText("");
+  }
+  await page.keyboard.press("Escape");
+  await profileRow.getByRole("button", { name: "Manage profiles" }).click();
   await expect(page).toHaveURL(/#profiles$/);
+  await page.locator(".profile-card").filter({ hasText: "Research" }).click();
   await expect(page.locator(".profile-card.active")).toContainText("Research");
   const manager = page.getByRole("navigation", { name: "Agent configuration" });
   await manager.getByRole("button", { name: "Capabilities", exact: true }).click();
@@ -323,7 +343,7 @@ test("Profiles opens by default, remains collapsible, and uses one scoped tabbed
   await expect(page.getByText("Profile scope", { exact: true })).toBeVisible();
 });
 
-test("Profiles keeps catalogs larger than ten inside a ten-row scrolling rail", async ({ page }, testInfo) => {
+test("a profile catalog larger than ten never makes the rail scroll", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium", "desktop profile rail capacity contract");
   await page.goto("/#profiles");
   const cards = page.locator(".profile-card");
@@ -335,15 +355,27 @@ test("Profiles keeps catalogs larger than ten inside a ten-row scrolling rail", 
     await fork.click();
     await expect(cards).toHaveCount(before + 1);
   }
+  const expectedProfiles = await cards.count();
 
-  const profileList = page.getByRole("navigation", { name: "Primary" }).locator("#airship-profile-navigation");
-  await expect(profileList.locator(".recent-conversation")).toHaveCount(await cards.count());
-  const dimensions = await profileList.evaluate((element) => ({
-    clientHeight: element.clientHeight,
-    scrollHeight: element.scrollHeight,
+  // AMENDED, and strictly stronger. The old assertion bounded the in-rail
+  // profile scroller at 310px so a large catalog could not push Trust
+  // navigation off-screen — it capped the symptom. The catalog is not in the
+  // rail at all now, so the invariant can be stated directly: however many
+  // profiles exist, the rail itself never becomes a scroll container, and
+  // every destination stays inside its painted box. The catalog is still
+  // complete: one menu option per profile, counted against the route's cards.
+  await page.goto("/#chat");
+  const rail = page.locator(".primary-nav");
+  const railState = await rail.evaluate((element) => ({
+    overflow: element.scrollHeight - element.clientHeight,
+    edges: element.dataset.scrollEdges,
   }));
-  expect(dimensions.clientHeight).toBeLessThanOrEqual(310);
-  expect(dimensions.scrollHeight).toBeGreaterThan(dimensions.clientHeight);
+  expect(railState.overflow).toBeLessThanOrEqual(1);
+  expect(railState.edges).toBe("none");
+  await page.locator(".sidebar .profile-switcher").getByRole("button", { name: "Agent profile" }).click();
+  const listbox = page.getByRole("listbox", { name: "Agent profile" });
+  await expect(listbox).toBeVisible();
+  expect(await listbox.getByRole("option").count()).toBe(expectedProfiles);
 });
 
 test("Proof owns receipt, journal, and attestation evidence without a duplicate destination", async ({ page }, testInfo) => {

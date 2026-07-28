@@ -79,6 +79,23 @@ function rank(facts: readonly SessionStatusFact[]): SessionStatusFact | undefine
 export const SESSION_STATUS_SHORT_MAX = 14;
 
 /**
+ * The band this one defers to, named rather than restated.
+ *
+ * The scope rule cuts both ways: this popover states the conversation's claims
+ * in full and says nothing about where the kernel runs or whether a vault has
+ * been adopted, because those are true of the browser tab and the topbar chip
+ * states them. Saying so is the difference between a scope boundary and a
+ * missing fact — a reader who wants the other two now knows they exist and
+ * where they are, instead of concluding this list is everything Airship knows.
+ */
+export const SESSION_STATUS_TAB_SCOPE_NOTE =
+  // Kept short on purpose: the popover body caps at 420px and scrolls, and a
+  // pointer that is itself half-scrolled off the bottom edge is not a pointer.
+  // "Opens them" rather than "states them" — the chip states the weakest tab
+  // claim and opens the sheet that holds both, which is what actually happens.
+  "Runtime location and vault adoption belong to this browser tab, not this conversation. The topbar chip opens them.";
+
+/**
  * The resting word for a claim whose full label is longer than the chip.
  *
  * A verdict is the one string in the disclosure ladder that may never be
@@ -138,6 +155,7 @@ export function SessionStatusChip({
       </>}
     >
       <ClaimRows rows={rows} />
+      <p class="popover__scope-note">{SESSION_STATUS_TAB_SCOPE_NOTE}</p>
     </Popover>
   );
 }

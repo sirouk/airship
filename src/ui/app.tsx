@@ -32,9 +32,6 @@ import {
 } from "../auth/chutes-oauth";
 import type { BrowserRuntimeCapabilityReport } from "../capabilities/browser-runtime";
 import {
-  completeSlashCommand,
-  createSlashCommandRegistry,
-  planSlashCommand,
   type SlashCommandPlan,
   type SlashCommandRegistry,
   type SlashCompletion,
@@ -121,6 +118,12 @@ import {
 import { isWorkspaceControlPlanePath, type WorkspaceEntry, type WorkspaceFile, type WorkspacePort } from "../workspace/contracts";
 import { MemoryWorkspace } from "../workspace/memory";
 import { composeClaimStack, type ClaimStackFact, type ClaimStackItem } from "./claim-stack-model";
+import { TURN_EVIDENCE_COPY, turnEvidenceVerdict } from "./turn-evidence";
+// The one fail-closed rule for a stored receipt, imported rather than restated.
+// `#proof` renders the hero verdict and this inspector on the same screen; if
+// they fed their shared reducer from two different predicates the route would
+// print two verdicts for one turn, which is the defect this package closes.
+import { sealStateForReceipt } from "./seal-states";
 import { ApprovalDock } from "./approval-dock";
 import { attestationRecordIdForReceipt, sessionAttestationReceipts } from "./attestation-history";
 import type { AttestationRefreshTarget } from "./attestations-view";
@@ -133,7 +136,7 @@ import { chatHash, chatSessionIdFromHash } from "./chat-route";
 import { MenuSelect } from "./menu-select";
 import { MobileNavigation } from "./mobile-navigation";
 import { ModelControl } from "./model-control";
-import { CANONICAL_DESTINATIONS, navigationHashForView, navigationViewFromHash, type CanonicalDestinationId, type NavigationView } from "./navigation-model";
+import { CANONICAL_DESTINATIONS, navigationHashForView, navigationViewFromHash, type NavigationView } from "./navigation-model";
 import {
   CommandPalette,
   PreferencesDialog,
@@ -166,6 +169,18 @@ import {
   type ProofSection,
   type ProofSelection,
 } from "./proof-route";
+import { Rail } from "./rail";
+import {
+  isRailToggleChord,
+  loadRailPreference,
+  railBand,
+  resolveRailState,
+  saveRailPreference,
+  toggledRailState,
+  withRailState,
+  type RailPreference,
+  type RailState,
+} from "./rail-state";
 import { SEAL_LABELS, Seal, sealStateForProofStatus, type SealState } from "./seal";
 import { useScrollEdges } from "./scroll-affordance";
 import { enabledSlashSelection, firstEnabledSlashIndex, moveSlashSelection } from "./slash-menu-state";
@@ -217,7 +232,7 @@ import { ProfileThemeSwatch } from "./profile-theme-swatch";
 import { PostureChip } from "./posture-chip";
 import { durabilityLabel } from "./durability-indicator";
 import { mapUnknownRequestFailure } from "./request-state";
-import { claimExpiry, claimLanguage, postureLabel, proofLevelLabel, proofStatusLabel, rankedReceiptVerdict, relativeEvidenceAge } from "./trust-language";
+import { claimExpiry, claimLanguage, postureLabel, proofLevelLabel, proofStatusLabel, relativeEvidenceAge } from "./trust-language";
 import { RouteSkeleton } from "./route-skeleton";
 import type { LocalProviderProbeResult } from "./connect/connect-surface";
 import {
@@ -339,6 +354,7 @@ type DurableAdoptionDescriptor = Readonly<{
 
 type OAuthCallbackStatus = { kind: "verified" | "blocked" | "error"; message: string };
 type AttestationsScreenComponent = typeof import("./attestations-view").AttestationsView;
+type ProofInspectorComponent = typeof import("./proof-inspector").ProofInspector;
 type EditorScreenComponent = typeof import("./editor-view").EditorView;
 type TerminalScreenComponent = typeof import("./terminal-view").TerminalView;
 type CapabilitiesScreenComponent = typeof import("./capabilities-view").CapabilitiesView;
@@ -422,11 +438,18 @@ const LOCAL_LAB_DEV_KEY = Object.freeze([
   0xc2, 0x0b, 0x9a, 0x46, 0xe3, 0x71, 0x58, 0xbd, 0x2f, 0x84, 0xd0, 0x6a, 0x39, 0xf7, 0x1c, 0x50,
 ]);
 
-const navigationIcons: Readonly<Record<CanonicalDestinationId, IconName>> = Object.freeze({
-  chat: "chat", workspace: "workspace", memory: "memory",
-  profiles: "profiles", vault: "cloud", attestations: "attestation", proof: "proof", access: "access",
-});
-const navigation = CANONICAL_DESTINATIONS.map((item) => Object.freeze({ ...item, icon: navigationIcons[item.id] }));
+/**
+ * The rail owns the destination glyphs now (`navigation-model.ts`), so the
+ * shell keeps only what it uses the destination table for: naming the route in
+ * the document title and in the view error boundary.
+ */
+function destinationLabel(view: View): string | undefined {
+  for (const item of CANONICAL_DESTINATIONS) {
+    if (item.id === view) return item.label;
+    for (const nested of item.nested) if (nested.id === view) return item.label;
+  }
+  return undefined;
+}
 
 /**
  * The seed that opens an empty conversation.
@@ -642,8 +665,12 @@ export function App() {
   );
   const [sessionLibrary, setSessionLibrary] = useState<SessionLibrary>();
   const [sessionRevision, setSessionRevision] = useState(0);
-  const [chatNavExpanded, setChatNavExpanded] = useState(true);
-  const [profileNavExpanded, setProfileNavExpanded] = useState(true);
+  const [railPreference, setRailPreference] = useState<RailPreference>(loadRailPreference);
+  // The viewport is only ever the *first* answer. Once a person has collapsed
+  // or expanded the rail in this width band, that choice wins on every later
+  // load — the rail stops re-deciding for them every time a lid is opened.
+  const [railViewport, setRailViewport] = useState(() => readRailViewport());
+  const railState: RailState = resolveRailState(railPreference, railViewport);
   const [recentPaletteSessions, setRecentPaletteSessions] = useState<readonly Readonly<{ id: string; title: string; open(): void }>[]>([]);
   const [recentProfileConversations, setRecentProfileConversations] = useState<readonly RecentConversation[]>([]);
   const [proofSelection, setProofSelection] = useState<ProofSelection | undefined>(() =>
@@ -659,6 +686,14 @@ export function App() {
   const [attachments, setAttachments] = useState<readonly ComposerAttachment[]>([]);
   const [composerNotice, setComposerNotice] = useState<string>();
   const [messageQueue, setMessageQueue] = useState<readonly QueuedComposerItem[]>([]);
+  /*
+   * The slash-command module travels with the registry it builds rather than
+   * through first paint. Every call site was already gated on `slashRegistry`
+   * being present, so binding the parser and completer to the same state adds
+   * no new waiting: the registry is constructed inside the runtime boot that
+   * already awaits several packs.
+   */
+  const [slashModule, setSlashModule] = useState<typeof import("../commands")>();
   const [slashRegistry, setSlashRegistry] = useState<SlashCommandRegistry>();
   const [slashSelection, setSlashSelection] = useState(0);
   const [slashMenuDismissedFor, setSlashMenuDismissedFor] = useState<string>();
@@ -712,6 +747,7 @@ export function App() {
   const [billingViewError, setBillingViewError] = useState<string>();
   const [ProofScreen, setProofScreen] = useState<ProofScreenComponent>();
   const [proofViewError, setProofViewError] = useState<string>();
+  const [ProofInspector, setProofInspector] = useState<ProofInspectorComponent>();
   const runtime = useRef<Runtime>();
   const catalogCheckpoint = useRef<ProfileCatalogCheckpoint>();
   const catalogMutationTail = useRef<Promise<void>>(Promise.resolve());
@@ -936,8 +972,8 @@ export function App() {
     ? activeSessionRuntime(runtime.current, activeSessionRecord)
     : undefined;
   const slashCompletions = useMemo(
-    () => slashRegistry ? completeSlashCommand(input, slashRegistry, { limit: 10 }) : [],
-    [input, slashRegistry],
+    () => slashRegistry && slashModule ? slashModule.completeSlashCommand(input, slashRegistry, { limit: 10 }) : [],
+    [input, slashRegistry, slashModule],
   );
   const paletteEntries = useMemo(() => buildPaletteEntries({
     navigate: navigatePrimary,
@@ -950,10 +986,25 @@ export function App() {
       requestAnimationFrame(() => textarea.current?.focus({ preventScroll: true }));
     },
   }), [slashRegistry, lastReceipt, sessionId, recentPaletteSessions]);
+  // The rail's chord has a searchable twin: a shortcut nobody can discover is
+  // a shortcut that does not exist, and the chevron is 700px away on a laptop.
+  const paletteEntriesWithRail = useMemo(() => Object.freeze([
+    ...paletteEntries,
+    Object.freeze({
+      id: "rail:toggle",
+      label: railState === "standard" ? "Collapse navigation rail" : "Expand navigation rail",
+      description: railState === "standard"
+        ? "Icons only, labels on hover · ⌘\\"
+        : "Show every destination label · ⌘\\",
+      keywords: ["rail", "sidebar", "navigation", "collapse", "expand", "focus"],
+      group: "Preferences" as const,
+      run: toggleRailState,
+    }),
+  ]), [paletteEntries, railState, railPreference, railViewport]);
   const slashMenuOpen = slashCompletions.length > 0 && !busy && slashMenuDismissedFor !== input;
   const composerPlan = useMemo(
-    () => input.trim() && slashRegistry ? planSlashCommand(input.trim(), slashRegistry) : undefined,
-    [input, slashRegistry],
+    () => input.trim() && slashRegistry && slashModule ? slashModule.planSlashCommand(input.trim(), slashRegistry) : undefined,
+    [input, slashRegistry, slashModule],
   );
   const composerOfflineBlocked = remoteComposerBlocked(
     online,
@@ -1225,9 +1276,14 @@ export function App() {
     && vaultSnapshot.config.mode === "local-development";
   const vaultRuntimeAdopted = localDeviceRuntimeAdopted || cloudVaultRuntimeAdopted;
   const trustAxes: readonly TrustAxis[] = Object.freeze([
-    { id: "local", label: online ? "Browser / Edge runtime" : OFFLINE_RUNTIME_LABEL, state: online ? "none" : "attention", detail: online ? "The agent kernel executes in this browser." : OFFLINE_RUNTIME_DETAIL, view: "proof" },
+    { id: "local", scope: "tab", label: online ? "Browser / Edge runtime" : OFFLINE_RUNTIME_LABEL, state: online ? "none" : "attention", detail: online ? "The agent kernel executes in this browser." : OFFLINE_RUNTIME_DETAIL, view: "proof" },
     {
       id: "vault",
+      // Vault *adoption* is a property of this tab's runtime; where this
+      // conversation's journal actually lives is the session bar's durability
+      // claim. Two claims, two bands, and the labels stopped matching in
+      // round 1 so the scope tag now records why.
+      scope: "tab",
       label: localDeviceRuntimeAdopted
         ? "Local Device Vault active"
         : localS3VaultRuntimeAdopted
@@ -1263,8 +1319,8 @@ export function App() {
             : vaultSnapshot.message),
       view: "vault",
     },
-    { id: "e2ee", label: inferenceStatusLabel, state: activeChutesConnection ? (connection.invokeAuthorization === "verified" ? "verified" : "asserted") : activeExternalConnection ? "asserted" : "none", detail: inferenceStatusDetail, view: "access" },
-    { id: "attestation", label: attestationSeal.label, state: attestationSeal.state, detail: attestationSeal.detail, view: "proof" },
+    { id: "e2ee", scope: "conversation", label: inferenceStatusLabel, state: activeChutesConnection ? (connection.invokeAuthorization === "verified" ? "verified" : "asserted") : activeExternalConnection ? "asserted" : "none", detail: inferenceStatusDetail, view: "access" },
+    { id: "attestation", scope: "conversation", label: attestationSeal.label, state: attestationSeal.state, detail: attestationSeal.detail, view: "proof" },
   ]);
   const attestationReceipts = useMemo(() => sessionAttestationReceipts({
     messages,
@@ -1477,6 +1533,24 @@ export function App() {
     return () => { current = false; };
   }, [view, proofSection, AttestationsScreen]);
 
+  /*
+   * The claim rail is fetched the moment a receipt exists — or the Proof route
+   * opens — and never before. It cannot render without one, so paying for it
+   * at first paint bought an empty conversation nothing.
+   */
+  useEffect(() => {
+    if ((view !== "proof" && !lastReceipt) || ProofInspector) return;
+    let current = true;
+    void import("./proof-inspector").then((module) => {
+      if (current) setProofInspector(() => module.ProofInspector);
+    }).catch(() => {
+      // Silent by design: the rail's own claims are also rendered by `#proof`,
+      // which reports its own load failure. A second alarm for one chunk would
+      // be a second phrasing of one fact, which is what this package removes.
+    });
+    return () => { current = false; };
+  }, [view, lastReceipt, ProofInspector]);
+
   useEffect(() => {
     if (view !== "proof" || ProofScreen) return;
     let current = true;
@@ -1625,6 +1699,21 @@ export function App() {
     return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view, proofSection, chutesConnected, credentialRevision]);
+
+  /**
+   * The one place the rail's width is chosen deliberately.
+   *
+   * The choice is written against the current width *band* rather than
+   * globally: a laptop and the external display it is docked to are different
+   * working postures, and one preference for both would be a third guess on
+   * top of the two this replaces.
+   */
+  function toggleRailState() {
+    const next = toggledRailState(railState);
+    const preference = withRailState(railPreference, railBand(railViewport.width), next);
+    setRailPreference(preference);
+    saveRailPreference(preference);
+  }
 
   function confirmProfileDraftDiscard(): boolean {
     const allowed = !profileDraftDirty.current || window.confirm(PROFILE_DRAFT_DISCARD_PROMPT);
@@ -1822,7 +1911,9 @@ export function App() {
         git: nextGitClient,
         additionalTools: [availabilityTool],
       });
-      const commands = createSlashCommandRegistry({ tools });
+      const commandModule = await import("../commands");
+      setSlashModule(() => commandModule);
+      const commands = commandModule.createSlashCommandRegistry({ tools });
       const profiles = new MemoryProfileCatalogStore();
       const initialCatalog = (await profiles.initialize(nextCatalog)).checkpoint;
       const nextRuntime: Runtime = {
@@ -2032,7 +2123,7 @@ export function App() {
   }, [connection.kind, oauthTokenRevision]);
 
   useEffect(() => {
-    const label = navigation.find((item) => item.id === view)?.label ?? "Agent";
+    const label = destinationLabel(view) ?? "Agent";
     document.title = unreadTurnCount > 0 ? `(${String(unreadTurnCount)}) Airship — ${label}` : `Airship — ${label}`;
   }, [unreadTurnCount, view]);
 
@@ -2041,9 +2132,33 @@ export function App() {
     if (view === "chat" && !document.hidden) setUnreadTurnCount(0);
   }, [view]);
 
-  // The rail is a real scroll container at common laptop heights. Re-bind when
-  // a disclosure changes its content height so the fade cannot go stale.
-  useScrollEdges(primaryNav, `${String(chatNavExpanded)}:${String(profileNavExpanded)}:${String(recentProfileConversations.length)}:${view}`);
+  // The rail fits without scrolling at every height this product is used at
+  // now, but the mask machinery stays: it is measured rather than assumed, and
+  // at a genuinely short viewport a clipped destination must still read as
+  // "more below" rather than as a sliced row. Re-bind when the state or the
+  // nesting changes the content height so the fade cannot go stale.
+  useScrollEdges(primaryNav, `${String(shellMounted)}:${railState}:${view}`);
+
+  // `data-rail` is on the document element, not the shell, because the topbar
+  // and the app grid both size their first column from `--rail-width`.
+  useEffect(() => { document.documentElement.dataset.rail = railState; }, [railState]);
+
+  useEffect(() => {
+    const onResize = () => setRailViewport(readRailViewport());
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (!isRailToggleChord(event)) return;
+      event.preventDefault();
+      toggleRailState();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [railState, railViewport, railPreference]);
 
   // The composer is 35 tab stops from <body> and is the most-used control in
   // the product. Claim it once the chat stage is actually mounted — the boot
@@ -2500,8 +2615,8 @@ export function App() {
       || vaultProviderSwitchingRef.current
       || localDeviceBusy
     ) return;
-    if (slashRegistry) {
-      const slashPlan = planSlashCommand(content, slashRegistry);
+    if (slashRegistry && slashModule) {
+      const slashPlan = slashModule?.planSlashCommand(content, slashRegistry);
       if (slashPlan.kind !== "chat") {
         // Local built-ins do not all create an AbortController. Keep a separate
         // synchronous admission lock so duplicate click/key events in one
@@ -3291,7 +3406,9 @@ export function App() {
     runtime.current = nextRuntime;
     activeDurableAuthority.current = authority;
     setGitClient(nextGitClient);
-    setSlashRegistry(createSlashCommandRegistry({ tools }));
+    const commandModule = await import("../commands");
+    setSlashModule(() => commandModule);
+    setSlashRegistry(commandModule.createSlashCommandRegistry({ tools }));
     setSessionLibrary(library);
     publishCatalogCheckpoint(nextCatalogCheckpoint);
     setProfileId(profile.profileId);
@@ -3383,7 +3500,11 @@ export function App() {
         tools: published.tools,
         contextMode: published.contextMode,
       };
-      setSlashRegistry(createSlashCommandRegistry({ tools: published.tools }));
+      // Already loaded by the boot that produced this runtime; re-import is a
+      // cache hit rather than a second fetch.
+      const commandModule = await import("../commands");
+      setSlashModule(() => commandModule);
+      setSlashRegistry(commandModule.createSlashCommandRegistry({ tools: published.tools }));
       setVaultContextPublicationMessage("Encrypted context generation published. Matching turns now fetch selected authenticated ranges from the Vault.");
       setRuntimeStatus("Encrypted ranged context published and available");
     } catch (error) {
@@ -3468,7 +3589,9 @@ export function App() {
     runtime.current = nextRuntime;
     activeDurableAuthority.current = undefined;
     setGitClient(nextGitClient);
-    setSlashRegistry(createSlashCommandRegistry({ tools }));
+    const commandModule = await import("../commands");
+    setSlashModule(() => commandModule);
+    setSlashRegistry(commandModule.createSlashCommandRegistry({ tools }));
     setSessionLibrary(new SessionLibrary(journal));
     publishCatalogCheckpoint(nextCatalogCheckpoint);
     setProfileId(profile.profileId);
@@ -4757,123 +4880,28 @@ export function App() {
         </div>
       </header>
 
-      <aside class="sidebar" inert={platformOverlayOpen} aria-hidden={platformOverlayOpen || undefined}>
-        <nav ref={primaryNav} class="primary-nav" aria-label="Primary">
-          {(["Work", "Agent", "Trust"] as const).map((group) => (
-            <div class="nav-group" key={group}>
-              <span class="nav-group-label">{group}</span>
-              {navigation.filter((item) => item.group === group).map((item) => {
-                const active = view === item.id;
-                const childActive = item.nested.some((nested) => nested.id === view);
-                if (item.id === "chat") {
-                  const recent = recentProfileConversations.slice(0, 10);
-                  return <div class="chat-nav-section" key={item.id}>
-                    <div class="chat-nav-primary">
-                      <button
-                        class={active ? "nav-item active" : childActive ? "nav-item has-active-child" : "nav-item"}
-                        type="button"
-                        aria-current={active ? "page" : undefined}
-                        data-scope={item.scope}
-                        title="Open active conversation"
-                        onClick={() => navigatePrimary("chat")}
-                      >
-                        <Icon name={item.icon} />
-                        <span>Chat</span>
-                        {unreadTurnCount > 0 ? <span class="nav-turn-badge" aria-label={`${String(unreadTurnCount)} completed turn${unreadTurnCount === 1 ? "" : "s"}`}>{unreadTurnCount}</span> : null}
-                      </button>
-                      <button
-                        class="chat-nav-disclosure"
-                        type="button"
-                        aria-label={`${chatNavExpanded ? "Collapse" : "Expand"} recent conversations`}
-                        aria-expanded={chatNavExpanded}
-                        aria-controls="airship-recent-conversations"
-                      onClick={() => setChatNavExpanded((expanded) => !expanded)}
-                      ><span aria-hidden="true">›</span></button>
-                      <button class="chat-nav-new" type="button" aria-label="New conversation" title="New conversation" disabled={busy} onClick={() => void createConversation()}><span aria-hidden="true">+</span></button>
-                    </div>
-                    {chatNavExpanded ? <div id="airship-recent-conversations" class="recent-conversations" aria-label="Recent conversations">
-                      {recent.map((session) => <button
-                        key={session.id}
-                        class={session.id === sessionId ? "recent-conversation recent-conversation--thread active" : "recent-conversation recent-conversation--thread"}
-                        type="button"
-                        title={session.title}
-                        aria-current={session.id === sessionId ? "page" : undefined}
-                        onClick={session.open}
-                      >
-                        <span class="recent-conversation__mark" aria-hidden="true">{session.id === sessionId ? "●" : "○"}</span>
-                        <span class="recent-conversation__copy">
-                          <strong>{session.title}</strong>
-                          <small>{session.preview}</small>
-                        </span>
-                        <time dateTime={session.updatedAt}>{formatConversationTime(session.updatedAt)}</time>
-                      </button>)}
-                      <button class={view === "sessions" ? "nav-item nav-item--nested active" : "nav-item nav-item--nested"} type="button" aria-current={view === "sessions" ? "page" : undefined} onClick={() => navigate("sessions")}>
-                        <span class="nav-nested-marker" aria-hidden="true">↳</span><span>All conversations</span>
-                      </button>
-                    </div> : null}
-                  </div>;
-                }
-                if (item.id === "profiles") {
-                  const profileOptions = managedProfiles(catalog);
-                  return <div class="chat-nav-section profile-nav-section" key={item.id}>
-                    <div class="chat-nav-primary profile-nav-primary">
-                      <button class={active ? "nav-item active" : childActive ? "nav-item has-active-child" : "nav-item"} type="button" aria-current={active ? "page" : undefined} data-scope={item.scope} title="Open profile manager" onClick={() => { setProfileNavExpanded(true); navigatePrimary("profiles"); }}><Icon name={item.icon} /><span>Profiles</span></button>
-                      <button class="chat-nav-disclosure" type="button" aria-label={`${profileNavExpanded ? "Collapse" : "Expand"} profiles`} aria-expanded={profileNavExpanded} aria-controls="airship-profile-navigation" onClick={() => setProfileNavExpanded((expanded) => !expanded)}><span aria-hidden="true">›</span></button>
-                    </div>
-                    {profileNavExpanded ? <div id="airship-profile-navigation" class="recent-conversations profile-navigation" aria-label="Profiles">
-                      {profileOptions.map((profile) => <button key={profile.profileId} class={profile.profileId === profileId ? "recent-conversation active" : "recent-conversation"} type="button" title={`Open ${profile.name} in the profile manager`} onClick={() => { openProfileManager(profile.profileId); }}><span class="profile-monogram" aria-hidden="true">{profileMonogram(profile.name)}</span><span>{profile.name}</span></button>)}
-                    </div> : null}
-                  </div>;
-                }
-                return [
-                <button
-                  key={item.id}
-                  class={active ? "nav-item active" : childActive ? "nav-item has-active-child" : "nav-item"}
-                  type="button"
-                  aria-current={active ? "page" : undefined}
-                  data-scope={item.scope}
-                  title={`${item.label} · ${item.scope} scope`}
-                  onClick={() => navigatePrimary(item.id)}
-                >
-                  <Icon name={item.icon} />
-                  <span>{item.label}</span>
-                  {item.id === "proof" && lastReceipt ? <span class="nav-proof-dot" /> : null}
-                </button>,
-                ...item.nested.map((nested) => (
-                  <button
-                    key={nested.id}
-                    class={view === nested.id ? "nav-item nav-item--nested active" : "nav-item nav-item--nested"}
-                    type="button"
-                    aria-current={view === nested.id ? "page" : undefined}
-                    data-scope={nested.scope}
-                    title={`${nested.label} · ${nested.scope} scope`}
-                    onClick={() => navigate(nested.id)}
-                  >
-                    <span class="nav-nested-marker" aria-hidden="true">↳</span>
-                    <span>{nested.label}</span>
-                  </button>
-                )),
-              ]})}
-            </div>
-          ))}
-        </nav>
-        <div class="sidebar-spacer" />
-        <div class="profile-switcher">
-          <span class="eyebrow">Agent profile</span>
-          <MenuSelect
-            className="profile-menu"
-            ariaLabel="Agent profile"
-            value={profileId}
-            disabled={busy}
-            options={managedProfiles(catalog).map((profile) => ({ value: profile.profileId, label: profile.name, description: profile.description }))}
-            leading={(option) => <span class="profile-monogram" aria-hidden="true">{profileMonogram(option.label)}</span>}
-            onChange={(nextId) => void changeProfile(nextId)}
-          />
-          <button type="button" class="profile-manage-link" onClick={() => navigate("profiles")}>Manage profiles</button>
-        </div>
-      </aside>
+      <Rail
+        view={view}
+        state={railState}
+        navRef={primaryNav}
+        inert={platformOverlayOpen}
+        busy={busy}
+        unreadTurnCount={unreadTurnCount}
+        hasReceipt={Boolean(lastReceipt)}
+        conversations={recentProfileConversations}
+        activeConversationId={sessionId ?? ""}
+        formatTime={formatConversationTime}
+        profiles={managedProfiles(catalog)}
+        profileId={profileId}
+        monogram={profileMonogram}
+        onNavigate={(next) => navigatePrimary(next)}
+        onManageProfiles={() => { openProfileManager(profileId); }}
+        onNewConversation={() => void createConversation()}
+        onChangeProfile={(nextId) => void changeProfile(nextId)}
+        onToggleState={toggleRailState}
+      />
 
-      <ViewErrorBoundary key={view} name={navigation.find((item) => item.id === view || item.nested.some((nested) => nested.id === view))?.label ?? "Airship"} onRecover={() => navigate("chat")}>
+      <ViewErrorBoundary key={view} name={destinationLabel(view) ?? "Airship"} onRecover={() => navigate("chat")}>
       <main
         ref={mainRegion}
         tabIndex={-1}
@@ -5239,7 +5267,7 @@ export function App() {
                     : null}
               </div>
             </section>
-              {lastReceipt ? <aside class="inspector"><ProofInspector
+              {lastReceipt && ProofInspector ? <aside class="inspector"><ProofInspector
               receipt={lastReceipt}
               endpointRecord={lastReceipt ? attestationRecords.find((record) => attestationRecordMatchesReceipt(record, lastReceipt)) : undefined}
               now={attestationNow}
@@ -5419,12 +5447,12 @@ export function App() {
               navigate("proof", proofHash(proofSelection, section));
             }}
             summarizeReceipt={receiptSummary}
-            renderInspector={(onOpenAttestations) => <ProofInspector
+            renderInspector={(onOpenAttestations) => ProofInspector ? <ProofInspector
               receipt={proofReceipt}
               endpointRecord={proofReceipt ? attestationRecords.find((record) => attestationRecordMatchesReceipt(record, proofReceipt)) : undefined}
               now={attestationNow}
               onOpenAttestations={onOpenAttestations}
-            />}
+            /> : <RouteSkeleton label="Loading the claim stack" />}
             evidenceLedger={AttestationsScreen ? <AttestationsScreen
               endpointRecords={attestationRecords}
               receipts={attestationReceipts}
@@ -5503,7 +5531,7 @@ export function App() {
         onOpenSettings={() => setPreferencesOpen(true)}
       />
       <ApprovalDock broker={approvalBroker} />
-      <CommandPalette open={paletteOpen} entries={paletteEntries} onClose={() => setPaletteOpen(false)} />
+      <CommandPalette open={paletteOpen} entries={paletteEntriesWithRail} onClose={() => setPaletteOpen(false)} />
       <PreferencesDialog open={preferencesOpen} value={preferences} onChange={(next) => {
         if (next.vaultBackend !== preferences.vaultBackend) {
           setPreferences((current) => Object.freeze({ ...next, vaultBackend: current.vaultBackend }));
@@ -6200,8 +6228,26 @@ function receiptSealState(receipt?: ConversationReceipt): SealState {
   return receipt.claims.endpointKey.status === "verified" ? "verified" : "attention";
 }
 
-export function describeAttestationSeal(args: {
-  connected: boolean;
+/**
+ * One description of endpoint evidence, in one vocabulary, at two scopes.
+ *
+ * `describeAttestationSeal` and `describeMessageAttestation` were separate
+ * functions with the same five branches and different words for each of them:
+ * one turn could carry "Separate evidence collected" in the session bar and
+ * "Separate evidence only" under the answer, or the acquisition reason
+ * ("Evidence unavailable") in one place and the canonical verdict word
+ * ("Evidence not pulled") in the other. They are one function now, so the two
+ * bands cannot drift; `scope` selects only the branches that genuinely differ,
+ * which is the one where a live session has a *next* turn and a settled receipt
+ * does not.
+ *
+ * Nothing merged here lost a clause. Where the two versions phrased the same
+ * fact differently, the surviving detail is the union of both sentences.
+ */
+function describeEndpointEvidence(args: {
+  scope: "session" | "turn";
+  /** Session scope only. A settled receipt has no "is a provider connected now". */
+  connected?: boolean;
   proofPolicy?: "record" | "strict";
   receipt?: ConversationReceipt;
   records: readonly ChutesEndpointEvidenceRecord[];
@@ -6212,7 +6258,7 @@ export function describeAttestationSeal(args: {
     return {
       state: "verified",
       label: "Endpoint verified",
-      detail: "The active receipt contains an independently verified endpoint-key claim. Model and conversation claims remain separate.",
+      detail: "This receipt contains an independently verified endpoint-key claim. Model and conversation claims remain independently scoped.",
     };
   }
   const historicalRecord = args.receipt
@@ -6225,7 +6271,7 @@ export function describeAttestationSeal(args: {
     return {
       state: "stale",
       label: "Evidence refresh due",
-      detail: "The separate endpoint evidence record is historical. Refresh before relying on its local key or policy comparison.",
+      detail: "The separate endpoint evidence record is beyond its browser display-freshness window. Refresh before relying on its local key or policy comparison.",
     };
   }
   if (record?.verdict === "rejected") {
@@ -6251,9 +6297,23 @@ export function describeAttestationSeal(args: {
   }
   if (args.failure && (!args.receipt || attestationFailureAppliesToReceipt(args.failure, args.receipt))) {
     return {
-      state: "attention",
-      label: args.failure.label,
-      detail: "Endpoint evidence was not accepted. This provider/acquisition state is not a TEE verdict.",
+      state: TURN_EVIDENCE_COPY["evidence-blocked"].seal,
+      // The canonical word, not the acquisition reason. The reason used to be
+      // the label here and the label was "Evidence unavailable" while the chip
+      // under the same turn's answer read "Evidence not pulled" — one failure,
+      // two headlines. The reason is not lost: it leads the sentence below,
+      // verbatim from `attestationFailureLabel()`.
+      label: TURN_EVIDENCE_COPY["evidence-blocked"].chip,
+      detail: `${args.failure.label}. ${TURN_EVIDENCE_COPY["evidence-blocked"].line} Endpoint evidence was not accepted. This provider/acquisition state is not a TEE verdict.`,
+    };
+  }
+  // The only genuinely scope-dependent branch: a live session has a next turn
+  // its policy can speak about, and a settled receipt does not.
+  if (args.scope === "turn") {
+    return {
+      state: "none",
+      label: "Secure hardware evidence pending",
+      detail: "Airship has not accepted endpoint TEE evidence for this receipt.",
     };
   }
   return args.connected
@@ -6277,6 +6337,19 @@ export function describeAttestationSeal(args: {
     };
 }
 
+/** The conversation-scoped reading, for the session bar's attestation claim. */
+export function describeAttestationSeal(args: {
+  connected: boolean;
+  proofPolicy?: "record" | "strict";
+  receipt?: ConversationReceipt;
+  records: readonly ChutesEndpointEvidenceRecord[];
+  failure?: AttestationAcquisitionFailure;
+  now: number;
+}): { state: SealState; label: string; detail: string } {
+  return describeEndpointEvidence({ ...args, scope: "session" });
+}
+
+/** The turn-scoped reading, for the evidence chip under one answer. */
 function describeMessageAttestation(
   receipt: ConversationReceipt | undefined,
   records: readonly ChutesEndpointEvidenceRecord[],
@@ -6284,55 +6357,7 @@ function describeMessageAttestation(
   now = Date.now(),
 ): MessageAttestation | undefined {
   if (!receipt || !isChutesReceiptProvider(receipt.provider)) return undefined;
-  if (receipt.claims.endpointKey.status === "verified") {
-    return {
-      state: "verified",
-      label: "Endpoint verified",
-      detail: "This receipt has a verified endpoint-key claim; model and conversation proof remain independently scoped.",
-    };
-  }
-  const historicalRecord = records.find((candidate) => attestationRecordMatchesReceipt(candidate, receipt));
-  const record = historicalRecord && isDisplayFreshAttestation(historicalRecord, now) ? historicalRecord : undefined;
-  if (historicalRecord && !record) {
-    return {
-      state: "stale",
-      label: "Evidence refresh due",
-      detail: "The separate endpoint evidence record is beyond its browser display-freshness window and must be reacquired.",
-    };
-  }
-  if (record?.verdict === "rejected") {
-    return {
-      state: "failed",
-      label: "Evidence rejected",
-      detail: "A separate current endpoint record failed its local binding or policy comparison; the receipt was not upgraded.",
-    };
-  }
-  if (record) {
-    if (!recordLocallyBindsReceipt(record, receipt)) {
-      return {
-        state: "attention",
-        label: "Separate evidence only",
-        detail: "A separate current endpoint record exists, but it did not establish both local bindings for this receipt.",
-      };
-    }
-    return {
-      state: "asserted",
-      label: "Local key match · separate",
-      detail: "A separate current endpoint record matched the challenge and discovered key locally. It did not upgrade this receipt; quote/GPU authenticity and this conversation remain unverified.",
-    };
-  }
-  if (failure && attestationFailureAppliesToReceipt(failure, receipt)) {
-    return {
-      state: "attention",
-      label: "Evidence not pulled",
-      detail: "The provider evidence acquisition did not complete. No TEE claim was inferred.",
-    };
-  }
-  return {
-    state: "none",
-    label: "Secure hardware evidence pending",
-    detail: "Airship has not accepted endpoint TEE evidence for this receipt.",
-  };
+  return Object.freeze(describeEndpointEvidence({ scope: "turn", receipt, records, failure, now }));
 }
 
 function isChutesReceiptProvider(provider: string): boolean {
@@ -6947,136 +6972,6 @@ function SkillsManagerView({
   );
 }
 
-function ProofInspector({
-  receipt,
-  endpointRecord,
-  now = Date.now(),
-  compact = false,
-  onOpenAttestations,
-}: {
-  receipt?: ConversationReceipt;
-  endpointRecord?: ChutesEndpointEvidenceRecord;
-  now?: number;
-  compact?: boolean;
-  onOpenAttestations?: () => void;
-}) {
-  const model = composeClaimStack(receipt, endpointRecord, now);
-  const establishedCount = model.groups.verified.length + model.groups.asserted.length;
-  const evidenceTone = model.evidence === "absent"
-    ? "absent"
-    : model.evidence.startsWith("stale-") ? "stale" : "matched";
-  const evidenceLabel = model.evidence === "turn-bound"
-    ? "Receipt-bound endpoint evidence"
-    : model.evidence === "same-endpoint"
-      ? "Same endpoint · not turn-bound"
-      : model.evidence === "stale-turn-bound"
-        ? "Receipt evidence refresh due"
-        : model.evidence === "stale-same-endpoint"
-          ? "Endpoint comparison expired"
-          : "Turn receipt only";
-  return (
-    <div class={compact ? "proof-inspector compact" : "proof-inspector panel"}>
-      <div class="inspector-heading"><div><span class="eyebrow">Claim stack</span><h2>Verification</h2></div><span class="proof-level">{receipt ? proofLevelLabel(receipt.proofLevel) : "Not checked"}</span></div>
-      {receipt ? <p class="proof-bottom-line">{rankedReceiptVerdict({ proofLevel: receipt.proofLevel, posture: receipt.posture, statuses: model.items.map((item) => item.status) })}</p> : null}
-      {receipt ? (
-        <section class={`evidence-join evidence-join--${evidenceTone}`} aria-label="Evidence composition">
-          <div class="evidence-join__heading">
-            <strong class={`evidence-join__state evidence-join__state--${evidenceTone}`}><span aria-hidden="true" />{evidenceLabel}</strong>
-            <span>{establishedCount} established · {model.groups.unavailable.length} not established</span>
-          </div>
-          <p>{model.evidenceSummary}</p>
-          {endpointRecord ? <dl class="evidence-join__facts">
-            <div><dt>Instance</dt><dd>{endpointRecord.subject.instanceId}</dd></div>
-            <div><dt>Evidence</dt><dd>{relativeEvidenceAge(endpointRecord.acquisition.fetchedAt, now)}</dd></div>
-          </dl> : null}
-          {onOpenAttestations ? <button class="evidence-join__action" type="button" onClick={onOpenAttestations}>{endpointRecord ? "Inspect endpoint evidence" : "Inspect evidence"} <span aria-hidden="true">→</span></button> : null}
-        </section>
-      ) : null}
-      <div class="claim-groups">
-        <ClaimGroup label="Needs attention" tone="failed" items={model.groups.failed} receipt={receipt} />
-        <ClaimGroup label="Verified" tone="verified" items={model.groups.verified} receipt={receipt} />
-        <ClaimGroup label="Assertions" tone="asserted" items={model.groups.asserted} receipt={receipt} />
-        {model.groups.unavailable.length > 0 ? (
-          <details class="claim-absence" open={!receipt}>
-            <summary><span>Not established</span><strong>{model.groups.unavailable.length}</strong><small>Future or unavailable claims</small></summary>
-            <div class="claim-absence__list">
-              {model.groups.unavailable.map((item) => {
-                const language = claimLanguage(item.key);
-                return <div key={item.key}><span>{language.primary}</span><small>{item.claim.summary}</small></div>;
-              })}
-            </div>
-          </details>
-        ) : null}
-      </div>
-      {receipt ? (
-         <details class="receipt-record"><summary>Technical receipt details</summary>
-          <div class="receipt-id"><span>Receipt</span><code>{receipt.receiptId}</code></div>
-          <dl class="receipt-metadata">
-             <div><dt>Created</dt><dd><time dateTime={receipt.createdAt}>{relativeEvidenceAge(receipt.createdAt)}</time></dd></div>
-             <div><dt>Posture</dt><dd>{postureLabel(receipt.posture)}</dd></div>
-            <div><dt>Provider</dt><dd>{receipt.provider}</dd></div>
-            <div><dt>Model</dt><dd>{receipt.model ?? "not recorded"}</dd></div>
-            <div><dt>Session</dt><dd>{receipt.sessionId}</dd></div>
-            <div><dt>Turn</dt><dd>{receipt.turnId}</dd></div>
-            <div><dt>Binding</dt><dd>{receipt.bindings.algorithm}</dd></div>
-            <div><dt>Evidence</dt><dd>{receipt.evidence?.format ?? "not attached"}</dd></div>
-          </dl>
-          <dl class="binding-record">
-            {receipt.bindings.requestDigest ? <div><dt>Request digest</dt><dd>{receipt.bindings.requestDigest}</dd></div> : null}
-            {receipt.bindings.responseDigest ? <div><dt>Response digest</dt><dd>{receipt.bindings.responseDigest}</dd></div> : null}
-            {receipt.bindings.requestCiphertextDigest ? <div><dt>Request ciphertext</dt><dd>{receipt.bindings.requestCiphertextDigest}</dd></div> : null}
-            {receipt.bindings.responseCiphertextDigest ? <div><dt>Response ciphertext</dt><dd>{receipt.bindings.responseCiphertextDigest}</dd></div> : null}
-            {receipt.bindings.evidenceDigest ? <div><dt>Evidence digest</dt><dd>{receipt.bindings.evidenceDigest}</dd></div> : null}
-          </dl>
-         </details>
-      ) : <p class="inspector-note">No turn receipt yet. Production remote mode must verify fresh endpoint evidence before inference; the compatibility lab remains visibly unattested.</p>}
-    </div>
-  );
-}
-
-function ClaimGroup({ label, tone, items, receipt }: { label: string; tone: "failed" | "verified" | "asserted"; items: readonly ClaimStackItem[]; receipt?: ConversationReceipt }) {
-  if (items.length === 0) return null;
-  return <section class={`claim-group claim-group--${tone}`} aria-label={`${label} claims`}>
-    <header><span>{label}</span><strong>{items.length}</strong></header>
-    <div class="claim-list">{items.map((item) => <ClaimRow key={item.key} item={item} receipt={receipt} />)}</div>
-  </section>;
-}
-
-function ClaimRow({ item, receipt }: { item: ClaimStackItem; receipt?: ConversationReceipt }) {
-  const { key: claimKey, claim, verification, facts, source, status } = item;
-  const sealState = sealStateForProofStatus(status);
-  const language = claimLanguage(claimKey);
-  const expiresAt = claimExpiry(claim.details);
-  return (
-    <details class="claim-row">
-      <summary>
-        <span class="claim-title">{language.primary}</span>
-        <span class="claim-disclosure"><span aria-hidden="true" /></span>
-        <span class="claim-meta">
-          <Seal class="claim-seal" state={sealState} label={proofStatusLabel(status)} size={16} compact />
-          <span class={`claim-source claim-source--${source}`}>{source === "endpoint-evidence" ? "Receipt-bound evidence" : "Turn receipt"}</span>
-        </span>
-      </summary>
-      <div class="claim-detail">
-         <p>{claim.summary}</p>
-         <dl><dt>Claim</dt><dd>{language.technical}</dd></dl>
-         <dl><dt>Source</dt><dd>{source === "endpoint-evidence" ? "Endpoint evidence whose normalized payload digest matches this receipt" : "This conversation turn receipt"}</dd></dl>
-         <dl><dt>Issuer</dt><dd>{claim.verifier ?? verification?.verifier ?? receipt?.provider ?? "Not supplied"}</dd></dl>
-         <dl><dt>Subject</dt><dd>{receipt?.model ?? receipt?.sessionId ?? "Not supplied"}</dd></dl>
-         <dl><dt>Scope</dt><dd>{claimKey === "conversation" ? "This conversation turn" : claimKey === "payment" ? "This account observation" : "This inference endpoint"}</dd></dl>
-         <dl><dt>Status</dt><dd>{proofStatusLabel(status)}</dd></dl>
-        {claim.verifier || verification?.verifier ? <dl><dt>Verifier</dt><dd>{claim.verifier ?? verification?.verifier}</dd></dl> : null}
-        {verification?.version ? <dl><dt>Version</dt><dd>{verification.version}</dd></dl> : null}
-         {claim.checkedAt || verification?.checkedAt ? <dl><dt>Checked</dt><dd><time dateTime={claim.checkedAt ?? verification?.checkedAt}>{relativeEvidenceAge((claim.checkedAt ?? verification?.checkedAt)!)}</time></dd></dl> : null}
-         <dl><dt>Expires</dt><dd>{expiresAt ? <time dateTime={expiresAt} title={new Date(expiresAt).toLocaleString()}>{relativeEvidenceAge(expiresAt)}</time> : "Not supplied"}</dd></dl>
-        {facts.map((fact: ClaimStackFact) => <dl key={fact.label}><dt>{fact.label}</dt><dd>{fact.value}</dd></dl>)}
-        {verification?.detail ? <dl><dt>Verifier note</dt><dd>{verification.detail}</dd></dl> : null}
-         {claim.policyDigest || claim.details !== undefined ? <details><summary>Technical details</summary>{claim.policyDigest ? <dl><dt>Verifier policy digest</dt><dd>{claim.policyDigest}</dd></dl> : null}{claim.details !== undefined ? <pre>{JSON.stringify(claim.details, null, 2)}</pre> : null}</details> : null}
-      </div>
-    </details>
-  );
-}
-
 function PageHeading({ eyebrow, title, description }: { eyebrow: string; title: string; description: string }) {
   return <header class="page-heading"><span class="eyebrow">{eyebrow}</span><h1>{title}</h1><p>{description}</p></header>;
 }
@@ -7132,4 +7027,19 @@ function receiptSummary(receipt: ConversationReceipt): string {
 function readViewHash(): View {
   if (typeof window === "undefined") return "chat";
   return navigationViewFromHash(window.location.hash);
+}
+
+/**
+ * What the rail is allowed to infer about this viewport.
+ *
+ * Pointer type is read as well as width because the 60px rail's labels are
+ * revealed by hover, and a touch tablet has no hover to reveal them with —
+ * width alone would ship an unlabelled icon column to an iPad.
+ */
+function readRailViewport(): Readonly<{ width: number; hoverCapable: boolean }> {
+  if (typeof window === "undefined") return Object.freeze({ width: 1_440, hoverCapable: true });
+  return Object.freeze({
+    width: window.innerWidth,
+    hoverCapable: window.matchMedia?.("(hover: hover)").matches ?? true,
+  });
 }

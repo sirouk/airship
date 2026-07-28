@@ -4,28 +4,32 @@
   color: var(--ink, #e9e8e3);
 }
 
+/* One 44px row, matching the other two provider panels. */
 .local-lab__header {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 1rem;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-3);
+  min-height: 44px;
 }
 
-.local-lab__header h2 { margin: 0; }
+.local-lab__header h2 { margin: 0; font-size: var(--fs-lead); }
 .local-lab__header > span {
   flex: none;
-  padding: .4rem .65rem;
-  border: 1px solid var(--line, #3b3d37);
-  border-radius: 999px;
-  color: var(--v-info);
-  font-size: .8rem;
-  font-weight: 750;
+  margin-inline-start: auto;
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-chip);
+  color: var(--v-caution);
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-title);
 }
 
+/* Brass encodes "you are here" or "act here"; a section label is neither. */
 .local-lab__eyebrow {
-  margin: 0 0 .35rem;
-  color: var(--brass, #c7a867);
-  font: 700 .75rem/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
+  margin: 0;
+  color: var(--ink-muted);
+  font: var(--fw-strong) var(--fs-micro)/1.2 var(--font-mono);
   letter-spacing: .11em;
   text-transform: uppercase;
 }
@@ -60,10 +64,20 @@
   background: color-mix(in srgb, var(--panel, #171916) 92%, transparent);
 }
 
+/* The three section names stop rendering as UA notches cut into a fieldset
+   border and read as the route's own section headers instead. Same words. */
 .local-lab legend {
-  padding: 0 .35rem;
-  font-weight: 750;
+  float: left;
+  width: 100%;
+  margin-bottom: var(--sp-2);
+  padding: 0;
+  color: var(--ink-muted);
+  font: var(--fw-strong) var(--fs-caption)/1.2 var(--font-mono);
+  letter-spacing: .11em;
+  text-transform: uppercase;
 }
+
+.local-lab legend + * { clear: both; }
 
 .local-lab label { display: grid; align-content: start; gap: .4rem; min-width: 0; }
 .local-lab label > span:first-child { font-size: .83rem; font-weight: 700; }
@@ -84,6 +98,45 @@
 
 .local-lab textarea { resize: vertical; user-select: all; overflow-wrap: anywhere; }
 .local-lab small { color: var(--ink-muted, #aaa9a4); line-height: 1.4; }
+
+/* The refusal renders at the field that caused it, in caution ink, with the
+   input boundary carrying the same state so it is not colour-only. */
+.local-lab small.local-lab__field-error { color: var(--v-caution); }
+.local-lab label[data-invalid="true"] input { border-color: var(--v-caution); }
+.local-lab label[data-invalid="true"] > span:first-child::after {
+  content: " — needs a change";
+  color: var(--v-caution);
+  font-weight: var(--fw-body);
+}
+
+/* Same 4-character recovery grid as the Local Device and Drive panels. */
+.local-lab__recovery output {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-3);
+  box-sizing: border-box;
+  max-width: 46ch;
+  padding: var(--sp-3);
+  border: 1px solid var(--line-control);
+  border-radius: var(--radius-control);
+  user-select: all;
+  color: var(--accent-bright);
+  background: var(--field, #111310);
+  font: var(--fw-strong) var(--fs-body)/1.6 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.local-lab__recovery output .recovery-key__prefix { color: var(--ink-muted); }
+
+.local-lab .local-lab__link {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+}
 
 .local-lab__recovery { grid-column: 1 / -1; display: grid; gap: .75rem; }
 .local-lab__mode {
@@ -159,7 +212,19 @@
   border-radius: .6rem;
   line-height: 1.5;
 }
-.local-lab__status--error { color: var(--v-caution); }
+/* A refusal and a success used to differ only in hue. The refusal now carries
+   a caution fill and a leading mark as well. */
+.local-lab__status--error {
+  border-color: color-mix(in srgb, var(--v-caution) 60%, transparent);
+  border-left-width: 3px;
+  background: color-mix(in srgb, var(--v-caution) 8%, transparent);
+  color: var(--v-caution);
+}
+
+.local-lab__status--error::before {
+  content: "△ ";
+  font-weight: var(--fw-title);
+}
 .local-lab__status--success { color: var(--v-verified); }
 
 @media (max-width: 680px) {

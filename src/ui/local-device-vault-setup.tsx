@@ -1,3 +1,4 @@
+import type { JSX } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import type { WorkspaceRootKey } from "../storage/encrypted-envelope";
 import {
@@ -7,10 +8,7 @@ import {
   type LocalDeviceWorkspaceKey,
   type LocalDeviceWorkspaceKeyEnrollment,
 } from "../storage/local-device-keyring";
-import {
-  requestPersistentLocalDeviceStorage,
-  type LocalDeviceStorageReadiness,
-} from "../storage/local-device-object-store";
+import { requestPersistentLocalDeviceStorage } from "../storage/local-device-object-store";
 import type { LocalDeviceVaultStatus } from "../vault/local-device";
 import { importWorkspaceRecoveryKey } from "../vault/recovery";
 import "./local-device-vault-setup.css";
@@ -121,18 +119,23 @@ export function LocalDeviceVaultSetup({
   const restoreFileInput = useRef<HTMLInputElement>(null);
   const restoreAbort = useRef<AbortController>();
 
+  const ceremonyRegion = useRef<HTMLDivElement>(null);
+
   const [operation, setOperation] = useState<Operation>();
   const [notice, setNotice] = useState<Notice>();
   const [ceremony, setCeremony] = useState<"idle" | "revealed" | "acknowledged">("idle");
+  /**
+   * Whether this key has left Airship yet, by the only two routes that exist.
+   * It gates nothing — the acknowledgement is the user's to make — but a
+   * one-time secret should never sit on screen next to a silent checkbox.
+   */
+  const [custody, setCustody] = useState<"none" | "copied" | "downloaded">("none");
   const [recoveryInputReady, setRecoveryInputReady] = useState(false);
   const [restoreFile, setRestoreFile] = useState<File>();
   const [restoreRecoveryReady, setRestoreRecoveryReady] = useState(false);
   const [restoreAcknowledged, setRestoreAcknowledged] = useState(false);
   const [restoreDisposition, setRestoreDisposition] =
     useState<"open-existing" | "create-new">("open-existing");
-  const [persistenceResult, setPersistenceResult] =
-    useState<"granted" | "not-granted" | "unsupported">();
-
   const busy = operation !== undefined;
 
   useEffect(() => () => {
@@ -149,8 +152,38 @@ export function LocalDeviceVaultSetup({
     clearSecretInput(restoreRecoveryInput.current);
   }, []);
 
+  // A one-time secret that renders 22px below a 900px fold has not been shown.
+  // The measured defect was that the ceremony landed at y=922 with no scroll,
+  // no focus move and no page-level signal, so the only visible change was the
+  // button relabelling itself.
+  useEffect(() => {
+    if (ceremony !== "revealed") return;
+    const region = ceremonyRegion.current;
+    if (!region) return;
+    region.scrollIntoView({ block: "center" });
+    region.focus();
+  }, [ceremony]);
+
   function finishOperation(): void {
     if (mounted.current) setOperation(undefined);
+  }
+
+  async function copyGeneratedRecovery(): Promise<void> {
+    const prepared = enrollment.current;
+    if (!prepared || ceremony !== "revealed") return;
+    try {
+      await navigator.clipboard.writeText(prepared.recoveryKey);
+      setCustody("copied");
+      setNotice({
+        kind: "info",
+        message: "Recovery key copied. Clipboard contents are outside Airship's control; paste it somewhere you keep, then acknowledge below.",
+      });
+    } catch (error) {
+      setNotice({
+        kind: "error",
+        message: publicError(error, "This browser refused clipboard access. Use Download recovery key, or select the value and copy it manually."),
+      });
+    }
   }
 
   function cancelEnrollment(): void {
@@ -162,6 +195,7 @@ export function LocalDeviceVaultSetup({
     }
     enrollment.current = undefined;
     setCeremony("idle");
+    setCustody("none");
   }
 
   async function openExisting(): Promise<void> {
@@ -292,7 +326,6 @@ export function LocalDeviceVaultSetup({
     try {
       const result = await (onRequestPersistentStorage ?? operations.requestPersistentStorage)();
       if (!mounted.current) return;
-      setPersistenceResult(result);
       setNotice({
         kind: result === "granted" ? "success" : "info",
         message: persistenceCopy(result),
@@ -341,6 +374,7 @@ export function LocalDeviceVaultSetup({
         new Blob([bytes.slice().buffer], { type: "text/plain;charset=utf-8" }),
         "airship-local-device-recovery-key.txt",
       );
+      setCustody("downloaded");
       setNotice({
         kind: "info",
         message: "Recovery key download requested. Verify that you saved it, then acknowledge below.",
@@ -445,16 +479,23 @@ export function LocalDeviceVaultSetup({
 
   return (
     <section class="local-device-vault" aria-labelledby="local-device-vault-title">
+      {/* One row, not a second title block. The eyebrow and the subtitle
+          sentence moved to the provider comparison on this same route, where
+          they are read at the moment the provider is chosen rather than after
+          it. `Device-owned durability` survives as this row's qualifier. */}
       <header class="local-device-vault__header">
-        <div>
-          <p class="local-device-vault__eyebrow">Device-owned durability</p>
-          <h2 id="local-device-vault-title">Local Device Vault</h2>
-          <p>Encrypted, offline, and private to this browser profile.</p>
-        </div>
+        <h2 id="local-device-vault-title">Local Device Vault</h2>
+        <p class="local-device-vault__eyebrow">Device-owned durability</p>
         <span data-ready={status ? "true" : "false"}>{status ? "Ready" : "Not opened"}</span>
       </header>
 
-      {status ? <LocalDeviceReadiness status={status} persistenceResult={persistenceResult} /> : (
+      {ceremony === "revealed" ? (
+        <p class="local-device-vault__ceremony-alert" role="status">
+          A one-time recovery key is on screen — save it before leaving this page.
+        </p>
+      ) : null}
+
+      {status ? null : (
         <div class="local-device-vault__setup">
           <div class="local-device-vault__choice">
             <div>
@@ -471,30 +512,42 @@ export function LocalDeviceVaultSetup({
               <strong>Create a new Vault</strong>
               <span>Generate one recovery key before the first encrypted object is committed.</span>
             </div>
-            <button type="button" class="local-device-vault__secondary" onClick={() => void beginEnrollment()} disabled={busy}>
+            <button type="button" class="local-device-vault__secondary" data-vault-create onClick={() => void beginEnrollment()} disabled={busy}>
               {operation === "preparing" ? "Preparing…" : ceremony === "idle" ? "Create new" : "Replace ceremony"}
             </button>
           </div>
 
           {ceremony !== "idle" ? (
-            <div class="local-device-vault__ceremony" data-state={ceremony}>
+            <div
+              class="local-device-vault__ceremony"
+              data-state={ceremony}
+              ref={ceremonyRegion}
+              tabIndex={-1}
+              aria-labelledby="local-device-ceremony-title"
+            >
               <div>
                 <p class="local-device-vault__eyebrow">One-time recovery</p>
-                <strong>{ceremony === "revealed" ? "Save this key now" : "Recovery key hidden"}</strong>
+                <strong id="local-device-ceremony-title">{ceremony === "revealed" ? "Save this key now" : "Recovery key hidden"}</strong>
               </div>
               {ceremony === "revealed" && enrollment.current ? (
                 <>
+                  {/* The value is one string; the groups are spans with a
+                      layout gap, so it stays transcribable in fours without a
+                      separator character entering its text content. */}
                   <output
                     ref={recoveryOutput}
                     aria-label="One-time Local Device recovery key"
                     aria-describedby="local-device-recovery-warning"
                   >
-                    {enrollment.current.recoveryKey}
+                    <RecoveryKeyGroups value={enrollment.current.recoveryKey} />
                   </output>
                   <p id="local-device-recovery-warning">
                     Airship does not upload or persist this value. Losing both it and this browser profile means losing the Vault.
                   </p>
                   <div class="local-device-vault__actions">
+                    <button type="button" onClick={() => void copyGeneratedRecovery()}>
+                      Copy key
+                    </button>
                     <button type="button" class="local-device-vault__secondary" onClick={() => void downloadGeneratedRecovery()}>
                       Download recovery key
                     </button>
@@ -502,6 +555,11 @@ export function LocalDeviceVaultSetup({
                       Cancel
                     </button>
                   </div>
+                  <p class="local-device-vault__custody" data-custody={custody}>{custody === "none"
+                    ? "Not copied or downloaded yet."
+                    : custody === "copied"
+                      ? "Copied to your clipboard."
+                      : "Download requested."}</p>
                   <label class="local-device-vault__check">
                     <input type="checkbox" onChange={(event) => {
                       if (event.currentTarget.checked) acknowledgeGeneratedRecovery();
@@ -693,36 +751,28 @@ export function LocalDeviceVaultSetup({
   );
 }
 
-function LocalDeviceReadiness({
-  status,
-  persistenceResult,
-}: Readonly<{
-  status: LocalDeviceVaultStatus;
-  persistenceResult?: "granted" | "not-granted" | "unsupported";
-}>) {
-  const readiness = status.readiness;
-  const persisted = persistenceResult === "granted"
-    || (persistenceResult === undefined && readiness.persistedPermission === "granted");
+/**
+ * The recovery key, grouped in fours so it can be transcribed and checked.
+ *
+ * Grouping is layout, never content: the spans carry no separator character,
+ * so `output.textContent` is still the exact key a caller pastes back in.
+ *
+ * The Drive and loopback panels render the identical markup from their own
+ * deferred pack. This file is one of exactly five separately budgeted
+ * local-storage packs (`scripts/release-gate.mjs:1088`), so importing across
+ * that boundary would pull device custody into every Drive connection.
+ */
+function RecoveryKeyGroups({ value }: Readonly<{ value: string }>): JSX.Element {
+  const separator = value.indexOf(".");
+  const prefix = separator >= 0 ? value.slice(0, separator + 1) : "";
+  const body = separator >= 0 ? value.slice(separator + 1) : value;
+  const groups: string[] = [];
+  for (let index = 0; index < body.length; index += 4) groups.push(body.slice(index, index + 4));
   return (
-    <div class="local-device-vault__readiness">
-      <div>
-        <span>Backend</span>
-        <strong>{readiness.backend === "opfs" ? "OPFS" : "IndexedDB"}</strong>
-      </div>
-      <div>
-        <span>Retention</span>
-        <strong>{persisted ? "Persistent grant" : "Browser managed"}</strong>
-      </div>
-      <div>
-        <span>Offline</span>
-        <strong>Available</strong>
-      </div>
-      <div>
-        <span>Usage</span>
-        <strong>{storageUsage(readiness)}</strong>
-      </div>
-      {readiness.warning ? <p>{readiness.warning}</p> : null}
-    </div>
+    <>
+      {prefix ? <span class="recovery-key__prefix">{prefix}</span> : null}
+      {groups.map((group, index) => <span class="recovery-key__group" key={`${index}:${group}`}>{group}</span>)}
+    </>
   );
 }
 
@@ -780,12 +830,6 @@ export function formatLocalDeviceBytes(value: number): string {
     unit = units[index]!;
   }
   return `${amount >= 10 ? amount.toFixed(0) : amount.toFixed(1)} ${unit}`;
-}
-
-function storageUsage(readiness: LocalDeviceStorageReadiness): string {
-  if (readiness.usageBytes === undefined) return "Not reported";
-  if (readiness.quotaBytes === undefined) return formatLocalDeviceBytes(readiness.usageBytes);
-  return `${formatLocalDeviceBytes(readiness.usageBytes)} / ${formatLocalDeviceBytes(readiness.quotaBytes)}`;
 }
 
 function persistenceCopy(result: "granted" | "not-granted" | "unsupported"): string {

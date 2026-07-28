@@ -48,7 +48,11 @@ describe("Chutes connection method copy", () => {
     expect(source).toContain("selectActiveModel");
     expect(source).toContain('role="tablist" aria-label="Chutes connection method"');
     expect(source).toContain('<section class="api-key-alternative"');
-    expect(source).toContain("chutesPanel={isChutesConnected(connection) ? (");
+    // The three-way branch is unchanged; it is now preceded inside the same
+    // panel by the OAuth notice, which used to have its only all-tone home on
+    // the page-level boundary aside that moved into the lane's disclosure.
+    expect(source).toContain("{isChutesConnected(connection) ? (");
+    expect(source).toContain('<p class={`oauth-boundary-status ${oauthNotice.tone}`}');
   });
 
   it("gives a cold visitor a route when the sign-in exchange is unconfigured", () => {
@@ -66,11 +70,17 @@ describe("Chutes connection method copy", () => {
     expect(source).toContain("Deployment detail: {oauthOrigin.reason}");
   });
 
-  it("keeps the section jump controls off the hash router", () => {
-    expect(source).not.toContain('<a href="#connect-surface-card">');
-    expect(source).not.toContain('<a href="#additional-inference-providers">');
-    expect(source).toContain("onClick={focusConnectSurface}");
-    expect(source).toContain("onClick={() => focusDirectProviders()}");
+  it("keeps in-page movement off the hash router", () => {
+    // The two jump buttons are gone with the sections they pointed at, but the
+    // rule they existed to satisfy is not: nothing on this route may navigate
+    // by hash, because the hash is the router and `href="#section"` resolved to
+    // an unknown route and ejected people to Chat. This is the stronger form —
+    // it forbids the anchors outright rather than checking two call sites, and
+    // it pins the remaining programmatic move to the panel a person just
+    // filled in rather than to a 589px jump down the document.
+    expect(source).not.toContain('<a href="#');
+    expect(source).toContain('document.getElementById("connect-surface-card")');
+    expect(source).toContain("requestAnimationFrame(() => focusConnectSurface())");
   });
 
   it("consumes a live extension observation and never manufactures one", () => {
@@ -98,7 +108,7 @@ describe("Chutes connection method copy", () => {
     const surface = source.indexOf("<ConnectSurface");
     expect(surface).toBeGreaterThan(0);
     expect(source.match(/<ConnectSurface/gu)).toHaveLength(1);
-    expect(surface).toBeLessThan(source.indexOf("chutesPanel={isChutesConnected(connection) ? ("));
+    expect(surface).toBeLessThan(source.indexOf("{isChutesConnected(connection) ? ("));
   });
 
   it("admits only source-declared text generation models to agent sessions", () => {
@@ -126,9 +136,53 @@ describe("Chutes connection method copy", () => {
   });
 
   it("presents Chutes as one inference connection and mounts additional providers accessibly", () => {
-    expect(source).toContain("<span>Inference connections</span>");
-    expect(source).toContain('<h1 id="access-connection-title">Connect models</h1>');
+    // Six levels of page chrome became one `<RouteHeader>`. The eyebrow and the
+    // H1 are the same two strings, passed as props: the eyebrow is the ⓘ
+    // panel's heading and the title is still a real `<h1>` carrying the id the
+    // section's `aria-labelledby` points at. Asserting the props is stronger
+    // than asserting the markup was — it also pins the heading id, which the
+    // old assertion only got for free from the literal tag.
+    expect(source).toContain('eyebrow="Inference connections"');
+    expect(source).toContain('title="Connect models"');
+    expect(source).toContain('headingId="access-connection-title"');
     expect(source).toContain("<span>Chutes connection</span>");
     expect(source).toContain('aria-label="Additional cloud and local inference providers"');
+  });
+
+  it("keeps every sentence the collapsed page chrome carried", () => {
+    // The information-fate line for the heading collapse, asserted rather than
+    // asserted-by-hand: both paragraphs and the eyebrow's own claim survive
+    // verbatim, one rung down, and the count chip's sentence is the thing its
+    // number now demonstrates.
+    expect(source).toContain("Use Chutes for application-encrypted inference, or connect browser-direct cloud and local models here. Credentials remain in page memory.");
+    expect(source).toContain("Everything else in Airship — workspace, editor, terminal and Git — already works without this. Only chat needs a model, and connecting one never closes the others.");
+    expect(source).toContain("Connect one, or several at once. Connecting one never closes the others.");
+  });
+
+  it("keeps the whole OAuth boundary aside, verbatim, inside the flow it describes", () => {
+    expect(source).toContain("How this works · what the handler can see");
+    expect(source).toContain("Local token-handler boundary");
+    expect(source).toContain("Public-client OAuth boundary");
+    expect(source).toContain("The localhost handler receives only the one-time code, PKCE verifier, and memory-only token requests.");
+    expect(source).toContain("The client ID is public. A one-time PKCE verifier survives only the authorization redirect");
+    expect(source).toContain("<summary>Registration details</summary>");
+    expect(source).toContain("Start sign-in again");
+    // An error is never behind a closed triangle: the diagnostic alert is a
+    // sibling of the Sign in button, and the notice is the first thing in the
+    // Chutes panel, above the branch that decides which control renders.
+    expect(source.indexOf('role="alert">{oauthDiagnosticError}')).toBeGreaterThan(source.indexOf("Sign in to Chutes\n"));
+    expect(source.indexOf('<p class={`oauth-boundary-status ${oauthNotice.tone}`}')).toBeLessThan(source.indexOf("{isChutesConnected(connection) ? ("));
+  });
+
+  it("keys the proof-policy disclosure on the capability and keeps both descriptions", () => {
+    // The 465×108px tile for a permanently disabled option collapses, but only
+    // while `available === false`, and both option descriptions plus the
+    // capability's own reason stay verbatim inside a summary that says what it
+    // contains. The honesty line never enters a disclosure.
+    expect(source).toContain("if (!CHUTES_STRICT_ENDPOINT_PROOF_CAPABILITY.available)");
+    expect(source).toContain("Strict fail-closed is unavailable in this build. Why, and what each policy does");
+    expect(source).toContain("CHUTES_STRICT_ENDPOINT_PROOF_CAPABILITY.reason");
+    expect(source).toContain("Recommended. Evaluate still-current endpoint evidence before every turn");
+    expect(source).toContain('<p class="proof-policy__caveat">This policy is not proof.');
   });
 });

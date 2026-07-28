@@ -3,6 +3,8 @@ import { GitDomainError } from "../git/errors";
 import { describeGitOperation } from "../git/operations";
 import type {
   GitAuthor,
+  GitCommitDetail,
+  GitCommitSummary,
   GitDiff,
   GitDiffScope,
   GitDeltaKind,
@@ -11,6 +13,7 @@ import type {
   GitOperationDescriptor,
   GitRepositorySnapshot,
   GitStatusEntry,
+  GitTagSummary,
 } from "../git/types";
 import type { BrowserGitClient } from "../git/client";
 import { preferredSourceRepositoryId, rememberSourceRepository } from "../git/source-selection";
@@ -19,7 +22,10 @@ import { importAndAdmitGithubRepository } from "../tools/repository-admission";
 import type { WorkspacePort } from "../workspace/contracts";
 import { Icon } from "./icons";
 import { MenuSelect } from "./menu-select";
-import { DurabilityIndicator, type DurabilityState } from "./durability-indicator";
+import { RouteHeader } from "./route-header";
+import { Seal, type SealState } from "./seal";
+import { Tabs } from "./tabs";
+import { durabilityLabel, type DurabilityState } from "./durability-indicator";
 import "./sources-view.css";
 import { mapUnknownRequestFailure } from "./request-state";
 
@@ -42,6 +48,9 @@ export type SourcesViewProps = Readonly<{
   workspaceDurability?: Readonly<{ state: DurabilityState; detail: string }>;
 }>;
 
+/** Depth of one history read. Bounded here so the pane cannot outgrow its box. */
+const HISTORY_DEPTH = 50;
+
 export function SourcesView({ client, author, review, workspace, reviewImport, onWorkspaceChanged, workspaceDurability = { state: "ephemeral", detail: "Workspace files exist only in this page runtime." } }: SourcesViewProps) {
   const [repositories, setRepositories] = useState<readonly GitRepositorySnapshot[]>([]);
   const [repositoryId, setRepositoryId] = useState("");
@@ -49,8 +58,16 @@ export function SourcesView({ client, author, review, workspace, reviewImport, o
   const [selectedPaths, setSelectedPaths] = useState<readonly string[]>([]);
   const [statusPresentation, setStatusPresentation] = useState<"tree" | "flat">("tree");
   const [collapsedFolders, setCollapsedFolders] = useState<ReadonlySet<string>>(() => new Set());
+  const [pane, setPane] = useState<"changes" | "history">("changes");
   const [diff, setDiff] = useState<GitDiff>();
-  const [wrapDiff, setWrapDiff] = useState(false);
+  const [commit, setCommit] = useState<GitCommitDetail>();
+  const [commitPath, setCommitPath] = useState<string>();
+  // Wrap defaults on: the longest patch line measured on this surface was 261
+  // characters against a 669px panel, so `pre` clipped the end of the line the
+  // reader came to read. Wrapping shows every character; the two-gutter layout
+  // is what keeps a wrapped line legible.
+  const [wrapDiff, setWrapDiff] = useState(true);
+  const [postureOpen, setPostureOpen] = useState(false);
   const [branchName, setBranchName] = useState("");
   const [branchTarget, setBranchTarget] = useState("");
   const [commitMessage, setCommitMessage] = useState("");
@@ -68,6 +85,7 @@ export function SourcesView({ client, author, review, workspace, reviewImport, o
   const [importReceipt, setImportReceipt] = useState<RepositoryImportResult>();
   const operationAbort = useRef<AbortController>();
   const diffAbort = useRef<AbortController>();
+  const postureRef = useRef<HTMLDetailsElement>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -106,6 +124,11 @@ export function SourcesView({ client, author, review, workspace, reviewImport, o
   const stagedCount = worktree?.status.filter((entry) => entry.index).length ?? 0;
   const remote = repository?.remotes.find((item) => item.name === "origin") ?? repository?.remotes[0];
   const hasConflict = selectedStatus.some(isConflicted);
+  const posture = useMemo(
+    () => sourcePostureFacts(client.capabilities, workspaceDurability),
+    [client.capabilities, workspaceDurability.state, workspaceDurability.detail],
+  );
+  const history = client.capabilities.features.history;
 
   function selectRepository(nextId: string) {
     const next = repositories.find((item) => item.id === nextId);
@@ -122,13 +145,26 @@ export function SourcesView({ client, author, review, workspace, reviewImport, o
 
   function clearSelection() {
     setSelectedPaths([]);
-    setDiff(undefined);
+    clearInspection();
     setError(undefined);
     setNotice(undefined);
   }
 
+  function clearInspection() {
+    setDiff(undefined);
+    setCommit(undefined);
+    setCommitPath(undefined);
+  }
+
   function togglePath(path: string) {
     setSelectedPaths((current) => current.includes(path) ? current.filter((item) => item !== path) : [...current, path]);
+  }
+
+  /** Opens the one posture disclosure from anywhere that used to restate it. */
+  function revealPosture() {
+    setPostureOpen(true);
+    postureRef.current?.scrollIntoView({ block: "nearest" });
+    postureRef.current?.querySelector("summary")?.focus();
   }
 
   async function inspectDiff(entry: GitStatusEntry, scope: GitDiffScope) {
@@ -139,7 +175,30 @@ export function SourcesView({ client, author, review, workspace, reviewImport, o
     setBusy(`diff:${entry.path}:${scope}`);
     setError(undefined);
     try {
-      setDiff(await client.diff({ repositoryId: repository.id, worktreeId: worktree.id, path: entry.path, scope }, controller.signal));
+      const next = await client.diff({ repositoryId: repository.id, worktreeId: worktree.id, path: entry.path, scope }, controller.signal);
+      setCommit(undefined);
+      setCommitPath(undefined);
+      setDiff(next);
+    } catch (caught) {
+      if (!controller.signal.aborted) setError(publicError(caught));
+    } finally {
+      if (diffAbort.current === controller) diffAbort.current = undefined;
+      if (!controller.signal.aborted) setBusy(undefined);
+    }
+  }
+
+  async function inspectCommit(oid: string) {
+    if (!repository || !worktree) return;
+    diffAbort.current?.abort();
+    const controller = new AbortController();
+    diffAbort.current = controller;
+    setBusy(`show:${oid}`);
+    setError(undefined);
+    try {
+      const detail = await client.show({ repositoryId: repository.id, worktreeId: worktree.id, revision: oid }, controller.signal);
+      setDiff(undefined);
+      setCommit(detail);
+      setCommitPath(detail.files[0]?.path);
     } catch (caught) {
       if (!controller.signal.aborted) setError(publicError(caught));
     } finally {
@@ -168,7 +227,7 @@ export function SourcesView({ client, author, review, workspace, reviewImport, o
       const result = await execute(client, operation, controller.signal);
       applyMutation(result);
       setSelectedPaths([]);
-      setDiff(undefined);
+      clearInspection();
       setNotice(success);
       return true;
     } catch (caught) {
@@ -211,7 +270,7 @@ export function SourcesView({ client, author, review, workspace, reviewImport, o
     await runMutation({ kind: "unstage", request: { repositoryId: repository.id, worktreeId: worktree.id, paths, expectedWorktreeVersion: worktree.version } }, `Unstaged ${paths.length} path${paths.length === 1 ? "" : "s"}.`);
   }
 
-  async function commit() {
+  async function commitStaged() {
     if (!repository || !worktree || !commitMessage.trim()) return;
     const message = commitMessage;
     if (await runMutation({ kind: "commit", request: { repositoryId: repository.id, worktreeId: worktree.id, message, author, expectedWorktreeVersion: worktree.version } }, "Commit created locally. Nothing was pushed.")) setCommitMessage("");
@@ -297,27 +356,67 @@ export function SourcesView({ client, author, review, workspace, reviewImport, o
 
   return (
     <section class="git-sources" aria-labelledby="git-sources-title">
-      <header class="git-sources-heading">
-        <div>
-          <span>Browser-native source control</span>
-          <h1 id="git-sources-title">Repositories &amp; worktrees</h1>
-          <p>Inspect, stage, branch, and commit against an adapter-owned browser filesystem. Remote traffic is direct and only available when its CORS and credential contract is actually installed.</p>
-          <div class="git-durability-split">
-            <span>Workspace files <DurabilityIndicator state={workspaceDurability.state} detail={workspaceDurability.detail} /></span>
-            <span>Git index &amp; refs <DurabilityIndicator state={client.capabilities.storage.durable ? "synced" : "ephemeral"} detail={client.capabilities.storage.detail} /></span>
-          </div>
-        </div>
-        <button type="button" onClick={() => setRefreshKey((value) => value + 1)} disabled={Boolean(busy)} aria-label="Refresh repositories"><Icon name="source" /> Refresh</button>
-      </header>
+      {/* The 158px eyebrow/serif-H1/paragraph slab becomes the shared 44px bar.
+          Nothing is dropped: the eyebrow is the ⓘ panel's heading and the
+          paragraph is its body, both verbatim, and the ⓘ opens itself on the
+          first visit to this pane so a first-run reader still meets the
+          remote-traffic caveat before touching anything. */}
+      <RouteHeader
+        class="git-sources-header"
+        routeId="sources"
+        density="tool"
+        title="Repositories & worktrees"
+        // The Workspace route's own header renders `Sources` as the selected
+        // tab 40px above this bar, so a second 28px route title would be the
+        // third rendering of one word. The heading stays a real <h1> for
+        // `aria-labelledby` and the document outline.
+        titleVisible={false}
+        eyebrow="Browser-native source control"
+        description="Inspect, stage, branch, and commit against an adapter-owned browser filesystem. Remote traffic is direct and only available when its CORS and credential contract is actually installed."
+        headingId="git-sources-title"
+        actions={<>
+          <button
+            class="git-import-toggle"
+            type="button"
+            aria-expanded={importOpen}
+            title="Direct CORS-safe API + raw reads, pinned to one immutable commit"
+            onClick={() => setImportOpen((value) => !value)}
+          ><Icon name="plus" /> {importOpen ? "Close import" : "Import"}</button>
+          <button type="button" onClick={() => setRefreshKey((value) => value + 1)} disabled={Boolean(busy)} aria-label="Refresh repositories"><Icon name="source" /> Refresh</button>
+        </>}
+      />
 
-      <section class="git-import" aria-labelledby="git-import-title">
-        <button class="git-import-toggle" type="button" aria-expanded={importOpen} onClick={() => setImportOpen((value) => !value)}>
-          <Icon name="plus" />
-          <span><strong id="git-import-title">Import public GitHub snapshot</strong><small>Direct CORS-safe API + raw reads, pinned to one immutable commit</small></span>
-          <b>{importOpen ? "Close" : "Import"}</b>
-        </button>
-        {importOpen ? (
+      {/* One posture row at every width. The three trust cards and the two
+          durability pills used to render as a 212px desktop grid *and* a phone
+          disclosure — the same facts twice, in two layouts, with the middle
+          card's 660-character Content-Security-Policy paragraph also printed a
+          second time under Remote boundary. The summary names every fact it
+          holds, so the collapse cannot bury one. */}
+      <details
+        class="git-sources-trust-disclosure"
+        ref={postureRef}
+        open={postureOpen}
+        onToggle={(event) => setPostureOpen(event.currentTarget.open)}
+      >
+        <summary>
+          <span class="eyebrow">Source posture</span>
+          <span class="git-posture-chips">
+            {posture.map((fact) => <Seal key={fact.id} state={fact.state} label={fact.label} density="chip" />)}
+          </span>
+          <small>{posture.length} facts · full detail</small>
+        </summary>
+        <div class="git-sources-trust" role="status">
+          <SourceTrustFacts facts={posture} />
+        </div>
+      </details>
+
+      {importOpen ? (
+        <section class="git-import" aria-labelledby="git-import-title">
           <div class="git-import-body">
+            <div class="git-import-title">
+              <strong id="git-import-title">Import public GitHub snapshot</strong>
+              <small>Direct CORS-safe API + raw reads, pinned to one immutable commit</small>
+            </div>
             <div class="git-import-form">
               <label>Repository URL or owner/name<input aria-label="GitHub repository" value={importRepository} onInput={(event) => setImportRepository(event.currentTarget.value)} placeholder="octocat/Hello-World" autoCapitalize="none" spellcheck={false} /></label>
               <label>Ref <small>optional</small><input aria-label="GitHub ref" value={importRef} onInput={(event) => setImportRef(event.currentTarget.value)} placeholder="default branch, tag, or commit" autoCapitalize="none" spellcheck={false} /></label>
@@ -332,18 +431,8 @@ export function SourcesView({ client, author, review, workspace, reviewImport, o
             {importProgress && busy === "snapshot-import" ? <ImportProgress progress={importProgress} /> : null}
             {importReceipt ? <ImportReceipt receipt={importReceipt} /> : null}
           </div>
-        ) : null}
-      </section>
-
-      <div class="git-sources-trust git-sources-trust-desktop" role="status">
-        <SourceTrustFacts client={client} />
-      </div>
-      <details class="git-sources-trust-disclosure">
-        <summary><span>Source posture</span><strong>{client.capabilities.storage.durable ? "Vault synced" : "Page memory"} · {client.capabilities.remote.transport === "none" ? "Remote unavailable" : "Remote available"} · Version-bound</strong></summary>
-        <div class="git-sources-trust" role="status">
-          <SourceTrustFacts client={client} />
-        </div>
-      </details>
+        </section>
+      ) : null}
 
       {error ? <div class="git-sources-alert error" role="alert"><Icon name="warning" /><span>{error}</span></div> : null}
       {error?.toLowerCase().includes("version") ? <div class="git-reconcile" role="alert"><strong>Worktree changed since review</strong><span>Refresh this worktree and re-review. Your current path selection stays visible until fresh state arrives.</span><button type="button" onClick={() => setRefreshKey((value) => value + 1)}>Refresh this worktree</button></div> : null}
@@ -354,120 +443,192 @@ export function SourcesView({ client, author, review, workspace, reviewImport, o
           <Icon name="branch" size={28} />
           <h2>{busy === "refresh" ? "Inspecting local repositories…" : "No repository adapter state"}</h2>
           <p>Use the public GitHub snapshot importer above, or install an adapter with a real browser-safe clone path. This surface never invents a proxy.</p>
-          <button type="button" onClick={() => setRefreshKey((value) => value + 1)}>Check available browser sources</button>
+          <div class="git-sources-empty__actions">
+            <button class="primary" type="button" onClick={() => setImportOpen(true)}><Icon name="plus" /> Import a public GitHub snapshot</button>
+            <button type="button" onClick={() => setRefreshKey((value) => value + 1)}>Check available browser sources</button>
+          </div>
           <small>{client.capabilities.features.clone.available ? "A clone-capable adapter is available." : `Full-history clone unavailable: ${client.capabilities.features.clone.reason ?? "no direct adapter is installed"}.`}</small>
         </div>
       ) : (
         <div class="git-sources-layout">
-          <aside class="git-source-rail" aria-label="Repository and worktree selection">
-            <div class="git-select-field">
-              <span>Repository</span>
-              <MenuSelect
-                placement="down"
-                ariaLabel="Repository"
-                value={repository.id}
-                options={repositories.map((item) => ({ value: item.id, label: item.name }))}
-                onChange={selectRepository}
-              />
-            </div>
-            <div class="git-repository-meta">
-              <strong>{repository.name}</strong>
-              <span>{shortOid(worktree.head)}</span>
-              <small>{repository.storage.durable ? "Durable adapter" : "Page-memory adapter"}</small>
-              <small>{repository.lastRemoteSyncAt ? `Last fetch ${relativeTime(repository.lastRemoteSyncAt)}` : "Never fetched in this browser"}</small>
-            </div>
-            <span class="git-section-label">Worktrees</span>
-            <div class="git-worktree-list">
-              {repository.worktrees.map((item) => (
-                <button class={item.id === worktree.id ? "active" : ""} type="button" onClick={() => selectWorktree(item.id)} key={item.id}>
-                  <Icon name="branch" />
-                  <span><strong>{item.branch}</strong><small>{item.path}</small></span>
-                  <em>{item.status.length}</em>
-                </button>
-              ))}
-            </div>
-            <div class="git-branch-controls">
-              <div class="git-select-field">
-                <span>Switch branch</span>
-                <MenuSelect
-                  placement="down"
-                  ariaLabel="Switch branch"
-                  value={branchTarget || worktree.branch}
-                  options={repository.branches.map((branch) => ({ value: branch.name, label: branch.name }))}
-                  onChange={setBranchTarget}
-                />
-              </div>
-              <button type="button" disabled={Boolean(busy) || !branchTarget || branchTarget === worktree.branch} onClick={switchBranch}>Switch checkout</button>
-              <label>New branch<input value={branchName} onInput={(event) => setBranchName(event.currentTarget.value)} placeholder="feature/evidence" /></label>
-              <button type="button" disabled={Boolean(busy) || !branchName.trim()} onClick={createBranch}><Icon name="plus" /> Create branch</button>
-              <label>Worktree branch<input value={newWorktreeBranch} onInput={(event) => setNewWorktreeBranch(event.currentTarget.value)} placeholder="feature/evidence" /></label>
-                  <label>Workspace path<input value={newWorktreePath} onInput={(event) => setNewWorktreePath(event.currentTarget.value)} placeholder="/workspace/worktrees/evidence" /></label>
-              <button type="button" disabled={Boolean(busy) || !client.capabilities.features.worktree.available || !newWorktreeBranch.trim() || !newWorktreePath.trim()} title={client.capabilities.features.worktree.reason} onClick={createWorktree}><Icon name="plus" /> Create worktree</button>
-              <button type="button" disabled={Boolean(busy) || !client.capabilities.features.worktree.available || repository.worktrees.length < 2} title={repository.worktrees.length < 2 ? "The repository must retain at least one worktree." : client.capabilities.features.worktree.reason} onClick={removeWorktree}>Remove selected worktree</button>
-            </div>
-          </aside>
-
           <main class="git-change-stage">
             <div class="git-stage-heading">
-              <div><span class="git-section-label">{worktree.branch}</span><h2>{worktree.status.length ? `${worktree.status.length} changed path${worktree.status.length === 1 ? "" : "s"}` : "Worktree clean"}</h2></div>
-              <div>
-                <div class="git-view-toggle" role="group" aria-label="Changed path layout">
-                  <button type="button" aria-pressed={statusPresentation === "tree"} onClick={() => setStatusPresentation("tree")}>Tree</button>
-                  <button type="button" aria-pressed={statusPresentation === "flat"} onClick={() => setStatusPresentation("flat")}>Flat</button>
-                </div>
-                <button type="button" disabled={Boolean(busy) || !selectedStatus.some((entry) => entry.index)} onClick={unstageSelected}>Unstage selected</button>
-                <button class="primary" type="button" disabled={Boolean(busy) || !selectedStatus.some((entry) => entry.worktree)} onClick={stageSelected}>Stage selected</button>
+              <Tabs
+                label="Source control views"
+                class="git-stage-tabs"
+                items={[
+                  { id: "changes", label: "Changes", count: worktree.status.length, countLabel: `${worktree.status.length} changed paths` },
+                  // `detail` becomes the tab's accessible name, so it carries
+                  // the honest reason only when the tab cannot be opened.
+                  history.available
+                    ? { id: "history", label: "History" }
+                    : {
+                      id: "history",
+                      label: "History",
+                      disabled: true,
+                      hint: "unavailable",
+                      detail: `History unavailable: ${history.reason ?? "this adapter does not read commit history"}`,
+                    },
+                ]}
+                activeId={pane}
+                onSelect={(next) => setPane(next === "history" ? "history" : "changes")}
+                panelId={(id) => `git-pane-${id}`}
+              />
+              <div class="git-stage-actions">
+                {pane === "changes" ? <>
+                  <div class="git-view-toggle" role="group" aria-label="Changed path layout">
+                    <button type="button" aria-pressed={statusPresentation === "tree"} onClick={() => setStatusPresentation("tree")}>Tree</button>
+                    <button type="button" aria-pressed={statusPresentation === "flat"} onClick={() => setStatusPresentation("flat")}>Flat</button>
+                  </div>
+                  <button type="button" disabled={Boolean(busy) || !selectedStatus.some((entry) => entry.index)} onClick={unstageSelected}>Unstage selected</button>
+                  <button class="primary" type="button" disabled={Boolean(busy) || !selectedStatus.some((entry) => entry.worktree)} onClick={stageSelected}>Stage selected</button>
+                </> : null}
               </div>
             </div>
-            <p class="git-status-legend"><span><b class="git-delta filled">M</b> Staged = ready to commit</span><span><b class="git-delta outlined">M</b> Working = not yet staged</span></p>
-            {hasConflict ? <p class="git-conflict-note" role="status">Conflicted paths are excluded from bulk Stage. Resolve them explicitly, then refresh and mark resolved through the adapter.</p> : null}
-            {worktree.status.length ? (
-              <div class="git-change-list" role="list" aria-label="Changed paths">
-                {statusPresentation === "flat" ? worktree.status.map((entry) => <ChangedPathRow key={entry.path} entry={entry} selected={selected.has(entry.path)} onToggle={togglePath} onInspect={inspectDiff} />) : statusTree.map((node) => <ChangedPathTreeNode
-                  key={node.path}
-                  node={node}
-                  depth={0}
-                  selected={selected}
-                  collapsed={collapsedFolders}
-                  onToggleFolder={(path) => setCollapsedFolders((current) => {
-                    const next = new Set(current);
-                    if (next.has(path)) next.delete(path); else next.add(path);
-                    return next;
-                  })}
-                  onTogglePath={togglePath}
-                  onInspect={inspectDiff}
-                />)}
+
+            {pane === "changes" ? (
+              <div class="git-pane" id="git-pane-changes" role="tabpanel" aria-label="Changed paths">
+                <p class="git-status-legend"><span><b class="git-delta filled">M</b> Staged = ready to commit</span><span><b class="git-delta outlined">M</b> Working = not yet staged</span></p>
+                {hasConflict ? <p class="git-conflict-note" role="status">Conflicted paths are excluded from bulk Stage. Resolve them explicitly, then refresh and mark resolved through the adapter.</p> : null}
+                {worktree.status.length ? (
+                  <div class="git-change-list" role="list" aria-label="Changed paths">
+                    {statusPresentation === "flat" ? worktree.status.map((entry) => <ChangedPathRow key={entry.path} entry={entry} selected={selected.has(entry.path)} onToggle={togglePath} onInspect={inspectDiff} />) : statusTree.map((node) => <ChangedPathTreeNode
+                      key={node.path}
+                      node={node}
+                      depth={0}
+                      selected={selected}
+                      collapsed={collapsedFolders}
+                      onToggleFolder={(path) => setCollapsedFolders((current) => {
+                        const next = new Set(current);
+                        if (next.has(path)) next.delete(path); else next.add(path);
+                        return next;
+                      })}
+                      onTogglePath={togglePath}
+                      onInspect={inspectDiff}
+                    />)}
+                  </div>
+                ) : (
+                  <div class="git-clean">
+                    <Icon name="check" />
+                    <strong>Nothing to stage</strong>
+                    <span>HEAD, index, and working tree agree.</span>
+                    {history.available ? <button type="button" onClick={() => setPane("history")}>Read the history of {worktree.branch}</button> : null}
+                  </div>
+                )}
               </div>
-            ) : <div class="git-clean"><Icon name="check" /><strong>Nothing to stage</strong><span>HEAD, index, and working tree agree.</span></div>}
-            <section class="git-diff-panel" aria-label="Selected diff">
-              <header><span>{diff ? `${diff.scope} · ${diff.path}` : "Diff inspector"}</span>{diff?.truncated ? <em>bounded preview</em> : null}<label><input type="checkbox" checked={wrapDiff} onChange={(event) => setWrapDiff(event.currentTarget.checked)} /> Wrap</label></header>
-              <div class={`git-diff-lines ${wrapDiff ? "wrap" : ""}`}>{diff?.patch ? diff.patch.split("\n").map((line, index) => <div class={diffLineKind(line)} key={`${index}:${line.slice(0, 12)}`}><span>{index + 1}</span><b>{line.startsWith("+") ? "+" : line.startsWith("-") ? "−" : " "}</b><code>{line}</code></div>) : <p>Choose a staged or working diff. Patches are computed locally and bounded before display.</p>}</div>
-            </section>
+            ) : (
+              <HistoryPane
+                client={client}
+                repository={repository}
+                worktree={worktree}
+                selectedOid={commit?.commit.oid}
+                onSelect={inspectCommit}
+                onError={setError}
+              />
+            )}
+
           </main>
 
-          <aside class="git-action-rail" aria-label="Commit and remote actions">
-            <section>
-              <span class="git-section-label">Local commit</span>
-              <strong>{stagedCount} staged path{stagedCount === 1 ? "" : "s"}</strong>
-              <label>Message<textarea rows={4} value={commitMessage} onInput={(event) => setCommitMessage(event.currentTarget.value)} placeholder="Describe the evidence-backed change" /></label>
-              <small>Author: {author.name} &lt;{author.email}&gt;</small>
-              <button class="primary" type="button" disabled={Boolean(busy) || stagedCount === 0 || !commitMessage.trim()} onClick={commit}><Icon name="check" /> Commit locally</button>
-              <p>Commit never implies push. Both operations receive separate approval.</p>
-            </section>
-            <section>
-              <span class="git-section-label">Remote boundary</span>
-              <strong>{remote ? `${remote.name} · ${remote.transport}` : "No remote configured"}</strong>
-              <small>{remote?.url ?? client.capabilities.remote.detail}</small>
-              <p class="git-upstream-status" role="status">{upstreamStatus(repository, worktree)}</p>
-              <button type="button" disabled={Boolean(busy) || !remote || !client.capabilities.features.fetch.available} onClick={fetchRemote}><Icon name="cloud" /> Fetch direct</button>
-              <button type="button" disabled={Boolean(busy) || !remote || !client.capabilities.features.push.available} onClick={pushRemote}><Icon name="source" /> Push {worktree.branch}</button>
-              <p class="git-push-warning">Push is always reviewed. A non-fast-forward update is blocked unless the remote is fetched and reconciled first.</p>
-              {!client.capabilities.features.push.available ? <p>{client.capabilities.features.push.reason}</p> : <>
-                <p>{gitCredentialBoundary(client)}</p>
-                <p>If the final response is lost, Airship reports the outcome as unknown and never retries automatically. Fetch before retrying.</p>
-              </>}
-            </section>
-          </aside>
+          <div class="git-rails">
+              <details class="git-repository-controls" open={repository.worktrees.length > 1}>
+                <summary>
+                  <span class="eyebrow">Repository</span>
+                  <strong>{repository.name} · {worktree.branch} · {shortOid(worktree.head)}</strong>
+                  <small>{repository.worktrees.length} worktree{repository.worktrees.length === 1 ? "" : "s"} · branch, worktree and checkout controls</small>
+                </summary>
+                <div class="git-repository-controls__body">
+                  <div class="git-select-field">
+                    <span>Repository</span>
+                    <MenuSelect
+                      placement="down"
+                      ariaLabel="Repository"
+                      value={repository.id}
+                      options={repositories.map((item) => ({ value: item.id, label: item.name }))}
+                      onChange={selectRepository}
+                    />
+                  </div>
+                  <div class="git-repository-meta">
+                    <strong>{repository.name}</strong>
+                    <span>{shortOid(worktree.head)}</span>
+                    <small>{repository.storage.durable ? "Durable adapter" : "Page-memory adapter"}</small>
+                    <small>{repository.lastRemoteSyncAt ? `Last fetch ${relativeTime(repository.lastRemoteSyncAt)}` : "Never fetched in this browser"}</small>
+                  </div>
+                  <span class="git-section-label">Worktrees</span>
+                  <div class="git-worktree-list">
+                    {repository.worktrees.map((item) => (
+                      <button class={item.id === worktree.id ? "active" : ""} type="button" onClick={() => selectWorktree(item.id)} key={item.id}>
+                        <Icon name="branch" />
+                        <span><strong>{item.branch}</strong><small>{item.path}</small></span>
+                        <em>{item.status.length}</em>
+                      </button>
+                    ))}
+                  </div>
+                  <div class="git-branch-controls">
+                    <div class="git-select-field">
+                      <span>Switch branch</span>
+                      <MenuSelect
+                        placement="down"
+                        ariaLabel="Switch branch"
+                        value={branchTarget || worktree.branch}
+                        options={repository.branches.map((branch) => ({ value: branch.name, label: branch.name }))}
+                        onChange={setBranchTarget}
+                      />
+                    </div>
+                    <button type="button" disabled={Boolean(busy) || !branchTarget || branchTarget === worktree.branch} onClick={switchBranch}>Switch checkout</button>
+                    <label>New branch<input value={branchName} onInput={(event) => setBranchName(event.currentTarget.value)} placeholder="feature/evidence" /></label>
+                    <button type="button" disabled={Boolean(busy) || !branchName.trim()} onClick={createBranch}><Icon name="plus" /> Create branch</button>
+                    <label>Worktree branch<input value={newWorktreeBranch} onInput={(event) => setNewWorktreeBranch(event.currentTarget.value)} placeholder="feature/evidence" /></label>
+                    <label>Workspace path<input value={newWorktreePath} onInput={(event) => setNewWorktreePath(event.currentTarget.value)} placeholder="/workspace/worktrees/evidence" /></label>
+                    <button type="button" disabled={Boolean(busy) || !client.capabilities.features.worktree.available || !newWorktreeBranch.trim() || !newWorktreePath.trim()} title={client.capabilities.features.worktree.reason} onClick={createWorktree}><Icon name="plus" /> Create worktree</button>
+                    <button type="button" disabled={Boolean(busy) || !client.capabilities.features.worktree.available || repository.worktrees.length < 2} title={repository.worktrees.length < 2 ? "The repository must retain at least one worktree." : client.capabilities.features.worktree.reason} onClick={removeWorktree}>Remove selected worktree</button>
+                  </div>
+                </div>
+              </details>
+
+              <section class="git-commit-box">
+                <span class="git-section-label">Local commit</span>
+                <strong>{stagedCount} staged path{stagedCount === 1 ? "" : "s"}</strong>
+                <label>Message<textarea rows={3} value={commitMessage} onInput={(event) => setCommitMessage(event.currentTarget.value)} placeholder="Describe the evidence-backed change" /></label>
+                <small>Author: {author.name} &lt;{author.email}&gt;</small>
+                <button class="primary" type="button" disabled={Boolean(busy) || stagedCount === 0 || !commitMessage.trim()} onClick={commitStaged}><Icon name="check" /> Commit locally</button>
+                <p>Commit never implies push. Both operations receive separate approval.</p>
+              </section>
+
+              {/* Open exactly when a remote operation can actually run. The
+                  1,030-character remote essay was permanently on screen while
+                  both of its buttons were disabled; the live claim
+                  (`upstreamStatus`) stays visible either way. */}
+              <details class="git-remote-boundary" open={Boolean(remote) && (client.capabilities.features.fetch.available || client.capabilities.features.push.available)}>
+                <summary>
+                  <span class="eyebrow">Remote boundary</span>
+                  <strong>{remote ? `${remote.name} · ${remote.transport}` : "No remote configured"}</strong>
+                  <small class="git-upstream-status" role="status">{upstreamStatus(repository, worktree)}</small>
+                </summary>
+                <div class="git-remote-boundary__body">
+                  {remote ? <small class="git-remote-url">{remote.url}</small> : null}
+                  <button type="button" disabled={Boolean(busy) || !remote || !client.capabilities.features.fetch.available} onClick={fetchRemote}><Icon name="cloud" /> Fetch direct</button>
+                  <button type="button" disabled={Boolean(busy) || !remote || !client.capabilities.features.push.available} onClick={pushRemote}><Icon name="source" /> Push {worktree.branch}</button>
+                  <p class="git-push-warning">Push is always reviewed. A non-fast-forward update is blocked unless the remote is fetched and reconciled first.</p>
+                  {!client.capabilities.features.push.available ? <p>{client.capabilities.features.push.reason}</p> : <>
+                    <p>{gitCredentialBoundary(client)}</p>
+                    <p>If the final response is lost, Airship reports the outcome as unknown and never retries automatically. Fetch before retrying.</p>
+                  </>}
+                  {/* The transport's own contract paragraph is stated once, in
+                      Source posture. This is a pointer to it, not a reprint. */}
+                  <p>What this build's Content-Security-Policy permits is stated once, under <button class="git-inline-link" type="button" onClick={revealPosture}>Source posture ↑</button>.</p>
+                </div>
+              </details>
+          </div>
+
+          <DiffPanel
+            diff={diff}
+            commit={commit}
+            commitPath={commitPath}
+            onSelectCommitPath={setCommitPath}
+            wrap={wrapDiff}
+            onWrapChange={setWrapDiff}
+            busy={busy}
+          />
         </div>
       )}
     </section>
@@ -552,11 +713,345 @@ function countTreeFiles(node: StatusTreeNode): number {
   return node.kind === "file" ? 1 : node.children.reduce((sum, child) => sum + countTreeFiles(child), 0);
 }
 
-function SourceTrustFacts({ client }: Readonly<{ client: BrowserGitClient }>) {
+/**
+ * Commit history, read through the verbs the adapter already implements.
+ *
+ * `BrowserGitClient.log` and `.show` shipped with the object database and were
+ * reachable only by typing into the Terminal's Shared Git box on another
+ * route: after a commit, this surface showed nothing, and a branch created
+ * here appeared nowhere but inside a closed select. Both calls are reads, so
+ * neither passes through the approval path — which is also why this pane adds
+ * no mutating verb: a half-built menu of tag/stash/merge/reset would be worse
+ * than the honest absence.
+ */
+function HistoryPane({ client, repository, worktree, selectedOid, onSelect, onError }: Readonly<{
+  client: BrowserGitClient;
+  repository: GitRepositorySnapshot;
+  worktree: GitRepositorySnapshot["worktrees"][number];
+  selectedOid?: string;
+  onSelect(oid: string): void;
+  onError(message: string): void;
+}>) {
+  const [commits, setCommits] = useState<readonly GitCommitSummary[]>();
+  const [tags, setTags] = useState<readonly GitTagSummary[]>([]);
+  const capability = client.capabilities.features.history;
+
+  useEffect(() => {
+    if (!capability.available) return;
+    const controller = new AbortController();
+    setCommits(undefined);
+    void client.log({ repositoryId: repository.id, worktreeId: worktree.id, depth: HISTORY_DEPTH }, controller.signal)
+      .then((next) => setCommits(next), (caught: unknown) => {
+        if (!controller.signal.aborted) { setCommits([]); onError(publicError(caught)); }
+      });
+    // Tags are decoration on a row; a tag read that fails must not blank the
+    // history that succeeded, so its failure is swallowed rather than raised.
+    void client.listTags(repository.id, controller.signal).then(setTags, () => setTags([]));
+    return () => controller.abort();
+  }, [client, repository.id, repository.version, worktree.id, worktree.version, capability.available]);
+
+  if (!capability.available) {
+    return <div class="git-pane git-clean" id="git-pane-history" role="tabpanel">
+      <Icon name="branch" />
+      <strong>History unavailable</strong>
+      <span>{capability.reason ?? "This adapter does not read commit history."}</span>
+    </div>;
+  }
+
+  return <div class="git-pane" id="git-pane-history" role="tabpanel" aria-label="Commit history">
+    <p class="git-status-legend"><span>{commits === undefined ? "Reading history…" : `${commits.length} commit${commits.length === 1 ? "" : "s"} on ${worktree.branch}, newest first`}</span><span>Bounded to the {HISTORY_DEPTH} most recent.</span></p>
+    <div class="git-history-list" role="list" aria-label="Commits">
+      {commits?.length === 0 ? <p class="git-history-empty">No commit is recorded in this repository yet.</p> : null}
+      {commits?.map((entry) => {
+        const refs = commitRefs(entry.oid, repository, tags);
+        return <button
+          class={`git-history-row ${entry.oid === selectedOid ? "selected" : ""}`}
+          key={entry.oid}
+          type="button"
+          role="listitem"
+          aria-current={entry.oid === selectedOid ? "true" : undefined}
+          title={entry.message}
+          onClick={() => onSelect(entry.oid)}
+        >
+          <code>{shortOid(entry.oid)}</code>
+          <strong>{commitSubject(entry.message)}</strong>
+          {refs.length ? <span class="git-history-refs">{refs.map((ref) => <em key={ref}>{ref}</em>)}</span> : null}
+          <small>{entry.author.name} · {relativeTime(entry.committedAt)}{entry.parents.length > 1 ? " · merge" : ""}</small>
+        </button>;
+      })}
+    </div>
+  </div>;
+}
+
+/** Branch and tag names pointing at one commit, so a new branch is visible. */
+export function commitRefs(
+  oid: string,
+  repository: Readonly<{ branches: readonly Readonly<{ name: string; oid: string }>[] }>,
+  tags: readonly GitTagSummary[],
+): readonly string[] {
+  return Object.freeze([
+    ...repository.branches.filter((branch) => branch.oid === oid).map((branch) => branch.name),
+    ...tags.filter((tag) => tag.target === oid || tag.oid === oid).map((tag) => `tag: ${tag.name}`),
+  ]);
+}
+
+/** First line of a commit message; the whole message stays in `title`. */
+export function commitSubject(message: string): string {
+  return message.split("\n").find((line) => line.trim().length > 0)?.trim() ?? "(no message)";
+}
+
+function DiffPanel({ diff, commit, commitPath, onSelectCommitPath, wrap, onWrapChange, busy }: Readonly<{
+  diff?: GitDiff;
+  commit?: GitCommitDetail;
+  commitPath?: string;
+  onSelectCommitPath(path: string): void;
+  wrap: boolean;
+  onWrapChange(next: boolean): void;
+  busy?: string;
+}>) {
+  const file = commit?.files.find((item) => item.path === commitPath) ?? commit?.files[0];
+  const patch = commit ? file?.patch : diff?.patch;
+  const parsed = useMemo(() => parseUnifiedPatch(patch ?? ""), [patch]);
+  const title = commit
+    ? `${file?.path ?? commitSubject(commit.commit.message)}`
+    : diff?.path ?? "Diff inspector";
+  const subtitle = commit
+    ? `commit ${shortOid(commit.commit.oid)} · ${commitSubject(commit.commit.message)}`
+    : diff ? diffComparisonLabel(diff.scope) : undefined;
+  const truncated = commit ? file?.truncated : diff?.truncated;
+
+  return <section class="git-diff-panel" aria-label="Selected diff">
+    <header>
+      <div class="git-diff-title">
+        <strong>{title}</strong>
+        {subtitle ? <small>{subtitle}</small> : null}
+      </div>
+      {truncated ? <em>bounded preview</em> : null}
+      <label><input type="checkbox" checked={wrap} onChange={(event) => onWrapChange(event.currentTarget.checked)} /> Wrap</label>
+    </header>
+    {commit && commit.files.length > 1 ? (
+      <div class="git-diff-files" role="group" aria-label="Files in this commit">
+        {commit.files.map((item) => <button
+          class={item.path === (file?.path ?? "") ? "active" : ""}
+          key={item.path}
+          type="button"
+          title={item.path}
+          onClick={() => onSelectCommitPath(item.path)}
+        ><b class="git-delta outlined">{deltaLetter(item.kind)}</b>{item.path}</button>)}
+      </div>
+    ) : null}
+    {/* `---`/`+++`/`diff --git` are headers about the file, not lines of it.
+        They kept the gutter's first three numbers and pushed real code out of
+        a 91px box; here they render verbatim, once, above the code. */}
+    {parsed.header.length ? <p class="git-diff-header">{parsed.header.map((line) => <code key={line}>{line}</code>)}</p> : null}
+    {commit?.truncated ? <p class="git-diff-notice" role="status">This commit touched more paths than the per-commit patch bound; the paths above are the bounded set.</p> : null}
+    {file?.binary || diff?.binary ? <p class="git-diff-notice" role="status">Binary file. Airship does not render a byte diff.</p> : null}
+    <div class={`git-diff-lines ${wrap ? "wrap" : ""}`}>
+      {parsed.lines.length ? parsed.lines.map((line, index) => (
+        line.kind === "hunk"
+          ? <div class="hunk" key={`${index}:${line.raw}`}><code>{line.raw}</code></div>
+          : <div class={line.kind} key={`${index}:${line.raw.slice(0, 16)}`}>
+            <span class="git-diff-old">{line.oldLine ?? ""}</span>
+            <span class="git-diff-new">{line.newLine ?? ""}</span>
+            <b>{line.sign}</b>
+            <code>{line.text}</code>
+          </div>
+      )) : <p>{diffPlaceholder({ diff, commit, file, busy })}</p>}
+    </div>
+  </section>;
+}
+
+/** What the diff box says when it has no patch to draw. */
+export function diffPlaceholder(input: Readonly<{
+  diff?: GitDiff;
+  commit?: GitCommitDetail;
+  file?: Readonly<{ path: string; binary: boolean }>;
+  busy?: string;
+}>): string {
+  if (input.busy?.startsWith("diff:") || input.busy?.startsWith("show:")) return "Computing this patch locally…";
+  // "Nothing is selected" and "this file has no textual change" used to read
+  // identically, which conflated an idle panel with an empty-file answer.
+  if (input.commit && input.file) return `No textual change in ${input.file.path} for this commit.`;
+  if (input.commit) return "This commit records no bounded file patch.";
+  if (input.diff) return `No textual change in ${input.diff.path}. The comparison returned an empty patch.`;
+  return "Choose a staged or working diff. Patches are computed locally and bounded before display.";
+}
+
+/** Plain English for the two comparisons the raw scope enum names. */
+export function diffComparisonLabel(scope: GitDiffScope): string {
+  return scope === "staged" ? "index vs HEAD" : "working tree vs index";
+}
+
+export type DiffLine = Readonly<{
+  kind: "context" | "added" | "removed" | "hunk";
+  sign: string;
+  text: string;
+  raw: string;
+  oldLine?: number;
+  newLine?: number;
+}>;
+
+export type ParsedPatch = Readonly<{
+  /** `diff --git`, `index`, `---`, `+++`, mode lines — verbatim, in order. */
+  header: readonly string[];
+  lines: readonly DiffLine[];
+}>;
+
+const HUNK_HEADER = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/u;
+
+/**
+ * A unified patch, projected onto real file line numbers.
+ *
+ * The previous renderer numbered the *array*, so `--- a/README.md` was line 1
+ * and no reader could map a hunk to a file. It also printed the sign twice —
+ * once as its own cell and once because the raw line was never stripped — so
+ * the screen read `+ +# Airship workspace`. Both are parsing bugs, not styling
+ * ones: the `@@` headers carry the counters, and this reads them.
+ */
+export function parseUnifiedPatch(patch: string): ParsedPatch {
+  const header: string[] = [];
+  const lines: DiffLine[] = [];
+  let oldLine = 0;
+  let newLine = 0;
+  let inHunk = false;
+  const rows = patch.split("\n");
+  // A unified patch ends with a newline, so the split leaves a trailing empty
+  // string. Rendering it produced a numbered row of nothing at the end of
+  // every file.
+  if (rows.at(-1) === "") rows.pop();
+  for (const raw of rows) {
+    if (raw === "" && lines.length === 0 && header.length === 0) continue;
+    const hunk = HUNK_HEADER.exec(raw);
+    if (hunk) {
+      oldLine = Number(hunk[1]);
+      newLine = Number(hunk[2]);
+      inHunk = true;
+      lines.push(Object.freeze({ kind: "hunk", sign: "", text: raw, raw }));
+      continue;
+    }
+    if (!inHunk) {
+      // Everything before the first hunk is file-level header text.
+      if (raw.length) header.push(raw);
+      continue;
+    }
+    if (raw.startsWith("\\")) {
+      // "\ No newline at end of file" belongs to the previous line and numbers
+      // nothing; it is kept verbatim as an unnumbered context row.
+      lines.push(Object.freeze({ kind: "context", sign: " ", text: raw, raw }));
+      continue;
+    }
+    if (raw.startsWith("+")) {
+      lines.push(Object.freeze({ kind: "added", sign: "+", text: raw.slice(1), raw, newLine }));
+      newLine += 1;
+      continue;
+    }
+    if (raw.startsWith("-")) {
+      lines.push(Object.freeze({ kind: "removed", sign: "−", text: raw.slice(1), raw, oldLine }));
+      oldLine += 1;
+      continue;
+    }
+    lines.push(Object.freeze({ kind: "context", sign: " ", text: raw.startsWith(" ") ? raw.slice(1) : raw, raw, oldLine, newLine }));
+    oldLine += 1;
+    newLine += 1;
+  }
+  return Object.freeze({ header: Object.freeze(header), lines: Object.freeze(lines) });
+}
+
+export type SourcePostureFact = Readonly<{
+  id: string;
+  state: SealState;
+  label: string;
+  detail: string;
+}>;
+
+/**
+ * Every posture claim this surface makes, computed once and rendered once.
+ *
+ * Three trust cards, two durability pills and a repeat of the transport
+ * paragraph under Remote boundary were five renderings of four facts. The
+ * durability pair merges only while the two scopes agree — a workspace held in
+ * a vault behind a page-memory Git index is a real, different state and still
+ * renders as two rows.
+ */
+export function sourcePostureFacts(
+  capabilities: BrowserGitClient["capabilities"],
+  workspaceDurability: Readonly<{ state: DurabilityState; detail: string }>,
+): readonly SourcePostureFact[] {
+  const gitDurability: DurabilityState = capabilities.storage.durable ? "synced" : "ephemeral";
+  const durability: readonly SourcePostureFact[] = workspaceDurability.state === gitDurability
+    ? [{
+      id: "durability",
+      state: durabilitySeal(gitDurability),
+      // Scoped even when merged: the Workspace route header states the
+      // workspace-files durability on its own, and two chips reading exactly
+      // `Ephemeral · this page only` 200px apart is the restatement this
+      // package exists to remove. This one covers strictly more — the Git
+      // index and refs as well — so it says so.
+      label: `Workspace & Git index · ${durabilityLabel(gitDurability)}`,
+      detail: `Workspace files — ${workspaceDurability.detail} Git index & refs — ${capabilities.storage.detail}`,
+    }]
+    : [
+      {
+        id: "durability-workspace",
+        state: durabilitySeal(workspaceDurability.state),
+        label: `Workspace files · ${durabilityLabel(workspaceDurability.state)}`,
+        detail: workspaceDurability.detail,
+      },
+      {
+        id: "durability-git",
+        state: durabilitySeal(gitDurability),
+        label: `Git index & refs · ${durabilityLabel(gitDurability)}`,
+        detail: capabilities.storage.detail,
+      },
+    ];
+  const facts: readonly SourcePostureFact[] = [
+    {
+      id: "storage",
+      // Page memory is `none` — nothing failed, nothing durable was claimed.
+      state: capabilities.storage.durable ? "verified" : "none",
+      label: storageLabel(capabilities.storage.backend),
+      detail: capabilities.storage.detail,
+    },
+    {
+      id: "remote",
+      // A transport with no origin it may reach is not "ready", which is what
+      // the teal dot said while the paragraph beside it named the two hosts
+      // this build's Content-Security-Policy blocks.
+      state: capabilities.remote.transport === "none"
+        ? "none"
+        : capabilities.remote.permittedOrigins.length === 0 ? "attention" : "asserted",
+      label: remoteTransportLabel(capabilities.remote.transport, capabilities.remote.permittedOrigins.length),
+      detail: capabilities.remote.detail,
+    },
+    {
+      id: "version-bound",
+      // Airship enforces this, and nothing external verifies it: `asserted`.
+      state: "asserted",
+      label: "Version-bound writes",
+      detail: "Every mutation is tied to the reviewed worktree generation.",
+    },
+    ...durability,
+  ];
+  return Object.freeze(facts.map((fact) => Object.freeze(fact)));
+}
+
+function durabilitySeal(state: DurabilityState): SealState {
+  return state === "ephemeral" ? "none" : state === "syncing" ? "checking" : "verified";
+}
+
+/** The transport, and how many origins this page may actually reach with it. */
+export function remoteTransportLabel(transport: string, permittedOrigins: number): string {
+  const name = remoteLabel(transport);
+  if (transport === "none") return name;
+  return `${name} · ${permittedOrigins} permitted origin${permittedOrigins === 1 ? "" : "s"}`;
+}
+
+function SourceTrustFacts({ facts }: Readonly<{ facts: readonly SourcePostureFact[] }>) {
   return <>
-    <div><span class={client.capabilities.storage.durable ? "ready" : "warning"} /><strong>{storageLabel(client.capabilities.storage.backend)}</strong><small>{client.capabilities.storage.detail}</small></div>
-    <div><span class={client.capabilities.remote.transport === "none" ? "warning" : "ready"} /><strong>{remoteLabel(client.capabilities.remote.transport)}</strong><small>{client.capabilities.remote.detail}</small></div>
-    <div><Icon name="proof" /><strong>Version-bound writes</strong><small>Every mutation is tied to the reviewed worktree generation.</small></div>
+    {facts.map((fact) => <div key={fact.id}>
+      <Seal state={fact.state} label={fact.label} density="chip" />
+      <small>{fact.detail}</small>
+    </div>)}
   </>;
 }
 
@@ -618,7 +1113,9 @@ async function execute(client: BrowserGitClient, operation: GitOperation, signal
     case "push": return client.push(operation.request, signal);
     // Source Control drives one reviewed mutation per button. Read-only kinds
     // and the verbs this panel does not surface fail closed here rather than
-    // being routed to an approximate neighbour.
+    // being routed to an approximate neighbour. The History pane reads through
+    // `log`/`show` directly and never enters this path: tag, stash, merge,
+    // restore and reset are implemented in the client and still have no UI.
     default:
       throw new GitDomainError("not-a-source-control-mutation", `${operation.kind} is not a mutation this Source Control panel performs.`);
   }

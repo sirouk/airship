@@ -25,6 +25,20 @@
   text-align: left;
 }
 
+/*
+ * Every disclosure in the product is a `.popover__trigger`, so the touch floor
+ * belongs to the primitive rather than to each route that remembered. Routes
+ * had patched this individually (sessions, billing) while the shared control
+ * stayed 24px tall on a coarse pointer — below the 44px rule everywhere the
+ * route had not noticed.
+ */
+@media (pointer: coarse) {
+  .popover__trigger {
+    min-height: 44px;
+    padding-block: var(--sp-1);
+  }
+}
+
 .popover__panel[hidden] {
   display: none;
 }
@@ -217,3 +231,21 @@
 }
 
 .popover__body > p { margin: 0; color: var(--ink-muted); }
+
+/*
+ * The scope boundary, stated rather than left as a silence.
+ *
+ * A popover that lists four claims and stops implies those four are everything
+ * Airship knows. This line says which band holds the rest — the difference
+ * between a fact that lives somewhere else and a fact that is missing. It is
+ * `--ink-muted` rather than `--ink-faint` because it has to be readable: a
+ * pointer nobody can read is the same as no pointer.
+ */
+.popover__scope-note {
+  margin: var(--sp-2) 0 0;
+  padding-top: var(--sp-2);
+  border-top: 1px solid var(--line);
+  color: var(--ink-muted);
+  font-size: var(--fs-caption);
+  line-height: 1.45;
+}

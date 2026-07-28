@@ -49,13 +49,22 @@ test("desktop shell navigates real routes and presents a coherent session header
   await page.keyboard.press("Escape");
   await expect(page.locator(".session-bar").getByRole("button").first()).toBeVisible();
 
+  // AMENDED: `All conversations` is the pinned last row of the rail's
+  // conversation disclosure rather than the sixth row of a 250px scroller, in
+  // which it was measured *invisible* at six or more threads. It is opened
+  // before it is clicked; the destination and the hash are unchanged.
+  await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Expand recent conversations" }).click();
   await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "All conversations" }).click();
   await expect(page).toHaveURL(/#sessions$/);
   await expect(page.getByRole("heading", { name: "All conversations", level: 1 })).toBeVisible();
 
-  await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Workspace" }).click();
+  // `exact` because the Workspace row now has an expander beside it whose
+  // accessible name necessarily contains the destination it expands.
+  await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Workspace", exact: true }).click();
   await expect(page).toHaveURL(/#workspace$/);
-  await expect(page.getByRole("heading", { name: "Editor", level: 1 })).toBeVisible();
+  // AMENDED (x2): `#workspace` hard-coded the heading "Editor" while the rail
+  // row said Workspace. Each destination now states its own name.
+  await expect(page.getByRole("heading", { name: "Workspace", level: 1 })).toBeVisible();
 
   await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Chat" }).click();
   await expect(page).toHaveURL(/#chat\/[^/?#]+$/);
@@ -103,7 +112,11 @@ test("the first user turn gives a new conversation a useful thread title", async
   const prompt = "Map the browser workspace boundaries";
   await page.getByRole("combobox", { name: "Message Airship" }).fill(prompt);
   await page.getByRole("button", { name: "Send message" }).click();
-  const recent = page.getByRole("navigation", { name: "Primary" }).locator("#airship-recent-conversations");
+  // AMENDED: the list is a disclosure now. The auto-titled thread still has to
+  // be in it, and it is read at 320px instead of ~105px.
+  const navigation = page.getByRole("navigation", { name: "Primary" });
+  await navigation.getByRole("button", { name: "Expand recent conversations" }).click();
+  const recent = navigation.locator("#airship-recent-conversations");
   await expect(recent.getByRole("button", { name: new RegExp(`^${prompt}`, "u") })).toBeVisible();
 });
 
@@ -145,7 +158,11 @@ test("desktop navigation exposes profile tabs and Account with one active page",
   await openReadyApp(page);
   const navigation = page.getByRole("navigation", { name: "Primary" });
 
-  await navigation.getByRole("button", { name: "Profiles", exact: true }).click();
+  // AMENDED: the `AGENT` group of one is dissolved. The pinned profile row's
+  // `Manage profiles` control opens the manager *scoped to the pinned
+  // profile*, which is a scope the rail's Profiles row never carried.
+  await page.locator(".sidebar .profile-switcher").getByRole("button", { name: "Manage profiles" }).click();
+  await expect(page).toHaveURL(/#profiles$/);
   await page.getByRole("navigation", { name: "Agent configuration" }).getByRole("button", { name: "Skills", exact: true }).click();
   await expect(page).toHaveURL(/#skills$/);
   await expect(page.getByRole("heading", { name: "Skills", level: 1 })).toBeVisible();
@@ -168,6 +185,8 @@ test("route form menus use the styled accessible listbox contract", async ({ pag
     await primary.getByRole("button", { name: "More", exact: true }).click();
     await page.getByRole("dialog", { name: "More" }).getByRole("button").filter({ hasText: "All conversations" }).click();
   } else {
+    // AMENDED: opened through the conversation disclosure (see above).
+    await primary.getByRole("button", { name: "Expand recent conversations" }).click();
     await primary.getByRole("button", { name: "All conversations", exact: true }).click();
   }
   const provider = page.getByRole("button", { name: "Filter by provider" });
@@ -235,7 +254,9 @@ test("mobile shell keeps primary destinations usable and exposes additional rout
 
   await mobileNavigation.getByRole("button", { name: "Workspace" }).click();
   await expect(page).toHaveURL(/#workspace$/);
-  await expect(page.getByRole("heading", { name: "Editor", level: 1 })).toBeVisible();
+  // AMENDED (x2): `#workspace` hard-coded the heading "Editor" while the rail
+  // row said Workspace. Each destination now states its own name.
+  await expect(page.getByRole("heading", { name: "Workspace", level: 1 })).toBeVisible();
 
   await mobileNavigation.getByRole("button", { name: "More" }).click();
   const more = page.getByRole("dialog", { name: "More" });
@@ -346,8 +367,21 @@ test("route gutter and density preferences apply consistently to the whole layou
   expect(comfortableFont).toBeGreaterThanOrEqual(17);
 
   const offsets: number[] = [];
+  // AMENDED only in how two of the three routes are reached: `All
+  // conversations` is the last row of the rail's conversation disclosure, and
+  // `Profiles` is the pinned profile row's `Manage profiles`. The three routes
+  // measured, and every gutter assertion below, are unchanged.
+  const primaryNav = page.getByRole("navigation", { name: "Primary" });
+  const openRoute: Readonly<Record<string, () => Promise<void>>> = {
+    "All conversations": async () => {
+      await primaryNav.getByRole("button", { name: "Expand recent conversations" }).click();
+      await primaryNav.getByRole("button", { name: "All conversations", exact: true }).click();
+    },
+    Workspace: async () => { await primaryNav.getByRole("button", { name: "Workspace", exact: true }).click(); },
+    Profiles: async () => { await page.locator(".sidebar .profile-switcher").getByRole("button", { name: "Manage profiles" }).click(); },
+  };
   for (const route of ["All conversations", "Workspace", "Profiles"] as const) {
-    await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: route, exact: true }).click();
+    await openRoute[route]!();
     // Two separate `boundingBox()` calls race the lazy route swap: the outgoing
     // route's H1 can satisfy the first and be detached by the second, and
     // `boundingBox()` does not retry a null. One evaluate measures both boxes
@@ -365,7 +399,7 @@ test("route gutter and density preferences apply consistently to the whole layou
   expect(Math.max(...offsets) - Math.min(...offsets)).toBeLessThanOrEqual(1);
   expect(offsets[0]).toBeGreaterThanOrEqual(14);
 
-  await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Chat" }).click();
+  await primaryNav.getByRole("button", { name: "Chat", exact: true }).click();
   await page.getByRole("button", { name: "Open Preferences" }).click();
   const density = page.getByRole("dialog", { name: "Preferences" }).getByLabel("Density");
   await density.click();

@@ -1,0 +1,260 @@
+/*
+ * Account, in the shapes the design system already owns.
+ *
+ * The route's own sheet, loaded with the route, holding only what the shared
+ * `routes.css` families do not: the calm not-connected card, the collapsed
+ * inactive-subscription row, and the usage chart's scale and axis. Everything
+ * else on this route is a `.panel`, a `.metric-strip` or a `<Seal>`, which is
+ * why this file is short.
+ *
+ * It loads after the barrel because the route is lazy, so these rules win over
+ * the same-specificity `routes.css` rules they refine. Nothing here relies on
+ * that for anything but a refinement.
+ */
+
+.billing-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4, 16px);
+  min-width: 0;
+}
+
+/* --- Not connected yet -------------------------------------------------- */
+
+/*
+ * One card, centred in what used to be 336px of void below it, in the resting
+ * voice rather than the failure voice: no grey status dot, no uppercase
+ * eyebrow restating the heading, one page-memory sentence instead of two.
+ */
+/*
+ * Deliberately top-aligned, not centred.
+ *
+ * The measured complaint was 40% chrome / 23% content / 37% void. Centring the
+ * card was tried and read worse — it splits the void in two and floats the
+ * route's one action in the middle of the screen. The card is now 350px rather
+ * than 208px because it carries the shape of what arrives, so the space below
+ * it reads as the bottom of a short page rather than as a hole under a stub.
+ */
+.billing-view .billing-gate {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--sp-3, 12px) var(--sp-4, 16px);
+  align-items: start;
+  align-content: center;
+  padding: var(--sp-5, 24px);
+  border-color: var(--line, rgba(225, 217, 200, 0.105));
+  background: var(--surface, #171c20);
+}
+
+.billing-view .billing-gate h2 {
+  margin: 0 0 var(--sp-2, 8px);
+  font-size: var(--fs-title, 20px);
+  font-weight: 600;
+}
+
+.billing-view .billing-gate p {
+  max-width: 62ch;
+  margin: 0;
+  color: var(--ink-muted, #9fa5a3);
+  font-size: var(--fs-meta, 13px);
+  line-height: 1.6;
+}
+
+.billing-gate-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-3, 12px);
+  align-items: center;
+  margin-top: var(--sp-4, 16px);
+}
+
+.billing-gate-link {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  color: var(--accent-bright, #dfba72);
+  font-size: var(--fs-caption, 12px);
+}
+
+.billing-gate-link.is-disabled {
+  color: var(--ink-disabled, #6b726f);
+  cursor: not-allowed;
+}
+
+/*
+ * The shape of what arrives, rather than a paragraph describing it.
+ *
+ * `<details>Whatbecomes available</details>` listed six nouns in prose that the
+ * route header had already listed in different words. The same six are named
+ * here as the tiles they will occupy, each holding an em dash — which states
+ * the non-claim instead of implying a zero.
+ */
+.billing-view .billing-gate-preview {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: var(--sp-2, 8px);
+}
+
+.billing-view .billing-gate-preview .metric-strip__value {
+  color: var(--ink-faint, #858d8a);
+}
+
+.billing-gate-preview-note {
+  margin: 0;
+  color: var(--ink-faint, #858d8a);
+  font-size: var(--fs-caption, 12px);
+}
+
+/* --- Connected ---------------------------------------------------------- */
+
+.billing-metric-strip {
+  border: 1px solid var(--line, rgba(225, 217, 200, 0.105));
+  border-radius: var(--radius-panel, 10px);
+  background: var(--surface, #171c20);
+}
+
+.billing-headroom-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1, 4px) var(--sp-4, 16px);
+  margin: 0;
+  color: var(--ink-faint, #858d8a);
+  font-size: var(--fs-caption, 12px);
+}
+
+.billing-headroom-facts > span:first-child {
+  color: var(--ink-muted, #9fa5a3);
+  font: var(--fs-micro)/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+/*
+ * The inactive-plan row.
+ *
+ * Two 205px cards printing "Chutes reported no active subscription" beside a
+ * third printing "Run a Chutes turn to observe headers" is 26% of the viewport
+ * spent saying no. The provider's own sentence still renders once, on the
+ * Subscription metric where the datum lives; this row states only the fact that
+ * follows from it.
+ */
+.runway-inactive {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-3, 12px);
+  align-items: center;
+  min-height: 56px;
+  padding: var(--sp-2, 8px) var(--sp-4, 16px);
+}
+
+.runway-inactive p {
+  flex: 1 1 20ch;
+  margin: 0;
+  color: var(--ink-muted, #9fa5a3);
+  font-size: var(--fs-meta, 13px);
+}
+
+/* --- Usage chart -------------------------------------------------------- */
+
+.usage-chart {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--sp-1, 4px) var(--sp-2, 8px);
+  padding: var(--sp-3, 12px) var(--sp-4, 16px) 0;
+}
+
+.usage-chart__scale {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  height: 180px;
+  color: var(--ink-faint, #858d8a);
+  font-size: var(--fs-micro);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.usage-chart .usage-bars {
+  /* A baseline rule, so a zero bucket reads differently from a near-zero one. */
+  border-bottom: 1px solid var(--line-strong, rgba(225, 217, 200, 0.18));
+}
+
+.usage-bar {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: flex-end;
+  min-width: 2px;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: default;
+}
+
+.usage-bar > span {
+  width: 100%;
+  min-height: 1px;
+  border-radius: 1px 1px 0 0;
+  background: color-mix(in srgb, var(--accent, #c19a58) 55%, transparent);
+}
+
+.usage-bar:hover > span,
+.usage-bar:focus-visible > span,
+.usage-bar[data-highlight="true"] > span {
+  background: var(--accent-bright, #dfba72);
+}
+
+.usage-ledger-row[data-highlight="true"] {
+  background: var(--surface-raised, #1c2226);
+}
+
+.usage-chart__axis {
+  grid-column: 2;
+  display: flex;
+  justify-content: space-between;
+  color: var(--ink-faint, #858d8a);
+  font-size: var(--fs-micro);
+}
+
+.usage-ledger-foot {
+  margin: 0;
+  padding: var(--sp-2, 8px) var(--sp-4, 16px);
+  color: var(--ink-faint, #858d8a);
+  font-size: var(--fs-micro);
+}
+
+.usage-ledger-row strong {
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 640px) {
+  .billing-view .billing-gate {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .usage-chart {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .usage-chart__scale {
+    flex-direction: row;
+    height: auto;
+    text-align: left;
+  }
+
+  .usage-chart__axis {
+    grid-column: 1;
+  }
+}
+
+/*
+ * The one primary action on the not-connected screen is 40px tall from the
+ * shared `.primary` recipe. On a phone that is the whole route's job, so it
+ * gets the 44px well the density contract requires.
+ */
+@media (pointer: coarse) {
+  .billing-view .billing-gate-action,
+  .billing-view .billing-credential-chip .popover__trigger {
+    min-height: 44px;
+  }
+}

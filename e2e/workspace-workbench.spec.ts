@@ -5,7 +5,13 @@ async function openIsolatedWorkspace(page: Page): Promise<void> {
     mode: "dark", typeScale: "default", density: "comfortable", corners: "subtle", bodyFont: "system-sans", vaultBackend: "ephemeral", approvalMode: "full-access",
   })));
   await page.goto("/#workspace");
-  await expect(page.getByRole("heading", { name: "Editor", level: 1 })).toBeVisible();
+  // AMENDED: this asserted `heading "Editor"` on `#workspace`. That assertion
+  // pinned the defect — one component served two destinations and hard-coded
+  // one wrong name, so the rail said Workspace, the H1 said Editor and the
+  // eyebrow said PAGE WORKSPACE. The replacement is stronger because it binds
+  // the heading to the route rather than to a constant: it fails if either
+  // destination renders the other's name.
+  await expect(page.getByRole("heading", { name: "Workspace", level: 1 })).toBeVisible();
   await expect(page.getByRole("tree", { name: "Workspace files" })).toBeVisible();
 }
 
@@ -31,8 +37,18 @@ test("desktop workbench edits with CAS, keeps tabs, and surfaces the real Git ch
   await editor.fill("The browser owns orchestration.\nWorkbench edit is version fenced.\n");
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.locator(".workbench-notice")).toContainText("Saved architecture.md");
-  await expect(page.locator(".editor-status")).toContainText("Saved");
-  await expect(page.locator(".editor-tabs > div.active b")).toHaveCount(0);
+  // AMENDED: `.editor-status` merged with `.editor-toolbar` into one
+  // `.editor-strip`. The replacement keeps the word and adds the invariant the
+  // old assertion could not see: the strip measured at y=959 on a 900px
+  // viewport, so "Saved" was true and invisible on every device. It now has to
+  // be inside the viewport.
+  await expect(page.locator(".editor-strip")).toContainText("Saved");
+  await expect(page.locator(".editor-strip")).toBeInViewport();
+  // AMENDED: the dirty marker moved from a bespoke `<b>` onto the shared
+  // <Tabs> state seal. Asserting the accessible name is stronger than counting
+  // an element: it proves a screen reader is told the buffer is clean, which
+  // the CSS-structural count never did.
+  await expect(page.getByRole("tab", { name: /architecture\.md/ })).not.toHaveAccessibleName(/Unsaved/u);
 
   await editor.fill("The saved revision.\nThis draft must not disappear.\n");
   await page.getByRole("button", { name: "Close architecture.md" }).click();
@@ -41,7 +57,7 @@ test("desktop workbench edits with CAS, keeps tabs, and surfaces the real Git ch
   await discard.getByRole("button", { name: "Cancel" }).click();
   await expect(editor).toHaveValue(/must not disappear/u);
   await page.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(page.locator(".editor-status")).toContainText("Saved");
+  await expect(page.locator(".editor-strip")).toContainText("Saved");
 
   await page.getByRole("tab", { name: /Source Control/ }).click();
   await expect(page.getByRole("button", { name: /docs\/architecture\.md [AM]/u })).toBeVisible();
@@ -62,6 +78,31 @@ test("desktop workbench edits with CAS, keeps tabs, and surfaces the real Git ch
   await expect(page.getByRole("tab", { name: /architecture\.md/ })).toHaveCount(0);
 });
 
+test("each workbench destination names itself and its modal closes on Escape", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "desktop workbench contract");
+  await openIsolatedWorkspace(page);
+
+  // Two hash destinations render one component. Each now states its own name
+  // instead of sharing one wrong one.
+  await page.goto("/#editor");
+  await expect(page.getByRole("heading", { name: "Editor", level: 1 })).toBeVisible();
+
+  // `.workbench-dialog` was the only modal in Airship with neither
+  // Escape-to-close nor a focus trap; a live run could not dismiss this dialog
+  // and had to be killed.
+  const target = page.getByRole("treeitem", { name: /retrieval\.md/ });
+  await target.focus();
+  await target.press("Shift+F10");
+  await page.getByRole("menuitem", { name: "Move…" }).click();
+  const move = page.getByRole("dialog", { name: "move workspace file" });
+  await expect(move).toBeVisible();
+  // The dialog never named the file it was about, or where that file was.
+  await expect(move).toContainText("Move retrieval.md");
+  await expect(move).toContainText("Currently in workspace/notes");
+  await move.press("Escape");
+  await expect(move).toHaveCount(0);
+});
+
 test("mobile workbench uses pane switching and an explicit folder move sheet", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile-chromium", "mobile workbench contract");
   await openIsolatedWorkspace(page);
@@ -69,6 +110,12 @@ test("mobile workbench uses pane switching and an explicit folder move sheet", a
   await page.getByRole("treeitem", { name: /retrieval\.md/ }).click();
   const editor = page.getByRole("textbox", { name: "Edit retrieval.md" });
   await expect(editor).toBeVisible();
+  // `.editor-toolbar small { display: none }` deleted the revision hash and the
+  // byte size below 760px with no way to recover either. Both are on a phone.
+  const strip = page.locator(".editor-strip");
+  await expect(strip).toBeInViewport();
+  await expect(strip).toContainText(/rev [0-9a-f]{7}/u);
+  await expect(strip).toContainText(/\d+ B/u);
   await editor.fill("Unsaved mobile draft follows its tab.\n");
   await page.getByRole("tab", { name: "Files", exact: true }).click();
   await page.getByRole("button", { name: "Actions for retrieval.md" }).click();

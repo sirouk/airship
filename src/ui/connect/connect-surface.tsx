@@ -3,6 +3,7 @@ import { useId, useRef, useState } from "preact/hooks";
 import { Icon } from "../icons";
 import { Seal } from "../seal";
 import {
+  companionFacts,
   describeConnectLanes,
   type ConnectLane,
   type ConnectLaneId,
@@ -66,7 +67,35 @@ const LANE_ICONS: Readonly<Record<ConnectLaneId, "lock" | "model" | "attestation
   claude: "model",
   grok: "model",
   local: "terminal",
+  companion: "attestation",
 });
+
+/**
+ * Method sub-labels, short enough to fit the tab at `--fs-micro` and never
+ * ellipsise. The long form is `status.label`, which stays in full on the lane's
+ * own seal and inside the panel, so nothing here is the only carrier.
+ */
+const METHOD_SUBLABELS: Readonly<Record<ConnectLaneStatus["kind"], string>> = Object.freeze({
+  connected: "Connected",
+  ready: "Primary",
+  checking: "Checking",
+  "needs-extension": "Needs the extension",
+  "extension-unavailable": "Not in this browser",
+  offline: "Offline",
+  unavailable: "Not available here",
+});
+
+/**
+ * Which method a lane opens on: the one that can actually work.
+ *
+ * Three of five lanes used to open onto a hardcoded OAuth tab whose own
+ * sub-label said the route was impossible. The OAuth tab stays present and
+ * selectable — that is where the honest reason lives — it simply stops being
+ * the default when it cannot be used.
+ */
+export function initialConnectMethod(oauthStatus: ConnectLaneStatus): "oauth" | "api-key" {
+  return oauthStatus.kind === "ready" || oauthStatus.kind === "connected" ? "oauth" : "api-key";
+}
 
 export function ConnectSurface({
   input,
@@ -92,21 +121,7 @@ export function ConnectSurface({
   const openLane = chosenLane ?? leadLane;
 
   return (
-    <section class="connect-surface" aria-labelledby="connect-surface-title">
-      <header class="connect-surface__heading">
-        <div>
-          <span>One, or several at once</span>
-          <h2 id="connect-surface-title">Providers</h2>
-          <p>Everything else in Airship — workspace, editor, terminal and Git — already works without this. Only chat needs a model, and connecting one never closes the others.</p>
-        </div>
-      </header>
-
-      <CompanionOverview
-        observation={input.bridge}
-        host={input.host}
-        installUrl={extensionInstallUrl}
-      />
-
+    <section class="connect-surface" aria-label="Providers">
       <ul class="connect-lane-list">
         {lanes.map((lane) => (
           <ConnectLaneCard
@@ -122,13 +137,10 @@ export function ConnectSurface({
                 oauthLabel="Sign in with ChatGPT"
                 oauthStatus={lane.oauthStatus ?? lane.status}
                 onOpenDirectProviders={onOpenDirectProviders}
-              >
-                <CodexPanel
-                  status={lane.oauthStatus ?? lane.status}
-                  onStart={onStartCodexSignIn}
-                  onSubmit={onSubmitCodexCode}
-                />
-              </CloudMethodPanel>
+                oauthPanel={() => (lane.oauthStatus ?? lane.status).kind === "ready" ? (
+                  <CodexPanel onStart={onStartCodexSignIn} onSubmit={onSubmitCodexCode} />
+                ) : null}
+              />
             ) : null}
             {lane.id === "claude" || lane.id === "grok" ? (
               <CloudMethodPanel
@@ -136,20 +148,28 @@ export function ConnectSurface({
                 oauthLabel={lane.id === "claude" ? "Sign in with Anthropic" : "Sign in with xAI"}
                 oauthStatus={lane.oauthStatus ?? lane.status}
                 onOpenDirectProviders={onOpenDirectProviders}
-              >
-                <ExtensionPanel
-                  oauthStatus={lane.oauthStatus ?? lane.status}
-                  providerLabel={lane.title}
-                  bridgeLine={bridgeSummary(input.bridge)}
-                  installUrl={extensionInstallUrl}
-                  onOpenDirectProviders={onOpenDirectProviders}
-                />
-              </CloudMethodPanel>
+                oauthPanel={({ useApiKey }) => (
+                  <ExtensionPanel
+                    oauthStatus={lane.oauthStatus ?? lane.status}
+                    providerLabel={lane.title}
+                    bridgeLine={bridgeSummary(input.bridge)}
+                    installUrl={extensionInstallUrl}
+                    onUseApiKey={useApiKey}
+                  />
+                )}
+              />
             ) : null}
             {lane.id === "local" ? (
               <LocalPanel
                 onCheck={onCheckLocalProviders}
                 onOpenDirectProviders={onOpenDirectProviders}
+              />
+            ) : null}
+            {lane.id === "companion" ? (
+              <CompanionPanel
+                observation={input.bridge}
+                host={input.host}
+                installUrl={extensionInstallUrl}
               />
             ) : null}
           </ConnectLaneCard>
@@ -161,7 +181,17 @@ export function ConnectSurface({
 
 type CloudProviderId = "openai" | "anthropic" | "xai";
 
-function CompanionOverview({
+/**
+ * The Companion's body — every word the 219px/415px card carried, one rung down.
+ *
+ * The three readings stay a `<dl>` so `dt`/`dd` remain machine-readable and
+ * screen-reader-addressable; they simply stop being a 50px boxed grid of "Not
+ * observed / Not active / Not active" rendered above the providers a person
+ * came here to connect. When the extension *is* answering, the same three
+ * readings are also promoted onto the collapsed row, so a truthful positive
+ * state is observable without opening anything.
+ */
+function CompanionPanel({
   observation,
   host,
   installUrl,
@@ -171,57 +201,32 @@ function CompanionOverview({
   installUrl?: string;
 }>) {
   const available = observation?.state === "available";
-  const storage = observation?.companion?.storage;
-  const compute = observation?.companion?.compute;
-  const status = !observation
-    ? "Checking this tab"
-    : available
-      ? `Extension ${observation.extensionVersion ?? ""} connected`.trim()
-      : "Extension not detected";
   const hostDetail = host.kind === "installable"
     ? "This browser can load the Airship Companion."
     : host.reason;
 
   return (
-    <section class="companion-overview" aria-labelledby="companion-overview-title">
-      <div class="companion-overview__heading">
-        <span class={`companion-overview__dot ${available ? "ready" : "idle"}`} aria-hidden="true" />
-        <div>
-          <strong id="companion-overview-title">Airship Companion</strong>
-          <small>{status}</small>
-        </div>
-        {installUrl ? (
-          <a
-            class={available ? "companion-overview__link" : "primary"}
-            href={installUrl}
-            target="_blank"
-            rel="noreferrer"
-          >
-            {available ? "Downloads & setup ↗" : "Get the extension ↗"}
-          </a>
-        ) : null}
-      </div>
-      <p>
-        Adds a reviewed provider relay, opt-in encrypted local cache, and bounded
-        background hash/vector work. Provider account authorization is offered
-        only when Airship also has a supported provider grant flow.
-      </p>
-      <dl class="companion-overview__facts">
-        <div>
-          <dt>Provider relay</dt>
-          <dd>{available ? `${observation.providers.length} route${observation.providers.length === 1 ? "" : "s"} live` : "Not observed"}</dd>
-        </div>
-        <div>
-          <dt>Encrypted cache</dt>
-          <dd>{storage?.state === "available" ? (storage.enabled ? `${storage.records ?? 0} page${storage.records === 1 ? "" : "s"}` : "Available · off") : "Not active"}</dd>
-        </div>
-        <div>
-          <dt>Background compute</dt>
-          <dd>{compute?.state === "available" ? "Hash + vector ranking" : "Not active"}</dd>
-        </div>
+    <div class="connect-companion">
+      <dl class="connect-companion__facts">
+        {companionFacts(observation).map((fact) => (
+          <div key={fact.label}>
+            <dt>{fact.label}</dt>
+            <dd>{fact.value}</dd>
+          </div>
+        ))}
       </dl>
-      {!available ? <small class="companion-overview__host">{hostDetail}</small> : null}
-    </section>
+      <p class="connect-companion__host">{hostDetail}</p>
+      {installUrl ? (
+        <a
+          class={available ? "connect-companion__link" : "primary"}
+          href={installUrl}
+          target="_blank"
+          rel="noreferrer"
+        >
+          {available ? "Downloads & setup ↗" : "Get the extension ↗"}
+        </a>
+      ) : null}
+    </div>
   );
 }
 
@@ -230,18 +235,32 @@ function CloudMethodPanel({
   oauthLabel,
   oauthStatus,
   onOpenDirectProviders,
-  children,
+  oauthPanel,
 }: Readonly<{
   provider: CloudProviderId;
   oauthLabel: string;
   oauthStatus: ConnectLaneStatus;
   onOpenDirectProviders?: (provider?: CloudProviderId) => void;
-  children: ComponentChildren;
+  /**
+   * The OAuth tabpanel's contents, given a way back to the key tab.
+   *
+   * A function rather than children because a caller may legitimately have no
+   * control to render — and this panel has to know that, so it can render the
+   * reason instead of a heading above nothing.
+   */
+  oauthPanel: (helpers: Readonly<{ useApiKey: () => void }>) => ComponentChildren;
 }>) {
-  const [method, setMethod] = useState<"oauth" | "api-key">("oauth");
+  const [method, setMethod] = useState<"oauth" | "api-key">(() => initialConnectMethod(oauthStatus));
   const oauthPanelId = useId();
   const keyPanelId = useId();
   const providerLabel = provider === "openai" ? "OpenAI" : provider === "anthropic" ? "Anthropic" : "xAI";
+  const useApiKey = () => setMethod("api-key");
+  // The OAuth panel renders a heading only when there is something under it.
+  // This is the measured OpenAI dead end: a bold "Sign in with ChatGPT" was the
+  // last thing in the lane because `CodexPanel` returns null for a non-ready
+  // status, and that status's own `detail` sentence rendered nowhere at all.
+  const rendered = oauthPanel({ useApiKey });
+  const oauthActionable = rendered !== null && rendered !== undefined && rendered !== false;
 
   return (
     <div class="connect-method">
@@ -254,7 +273,7 @@ function CloudMethodPanel({
           onClick={() => setMethod("oauth")}
         >
           <span>OAuth</span>
-          <small>{oauthStatus.kind === "ready" ? "Primary" : oauthStatus.label}</small>
+          <small>{METHOD_SUBLABELS[oauthStatus.kind]}</small>
         </button>
         <button
           type="button"
@@ -268,8 +287,13 @@ function CloudMethodPanel({
         </button>
       </div>
       <div id={oauthPanelId} role="tabpanel" hidden={method !== "oauth"}>
-        <p class="connect-method__title">{oauthLabel}</p>
-        {children}
+        {oauthActionable ? <p class="connect-method__title">{oauthLabel}</p> : null}
+        {oauthActionable ? rendered : (
+          <div class="connect-method__blocked">
+            <p><Icon name="warning" size={16} />{oauthStatus.detail}</p>
+            <button type="button" onClick={useApiKey}>Use an API key</button>
+          </div>
+        )}
       </div>
       <div id={keyPanelId} role="tabpanel" hidden={method !== "api-key"}>
         <div class="connect-method__key">
@@ -309,7 +333,17 @@ function ConnectLaneCard({
   const panelId = useId();
   const titleId = useId();
   return (
-    <li class="connect-lane" data-lane={lane.id} data-state={lane.status.kind} data-open={open ? "true" : "false"}>
+    // `data-state` is the lane's own state and `data-oauth-state` is its
+    // sign-in leg's. They are different claims now that a lane is described at
+    // its own altitude — OpenAI's key route is ready while its ChatGPT sign-in
+    // is not — so both are readable rather than one standing in for the other.
+    <li
+      class="connect-lane"
+      data-lane={lane.id}
+      data-state={lane.status.kind}
+      data-oauth-state={lane.oauthStatus?.kind}
+      data-open={open ? "true" : "false"}
+    >
       <button
         type="button"
         class="connect-lane__header"
@@ -318,11 +352,21 @@ function ConnectLaneCard({
         onClick={onToggle}
       >
         <Icon name={LANE_ICONS[lane.id]} size={20} />
+        {/* One row, one baseline. The qualifier is a different fact from the
+            title, never the title again, so the pair earns its 44px. */}
         <span class="connect-lane__identity">
           <strong id={titleId}>{lane.title}</strong>
           <small>{lane.vendor}</small>
         </span>
+        {lane.facts ? (
+          <span class="connect-lane__facts">
+            {lane.facts.map((fact) => (
+              <span key={fact.label} title={`${fact.label}: ${fact.value}`}>{fact.value}</span>
+            ))}
+          </span>
+        ) : null}
         <Seal state={lane.seal} label={lane.status.label} compact />
+        <span class="connect-lane__chevron" aria-hidden="true">⌄</span>
       </button>
       <div class="connect-lane__body" id={panelId} role="region" aria-labelledby={titleId} hidden={!open}>
         <p class="connect-lane__summary">{lane.summary}</p>
@@ -342,11 +386,9 @@ function ConnectLaneCard({
  * to feel broken — and the field reads whatever is pasted while it is typed.
  */
 function CodexPanel({
-  status,
   onStart,
   onSubmit,
 }: Readonly<{
-  status: ConnectLaneStatus;
   onStart?: () => Promise<void>;
   onSubmit?: (code: string, state?: string) => Promise<void>;
 }>) {
@@ -357,11 +399,10 @@ function CodexPanel({
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string>();
 
-  const connectable = status.kind === "ready";
+  // Whether this panel may render at all is the caller's decision, so that a
+  // lane which cannot start sign-in renders the reason rather than nothing.
   const reading = readAuthorizationCode(raw);
   const submittable = isSubmittableCode(reading);
-
-  if (!connectable) return null;
 
   return (
     <div class="connect-paste">
@@ -483,13 +524,14 @@ function ExtensionPanel({
   providerLabel,
   bridgeLine,
   installUrl,
-  onOpenDirectProviders,
+  onUseApiKey,
 }: Readonly<{
   oauthStatus: ConnectLaneStatus;
   providerLabel: string;
   bridgeLine: string;
   installUrl?: string;
-  onOpenDirectProviders?: (provider?: CloudProviderId) => void;
+  /** Switches to the key tab beside this one, which is where the field is. */
+  onUseApiKey: () => void;
 }>) {
   const alternative = oauthStatus.kind === "needs-extension" || oauthStatus.kind === "extension-unavailable"
     ? oauthStatus.alternative
@@ -542,14 +584,7 @@ function ExtensionPanel({
       {alternative ? (
         <div class="connect-extension__alternative">
           <p>{alternative}</p>
-          {onOpenDirectProviders ? (
-            <button
-              type="button"
-              onClick={() => onOpenDirectProviders(providerLabel === "Anthropic" ? "anthropic" : "xai")}
-            >
-              Configure API key
-            </button>
-          ) : null}
+          <button type="button" onClick={onUseApiKey}>Use an API key</button>
         </div>
       ) : null}
     </div>

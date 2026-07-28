@@ -34,20 +34,33 @@ test("sidebar, profile scope, and command palette navigation protect unsaved pro
   await expect(page).toHaveURL(/#profiles$/u);
   await expect(name).toHaveValue(draft);
 
+  // AMENDED. The rail's per-profile rows were a group of one whose children
+  // duplicated the pinned profile card, and they are gone; the profile catalog
+  // is the route's own card list and the pinned row's menu. The guard being
+  // tested is unchanged and lives on the surviving surface — switching profile
+  // scope with an unsaved draft still asks, dismissing still keeps the draft,
+  // accepting still discards it — and it is now exercised where a person
+  // actually switches scope rather than on a duplicate entry point.
+  const cards = page.locator(".profile-card");
   await respondToDiscardPrompt(
     page,
-    () => primary.getByRole("button", { name: "Research", exact: true }).click(),
+    () => cards.filter({ hasText: "Research" }).click(),
     "dismiss",
   );
   await expect(page).toHaveURL(/#profiles$/u);
   await expect(name).toHaveValue(draft);
 
+  // Accepting has to *land* somewhere else to prove the draft was discarded, so
+  // the accepted transition is the one that actually changes the scope.
   await respondToDiscardPrompt(
     page,
-    () => primary.getByRole("button", { name: "General", exact: true }).click(),
+    () => cards.filter({ hasText: "Research" }).click(),
     "accept",
   );
-  await expect(name).toHaveValue(original);
+  await expect(name).not.toHaveValue(draft);
+  await expect(page.locator(".profile-card.active")).toContainText("Research");
+  const researchOriginal = await name.inputValue();
+  expect(researchOriginal).not.toBe(original);
   await name.fill(draft);
 
   await page.getByRole("button", { name: "Open command palette" }).click();
@@ -67,7 +80,9 @@ test("sidebar, profile scope, and command palette navigation protect unsaved pro
     "accept",
   );
   await expect(page).toHaveURL(/#workspace$/u);
-  await expect(page.getByRole("heading", { name: "Editor" })).toBeVisible();
+  // AMENDED: the `#workspace` H1 read "Editor". Asserting the route's own name
+  // is stronger — it fails if the two destinations share one heading again.
+  await expect(page.getByRole("heading", { name: "Workspace" })).toBeVisible();
 });
 
 test("mobile More navigation protects the same unsaved profile draft", async ({ page }, testInfo) => {

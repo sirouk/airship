@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
 const routes = [
-  ["chat", /.+/], ["sessions", /^All conversations$/i], ["workspace", /^Editor$/i],
+  ["chat", /.+/], ["sessions", /^All conversations$/i], ["workspace", /^Workspace$/i],
   ["editor", /^Editor$/i], ["terminal", /^Terminal$/i], ["memory", /^Memory$/i], ["context", /^Memory$/i],
   ["profiles", /^Profiles$/i], ["capabilities", /^Capabilities$/i], ["skills", /^Skills$/i],
   ["proof", /^Proof$/i], ["vault", /^Vault$/i],
@@ -184,43 +184,124 @@ test("the left rail advertises its own overflow only while content is hidden", a
   const rail = page.locator(".primary-nav");
   await expect(rail).toBeVisible();
 
-  for (const height of [700, 800, 900, 1_080] as const) {
+  // AMENDED (DESIGN_DIRECTION.md §7.2). The mask machinery is kept verbatim
+  // and is still correct; what changed is the content it measures. The rail
+  // used to hold 785px of destinations plus a 250px conversation scroller and
+  // a 310px profile scroller, so it overflowed at every laptop height and the
+  // fade fired at 700, 800 and 900. With the conversation list and the profile
+  // catalog re-homed into disclosures the content set is ~430px, which fits.
+  //
+  // Asserting that it *never* fires would delete a working affordance, so this
+  // now asserts both halves of the contract: silent wherever the rail fits,
+  // and still painting an honest "more below" at a height where it genuinely
+  // does not. 598px is the floor the design was drawn to; 480px is the
+  // synthetic short window that proves the fade is alive.
+  for (const height of [598, 640, 700, 800, 900, 1_080] as const) {
     await page.setViewportSize({ width: 1_440, height });
-    // The affordance is measured, not assumed: whatever the rail's real
-    // overflow is at this height, the painted state has to agree with it.
     await expect
-      .poll(async () => rail.evaluate((element) => {
-        const scrollable = element.scrollHeight - element.clientHeight > 1;
-        return element.dataset.scrollEdges === (scrollable ? "end" : "none");
-      }), { message: `rail affordance settles at ${height}px` })
-      .toBe(true);
+      .poll(async () => rail.evaluate((element) => element.dataset.scrollEdges), {
+        message: `rail affordance settles at ${height}px`,
+      })
+      .toBe("none");
 
     const state = await rail.evaluate((element) => ({
-      scrollable: element.scrollHeight - element.clientHeight > 1,
-      edges: element.dataset.scrollEdges,
+      overflow: element.scrollHeight - element.clientHeight,
       masked: getComputedStyle(element).maskImage !== "none",
       dividerShown: (() => {
         const divider = document.querySelector<HTMLElement>(".sidebar-spacer");
         return divider ? getComputedStyle(divider).display !== "none" : false;
       })(),
+      // Every destination the rail files is inside the painted box, not just
+      // inside the scroll extent. This is the invariant the old assertion was
+      // a proxy for, asserted directly.
+      hidden: [...element.querySelectorAll<HTMLElement>(".nav-item")].filter((item) => {
+        const box = item.getBoundingClientRect();
+        const railBox = element.getBoundingClientRect();
+        return box.bottom > railBox.bottom + 1 || box.top < railBox.top - 1;
+      }).map((item) => item.textContent?.trim()),
     }));
-    if (state.scrollable) {
-      expect(state.edges, `${height}px rail hides content`).toBe("end");
-      expect(state.masked, `${height}px rail paints an edge fade`).toBe(true);
-      expect(state.dividerShown, `${height}px pinned profile card is bounded`).toBe(true);
-    } else {
-      expect(state.edges, `${height}px rail fits`).toBe("none");
-      expect(state.masked, `${height}px rail must not fake an overflow`).toBe(false);
-      expect(state.dividerShown, `${height}px rail needs no pinned divider`).toBe(false);
-    }
+    expect(state.overflow, `${height}px rail fits without scrolling`).toBeLessThanOrEqual(1);
+    expect(state.masked, `${height}px rail must not fake an overflow`).toBe(false);
+    expect(state.dividerShown, `${height}px rail needs no pinned divider`).toBe(false);
+    expect(state.hidden, `${height}px rail hides no destination`).toEqual([]);
   }
 
-  await page.setViewportSize({ width: 1_440, height: 800 });
+  // The "end" case, re-asserted at a height the rail genuinely cannot fit.
+  await page.setViewportSize({ width: 1_440, height: 480 });
+  await expect
+    .poll(async () => rail.evaluate((element) => element.dataset.scrollEdges), {
+      message: "rail advertises hidden content at 480px",
+    })
+    .toBe("end");
+  const short = await rail.evaluate((element) => ({
+    overflow: element.scrollHeight - element.clientHeight,
+    masked: getComputedStyle(element).maskImage !== "none",
+    dividerShown: getComputedStyle(document.querySelector<HTMLElement>(".sidebar-spacer")!).display !== "none",
+  }));
+  expect(short.overflow, "480px rail genuinely hides content").toBeGreaterThan(1);
+  expect(short.masked, "480px rail paints an edge fade").toBe(true);
+  expect(short.dividerShown, "480px pinned profile row is bounded").toBe(true);
+
   await rail.evaluate((element) => { element.scrollTop = element.scrollHeight; });
   await expect.poll(async () => rail.evaluate((element) => element.dataset.scrollEdges)).toBe("start");
   await rail.evaluate((element) => { element.scrollTop = Math.round((element.scrollHeight - element.clientHeight) / 2); });
   await expect.poll(async () => rail.evaluate((element) => element.dataset.scrollEdges)).toBe("both");
   await page.screenshot({ path: testInfo.outputPath("rail-scroll-affordance.png"), animations: "disabled" });
+});
+
+test("the rail keeps three states, remembers the one it is put in, and reaches every destination by keyboard", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "desktop rail state contract");
+  await page.setViewportSize({ width: 1_440, height: 900 });
+  await page.goto("/#chat");
+  const sidebar = page.locator(".sidebar");
+  await expect(sidebar).toHaveAttribute("data-rail-state", "standard");
+
+  // The chord and the chevron are the same control; the palette entry is the
+  // third, because a shortcut nobody can find is a shortcut that does not
+  // exist. All three write the same remembered preference.
+  await page.keyboard.press("Meta+\\");
+  await expect(sidebar).toHaveAttribute("data-rail-state", "rail");
+  expect(await sidebar.evaluate((element) => Math.round(element.getBoundingClientRect().width))).toBe(60);
+
+  // Collapsed does not mean anonymous: every destination keeps its accessible
+  // name, so an icon rail never ships a column of unlabelled glyphs.
+  const navigation = page.getByRole("navigation", { name: "Primary" });
+  for (const label of ["Chat", "Workspace", "Memory", "Proof", "Vault", "Connection", "Account"] as const) {
+    await expect(navigation.getByRole("button", { name: label, exact: true })).toBeVisible();
+  }
+
+  // Hover-peek is an overlay, not a reflow: the conversation must not move.
+  const mainBefore = await page.locator("main.main").boundingBox();
+  await sidebar.hover();
+  await expect.poll(async () => (await page.locator(".rail").boundingBox())?.width).toBe(268);
+  const mainAfter = await page.locator("main.main").boundingBox();
+  expect(mainAfter!.x).toBe(mainBefore!.x);
+
+  await page.reload();
+  await expect(page.locator(".sidebar")).toHaveAttribute("data-rail-state", "rail");
+  await page.getByRole("button", { name: "Expand navigation rail" }).click();
+  await expect(page.locator(".sidebar")).toHaveAttribute("data-rail-state", "standard");
+  await page.reload();
+  await expect(page.locator(".sidebar")).toHaveAttribute("data-rail-state", "standard");
+
+  // One composite widget: the rail is three tab stops, and the arrows do the
+  // walking. Reach is added, never substituted — every row is still a button.
+  await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Chat", exact: true }).focus();
+  const walk: (string | null)[] = [];
+  for (let index = 0; index < 8; index += 1) {
+    walk.push(await page.evaluate(() => document.activeElement?.textContent?.trim() ?? document.activeElement?.getAttribute("aria-label") ?? null));
+    await page.keyboard.press("ArrowDown");
+  }
+  expect(walk).toContain("Account");
+  expect(walk).toContain("Vault");
+  await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Workspace", exact: true }).focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(page.getByRole("button", { name: "Collapse Workspace" })).toBeVisible();
+  await page.keyboard.press("ArrowRight");
+  await expect(page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Editor", exact: true })).toBeFocused();
+  await page.keyboard.press("ArrowLeft");
+  await expect(page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Workspace", exact: true })).toBeFocused();
+  await page.screenshot({ path: testInfo.outputPath("rail-states.png"), animations: "disabled" });
 });
 
 test("an empty conversation centres its zero state without ever clipping it", async ({ page }) => {
@@ -297,24 +378,19 @@ test("mobile workspace and terminal controls preserve their content lanes", asyn
   test.skip(testInfo.project.name !== "mobile-chromium", "mobile work surface geometry contract");
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/#workspace");
-  await expect(page.getByRole("heading", { name: "Editor", level: 1 })).toBeVisible();
+  // AMENDED: `#workspace` said "Editor". The route now names itself.
+  await expect(page.getByRole("heading", { name: "Workspace", level: 1 })).toBeVisible();
 
-  const workspaceHeading = await page.locator(".workspace-heading").evaluate((heading) => {
-    const copy = heading.querySelector<HTMLElement>("p")!.getBoundingClientRect();
-    const status = heading.querySelector<HTMLElement>(".durability-indicator")!.getBoundingClientRect();
-    const box = heading.getBoundingClientRect();
-    return {
-      copyWidth: copy.width,
-      headingWidth: box.width,
-      statusTop: status.top,
-      copyBottom: copy.bottom,
-      statusRight: status.right,
-      headingRight: box.right,
-    };
-  });
-  expect(workspaceHeading.copyWidth).toBeGreaterThan(workspaceHeading.headingWidth * .9);
-  expect(workspaceHeading.statusTop).toBeGreaterThanOrEqual(workspaceHeading.copyBottom - 1);
-  expect(workspaceHeading.statusRight).toBeLessThanOrEqual(workspaceHeading.headingRight + 1);
+  // AMENDED: `.workspace-heading` was a 150px slab — eyebrow, 47px serif H1,
+  // paragraph and a durability pill — and this measured that its three pieces
+  // stacked without colliding. The slab is a 44px bar now, so the replacement
+  // measures the thing that band was costing: the share of a phone viewport
+  // spent before the first file row, plus the promise that the route's own
+  // sentence is still reachable rather than deleted.
+  const workbenchTop = await page.locator(".workbench-shell").evaluate((shell) => shell.getBoundingClientRect().top);
+  expect(workbenchTop).toBeLessThanOrEqual(844 * .34);
+  await expect(page.getByRole("button", { name: /About Workspace/u })).toBeVisible();
+  await expect(page.locator(".route-header__status")).toContainText("Ephemeral");
 
   const architecture = page.getByRole("treeitem", { name: /architecture\.md/u });
   const architectureRow = architecture.locator("xpath=..");
@@ -406,7 +482,25 @@ for (const density of densities) {
           const rail = page.locator(".sidebar");
           await expect(rail).toBeVisible();
           const railWidth = await rail.evaluate((element) => element.getBoundingClientRect().width);
-          expect(railWidth).toBeGreaterThanOrEqual(100);
+          // AMENDED. The old floor of 100px described the retired tablet block,
+          // which bought its 104px by `display: none`-ing the conversation
+          // disclosure, the new-conversation button, the recent-conversation
+          // list and the profile switcher — four controls deleted at a
+          // breakpoint. The intermediate rail is the product's own `rail`
+          // state now: 60px with a fine pointer, 84px where there is no hover
+          // to reveal a label with. The replacement invariant is stronger,
+          // because it asserts what the old one only assumed: the rail is
+          // present, and every destination it files is still named and
+          // clickable rather than hidden.
+          expect(railWidth).toBeGreaterThanOrEqual(60);
+          const navigation = rail.getByRole("navigation", { name: "Primary" });
+          for (const label of ["Chat", "Workspace", "Memory", "Proof", "Vault", "Connection", "Account"] as const) {
+            await expect(navigation.getByRole("button", { name: label, exact: true })).toBeVisible();
+          }
+          // The profile switcher survives this breakpoint now; it used to be
+          // deleted here outright (P9).
+          await expect(rail.locator(".profile-switcher").getByRole("button", { name: "Agent profile" })).toBeVisible();
+          // Both catalogs are disclosures, closed at rest at every width.
           await expect(rail.locator("#airship-recent-conversations")).toBeHidden();
           await expect(rail.locator("#airship-profile-navigation")).toBeHidden();
         }

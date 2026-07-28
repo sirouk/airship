@@ -2,8 +2,35 @@ import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { loadDeferredCapabilities } from "../load-deferred-capabilities";
 import type { GoogleIdentityServicesAuthorizer, MemoryOnlyGoogleAccessTokenProvider } from "../storage/google-drive-auth";
 import type { ConfigureGoogleDriveVaultRequest } from "../vault";
+import type { JSX } from "preact";
 import type { WorkspaceRecoveryMaterial } from "../vault/recovery";
 import "./google-drive-setup.css";
+
+/**
+ * The recovery key, grouped in fours so it can be transcribed and checked.
+ *
+ * Grouping is layout, never content: the spans carry no separator character,
+ * so `output.textContent` is still the exact key a caller pastes back in.
+ *
+ * It lives here rather than in a shared module because the Local Device panel
+ * is one of exactly five separately budgeted local-storage packs
+ * (`scripts/release-gate.mjs:1088`); importing across that boundary would make
+ * a Google Drive connection download the whole device-custody surface. The
+ * loopback S3 panel ships in this same deferred pack, so it imports it.
+ */
+export function RecoveryKeyGroups({ value }: Readonly<{ value: string }>): JSX.Element {
+  const separator = value.indexOf(".");
+  const prefix = separator >= 0 ? value.slice(0, separator + 1) : "";
+  const body = separator >= 0 ? value.slice(separator + 1) : value;
+  const groups: string[] = [];
+  for (let index = 0; index < body.length; index += 4) groups.push(body.slice(index, index + 4));
+  return (
+    <>
+      {prefix ? <span class="recovery-key__prefix">{prefix}</span> : null}
+      {groups.map((group, index) => <span class="recovery-key__group" key={`${index}:${group}`}>{group}</span>)}
+    </>
+  );
+}
 
 export function GoogleDriveSetup({ onConfigure }: Readonly<{
   onConfigure(request: ConfigureGoogleDriveVaultRequest): void;
@@ -114,15 +141,32 @@ export function GoogleDriveSetup({ onConfigure }: Readonly<{
     }
   }
 
-  return <section class="google-drive-setup" aria-labelledby="google-drive-setup-title">
+  return <section class="google-drive-setup" data-available={clientId ? "true" : "false"} aria-labelledby="google-drive-setup-title">
     <header>
-      <div><p class="vault-view__eyebrow">Recommended durability</p><h2 id="google-drive-setup-title">Connect your Google Drive</h2></div>
-      <span>Browser → Drive</span>
+      <h2 id="google-drive-setup-title">Connect your Google Drive</h2>
+      {clientId ? <p class="google-drive-setup__eyebrow">Recommended durability</p> : null}
+      <span data-state={clientId ? "ready" : "unavailable"}>{clientId ? "Browser → Drive" : "Unavailable in this build"}</span>
     </header>
-    <p>Airship creates a visible folder in your Drive and stores only client-encrypted manifests and segments. Google never receives the workspace key.</p>
-    {!clientId ? <div class="google-drive-setup__notice" role="alert">
-      Set <code>VITE_GOOGLE_CLIENT_ID</code> to a Google OAuth Web client ID, enable the Drive API, and allow this page origin.
-    </div> : <>
+    {/* A build with no OAuth client cannot open a Drive folder, so it does not
+        claim it can. The capability sentence renders only where it is true. */}
+    {clientId
+      ? <p>Airship creates a visible folder in your Drive and stores only client-encrypted manifests and segments. Google never receives the workspace key.</p>
+      : <p>This deployment has no Google OAuth client ID, so Airship cannot open a Drive workspace. Your data is not affected: nothing has been sent to Google, and no vault state has changed.</p>}
+    {!clientId ? <>
+      <div class="google-drive-setup__actions">
+        <button type="button" onClick={() => {
+          const provider = document.querySelector<HTMLElement>(".vault-provider-selector button");
+          provider?.scrollIntoView({ block: "center" });
+          provider?.focus();
+        }}>Choose another provider</button>
+      </div>
+      <details class="google-drive-setup__deploy">
+        <summary>For the person deploying Airship — the exact build variable this needs</summary>
+        <div class="google-drive-setup__notice" role="alert">
+          Set <code>VITE_GOOGLE_CLIENT_ID</code> to a Google OAuth Web client ID, enable the Drive API, and allow this page origin.
+        </div>
+      </details>
+    </> : <>
       {recovery ? <label>New workspace folder<input value={folderName} maxLength={120} onInput={(event) => setFolderName(event.currentTarget.value)} /></label> : <div class="google-drive-setup__notice">
         <strong>Recover an existing workspace</strong>
         <p>Airship discovers the app-created folder from the key after Google account selection. A wrong account or key fails closed and never creates a blank replacement.</p>
@@ -130,8 +174,14 @@ export function GoogleDriveSetup({ onConfigure }: Readonly<{
       <div class="google-drive-setup__key">
         <strong>Workspace recovery</strong>
         <p>This key—not your Google account—decrypts the vault. Save it once so another device can open the same workspace.</p>
+        {/* Starting a new workspace is the first-run path, so its control leads
+            the block rather than trailing the paste box as a grey afterthought. */}
+        <div class="google-drive-setup__recovery-actions">
+          <button type="button" onClick={() => void generateRecovery()} disabled={busy}>{recovery ? "Generate a different key" : "Create a new workspace"}</button>
+          {recovery ? <button type="button" class="google-drive-setup__secondary" onClick={recoverExisting} disabled={busy}>Recover existing instead</button> : null}
+        </div>
         {recovery ? <>
-          <output>{recovery.displayValue}</output>
+          <output><RecoveryKeyGroups value={recovery.displayValue} /></output>
           <label class="google-drive-setup__check"><input type="checkbox" checked={saved} onChange={(event) => setSaved(event.currentTarget.checked)} /> I saved this recovery key</label>
         </> : <>
           <textarea
@@ -150,12 +200,10 @@ export function GoogleDriveSetup({ onConfigure }: Readonly<{
           />
           <label class="google-drive-setup__check"><input type="checkbox" checked={showImportedRecovery} onChange={(event) => setShowImportedRecovery(event.currentTarget.checked)} /> Show imported recovery key</label>
         </>}
-        <div class="google-drive-setup__recovery-actions">
-          <button type="button" class="google-drive-setup__secondary" onClick={() => void generateRecovery()} disabled={busy}>{recovery ? "Generate a different key" : "Create a new workspace"}</button>
-          {recovery ? <button type="button" class="google-drive-setup__secondary" onClick={recoverExisting} disabled={busy}>Recover existing instead</button> : null}
-        </div>
       </div>
-      <button type="button" onClick={() => void connect()} disabled={!prepared || busy}>{busy ? "Connecting…" : prepared ? recovery ? "Create with Google Drive" : "Recover with Google Drive" : "Preparing Google sign-in…"}</button>
+      <div class="google-drive-setup__actions">
+        <button type="button" onClick={() => void connect()} disabled={!prepared || busy}>{busy ? "Connecting…" : prepared ? recovery ? "Create with Google Drive" : "Recover with Google Drive" : "Preparing Google sign-in…"}</button>
+      </div>
     </>}
     {status && <p class="google-drive-setup__status" role="status">{status}</p>}
     <small>OAuth tokens remain in page memory. Airship requests <code>drive.file</code>, not access to your whole Drive.</small>

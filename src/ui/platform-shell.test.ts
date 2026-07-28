@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyPreferenceOverrides, buildPaletteEntries, DEFAULT_PREFERENCES, filterPaletteEntries, loadPreferenceOverrides, loadRecentSessionPaletteSources, navigationJumpForChord, recentSessionPaletteSources, resolveDefaultVaultBackend, savePreferenceOverrides, worstTrustAxis } from "./platform-shell";
+import { applyPreferenceOverrides, buildPaletteEntries, DEFAULT_PREFERENCES, filterPaletteEntries, loadPreferenceOverrides, loadRecentSessionPaletteSources, navigationJumpForChord, recentSessionPaletteSources, resolveDefaultVaultBackend, savePreferenceOverrides, trustAxesInScope, TRUST_SCOPE_BANDS, worstTrustAxis } from "./platform-shell";
 import { CANONICAL_DESTINATIONS } from "./navigation-model";
 
 describe("platform shell contracts", () => {
@@ -75,10 +75,32 @@ describe("platform shell contracts", () => {
 
   it("picks the weakest trust axis without changing its claim", () => {
     const axes = [
-      { id: "local", label: "Local runtime", state: "verified", detail: "On device", view: "proof" },
-      { id: "attestation", label: "Endpoint not checked", state: "asserted", detail: "Encrypted only", view: "proof" },
+      { id: "local", scope: "tab", label: "Local runtime", state: "verified", detail: "On device", view: "proof" },
+      { id: "attestation", scope: "conversation", label: "Endpoint not checked", state: "asserted", detail: "Encrypted only", view: "proof" },
     ] as const;
     expect(worstTrustAxis(axes)).toBe(axes[1]);
+  });
+
+  /*
+   * The scope partition is what stops one fact being printed in two bands. It
+   * is asserted here rather than only in the topbar because the split has to
+   * survive an axis being added: an untagged axis is a compile error, and a
+   * mis-tagged one shows up as a band claiming something it does not own.
+   */
+  it("partitions axes by the band that owns them", () => {
+    const axes = [
+      { id: "local", scope: "tab", label: "Local runtime", state: "verified", detail: "On device", view: "proof" },
+      { id: "vault", scope: "tab", label: "No vault adopted", state: "none", detail: "No cloud vault is configured.", view: "vault" },
+      { id: "e2ee", scope: "conversation", label: "Connect a model", state: "none", detail: "Nothing connected.", view: "access" },
+      { id: "attestation", scope: "conversation", label: "Endpoint not checked", state: "asserted", detail: "Encrypted only", view: "proof" },
+    ] as const;
+
+    expect(trustAxesInScope(axes, "tab").map((axis) => axis.id)).toEqual(["local", "vault"]);
+    expect(trustAxesInScope(axes, "conversation").map((axis) => axis.id)).toEqual(["e2ee", "attestation"]);
+    // Every axis lands in exactly one band; none is orphaned by the partition.
+    expect(trustAxesInScope(axes, "tab").length + trustAxesInScope(axes, "conversation").length).toBe(axes.length);
+    expect(TRUST_SCOPE_BANDS.conversation.restingHome).toContain("session bar");
+    expect(TRUST_SCOPE_BANDS.tab.restingHome).toContain("topbar");
   });
 
   it("maps g chords to high-traffic destinations and ignores incomplete chords", () => {

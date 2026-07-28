@@ -1,7 +1,9 @@
+import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import type { ChutesEndpointEvidenceRecord } from "../attestation/provider-types";
 import { createLocalReceipt } from "../receipts/types";
 import { describeAttestationSeal } from "./app";
+import { TURN_EVIDENCE_COPY } from "./turn-evidence";
 
 const NOW = Date.parse("2026-07-19T12:00:00.000Z");
 const KEY_DIGEST = `sha256:${"a".repeat(64)}`;
@@ -64,6 +66,41 @@ describe("session attestation seal", () => {
 
     expect(seal).toMatchObject({ state: "attention", label: "Separate evidence collected" });
     expect(seal.detail).toContain("did not establish both");
+  });
+
+  /*
+   * The session band and the turn band used to be two functions with the same
+   * five branches and different words for each, so one turn read "Evidence
+   * unavailable" in the session bar and "Evidence not pulled" under its own
+   * answer. They share one describer now; this is what stops them drifting
+   * apart again.
+   */
+  it("speaks an acquisition failure in the canonical word, with the reason kept verbatim", () => {
+    const seal = describeAttestationSeal({
+      connected: true,
+      records: [],
+      failure: { label: "Evidence unavailable", code: "evidence-unavailable" } as never,
+      now: NOW,
+    });
+
+    expect(seal.label).toBe(TURN_EVIDENCE_COPY["evidence-blocked"].chip);
+    expect(seal.state).toBe(TURN_EVIDENCE_COPY["evidence-blocked"].seal);
+    // The specific reason is not deleted by the canonical headline; it leads
+    // the sentence, which is visible body text in the session status popover.
+    expect(seal.detail).toContain("Evidence unavailable");
+    expect(seal.detail).toContain("This provider/acquisition state is not a TEE verdict.");
+  });
+
+  it("keeps the one branch that genuinely differs by scope, and only that one", async () => {
+    const source = await readFile(new URL("./app.tsx", import.meta.url), "utf8");
+
+    // A live session has a *next* turn its policy can speak about; a settled
+    // receipt does not. Every other branch is shared, so the two bands cannot
+    // describe the same endpoint record in two vocabularies.
+    expect(source).toContain('if (args.scope === "turn") {');
+    expect(source.match(/args\.scope === "turn"/gu)?.length).toBe(1);
+    expect(source).toContain('describeEndpointEvidence({ ...args, scope: "session" })');
+    expect(source).toContain('describeEndpointEvidence({ scope: "turn", receipt, records, failure, now })');
   });
 });
 

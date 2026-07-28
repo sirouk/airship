@@ -1,7 +1,14 @@
+/*
+ * One measure. The page ran four at once — main 1208 → view 1156 → layout 980
+ * → surface 942 — so the lane list carried a 266px dead right gutter while the
+ * card beneath it ran 214px wider, and the whole surface hugged the left edge.
+ */
 .access-connection-view {
   display: grid;
-  gap: 18px;
+  gap: var(--sp-4);
   width: 100%;
+  max-width: var(--connect-measure);
+  margin-inline: auto;
   color: var(--ink);
 }
 
@@ -10,65 +17,46 @@
   scroll-margin-top: 76px;
 }
 
-.access-provider-jump {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 14px;
-}
-
-.access-provider-jump button {
+/* The route bar's count chip: the number is the claim, and its own sentence is
+   one gesture away rather than in a `title` a thumb cannot reach. */
+.access-count-chip {
   display: inline-flex;
-  gap: 7px;
   align-items: center;
-  min-height: 34px;
-  padding: 0 11px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-control);
-  background: var(--surface);
+  min-height: 32px;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+
+.access-count-list {
+  display: grid;
+  gap: var(--sp-1);
+  margin: var(--sp-2) 0 0;
+  padding-left: 1.1em;
   color: var(--ink-muted);
-  font-size: 0.77rem;
-  font-weight: 700;
-  text-decoration: none;
+  font-size: var(--fs-caption);
+  line-height: 1.5;
 }
 
-.access-provider-jump button:hover,
-.access-provider-jump button:focus-visible {
-  border-color: var(--line-strong);
-  color: var(--ink);
-  background: var(--surface-raised);
+.access-route-note {
+  margin: var(--sp-2) 0 0;
+  color: var(--ink-muted);
+  font-size: var(--fs-caption);
+  line-height: 1.55;
 }
 
-.access-connection-heading > span,
 .access-section-heading > div > span {
-  color: var(--accent-bright);
-  font: 700 0.7rem/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--ink-muted);
+  font: 700 var(--fs-micro)/1.2 var(--font-mono);
   letter-spacing: 0.12em;
   text-transform: uppercase;
-}
-
-.access-connection-heading h1 {
-  margin: 7px 0 8px;
-  font-family: var(--font-display);
-  font-size: clamp(1.75rem, 4vw, 2.7rem);
-  line-height: 1;
-}
-
-.access-connection-heading p,
-.oauth-browser-boundary p {
-  max-width: 76ch;
-  margin: 0;
-  color: var(--ink-muted);
-  font-size: 0.88rem;
-  line-height: 1.6;
 }
 
 .access-connection-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 14px;
+  gap: var(--sp-3);
   align-items: start;
-  max-width: 980px;
 }
 
 .access-connection-card {
@@ -96,7 +84,7 @@
 .access-section-heading strong {
   display: block;
   margin: 5px 0 0;
-  font-size: 1.2rem;
+  font-size: var(--fs-title);
   line-height: 1.25;
 }
 
@@ -109,7 +97,7 @@
   border: 1px solid var(--line-strong);
   border-radius: 999px;
   color: var(--ink-muted);
-  font: 700 0.7rem/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font: 700 var(--fs-micro)/1 var(--font-mono);
   white-space: nowrap;
 }
 
@@ -165,13 +153,13 @@
 
 .oauth-primary-entry strong {
   color: var(--ink);
-  font-size: 0.9rem;
+  font-size: var(--fs-meta);
 }
 
 .oauth-primary-entry p {
   margin-top: 5px;
   color: var(--ink-muted);
-  font-size: 0.76rem;
+  font-size: var(--fs-caption);
   line-height: 1.5;
 }
 
@@ -189,7 +177,7 @@
   padding: 11px 12px;
   color: var(--ink-muted);
   cursor: pointer;
-  font-size: 0.76rem;
+  font-size: var(--fs-caption);
   font-weight: 700;
 }
 
@@ -234,16 +222,16 @@
 .credential-type code {
   grid-row: 1 / span 2;
   color: var(--accent-bright);
-  font: 700 0.75rem/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font: 700 var(--fs-caption)/1.4 var(--font-mono);
 }
 
 .credential-type strong {
-  font-size: 0.82rem;
+  font-size: var(--fs-meta);
 }
 
 .credential-type span {
   color: var(--ink-muted);
-  font-size: 0.75rem;
+  font-size: var(--fs-caption);
   line-height: 1.45;
 }
 
@@ -252,7 +240,7 @@
   display: grid;
   gap: 7px;
   color: var(--ink-muted);
-  font-size: 0.76rem;
+  font-size: var(--fs-caption);
   font-weight: 650;
 }
 
@@ -266,7 +254,7 @@
   border-radius: var(--radius-control);
   color: var(--ink);
   background: var(--surface-soft);
-  font: 1rem/1.3 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font: var(--fs-body)/1.3 var(--font-mono);
 }
 
 .credential-entry input:focus-visible,
@@ -281,7 +269,7 @@
 .capability-caveat {
   margin: 0;
   color: var(--ink-faint);
-  font-size: 0.74rem;
+  font-size: var(--fs-caption);
   line-height: 1.5;
 }
 
@@ -293,7 +281,7 @@
   color: var(--ink);
   background: var(--surface-raised);
   font-family: inherit;
-  font-size: 0.76rem;
+  font-size: var(--fs-caption);
   font-weight: 700;
   line-height: 1.2;
   cursor: pointer;
@@ -310,21 +298,105 @@
   border-color: color-mix(in srgb, var(--danger) 38%, transparent);
 }
 
+/* Disabled is carried by explicit colour, never transparency, so it composites
+   predictably instead of dropping a glyph to 1.71:1 over whatever is behind. */
 .access-connection-view button:disabled {
   cursor: not-allowed;
-  opacity: 0.48;
+  color: var(--ink-disabled);
+  border-color: var(--line-control);
+  background: var(--surface-disabled);
 }
 
-.credential-kind-result,
-.oauth-browser-boundary {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 11px;
-  padding: 12px;
-  border: 1px solid color-mix(in srgb, var(--accent-bright) 28%, transparent);
-  border-radius: var(--radius-control);
+/*
+ * Row 1 of the candidate panel: who you are connecting as, plus when the
+ * catalogue was read. Both of the sentences that used to make this a 65px card
+ * and a 58px band are one gesture away, verbatim.
+ */
+.candidate-identity {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  align-items: center;
+  min-height: 44px;
+}
+
+.credential-kind-result {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+  margin: 0;
   color: var(--accent-bright);
-  background: color-mix(in srgb, var(--accent) 5%, transparent);
+  font-size: var(--fs-meta);
+}
+
+.candidate-help__trigger,
+.catalog-provenance-chip {
+  display: inline-flex;
+  gap: var(--sp-1);
+  align-items: center;
+  min-height: 32px;
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--line-control);
+  border-radius: var(--radius-chip);
+  color: var(--ink-muted);
+  background: transparent;
+  font: var(--fs-micro)/1.2 var(--font-mono);
+  cursor: pointer;
+}
+
+.candidate-help {
+  margin-right: auto;
+}
+
+.candidate-help__trigger {
+  width: 32px;
+  padding: 0;
+  justify-content: center;
+}
+
+.candidate-model {
+  display: grid;
+  gap: var(--sp-1);
+}
+
+.candidate-model > span {
+  color: var(--ink-muted);
+  font: 700 var(--fs-micro)/1.2 var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/*
+ * Where there is room, the open picker renders in flow and pushes the panel
+ * down. Anchored, a 620px popover landed on top of the availability, context,
+ * price and trust-readiness tiles — hiding the evidence about the model
+ * precisely while someone was choosing it.
+ */
+@media (min-width: 900px) {
+  .candidate-model .model-picker-popover {
+    position: static;
+    width: 100%;
+    max-height: min(520px, 60dvh);
+    margin-top: var(--sp-2);
+    box-shadow: none;
+  }
+}
+
+/*
+ * Row 3: the evidence about the model beside the policy that governs it. The
+ * two used to stack to 324px, and the picker popover then covered both.
+ */
+.candidate-decision {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+  gap: var(--sp-3);
+  align-items: start;
+}
+
+@media (max-width: 720px) {
+  .candidate-decision {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .oauth-finish-banner {
@@ -344,29 +416,13 @@
 }
 
 .oauth-finish-banner strong {
-  font-size: 0.84rem;
+  font-size: var(--fs-meta);
 }
 
 .oauth-finish-banner span {
   margin-top: 4px;
   color: var(--ink-muted);
-  font-size: 0.75rem;
-  line-height: 1.45;
-}
-
-.credential-kind-result strong,
-.credential-kind-result span {
-  display: block;
-}
-
-.credential-kind-result strong {
-  font-size: 0.84rem;
-}
-
-.credential-kind-result span {
-  margin-top: 4px;
-  color: var(--ink-muted);
-  font-size: 0.75rem;
+  font-size: var(--fs-caption);
   line-height: 1.45;
 }
 
@@ -394,12 +450,19 @@
 }
 
 .model-candidate-summary span,
-.model-candidate-summary strong,
-.model-candidate-summary small {
+.model-candidate-summary strong {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Captions wrap. They are the provenance of the value above them — "provider
+   management snapshot", "catalog metadata is not proof" — and a caveat clipped
+   to `catalog metadata is not p…` is a caveat that was not made. */
+.model-candidate-summary small {
+  display: block;
+  line-height: 1.35;
 }
 
 .model-candidate-summary span {
@@ -409,52 +472,104 @@
 }
 
 .model-candidate-summary strong {
-  margin-top: 5px;
+  margin-top: var(--sp-1);
   color: var(--ink);
-  font-size: 0.77rem;
+  font-size: var(--fs-caption);
 }
 
 .model-candidate-summary small {
-  margin-top: 3px;
+  margin-top: 2px;
   color: var(--ink-muted);
   font-size: var(--fs-micro);
 }
 
-.catalog-provenance {
+.catalog-provenance-popover .popover__body > p.complete {
+  color: var(--v-verified);
+}
+
+.catalog-provenance-popover .popover__body > p.partial {
+  color: var(--accent-bright);
+}
+
+/*
+ * Capability-keyed proof policy. While strict fail-closed is unavailable this
+ * is one selected chip plus a disclosure that names both of its contents; when
+ * the capability record flips it becomes the two-tile fieldset below, with no
+ * design change, because the branch is the capability and not a preference.
+ */
+.proof-policy {
   display: grid;
-  gap: 6px;
-  padding: 9px 10px;
-  border-left: 2px solid var(--line-strong);
-  color: var(--ink-faint);
-  background: rgba(0, 0, 0, 0.08);
-  font: var(--fs-micro)/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+  gap: var(--sp-2);
+  align-content: start;
+  padding: var(--sp-3);
+  border: 1px solid var(--line-control);
+  border-radius: var(--radius-control);
+  background: var(--surface-soft);
 }
 
-.catalog-provenance > span {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-}
-
-.catalog-provenance > span.complete {
-  color: var(--signal);
-}
-
-.catalog-provenance > span.partial {
-  color: var(--accent-bright);
-}
-
-.catalog-provenance details {
-  color: var(--accent-bright);
-}
-
-.catalog-provenance summary {
-  cursor: pointer;
-}
-
-.catalog-provenance p {
-  margin: 6px 0 0;
+.proof-policy__legend {
+  margin: 0;
   color: var(--ink-muted);
+  font: 700 var(--fs-micro)/1.2 var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.proof-policy__selected {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+  margin: 0;
+  font-size: var(--fs-meta);
+}
+
+.proof-policy__selected svg {
+  color: var(--v-verified);
+}
+
+.proof-policy__selected span {
+  color: var(--ink-muted);
+  font-size: var(--fs-caption);
+}
+
+/* The trigger says what is inside it and looks like a trigger. A collapse a
+   person cannot see is a collapse that buries. */
+.proof-policy__why > summary {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  color: var(--ink-muted);
+  cursor: pointer;
+  font-size: var(--fs-caption);
+  line-height: 1.5;
+}
+
+.proof-policy__why > summary::after {
+  margin-left: var(--sp-1);
+  color: var(--accent-bright);
+  content: "⌄";
+}
+
+.proof-policy__why[open] > summary::after {
+  content: "⌃";
+}
+
+.proof-policy__why p {
+  margin: var(--sp-2) 0 0;
+  color: var(--ink-muted);
+  font-size: var(--fs-caption);
+  line-height: 1.5;
+}
+
+.proof-policy__why strong {
+  color: var(--ink);
+}
+
+.proof-policy__caveat {
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: var(--fs-caption);
+  line-height: 1.5;
 }
 
 .proof-policy-consent {
@@ -472,7 +587,7 @@
   grid-column: 1 / -1;
   padding: 0 4px;
   color: var(--ink-muted);
-  font-size: 0.7rem;
+  font-size: var(--fs-micro);
   font-weight: 750;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -495,7 +610,7 @@
   grid-column: 1 / -1;
   margin: 0;
   color: var(--ink-faint);
-  font-size: 0.7rem;
+  font-size: var(--fs-micro);
   line-height: 1.45;
 }
 
@@ -516,13 +631,13 @@
 }
 
 .proof-policy-consent strong {
-  font-size: 0.8rem;
+  font-size: var(--fs-meta);
 }
 
 .proof-policy-consent small {
   margin-top: 4px;
   color: var(--ink-muted);
-  font-size: 0.74rem;
+  font-size: var(--fs-caption);
   line-height: 1.45;
 }
 
@@ -557,7 +672,7 @@
 .active-connection-summary dt,
 .active-connection-summary dd {
   margin: 0;
-  font-size: 0.76rem;
+  font-size: var(--fs-caption);
 }
 
 .active-model-select {
@@ -575,7 +690,7 @@
   gap: 7px;
   margin: 0;
   color: var(--ink-faint);
-  font-size: 0.72rem;
+  font-size: var(--fs-micro);
   line-height: 1.5;
 }
 
@@ -600,27 +715,26 @@
 
 .capability-card > summary {
   display: flex;
-  gap: 12px;
+  gap: var(--sp-3);
   align-items: center;
   justify-content: space-between;
-  min-height: 44px;
+  min-height: 40px;
   color: var(--ink);
   cursor: pointer;
 }
 
-.capability-card > summary span {
-  color: var(--ink-faint);
-  font: 700 var(--fs-micro)/1.2 var(--font-mono);
-  letter-spacing: .08em;
-  text-transform: uppercase;
+@media (pointer: coarse) {
+  .capability-card > summary {
+    min-height: 44px;
+  }
 }
 
-.capability-card > summary strong { font-size: .86rem; }
+.capability-card > summary strong { font-size: var(--fs-meta); font-weight: 600; }
 
 .capability-card table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.75rem;
+  font-size: var(--fs-caption);
 }
 
 .capability-card th,
@@ -649,7 +763,7 @@
 
 .capability-card tbody th strong {
   color: var(--ink);
-  font-size: 0.78rem;
+  font-size: var(--fs-meta);
 }
 
 .capability-card tbody th span {
@@ -682,15 +796,27 @@
   margin-top: 12px;
 }
 
+/* These two answer the button a person just pressed, so they sit above the
+   lanes now. A failure sentence is one long line: the icon must not shrink and
+   the sentence must wrap, or the answer runs off its own card. */
 .access-live-status,
 .access-live-error {
   display: flex;
-  gap: 8px;
-  align-items: center;
-  margin: 12px 0 0;
-  padding: 9px 10px;
+  gap: var(--sp-2);
+  align-items: flex-start;
+  min-width: 0;
+  margin: 0 0 var(--sp-3);
+  padding: var(--sp-2);
   border-radius: var(--radius-control);
-  font: 0.75rem/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font: var(--fs-caption)/1.45 var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+.access-live-status > svg,
+.access-live-error > svg,
+.access-live-status > span {
+  flex: 0 0 auto;
+  margin-top: 4px;
 }
 
 .access-network-pause {
@@ -703,7 +829,7 @@
   border-radius: var(--radius-control);
   color: var(--v-caution);
   background: color-mix(in srgb, var(--v-caution) 7%, transparent);
-  font: 0.75rem/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font: var(--fs-caption)/1.45 var(--font-mono);
 }
 
 .access-live-status {
@@ -723,17 +849,27 @@
   background: color-mix(in srgb, var(--danger) 6%, transparent);
 }
 
-.oauth-browser-boundary {
-  color: var(--accent-bright);
-}
-
-.oauth-browser-boundary strong {
+/*
+ * The token-handler boundary now lives inside the Chutes lane's own "How this
+ * works · what the handler can see" disclosure — every word of it is about
+ * Chutes OAuth, and it used to render at page altitude where someone pasting an
+ * Ollama address read it.
+ */
+.oauth-mechanism > strong {
   display: block;
-  margin-bottom: 5px;
-  font-size: 0.86rem;
+  margin-top: var(--sp-3);
+  color: var(--accent-bright);
+  font-size: var(--fs-meta);
 }
 
-.oauth-browser-boundary code {
+.oauth-mechanism > p {
+  margin: var(--sp-1) 0 0;
+  color: var(--ink-muted);
+  font-size: var(--fs-caption);
+  line-height: 1.55;
+}
+
+.oauth-mechanism code {
   color: var(--ink);
 }
 
@@ -766,7 +902,7 @@
   padding: 10px 11px;
   color: var(--ink);
   cursor: pointer;
-  font-size: 0.76rem;
+  font-size: var(--fs-caption);
   font-weight: 700;
 }
 
@@ -779,7 +915,7 @@
 }
 
 .oauth-diagnostic > p {
-  font-size: 0.74rem;
+  font-size: var(--fs-caption);
 }
 
 .oauth-diagnostic dl {
@@ -800,7 +936,7 @@
 .oauth-diagnostic dd {
   margin: 0;
   overflow-wrap: anywhere;
-  font: 0.69rem/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font: var(--fs-micro)/1.45 var(--font-mono);
 }
 
 .oauth-diagnostic dt {
@@ -812,6 +948,10 @@
 }
 
 @media (max-width: 1050px) {
+  .access-connection-view {
+    max-width: none;
+  }
+
   .access-connection-layout {
     grid-template-columns: 1fr;
   }
@@ -819,34 +959,17 @@
 
 @media (max-width: 640px) {
   .access-connection-view {
-    gap: 13px;
+    gap: var(--sp-3);
   }
 
   /*
-   * Treat provider setup as a compact utility surface on a phone. The Trust
-   * tab and the Chutes lane already provide the surrounding context, so a
-   * desktop-sized introduction only delays the first usable control.
+   * The phone overrides that hid the eyebrow, the page paragraph and the jump
+   * nav are gone, because what they hid is gone at every width: the eyebrow and
+   * the paragraph are the route header's ⓘ, and the jump nav's two
+   * destinations no longer exist as separate sections. Desktop was strictly
+   * worse than the layout the mobile stylesheet already shipped; this ends that
+   * rather than maintaining two of them.
    */
-  .access-connection-heading > span,
-  .access-connection-heading > p {
-    display: none;
-  }
-
-  .access-connection-heading h1 {
-    margin: 0;
-    font-size: 1.65rem;
-    line-height: 1.1;
-  }
-
-  /*
-   * On a phone the provider cards immediately follow this header, so duplicate
-   * in-page jump controls only consume the exact space needed by the first
-   * credential field. Desktop keeps them for long, multi-column scanning.
-   */
-  .access-provider-jump {
-    display: none;
-  }
-
   .access-connection-card {
     padding: 9px;
     border-radius: var(--radius-control);
@@ -910,11 +1033,7 @@
 
   .capability-card th,
   .capability-card td {
-    padding-inline: 6px;
-  }
-
-  .oauth-browser-boundary {
-    grid-template-columns: 24px minmax(0, 1fr);
+    padding-inline: var(--sp-2);
   }
 }
 

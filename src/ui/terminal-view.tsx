@@ -1,3 +1,4 @@
+import type { ComponentChildren } from "preact";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
@@ -8,7 +9,52 @@ import type { WorkspacePort } from "../workspace/contracts";
 import { getBrowserTerminalManager, type BrowserTerminalManager } from "../terminal/manager";
 import type { TerminalSessionSnapshot } from "../terminal/contracts";
 import { Icon } from "./icons";
+import { RouteHeader } from "./route-header";
+import { Seal, type SealState } from "./seal";
 import "./terminal-view.css";
+
+/**
+ * Where the runtime band's open state lives between visits.
+ *
+ * The band was 183px of permanently-open explanation on desktop — its own
+ * `<summary>` was `display: none` above 760px, so the one control that could
+ * close it was invisible. It is a disclosure now at every width, which means
+ * its state has to survive a route change or closing it would be a gesture the
+ * user repeats forever.
+ */
+export const TERMINAL_SETUP_STORAGE_KEY = "airship.terminal.setup.v1";
+
+/**
+ * Closed by default, and only a stored choice reopens it.
+ *
+ * Deliberately not "open on first visit": the four facts the band carried are
+ * now on the summary row itself, so nothing is hidden by the default except
+ * the paragraph, which the summary names.
+ */
+export function readTerminalSetupOpen(storage: Pick<Storage, "getItem"> | undefined): boolean {
+  try {
+    return storage?.getItem(TERMINAL_SETUP_STORAGE_KEY) === "open";
+  } catch {
+    // A blocked or partitioned storage is not an error worth surfacing here;
+    // it just means the band starts closed, which is the default anyway.
+    return false;
+  }
+}
+
+function writeTerminalSetupOpen(open: boolean): void {
+  try {
+    globalThis.localStorage?.setItem(TERMINAL_SETUP_STORAGE_KEY, open ? "open" : "closed");
+  } catch { /* Page-memory only. The band still works for this page's lifetime. */ }
+}
+
+/** The one status vocabulary, fed by the terminal's own lifecycle. */
+export function terminalSealState(status: TerminalSessionSnapshot["status"]): SealState {
+  if (status === "running") return "verified";
+  if (status === "starting") return "checking";
+  if (status === "failed") return "failed";
+  if (status === "restart-required") return "attention";
+  return "none";
+}
 
 export function TerminalView({ workspace, git, reviewGit, onWorkspaceChanged, threadId, workspaceRoot = "/workspace" }: Readonly<{
   workspace: WorkspacePort;
@@ -27,9 +73,7 @@ export function TerminalView({ workspace, git, reviewGit, onWorkspaceChanged, th
   const [renameValue, setRenameValue] = useState("");
   const [gitCommand, setGitCommand] = useState("git status");
   const [gitRunning, setGitRunning] = useState(false);
-  const [setupOpen, setSetupOpen] = useState(() => (
-    typeof matchMedia !== "function" || !matchMedia("(max-width: 760px)").matches
-  ));
+  const [setupOpen, setSetupOpen] = useState(() => readTerminalSetupOpen(globalThis.localStorage));
   const cancelRename = useRef(false);
   const workspaceChanged = useRef(onWorkspaceChanged);
   workspaceChanged.current = onWorkspaceChanged;
@@ -52,14 +96,6 @@ export function TerminalView({ workspace, git, reviewGit, onWorkspaceChanged, th
   useEffect(() => manager.subscribeWorkspace(() => {
     void workspaceChanged.current?.();
   }), [manager]);
-
-  useEffect(() => {
-    if (typeof matchMedia !== "function") return;
-    const media = matchMedia("(max-width: 760px)");
-    const syncDisclosure = () => setSetupOpen(!media.matches);
-    media.addEventListener("change", syncDisclosure);
-    return () => media.removeEventListener("change", syncDisclosure);
-  }, []);
 
   const active = sessions.find(({ id }) => id === activeId);
   const runGit = async () => {
@@ -115,32 +151,49 @@ export function TerminalView({ workspace, git, reviewGit, onWorkspaceChanged, th
 
   return (
     <section class="terminal-route" aria-labelledby="terminal-title">
-      <header class="terminal-route__heading">
-        <div><span class="eyebrow">Workspace · browser process room</span><h1 id="terminal-title">Terminal</h1></div>
-        <div class="terminal-route__actions">
+      {/* The 54px eyebrow-plus-serif-H1 block named a route the rail already
+          shows as selected. The words survive: the eyebrow is the ⓘ panel's
+          heading, and the notes below it are facts this route states nowhere
+          else — including which shell a tab actually spawns. */}
+      <RouteHeader
+        class="terminal-route__header"
+        routeId="terminal"
+        density="tool"
+        title="Terminal"
+        eyebrow="Workspace · browser process room"
+        description="Interactive processes, a Shared Git bridge onto the browser repository, and per-tab command history, all held inside this page."
+        headingId="terminal-title"
+        notes={<>
+          {/* Verified against `manager.ts`, which spawns `jsh`, and against
+              `execution-tools.ts`, where airship-sh is the agent's shell
+              runtime. Neither claim is inferred from the other. */}
+          <p>Each tab spawns <code>jsh</code>, the WebContainer image's own shell. <code>airship-sh</code>, Airship's first-party POSIX interpreter, runs the agent's shell tool and is <strong>not</strong> selectable as a terminal tab in this build, so a script <code>jsh</code> rejects cannot be retried here.</p>
+          <p>{threadId ? `Attached to conversation thread ${threadId}.` : "No conversation thread is attached to this route."}</p>
+        </>}
+        actions={<div class="terminal-route__actions">
           <button type="button" onClick={() => void sync()} disabled={syncing || !sessions.some(({ status }) => status === "running" || status === "exited")}><Icon name="cloud" size={16} />{syncing ? "Reconciling…" : "Reconcile workspace"}</button>
           <button type="button" onClick={createTab} disabled={sessions.length >= 8}><span aria-hidden="true">＋</span> New terminal</button>
-        </div>
-      </header>
+        </div>}
+      />
 
-      <details class="terminal-route__setup" open={setupOpen} onToggle={(event) => setSetupOpen(event.currentTarget.open)}>
+      {/* One 44px row that carries every fact the 183px band carried on its
+          face, and holds only the boundary paragraph inside. Its own control
+          is visible at every width now, and the choice is remembered. */}
+      <details class="terminal-route__setup" open={setupOpen} onToggle={(event) => {
+        setSetupOpen(event.currentTarget.open);
+        writeTerminalSetupOpen(event.currentTarget.open);
+      }}>
         <summary>
           <span><Icon name="terminal" size={16} /><strong>Browser Node shell</strong></span>
-          <small>Runtime facts &amp; Shared Git</small>
-        </summary>
-        <div class="terminal-route__setup-body">
-          <p>Real interactive Node processes run inside this page's WebContainer. This is not your device shell, host Bash, SSH, or a remote Airship backend.</p>
-          <div class="terminal-assurance" role="note">
-            <span><Icon name="terminal" size={16} /><strong>Browser Node shell</strong></span>
+          <small>WebContainer, not a device shell — read the boundary</small>
+          <span class="terminal-assurance" role="note">
             <span>Processes stay hot while this page lives</span>
             <span>Reload requires process restart</span>
             <span>{threadId ? `Thread ${compactId(threadId)}` : "No conversation thread attached"}</span>
-          </div>
-          <form class="terminal-git-bridge" onSubmit={(event) => { event.preventDefault(); void runGit(); }}>
-            <label for="terminal-git-command"><strong>Shared Git</strong><span>Authoritative Editor/source-control state · approval policy applies</span></label>
-            <div><input id="terminal-git-command" value={gitCommand} spellcheck={false} onInput={(event) => setGitCommand(event.currentTarget.value)} aria-describedby="terminal-git-detail" /><button type="submit" disabled={!active || gitRunning}>{gitRunning ? "Running…" : "Run"}</button></div>
-            <small id="terminal-git-detail">This deterministic bridge uses browser Git directly; the WebContainer never receives a second copy of <code>.git</code>. Try <code>git help</code>.</small>
-          </form>
+          </span>
+        </summary>
+        <div class="terminal-route__setup-body">
+          <p>Real interactive Node processes run inside this page's WebContainer. This is not your device shell, host Bash, SSH, or a remote Airship backend.</p>
         </div>
       </details>
 
@@ -159,13 +212,31 @@ export function TerminalView({ workspace, git, reviewGit, onWorkspaceChanged, th
               if (event.key === "Escape") { cancelRename.current = true; event.currentTarget.blur(); }
             }}
           /> : <button type="button" role="tab" aria-selected={session.id === activeId} onClick={() => setActiveId(session.id)} onDblClick={() => beginRename(session)}>
-            <span class={`terminal-status status-${session.status}`} aria-hidden="true" /><span class="terminal-tab__label"><strong>{session.name}</strong><small>{statusLabel(session)}</small></span>
+            {/* The status word was printed twice within 90px — here and again
+                in the panel bar below. It is one seal now, and the word it
+                dropped is the seal's accessible name. */}
+            <Seal state={terminalSealState(session.status)} label={statusLabel(session)} density="dot" size={16} />
+            <span class="terminal-tab__label"><strong>{session.name}</strong></span>
           </button>}
           <button class="terminal-tab__rename" type="button" aria-label={`Rename ${session.name}`} title="Rename terminal" onClick={() => beginRename(session)}>✎</button>
         </div>)}
       </div>
 
-      {active ? <TerminalPanel key={active.id} manager={manager} session={active} onNotice={setNotice} /> : (
+      {active ? <TerminalPanel
+        key={active.id}
+        manager={manager}
+        session={active}
+        onNotice={setNotice}
+        bridge={<form class="terminal-git-bridge" onSubmit={(event) => { event.preventDefault(); void runGit(); }}>
+          {/* Output from this form is echoed into the same scrollback as the
+              shell's, so the line has to say which authority produced it. */}
+          <span class="terminal-git-bridge__mark" aria-hidden="true">git▸</span>
+          <label for="terminal-git-command"><strong>Shared Git</strong><span>Authoritative Editor/source-control state · approval policy applies</span></label>
+          <input id="terminal-git-command" value={gitCommand} spellcheck={false} onInput={(event) => setGitCommand(event.currentTarget.value)} aria-describedby="terminal-git-detail" />
+          <button type="submit" disabled={!active || gitRunning}>{gitRunning ? "Running…" : "Run"}</button>
+          <small id="terminal-git-detail">This deterministic bridge uses browser Git directly; the WebContainer never receives a second copy of <code>.git</code>. Try <code>git help</code>.</small>
+        </form>}
+      /> : (
         <div class="terminal-empty"><Icon name="terminal" /><h2>No terminal tab</h2><p>Create a tab to cold-start an isolated browser runtime.</p><button type="button" onClick={createTab}>New terminal</button></div>
       )}
       <footer class="terminal-route__footer" role="status"><Icon name="proof" size={15} /><span>{notice}</span></footer>
@@ -173,10 +244,12 @@ export function TerminalView({ workspace, git, reviewGit, onWorkspaceChanged, th
   );
 }
 
-function TerminalPanel({ manager, session: initial, onNotice }: Readonly<{
+function TerminalPanel({ manager, session: initial, onNotice, bridge }: Readonly<{
   manager: BrowserTerminalManager;
   session: TerminalSessionSnapshot;
   onNotice(message: string): void;
+  /** The Shared Git form, rendered as the panel's own footer strip. */
+  bridge: ComponentChildren;
 }>) {
   const [session, setSession] = useState(initial);
   const host = useRef<HTMLDivElement>(null);
@@ -277,7 +350,10 @@ function TerminalPanel({ manager, session: initial, onNotice }: Readonly<{
 
   return <div class="terminal-panel">
     <div class="terminal-panel__bar">
-      <div><span class={`terminal-status status-${session.status}`} aria-hidden="true" /><strong>{statusLabel(session)}</strong><code>{session.cwd}</code>{session.threadId ? <span title={session.threadId}>thread {compactId(session.threadId)}</span> : null}</div>
+      {/* The seal is hidden from the accessible tree because the word it
+          carries is the `<strong>` immediately beside it — shape and word are
+          both present visually, and the name is said once. */}
+      <div><span aria-hidden="true"><Seal state={terminalSealState(session.status)} label={statusLabel(session)} density="dot" size={16} /></span><strong>{statusLabel(session)}</strong><code title={session.cwd}>{session.cwd}</code>{session.threadId ? <span title={session.threadId}>thread {compactId(session.threadId)}</span> : null}</div>
       <div>
         {session.status === "running" ? <button type="button" onClick={() => void manager.interrupt(session.id)} aria-label="Interrupt process">⌃C <span>Interrupt</span></button> : <span class="terminal-panel__starting" aria-live="polite">{statusLabel(session)}</span>}
         <button type="button" onClick={restart} disabled={session.status === "starting"}><Icon name="branch" size={14} /> Restart</button>
@@ -290,6 +366,7 @@ function TerminalPanel({ manager, session: initial, onNotice }: Readonly<{
       aria-label={`${session.name} browser terminal`}
       data-output-chars={session.bufferedOutput.length}
     />
+    {bridge}
     <div class="terminal-panel__meta"><span>{session.detail}</span><details><summary>Command history · {session.history.length}</summary>{session.history.length ? <ol>{session.history.slice().reverse().map((command, index) => <li key={`${index}-${command}`}><code>{command}</code></li>)}</ol> : <p>No commands recorded in this page.</p>}</details></div>
   </div>;
 }

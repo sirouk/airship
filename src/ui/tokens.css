@@ -46,9 +46,9 @@
   --density-chat-measure: 820px;
   --density-sidebar: 232px;
   /* The rail's three states resolve to one width token so `.app-shell` and
-     `.topbar` can share a grid template and the brand block keeps tracking the
-     rail exactly. Unconsumed until the rail is rebuilt; `--density-sidebar` is
-     still the value in force. */
+     `.topbar` share a grid template and the brand block keeps tracking the
+     rail exactly. `standard` stays density-driven; the other two are fixed,
+     because 60px is an icon target and 0px is nothing. */
   --rail-width: var(--density-sidebar);
   /* One measure for the Connect surface, inherited by every descendant, in
      place of the four competing max-widths it carries today. */
@@ -171,6 +171,21 @@ body {
 :root[data-body-font="system-serif"] {
   font-family: Georgia, "Times New Roman", serif;
 }
+
+/*
+ * The rail's three states, on one token.
+ *
+ * `standard` stays density-driven (232px comfortable, 210px compact) because a
+ * labelled rail is text and text is what density scales. `rail` is 60px: an
+ * 8px gutter around a 44px touch target, which is the smallest column that can
+ * still be pressed accurately. `focus` is nothing at all.
+ *
+ * `data-rail` is written by the shell from the remembered preference, so the
+ * default below only ever paints during the first frame of a cold load.
+ */
+:root[data-rail="standard"] { --rail-width: var(--density-sidebar); }
+:root[data-rail="rail"] { --rail-width: 60px; }
+:root[data-rail="focus"] { --rail-width: 0px; }
 
 :root[data-type-scale="large"] {
   --type-scale: 1.125;

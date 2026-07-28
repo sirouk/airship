@@ -9,11 +9,21 @@ describe("progressive disclosure coherence contract", () => {
     expect(source.indexOf("billing-gate-preview")).toBeLessThan(source.indexOf("{accountReadable ? <>"));
   });
 
-  it("puts the source task before mobile posture detail", async () => {
+  // Replaces "puts the source task before mobile posture detail", which pinned
+  // an ordering *between two renderings of the same facts*: a desktop-only
+  // three-card grid and a phone-only disclosure. Ordering them correctly was
+  // never the invariant worth having — rendering them once was. This is the
+  // stronger form: exactly one posture element, at every width, and the trust
+  // facts computed in exactly one place, so the 660-character transport
+  // paragraph cannot be printed twice on one screen again.
+  it("states the source posture exactly once, at every width", async () => {
     const source = await readFile(new URL("./sources-view.tsx", import.meta.url), "utf8");
-    expect(source.indexOf('class="git-import"')).toBeLessThan(source.indexOf('class="git-sources-trust git-sources-trust-desktop"'));
-    expect(source).toContain('class="git-sources-trust-disclosure"');
-    expect(source).toContain("<SourceTrustFacts client={client} />");
+    const styles = await readFile(new URL("./sources-view.css", import.meta.url), "utf8");
+    expect(source.match(/class="git-sources-trust-disclosure"/gu)).toHaveLength(1);
+    expect(source.match(/<SourceTrustFacts /gu)).toHaveLength(1);
+    expect(source).not.toContain("git-sources-trust-desktop");
+    expect(source.match(/capabilities\.remote\.detail/gu)).toHaveLength(1);
+    expect(styles).not.toMatch(/\.git-sources-trust-disclosure\s*\{[^}]*display:\s*none/u);
   });
 
   it("advertises the bounded trust navigation contract", async () => {

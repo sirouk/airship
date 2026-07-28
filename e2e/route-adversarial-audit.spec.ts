@@ -128,7 +128,23 @@ test("every desktop and mobile route remains usable in the live local lab", asyn
 async function navigate(page: Page, route: Route, mobile: boolean): Promise<void> {
   if (route.deepLinkOnly) { await page.goto(`/#${route.hash}`); return; }
   if (!mobile) {
-    await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: route.label, exact: true }).click();
+    const primary = page.getByRole("navigation", { name: "Primary" });
+    // AMENDED: three destinations are no longer resting rail rows. `All
+    // conversations` is the pinned last row of the rail's conversation
+    // disclosure, `Editor`/`Terminal` are behind the Workspace expander, and
+    // `Profiles` is the pinned profile row's `Manage profiles`. Every one is
+    // still reached from the rail by pointer, one gesture deeper, and this
+    // helper is what asserts that — a missing disclosure fails the whole audit.
+    if (route.hash === "sessions") {
+      await primary.getByRole("button", { name: "Expand recent conversations" }).click();
+    } else if (route.hash === "editor" || route.hash === "terminal") {
+      const expander = primary.getByRole("button", { name: "Expand Workspace" });
+      if (await expander.count()) await expander.click();
+    } else if (route.hash === "profiles") {
+      await page.locator(".sidebar .profile-switcher").getByRole("button", { name: "Manage profiles" }).click();
+      return;
+    }
+    await primary.getByRole("button", { name: route.label, exact: true }).click();
     return;
   }
   if (route.primaryMobile) {

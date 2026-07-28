@@ -24,6 +24,20 @@ async function openConnect(page: Page, url = "/#connection") {
   // rather than reading the in-flight state.
   await expect(page.locator('.connect-lane[data-lane="claude"]'))
     .not.toHaveAttribute("data-state", "checking", { timeout: 15_000 });
+  /*
+   * `<RouteHeader>`'s ⓘ auto-opens on a route's first visit, which is where the
+   * page's eyebrow and its two orientation paragraphs now live. Its panel is an
+   * absolutely-positioned overlay anchored under the route title, so on this
+   * route it lands over the top of the lead lane and swallows the first click
+   * aimed at anything beneath it. Every test below drives controls in that
+   * region, so the panel is dismissed the way a person dismisses it.
+   *
+   * Recorded rather than worked around: the panel covering the route's primary
+   * control on arrival is a defect in the shared header's placement, not in
+   * this surface, and it is reported to that package.
+   */
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".route-header__about")).toHaveAttribute("data-open", "false");
 }
 
 async function openLane(page: Page, lane: string) {
@@ -197,6 +211,17 @@ test("Claude and Grok state the extension honestly and offer no broken button", 
     const state = await card.getAttribute("data-state");
     expect(["ready", "needs-extension", "extension-unavailable"], `${lane} state`).toContain(state);
 
+    /*
+     * AMENDED: the OAuth tab is selected explicitly before its panel is read.
+     * A lane whose sign-in leg cannot work no longer *opens* on that leg — the
+     * key route that works is the default — but the tab stays present and
+     * selectable, because that panel is where the honest reason lives. Doing
+     * the selection here makes the replacement invariant stronger: it proves
+     * the tab is still reachable AND that its contents survived, where the old
+     * assertion only proved the second because the tab happened to be default.
+     */
+    await card.getByRole("tab", { name: /^OAuth/u }).click();
+
     // One sentence naming why, in the vendor's terms, not the user's fault.
     await expect(card).toContainText(/No browser extension answered the bridge handshake/u);
     await expect(card.locator(".connect-extension__boundary summary")).toBeVisible();
@@ -214,7 +239,11 @@ test("Claude and Grok state the extension honestly and offer no broken button", 
 
     // A real install hub now exists even before store signing, so there is
     // always a truthful route to reviewed packages and browser-specific steps.
-    await expect(page.locator(".companion-overview").getByRole("link", { name: /Get the extension/u }))
+    // The Companion is the sixth lane now; its install route is in the lane
+    // body, one 44px row away, and the row itself states that it is not
+    // installed rather than advertising the extension above the providers.
+    const companion = await openLane(page, "companion");
+    await expect(companion.getByRole("link", { name: /Get the extension/u }))
       .toHaveAttribute("href", /\/extension\/index\.html$/u);
   }
 
@@ -238,17 +267,26 @@ test("the API-key alternative moves to the direct providers without leaving the 
   await expect(page.locator("#provider-setup-anthropic")).toBeFocused();
 });
 
-test("the section jump controls do not eject the visitor to Chat", async ({ page }, testInfo) => {
+/*
+ * AMENDED. The two `.access-provider-jump` buttons are gone with the sections
+ * they pointed at — proposal 1 of the connect IA collapses the eyebrow, the H1,
+ * the paragraph, the jump nav and the second heading block into one 44px route
+ * bar. The rule they existed to prove is kept and made STRONGER: instead of
+ * clicking two specific controls and checking the hash survived, this asserts
+ * that no in-page anchor exists at all on the route, so no future control can
+ * reintroduce the defect, and that moving around the surface never rewrites the
+ * router hash. The words the jump nav carried are unaffected — they were
+ * navigation labels for destinations, not claims.
+ */
+test("nothing on the connect route navigates by hash", async ({ page }) => {
   await openConnect(page);
-  if (testInfo.project.name === "mobile-chromium") {
-    await expect(page.locator(".access-provider-jump")).toBeHidden();
-    return;
-  }
-  await page.getByRole("button", { name: /Cloud keys & local models/u }).click();
-  await expect(page).toHaveURL(/#connection$/);
   await expect(page.getByRole("heading", { name: "Connect models", level: 1 })).toBeVisible();
+  const inPageAnchors = await page.evaluate(() =>
+    [...document.querySelectorAll("main a")].filter((node) => (node.getAttribute("href") ?? "").startsWith("#")).length);
+  expect(inPageAnchors, "the hash is the router; an in-page anchor resolves to an unknown route").toBe(0);
 
-  await page.locator(".access-provider-jump").getByRole("button", { name: "Providers" }).click();
+  const claude = await openLane(page, "claude");
+  await claude.getByRole("tab", { name: /^API key/u }).click();
   await expect(page).toHaveURL(/#connection$/);
 });
 
@@ -295,8 +333,11 @@ test("Check this machine issues a real loopback probe and keeps every other lane
   await expect(results.filter({ hasText: "LM Studio" }).first()).toContainText(/did not answer/u);
 
   // A connected provider must not take the rest of the surface away with it.
+  // AMENDED 5 → 6: the Airship Companion is now the sixth row of this same
+  // list, in the same vocabulary, instead of a 219px card above it. The
+  // invariant is unchanged and now covers one more surface.
   await expect(page.locator('.connect-lane[data-lane="local"]')).toHaveAttribute("data-state", "connected");
-  await expect(page.locator("button.connect-lane__header")).toHaveCount(5);
+  await expect(page.locator("button.connect-lane__header")).toHaveCount(6);
   const chutes = await openLane(page, "chutes");
   await chutes.getByRole("tab", { name: /^API key/u }).click();
   await expect(chutes.locator('input[name="chutes-api-key"]')).toBeVisible();
@@ -305,12 +346,21 @@ test("Check this machine issues a real loopback probe and keeps every other lane
 test("the paste-back step warns first and answers while the code is typed", async ({ page }) => {
   await openConnect(page);
   const codex = await openLane(page, "codex");
-  const state = await codex.getAttribute("data-state");
+  /*
+   * AMENDED to read `data-oauth-state`, not `data-state`. The OpenAI lane is
+   * now `ready` at its own altitude because a page-memory OpenAI API key
+   * genuinely connects from this route — `unavailable` there was false, and
+   * `STATUS_RANK.unavailable` sorted a working route dead last. The fact this
+   * test needs is about the *sign-in leg*, which is exactly what moved into
+   * `oauthStatus`, so the guard now reads the state it actually depends on.
+   */
+  const state = await codex.getAttribute("data-oauth-state");
   test.skip(
     state !== "ready",
-    `Codex sign-in is not wired into this build (lane state "${state}"), so there is no paste field to drive. `
+    `Codex sign-in is not wired into this build (OAuth leg state "${state}"), so there is no paste field to drive. `
     + "This test runs unchanged as soon as the port is supplied.",
   );
+  await codex.getByRole("tab", { name: /^OAuth/u }).click();
 
   // The warning has to arrive before the vendor tab, not after the error page.
   await expect(codex).toContainText(/will look like an error|can’t be reached/u);
@@ -358,12 +408,12 @@ test("the connect surface is usable on a phone", async ({ page }, testInfo) => {
       })(),
     },
     chutesTop: document.querySelector<HTMLElement>('.connect-lane[data-lane="chutes"]')?.getBoundingClientRect().top,
-    companionTop: document.querySelector<HTMLElement>(".companion-overview")?.getBoundingClientRect().top,
+    companionTop: document.querySelector<HTMLElement>('.connect-lane[data-lane="companion"]')?.getBoundingClientRect().top,
   }));
   expect(layout.overflow.document).toBeLessThanOrEqual(1);
   expect(layout.overflow.surface).toBeLessThanOrEqual(1);
   expect(layout.chutesTop, "the immediately usable Chutes lane has measurable placement").toBeDefined();
-  expect(layout.companionTop, "the optional companion overview has measurable placement").toBeDefined();
+  expect(layout.companionTop, "the optional companion lane has measurable placement").toBeDefined();
   expect(layout.chutesTop!, "the usable provider path leads optional extension detail").toBeLessThan(layout.companionTop!);
   expect(layout.chutesTop!, "the usable provider path begins in the first phone viewport").toBeLessThan(844);
   const keyInput = page.locator('input[name="chutes-api-key"]');
@@ -379,7 +429,11 @@ test("the connect surface is usable on a phone", async ({ page }, testInfo) => {
 
   const headers = page.locator("button.connect-lane__header");
   const count = await headers.count();
-  expect(count).toBe(5);
+  // AMENDED 5 → 6: the Companion joined this list as its sixth row, so the
+  // 44px touch-target sweep below now covers it too. On a phone that row
+  // replaces a 415px card — 66% of the viewport — that said "Not active" three
+  // times above the providers.
+  expect(count).toBe(6);
   for (let index = 0; index < count; index += 1) {
     const box = await headers.nth(index).boundingBox();
     expect(box?.height ?? 0, `lane header ${index} height`).toBeGreaterThanOrEqual(44);

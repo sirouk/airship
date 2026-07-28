@@ -1,26 +1,90 @@
 .model-picker { position:relative; min-width:0; }
-.model-picker-trigger { display:flex; gap:8px; align-items:center; justify-content:space-between; width:100%; min-width:0; padding:5px 8px; overflow:hidden; border:1px solid var(--line); border-radius:var(--radius-control); color:var(--ink); background:transparent; font:var(--fs-micro)/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; white-space:nowrap; text-overflow:ellipsis; }
-.model-picker-value { flex:1; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
-.model-picker-popover { position:absolute; z-index:320; top:calc(100% + 7px); left:0; width:min(620px, calc(100vw - 28px)); max-height:min(650px, 70dvh); overflow:auto; padding:10px; border:1px solid var(--line-strong); border-radius:var(--radius-panel); background:var(--surface-raised); box-shadow:0 18px 60px rgba(0,0,0,.45); }
-.model-picker-popover > input { width:100%; font-size:16px; }
-.model-picker-toolbar { display:flex; gap:10px; align-items:flex-end; justify-content:space-between; margin:8px 0 5px; }
-.model-picker-facets { display:flex; flex-wrap:wrap; gap:5px; }
-.model-picker-facets button[aria-pressed="true"] { border-color:var(--accent-bright); box-shadow:inset 0 -2px var(--accent-bright); }
-.model-picker-sort { display:grid; flex:0 0 132px; gap:3px; color:var(--ink-faint); font:var(--fs-micro)/1.2 ui-monospace,SFMono-Regular,Menlo,monospace; text-transform:uppercase; }
-.model-picker-sort .menu-select-trigger { min-width:132px; min-height:31px; }
-.model-picker-sort .menu-select-popover { min-width:190px; }
-.model-picker-provenance { margin:0 0 8px; color:var(--ink-faint); font-size:var(--fs-micro); }
-.model-picker-list { display:grid; gap:3px; }
-.model-picker-list > button { display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:12px; width:100%; min-height:44px; text-align:left; }
-.model-logo { position:relative; flex:none; align-self:center; display:grid; place-items:center; width:22px; height:22px; overflow:hidden; border:1px solid var(--line); border-radius:6px; background:var(--surface-soft); color:var(--ink-muted); font:600 var(--fs-micro)/1 ui-sans-serif,system-ui,sans-serif; text-transform:uppercase; }
+
+/* Left-aligned, because it is a control and not a banner: as a `<button>` it
+   inherited `text-align: center`, so a model id floated in the middle of a
+   914px bar with ~350px of nothing on each side. */
+.model-picker-trigger { display:flex; gap:var(--sp-2); align-items:center; justify-content:flex-start; width:100%; min-width:0; min-height:44px; padding:var(--sp-1) var(--sp-2); overflow:hidden; border:1px solid var(--line-strong); border-radius:var(--radius-control); color:var(--ink); background:var(--surface-soft); font:var(--fs-caption)/1.45 var(--font-mono); text-align:left; white-space:nowrap; }
+.model-picker-trigger:hover:not(:disabled),
+.model-picker-trigger[aria-expanded="true"] { border-color:var(--accent-bright); }
+.model-picker-value { min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+.model-picker-badge { flex:0 1 auto; min-width:0; overflow:hidden; color:var(--accent-bright); font:var(--fs-micro)/1.2 var(--font-body); text-overflow:ellipsis; }
+.model-picker-caret { margin-left:auto; color:var(--ink-faint); }
+
+/* Three regions, and only the middle one scrolls. The whole popover used to be
+   one `overflow: auto` box, so search, facets, sort and the provenance caveat
+   all left the screen at scrollTop 400. */
+.model-picker-popover { position:absolute; z-index:320; top:calc(100% + var(--sp-2)); left:0; display:flex; flex-direction:column; width:max(100%, min(680px, calc(100vw - 28px))); max-height:min(650px, 70dvh); border:1px solid var(--line-strong); border-radius:var(--radius-panel); background:var(--surface-raised); box-shadow:0 18px 60px rgba(0,0,0,.45); }
+.model-picker[data-open="true"] .model-picker-popover { overflow:hidden; }
+
+.model-picker-header { display:grid; flex:0 0 auto; gap:var(--sp-2); padding:var(--sp-2); border-bottom:1px solid var(--line); }
+.model-picker-sheet-bar { display:none; }
+.model-picker-header > input { width:100%; min-height:40px; font-size:var(--fs-body); }
+.model-picker-facets { display:flex; flex-wrap:wrap; gap:var(--sp-1); }
+.model-picker-facets button { display:inline-flex; gap:var(--sp-1); align-items:center; min-height:32px; padding:0 var(--sp-2); border:1px solid var(--line-control, var(--line-strong)); border-radius:var(--radius-chip, 999px); color:var(--ink-muted); background:transparent; font-size:var(--fs-caption); }
+.model-picker-facets button small { color:var(--ink-faint); font-size:var(--fs-micro); font-variant-numeric:tabular-nums; }
+.model-picker-facets button[aria-pressed="true"] { color:var(--ink); border-color:var(--accent-bright); background:color-mix(in srgb, var(--accent) 10%, transparent); }
+.model-picker-status { display:flex; gap:var(--sp-2); align-items:center; justify-content:space-between; min-height:24px; color:var(--ink-muted); font-size:var(--fs-caption); }
+.model-picker-status .menu-select-trigger { min-height:32px; }
+
+.model-picker-list { flex:1 1 auto; display:flex; flex-direction:column; gap:2px; overflow:auto; padding:var(--sp-2); }
+.model-picker-list > button { flex:0 0 auto; }
+/* Explicit placement, not auto-flow: a row carries five cells and the phone
+   layout reflows them into four rows, which auto-placement cannot do without
+   stacking two of them into the same slot. */
+.model-picker-list > button { display:block; width:100%; min-height:44px; padding:var(--sp-1) var(--sp-2); text-align:left; }
+.model-row { display:grid; grid-template-columns:auto minmax(0,1fr) auto; gap:2px var(--sp-2); align-items:center; width:100%; }
+.model-row > .model-logo { grid-area:1 / 1 / 3 / 2; }
+.model-row > .model-row-id { grid-area:1 / 2 / 2 / 3; }
+.model-row > .model-row-price { grid-area:1 / 3 / 2 / 4; }
+.model-row > .model-row-capabilities { grid-area:2 / 2 / 3 / 3; }
+.model-row > .model-row-metrics { grid-area:2 / 3 / 3 / 4; }
+.model-row-id { min-width:0; overflow:hidden; color:var(--ink); font:600 var(--fs-caption)/1.35 var(--font-mono); text-overflow:ellipsis; white-space:nowrap; }
+/* Price sits at ink weight on line 1: it is the number a person is about to
+   commit to, and it used to be the quietest text on the row. */
+.model-row-price { color:var(--ink); font:600 var(--fs-caption)/1.35 var(--font-body); font-variant-numeric:tabular-nums; white-space:nowrap; }
+.model-row-capabilities { display:flex; flex-wrap:wrap; gap:0 var(--sp-1); min-width:0; color:var(--ink-muted); font-size:var(--fs-micro); }
+.model-row-capabilities > * + *::before { content:"· "; color:var(--ink-faint); }
+.model-row-flag { color:var(--accent-bright); font-style:normal; font-weight:700; }
+/* Popularity is unverified provider telemetry. It was painted `--v-verified`,
+   which is the colour reserved for a cryptographic verdict. */
+.model-row-metrics { color:var(--ink-faint); font-size:var(--fs-micro); font-variant-numeric:tabular-nums; white-space:nowrap; }
+.model-picker-list > button[aria-selected="true"] { border-color:var(--accent-bright); }
+.model-picker-list > button[data-active="true"] { border-color:var(--line-strong); background:var(--surface-soft); outline:none; }
+.model-picker-empty { margin:0; padding:var(--sp-3); color:var(--ink-muted); font-size:var(--fs-caption); }
+
+.model-picker-footer { flex:0 0 auto; display:grid; gap:var(--sp-2); padding:var(--sp-2); border-top:1px solid var(--line); background:var(--surface-raised); }
+.model-picker-provenance { margin:0; color:var(--ink-faint); font-size:var(--fs-micro); line-height:1.45; }
+.model-picker-show-all { width:100%; min-height:40px; }
+
+.model-logo { position:relative; flex:none; align-self:center; display:grid; place-items:center; width:22px; height:22px; overflow:hidden; border:1px solid var(--line); border-radius:var(--radius-control); background:var(--surface-soft); color:var(--ink-muted); font:600 var(--fs-micro)/1 var(--font-body); text-transform:uppercase; }
 .model-logo-img { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; background:var(--surface-soft); }
 .model-picker-trigger .model-logo { width:20px; height:20px; }
-.model-picker-list > button > span { display:grid; gap:3px; min-width:0; }
-.model-picker-list > button > span:last-child { text-align:right; }
-.model-picker-list strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.model-picker-list small { color:var(--ink-faint); }
-.model-picker-list em { color:var(--v-verified); font-style:normal; }
-.model-picker-list .recommended:first-child { border-left:2px solid var(--accent); }
-.model-picker-list>button[data-active="true"] { border-color:var(--line-strong); background:var(--surface-soft); outline:none; }
-.model-picker-show-all { width:100%; margin-top:7px; }
-@media(max-width:640px), (max-width:950px) and (max-height:500px){.model-picker-popover{position:fixed; inset:auto 8px max(8px,env(safe-area-inset-bottom)) 8px; width:auto; max-height:70dvh}.model-picker-toolbar{display:grid}.model-picker-sort{width:100%; flex-basis:auto}.model-picker-list>button{grid-template-columns:auto minmax(0,1fr)}.model-picker-list>button>span:last-child{text-align:left}}
+
+@media(max-width:640px), (max-width:950px) and (max-height:500px) {
+  /* A sheet says what it is and how to leave it. It used to paint from y=214
+     over a trigger at y=404, swallowing its own control with no explanation. */
+  .model-picker-popover { position:fixed; inset:auto var(--sp-2) max(var(--sp-2), env(safe-area-inset-bottom)) var(--sp-2); width:auto; max-height:80dvh; }
+  .model-picker-sheet-bar { display:flex; gap:var(--sp-2); align-items:center; justify-content:space-between; min-height:44px; }
+  .model-picker-done { min-height:44px; padding:0 var(--sp-3); }
+  .model-picker-header > input { min-height:44px; font-size:16px; }
+  /* One scroll-snap row, not a five-row 240px stack that put the first result
+     384px into a 652px sheet. The `width` reset is load-bearing: the connect
+     surface stretches every button to 100% at this breakpoint, which is what
+     turned a wrapping chip row into that stack in the first place. */
+  .model-picker-facets { flex-wrap:nowrap; overflow-x:auto; scroll-snap-type:x mandatory; -webkit-overflow-scrolling:touch; }
+  .model-picker .model-picker-facets button { flex:0 0 auto; width:auto; min-height:44px; scroll-snap-align:start; }
+  .model-picker .model-picker-status .menu-select-trigger { width:auto; min-height:44px; }
+  .model-picker .model-picker-done { width:auto; }
+  /* The trigger wraps rather than clipping: the model id and the
+     recommendation that qualifies it are both the answer to "what am I on". */
+  .model-picker-trigger { flex-wrap:wrap; white-space:normal; }
+  .model-picker-value { overflow:visible; white-space:normal; overflow-wrap:anywhere; }
+  .model-picker-badge { flex-basis:100%; overflow:visible; }
+  /* Model ids never ellipsise here: `…-2507-TEE` and `…-Thinking-TEE` are the
+     distinguishing suffixes, so a cut from the right removes the identity. */
+  .model-row { grid-template-columns:auto minmax(0,1fr); align-items:start; }
+  .model-row > .model-row-id { grid-area:1 / 2 / 2 / 3; white-space:normal; overflow:visible; overflow-wrap:anywhere; }
+  .model-row > .model-row-price { grid-area:2 / 2 / 3 / 3; white-space:normal; }
+  .model-row > .model-row-capabilities { grid-area:3 / 1 / 4 / 3; }
+  .model-row > .model-row-metrics { grid-area:4 / 1 / 5 / 3; white-space:normal; }
+}

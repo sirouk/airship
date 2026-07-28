@@ -1,132 +1,63 @@
 .connect-surface {
   display: grid;
-  gap: 14px;
+  gap: var(--sp-3);
   min-width: 0;
 }
 
-.connect-surface__heading > div > span {
-  color: var(--accent-bright);
-  font: 700 var(--fs-micro)/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-}
-
-.connect-surface__heading h2 {
-  margin: 6px 0 6px;
-  font-size: var(--fs-h3);
-  line-height: 1.15;
-}
-
-.connect-surface__heading p {
-  max-width: 68ch;
-  margin: 0;
-  color: var(--ink-muted);
-  font-size: var(--fs-meta);
-  line-height: 1.5;
-}
-
-.companion-overview {
+/*
+ * The Companion body. Its three readings keep their `dt`/`dd` pairs and their
+ * exact value strings; what changed is that they are one wrapping line inside a
+ * lane instead of a 50px boxed grid rendered above the providers.
+ */
+.connect-companion {
   display: grid;
-  gap: 10px;
-  padding: 12px 13px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-panel);
-  background: linear-gradient(135deg, var(--surface-raised), var(--surface));
+  gap: var(--sp-2);
+  justify-items: start;
 }
 
-.companion-overview__heading {
+.connect-companion__facts {
   display: flex;
-  gap: 9px;
-  align-items: center;
-  min-width: 0;
-}
-
-.companion-overview__dot {
-  width: 8px;
-  height: 8px;
-  flex: 0 0 auto;
-  border: 1px solid var(--line-strong);
-  border-radius: 999px;
-  background: var(--ink-faint);
-}
-
-.companion-overview__dot.ready {
-  border-color: var(--v-verified);
-  background: var(--v-verified);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--v-verified) 14%, transparent);
-}
-
-.companion-overview__heading > div {
-  display: grid;
-  flex: 1 1 auto;
-  min-width: 0;
-  gap: 1px;
-}
-
-.companion-overview__heading strong {
-  font-size: var(--fs-meta);
-}
-
-.companion-overview__heading small,
-.companion-overview__host {
-  color: var(--ink-faint);
-  font-size: var(--fs-micro);
-  line-height: 1.4;
-}
-
-.companion-overview__heading a {
-  flex: 0 0 auto;
-}
-
-.companion-overview__link {
-  color: var(--accent-bright);
-  font-size: var(--fs-caption);
-  font-weight: 700;
-  text-decoration: none;
-}
-
-.companion-overview > p {
-  max-width: 76ch;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-3);
   margin: 0;
-  color: var(--ink-muted);
-  font-size: var(--fs-caption);
-  line-height: 1.5;
 }
 
-.companion-overview__facts {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 1px;
-  margin: 0;
-  overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-control);
-  background: var(--line);
-}
-
-.companion-overview__facts > div {
-  display: grid;
+.connect-companion__facts > div {
+  display: flex;
+  gap: var(--sp-1);
+  align-items: baseline;
   min-width: 0;
-  gap: 2px;
-  padding: 8px 9px;
-  background: var(--surface-soft);
 }
 
-.companion-overview__facts dt {
+.connect-companion__facts dt {
   color: var(--ink-faint);
   font: var(--fs-micro)/1.25 var(--font-mono);
   letter-spacing: 0.03em;
   text-transform: uppercase;
 }
 
-.companion-overview__facts dd {
-  min-width: 0;
+.connect-companion__facts dd {
   margin: 0;
-  overflow: hidden;
   color: var(--ink);
   font-size: var(--fs-caption);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+}
+
+.connect-companion__host {
+  max-width: 66ch;
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: var(--fs-caption);
+  line-height: 1.5;
+}
+
+.connect-companion__link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  color: var(--accent-bright);
+  font-size: var(--fs-caption);
+  font-weight: 700;
+  text-decoration: none;
 }
 
 .connect-lane-list {
@@ -162,13 +93,21 @@
   background: var(--surface-soft);
 }
 
+/*
+ * One 44px row, and one shared inline padding with the body so an open lane's
+ * copy hangs under its own title instead of 34px to the left of it.
+ */
+.connect-lane {
+  --lane-gutter: 32px;
+}
+
 .connect-lane__header {
   display: flex;
-  gap: 11px;
+  gap: var(--sp-3);
   align-items: center;
   width: 100%;
-  min-height: 56px;
-  padding: 10px 13px;
+  min-height: 44px;
+  padding: var(--sp-1) var(--sp-3);
   border: 0;
   border-radius: var(--radius-panel);
   background: none;
@@ -189,30 +128,65 @@
 }
 
 .connect-lane__identity {
-  display: grid;
+  display: flex;
   flex: 1 1 auto;
+  flex-wrap: wrap;
+  gap: 0 var(--sp-2);
+  align-items: baseline;
   min-width: 0;
-  gap: 1px;
 }
 
 .connect-lane__identity strong {
-  font-size: var(--fs-body);
-  font-weight: 700;
+  font-size: var(--fs-lead);
+  font-weight: 600;
+  line-height: 1.2;
 }
 
 .connect-lane__identity small {
-  color: var(--ink-faint);
-  font-size: var(--fs-micro);
+  min-width: 0;
+  color: var(--ink-muted);
+  font-size: var(--fs-caption);
+  line-height: 1.3;
+}
+
+/* Observed values, promoted onto the closed row. Never a negation: a row that
+   says "Not observed" three times is the advert this list stopped being. */
+.connect-lane__facts {
+  display: flex;
+  flex: 0 1 auto;
+  gap: var(--sp-2);
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink-muted);
+  font: var(--fs-micro)/1.2 var(--font-mono);
+  white-space: nowrap;
 }
 
 .connect-lane__header .seal {
   flex: 0 0 auto;
 }
 
+.connect-lane__chevron {
+  flex: 0 0 auto;
+  color: var(--ink-faint);
+  font-size: var(--fs-caption);
+  transition: transform 120ms ease;
+}
+
+.connect-lane[data-open="true"] .connect-lane__chevron {
+  transform: rotate(180deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .connect-lane__chevron {
+    transition: none;
+  }
+}
+
 .connect-lane__body {
   display: grid;
-  gap: 11px;
-  padding: 0 13px 14px;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-3) var(--sp-3) calc(var(--sp-3) + var(--lane-gutter));
 }
 
 .connect-lane__body[hidden] {
@@ -405,25 +379,65 @@
   background: transparent;
 }
 
+/*
+ * Selected and unselected were byte-identical — same background, same border —
+ * so which credential path was active was readable through `aria-selected` and
+ * not through pixels. This adopts the route tabs' own language: brass tint,
+ * brass border, a 2px brass bottom rule, and the label at full weight.
+ */
 .connect-method__switch > button[aria-selected="true"] {
   color: var(--ink);
-  background: var(--surface-raised);
-  box-shadow: 0 0 0 1px var(--line-strong);
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--accent-bright) 55%, transparent),
+    inset 0 -2px 0 var(--accent-bright);
 }
 
 .connect-method__switch span {
   font-size: var(--fs-caption);
+  font-weight: 400;
+}
+
+.connect-method__switch > button[aria-selected="true"] span {
   font-weight: 700;
 }
 
 .connect-method__switch small {
   min-width: 0;
-  overflow: hidden;
   color: var(--ink-faint);
   font: var(--fs-micro)/1.2 var(--font-mono);
   text-align: right;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* No ellipsis: these sub-labels are short by construction now, and a clipped
+     "Add the Airship e…" is a status a person cannot read. */
+  overflow-wrap: anywhere;
+}
+
+.connect-method__switch > button[aria-selected="true"] small {
+  color: var(--ink-muted);
+}
+
+.connect-method__blocked {
+  display: grid;
+  gap: var(--sp-2);
+  justify-items: start;
+}
+
+.connect-method__blocked p {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: flex-start;
+  max-width: 66ch;
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--fs-caption);
+  line-height: 1.5;
+}
+
+.connect-method__blocked svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: var(--v-caution);
 }
 
 .connect-method [role="tabpanel"][hidden] {
@@ -640,40 +654,25 @@
 
 @media (max-width: 640px) {
   /*
-   * A phone-sized first visit must lead with the connection that can actually
-   * make chat useful. The companion remains fully available below the provider
-   * lanes (and inside the lanes that require it), but it must not push the
-   * already-open Chutes credential path below the first viewport.
+   * What used to be phone-only is now the layout at every width: the Companion
+   * is the last row of the lane list on desktop too, and the second heading
+   * block it sat under no longer exists. What is left here is touch sizing.
+   *
+   * `.connect-lane__detail { display: none }` was deleted rather than kept: it
+   * was the one override that removed a status sentence instead of a heading,
+   * so a phone read a lane's state and never its reason.
    */
-  .connect-lane-list {
-    order: 1;
-  }
-
-  .companion-overview {
-    order: 2;
-  }
-
-  /*
-   * The route heading already explains the provider boundary. Repeating a
-   * second heading and four-line introduction here delayed the first usable
-   * credential control by more than a viewport on a 390px phone.
-   */
-  .connect-surface__heading {
-    display: none;
+  .connect-lane {
+    --lane-gutter: 0px;
   }
 
   .connect-lane__header {
-    min-height: 48px;
-    padding: 7px 10px;
+    padding: var(--sp-1) var(--sp-2);
   }
 
   .connect-lane__body {
-    gap: 7px;
-    padding: 0 10px 10px;
-  }
-
-  .connect-lane__detail {
-    display: none;
+    gap: var(--sp-2);
+    padding: 0 var(--sp-2) var(--sp-2);
   }
 
   .connect-lane__header,
@@ -700,16 +699,10 @@
     width: auto;
   }
 
-  .companion-overview__heading {
-    flex-wrap: wrap;
-  }
-
-  .companion-overview__heading a {
-    width: 100%;
-    justify-content: center;
-  }
-
-  .companion-overview__facts {
-    grid-template-columns: 1fr;
+  /* The promoted fact strip is a convenience, not a home: the identical three
+     `dt`/`dd` pairs render in the lane body at every width. It yields the row
+     so the seal and its word — which have no second home — never have to. */
+  .connect-lane__facts {
+    display: none;
   }
 }

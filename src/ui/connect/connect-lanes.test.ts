@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { extensionBridgeObservation } from "../../capabilities/extension-bridge";
-import { CONNECT_LANE_IDS, describeConnectLanes, type ConnectLaneId, type ConnectLaneInput } from "./connect-lanes";
+import {
+  connectLaneCountLabel,
+  connectLaneCountSeal,
+  CONNECT_LANE_IDS,
+  describeConnectLanes,
+  type ConnectLaneId,
+  type ConnectLaneInput,
+} from "./connect-lanes";
 import { observeHostExtensionSupport } from "./extension-bridge-presence";
 
 const DESKTOP = observeHostExtensionSupport(
@@ -48,10 +55,79 @@ describe("connect lanes", () => {
     expect(lane(describeConnectLanes(input()), "grok").status.kind).toBe("ready");
   });
 
-  it("puts a connected lane first without reshuffling the rest", () => {
+  it("puts a connected lane first without reshuffling the rest, and never above the providers", () => {
     const order = describeConnectLanes(input({ grok: { connected: true } })).map((entry) => entry.id);
     expect(order[0]).toBe("grok");
-    expect(order.slice(1)).toEqual(["chutes", "codex", "claude", "local"]);
+    expect(order.slice(1)).toEqual(["chutes", "codex", "claude", "local", "companion"]);
+  });
+
+  it("pins the Companion last even when its own extension is answering", () => {
+    // The one row that connects nothing may never outrank the providers this
+    // page exists to connect — which is what a rank-by-status Companion would
+    // do the moment the extension answered, and what its 219px/415px card did
+    // unconditionally before it became a row.
+    const lanes = describeConnectLanes(input({
+      bridge: extensionBridgeObservation({
+        kind: "answered",
+        version: "1.4.0",
+        providers: ["anthropic"],
+        unavailable: [],
+        elapsedMs: 9,
+      }),
+    }));
+    expect(lanes[lanes.length - 1]?.id).toBe("companion");
+    expect(lane(lanes, "companion").status.kind).toBe("connected");
+    expect(lane(lanes, "companion").vendor).toBe("Extension 1.4.0");
+    expect(lane(lanes, "companion").facts?.map((fact) => fact.label)).toEqual([
+      "Provider relay",
+      "Encrypted cache",
+      "Background compute",
+    ]);
+  });
+
+  it("says checking, never not-installed, while the Companion probe is in flight", () => {
+    const companion = lane(describeConnectLanes(input({ bridge: undefined })), "companion");
+    expect(companion.status.kind).toBe("checking");
+    expect(companion.vendor).toBe("Checking this tab");
+    // A negation strip is never promoted onto the closed row: three cells
+    // reading "Not observed / Not active / Not active" are what the qualifier
+    // already says in one clause.
+    expect(companion.facts).toBeUndefined();
+  });
+
+  it("offers a Companion install only where there is a page to install from", () => {
+    const withPage = lane(describeConnectLanes(input({ extensionInstallUrl: INSTALL_URL })), "companion");
+    expect(withPage.vendor).toBe("Not installed");
+    expect(withPage.status.label).toBe("Get the extension");
+    const withoutPage = lane(describeConnectLanes(input()), "companion");
+    expect(withoutPage.vendor).toBe("No install page in this build");
+    expect(withoutPage.status.detail).toContain("did not configure the Airship Companion install hub");
+    const androidHost = lane(describeConnectLanes(input({ host: CHROME_ANDROID })), "companion");
+    expect(androidHost.vendor).toBe("Not possible in this browser");
+    expect(androidHost.status.detail).toContain("cannot install extensions");
+    // "cannot host one" and "we have not shipped one" are different facts and
+    // keep different words: the second is Airship's gap, not the browser's.
+    const iosHost = lane(describeConnectLanes(input({
+      host: observeHostExtensionSupport("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15"),
+    })), "companion");
+    expect(iosHost.vendor).toBe("Not published for this browser");
+    expect(iosHost.status.label).toBe("Not published here");
+    expect(iosHost.status.detail).toContain("Airship does not publish one yet");
+  });
+
+  it("never renders a lane whose qualifier repeats its own title", () => {
+    for (const entry of describeConnectLanes(input())) {
+      expect(entry.vendor, entry.id).not.toBe(entry.title);
+    }
+    expect(lane(describeConnectLanes(input()), "chutes").vendor).toBe("Encrypted inference with per-turn evidence");
+  });
+
+  it("counts what is true, from the same lanes the list renders", () => {
+    expect(connectLaneCountLabel(describeConnectLanes(input()))).toMatch(/^No model connected · \d+ ready$/u);
+    expect(connectLaneCountSeal(describeConnectLanes(input()))).toBe("none");
+    const connected = describeConnectLanes(input({ chutes: { connected: true, signInAvailable: true } }));
+    expect(connectLaneCountLabel(connected)).toMatch(/^Chutes connected · \d+ more ready$/u);
+    expect(connectLaneCountSeal(connected)).toBe("verified");
   });
 
   it("keeps every other lane offerable once Chutes is connected", () => {
@@ -84,10 +160,22 @@ describe("connect lanes", () => {
     expect(lane(describeConnectLanes(input()), "chutes").summary).toMatch(/sign in/iu);
   });
 
-  it("never offers a ChatGPT sign-in the build cannot start", () => {
+  it("never offers a ChatGPT sign-in the build cannot start, and does not bury the key route that works", () => {
     const codex = lane(describeConnectLanes(input({ codex: { connected: false, available: false } })), "codex");
-    expect(codex.status.kind).toBe("unavailable");
+    // The lane describes the lane: an OpenAI API key connects from this page,
+    // so `unavailable` at lane altitude was false *and* sorted a working route
+    // dead last through `STATUS_RANK`. The sign-in state is not softened — it
+    // moves to `oauthStatus`, which is what the method tab and its blocked
+    // panel read, and where it is true. This is stronger than the old
+    // assertion: it pins both altitudes at once instead of one.
+    expect(codex.status.kind).toBe("ready");
+    expect(codex.status.label).toBe("API key only");
+    expect(codex.oauthStatus?.kind).toBe("unavailable");
+    expect(codex.oauthStatus?.label).toBe("Not available here");
+    expect(codex.oauthStatus?.detail).toContain("not configured in this build");
     expect(codex.summary).not.toMatch(/sign in with your chatgpt/iu);
+    const order = describeConnectLanes(input({ codex: { connected: false, available: false } })).map((entry) => entry.id);
+    expect(order.indexOf("codex")).toBeLessThan(order.indexOf("companion"));
   });
 
   it("warns about the error-looking page before the Codex tab is opened", () => {

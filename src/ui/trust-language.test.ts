@@ -9,6 +9,18 @@ describe("trust language", () => {
     expect(proofStatusLabel("partial")).toBe("Asserted");
     expect(claimLanguage("cpuTee")).toEqual({ primary: "Protected CPU runtime", technical: "CPU TEE" });
   });
+  it("speaks absence as absence and keeps the author in an assertion", () => {
+    // "Established" meant two opposite things 183px apart: the rail counted
+    // "7 established" for claims only recorded, while the metric beside it read
+    // "Not established" to mean nothing was proven. The word is retired.
+    expect(proofStatusLabel("unavailable")).toBe("No evidence");
+    for (const status of ["verified", "partial", "failed", "expired", "unavailable"] as const) {
+      expect(proofStatusLabel(status).toLowerCase()).not.toContain("establish");
+    }
+    // "Recorded" would say Airship wrote it down and drop the party that said
+    // it. "Asserted" keeps the author, which is the claim being made.
+    expect(proofStatusLabel("partial")).not.toBe("Recorded");
+  });
   it("renders relative ages while timestamps remain available for time metadata", () => {
     expect(relativeEvidenceAge("2026-07-18T12:57:00.000Z", Date.parse("2026-07-18T13:00:00.000Z"))).toBe("3 minutes ago");
   });

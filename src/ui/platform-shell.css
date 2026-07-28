@@ -90,8 +90,28 @@ button.status-seal:hover { border-color: var(--line-strong); background: var(--s
 .preferences-dialog__reset { width: 100%; margin-top: 1rem; }
 
 .trust-sheet { width: min(34rem, 100%); padding: 1rem; border: 1px solid var(--line-strong); border-radius: var(--radius-panel); background: var(--surface-raised); box-shadow: var(--shadow); }
-.trust-sheet > div > button { display: grid; grid-template-columns: 10rem minmax(0,1fr) auto; align-items: center; gap: .75rem; width: 100%; min-height: 3.75rem; padding: .625rem .75rem; border-width: 1px 0 0; text-align: left; }
-.trust-sheet > div small { overflow: visible; color: var(--ink-muted); font-size: .6875rem; text-overflow: clip; white-space: normal; }
+/* Descendant, not child: the rows sit inside a per-scope <section> now. The
+   selector used to be `> div > button`, which silently stopped matching when
+   the grouping landed and dropped the whole three-column grid. */
+.trust-sheet .claim-rows > button { display: grid; grid-template-columns: minmax(8rem, 12rem) minmax(0,1fr) auto; align-items: center; gap: .75rem; width: 100%; min-height: 3.75rem; padding: .625rem .75rem; border-width: 1px 0 0; text-align: left; }
+.trust-sheet .claim-rows small { overflow: visible; color: var(--ink-muted); font-size: .6875rem; text-overflow: clip; white-space: normal; }
+/* The sheet is the destination of the ladder, not a rung on it. `Secure
+   hardware n…` and `Browser / Edge run…` were truncated verdicts at the one
+   place the full claim is supposed to arrive — the same rule `popover.css`
+   already applies to the identical rows in the session status popover. */
+.trust-sheet .claim-rows .seal { max-width: 100%; }
+.trust-sheet .claim-rows .seal__label { overflow: visible; text-overflow: clip; white-space: normal; }
+
+/*
+ * The sheet groups its rows by the band that owns them. Every axis still
+ * renders its own row with its own words — the grouping adds two headings and
+ * removes nothing, so the four-axis posture survives the topbar chip having
+ * stopped speaking for two of them.
+ */
+.trust-sheet__scope { margin-top: 1rem; }
+.trust-sheet__scope:first-of-type { margin-top: .5rem; }
+.trust-sheet__scope > h3 { margin: 0; }
+.trust-sheet__where { margin: .25rem 0 .5rem; color: var(--ink-muted); font-size: .75rem; line-height: 1.45; }
 
 .pwa-update { position: fixed; z-index: 90; right: max(1rem, env(safe-area-inset-right)); bottom: max(1rem, env(safe-area-inset-bottom)); display: flex; gap: 1rem; align-items: center; max-width: min(30rem, calc(100vw - 2rem)); padding: .75rem; border: 1px solid var(--v-caution); border-radius: var(--radius-panel); background: var(--surface-raised); box-shadow: var(--shadow); transition: opacity 120ms ease, transform 120ms ease; }
 .pwa-update span, .pwa-update small { display: block; }

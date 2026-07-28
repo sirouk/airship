@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ChutesEndpointEvidenceRecord } from "../attestation/provider-types";
 import { createLocalReceipt } from "../receipts/types";
+import { claimCeiling, declaredClaimStatus, turnEvidenceVerdict } from "./claim-stack-facts";
 import { composeClaimStack } from "./claim-stack-model";
 
 const NOW = Date.parse("2026-07-19T12:00:00.000Z");
@@ -84,6 +85,118 @@ describe("claim-stack evidence composition", () => {
       label: "TDX quote",
       value: "2,048 bytes · v5",
     });
+  });
+});
+
+describe("the two claim ceilings", () => {
+  it("never lets a receipt's own declaration of verification stand as verified", () => {
+    // The measured defect: one receipt, one tab click apart, read "VERIFIED 1
+    // / Protected CPU runtime ✓ Verified" on Receipt & journal and "Asserted ·
+    // receipt unauthenticated" on Attestation evidence. Nothing authenticates
+    // a receipt, so its own claim of verification is an assertion.
+    const receipt = encryptedReceipt();
+    receipt.claims.cpuTee = { status: "verified", summary: "Receipt declares a verified CPU TEE.", verifier: "chutes" };
+    const model = composeClaimStack(receipt, undefined, NOW);
+    const cpu = model.items.find((item) => item.key === "cpuTee")!;
+
+    expect(cpu).toMatchObject({ source: "turn-receipt", status: "partial", qualifier: "asserted-verified" });
+    expect(declaredClaimStatus(cpu)).toBe("verified");
+    expect(claimCeiling(cpu)).toBe("receipt-integrity");
+    expect(model.groups.verified).toHaveLength(0);
+  });
+
+  it("keeps a declared failure at full weight rather than softening it to an assertion", () => {
+    // Fail-closed: the receipt-integrity ceiling may lower a positive claim and
+    // may never soften a negative one, or a stated failure would be filed under
+    // "Assertions" and leave the "Needs attention" group empty.
+    const receipt = encryptedReceipt();
+    receipt.claims.model = { status: "failed", summary: "The declared model artifact did not match." };
+    const model = composeClaimStack(receipt, undefined, NOW);
+
+    expect(model.items.find((item) => item.key === "model")).toMatchObject({ status: "failed", qualifier: "asserted-failed" });
+    expect(model.groups.failed.map((item) => item.key)).toEqual(["model"]);
+  });
+
+  it("caps endpoint evidence that declares verification without naming a verifier", () => {
+    const record = endpointRecord();
+    const model = composeClaimStack(encryptedReceipt(), {
+      ...record,
+      claims: { ...record.claims, cpuTee: { state: "verified", title: "Fixture", summary: "verified fixture" } },
+    }, NOW);
+    const cpu = model.items.find((item) => item.key === "cpuTee")!;
+
+    expect(cpu).toMatchObject({ source: "endpoint-evidence", status: "partial", qualifier: "verified-without-authority" });
+    expect(declaredClaimStatus(cpu)).toBe("verified");
+    expect(claimCeiling(cpu)).toBe("authority");
+  });
+});
+
+describe("the one turn-evidence verdict", () => {
+  it("answers an unproven-but-recorded turn with one asserted verdict and both figures", () => {
+    const receipt = encryptedReceipt();
+    receipt.claims.cpuTee = { status: "verified", summary: "Receipt declares a verified CPU TEE.", verifier: "chutes" };
+    const verdict = turnEvidenceVerdict({ stack: composeClaimStack(receipt, undefined, NOW), hasReceipt: true });
+
+    expect(verdict.state).toBe("asserted");
+    expect(verdict.seal).toBe("asserted");
+    expect(verdict.chip).toBe("Asserted, not verified");
+    expect(verdict.chip.length).toBeLessThanOrEqual(22);
+    expect(verdict.line.length).toBeLessThanOrEqual(80);
+    // Uncapped versus capped, which is the whole argument of the surface.
+    expect(verdict.declaredVerified).toBe(1);
+    expect(verdict.counts.verified).toBe(0);
+    expect(verdict.ceilings).toEqual(["receipt-integrity"]);
+  });
+
+  it("never promotes a failed fetch over a recorded turn, and never demotes it to nothing", () => {
+    // An acquisition failure beside a receipt produced a topbar reading
+    // "Evidence unavailable" next to a badge reading "evidence recorded".
+    const withReceipt = turnEvidenceVerdict({
+      stack: composeClaimStack(encryptedReceipt(), undefined, NOW),
+      hasReceipt: true,
+      acquisitionFailure: "Evidence path unreadable",
+    });
+    expect(withReceipt.state).toBe("asserted");
+    expect(withReceipt.modifier).toBe("Evidence path unreadable");
+
+    const withoutReceipt = turnEvidenceVerdict({
+      stack: composeClaimStack(undefined, undefined, NOW),
+      hasReceipt: false,
+      acquisitionFailure: "Evidence path unreadable",
+    });
+    expect(withoutReceipt.state).toBe("evidence-blocked");
+    expect(withoutReceipt.seal).toBe("attention");
+  });
+
+  it("fails closed on an attested receipt whose own fields disagree", () => {
+    const verdict = turnEvidenceVerdict({
+      stack: composeClaimStack(encryptedReceipt(), undefined, NOW),
+      hasReceipt: true,
+      attestedFieldsDisagree: true,
+    });
+    expect(verdict.state).toBe("failed");
+    expect(verdict.line).toBe("Verification failed or expired · do not rely on this receipt");
+  });
+
+  it("says no evidence, not no proof, before the first turn", () => {
+    const verdict = turnEvidenceVerdict({ stack: composeClaimStack(undefined, undefined, NOW), hasReceipt: false });
+    expect(verdict.state).toBe("no-evidence");
+    expect(verdict.counts).toMatchObject({ verified: 0, asserted: 0, noEvidence: 8, total: 8 });
+    expect(verdict.ceilings).toEqual([]);
+  });
+
+  it("counts the surviving verifications when an authority actually checked one", () => {
+    const record = endpointRecord();
+    const verdict = turnEvidenceVerdict({
+      stack: composeClaimStack(encryptedReceipt(), {
+        ...record,
+        claims: { ...record.claims, cpuTee: { ...record.claims.cpuTee, state: "verified", verifier: "intel-dcap-browser" } },
+      }, NOW),
+      hasReceipt: true,
+    });
+    expect(verdict.state).toBe("partly-proven");
+    expect(verdict.chip).toBe("1 of 8 verified");
+    expect(verdict.counts.verified).toBe(1);
   });
 });
 

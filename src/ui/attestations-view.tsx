@@ -158,10 +158,15 @@ export function AttestationsView({
           <p>Each result applies only to its named claim. A fetched quote, locally matched key, verified endpoint, model artifact, and signed conversation are separate facts with separate authorities.</p>
         </div>
         <div class="attestations-heading-actions">
+          {/* Emphasis follows truth-changing power. "Refresh evidence" is the
+              only control here that changes what is known; "Export status
+              summary" produces an artifact whose own adjacent note says it is
+              not independently verifiable proof, and it was the loudest object
+              on the entire trust surface. */}
           {refreshing
             ? <button class="danger" type="button" onClick={cancelRefresh}><Icon name="stop" /> Cancel refresh</button>
-            : <button type="button" disabled={!selected || !onRefresh} onClick={refresh}><Icon name="proof" /> Refresh evidence</button>}
-          <button class="primary" type="button" disabled={records.length === 0} onClick={exportPublic}><Icon name="cloud" /> Export status summary</button>
+            : <button class="primary" type="button" disabled={!selected || !onRefresh} onClick={refresh}><Icon name="proof" /> Refresh evidence</button>}
+          <button type="button" disabled={records.length === 0} onClick={exportPublic}><Icon name="cloud" /> Export status summary</button>
         </div>
       </header>
 
@@ -216,14 +221,20 @@ export function AttestationsView({
                   aria-current={record.id === selected.id ? "true" : undefined}
                   onClick={() => chooseRecord(record)}
                   key={record.id}
+                  data-source={record.source}
+                  aria-label={`${record.title}. ${record.subtitle}. ${record.source === "endpoint-evidence" ? "Endpoint acquisition" : "Conversation receipt"}. ${record.createdAt ? formatTimestamp(record.createdAt) : "Timestamp unavailable"}.`}
                 >
                   <StatusMark state={record.overallState} />
+                  {/* The record's identity is its title. In a 212px card the
+                      shipped layout clipped it to "C…" while printing the word
+                      "asserted" three times — seal label, title suffix and a
+                      shouted badge. The badge survives only where it is not a
+                      restatement of the seal beside it. */}
                   <span>
                     <strong>{record.title}</strong>
-                    <small>{record.subtitle}</small>
-                    <em>{record.createdAt ? formatTimestamp(record.createdAt) : "Timestamp unavailable"}</em>
+                    <small>{record.subtitle} · {record.createdAt ? formatTimestamp(record.createdAt) : "Timestamp unavailable"}</small>
                   </span>
-                  <b>{record.source === "endpoint-evidence" ? "ENDPOINT" : "ASSERTED"}</b>
+                  {record.source === "endpoint-evidence" ? <b>ENDPOINT</b> : null}
                 </button>
               ))}
             </div>
@@ -243,7 +254,13 @@ export function AttestationsView({
                   <button class={`${dimension.state}${active ? " active" : ""}`} type="button" aria-pressed={active} onClick={() => setInspector({ kind: "dimension", key })} key={key}>
                     <span><StatusMark state={dimension.state} /></span>
                     <strong>{dimension.title}</strong>
-                    <small>{qualifierLabel(dimension.qualifier, dimension.state)}</small>
+                    {/* Only the delta. Falling back to the status word would
+                        print it twice per tile — the seal chip above already
+                        carries it — which is the shape of the defect this
+                        replaces, one row lower. */}
+                    {attestationQualifierLabel(dimension.qualifier)
+                      ? <small>{attestationQualifierLabel(dimension.qualifier)}</small>
+                      : null}
                   </button>
                 );
               })}
@@ -308,21 +325,31 @@ function RecordHeader({ record }: { record: NormalizedAttestationRecord }) {
         <h2>{record.subtitle}</h2>
         <p>{record.proofLevel ? `Declared proof level: ${proofLevelLabel(record.proofLevel)}.` : ""} {record.posture ? `Transport: ${postureLabel(record.posture as Parameters<typeof postureLabel>[0])}.` : "Inference transport is not asserted by this record."} {receiptTrust}</p>
       </div>
-      <dl>
-        <div><dt>Verified</dt><dd>{counts.verified}</dd></div>
-        <div><dt>Partial</dt><dd>{counts.partial}</dd></div>
-        <div><dt>Failed</dt><dd>{counts.failed + counts.expired}</dd></div>
-        <div><dt>Unavailable</dt><dd>{counts.unavailable}</dd></div>
+      {/* Four inline pairs, in the product's own three state words plus the
+          failure. The shipped 4-column `dl` rendered "VERIFIEDPARTIAL FAILED
+          UNAV" on iPad — overlapping labels in a machine vocabulary that no
+          other surface speaks. "Partial" is the enum; "Asserted" is the word. */}
+      <dl class="attestation-record-counts">
+        <div><dd>{counts.verified}</dd><dt>{proofStatusLabel("verified")}</dt></div>
+        <div><dd>{counts.partial}</dd><dt>{proofStatusLabel("partial")}</dt></div>
+        <div><dd>{counts.failed + counts.expired}</dd><dt>{proofStatusLabel("failed")}</dt></div>
+        <div><dd>{counts.unavailable}</dd><dt>{proofStatusLabel("unavailable")}</dt></div>
       </dl>
     </header>
   );
 }
 
 function DimensionInspector({ dimension }: { dimension: AttestationDimension }) {
+  // Three block-level lines, and the status word printed exactly once. The
+  // shipped inspector ran them together — "Attested endpoint-key
+  // bindingASSERTED · ASSERTED PARTIAL · RECEIPT UNAUTHENTICATED" — because
+  // <small> and <strong> laid out inline and the qualifier re-prefixed a word
+  // the line already began with.
+  const delta = attestationQualifierLabel(dimension.qualifier);
   return (
     <section class="attestation-inspection">
       <span>Claim detail</span>
-      <div class="attestation-inspection-title"><StatusMark state={dimension.state} /><div><h2>{dimension.title}</h2><small>{ATTESTATION_TECHNICAL_LABELS[dimension.key]}</small><strong class={dimension.state}>{statusLabel(dimension.state)} · {qualifierLabel(dimension.qualifier, dimension.state)}</strong></div></div>
+      <div class="attestation-inspection-title"><StatusMark state={dimension.state} /><div><h2>{dimension.title}</h2><small>{ATTESTATION_TECHNICAL_LABELS[dimension.key]}</small><strong class={dimension.state}>{statusLabel(dimension.state)}{delta ? ` · ${delta}` : ""}</strong></div></div>
       <p>{dimension.summary}</p>
       <dl>
         <Detail label="Verification authority" value={dimension.authority} />
@@ -408,13 +435,38 @@ function statusLabel(state: ProofStatus): string {
   return proofStatusLabel(state);
 }
 
-function qualifierLabel(qualifier: string, state: ProofStatus): string {
-  if (qualifier.startsWith("asserted-")) return `Asserted ${qualifier.slice("asserted-".length)} · receipt unauthenticated`;
-  if (qualifier === "verified-without-authority") return "Declared verified · authority absent";
-  if (qualifier === "matched") return "Locally matched · not verified";
-  if (qualifier === "present") return "Present · authenticity unverified";
-  if (qualifier === "unverified") return "Independent verifier absent";
-  return statusLabel(state);
+/**
+ * The claim's own delta, with the record-level ceiling left to the header.
+ *
+ * The shared caveat is stated once — `RecordHeader`'s `receiptTrust` sentence
+ * — so this returns only what distinguishes *this* claim. The tab's main text
+ * carried "receipt unauthenticated" nine times for one record-level fact,
+ * which is how a genuine per-claim difference became invisible.
+ *
+ * WHY THIS IS NOT AN IMPORT. The same dictionary is spoken by the Receipt &
+ * journal tab through `readClaimQualifier()` in `claim-stack-facts.ts`, and the
+ * two must never diverge — that divergence is the defect this package exists to
+ * fix. It cannot be shared as a module here: this view is bundled into the
+ * deferred capability pack while the other tab is its own chunk, so a module
+ * imported by both becomes a third artifact the release gate cannot attribute
+ * to an owner, and hoisting it into the preloaded chunk costs ~130 gzipped
+ * bytes against a 132 KiB cap with tens of bytes left. The agreement is
+ * therefore enforced where it can be: `attestations-view.test.ts` asserts this
+ * function returns exactly `claimQualifierLabel(q, { ceilingStatedElsewhere:
+ * true })` for every qualifier `attestations-model.ts` can emit.
+ */
+export function attestationQualifierLabel(qualifier: string): string | undefined {
+  if (qualifier === "verified-without-authority") return "record declares verified";
+  if (qualifier.startsWith("asserted-")) {
+    const declared = qualifier.slice("asserted-".length);
+    return declared === "unavailable" || declared === "partial" ? undefined : `record declares ${declared}`;
+  }
+  if (qualifier === "matched") return "locally matched · not independently verified";
+  if (qualifier === "present") return "present · authenticity not checked";
+  if (qualifier === "unverified") return "no independent verifier";
+  if (qualifier === "verified") return "checked by the named authority";
+  if (qualifier === "unavailable") return undefined;
+  return qualifier.includes("/") ? qualifier.replace("/", " · ") : undefined;
 }
 
 function authorityLabel(kind: AttestationDimension["authorityKind"]): string {
