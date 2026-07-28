@@ -1,4 +1,5 @@
 import type { JsonValue, SessionManifest } from "../core/contracts";
+import { canonicalSessionContextPolicy } from "../core/context-policy";
 import {
   JournalConflictError,
   type DurableEvent,
@@ -374,7 +375,12 @@ function validateSession(value: unknown): asserts value is SessionRecord {
 }
 
 function validateManifest(value: Record<string, unknown>): asserts value is SessionManifest {
-  if (value.protocolVersion !== 1 || !Array.isArray(value.tools)) throw new Error("Encrypted session manifest is invalid.");
+  if (
+    (value.protocolVersion !== 1 && value.protocolVersion !== 2) ||
+    !Array.isArray(value.tools) ||
+    (value.protocolVersion === 1 && value.turnContext !== undefined) ||
+    (value.protocolVersion === 2 && value.turnContext !== "required" && value.turnContext !== "disabled")
+  ) throw new Error("Encrypted session manifest is invalid.");
   for (const field of ["systemPrompt", "systemPromptDigest", "providerId", "model", "toolManifestDigest", "workspaceId", "createdAt"] as const) {
     requiredString(value[field], `manifest ${field}`);
   }
@@ -384,6 +390,29 @@ function validateManifest(value: Record<string, unknown>): asserts value is Sess
     "native",
     "remote-confidential",
   ].includes(String(value.capabilityTier))) throw new Error("Encrypted session capability tier is invalid.");
+  if (value.contextPolicy !== undefined && !canonicalSessionContextPolicy(value.contextPolicy)) {
+    throw new Error("Encrypted session context policy is invalid.");
+  }
+  if (value.inferenceBinding !== undefined) {
+    if (!isRecord(value.inferenceBinding)) throw new Error("Encrypted session inference binding is invalid.");
+    const binding = value.inferenceBinding;
+    requiredString(binding.connectionId, "manifest inference connection ID");
+    requiredInteger(binding.connectionGeneration, "manifest inference connection generation");
+    requiredString(binding.providerId, "manifest inference provider ID");
+    requiredString(binding.providerLabel, "manifest inference provider label");
+    requiredInteger(binding.providerRevision, "manifest inference provider revision");
+    requiredString(binding.authMethod, "manifest inference auth method");
+    requiredString(binding.transportBoundary, "manifest inference transport boundary");
+    const modelId = requiredString(binding.modelId, "manifest inference model ID");
+    requiredString(binding.boundAt, "manifest inference binding time");
+    if (
+      binding.version !== 1 ||
+      modelId !== value.model ||
+      !["oauth-pkce", "api-key", "local-none"].includes(String(binding.authMethod)) ||
+      !["e2ee-attestable", "provider-tls", "loopback-local"].includes(String(binding.transportBoundary)) ||
+      !Number.isFinite(Date.parse(String(binding.boundAt)))
+    ) throw new Error("Encrypted session inference binding is invalid.");
+  }
 }
 
 function validateEvent(value: unknown): asserts value is DurableEvent {

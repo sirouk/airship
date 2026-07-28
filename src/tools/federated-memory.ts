@@ -2,7 +2,11 @@ import type { JsonValue, Tool, ToolContext } from "../core/contracts";
 import { sha256 } from "../core/hash";
 import type { DurableEvent, EventJournal } from "../core/journal";
 import type { ClientContextRuntime } from "../retrieval/client-context-runtime";
+import type { ClientContextSearchHit } from "../indexing/client-context-engine";
 import type { WorkspacePort } from "../workspace/contracts";
+import { memoryLineage } from "../retrieval/federated-turn-context";
+import { rankProfileMemories } from "../retrieval/memory-ranking";
+import { toolLineage, workspaceGenerationLineage } from "../retrieval/tool-lineage";
 import { MEMORY_PATH, parseMemoryDocument } from "./memory-tools";
 import type { ToolRegistry } from "./registry";
 
@@ -16,6 +20,14 @@ export type FederatedMemoryResult = Readonly<{
   groups: readonly [ThreadGroup, ProfileGroup, WorkspaceGroup];
 }>;
 
+export type FederatedMemorySearchState = Readonly<{
+  authority: object;
+  query: string;
+  result?: FederatedMemoryResult;
+  status?: string;
+  searching: boolean;
+}>;
+
 type ThreadGroup = Readonly<{
   corpus: "current-thread";
   priority: 1;
@@ -26,9 +38,14 @@ type ThreadGroup = Readonly<{
 type ProfileGroup = Readonly<{
   corpus: "active-profile-memory";
   priority: 2;
-  ranking: "reverse-chronological lexical matches";
+  ranking: "bounded BM25 relevance, recency-tiebroken; within this corpus only";
   legacyQuarantined: number;
+  lineage?: JsonValue;
   hits: readonly Readonly<Record<string, JsonValue>>[];
+}>;
+
+type FederatedWorkspaceHit = Readonly<ClientContextSearchHit & {
+  scoreScope: "shared-workspace-index-only";
 }>;
 
 type WorkspaceGroup = Readonly<{
@@ -37,8 +54,11 @@ type WorkspaceGroup = Readonly<{
   ranking: "hybrid score within this corpus only; never comparable across groups";
   generationDigest: string;
   workspaceSnapshotDigest: string;
+  durationMs: number;
+  completedAt: string;
+  lineage?: JsonValue;
   duplicatesSuppressed: number;
-  hits: readonly Readonly<Record<string, JsonValue>>[];
+  hits: readonly FederatedWorkspaceHit[];
 }>;
 
 export function registerFederatedMemoryTool(
@@ -50,7 +70,7 @@ export function registerFederatedMemoryTool(
   const tool: Tool = {
     definition: {
       name: "search_memory",
-      description: "Search three explicit context lanes without blending scores: current thread, this session's pinned-profile memories, then the shared workspace/source hybrid index.",
+      description: "Search three explicit context lanes without blending scores: current thread (reverse-chronological substring), this session's pinned-profile memories (ranked, recency-tiebroken), then the shared workspace/source hybrid index. Each indexed lane reports its own generation lineage.",
       effect: "read",
       inputSchema: {
         type: "object",
@@ -99,10 +119,11 @@ export async function searchFederatedMemory(args: Readonly<{
   const threadHits = await threadMatches(events, normalized, args.limit);
   const file = await args.workspace.read(MEMORY_PATH);
   const document = file ? parseMemoryDocument(file.content) : undefined;
-  const profileHits = await Promise.all((document?.records ?? [])
-    .filter((memory) => memory.scope.kind === "profile" && memory.scope.profileId === profile.profileId)
-    .filter((memory) => `${memory.content}\n${memory.source}`.toLocaleLowerCase().includes(normalized))
-    .slice(-args.limit).reverse()
+  const profileScoped = (document?.records ?? [])
+    .filter((memory) => memory.scope.kind === "profile" && memory.scope.profileId === profile.profileId);
+  const profileHits = await Promise.all(
+    rankProfileMemories(profileScoped, args.query, { limit: args.limit })
+    .map(({ record: memory }) => memory)
     .map(async (memory) => Object.freeze({
       id: memory.id,
       content: memory.content,
@@ -114,24 +135,41 @@ export async function searchFederatedMemory(args: Readonly<{
       createdInSessionId: memory.scope.kind === "profile" ? memory.scope.createdInSessionId : "",
     } satisfies Record<string, JsonValue>)));
 
+  // The profile lane carries its own generation so a caller can re-derive which
+  // memory.json revision produced these records, exactly as the turn seam does.
+  const profileLineage = file && profileHits.length
+    ? toolLineage(
+      "airship-profile-memory-tool-v1",
+      {
+        sessionId: session.id,
+        profileId: profile.profileId,
+        profileRevision: profile.profileRevision,
+      },
+      [await memoryLineage(file.revision, file.content)],
+    )
+    : undefined;
+
   // search() refreshes and revision-checks the workspace before and after the
   // query. Failure is propagated; stale results are never silently substituted.
   const workspaceResult = await args.runtime.search(args.query, { limit: args.limit, signal: args.context.signal });
+  const workspaceGeneration = args.runtime.getState().generation;
+  const workspaceLineage = workspaceGeneration
+    ? toolLineage(
+      "airship-workspace-tool-search-v1",
+      { sessionId: session.id, workspaceId: session.manifest.workspaceId },
+      [workspaceGenerationLineage(workspaceGeneration)],
+    )
+    : undefined;
   const seen = new Set<string>();
   let duplicatesSuppressed = 0;
-  const workspaceHits: Readonly<Record<string, JsonValue>>[] = [];
+  const workspaceHits: FederatedWorkspaceHit[] = [];
   for (const hit of workspaceResult.hits) {
     const key = `${hit.path}\u0000${hit.chunkId}`;
     if (seen.has(key)) { duplicatesSuppressed += 1; continue; }
     seen.add(key);
     workspaceHits.push(Object.freeze({
-      path: hit.path,
-      text: hit.text,
-      score: hit.score,
+      ...hit,
       scoreScope: "shared-workspace-index-only",
-      revision: hit.revision,
-      contentDigest: hit.contentDigest,
-      chunkId: hit.chunkId,
     }));
   }
   return Object.freeze({
@@ -153,8 +191,9 @@ export async function searchFederatedMemory(args: Readonly<{
       Object.freeze({
         corpus: "active-profile-memory",
         priority: 2,
-        ranking: "reverse-chronological lexical matches",
+        ranking: "bounded BM25 relevance, recency-tiebroken; within this corpus only",
         legacyQuarantined: document?.legacyCount ?? 0,
+        ...(profileLineage ? { lineage: profileLineage as unknown as JsonValue } : {}),
         hits: Object.freeze(profileHits),
       }),
       Object.freeze({
@@ -163,6 +202,9 @@ export async function searchFederatedMemory(args: Readonly<{
         ranking: "hybrid score within this corpus only; never comparable across groups",
         generationDigest: workspaceResult.generationDigest,
         workspaceSnapshotDigest: workspaceResult.workspaceSnapshotDigest,
+        durationMs: workspaceResult.durationMs,
+        completedAt: workspaceResult.completedAt,
+        ...(workspaceLineage ? { lineage: workspaceLineage as unknown as JsonValue } : {}),
         duplicatesSuppressed,
         hits: Object.freeze(workspaceHits),
       }),

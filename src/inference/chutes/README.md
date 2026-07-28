@@ -44,9 +44,14 @@ runtime policy). Raw quotes, certificates, nonces, and endpoint keys are not
 copied into the conversation receipt. Required mode still fails before invoke
 unless the exact endpoint produces a fresh verified receipt.
 
-An endpoint receipt never upgrades the `model` or `conversation` claims. Chutes
-v1 has no model-artifact proof, header/AAD binding, stream sequence field, or
-authenticated final transcript record. Completed receipts state these gaps.
+An endpoint receipt never upgrades the `model` claim or makes the
+`conversation` claim verified. Chutes v1 has no model-artifact proof,
+header/AAD binding, stream sequence field, enclave-signed transcript, or
+authenticated final transcript record. After a successful stream, Airship does
+record the request-ciphertext digest and a constant-memory, domain-separated
+SHA-256 chain over the exact authenticated response-ciphertext records. That
+order-sensitive commitment is labeled partial local-client evidence only; it
+cannot be promoted into an enclave transcript signature.
 
 The verified CPU path runs `dcap-qvl` locally in deferred Rust/WASM and requires
 an advisory-free `UpToDate` aggregate, QE, and platform status. It verifies the
@@ -57,7 +62,14 @@ The Chutes MRTD/RTMR allowlist is a separate local match against the public
 signed transparency artifact, so Airship does not describe it as independent
 provider-policy authorization. GPU evidence likewise remains `matched`, not
 verified, until caller-nonce binding and NVIDIA RIM/revocation evaluation are
-available.
+available. Consequently, CPU verification remains a valid claim-scoped result,
+but it cannot create a verified aggregate endpoint receipt for a GPU-backed
+Chutes inference endpoint while the required GPU claim is partial or
+unavailable. For the compact live NVIDIA artifact, Airship locally checks that
+the SPDM request nonce matches the TDX endpoint-binding digest; it still
+requires an independent signed NVIDIA verdict with authenticity,
+RIM/revocation, freshness, and confidential-compute policy before promoting
+the GPU claim.
 
 ## Build crypto
 

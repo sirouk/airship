@@ -3,7 +3,23 @@ import { GitCapabilityError, GitDomainError, GitNotFoundError, GitValidationErro
 import type {
   BrowserGitAdapter,
   GitAdapterCapabilities,
+  GitAddRemoteRequest,
   GitAuthor,
+  GitCapability,
+  GitCommitDetail,
+  GitCommitSummary,
+  GitCreateTagRequest,
+  GitDeleteTagRequest,
+  GitLogRequest,
+  GitMergeRequest,
+  GitRemoveRemoteRequest,
+  GitResetRequest,
+  GitRestoreRequest,
+  GitSetRemoteUrlRequest,
+  GitShowRequest,
+  GitStashEntry,
+  GitStashRequest,
+  GitTagSummary,
   GitCommitRequest,
   GitCreateBranchRequest,
   GitCreateWorktreeRequest,
@@ -36,6 +52,7 @@ import {
   validateBranchName,
   validateCommitMessage,
   validateFileContent,
+  validateGitDestination,
   validateGitIdentifier,
   validateGitPath,
   validatePathList,
@@ -84,6 +101,14 @@ export type MemoryGitRepositorySeed = Readonly<{
   remoteUrl?: string;
 }>;
 
+/**
+ * This adapter models Git semantics over plain maps; it has no object database,
+ * no refs/tags namespace, no reflog and no config file. Anything that can only
+ * be answered from real Git storage stays honestly unavailable rather than
+ * being simulated into a plausible-looking answer.
+ */
+const SIMULATED_STATE_REASON = "this reference adapter simulates commit semantics in memory and has no Git object database, ref namespace, reflog, or config to read";
+
 export const MEMORY_GIT_CAPABILITIES: GitAdapterCapabilities = deepFreeze({
   adapterId: "airship-memory-git",
   adapterName: "Airship in-memory Git reference adapter",
@@ -96,6 +121,7 @@ export const MEMORY_GIT_CAPABILITIES: GitAdapterCapabilities = deepFreeze({
     transport: "none",
     requiresCors: true,
     credentialPersistence: "none",
+    permittedOrigins: [],
     detail: "No remote transport is installed. Airship never inserts a hidden Git proxy.",
   },
   features: {
@@ -109,6 +135,12 @@ export const MEMORY_GIT_CAPABILITIES: GitAdapterCapabilities = deepFreeze({
     clone: { available: false, reason: "this adapter has no direct CORS-safe Git HTTP or host-provider transport" },
     fetch: { available: false, reason: "this adapter has no direct CORS-safe Git HTTP or host-provider transport" },
     push: { available: false, reason: "this adapter has no direct CORS-safe Git HTTP or host-provider transport" },
+    history: { available: false, reason: SIMULATED_STATE_REASON },
+    tag: { available: false, reason: SIMULATED_STATE_REASON },
+    stash: { available: false, reason: SIMULATED_STATE_REASON },
+    merge: { available: false, reason: SIMULATED_STATE_REASON },
+    restore: { available: false, reason: SIMULATED_STATE_REASON },
+    "remote-config": { available: false, reason: SIMULATED_STATE_REASON },
   },
 });
 
@@ -319,7 +351,7 @@ export class MemoryGitAdapter implements BrowserGitAdapter {
     if (!tree) throw new GitDomainError("corrupt-ref", `Branch ${branch} does not resolve to a known commit.`);
     const worktree: MemoryWorktree = {
       id,
-      path: validateGitIdentifier(request.path, "Virtual worktree path"),
+      path: validateGitDestination(request.path),
       branch,
       head,
       index: cloneTree(tree),
@@ -372,6 +404,58 @@ export class MemoryGitAdapter implements BrowserGitAdapter {
 
   async push(_request: GitPushRequest, _context: GitOperationContext): Promise<GitMutationResult> {
     throw this.remoteUnavailable("push");
+  }
+
+  async log(_request: GitLogRequest, _context: GitOperationContext): Promise<readonly GitCommitSummary[]> {
+    throw this.unavailable("history");
+  }
+
+  async show(_request: GitShowRequest, _context: GitOperationContext): Promise<GitCommitDetail> {
+    throw this.unavailable("history");
+  }
+
+  async listTags(_repositoryId: string, _context: GitOperationContext): Promise<readonly GitTagSummary[]> {
+    throw this.unavailable("tag");
+  }
+
+  async createTag(_request: GitCreateTagRequest, _context: GitOperationContext): Promise<GitMutationResult> {
+    throw this.unavailable("tag");
+  }
+
+  async deleteTag(_request: GitDeleteTagRequest, _context: GitOperationContext): Promise<GitMutationResult> {
+    throw this.unavailable("tag");
+  }
+
+  async listStash(_request: GitStatusRequest, _context: GitOperationContext): Promise<readonly GitStashEntry[]> {
+    throw this.unavailable("stash");
+  }
+
+  async stash(_request: GitStashRequest, _context: GitOperationContext): Promise<GitMutationResult> {
+    throw this.unavailable("stash");
+  }
+
+  async merge(_request: GitMergeRequest, _context: GitOperationContext): Promise<GitMutationResult> {
+    throw this.unavailable("merge");
+  }
+
+  async restore(_request: GitRestoreRequest, _context: GitOperationContext): Promise<GitMutationResult> {
+    throw this.unavailable("restore");
+  }
+
+  async reset(_request: GitResetRequest, _context: GitOperationContext): Promise<GitMutationResult> {
+    throw this.unavailable("restore");
+  }
+
+  async addRemote(_request: GitAddRemoteRequest, _context: GitOperationContext): Promise<GitMutationResult> {
+    throw this.unavailable("remote-config");
+  }
+
+  async setRemoteUrl(_request: GitSetRemoteUrlRequest, _context: GitOperationContext): Promise<GitMutationResult> {
+    throw this.unavailable("remote-config");
+  }
+
+  async removeRemote(_request: GitRemoveRemoteRequest, _context: GitOperationContext): Promise<GitMutationResult> {
+    throw this.unavailable("remote-config");
   }
 
   /** Simulates an authorized OPFS/File System Access worktree edit for tests and demos. */
@@ -667,6 +751,10 @@ export class MemoryGitAdapter implements BrowserGitAdapter {
   }
 
   private remoteUnavailable(capability: "clone" | "fetch" | "push"): GitCapabilityError {
+    return this.unavailable(capability);
+  }
+
+  private unavailable(capability: GitCapability): GitCapabilityError {
     return new GitCapabilityError(capability, this.capabilities.features[capability].reason!);
   }
 }

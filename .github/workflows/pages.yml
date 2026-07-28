@@ -39,6 +39,15 @@ jobs:
           AIRSHIP_PUBLIC_BASE_PATH: /airship/
           VITE_AIRSHIP_CHUTES_PUBLIC_CLIENT_ID: ${{ vars.VITE_AIRSHIP_CHUTES_PUBLIC_CLIENT_ID }}
           VITE_AIRSHIP_PUBLIC_ORIGIN: ${{ vars.VITE_AIRSHIP_PUBLIC_ORIGIN }}
+          # A Google OAuth *Web* client ID is a public deployment identifier, not
+          # a secret, so it is a repository variable. Without it Vite strips the
+          # entire Drive connect branch from the bundle and no runtime toggle can
+          # restore it, so the default provider below must move with it.
+          VITE_GOOGLE_CLIENT_ID: ${{ vars.VITE_GOOGLE_CLIENT_ID }}
+          # Fail closed on an unconfigured deployment: default to the Local
+          # Device vault, which needs no configuration, rather than offering a
+          # Drive default this artifact cannot connect.
+          VITE_AIRSHIP_DEFAULT_VAULT_PROVIDER: ${{ vars.VITE_GOOGLE_CLIENT_ID != '' && 'google-drive' || 'local-device' }}
         run: npm run build
 
       - name: Add static callback fallback

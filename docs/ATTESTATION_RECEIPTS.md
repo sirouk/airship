@@ -1,13 +1,15 @@
 # Attestation and conversation receipts
 
-Implementation status, 2026-07-18: the dedicated `AttestationsView` is mounted
-in `App` with application navigation, bounded in-memory evidence acquisition,
-receipt collection, and explicit acquisition notices. The screen does not claim
-that evidence has been pulled merely because the route exists.
+Implementation status, 2026-07-23: the unified `ProofView` is mounted in `App`
+with receipt, session-audit, endpoint-evidence, and verifier-ledger tabs,
+bounded in-memory evidence acquisition, and explicit acquisition notices. The
+legacy Attestations route deep-links to the evidence tab; it is not a second
+trust surface. Proof does not claim that evidence has been pulled merely
+because the route exists.
 
 Airship makes proof visible at the point where a user needs it: beside each
 assistant response. A compact row of badges opens an evidence drawer. The
-Attestations screen exports an **unsigned, privacy-safe status summary**, not an
+Proof screen exports an **unsigned, privacy-safe status summary**, not an
 independently verifiable proof or receipt. Raw quotes, certificates, signatures,
 public keys, nonces, provider bodies, arbitrary claim detail objects, and
 dictionary-testable plaintext request/response digests are omitted. Free-form
@@ -58,7 +60,12 @@ Levels are cumulative. Airship never promotes a local hash to a hardware proof.
 
 For every successful Chutes turn, the inference transport records the exact
 invoked instance and a digest of the E2EE public key in that immutable local
-receipt. Evidence acquisition is a separate, non-mutating follow-up:
+receipt. It also commits the request ciphertext and a domain-separated,
+order-sensitive SHA-256 chain over every authenticated response-ciphertext
+record. That promotes only the local conversation-integrity claim to
+`partial / airship-client`; it is not an enclave-signed transcript and cannot
+promote the Conversation badge to verified. Evidence acquisition is a
+separate, non-mutating follow-up:
 
 1. use the turn's exact chute, instance, and invocation-time key digest;
 2. call authenticated `GET /e2e/instances/{chute_id}` and select only the exact
@@ -100,20 +107,17 @@ alone never produces a green CPU/GPU badge.
 
 ### Current browser-access finding
 
-On 2026-07-18 a server-side live diagnostic retrieved 14 public TEE instance
-evidence records, each containing eight GPU evidence objects, with no failed
-instance records. The batch was approximately 1.48 MB. This proves that the
-public provider route returned evidence to that diagnostic; it does not prove
-any TEE, model, or conversation claim.
+On 2026-07-23 the live Chromium acceptance gate retrieved Chutes endpoint
+evidence and the public measurement feed directly from the browser after an
+encrypted vision turn. The observed ingress authorized cross-origin reads.
+This is deployment evidence, not a permanent API guarantee and not proof that
+any quote is authentic.
 
-The same route was not browser-readable in that deployment: `OPTIONS`
-advertised permissive access, but the observed evidence `GET` response lacked
-an `Access-Control-Allow-Origin` header. That is a deployment observation, not
-something browser `fetch` can diagnose by itself. At runtime the UI reports
-**cross-origin unreadable / evidence not pulled** because CORS authorization,
-DNS, TLS, offline state, or another network-path failure can look identical to
-browser JavaScript. It is not a TEE failure and must not create failed or
-verified hardware claims. Airship does not suggest or insert a hidden proxy.
+If a later browser cannot read the route, Airship reports **cross-origin
+unreadable / evidence not pulled** because CORS authorization, DNS, TLS,
+offline state, or another network-path failure can look identical to browser
+JavaScript. It is not a TEE failure and cannot create a failed or verified
+hardware claim. Airship does not suggest or insert a hidden proxy.
 
 The reviewed Chutes API snapshot originally classified evidence routes as
 `evidence:read`, so the Airship OAuth grant (`openid profile chutes:invoke
@@ -159,7 +163,14 @@ succeeded; it is not the state produced by evidence fetching alone.
     "gpuTee": { "status": "verified", "policyDigest": "..." },
     "endpointKey": { "status": "verified" },
     "model": { "status": "unavailable" },
-    "conversation": { "status": "unavailable" },
+    "conversation": {
+      "status": "partial",
+      "verifier": "airship-client",
+      "details": {
+        "commitment": "airship-chutes-e2e-response-sha256-chain-v1",
+        "authority": "local-client"
+      }
+    },
     "payment": { "status": "unavailable" }
   },
   "bindings": {
@@ -173,7 +184,13 @@ succeeded; it is not the state produced by evidence fetching alone.
     "format": "chutes-tee-evidence-v1",
     "payload": {}
   },
-  "verifications": []
+  "verifications": [
+    {
+      "verifier": "airship-client",
+      "status": "partial",
+      "claim": "conversation"
+    }
+  ]
 }
 ```
 
@@ -205,7 +222,7 @@ final ordered content and an optional incremental transcript hash.
 ## Verification UX
 
 - Badges appear on every assistant message and in the global connection strip.
-- The dedicated Attestations surface keeps endpoint acquisitions and
+- The unified Proof surface keeps endpoint acquisitions and
   conversation receipts as separate selectable records. It shows a claim
   matrix for transport, freshness, CPU TEE, GPU TEE, endpoint key, model/policy,
   conversation signature, and settlement, with an independently selectable

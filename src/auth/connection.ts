@@ -25,7 +25,7 @@ type ActiveChutesConnectionBase = Readonly<{
   model: string;
   connectedAt: string;
   posture: Extract<SecurityPosture, "encrypted-unattested" | "encrypted-attested">;
-  source: "manual-import";
+  source: "oauth-pkce" | "manual-import";
   /** Proved only by a successful protected invocation, never by key shape or public discovery. */
   invokeAuthorization: "unverified" | "verified";
   lastInvokeAt?: string;
@@ -132,7 +132,7 @@ export function createChutesConnection(args: Readonly<{
       provider: "chutes",
       model,
       posture: args.posture,
-      source: "manual-import",
+      source: "oauth-pkce",
       invokeAuthorization: "unverified",
       connectedAt,
     });

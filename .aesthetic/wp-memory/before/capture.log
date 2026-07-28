@@ -1,0 +1,12 @@
+[desktop] memory rest {"viewport":{"w":1440,"h":900},"mainTop":58,"firstContentTop":257,"scrollWidth":1440,"overflowX":false}
+[desktop] memory hits {"viewport":{"w":1440,"h":900},"mainTop":58,"firstContentTop":null,"scrollWidth":1440,"overflowX":false}
+[desktop] sessions {"viewport":{"w":1440,"h":900},"mainTop":58,"firstContentTop":282,"scrollWidth":1440,"overflowX":false}
+[desktop] sessions rows 14 cardH {"x":269,"y":282,"width":265,"height":56}
+[desktop] zero-state text "No matching conversations\n\nClear or widen the current filters.\n\nTranscript text is not indexed in this build."
+[desktop] detail still rendered: 1 forkEnabled=true
+[phone] memory rest {"viewport":{"w":430,"h":740},"mainTop":52,"firstContentTop":229,"scrollWidth":430,"overflowX":false}
+[phone] memory hits {"viewport":{"w":430,"h":740},"mainTop":52,"firstContentTop":null,"scrollWidth":430,"overflowX":false}
+[phone] sessions {"viewport":{"w":430,"h":740},"mainTop":52,"firstContentTop":312,"scrollWidth":430,"overflowX":false}
+[phone] sessions rows 14 cardH {"x":24,"y":312,"width":338,"height":56}
+[phone] zero-state text "No matching conversations\n\nClear or widen the current filters.\n\nTranscript text is not indexed in this build."
+[phone] detail still rendered: 1 forkEnabled=true

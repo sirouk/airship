@@ -11,6 +11,12 @@ describe("object-store conformance", () => {
       nonce: "fixed-run-001",
       now: () => tick++,
     });
+    expect(result.capabilities).toMatchObject({
+      adapter: { adapter: "memory" },
+      exactRangeRead: "verified",
+      conditionalCreate: "verified",
+      compareAndSwap: "verified",
+    });
 
     expect(result.prefix).toBe("airship-conformance/fixed-run-001");
     expect(result.checks.map((check) => check.name)).toEqual([

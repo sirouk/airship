@@ -94,28 +94,28 @@ export async function createBuiltInProfileCatalog(): Promise<ProfileCatalog> {
     skillModes: Readonly<Record<string, SkillMode>>;
   }> = [
     {
-      profileId: "engineer",
-      name: "Systems Engineer",
-      description: "Build, test, and operate",
-      systemPrompt: "You are an outcome-owning systems engineer operating the Airship edge workspace. Turn user intent into working artifacts: discover the relevant state, plan only when the work merits it, use the provided tools decisively, follow dependencies across files, handle conflicts and recoverable failures, and verify what you changed. Do not retreat into advice when you can act. Be exact about the difference between this browser workspace, its browser-owned Git adapter, imported source snapshots, and an unrestricted host shell.",
+      profileId: "general",
+      name: "General",
+      description: "A capable everyday agent for clear, useful work.",
+      systemPrompt: "You are a capable, outcome-owning general agent operating the Airship edge workspace. Turn user intent into useful, inspectable work: understand the request, inspect relevant state, use available tools decisively, and verify consequential changes. Be clear, calm, and explicit about the difference between this browser workspace, its browser-owned Git adapter, imported source snapshots, and an unrestricted host shell.",
       themeId: "foundry",
-      skillModes: { "delivery-loop": "on", "workspace-steward": "on", "source-reviewer": "inherit" },
+      skillModes: { "delivery-loop": "on", "workspace-steward": "inherit" },
     },
     {
-      profileId: "researcher",
-      name: "Research Analyst",
-      description: "Find, compare, and synthesize",
-      systemPrompt: "You are a rigorous research analyst working from inspectable Airship sources. Search local context first, retrieve direct CORS-enabled sources when needed, distinguish repository snapshots from live upstream state, synthesize across evidence, and preserve provenance, uncertainty, dates, and source boundaries. Produce useful artifacts in the workspace when the request benefits from them.",
+      profileId: "research",
+      name: "Research",
+      description: "Find, compare, and synthesize with sources in view.",
+      systemPrompt: "You are a rigorous research agent working from inspectable Airship sources. Search local context first, retrieve direct CORS-enabled sources when needed, distinguish repository snapshots from live upstream state, synthesize across evidence, and preserve provenance, uncertainty, dates, and source boundaries. Produce useful artifacts in the workspace when the request benefits from them.",
       themeId: "verdigris",
       skillModes: { "memory-gardener": "on", "workspace-steward": "off" },
     },
     {
-      profileId: "reviewer",
-      name: "Security Reviewer",
-      description: "Threat-model and verify",
-      systemPrompt: "You are a precise security reviewer operating on evidence available to Airship. Inspect implementations and exact diffs, trace trust boundaries and state transitions, separate exploitable behavior from speculation, and require verification proportional to the claim. Treat encryption, receipts, provider claims, and independently verified attestation as distinct properties; never upgrade one into another.",
-      themeId: "blue-ledger",
-      skillModes: { "source-reviewer": "on", "concise-handoff": "on" },
+      profileId: "builder-systems",
+      name: "Builder / Systems",
+      description: "Build, test, and operate systems with disciplined follow-through.",
+      systemPrompt: "You are an outcome-owning systems engineer operating the Airship edge workspace. Turn user intent into working artifacts: discover the relevant state, plan only when the work merits it, use the provided tools decisively, follow dependencies across files, handle conflicts and recoverable failures, and verify what you changed. Do not retreat into advice when you can act. Be exact about the difference between this browser workspace, its browser-owned Git adapter, imported source snapshots, and an unrestricted host shell.",
+      themeId: "foundry",
+      skillModes: { "delivery-loop": "on", "workspace-steward": "on", "source-reviewer": "inherit" },
     },
   ];
 
@@ -130,6 +130,9 @@ export async function createBuiltInProfileCatalog(): Promise<ProfileCatalog> {
       providerId: "airship-demo",
       model: "airship/demo-v1",
       minimumPosture: "local",
+      workspaceBinding: { kind: "active-workspace" },
+      memoryScope: profile.profileId === "research" ? "workspace" : "profile",
+      approvalMode: profile.profileId === "builder-systems" ? "auto-approve" : "ask-first",
       theme: { themeId: theme.themeId, digest: theme.digest },
       skillModes: profile.skillModes,
       createdAt: `2026-07-18T00:0${index}:00.000Z`,
@@ -151,6 +154,21 @@ export async function createBuiltInProfileCatalog(): Promise<ProfileCatalog> {
   });
 }
 
+/*
+ * A theme manifest is written inline on <html>, so it beats every stylesheet.
+ * Two consequences bind this table:
+ *
+ * 1. `foundry` is the shipped default and must be byte-identical to the `:root`
+ *    palette in `ui/tokens.css`. Where it agreed, the inline write was a no-op;
+ *    where it drifted, the theme silently reverted the stylesheet — which is
+ *    how `--ink-faint` shipped at 4.73:1 for a year while tokens.css carried
+ *    the 5.72:1 fix and a comment predicting exactly this. `themeCssVariables`
+ *    now omits any role that already agrees, so agreement is also what lets a
+ *    colour-mode preference reach the surfaces at all.
+ * 2. Every palette's `inkFaint` must clear AA on its own `surfaceRaised` and
+ *    its `inkMuted` 7:1 on its own `surface`; a caption is where provenance
+ *    lives. `ui/css-variable-contract.test.ts` enforces both, per theme.
+ */
 const themeDrafts: readonly ThemeManifestDraft[] = [
   {
     themeId: "foundry",
@@ -163,8 +181,8 @@ const themeDrafts: readonly ThemeManifestDraft[] = [
       surfaceRaised: "#1c2226",
       surfaceSoft: "#14191c",
       ink: "#ece8de",
-      inkMuted: "#9fa5a3",
-      inkFaint: "#858d8a",
+      inkMuted: "#b0b6b3",
+      inkFaint: "#949c99",
       accent: "#c19a58",
       accentBright: "#dfba72",
     },
@@ -183,7 +201,7 @@ const themeDrafts: readonly ThemeManifestDraft[] = [
       surfaceSoft: "#101b1c",
       ink: "#edf1eb",
       inkMuted: "#a6b4af",
-      inkFaint: "#7f938e",
+      inkFaint: "#8ba49e",
       accent: "#73a69c",
       accentBright: "#a4cec3",
     },
@@ -202,7 +220,7 @@ const themeDrafts: readonly ThemeManifestDraft[] = [
       surfaceSoft: "#111821",
       ink: "#e9edf0",
       inkMuted: "#a0aab3",
-      inkFaint: "#7e8994",
+      inkFaint: "#8a95a1",
       accent: "#7895b9",
       accentBright: "#a9c2df",
     },

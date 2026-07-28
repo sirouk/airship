@@ -2,6 +2,25 @@ import { useEffect, useId, useMemo, useRef, useState } from "preact/hooks";
 import { filterModels, modelPopularitySignal, sortModels } from "../models";
 import type { AirshipModel, ModelSort } from "../models";
 import { MenuSelect } from "./menu-select";
+import { TRUST_LABEL_CONNECT_TRUST_READINESS } from "./trust-language";
+
+/**
+ * Choosing a model, with the catalogue travelling on the model.
+ *
+ * The rebuild is answering three measured defects. (1) The popover was a single
+ * `overflow: auto` box, so at scrollTop 400 the search field, every facet, the
+ * sort control and the provenance caveat were gone — you could not filter once
+ * you had scrolled. It is now three regions and only the list scrolls. (2) The
+ * capability payload the rows exist to carry was ellipsised on 12 of 12 rows
+ * while popularity — provider telemetry nobody verified — was painted in the
+ * verification colour and was the loudest thing on the row. Every field is now
+ * visible at rest, popularity is muted, and price is at ink weight. (3) On a
+ * phone the five facets stacked to 240px, which put the first result 384px into
+ * a 652px sheet; they are one scroll-snap row.
+ *
+ * `PAGE_SIZE` stays. At 40+ models an unpaged list is roughly 5,000px, and the
+ * pagination is what keeps the keyboard cursor inside a bounded set.
+ */
 
 const PAGE_SIZE = 30;
 const COMPACT_NUMBER = new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 });
@@ -18,6 +37,96 @@ const SORTS: readonly Readonly<{ value: PickerSort; label: string }>[] = Object.
   { value: "name", label: "Name" },
 ]);
 
+/**
+ * The provenance caveat, permanently visible in the sticky footer.
+ *
+ * It used to scroll away, which meant the one sentence qualifying every number
+ * above it was absent exactly when someone was reading those numbers.
+ */
+export const MODEL_PICKER_PROVENANCE = "Capabilities are source-declared; catalog metadata is not proof. Popularity and load use fresh provider telemetry when available.";
+
+/**
+ * One catalogue fact about one model: a label, a value, and its provenance.
+ *
+ * These are the four cells the `#access` panel used to render *beside* the
+ * picker, in a 210px 2×2 tile grid that described whatever was already chosen.
+ * That put the evidence about a model outside the control you choose it with,
+ * so comparing two models meant choosing one, closing the popover, reading a
+ * grid, reopening, choosing the other. The facts now belong to the picker and
+ * move when the selection moves.
+ */
+export type ModelFact = Readonly<{ label: string; value: string; captions: readonly string[] }>;
+
+/**
+ * The four facts, verbatim from the tiles they replace.
+ *
+ * Every caption is provenance and is rendered in full: `provider management
+ * snapshot` qualifies a live-looking availability word, and `catalog metadata
+ * is not proof` is the caveat that stops `evidence candidate` from reading as
+ * a verdict. A caption is never a `title`; touch has no hover.
+ */
+export function modelFacts(model: AirshipModel): readonly ModelFact[] {
+  const context = model.contextTokens ?? model.maxModelTokens;
+  return Object.freeze([
+    Object.freeze({
+      label: "Availability",
+      value: model.availability,
+      captions: Object.freeze([
+        model.provenance.availability === "unavailable" ? "live status unavailable" : "provider management snapshot",
+      ]),
+    }),
+    Object.freeze({
+      label: "Context",
+      value: context ? COMPACT_NUMBER.format(context) : "unknown",
+      captions: Object.freeze([
+        model.maxOutputTokens ? `${COMPACT_NUMBER.format(model.maxOutputTokens)} max output` : "output limit unavailable",
+      ]),
+    }),
+    Object.freeze({
+      label: "Input / output",
+      value: `${formatUsd(model.pricing.input.usdPerMillion)} / ${formatUsd(model.pricing.output.usdPerMillion)}`,
+      captions: Object.freeze(["USD per million tokens"]),
+    }),
+    Object.freeze({
+      label: "Trust readiness",
+      value: model.trust.consistency === "conflict" ? "metadata conflict" : "evidence candidate",
+      // `verification remains unverified` is a retired name: `trust.verification`
+      // is the literal `"unverified"` (models/types.ts), so the template said
+      // the same word twice and neither time said when the check happens. Its
+      // written successor carries both facts — the readiness AND "catalog
+      // metadata is not proof", verbatim — so the second caption would now be a
+      // duplicate of a clause inside the first rather than a fact of its own.
+      captions: Object.freeze([TRUST_LABEL_CONNECT_TRUST_READINESS]),
+    }),
+  ]);
+}
+
+/**
+ * The selected model's catalogue facts, rendered inside the control itself.
+ *
+ * One label column and one flowing value column, rather than the four boxed
+ * tiles this replaces: at a 664px measure four columns are ~150px each, which
+ * wrapped `provider management snapshot` onto three lines and made the block
+ * taller than the tile grid it was meant to compress. Nothing is truncated —
+ * every caption is provenance, and a caption cut in half is a claim with its
+ * qualifier removed.
+ */
+function ModelFactStrip({ model }: Readonly<{ model: AirshipModel }>) {
+  return (
+    <dl class="model-picker-meta" aria-label={`Catalog metadata for ${model.id}`}>
+      {modelFacts(model).map((fact) => (
+        <div key={fact.label}>
+          <dt>{fact.label}</dt>
+          <dd>
+            <strong>{fact.value}</strong>
+            {fact.captions.map((caption) => <small key={caption}>{caption}</small>)}
+          </dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
 /** Provider/model badge: real Chutes logo when available, provider monogram otherwise. */
 export function ModelLogo({ model }: Readonly<{ model: AirshipModel }>) {
   return (
@@ -29,7 +138,34 @@ export function ModelLogo({ model }: Readonly<{ model: AirshipModel }>) {
   );
 }
 
-export function ModelPicker({ models, value, disabled, onSelect }: Readonly<{ models: readonly AirshipModel[]; value?: string; disabled?: boolean; onSelect: (id: string) => void }>) {
+export function ModelPicker({
+  models,
+  value,
+  disabled,
+  onSelect,
+  recommendedModelId,
+  attachFacts = false,
+}: Readonly<{
+  models: readonly AirshipModel[];
+  value?: string;
+  disabled?: boolean;
+  onSelect: (id: string) => void;
+  /**
+   * The catalogue's own privacy-first pick, when the caller has one.
+   *
+   * Passed in rather than inferred from row order: "recommended" is a claim,
+   * and the first row of whatever sort happens to be active is not that claim.
+   */
+  recommendedModelId?: string;
+  /**
+   * Renders the selected model's catalogue facts inside the control.
+   *
+   * Opt-in because the connected-summary `<dl>` already states the connection's
+   * own facts around it; the credential panel is where the four tiles used to
+   * sit beside the picker, and it is the surface that asks for a *choice*.
+   */
+  attachFacts?: boolean;
+}>) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState("");
   const [query, setQuery] = useState("");
@@ -43,18 +179,9 @@ export function ModelPicker({ models, value, disabled, onSelect }: Readonly<{ mo
   const optionsId = useId();
   useEffect(() => { const timer = window.setTimeout(() => setQuery(draft), 140); return () => window.clearTimeout(timer); }, [draft]);
   useEffect(() => setShowAll(false), [query, facet, sort]);
-  const eligible = useMemo(() => {
-    const filters = facet === "vision"
-      ? { query, inputModalities: ["image"] }
-      : facet === "tools"
-        ? { query, features: ["tools"] }
-        : facet === "confidential"
-          ? { query, confidentialCompute: "required" as const }
-          : facet === "hot"
-            ? { query, availability: ["hot" as const] }
-            : { query };
-    return sortModels(filterModels(models, filters), sort);
-  }, [facet, models, query, sort]);
+  const searched = useMemo(() => filterModels(models, { query }), [models, query]);
+  const eligible = useMemo(() => sortModels(facetModels(searched, facet), sort), [facet, searched, sort]);
+  const counts = useMemo(() => facetCounts(searched), [searched]);
   const visible = showAll ? eligible : eligible.slice(0, PAGE_SIZE);
   const selected = models.find((model) => model.id === value);
   const close = (restore = true) => { setOpen(false); if (restore) requestAnimationFrame(() => trigger.current?.focus()); };
@@ -68,33 +195,128 @@ export function ModelPicker({ models, value, disabled, onSelect }: Readonly<{ mo
     document.addEventListener("focusin", outside);
     return () => { document.removeEventListener("pointerdown", outside, true); document.removeEventListener("focusin", outside); };
   }, [open]);
-  return <div class="model-picker" ref={root}>
-    <button ref={trigger} class="model-picker-trigger" type="button" disabled={disabled} aria-haspopup="dialog" aria-controls={open ? `${optionsId}-dialog` : undefined} aria-expanded={open} onClick={() => open ? close(false) : openPicker()} onKeyDown={(event) => { if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) { event.preventDefault(); openPicker(); setActive(event.key === "ArrowUp" || event.key === "End" ? Math.max(0, visible.length - 1) : 0); } if (event.key === "Escape" && open) { event.preventDefault(); close(); } }}>{selected ? <ModelLogo model={selected} /> : null}<span class="model-picker-value">{selected?.id ?? "Choose model"}</span><span aria-hidden="true">⌄</span></button>
+  const recommended = recommendedModelId !== undefined && value === recommendedModelId;
+  return <div class="model-picker" ref={root} data-open={open ? "true" : "false"}>
+    <button ref={trigger} class="model-picker-trigger" type="button" disabled={disabled} aria-haspopup="dialog" aria-controls={open ? `${optionsId}-dialog` : undefined} aria-expanded={open} onClick={() => open ? close(false) : openPicker()} onKeyDown={(event) => { if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) { event.preventDefault(); openPicker(); setActive(event.key === "ArrowUp" || event.key === "End" ? Math.max(0, visible.length - 1) : 0); } if (event.key === "Escape" && open) { event.preventDefault(); close(); } }}>
+      {selected ? <ModelLogo model={selected} /> : null}
+      <span class="model-picker-value">{selected?.id ?? "Choose model"}</span>
+      {/* The recommendation travels inside the control, with the model it
+          describes, instead of floating above it as its own 22px label. */}
+      {recommended ? <span class="model-picker-badge">✦ privacy-first recommendation</span> : null}
+      <span class="model-picker-caret" aria-hidden="true">⌄</span>
+    </button>
+    {/* The catalogue facts travel with the model, inside the control that
+        chooses it. They used to be a 210px tile grid parked beside the picker,
+        describing the current selection from outside the thing that changes
+        it — and the open popover then covered them. */}
+    {attachFacts && selected ? <ModelFactStrip model={selected} /> : null}
     {open ? <div id={`${optionsId}-dialog`} class="model-picker-popover" role="dialog" aria-label="Choose a Chutes model" onKeyDown={(event) => {
       if (event.key === "Escape") { event.preventDefault(); close(); }
       if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); setActive((current) => nextModelIndex(visible.length, current, event.key === "ArrowDown" ? 1 : -1)); }
       if (event.key === "Home" || event.key === "End") { event.preventDefault(); setActive(event.key === "Home" ? 0 : Math.max(0, visible.length - 1)); }
       if (event.key === "Enter" && event.target === search.current) { event.preventDefault(); choose(active); }
     }}>
-      <input ref={search} type="search" value={draft} onInput={(event) => setDraft(event.currentTarget.value)} placeholder="Search models" aria-label="Search models" aria-controls={optionsId} aria-activedescendant={visible[active] ? `${optionsId}-option-${active}` : undefined} />
-      <div class="model-picker-toolbar">
-        <div class="model-picker-facets" role="group" aria-label="Model capability filters">{FACETS.map((item) => <button type="button" aria-pressed={facet === item} onClick={() => setFacet(item)}>{facetLabel(item)}</button>)}</div>
-        <div class="model-picker-sort"><span>Sort</span><MenuSelect ariaLabel="Sort models" placement="down" value={sort} options={SORTS} onChange={(value) => setSort(value as PickerSort)} /></div>
+      <div class="model-picker-header">
+        {/* Only rendered as a sheet header at ≤640px, where the popover covers
+            its own trigger and there is otherwise nothing saying what this is
+            or how to leave it. */}
+        <div class="model-picker-sheet-bar">
+          <strong>Session model</strong>
+          <button type="button" class="model-picker-done" onClick={() => close()}>Done</button>
+        </div>
+        <input ref={search} type="search" value={draft} onInput={(event) => setDraft(event.currentTarget.value)} placeholder="Search models" aria-label="Search models" aria-controls={optionsId} aria-activedescendant={visible[active] ? `${optionsId}-option-${active}` : undefined} />
+        <div class="model-picker-facets" role="group" aria-label="Model capability filters">
+          {FACETS.map((item) => (
+            /*
+             * Every facet keeps its count visible, and none is disabled. A
+             * facet matching all 12 of 12 excludes nothing — and the number,
+             * rendered beside `All`, is what says so. Disabling it would move
+             * that fact into a `title`, which a thumb cannot read.
+             */
+            <button key={item} type="button" aria-pressed={facet === item} onClick={() => setFacet(item)}>
+              {facetLabel(item)}<small>{counts[item]}</small>
+            </button>
+          ))}
+        </div>
+        <div class="model-picker-status">
+          <span>{eligible.length} model{eligible.length === 1 ? "" : "s"}</span>
+          <MenuSelect ariaLabel="Sort models" placement="down" value={sort} options={SORTS} onChange={(value) => setSort(value as PickerSort)} />
+        </div>
       </div>
-      <p class="model-picker-provenance">Capabilities are source-declared. Popularity and load use fresh provider telemetry when available.</p>
-      <div id={optionsId} class="model-picker-list" role="listbox" aria-label={`${eligible.length} eligible models`}>{visible.map((model, index) => <button id={`${optionsId}-option-${index}`} type="button" role="option" aria-selected={model.id === value} data-active={index === active} class={index === 0 ? "recommended" : ""} onPointerMove={() => setActive(index)} onClick={() => choose(index)} key={model.id}>
+      <div id={optionsId} class="model-picker-list" role="listbox" aria-label={`${eligible.length} eligible models`}>{visible.map((model, index) => <button id={`${optionsId}-option-${index}`} type="button" role="option" aria-selected={model.id === value} data-active={index === active} data-recommended={model.id === recommendedModelId ? "true" : undefined} onPointerMove={() => setActive(index)} onClick={() => choose(index)} key={model.id}>
+        {/*
+          The grid lives on this span, not on the `<button>`. A button does not
+          grow past its min-height for grid rows it contains, which silently
+          clipped the capability and metric lines out of a 44px row on a phone —
+          i.e. it deleted two facts by layout rather than by decision.
+        */}
+        <span class="model-row">
         <ModelLogo model={model} />
-        <span><strong>{model.id}</strong><small>{capabilityLabels(model).join(" · ") || "Capabilities not declared"}</small></span>
-        <span title={operationalTitle(model)}><em>{operationalLabel(model)}</em><small>{formatContext(model)} · {formatPrice(model)}</small></span>
-      </button>)}</div>
-      {!showAll && eligible.length > PAGE_SIZE ? <button class="model-picker-show-all" type="button" onClick={() => setShowAll(true)}>Show all {eligible.length}</button> : null}
-      {!eligible.length ? <p>No matching models.</p> : null}
+        <span class="model-row-id">{model.id}</span>
+        <span class="model-row-price">{formatPrice(model)}</span>
+        {/*
+          Capability tokens stay words, not glyphs. A glyph's absence is a
+          silent negative the first time a non-confidential model appears in
+          this catalogue, and every one of these rows currently reads
+          "Confidential candidate" — so the day one does not, it has to be
+          readable rather than inferable from a missing shape.
+        */}
+        <span class="model-row-capabilities">
+          {model.id === recommendedModelId ? <em class="model-row-flag">Recommended</em> : null}
+          {model.id === value ? <em class="model-row-flag">Selected</em> : null}
+          {capabilityLabels(model).length > 0
+            ? capabilityLabels(model).map((label) => <span key={label}>{label}</span>)
+            : <span>Capabilities not declared</span>}
+          {/*
+            Availability and trust readiness are per-model catalogue facts that
+            existed only in the tile grid outside this control, so comparing two
+            models on them was impossible without choosing one first. Words, not
+            glyphs: `metadata conflict` and `cold` are the cases that decide a
+            choice, and an absent glyph is a negative nobody reads.
+          */}
+          {catalogTokens(model).map((label) => <span key={label} class="model-row-catalog">{label}</span>)}
+        </span>
+        <span class="model-row-metrics" title={operationalTitle(model)}>{formatContext(model)} · {operationalLabel(model)}</span>
+        </span>
+      </button>)}
+      {!eligible.length ? <p class="model-picker-empty">No matching models.</p> : null}
+      </div>
+      <div class="model-picker-footer">
+        {!showAll && eligible.length > PAGE_SIZE ? <button class="model-picker-show-all" type="button" onClick={() => setShowAll(true)}>Show all {eligible.length}</button> : null}
+        <p class="model-picker-provenance">{MODEL_PICKER_PROVENANCE}</p>
+      </div>
     </div> : null}
   </div>;
 }
 
 export function visibleModelCount(total: number, showAll: boolean): number { return showAll ? total : Math.min(PAGE_SIZE, total); }
 export function nextModelIndex(count: number, current: number, delta: -1 | 1): number { return count <= 0 ? -1 : (Math.max(0, current) + delta + count) % count; }
+
+/** One facet, applied to an already-searched set so counts and list agree. */
+export function facetModels(models: readonly AirshipModel[], facet: Facet): readonly AirshipModel[] {
+  if (facet === "vision") return filterModels(models, { inputModalities: ["image"] });
+  if (facet === "tools") return filterModels(models, { features: ["tools"] });
+  if (facet === "confidential") return filterModels(models, { confidentialCompute: "required" });
+  if (facet === "hot") return filterModels(models, { availability: ["hot"] });
+  return models;
+}
+
+/**
+ * How many models each facet would leave, given the current search.
+ *
+ * Rendered on the chips themselves: a filter that costs a tap and a decision
+ * has to say up front what it would remove, and `Confidential 12` beside
+ * `All 12` says "nothing" without needing a hover.
+ */
+export function facetCounts(models: readonly AirshipModel[]): Readonly<Record<Facet, number>> {
+  return Object.freeze({
+    all: models.length,
+    vision: facetModels(models, "vision").length,
+    tools: facetModels(models, "tools").length,
+    confidential: facetModels(models, "confidential").length,
+    hot: facetModels(models, "hot").length,
+  });
+}
 
 function facetLabel(value: Facet): string { return value[0]!.toUpperCase() + value.slice(1); }
 function capabilityLabels(model: AirshipModel): string[] {
@@ -106,6 +328,23 @@ function capabilityLabels(model: AirshipModel): string[] {
   if (model.features.some((value) => value.toLowerCase() === "tools")) labels.push("Tools");
   if (model.trust.confidentialCompute === "asserted") labels.push("Confidential candidate");
   return labels;
+}
+/**
+ * The two catalogue facts a row could not previously carry.
+ *
+ * `trust.consistency === "conflict"` is the one state a person must not choose
+ * blind, so it is named on the row rather than only after selection.
+ */
+export function catalogTokens(model: AirshipModel): readonly string[] {
+  return Object.freeze([
+    model.availability,
+    model.trust.consistency === "conflict" ? "metadata conflict" : "evidence candidate",
+  ]);
+}
+function formatUsd(value: number | undefined): string {
+  return value === undefined
+    ? "unknown"
+    : new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 4 }).format(value);
 }
 function operationalLabel(model: AirshipModel): string {
   const popularity = modelPopularitySignal(model);

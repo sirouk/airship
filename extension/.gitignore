@@ -1,0 +1,2 @@
+# Build output. Every artifact is reproduced by `node extension/build.mjs`.
+/build/

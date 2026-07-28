@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
-import { BrowserGitClient, MemoryGitAdapter } from "../git";
+import { BrowserGitClient } from "../git";
+import { MemoryGitAdapter } from "../git/memory-adapter";
 import { WasmChutesE2eeCrypto } from "../inference/chutes/crypto";
 import { ChutesInferenceTransport } from "../inference/chutes/transport";
 import { createAirshipToolRegistry } from "../tools/airship-tools";
@@ -13,6 +14,9 @@ import { createSessionManifest, runTurn } from "./agent";
 
 const apiKey = process.env.CHUTES_TEST_API_KEY?.trim();
 const requestedModel = process.env.CHUTES_TEST_MODEL?.trim() || "zai-org/GLM-5.2-TEE";
+if (process.env.AIRSHIP_CHUTES_LIVE === "1" && !apiKey) {
+  throw new Error("Live Chutes acceptance requires CHUTES_TEST_API_KEY.");
+}
 const liveDescribe = apiKey ? describe : describe.skip;
 
 liveDescribe("live fully tooled Airship agent", () => {

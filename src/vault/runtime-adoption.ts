@@ -1,20 +1,27 @@
-import type { EventJournal, JournalBackend } from "../core/journal";
-import { isGitWorkspaceControlPlanePath, type WorkspacePort } from "../workspace/contracts";
+import type { JsonValue } from "../core/contracts";
+import { stableStringify } from "../core/hash";
+import type { EventJournal, JournalBackend, SessionRecord } from "../core/journal";
+import {
+  ProfileCatalogConflictError,
+  type ProfileCatalogCheckpoint,
+  type ProfileCatalogStore,
+} from "../profiles/persistence";
+import { isLegacyGitCheckpointPath, type WorkspacePort } from "../workspace/contracts";
 
 /** Copy a stable workspace snapshot without overwriting divergent cloud state. */
 export async function migrateWorkspaceState(source: WorkspacePort, target: WorkspacePort): Promise<void> {
-  const entries = (await source.list()).filter((entry) => !isGitWorkspaceControlPlanePath(entry.path));
+  const entries = (await source.list()).filter((entry) => !isLegacyGitCheckpointPath(entry.path));
   const snapshot = [];
   for (const entry of entries) {
-    // Git checkpoints have their own object-integrity and fenced-head protocol.
-    // Copying them as ordinary files would bypass reconciliation or surface a
-    // misleading generic workspace conflict during a durability-mode switch.
+    // Only the retired parallel semantic checkpoint is excluded. Conventional
+    // repository `.git` files and the browser-Git registry are authoritative
+    // workspace state and deliberately migrate through this same port.
     const file = await source.read(entry.path);
     if (!file) throw new Error(`Workspace file disappeared during vault migration: ${entry.path}.`);
     if (file.revision !== entry.revision) throw new Error(`Workspace changed during vault migration: ${entry.path}.`);
     snapshot.push(file);
   }
-  const freshEntries = (await source.list()).filter((entry) => !isGitWorkspaceControlPlanePath(entry.path));
+  const freshEntries = (await source.list()).filter((entry) => !isLegacyGitCheckpointPath(entry.path));
   if (!sameWorkspaceSnapshot(entries, freshEntries)) {
     throw new Error("Workspace changed during vault migration; retry after writes settle.");
   }
@@ -50,12 +57,13 @@ export async function migrateJournalState(source: EventJournal, target: JournalB
     }
     const existing = await target.getSession(session.id);
     if (existing) {
-      if (
-        existing.headSequence !== session.headSequence ||
-        existing.headDigest !== session.headDigest ||
-        existing.manifest.systemPromptDigest !== session.manifest.systemPromptDigest ||
-        existing.manifest.toolManifestDigest !== session.manifest.toolManifestDigest
-      ) {
+      // The digest head commits the event chain, not the mutable backend row
+      // that indexes it. Never treat a matching head as permission to adopt a
+      // different provider/model/workspace/profile binding, title, or time.
+      // A Vault transition is an exact copy operation; accepting only a few
+      // manifest digests here would let divergent session authority survive
+      // under an otherwise valid event head (especially at genesis).
+      if (!sameSessionRecord(existing, session)) {
         throw new Error(`Encrypted vault contains a conflicting session ${session.id}.`);
       }
       continue;
@@ -78,6 +86,49 @@ export async function migrateJournalState(source: EventJournal, target: JournalB
   }
 }
 
+export type ProfileCatalogMigration = Readonly<{
+  checkpoint: ProfileCatalogCheckpoint;
+  disposition: "created" | "matched" | "adopted-existing";
+}>;
+
+/**
+ * Move the catalog through the same provider-neutral authority boundary as
+ * workspace and journal state. A deterministic first-page seed may yield to
+ * an existing Vault catalog; real page edits never overwrite divergence.
+ */
+export async function migrateProfileCatalogState(
+  source: ProfileCatalogCheckpoint,
+  target: ProfileCatalogStore,
+  options: Readonly<{ sourceIsBootstrap: boolean }>,
+  signal?: AbortSignal,
+): Promise<ProfileCatalogMigration> {
+  const initial = await target.load(signal);
+  if (!initial) {
+    const initialized = await target.initialize(source.catalog, signal);
+    if (initialized.disposition === "created") {
+      return Object.freeze({ checkpoint: initialized.checkpoint, disposition: "created" });
+    }
+    return resolveExistingCatalog(source, initialized.checkpoint, options.sourceIsBootstrap);
+  }
+  return resolveExistingCatalog(source, initial, options.sourceIsBootstrap);
+}
+
+function resolveExistingCatalog(
+  source: ProfileCatalogCheckpoint,
+  existing: ProfileCatalogCheckpoint,
+  sourceIsBootstrap: boolean,
+): ProfileCatalogMigration {
+  if (source.digest === existing.digest) {
+    return Object.freeze({ checkpoint: existing, disposition: "matched" });
+  }
+  if (sourceIsBootstrap) {
+    return Object.freeze({ checkpoint: existing, disposition: "adopted-existing" });
+  }
+  throw new ProfileCatalogConflictError(
+    "The selected Vault contains a different profile catalog. No profile, theme, or skill revision was overwritten.",
+  );
+}
+
 function sameWorkspaceSnapshot(
   before: readonly { path: string; revision: string }[],
   after: readonly { path: string; revision: string }[],
@@ -85,4 +136,8 @@ function sameWorkspaceSnapshot(
   if (before.length !== after.length) return false;
   const revisions = new Map(before.map((entry) => [entry.path, entry.revision]));
   return after.every((entry) => revisions.get(entry.path) === entry.revision);
+}
+
+function sameSessionRecord(left: SessionRecord, right: SessionRecord): boolean {
+  return stableStringify(left as unknown as JsonValue) === stableStringify(right as unknown as JsonValue);
 }

@@ -10,13 +10,23 @@
 .menu-select.placement-down .menu-select-popover { top:calc(100% + 7px); right:auto; bottom:auto; left:0; max-height:min(420px,70dvh,var(--menu-select-available-height,70dvh)); }
 .menu-select-option { display:grid; grid-template-columns:auto minmax(0,1fr) auto; gap:9px; align-items:center; width:100%; min-height:44px; padding:7px 9px; border:1px solid transparent; border-radius:var(--radius-control); color:var(--ink); background:transparent; cursor:pointer; text-align:left; }
 .menu-select-option-copy { display:grid; gap:2px; min-width:0; }
-.menu-select-option strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+/* A label in a menu of choices may wrap; it may not be cut. "Auto …" and
+   "Full …" named nothing the user could choose between, and the truncated
+   remainder had no other carrier — an option label is not a `title`. */
+.menu-select-option strong { overflow:hidden; }
+/* A menu whose scope is a fact ("this conversation only") states it in the
+   menu. Both are `aria-hidden` presentational text: the listbox already
+   carries the scope in its accessible name, and the note is additionally the
+   listbox's `aria-describedby` target, so nothing here is sighted-only. */
+.menu-select-popover__header, .menu-select-popover__note { margin:0; padding:var(--sp-1) var(--sp-2); color:var(--ink-muted); font-size:var(--fs-micro); }
+.menu-select-popover__header { border-bottom:1px solid var(--line); font-family:var(--font-mono); letter-spacing:.11em; text-transform:uppercase; }
+.menu-select-popover__note { border-top:1px solid var(--line); color:var(--ink-faint); }
 .menu-select-option:hover, .menu-select-option:focus-visible { border-color:var(--line); background:color-mix(in srgb,var(--accent) 8%,var(--surface-soft)); }
 .menu-select-option[aria-selected="true"] { border-color:color-mix(in srgb,var(--accent) 38%,var(--line)); background:color-mix(in srgb,var(--accent) 11%,var(--surface-soft)); }
 .menu-select-check { color:var(--accent-bright); }
 .menu-select.compact { width:44px; }
 .menu-select.compact .menu-select-trigger { justify-content:center; width:44px; height:44px; min-height:44px; padding:0; border-radius:50%; color:var(--brass-bright); background:rgba(193,154,88,.065); }
-.menu-select.compact .menu-select-caret { position:absolute; right:-2px; bottom:-2px; display:grid; place-items:center; width:16px; height:16px; border:1.5px solid var(--ground); border-radius:50%; color:var(--ink); background:var(--surface-raised); font-size:11px; }
+.menu-select.compact .menu-select-caret { position:absolute; right:-2px; bottom:-2px; display:grid; place-items:center; width:16px; height:16px; border:1.5px solid var(--ground); border-radius:50%; color:var(--ink); background:var(--surface-raised); font-size:var(--fs-micro); }
 .menu-select.compact .menu-select-popover { position:fixed; top:58px; right:8px; bottom:auto; width:min(320px,calc(100vw - 16px)); }
 .compact-profile-menu { display:none; }
 .profile-switcher .profile-menu { margin-top:9px; }
@@ -27,5 +37,30 @@
 .profile-manage-link { width:100%; margin-top:7px; padding:5px 7px; border:0; color:var(--ink-faint); background:transparent; cursor:pointer; font-size:var(--fs-micro); text-align:left; }
 .profile-manage-link:hover { color:var(--accent-bright); }
 @media (max-width:860px) { .compact-profile-menu { display:block; } }
-@media (max-width:640px) { .menu-select-popover, .menu-select.placement-down .menu-select-popover { position:fixed; inset:auto 8px max(8px,env(safe-area-inset-bottom)) 8px; width:auto; max-width:none; max-height:70dvh; padding:8px; } }
+/* The narrow-viewport bottom sheet. `position` changes here, not just `inset`,
+   so any per-instance override below 640px has to restate `position` as well —
+   an override that sets `inset` alone leaves `calc(100% + …)` resolving against
+   the viewport instead of the anchor, which puts the menu off the top of the
+   screen while the trigger still reports `aria-expanded="true"`. That is how
+   the composer's approval-policy control shipped inert on every phone; see the
+   block in `routes.css` and the geometry test in `e2e/composer-layout.spec.ts`. */
+@media (max-width:640px), (max-width:950px) and (max-height:500px) { .menu-select-popover, .menu-select.placement-down .menu-select-popover { position:fixed; inset:auto 8px max(8px,env(safe-area-inset-bottom)) 8px; width:auto; max-width:none; max-height:70dvh; padding:8px; } }
+/*
+ * The menu's arrival: the fade, and deliberately not the rise.
+ *
+ * `overlay-fade` is declared in `shell.css` — @keyframes names are
+ * document-global — so the menu spends the layer's one 120ms rather than
+ * inventing a third opinion. It does *not* take `overlay-rise`, and that is a
+ * decision rather than an omission. Every other overlay in this product is read
+ * before it is acted on. A menu is opened and immediately tapped, and for the
+ * duration of a travelling entrance the option under a finger is not the option
+ * that will receive the tap. `e2e/composer-layout.spec.ts` measures exactly
+ * that — it hit-tests each policy at its own centre — and it caught a
+ * bottom-sheet rise on this menu. On the control that decides whether the agent
+ * may write files and run shell commands without asking, a 180ms window in
+ * which a fast thumb selects the wrong policy is not a trade worth an origin.
+ */
+.menu-select-popover { animation:overlay-fade 120ms ease; }
+/* No reduced-motion counterpart: with no travel to retract there is nothing the
+   global duration reset at `routes.css:3271` does not already handle. */
 @media (prefers-reduced-motion:reduce) { .menu-select-caret { transition:none; } }

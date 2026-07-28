@@ -10,6 +10,9 @@ import { ChutesInferenceTransport } from "./transport";
 
 const apiKey = process.env.CHUTES_TEST_API_KEY?.trim();
 const requestedModel = process.env.CHUTES_TEST_MODEL?.trim() || "zai-org/GLM-5.2-TEE";
+if (process.env.AIRSHIP_CHUTES_LIVE === "1" && !apiKey) {
+  throw new Error("Live Chutes acceptance requires CHUTES_TEST_API_KEY.");
+}
 const liveDescribe = apiKey ? describe : describe.skip;
 const stressDescribe = apiKey && process.env.AIRSHIP_CHUTES_STRESS === "1" ? describe : describe.skip;
 
@@ -52,12 +55,28 @@ liveDescribe("live Airship Chutes E2EE transport", () => {
       model: model!.id,
       claims: {
         encryption: { status: "partial" },
-        conversation: { status: "unavailable" },
+        conversation: {
+          status: "partial",
+          verifier: "airship-client",
+          details: {
+            commitment: "airship-chutes-e2e-response-sha256-chain-v1",
+            authority: "local-client",
+          },
+        },
       },
       bindings: {
         requestDigest: expect.stringMatching(/^sha256:/u),
         responseDigest: expect.stringMatching(/^sha256:/u),
+        requestCiphertextDigest: expect.stringMatching(/^sha256:/u),
+        responseCiphertextDigest: expect.stringMatching(/^sha256:/u),
       },
+      verifications: expect.arrayContaining([
+        expect.objectContaining({
+          verifier: "airship-client",
+          status: "partial",
+          claim: "conversation",
+        }),
+      ]),
     });
 
     const persisted = await journal.getSession(session.id);

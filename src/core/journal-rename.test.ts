@@ -27,4 +27,15 @@ describe("durable session rename", () => {
     const report = await auditSessionHistory({ session: projected!, events: await journal.readEvents(session.id) });
     expect(report.status).toBe("invalid");
   });
+
+  it("does not append a title change after the admitted turn is cancelled", async () => {
+    const journal = new EventJournal(new MemoryJournalBackend());
+    const manifest = await createSessionManifest({ systemPrompt: "test", providerId: "local", model: "demo", tools: [], workspaceId: "workspace" });
+    const session = await journal.createSession("Before", manifest);
+    const controller = new AbortController();
+    controller.abort(new DOMException("Stopped by user", "AbortError"));
+
+    await expect(journal.renameSession(session.id, "After", controller.signal)).rejects.toMatchObject({ name: "AbortError" });
+    expect((await journal.getSession(session.id))?.title).toBe("Before");
+  });
 });

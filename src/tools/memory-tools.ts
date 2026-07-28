@@ -1,5 +1,7 @@
 import type { JsonValue, SessionProfileBinding, Tool, ToolContext } from "../core/contracts";
+import { sha256 } from "../core/hash";
 import { randomUuid } from "../core/id";
+import { rankProfileMemories } from "../retrieval/memory-ranking";
 import type { EventJournal } from "../core/journal";
 import type { WorkspacePort } from "../workspace/contracts";
 import type { ToolRegistry } from "./registry";
@@ -38,7 +40,7 @@ export function registerMemoryTools(
   const recall: Tool = {
     definition: {
       name: "recall_memory",
-      description: "Search explicit memories belonging to this session's pinned profile. Workspace/source search remains separately shared; legacy unscoped records are quarantined.",
+      description: "Search explicit memories belonging to this session's pinned profile, ranked by bounded relevance with recency as the tiebreak; an omitted query returns the most recent records. Workspace/source search remains separately shared; legacy unscoped records are quarantined.",
       effect: "read",
       inputSchema: {
         type: "object",
@@ -52,25 +54,33 @@ export function registerMemoryTools(
     async execute(argumentsValue, context) {
       const profile = await pinnedProfile(journal, context);
       const args = objectArguments(argumentsValue);
-      const query = typeof args.query === "string" ? args.query.trim().toLocaleLowerCase() : "";
+      const query = typeof args.query === "string" ? args.query.trim() : "";
       const limit = typeof args.limit === "number" ? args.limit : 12;
       const file = await workspace.read(MEMORY_PATH);
       const document = file ? parseMemoryDocument(file.content) : emptyDocument();
       const records = profileRecords(document.records, profile.profileId);
-      const selected = records
-        .filter((record) => !query || `${record.content}\n${record.source}`.toLocaleLowerCase().includes(query))
-        .slice(-limit)
-        .reverse();
+      // An empty query is a browse, not a search: keep the newest records. A real
+      // query uses the same ranker as automatic turn injection, so the agent's
+      // fallback can never be worse than the lane that already ran.
+      const selected = query
+        ? rankProfileMemories(records, query, { limit }).map((candidate) => candidate.record)
+        : records.slice(-limit).reverse();
+      const sourceDigest = file ? await sha256(file.content) : null;
       return {
-        content: JSON.stringify(selected, null, 2),
+        content: JSON.stringify(await Promise.all(selected.map(async (record) => ({
+          ...record,
+          contentDigest: await sha256(record.content),
+        }))), null, 2),
         metadata: {
           count: selected.length,
           total: records.length,
+          ranking: query ? "bounded-bm25-recent-v1" : "reverse-chronological",
           scope: "profile",
           profileId: profile.profileId,
           profileRevision: profile.profileRevision,
           legacyQuarantined: document.legacyCount,
           revision: file?.revision ?? null,
+          sourceDigest,
         },
       };
     },

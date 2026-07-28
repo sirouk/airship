@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { LOCAL_LAB, LOCAL_LAB_UI_ORIGINS, inspectAirshipHtml, labCorsAllows, labEnvironment } from "./local-lab.mjs";
+import {
+  LOCAL_LAB,
+  LOCAL_LAB_GOOGLE_CLIENT_ID,
+  LOCAL_LAB_UI_ORIGINS,
+  chutesOAuthBridgeRequest,
+  inspectAirshipHtml,
+  labCorsAllows,
+  labEnvironment,
+  requiresOwnedViteRestartForOAuth,
+} from "./local-lab.mjs";
 
 describe("local full-system lab contract", () => {
   it("recognizes Airship only when the development CSP authorizes both loopback spellings", () => {
@@ -21,9 +30,39 @@ describe("local full-system lab contract", () => {
       AIRSHIP_LOCAL_S3_ENDPOINT: LOCAL_LAB.s3Endpoint,
       AIRSHIP_LOCAL_S3_BUCKET: LOCAL_LAB.bucket,
       AIRSHIP_LOCAL_S3_ACCESS_KEY: LOCAL_LAB.accessKeyId,
-      VITE_AIRSHIP_DEFAULT_VAULT_PROVIDER: "local-lab",
+      VITE_AIRSHIP_DEFAULT_VAULT_PROVIDER: "google-drive",
+      VITE_GOOGLE_CLIENT_ID: LOCAL_LAB_GOOGLE_CLIENT_ID,
     });
     expect(Object.isFrozen(result)).toBe(true);
+  });
+
+  it("preserves an operator-provided Google registration in the lab", () => {
+    const result = labEnvironment({ VITE_GOOGLE_CLIENT_ID: "operator-client.apps.googleusercontent.com" });
+    expect(result.VITE_GOOGLE_CLIENT_ID).toBe("operator-client.apps.googleusercontent.com");
+  });
+
+  it("requires a complete process-only Chutes bridge configuration and exposes no secret state", () => {
+    expect(chutesOAuthBridgeRequest({})).toEqual({ configured: false });
+    expect(() => chutesOAuthBridgeRequest({ AIRSHIP_CHUTES_OAUTH_CLIENT_ID: "cid_test" }))
+      .toThrow(/requires both/u);
+    expect(() => chutesOAuthBridgeRequest({ AIRSHIP_CHUTES_OAUTH_CLIENT_SECRET: "csc_test" }))
+      .toThrow(/requires both/u);
+    const request = chutesOAuthBridgeRequest({
+      AIRSHIP_CHUTES_OAUTH_CLIENT_ID: " cid_test ",
+      AIRSHIP_CHUTES_OAUTH_CLIENT_SECRET: " csc_memory_only ",
+    });
+    expect(request).toEqual({ configured: true, clientId: "cid_test" });
+    expect(JSON.stringify(request)).not.toContain("csc_memory_only");
+    expect(Object.isFrozen(request)).toBe(true);
+  });
+
+  it("restarts an owned OAuth handler for secret rotation without persisting a secret derivative", () => {
+    const configured = { configured: true, clientId: "cid_test" };
+    const absent = { configured: false };
+    expect(requiresOwnedViteRestartForOAuth(configured, configured)).toBe(true);
+    expect(requiresOwnedViteRestartForOAuth(configured, absent)).toBe(true);
+    expect(requiresOwnedViteRestartForOAuth(absent, configured)).toBe(true);
+    expect(requiresOwnedViteRestartForOAuth(absent, absent)).toBe(false);
   });
 
   it("confines the published lab endpoint and console to IPv4 loopback", () => {

@@ -1,9 +1,10 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
+import { readAirshipStyles } from "./style-sheets.test-helper";
 
 const [app, styles, sessions, featureStyles] = await Promise.all([
   readFile(new URL("./app.tsx", import.meta.url), "utf8"),
-  readFile(new URL("./styles.css", import.meta.url), "utf8"),
+  readAirshipStyles(),
   readFile(new URL("./sessions-view.css", import.meta.url), "utf8"),
   Promise.all([
     ["access-connection-view", "./access-view.css"],
@@ -50,6 +51,13 @@ describe("route layout contract", () => {
     expect(tabs).toContain("calc(-1 * var(--route-gutter-inline-start))");
     expect(tabs).toContain("calc(-1 * var(--route-gutter-inline-end))");
     expect(cssRule(styles, ".trust-route-layout > :not(.trust-hub-tabs)")).toContain("margin-top: var(--route-gutter-block)");
+  });
+
+  it("keeps profile navigation inside the route-owned gutter without nesting another inset", () => {
+    expect(cssRule(styles, ".profile-hub-tabs")).toContain("width: min(1320px, 100%)");
+    expect(cssRule(styles, ".profile-hub-tabs")).toContain("margin: 0 auto");
+    expect(cssRule(styles, ".profile-scope-contract")).toContain("width: min(1320px, 100%)");
+    expect(styles).not.toMatch(/\\.profile-(?:hub-tabs|scope-contract)[^{]*\{[^}]*width:\s*calc\(100%\s*-\s*(?:28|36)px\)/su);
   });
 });
 

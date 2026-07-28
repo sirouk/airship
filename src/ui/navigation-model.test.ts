@@ -3,11 +3,13 @@ import {
   CANONICAL_DESTINATIONS,
   MOBILE_MORE_ENTRIES,
   MOBILE_PRIMARY_CONTROLS,
+  RAIL_SECTIONS,
   SETTINGS_OVERLAY_ENTRY,
   canonicalParentForView,
   mobilePrimaryControlForView,
   navigationHashForView,
   navigationViewFromHash,
+  railTraversal,
   type NavigationView,
 } from "./navigation-model";
 
@@ -76,6 +78,7 @@ describe("canonical navigation model", () => {
     expect(navigationViewFromHash("#billing")).toBe("billing");
     expect(navigationViewFromHash("#sources")).toBe("editor");
     expect(navigationViewFromHash("#attestations")).toBe("proof");
+    expect(navigationViewFromHash("#chat/018f40e0-7c62-7c70-9db7-6d5de37ae52c")).toBe("chat");
     expect(navigationViewFromHash("#unknown")).toBe("chat");
   });
 
@@ -90,22 +93,22 @@ describe("canonical navigation model", () => {
     expect(mobilePrimaryControlForView("proof")).toBe("trust");
   });
 
-  it("maps every other non-primary view to More", () => {
+  it("keeps nested destinations attached to their primary mobile parent", () => {
     expect(Object.fromEntries(allViews.map((view) => [view, mobilePrimaryControlForView(view)]))).toEqual({
       chat: "chat",
-      sessions: "more",
+      sessions: "chat",
       workspace: "workspace",
-      editor: "more",
-      terminal: "more",
+      editor: "workspace",
+      terminal: "workspace",
       memory: "more",
       context: "more",
       profiles: "more",
       capabilities: "more",
       skills: "more",
-      vault: "more",
-      billing: "more",
+      vault: "trust",
+      billing: "trust",
       proof: "trust",
-      access: "more",
+      access: "trust",
     });
   });
 
@@ -137,5 +140,50 @@ describe("canonical navigation model", () => {
       hash: "#settings",
     });
     expect(CANONICAL_DESTINATIONS.map((entry) => String(entry.id))).not.toContain(SETTINGS_OVERLAY_ENTRY.id);
+  });
+});
+
+describe("the rail's filing", () => {
+  const rows = RAIL_SECTIONS.flatMap((section) => section.rows);
+
+  it("leaves the first section unlabelled and renames the filing cabinet", () => {
+    expect(RAIL_SECTIONS.map((section) => section.label)).toEqual([undefined, "Receipts & access"]);
+    // The three internal-architecture group names are gone as *labels*. "Work"
+    // had nothing above it to be distinguished from, "Agent" was a group of
+    // one, and this product shows receipts rather than asking for trust.
+    expect(RAIL_SECTIONS.map((section) => section.label ?? "")).not.toContain("Work");
+    expect(RAIL_SECTIONS.map((section) => section.label ?? "")).not.toContain("Trust");
+  });
+
+  it("un-nests Account and keeps Workspace as the one correct nesting", () => {
+    expect(rows.map((row) => row.id)).toEqual(["chat", "workspace", "memory", "proof", "vault", "access", "billing"]);
+    expect(rows.find((row) => row.id === "billing")?.hash).toBe("#account");
+    expect(rows.flatMap((row) => row.nested.map((nested) => nested.id))).toEqual(["editor", "terminal"]);
+  });
+
+  it("gives every row and every nested row a glyph, because the 60px rail has only glyphs", () => {
+    for (const row of rows) {
+      expect(row.icon, `${row.label} needs an icon`).toBeTruthy();
+      for (const nested of row.nested) expect(nested.icon, `${nested.label} needs an icon`).toBeTruthy();
+    }
+  });
+
+  it("does not file All conversations or Profiles as rail rows — both are disclosures now", () => {
+    const ids = rows.map((row) => String(row.id));
+    expect(ids).not.toContain("sessions");
+    expect(ids).not.toContain("profiles");
+    // ...and both remain reachable destinations with their own hashes.
+    expect(navigationHashForView("sessions")).toBe("#sessions");
+    expect(navigationHashForView("profiles")).toBe("#profiles");
+  });
+
+  it("walks the visual order, folding nested rows in only while their parent is open", () => {
+    expect(railTraversal({})).toEqual(["chat", "workspace", "memory", "proof", "vault", "access", "billing"]);
+    expect(railTraversal({ workspace: true })).toEqual([
+      "chat", "workspace", "editor", "terminal", "memory", "proof", "vault", "access", "billing",
+    ]);
+    // A collapsed parent must not leave its children in the arrow-key order:
+    // focus would move to a row nobody can see.
+    expect(railTraversal({ workspace: false })).not.toContain("editor");
   });
 });

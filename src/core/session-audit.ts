@@ -1,6 +1,7 @@
 import type {
   CanonicalMessage,
   JsonValue,
+  SecurityPosture,
   SessionManifest,
   ToolCall,
   ToolDefinition,
@@ -8,7 +9,21 @@ import type {
 import { sha256, stableStringify } from "./hash";
 import type { DurableEvent, SessionRecord } from "./journal";
 import { boundInferenceHistoryImages, canonicalImageInputs } from "./multimodal";
-import { canonicalContextSelection, injectContextSelection, verifyContextSelection } from "./context-selection";
+import {
+  canonicalContextSelection,
+  contextSelectionScopeMatches,
+  injectContextSelection,
+  verifyContextSelection,
+  verifyContextSelectionQuery,
+} from "./context-selection";
+import {
+  canonicalContextSummary,
+  canonicalSessionContextPolicy,
+  summaryBodiesWithinPolicy,
+  verifyContextSummary,
+  type ContextSummaryProvenance,
+} from "./context-compressor";
+import { materializeMessages } from "./agent";
 
 const EVENT_FIELDS = new Set([
   "version",
@@ -26,7 +41,9 @@ const EVENT_FIELDS = new Set([
 const KNOWN_EVENT_TYPES = new Set([
   "session.created",
   "session.renamed",
+  "context.summary.updated",
   "turn.requested",
+  "turn.context.selected",
   "inference.started",
   "inference.usage",
   "assistant.completed",
@@ -152,6 +169,11 @@ type ToolState = {
 type TurnState = {
   id: string;
   step: number;
+  request?: {
+    content: string;
+    messageIndex: number;
+  };
+  contextSelected?: boolean;
   inference?: {
     operationId: string;
     requestDigest: string;
@@ -400,7 +422,7 @@ async function validateManifest(
   }
   if (
     !raw ||
-    raw.protocolVersion !== 1 ||
+    (raw.protocolVersion !== 1 && raw.protocolVersion !== 2) ||
     boundedString(raw.systemPrompt, 512 * 1024) === undefined ||
     boundedString(raw.systemPromptDigest, 128) === undefined ||
     boundedString(raw.providerId, 256) === undefined ||
@@ -410,7 +432,7 @@ async function validateManifest(
     boundedString(raw.createdAt, 128) === undefined ||
     !Array.isArray(raw.tools)
   ) {
-    add({ code: "MANIFEST_SHAPE_INVALID", category: "manifest", message: "Session manifest does not satisfy protocol v1." });
+    add({ code: "MANIFEST_SHAPE_INVALID", category: "manifest", message: "Session manifest does not satisfy a supported protocol shape." });
     return;
   }
   if ((await sha256(raw.systemPrompt as string)) !== raw.systemPromptDigest) {
@@ -421,6 +443,35 @@ async function validateManifest(
   }
   if (raw.securityPosture !== undefined && !POSTURES.has(String(raw.securityPosture))) {
     add({ code: "SECURITY_POSTURE_PIN_INVALID", category: "manifest", message: "Manifest security posture pin is invalid." });
+  }
+  const inferenceBinding = asPlainRecord(raw.inferenceBinding);
+  if (raw.inferenceBinding !== undefined && (
+    !inferenceBinding ||
+    inferenceBinding.version !== 1 ||
+    boundedString(inferenceBinding.connectionId, 256) === undefined ||
+    !Number.isSafeInteger(inferenceBinding.connectionGeneration) ||
+    (inferenceBinding.connectionGeneration as number) <= 0 ||
+    boundedString(inferenceBinding.providerId, 256) === undefined ||
+    boundedString(inferenceBinding.providerLabel, 256) === undefined ||
+    !Number.isSafeInteger(inferenceBinding.providerRevision) ||
+    (inferenceBinding.providerRevision as number) <= 0 ||
+    !["oauth-pkce", "api-key", "local-none"].includes(String(inferenceBinding.authMethod)) ||
+    !["e2ee-attestable", "provider-tls", "loopback-local"].includes(String(inferenceBinding.transportBoundary)) ||
+    boundedString(inferenceBinding.modelId, 512) === undefined ||
+    inferenceBinding.modelId !== raw.model ||
+    boundedString(inferenceBinding.boundAt, 128) === undefined ||
+    !Number.isFinite(Date.parse(String(inferenceBinding.boundAt)))
+  )) {
+    add({ code: "INFERENCE_BINDING_INVALID", category: "manifest", message: "Manifest inference connection binding is malformed or does not match its model pin." });
+  }
+  if (raw.contextPolicy !== undefined && !canonicalSessionContextPolicy(raw.contextPolicy)) {
+    add({ code: "CONTEXT_POLICY_INVALID", category: "manifest", message: "Manifest context-window and compression semantics are invalid." });
+  }
+  if (
+    (raw.protocolVersion === 1 && raw.turnContext !== undefined) ||
+    (raw.protocolVersion === 2 && raw.turnContext !== "required" && raw.turnContext !== "disabled")
+  ) {
+    add({ code: "TURN_CONTEXT_POLICY_INVALID", category: "manifest", message: "Manifest turn-context retrieval policy is invalid." });
   }
   const lineage = asPlainRecord(raw.lineage);
   if (raw.lineage !== undefined && (
@@ -489,7 +540,7 @@ async function validateManifest(
     if (
       !skills ||
       !skillsValid ||
-      profile.version !== 1 ||
+      (profile.version !== 1 && profile.version !== 2) ||
       boundedString(profile.profileId, 256) === undefined ||
       !DIGEST_PATTERN.test(String(profile.profileRevision)) ||
       boundedString(profile.themeId, 256) === undefined ||
@@ -500,6 +551,19 @@ async function validateManifest(
       add({ code: "PROFILE_BINDING_INVALID", category: "manifest", message: "Session profile binding is invalid." });
     } else if ((await sha256(stableStringify(skills as JsonValue))) !== profile.skillSetDigest) {
       add({ code: "SKILL_SET_DIGEST_MISMATCH", category: "manifest", message: "Resolved skills do not match their pinned digest." });
+    }
+    const workspaceBinding = asPlainRecord(profile.workspaceBinding);
+    const hasSiloFields = profile.workspaceBinding !== undefined || profile.memoryScope !== undefined || profile.approvalMode !== undefined || profile.minimumPosture !== undefined;
+    const validWorkspaceBinding = workspaceBinding !== undefined && (
+      (workspaceBinding.kind === "active-workspace" && Object.keys(workspaceBinding).length === 1) ||
+      (workspaceBinding.kind === "workspace-id" && boundedString(workspaceBinding.workspaceId, 512) !== undefined)
+    );
+    const validSilo = validWorkspaceBinding
+      && ["session", "profile", "workspace"].includes(String(profile.memoryScope))
+      && ["ask-first", "auto-approve", "full-access"].includes(String(profile.approvalMode))
+      && POSTURES.has(String(profile.minimumPosture) as SecurityPosture);
+    if ((profile.version === 2 && !validSilo) || (profile.version === 1 && hasSiloFields)) {
+      add({ code: "PROFILE_SILO_INVALID", category: "manifest", message: "Session profile workspace, memory, approval, or proof boundary is invalid." });
     }
   }
 }
@@ -598,6 +662,54 @@ async function validateProtocol(
     if (event.type === "session.renamed") {
       if (event.turnId || event.operationId || !payload || typeof payload.title !== "string" || !payload.title.trim() || payload.title.length > 240) {
         add({ severity: "error", category: "protocol", code: "SESSION_RENAME_MALFORMED", sequence: event.sequence, message: "A session rename must carry one bounded title outside any turn." });
+      }
+      continue;
+    }
+
+    if (event.type === "context.summary.updated") {
+      const summary = canonicalContextSummary(event.payload);
+      const valid = summary
+        ? await verifyContextSummary(summary, events.slice(0, index + 1))
+        : false;
+      const turnBoundPreprocessing = Boolean(
+        active &&
+        session.manifest.protocolVersion === 2 &&
+        event.turnId === active.id &&
+        !event.operationId &&
+        active.step === -1 &&
+        !active.inference &&
+        !active.finalAssistant &&
+        active.tools.length === 0,
+      );
+      const outsideTurn = !active && !event.turnId && !event.operationId;
+      if (
+        activeLocal || (!outsideTurn && !turnBoundPreprocessing) || !summary || !valid ||
+        summary.sourceEndSequence >= event.sequence ||
+        !summaryMatchesContextPolicy(summary, session.manifest, events.slice(0, index))
+      ) {
+        add({
+          ...eventLocation(event),
+          code: "CONTEXT_SUMMARY_INVALID",
+          category: "protocol",
+          message: "A context summary must be a verified, digest-linked transcript-prefix delta outside an active turn.",
+        });
+      } else {
+        messages.splice(0, messages.length, ...materializeMessages(
+          events.slice(0, index + 1),
+          {
+            injectLatestContext: turnBoundPreprocessing,
+            allowEmbeddedContext: session.manifest.turnContext === undefined,
+            allowSelectedContext: session.manifest.turnContext !== "disabled",
+          },
+        ));
+        if (active?.request) {
+          active.request.messageIndex = messages.length - 1;
+          lastContextMessage = active.contextSelected
+            ? { index: active.request.messageIndex, content: active.request.content }
+            : undefined;
+        } else {
+          lastContextMessage = undefined;
+        }
       }
       continue;
     }
@@ -725,6 +837,13 @@ async function validateProtocol(
         ? undefined
         : canonicalContextSelection(payload.contextSelection);
       const contextVerified = contextSelection ? await verifyContextSelection(contextSelection) : false;
+      const contextQueryVerified = contextSelection && typeof payload?.content === "string"
+        ? await verifyContextSelectionQuery(contextSelection, payload.content)
+        : false;
+      const contextScopeVerified = contextSelection
+        ? contextSelectionScopeMatches(contextSelection, session.id, session.manifest)
+        : false;
+      const embeddedContextAllowed = session.manifest.turnContext === undefined;
       if (!payload || typeof payload.content !== "string") {
         add({ ...eventLocation(event), code: "TURN_CONTENT_INVALID", category: "protocol", message: "Turn request payload must contain string content." });
       }
@@ -735,6 +854,18 @@ async function validateProtocol(
         add({ ...eventLocation(event), code: "TURN_CONTEXT_INVALID", category: "protocol", message: "Turn context selection violates the bounded provenance contract." });
       } else if (contextSelection && !contextVerified) {
         add({ ...eventLocation(event), code: "TURN_CONTEXT_DIGEST_MISMATCH", category: "protocol", message: "Turn context selection digest or selected text digest does not verify." });
+      } else if (contextSelection && !contextQueryVerified) {
+        add({ ...eventLocation(event), code: "TURN_CONTEXT_QUERY_MISMATCH", category: "protocol", message: "Turn context selection is committed to a different canonical query." });
+      } else if (contextSelection && !contextScopeVerified) {
+        add({ ...eventLocation(event), code: "TURN_CONTEXT_SCOPE_MISMATCH", category: "protocol", message: "Turn context selection lineage is outside the session's pinned scope." });
+      }
+      if (payload?.contextSelection !== undefined && !embeddedContextAllowed) {
+        add({
+          ...eventLocation(event),
+          code: "TURN_CONTEXT_LEGACY_EMBED_INVALID",
+          category: "protocol",
+          message: "Only historical manifests without an explicit turn-context policy may embed selection data in turn.requested.",
+        });
       }
       seenTurns.add(event.turnId);
       counts.turns += 1;
@@ -745,14 +876,75 @@ async function validateProtocol(
         lastContextMessage = undefined;
       }
       if (payload && typeof payload.content === "string" && images &&
-          (payload.contextSelection === undefined || (contextSelection && contextVerified))) {
+          (payload.contextSelection === undefined || (
+            embeddedContextAllowed && contextSelection && contextVerified && contextQueryVerified && contextScopeVerified
+          ))) {
         const index = messages.length;
         messages.push({
           role: "user",
           content: injectContextSelection(payload.content, contextSelection),
           ...(images.length ? { images: [...images] } : {}),
         });
-        if (contextSelection?.hits.length) lastContextMessage = { index, content: payload.content };
+        active.request = { content: payload.content, messageIndex: index };
+        active.contextSelected = embeddedContextAllowed && Boolean(contextSelection);
+        if (embeddedContextAllowed && contextSelection?.hits.length) lastContextMessage = { index, content: payload.content };
+      }
+      continue;
+    }
+
+    if (event.type === "turn.context.selected") {
+      const turn = requireActive(event);
+      const selection = canonicalContextSelection(payload?.contextSelection);
+      const verified = selection ? await verifyContextSelection(selection) : false;
+      const queryVerified = selection && turn?.request
+        ? await verifyContextSelectionQuery(selection, turn.request.content)
+        : false;
+      const scopeVerified = selection
+        ? contextSelectionScopeMatches(selection, session.id, session.manifest)
+        : false;
+      if (
+        !turn ||
+        event.operationId ||
+        turn.step !== -1 ||
+        turn.inference ||
+        turn.tools.length ||
+        turn.contextSelected ||
+        !turn.request ||
+        session.manifest.protocolVersion !== 2 ||
+        session.manifest.turnContext === "disabled" ||
+        !selection ||
+        !verified ||
+        !queryVerified ||
+        !scopeVerified
+      ) {
+        add({
+          ...eventLocation(event),
+          code: !selection
+            ? "TURN_CONTEXT_INVALID"
+            : !verified
+              ? "TURN_CONTEXT_DIGEST_MISMATCH"
+              : !queryVerified
+                ? "TURN_CONTEXT_QUERY_MISMATCH"
+                : !scopeVerified
+                  ? "TURN_CONTEXT_SCOPE_MISMATCH"
+                  : "TURN_CONTEXT_LIFECYCLE_INVALID",
+          category: "protocol",
+          message: "Turn context must be canonical, verified, policy-allowed, unique, and journaled before inference.",
+        });
+        continue;
+      }
+      const message = messages[turn.request.messageIndex];
+      if (!message || message.role !== "user") {
+        add({ ...eventLocation(event), code: "TURN_CONTEXT_LIFECYCLE_INVALID", category: "protocol", message: "Turn context has no matching user request." });
+        continue;
+      }
+      messages[turn.request.messageIndex] = {
+        ...message,
+        content: injectContextSelection(turn.request.content, selection),
+      };
+      turn.contextSelected = true;
+      if (selection.hits.length) {
+        lastContextMessage = { index: turn.request.messageIndex, content: turn.request.content };
       }
       continue;
     }
@@ -760,6 +952,18 @@ async function validateProtocol(
     if (event.type === "inference.started") {
       const turn = requireActive(event);
       if (!turn || !payload) continue;
+      if (
+        session.manifest.turnContext === "required" &&
+        turn.request?.content.trim() &&
+        !turn.contextSelected
+      ) {
+        add({
+          ...eventLocation(event),
+          code: "TURN_CONTEXT_REQUIRED_MISSING",
+          category: "protocol",
+          message: "Inference started without the turn-context selection required by the immutable session manifest.",
+        });
+      }
       const step = payload.step;
       const operationId = event.operationId;
       if (
@@ -1019,6 +1223,87 @@ async function validateProtocol(
     });
   }
   return counts;
+}
+
+function summaryMatchesContextPolicy(
+  summary: NonNullable<ReturnType<typeof canonicalContextSummary>>,
+  manifest: SessionManifest,
+  priorEvents: readonly DurableEvent[],
+): boolean {
+  const canonical = canonicalSessionContextPolicy(manifest.contextPolicy);
+  if (!canonical) return false;
+  if (
+    summary.contextWindowTokens !== canonical.contextWindowTokens ||
+    summary.thresholdBasisPoints !== canonical.compression.thresholdBasisPoints ||
+    summary.targetRatioBasisPoints !== canonical.compression.targetRatioBasisPoints ||
+    // Both free-text bodies, not just the delta: a compacted tier is written by
+    // the same summarizer under the same cap, and one that is larger than the
+    // pinned budget was not produced by this session's policy. Bounding only
+    // the delta leaves the tier capped at the 64 KiB hard ceiling, several
+    // times the pinned budget, and it rides into every future prompt.
+    !summaryBodiesWithinPolicy(summary, canonical.compression.maxSummaryDeltaBytes) ||
+    summary.estimatedTokensBefore / summary.contextWindowTokens < summary.thresholdBasisPoints / 10_000 ||
+    priorEvents.filter((event) =>
+      event.type === "turn.completed" && event.sequence > summary.sourceEndSequence
+    ).length !== canonical.compression.preserveRecentTurns
+  ) return false;
+  const summarizer = canonical.compression.summarizer;
+  if (!compactionMatchesContextPolicy(summary.compaction, summarizer, manifest)) return false;
+  if (summarizer.mode === "extractive-fallback") {
+    return summary.summaryMethod === "extractive-fallback-v1" &&
+      summary.summarizerProvenance === undefined &&
+      summary.summarizerAttempt === undefined;
+  }
+  if (summary.summaryMethod === "summarizer-port-v1") {
+    return summary.summarizerId === summarizer.adapterId &&
+      provenanceMatchesContextPolicy(summary.summarizerProvenance, summarizer.adapterId, manifest);
+  }
+  return summarizer.onFailure === "extractive-fallback" &&
+    summary.summaryMethod === "extractive-fallback-v1" &&
+    summary.summarizerAttempt?.summarizerId === summarizer.adapterId;
+}
+
+/**
+ * The compacted tier gets the same cross-check the delta gets. Without it a
+ * fabricated tier provenance only has to be internally self-consistent — its
+ * `responseDigest` matching its own body — to pass replay, while naming an
+ * adapter, provider, model, or posture this session never pinned. The tier
+ * stands in for the entire start of the conversation, so it is the last place
+ * an unchecked label belongs.
+ */
+function compactionMatchesContextPolicy(
+  compaction: NonNullable<ReturnType<typeof canonicalContextSummary>>["compaction"],
+  summarizer: NonNullable<ReturnType<typeof canonicalSessionContextPolicy>>["compression"]["summarizer"],
+  manifest: SessionManifest,
+): boolean {
+  if (!compaction) return true;
+  if (summarizer.mode === "extractive-fallback") {
+    // No summarizer was pinned, so no tier this session wrote can claim one.
+    return compaction.method === "extractive-fallback-v1" &&
+      compaction.provenance === undefined &&
+      compaction.attempt === undefined;
+  }
+  if (compaction.method === "summarizer-port-v1") {
+    return compaction.attempt === undefined &&
+      provenanceMatchesContextPolicy(compaction.provenance, summarizer.adapterId, manifest);
+  }
+  // An extractive tier under a summarizer policy is only legitimate when the
+  // policy permits the fallback and the commitment records which summarizer
+  // failed, exactly as the delta must.
+  return summarizer.onFailure === "extractive-fallback" &&
+    compaction.provenance === undefined &&
+    compaction.attempt?.summarizerId === summarizer.adapterId;
+}
+
+function provenanceMatchesContextPolicy(
+  provenance: ContextSummaryProvenance | undefined,
+  adapterId: string,
+  manifest: SessionManifest,
+): boolean {
+  return provenance?.adapterId === adapterId &&
+    provenance.providerId === manifest.providerId &&
+    provenance.model === manifest.model &&
+    (manifest.securityPosture === undefined || provenance.posture === manifest.securityPosture);
 }
 
 function parseToolCalls(

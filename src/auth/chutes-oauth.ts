@@ -1,10 +1,16 @@
 const CHUTES_AUTHORIZE_ENDPOINT = "https://api.chutes.ai/idp/authorize";
-const CHUTES_TOKEN_ENDPOINT = import.meta.env.DEV && import.meta.env.MODE !== "test"
-  ? "/__airship/chutes/oauth/token"
-  : "https://api.chutes.ai/idp/token";
+const CHUTES_PUBLIC_TOKEN_ENDPOINT = "https://api.chutes.ai/idp/token";
+const CHUTES_PUBLIC_REVOCATION_ENDPOINT = "https://api.chutes.ai/idp/token/revoke";
+const CHUTES_LOCAL_TOKEN_ENDPOINT = "/__airship/chutes/oauth/token";
+const CHUTES_LOCAL_REVOCATION_ENDPOINT = "/__airship/chutes/oauth/revoke";
 const MAX_TOKEN_RESPONSE_BYTES = 32 * 1024;
 const MAX_OAUTH_TOKEN_BYTES = 4 * 1024;
 const TOKEN_REQUEST_TIMEOUT_MS = 20_000;
+/*
+ * Sign-out must not wait on the network. Revocation is fired detached from
+ * teardown and given a short deadline of its own.
+ */
+const REVOCATION_TIMEOUT_MS = 5_000;
 const CHUTES_REGISTRATION_SCOPES = ["profile", "chutes:invoke", "billing:read"] as const;
 const CHUTES_REQUEST_SCOPES = ["openid", ...CHUTES_REGISTRATION_SCOPES] as const;
 
@@ -23,6 +29,8 @@ export type ChutesOAuthRegistration = Readonly<{
   configurationError?: string;
 }>;
 
+export type ChutesOAuthExchangeMode = "local-confidential-bridge" | "public-pkce";
+
 export const CHUTES_LOCAL_REGISTRATION: ChutesOAuthRegistration = Object.freeze({
   name: "Airship",
   clientId: "cid_n2tusjazqmkkwon12jy3bo3u",
@@ -31,13 +39,14 @@ export const CHUTES_LOCAL_REGISTRATION: ChutesOAuthRegistration = Object.freeze(
   redirectUris: ["http://localhost:4173/auth/chutes/callback"] as const,
   registrationScopes: CHUTES_REGISTRATION_SCOPES,
   scopes: CHUTES_REQUEST_SCOPES,
-  // The checked-in localhost registration is confidential. Development uses
-  // the same-origin loopback exchange bridge, which adds the secret from the
-  // Vite process; browser JavaScript never receives it. A static deployment
-  // must use a separate Chutes app registered with method `none`.
+  // Chutes production currently registers this localhost app as confidential.
+  // The browser still creates and proves S256 PKCE; the same-origin Vite
+  // handler adds the process-held secret during token operations. The secret
+  // is never compiled into, returned to, or accepted from browser JavaScript.
   tokenEndpointAuthMethod: "client_secret_post" as "none" | "client_secret_post",
-  public: false,
-  refreshTokenLifetimeDays: 1,
+  // `public` is Chutes directory visibility, not OAuth client authentication.
+  public: true,
+  refreshTokenLifetimeDays: 30,
   configured: true,
 });
 
@@ -91,6 +100,34 @@ export const CHUTES_ACTIVE_REGISTRATION = resolveChutesOAuthRegistration({
   publicBasePath: import.meta.env.BASE_URL,
 });
 
+/**
+ * Validate both the registered origin and deployment base path. OAuth state is
+ * tab-local, so a sibling application on the same origin must not be allowed to
+ * start an Airship authorization attempt.
+ */
+export function chutesOAuthLocationState(
+  homepageUrl: string,
+  currentLocation: string,
+): Readonly<{ available: boolean; reason?: string }> {
+  try {
+    const homepage = new URL(homepageUrl);
+    const current = new URL(currentLocation);
+    if (homepage.origin !== current.origin) {
+      return { available: false, reason: `Sign-in is registered for ${homepage.origin}. Open Airship there before continuing.` };
+    }
+    const homepagePath = homepage.pathname === "/" ? "/" : homepage.pathname.replace(/\/+$/u, "");
+    const pathMatches = homepagePath === "/"
+      || current.pathname === homepagePath
+      || current.pathname.startsWith(`${homepagePath}/`);
+    if (!pathMatches) {
+      return { available: false, reason: `Sign-in is registered for ${homepage.href}. Open that Airship deployment before continuing.` };
+    }
+    return { available: true };
+  } catch {
+    return { available: false, reason: "The configured OAuth homepage is invalid; sign-in remains disabled." };
+  }
+}
+
 export type ChutesPkceAttempt = {
   state: string;
   verifier: string;
@@ -111,6 +148,23 @@ export type ChutesOAuthTokenSet = Readonly<{
   scopes: readonly string[];
 }>;
 
+/**
+ * Resolve the one honest token boundary for a registration.
+ *
+ * A confidential app is accepted only for the checked-in localhost callback,
+ * where the development server can keep its secret outside browser JavaScript.
+ * Static deployments must use a public (`none`) registration.
+ */
+export function chutesOAuthExchangeMode(
+  registration: ChutesOAuthRegistration,
+): ChutesOAuthExchangeMode {
+  if (registration.tokenEndpointAuthMethod === "none") return "public-pkce";
+  if (registration === CHUTES_LOCAL_REGISTRATION) return "local-confidential-bridge";
+  throw new Error(
+    "Confidential Chutes OAuth is supported only by Airship's localhost handler.",
+  );
+}
+
 type ChutesTokenResponse = Readonly<{
   access_token?: unknown;
   token_type?: unknown;
@@ -126,10 +180,10 @@ export async function createChutesAuthorizationRequest(args: {
   now?: number;
   crypto?: Pick<Crypto, "getRandomValues" | "subtle">;
 }): Promise<{ url: URL; attempt: ChutesPkceAttempt }> {
-  const clientId = args.clientId.trim();
-  if (!clientId) throw new TypeError("A Chutes OAuth client ID is required.");
   const registration = args.registration ?? CHUTES_LOCAL_REGISTRATION;
   if (!registration.configured) throw new Error(registration.configurationError ?? "Chutes OAuth is not configured.");
+  const clientId = validateRegistrationClientId(args.clientId, registration);
+  chutesOAuthExchangeMode(registration);
   const redirectUri = validateRedirectUri(
     args.redirectUri ?? registration.redirectUris[0] ?? "",
     registration.redirectUris,
@@ -185,10 +239,10 @@ export function consumeChutesAuthorizationCallback(args: {
 }
 
 /**
- * Exchange a one-time authorization code with PKCE. The static production path
- * is a public client; the local development path uses a same-origin loopback
- * bridge that adds its process-held confidential secret. Browser JavaScript
- * never accepts that secret. Returned tokens remain page-memory values.
+ * Exchange a one-time authorization code with PKCE. Browser/native
+ * registrations call Chutes directly. The checked-in confidential localhost
+ * registration calls its same-origin process handler; every other confidential
+ * registration fails closed. Returned tokens remain page-memory values.
  */
 export async function exchangeChutesAuthorizationCode(args: {
   callback: ChutesAuthorizationCallback;
@@ -200,7 +254,7 @@ export async function exchangeChutesAuthorizationCode(args: {
 }): Promise<ChutesOAuthTokenSet> {
   const registration = args.registration ?? CHUTES_LOCAL_REGISTRATION;
   if (!registration.configured) throw new Error(registration.configurationError ?? "Chutes OAuth is not configured.");
-  const clientId = validateClientId(args.clientId);
+  const clientId = validateRegistrationClientId(args.clientId, registration);
   const code = validateOpaqueValue(args.callback.code, "authorization code", 4 * 1024);
   const verifier = validatePkceVerifier(args.callback.verifier);
   const redirectUri = validateRedirectUri(args.callback.redirectUri, registration.redirectUris);
@@ -215,12 +269,13 @@ export async function exchangeChutesAuthorizationCode(args: {
     signal: args.signal,
     now: args.now,
     fetch: args.fetch,
+    registration,
   });
   requireGrantedScopes(tokenSet.scopes, registration.registrationScopes);
   return tokenSet;
 }
 
-/** Rotate a public client's memory-only refresh token without a client secret. */
+/** Rotate a memory-only refresh token through the registration's token boundary. */
 export async function refreshChutesOAuthToken(args: {
   refreshToken: string;
   clientId: string;
@@ -231,7 +286,7 @@ export async function refreshChutesOAuthToken(args: {
 }): Promise<ChutesOAuthTokenSet> {
   const registration = args.registration ?? CHUTES_LOCAL_REGISTRATION;
   if (!registration.configured) throw new Error(registration.configurationError ?? "Chutes OAuth is not configured.");
-  const clientId = validateClientId(args.clientId);
+  const clientId = validateRegistrationClientId(args.clientId, registration);
   const refreshToken = validateToken(args.refreshToken, "crt_", "refresh token");
   const refreshed = await requestTokenSet({
     form: {
@@ -242,6 +297,7 @@ export async function refreshChutesOAuthToken(args: {
     signal: args.signal,
     now: args.now,
     fetch: args.fetch,
+    registration,
   });
   if (!refreshed.refreshToken || refreshed.refreshToken === refreshToken) {
     throw new Error("Chutes OAuth refresh did not rotate the one-time refresh token.");
@@ -250,17 +306,101 @@ export async function refreshChutesOAuthToken(args: {
   return refreshed;
 }
 
+/**
+ * Outcome of an RFC 7009 revocation attempt.
+ *
+ * `accepted` means the provider accepted the request, NOT that a session is
+ * proven destroyed: the Chutes IdP answers 200 for tokens it never issued, so
+ * nothing downstream may promote this to "the provider session is gone".
+ */
+export type ChutesTokenRevocationResult = Readonly<
+  | { state: "accepted"; status: number }
+  | { state: "rejected"; status: number }
+  | { state: "unreachable"; reason: "network" | "timeout" | "cancelled" }
+>;
+
+/**
+ * Ask the Chutes IdP to invalidate one memory-only token.
+ *
+ * Clearing page memory ends Airship's use of a credential but leaves a leaked
+ * refresh token valid at the provider for the rest of its lifetime, so sign-out
+ * asks the published revocation endpoint to drop it too. A malformed value is
+ * never transmitted; transport failures are reported, not thrown, because the
+ * caller is a best-effort detached teardown step.
+ */
+export async function revokeChutesToken(args: {
+  token: string;
+  tokenTypeHint: "refresh_token" | "access_token";
+  clientId: string;
+  signal?: AbortSignal;
+  fetch?: typeof globalThis.fetch;
+  registration?: ChutesOAuthRegistration;
+}): Promise<ChutesTokenRevocationResult> {
+  const registration = args.registration ?? CHUTES_LOCAL_REGISTRATION;
+  if (!registration.configured) throw new Error(registration.configurationError ?? "Chutes OAuth is not configured.");
+  const clientId = validateRegistrationClientId(args.clientId, registration);
+  const token = validateToken(
+    args.token,
+    args.tokenTypeHint === "refresh_token" ? "crt_" : "cak_",
+    args.tokenTypeHint === "refresh_token" ? "refresh token" : "access token",
+  );
+  const fetchImpl = args.fetch ?? globalThis.fetch;
+  if (!fetchImpl) throw new Error("Fetch is required to revoke a Chutes token.");
+  const lifetime = createTokenRequestLifetime(args.signal, REVOCATION_TIMEOUT_MS);
+  const endpoint = chutesOAuthExchangeMode(registration) === "local-confidential-bridge"
+    ? CHUTES_LOCAL_REVOCATION_ENDPOINT
+    : CHUTES_PUBLIC_REVOCATION_ENDPOINT;
+  try {
+    const response = await abortable(fetchImpl(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        token,
+        token_type_hint: args.tokenTypeHint,
+        client_id: clientId,
+      }).toString(),
+      cache: "no-store",
+      credentials: "omit",
+      redirect: "error",
+      referrerPolicy: "no-referrer",
+      signal: lifetime.signal,
+    }), lifetime.signal);
+    // The body carries no authority for this decision and may be unbounded.
+    void response.body?.cancel().catch(() => undefined);
+    return Object.freeze(
+      response.ok
+        ? { state: "accepted" as const, status: response.status }
+        : { state: "rejected" as const, status: response.status },
+    );
+  } catch {
+    return Object.freeze({
+      state: "unreachable" as const,
+      reason: lifetime.didTimeout()
+        ? "timeout" as const
+        : args.signal?.aborted
+          ? "cancelled" as const
+          : "network" as const,
+    });
+  } finally {
+    lifetime.dispose();
+  }
+}
+
 async function requestTokenSet(args: {
   form: Readonly<Record<string, string>>;
   signal?: AbortSignal;
   now?: number;
   fetch?: typeof globalThis.fetch;
+  registration: ChutesOAuthRegistration;
 }): Promise<ChutesOAuthTokenSet> {
   const fetchImpl = args.fetch ?? globalThis.fetch;
   if (!fetchImpl) throw new Error("Fetch is required to complete Sign in with Chutes.");
   const lifetime = createTokenRequestLifetime(args.signal);
+  const endpoint = chutesOAuthExchangeMode(args.registration) === "local-confidential-bridge"
+    ? CHUTES_LOCAL_TOKEN_ENDPOINT
+    : CHUTES_PUBLIC_TOKEN_ENDPOINT;
   try {
-    const response = await abortable(fetchImpl(CHUTES_TOKEN_ENDPOINT, {
+    const response = await abortable(fetchImpl(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams(args.form).toString(),
@@ -291,7 +431,21 @@ async function requestTokenSet(args: {
   }
 }
 
-function createTokenRequestLifetime(parent?: AbortSignal): Readonly<{
+function validateRegistrationClientId(
+  value: string,
+  registration: ChutesOAuthRegistration,
+): string {
+  const clientId = validateClientId(value);
+  if (clientId !== registration.clientId) {
+    throw new Error("The Chutes OAuth client ID does not match the active registration.");
+  }
+  return clientId;
+}
+
+function createTokenRequestLifetime(
+  parent?: AbortSignal,
+  timeoutMs: number = TOKEN_REQUEST_TIMEOUT_MS,
+): Readonly<{
   signal: AbortSignal;
   didTimeout: () => boolean;
   dispose: () => void;
@@ -304,7 +458,7 @@ function createTokenRequestLifetime(parent?: AbortSignal): Readonly<{
   const timer = globalThis.setTimeout(() => {
     timedOut = true;
     controller.abort(new DOMException("Chutes OAuth token request timed out.", "TimeoutError"));
-  }, TOKEN_REQUEST_TIMEOUT_MS);
+  }, timeoutMs);
   return Object.freeze({
     signal: controller.signal,
     didTimeout: () => timedOut,
@@ -332,9 +486,15 @@ async function readBoundedJson(
   maxBytes: number,
   signal: AbortSignal,
 ): Promise<Record<string, unknown>> {
-  const contentLength = Number(response.headers.get("content-length"));
-  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
-    throw new Error("Chutes OAuth token response exceeded the browser safety limit.");
+  const declaredLength = response.headers.get("content-length");
+  if (declaredLength !== null) {
+    if (!/^\d+$/u.test(declaredLength)) {
+      throw new Error("Chutes OAuth token response declared an invalid length.");
+    }
+    const contentLength = Number(declaredLength);
+    if (!Number.isSafeInteger(contentLength) || contentLength > maxBytes) {
+      throw new Error("Chutes OAuth token response exceeded the browser safety limit.");
+    }
   }
   if (!response.body) throw new Error("Chutes OAuth token response was empty.");
   const reader = response.body.getReader();
@@ -458,7 +618,13 @@ function validateOpaqueValue(value: string, label: string, maxBytes: number): st
 }
 
 function validateToken(value: unknown, prefix: "cak_" | "crt_", label: string): string {
-  if (typeof value !== "string" || !value.startsWith(prefix) || value.length > MAX_OAUTH_TOKEN_BYTES || /[\u0000-\u0020\u007f]/u.test(value)) {
+  if (
+    typeof value !== "string" ||
+    !value.startsWith(prefix) ||
+    value.length <= prefix.length ||
+    value.length > MAX_OAUTH_TOKEN_BYTES ||
+    /[\u0000-\u0020\u007f]/u.test(value)
+  ) {
     throw new Error(`Chutes OAuth returned an invalid ${label}.`);
   }
   return value;

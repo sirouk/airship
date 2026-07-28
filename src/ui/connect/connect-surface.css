@@ -1,0 +1,724 @@
+.connect-surface {
+  display: grid;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+
+/*
+ * The Companion body. Its three readings keep their `dt`/`dd` pairs and their
+ * exact value strings; what changed is that they are one wrapping line inside a
+ * lane instead of a 50px boxed grid rendered above the providers.
+ */
+.connect-companion {
+  display: grid;
+  gap: var(--sp-2);
+  justify-items: start;
+}
+
+.connect-companion__facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-3);
+  margin: 0;
+}
+
+.connect-companion__facts > div {
+  display: flex;
+  gap: var(--sp-1);
+  align-items: baseline;
+  min-width: 0;
+}
+
+.connect-companion__facts dt {
+  color: var(--ink-faint);
+  font: var(--fs-micro)/1.25 var(--font-mono);
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.connect-companion__facts dd {
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--fs-caption);
+}
+
+.connect-companion__host {
+  max-width: 66ch;
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: var(--fs-caption);
+  line-height: 1.5;
+}
+
+.connect-companion__link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  color: var(--accent-bright);
+  font-size: var(--fs-caption);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.connect-lane-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.connect-lane {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-panel);
+  background: var(--surface);
+}
+
+.connect-lane[data-open="true"] {
+  border-color: var(--line-strong);
+  background: var(--surface-raised);
+}
+
+/*
+ * A lane that cannot be connected is recessed, never dimmed with opacity:
+ * the sentence explaining why is exactly the copy a cautious person leans in
+ * to read, so it has to stay at full body contrast.
+ */
+.connect-lane[data-state="needs-extension"],
+.connect-lane[data-state="extension-unavailable"],
+.connect-lane[data-state="unavailable"],
+.connect-lane[data-state="offline"] {
+  border-style: dashed;
+  background: var(--surface-soft);
+}
+
+/*
+ * One 44px row, and one shared inline padding with the body so an open lane's
+ * copy hangs under its own title instead of 34px to the left of it.
+ */
+.connect-lane {
+  --lane-gutter: 32px;
+}
+
+.connect-lane__header {
+  display: flex;
+  gap: var(--sp-3);
+  align-items: center;
+  width: 100%;
+  min-height: 44px;
+  padding: var(--sp-1) var(--sp-3);
+  border: 0;
+  border-radius: var(--radius-panel);
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.connect-lane__header:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.connect-lane__header > svg {
+  flex: 0 0 auto;
+  color: var(--ink-faint);
+}
+
+.connect-lane__identity {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  gap: 0 var(--sp-2);
+  align-items: baseline;
+  min-width: 0;
+}
+
+.connect-lane__identity strong {
+  font-size: var(--fs-lead);
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.connect-lane__identity small {
+  min-width: 0;
+  color: var(--ink-muted);
+  font-size: var(--fs-caption);
+  line-height: 1.3;
+}
+
+/* Observed values, promoted onto the closed row. Never a negation: a row that
+   says "Not observed" three times is the advert this list stopped being. */
+.connect-lane__facts {
+  display: flex;
+  flex: 0 1 auto;
+  gap: var(--sp-2);
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink-muted);
+  font: var(--fs-micro)/1.2 var(--font-mono);
+  white-space: nowrap;
+}
+
+.connect-lane__header .seal {
+  flex: 0 0 auto;
+}
+
+.connect-lane__chevron {
+  flex: 0 0 auto;
+  color: var(--ink-faint);
+  font-size: var(--fs-caption);
+  transition: transform 120ms ease;
+}
+
+.connect-lane[data-open="true"] .connect-lane__chevron {
+  transform: rotate(180deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .connect-lane__chevron {
+    transition: none;
+  }
+}
+
+.connect-lane__body {
+  display: grid;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-3) var(--sp-3) calc(var(--sp-3) + var(--lane-gutter));
+}
+
+.connect-lane__body[hidden] {
+  display: none;
+}
+
+.connect-lane__summary,
+.connect-lane__detail {
+  max-width: 66ch;
+  margin: 0;
+  font-size: var(--fs-meta);
+  line-height: 1.55;
+}
+
+.connect-lane__summary {
+  color: var(--ink);
+}
+
+.connect-lane__detail {
+  color: var(--ink-muted);
+}
+
+.connect-lane__boundary,
+.connect-lane__failure {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  max-width: 66ch;
+  margin: 0;
+  font-size: var(--fs-caption);
+  line-height: 1.5;
+}
+
+.connect-lane__boundary {
+  color: var(--ink-faint);
+}
+
+.connect-lane__failure {
+  color: var(--v-failed);
+}
+
+.connect-lane__boundary > svg,
+.connect-lane__failure > svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.connect-paste {
+  display: grid;
+  gap: 12px;
+}
+
+.connect-paste__steps {
+  display: grid;
+  gap: 15px;
+  margin: 0;
+  padding-left: 1.35em;
+}
+
+.connect-paste__steps > li {
+  display: grid;
+  gap: 6px;
+  justify-items: start;
+  min-width: 0;
+}
+
+.connect-paste__steps strong {
+  font-size: var(--fs-meta);
+}
+
+.connect-paste__steps > li > span {
+  max-width: 62ch;
+  color: var(--ink-muted);
+  font-size: var(--fs-caption);
+  line-height: 1.55;
+}
+
+.connect-paste__example {
+  width: 100%;
+  margin: 2px 0 0;
+  padding: 8px 10px;
+  overflow-wrap: anywhere;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-control);
+  background: var(--surface-soft);
+  color: var(--ink-faint);
+  font: var(--fs-caption)/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.connect-paste__example mark {
+  padding: 1px 3px;
+  border-radius: 3px;
+  background: rgba(223, 186, 114, 0.18);
+  color: var(--accent-bright);
+  font-weight: 700;
+}
+
+.connect-paste__field {
+  display: grid;
+  gap: 5px;
+  width: 100%;
+  min-width: 0;
+}
+
+.connect-paste__field > span {
+  color: var(--ink-muted);
+  font-size: var(--fs-micro);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.connect-paste__field input {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 11px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-control);
+  background: var(--surface-soft);
+  color: var(--ink);
+  font: var(--fs-meta)/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.connect-paste__field input:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.connect-paste__field input[aria-invalid="true"] {
+  border-color: var(--v-failed);
+}
+
+.connect-paste__reading {
+  max-width: 62ch;
+  margin: 0;
+  font-size: var(--fs-caption);
+  line-height: 1.5;
+}
+
+.connect-paste__reading.empty {
+  color: var(--ink-faint);
+}
+
+.connect-paste__reading.accepted {
+  color: var(--v-verified);
+}
+
+.connect-paste__reading.rejected {
+  color: var(--v-caution);
+}
+
+.connect-paste__preview {
+  margin: 0;
+  color: var(--ink-faint);
+  font-size: var(--fs-caption);
+}
+
+.connect-paste__preview code {
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--surface-soft);
+  color: var(--ink);
+}
+
+.connect-method {
+  display: grid;
+  gap: 12px;
+}
+
+.connect-method__switch {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 3px;
+  max-width: 420px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  background: var(--surface-soft);
+}
+
+.connect-method__switch > button {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px;
+  align-items: baseline;
+  min-width: 0;
+  min-height: 38px;
+  padding: 7px 10px;
+  border: 0;
+  color: var(--ink-muted);
+  background: transparent;
+}
+
+/*
+ * Selected and unselected were byte-identical — same background, same border —
+ * so which credential path was active was readable through `aria-selected` and
+ * not through pixels. This adopts the route tabs' own language: brass tint,
+ * brass border, a 2px brass bottom rule, and the label at full weight.
+ */
+.connect-method__switch > button[aria-selected="true"] {
+  color: var(--ink);
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--accent-bright) 55%, transparent),
+    inset 0 -2px 0 var(--accent-bright);
+}
+
+.connect-method__switch span {
+  font-size: var(--fs-caption);
+  font-weight: 400;
+}
+
+.connect-method__switch > button[aria-selected="true"] span {
+  font-weight: 700;
+}
+
+.connect-method__switch small {
+  min-width: 0;
+  color: var(--ink-faint);
+  font: var(--fs-micro)/1.2 var(--font-mono);
+  text-align: right;
+  /* No ellipsis: these sub-labels are short by construction now, and a clipped
+     "Add the Airship e…" is a status a person cannot read. */
+  overflow-wrap: anywhere;
+}
+
+.connect-method__switch > button[aria-selected="true"] small {
+  color: var(--ink-muted);
+}
+
+.connect-method__blocked {
+  display: grid;
+  gap: var(--sp-2);
+  justify-items: start;
+}
+
+.connect-method__blocked p {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: flex-start;
+  max-width: 66ch;
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--fs-caption);
+  line-height: 1.5;
+}
+
+.connect-method__blocked svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: var(--v-caution);
+}
+
+/*
+ * The operator's sentence, one rung down.
+ *
+ * It is a provenance line — it names the process that has to change — so it is
+ * not deleted and not paraphrased. It is also addressed to somebody other than
+ * the person reading, which is why it stops being the headline. The disclosure
+ * says what it holds, so nothing is buried behind a word that means nothing.
+ */
+.connect-method__cause {
+  margin: 0;
+}
+
+.connect-method__cause > summary {
+  color: var(--ink-muted);
+  font-size: var(--fs-meta);
+  cursor: pointer;
+}
+
+.connect-method__cause > p {
+  max-width: 66ch;
+  margin: var(--sp-1) 0 0;
+  color: var(--ink-muted);
+  font: var(--fs-caption)/1.5 var(--font-mono);
+}
+
+.connect-method [role="tabpanel"][hidden] {
+  display: none;
+}
+
+.connect-method__title {
+  margin: 0 0 10px;
+  color: var(--ink);
+  font-size: var(--fs-caption);
+  font-weight: 700;
+}
+
+.connect-method__key {
+  display: grid;
+  gap: 10px;
+  justify-items: start;
+}
+
+.connect-method__key p {
+  max-width: 64ch;
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: var(--fs-caption);
+  line-height: 1.5;
+}
+
+.connect-extension {
+  display: grid;
+  gap: 11px;
+}
+
+.connect-extension__observation {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  max-width: 66ch;
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: var(--fs-caption);
+  line-height: 1.5;
+}
+
+.connect-extension__observation > svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.connect-extension__ready {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  max-width: 66ch;
+  margin: 0;
+  color: var(--v-verified);
+  font-size: var(--fs-caption);
+  line-height: 1.5;
+}
+
+.connect-extension__ready > svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.connect-extension__unpublished {
+  max-width: 62ch;
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: var(--fs-caption);
+  line-height: 1.5;
+}
+
+.connect-extension__boundary summary {
+  display: flex;
+  align-items: center;
+  min-height: 34px;
+  color: var(--ink-muted);
+  font-size: var(--fs-caption);
+  cursor: pointer;
+}
+
+.connect-extension__boundary summary:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.connect-extension__boundary ul {
+  display: grid;
+  gap: 5px;
+  max-width: 66ch;
+  margin: 6px 0 8px;
+  padding-left: 1.2em;
+  color: var(--ink-muted);
+  font-size: var(--fs-caption);
+  line-height: 1.5;
+}
+
+.connect-extension__boundary p {
+  max-width: 66ch;
+  margin: 0;
+  color: var(--ink-faint);
+  font-size: var(--fs-caption);
+  line-height: 1.5;
+}
+
+.connect-extension__alternative {
+  display: grid;
+  gap: 7px;
+  justify-items: start;
+  padding: 10px 11px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+}
+
+.connect-extension__alternative p {
+  max-width: 62ch;
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--fs-caption);
+  line-height: 1.5;
+}
+
+.connect-local {
+  display: grid;
+  gap: 9px;
+  justify-items: start;
+}
+
+.connect-local p {
+  max-width: 66ch;
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: var(--fs-caption);
+  line-height: 1.6;
+}
+
+.connect-local code {
+  color: var(--ink);
+}
+
+/* Empty until a probe has answered, so it must not reserve a visible box. */
+.connect-local__results:empty {
+  display: none;
+}
+
+.connect-local__results {
+  justify-self: stretch;
+  min-width: 0;
+}
+
+.connect-local__results ul {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.connect-local__results li {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-left-width: 3px;
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  overflow-wrap: anywhere;
+}
+
+.connect-local__results li[data-outcome="answered"] {
+  border-left-color: var(--v-verified);
+}
+
+.connect-local__results li[data-outcome="silent"] {
+  border-left-color: var(--v-neutral);
+}
+
+.connect-local__results strong {
+  color: var(--ink);
+  font-size: var(--fs-caption);
+}
+
+.connect-local__results span {
+  color: var(--ink-muted);
+  font-size: var(--fs-caption);
+  line-height: 1.5;
+}
+
+.connect-local__unwired {
+  color: var(--ink-faint);
+}
+
+.connect-surface a.primary {
+  display: inline-flex;
+  align-items: center;
+  min-height: 40px;
+  padding: 0 14px;
+  border-radius: var(--radius-control);
+  font-size: var(--fs-caption);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+@media (max-width: 640px) {
+  /*
+   * What used to be phone-only is now the layout at every width: the Companion
+   * is the last row of the lane list on desktop too, and the second heading
+   * block it sat under no longer exists. What is left here is touch sizing.
+   *
+   * `.connect-lane__detail { display: none }` was deleted rather than kept: it
+   * was the one override that removed a status sentence instead of a heading,
+   * so a phone read a lane's state and never its reason.
+   */
+  .connect-lane {
+    --lane-gutter: 0px;
+  }
+
+  .connect-lane__header {
+    padding: var(--sp-1) var(--sp-2);
+  }
+
+  .connect-lane__body {
+    gap: var(--sp-2);
+    padding: 0 var(--sp-2) var(--sp-2);
+  }
+
+  .connect-lane__header,
+  .connect-surface button,
+  .connect-surface a.primary,
+  .connect-extension__boundary summary {
+    min-height: 44px;
+  }
+
+  .connect-paste__steps {
+    padding-left: 1.15em;
+  }
+
+  .connect-surface button {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .connect-method__switch {
+    max-width: none;
+  }
+
+  .connect-method__switch > button {
+    width: auto;
+  }
+
+  /* The promoted fact strip is a convenience, not a home: the identical three
+     `dt`/`dd` pairs render in the lane body at every width. It yields the row
+     so the seal and its word — which have no second home — never have to. */
+  .connect-lane__facts {
+    display: none;
+  }
+}

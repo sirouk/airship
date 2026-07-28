@@ -38,7 +38,7 @@ describe("Chutes invocation attestation gate", () => {
       if (options.route === "instance") {
         throw new AttestationEvidenceClientError("forbidden", "Instance evidence access denied.", { status: 403 });
       }
-      return endpointRecord({ cpu: "verified" });
+      return endpointRecord({ cpu: "verified", gpu: "verified" });
     });
     const gate = createChutesAttestationGateFromClient(
       { get } as Pick<ChutesAttestationEvidenceClient, "get">,
@@ -53,8 +53,41 @@ describe("Chutes invocation attestation gate", () => {
       chuteId: SUBJECT.chuteId,
       instanceId: SUBJECT.instanceId,
       e2ePublicKey: SUBJECT.e2ePublicKey,
+      cpuTee: { status: "verified" },
+      gpuTee: { status: "verified" },
     });
   });
+
+  it("does not promote a CPU-verified endpoint while NVIDIA evidence is only partially authenticated", async () => {
+    const get = vi.fn(async () => endpointRecord({ cpu: "verified", gpu: "matched" }));
+    const gate = createChutesAttestationGateFromClient({ get } as Pick<ChutesAttestationEvidenceClient, "get">);
+
+    const result = await gate.verifyEndpoint(SUBJECT, new AbortController().signal);
+
+    expect(result.receipt).toBeUndefined();
+    expect(result.evaluation).toMatchObject({
+      cpuTee: { status: "verified" },
+      gpuTee: { status: "partial" },
+    });
+    expect(result.unavailableReason).toContain("NVIDIA GPU verification did not reach verified");
+    expect(result.unavailableReason).toContain("claim state: matched");
+  });
+
+  it.each(["unavailable", "unverified", "failed", "expired"] as const)(
+    "does not promote an endpoint whose required GPU claim is %s",
+    async (gpu) => {
+      const get = vi.fn(async () => endpointRecord({ cpu: "verified", gpu }));
+      const gate = createChutesAttestationGateFromClient({ get } as Pick<ChutesAttestationEvidenceClient, "get">);
+
+      const result = await gate.verifyEndpoint(SUBJECT, new AbortController().signal);
+
+      expect(result.receipt).toBeUndefined();
+      expect(result.evaluation?.gpuTee.status).toBe(
+        gpu === "failed" ? "failed" : gpu === "expired" ? "expired" : gpu === "unavailable" ? "unavailable" : "partial",
+      );
+      expect(result.unavailableReason).toContain(`claim state: ${gpu}`);
+    },
+  );
 
   it("never substitutes another public evidence instance or key", async () => {
     const get = vi.fn(async (options: { route?: string }) => {

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { applyLocalDevelopmentPolicy } from "./vite.config";
+import {
+  applyLocalDevelopmentPolicy,
+  DEVELOPMENT_WATCH_IGNORES,
+  resolveAirshipModulePreloadDependencies,
+  rewriteLocalExtensionHubRequest,
+} from "./vite.config";
 
 describe("local development CSP", () => {
   it("adds only the reviewed loopback S3 origins and development style exception", () => {
@@ -12,5 +17,43 @@ describe("local development CSP", () => {
 
   it("does not widen unrelated or already-missing directives", () => {
     expect(applyLocalDevelopmentPolicy("default-src 'self';")).toBe("default-src 'self';");
+  });
+
+  it("keeps generated browser-test and build artifacts outside the live reload graph", () => {
+    expect(DEVELOPMENT_WATCH_IGNORES).toEqual(expect.arrayContaining([
+      "**/playwright-report/**",
+      "**/test-results/**",
+      "**/.airship-lab/**",
+      "**/dist/**",
+    ]));
+    expect(DEVELOPMENT_WATCH_IGNORES).not.toContain("**/src/**");
+    expect(Object.isFrozen(DEVELOPMENT_WATCH_IGNORES)).toBe(true);
+  });
+
+  it("serves the Companion installer at the natural development hub path", () => {
+    expect(rewriteLocalExtensionHubRequest("/extension/", "/")).toBe("/extension/index.html");
+    expect(rewriteLocalExtensionHubRequest("/extension?source=connect", "/"))
+      .toBe("/extension/index.html?source=connect");
+    expect(rewriteLocalExtensionHubRequest("/airship/extension/", "/airship/"))
+      .toBe("/airship/extension/index.html");
+    expect(rewriteLocalExtensionHubRequest("/extension/privacy.html", "/"))
+      .toBe("/extension/privacy.html");
+  });
+
+  it("keeps optional packs out of HTML preloads without disabling just-in-time dynamic preloads", () => {
+    const dependencies = [
+      "assets/core-shared-abc.js",
+      "assets/workspace-adapter-def.js",
+      "assets/local-device-keyring-ghi.js",
+      "assets/provider-connections-view-jkl.js",
+    ];
+    expect(resolveAirshipModulePreloadDependencies("index.html", dependencies, {
+      hostId: "index.html",
+      hostType: "html",
+    })).toEqual(["assets/core-shared-abc.js"]);
+    expect(resolveAirshipModulePreloadDependencies("assets/index.js", dependencies, {
+      hostId: "assets/index.js",
+      hostType: "js",
+    })).toBe(dependencies);
   });
 });

@@ -60,6 +60,11 @@ is metadata, not proof.
 | Duplicate side effects after crash | operation IDs, persist-before-execute, idempotent tool adapters/result journal | external tools without idempotency require confirmation/reconciliation |
 | Cross-device concurrent turn | expiring writer lease, fencing token, fork on conflict | offline devices can intentionally create branches |
 | Device loss | wrapped workspace keys, recovery kit, revocation, key rotation | a copied unlocked device key can read historical ciphertext |
+| Remote executor substitution | separate execution subject, fresh quote, exact ephemeral channel/receipt-key and runtime-policy binding, live probe | verifier/vendor root compromise |
+| Remote replay or duplicated dispatch | plan-bound approval, idempotency key, ordered AEAD records, digest-linked frames, reconciliation before retry | arbitrary external effects may not be exactly-once |
+| Remote workspace overwrite | immutable browser-captured base, copy-on-write delta, revision/digest validation, one browser-owned head adoption | valid execution can still conflict with a newer head |
+| Overbroad remote data access | selected snapshot only, per-job data key, exact mounts/bytes/expiry, no storage/root credentials | approved plaintext is visible inside the verified executor |
+| Embedded secret custodian token | no shared browser/binary token; user-owned memory lease or native keychain; static release scans | compromised active page can read a user-supplied live token |
 | Denial/quota exhaustion | bounds, backpressure, timeouts over body lifetime, budgets, circuit breakers | network/provider outage cannot be hidden |
 
 ## Key hierarchy
@@ -77,6 +82,37 @@ is metadata, not proof.
 Browser key persistence must feature-detect structured-clone support for
 non-extractable `CryptoKey`. Cross-device enrollment and recovery require a
 separate reviewed protocol; localStorage is never an acceptable fallback.
+
+Ordinary WebAuthn private keys are not volume keys. Only the optional PRF
+extension may derive a wrapping key after an exact credential reports support.
+A recovery kit remains mandatory until device enrollment and loss recovery pass
+their real multi-device gates.
+
+Bitwarden machine-account access tokens are bearer capabilities. Hermes'
+plaintext local `.env` and short-lived disk-cache pattern belongs to a
+user-controlled CLI host and is not copied into Airship. A token is never
+embedded or persisted in the PWA/binary and never delegated to inference,
+storage, or a remote executor. See
+[`KEY_CUSTODY_AND_DEVICE_ENROLLMENT.md`](KEY_CUSTODY_AND_DEVICE_ENROLLMENT.md).
+
+## Remote execution boundary
+
+Inference attestation does not attest a CPU execution sandbox. Remote execution
+uses a separate evidence subject, measurement policy, endpoint/channel key, and
+terminal receipt key. TLS, provider metadata, or an endpoint-key match alone is
+insufficient.
+
+Placement is chosen before spawn. The browser remains approval, journal,
+workspace-head, context, and receipt-verdict authority. A paired executor may
+run one job against a read-only snapshot and return a bounded copy-on-write
+delta. It never receives the workspace root, Google/S3/Bitwarden credentials,
+or permission to update an authoritative head.
+
+The primary data path stages authenticated immutable blocks. WAN syscall, file
+descriptor, `mmap`, or live CRIU migration is not a baseline promise. Invalid
+frames or receipts quarantine outputs and forbid delta adoption; lost dispatch
+acknowledgements reconcile by operation ID before any retry. See
+[`COMPUTE_CONTINUUM.md`](COMPUTE_CONTINUUM.md).
 
 ## Chutes E2EE v1 compatibility risks
 

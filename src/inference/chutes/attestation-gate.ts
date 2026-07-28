@@ -19,6 +19,19 @@ import type {
 
 const GATE_FRESHNESS_MS = 5 * 60_000;
 
+/**
+ * Build-time verifier capability, not a provider/model assertion. The shipped
+ * browser verifier authenticates NVIDIA device evidence but cannot yet perform
+ * the nonce-bound RIM, revocation, and freshness checks needed to promote the
+ * GPU claim from `matched` to `verified`. Keep strict mode visibly unavailable
+ * until that independent verifier path exists instead of offering a policy
+ * that is guaranteed to reject every turn.
+ */
+export const CHUTES_STRICT_ENDPOINT_PROOF_CAPABILITY = Object.freeze({
+  available: false,
+  reason: "Independent NVIDIA GPU verification is not yet browser-complete; strict endpoint proof would reject every turn.",
+});
+
 function toProofStatus(state: AttestationClaimState): ProofStatus {
   return state === "verified"
     ? "verified"
@@ -90,17 +103,11 @@ export function createChutesAttestationGateFromClient(
       }
 
       const evaluation = evaluationFromRecord(record, checkedAt);
-      if (
-        record.verdict !== "evidence-only" ||
-        record.binding.state !== "matched" ||
-        record.claims.nonceFreshness.state !== "matched" ||
-        record.claims.endpointKey.state !== "matched" ||
-        record.claims.cpuTee.state !== "verified" ||
-        record.claims.runtimePolicy.state !== "matched"
-      ) {
+      const policyFailure = verifiedEndpointPolicyFailure(record);
+      if (policyFailure) {
         return {
           evaluation,
-          unavailableReason: "Endpoint evidence was evaluated but did not satisfy the verified endpoint policy.",
+          unavailableReason: policyFailure,
         };
       }
 
@@ -126,6 +133,37 @@ export function createChutesAttestationGateFromClient(
       };
     },
   };
+}
+
+/**
+ * Chutes inference endpoints are CPU + GPU confidential-compute subjects. A
+ * verified CPU quote cannot promote the aggregate endpoint/TEE posture while
+ * the accelerator claim is merely present or partially authenticated. The
+ * current browser NVIDIA verifier deliberately tops out at `matched`, so this
+ * gate remains partial until an independent verifier establishes nonce-bound
+ * GPU authenticity, firmware/RIM policy, revocation, and freshness.
+ */
+function verifiedEndpointPolicyFailure(record: ChutesEndpointEvidenceRecord): string | undefined {
+  if (record.verdict !== "evidence-only") {
+    return "Endpoint evidence was rejected and cannot satisfy the verified endpoint policy.";
+  }
+  if (
+    record.binding.state !== "matched" ||
+    record.claims.nonceFreshness.state !== "matched" ||
+    record.claims.endpointKey.state !== "matched"
+  ) {
+    return "Endpoint evidence did not establish the fresh nonce and exact E2EE endpoint-key binding.";
+  }
+  if (record.claims.cpuTee.state !== "verified") {
+    return "Endpoint evidence is not fully attested: independent Intel TDX verification did not reach verified.";
+  }
+  if (record.claims.gpuTee.state !== "verified") {
+    return `Endpoint evidence is not fully attested: independent NVIDIA GPU verification did not reach verified (claim state: ${record.claims.gpuTee.state}).`;
+  }
+  if (record.claims.runtimePolicy.state !== "matched") {
+    return "Endpoint evidence did not match the required runtime measurement policy.";
+  }
+  return undefined;
 }
 
 async function acquireExactRecord(

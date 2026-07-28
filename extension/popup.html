@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Airship Companion</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main>
+      <header>
+        <img src="icons/icon-48.png" width="38" height="38" alt="">
+        <div>
+          <strong>Airship Companion</strong>
+          <span>Edge runtime extension · <b data-build-channel>Inspecting build…</b></span>
+        </div>
+      </header>
+      <p class="status" data-status data-state="ready">Inspecting this extension…</p>
+      <section class="tab-diagnostic">
+        <div class="tab-diagnostic__heading">
+          <strong>Current Airship tab</strong>
+          <span data-tab-state data-state="unavailable">Checking the active tab…</span>
+        </div>
+        <code data-tab-origin>Not inspected yet</code>
+        <p>
+          Caller allowlist for this build
+          <span class="caller-rules" data-caller-rules></span>
+        </p>
+        <small>
+          Allowlist compatibility is not a live provider-relay result. Verify the
+          handshake and provider status in Airship’s Connection screen.
+        </small>
+        <a data-connection-link target="_blank" rel="noopener">Open Airship Connection</a>
+      </section>
+      <section>
+        <label>
+          <span><strong>Encrypted cache</strong><small>Optional Vault acceleration only. No OAuth token or plaintext is accepted.</small></span>
+          <input type="checkbox" role="switch" data-cache-toggle disabled>
+        </label>
+        <p data-cache-usage>Inspecting local storage…</p>
+        <button type="button" data-cache-clear disabled>Clear encrypted cache</button>
+      </section>
+      <footer>
+        Cache and compute are extension-local. Their availability does not prove
+        that this tab can reach the provider relay. Compute uses the extension
+        background context; it does not add new hardware.
+      </footer>
+    </main>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

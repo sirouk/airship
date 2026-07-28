@@ -5,6 +5,7 @@ import {
   normalizeAttestationEvidence,
   serializePublicAttestationSummary,
 } from "./attestations-model";
+import { composeClaimStack } from "./claim-stack-model";
 
 const CHECKED = "2026-07-18T12:00:00.000Z";
 const CACHE_UNTIL = "2026-07-18T12:01:30.000Z";
@@ -37,6 +38,49 @@ describe("attestation presentation model", () => {
     expect(Object.isFrozen(record)).toBe(true);
     expect(Object.isFrozen(record!.dimensions)).toBe(true);
     expect(Object.isFrozen(record!.dimensions.model.facts)).toBe(true);
+  });
+
+  it("identifies only the bundled Intel QVL and NVIDIA binding checks as local authorities", () => {
+    const base = endpointRecord();
+    const input: ChutesEndpointEvidenceRecord = {
+      ...base,
+      claims: {
+        ...base.claims,
+        cpuTee: claim(
+          "verified",
+          "Intel TDX authenticity",
+          "The bundled QVL completed every required check.",
+          "intel-dcap-qvl-wasm@dcap-qvl/0.5.2",
+        ),
+        gpuTee: claim(
+          "matched",
+          "NVIDIA GPU evidence binding",
+          "The SPDM request nonce matched; full NVIDIA verification is separate.",
+          "airship-nvidia-spdm-binding/v1",
+        ),
+        nonceFreshness: claim(
+          "verified",
+          "Nonce freshness",
+          "A third-party plugin declared freshness.",
+          "airship-untrusted-plugin",
+        ),
+      },
+    };
+
+    const [record] = normalizeAttestationEvidence({ endpointRecords: [input] });
+    expect(record!.dimensions["cpu-tee"]).toMatchObject({
+      state: "verified",
+      authorityKind: "local",
+    });
+    expect(record!.dimensions["gpu-tee"]).toMatchObject({
+      state: "partial",
+      qualifier: "matched",
+      authorityKind: "local",
+    });
+    expect(record!.dimensions.freshness).toMatchObject({
+      state: "verified",
+      authorityKind: "external",
+    });
   });
 
   it("keeps every structurally typed conversation receipt assertion-only", () => {
@@ -86,7 +130,68 @@ describe("attestation presentation model", () => {
     });
     expect(record!.dimensions.freshness.authority).toContain("Claimed verifier: airship-untrusted-plugin");
     expect(record!.receiptTrust).toBe("asserted");
-    expect(record!.warnings.join(" ")).toContain("assertions only");
+    expect(record!.warnings.join(" ")).toContain("declares verified is shown as an assertion");
+  });
+
+  /*
+   * One turn, one verdict, on both Proof tabs.
+   *
+   * `assertedState()` used to map every non-`unavailable` receipt claim to
+   * `partial`, so a receipt that declared `cpuTee` failed read "Asserted" on
+   * the Attestation evidence tab and "Failed" on Receipt & journal — the same
+   * claim, one click apart. The ceiling now runs in one direction only, and
+   * this asserts the two models agree claim for claim rather than asserting
+   * one of them in isolation, which is how they drifted.
+   */
+  it("reads one verdict per claim on both Proof tabs, and never softens a declared failure", () => {
+    const receipt = attestedReceipt();
+    receipt.claims.cpuTee = { status: "failed", summary: "The Intel quote did not verify.", verifier: "external-dcap", checkedAt: CHECKED };
+    receipt.claims.gpuTee = { status: "expired", summary: "The GPU evidence window closed.", checkedAt: CHECKED };
+    const [record] = normalizeAttestationEvidence({ receipts: [receipt] });
+    const stack = composeClaimStack(receipt, undefined, Date.parse(CHECKED));
+    const dimensionOf = {
+      encryption: "transport",
+      freshness: "freshness",
+      cpuTee: "cpu-tee",
+      gpuTee: "gpu-tee",
+      endpointKey: "endpoint-key",
+      model: "model",
+      conversation: "conversation",
+      payment: "payment",
+    } as const;
+
+    expect(stack.items).toHaveLength(8);
+    for (const item of stack.items) {
+      const dimension = record!.dimensions[dimensionOf[item.key]];
+      expect(dimension.state, `${item.key} state`).toBe(item.status);
+      expect(dimension.qualifier, `${item.key} qualifier`).toBe(item.qualifier);
+    }
+    // The two states the old ceiling erased, named on the evidence tab.
+    expect(record!.dimensions["cpu-tee"]).toMatchObject({ state: "failed", qualifier: "asserted-failed" });
+    expect(record!.dimensions["gpu-tee"]).toMatchObject({ state: "expired", qualifier: "asserted-expired" });
+    expect(stack.groups.failed.map((item) => item.key)).toEqual(["cpuTee", "gpuTee"]);
+    expect(record!.overallState).toBe("failed");
+    // A declared failure may not be described as an assertion in its own prose.
+    expect(record!.dimensions["cpu-tee"].summary).not.toContain("assertion-only");
+    expect(record!.dimensions["cpu-tee"].summary).toContain("keeps full weight");
+    // And an unauthenticated declaration is still never hardened into a finding.
+    expect(record!.dimensions.transport).toMatchObject({ state: "partial", qualifier: "asserted-verified" });
+    expect(record!.dimensions.transport.summary).toContain("assertion-only");
+  });
+
+  it("keeps a declared failure at full weight in a receipt's own verification records", () => {
+    const receipt = attestedReceipt();
+    receipt.verifications = [{
+      claim: "cpuTee",
+      status: "failed",
+      verifier: "external-dcap",
+      version: "1",
+      checkedAt: CHECKED,
+      detail: "The quote signature chain did not validate.",
+    }];
+    const [record] = normalizeAttestationEvidence({ receipts: [receipt] });
+    expect(record!.verifications[0]).toMatchObject({ state: "failed", qualifier: "asserted-failed" });
+    expect(record!.verifications[0]!.summary).not.toContain("assertion-only");
   });
 
   it("exports an unsigned status summary and strips raw provider artifacts, plaintext digests, and secrets", () => {

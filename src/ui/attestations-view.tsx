@@ -30,6 +30,8 @@ export type AttestationsViewProps = Readonly<{
   onCancel?: (recordId: string) => void;
   /** Public, pre-redacted acquisition state from the mounted controller. */
   acquisitionNotice?: string;
+  /** Opens the provider connection surface when acquisition is unavailable. */
+  onOpenConnection?: () => void;
   /** Receives an unsigned, privacy-safe status summary. Raw evidence is never passed here. */
   onExport?: (json: string) => void;
   /** Renders inside the unified Proof route without introducing a second page heading. */
@@ -48,6 +50,7 @@ export function AttestationsView({
   onRefresh,
   onCancel,
   acquisitionNotice,
+  onOpenConnection,
   onExport,
   embedded = false,
 }: AttestationsViewProps) {
@@ -155,10 +158,15 @@ export function AttestationsView({
           <p>Each result applies only to its named claim. A fetched quote, locally matched key, verified endpoint, model artifact, and signed conversation are separate facts with separate authorities.</p>
         </div>
         <div class="attestations-heading-actions">
+          {/* Emphasis follows truth-changing power. "Refresh evidence" is the
+              only control here that changes what is known; "Export status
+              summary" produces an artifact whose own adjacent note says it is
+              not independently verifiable proof, and it was the loudest object
+              on the entire trust surface. */}
           {refreshing
             ? <button class="danger" type="button" onClick={cancelRefresh}><Icon name="stop" /> Cancel refresh</button>
-            : <button type="button" disabled={!selected || !onRefresh} onClick={refresh}><Icon name="proof" /> Refresh evidence</button>}
-          <button class="primary" type="button" disabled={records.length === 0} onClick={exportPublic}><Icon name="cloud" /> Export status summary</button>
+            : <button class="primary" type="button" disabled={!selected || !onRefresh} onClick={refresh}><Icon name="proof" /> Refresh evidence</button>}
+          <button type="button" disabled={records.length === 0} onClick={exportPublic}><Icon name="cloud" /> Export status summary</button>
         </div>
       </header>
 
@@ -185,11 +193,18 @@ export function AttestationsView({
             <div><h2>{inputOverflow ? "Evidence page rejected" : "No evidence records yet"}</h2>
               <p>{inputOverflow
                 ? "Load a bounded evidence page before opening the ledger. No records from the oversized input were interpreted."
-                : "Run a protected Chutes invocation or acquire endpoint evidence. Nothing is inferred while the ledger is empty."}</p>
+                : onOpenConnection
+                  ? "No Chutes inference provider is connected. Endpoint evidence cannot be acquired until you connect one; existing records remain inspectable."
+                  : "Run a protected Chutes invocation or acquire endpoint evidence. Nothing is inferred while the ledger is empty."}</p>
+              {!inputOverflow && onOpenConnection
+                ? <button class="attestations-empty__connection primary" type="button" onClick={onOpenConnection}>Connect inference</button>
+                : null}
             </div>
           </div>
           {!inputOverflow ? <div class="attestations-empty__flow" aria-label="Evidence lifecycle">
-            <div><span>01</span><strong>Acquire</strong><small>Fetch fresh endpoint evidence for the selected Chutes runtime.</small></div>
+            <div><span>01</span><strong>Acquire</strong><small>{onOpenConnection
+              ? "Connect Chutes inference, then fetch fresh endpoint evidence for that runtime."
+              : "Fetch fresh endpoint evidence for the selected Chutes runtime."}</small></div>
             <div><span>02</span><strong>Bind</strong><small>Match the instance and endpoint-key digest to the exact turn.</small></div>
             <div><span>03</span><strong>Inspect</strong><small>Review each claim, authority, measurement, and warning separately.</small></div>
           </div> : null}
@@ -206,14 +221,20 @@ export function AttestationsView({
                   aria-current={record.id === selected.id ? "true" : undefined}
                   onClick={() => chooseRecord(record)}
                   key={record.id}
+                  data-source={record.source}
+                  aria-label={`${record.title}. ${record.subtitle}. ${record.source === "endpoint-evidence" ? "Endpoint acquisition" : "Conversation receipt"}. ${record.createdAt ? formatTimestamp(record.createdAt) : "Timestamp unavailable"}.`}
                 >
                   <StatusMark state={record.overallState} />
+                  {/* The record's identity is its title. In a 212px card the
+                      shipped layout clipped it to "C…" while printing the word
+                      "asserted" three times — seal label, title suffix and a
+                      shouted badge. The badge survives only where it is not a
+                      restatement of the seal beside it. */}
                   <span>
                     <strong>{record.title}</strong>
-                    <small>{record.subtitle}</small>
-                    <em>{record.createdAt ? formatTimestamp(record.createdAt) : "Timestamp unavailable"}</em>
+                    <small>{record.subtitle} · {record.createdAt ? formatTimestamp(record.createdAt) : "Timestamp unavailable"}</small>
                   </span>
-                  <b>{record.source === "endpoint-evidence" ? "ENDPOINT" : "ASSERTED"}</b>
+                  {record.source === "endpoint-evidence" ? <b>ENDPOINT</b> : null}
                 </button>
               ))}
             </div>
@@ -233,7 +254,13 @@ export function AttestationsView({
                   <button class={`${dimension.state}${active ? " active" : ""}`} type="button" aria-pressed={active} onClick={() => setInspector({ kind: "dimension", key })} key={key}>
                     <span><StatusMark state={dimension.state} /></span>
                     <strong>{dimension.title}</strong>
-                    <small>{qualifierLabel(dimension.qualifier, dimension.state)}</small>
+                    {/* Only the delta. Falling back to the status word would
+                        print it twice per tile — the seal chip above already
+                        carries it — which is the shape of the defect this
+                        replaces, one row lower. */}
+                    {attestationQualifierLabel(dimension.qualifier)
+                      ? <small>{attestationQualifierLabel(dimension.qualifier)}</small>
+                      : null}
                   </button>
                 );
               })}
@@ -288,8 +315,11 @@ export function AttestationsView({
 
 function RecordHeader({ record }: { record: NormalizedAttestationRecord }) {
   const counts = countStates(record);
+  // The record-level ceiling, in the direction it runs. "Every non-unavailable
+  // claim is shown as an assertion" described the rule as it was
+  // mis-implemented, and it stood above a matrix that may now read "Failed".
   const receiptTrust = record.source === "conversation-receipt"
-    ? "Receipt integrity is unauthenticated; every non-unavailable claim is shown as an assertion."
+    ? "Receipt integrity is unauthenticated; a declared verification is shown as an assertion, and a declared failure keeps its full weight."
     : "This is endpoint acquisition evidence, not a conversation receipt.";
   return (
     <header class="attestation-record-heading">
@@ -298,21 +328,31 @@ function RecordHeader({ record }: { record: NormalizedAttestationRecord }) {
         <h2>{record.subtitle}</h2>
         <p>{record.proofLevel ? `Declared proof level: ${proofLevelLabel(record.proofLevel)}.` : ""} {record.posture ? `Transport: ${postureLabel(record.posture as Parameters<typeof postureLabel>[0])}.` : "Inference transport is not asserted by this record."} {receiptTrust}</p>
       </div>
-      <dl>
-        <div><dt>Verified</dt><dd>{counts.verified}</dd></div>
-        <div><dt>Partial</dt><dd>{counts.partial}</dd></div>
-        <div><dt>Failed</dt><dd>{counts.failed + counts.expired}</dd></div>
-        <div><dt>Unavailable</dt><dd>{counts.unavailable}</dd></div>
+      {/* Four inline pairs, in the product's own three state words plus the
+          failure. The shipped 4-column `dl` rendered "VERIFIEDPARTIAL FAILED
+          UNAV" on iPad — overlapping labels in a machine vocabulary that no
+          other surface speaks. "Partial" is the enum; "Asserted" is the word. */}
+      <dl class="attestation-record-counts">
+        <div><dd>{counts.verified}</dd><dt>{proofStatusLabel("verified")}</dt></div>
+        <div><dd>{counts.partial}</dd><dt>{proofStatusLabel("partial")}</dt></div>
+        <div><dd>{counts.failed + counts.expired}</dd><dt>{proofStatusLabel("failed")}</dt></div>
+        <div><dd>{counts.unavailable}</dd><dt>{proofStatusLabel("unavailable")}</dt></div>
       </dl>
     </header>
   );
 }
 
 function DimensionInspector({ dimension }: { dimension: AttestationDimension }) {
+  // Three block-level lines, and the status word printed exactly once. The
+  // shipped inspector ran them together — "Attested endpoint-key
+  // bindingASSERTED · ASSERTED PARTIAL · RECEIPT UNAUTHENTICATED" — because
+  // <small> and <strong> laid out inline and the qualifier re-prefixed a word
+  // the line already began with.
+  const delta = attestationQualifierLabel(dimension.qualifier);
   return (
     <section class="attestation-inspection">
       <span>Claim detail</span>
-      <div class="attestation-inspection-title"><StatusMark state={dimension.state} /><div><h2>{dimension.title}</h2><small>{ATTESTATION_TECHNICAL_LABELS[dimension.key]}</small><strong class={dimension.state}>{statusLabel(dimension.state)} · {qualifierLabel(dimension.qualifier, dimension.state)}</strong></div></div>
+      <div class="attestation-inspection-title"><StatusMark state={dimension.state} /><div><h2>{dimension.title}</h2><small>{ATTESTATION_TECHNICAL_LABELS[dimension.key]}</small><strong class={dimension.state}>{statusLabel(dimension.state)}{delta ? ` · ${delta}` : ""}</strong></div></div>
       <p>{dimension.summary}</p>
       <dl>
         <Detail label="Verification authority" value={dimension.authority} />
@@ -398,20 +438,54 @@ function statusLabel(state: ProofStatus): string {
   return proofStatusLabel(state);
 }
 
-function qualifierLabel(qualifier: string, state: ProofStatus): string {
-  if (qualifier.startsWith("asserted-")) return `Asserted ${qualifier.slice("asserted-".length)} · receipt unauthenticated`;
-  if (qualifier === "verified-without-authority") return "Declared verified · authority absent";
-  if (qualifier === "matched") return "Locally matched · not verified";
-  if (qualifier === "present") return "Present · authenticity unverified";
-  if (qualifier === "unverified") return "Independent verifier absent";
-  return statusLabel(state);
+/**
+ * The claim's own delta, with the record-level ceiling left to the header.
+ *
+ * The shared caveat is stated once — `RecordHeader`'s `receiptTrust` sentence
+ * — so this returns only what distinguishes *this* claim. The tab's main text
+ * carried "receipt unauthenticated" nine times for one record-level fact,
+ * which is how a genuine per-claim difference became invisible.
+ *
+ * WHY THIS IS NOT AN IMPORT. The same dictionary is spoken by the Receipt &
+ * journal tab through `readClaimQualifier()` in `claim-stack-facts.ts`, and the
+ * two must never diverge — that divergence is the defect this package exists to
+ * fix. It cannot be shared as a module here: this view is bundled into the
+ * deferred capability pack while the other tab is its own chunk, so a module
+ * imported by both becomes a third artifact the release gate cannot attribute
+ * to an owner, and hoisting it into the preloaded chunk costs ~130 gzipped
+ * bytes against a 132 KiB cap with tens of bytes left. The agreement is
+ * therefore enforced where it can be: `attestations-view.test.ts` asserts this
+ * function returns exactly `claimQualifierLabel(q, { ceilingStatedElsewhere:
+ * true })` for every qualifier `attestations-model.ts` can emit.
+ */
+export function attestationQualifierLabel(qualifier: string): string | undefined {
+  if (qualifier === "verified-without-authority") return "record declares verified";
+  if (qualifier.startsWith("asserted-")) {
+    const declared = qualifier.slice("asserted-".length);
+    return declared === "unavailable" || declared === "partial" ? undefined : `record declares ${declared}`;
+  }
+  if (qualifier === "matched") return "locally matched · not independently verified";
+  if (qualifier === "present") return "present · authenticity not checked";
+  if (qualifier === "unverified") return "no independent verifier";
+  if (qualifier === "verified") return "checked by the named authority";
+  if (qualifier === "unavailable") return undefined;
+  return qualifier.includes("/") ? qualifier.replace("/", " · ") : undefined;
 }
 
+/**
+ * The four authority classes, as noun phrases.
+ *
+ * `none` reads "No verification authority" — byte-identical to the label
+ * `authorityFor()` already computes for the same case in `attestations-model`.
+ * It replaces a phrasing built on the retired state verb, which meant
+ * *recorded* on the claim rail and *unproven* in the metric 183px away, and is
+ * therefore banned from this file outright.
+ */
 function authorityLabel(kind: AttestationDimension["authorityKind"]): string {
   if (kind === "external") return "External verifier";
   if (kind === "mixed") return "Mixed local and external chain";
   if (kind === "local") return "Local client check";
-  return "No trusted authority established";
+  return "No verification authority";
 }
 
 function sameTimestamp(left: string, right: string): boolean {

@@ -157,13 +157,14 @@ export class ChutesInferenceTransport implements InferenceTransport {
   readonly id = "chutes-e2ee-v1";
   readonly posture: Extract<SecurityPosture, "encrypted-attested" | "encrypted-unattested">;
 
-  private readonly apiKeySource: ChutesTransportOptions["apiKey"];
+  private apiKeySource: ChutesTransportOptions["apiKey"];
   private readonly fetchImpl: FetchLike;
   private readonly crypto: ChutesE2eeCrypto;
-  private readonly gate?: AttestationGate;
+  private gate?: AttestationGate;
   private readonly options: ResolvedOptions;
   private readonly now: () => number;
   private readonly onInvocationTelemetry?: (telemetry: ChutesInvocationTelemetry) => void;
+  private readonly credentialRevocation = new AbortController();
   private readonly modelCaches = new Map<string, CachedModels>();
   private readonly pendingModels = new Map<string, SharedFlight<ChutesModel[]>>();
   private readonly leasePools = new Map<string, InstanceLease[]>();
@@ -183,10 +184,35 @@ export class ChutesInferenceTransport implements InferenceTransport {
       this.options.attestationMode === "required" ? "encrypted-attested" : "encrypted-unattested";
   }
 
+  /**
+   * Irreversibly release the page-memory credential authority and cancel every
+   * in-flight operation. Retained transport references cannot borrow the old
+   * key after disconnect.
+   */
+  revokeCredential(reason: unknown = new DOMException("Chutes credential was released.", "AbortError")): void {
+    if (this.credentialRevocation.signal.aborted) return;
+    const error = cancelledError(reason);
+    this.credentialRevocation.abort(error);
+    this.apiKeySource = "";
+    this.gate = undefined;
+    this.modelCaches.clear();
+    this.pendingModels.clear();
+    this.leasePools.clear();
+    this.pendingDiscovery.clear();
+    this.usedNonces.clear();
+    this.attestationCache.clear();
+  }
+
   async listModels(signal: AbortSignal = new AbortController().signal): Promise<ChutesModel[]> {
-    const apiKey = await abortable(this.resolveApiKey(), signal);
-    const authScope = await sha256Local(apiKey);
-    return this.getModels(authScope, signal);
+    const linked = linkAbortSignals(signal, this.credentialRevocation.signal);
+    try {
+      throwIfAborted(linked.signal);
+      const apiKey = await abortable(this.resolveApiKey(), linked.signal);
+      const authScope = await sha256Local(apiKey);
+      return await this.getModels(authScope, linked.signal);
+    } finally {
+      linked.dispose();
+    }
   }
 
   /** Prove protected E2E endpoint access without spending a nonce or invoking. */
@@ -194,27 +220,34 @@ export class ChutesInferenceTransport implements InferenceTransport {
     modelId: string,
     signal: AbortSignal = new AbortController().signal,
   ): Promise<void> {
-    const apiKey = await abortable(this.resolveApiKey(), signal);
-    const authScope = await sha256Local(apiKey);
-    const models = await this.getModels(authScope, signal);
-    const model = models.find((candidate) => candidate.id === modelId);
-    if (!model) {
-      throw new ChutesTransportError(
-        "MODEL_NOT_CONFIDENTIAL",
-        `Model ${modelId} is not explicitly marked confidential_compute by Chutes discovery.`,
-        { operation: "model-discovery" },
+    const linked = linkAbortSignals(signal, this.credentialRevocation.signal);
+    try {
+      throwIfAborted(linked.signal);
+      const apiKey = await abortable(this.resolveApiKey(), linked.signal);
+      const authScope = await sha256Local(apiKey);
+      const models = await this.getModels(authScope, linked.signal);
+      const model = models.find((candidate) => candidate.id === modelId);
+      if (!model) {
+        throw new ChutesTransportError(
+          "MODEL_NOT_CONFIDENTIAL",
+          `Model ${modelId} is not explicitly marked confidential_compute by Chutes discovery.`,
+          { operation: "model-discovery" },
+        );
+      }
+      await this.fetchAndPoolLeases(
+        apiKey,
+        model.chuteId,
+        `${authScope}:${model.chuteId}`,
+        linked.signal,
       );
+    } finally {
+      linked.dispose();
     }
-    await this.fetchAndPoolLeases(
-      apiKey,
-      model.chuteId,
-      `${authScope}:${model.chuteId}`,
-      signal,
-    );
   }
 
   async *stream(request: InferenceRequest, parentSignal: AbortSignal): AsyncIterable<InferenceEvent> {
-    const lifetime = new RequestLifetime(parentSignal, this.options.totalTimeoutMs);
+    const linked = linkAbortSignals(parentSignal, this.credentialRevocation.signal);
+    const lifetime = new RequestLifetime(linked.signal, this.options.totalTimeoutMs);
     let requestContext: E2eeRequestCryptoContext | undefined;
     let streamContext: E2eeStreamCryptoContext | undefined;
     let stall: StallTimer | undefined;
@@ -339,6 +372,7 @@ export class ChutesInferenceTransport implements InferenceTransport {
         this.options.maxSseEventChars,
       );
       const decoder = new TextDecoder();
+      const responseCiphertextCommitment = new CiphertextTranscriptCommitment();
       let sawDone = false;
       let streamOpened = false;
       reader = response.body.getReader();
@@ -357,6 +391,9 @@ export class ChutesInferenceTransport implements InferenceTransport {
             streamContext,
             authenticatedStream,
           );
+          if (result.authenticatedCiphertext !== undefined) {
+            await responseCiphertextCommitment.append(result.authenticatedCiphertext);
+          }
           if (result.requestConsumed && requestContext) {
             safeFreeRequest(requestContext);
             requestContext = undefined;
@@ -387,6 +424,9 @@ export class ChutesInferenceTransport implements InferenceTransport {
             streamContext,
             authenticatedStream,
           );
+          if (result.authenticatedCiphertext !== undefined) {
+            await responseCiphertextCommitment.append(result.authenticatedCiphertext);
+          }
           if (result.requestConsumed && requestContext) {
             safeFreeRequest(requestContext);
             requestContext = undefined;
@@ -447,6 +487,7 @@ export class ChutesInferenceTransport implements InferenceTransport {
         instanceId: invokedLease?.instanceId,
         endpointKeyDigest,
         requestCiphertextDigest,
+        responseCiphertextDigest: responseCiphertextCommitment.digest(),
         attestation,
         nowMs: this.now(),
       });
@@ -467,6 +508,7 @@ export class ChutesInferenceTransport implements InferenceTransport {
       }
       if (requestContext) safeFreeRequest(requestContext);
       lifetime.dispose();
+      linked.dispose();
     }
   }
 
@@ -480,6 +522,7 @@ export class ChutesInferenceTransport implements InferenceTransport {
     done: boolean;
     requestConsumed: boolean;
     streamContext?: E2eeStreamCryptoContext;
+    authenticatedCiphertext?: string;
   } {
     if (outer.data.trim() === "[DONE]") {
       const innerFinal = authenticatedStream.finish();
@@ -509,7 +552,7 @@ export class ChutesInferenceTransport implements InferenceTransport {
       }
       const plaintext = currentStream.decrypt_chunk(envelope.e2e);
       const inner = authenticatedStream.push(plaintext);
-      return { ...inner, requestConsumed: false };
+      return { ...inner, requestConsumed: false, authenticatedCiphertext: envelope.e2e };
     }
     if (envelope.e2e_error !== undefined) {
       throw new ChutesTransportError(
@@ -524,8 +567,10 @@ export class ChutesInferenceTransport implements InferenceTransport {
   }
 
   private async resolveApiKey() {
+    throwIfAborted(this.credentialRevocation.signal);
     const value =
       typeof this.apiKeySource === "function" ? await this.apiKeySource() : this.apiKeySource;
+    throwIfAborted(this.credentialRevocation.signal);
     const key = value.trim();
     if (!key) throw new ChutesTransportError("HTTP_ERROR", "A Chutes API key is required.");
     return key;
@@ -925,6 +970,34 @@ class StallTimer {
   }
 }
 
+function linkAbortSignals(
+  caller: AbortSignal,
+  authority: AbortSignal,
+): Readonly<{ signal: AbortSignal; dispose(): void }> {
+  const controller = new AbortController();
+  const forwardCaller = () => {
+    if (!controller.signal.aborted) {
+      controller.abort(caller.reason ?? new DOMException("Inference request was cancelled.", "AbortError"));
+    }
+  };
+  const forwardAuthority = () => {
+    if (!controller.signal.aborted) {
+      controller.abort(authority.reason ?? new DOMException("Inference credential was released.", "AbortError"));
+    }
+  };
+  if (caller.aborted) forwardCaller();
+  else caller.addEventListener("abort", forwardCaller, { once: true });
+  if (authority.aborted) forwardAuthority();
+  else authority.addEventListener("abort", forwardAuthority, { once: true });
+  return Object.freeze({
+    signal: controller.signal,
+    dispose() {
+      caller.removeEventListener("abort", forwardCaller);
+      authority.removeEventListener("abort", forwardAuthority);
+    },
+  });
+}
+
 async function abortable<T>(promise: PromiseLike<T>, signal: AbortSignal): Promise<T> {
   throwIfAborted(signal);
   return new Promise<T>((resolve, reject) => {
@@ -1092,6 +1165,7 @@ function createConversationReceipt(args: {
   instanceId?: string;
   endpointKeyDigest?: string;
   requestCiphertextDigest?: string;
+  responseCiphertextDigest?: string;
   attestation: AttestationOutcome;
   nowMs: number;
 }): ConversationReceipt {
@@ -1108,10 +1182,22 @@ function createConversationReceipt(args: {
     status: "unavailable",
     summary: "Chutes model discovery selected this model, but no model-artifact proof is present.",
   };
-  claims.conversation = {
-    status: "unavailable",
-    summary: "Chutes E2EE v1 provides no enclave-signed transcript or authenticated final record.",
-  };
+  claims.conversation = args.requestCiphertextDigest && args.responseCiphertextDigest
+    ? {
+        status: "partial",
+        summary:
+          "Airship locally committed the request ciphertext and every authenticated response-ciphertext record. This is a client hash-chain binding, not an enclave-signed transcript.",
+        verifier: "airship-client",
+        checkedAt: now,
+        details: {
+          commitment: "airship-chutes-e2e-response-sha256-chain-v1",
+          authority: "local-client",
+        },
+      }
+    : {
+        status: "unavailable",
+        summary: "Chutes E2EE v1 provides no enclave-signed transcript or authenticated final record.",
+      };
 
   const verifications: VerificationRecord[] = [
     {
@@ -1123,6 +1209,17 @@ function createConversationReceipt(args: {
       detail: "Local v1 encryption and per-record authentication; routing metadata remains outside AEAD.",
     },
   ];
+  if (claims.conversation.status === "partial") {
+    verifications.push({
+      verifier: "airship-client",
+      version: "1",
+      checkedAt: now,
+      status: "partial",
+      claim: "conversation",
+      detail:
+        "Local request-ciphertext digest plus a domain-separated SHA-256 chain over authenticated response-ciphertext records; no external signer.",
+    });
+  }
   const verified = args.attestation.receipt;
   const evaluated = args.attestation.evaluation;
   if (evaluated) {
@@ -1207,6 +1304,7 @@ function createConversationReceipt(args: {
       algorithm: "SHA-256",
       endpointKeyDigest: args.endpointKeyDigest,
       requestCiphertextDigest: args.requestCiphertextDigest,
+      responseCiphertextDigest: args.responseCiphertextDigest,
       evidenceDigest: evaluated?.evidenceDigest ?? verified?.evidence?.digest,
     },
     evidence: verified?.evidence
@@ -1228,10 +1326,61 @@ function cloneJson(value: JsonValue): JsonValue {
 }
 
 async function sha256Local(value: string | Uint8Array) {
-  const source = typeof value === "string" ? new TextEncoder().encode(value) : value;
-  const bytes = new Uint8Array(source.byteLength);
-  bytes.set(source);
-  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes.buffer));
+  return formatSha256(await sha256Bytes(
+    typeof value === "string" ? CIPHERTEXT_ENCODER.encode(value) : value,
+  ));
+}
+
+const CIPHERTEXT_ENCODER = new TextEncoder();
+const RESPONSE_COMMITMENT_DOMAIN =
+  CIPHERTEXT_ENCODER.encode("airship:chutes:e2e-response:sha256-chain:v1");
+
+/**
+ * A constant-memory commitment to the exact authenticated `e2e` records.
+ *
+ * WebCrypto intentionally has no streaming digest API. Hashing each
+ * length-delimited record into a domain-separated SHA-256 chain avoids
+ * retaining an unbounded encrypted response while still making order,
+ * boundaries, duplication, and omission part of the commitment. A record is
+ * appended only after the WASM E2EE context has authenticated and decrypted it.
+ */
+class CiphertextTranscriptCommitment {
+  private state: Uint8Array | undefined;
+  private records = 0;
+
+  async append(ciphertext: string): Promise<void> {
+    const encoded = CIPHERTEXT_ENCODER.encode(ciphertext);
+    if (!this.state) {
+      this.state = await sha256Bytes(RESPONSE_COMMITMENT_DOMAIN);
+    }
+    if (this.records >= 0xffff_ffff || encoded.byteLength > 0xffff_ffff) {
+      throw new ChutesTransportError(
+        "RESPONSE_TOO_LARGE",
+        "Chutes returned too many encrypted response records to commit safely.",
+      );
+    }
+    const frame = new Uint8Array(this.state.byteLength + 8 + encoded.byteLength);
+    frame.set(this.state, 0);
+    const header = new DataView(frame.buffer, this.state.byteLength, 8);
+    header.setUint32(0, this.records, false);
+    header.setUint32(4, encoded.byteLength, false);
+    frame.set(encoded, this.state.byteLength + 8);
+    this.state = await sha256Bytes(frame);
+    this.records += 1;
+  }
+
+  digest(): string | undefined {
+    return this.records > 0 && this.state ? formatSha256(this.state) : undefined;
+  }
+}
+
+async function sha256Bytes(value: Uint8Array): Promise<Uint8Array> {
+  const copy = new Uint8Array(value.byteLength);
+  copy.set(value);
+  return new Uint8Array(await crypto.subtle.digest("SHA-256", copy.buffer));
+}
+
+function formatSha256(digest: Uint8Array): string {
   let binary = "";
   for (const byte of digest) binary += String.fromCharCode(byte);
   return `sha256:${btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "")}`;

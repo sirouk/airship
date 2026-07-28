@@ -153,7 +153,15 @@ export class EncryptedObjectWorkspace implements WorkspacePort, ClientEncryptedW
       .filter((entry) => entry.path !== normalized)
       .concat(nextEntry)
       .sort((left, right) => compareWorkspacePaths(left.path, right.path));
-    await this.advanceManifest(loaded, { version: 1, generation: loaded.manifest.generation + 1, files });
+    try {
+      await this.advanceManifest(loaded, { version: 1, generation: loaded.manifest.generation + 1, files });
+    } catch (error) {
+      // On a lost CAS the just-minted revision is the orphan, not the old one:
+      // no committed manifest will ever reference this key again.
+      await this.dropCachedRevision(cloudKey);
+      throw error;
+    }
+    if (current) await this.dropCachedRevision(current.cloudKey);
     return structuredClone(file);
   }
 
@@ -166,6 +174,19 @@ export class EncryptedObjectWorkspace implements WorkspacePort, ClientEncryptedW
     checkExpectedRevision(current, options.expectedRevision);
     const files = loaded.manifest.files.filter((entry) => entry.path !== normalized);
     await this.advanceManifest(loaded, { version: 1, generation: loaded.manifest.generation + 1, files });
+    await this.dropCachedRevision(current.cloudKey);
+  }
+
+  /**
+   * Releases a revision-scoped ciphertext page from the acceleration cache when
+   * the committed manifest can no longer reference it. Provider authority is
+   * untouched: the object itself stays until a reclamation job trashes it, so a
+   * reader holding an older manifest generation still resolves.
+   */
+  private async dropCachedRevision(cloudKey: string): Promise<void> {
+    const store = this.store as ObjectStore & { dropSupersededRevision?(key: string): Promise<void> };
+    if (typeof store.dropSupersededRevision !== "function") return;
+    await store.dropSupersededRevision(cloudKey).catch(() => undefined);
   }
 
   private async readEntry(entry: WorkspaceManifestEntry): Promise<WorkspaceFile> {

@@ -3,7 +3,10 @@ import { randomUuid } from "../core/id";
 import { loadDeferredCapabilities } from "../load-deferred-capabilities";
 import type { EncryptedObjectJournalBackend } from "../storage/encrypted-object-journal";
 import type { WorkspaceRootKey } from "../storage/encrypted-envelope";
-import type { ObjectStore } from "../storage/object-store";
+import { isReclaimableObjectStore, type ObjectReclamationReceipt, type ObjectStore } from "../storage/object-store";
+import type { CiphertextCacheCapability } from "../storage/client-ciphertext-cache";
+import type { EncryptedProfileCatalogStore } from "../profiles/persistence";
+import type { VaultContextFabricPort } from "./context-fabric-port";
 import type { GoogleDriveWorkspace } from "../storage/google-drive-workspace";
 import type { S3CredentialProvider, S3ObjectStore } from "../storage/s3-object-store";
 import {
@@ -48,9 +51,13 @@ export type VaultProbeEvidence = Readonly<{
   checks: readonly Readonly<{ name: string; durationMs: number }>[];
   createdKeys: readonly string[];
   cleanup: Readonly<{
-    deletionAvailableInRuntime: false;
-    policy: "provider-lifecycle-or-out-of-band";
+    deletionAvailableInRuntime: boolean;
+    policy: "provider-lifecycle-or-out-of-band" | "runtime-reclaimed";
     warning: string;
+    /** Provider-confirmed removals only. Absent when the store cannot reclaim. */
+    reclaimedKeys?: readonly string[];
+    /** Probe objects still resident and still needing out-of-band cleanup. */
+    retainedKeys?: readonly string[];
   }>;
   readiness: Readonly<{
     conditionalCreate: "verified";
@@ -111,10 +118,18 @@ export type VaultSnapshot =
       message: "Vault is not ready for strict cloud state.";
     }>);
 
-export type ReadyVaultRuntime = Readonly<{
+export type DurableStateRuntime = Readonly<{
   store: ObjectStore;
   journal: EncryptedObjectJournalBackend;
   workspace: EncryptedObjectWorkspace;
+  profiles: EncryptedProfileCatalogStore;
+  /** Non-extracting facade; raw storage credentials and workspace key stay private to the coordinator pack. */
+  contextFabric: VaultContextFabricPort;
+}>;
+
+export type ReadyVaultRuntime = DurableStateRuntime & Readonly<{
+  /** Local acceleration only; provider remains authoritative for heads, listings, and CAS. */
+  acceleration: CiphertextCacheCapability;
 }>;
 
 export type ConfigureVaultRequest = {
@@ -147,6 +162,8 @@ export type ConfigureGoogleDriveVaultRequest = Readonly<{
   store: ObjectStore;
   workspaceKey: WorkspaceRootKey;
   accountLabel: string;
+  /** Explicit user-gesture renewal of the page-memory GIS access token. */
+  reauthorize?(): Promise<void>;
   reset?(): void;
   now?: () => Date;
 }>;
@@ -164,7 +181,11 @@ type VaultRuntimeModules = Readonly<{
   S3ObjectStore: typeof import("../storage/s3-object-store").S3ObjectStore;
   runObjectStoreConformance: typeof import("../storage/conformance").runObjectStoreConformance;
   EncryptedObjectJournalBackend: typeof import("../storage/encrypted-object-journal").EncryptedObjectJournalBackend;
+  EncryptedProfileCatalogStore: typeof import("../profiles/persistence").EncryptedProfileCatalogStore;
   EncryptedObjectWorkspace: typeof import("./encrypted-workspace").EncryptedObjectWorkspace;
+  VaultContextFabricPort: typeof import("./context-fabric-port").VaultContextFabricPort;
+  createClientCiphertextCache: typeof import("../storage/client-ciphertext-cache").createClientCiphertextCache;
+  CiphertextCachingObjectStore: typeof import("../storage/caching-object-store").CiphertextCachingObjectStore;
 }>;
 
 /**
@@ -182,8 +203,10 @@ export class VaultCoordinator {
   private workspaceKey?: WorkspaceRootKey;
   private store?: ObjectStore;
   private directStore?: ObjectStore;
+  private directReauthorize?: () => Promise<void>;
   private directReset?: () => void;
   private runtime?: ReadyVaultRuntime;
+  private acceleratedStore?: import("../storage/caching-object-store").CiphertextCachingObjectStore;
   private fetchImplementation?: typeof fetch;
   private abortController?: AbortController;
   private now: () => Date = () => new Date();
@@ -203,6 +226,7 @@ export class VaultCoordinator {
     const config = validateVaultS3Configuration(request.configuration);
     this.invalidateProbe("Vault configuration was replaced.");
     this.resetProvider();
+    this.resetAcceleration();
     this.runtime = undefined;
     this.config = config;
     this.requirements = vaultProviderRequirements(config);
@@ -212,6 +236,7 @@ export class VaultCoordinator {
     this.now = request.now ?? (() => new Date());
     this.store = undefined;
     this.directStore = undefined;
+    this.directReauthorize = undefined;
     this.directReset = undefined;
     return this.transition({
       phase: "configured",
@@ -223,37 +248,28 @@ export class VaultCoordinator {
   }
 
   configureGoogleDrive(request: ConfigureGoogleDriveVaultRequest): VaultSnapshot {
+    // Validate and copy every caller-controlled field before releasing the
+    // currently mounted authority. A malformed replacement must not leave an
+    // old `ready` snapshot pointing at a runtime whose token/cache was already
+    // destroyed.
+    const nextConfig = validatedGoogleDriveConfiguration(request);
+    const nextRequirements = googleDriveRequirements(nextConfig, request.store);
+    const nextReauthorize = request.reauthorize;
+    const nextReset = request.reset;
     this.invalidateProbe("Vault configuration was replaced.");
     this.resetProvider();
+    this.resetAcceleration();
     this.runtime = undefined;
-    const workspaceName = request.workspace.workspaceName.trim();
-    if (!workspaceName || workspaceName.length > 120) throw new Error("Google Drive workspace name is invalid.");
-    this.config = Object.freeze({
-      provider: "google-drive",
-      endpoint: "https://www.googleapis.com",
-      workspaceName,
-      workspaceFolderId: request.workspace.workspaceFolderId,
-      webViewLink: request.workspace.webViewLink,
-      namespace: request.workspace.namespaceId,
-      probePrefix: ".airship-probes/v1",
-      credentialSource: Object.freeze({
-        kind: "google-identity-services",
-        displayName: request.accountLabel,
-        authorityOrigins: Object.freeze([
-          "https://accounts.google.com",
-          "https://openidconnect.googleapis.com",
-          "https://www.googleapis.com",
-        ]),
-      }),
-    });
-    this.requirements = googleDriveRequirements(this.config);
+    this.config = nextConfig;
+    this.requirements = nextRequirements;
     this.provider = undefined;
     this.workspaceKey = request.workspaceKey;
     this.fetchImplementation = undefined;
     this.now = request.now ?? (() => new Date());
     this.store = request.store;
     this.directStore = request.store;
-    this.directReset = request.reset;
+    this.directReauthorize = nextReauthorize;
+    this.directReset = nextReset;
     return this.transition({
       phase: "configured",
       ...this.configuredFields(),
@@ -265,6 +281,7 @@ export class VaultCoordinator {
     this.requireConfiguration();
     this.invalidateProbe("Workspace key changed.");
     this.workspaceKey = key;
+    this.resetAcceleration();
     this.runtime = undefined;
     return this.transition({
       phase: "configured",
@@ -277,6 +294,7 @@ export class VaultCoordinator {
     this.requireConfiguration();
     this.invalidateProbe("Workspace key was cleared.");
     this.workspaceKey = undefined;
+    this.resetAcceleration();
     this.runtime = undefined;
     return this.transition({
       phase: "configured",
@@ -298,9 +316,11 @@ export class VaultCoordinator {
   disconnect(): VaultSnapshot {
     this.invalidateProbe("Vault disconnected.");
     this.resetProvider();
+    this.resetAcceleration();
     this.runtime = undefined;
     this.store = undefined;
     this.directStore = undefined;
+    this.directReauthorize = undefined;
     this.directReset = undefined;
     this.fetchImplementation = undefined;
     this.workspaceKey = undefined;
@@ -308,6 +328,19 @@ export class VaultCoordinator {
     this.config = undefined;
     this.requirements = undefined;
     return this.transitionDisconnected();
+  }
+
+  /**
+   * Renew a Google Drive grant from a click/tap without replacing the store,
+   * workspace key, or verified runtime. No refresh token is retained.
+   */
+  async reauthorizeGoogleDrive(): Promise<void> {
+    if (!this.config || !isGoogleDriveConfiguration(this.config) || !this.directStore) {
+      throw new Error("Google Drive is not the configured vault provider.");
+    }
+    const reauthorize = this.directReauthorize;
+    if (!reauthorize) throw new Error("This Google Drive connection cannot be renewed in place. Reconnect the vault.");
+    await reauthorize();
   }
 
   readyRuntime(): ReadyVaultRuntime {
@@ -346,7 +379,15 @@ export class VaultCoordinator {
       : this.current.phase === "degraded"
         ? this.current.previousEvidence
         : undefined;
-    this.runtime = undefined;
+    // A re-probe refreshes evidence for the already configured authority. The
+    // adopted application runtime may still own these exact adapters while the
+    // conformance checks run, so closing its acceleration here would strand
+    // workspace reads and make a later disconnect unable to migrate state.
+    // Configuration/key changes and disconnect remain the only operations that
+    // destroy the runtime. Readiness still fails closed through `current.phase`:
+    // `readyRuntime()` cannot expose a retained runtime while probing/degraded.
+    const retainedRuntime = this.runtime;
+    const retainedAcceleratedStore = this.acceleratedStore;
     this.transition({
       phase: "probing",
       ...this.configuredFields(),
@@ -394,6 +435,10 @@ export class VaultCoordinator {
         ...conformance.createdKeys,
         ...composition.createdKeys,
       ])].sort());
+      // Probe litter is provably unreachable — nothing but this run ever
+      // references those keys — so it is the one safe reclamation candidate that
+      // needs no safety age. Anything unconfirmed keeps the original warning.
+      const cleanup = await this.reclaimProbeObjects(store, allCreatedKeys, controller.signal);
       const evidence: VaultProbeEvidence = Object.freeze({
         runId,
         logicalPrefix: conformance.prefix,
@@ -404,11 +449,7 @@ export class VaultCoordinator {
           ...composition.checks.map((check) => Object.freeze({ ...check })),
         ]),
         createdKeys: allCreatedKeys,
-        cleanup: Object.freeze({
-          deletionAvailableInRuntime: false,
-          policy: "provider-lifecycle-or-out-of-band",
-          warning: "Probe objects are immutable. Configure provider lifecycle expiry or remove the listed keys out-of-band.",
-        }),
+        cleanup,
         readiness: Object.freeze({
           conditionalCreate: "verified",
           compareAndSwap: "verified",
@@ -420,11 +461,31 @@ export class VaultCoordinator {
           dataSynchronization: "not-evaluated",
         }),
       });
-      this.runtime = Object.freeze({
-        store,
-        journal: new modules.EncryptedObjectJournalBackend(store, key, "state/journal/v1"),
-        workspace: new modules.EncryptedObjectWorkspace(store, key, "state/workspace/v1"),
-      });
+      if (retainedRuntime && retainedAcceleratedStore) {
+        // The configuration and key cannot change without first destroying the
+        // retained runtime, so this is the same-authority lifecycle. Preserve
+        // object identity: the app already adopted these adapters.
+        this.runtime = retainedRuntime;
+        this.acceleratedStore = retainedAcceleratedStore;
+      } else {
+        const cache = await modules.createClientCiphertextCache({ partition: vaultCachePartition(config) });
+        if (generation !== this.generation || controller.signal.aborted) {
+          cache.close();
+          throw abortReason(controller.signal);
+        }
+        const acceleratedStore = new modules.CiphertextCachingObjectStore(store, cache);
+        this.acceleratedStore = acceleratedStore;
+        const journal = new modules.EncryptedObjectJournalBackend(acceleratedStore, key, "state/journal/v1");
+        const workspace = new modules.EncryptedObjectWorkspace(acceleratedStore, key, "state/workspace/v1");
+        this.runtime = Object.freeze({
+          store: acceleratedStore,
+          acceleration: acceleratedStore.acceleration,
+          journal,
+          workspace,
+          profiles: new modules.EncryptedProfileCatalogStore(acceleratedStore, key, "state/profiles/v1"),
+          contextFabric: new modules.VaultContextFabricPort(acceleratedStore, key, workspace),
+        });
+      }
       return this.transition({
         phase: "ready",
         ...this.configuredFields(),
@@ -434,7 +495,10 @@ export class VaultCoordinator {
     } catch (error) {
       if (generation !== this.generation) throw abortReason(controller.signal);
       if (isAbort(error) || controller.signal.aborted) {
-        this.runtime = undefined;
+        if (!retainedRuntime) {
+          this.resetAcceleration();
+          this.runtime = undefined;
+        }
         this.transition({
           phase: "configured",
           ...this.configuredFields(),
@@ -442,7 +506,10 @@ export class VaultCoordinator {
         });
         throw abortReason(controller.signal);
       }
-      this.runtime = undefined;
+      if (!retainedRuntime) {
+        this.resetAcceleration();
+        this.runtime = undefined;
+      }
       const diagnostic = redactVaultError(error, this.now().toISOString());
       return this.transition({
         phase: "degraded",
@@ -497,6 +564,54 @@ export class VaultCoordinator {
     }
   }
 
+  /**
+   * Sweeps this run's probe objects when — and only when — the provider offers a
+   * reclamation capability. Keys the provider did not confirm removed keep the
+   * original out-of-band warning verbatim, so the notice never overstates what
+   * actually happened.
+   */
+  private async reclaimProbeObjects(
+    store: ObjectStore,
+    createdKeys: readonly string[],
+    signal: AbortSignal,
+  ): Promise<VaultProbeEvidence["cleanup"]> {
+    const retainedWarning = "Probe objects are immutable. Configure provider lifecycle expiry or remove the listed keys out-of-band.";
+    if (!isReclaimableObjectStore(store) || !createdKeys.length) {
+      return Object.freeze({
+        deletionAvailableInRuntime: false,
+        policy: "provider-lifecycle-or-out-of-band",
+        warning: retainedWarning,
+      });
+    }
+    let receipt: ObjectReclamationReceipt;
+    try {
+      receipt = await store.trash(createdKeys, signal);
+    } catch {
+      // A failed sweep must not degrade a verified probe, and must not claim a
+      // removal it did not observe.
+      return Object.freeze({
+        deletionAvailableInRuntime: true,
+        policy: "provider-lifecycle-or-out-of-band",
+        warning: `Probe object reclamation did not complete. ${retainedWarning}`,
+      });
+    }
+    const retained = Object.freeze([...receipt.retained].sort());
+    return Object.freeze({
+      deletionAvailableInRuntime: true,
+      policy: retained.length ? "provider-lifecycle-or-out-of-band" : "runtime-reclaimed",
+      warning: retained.length
+        ? `${retained.length} of ${receipt.requested} probe object(s) were not confirmed removed. ${retainedWarning}`
+        : "Probe objects were moved to the provider's trash and confirmed removed from the live index.",
+      reclaimedKeys: Object.freeze([...receipt.reclaimed].sort()),
+      retainedKeys: retained,
+    });
+  }
+
+  private resetAcceleration(): void {
+    this.acceleratedStore?.closeAcceleration();
+    this.acceleratedStore = undefined;
+  }
+
   private diagnostic(
     code: VaultDiagnostic["code"],
     operation: VaultDiagnostic["operation"],
@@ -539,11 +654,97 @@ export class VaultCoordinator {
   }
 }
 
+function validatedGoogleDriveConfiguration(
+  request: ConfigureGoogleDriveVaultRequest,
+): GoogleDriveVaultConfiguration {
+  const workspaceName = canonicalDisplayValue(
+    request.workspace.workspaceName,
+    "Google Drive workspace name",
+    120,
+  );
+  const workspaceFolderId = googleDriveId(request.workspace.workspaceFolderId, "workspace folder ID");
+  const rootFolderId = googleDriveId(request.workspace.rootFolderId, "root folder ID");
+  const segmentsFolderId = googleDriveId(request.workspace.segmentsFolderId, "segments folder ID");
+  if (new Set([workspaceFolderId, rootFolderId, segmentsFolderId]).size !== 3) {
+    throw new Error("Google Drive workspace folder roles must refer to distinct folders.");
+  }
+  const namespace = request.workspace.namespaceId;
+  if (!/^[A-Za-z0-9_-]{20,128}$/u.test(namespace)) {
+    throw new Error("Google Drive workspace namespace is invalid.");
+  }
+  const accountLabel = canonicalDisplayValue(request.accountLabel, "Google account label", 320);
+  const webViewLink = request.workspace.webViewLink === undefined
+    ? undefined
+    : googleDriveWebViewLink(request.workspace.webViewLink);
+  return Object.freeze({
+    provider: "google-drive",
+    endpoint: "https://www.googleapis.com",
+    workspaceName,
+    workspaceFolderId,
+    ...(webViewLink ? { webViewLink } : {}),
+    namespace,
+    probePrefix: ".airship-probes/v1",
+    credentialSource: Object.freeze({
+      kind: "google-identity-services",
+      displayName: accountLabel,
+      authorityOrigins: Object.freeze([
+        "https://accounts.google.com",
+        "https://openidconnect.googleapis.com",
+        "https://www.googleapis.com",
+      ]),
+    }),
+  });
+}
+
+function googleDriveId(value: string, label: string): string {
+  if (!/^[A-Za-z0-9_-]{8,256}$/u.test(value)) {
+    throw new Error(`Google Drive ${label} is invalid.`);
+  }
+  return value;
+}
+
+function googleDriveWebViewLink(value: string): string {
+  if (value.length > 2_048 || /[\r\n]/u.test(value)) throw new Error("Google Drive workspace link is invalid.");
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error("Google Drive workspace link is invalid.");
+  }
+  if (
+    url.protocol !== "https:" ||
+    url.hostname !== "drive.google.com" ||
+    url.username ||
+    url.password ||
+    url.hash
+  ) {
+    throw new Error("Google Drive workspace link must use the pinned Drive HTTPS origin.");
+  }
+  return url.href;
+}
+
+function canonicalDisplayValue(value: string, label: string, maximum: number): string {
+  const normalized = value.trim();
+  if (
+    !normalized ||
+    normalized.length > maximum ||
+    /[\u0000-\u001f\u007f]/u.test(normalized)
+  ) {
+    throw new Error(`${label} is invalid.`);
+  }
+  return normalized;
+}
+
 export function isGoogleDriveConfiguration(config: VaultCloudConfiguration): config is GoogleDriveVaultConfiguration {
   return "provider" in config && config.provider === "google-drive";
 }
 
-function googleDriveRequirements(config: GoogleDriveVaultConfiguration): VaultProviderRequirements {
+function googleDriveRequirements(config: GoogleDriveVaultConfiguration, store: ObjectStore): VaultProviderRequirements {
+  // GoogleDriveObjectStore implements `trash`, and reclaimProbeObjects sweeps
+  // this run's probe objects when it does — but the store is caller-supplied,
+  // so the capability is read off the object that was actually handed in rather
+  // than assumed from the provider name.
+  const reclaimable = isReclaimableObjectStore(store);
   return Object.freeze({
     directBrowserOnly: true,
     credentialContract: Object.freeze({
@@ -567,8 +768,11 @@ function googleDriveRequirements(config: GoogleDriveVaultConfiguration): VaultPr
     }),
     probeLifecycle: Object.freeze({
       logicalPrefix: `${config.namespace}/${config.probePrefix}`,
-      deletionAvailableInRuntime: false as const,
-      cleanup: "provider-lifecycle-or-out-of-band" as const,
+      deletionAvailableInRuntime: reclaimable,
+      // Even a reclaiming store keeps the out-of-band path: a sweep reports
+      // only what the provider confirmed, and anything it did not confirm is
+      // still resident.
+      cleanup: reclaimable ? "runtime-reclaimed-then-out-of-band" as const : "provider-lifecycle-or-out-of-band" as const,
     }),
   });
 }
@@ -580,9 +784,19 @@ function loadVaultRuntimeModules(): Promise<VaultRuntimeModules> {
     S3ObjectStore: capabilities.S3ObjectStore,
     runObjectStoreConformance: capabilities.runObjectStoreConformance,
     EncryptedObjectJournalBackend: capabilities.EncryptedObjectJournalBackend,
+    EncryptedProfileCatalogStore: capabilities.EncryptedProfileCatalogStore,
     EncryptedObjectWorkspace: capabilities.EncryptedObjectWorkspace,
+    VaultContextFabricPort: capabilities.VaultContextFabricPort,
+    createClientCiphertextCache: capabilities.createClientCiphertextCache,
+    CiphertextCachingObjectStore: capabilities.CiphertextCachingObjectStore,
   }));
   return runtimeModulesPromise;
+}
+
+function vaultCachePartition(config: VaultCloudConfiguration): string {
+  return isGoogleDriveConfiguration(config)
+    ? `google-drive\0${config.workspaceFolderId}\0${config.namespace}`
+    : `s3\0${config.endpoint}\0${config.bucket}\0${config.namespace}`;
 }
 
 async function runEncryptedCompositionProbe(args: {

@@ -4,6 +4,7 @@ import { durabilityLabel } from "./durability-indicator";
 describe("DurabilityIndicator", () => {
   it("states page-only durability without implying sync", () => {
     expect(durabilityLabel("ephemeral")).toBe("Ephemeral · this page only");
+    expect(durabilityLabel("local")).toBe("Encrypted · this device");
     expect(durabilityLabel("syncing")).not.toContain("synced");
   });
 });

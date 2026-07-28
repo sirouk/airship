@@ -1,5 +1,6 @@
+import type { ComponentChildren } from "preact";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
-import { isContextSupersession, type ClientContextEngineState, type ClientContextSearchResult } from "../indexing/client-context-engine";
+import { isContextSupersession, type ClientContextCandidate, type ClientContextEngineState, type ClientContextSearchHit, type ClientContextSearchResult } from "../indexing/client-context-engine";
 import { getClientContextRuntime } from "../retrieval/client-context-runtime";
 import type { WorkspaceEntry, WorkspacePort } from "../workspace/contracts";
 import { Icon } from "./icons";
@@ -7,6 +8,8 @@ import type { ContextFabricDriver } from "../retrieval/context-driver";
 import type { RetrievalCommitment, RoutedExpert } from "../retrieval/contracts";
 import type { EmbeddingMode } from "../indexing/semantic-browser-provider";
 import type { SemanticProviderState } from "../indexing/semantic-worker-provider";
+import type { FederatedMemorySearchState } from "../tools/federated-memory";
+import type { ProvenanceRow } from "./provenance-chip";
 import "./context-view.css";
 
 export type ContextViewProps = Readonly<{
@@ -16,28 +19,70 @@ export type ContextViewProps = Readonly<{
   resultLimit?: number;
   fabricDriver?: ContextFabricDriver;
   embedded?: boolean;
+  searchQuery?: string;
+  sharedSearch?: FederatedMemorySearchState;
+  onGenerationChange?: (generationDigest?: string) => void;
+  onReady?: () => void;
+  /** Opens an indexed source in the editor. Unwired hosts get no button. */
+  onOpenFile?: (path: string) => void;
+  /**
+   * How this view renders a lineage chip.
+   *
+   * Passed in rather than imported. `<ProvenanceChip>` is a Memory-route
+   * module, and a *runtime* import from here would put it in the same lazy
+   * chunk group as the graph's kind-visual table and merge the two — the
+   * release gate requires that table to remain a chunk of its own, and a
+   * bundler-shaped merge is not a reason to move a component. The type crosses
+   * the boundary (types are erased); the component does not.
+   */
+  renderProvenance: (subject: string, rows: readonly ProvenanceRow[]) => ComponentChildren;
+  /**
+   * Whether the index-status detail starts open.
+   *
+   * True when this view *is* the destination — arriving at `#context` asks for
+   * the index itself, and that landing keeps the five metric cells and both
+   * embedding paragraphs on screen exactly as it always has. False when the
+   * index is one disclosure inside Memory, where the compact row is the point.
+   */
+  detailExpanded?: boolean;
 }>;
 
-export function ContextView({ workspace, entries, dimensions = 384, resultLimit = 8, fabricDriver, embedded = false }: ContextViewProps) {
+export function ContextView({ workspace, entries, dimensions = 384, resultLimit = 8, fabricDriver, embedded = false, searchQuery, sharedSearch, onGenerationChange, onReady, onOpenFile, renderProvenance, detailExpanded = false }: ContextViewProps) {
   const runtime = useMemo(() => getClientContextRuntime(workspace, { dimensions }), [dimensions, workspace]);
   const [engineState, setEngineState] = useState<ClientContextEngineState>(() => runtime.getState());
   const [embeddingMode, setEmbeddingMode] = useState<EmbeddingMode>(() => runtime.getEmbeddingMode());
   const [semanticState, setSemanticState] = useState<SemanticProviderState | undefined>(() => runtime.getSemanticState());
   const [embeddingChange, setEmbeddingChange] = useState<"idle" | "changing">("idle");
-  const [query, setQuery] = useState("");
-  const [searchResult, setSearchResult] = useState<ClientContextSearchResult>();
-  const [searchStatus, setSearchStatus] = useState<"idle" | "searching" | "cancelled" | "complete">("idle");
-  const [searchError, setSearchError] = useState<string>();
+  const [statusExpanded, setStatusExpanded] = useState(detailExpanded);
+  const [draftQuery, setDraftQuery] = useState("");
+  const [localSearchResult, setLocalSearchResult] = useState<ClientContextSearchResult>();
+  const [localSearchStatus, setLocalSearchStatus] = useState<"idle" | "searching" | "cancelled" | "complete">("idle");
+  const [localSearchError, setLocalSearchError] = useState<string>();
   const [fabric, setFabric] = useState<Readonly<{ experts: readonly RoutedExpert[]; warnings: readonly string[]; commitment?: RetrievalCommitment }>>({ experts: [], warnings: [] });
   const searchController = useRef<AbortController>();
   const searchSequence = useRef(0);
+  const query = searchQuery ?? draftQuery;
+  const generationDigest = engineState.generation?.lineage.generationDigest;
+  const sharedResult = sharedContextResult(sharedSearch, query, generationDigest);
+  const searchResult = searchQuery === undefined ? localSearchResult : sharedResult;
+  const searchStatus = searchQuery === undefined
+    ? localSearchStatus
+    : sharedSearch?.searching ? "searching" : sharedResult ? "complete" : "idle";
+  const searchError = searchQuery === undefined
+    ? localSearchError
+    : sharedSearch?.searching ? undefined : sharedSearch?.status;
 
   useEffect(() => runtime.subscribe(setEngineState), [runtime]);
   useEffect(() => runtime.subscribeSemantic(setSemanticState), [runtime]);
+  useEffect(() => {
+    if (!onReady) return;
+    const frame = window.requestAnimationFrame(onReady);
+    return () => window.cancelAnimationFrame(frame);
+  }, [onReady]);
 
   useEffect(() => {
     void runtime.updateWorkspace(entries).catch((error: unknown) => {
-      if (!isContextSupersession(error)) setSearchError(undefined);
+      if (!isContextSupersession(error)) setLocalSearchError(undefined);
     });
   }, [runtime, entries]);
 
@@ -45,24 +90,24 @@ export function ContextView({ workspace, entries, dimensions = 384, resultLimit 
     searchController.current?.abort(new DOMException("Context view closed.", "AbortError"));
   }, [runtime]);
 
-  const generationDigest = engineState.generation?.lineage.generationDigest;
+  useEffect(() => onGenerationChange?.(generationDigest), [generationDigest, onGenerationChange]);
   useEffect(() => {
-    setSearchResult((current) => current?.generationDigest === generationDigest ? current : undefined);
+    setLocalSearchResult((current) => current?.generationDigest === generationDigest ? current : undefined);
     if (engineState.phase !== "ready") {
       searchController.current?.abort(new DOMException("The context generation changed.", "AbortError"));
-      setSearchStatus("idle");
+      setLocalSearchStatus("idle");
     }
   }, [engineState.phase, generationDigest]);
 
-  async function search() {
-    const normalized = query.trim();
+  async function search(candidate = query) {
+    const normalized = candidate.trim();
     if (!normalized || engineState.phase !== "ready") return;
     const sequence = ++searchSequence.current;
     searchController.current?.abort(new DOMException("A newer search started.", "AbortError"));
     const controller = new AbortController();
     searchController.current = controller;
-    setSearchStatus("searching");
-    setSearchError(undefined);
+    setLocalSearchStatus("searching");
+    setLocalSearchError(undefined);
     try {
       if (fabricDriver) {
         const experts: RoutedExpert[] = [];
@@ -77,15 +122,15 @@ export function ContextView({ workspace, entries, dimensions = 384, resultLimit 
       }
       const result = await runtime.search(normalized, { limit: resultLimit, signal: controller.signal });
       if (sequence !== searchSequence.current) return;
-      setSearchResult(result);
-      setSearchStatus("complete");
+      setLocalSearchResult(result);
+      setLocalSearchStatus("complete");
     } catch (error) {
       if (sequence !== searchSequence.current) return;
       if (isCancellation(error) || isContextSupersession(error)) {
-        setSearchStatus("cancelled");
+        setLocalSearchStatus("cancelled");
       } else {
-        setSearchStatus("idle");
-        setSearchError(error instanceof Error ? error.message : "Context search failed.");
+        setLocalSearchStatus("idle");
+        setLocalSearchError(error instanceof Error ? error.message : "Context search failed.");
       }
     } finally {
       if (searchController.current === controller) searchController.current = undefined;
@@ -97,31 +142,36 @@ export function ContextView({ workspace, entries, dimensions = 384, resultLimit 
     searchController.current?.abort(new DOMException("Search cancelled by the user.", "AbortError"));
     runtime.cancelSearch();
     searchController.current = undefined;
-    setSearchStatus("cancelled");
+    setLocalSearchStatus("cancelled");
   }
 
   const generation = engineState.generation;
   const stats = generation?.candidateStats;
   const chunks = generation?.chunkStats;
+  const indexTone = engineState.phase === "error"
+    ? "error"
+    : engineState.phase === "ready" && stats?.byStatus.failed
+      ? "caution"
+      : engineState.phase === "ready" ? "ready" : "neutral";
 
   async function changeEmbeddingMode(mode: EmbeddingMode) {
     if (mode === embeddingMode || embeddingChange === "changing") return;
     setEmbeddingChange("changing");
-    setSearchError(undefined);
+    setLocalSearchError(undefined);
     try {
       await runtime.setEmbeddingMode(mode);
       setEmbeddingMode(mode);
-      setSearchResult(undefined);
+      setLocalSearchResult(undefined);
     } catch (error) {
       setEmbeddingMode(runtime.getEmbeddingMode());
-      setSearchError(error instanceof Error ? error.message : "The local embedding engine could not be changed.");
+      setLocalSearchError(error instanceof Error ? error.message : "The local embedding engine could not be changed.");
     } finally {
       setEmbeddingChange("idle");
     }
   }
 
   return (
-    <section class="client-context-view" aria-labelledby="client-context-title">
+    <section class="client-context-view" aria-labelledby={embedded ? undefined : "client-context-title"} aria-label={embedded ? "Workspace context index" : undefined}>
       {!embedded ? <header class="client-context-heading">
         <div>
           <span>On-device context index</span>
@@ -134,31 +184,94 @@ export function ContextView({ workspace, entries, dimensions = 384, resultLimit 
         </div>
       </header> : null}
 
-      <section class="embedding-engine-card" aria-labelledby="embedding-engine-title">
-        <div>
-          <span>Private embedding engine</span>
-          <h2 id="embedding-engine-title">{embeddingMode === "semantic" ? "Semantic transformer" : "Deterministic bootstrap"}</h2>
-          <p>{embeddingMode === "semantic"
-            ? "The pinned model executes in an isolated browser worker. WebGPU is preferred; WASM is the automatic fallback. Public model artifacts may be cached, but workspace text and vectors remain page-memory only."
-            : "Hash vectors keep retrieval immediately available without a model download. They are deterministic test/bootstrap signals, not semantic understanding."}</p>
+      {/*
+        * One status row where 470px of preamble used to stand: an embedding
+        * card (eyebrow + H2 + three-line paragraph), a five-cell metric strip,
+        * a card restating the search field 1,600px above it, and a shared-
+        * runtime note — five eyebrow/heading pairs before a single indexed
+        * file appeared. Every one of those strings is still here; the metrics
+        * and the two embedding paragraphs are one gesture away, and the state
+        * word, the counts and the engine's own live status never were.
+        */}
+      <div class="context-index-status" aria-label="Context index status">
+        <div class="context-index-status__row">
+          <button
+            class="context-index-status__toggle"
+            type="button"
+            aria-expanded={statusExpanded}
+            aria-label={`${phaseLabel(engineState.phase, Boolean(stats?.byStatus.failed))}. ${indexSummaryText(stats?.total ?? entries.length, chunks?.total ?? 0, chunks?.vectorBytes, embeddingMode)}. ${statusExpanded ? "Hide" : "Show"} the five index metrics, the embedding engine description, and the shared-runtime note.`}
+            onClick={() => setStatusExpanded((value) => !value)}
+          >
+            <span class={`context-index-status__dot ${indexTone}`} aria-hidden="true" />
+            <strong>{phaseLabel(engineState.phase, Boolean(stats?.byStatus.failed))}</strong>
+            {/* The counts win the width over the affordance's own label: the
+                chevron is the affordance, and its accessible name states both
+                the counts and exactly what the panel holds. */}
+            <span>{indexSummaryText(stats?.total ?? entries.length, chunks?.total ?? 0, chunks?.vectorBytes, embeddingMode)}</span>
+            <i class="context-index-status__chevron" aria-hidden="true" />
+          </button>
+          <p class="embedding-engine-state" role="status" aria-live="polite">
+            <span class={semanticTone(embeddingMode, semanticState)} />
+            {embeddingStatus(embeddingMode, semanticState, embeddingChange)}
+            {semanticState?.loadedBytes !== undefined ? <small>{formatBytes(semanticState.loadedBytes)}{semanticState.totalBytes ? ` / ${formatBytes(semanticState.totalBytes)}` : ""}</small> : null}
+          </p>
+          <div class="embedding-engine-actions" role="group" aria-label="Embedding engine">
+            <button type="button" class={embeddingMode === "bootstrap" ? "selected" : ""} aria-pressed={embeddingMode === "bootstrap"} disabled={embeddingChange === "changing"} title="Hash vectors keep retrieval immediately available without a model download. They are deterministic test/bootstrap signals, not semantic understanding." onClick={() => void changeEmbeddingMode("bootstrap")}>Bootstrap</button>
+            <button type="button" class={embeddingMode === "semantic" ? "selected" : ""} aria-pressed={embeddingMode === "semantic"} disabled={embeddingChange === "changing"} title="The pinned model executes in an isolated browser worker. WebGPU is preferred; WASM is the automatic fallback." onClick={() => void changeEmbeddingMode("semantic")}>Local semantic</button>
+          </div>
         </div>
-        <div class="embedding-engine-actions" role="group" aria-label="Embedding engine">
-          <button type="button" class={embeddingMode === "bootstrap" ? "selected" : ""} aria-pressed={embeddingMode === "bootstrap"} disabled={embeddingChange === "changing"} onClick={() => void changeEmbeddingMode("bootstrap")}>Bootstrap</button>
-          <button type="button" class={embeddingMode === "semantic" ? "selected" : ""} aria-pressed={embeddingMode === "semantic"} disabled={embeddingChange === "changing"} onClick={() => void changeEmbeddingMode("semantic")}>Local semantic</button>
-        </div>
-        <div class="embedding-engine-state" role="status" aria-live="polite">
-          <span class={semanticTone(embeddingMode, semanticState)} />
-          {embeddingStatus(embeddingMode, semanticState, embeddingChange)}
-          {semanticState?.loadedBytes !== undefined ? <small>{formatBytes(semanticState.loadedBytes)}{semanticState.totalBytes ? ` / ${formatBytes(semanticState.totalBytes)}` : ""}</small> : null}
-        </div>
-      </section>
 
-      <div class="context-live-strip" aria-label="Context index status">
-        <ContextMetric label="State" value={phaseLabel(engineState.phase, Boolean(stats?.byStatus.failed))} detail={engineState.phase === "refreshing" ? "staging privately" : "memory-only"} tone={engineState.phase === "error" ? "error" : engineState.phase === "ready" && stats?.byStatus.failed ? "caution" : engineState.phase === "ready" ? "ready" : "neutral"} />
-        <ContextMetric label="Candidates" value={formatInteger(stats?.total ?? entries.length)} detail={stats ? `${formatBytes(stats.indexedBytes)} indexed` : `${formatInteger(entries.length)} observed`} />
-        <ContextMetric label="Chunks" value={formatInteger(chunks?.total ?? 0)} detail={chunks ? `${formatInteger(chunks.documents)} documents` : "awaiting refresh"} />
-        <ContextMetric label="Refresh" value={generation ? formatMilliseconds(generation.timing.totalMs) : "—"} detail={generation ? `${formatMilliseconds(generation.timing.indexingMs)} indexing` : "no completed run"} />
-        <ContextMetric label="Vector memory" value={chunks ? formatBytes(chunks.vectorBytes) : "—"} detail={generation ? `${generation.lineage.embeddingDimensions} dimensions` : "not allocated"} />
+        {/*
+          * One line where a 76px card stood.
+          *
+          * `SHARED MEMORY QUERY / Waiting for a query above` existed only to
+          * report that the field 1,600px up the page was being followed, and
+          * then said it a second time in a sentence underneath. The sentence
+          * is the part that carries a fact, so the sentence is what survives;
+          * when a query is running it names the query it is bound to, which
+          * the label pair never did.
+          */}
+        {searchQuery !== undefined ? (
+          <p
+            class="context-shared-status"
+            role="status"
+            aria-live="polite"
+            /* The label pair this replaced carried the only accessible name for
+               the shared-query binding. Keeping the name on the sentence that
+               replaced it means the region is still addressable by assistive
+               technology and by tests, rather than only findable by its text. */
+            aria-label="Shared Memory query in the workspace index"
+          >
+            {query.trim() ? <b>Following “{query.trim().slice(0, 160)}”</b> : null}
+            {managedSearchStatusText(query, engineState.phase, searchStatus, searchResult)}
+          </p>
+        ) : null}
+        {searchQuery !== undefined && searchError ? <p class="context-search-error" role="alert">{searchError}</p> : null}
+
+        {/*
+          * The bootstrap caveat is promoted from a paragraph inside a card to
+          * a visible caution the moment it is load-bearing: hits are on screen
+          * and they were ranked by hash vectors, not by meaning.
+          */}
+        {embeddingMode === "bootstrap" && searchResult?.hits.length ? (
+          <p class="context-bootstrap-caution" role="note">These results were ranked with deterministic test/bootstrap signals, not semantic understanding.</p>
+        ) : null}
+
+        {statusExpanded ? (
+          <div class="context-index-status__detail">
+            <div class="context-live-strip">
+              <ContextMetric label="State" value={phaseLabel(engineState.phase, Boolean(stats?.byStatus.failed))} detail={engineState.phase === "refreshing" ? "staging privately" : "memory-only"} tone={engineState.phase === "error" ? "error" : engineState.phase === "ready" && stats?.byStatus.failed ? "caution" : engineState.phase === "ready" ? "ready" : "neutral"} />
+              <ContextMetric label="Candidates" value={formatInteger(stats?.total ?? entries.length)} detail={stats ? `${formatBytes(stats.indexedBytes)} indexed` : `${formatInteger(entries.length)} observed`} />
+              <ContextMetric label="Chunks" value={formatInteger(chunks?.total ?? 0)} detail={chunks ? `${formatInteger(chunks.documents)} documents` : "awaiting refresh"} />
+              <ContextMetric label="Refresh" value={generation ? formatMilliseconds(generation.timing.totalMs) : "—"} detail={generation ? `${formatMilliseconds(generation.timing.indexingMs)} indexing` : "no completed run"} />
+              <ContextMetric label="Vector memory" value={chunks ? formatBytes(chunks.vectorBytes) : "—"} detail={generation ? `${generation.lineage.embeddingDimensions} dimensions` : "not allocated"} />
+            </div>
+            <p class="context-engine-note"><strong>Private embedding engine · {embeddingMode === "semantic" ? "Semantic transformer" : "Deterministic bootstrap"}.</strong> {embeddingMode === "semantic"
+              ? "The pinned model executes in an isolated browser worker. WebGPU is preferred; WASM is the automatic fallback. Public model artifacts may be cached, but workspace text and vectors remain page-memory only."
+              : "Hash vectors keep retrieval immediately available without a model download. They are deterministic test/bootstrap signals, not semantic understanding."}</p>
+            <p class="context-injection-disclosure" role="note"><strong>Shared runtime.</strong> This screen, the search_context tool, and automatic turn grounding use the same memory-only generation. Selected turn context is bounded and committed to the session journal with source digests.</p>
+          </div>
+        ) : null}
       </div>
 
       {engineState.phase === "refreshing" ? (
@@ -168,31 +281,32 @@ export function ContextView({ workspace, entries, dimensions = 384, resultLimit 
         <p class="context-engine-error" role="alert"><Icon name="warning" size={17} /><span><strong>{engineState.error.code}</strong>{engineState.error.message}</span></p>
       ) : null}
 
-      <form class="context-search" role="search" onSubmit={(event) => { event.preventDefault(); void search(); }}>
-        <label for="client-context-query"><span>Hybrid local search</span><small>72% deterministic dense score · 28% lexical overlap</small></label>
-        <div>
-          <Icon name="context" size={18} />
-          <input
-            id="client-context-query"
-            type="search"
-            value={query}
-            autoComplete="off"
-            spellcheck={false}
-            placeholder={engineState.phase === "ready" ? "Search this exact workspace generation…" : "Index refresh must complete first…"}
-            disabled={engineState.phase !== "ready" || searchStatus === "searching"}
-            onInput={(event) => setQuery(event.currentTarget.value)}
-          />
-          {searchStatus === "searching" ? (
-            <button type="button" onClick={cancelSearch}><Icon name="stop" size={15} />Cancel</button>
-          ) : (
-            <button class="primary" type="submit" disabled={!query.trim() || engineState.phase !== "ready"}><Icon name="context" size={15} />Search</button>
-          )}
-        </div>
-        <p class="context-search-status" role="status" aria-live="polite">{searchStatusText(searchStatus, searchResult)}</p>
-        {searchError ? <p class="context-search-error" role="alert">{searchError}</p> : null}
-      </form>
+      {searchQuery !== undefined ? null : (
+        <form class="context-search" role="search" onSubmit={(event) => { event.preventDefault(); void search(); }}>
+          <label for="client-context-query"><span>Hybrid local search</span><small>72% deterministic dense score · 28% lexical overlap</small></label>
+          <div>
+            <Icon name="context" size={18} />
+            <input
+              id="client-context-query"
+              type="search"
+              value={query}
+              autoComplete="off"
+              spellcheck={false}
+              placeholder={engineState.phase === "ready" ? "Search this exact workspace generation…" : "Index refresh must complete first…"}
+              disabled={engineState.phase !== "ready" || searchStatus === "searching"}
+              onInput={(event) => setDraftQuery(event.currentTarget.value)}
+            />
+            {searchStatus === "searching" ? (
+              <button type="button" onClick={cancelSearch}><Icon name="stop" size={15} />Cancel</button>
+            ) : (
+              <button class="primary" type="submit" disabled={!query.trim() || engineState.phase !== "ready"}><Icon name="context" size={15} />Search</button>
+            )}
+          </div>
+          <p class="context-search-status" role="status" aria-live="polite">{searchStatusText(searchStatus, searchResult)}</p>
+          {searchError ? <p class="context-search-error" role="alert">{searchError}</p> : null}
+        </form>
+      )}
 
-      <p class="context-injection-disclosure" role="note"><strong>Shared runtime.</strong> This screen, the search_context tool, and automatic turn grounding use the same memory-only generation. Selected turn context is bounded and committed to the session journal with source digests.</p>
       {fabricDriver ? <section class="context-fabric-results" aria-labelledby="context-fabric-title"><div class="context-surface-heading"><div><span>Encrypted segmented routing</span><h2 id="context-fabric-title">Selected context experts</h2></div><span>{fabric.commitment ? `${formatBytes(fabric.commitment.bytesRead)} streamed` : `${fabric.experts.length} routed`}</span></div>{fabric.warnings.map((warning) => <p class="context-recall-warning" role="alert"><Icon name="warning" size={16} />Recall reduced · {warning}</p>)}<div>{fabric.experts.map((expert) => <article key={expert.expertId}><span>{expert.kind}</span><strong>{expert.label}</strong><small>{expert.score.toFixed(3)} relevance · {formatBytes(expert.bytes)} budget</small></article>)}</div>{fabric.commitment ? <details><summary>Retrieval commitment</summary><code>{fabric.commitment.resultDigest}</code><small> generation {fabric.commitment.generation} · {fabric.commitment.complete ? "complete" : "incomplete"}</small></details> : null}</section> : null}
       {stats?.byStatus.failed ? <p class="context-recall-warning" role="alert"><Icon name="warning" size={16} /><span><strong>Recall reduced.</strong> {stats.byStatus.failed} source{stats.byStatus.failed === 1 ? "" : "s"} could not be indexed for this generation.</span></p> : null}
 
@@ -204,28 +318,26 @@ export function ContextView({ workspace, entries, dimensions = 384, resultLimit 
           </div>
           {generation?.candidates.length ? (
             <div class="context-candidate-list">
-              {generation.candidates.map((candidate) => (
-                <article class="context-candidate" key={`${candidate.path}:${candidate.revision}`}>
-                  <div class="context-candidate-title">
-                    <span class={`context-index-state ${candidate.status}`}>{candidate.status}</span>
-                    <div><strong>{displayPath(candidate.path)}</strong><small>{candidate.contentType ?? "unsupported"} · {formatBytes(candidate.size)} · {candidate.chunks} chunk{candidate.chunks === 1 ? "" : "s"}</small></div>
-                  </div>
-                  <p>{candidate.reason}</p>
-                  <dl class="context-exact-record">
-                    <div><dt>Revision</dt><dd><code>{candidate.revision}</code></dd></div>
-                    <div><dt>Content digest</dt><dd><code>{candidate.contentDigest ?? "not produced"}</code></dd></div>
-                  </dl>
-                  {candidate.chunkIds.length ? (
-                    <details class="candidate-chunks">
-                      <summary>{candidate.chunkIds.length} exact chunk identifier{candidate.chunkIds.length === 1 ? "" : "s"}</summary>
-                      <ol>{candidate.chunkIds.map((chunkId) => <li key={chunkId}><code>{chunkId}</code></li>)}</ol>
-                    </details>
-                  ) : null}
-                </article>
+              {orderCandidates(generation.candidates).map((candidate) => (
+                <ContextCandidateRow
+                  key={`${candidate.path}:${candidate.revision}`}
+                  candidate={candidate}
+                  generationDigest={generation.lineage.generationDigest}
+                  onOpenFile={onOpenFile}
+                  renderProvenance={renderProvenance}
+                />
               ))}
             </div>
           ) : (
-            <ContextEmpty icon={engineState.phase === "error" ? "warning" : "context"} title={entries.length ? "Index generation pending" : "No workspace files"} body={entries.length ? "The current revision set has not passed staging validation yet." : "Add a supported text or code file to surface the first candidate."} />
+            <ContextEmpty
+              icon={engineState.phase === "error" ? "warning" : "context"}
+              title={entries.length ? "Index generation pending" : "No workspace files"}
+              body={entries.length ? "The current revision set has not passed staging validation yet." : "Add a supported text or code file to surface the first candidate."}
+              /* Staging is the engine's own work; offering a button there would
+                 name an action the reader does not have. Creating a file is an
+                 action they do have, and the workspace is where it is taken. */
+              {...(entries.length ? {} : { action: { label: "Open the workspace", onAct: () => { window.location.hash = "#workspace"; } } })}
+            />
           )}
         </section>
 
@@ -237,35 +349,31 @@ export function ContextView({ workspace, entries, dimensions = 384, resultLimit 
           {searchResult?.hits.length ? (
             <div class="context-hit-list">
               {searchResult.hits.map((hit, index) => (
-                <article class="context-hit" key={hit.chunkId}>
-                  <div class="context-hit-heading"><span>{String(index + 1).padStart(2, "0")}</span><div><strong>{displayPath(hit.path)}</strong><small>chunk {hit.chunkIndex} · hybrid {formatScore(hit.score)}</small></div></div>
-                  <p>{hit.text}</p>
-                  <div class="context-human-route"><span>{humanKind(hit.path)}</span><strong>{whyMatched(hit.denseScore, hit.lexicalScore)}</strong><small>{formatBytes(new TextEncoder().encode(hit.text).byteLength)} retrieved</small></div>
-                  <div class="context-score-grid" aria-label="Hybrid score components">
-                    <span><small>Dense</small><strong>{formatScore(hit.denseScore)}</strong></span>
-                    <span><small>Lexical</small><strong>{formatScore(hit.lexicalScore)}</strong></span>
-                    <span><small>Combined</small><strong>{formatScore(hit.score)}</strong></span>
-                  </div>
-                  <dl class="context-exact-record">
-                    <div><dt>Revision</dt><dd><code>{hit.revision}</code></dd></div>
-                    <div><dt>Content digest</dt><dd><code>{hit.contentDigest}</code></dd></div>
-                    <div><dt>Chunk ID</dt><dd><code>{hit.chunkId}</code></dd></div>
-                  </dl>
-                </article>
+                <ContextHitRow
+                  key={hit.chunkId}
+                  hit={hit}
+                  rank={index + 1}
+                  generationDigest={searchResult.generationDigest}
+                  onOpenFile={onOpenFile}
+                  renderProvenance={renderProvenance}
+                />
               ))}
             </div>
           ) : searchResult ? (
-            <ContextEmpty icon="context" title="No local matches" body="The active flat index returned no candidates for this generation and result limit." />
+            <ContextEmpty
+              icon="context"
+              title="No local matches"
+              body={`The active flat index returned no candidates for this generation and result limit. ${candidateSummary(stats?.byStatus ?? {})} in this generation.`}
+              action={{ label: "Change the query", onAct: () => focusContextQuery(embedded) }}
+            />
           ) : (
-            <ContextEmpty icon="context" title="Search the active generation" body="Results include exact file revisions, content digests, chunk identifiers, and inspectable dense/lexical scores." />
+            <ContextEmpty
+              icon="context"
+              title="Nothing searched yet"
+              body="Results include exact file revisions, content digests, chunk identifiers, and inspectable dense/lexical scores."
+              action={{ label: embedded ? "Search memory" : "Search the active generation", onAct: () => focusContextQuery(embedded) }}
+            />
           )}
-          {searchResult ? (
-            <dl class="context-query-lineage">
-              <div><dt>Query digest</dt><dd><code>{searchResult.queryDigest}</code></dd></div>
-              <div><dt>Generation</dt><dd><code>{searchResult.generationDigest}</code></dd></div>
-              <div><dt>Completed</dt><dd><time dateTime={searchResult.completedAt}>{searchResult.completedAt}</time></dd></div>
-            </dl>
-          ) : null}
         </section>
       </div>
 
@@ -273,6 +381,14 @@ export function ContextView({ workspace, entries, dimensions = 384, resultLimit 
         <section class="context-lineage" aria-labelledby="context-lineage-title">
           <div class="context-surface-heading"><div><span>Rebuildable local materialization</span><h2 id="context-lineage-title">Index lineage</h2></div><span>Nothing persisted</span></div>
           <dl>
+            {/* The query's own lineage folds in here rather than repeating the
+                generation digest once per hit and again beneath the hit list:
+                these are generation-scoped facts, and this panel is the one
+                canonical owner of them. */}
+            {searchResult ? <>
+              <div><dt>Query digest</dt><dd><code>{searchResult.queryDigest}</code></dd></div>
+              <div><dt>Query completed</dt><dd><time dateTime={searchResult.completedAt}>{searchResult.completedAt}</time></dd></div>
+            </> : null}
             <div><dt>Generation digest</dt><dd><code>{generation.lineage.generationDigest}</code></dd></div>
             <div><dt>Workspace snapshot</dt><dd><code>{generation.lineage.workspaceSnapshotDigest}</code></dd></div>
             <div><dt>Embedding provider</dt><dd><code>{generation.lineage.embeddingProvider}</code> · {generation.lineage.embeddingDimensions} dimensions</dd></div>
@@ -288,8 +404,151 @@ export function ContextView({ workspace, entries, dimensions = 384, resultLimit 
   );
 }
 
+/*
+ * The four row shapes, constructed locally.
+ *
+ * Same boundary as `renderProvenance`: these are four one-line data
+ * constructors, and importing them would re-create the runtime edge the prop
+ * exists to avoid. The union they build is the shared type, so a shape that
+ * drifts from `provenance-chip.tsx` fails the typecheck rather than the eye.
+ */
+const factRow = (label: string, value: string): ProvenanceRow => Object.freeze({ kind: "fact", label, value });
+const digestRow = (label: string, value: string): ProvenanceRow => Object.freeze({ kind: "digest", label, value });
+const inheritedRow = (label: string, value: string, scope: string): ProvenanceRow => Object.freeze({ kind: "inherited", label, value, scope });
+const noteRow = (text: string, tone: "neutral" | "caution" = "neutral"): ProvenanceRow => Object.freeze({ kind: "note", text, tone });
+
 function ContextMetric({ label, value, detail, tone = "neutral" }: { label: string; value: string; detail: string; tone?: "neutral" | "ready" | "error" | "caution" }) {
   return <div class={`context-metric ${tone}`}><span>{label}</span><strong>{value}</strong><small>{detail}</small></div>;
+}
+
+/**
+ * The four counts the status row carries, in one sentence.
+ *
+ * They are the same numbers the five metric cards hold; the cards keep their
+ * captions and their tone states one gesture away. What the row buys is that
+ * "is this thing searchable, over how much, with which engine" reads in one
+ * line instead of in a 92px grid under a 175px explanatory card.
+ */
+export function indexSummaryText(sources: number, chunkCount: number, vectorBytes: number | undefined, mode: EmbeddingMode): string {
+  const parts = [
+    `${formatInteger(sources)} source${sources === 1 ? "" : "s"}`,
+    `${formatInteger(chunkCount)} chunk${chunkCount === 1 ? "" : "s"}`,
+  ];
+  if (vectorBytes !== undefined) parts.push(formatBytes(vectorBytes));
+  parts.push(mode === "semantic" ? "local semantic embeddings" : "bootstrap embeddings");
+  return parts.join(" · ");
+}
+
+/**
+ * Degraded candidates float to the top.
+ *
+ * A `failed`, `too-large` or `unsupported` row is the one a person has to act
+ * on, and it was formatted identically to the healthy ones and sorted by path,
+ * so it could sit anywhere in a list of hundreds. Stable within each band.
+ */
+export function orderCandidates(candidates: readonly ClientContextCandidate[]): readonly ClientContextCandidate[] {
+  return Object.freeze([...candidates].sort((left, right) => candidateRank(left) - candidateRank(right)));
+}
+
+function candidateRank(candidate: ClientContextCandidate): number {
+  if (candidate.status === "failed") return 0;
+  if (candidate.status === "too-large" || candidate.status === "unsupported") return 1;
+  return 2;
+}
+
+/**
+ * One 44px row per source, with its lineage filed rather than shouted.
+ *
+ * Three 100-byte markdown files used to consume 531px of stacked cards, each
+ * printing a 36-character revision UUID and a 51-character sha256 in full,
+ * plus a separate 28px disclosure for its chunk identifiers, plus the same
+ * seven-word reason line once per healthy row.
+ */
+function ContextCandidateRow({ candidate, generationDigest, onOpenFile, renderProvenance }: Readonly<{
+  candidate: ClientContextCandidate;
+  generationDigest: string;
+  onOpenFile?: (path: string) => void;
+  renderProvenance: ContextViewProps["renderProvenance"];
+}>) {
+  const degraded = candidate.status !== "indexed";
+  const rows: ProvenanceRow[] = [
+    noteRow(candidate.reason, degraded ? "caution" : "neutral"),
+    // The row already prints the workspace-relative path; the chip carries the
+    // absolute one by reference rather than restating it.
+    inheritedRow("Path", candidate.path, "this row's name"),
+    factRow("Content type", candidate.contentType ?? "unsupported"),
+    factRow("Size", formatBytes(candidate.size)),
+    digestRow("Revision", candidate.revision),
+    digestRow("Content digest", candidate.contentDigest ?? "not produced"),
+    ...candidate.chunkIds.map((chunkId, index) => digestRow(`Chunk ${index}`, chunkId)),
+    inheritedRow("Generation", generationDigest, "this index generation"),
+  ];
+  return (
+    <article class="context-candidate" data-status={candidate.status}>
+      <div class="context-candidate__row">
+        <span class={`context-index-state ${candidate.status}`}>{candidate.status}</span>
+        <strong>{displayPath(candidate.path)}</strong>
+        <small>{candidate.contentType ?? "unsupported"} · {formatBytes(candidate.size)} · {candidate.chunks} chunk{candidate.chunks === 1 ? "" : "s"}</small>
+        {onOpenFile ? <button class="context-open" type="button" onClick={() => onOpenFile(candidate.path)}>Open in editor</button> : null}
+        {renderProvenance(workspaceBaseName(candidate.path), rows)}
+      </div>
+      {/* A degraded row states its reason where it is, at rest. A healthy row's
+          reason is the same seven words on every line, so it files itself. */}
+      {degraded ? <p>{candidate.reason}</p> : null}
+    </article>
+  );
+}
+
+/** The characters a hit shows before it offers to show the whole chunk. */
+export const CONTEXT_CHUNK_PREVIEW_CHARACTERS = 420;
+
+/**
+ * One hit: rank, source, why it matched, the chunk, its lineage.
+ *
+ * A single measured hit was 627px tall — an unclamped chunk, a three-cell score
+ * grid, a three-row exact-record list and a three-row query-lineage list, with
+ * `whyMatched()`, the best sentence on the route, buried in the middle at
+ * metadata weight. The sentence leads now; the scores and digests are in the
+ * chip, where they are also copyable for the first time.
+ */
+function ContextHitRow({ hit, rank, generationDigest, onOpenFile, renderProvenance }: Readonly<{
+  hit: ClientContextSearchHit;
+  rank: number;
+  generationDigest: string;
+  onOpenFile?: (path: string) => void;
+  renderProvenance: ContextViewProps["renderProvenance"];
+}>) {
+  const [expanded, setExpanded] = useState(false);
+  const bytes = new TextEncoder().encode(hit.text).byteLength;
+  const rows: ProvenanceRow[] = [
+    noteRow("72% deterministic dense score · 28% lexical overlap. Hybrid score within this corpus only; never comparable across groups."),
+    factRow("Scores", `Dense ${formatScore(hit.denseScore)} · Lexical ${formatScore(hit.lexicalScore)} · Combined ${formatScore(hit.score)}`),
+    inheritedRow("Path", hit.path, "this hit's name"),
+    factRow("Chunk index", String(hit.chunkIndex)),
+    factRow("Retrieved", formatBytes(bytes)),
+    digestRow("Revision", hit.revision),
+    digestRow("Content digest", hit.contentDigest),
+    digestRow("Chunk id", hit.chunkId),
+    inheritedRow("Generation", generationDigest, "the Index lineage panel"),
+  ];
+  return (
+    <article class="context-hit">
+      <div class="context-hit-heading">
+        <span>{String(rank).padStart(2, "0")}</span>
+        <strong>{displayPath(hit.path)}</strong>
+        <small>chunk {hit.chunkIndex} · hybrid {formatScore(hit.score)} · {formatBytes(bytes)} retrieved</small>
+        {onOpenFile ? <button class="context-open" type="button" onClick={() => onOpenFile(hit.path)}>Open in editor</button> : null}
+        {renderProvenance(workspaceBaseName(hit.path), rows)}
+      </div>
+      <p class="context-hit__why"><span>{humanKind(hit.path)}</span>{whyMatched(hit.denseScore, hit.lexicalScore)}</p>
+      <p class="context-hit__chunk" data-expanded={expanded ? "true" : "false"}>{hit.text}</p>
+      {hit.text.length > CONTEXT_CHUNK_PREVIEW_CHARACTERS ? (
+        <button class="context-hit__more" type="button" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}>
+          {expanded ? "Show less" : `Show the whole chunk (${formatBytes(bytes)})`}
+        </button>
+      ) : null}
+    </article>
+  );
 }
 
 function humanKind(path: string): string {
@@ -305,8 +564,44 @@ function whyMatched(dense: number, lexical: number): string {
   return "Matched both words and local semantic signals.";
 }
 
-function ContextEmpty({ icon, title, body }: { icon: "context" | "warning"; title: string; body: string }) {
-  return <div class="context-empty"><Icon name={icon} size={24} /><strong>{title}</strong><p>{body}</p></div>;
+/**
+ * An empty panel that ends in something to press.
+ *
+ * Every state on this route was accurate and terminal: "Search the active
+ * generation" describes what would happen if the reader found the field, which
+ * on the embedded surface is 1,600px above and on the standalone surface is
+ * below the panel doing the describing. The action is optional because a state
+ * with no honest action — an index that has not finished staging — must not
+ * grow a button that pretends otherwise.
+ */
+function ContextEmpty({ icon, title, body, action }: {
+  icon: "context" | "warning";
+  title: string;
+  body: string;
+  action?: Readonly<{ label: string; onAct: () => void }>;
+}) {
+  return (
+    <div class="context-empty">
+      <Icon name={icon} size={24} />
+      <strong>{title}</strong>
+      <p>{body}</p>
+      {action ? <button class="context-empty__action" type="button" onClick={action.onAct}>{action.label}</button> : null}
+    </div>
+  );
+}
+
+/**
+ * Puts the caret in the field this panel is describing.
+ *
+ * The embedded index is driven by the Memory route's own search box, so the
+ * only honest destination is that box — not a second field, which is the thing
+ * this surface deliberately does not have.
+ */
+function focusContextQuery(embedded: boolean): void {
+  const field = document.getElementById(embedded ? "memory-query-input" : "client-context-query");
+  if (!(field instanceof HTMLInputElement)) return;
+  field.scrollIntoView({ block: "center" });
+  field.focus();
 }
 
 function phaseLabel(phase: ClientContextEngineState["phase"], degraded: boolean): string {
@@ -331,8 +626,42 @@ function searchStatusText(status: "idle" | "searching" | "cancelled" | "complete
   return "Search is cancellable and automatically invalidated by a workspace refresh.";
 }
 
+function sharedContextResult(state: FederatedMemorySearchState | undefined, query: string, generationDigest?: string): ClientContextSearchResult | undefined {
+  const result = state?.result;
+  if (!result || state.query !== query.trim()) return undefined;
+  const workspace = result.groups[2];
+  if (!generationDigest || workspace.generationDigest !== generationDigest) return undefined;
+  return {
+    query: result.query,
+    queryDigest: result.queryDigest,
+    generationDigest: workspace.generationDigest,
+    workspaceSnapshotDigest: workspace.workspaceSnapshotDigest,
+    durationMs: workspace.durationMs,
+    completedAt: workspace.completedAt,
+    hits: workspace.hits,
+  };
+}
+
+function managedSearchStatusText(
+  query: string,
+  phase: ClientContextEngineState["phase"],
+  status: "idle" | "searching" | "cancelled" | "complete",
+  result?: ClientContextSearchResult,
+): string {
+  if (!query.trim()) return "The index stays ready while the shared query is empty.";
+  if (phase !== "ready") return "The query will run when the current workspace generation becomes searchable.";
+  if (status === "searching") return "Searching the active in-memory generation with the query above…";
+  if (status === "complete" && result) return `${result.hits.length} index result${result.hits.length === 1 ? "" : "s"} sealed to ${result.generationDigest}.`;
+  return "The shared query is ready to run against this exact workspace generation.";
+}
+
 function isCancellation(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
+}
+
+/** The file's own name, for a chip heading that has to fit beside a row. */
+function workspaceBaseName(path: string): string {
+  return path.slice(path.lastIndexOf("/") + 1) || path;
 }
 
 function displayPath(path: string): string {

@@ -1,0 +1,452 @@
+/*
+ * The Proof route.
+ *
+ * One rule governs this sheet: the answer to "is this turn proven" is a single
+ * object, and every other element on the page is subordinate to it. The route
+ * previously spent 338px — 37.6% of a 900px viewport — on an eyebrow, a 47px
+ * serif H1, a paragraph, a tab row and a 568x110 card carrying one word, and
+ * then printed nine verdict-shaped statements below the fold. Everything those
+ * elements said is still on the page; only one of them is a verdict.
+ */
+
+.proof-view {
+  display: grid;
+  gap: var(--sp-3);
+  align-content: start;
+  min-width: 0;
+}
+
+.proof-surface-switch {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-4);
+  align-items: center;
+  justify-content: space-between;
+}
+
+.proof-view .proof-surface-tabs {
+  margin: 0;
+}
+
+/*
+ * The route's own slab, made small without moving a word off the screen.
+ *
+ * At document density the eyebrow takes a whole flex line above a 28px serif
+ * title and the sentence renders at 13px below it — 338px, 37.6% of a 900px
+ * viewport, before the first proof fact. The eyebrow joins the title's row as
+ * the label it is, and the sentence drops one step on the ramp. Both strings
+ * are unchanged and both are still visible at rest; only their altitude moved.
+ */
+.proof-view .route-header {
+  gap: var(--sp-1);
+  padding-block: var(--sp-1);
+}
+
+.proof-view .route-header__eyebrow {
+  flex-basis: auto;
+  order: 2;
+  font-size: var(--fs-micro);
+}
+
+/* No 68ch cap here: the sentence fits one line at desktop widths, and the
+   second line it was wrapping onto cost 20px above the verdict. */
+.proof-view .route-header__description {
+  max-width: none;
+  font-size: var(--fs-caption);
+}
+
+/* `:not([hidden])` is load-bearing: a class selector outranks the UA's
+   `[hidden] { display: none }`, so declaring `display` unqualified would leave
+   the inactive tabpanel laid out — measured at 290px of skeleton above the
+   verdict on the panel the user actually selected. */
+.proof-surface-panel:not([hidden]) {
+  display: grid;
+  gap: var(--sp-4);
+  align-content: start;
+  min-width: 0;
+}
+
+/* ── The one verdict ─────────────────────────────────────────────────── */
+
+.proof-verdict {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--sp-3) var(--sp-4);
+  align-items: start;
+  padding: var(--sp-4);
+  border: 1px solid var(--line-control);
+  border-radius: var(--radius-panel);
+  background: var(--surface-raised);
+  min-width: 0;
+}
+
+.proof-verdict__claims {
+  grid-row: 1;
+  grid-column: 1;
+}
+
+.proof-verdict__claims > .popover__trigger {
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  border-radius: var(--radius-control);
+}
+
+.proof-verdict__body {
+  grid-row: 1;
+  grid-column: 2;
+  display: grid;
+  gap: var(--sp-1);
+  align-content: center;
+  min-width: 0;
+}
+
+.proof-verdict__body:empty { display: none; }
+
+.proof-verdict__context {
+  margin: 0;
+  font-size: var(--fs-meta);
+  color: var(--ink-muted);
+}
+
+.proof-verdict__summary {
+  margin: 0;
+  font-size: var(--fs-meta);
+  color: var(--ink-faint);
+}
+
+.proof-verdict__modifier {
+  display: flex;
+  gap: var(--sp-1);
+  align-items: center;
+  margin: 0;
+  font-size: var(--fs-meta);
+  color: var(--v-caution);
+}
+
+/* The verdict's own colour is carried by the hero seal and the state word;
+   the panel edge only echoes it, never replaces it. */
+.proof-verdict[data-state="failed"] { border-color: color-mix(in srgb, var(--v-failed) 46%, transparent); }
+.proof-verdict[data-state="proven"],
+.proof-verdict[data-state="partly-proven"] { border-color: color-mix(in srgb, var(--v-verified) 46%, transparent); }
+.proof-verdict[data-state="evidence-blocked"] { border-color: color-mix(in srgb, var(--v-caution) 46%, transparent); }
+
+/* ── The three counts, which are also the legend ─────────────────────── */
+
+/*
+ * One element does both jobs on purpose. A count with no definition is a
+ * number a reader cannot act on; a legend with no count is a glossary nobody
+ * reads. Together they are the persistent legend §4.4 requires, containing
+ * exactly the state words the surfaces emit and nothing else.
+ */
+.proof-counts {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 0;
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  overflow: clip;
+}
+
+.proof-counts > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0 var(--sp-2);
+  align-items: baseline;
+  padding: var(--sp-3) var(--sp-4);
+  border-left: 1px solid var(--line);
+}
+
+.proof-counts > div:first-child { border-left: 0; }
+
+.proof-counts dt {
+  display: flex;
+  gap: var(--sp-1);
+  align-items: center;
+  font: var(--fw-strong) var(--fs-micro) / 1.2 var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: .11em;
+  color: var(--ink-muted);
+}
+
+.proof-counts dd {
+  margin: 0;
+  font: var(--fw-title) var(--fs-title) / 1 var(--font-body);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+.proof-counts small {
+  grid-column: 1 / -1;
+  margin-top: var(--sp-1);
+  font-size: var(--fs-caption);
+  line-height: 1.4;
+  color: var(--ink-faint);
+}
+
+/* ── The two ceilings ────────────────────────────────────────────────── */
+
+/*
+ * Never a disclosure. This block is the reason the headline is not green, and
+ * a collapse designed to bury an uncomfortable truth is as dishonest as a
+ * false claim. Both ceilings are named separately because they are two
+ * independent rules over two different claim sources — merging them would
+ * produce one sentence about signatures, and nothing here checks a signature.
+ */
+.proof-ceilings {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--surface-soft) 91%, transparent);
+}
+
+.proof-ceilings__figures {
+  margin: 0;
+  font-size: var(--fs-meta);
+  color: var(--ink-muted);
+}
+
+.proof-ceilings__figures strong {
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+.proof-ceilings__rule {
+  display: grid;
+  gap: 2px;
+  padding-left: var(--sp-3);
+  border-left: 2px solid var(--copper);
+}
+
+.proof-ceilings__rule strong {
+  font: var(--fw-strong) var(--fs-meta) / 1.3 var(--font-body);
+  color: var(--ink);
+}
+
+.proof-ceilings__rule small {
+  font: var(--fw-body) var(--fs-micro) / 1.3 var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: .11em;
+  color: var(--ink-muted);
+}
+
+.proof-ceilings__rule p {
+  margin: 0;
+  font-size: var(--fs-caption);
+  line-height: 1.5;
+  color: var(--ink-muted);
+}
+
+/* ── Declared posture ────────────────────────────────────────────────── */
+
+.proof-posture {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--sp-2) var(--sp-4);
+  margin: 0;
+}
+
+.proof-posture > div { display: grid; gap: 2px; min-width: 0; }
+
+.proof-posture dt {
+  font: var(--fw-body) var(--fs-micro) / 1.2 var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: .11em;
+  color: var(--ink-muted);
+}
+
+.proof-posture dd {
+  margin: 0;
+  font-size: var(--fs-caption);
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+/* ── Session journal, one row that expands ───────────────────────────── */
+
+.proof-journal {
+  border: 1px solid var(--line-control);
+  border-radius: var(--radius-panel);
+  background: var(--surface-raised);
+  overflow: clip;
+}
+
+.proof-journal__row {
+  display: grid;
+  grid-template-columns: auto minmax(0, auto) minmax(0, 1fr) auto;
+  gap: var(--sp-2) var(--sp-3);
+  align-items: center;
+  min-height: 56px;
+  padding: var(--sp-2) var(--sp-4);
+  cursor: pointer;
+  list-style: none;
+}
+
+.proof-journal__row::-webkit-details-marker { display: none; }
+
+.proof-journal__row h2 {
+  margin: 0;
+  font: var(--fw-strong) var(--fs-lead) / 1.2 var(--font-body);
+  color: var(--ink);
+}
+
+.proof-journal__state {
+  font-size: var(--fs-caption);
+  color: var(--ink-muted);
+  min-width: 0;
+}
+
+.proof-journal__facts {
+  font: var(--fw-body) var(--fs-micro) / 1.2 var(--font-mono);
+  color: var(--ink-faint);
+  justify-self: end;
+  overflow-wrap: anywhere;
+}
+
+.proof-journal[open] .proof-journal__row {
+  border-bottom: 1px solid var(--line);
+}
+
+.proof-journal__body {
+  display: grid;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+}
+
+.proof-journal__scope { margin: 0; }
+
+.proof-journal .audit-clean {
+  margin: 0;
+  font-size: var(--fs-caption);
+  color: var(--ink-faint);
+}
+
+/* ── Claim rows inside the hero popover ──────────────────────────────── */
+
+.claim-popover-row__state {
+  font-size: var(--fs-caption);
+  color: var(--ink-muted);
+}
+
+/* ── Actions ─────────────────────────────────────────────────────────── */
+
+.proof-actions .small-button.primary {
+  border-color: var(--accent-bright);
+  background: var(--accent-bright);
+  color: var(--ground);
+}
+
+@media (max-width: 760px) {
+  .proof-verdict {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* Narrow viewports pay for the legend and the posture triple in stacked
+     rows. Nothing is dropped; the label and its value share a line and the
+     definitions drop one step on the ramp, which is the difference between a
+     ~1100px block and a ~780px one on a 430px screen. */
+  .proof-counts > div {
+    padding: var(--sp-2) var(--sp-3);
+  }
+
+  .proof-counts small {
+    margin-top: 0;
+    font-size: var(--fs-micro);
+  }
+
+  .proof-posture > div {
+    grid-template-columns: minmax(0, 12ch) minmax(0, 1fr);
+    gap: var(--sp-2);
+    align-items: baseline;
+  }
+
+  .proof-verdict__claims,
+  .proof-verdict__body {
+    grid-column: 1;
+    grid-row: auto;
+  }
+
+  .proof-journal__row {
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: start;
+    padding: var(--sp-3) var(--sp-3);
+  }
+
+  .proof-journal__state,
+  .proof-journal__facts {
+    grid-column: 2;
+    justify-self: start;
+  }
+}
+
+/* ── Journal disclosures inside the route ────────────────────────────── */
+
+/*
+ * The journal body's nested disclosures used to inherit `.journal-audit`'s
+ * rules; this route no longer uses that container, so they are given their own
+ * targets rather than left at the 20px browser default.
+ */
+.proof-journal__body > details > summary,
+.proof-journal .audit-findings > summary {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+  min-height: 44px;
+  padding: 0 var(--sp-2);
+  border-radius: var(--radius-control);
+  color: var(--ink);
+  font-size: var(--fs-meta);
+  cursor: pointer;
+}
+
+.proof-journal__body > details > code {
+  display: block;
+  padding: var(--sp-2);
+  overflow-wrap: anywhere;
+  font: var(--fw-body) var(--fs-micro) / 1.5 var(--font-mono);
+  color: var(--ink-muted);
+}
+
+/*
+ * One column, not three.
+ *
+ * `.audit-findings article` is a `48px 150px minmax(0,1fr)` grid, and a
+ * 31-character monospace code needs about 205px — so the single most important
+ * row on the journal panel painted its code over its own message
+ * ("SESSION_TITLE_SNAPSHOT_MISMATCHreation event title differs…"). The severity
+ * becomes an inline pill, the code gets a line, the message gets a line.
+ */
+.proof-journal .audit-findings article {
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--sp-1);
+}
+
+.proof-journal .audit-findings article > span {
+  justify-self: start;
+  padding: 2px var(--sp-2);
+  border-radius: var(--radius-chip);
+}
+
+.proof-journal .audit-findings article > strong {
+  overflow-wrap: anywhere;
+  font-variant-ligatures: none;
+}
+
+/*
+ * The route's evidence actions are touch targets like any other.
+ *
+ * `.small-button` is 36px, which is below the 44px floor everything else on
+ * this route now meets — and these four are the only controls that produce a
+ * portable artifact, so they are the last place to make someone aim.
+ */
+.proof-view .proof-actions .small-button {
+  min-height: 44px;
+  padding-block: 0;
+}

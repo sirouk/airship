@@ -1,0 +1,1389 @@
+/*
+ * Airship shell: app grid, topbar, brand, status seals, rail, profile
+ * switcher and the main landmark. Second in the `styles.css` barrel.
+ */
+
+.app-shell {
+  display: grid;
+  /* One token for the rail's three states, shared with `.topbar` below so the
+     brand block keeps tracking the rail exactly at every width. */
+  grid-template-columns: var(--rail-width) minmax(0, 1fr);
+  grid-template-rows: 58px minmax(0, 1fr);
+  width: 100%;
+  height: 100%;
+}
+
+.topbar {
+  z-index: 20;
+  display: grid;
+  grid-column: 1 / -1;
+  /* `minmax(0, auto)` on the action track, not bare `auto`.
+     A bare `auto` track refuses to shrink below its content, so when the
+     runtime status line grew to 340px the whole action cluster grew with it
+     and squeezed the centre band from 256px to 32px — at 834px the runtime
+     posture chip was pushed entirely under the brass `Connect a model` and
+     could not be seen or clicked. A trust chip nobody can reach is worse than
+     a truncated status sentence, and the sentence has an ellipsis, a `title`
+     and a live region; the chip has none of those. */
+  grid-template-columns: var(--rail-width) minmax(280px, 1fr) minmax(0, auto);
+  align-items: center;
+  min-width: 0;
+  border-bottom: 1px solid var(--line-strong);
+  background: color-mix(in srgb, var(--ground) 94%, transparent);
+  backdrop-filter: blur(18px);
+}
+
+.tab-presence-note { max-width:210px; color:var(--v-caution); font-size:var(--fs-caption); line-height:1.3; }
+.billing-observation.stale { color:var(--v-caution); }
+.theme-swatch.six-color { display:grid; grid-template-columns:repeat(3,1fr); grid-template-rows:repeat(2,1fr); overflow:hidden; }
+.theme-swatch.six-color i { min-width:10px; min-height:10px; }
+.memory-legend button { display:inline-flex; align-items:center; gap:6px; min-height:32px; padding:4px 7px; border:1px solid var(--line); background:transparent; }
+.memory-legend button[aria-pressed="false"] { opacity:.48; text-decoration:line-through; }
+.memory-legend i[data-shape="square"] { border-radius:1px; }
+.memory-legend i[data-shape="diamond"] { transform:rotate(45deg); border-radius:1px; }
+.memory-legend i[data-shape="ring"],.memory-legend i[data-shape="hollow"] { background:transparent; border:2px solid currentColor; }
+.memory-boundary { display:flex; gap:10px; align-items:center; margin-bottom:10px; padding:9px 12px; border:1px solid var(--line); color:var(--ink-muted); font-size:var(--fs-caption); }
+.memory-boundary.attention { border-color:var(--v-caution); }
+.memory-boundary.attention strong { color:var(--v-caution); }
+
+.nav-item, .topbar button, .small-button, .button-link, .status-chip, .profile-card, .theme-option, .skill-card {
+  transition: background-color 110ms ease, border-color 110ms ease, color 110ms ease, transform 110ms ease;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  padding: 0 17px;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.brand-seal {
+  position: relative;
+  margin-right: 10px;
+}
+
+.brand-seal .seal__label,
+.boot-seal .seal__label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+
+.brand-seal::after {
+  position: absolute;
+  right: -5px;
+  bottom: 4px;
+  width: 7px;
+  border-top: 2px solid var(--brand-mark);
+  content: "";
+  transform: rotate(-28deg);
+  transform-origin: left center;
+}
+
+.brand-name {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: var(--fs-title);
+  letter-spacing: 0.01em;
+}
+
+.edition {
+  align-self: flex-end;
+  margin: 0 0 13px 8px;
+  color: var(--ink-faint);
+  font: var(--fs-micro)/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/*
+ * Exactly one chip, at every width and in every connection state.
+ *
+ * The band used to render one pill per axis — four of them, 398px, the fourth
+ * truncated to `Secure hardware not c…` on a laptop — and swapped itself for a
+ * different component on a phone. The weakest claim states itself in full, the
+ * count states how many are behind it, and the sheet renders all four verbatim.
+ */
+.topbar-center {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+  min-width: 0;
+  padding: 0 var(--sp-4);
+}
+
+.topbar-posture-chip {
+  display: inline-flex;
+  gap: var(--sp-1);
+  align-items: center;
+  min-width: 0;
+  min-height: 28px;
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--line-control);
+  border-radius: var(--radius-chip);
+  color: var(--ink-muted);
+  background: color-mix(in srgb, var(--surface-soft) 80%, transparent);
+  cursor: pointer;
+  font: var(--fw-body) var(--fs-micro)/1 var(--font-body);
+}
+
+.topbar-posture-chip:hover { color: var(--ink); border-color: var(--accent); }
+.topbar-posture-chip[data-state="failed"] { color: var(--v-failed); }
+.topbar-posture-chip[data-state="attention"] { color: var(--v-caution); }
+
+.topbar-posture-chip__count {
+  flex: 0 0 auto;
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+
+/* ── The one status family ──────────────────────────────────────────────────
+ *
+ * Airship spoke status in five visual languages across 49 CSS families:
+ * outlined pills, filled dot-pills, monospace tokens, bordered rows with a
+ * coloured word, and prose. There is one now — <Seal>, seven frozen states,
+ * three densities. The density chooses the container; it never changes the
+ * claim, and the state word is present in all three (visible in chip and hero,
+ * carried by the accessible name in dot) so colour is never the sole carrier.
+ */
+.seal {
+  display: inline-flex;
+  min-width: 0;
+  gap: var(--sp-1);
+  align-items: center;
+  color: var(--v-neutral);
+  line-height: 1.15;
+}
+
+/* dot — a 16px well with no visible label, for rows and badges where a plain
+   word already sits beside the mark. The label is clipped out of the layout,
+   never removed: screen readers still hear the verdict. */
+.seal[data-density="dot"] .seal__label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* chip — the default, and the shape every retired family collapses onto. The
+   border and fill are mixed from the state colour, so one recipe covers all
+   seven states and no state needs its own rgba() pair. */
+.seal[data-density="chip"] {
+  min-height: 24px;
+  padding: 0 var(--sp-2);
+  border: 1px solid color-mix(in srgb, currentColor 34%, transparent);
+  border-radius: var(--radius-chip);
+  background: color-mix(in srgb, currentColor 10%, transparent);
+  font: var(--fw-strong) var(--fs-caption)/1 var(--font-body);
+}
+
+/* --copper and --v-failed are legal as seal strokes but not as text on a raised
+   surface: both measure 4.24:1, under the 4.5:1 a 12px chip label needs. The
+   chip keeps them for the glyph, the border and the fill — where WCAG 1.4.11's
+   3:1 is the applicable rule — and lifts only the word, so the verdict is never
+   the least legible thing in its own chip. */
+.seal[data-density="chip"][data-state="asserted"] .seal__label,
+.seal[data-density="chip"][data-state="failed"] .seal__label {
+  color: var(--ink);
+}
+
+/* hero — one per route. The 28px well, the verdict at title size, and the
+   detail as a visible line rather than a tooltip: at the top of a route the
+   claim is the content, so it does not belong one rung down the ladder. */
+.seal[data-density="hero"] {
+  display: grid;
+  grid-template-areas: "glyph label" "glyph detail";
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0 var(--sp-3);
+  align-items: center;
+}
+
+.seal[data-density="hero"] .seal__svg {
+  grid-area: glyph;
+}
+
+.seal[data-density="hero"] .seal__label {
+  grid-area: label;
+  font: var(--fw-title) var(--fs-title)/1.2 var(--font-body);
+}
+
+.seal__detail {
+  grid-area: detail;
+  color: var(--ink-muted);
+  font-size: var(--fs-meta);
+  line-height: 1.5;
+  white-space: normal;
+}
+
+/* The Airship mark is not a status. It uses the same SVG grammar, so it is the
+   same component, but it must not grow a chip shell around the wordmark. */
+.brand-seal[data-density],
+.boot-seal[data-density] {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+.seal[data-state="checking"] {
+  color: var(--v-info);
+}
+
+.seal[data-state="stale"],
+.seal[data-state="attention"] {
+  color: var(--v-caution);
+}
+
+.seal[data-state="verified"] {
+  color: var(--v-verified);
+}
+
+.seal[data-state="asserted"] {
+  color: var(--copper);
+}
+
+.seal[data-state="failed"] {
+  color: var(--v-failed);
+}
+
+.seal[data-state="none"][data-origin="local"] {
+  color: var(--truth-local);
+}
+
+/* The mark is not a verdict.
+ *
+ * It shares <Seal>'s grammar and `app.tsx` renders it with state="asserted",
+ * so the block above painted the logo in the copper reserved for "a remote
+ * party claims this" — one colour saying two things in the same viewport, and
+ * the reason a reader cannot learn what copper means by looking. It has to
+ * out-specify `.seal[data-state="asserted"]` to say so: the plain `.brand-seal`
+ * colour that used to sit at the top of this sheet never won a single frame,
+ * which is why the collision survived. Only the colour is separated here; the
+ * mark still draws the asserted *shape* until its call site moves. */
+.seal.brand-seal {
+  color: var(--brand-mark);
+}
+
+/* ── The retirement ledger ──────────────────────────────────────────────────
+ *
+ * These selectors are the status containers that still draw their own chip
+ * because their call site lives in a file another work package owns. They no
+ * longer draw it *their* way: they share the recipe above verbatim, so there is
+ * one vocabulary today rather than after the last package lands. Each entry is
+ * deleted from this list — not restyled — as its owner moves the call site onto
+ * <Seal density="chip">. The list only ever shrinks.
+ */
+.status-seal,
+.receipt-chip,
+.attestation-chip,
+.audit-state,
+.runtime-posture {
+  display: inline-flex;
+  min-width: 0;
+  gap: var(--sp-1);
+  align-items: center;
+  min-height: 24px;
+  padding: 0 var(--sp-2);
+  border: 1px solid color-mix(in srgb, currentColor 34%, transparent);
+  border-radius: var(--radius-chip);
+  background: color-mix(in srgb, currentColor 10%, transparent);
+  color: var(--ink-muted);
+  font: var(--fw-strong) var(--fs-caption)/1 var(--font-body);
+  white-space: nowrap;
+}
+
+/* One pill per status, never two. Where a container above is itself the chip,
+   the Seal inside it keeps the glyph and the word and sheds its own shell. */
+.topbar-posture-chip > .seal[data-density="chip"],
+.status-seal > .seal[data-density="chip"],
+.receipt-chip > .seal[data-density="chip"],
+.attestation-chip > .seal[data-density="chip"] {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  /* Type comes back from the container too. Without this the nested seal keeps
+     re-asserting the chip's own caption size and a dense row can no longer
+     choose --fs-micro for itself, which is how a claim ends up ellipsised. */
+  font: inherit;
+}
+
+/* State colouring for the ledger containers: colour, and nothing else. The
+   recipe mixes the border and the fill from it, so twelve families' worth of
+   hand-tuned rgba() pairs — three per state, each drifting from the others —
+   reduce to one declaration per state. */
+.status-seal[data-state="verified"],
+.attestation-chip.verified {
+  color: var(--v-verified);
+}
+
+.status-seal[data-state="checking"] {
+  color: var(--v-info);
+}
+
+.status-seal[data-state="stale"],
+.status-seal[data-state="attention"],
+.attestation-chip.stale,
+.attestation-chip.attention {
+  color: var(--v-caution);
+}
+
+/* One colour for one state. "Asserted" is a truth-source verdict — a remote
+   party's claim — and copper is the token reserved for it (ΔE 2.1 from
+   --truth-remote). Caution is a different axis: "attend to this". This chip
+   used to print asserted in caution amber while the seal two rows above
+   printed it in copper, so the same fact wore two colours on one screen.
+   The word itself is lifted to --ink by the chip-label rule above, which is
+   what keeps a 12px label clear of copper's 4.29:1 on a raised surface. */
+.attestation-chip.asserted {
+  color: var(--copper);
+}
+
+.attestation-chip.failed {
+  color: var(--v-failed);
+}
+
+/* Brass says "act here", and a disconnected runtime with no model is the one
+   thing the user has to act on. */
+.receipt-chip,
+.runtime-posture {
+  color: var(--accent-bright);
+}
+
+/* ── The one notice ─────────────────────────────────────────────────────────
+ *
+ * Five `__notice`/`callout` families said the same thing five ways. A notice is
+ * a chip plus a sentence on one row, over the same seven states, so a warning
+ * on the Connect surface and a warning in the workbench are recognisably the
+ * same object. `[data-state]` is the only knob; there is no tone vocabulary
+ * separate from the verdict vocabulary. The two aliases are the same retirement
+ * ledger as the chip recipe above: they are call sites another package owns,
+ * sharing the recipe now and losing their own name when that package lands.
+ * `.provider-fabric__notice` and `.composer-notice` join them in WP-7/WP-3,
+ * whose IA rewrites move the markup those two selectors describe. */
+.notice,
+.local-device-vault__notice,
+.workbench-notice {
+  /* The tone is a separate channel from the ink on purpose. A notice is a
+     sentence, and a sentence has to stay readable — so the state tints the
+     boundary and the fill, and the words keep an ink that clears AA. That is
+     the difference between a notice and a chip, whose content *is* the
+     verdict word and therefore carries the state colour itself. */
+  --notice-tone: var(--ink-faint);
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+  min-height: 32px;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid color-mix(in srgb, var(--notice-tone) 34%, var(--line));
+  border-radius: var(--radius-control);
+  color: var(--ink-muted);
+  background: color-mix(in srgb, var(--notice-tone) 6%, transparent);
+  font-size: var(--fs-meta);
+  line-height: 1.5;
+}
+
+.notice[data-state="verified"] {
+  --notice-tone: var(--v-verified);
+}
+
+.notice[data-state="stale"],
+.notice[data-state="attention"] {
+  --notice-tone: var(--v-caution);
+}
+
+.notice[data-state="failed"] {
+  --notice-tone: var(--v-failed);
+  color: var(--ink);
+}
+
+.notice[data-state="checking"] {
+  --notice-tone: var(--v-info);
+}
+
+.notice > p {
+  margin: 0;
+  color: inherit;
+}
+
+.seal__svg {
+  flex: 0 0 auto;
+  overflow: visible;
+}
+
+.seal__fill {
+  fill: currentColor;
+}
+
+.seal__cutout {
+  stroke: var(--ground);
+  stroke-width: 2.1;
+}
+
+.seal[data-acting="true"] .seal__arc--checking {
+  transform-origin: 12px 12px;
+  animation: seal-checking 1.4s linear infinite;
+}
+
+.seal__arc--stale {
+  stroke-dasharray: 3 2;
+}
+
+.seal__label {
+  overflow: hidden;
+  color: currentColor;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Retained until its last call site migrates: with the base gap now --sp-1,
+   this modifier resolves to the same value the chip recipe already uses. */
+.seal--compact {
+  gap: var(--sp-1);
+}
+
+@keyframes seal-checking {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .seal__arc--checking {
+    animation: none !important;
+  }
+}
+
+@media (forced-colors: active) {
+  .seal {
+    color: CanvasText;
+    forced-color-adjust: none;
+  }
+
+  .seal[data-state="verified"] {
+    color: LinkText;
+  }
+
+  .seal[data-state="attention"],
+  .seal[data-state="failed"] {
+    color: MarkText;
+  }
+}
+
+.topbar-actions {
+  display: flex;
+  gap: 9px;
+  align-items: center;
+  min-width: 0;
+  padding-right: 12px;
+}
+
+/*
+ * The one connect verb on `#chat`.
+ *
+ * Three buttons used to offer it — a topbar axis pill, a guidance-band button
+ * and a differently-worded phone chip — so the screen with the least to say
+ * said the same thing three times. Visible text and accessible name are the
+ * same string here, which is what makes the shipped `exact: true` selector
+ * read what a sighted user actually reads.
+ */
+.topbar-connect-action {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  padding: 0 var(--sp-3);
+  border: 1px solid color-mix(in srgb, var(--accent-bright) 50%, var(--line-control));
+  border-radius: var(--radius-chip);
+  color: var(--accent-bright);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface-soft));
+  cursor: pointer;
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-strong);
+  white-space: nowrap;
+}
+
+.topbar-connect-action:hover { background: color-mix(in srgb, var(--accent) 18%, var(--surface-soft)); }
+
+.compact-profile-select {
+  position: relative;
+  display: none;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  border-radius: 50%;
+  color: var(--brass-bright);
+  background: color-mix(in srgb, var(--accent) 6.5%, transparent);
+  font: var(--fs-micro) ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.compact-profile-select select {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.runtime-line {
+  display: flex;
+  flex: 0 1 auto;
+  gap: 7px;
+  align-items: center;
+  min-width: 0;
+  max-width: min(42vw, 380px);
+  overflow: hidden;
+  color: var(--ink-muted);
+  font-size: var(--fs-micro);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runtime-line__text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pulse-dot {
+  display: inline-block;
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--verdigris);
+  box-shadow: 0 0 0 3px rgba(103, 163, 154, 0.09);
+}
+
+.icon-button {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  color: var(--ink-muted);
+  background: transparent;
+  cursor: pointer;
+}
+
+.icon-button:hover {
+  color: var(--ink);
+  border-color: var(--line-strong);
+  background: color-mix(in srgb, var(--ink) 3%, transparent);
+}
+
+/* ── The rail, in three states on one width token ───────────────────────────
+ *
+ * `.sidebar` is the grid *column* and never moves; `.rail` is what is painted
+ * inside it, and is the only thing that changes width. The separation is what
+ * makes hover-peek possible without reflowing the conversation: the peeked
+ * panel overflows its column instead of widening the grid track, so a person
+ * skimming destinations never watches the transcript jump sideways.
+ */
+.sidebar {
+  position: relative;
+  min-height: 0;
+}
+
+.rail {
+  position: absolute;
+  inset-block: 0;
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-height: 0;
+  border-right: 1px solid var(--line-strong);
+  background: var(--surface-soft);
+}
+
+.primary-nav {
+  display: grid;
+  flex: 1 1 auto;
+  align-content: start;
+  gap: 10px;
+  min-height: 0;
+  padding: 12px 10px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+
+.primary-nav::-webkit-scrollbar { width: 4px; }
+.primary-nav::-webkit-scrollbar-thumb { border-radius: 4px; background: var(--line-strong); }
+
+/* The rail genuinely overflows at common laptop heights (785px of destinations
+   inside a 602px box at 1440x800), and overlay scrollbars paint nothing at
+   rest, so a half-visible destination reads as a clipped layout instead of as
+   scrollable. Fade only the edge that is actually hiding content: the state is
+   measured, never assumed, so a rail that fits keeps a hard edge. */
+.primary-nav[data-scroll-edges="start"] { --nav-scroll-fade: linear-gradient(to bottom, transparent 0, #000 26px); }
+.primary-nav[data-scroll-edges="end"] { --nav-scroll-fade: linear-gradient(to bottom, #000 calc(100% - 26px), transparent 100%); }
+.primary-nav[data-scroll-edges="both"] { --nav-scroll-fade: linear-gradient(to bottom, transparent 0, #000 26px, #000 calc(100% - 26px), transparent 100%); }
+
+.primary-nav[data-scroll-edges]:not([data-scroll-edges="none"]) {
+  -webkit-mask-image: var(--nav-scroll-fade);
+  mask-image: var(--nav-scroll-fade);
+}
+
+/* A scrolling rail passes content behind the pinned profile card. Draw the
+   boundary explicitly so the card reads as pinned chrome, not as the end. */
+.primary-nav[data-scroll-edges]:not([data-scroll-edges="none"]) + .sidebar-spacer {
+  display: block;
+  flex: 0 0 auto;
+  height: 1px;
+  background: var(--line-strong);
+}
+
+/* A fade carries no forced-colors equivalent; keep every destination at full
+   contrast and let the scrollbar carry the affordance instead. */
+@media (forced-colors: active) {
+  .primary-nav[data-scroll-edges]:not([data-scroll-edges="none"]) {
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
+}
+
+.nav-group {
+  display: grid;
+  gap: var(--sp-1);
+}
+
+/* A destination and the controls that belong to it, on one line. */
+.rail-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 2px;
+  align-items: center;
+  min-width: 0;
+}
+
+.chat-nav-new {
+  display: grid;
+  place-items: center;
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  color: var(--ink-faint);
+  background: transparent;
+  cursor: pointer;
+  font-size: var(--fs-lead);
+}
+.chat-nav-new:hover:not(:disabled) { color: var(--accent-bright); border-color: var(--line-control); background: color-mix(in srgb, var(--ink) 2.6%, transparent); }
+
+.chat-nav-disclosure,
+.rail-expander {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  min-height: 32px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  color: var(--ink-faint);
+  background: transparent;
+  cursor: pointer;
+}
+
+.chat-nav-disclosure:hover,
+.rail-expander:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 2.6%, transparent); }
+.chat-nav-disclosure > span,
+.rail-expander > span { font-size: var(--fs-meta); transform: rotate(0); transition: transform 120ms ease; }
+.chat-nav-disclosure[aria-expanded="true"] > span,
+.rail-expander[aria-expanded="true"] > span { transform: rotate(90deg); }
+
+/* The conversation disclosure escapes its scroll container.
+ *
+ * `.primary-nav` keeps `overflow-y: auto` — the measured scroll-edge mask is
+ * still correct and must still fire at heights where the rail genuinely does
+ * not fit — and a block-axis scroller clips the inline axis too. `fixed`
+ * placement, positioned from the trigger's own rect, is what lets a 320px
+ * panel hang off a 60px rail without either widening the grid or being sliced.
+ */
+.rail-recents { position: relative; display: contents; }
+
+.recent-conversations {
+  position: fixed;
+  z-index: 40;
+  display: grid;
+  align-content: start;
+  width: 320px;
+  max-width: calc(100vw - 24px);
+  max-height: min(420px, 60vh);
+  padding: var(--sp-1);
+  overflow-y: auto;
+  border: 1px solid var(--line-control);
+  border-radius: var(--radius-panel);
+  background: var(--surface-raised);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.46);
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+
+.rail-recents__header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: var(--sp-2);
+  align-items: center;
+  min-height: 36px;
+  padding: 0 var(--sp-1) 0 var(--sp-2);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-raised);
+}
+
+.rail-recents__header strong { font-size: var(--fs-caption); font-weight: var(--fw-strong); }
+.rail-recents__header small { color: var(--ink-faint); font-size: var(--fs-micro); font-variant-numeric: tabular-nums; }
+
+.recent-conversation {
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr);
+  gap: var(--sp-2);
+  align-items: center;
+  min-height: 32px;
+  padding: var(--sp-1) var(--sp-2);
+  border: 0;
+  border-radius: var(--radius-control);
+  color: var(--ink-faint);
+  background: transparent;
+  font-size: var(--fs-caption);
+  text-align: left;
+  cursor: pointer;
+}
+
+.recent-conversation:hover,
+.recent-conversation.active { color: var(--ink); background: color-mix(in srgb, var(--ink) 2.6%, transparent); }
+.recent-conversation > span:first-child { color: var(--verdigris); font-size: var(--fs-micro); }
+.recent-conversation > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.recent-conversation--thread {
+  grid-template-columns: 12px minmax(0, 1fr) auto;
+  gap: 6px;
+  min-height: 46px;
+  padding-block: 5px;
+}
+.recent-conversation--thread .recent-conversation__mark { align-self: start; margin-top: 3px; }
+.recent-conversation--thread .recent-conversation__copy { display: grid; gap: 2px; min-width: 0; }
+.recent-conversation--thread .recent-conversation__copy strong,
+.recent-conversation--thread .recent-conversation__copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.recent-conversation--thread .recent-conversation__copy strong { color: inherit; font-size: var(--fs-caption); font-weight: var(--fw-strong); }
+.recent-conversation--thread .recent-conversation__copy small { color: var(--ink-faint); font-size: var(--fs-micro); }
+.recent-conversation--thread time { align-self: start; padding-top: 1px; color: var(--ink-faint); font-size: var(--fs-micro); white-space: nowrap; }
+.recent-conversation--thread.active .recent-conversation__copy small,
+.recent-conversation--thread:hover .recent-conversation__copy small { color: var(--ink-muted); }
+/* The ledger link, pinned as the panel's last row rather than the sixth row of
+   a 250px scroller where nine threads pushed it out of reach entirely. */
+.recent-conversations .nav-item--nested {
+  margin: var(--sp-1) 0 0;
+  width: 100%;
+  padding-left: var(--sp-2);
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+}
+
+.nav-group-label {
+  padding: 3px 10px 4px;
+  color: var(--ink-faint);
+  font: var(--fs-micro)/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.nav-item {
+  position: relative;
+  display: grid;
+  grid-template-columns: 25px minmax(0, 1fr) auto;
+  gap: 7px;
+  align-items: center;
+  width: 100%;
+  /* Composed, not collided. `:root[data-density] .nav-item` (0-2-1) used to
+     beat the tablet block's `.sidebar .nav-item` (0-2-0), so the intermediate
+     rail's own row height silently never applied. One custom property means
+     the state that wants a different row can set it and the density block
+     still provides the floor. */
+  min-height: var(--rail-item-height, var(--density-control, 38px));
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  color: var(--ink-muted);
+  background: transparent;
+  cursor: pointer;
+  font-size: var(--fs-caption);
+  text-align: left;
+}
+
+.nav-item__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nav-item:hover {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--ink) 2.6%, transparent);
+}
+
+.nav-item.has-active-child {
+  color: var(--ink);
+}
+
+/* Nesting is carried by the indent, the 1px rule and `aria-level`. The forty
+   brass `↳` glyphs are gone: a tree marker encodes nothing a 12px indent does
+   not already say, and brass means "you are here" or "act here". */
+.nav-item--nested {
+  --rail-item-height: 36px;
+  margin-left: var(--sp-3);
+  width: calc(100% - var(--sp-3));
+  padding-left: var(--sp-3);
+  border-left: 1px solid var(--line);
+  border-radius: 0 var(--radius-control) var(--radius-control) 0;
+  color: var(--ink-faint);
+  font-size: var(--fs-caption);
+}
+
+.nav-item.active {
+  color: var(--ink);
+  border-color: color-mix(in srgb, var(--accent) 19%, transparent);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 12%, transparent), color-mix(in srgb, var(--accent) 3.5%, transparent));
+}
+
+.nav-item.active::before {
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  left: -1px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--brass-bright);
+  content: "";
+}
+
+.nav-proof-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--brass);
+}
+
+.nav-turn-badge {
+  display: grid;
+  place-items: center;
+  min-width: 17px;
+  height: 17px;
+  margin-left: auto;
+  padding: 0 4px;
+  border: 1px solid color-mix(in srgb, var(--v-caution) 45%, var(--line));
+  border-radius: 999px;
+  color: var(--v-caution);
+  font: var(--fs-micro)/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.sidebar-spacer {
+  display: none;
+}
+
+/*
+ * The pinned profile, at 48px instead of 120px.
+ *
+ * It was a card: a brass eyebrow, a full-width menu and a link, 211x120px —
+ * 14.2% of the rail spent restating a fact the topbar's compact picker already
+ * carries. It is one row now. Nothing is lost: the eyebrow became this
+ * control's accessible name ("Agent profile"), `Manage profiles` kept its own
+ * target, and the per-profile *descriptions* the old rail rows dropped are
+ * rendered by the menu.
+ */
+.profile-switcher {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--sp-1);
+  align-items: center;
+  flex: 0 0 auto;
+  min-height: 48px;
+  margin: 0;
+  padding: var(--sp-1) var(--sp-2);
+  border: 0;
+  border-top: 1px solid var(--line);
+  background: transparent;
+}
+
+.eyebrow {
+  display: block;
+  color: var(--brass);
+  font: var(--fs-micro)/1.3 ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+/* ── Rail state: 60px, icon only ────────────────────────────────────────────
+ *
+ * The labels are clipped out of the layout, never removed — the accessible
+ * name, the `<title>` (which carries the scope, i.e. *more* than the visible
+ * label) and the hover-peek panel all still say the word. `display: none` here
+ * would take the name off the button as well, which is how an icon rail ends up
+ * shipping nine anonymous glyphs.
+ */
+.sidebar[data-rail-state="rail"] .nav-item__label,
+.sidebar[data-rail-state="rail"] .nav-group-label,
+.sidebar[data-rail-state="rail"] .profile-manage-link__label,
+.sidebar[data-rail-state="rail"] .menu-select-value {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.sidebar[data-rail-state="rail"] .primary-nav { padding: var(--sp-2) var(--sp-1); }
+.sidebar[data-rail-state="rail"] .nav-item { grid-template-columns: minmax(0, 1fr); justify-items: center; padding: 0; }
+.sidebar[data-rail-state="rail"] .nav-item--nested { margin-left: var(--sp-1); width: calc(100% - var(--sp-1)); padding-left: 0; }
+.sidebar[data-rail-state="rail"] .rail-row { position: relative; grid-template-columns: minmax(0, 1fr); }
+.sidebar[data-rail-state="rail"] .rail-expander,
+.sidebar[data-rail-state="rail"] .chat-nav-disclosure { justify-self: center; }
+
+/* A 60px column has no second track. Where there is a pointer precise enough
+   to hit an 18px glyph, the expander rides the row's right edge instead of
+   taking a line of its own — which is what stopped the collapsed rail reading
+   as a column of stray arrows. A coarse pointer keeps the full-height target;
+   the two-line layout is the price of a thumb, and it is the right price. */
+@media (hover: hover) and (pointer: fine) {
+  .sidebar[data-rail-state="rail"] .rail-expander,
+  .sidebar[data-rail-state="rail"] .chat-nav-disclosure {
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 18px;
+    min-height: 100%;
+  }
+
+  .sidebar[data-rail-state="rail"] .rail-expander > span,
+  .sidebar[data-rail-state="rail"] .chat-nav-disclosure > span { font-size: var(--fs-meta); }
+}
+.sidebar[data-rail-state="rail"] .profile-switcher { grid-template-columns: minmax(0, 1fr); justify-items: center; }
+
+/* The unread count and the receipt dot stay *on the row* in every state — they
+   are the one thing the rail says without being asked, and a collapsed rail
+   that dropped them would hide a fact rather than a label. In a single-track
+   row they ride the glyph's corner instead of taking a line. */
+.sidebar[data-rail-state="rail"] .nav-turn-badge,
+.sidebar[data-rail-state="rail"] .nav-proof-dot {
+  position: absolute;
+  top: 3px;
+  right: 5px;
+  margin: 0;
+}
+
+/*
+ * Hover-peek: an overlay, never a reflow.
+ *
+ * The panel widens over the conversation instead of widening the grid track,
+ * so nothing in the transcript moves while a person skims the rail. 180ms of
+ * dwell before it opens is the difference between intent and transit; 240ms
+ * before it closes is what stops it flickering on the way to the composer.
+ * `:focus-within` pins it open, because a keyboard user reading a label must
+ * not lose it to a mouse that happened to move.
+ */
+.sidebar[data-rail-state="rail"] .rail {
+  transition: width 140ms ease 240ms;
+}
+
+@media (hover: hover) {
+  .sidebar[data-rail-state="rail"]:hover .rail {
+    z-index: 30;
+    width: 268px;
+    box-shadow: 0 18px 44px rgba(0, 0, 0, 0.46);
+    transition-delay: 180ms;
+  }
+
+  .sidebar[data-rail-state="rail"]:hover .nav-item__label,
+  .sidebar[data-rail-state="rail"]:hover .nav-group-label,
+  .sidebar[data-rail-state="rail"]:hover .profile-manage-link__label,
+  .sidebar[data-rail-state="rail"]:hover .menu-select-value,
+  .sidebar[data-rail-state="rail"]:focus-within .nav-item__label,
+  .sidebar[data-rail-state="rail"]:focus-within .nav-group-label,
+  .sidebar[data-rail-state="rail"]:focus-within .profile-manage-link__label,
+  .sidebar[data-rail-state="rail"]:focus-within .menu-select-value {
+    position: static;
+    width: auto;
+    height: auto;
+    clip-path: none;
+  }
+
+  .sidebar[data-rail-state="rail"]:hover .nav-item,
+  .sidebar[data-rail-state="rail"]:focus-within .nav-item {
+    grid-template-columns: 25px minmax(0, 1fr) auto;
+    justify-items: stretch;
+    padding: 0 10px;
+  }
+
+  .sidebar[data-rail-state="rail"]:hover .rail-row,
+  .sidebar[data-rail-state="rail"]:focus-within .rail-row {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+  }
+
+  .sidebar[data-rail-state="rail"]:hover .nav-turn-badge,
+  .sidebar[data-rail-state="rail"]:focus-within .nav-turn-badge,
+  .sidebar[data-rail-state="rail"]:hover .nav-proof-dot,
+  .sidebar[data-rail-state="rail"]:focus-within .nav-proof-dot {
+    position: static;
+  }
+
+  .sidebar[data-rail-state="rail"]:hover .profile-switcher,
+  .sidebar[data-rail-state="rail"]:focus-within .profile-switcher {
+    grid-template-columns: minmax(0, 1fr) auto;
+    justify-items: stretch;
+  }
+}
+
+.sidebar[data-rail-state="rail"]:focus-within .rail {
+  z-index: 30;
+  width: 268px;
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.46);
+  transition-delay: 0ms;
+}
+
+/*
+ * No hover, no tooltip, so no unlabelled icons.
+ *
+ * The 60px rail pays for its width with a hover-revealed label, and a touch
+ * viewport narrow enough to land in `rail` has nothing to hover with. It gets
+ * the label permanently, stacked under the glyph at the micro step — the one
+ * thing the retired tablet block got right — and 16px more width to hold the
+ * longest destination name without cutting it.
+ */
+@media (hover: none) {
+  /* Measured, not guessed: 84px is the narrowest column in which `Connection`
+     — the longest destination name — renders without `scrollWidth` exceeding
+     `clientWidth` at the comfortable density's micro step. */
+  :root[data-rail="rail"] { --rail-width: 84px; }
+
+  .sidebar[data-rail-state="rail"] .nav-item {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    justify-content: center;
+    padding: 0 var(--sp-1);
+  }
+
+  .sidebar[data-rail-state="rail"] .nav-item__label {
+    position: static;
+    width: auto;
+    max-width: 100%;
+    height: auto;
+    clip-path: none;
+    font-size: var(--fs-micro);
+    text-align: center;
+  }
+}
+
+/* ── Focus state: the rail is not painted at all ────────────────────────────
+ *
+ * `--rail-width: 0px` closes the grid track; this stops the rail painting into
+ * the column it no longer has. There is deliberately no trigger for this state
+ * in the shell yet: entering it hides destinations, and the honesty strip that
+ * keeps the weakest claim and the session model visible while chrome is hidden
+ * is specified as part of focus mode itself. The state exists so that work
+ * package has a rail to switch into, not so a stray class can hide navigation.
+ */
+.sidebar[data-rail-state="focus"] { display: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar[data-rail-state="rail"] .rail { transition: none; }
+}
+
+/*
+ * The collapse control, and the only place the rail states are named in the UI.
+ * 24px of glyph in a target that clears 44px wherever a finger might use it.
+ */
+.rail-collapse {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  min-height: 28px;
+  padding: 0 var(--sp-2);
+  border: 0;
+  border-top: 1px solid var(--line);
+  color: var(--ink-faint);
+  background: transparent;
+  cursor: pointer;
+  font-size: var(--fs-meta);
+}
+
+.rail-collapse:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 2.6%, transparent); }
+
+@media (pointer: coarse) {
+  .rail-collapse { min-height: 44px; }
+  .chat-nav-disclosure,
+  .rail-expander,
+  .chat-nav-new { min-height: 44px; min-width: 44px; }
+  .recent-conversation { min-height: 44px; }
+}
+
+/* In `rail` and `focus` the wordmark has no column to live in; the mark keeps
+   the brand's target and its accessible name, and the words come back with the
+   peek and on exit. */
+:root[data-rail="rail"] .brand-name,
+:root[data-rail="rail"] .edition,
+:root[data-rail="focus"] .brand { display: none; }
+
+:root[data-rail="rail"] .brand { justify-content: center; padding: 0; }
+
+/* `.topbar-center` is deliberately absent from the rule above. Focus mode may
+   hide chrome; it may not hide a claim, and the posture chip is the only
+   always-visible statement of what this tab's runtime and vault actually are.
+   Whoever wires the focus trigger owns the honesty strip that re-homes it. */
+
+/* `Manage profiles` beside the picker rather than under it: the row is 48px,
+   so the link is a target on the same line, not a third one. */
+.profile-switcher .profile-menu { margin-top: 0; }
+.profile-switcher .profile-menu .menu-select-trigger { gap: var(--sp-2); min-height: 40px; padding: 0 var(--sp-1); }
+.profile-switcher .profile-menu .profile-monogram { width: 26px; height: 26px; }
+
+.profile-switcher .profile-manage-link {
+  display: flex;
+  gap: var(--sp-1);
+  align-items: center;
+  width: auto;
+  min-height: 40px;
+  margin: 0;
+  padding: 0 var(--sp-2);
+  border-radius: var(--radius-control);
+  white-space: nowrap;
+}
+
+.profile-switcher .profile-manage-link.active { color: var(--ink); background: color-mix(in srgb, var(--accent) 11%, transparent); }
+.profile-switcher .profile-manage-link svg { flex: 0 0 auto; width: 16px; height: 16px; }
+
+@media (pointer: coarse) {
+  .profile-switcher .profile-manage-link,
+  .profile-switcher .profile-menu .menu-select-trigger { min-height: 44px; }
+}
+
+.profile-monogram {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-radius: 50%;
+  color: var(--brass-bright);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  font: var(--fs-micro) ui-monospace, monospace;
+}
+
+.profile-switcher > small {
+  display: block;
+  margin: 7px 0 0 37px;
+  color: var(--ink-faint);
+  font-size: var(--fs-micro);
+}
+
+.main {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  background:
+    linear-gradient(color-mix(in srgb, var(--ink) 1.2%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in srgb, var(--ink) 0.9%, transparent) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+/* Route navigation moves focus to the main landmark for screen readers. The
+   landmark itself is not an interactive control and should not paint a
+   viewport-sized browser outline. */
+.main:focus { outline: none; }
+
+/*
+ * The reference clause, not a second verdict.
+ *
+ * The topbar chip speaks for this browser tab. The claims scoped to the open
+ * conversation are stated at rest in the session bar, and this clause names
+ * how many they are so the deferral states its own cost. It only takes a seal
+ * and a state colour when one of those claims is actually alarming, because a
+ * pointer that shouts on every healthy turn stops being read, and one that
+ * stays quiet through a failure is a burial. The word travels with the colour
+ * in both cases, so colour is never the sole carrier.
+ */
+.topbar-posture-chip__elsewhere {
+  display: inline-flex;
+  gap: var(--sp-1);
+  align-items: center;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink-faint);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topbar-posture-chip__elsewhere[data-state="failed"] { color: var(--v-failed); }
+.topbar-posture-chip__elsewhere[data-state="attention"] { color: var(--v-caution); }
+
+/*
+ * The overlay entrance, for the overlays that are not popovers.
+ *
+ * `popover.css` owns the anchored-disclosure arrival. This is the rest of the
+ * layer: the command palette, the Preferences dialog, the trust sheet, the modal
+ * that interrupts a turn to ask permission, the notice the workbench raises, and
+ * the pill that offers back the bottom of a transcript the reader scrolled away
+ * from. Every one of them reported `transition: all 0s; animation: none` and
+ * appeared as a completed fact with no arrival, on a surface that demonstrably
+ * understands intent everywhere else — 150ms of popover dwell, 180/240ms of rail
+ * dwell, a 6s self-clearing toast — and then threw that understanding away at
+ * the one moment a person is looking for it.
+ *
+ * All six mount and unmount rather than toggling a state, so a keyframed
+ * entrance is the whole mechanism: nothing about when they appear changes, only
+ * that appearing now takes a tenth of a second and comes from somewhere.
+ *
+ * They live in this sheet rather than in the four sheets that draw them because
+ * the defect was never a wrong duration. It was that no file owned arrival at
+ * all, so no file was ever the one that had forgotten it. One block, one
+ * durations table, one reduced-motion retraction. This sheet follows
+ * `platform-shell.css` in the barrel, which is what lets it speak for the three
+ * surfaces drawn there without editing them.
+ *
+ * 120ms fade, 140ms rise. The approval dock is the surface here a person is
+ * actually waiting on — the agent is stopped until they answer — so its entrance
+ * may never be long enough to be a delay in its own right.
+ */
+.platform-scrim,
+.approval-scrim,
+.command-palette,
+.preferences-dialog,
+.trust-sheet,
+.approval-dock,
+.workbench-notice,
+.transcript-jump {
+  animation: overlay-fade 120ms ease;
+}
+
+.command-palette,
+.preferences-dialog,
+.trust-sheet,
+.approval-dock,
+.workbench-notice,
+.transcript-jump {
+  --overlay-rise: translateY(10px);
+  animation: overlay-fade 120ms ease, overlay-rise 140ms cubic-bezier(.2, .8, .2, 1);
+}
+
+/*
+ * Below the sheet breakpoint these four are bottom sheets, not centred panels —
+ * `platform-shell.css` re-anchors the scrim to `end center` and squares off the
+ * lower corners. A sheet rises from the edge it is docked to, so the travel
+ * becomes the panel's own height rather than 10px: on a phone the slide is what
+ * says "this came up from the bottom and will go back there", which is the only
+ * dismissal cue a surface with no visible affordance has. The breakpoint is
+ * restated from `platform-shell.css:147` deliberately — the two must agree, and
+ * a rise that disagrees with its own layout is worse than no rise.
+ */
+@media (max-width: 640px), (max-width: 950px) and (max-height: 500px) {
+  .command-palette,
+  .preferences-dialog,
+  .trust-sheet,
+  .approval-dock {
+    --overlay-rise: translateY(100%);
+    animation: overlay-fade 120ms ease, overlay-rise 180ms cubic-bezier(.2, .8, .2, 1);
+  }
+}
+
+@keyframes overlay-fade {
+  from { opacity: 0; }
+}
+
+@keyframes overlay-rise {
+  from { transform: var(--overlay-rise); }
+}
+
+/*
+ * The extension of the global reduced-motion reset, not a rival to it.
+ *
+ * `routes.css:3271` already collapses every duration in the product to 0.01ms
+ * under `prefers-reduced-motion`, which is what makes these entrances arrive
+ * instantly rather than not at all. What a duration reset cannot reach is the
+ * *distance* a keyframe starts from: an animation collapsed to 0.01ms still
+ * begins at `translateY(100%)`, and a single frame of a full sheet-height jump
+ * is exactly the kind of movement the preference exists to refuse. Retracting
+ * `--overlay-rise` is the only part that global rule cannot do for us, which is
+ * why this block declares nothing else — and why it retracts the property
+ * rather than the animation, so the phone override above cannot quietly
+ * reinstate the largest travel in the product.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .command-palette,
+  .preferences-dialog,
+  .trust-sheet,
+  .approval-dock,
+  .workbench-notice,
+  .transcript-jump {
+    --overlay-rise: none;
+  }
+}
+
+/*
+ * The pressed frame.
+ *
+ * The product carried 87 `:hover` rules against one `:active`, and the
+ * transition list at the top of this sheet had been transitioning `transform`
+ * on seven selectors since nothing ever changed it. On a surface whose actions
+ * are consequential and whose answers take seconds, the pressed frame is the
+ * only confirmation that arrives at the speed of the finger — everything after
+ * it is the network's to deliver. Hover says "this is a thing"; press says "I
+ * got that", and only the second one is an answer.
+ *
+ * Position in this sheet is load bearing. `.nav-item:hover` (above) sets a
+ * background at the same specificity as `.nav-item:active`, so an equal-weight
+ * press rule declared earlier would be silently swallowed by the pointer state
+ * that is *also* true while a mouse is held down. This block therefore comes
+ * last. `.starter-chip` is the one family whose hover lives in a later sheet
+ * (`chat.css`), which no position here can outrank, so it takes the extra
+ * `:hover:active` step instead — the bare `:active` still covers keyboard and
+ * touch presses, where `:hover` was never in play.
+ */
+.nav-item:active, .topbar button:active, .small-button:active, .status-chip:active,
+.starter-chip:active, .starter-chip:hover:active, .workbench-dialog button:active,
+.approval-dock button:active, .connect-lane button:active {
+  transform: translateY(1px) scale(.994);
+  background-color: color-mix(in srgb, var(--accent) 14%, transparent);
+  transition-duration: 60ms;
+}
+
+/*
+ * Keep the acknowledgement, drop the movement. The tint is the message; the 1px
+ * is only how the message is normally spelled.
+ *
+ * The global reset at `routes.css:3271` cannot cover this one, and that is the
+ * whole reason this block exists: a pressed transform is not a transition or an
+ * animation, it is a state the element simply *has* while held, so zeroing
+ * durations leaves it in place for as long as the finger is down. Retracting it
+ * here is what makes the press honour the preference at all.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .nav-item:active, .topbar button:active, .small-button:active, .status-chip:active,
+  .starter-chip:active, .starter-chip:hover:active, .workbench-dialog button:active,
+  .approval-dock button:active, .connect-lane button:active { transform: none; }
+}

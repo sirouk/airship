@@ -2,8 +2,15 @@ import { describe, expect, it } from "vitest";
 import type { JsonValue } from "../../core/contracts";
 import type { DurableEvent } from "../../core/journal";
 import { createLocalReceipt, type ConversationReceipt } from "../../receipts/types";
+import { EventJournal } from "../../core/journal";
+import { MemoryJournalBackend } from "../../core/memory-journal";
+import { createSessionManifest } from "../../core/session-manifest";
+import { sha256, stableStringify } from "../../core/hash";
+import type { CanonicalMessage } from "../../core/contracts";
+import { auditSessionHistory } from "../../core/session-audit";
 import {
   SessionMessagePresentationError,
+  describeSessionPresentationFault,
   presentSessionMessages,
   type SessionMessagePresentationInput,
 } from "./session-message-presentation";
@@ -366,6 +373,228 @@ describe("presentSessionMessages", () => {
     }), "HEAD_MISMATCH");
   });
 });
+
+/*
+ * ── The two validators must agree ────────────────────────────────────────
+ *
+ * `auditSessionHistory` and `presentSessionMessages` are both asked whether a
+ * journal is sound, and they disagreed. The audit dispatches on an allow-list —
+ * it reacts to the types it knows and warns about the rest — while the
+ * presentation fell through to `requiredTurnId`, a throw, for anything that was
+ * not a turn. protocol-v1 defines session-scoped events with no `turnId` at
+ * all, so a journal the audit rated `verified` raised a protocol error in the
+ * renderer, and because the renderer runs *inside* vault adoption, one such
+ * event made an entire vault unadoptable.
+ *
+ * Nothing was corrupt. `session.renamed` is written by Airship itself on the
+ * first prompt of every default-titled session, and by the Rename control in
+ * the Sessions route; renaming also bumps `updatedAt`, which is the sort key
+ * that elects the session adoption tries to resume. The act that made a session
+ * unpresentable promoted it to the resume slot.
+ *
+ * These cases are the deliverable. They are written against the *real* journal
+ * and the *real* audit — no hand-built digests — so they cannot pass by
+ * agreeing with a fixture instead of with the code.
+ */
+describe("presentSessionMessages agrees with auditSessionHistory", () => {
+  it("presents a renamed session, the way Airship's own auto-title writes it", async () => {
+    const journal = memoryJournal();
+    const created = await journal.createSession("General conversation", await auditManifest());
+    // Exactly what `app.tsx` does on the first prompt of a default-titled
+    // session: rename at headSequence 1, before the turn is requested.
+    await journal.renameSession(created.id, "Say the single word: ok");
+    await appendAuditableTurn(journal, created.id, "turn-1", "Say the single word: ok", "ok");
+    const session = (await journal.getSession(created.id))!;
+    const events = await journal.readEvents(session.id);
+    const audit = await auditSessionHistory({ session, events });
+
+    // The premise: the audit is happy. If this ever stops holding, the two
+    // validators are being reconciled by weakening the audit, which would rate
+    // every real user's correct journal invalid.
+    expect(audit.status).toBe("verified");
+
+    const view = presentSessionMessages({ session, audit, events });
+
+    expect(view.turnCount).toBe(1);
+    expect(view.rows).toHaveLength(2);
+    // The rename is not silently skipped: it is a durable record the user
+    // created, and it comes back with its position in the chain.
+    expect(view.markers).toHaveLength(1);
+    expect(view.markers[0]).toMatchObject({
+      kind: "session.renamed",
+      sequence: 2,
+      presentable: true,
+      detail: "Renamed to “Say the single word: ok”",
+    });
+    expect(view.markers[0]!.digest).toBe(events[1]!.digest);
+  });
+
+  it("presents a rename made mid-conversation, in its own place in the chain", async () => {
+    const journal = memoryJournal();
+    const created = await journal.createSession("Audit fixture", await auditManifest());
+    await appendAuditableTurn(journal, created.id, "turn-1", "First", "One");
+    // The shipped Rename control in the Sessions route, between two turns.
+    await journal.renameSession(created.id, "Renamed midway");
+    await appendAuditableTurn(journal, created.id, "turn-2", "Second", "Two");
+    const session = (await journal.getSession(created.id))!;
+    const events = await journal.readEvents(session.id);
+    const audit = await auditSessionHistory({ session, events });
+    expect(audit.status).toBe("verified");
+
+    const renameSequence = events.find((event) => event.type === "session.renamed")!.sequence;
+    const view = presentSessionMessages({ session, audit, events });
+    expect(view.turnCount).toBe(2);
+    expect(view.markers.map((marker) => marker.sequence)).toEqual([renameSequence]);
+    // Between the two turns, not appended at the end: a divider whose position
+    // has been lost is a record whose meaning has been lost. Turn one's two
+    // rows sit below it in the chain and turn two's two rows sit above it.
+    expect(view.rows.filter((row) => row.sequence < renameSequence).map((row) => row.turnId))
+      .toEqual(["turn-1", "turn-1"]);
+    expect(view.rows.filter((row) => row.sequence > renameSequence).map((row) => row.turnId))
+      .toEqual(["turn-2", "turn-2"]);
+  });
+
+  it("accounts for a session-scoped record it cannot read, instead of refusing the page", () => {
+    // Stands in for a protocol type a future build adds and this one does not
+    // know. The audit warns and keeps going; the presentation must do the same,
+    // and must say on screen that the record is there.
+    const events = sequence([
+      draft("session.created", undefined, {}),
+      draft("session.archived.v2", undefined, { reason: "unknown to this build" }),
+      ...agentTurn("turn-1", "Ask", "Answer"),
+    ]);
+    const view = presentSessionMessages(input(events));
+
+    expect(view.turnCount).toBe(1);
+    expect(view.markers).toHaveLength(1);
+    expect(view.markers[0]).toMatchObject({ kind: "session.archived.v2", presentable: false });
+    expect(view.markers[0]!.detail).toContain("cannot replay");
+    expect(view.markers[0]!.detail).toContain("intact in the journal");
+  });
+
+  it("still refuses a turn event that lost its turn identity, and says which one", () => {
+    // The permissiveness above is scoped to types that are not turn-scoped. An
+    // `assistant.completed` with no turn is a real protocol violation and stays
+    // one — but the fault now names the session, the sequence and the type
+    // rather than handing the user a bare event UUID.
+    const events = sequence([
+      draft("session.created", undefined, {}),
+      draft("turn.requested", "turn-1", { content: "Ask" }),
+      draft("assistant.completed", undefined, { message: { role: "assistant", content: "Orphan" } }),
+      draft("turn.completed", "turn-1", {}),
+    ]);
+    try {
+      presentSessionMessages(input(events));
+      throw new Error("Expected presentation to fail.");
+    } catch (error) {
+      expect(error).toBeInstanceOf(SessionMessagePresentationError);
+      const fault = error as SessionMessagePresentationError;
+      expect(fault.code).toBe("TURN_PROTOCOL_INVALID");
+      expect(fault.sessionId).toBe("session-1");
+      expect(fault.sequence).toBe(3);
+      expect(fault.eventType).toBe("assistant.completed");
+      const described = describeSessionPresentationFault(fault);
+      expect(described).toContain("at event 3");
+      expect(described).toContain("assistant.completed");
+      // The short id, which is what a fault line has room for.
+      expect(described).toContain("in session session-1".slice(0, "in session ".length + 8));
+    }
+  });
+});
+
+function memoryJournal(): EventJournal {
+  let tick = 0;
+  let id = 0;
+  return new EventJournal(
+    new MemoryJournalBackend(),
+    () => `2026-07-18T00:00:${String(tick++).padStart(2, "0")}.000Z`,
+    () => `event-${String(++id)}`,
+  );
+}
+
+/**
+ * One turn the audit accepts in full: request, inference, digest-bound
+ * assistant message, receipt and completion.
+ *
+ * Written out rather than hand-stubbed because these cases exist to prove the
+ * *audit* and the *presentation* agree. A turn the audit merely tolerates would
+ * let the pair agree about a journal neither of them really approves.
+ */
+async function appendAuditableTurn(
+  journal: EventJournal,
+  sessionId: string,
+  turnId: string,
+  prompt: string,
+  answer: string,
+): Promise<void> {
+  const operationId = `inference-${turnId}`;
+  const session = (await journal.getSession(sessionId))!;
+  const priorEvents = await journal.readEvents(sessionId);
+  const messages: CanonicalMessage[] = [];
+  for (const event of priorEvents) {
+    const payload = event.payload as unknown as { content?: string; message?: CanonicalMessage };
+    if (event.type === "turn.requested") messages.push({ role: "user", content: payload.content! });
+    if (event.type === "assistant.completed") messages.push(payload.message!);
+  }
+  messages.push({ role: "user", content: prompt });
+  await journal.append(sessionId, [{ type: "turn.requested", turnId, payload: { content: prompt } }]);
+  const requestDigest = await sha256(stableStringify({
+    model: session.manifest.model,
+    systemPromptDigest: session.manifest.systemPromptDigest,
+    messages,
+    tools: session.manifest.tools,
+    idempotencyKey: `${sessionId}:${turnId}:0`,
+  } as unknown as JsonValue));
+  await journal.append(sessionId, [{
+    type: "inference.started",
+    turnId,
+    operationId,
+    payload: {
+      step: 0,
+      providerId: session.manifest.providerId,
+      model: session.manifest.model,
+      posture: "local",
+      requestDigest,
+      idempotencyKey: `${sessionId}:${turnId}:0`,
+    },
+  }]);
+  const responseDigest = await sha256(answer);
+  const receipt = createLocalReceipt({
+    sessionId,
+    turnId,
+    provider: session.manifest.providerId,
+    model: session.manifest.model,
+    requestDigest,
+    responseDigest,
+    now: "2026-07-18T00:00:04.000Z",
+  });
+  await journal.append(sessionId, [
+    {
+      type: "assistant.completed",
+      turnId,
+      operationId,
+      payload: {
+        message: { role: "assistant", content: answer },
+        finishReason: "stop",
+        responseDigest,
+        receipt: receipt as unknown as JsonValue,
+      },
+    },
+    { type: "turn.completed", turnId, payload: { responseDigest, receiptId: receipt.receiptId } },
+  ]);
+}
+
+function auditManifest() {
+  return createSessionManifest({
+    systemPrompt: "Be exact and preserve evidence.",
+    providerId: "demo",
+    model: "airship/test-model",
+    tools: [],
+    workspaceId: "memory://presentation-test",
+    capabilityTier: "web-baseline",
+    now: "2026-07-18T00:00:00.000Z",
+  });
+}
 
 type Draft = Readonly<{
   type: string;

@@ -5,6 +5,7 @@ import {
   type WorkspaceFile,
   type WorkspacePort,
 } from "../workspace/contracts";
+import { isWorkspaceBinaryEnvelope, workspaceContentByteLength } from "../workspace/content-codec";
 import { ToolRegistry } from "./registry";
 
 const MAX_SEARCH_FILES = 512;
@@ -13,6 +14,7 @@ const MAX_SEARCH_TOTAL_BYTES = 8 * 1024 * 1024;
 const DEFAULT_SEARCH_RESULTS = 50;
 const MAX_SEARCH_RESULTS = 200;
 const MAX_SNIPPET_CHARACTERS = 240;
+const MAX_TEXT_EDITOR_EDITS = 32;
 
 function objectArguments(value: JsonValue): Record<string, JsonValue> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Tool arguments must be an object.");
@@ -81,10 +83,17 @@ export function createWorkspaceToolRegistry(workspace: WorkspacePort): ToolRegis
         additionalProperties: false,
       },
     },
-    async execute(argumentsValue) {
+    async execute(argumentsValue): Promise<ToolExecutionResult> {
       const path = workspacePath(objectArguments(argumentsValue).path, "path");
       const file = await workspace.read(path);
       if (!file) return { content: `File not found: ${path}`, isError: true };
+      if (isWorkspaceBinaryEnvelope(file.content)) {
+        return {
+          content: `Binary file is not available through read_file: ${path}. Use stat_path or a byte-capable execution runtime.`,
+          isError: true,
+          metadata: { path: file.path, revision: file.revision, size: workspaceContentByteLength(file.content), encoding: "binary" },
+        };
+      }
       return { content: file.content, metadata: { path: file.path, revision: file.revision, size: file.size } };
     },
   };
@@ -209,6 +218,10 @@ export function createWorkspaceToolRegistry(workspace: WorkspacePort): ToolRegis
           continue;
         }
         if (!file) continue;
+        if (isWorkspaceBinaryEnvelope(file.content)) {
+          skippedFiles += 1;
+          continue;
+        }
         scannedFiles += 1;
         const contentBytes = new TextEncoder().encode(file.content).byteLength;
         scannedBytes += contentBytes;
@@ -266,6 +279,9 @@ export function createWorkspaceToolRegistry(workspace: WorkspacePort): ToolRegis
 
       const file = await workspace.read(path);
       if (!file) return { content: `File not found: ${path}`, isError: true };
+      if (isWorkspaceBinaryEnvelope(file.content)) {
+        return { content: `Refused text replacement in binary file: ${path}.`, isError: true, metadata: { path, encoding: "binary" } };
+      }
       if (expectedRevision !== undefined && expectedRevision !== file.revision) throw new WorkspaceConflictError();
       const occurrences = countOccurrences(file.content, oldText);
       if (occurrences === 0) return { content: `Text not found in ${path}.`, isError: true, metadata: { path, occurrences: 0 } };
@@ -359,6 +375,97 @@ export function createWorkspaceToolRegistry(workspace: WorkspacePort): ToolRegis
     },
   };
 
+  const textEditor: Tool = {
+    definition: {
+      name: "text_editor",
+      description: "Apply a bounded batch of exact, revision-checked UTF-8 creates or replacements in the browser workspace. Every possible mutation is declared in this one approval-bound call.",
+      effect: "write",
+      inputSchema: {
+        type: "object",
+        properties: {
+          edits: {
+            type: "array",
+            minItems: 1,
+            maxItems: MAX_TEXT_EDITOR_EDITS,
+            items: {
+              type: "object",
+              properties: {
+                path: { type: "string" },
+                oldText: { type: ["string", "null"], description: "Exact text to replace; null creates a new file." },
+                newText: { type: "string", maxLength: 1_048_576 },
+                replaceAll: { type: "boolean", default: false },
+                expectedRevision: { type: ["string", "null"] },
+              },
+              required: ["path", "oldText", "newText"],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ["edits"],
+        additionalProperties: false,
+      },
+    },
+    async execute(argumentsValue): Promise<ToolExecutionResult> {
+      const rawEdits = objectArguments(argumentsValue).edits;
+      if (!Array.isArray(rawEdits) || rawEdits.length < 1 || rawEdits.length > MAX_TEXT_EDITOR_EDITS) {
+        throw new Error(`edits must contain 1 to ${MAX_TEXT_EDITOR_EDITS} operations.`);
+      }
+      const planned: Array<Readonly<{ path: string; content: string; expectedRevision: string | null; replacements: number }>> = [];
+      const seen = new Set<string>();
+      for (const [index, value] of rawEdits.entries()) {
+        const edit = objectArguments(value);
+        const path = workspacePath(edit.path, `edits[${index}].path`);
+        if (seen.has(path)) throw new Error(`text_editor accepts at most one operation per path: ${path}`);
+        seen.add(path);
+        const newText = stringArgument(edit.newText, `edits[${index}].newText`);
+        const replaceAll = booleanArgument(edit.replaceAll, `edits[${index}].replaceAll`);
+        const declaredRevision = edit.expectedRevision;
+        if (declaredRevision !== undefined && declaredRevision !== null && typeof declaredRevision !== "string") {
+          throw new Error(`edits[${index}].expectedRevision must be a string or null.`);
+        }
+        const current = await workspace.read(path);
+        if (edit.oldText === null) {
+          if (current) throw new WorkspaceConflictError(`text_editor create target already exists: ${path}`);
+          if (declaredRevision !== undefined && declaredRevision !== null) {
+            throw new Error(`A create operation must use a null expectedRevision: ${path}`);
+          }
+          planned.push({ path, content: newText, expectedRevision: null, replacements: 0 });
+          continue;
+        }
+        const oldText = stringArgument(edit.oldText, `edits[${index}].oldText`);
+        if (!oldText) throw new Error(`edits[${index}].oldText must not be empty.`);
+        if (!current) throw new WorkspaceConflictError(`text_editor replacement target is missing: ${path}`);
+        if (isWorkspaceBinaryEnvelope(current.content)) {
+          throw new Error(`text_editor refused opaque binary content: ${path}`);
+        }
+        if (typeof declaredRevision === "string" && declaredRevision !== current.revision) {
+          throw new WorkspaceConflictError(`text_editor revision changed before execution: ${path}`);
+        }
+        const occurrences = countOccurrences(current.content, oldText);
+        if (occurrences === 0) throw new WorkspaceConflictError(`text_editor could not find the declared text: ${path}`);
+        if (!replaceAll && occurrences !== 1) {
+          throw new Error(`text_editor refused ${occurrences} ambiguous occurrences in ${path}; set replaceAll explicitly.`);
+        }
+        planned.push({
+          path,
+          content: replaceAll ? current.content.split(oldText).join(newText) : current.content.replace(oldText, newText),
+          expectedRevision: current.revision,
+          replacements: replaceAll ? occurrences : 1,
+        });
+      }
+
+      const written: Array<{ path: string; revision: string; size: number; replacements: number }> = [];
+      for (const edit of planned) {
+        const file = await workspace.write(edit.path, edit.content, { expectedRevision: edit.expectedRevision });
+        written.push({ path: file.path, revision: file.revision, size: file.size, replacements: edit.replacements });
+      }
+      return {
+        content: `Applied ${written.length} revision-checked workspace edit${written.length === 1 ? "" : "s"}.`,
+        metadata: { files: written, transaction: "preflight-plus-per-file-cas", atomic: written.length === 1 },
+      };
+    },
+  };
+
   registry.register(listFiles);
   registry.register(readFile);
   registry.register(writeFile);
@@ -367,6 +474,7 @@ export function createWorkspaceToolRegistry(workspace: WorkspacePort): ToolRegis
   registry.register(replaceText);
   registry.register(moveFile);
   registry.register(removeFile);
+  registry.register(textEditor);
   return registry;
 }
 

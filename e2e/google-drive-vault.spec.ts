@@ -1,9 +1,28 @@
-import { expect, test, type Page, type Route } from "@playwright/test";
+import { expect, test, type BrowserContext, type Page, type Route } from "@playwright/test";
 
 const TOKEN = "google-browser-acceptance-token";
 const REQUIRED_SCOPES = ["openid", "email", "profile", "https://www.googleapis.com/auth/drive.file"];
 
-test("real browser UI adopts the encrypted Google Drive vault through GIS and Drive HTTP boundaries", async ({ page }) => {
+test("Google Identity Services loads through the reviewed Trusted Types boundary", async ({ page }) => {
+  const pageErrors: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  await page.route("https://accounts.google.com/gsi/client", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/javascript",
+      body: `globalThis.google={accounts:{oauth2:{initTokenClient(options){return{requestAccessToken(){queueMicrotask(()=>options.callback({error:"interaction_required"}))}}}}}};`,
+    });
+  });
+
+  await page.goto("/#vault");
+
+  await expect(page.getByRole("heading", { name: "Connect your Google Drive" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Recover with Google Drive" })).toBeEnabled();
+  await expect(page.locator(".google-drive-setup__status")).toHaveCount(0);
+  expect(pageErrors.filter((message) => message.includes("TrustedScriptURL"))).toEqual([]);
+});
+
+test("real browser UI adopts and recovers the encrypted Google Drive vault through GIS and Drive HTTP boundaries", async ({ browser, page }) => {
   test.setTimeout(90_000);
   const drive = new BrowserDriveService();
   await installGoogleIdentityBoundary(page);
@@ -20,16 +39,17 @@ test("real browser UI adopts the encrypted Google Drive vault through GIS and Dr
 
   await page.goto("/#vault");
   await expect(page.getByRole("heading", { name: "Connect your Google Drive" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Continue with Google" })).toBeEnabled();
-  await page.getByLabel("Workspace folder").fill("Airship Browser Acceptance");
-  await page.getByRole("button", { name: "Generate new recovery key" }).click();
+  await expect(page.getByRole("button", { name: "Recover with Google Drive" })).toBeEnabled();
+  await page.getByRole("button", { name: "Create a new workspace" }).click();
+  await page.getByLabel("New workspace folder").fill("Airship Browser Acceptance");
   const recovery = page.locator(".google-drive-setup output");
   await expect(recovery).toHaveText(/^airship-wrk-v1\./);
   const recoveryValue = await recovery.textContent();
   await page.getByLabel("I saved this recovery key").check();
-  await page.getByRole("button", { name: "Continue with Google" }).click();
+  await page.getByRole("button", { name: "Create with Google Drive" }).click();
 
   await expect(page.getByText("Encrypted runtime active", { exact: true })).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByText("Google Drive · encrypted", { exact: true })).toBeVisible();
   await expect(page.getByText("Provider contract verified", { exact: true })).toBeVisible();
   await expect(page.locator(".vault-view__configuration")).toContainText("Google Drive");
   await expect(page.locator(".vault-view__configuration")).toContainText("Airship Browser Acceptance");
@@ -38,13 +58,69 @@ test("real browser UI adopts the encrypted Google Drive vault through GIS and Dr
   await expect(readiness.getByRole("listitem").filter({ hasText: "Compare and swap" })).toContainText("Verified");
   await expect(readiness.getByRole("listitem").filter({ hasText: "Exact ranges" })).toContainText("Verified");
 
+  await page.getByRole("button", { name: "Renew Google access" }).click();
+  const approval = page.getByRole("dialog", { name: /Allow vault_live_conformance once/ });
+  await expect(approval).toBeVisible();
+  await approval.getByRole("button", { name: "Allow once" }).click();
+  await expect(page.getByRole("button", { name: "Renew Google access" })).toBeEnabled({ timeout: 60_000 });
+  await expect(page.getByText("Provider contract verified", { exact: true })).toBeVisible();
+
   const gis = await page.evaluate(() => (window as typeof window & { __airshipGoogleAcceptance: {
     scopes: string[];
     prompts: string[];
   } }).__airshipGoogleAcceptance);
   expect(gis.scopes).toHaveLength(1);
   expect(gis.scopes[0]!.split(/\s+/u).sort()).toEqual([...REQUIRED_SCOPES].sort());
-  expect(gis.prompts).toEqual(["select_account"]);
+  expect(gis.prompts).toEqual(["select_account", ""]);
+
+  // A second, storage-empty browser context imports only the one-time recovery
+  // value and obtains its own expiring Google grant. It must rediscover the
+  // exact app-owned folder hierarchy and encrypted object index; it may not
+  // create a competing authority just because no Airship browser state exists.
+  const recoveredContext = await browser.newContext({
+    baseURL: "http://127.0.0.1:4187",
+    viewport: page.viewportSize() ?? { width: 1280, height: 800 },
+  });
+  try {
+    await installGoogleIdentityBoundary(recoveredContext);
+    const recoveredPage = await recoveredContext.newPage();
+    await recoveredPage.route("https://openidconnect.googleapis.com/**", async (route) => {
+      drive.observeAuthorization(route);
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        headers: googleHeaders(),
+        body: JSON.stringify({ sub: "google-browser-user-123", email: "pilot@airship.test", email_verified: true, name: "Airship Pilot" }),
+      });
+    });
+    await recoveredPage.route("https://www.googleapis.com/**", (route) => drive.handle(route));
+
+    await recoveredPage.goto("/#vault");
+    await expect(recoveredPage.getByRole("heading", { name: "Connect your Google Drive" })).toBeVisible();
+    const workspaceFoldersBeforeRecovery = drive.filesByRole("workspace").length;
+    await recoveredPage.getByLabel("Existing Airship recovery key").fill(`airship-wrk-v1.${"A".repeat(43)}`);
+    await recoveredPage.getByRole("button", { name: "Recover with Google Drive" }).click();
+    await expect(recoveredPage.locator(".google-drive-setup__status")).toContainText("No Airship workspace matching this recovery key exists", { timeout: 30_000 });
+    expect(drive.filesByRole("workspace")).toHaveLength(workspaceFoldersBeforeRecovery);
+
+    await recoveredPage.getByLabel("Existing Airship recovery key").fill(recoveryValue ?? "");
+    await recoveredPage.getByRole("button", { name: "Recover with Google Drive" }).click();
+    await expect(recoveredPage.getByText("Encrypted runtime active", { exact: true })).toBeVisible({ timeout: 60_000 });
+    await expect(recoveredPage.getByText("Google Drive · encrypted", { exact: true })).toBeVisible();
+    await expect(recoveredPage.locator(".vault-view__configuration")).toContainText("Airship Browser Acceptance");
+    await expect(recoveredPage.getByText("Provider contract verified", { exact: true })).toBeVisible();
+
+    const recoveredPersisted = await persistedBrowserText(recoveredPage);
+    expect(recoveredPersisted).not.toContain(TOKEN);
+    expect(recoveredPersisted).not.toContain(recoveryValue ?? "unavailable-recovery-value");
+  } finally {
+    await recoveredContext.close();
+  }
+
+  await page.getByRole("button", { name: "Disconnect · continue locally" }).click();
+  await expect(page.getByText("Disconnected", { exact: true })).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByRole("heading", { name: "Connect your Google Drive" })).toBeVisible();
+  await expect(page.getByText("No endpoint, credential authority, or workspace key is attached.")).toBeVisible();
 
   expect(drive.authorizationHeaders.length).toBeGreaterThan(20);
   expect(new Set(drive.authorizationHeaders)).toEqual(new Set([`Bearer ${TOKEN}`]));
@@ -62,8 +138,8 @@ test("real browser UI adopts the encrypted Google Drive vault through GIS and Dr
   expect(persisted).not.toContain(recoveryValue ?? "unavailable-recovery-value");
 });
 
-async function installGoogleIdentityBoundary(page: Page): Promise<void> {
-  await page.addInitScript(({ token, scopes }) => {
+async function installGoogleIdentityBoundary(target: Page | BrowserContext): Promise<void> {
+  await target.addInitScript(({ token, scopes }) => {
     localStorage.clear();
     sessionStorage.clear();
     const state = { scopes: [] as string[], prompts: [] as string[] };
@@ -244,7 +320,7 @@ class BrowserDriveService {
   }
 
   private metadata(file: StoredFile): Record<string, unknown> {
-    return { id: file.id, name: file.name, mimeType: file.mimeType, size: String(file.bytes.length), modifiedTime: file.modifiedTime, appProperties: file.appProperties, webViewLink: `https://drive.google.test/open?id=${file.id}` };
+    return { id: file.id, name: file.name, mimeType: file.mimeType, size: String(file.bytes.length), modifiedTime: file.modifiedTime, appProperties: file.appProperties, webViewLink: `https://drive.google.com/drive/folders/${file.id}` };
   }
 }
 
@@ -252,7 +328,9 @@ type FileMetadata = { name: string; mimeType: string; parents: string[]; appProp
 
 function googleHeaders(extra: Record<string, string> = {}): Record<string, string> {
   return {
-    "access-control-allow-origin": "http://127.0.0.1:4187",
+    // The same boundary runs under the ordinary 4173 matrix and the isolated
+    // 4187 Drive contract. No cookies or browser credentials are involved.
+    "access-control-allow-origin": "*",
     "access-control-allow-headers": "authorization,content-type,if-match,range",
     "access-control-allow-methods": "GET,POST,PATCH,OPTIONS",
     "access-control-expose-headers": "etag,content-length,content-range",

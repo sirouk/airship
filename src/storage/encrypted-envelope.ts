@@ -37,6 +37,34 @@ export class WorkspaceRootKey {
     return { key: await WorkspaceRootKey.import(recoveryBytes), recoveryBytes };
   }
 
+  /**
+   * Rehydrate a structured-cloned, non-extractable HKDF handle from
+   * origin-private browser storage. This never accepts raw or extractable key
+   * material.
+   */
+  static fromPersistedHandle(handle: CryptoKey): WorkspaceRootKey {
+    const algorithm = handle?.algorithm;
+    if (
+      !algorithm ||
+      algorithm.name !== "HKDF" ||
+      handle.extractable ||
+      handle.type !== "secret" ||
+      handle.usages.length !== 1 ||
+      handle.usages[0] !== "deriveKey"
+    ) {
+      throw new Error("Persisted workspace key handle is invalid.");
+    }
+    return new WorkspaceRootKey(handle);
+  }
+
+  /**
+   * A structured-cloneable handle for same-origin device custody. The handle
+   * remains non-extractable; callers never receive the root bytes.
+   */
+  persistedHandle(): CryptoKey {
+    return this.key;
+  }
+
   async opaqueObjectId(logicalId: string): Promise<string> {
     const namingKey = await crypto.subtle.deriveKey(
       {

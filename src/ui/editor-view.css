@@ -1,9 +1,115 @@
-.editor-route { display: grid; gap: .72rem; width: 100%; min-width: 0; }
-.editor-route__tabs { display: flex; gap: .2rem; width: fit-content; max-width: 100%; padding: .2rem; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--surface-soft); }
-.editor-route__tabs button { min-height: 34px; padding: 0 .8rem; border: 0; border-radius: calc(var(--radius-control) - 2px); color: var(--ink-muted); background: transparent; cursor: pointer; }
-.editor-route__tabs button[aria-selected="true"] { color: var(--ink); background: color-mix(in srgb, var(--accent) 12%, var(--surface)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 24%, transparent); }
-.editor-route__loading { min-height: 12rem; padding: 1rem; border: 1px solid var(--line); border-radius: var(--radius-panel); color: var(--ink-muted); background: var(--surface); }
+/*
+ * The workbench route is a frame, not a document.
+ *
+ * `.main` is the shell's own scroll container and every other route is a page
+ * inside it. This one is not: the file strip that names the revision, the byte
+ * size and whether your buffer is saved measured at y=959 on a 900px viewport
+ * because the route scrolled as a document. The route bar and the workbench
+ * split the frame between them, and only the code and the tree scroll.
+ *
+ * Scoped through `:has()` so it applies exactly when this route is mounted and
+ * to no other route sharing `.main`.
+ */
+.main:has(> .editor-route) {
+  padding: 0;
+  overflow: hidden;
+}
+
+.main:has(> .editor-route) > .editor-route {
+  width: 100%;
+  max-width: none;
+  margin: 0;
+}
+
+.editor-route {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  /* Below this the workbench stops being usable, so let the shell scroll. */
+  min-height: 22rem;
+}
+
+/*
+ * The route bar keeps the shell's own gutter rather than `<RouteHeader>`'s
+ * default, so this route's title starts on the same vertical line as every
+ * other route's — the invariant `airship-shell.spec.ts` measures. The workbench
+ * below it is deliberately full-bleed: it is a frame, not a page.
+ *
+ * The selector is a child chain rather than a bare class pair so it outranks
+ * `routes.css`'s `.route-layout > * > .route-header { padding-inline: 0 }`,
+ * which is appended later in the barrel. That rule strips the second page edge
+ * from routes whose shell already supplies one; this route zeroed the shell's
+ * padding above, so the gutter has to come from the bar itself.
+ */
+.main > .editor-route > .route-header.editor-route__header {
+  padding-inline: var(--route-gutter-inline-start, var(--sp-6)) var(--route-gutter-inline-end, var(--sp-6));
+}
+
+.editor-route__panel {
+  min-width: 0;
+  min-height: 0;
+}
+
+/* Files own the frame; Sources is still a document and still scrolls. */
+.editor-route__panel[data-mode="files"] {
+  display: grid;
+  overflow: hidden;
+}
+
+.editor-route__panel[data-mode="sources"] {
+  overflow: auto;
+  padding: var(--sp-5) var(--sp-6) var(--sp-7);
+}
+
+/*
+ * The route control lives inside the 44px bar rather than above it. Its own
+ * underline is the "you are here" encoding; the bar already owns the rule
+ * beneath, so a second border would draw the same line twice.
+ */
+.tabs.editor-route__tabs {
+  border-bottom: 0;
+}
+
+.editor-route__loading {
+  margin: var(--sp-5) var(--sp-6);
+  min-height: 12rem;
+  padding: var(--sp-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-panel);
+  color: var(--ink-muted);
+  background: var(--surface);
+}
+
+/*
+ * Durability was a wrapping pill whose explanatory sentence lived only in
+ * `title=` — unreachable by touch and by keyboard on every device. Same words,
+ * now one keyboard-reachable gesture away.
+ */
+.workbench-durability {
+  display: inline-flex;
+  min-width: 0;
+}
+
+.workbench-durability__detail {
+  margin: 0 0 var(--sp-2);
+  color: var(--ink);
+  font-size: var(--fs-caption);
+  line-height: 1.5;
+}
+
+.workbench-durability__detail:last-child {
+  margin-bottom: 0;
+  color: var(--ink-muted);
+}
+
 @media (max-width: 760px) {
-  .editor-route__tabs { display: grid; grid-template-columns: 1fr 1fr; width: 100%; }
-  .editor-route__tabs button { min-height: 44px; }
+  .editor-route__panel[data-mode="sources"] {
+    padding: var(--sp-4) var(--sp-4) var(--sp-6);
+  }
+
+  .editor-route__loading {
+    margin: var(--sp-4);
+  }
 }

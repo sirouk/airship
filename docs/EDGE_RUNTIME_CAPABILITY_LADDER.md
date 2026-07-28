@@ -116,10 +116,11 @@ capability-negotiated adapter with truthful transport provenance.
 
 ## Execution without a server-shaped browser
 
-The baseline executor now includes a bounded JavaScript Worker and a compact,
+The baseline executor now includes a bounded JavaScript Worker and a pinned,
 real WASI Preview 1 command host with typed inputs, wall-clock/output/artifact
-limits, abort, args/env/stdout/stderr, and no implicit DOM, network, credential,
-or filesystem access. `inspect_execution_runtimes` reports what is actually
+limits, abort, args/env/stdout/stderr, and an optional bounded in-memory
+workspace snapshot with revision-checked writeback. It has no implicit DOM,
+network, credential, host-filesystem, Bash, or compiler access. `inspect_execution_runtimes` reports what is actually
 ready; `execute_code` never treats an optional label as an installed runtime.
 
 Pyodide 314.0.2 is an explicitly installed pack that becomes ready only after a
@@ -170,7 +171,7 @@ Every subsystem has explicit states: `unavailable`, `probing`, `ready`,
 
 | Concern | Baseline budget |
 |---|---:|
-| startup application JavaScript | 224 KiB aggregate compressed gate |
+| automatically loaded startup JavaScript | 224 KiB compressed engineering target; executable entry/baseline caps are in `RELEASE_GATE.md` |
 | automatic context injected per turn | 6 chunks and 24 KiB plaintext default |
 | remote context fan-out | 4 experts, 8 MiB, 1.5 s default |
 | image input | 8 images, 10 MiB each, 20 MiB aggregate |
@@ -179,7 +180,9 @@ Every subsystem has explicit states: `unavailable`, `probing`, `ready`,
 | one workspace file | 16 MiB encrypted-workspace ceiling |
 | agent loop | 32 steps with cancellation and durable step boundaries |
 
-Optional semantic, database, Git, and WASI packs are lazy and separately budgeted.
+Optional semantic, database, Git, and execution packs are lazy and separately
+budgeted. WASIX Bash is currently fail-closed and the release gate permits zero
+WASIX artifacts.
 Cold download and initialization are included in their benchmark; a warm-cache
 number is never presented as first-use latency.
 

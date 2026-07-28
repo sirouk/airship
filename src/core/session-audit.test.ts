@@ -542,6 +542,32 @@ describe("auditSessionHistory", () => {
     expect(tampered.status).toBe("invalid");
     expect(tampered.findings.map((finding) => finding.code)).toContain("SKILL_SET_DIGEST_MISMATCH");
   });
+
+  it("requires every v2 profile-silo field while preserving valid v1 historical pins", async () => {
+    const resolvedSkills: never[] = [];
+    const fixture = await createFixture([], {
+      version: 2,
+      profileId: "general",
+      profileRevision: await sha256("profile-v2"),
+      themeId: "foundry",
+      themeDigest: await sha256("theme-v2"),
+      resolvedSkills,
+      skillSetDigest: await sha256(stableStringify(resolvedSkills as unknown as JsonValue)),
+      resolutionDigest: await sha256("resolution-v2"),
+      workspaceBinding: { kind: "active-workspace" },
+      memoryScope: "profile",
+      approvalMode: "ask-first",
+      minimumPosture: "encrypted-unattested",
+    });
+
+    expect((await auditFixture(fixture)).status).toBe("verified");
+    const session = (await fixture.journal.getSession(fixture.session.id))!;
+    const malformed: Record<string, unknown> = { ...session.manifest.profile! };
+    delete malformed.approvalMode;
+    session.manifest.profile = malformed as typeof session.manifest.profile;
+    const report = await auditSessionHistory({ session, events: await fixture.journal.readEvents(session.id) });
+    expect(report.findings.map((finding) => finding.code)).toContain("PROFILE_SILO_INVALID");
+  });
 });
 
 async function createFixture(tools: ToolDefinition[], profile?: SessionRecord["manifest"]["profile"]) {

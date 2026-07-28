@@ -9,6 +9,7 @@ import type {
 import { sha256, stableStringify } from "../core/hash";
 import { compileToolInputSchema } from "./schema";
 import type { ClientContextRuntime } from "../retrieval/client-context-runtime";
+import type { TurnContextProvider } from "../core/context-selection";
 
 const MAX_TOOL_OUTPUT_BYTES = 1_048_576;
 const MAX_APPROVAL_TICKETS = 256;
@@ -33,6 +34,7 @@ export class ToolRegistry {
   private readonly closedOperations = new Set<string>();
   private readonly approvals = new Map<string, ApprovalTicket>();
   private contextRuntime?: ClientContextRuntime;
+  private turnContextProvider?: TurnContextProvider;
 
   attachContextRuntime(runtime: ClientContextRuntime): void {
     if (this.contextRuntime && this.contextRuntime !== runtime) throw new Error("A different context runtime is already attached.");
@@ -41,6 +43,17 @@ export class ToolRegistry {
 
   getContextRuntime(): ClientContextRuntime | undefined {
     return this.contextRuntime;
+  }
+
+  attachTurnContextProvider(provider: TurnContextProvider): void {
+    if (this.turnContextProvider && this.turnContextProvider !== provider) {
+      throw new Error("A different turn context provider is already attached.");
+    }
+    this.turnContextProvider = provider;
+  }
+
+  getTurnContextProvider(): TurnContextProvider | undefined {
+    return this.turnContextProvider;
   }
 
   register(tool: Tool): void {

@@ -1,190 +1,328 @@
-# Browser-native Git foundation
+# Browser-native Git
 
-Status: executable local and encrypted-cloud foundation, 2026-07-19. Ephemeral mode uses the in-memory adapter. Vault mode can bind the versioned encrypted-workspace adapter. An OPFS/File System Access adapter and a general remote adapter are not yet installed.
+**Status:** standards-compatible local Git foundation, 2026-07-22
+
+Airship runs Git on the client with `isomorphic-git`. The Git engine reads and
+writes through the same `WorkspacePort` used by Editor, Terminal, tools,
+retrieval, and Vault migration. There is no second simulated repository and no
+Airship Git proxy.
 
 ## Product truth
 
-Airship can run Git’s local control plane in the client. A browser can own a virtual object database, index, checkout, branches, commits, status, and diffs without an Airship application server. A browser cannot universally speak authenticated Git Smart HTTP to arbitrary origins: the remote must allow the production origin through CORS, or the host must expose a browser-safe provider API. Airship does not conceal this boundary with an undeclared proxy.
+Each registered repository contains a conventional `.git` namespace with
+loose objects or packfiles, refs, `HEAD`, config, and a binary `DIRC` index.
+Repository metadata is catalogued at
+`/workspace/.airship/browser-git-repositories.v1.json`. Both the catalog and
+the repository `.git` files are hidden from ordinary Editor trees,
+WebContainer execution snapshots, and model context, but they migrate with the
+authoritative workspace. Terminal Git commands use the deterministic
+`BrowserGitClient` bridge against those exact files; Airship does not copy
+`.git` into WebContainer or create a second repository there.
 
-The implemented reference path proves:
+The workspace boundary is string-valued, so opaque Git and binary worktree
+bytes use a reversible, versioned base64 envelope. This is a storage encoding,
+not a synthetic Git format: bytes presented to the Git engine remain the exact
+Git bytes. Symlinks are currently rejected rather than emulated.
 
-- immutable repository and worktree snapshots;
-- the two Git change planes (HEAD → index and index → working tree);
-- bounded local diff, stage, unstage, commit, branch, branch switch, worktree create, and worktree remove semantics;
-- compare-before-mutate worktree/repository generations;
-- one writer per repository scope in a `BrowserGitClient` instance;
-- cancellation before an adapter’s commit point;
-- effect/risk/destination descriptors suitable for Airship’s approval broker;
-- portable path/ref validation and explicit limits; and
-- reload-durable, content-addressed encrypted workspace checkpoints with an atomic head; and
-- fail-closed clone/fetch/push capability reporting.
-- one atomic public-GitHub snapshot admission path shared by the agent tool and
-  Sources UI, so imported bytes cannot appear in Workspace without the matching
-  browser-Git repository; and
-- remembered page selection so an admitted repository remains visible across
-  route changes and encrypted-vault reload adoption.
+Ephemeral mode keeps this whole filesystem in page memory. An active
+client-encrypted Vault persists the same files through its selected provider;
+no detached Git checkpoint is exported. The legacy
+`/workspace/.airship/git/` semantic checkpoint is ignored during migration.
 
-It does **not** yet prove OPFS persistence, Smart HTTP interoperability, packfile hardening, merge/rebase, signing, LFS, or submodules. Those remain release gates, not implied features.
-
-## Components
+## Architecture
 
 ```text
-SourcesView
-  |
-  +-- exact GitOperation + GitOperationDescriptor --> ApprovalBroker
-  |
-  +-- BrowserGitClient
-        |  validates, freezes, capability-gates, single-writer locks
-        |
-        +-- BrowserGitAdapter
-              +-- MemoryGitAdapter                 implemented; reload loses state
-              +-- EncryptedWorkspaceGitAdapter     implemented; encrypted vault durability
-              +-- isomorphic-git + OPFS adapter    next local durable adapter
-              +-- File System Access adapter       explicit user-authorized host folder
-              +-- host-provider API adapter        direct, scoped, host-specific
-              +-- direct Smart HTTP adapter        only for CORS-enabled remotes
+Editor + Source Control + terminal Git bridge + agent Git tools
+                    |
+             BrowserGitClient
+       validation / locks / capability gates
+                    |
+          WorkspaceGitAdapter (lazy chunk)
+                    |
+              isomorphic-git
+                    |
+           WorkspaceGitFileSystem
+                    |
+    authoritative WorkspacePort selected by runtime
+       |                                |
+ page-memory Ephemeral        client-encrypted Vault
 ```
 
-`src/git/types.ts` is the adapter waist. It is deliberately library-neutral: isomorphic-git, a WASM engine, or a provider API can satisfy it without leaking library-specific filesystem handles or credentials into the UI. An adapter publishes a capability report covering storage durability, remote transport, credential persistence, and each operation. Every unavailable operation must include a reason.
+`src/git/types.ts` remains the library-neutral adapter waist. The Git engine,
+its Buffer compatibility layer, and the filesystem bridge live in one lazy
+browser-Git chunk; the baseline shell does not preload them. The release gate
+allows exactly one optional Git chunk and budgets it independently.
 
-## Version and cancellation contract
+## Implemented operations
 
-Every local mutation contains `expectedWorktreeVersion`; repository-wide mutations contain `expectedRepositoryVersion`. The adapter compares that value at the durable mutation boundary. A mismatch is `GitVersionConflictError`, forcing a new status/diff and approval. This is what binds the operation the person reviewed to the state actually changed.
+- real status over HEAD, index, and worktree;
+- bounded staged and working-tree diffs;
+- stage, unstage, commit, create branch, and switch branch;
+- bounded history reads: `log` (optionally depth-limited, revision-scoped, or
+  following one path) and `show`, which renders a commit against its first
+  parent — or against the empty tree for a root commit;
+- lightweight and annotated tags: create, list, and delete real `refs/tags`
+  entries and real tag objects;
+- stash push/apply/pop/drop/clear/list over the conventional `refs/stash` and
+  `logs/refs/stash` records;
+- conflict-free merge — fast-forward or a real merge commit — followed by the
+  checkout that makes the worktree and index agree with the new `HEAD`;
+- discard-changes and reset: restore named paths from the index or from `HEAD`,
+  and `--soft`/`--mixed`/`--hard` reset of the current branch;
+- remote management: attach, repoint, and detach a remote in both `.git/config`
+  and the repository catalog;
+- full-history direct Smart HTTP clone and fetch when this build's own
+  Content-Security-Policy permits the origin *and* the remote permits it;
+- direct Smart HTTP push after a separate identity/change-remote approval,
+  including an optional page-memory-only credential callback and explicit
+  unknown-outcome recovery;
+- conventional linked-worktree create/list/remove with a real `.git` pointer,
+  `.git/worktrees/<id>` administration records, an independent `HEAD` and
+  binary index, and one physically shared object/ref/config namespace;
+- public GitHub snapshot admission as a real local repository; and
+- reload and Vault-transition reopening from the same `.git` files.
 
-`BrowserGitClient` allows concurrent reads but admits one mutating operation per worktree, with repository-wide operations excluding all worktree writers. The lock is an in-page coordinator. `EncryptedWorkspaceGitAdapter` adds a cross-instance CAS checkpoint: it refreshes before an operation, applies the mutation to an isolated clone, writes immutable objects, and publishes exactly one versioned head. A losing writer never replaces its live state and receives `GitCheckpointConflictError`. A future OPFS adapter still needs Web Locks plus fencing.
+Deliberately **not** implemented, and reported as such rather than approximated:
+rebase, cherry-pick, revert, blame, bisect, submodules, notes, and interactive
+conflict resolution. `isomorphic-git` exports `cherryPick` but no `rebase` or
+`revert`; a conflicting merge is aborted with the conflicting path list instead
+of writing conflict markers, because `statusMatrix` has no stage-2/stage-3
+representation to surface a conflicted path honestly.
 
-An abort observed before dispatch fails without mutation. After dispatch, the adapter owns the commit point. A remote adapter must distinguish `not-committed`, `committed`, and `unknown`; it must never report an unproved rollback or automatically retry an unknown push.
+Because a stash entry is a real commit, `isomorphic-git` resolves its identity
+from `user.name`/`user.email` in the repository config, exactly as Git does. The
+adapter therefore publishes the reviewed request author into `.git/config`
+before writing the stash commit.
 
-## Approval integration
+The Terminal route exposes a Shared Git command row for status, diff, log, show,
+add, restore/reset, commit, branch/switch, merge, stash, tag, worktree
+management, remote inspection and management, fetch, push, clone, and selected
+rev-parse queries; `git help` lists the exact set, including what is absent.
+Local mutations and remote effects go through the same approval policy as
+Editor. The adjacent interactive WebContainer remains a real Node/jsh runtime,
+but its arbitrary process filesystem excludes `.git`: this prevents unreviewed
+native mutations from bypassing Workspace CAS while still giving terminal users
+authoritative Git operations and output.
 
-`describeGitOperation()` returns:
+### Ignore rules
 
-- the broker effect (`read`, `write`, `network`, or `identity`);
-- a product risk (`observe`, `change-local`, `communicate`, or `change-remote`);
-- the repository/worktree resource;
-- the remote destination when applicable;
-- whether data leaves the device; and
-- a deeply frozen, redaction-safe copy of the exact operation arguments, including the expected generation.
+`.gitignore` and `.git/info/exclude` are honoured by the engine itself:
+`statusMatrix` drops untracked-and-ignored rows and `add` skips them. Airship
+does not add a second ignore engine on top, so Git's own rules hold — including
+the rule that a file under an excluded directory cannot be re-included by a
+later negation. Three consequences are made explicit rather than left to be
+inferred from an empty status:
 
-`SourcesView` requires a fail-closed `review` callback. An application bridge can turn the descriptor into an approval-broker request:
+- staging an ignored, untracked path fails with `path-ignored`, naming the rule,
+  instead of the misleading "has no unstaged change"; passing `force` stages it
+  and the approval summary says so;
+- a path that was tracked before the pattern was added keeps reporting
+  modifications, because Git only applies ignore rules to untracked paths; and
+- a seeded or migrated file the repository's own rules exclude stays in the
+  workspace but never enters the index. Initialization counts those files and
+  names them in a `console.warn`, so the omission is legible in devtools rather
+  than inferred from an empty status; it does not yet reach the UI, the mutation
+  result, or the approval record.
 
-```ts
-const review: SourcesReview = (operation, descriptor) => broker.request(
-  {
-    name: `git.${operation.kind}`,
-    description: descriptor.summary,
-    effect: descriptor.brokerEffect,
-    inputSchema: {},
-  },
-  descriptor.arguments,
-  { sessionId, turnId, operationId, signal },
-);
-```
+The in-memory reference adapter has no ignore engine at all and does not pretend
+to: it reports every untracked path. `src/git/gitignore.test.ts` pins both
+contracts.
 
-For a production grant, the executor must additionally bind and atomically consume the canonical argument digest. A local commit and a push are always two approvals. Force push remains explicit in both the descriptor and operation; the supplied Sources UI does not expose it.
+The Source Control rail defaults to a path tree and projects the same files as
+Editor. Historical `#sources` navigation resolves to Workspace Editor.
 
-## Local adapter sequence
+### Snapshot import is not clone
 
-The next production *device-local* adapter should compose isomorphic-git (or a conformant successor) behind `BrowserGitAdapter`:
+The public GitHub importer resolves and verifies a pinned host snapshot, writes
+those exact bytes into Workspace, then initializes a genuine local repository.
+It creates an empty root commit and leaves the admitted files visibly
+untracked so the operator can review, stage, and commit them. It records the
+source URL as `origin`, but it does **not** invent the upstream commit graph.
+Use direct clone when upstream objects and history are required — but read the
+Content-Security-Policy section below first: on this build the importer is the
+only working path to a public GitHub repository.
 
-1. Keep the Git directory and ordinary browser worktree in OPFS. OPFS availability is a capability, not a baseline assumption.
-2. Run repository scans, hashing, pack parsing, and diff work in a dedicated module worker.
-3. Use Web Locks plus a fenced repository generation. Flush filesystem writes before publishing the new generation.
-4. Treat File System Access handles as separately authorized capabilities. Persisting a handle does not prove that permission remains granted; re-check it.
-5. Enforce Airship’s validation and resource limits before passing paths/refs/objects to the engine.
-6. Encrypt immutable Git objects and small checkout/index manifests before optional S3 checkpointing. Acknowledged cloud durability requires object commit plus head CAS, not merely an OPFS write.
+A freshly imported repository presents every admitted file as untracked, so the
+first stage covers the whole tree. One reviewed stage/unstage/restore request
+therefore accepts up to `GIT_LIMITS.maxPathsPerRequest` paths (4096, at least the
+importer's 2000-file default); `BrowserGitClient` executes it as sequential
+chunks of at most `maxPathsPerOperation` (512) per adapter call, chaining each
+chunk's issued worktree version so an interleaved foreign write still fails the
+fence. If a later chunk fails, the error states how many paths were already
+staged: partial staging is a durable outcome and is never reported as a
+rollback.
 
-The in-memory and encrypted adapters expose version-fenced `writeWorkingFile`,
-`removeWorkingFile`, and `moveWorkingFile` operations so Workspace Explorer and
-Sources project the same worktree. The memory capability reports
-`durable: false`. `EncryptedWorkspaceGitAdapter` accepts only a
-`ClientEncryptedWorkspacePort`; a generic workspace, IndexedDB adapter, or host
-filesystem cannot accidentally be labeled encrypted.
+The converse claim needs the adapter's cooperation, so the adapter contract
+carries it: `stage`, `unstage`, and `restore` must admit or refuse every path
+they were given *before* their first write. `types.ts` enumerates the codes that
+pre-flight can raise — `not-found`, `version-conflict`, `validation`,
+`path-ignored`, `path-not-tracked`, `detached-head` — and a failure carrying one
+of them on the *first* chunk provably changed nothing, so `BrowserGitClient`
+surfaces it verbatim instead of masking it as `partial-mutation`. Every other
+code, and every failure once an earlier chunk has committed, keeps the
+conservative partial framing. That is why the workspace adapter scans the whole
+path set first rather than deciding each path as it writes it: a mid-set refusal
+after a sibling had already been added would turn the verbatim code into a false
+"nothing happened" claim.
 
-The UI currently composes a workspace mutation and a Git-checkpoint mutation
-with preflight fencing and compensating rollback. Those two encrypted heads do
-not share one atomic commit point. An ordinary rejected operation is rolled
-back, but an ambiguous provider success or failed rollback is reported as an
-error and requires refresh/repair; the UI must not call this a cross-head atomic
-transaction. A future batch manifest or durable repair journal is required for
-that stronger claim.
+## Versions, concurrency, and migration
 
-### Encrypted checkpoint protocol
+Every mutation carries the repository/worktree version the user reviewed. The
+adapter derives that version from actual Workspace revisions, rejects a stale
+operation, and allows only the explicitly projected file to change during an
+Editor-to-Git handoff. `BrowserGitClient` serializes conflicting mutations in
+the page. Workspace providers retain their own compare-and-swap contract.
 
-The durable adapter stores immutable file contents by SHA-256 beneath `/workspace/.airship/git/objects/`, then advances `/workspace/.airship/git/head.v1.json` using `WorkspacePort.write(..., { expectedRevision })`. The head contains refs, commit metadata, index/checkouts, repository/worktree generations, object digests, a schema version, a monotonic checkpoint generation, and a canonical state digest. Reload verifies the head, every referenced object digest, every reconstructed commit ID, every ref, and all path/resource limits before admitting state.
+Git's index caches a stat per tracked file and treats a file as unchanged when
+mode, size, uid, gid, inode and *whole-second* mtime all match. A browser
+workspace has no real inodes, and agent tool loops and editor autosave routinely
+rewrite a file to a same-length value inside one second — which would make that
+edit invisible to status, diff, stage, and commit. `WorkspaceGitFileSystem`
+therefore projects the WorkspacePort revision, which every port implementation
+mints fresh on every write, into the reported inode. A no-op rewrite costs one
+re-hash; a real rewrite can never be missed.
 
-Object writes can become unreachable when a tab loses the final CAS; that is safe opaque garbage and can be collected later. The adapter bounds head bytes, repository/commit/object/reference counts, tree entries, and individual file bytes. Its reserved control-plane path is excluded from automatic context indexing, so Git internals cannot become model context.
+Linked worktrees close the one gap between isomorphic-git's `.git`-file
+discovery and Git's layout rules. The filesystem adapter interprets the
+conventional `commondir` record: per-worktree `HEAD`, index, in-progress state,
+and `logs/HEAD` remain in the linked administration directory, while objects,
+refs, config, packed refs, and common logs resolve to the primary `.git`
+directory. It does not copy or reconcile those namespaces. A branch may be
+checked out by only one registered worktree, creation requires an empty safe
+Workspace destination, and removal refuses a dirty or primary checkout.
+When an imported repository is nested inside the registered root Workspace
+repository, its linked checkout may use another safe path in that same
+Workspace container. Airship records an owner-qualified exclude in the
+container repository and omits every nested repository worktree from its
+version projection, so the linked checkout neither pollutes root status nor
+weakens overlap checks against unrelated repositories.
 
-## Remote strategies
+Vault transitions copy normal files, the repository catalog, and every `.git`
+file through `WorkspacePort`. Adoption happens only after the target can reopen
+and verify each registered `HEAD` and index. The old lossy checkpoint is not
+copied and `WorkspaceGitAdapter.exportCheckpoint()` fails closed by design.
 
-### Direct Git Smart HTTP
+This is not yet a cross-tab filesystem transaction. A future worker/OPFS tier
+should add Web Locks or equivalent durable writer fencing before advertising
+safe concurrent repository mutation across tabs.
 
-Use only when the remote advertises a browser-compatible CORS policy for the production origin and accepts a user-scoped, short-lived credential. Preflight, redirects, response headers, streaming bodies, and credential revocation need live conformance tests. Tokens remain in memory and must not appear in the URL, repository config, object store, logs, error messages, or service-worker cache.
+## Remote contract
 
-### Host-provider API
+### This build's Content-Security-Policy is the first gate, before CORS
 
-GitHub/GitLab/other host APIs can be a separate adapter when their browser OAuth and repository APIs cover the requested semantics. A content API update is not silently labeled a Git push: the adapter must preserve parent/ref preconditions, commit authorship, conflicts, and result identity or expose a narrower capability.
+Airship ships a strict `connect-src` allowlist of exact origins in both
+`index.html` and `public/_headers`. It names `https://api.github.com` and
+`https://raw.githubusercontent.com` — GitHub's REST API and raw-file CDN, the
+two hosts the snapshot importer uses. **Neither serves Git Smart HTTP**, and
+neither `https://github.com` nor `https://gitlab.com` is on the list. There is
+no wildcard and no scheme-wide grant.
 
-### No transport
+So on this build, direct `clone`, `fetch`, and `push` can reach only origins in
+`GIT_REMOTE_CONNECT_ORIGINS` (`src/git/validation.ts`, currently empty) plus the
+page's own origin, which `connect-src 'self'` permits. A Git remote served
+beside Airship works; public GitHub and GitLab do not, and no CORS configuration
+on their side would change that.
 
-`MemoryGitAdapter` uses this posture. Clone/fetch/push throw `GitCapabilityError` before reaching the adapter. A configured remote URL is descriptive metadata, not proof that transport works.
+The adapter checks this before it calls the transport, and fails with
+`remote-origin-not-permitted`, naming Airship's own policy and pointing at the
+snapshot importer. This matters because a CSP block and a remote CORS refusal
+are indistinguishable to page JavaScript — both surface as
+`TypeError: Failed to fetch` — so without the check Airship would confidently
+blame a remote for its own decision. `capabilities.remote.permittedOrigins`
+carries the same list to the UI, the terminal, and the agent, and
+`src/git/validation.test.ts` pins the constant against both shipped policy
+documents so the two cannot drift.
 
-## Hostile-repository gates
+The capability record reports the same limit rather than a flat boolean:
+`features.clone`, `features.fetch`, and `features.push` are available only while
+at least one origin is permitted, and their `reason` names exactly which origins
+the claim covers — the page's own origin on this build, plus whatever a
+deployment adds to `connect-src` and `GIT_REMOTE_CONNECT_ORIGINS`. In a host
+with no document origin nothing is reachable, so the three verbs report
+`available: false` and the client refuses them before dispatch instead of
+letting each call fail at the transport.
 
-The current domain rejects parent/root/backslash/control paths, `.git` worktree materialization, non-NFC names, Windows device names, trailing dot/space segments, overlong paths, duplicate operation paths, case-fold collisions, malformed refs, credential-bearing remotes, and non-HTTPS remotes. It bounds selected paths, commit messages, files, seed file counts, and rendered diffs.
+Operators who need direct Git over the network must add that Git host to
+`connect-src` in **both** `index.html` and `public/_headers` (they are compared
+for equality by `scripts/check-static-security.mjs`) and to
+`GIT_REMOTE_CONNECT_ORIGINS`. The host must still grant CORS.
 
-A production object/pack adapter must additionally test and bound:
+### What a permitted remote must additionally do
 
-- object count, total inflated bytes, delta depth, delta cycles, and compression ratio;
-- duplicate paths after Unicode/case normalization;
-- symlink, submodule, alternates, replace refs, hooks, attributes, and filter escape;
-- ref collisions, symbolic-ref cycles, shallow/promisor state, and malformed indexes;
-- diff/rename/merge CPU and memory budgets; and
-- credentials or secret fixtures crossing a remote/indexing boundary.
+Clone and fetch use Git Smart HTTP directly from the browser. A permitted target
+must:
 
-Until that corpus passes, importing an arbitrary hostile repository is not a production capability.
+- use HTTPS;
+- expose the required endpoints and response headers to the Airship origin
+  (unless it *is* the Airship origin, where no CORS grant is needed);
+- allow preflight and streaming behavior used by the Git engine; and
+- provide any required authorization through a reviewed credential adapter.
 
-## Reusable integration
+Failure reports the target origin and distinguishes the same-origin case from
+the cross-origin CORS boundary. Airship
+does not route through an undeclared backend. Push uses the same direct Smart
+HTTP client. A remote that permits anonymous writes needs no credential;
+otherwise the embedding integration must supply the adapter's scoped
+page-memory credential callback. Credentials are returned only to
+`isomorphic-git`'s challenge callback and are never included in Git operation
+arguments, approval receipts, Git config, Workspace, terminal history, or
+Vault. The default Airship surface does not manufacture or persist a Git-host
+token.
 
-```tsx
-const adapter = await MemoryGitAdapter.create([{
-  id: "airship",
-  name: "Airship",
-  files: { "README.md": "# Airship\n" },
-}]);
-const client = new BrowserGitClient(adapter);
+Push is never folded into commit and always receives its own identity approval.
+Non-force is the default. If the network ends without a verified terminal
+response, Airship reports `push-outcome-unknown`: the remote may have accepted
+the ref, so the operator must fetch before retrying. It does not claim that a
+remote mutation rolled back.
 
-<SourcesView
-  client={client}
-  author={{ name: "Operator", email: "operator@example.com" }}
-  review={review}
-/>
-```
+Host-specific APIs may be added behind a separate adapter. A provider content
+API must never be labeled a Git push unless it preserves parent/ref
+preconditions, commit identity, conflicts, and the returned object identity.
 
-Vault mode changes only the adapter construction; Ephemeral mode keeps the code above:
+## Hostile input and present limits
 
-```ts
-const adapter = await EncryptedWorkspaceGitAdapter.create(encryptedObjectWorkspace, [{
-  id: "airship",
-  name: "Airship",
-  files: { "README.md": "# Airship\n" },
-}]);
-const client = new BrowserGitClient(adapter);
-```
+The adapter rejects traversal, backslashes, control characters, `.git`
+worktree materialization, non-NFC names, Windows device names, trailing dot or
+space segments, case-fold collisions, malformed refs, credential-bearing
+remote URLs, non-HTTPS remotes, and oversized operation inputs. It bounds file,
+seed, selection, message, and rendered-diff sizes.
 
-`encryptedObjectWorkspace` must be the same `EncryptedObjectWorkspace` selected by the active vault runtime. Switching durability modes should construct the corresponding adapter rather than copying Git metadata into device plaintext storage.
+Before arbitrary hostile remote clone can be called production-hardened, add a
+corpus and explicit limits for pack/object count, inflated bytes, delta depth,
+compression ratio, malformed indexes, ref collisions, submodules, attributes,
+filters, alternates, shallow/promisor state, and checkout CPU/memory. Current
+direct clone is therefore a conditional interoperability capability, not a
+claim that every public repository is safe or browser-compatible.
 
-The explicit mode-transition hooks preserve live state:
+## Executable evidence
 
-```ts
-const durable = await EncryptedWorkspaceGitAdapter.createFromCheckpoint(
-  ready.workspace,
-  await ephemeralClient.exportCheckpoint(),
-);
-
-const ephemeral = await MemoryGitAdapter.restore(await durableClient.exportCheckpoint());
-```
-
-The application should replace its `BrowserGitClient` and tool registry only after the target adapter has committed successfully. A durable export carries its exact head revision, generation, and state digest through Memory mode. Returning to the same Vault advances that head only when the fence still matches. If another device changed the cloud checkpoint, the adapter raises `GitCheckpointConflictError`; the UI must present reconciliation instead of silently overwriting either side. A fresh page bootstrap has no durable base and loads the existing encrypted head as authoritative; it cannot replace it with sample state.
-
-`SourcesView` supports repository/worktree selection, dual-plane status, staged and working diffs, stage/unstage, local commit, create/switch branch, and separately approved fetch/push controls. Disabled remote controls display the adapter’s actual reason. Its stylesheet includes narrow layouts, 44-pixel primary controls, focus-visible states, and forced-colors support.
+- `src/git/workspace-adapter.test.ts` verifies real `HEAD`, refs, objects, a
+  binary `DIRC` index, stage/commit behavior, snapshot admission, reopen, and
+  fail-closed direct transport errors, accepted credentialed push, credential
+  non-persistence, unknown push outcomes, and linked-worktree metadata,
+  shared-object/ref behavior, branch isolation, reload, and removal.
+- `src/git/history.test.ts` verifies `log` against the real commit chain and the
+  loose objects that back it, path-scoped history, `show` against a first parent
+  and against the empty tree, patch-count truncation, and real lightweight and
+  annotated tag refs.
+- `src/git/recovery-verbs.test.ts` verifies stash push/list/pop against
+  `refs/stash`, fast-forward and true merge commits with the worktree
+  materialized, conflict abort leaving the worktree byte-identical,
+  `--ff-only` refusal, dirty-worktree refusal, restore from index and from
+  `HEAD`, and soft/mixed/hard reset.
+- `src/git/remote-config.test.ts` verifies that a remote change lands in both
+  `.git/config` and the catalog, survives reopening, and fails closed on
+  duplicates, unknown remotes, credential-bearing URLs, and stale versions.
+- `src/git/gitignore.test.ts` pins the ignore contract for both adapters.
+- `src/git/terminal-commands.test.ts` proves terminal commands read and mutate
+  the same client/repository as source control, route push through identity
+  approval, honor approval denial, list/add/remove linked worktrees, drive the
+  history/tag/stash/merge/restore/remote verbs through the approval broker in
+  order, and refuse an unreachable clone before prompting for approval.
+- `src/vault/runtime-adoption.test.ts` verifies that real `.git` state and the
+  registry migrate while the legacy detached checkpoint does not.
+- `e2e/github-import.spec.ts` exercises import, Editor visibility, Source
+  Control, stage, commit, hidden metadata, reload, and agent use in the local
+  browser lab.
+- `scripts/release-gate.test.mjs` prevents the optional Git pack from leaking
+  into baseline or preload paths.

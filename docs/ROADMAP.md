@@ -1,5 +1,9 @@
 # Airship roadmap
 
+> [`CANON.md`](CANON.md) is the current implementation-status ledger. This
+> roadmap describes sequencing; if a capability has since shipped or changed
+> shape, the canon's implemented/conditional/planned classification governs.
+
 ## M0: executable architecture
 
 - framework-independent evented agent loop;
@@ -27,9 +31,9 @@
   and a full local protocol/receipt auditor in Proof;
 - fail-closed responsive approval dock with a bounded redacted queue and
   session/turn/operation identity;
-- browser Git/source-control contracts plus a concrete page-memory
-  status/diff/stage/commit/branch/worktree reference adapter with remote
-  operations explicitly unavailable;
+- browser Git/source-control contracts plus a genuine workspace-backed
+  object/ref/index adapter for status, diff, stage, commit, branch, conditional
+  direct clone/fetch, and the Terminal shared-Git bridge;
 - automatic text/code discovery plus a coalesced, cancellable, generation-pinned
   on-device hybrid context engine using deterministic bootstrap embeddings;
 - encrypted segmented objects, local expert routing, selected-page streaming,
@@ -96,6 +100,11 @@ Chutes must expose; a client cannot manufacture that proof.
 
 - [x] capability-truthful execution broker, bounded JavaScript Worker, and
   compact WASI Preview 1 command runner;
+- [x] fail-closed browser-only placement, remote-observation refusal, an
+  isolated browser-job transition skeleton, and a bounded, ordered,
+  digest-linked remote-process structural validator; this protocol foundation
+  neither authenticates lifecycle events/a peer nor advertises a live remote
+  executor or operational reconciliation;
 - [x] explicitly installed locked Pyodide 314.0.2 runtime with a fresh bounded
   browser Worker per job, standard-library execution, and truthful readiness;
 - atomic multi-file Python workspace adoption (the current bounded mount uses
@@ -105,7 +114,11 @@ Chutes must expose; a client cannot manufacture that proof.
   lifecycle gates in `WALRUS_STORAGE.md` pass;
 - MCP Streamable HTTP bridge with browser-safe auth;
 - Tauri native companion for PTY, selected host files, OS keychain, and jobs;
-- isolated remote execution adapter with capability receipts;
+- prepared-effect approvals that bind executor/evidence/channel/mount/egress/
+  resource plans before dispatch;
+- coherent workspace snapshot and transactional copy-on-write delta port;
+- isolated remote execution adapter with a separately attested application
+  channel, reconciliation, and signed capability receipts;
 - skills/plugins packaged outside the stable core tool snapshot.
 
 ## M5: production and compliance programs
@@ -125,5 +138,12 @@ Chutes must expose; a client cannot manufacture that proof.
 - No funded publisher credential or wallet secret is distributed to an
   untrusted client; sponsored writes require one-time parameter-bound grants.
 - No arbitrary shell promise in the web tier.
+- No remote-executor readiness from inference attestation, TLS, provider
+  metadata, or key match alone; execution requires its own fresh evidence-bound
+  channel and live probe.
+- No live process migration claim across browser and Linux runtimes; placement
+  is pre-spawn and checkpoints are exact runtime/image/ABI artifacts.
+- No shared Bitwarden machine token in JavaScript, WASM, a service worker, or a
+  downloadable binary.
 - No new core tool without broad utility and a stable prompt-cost review.
 - No irreversible personal data written to a public ledger.

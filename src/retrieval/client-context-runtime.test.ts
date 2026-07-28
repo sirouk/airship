@@ -79,4 +79,19 @@ describe("ClientContextRuntime", () => {
       embeddings: { ...embeddings, id: "different-model" },
     })).toThrow(`already pinned to ${embeddings.id}`);
   });
+
+  it("re-reads adaptive scheduling before each changed index generation", async () => {
+    const workspace = new MemoryWorkspace();
+    await workspace.write("policy.md", "first browser scheduling generation");
+    const scheduling = vi.fn()
+      .mockReturnValueOnce({ embeddingBatchSize: 4, maxIndexingConcurrency: 1, yieldEveryMs: 8 })
+      .mockReturnValue({ embeddingBatchSize: 32, maxIndexingConcurrency: 4, yieldEveryMs: 16 });
+    const runtime = new ClientContextRuntime(workspace, { dimensions: 64, scheduling });
+
+    await runtime.refreshNow();
+    await workspace.write("policy.md", "second browser scheduling generation");
+    await runtime.refreshNow();
+
+    expect(scheduling).toHaveBeenCalledTimes(2);
+  });
 });

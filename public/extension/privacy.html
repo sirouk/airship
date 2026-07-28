@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="description" content="Airship Companion privacy disclosure." />
+    <link rel="icon" href="../favicon.svg" />
+    <link rel="stylesheet" href="./install.css" />
+    <title>Airship Companion Privacy</title>
+  </head>
+  <body>
+    <main>
+      <a class="back" href="./">← Airship Companion</a>
+      <header>
+        <span class="eyebrow">Privacy disclosure · version 1.1.1</span>
+        <h1>A small, inspectable boundary.</h1>
+        <p>
+          Airship Companion is an optional browser extension for the Airship
+          edge agent. It does not operate an Airship backend and does not sell,
+          profile, or advertise against user data.
+        </p>
+      </header>
+      <section class="boundary" aria-labelledby="privacy-data">
+        <div>
+          <span>Data handling</span>
+          <h2 id="privacy-data">What crosses the extension</h2>
+        </div>
+        <dl>
+          <div><dt>Provider relay</dt><dd>At a user-requested provider operation, bounded request and response bytes may pass through the background context to fixed, manifest-listed vendor hosts. Cookies are omitted, redirects are not followed, and traffic is not logged or stored by the extension.</dd></div>
+          <div><dt>Credentials</dt><dd>Provider credentials remain in the Airship page’s memory. They can transit a requested relay call but are never persisted by the extension.</dd></div>
+          <div><dt>Encrypted cache</dt><dd>Disabled by default. If the person enables it, extension-origin IndexedDB stores only caller-declared encrypted Airship pages under opaque identifiers. Records are bounded, integrity-checked, evicted under a fixed budget, and clearable from the popup.</dd></div>
+          <div><dt>Background compute</dt><dd>Bounded hashing and vector ranking use data supplied by the Airship page and return results to that same page. Inputs and results are not retained by the compute operation.</dd></div>
+          <div><dt>Telemetry</dt><dd>The extension contains no analytics, advertising SDK, remote code loader, or extension traffic logger.</dd></div>
+          <div><dt>Deletion</dt><dd>Clear the encrypted cache from the extension popup, disable the cache, or uninstall the extension. Removing browser extension data deletes its extension-origin store according to the browser’s own lifecycle.</dd></div>
+        </dl>
+      </section>
+      <section class="local-test">
+        <div>
+          <span>Scope</span>
+          <h2>Permissions are compiled in</h2>
+          <p>Caller and destination allowlists are source-controlled. No page message can add a host, raise a byte ceiling, enable cache storage, or grant provider account authorization.</p>
+        </div>
+        <div class="local-actions">
+          <a href="./releases/SHA256SUMS">Artifact checksums</a>
+          <a href="https://github.com/sirouk/airship" rel="noreferrer">Source repository ↗</a>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

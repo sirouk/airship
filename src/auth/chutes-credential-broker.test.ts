@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  CHUTES_LOCAL_REGISTRATION,
   refreshChutesOAuthToken,
+  resolveChutesOAuthRegistration,
+  revokeChutesToken,
   type ChutesOAuthTokenSet,
 } from "./chutes-oauth";
 import {
@@ -10,6 +13,11 @@ import {
 
 const BASELINE_SCOPES = ["profile", "chutes:invoke", "billing:read"] as const;
 const START = 2_000_000;
+const PUBLIC_REGISTRATION = resolveChutesOAuthRegistration({
+  development: false,
+  publicClientId: "cid_public_broker",
+  publicOrigin: "https://airship.example",
+});
 
 describe("ChutesCredentialBroker", () => {
   it("owns an API key without serializing it and fails closed for OAuth-only use", async () => {
@@ -131,6 +139,34 @@ describe("ChutesCredentialBroker", () => {
     now = START + 100;
     await expect(broker.getBearerToken()).resolves.toBe("cak_rotated.access");
     expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("binds hosted refresh and revocation to the broker's public registration", async () => {
+    const refresh = vi.fn(async () => oauthSet({
+      accessToken: "cak_public.rotated",
+      refreshToken: "crt_public.rotated",
+      expiresAt: START + 3_600_000,
+    }));
+    const revoke = vi.fn<typeof revokeChutesToken>(
+      async () => ({ state: "accepted" as const, status: 200 }),
+    );
+    const broker = new ChutesCredentialBroker({
+      registration: PUBLIC_REGISTRATION,
+      now: () => START,
+      refresh,
+      revoke,
+      minimumValidityMs: 30_000,
+    });
+    broker.installOAuthTokenSet(oauthSet({ expiresAt: START + 1 }));
+
+    await expect(broker.getBearerToken()).resolves.toBe("cak_public.rotated");
+    expect(refresh).toHaveBeenCalledWith(expect.objectContaining({
+      clientId: PUBLIC_REGISTRATION.clientId,
+      registration: PUBLIC_REGISTRATION,
+    }));
+    broker.clear();
+    await vi.waitFor(() => expect(revoke).toHaveBeenCalledTimes(2));
+    expect(revoke.mock.calls.every(([request]) => request.registration === PUBLIC_REGISTRATION)).toBe(true);
   });
 
   it("fences a late refresh after clear and never resurrects the cleared session", async () => {
@@ -286,6 +322,49 @@ describe("ChutesCredentialBroker", () => {
     expect(error).toBeInstanceOf(ChutesCredentialBrokerError);
     expect(error).toMatchObject({ code: "wrong-kind", name: "ChutesCredentialBrokerError" });
     expect(String(error)).not.toContain("cpk_final.value");
+  });
+});
+
+describe("ChutesCredentialBroker sign-out revocation", () => {
+  it("asks the provider to drop both released OAuth tokens", async () => {
+    const revoke = vi.fn<typeof revokeChutesToken>(
+      async () => ({ state: "accepted" as const, status: 200 }),
+    );
+    const broker = new ChutesCredentialBroker({ now: () => START, revoke });
+    broker.installOAuthTokenSet(oauthSet());
+
+    expect(broker.clear()).toMatchObject({ status: "disconnected" });
+    await vi.waitFor(() => expect(revoke).toHaveBeenCalledTimes(2));
+    expect(revoke.mock.calls.map(([request]) => request)).toEqual([
+      {
+        token: "crt_initial.refresh",
+        tokenTypeHint: "refresh_token",
+        clientId: CHUTES_LOCAL_REGISTRATION.clientId,
+        registration: CHUTES_LOCAL_REGISTRATION,
+      },
+      {
+        token: "cak_initial.access",
+        tokenTypeHint: "access_token",
+        clientId: CHUTES_LOCAL_REGISTRATION.clientId,
+        registration: CHUTES_LOCAL_REGISTRATION,
+      },
+    ]);
+  });
+
+  it("clears page memory even when revocation rejects, and never revokes an API key", async () => {
+    const revoke = vi.fn<typeof revokeChutesToken>(async () => {
+      throw new Error("provider unreachable");
+    });
+    const broker = new ChutesCredentialBroker({ now: () => START, revoke });
+
+    broker.installApiKey("cpk_page-memory-only.value");
+    expect(broker.clear()).toMatchObject({ status: "disconnected" });
+    expect(revoke).not.toHaveBeenCalled();
+
+    broker.installOAuthTokenSet(oauthSet());
+    expect(broker.clear()).toMatchObject({ status: "disconnected" });
+    await vi.waitFor(() => expect(revoke).toHaveBeenCalledTimes(1));
+    await expect(broker.getBearerToken()).rejects.toMatchObject({ code: "disconnected" });
   });
 });
 

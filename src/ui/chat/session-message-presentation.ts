@@ -28,6 +28,39 @@ export type SessionPresentationRow = Readonly<{
   receipt?: Readonly<ConversationReceipt>;
 }>;
 
+/**
+ * A durable event that belongs to the session rather than to any turn.
+ *
+ * protocol-v1 defines these — `session.renamed` carries no `turnId` at all
+ * (`session-audit.ts` actively requires `!event.turnId`) and
+ * `context.summary.updated` has an outside-turn form — and Airship writes the
+ * first of them itself on the first prompt of every default-titled session.
+ * They are not turns and cannot become rows, but they are records the user
+ * created, so they are returned in sequence order and rendered rather than
+ * skipped. A page that dropped them would keep reporting `turnCount` and `page`
+ * as though it were complete, which is the failure this type exists to prevent.
+ */
+export type SessionPresentationMarker = Readonly<{
+  /** The durable event type, unmapped, so a marker can be traced to its record. */
+  kind: string;
+  eventId: string;
+  sequence: number;
+  digest: string;
+  recordedAt?: string;
+  /** One plain sentence, already presentable. */
+  detail: string;
+  /**
+   * Whether this marker's own content could be read.
+   *
+   * `false` for a session-scoped event whose type this build does not
+   * interpret. The event is still counted and still shown — "there is a record
+   * here that this version cannot replay" is information the user is owed, and
+   * it is the honest alternative to the throw that used to strand a whole vault
+   * over one perfectly valid rename.
+   */
+  presentable: boolean;
+}>;
+
 export type SessionMessagePresentation = Readonly<{
   sessionId: string;
   auditStatus: "verified" | "incomplete";
@@ -39,6 +72,8 @@ export type SessionMessagePresentation = Readonly<{
   }>;
   turnCount: number;
   rows: readonly SessionPresentationRow[];
+  /** Session-scoped records in the page, in durable sequence order. */
+  markers: readonly SessionPresentationMarker[];
 }>;
 
 export type SessionPresentationAudit = Readonly<Pick<
@@ -94,15 +129,56 @@ export type SessionMessagePresentationErrorCode =
   | "RECEIPT_MISMATCH"
   | "HISTORY_MISMATCH";
 
+/**
+ * Where a presentation refused, in terms a person can act on.
+ *
+ * The shipped failure named one thing — a bare event UUID — on a screen that
+ * offered no session name, no position and no reason. A user handed
+ * "Event 4eb86679-… has no valid turn identity" cannot tell which of their
+ * conversations is involved, and the most likely response to that screen is to
+ * delete the store. These fields exist so every surfacing site can say which
+ * conversation, where in it, and what kind of record.
+ */
+export type SessionMessagePresentationErrorContext = Readonly<{
+  sessionId?: string;
+  sequence?: number;
+  eventType?: string;
+}>;
+
 export class SessionMessagePresentationError extends Error {
   readonly name = "SessionMessagePresentationError";
+  readonly sessionId?: string;
+  readonly sequence?: number;
+  readonly eventType?: string;
 
   constructor(
     readonly code: SessionMessagePresentationErrorCode,
     message: string,
+    context: SessionMessagePresentationErrorContext = {},
   ) {
     super(message);
+    this.sessionId = context.sessionId;
+    this.sequence = context.sequence;
+    this.eventType = context.eventType;
   }
+}
+
+/**
+ * The same fault, stated for a person rather than for a log.
+ *
+ * Kept beside the error so the four surfaces that render it — adoption, deep
+ * link, command palette and the library resume — cannot each invent their own
+ * subset of the facts, which is how one of them came to print only the UUID.
+ */
+export function describeSessionPresentationFault(error: unknown): string {
+  if (!(error instanceof SessionMessagePresentationError)) {
+    return error instanceof Error ? error.message : "The transcript could not be replayed.";
+  }
+  const at = error.sequence === undefined
+    ? ""
+    : ` at event ${String(error.sequence)}${error.eventType ? ` (${error.eventType})` : ""}`;
+  const which = error.sessionId ? ` in session ${error.sessionId.slice(0, 8)}` : "";
+  return `${error.message}${at}${which}`;
 }
 
 type GroupBase = {
@@ -136,6 +212,26 @@ const LOCAL_COMMAND_TYPES = new Set([
   "local.command.approved",
   ...LOCAL_COMMAND_TERMINAL_TYPES,
 ]);
+/**
+ * Which durable event types belong to a turn, as one rule rather than a list.
+ *
+ * This is the fix for the defect that stranded a whole vault. The grouper used
+ * to assume that *everything* after `session.created` carried a `turnId`, and
+ * fell through to `requiredTurnId` — a throw — for anything that did not. But
+ * protocol-v1 defines session-scoped events with no `turnId` at all
+ * (`session.renamed`, and the outside-turn form of `context.summary.updated`),
+ * and `auditSessionHistory` rates journals containing them `verified`. Two
+ * validators disagreed and the stricter one was the renderer, so a conversation
+ * with a perfect digest chain raised a protocol error — and because the
+ * renderer runs inside vault adoption, one ordinary rename cost the whole vault.
+ *
+ * Turn-scoped families are named positively, so an event outside them and
+ * outside a turn is a session marker rather than a violation. A `turn.*` or
+ * `tool.*` event that arrives with no turn identity is still a violation and
+ * still fails: the permissiveness is scoped to the families that were never
+ * turn-scoped in the first place.
+ */
+const TURN_SCOPED_PREFIX = /^(?:turn|inference|assistant|tool|local)\./u;
 const TURN_STATUSES = new Set<SessionPresentationTurnStatus>([
   "completed",
   "failed",
@@ -168,7 +264,7 @@ export function presentSessionMessages(
   validateEventPage(input.session, input.events);
   if (input.events.length === 0) return emptyPresentation(input);
 
-  const groups = groupTurns(input.events, limits.maxTurns);
+  const { groups, markers } = groupTurns(input.events, limits.maxTurns);
   const receipts = receiptIndex(input.receipts ?? [], input.session.id);
   const history = historyIndex(input.history ?? []);
   const rows: SessionPresentationRow[] = [];
@@ -244,6 +340,7 @@ export function presentSessionMessages(
     }),
     turnCount: groups.length,
     rows: Object.freeze(rows),
+    markers: Object.freeze(markers),
   });
 }
 
@@ -332,8 +429,12 @@ function validateEventPage(
   }
 }
 
-function groupTurns(events: readonly DurableEvent[], maxTurns: number): TurnGroup[] {
+function groupTurns(
+  events: readonly DurableEvent[],
+  maxTurns: number,
+): { groups: TurnGroup[]; markers: SessionPresentationMarker[] } {
   const groups: TurnGroup[] = [];
+  const markers: SessionPresentationMarker[] = [];
   const seenTurnIds = new Set<string>();
   let active: TurnGroup | undefined;
 
@@ -380,9 +481,20 @@ function groupTurns(events: readonly DurableEvent[], maxTurns: number): TurnGrou
       continue;
     }
 
+    // A session-scoped record: no turn identity, and not a turn type. It is
+    // kept, counted and rendered, never dropped — see `SessionPresentationMarker`.
+    if (!event.turnId && !event.operationId && !TURN_SCOPED_PREFIX.test(event.type)) {
+      markers.push(sessionMarker(event));
+      continue;
+    }
+
     const turnId = requiredTurnId(event);
     if (!active || active.turnId !== turnId) {
-      fail("TURN_PROTOCOL_INVALID", "A turn event appears without its request boundary in the page.");
+      fail(
+        "TURN_PROTOCOL_INVALID",
+        "A turn event appears without its request boundary in the page.",
+        eventContext(event),
+      );
     }
     if (active.kind === "local-command") {
       validateLocalCommandEvent(active, event);
@@ -405,7 +517,59 @@ function groupTurns(events: readonly DurableEvent[], maxTurns: number): TurnGrou
     active = undefined;
   }
 
-  return groups;
+  return { groups, markers };
+}
+
+/**
+ * The presentable form of one session-scoped record.
+ *
+ * `presentable: false` is not an error state and not a reason to hide the row.
+ * It says the record exists, where it sits in the chain, and that this build
+ * cannot read its content — which is strictly more than the previous behaviour,
+ * which said nothing because it threw.
+ */
+function sessionMarker(event: DurableEvent): SessionPresentationMarker {
+  const payload = record(event.payload);
+  const base = {
+    kind: event.type,
+    eventId: event.eventId,
+    sequence: event.sequence,
+    digest: event.digest,
+    ...(event.recordedAt ? { recordedAt: event.recordedAt } : {}),
+  };
+  const title = event.type === "session.renamed" && typeof payload?.title === "string"
+    ? presentableTitle(payload.title)
+    : undefined;
+  if (title !== undefined) return Object.freeze({ ...base, presentable: true, detail: `Renamed to “${title}”` });
+  if (event.type === "context.summary.updated") {
+    return Object.freeze({
+      ...base,
+      presentable: true,
+      detail: "Earlier turns were summarised into context; the original events remain in the journal.",
+    });
+  }
+  return Object.freeze({
+    ...base,
+    presentable: false,
+    detail: `This build cannot replay a ${event.type} record; the record is intact in the journal.`,
+  });
+}
+
+/**
+ * Bounded, control-character-free title text, or nothing.
+ *
+ * The journal caps a title at 240 characters and this line renders 120, so a
+ * long one is shortened — but never silently. The ellipsis is the difference
+ * between a shortened title and a title the reader believes they have all of.
+ */
+function presentableTitle(value: string): string | undefined {
+  const trimmed = value.replace(/[\u0000-\u001F\u007F]/gu, " ").trim();
+  if (trimmed.length === 0 || value.length > 240) return undefined;
+  return trimmed.length > 120 ? `${trimmed.slice(0, 119)}…` : trimmed;
+}
+
+function eventContext(event: DurableEvent): SessionMessagePresentationErrorContext {
+  return { sessionId: event.sessionId, sequence: event.sequence, eventType: event.type };
 }
 
 function validateLocalCommandEvent(group: LocalCommandGroup, event: DurableEvent): void {
@@ -695,6 +859,7 @@ function emptyPresentation(input: SessionMessagePresentationInput): SessionMessa
     page: Object.freeze({ firstSequence: 0, lastSequence: 0, omittedPrefix: false }),
     turnCount: 0,
     rows: Object.freeze([]),
+    markers: Object.freeze([]),
   });
 }
 
@@ -721,14 +886,22 @@ function resolveLimits(
 
 function requiredTurnId(event: DurableEvent): string {
   if (!validIdentifier(event.turnId)) {
-    fail("TURN_PROTOCOL_INVALID", `Event ${event.eventId} has no valid turn identity.`);
+    fail(
+      "TURN_PROTOCOL_INVALID",
+      `Event ${event.eventId} has no valid turn identity.`,
+      eventContext(event),
+    );
   }
   return event.turnId!;
 }
 
 function requiredOperationId(event: DurableEvent): string {
   if (!validIdentifier(event.operationId)) {
-    fail("TURN_PROTOCOL_INVALID", `Event ${event.eventId} has no valid operation identity.`);
+    fail(
+      "TURN_PROTOCOL_INVALID",
+      `Event ${event.eventId} has no valid operation identity.`,
+      eventContext(event),
+    );
   }
   return event.operationId!;
 }
@@ -756,6 +929,10 @@ function record(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
-function fail(code: SessionMessagePresentationErrorCode, message: string): never {
-  throw new SessionMessagePresentationError(code, message);
+function fail(
+  code: SessionMessagePresentationErrorCode,
+  message: string,
+  context?: SessionMessagePresentationErrorContext,
+): never {
+  throw new SessionMessagePresentationError(code, message, context);
 }

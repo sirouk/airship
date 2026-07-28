@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { EventJournal } from "../core/journal";
 import { MemoryJournalBackend } from "../core/memory-journal";
-import { BrowserGitClient, MemoryGitAdapter } from "../git";
+import { BrowserGitClient } from "../git";
+import { MemoryGitAdapter } from "../git/memory-adapter";
 import { createAirshipToolRegistry } from "../tools/airship-tools";
 import { MemoryWorkspace } from "../workspace/memory";
 import { archiveProfileRevision, createBuiltInProfileCatalog, managedProfileRevisions } from "./catalog";
@@ -10,7 +11,7 @@ import { resolveProfileForSession, themeCssVariables } from "./domain";
 describe("built-in Airship profiles", () => {
   it("resolves every profile into a pinned prompt, skill set, and semantic theme", async () => {
     const catalog = await createBuiltInProfileCatalog();
-    expect(catalog.profiles.map((profile) => profile.profileId)).toEqual(["engineer", "researcher", "reviewer"]);
+    expect(catalog.profiles.map((profile) => profile.profileId)).toEqual(["general", "research", "builder-systems"]);
     expect(new Set(catalog.themes.map((theme) => theme.digest)).size).toBe(catalog.themes.length);
 
     for (const profile of catalog.profiles) {
@@ -25,6 +26,9 @@ describe("built-in Airship profiles", () => {
       expect(pin.profile.profileId).toBe(profile.profileId);
       expect(pin.systemPrompt).toContain(profile.systemPrompt);
       expect(pin.resolutionDigest).toMatch(/^sha256:/u);
+      expect(pin.workspaceBinding).toEqual({ kind: "active-workspace" });
+      expect(["session", "profile", "workspace"]).toContain(pin.memoryScope);
+      expect(["ask-first", "auto-approve", "full-access"]).toContain(pin.approvalMode);
       expect(Object.keys(themeCssVariables(theme!))).toHaveLength(9);
     }
   });
@@ -50,9 +54,9 @@ describe("built-in Airship profiles", () => {
 
   it("archives profiles from new work without stranding immutable historical revisions", async () => {
     const catalog = await createBuiltInProfileCatalog();
-    const archived = archiveProfileRevision(catalog, "researcher");
-    expect(managedProfileRevisions(archived).map((profile) => profile.profileId)).toEqual(["engineer", "reviewer"]);
-    expect(archived.profiles.find((profile) => profile.profileId === "researcher")).toBe(catalog.profiles[1]);
-    expect(() => archiveProfileRevision(archiveProfileRevision(archived, "reviewer"), "engineer")).toThrow(/retain at least one/u);
+    const archived = archiveProfileRevision(catalog, "research");
+    expect(managedProfileRevisions(archived).map((profile) => profile.profileId)).toEqual(["general", "builder-systems"]);
+    expect(archived.profiles.find((profile) => profile.profileId === "research")).toBe(catalog.profiles[1]);
+    expect(() => archiveProfileRevision(archiveProfileRevision(archived, "builder-systems"), "general")).toThrow(/retain at least one/u);
   });
 });

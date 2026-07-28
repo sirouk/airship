@@ -45,8 +45,7 @@ export type ToolDefinition = {
   effect: "read" | "write" | "network" | "execute" | "identity";
 };
 
-export type SessionProfileBinding = {
-  version: 1;
+type SessionProfileBindingBase = {
   profileId: string;
   profileRevision: string;
   themeId: string;
@@ -60,6 +59,23 @@ export type SessionProfileBinding = {
   resolutionDigest: string;
 };
 
+/** Historical pin shape. Its absent silo fields resolve to safe defaults. */
+export type SessionProfileBindingV1 = SessionProfileBindingBase & { version: 1 };
+
+/** Current pin shape. These boundaries are mandatory and signed into the manifest. */
+export type SessionProfileBindingV2 = SessionProfileBindingBase & {
+  version: 2;
+  workspaceBinding:
+    | { kind: "active-workspace" }
+    | { kind: "workspace-id"; workspaceId: string };
+  memoryScope: "session" | "profile" | "workspace";
+  approvalMode: "ask-first" | "auto-approve" | "full-access";
+  /** The inference evidence floor required when this session was pinned. */
+  minimumPosture: SecurityPosture;
+};
+
+export type SessionProfileBinding = SessionProfileBindingV1 | SessionProfileBindingV2;
+
 export type SessionForkLineage = Readonly<{
   version: 1;
   kind: "fork";
@@ -69,15 +85,68 @@ export type SessionForkLineage = Readonly<{
   forkedAt: string;
 }>;
 
-export type SessionManifest = {
-  protocolVersion: 1;
+/**
+ * Immutable provider-context semantics for a session. The window is copied
+ * from authoritative runtime/catalog metadata when the session is created;
+ * replay never consults a mutable model directory.
+ */
+export type SessionContextPolicy = Readonly<{
+  version: 1;
+  contextWindowTokens: number;
+  contextWindowSource: Readonly<
+    | { kind: "provider-catalog"; field: "contextTokens" | "maxModelTokens" }
+    | { kind: "runtime-config"; label: string }
+  >;
+  compression: Readonly<{
+    strategy: "iterative-reference-delta-v1";
+    thresholdBasisPoints: number;
+    targetRatioBasisPoints: number;
+    preserveRecentTurns: number;
+    maxSummaryDeltaBytes: number;
+    summarizer: Readonly<
+      | { mode: "extractive-fallback" }
+      | {
+          mode: "inference-transport";
+          adapterId: "airship/inference-transport-summary-v1";
+          onFailure: "extractive-fallback" | "retain-history";
+        }
+    >;
+  }>;
+}>;
+
+/**
+ * Credential-free identity of the exact inference authority selected for a
+ * session. Provider and model IDs alone are ambiguous when a page has multiple
+ * accounts, local endpoints, or replacement credentials connected at once.
+ *
+ * The generation changes whenever a connection ID is rebound. Secrets,
+ * refresh material, raw scopes, endpoints, and account identifiers are
+ * intentionally absent.
+ */
+export type SessionInferenceBinding = Readonly<{
+  version: 1;
+  connectionId: string;
+  connectionGeneration: number;
+  providerId: string;
+  providerLabel: string;
+  providerRevision: number;
+  authMethod: "oauth-pkce" | "api-key" | "local-none";
+  transportBoundary: "e2ee-attestable" | "provider-tls" | "loopback-local";
+  modelId: string;
+  boundAt: string;
+}>;
+
+type SessionManifestBase = {
   systemPrompt: string;
   systemPromptDigest: string;
   providerId: string;
   model: string;
+  /** Optional only for historical and deterministic built-in local sessions. */
+  inferenceBinding?: SessionInferenceBinding;
   toolManifestDigest: string;
   tools: ToolDefinition[];
   workspaceId: string;
+  /** Page-capability observation at creation; live tool results bind their producing tier. */
   capabilityTier: "web-baseline" | "web-enhanced" | "native" | "remote-confidential";
   /** Security posture pinned when the session is created. Older protocol-v1 manifests may omit it. */
   securityPosture?: SecurityPosture;
@@ -85,8 +154,28 @@ export type SessionManifest = {
   profile?: SessionProfileBinding;
   /** Immediate immutable ancestor commitment for a fork. History remains in the source session. */
   lineage?: SessionForkLineage;
+  /** Optional when the session does not opt into automatic compression. */
+  contextPolicy?: SessionContextPolicy;
   createdAt: string;
 };
+
+/** Historical manifests predate the separately journaled context-selection event. */
+export type SessionManifestV1 = SessionManifestBase & {
+  protocolVersion: 1;
+  turnContext?: never;
+};
+
+/**
+ * Current manifests make retrieval semantics critical and explicit. A v1
+ * reader must reject this manifest version instead of silently ignoring the
+ * `turn.context.selected` event.
+ */
+export type SessionManifestV2 = SessionManifestBase & {
+  protocolVersion: 2;
+  turnContext: "required" | "disabled";
+};
+
+export type SessionManifest = SessionManifestV1 | SessionManifestV2;
 
 export type InferenceRequest = {
   requestId: string;
@@ -121,7 +210,21 @@ export type ToolContext = {
   turnId: string;
   operationId: string;
   signal: AbortSignal;
+  /**
+   * Immutable page-capability observation recorded when the session began.
+   * It is evidence context, not an authorization ceiling: optional runtimes
+   * activated later are governed by readiness, approvals, and result-level
+   * provenance in the same conversation.
+   */
+  capabilityTier?: SessionManifest["capabilityTier"];
+  /** Live, page-memory output. The terminal tool result remains the durable authority. */
+  onOutput?: (chunk: ToolOutputChunk) => void;
 };
+
+export type ToolOutputChunk = Readonly<{
+  stream: "stdout" | "stderr" | "combined";
+  text: string;
+}>;
 
 export type ToolExecutionResult = {
   content: string;

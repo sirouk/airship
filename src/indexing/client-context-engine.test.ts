@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { sha256 } from "../core/hash";
 import type { WorkspaceEntry, WorkspaceFile, WorkspacePort } from "../workspace/contracts";
 import { MemoryWorkspace } from "../workspace/memory";
+import { encodeWorkspaceBytes } from "../workspace/content-codec";
 import type { EmbeddingProvider } from "./contracts";
 import {
   ClientContextEngine,
@@ -44,6 +45,20 @@ describe("ClientContextEngine", () => {
     });
     expect(generation.timing.totalMs).toBeGreaterThanOrEqual(0);
 
+    const publication = engine.exportActiveGeneration();
+    expect(publication.generation).toBe(generation);
+    expect(publication.embeddings.id).toBe(generation.lineage.embeddingProvider);
+    expect(publication.chunks).toHaveLength(1);
+    expect(publication.chunks[0]).toMatchObject({
+      path: architecture.path,
+      revision: architecture.revision,
+      contentDigest: indexed?.contentDigest,
+      chunkIndex: 0,
+    });
+    const liveVectorValue = publication.chunks[0]!.vector[0];
+    publication.chunks[0]!.vector[0] = 99;
+    expect(engine.exportActiveGeneration().chunks[0]!.vector[0]).toBe(liveVectorValue);
+
     const result = await engine.search("authenticated context storage", { limit: 4 });
     expect(result.hits).toHaveLength(1);
     expect(result.hits[0]).toMatchObject({
@@ -56,6 +71,26 @@ describe("ClientContextEngine", () => {
     expect(result.queryDigest).toMatch(/^sha256:/u);
     expect(result.generationDigest).toBe(generation.lineage.generationDigest);
     expect(engine.getState().lastSearch).toMatchObject({ resultCount: 1, generationDigest: result.generationDigest });
+    engine.dispose();
+    expect(() => engine.exportActiveGeneration()).toThrow("not available for encrypted publication");
+  });
+
+  it("preserves an opaque payload with a text extension without embedding its storage envelope", async () => {
+    const workspace = new MemoryWorkspace();
+    await workspace.write("fixtures/opaque.json", encodeWorkspaceBytes(Uint8Array.from([0, 255, 1, 2])));
+    const engine = new ClientContextEngine({ workspace, dimensions: 64 });
+
+    const generation = await engine.updateWorkspace(await workspace.list());
+    expect(generation.candidates).toEqual([
+      expect.objectContaining({
+        path: "/workspace/fixtures/opaque.json",
+        status: "unsupported",
+        reason: "Opaque binary bytes are preserved but never decoded as model context.",
+        chunks: 0,
+      }),
+    ]);
+    expect(engine.exportActiveGeneration().chunks).toEqual([]);
+    expect((await engine.search("airship-git-binary-v1")).hits).toEqual([]);
     engine.dispose();
   });
 

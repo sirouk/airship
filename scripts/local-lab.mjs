@@ -27,6 +27,12 @@ export const LOCAL_LAB_UI_ORIGINS = Object.freeze([
   "http://127.0.0.1:4173",
 ]);
 
+// This is a deliberately non-secret, syntactically valid OAuth client ID used
+// only by the local browser-acceptance boundary. Real Google authorization
+// still requires an operator-supplied registration whose origin matches the
+// deployed app.
+export const LOCAL_LAB_GOOGLE_CLIENT_ID = "123456789012-airship-browser-acceptance.apps.googleusercontent.com";
+
 export function inspectAirshipHtml(html) {
   return Object.freeze({
     airship: /<title>\s*Airship(?:\s|<)/iu.test(html),
@@ -45,8 +51,39 @@ export function labEnvironment(base = process.env) {
     AIRSHIP_LOCAL_S3_NAMESPACE: LOCAL_LAB.namespace,
     AIRSHIP_LOCAL_S3_ACCESS_KEY: LOCAL_LAB.accessKeyId,
     AIRSHIP_LOCAL_S3_SECRET_KEY: LOCAL_LAB.secretAccessKey,
-    VITE_AIRSHIP_DEFAULT_VAULT_PROVIDER: "local-lab",
+    // The ordinary product must remain Drive-first even when its disposable
+    // MinIO harness is running. S3 is reachable only after the user selects
+    // the explicit advanced/local-lab provider; the harness never changes the
+    // storage promise visible to an ordinary browser session.
+    VITE_AIRSHIP_DEFAULT_VAULT_PROVIDER: "google-drive",
+    VITE_GOOGLE_CLIENT_ID: base.VITE_GOOGLE_CLIENT_ID ?? LOCAL_LAB_GOOGLE_CLIENT_ID,
   });
+}
+
+/**
+ * Report only the non-secret shape needed to decide whether an already-owned
+ * Vite process can be reused. The secret itself and any derivative of it never
+ * enter the lab state file.
+ */
+export function chutesOAuthBridgeRequest(environment = process.env) {
+  const clientId = environment.AIRSHIP_CHUTES_OAUTH_CLIENT_ID?.trim() ?? "";
+  const clientSecret = environment.AIRSHIP_CHUTES_OAUTH_CLIENT_SECRET?.trim() ?? "";
+  if (Boolean(clientId) !== Boolean(clientSecret)) {
+    throw new Error(
+      "Local Chutes OAuth requires both AIRSHIP_CHUTES_OAUTH_CLIENT_ID and AIRSHIP_CHUTES_OAUTH_CLIENT_SECRET.",
+    );
+  }
+  return Object.freeze({ configured: Boolean(clientId), ...(clientId ? { clientId } : {}) });
+}
+
+/**
+ * A configured request always restarts the owned Vite process. The state file
+ * deliberately stores neither the app secret nor a secret fingerprint, so
+ * reusing a process could otherwise keep a rotated secret indefinitely.
+ * Removing bridge configuration also restarts once to drop the old authority.
+ */
+export function requiresOwnedViteRestartForOAuth(requested, running) {
+  return requested.configured || running.configured;
 }
 
 const requiredCorsRequestHeaders = Object.freeze([
@@ -98,6 +135,9 @@ async function start() {
   const snapshot = await inspectLab();
   if (!snapshot.ui.ready || !snapshot.ui.localS3Csp || !snapshot.s3.ready || !snapshot.s3Cors.ready) {
     throw new Error("The lab started but its health contract did not become ready. Run `npm run lab:logs`.");
+  }
+  if (chutesOAuthBridgeRequest(process.env).configured && !snapshot.oauthBridge.ready) {
+    throw new Error("The local Chutes OAuth bridge was requested but did not become ready.");
   }
   printSnapshot(snapshot);
   printVaultSetup();
@@ -187,14 +227,28 @@ async function stop() {
 async function ensureVite() {
   const existing = await inspectUi();
   const previous = await readState();
+  const requestedOAuth = chutesOAuthBridgeRequest(process.env);
   if (existing.ready) {
     if (!existing.localS3Csp) {
       throw new Error("Port 4173 serves Airship without the local-lab CSP. Restart that Vite process, then run `npm run lab:start` again.");
     }
-    if (previous?.vite?.owned && pidAlive(previous.vite.pid)) return previous.vite;
-    throw new Error(
-      "Port 4173 already serves an unowned Airship process. Stop it before `npm run lab:start`; the lab will not adopt a listener whose network binding it cannot prove.",
-    );
+    if (previous?.vite?.owned && pidAlive(previous.vite.pid)) {
+      const runningOAuth = Object.freeze({
+        configured: previous.vite.oauthBridgeConfigured === true,
+        ...(previous.vite.oauthClientId ? { clientId: previous.vite.oauthClientId } : {}),
+      });
+      if (!requiresOwnedViteRestartForOAuth(requestedOAuth, runningOAuth)) return previous.vite;
+      await stopProcessGroup(previous.vite.pid);
+      console.log(
+        requestedOAuth.configured
+          ? "Restarting the lab-owned Airship process with the requested local OAuth handler."
+          : "Restarting the lab-owned Airship process without the previous local OAuth handler.",
+      );
+    } else {
+      throw new Error(
+        "Port 4173 already serves an unowned Airship process. Stop it before `npm run lab:start`; the lab will not adopt a listener whose network binding it cannot prove.",
+      );
+    }
   }
 
   const viteBinary = resolve(root, "node_modules", "vite", "bin", "vite.js");
@@ -212,7 +266,12 @@ async function ensureVite() {
   } finally {
     closeSync(descriptor);
   }
-  const vite = Object.freeze({ owned: true, pid: child.pid });
+  const vite = Object.freeze({
+    owned: true,
+    pid: child.pid,
+    oauthBridgeConfigured: requestedOAuth.configured,
+    ...(requestedOAuth.clientId ? { oauthClientId: requestedOAuth.clientId } : {}),
+  });
   try {
     await waitFor("Airship", inspectUi, (result) => result.ready && result.localS3Csp, 30_000);
     return vite;
@@ -223,8 +282,27 @@ async function ensureVite() {
 }
 
 async function inspectLab() {
-  const [ui, s3, s3Cors] = await Promise.all([inspectUi(), inspectMinio(), inspectMinioCors()]);
-  return Object.freeze({ ui, s3, s3Cors });
+  const [ui, s3, s3Cors, oauthBridge] = await Promise.all([
+    inspectUi(),
+    inspectMinio(),
+    inspectMinioCors(),
+    inspectOAuthBridge(),
+  ]);
+  return Object.freeze({ ui, s3, s3Cors, oauthBridge });
+}
+
+async function inspectOAuthBridge() {
+  try {
+    const response = await fetch(`${LOCAL_LAB.uiUrl}__airship/chutes/oauth/token`, {
+      method: "GET",
+      cache: "no-store",
+      redirect: "error",
+      signal: AbortSignal.timeout(2_000),
+    });
+    return Object.freeze({ ready: response.status === 204, status: response.status });
+  } catch {
+    return Object.freeze({ ready: false, status: 0 });
+  }
 }
 
 async function inspectUi() {
@@ -290,11 +368,12 @@ function printSnapshot(snapshot) {
   console.log(`  Dev S3 CSP  ${snapshot.ui.localS3Csp ? "ready" : "missing"}`);
   console.log(`  MinIO       ${snapshot.s3.ready ? "ready" : "unreachable"}  ${LOCAL_LAB.s3Endpoint}`);
   console.log(`  S3 preflight ${snapshot.s3Cors.ready ? "ready" : "rejected"}  Origins ${LOCAL_LAB_UI_ORIGINS.join(", ")}`);
+  console.log(`  Chutes OAuth ${snapshot.oauthBridge.ready ? "localhost token handler ready" : "localhost token handler not configured"}`);
   console.log(`  Console     ${LOCAL_LAB.s3Console}`);
 }
 
 function printVaultSetup() {
-  console.log("\nVault → Configure vault → Import/Generate local lab");
+  console.log("\nVault → Storage provider → S3-compatible / MinIO → Configure vault");
   console.log(`  Endpoint    ${LOCAL_LAB.s3Endpoint}`);
   console.log(`  Region      ${LOCAL_LAB.region}`);
   console.log(`  Bucket      ${LOCAL_LAB.bucket}`);

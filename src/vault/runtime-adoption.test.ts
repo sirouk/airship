@@ -3,21 +3,64 @@ import { createSessionManifest } from "../core/agent";
 import { EventJournal } from "../core/journal";
 import { MemoryJournalBackend } from "../core/memory-journal";
 import { MemoryWorkspace } from "../workspace/memory";
-import { migrateJournalState, migrateWorkspaceState } from "./runtime-adoption";
+import { createBuiltInProfileCatalog } from "../profiles/catalog";
+import { createGlobalSkillSettings } from "../profiles/domain";
+import { EncryptedProfileCatalogStore, MemoryProfileCatalogStore } from "../profiles/persistence";
+import { WorkspaceRootKey } from "../storage/encrypted-envelope";
+import { MemoryObjectStore } from "../storage/memory-object-store";
+import { migrateJournalState, migrateProfileCatalogState, migrateWorkspaceState } from "./runtime-adoption";
 
 describe("vault runtime adoption", () => {
+  it("creates, recovers, and conflict-fences the provider-neutral profile catalog", async () => {
+    const sourceStore = new MemoryProfileCatalogStore();
+    const builtIn = await createBuiltInProfileCatalog();
+    const source = (await sourceStore.initialize(builtIn)).checkpoint;
+    const objects = new MemoryObjectStore();
+    const { key } = await WorkspaceRootKey.generate();
+    const vault = new EncryptedProfileCatalogStore(objects, key);
+
+    const created = await migrateProfileCatalogState(source, vault, { sourceIsBootstrap: true });
+    expect(created).toMatchObject({ disposition: "created", checkpoint: { generation: 1, digest: source.digest } });
+
+    const editedCatalog = Object.freeze({
+      ...created.checkpoint.catalog,
+      globalSkills: createGlobalSkillSettings({ ...created.checkpoint.catalog.globalSkills, "concise-handoff": true }),
+    });
+    const edited = await vault.commit(created.checkpoint, editedCatalog);
+    const freshPage = new MemoryProfileCatalogStore();
+    const freshSeed = (await freshPage.initialize(builtIn)).checkpoint;
+    const recovered = await migrateProfileCatalogState(freshSeed, vault, { sourceIsBootstrap: true });
+    expect(recovered).toMatchObject({
+      disposition: "adopted-existing",
+      checkpoint: { digest: edited.digest, catalog: { globalSkills: { "concise-handoff": true } } },
+    });
+
+    const locallyEdited = await freshPage.commit(freshSeed, Object.freeze({
+      ...builtIn,
+      globalSkills: createGlobalSkillSettings({ ...builtIn.globalSkills, "workspace-steward": true }),
+    }));
+    await expect(migrateProfileCatalogState(locallyEdited, vault, { sourceIsBootstrap: false }))
+      .rejects.toThrow("different profile catalog");
+  });
+
   it("copies workspace content idempotently and refuses divergent cloud files", async () => {
     const source = new MemoryWorkspace();
     const target = new MemoryWorkspace();
     await source.write("README.md", "same bytes");
     await source.write("src/index.ts", "export const edge = true;\n");
     await source.write(".airship/git/head.v1.json", "git owns this migration plane");
+    await source.write(".airship/browser-git-repositories.v1.json", "real Git registry");
+    await source.write("sources/example/.git/HEAD", "real Git HEAD");
+    await source.write("sources/example/.git/index", "real Git index");
     await source.write(".airship/terminal/sessions.v1.json", "terminal metadata is ordinary encrypted state");
     await target.write("README.md", "same bytes");
 
     await migrateWorkspaceState(source, target);
     expect((await target.read("src/index.ts"))?.content).toContain("edge = true");
     expect(await target.read(".airship/git/head.v1.json")).toBeUndefined();
+    expect(await target.read(".airship/browser-git-repositories.v1.json")).toMatchObject({ content: "real Git registry" });
+    expect(await target.read("sources/example/.git/HEAD")).toMatchObject({ content: "real Git HEAD" });
+    expect(await target.read("sources/example/.git/index")).toMatchObject({ content: "real Git index" });
     expect(await target.read(".airship/terminal/sessions.v1.json")).toMatchObject({ content: "terminal metadata is ordinary encrypted state" });
     await expect(migrateWorkspaceState(source, target)).resolves.toBeUndefined();
 
@@ -100,6 +143,42 @@ describe("vault runtime adoption", () => {
       headDigest: "genesis",
     });
     await expect(target.readEvents(session.id)).resolves.toEqual([]);
+  });
+
+  it("refuses conflicting session authority even when the journal head and prompt digests match", async () => {
+    const sourceBackend = new MemoryJournalBackend();
+    const source = new EventJournal(sourceBackend);
+    const target = new MemoryJournalBackend();
+    const manifest = await createSessionManifest({
+      systemPrompt: "stable prompt",
+      providerId: "test-provider",
+      model: "source-model",
+      tools: [],
+      workspaceId: "memory://source",
+      now: "2026-07-19T00:00:00.000Z",
+    });
+    const session = {
+      id: "conflicting-authority-session",
+      title: "Source session",
+      manifest,
+      createdAt: "2026-07-19T00:00:00.000Z",
+      updatedAt: "2026-07-19T00:00:00.000Z",
+      headSequence: 0,
+      headDigest: "genesis",
+    };
+    await sourceBackend.createSession(session);
+    await target.createSession({
+      ...structuredClone(session),
+      manifest: {
+        ...structuredClone(session.manifest),
+        model: "substituted-model",
+      },
+    });
+
+    await expect(migrateJournalState(source, target)).rejects.toThrow("conflicting session");
+    await expect(target.getSession(session.id)).resolves.toMatchObject({
+      manifest: { model: "substituted-model" },
+    });
   });
 
   it("refuses a session append racing migration before creating a vault session", async () => {

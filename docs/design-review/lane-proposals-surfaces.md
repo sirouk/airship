@@ -1,0 +1,1140 @@
+
+
+## Sidebar, navigation, and intelligent collapse
+
+**Diagnosis.** The 232px rail is not too wide — it is unconditionally wide, and it spends that width on the wrong things. Measured at localhost:4173 with Playwright.
+
+GEOMETRY. `.app-shell` is `232px minmax(0,1fr)` at every viewport ≥861px, including 1024×768 (measured `232px 792px`). `.sidebar` is 232×842 at 1440×900; `.primary-nav` is a 231×701 box holding **785px of content**. Nav rows are 46px (density-control), group labels 19px, nested rows 46px, profile rows 31px, recent-conversation threads 46px.
+
+THE RAIL CLIPS ITS OWN DESTINATIONS IN THE PRISTINE DEFAULT STATE. At 1440×900, one conversation, three profiles: last item `↳ Account` occupies y785–831, nav viewport ends at y759 — Account is **100% invisible**. `Connection` (y736–782) is 50% cut and already inside the 26px bottom mask fade. `data-scroll-edges="end"` at 1440×900, 1440×800 (601px box), 1440×700 (501px box — 36% of destinations hidden; the "Research" profile row renders sliced through its x-height), 1280×720 and 1024×768. Only 1920×1080 fits.
+
+ORDINARY USE PUSHES THE ENTIRE TRUST GROUP OFF-SCREEN. I clicked "New conversation" seven times. nav content went 785 → **943px** in the same 701px box; `.recent-conversations` hit its 250px cap with a 414px scrollHeight. Elements outside the nav viewport: **Proof, Vault, Connection, Account** — every trust surface Airship exists to expose. The rail then shows eight rows reading "General conver… / No messages yet / 9:50 AM", titles truncated to ~13 characters because the 232px row gives the title only ~105px.
+
+THE 104px TABLET RAIL BEATS THE 232px DESKTOP RAIL. At 820×1000 the shell is `104px 716px` and the icon rail shows **11 of 11 destinations, 942px content in a 942px box, no scroll**. At 1440×900 with eight conversations the 232px rail shows **8 of 11**. The desktop rail is 2.23× wider and surfaces three fewer destinations.
+
+THREE NESTED SCROLLERS IN ONE RAIL. `.primary-nav` (overflow auto) contains `.recent-conversations` (max-height min(250px,30vh), overflow auto) which contains nothing, and `.recent-conversations.profile-navigation` (max-height min(310px,38vh), overflow auto). Three independent scroll regions inside 232×842.
+
+TAB-STOP COST. 20 focusable controls in the rail before main content with 1 conversation and 3 profiles; **29** with 8 conversations and 5 profiles.
+
+THE PINNED CARD. `.profile-switcher` is 211×120px — 14.2% of the sidebar's height — to render three stacked elements: a 15px eyebrow "AGENT PROFILE", a 42px MenuSelect, a 23px "Manage profiles" link. The word "General" appears three times on the same screen: this card, the active `AGENT ▸ Profiles ▸ General` row 259px above it, and the stage eyebrow "ACTIVE SESSION · GENERAL".
+
+THE GROUPING IS ARCHITECTURE. WORK(Chat, Workspace[Editor,Terminal], Memory) / **AGENT — a group of exactly one item** whose children duplicate the pinned card / TRUST(Proof, Vault, Connection[Account]) — a bucket holding a receipt log, a storage backend, a model-provider page and a billing page. Three labels cost 57px + padding to express a taxonomy in which one group has one member.
+
+FOUR NAMES FOR ONE DESTINATION. `#connection` is called "Connection" (rail), "Connect a model" (topbar pill), "Connect a model" (guidance banner button) and "Connect models" (page H1).
+
+WHAT THE RAIL ACTUALLY COSTS THE CONVERSATION. `.chat-layout` is `minmax(0,1fr) 310px`; `--density-chat-measure` is 820px. Designed layout needs 232 + 820 + 310 = **1362px**. At 1280×720 with the proof inspector open the chat stage is 738px — the conversation renders **82px below its designed measure**.
+
+NO COLLAPSE EXISTS. No `focusMode`, `sidebarCollapsed` or equivalent anywhere in `src/ui/`. There is no manual escape and no viewport trigger.
+
+SPECIFICITY ACCIDENT. `:root[data-density] .nav-item { min-height: var(--density-control) }` (styles.css:165, 0-2-1) beats `.sidebar .nav-item { min-height: 50px }` (styles.css:4931, 0-2-0), so the tablet rail renders 46px rows, not the 50px it asks for. Measured 46px at 820×1000.
+
+### Three-state rail on one width token, with hover-peek and a remembered manual toggle
+- impact **transformative** · effort **medium** · reclaims 172px horizontal (232→60), 14.2% of the 1208px main region at 1440. Drops the minimum width for the designed rail+measure+inspector layout from 1362px to 1190px, so 1280×720 finally renders the 820px measure with 45px gutters instead of compressing it by 82px.
+- **Problem.** `.app-shell` is `232px minmax(0,1fr)` unconditionally from 861px up — measured `232px 792px` at 1024×768 and `232px 1208px` at 1440×900. There is no collapse control anywhere in src/ui/. The designed layout (232 rail + 820 measure + 310 inspector) needs 1362px, so every laptop below that renders the conversation under its measure; at 1280×720 with the inspector open the chat stage is 738px, 82px short.
+- **Design.** Replace `--density-sidebar` with `--rail-width`, driven by `data-rail` on `<html>` with three values:
+
+- `data-rail="rail"` → `--rail-width: 60px`. 8px inline padding, 44×44 icon targets, 18px icons centered, 4px gaps. Icon only.
+- `data-rail="standard"` → `--rail-width: 232px`. Today's rail, unchanged visually.
+- `data-rail="focus"` → `--rail-width: 0px`. See the focus-mode proposal.
+
+`.app-shell` and `.topbar` both use `grid-template-columns: var(--rail-width) …` so the brand block keeps tracking the rail exactly (it is measured at 232px today, pixel-identical to the sidebar). In `rail` state the brand renders the 22px seal mark only; the wordmark "Airship / EDGE RUNTIME" moves to `aria-label`/`title` on the mark and reappears during hover-peek.
+
+DEFAULT, not override: `standard` at ≥1362px, `rail` below. 1362 = 232+820+310, the width at which the designed layout stops fitting. Once the user toggles, `preferences.railState` is stored per band (`wide` / `narrow`) so a laptop user is not fighting resize, and the stored value wins over the default forever after.
+
+TRIGGER: `⌘\` / `Ctrl+\`, plus a command-palette entry "Collapse navigation rail" / "Expand navigation rail", plus a 24×24 chevron button pinned at the rail's bottom-left corner (`aria-label="Collapse navigation rail"` / `"Expand navigation rail"`, `aria-expanded`).
+
+HOVER-PEEK: in `rail` state, pointer over the rail for 180ms expands an OVERLAY panel to 268px — `position:absolute; inset-block:0; left:0; z-index:30; box-shadow:var(--shadow)` — it does not reflow the grid, so the conversation never jumps. Collapses 240ms after pointer-out. `:focus-within` pins it open until focus leaves, so keyboard users get labels. `@media (prefers-reduced-motion: reduce)` → no transition, instant swap. `@media (hover: none)` → no peek; tap the rail toggle instead.
+- **Information fate.** Nothing is removed. In `rail` state every destination label moves from a visible 12px string to (a) the existing `title={`${label} · ${scope} scope`}` tooltip, which is strictly MORE information than the visible label carries today, (b) the existing `aria-label`, and (c) the hover-peek/focus-within panel at full 12px. The scope stripe (`platform-shell.css:13-18`, `.nav-item[data-scope]::after`) is retained at 2px and remains the only always-visible scope cue in both states. The unread-turn badge and the proof dot become 8px corner dots on the icon in `rail` state and keep their `aria-label`s verbatim.
+- **Files.** src/ui/styles.css, src/ui/app.tsx, src/ui/platform-shell.css, src/ui/navigation-model.ts
+
+### Recent conversations leave the rail for a 320px switcher popover
+- impact **transformative** · effort **medium** · reclaims 250px vertical at the cap (36% of the 701px visible nav box); removes 242px of the 943px overflow measured with eight conversations, which is exactly what puts Proof/Vault/Connection/Account back above the fold.
+- **Problem.** Measured with eight conversations at 1440×900: `.recent-conversations` sits at its 250px cap with a 414px scrollHeight — 32% of the rail's 785px baseline content — and pushes nav content to 943px in a 701px box. The elements it drives out of the viewport are Proof, Vault, Connection and Account. The rows it shows in exchange are eight identical "General conver… / No messages yet / 9:50 AM": the 232px rail leaves the title ~105px after the 12px mark, 5px gap, 6px padding and the time column, so titles truncate at ~13 characters.
+- **Design.** The existing `.chat-nav-disclosure` chevron (app.tsx:4673) stops toggling an in-flow block and becomes the trigger for a popover anchored to the Chat row: 320px wide, `max-height: min(420px, 60vh)`, rendered over the main region, focus-trapped with the existing `trapFocus` from `src/ui/focus-trap.ts`, dismissed on Esc / outside click / selection.
+
+Row structure is unchanged from today's `.recent-conversation--thread` (mark, title, preview, time) but at 320px the title column gets ~232px instead of ~105px — roughly 34 characters instead of 13. Same ten sessions from `recentProfileConversations.slice(0, 10)`.
+
+Popover header: `Conversations` with the `+` new-conversation button (today's `.chat-nav-new`, same `aria-label="New conversation"`) moved into it. Last row is `↳ All conversations`, copy and `navigate("sessions")` unchanged.
+
+Additional entries so the destination is never fewer than two keystrokes away: `⌘⇧O` opens the popover directly; the command palette gains "Recent conversations". In `rail` state the trigger is a 12px caret that appears on the Chat icon on hover/focus.
+- **Information fate.** Every session title, preview line and timestamp is kept, at a larger effective width. The `●`/`○` active mark is kept. `aria-current="page"` on the active session is kept. "All conversations" is kept as the popover's last row. The `+` new-conversation control is kept, moved into the popover header. The unread-turn badge stays on the Chat rail row itself, not in the popover, so it is visible without opening anything.
+- **Files.** src/ui/app.tsx, src/ui/styles.css, src/ui/sessions-route.tsx, src/ui/focus-trap.ts
+
+### Dissolve the AGENT group; the pinned 120px card becomes a 48px row
+- impact **high** · effort **small** · reclaims 230px vertical: 158px from the dissolved AGENT group (up to 310px at its cap) plus 72px from the card→row (120px → 48px, a 60% reduction).
+- **Problem.** AGENT is a group of exactly one destination. Measured cost at 1440×900: 19px label + 46px Profiles row + 93px of three profile rows = 158px, 20% of the rail's content, and it grows to 310px at its `min(310px, 38vh)` cap. Its children duplicate the `.profile-switcher` card 259px below it, which is itself 211×120px (14.2% of the sidebar height) rendering an eyebrow, a 42px MenuSelect and a 23px link. The word "General" appears three times on one screen: the card, the active profile row, and the stage eyebrow "ACTIVE SESSION · GENERAL".
+- **Design.** Delete the AGENT group and the `.profile-nav-section` block (app.tsx:4703-4716). Replace `.profile-switcher` with a single 48px full-bleed row pinned below the existing 1px `.sidebar-spacer` rule:
+
+```
+[GE]  General                    ⌄
+```
+24px monogram, 13px name, 12px chevron, `min-height: 48px`, `padding: 0 12px`, no card border, no inner background. `aria-label="Agent profile: General. Change profile"`.
+
+It opens the existing `MenuSelect` popover, which already renders `{ label, description }` per option — so the profile *descriptions* the rail rows currently drop are gained. The popover header reads `Agent profile` (the eyebrow's copy, moved). Its last two rows are `Manage profiles` (copy unchanged, `navigate("profiles")`) and `Preferences…`.
+
+In `rail` (60px) state the row is the 24px monogram inside a 44×44 target, same popover, same `aria-label`.
+- **Information fate.** "AGENT PROFILE" eyebrow: deleted as visible copy, preserved as the popover header and as the row's `aria-label` — a visible eyebrow labelling a row that already shows a monogram and a profile name is genuinely redundant. Every profile name: kept, in the popover, now accompanied by its description. "Manage profiles": kept verbatim as a popover row. The `Profiles` destination: kept, reachable via that row and via the command palette. The active-profile highlight: kept as the popover's checked state.
+- **Files.** src/ui/app.tsx, src/ui/styles.css, src/ui/menu-select.tsx, src/ui/navigation-model.ts
+
+### Regroup to one unlabelled working set plus RECEIPTS & ACCESS; rename Connection to Models
+- impact **high** · effort **medium** · reclaims 110px vertical (WORK label 26px + AGENT group 158px net of the 46px Profiles row that moves, + 92px if Workspace nesting collapses by default), and the rail stops scrolling entirely at every height ≥598px versus the current 785–943px in a 501–701px box.
+- **Problem.** WORK/AGENT/TRUST is the architecture's taxonomy, not a person's. AGENT has one member. TRUST holds a receipt log (Proof), a storage backend (Vault), a model-provider page (Connection) and a billing page (Account) — the last two are plumbing, not trust. `Account` is nested under `Connection` with a `↳` marker, which is why it is the single row most reliably below the fold (measured 100% invisible at 1440×900 in the default state). And `#connection` carries four different names on screen at once: "Connection" (rail), "Connect a model" (topbar pill), "Connect a model" (guidance banner button), "Connect models" (page H1).
+- **Design.** ```
+(no group label)
+  Chat                 ▸   [unread badge]
+  Workspace            ▸
+    ↳ Editor
+    ↳ Terminal
+  Memory
+
+RECEIPTS & ACCESS
+  Proof                    [receipt dot]
+  Vault
+  Models
+  Account
+──────────────────────────
+[GE] General             ⌄
+```
+
+Each move, defended:
+
+1. **Drop the "WORK" label.** The first group in a rail needs no label — there is nothing above it to be disambiguated from. Recovers 19px + 7px padding and the rail reads faster.
+2. **AGENT dissolves** into the pinned profile row (previous proposal).
+3. **TRUST → `RECEIPTS & ACCESS`.** Honest description of the four members: Proof is a receipt log, Vault is where state persists, Models is what you may call, Account is what it costs. If a shorter string is required, `EVIDENCE & ACCESS`. I would not keep "Trust": Airship's whole posture is that it does not ask to be trusted, it shows evidence. A nav group named TRUST is the one place the product asks for the word instead of earning it.
+4. **Connection → `Models`.** Rail says `Models`; both calls-to-action keep `Connect a model`; page H1 becomes `Models` with its existing paragraph unchanged. Keep the `#connection` hash so no link breaks, add `#models` as an alias in `VIEW_HASHES`.
+5. **Account un-nests** to a peer row. It is a real destination, not a sub-page of the provider connector, and its `↳` nesting is why it falls off the bottom.
+6. **Editor / Terminal stay nested** under Workspace with the `↳` marker. They genuinely are sub-surfaces of a workspace; this is the one nesting the current model gets right. Collapse them by default behind Workspace's own `▸` (state remembered), which trims a further 92px.
+
+Resulting rail content height: 5 top rows (230px) + 1 group label (19px) + 4 rows (184px) + 24px nav padding + 10px group gap + 24px item gaps = **491px**, or **399px** with Workspace collapsed. Plus the 48px profile row and 1px rule = 540px / 448px of sidebar. Fits without scrolling at every viewport height ≥ 598px (≥ 506px collapsed).
+- **Information fate.** No destination is removed and none is buried. All seven canonical destinations and all three nested ones remain in the rail; Account is promoted from nested to peer. The scope metadata (`session` / `workspace` / `profile` / `global`) currently carried by the `data-scope` left stripe and the `title` string is kept unchanged on every row. The word "Trust" survives as the phone tab-bar label and as the `TrustSheet` title, so the concept is not erased — it stops being a filing cabinet. The word "Connection" survives in the `#connection` hash and in the Connect surface's own copy.
+- **Files.** src/ui/navigation-model.ts, src/ui/app.tsx, src/ui/access-view.tsx, src/ui/mobile-navigation.tsx, src/ui/navigation-model.test.ts, src/ui/styles.css
+
+### Focus mode (⌘.) that trades chrome for a 28px honesty strip
+- impact **transformative** · effort **medium** · reclaims 262px of chrome returned at 1440×900 (232px rail + 58px topbar − 28px strip). Chat stage goes 898px → 1130px with the inspector open, restoring 155px gutters around the 820px measure instead of 39px.
+- **Problem.** There is no way to give a conversation the whole window. Measured chrome at 1440×900: 58px topbar + 232px rail, on top of the ~220px of stage header the lead already measured. With the proof inspector open the chat stage is 898px carrying an 820px measure — 39px gutters. Nothing in src/ui/ implements focusMode, sidebarCollapsed, zen or any equivalent.
+- **Design.** `data-rail="focus"` sets `--rail-width: 0px` and hides the topbar's brand block and `.topbar-center` status-seal cluster.
+
+Trigger: `⌘.` / `Ctrl+.`, plus the command palette entry "Focus conversation" / "Exit focus". `Esc` exits. Manual only — an automatic trigger would hide claims the user did not choose to hide.
+
+In exchange it REVEALS a 28px focus strip pinned top-right of `.chat-stage`, which is the first tab stop and is always visible:
+
+```
+[◐] Ephemeral · Ready · airship/demo-v1        ⌘. exit focus
+```
+
+- `[◐]` is the existing `<Seal>` component at `size={16} compact`, fed by the already-computed `mobilePostureSeal` — the weakest claim across the stack, exactly the rule the 430px header already applies.
+- Clicking the strip opens the existing `TrustSheet` with the complete claim stack, unchanged.
+- Strip `aria-label`: `"Runtime trust: <weakest claim label>. Open full claim stack."` — the same string the phone trust chip uses today.
+
+So focus mode hides chrome, never claims: the four topbar seals collapse into the one weakest seal that already governs the phone layout. Nothing is newly hidden that a 430px phone does not already hide, and the model id — which the topbar does not show at all — is added.
+- **Information fate.** Topbar status seals ("Browser / Edge runtime", "Ephemeral", "Connect a model"): merged into the single weakest-claim seal in the strip, one tap from the full stack in the existing TrustSheet — the identical reduction the phone header already ships. Brand wordmark: hidden, restored on exit or on ⌘K. Rail: hidden, every destination still reachable via ⌘K and via ⌘. to exit. Runtime line ("Local kernel ready"): folded into the strip's "Ready" token, full string kept in the seal detail and in the existing `role="status"` live region. Session model id: newly ADDED to the strip; it is not in the topbar today.
+- **Files.** src/ui/app.tsx, src/ui/styles.css, src/ui/seal.tsx, src/ui/posture-chip.tsx, src/ui/platform-shell.css
+
+### One rail component for tablet and desktop; retire the 60-line tablet override block
+- impact **high** · effort **medium** · reclaims 44px horizontal on tablet (104→60), 6.1% of the 716px main region at 820px; and ~60 lines of duplicated media-query CSS retired.
+- **Problem.** The 104px tablet rail is measurably better than the 232px desktop rail. At 820×1000: shell `104px 716px`, 11 of 11 destinations visible, 942px content in a 942px box, no scroll. At 1440×900 with 8 conversations: 8 of 11 visible, Proof/Vault/Connection/Account below the fold. The wider rail shows three fewer destinations. They are also two separately-maintained layouts — `@media (max-width: 860px)` at styles.css:4893 spends ~60 lines re-specifying `.sidebar .nav-item` as a two-line icon-over-label column, hiding `.chat-nav-disclosure`, `.chat-nav-new`, `.recent-conversations` and `.profile-switcher`. And it does not even land: `:root[data-density] .nav-item { min-height: var(--density-control) }` (styles.css:165, specificity 0-2-1) beats `.sidebar .nav-item { min-height: 50px }` (styles.css:4931, 0-2-0), so rows render at 46px, measured at 820×1000.
+- **Design.** Extract the rail into `src/ui/rail.tsx` + `src/ui/rail.css`, a single component with `state: "rail" | "standard"`.
+
+The `rail` state IS the tablet layout, at **60px instead of 104px**: a single centred 18px icon in a 44×44 target, no label under it. The label under the icon is what forces 104px, and it renders at 11.7px — below the type floor `src/ui/type-floor.test.ts` defends. A hover/focus tooltip carries the label at full 12px plus its scope, which is more than the 11.7px stacked label says.
+
+The `@media (max-width: 860px)` sidebar block collapses to one declaration: `:root:not([data-rail]) { --rail-default: rail; }`. All the display:none overrides go away because the popovers from the conversations and profile proposals are the same component at every width.
+
+Fix the specificity accident while the code is open: move the density row-height rule to `:root[data-density] .nav-item:not([data-rail-state="rail"])`, or set the rail-state height with a custom property (`min-height: var(--rail-item-height, var(--density-control))`) so it composes instead of colliding.
+- **Information fate.** Nothing is dropped. The tablet rail's visible 11.7px labels move to a 12px tooltip plus `aria-label` — larger type, plus scope, plus a hover-peek panel that the current tablet layout does not have. Everything the current tablet block hides outright (`chat-nav-disclosure`, `chat-nav-new`, `recent-conversations`, `profile-switcher` are all `display:none` at ≤860px today) comes BACK as popovers — the tablet layout currently loses the conversation switcher and the profile switcher entirely, and this restores both.
+- **Files.** src/ui/rail.tsx, src/ui/rail.css, src/ui/styles.css, src/ui/app.tsx, src/ui/density-contract.test.ts, src/ui/route-layout.test.ts
+
+### Collapse the rail to one scroll region and one tab stop
+- impact **medium** · effort **small** · reclaims No pixels; removes 2 of 3 nested scroll regions and 17 of 20 tab stops (26 of 29 in the eight-conversation state).
+- **Problem.** Three independent overflow-y scrollers nest inside 232×842: `.primary-nav`, `.recent-conversations` (max-height min(250px,30vh)), and `.recent-conversations.profile-navigation` (max-height min(310px,38vh)). Focus cost measured at 1440×900: 20 tab stops in the rail before main content with 1 conversation and 3 profiles; 29 with 8 conversations and 5 profiles.
+- **Design.** After the conversation and profile popovers land, both inner scrollers are gone by construction and the rail has exactly one scroll region — which, at 491px of content (399px with Workspace collapsed), never actually scrolls above a 598px viewport.
+
+Keep the `data-scroll-edges` mask machinery at styles.css:625-655 verbatim. It is correct, measured rather than assumed, and it has a `forced-colors` fallback — it simply stops firing at realistic heights. That removes both of the clipped renderings I captured: the "Research" row sliced through its x-height at 1440×700, and the whole RECEIPTS group below the fold at 1440×900 with 8 conversations.
+
+Make the rail a roving-tabindex composite (`role="navigation"` wrapping a `role="tablist"`-style group, `tabindex="0"` on the active item and `-1` on the rest):
+- `↑`/`↓` move between destinations, wrapping.
+- `→` expands Workspace's nested pair and moves into it; `←` collapses / moves to parent.
+- `Enter`/`Space` navigates.
+- `Home`/`End` jump to first/last destination.
+- The rail toggle chevron and the pinned profile row remain separate tab stops.
+
+That takes the rail from 20 tab stops to **3** (rail composite, toggle, profile row) — or 1 to traverse all destinations. The existing skip links at app.tsx:4547 ("Skip to conversation", "Skip to composer") stay unchanged and keep working.
+- **Information fate.** Nothing removed. Every destination remains keyboard-reachable and gains arrow-key traversal it does not have today. The three scroll regions become one; the content they were scrolling is not discarded, it moved into popovers in the earlier proposals. `aria-current="page"`, the `data-scope` stripes, the proof dot and the unread-turn badge are all unchanged.
+- **Files.** src/ui/app.tsx, src/ui/rail.tsx, src/ui/styles.css, src/ui/scroll-affordance.ts, src/ui/focus-trap.ts
+
+
+## composer
+
+**Diagnosis.** The composer is not "small" because of its height — it is small because **the toolbar sits in the same grid row as the text field and takes most of the width**. `.composer-input-row` is `grid-template-columns: minmax(0,1fr) auto` (styles.css:2013) with `.composer-footer` in the `auto` track at a fixed intrinsic 449.6px on every desktop-class viewport.
+
+Measured share of the composer card that is actually typeable, resting/empty state:
+| viewport | card | textarea | share | toolbar | share |
+|---|---|---|---|---|---|
+| 1440x900 | 790px | **338.4px** | 42.8% | 449.6px | 56.9% |
+| 1280x800 | 790px | **338.4px** | 42.8% | 449.6px | 56.9% |
+| iPad Pro 11 (834) | 686px | **234.4px** | **34.2%** | 449.6px | 65.5% |
+| iPhone 14 Pro Max (430) | 412px | **208.5px** | 50.6% | 201.5px | 48.9% |
+
+On a 1440px display the usable typing width is 338px — narrower than an iPhone. On the iPad it is 234px, one third of the card.
+
+**The clipping is not a line-height bug and not a flex bug — it is a fixed-height bug caused by that width theft.** The textarea is `min-height: 58px` (density override, styles.css:183 = `--density-control` 46px + 12px) with `padding: 17px 17px 8px`, leaving a **33px content box** against a **23.2px line box** (desktop) / **24px** (phone). One line fits; two do not. The placeholder "Ask Airship or type / for tools and session commands…" needs **348.9px** but the desktop content box is 304px → wraps to 2 lines (46.4px) inside 33px. `scrollHeight 71 / clientHeight 58` — 13px of line 2 is cut. On phone the content box is 174px against a 396px placeholder → **3 lines**, `scrollHeight 97 / clientHeight 58` — line 2 is sliced horizontally through the letterforms and line 3 ("commands…") never renders at all. Confirmed visually at desktop, tablet and phone; on tablet the cut second line crosses the card's own bottom border.
+
+**The auto-grow algorithm makes it worse, not better.** The `fit()` effect (app.tsx:917-947) toggles `data-multiline` on, measures, and if `natural <= minimum + 1` it *removes* multiline and re-measures. On phone, "Summarize the workspace" (23 chars) fits one line at full width → guard fires → textarea snaps back to 208.5px → wraps to 2 lines → card grows to 75px. A 23-character prompt renders on two lines while 200px of the card sits idle holding a `+`, a dot and the words "Ask First".
+
+Two further measured defects in my lane:
+- **The approval popover truncates its own safety-critical option labels.** In a 330px popover with ~200px of slack, `.menu-select-option`'s `auto minmax(0,1fr) auto` grid collapses the label track: "Auto Approve" needs 80px and gets **48.2px**; "Full Access" needs 67px and gets **39px**. They render as "Auto ..." and "Full ...". Identical on desktop and phone.
+- **On mobile the durability/credential fact is already deleted, not re-presented.** `.composer-tools span:nth-child(2) { display:none }` (styles.css:5551) renders "local demo · page memory" at **0x0px** on phone. The blueprint already flags this (AIRSHIP_DESIGN_BLUEPRINT.md:1357).
+
+Vertical behaviour, keyboard up: at a 404px visual viewport (iOS keyboard), the resting composer region is **21% of visible height**; with an 8-line prompt the 180px hard cap makes it **64.1%** and the transcript collapses to **24px** — the conversation is gone, and the card visually overlaps the session header behind it. There is also no scroll affordance at the cap: the top line is sliced flat with no fade.
+
+Finally, `Shift` appears nowhere as user-facing copy anywhere in `src/ui/`. Enter sends, Shift+Enter newlines, Enter-while-busy queues — none of it is discoverable.
+
+Note: the blueprint's own composer spec (§11.1, line 1322) already draws the toolbar as a **separate row beneath the textarea**. The shipped inline layout is a divergence from the design that was already agreed.
+
+### Unstack the composer: give the text field the full card width, always
+- impact **transformative** · effort **medium** · reclaims +418px of horizontal typing width on desktop and iPad, +174px on phone; costs +11.2px vertical on desktop, +27.2px on phone (returned by proposal 5)
+- **Problem.** `.composer-input-row` puts the toolbar in the same grid row as the textarea, so the typeable width is 338.4px of 790px on desktop (42.8%), 234.4px of 686px on iPad (34.2%), 208.5px of 412px on phone (50.6%). The `fit()` oscillation guard (app.tsx:917-947) then forces short prompts back into the narrow column: "Summarize the workspace" (23 chars) wraps to two lines on phone with 200px of the card idle.
+- **Design.** Make the two-row layout the only layout — which is what AIRSHIP_DESIGN_BLUEPRINT.md §11.1 already specifies.
+
+1. styles.css:2013 — `.composer-input-row { display: grid; grid-template-columns: minmax(0, 1fr); }`. Delete the `[data-multiline]` rules at 2019-2025; the footer is always its own row and always `justify-content: space-between` (tools left, send right).
+2. app.tsx:917-947 — delete the whole `data-multiline` toggle/re-measure branch from `fit()`. It exists only to guard an oscillation that cannot happen once the width is constant. `fit()` reduces to: set height to `min`, read `scrollHeight`, clamp between `min` and `max`, set `overflowY`.
+3. Resting geometry, desktop (≥641px):
+   - `.composer textarea { min-height: 44px; padding: 12px 16px 8px; line-height: 22px; font-size: var(--fs-meta); }` — replaces the density override at styles.css:183 (`min-height: calc(var(--density-control) + 12px)` = 58px, `padding: 17px 17px 8px`). 12+22+8 = 42, floored to 44. Content box 756px.
+   - `.composer-footer { min-height: 32px; padding: 0 6px 0 10px; justify-content: space-between; }` — replaces `min-height: 52px`.
+   - Card at rest = 44 + 32 + 2px border = **78px** (today 60px).
+   - `.composer-wrap { padding: 8px max(22px, calc((100% - 790px)/2)) 10px; }` (today 9.8/14) → wrap **96px** vs 84.8px today.
+4. Resting geometry, mobile (≤640px):
+   - textarea `min-height: 46px; padding: 12px 14px 8px; font-size: 16px; line-height: 24px` (keep the 16px iOS-zoom guard).
+   - `.composer-footer { min-height: 48px; }` so every child clears 44px.
+   - Card = 46 + 48 + 2 = **96px**; wrap padding 7/9 → **112px** vs 84.8px today.
+
+Measured outcome: textarea content box goes 304px → **756px** on desktop (+149%), 200px → **652px** on iPad (+226%), 174px → **382px** on phone (+120%). The 348.9px placeholder now fits on one line with 407px of slack at 1440, and the 396px phone placeholder fits with no wrap at all. The clipping cannot recur at any viewport because the content box exceeds the longest placeholder by >100%.
+
+Honest cost: +11.2px of vertical chrome on desktop (1.24% of a 900px viewport) and +27.2px on phone (3.7% of 740px). Proposal 5 returns ~90px on phone when the keyboard is open, so the phone is net positive in the state where it matters.
+- **Information fate.** Nothing is removed. Attach image, the durability/credential line, the Ask First policy control and Send all remain simultaneously visible — they simply occupy a dedicated 32px (desktop) / 48px (mobile) strip beneath the field instead of competing with it for horizontal space. The mobile case gains information: `.composer-tools span:nth-child(2)` (styles.css:5551) currently renders the durability line at 0x0px on phone; with a full-width strip it is restored, satisfying AIRSHIP_DESIGN_BLUEPRINT.md:1357.
+- **Files.** src/ui/app.tsx, src/ui/styles.css
+
+### Shorten the placeholder and make Enter / Shift+Enter discoverable
+- impact **high** · effort **small** · reclaims placeholder rendered width 348.9px → 211px desktop, 396px → 239px phone; guarantees a single line at every viewport
+- **Problem.** The placeholder is 53 characters and renders at 348.9px (desktop) / 396px (phone) against content boxes of 304px / 174px, so it wraps and is clipped mid-glyph. Separately, `Shift` appears nowhere as user-facing copy in `src/ui/` — Enter-sends, Shift+Enter-newline and Enter-queues-while-busy are all undiscoverable.
+- **Design.** 1. app.tsx:5032 — placeholder becomes `"Message Airship — / for commands"` (32 chars ≈ 211px at 13.81px, ≈239px at 16px mobile). Below 480px, `"Message Airship"` (15 chars ≈ 112px). Set the shorter string from the same `MOBILE_SHELL_MEDIA_QUERY` already imported at app.tsx:191.
+2. The dropped words are not lost: the slash menu (`.slash-command-menu`, app.tsx:4979) gains a sticky header row — `<header>Commands and session tools · Enter or Tab to accept</header>` at `--fs-micro` / `--ink-faint` — so "tools and session commands" is stated where the user is looking at the actual tools. Add `title="Message Airship. Type / for tools and session commands."` on the textarea for the hover path.
+3. Add a keyboard legend as the last child of `.composer-tools`: `<span class="composer-keyhint" aria-hidden="true"><kbd>↵</kbd> send <kbd>⇧↵</kbd> newline</span>` at `--fs-micro`, `--ink-faint`, `letter-spacing: .01em`; `kbd` styled 16px tall, `--surface-soft`, `--radius-control`, 1px `--line`. Render it only when `input.length > 0 || composerFocused` (add a `focused` state on the existing `onFocus`/`onBlur`), and `display: none` below 640px where there is no hardware keyboard.
+4. When `busy`, the legend swaps in place to `<kbd>↵</kbd> queue <kbd>⇧↵</kbd> newline` — this is the only place the existing queue-on-Enter behaviour (app.tsx:5065-5079) is ever stated before the user trips over it. Today that fact only appears as a `composerNotice` *after* a failed Enter.
+- **Information fate.** "or type / for tools and session commands" moves to two places: the slash menu's own header (visible exactly when relevant) and the textarea `title`. Nothing else changes. The Enter/Shift+Enter legend and the busy-state queue hint are net-new disclosures of behaviour that already ships but is currently invisible.
+- **Files.** src/ui/app.tsx, src/ui/styles.css
+
+### Rebuild the Ask First control as a policy chip, and stop truncating its own option labels
+- impact **high** · effort **small** · reclaims trigger 120px fixed → ~92px intrinsic in the footer strip; label truncation 48.2/80px and 39/67px eliminated
+- **Problem.** The approval control is a fixed 120px `MenuSelect` wedged inline against the text field, and its bold 700-weight "Ask First" is the brightest, heaviest text in the entire composer — louder than the placeholder it is crowding out. Worse, the popover truncates safety-critical labels: in a 330px popover, "Auto Approve" needs 80px and renders in 48.2px; "Full Access" needs 67px and renders in 39px. They read as "Auto ..." and "Full ..." on both desktop and phone.
+- **Design.** Trigger (`.composer-approval-select`, styles.css:2120-2159):
+- Drop `width: 120px; min-width: 120px` → `width: auto`. Sits in the left cluster of the new footer strip.
+- Trigger content: coloured 7px dot + sentence-case label. Copy changes to `Ask first` / `Auto approve` / `Full access`, `font-weight: 500` (from 700), `font-size: var(--fs-micro)`, `color: var(--ink-muted)`. Keep the existing escalation colours (`--verdigris` / `--v-caution` / `--signal-red`) — they are the whole point.
+- Trigger height 28px desktop / 44px mobile; caret 12px, `--ink-faint`.
+
+Popover (menu-select.css, `.menu-select-option`):
+- `grid-template-columns: minmax(max-content, auto) minmax(0, 1fr) auto` and remove `white-space: nowrap; text-overflow: ellipsis` from `.menu-select-option strong`, allowing the label to wrap rather than truncate. In a 330px popover both labels fit whole on one line with room to spare.
+- Add a leading escalation dot per option, same three colours as the trigger, so the three rows read as a ladder rather than a list.
+- Scope this as `.composer-approval-select .menu-select-option { ... }` if the wider `MenuSelect` needs its current behaviour for long model ids.
+
+Copy, exact, per state (descriptions already exist at app.tsx:5101-5103 and are kept verbatim):
+- `● Ask first` — "Prompt before effectful actions."
+- `● Auto approve` — "Ask the active model to review each effect; prompt when uncertain."
+- `● Full access` — "Allow effects inside the bounded browser workspace without prompting."
+
+Add a popover header and footer that state the scope, which today exists only in the `aria-label` "Conversation approval policy" and is invisible to sighted users:
+- header: `Approval policy`
+- footer: `Applies to this conversation only.` at `--fs-micro` / `--ink-faint`.
+
+Mobile: `.menu-select-popover` already becomes a fixed bottom sheet at ≤640px (menu-select.css); keep it, rows stay 44px, add the same header/footer.
+- **Information fate.** Nothing removed and two things restored: the full labels "Auto Approve" and "Full Access", currently physically truncated to 60% and 58% of their width, and the conversation-scope fact, currently only in an aria-label. The three descriptions stay verbatim. The escalation colour coding stays. Only the visual weight drops from 700 to 500 so the control stops out-shouting the text field.
+- **Files.** src/ui/app.tsx, src/ui/styles.css, src/ui/menu-select.css
+
+### Rebuild the footer strip: icon-only attach, a tappable posture chip, and a send button that reads as the primary action
+- impact **high** · effort **medium** · reclaims footer intrinsic width 449.6px → ~250px; restores a 0x0px element on mobile
+- **Problem.** The footer is 449.6px on every desktop-class viewport: "Attach image" alone is 103.7px (23%), the durability line "local demo · page memory" is 164.9px (37%), the policy select 120px (27%), send 34px. On phone the durability line is `display:none` at 0x0px — the credential fact is deleted rather than re-presented — and the composer's honest offline/demo caveats live only in a `title` attribute, which is unreachable on touch.
+- **Design.** New `.composer-footer`, left cluster → right cluster, 32px desktop / 48px mobile:
+
+`[ + ] [ ⚿ posture ] [ ● policy ]  …  [ ↵ send legend ] [ Send ]`
+
+1. **Attach** — icon only at every breakpoint. `.composer-attach` becomes a 32px (desktop) / 44px (mobile) square, `Icon name="plus" size={16}`, `aria-label="Attach image"` (already present at app.tsx:5089), `title="Attach image"`. Delete the visible `<span>Attach image</span>`; the accessible name is unchanged. Saves 78px and makes desktop consistent with the mobile treatment that already ships (styles.css:5555).
+2. **Posture chip** — replace the plain `<span><Icon lock/> …</span>` with a `<button class="composer-posture">` carrying a lock glyph plus a two-word label, opening a popover with the full sentence on both hover and tap. Exact copy:
+   - not connected → chip `⚿ Local demo`; popover: "No provider is connected. Replies come from a deterministic local demo and nothing leaves this tab."
+   - connected, `authMethod === "local-none"` → chip `⚿ Local endpoint`; popover: "Inference runs against a local endpoint. No credential is held."
+   - connected, remote → chip `⚿ Key in memory`; popover: "Your API key lives in this tab's memory only and is dropped when the tab closes."
+   - offline → chip `⚿ Offline`, `--v-caution`; popover carries `OFFLINE_INLINE_REASON` verbatim.
+   The chip is rendered at all breakpoints — delete `styles.css:5551` (`.composer-tools span:nth-child(2) { display: none }`).
+3. **Send** — 32px desktop / 44px mobile, brass fill, `--radius-control`. Keep every existing `title` string (app.tsx:5126-5133) but mirror the disabled reason into the posture popover so touch users can read it. Disabled state keeps the current dimmed brass; add `cursor: not-allowed`.
+4. Strip is `justify-content: space-between` with a `gap: 6px` left cluster, so on any width narrower than the sum of parts the left cluster wraps its labels to glyph-only via `container-type: inline-size` on `.composer` and a `@container (max-width: 380px)` rule — never a horizontal scroll and never a `display: none`.
+- **Information fate.** "Attach image" survives as the accessible name and tooltip on a universally-legible `+`. "local demo · page memory" splits: the credential half becomes the always-visible chip label, the durability half ("page memory") moves into the chip's popover sentence — where it is stated more precisely than today and, critically, is now visible on mobile where it currently renders at 0x0px. The word "Ephemeral · this page only" already states the durability fact in the session status row 220px above, so the composer chip is free to specialise in credential posture. Every `title`-only caveat is promoted to a tappable popover.
+- **Files.** src/ui/app.tsx, src/ui/styles.css, src/ui/durability-indicator.tsx
+
+### Cap growth against the visual viewport and give the scroll a fade — fix the keyboard-up collapse
+- impact **high** · effort **medium** · reclaims transcript at keyboard-open goes from 24px to ~110px via the cap alone, and to ~200px once the tab bar yields; composer share of visible height 64.1% → 46%
+- **Problem.** `max-height: 180px` is a constant regardless of available height. At a 404px visual viewport (iPhone 14 Pro Max with the keyboard up) an 8-line prompt makes the composer region 258.8px = **64.1% of the visible area** and collapses the transcript to **24px**; the card visually overlaps the session header behind it. At the cap there is no scroll affordance at all — the top line is sliced flat mid-x-height with 17px of padding full of cut glyphs, on both desktop and phone.
+- **Design.** 1. **Viewport-aware cap.** `fit()` (app.tsx:917-947) already subscribes to `window.visualViewport` resize. Replace the `maximum` read with:
+   `const available = window.visualViewport?.height ?? window.innerHeight;`
+   `const maximum = Math.min(parseFloat(style.maxHeight) || 180, Math.round(available * 0.34));`
+   At 900px → 180px (unchanged). At a 404px visual viewport → 137px, so the composer region becomes 187px = 46% instead of 64%, and the transcript keeps ~110px instead of 24px.
+2. **Pin above the keyboard.** Implement AIRSHIP_DESIGN_BLUEPRINT.md §11.6 (line 1354), which is specified but not shipped: on `visualViewport` resize, translate `.mobile-tabbar` out (`transform: translateY(100%)`) and pin `.composer-wrap` to the visual viewport bottom while the keyboard is open. That returns the tab bar's 56px + `env(safe-area-inset-bottom)` (~90px on iPhone 14 Pro Max) to the transcript — more than repaying proposal 1's +27.2px. `platform-shell.tsx:424` already holds a `visualViewport` subscription to extend.
+3. **Scroll fade.** When `element.scrollTop > 0`, set `data-scrolled` on `.composer-input-row`; CSS: `.composer-input-row[data-scrolled] textarea { mask-image: linear-gradient(to bottom, transparent 0, #000 14px); }`. When `scrollHeight - scrollTop - clientHeight > 1`, set `data-scroll-end` and add a matching 14px fade at the bottom. The half-sliced line then reads as scrolled content rather than a broken box.
+4. **Restore the drag handle as a grabber, not a resize.** Optional: a 3px `--line` pill centred on the card's top edge, `cursor: ns-resize`, that lets the user raise the cap to `min(60dvh, 420px)` for long prompts, persisted per session. Only if effort allows.
+- **Information fate.** Nothing changes about what is shown; only how much of the growing prompt is allowed to displace the conversation, and whether the cut edge is legible as a scroll. No copy changes.
+- **Files.** src/ui/app.tsx, src/ui/styles.css, src/ui/platform-shell.tsx, src/ui/platform-shell.css
+
+
+## Model selection — placement, styling, and the post-OAuth wall of text
+
+**Diagnosis.** I drove the live lab at 1440x900 and iPhone 14 Pro Max, connected the real Chutes key at `#access`, landed in chat, and measured every model surface. Four separate findings, all confirmed on screen.
+
+**(1) The chat model control truncates the one thing it exists to show.** `.stage-header` is `grid-template-columns: minmax(180px,1fr) minmax(270px,420px)` (styles.css:993). The title column measures 726px and the H1 "General conversation" paints ~200px of it — **526px of dead space** — while the model card is pinned to the right at x=998, w=420, h=69, separated from the title by ~543px. Inside that 420px card, `.session-runtime` is `30px | 1fr | auto`; the `auto` column is the posture pill "E2EE · evidence recorded" at **185px**, which leaves the model name exactly **169px**. Result: the model renders as `Qwen3-32B-…` (screenshot desktop-C2-header-crop.png). The posture string is 110% of the width given to the model id, and every extra character of posture copy shortens the model name further. Meanwhile the topbar shows the same model *again*, also truncated: `Chutes · Qwen3-32B-T…`.
+
+**(2) The chat dropdown is a 260px MenuSelect that ellipsizes every row.** Opened it live: popover **260px wide, 420px tall, scrollHeight 676px** — 62% of the list visible, no search, no filter, no count. Twelve options at 53px each. Every label truncates (`gemma-4-31B-turbo-T…`, `Qwen3.5-397B-A17B-T…`) and every description truncates (`VISION · TOOLS · 817.5K INVO…`). The reason: `modelControlOptions()` (model-control.tsx:95) prefixes each description with the boilerplate `STARTS A NEW PINNED CONVERSATION` — 32 identical characters on 11 of 12 rows — which wins the width and pushes the actual capability data off the end. Popularity is rendered in `--v-verified` green (`model-picker.css`, `.model-picker-list em`), i.e. the verification colour applied to unverified provider telemetry.
+
+**(3) The `#access` picker trigger does not read as a control, and its popover mis-anchors.** The trigger is **914px wide, 44px tall**, and because it is a `<button>` with no `text-align` override it inherits `center`: the model id floats dead centre with ~350px of empty space on each side, logo pinned far left, `⌄` pinned far right (desktop-B2). Its popover is `width:min(620px,…)` and `left:0` — **620px under a 914px trigger, 294px (32%) narrower**, left-aligned, and it covers `.model-candidate-summary` and `.proof-policy-consent`, so the metadata about the model you are choosing is hidden precisely while you choose. The popover is a single `overflow:auto` box, so search, facets, sort and the provenance caveat all scroll off (confirmed at scrollTop 400, desktop-B4).
+
+**(4) The post-discovery panel is 637px of prose around a 44px control.** `.connection-candidate` measures 914x637 and contains 146 words / 1048 characters. Row budget: credential-kind 65px, model label + picker **44px (6.9%)**, candidate summary 145px (23%), catalog provenance 58px, turn-proof-policy **179px (28%)**, actions 44px. The single largest block on the page is a fieldset whose second option, `Strict fail-closed · unavailable`, is a **465x108px** tile of grey prose for a control that is permanently `disabled` in this build. Above it: topbar 58 + trust tabs 61 + page heading block 187 + jump nav 44 = **350px** of chrome before the Providers card starts, on a `.access-connection-view` whose scrollHeight is **3061px**; discovery auto-scrolls the user 589px down it.
+
+**(5) On phone the picker is 77% chrome and shows one model.** Popover 414x518 at y=214 — it renders *above* its own trigger (y=404), silently swallowing it. Inside: search ~44px, then five facet buttons stacked vertically at ~48px each (~265px), sort label + control ~60px, provenance paragraph 2 lines. That is ~400px of 518. The list gets ~118px, and rows are 108px on phone. **Exactly one model row is visible** (phone-B3-picker-open.png).
+
+### Chat: kill the detached 420px card; put an untruncated model chip on the title line
+- impact **transformative** · effort **medium** · reclaims Stage header 136px → ~76px (60px vertical, 6.7% of a 900px viewport); the 420px right grid column is reclaimed horizontally; the model name field goes 169px → ~250px and stops truncating.
+- **Problem.** The `SESSION MODEL / Qwen3-32B-… / E2EE · evidence recorded` card floats at x=998, 543px right of the H1, in a 420px grid column, while 526px of the title column sits empty. Inside it the posture pill takes 185px and leaves the model name 169px, so `Qwen3-32B-TEE` — 13 characters — ellipsizes. `.stage-header` is 136px tall.
+- **Design.** Collapse `.stage-header` to one content column: `grid-template-columns: minmax(0,1fr) auto`. The left cluster becomes `[eyebrow] / [H1] [model chip]`, with the chip inline on the H1 baseline, `margin-left:14px`, vertically centred.
+
+New `.session-model-chip` (replaces the `.session-runtime.remote` card in `.stage-header-model`): a 30px-tall pill button, `max-width:36ch`, `min-width:14ch`, containing `[logo 18px] Qwen3-32B-TEE [status dot 8px] ⌄`. Copy of the accessible name: `Session model Qwen/Qwen3-32B-TEE on Chutes. E2EE, evidence recorded. Change model.` Disconnected state copy: chip reads `Connect a model` with a hollow dot, same tap target, navigating to `#access` exactly as today.
+
+The status dot uses the existing trust ramp: `--v-verified` for `E2EE · last turn proved` / `evidence recorded`, brass for `E2EE · proof required`, `--v-unverified` for `E2EE · no proof gate`, grey for `Disconnected · read-only pin`. Hovering or focusing the dot opens the existing claim-stack popover whose first line is the verbatim posture string produced by `activeConnectionBoundaryLabel()` / `activeConnectionProofLabel()`, unchanged.
+
+Also set `.stage-header h1 { max-width: 42ch; }` so a long conversation title cannot re-starve the chip.
+- **Information fate.** `CHUTES · SESSION MODEL` eyebrow (169x15px): the words "session model" move into the chip's `aria-label` and into the picker popover's sticky header (`Session model`); the provider word `Chutes` survives as the chip's provider logo, in the `aria-label`, and verbatim in the topbar pill. Nothing new is claimed and nothing is asserted that was not asserted before. — Model id: promoted from truncated-at-169px to a full-width, untruncated chip; `compactModelLabel()` still strips the vendor prefix for display and the full `Qwen/Qwen3-32B-TEE` remains in the `aria-label` and the hover stack. — Posture pill `E2EE · evidence recorded` (185px): becomes an 8px dot on the chip plus the same string verbatim as the first line of the chip's hover stack, and it remains a button that opens `#access` (same `onOpenConnection` handler). — `.session-runtime-error` (`role="alert"`) keeps its absolute anchoring, re-parented to the chip. — The `session-meta` row below (`Evidence checked per turn · this session | Ready | Ephemeral · this page only | 1 recorded step | #f474…`) is untouched by this proposal.
+- **Files.** src/ui/app.tsx, src/ui/styles.css, src/ui/model-control.tsx
+
+### Chat: replace the 260px truncating MenuSelect with the real ModelPicker
+- impact **high** · effort **medium** · reclaims Popover 260px → 680px wide: ~26 characters of label recovered per row, 12 rows de-truncated. Visible list fraction 62% → ~85% once the sticky header stops competing with the list for scroll.
+- **Problem.** The chat dropdown is a `MenuSelect` popover measured at 260x420 with scrollHeight 676 — 62% of the list visible, no search, no filters, no sort, no visible count. All 12 labels and all 12 descriptions ellipsize. `modelControlOptions()` puts the 32-character boilerplate `STARTS A NEW PINNED CONVERSATION` on 11 of 12 rows, where it wins the width and truncates the capability payload the row exists to carry.
+- **Design.** Delete the `MenuSelect` from `model-control.tsx` and mount `<ModelPicker>` (the `#access` component, after the fixes in the next proposal) anchored to the new chip, `width: min(680px, calc(100vw - 32px))`, `top: calc(100% + 8px)`, `left:0` with a right-edge flip when it would overflow the viewport.
+
+`ModelControl` currently receives a flattened `ModelControlOption[]`; change it to accept `readonly AirshipModel[]` so chat gets the same rows, search, facets and sort as `#access`. `app.tsx:4813` already has `availableModels` in hand and is throwing the metadata away in the `.map()`.
+
+The pinning warning stops being per-row boilerplate and becomes one sticky footer line in the popover, exact copy: `Choosing a different model opens a new pinned conversation. Turns already recorded keep the model they ran on.` The current row keeps its existing `✓` and gains a `Current` badge.
+- **Information fate.** `CURRENT PINNED MODEL` (row 1 description suffix): becomes the `Current` badge + `✓`, same meaning, 6 characters instead of 21. — `STARTS A NEW PINNED CONVERSATION` x11: merged into one sticky footer sentence, stated once, always visible, no longer truncated. — `VISION · TOOLS · 817.5K INVOCATIONS` per row: promoted from a truncated 3rd-tier description to the picker's own capability glyphs plus the right-hand metric column, and gains context and price which the chat dropdown never showed at all. — `modelControlOptions()`'s escape hatch for a pinned model outside the catalog (`Current pinned model · catalog details unavailable`) is preserved as a pinned first row in the picker list with that exact copy and `aria-disabled`. — `safeModelControlErrorMessage()` and the `role="alert"` error path are unchanged.
+- **Files.** src/ui/model-control.tsx, src/ui/model-picker.tsx, src/ui/app.tsx, src/ui/styles.css
+
+### ModelPicker: sticky header, one-line rows, expand-on-focus, and honest colour
+- impact **transformative** · effort **medium** · reclaims Rows 51px → 44px (30 rows: 1530px → 1320px, 210px). Header chrome stops consuming scroll: at a 630px popover the visible row count goes 9 → 12.
+- **Problem.** The popover is a single `overflow:auto` box, so at scrollTop 400 the search field, all five facets, the sort control and the provenance caveat are gone — you cannot filter once you have scrolled. Rows are 51px with prose capabilities in which `Text` repeats on 12/12 rows and `Confidential candidate` repeats on 12/12 rows. The result count exists only as an invisible `aria-label` ("12 eligible models"). Popularity is painted `--v-verified` green — the verification colour on unverified provider telemetry.
+- **Design.** Make `.model-picker-popover` a `display:flex; flex-direction:column` box with three regions and move `overflow:auto` to the list alone.
+
+**Sticky header, 96px, never scrolls:** row 1 = search input, 40px. Row 2 = facet segmented control, 32px, `overflow-x:auto; scroll-snap-type:x mandatory`, facets carrying live counts: `All 12 · Vision 5 · Tools 12 · Confidential 12 · Hot 9`. A facet whose count equals `All` renders `disabled` with `title="All 12 models in this catalog are confidential candidates"` — the fact stays, the false affordance goes. Row 3 = 24px status line, left `12 models`, right the existing sort `MenuSelect` relabelled inline as `Popular ⌄` (drop the separate 132px `SORT` eyebrow column).
+
+**List:** rows drop to 44px, one line, four zones — `[logo 20px] [name, 1fr] [capability glyphs, auto] [41k · $0.10/$0.42, auto]`. Capabilities become glyph pills with `title` text: `◧ vision`, `⌘ tools`, `⬡ TEE`, `▶ video`. Popularity moves into the metric column in `--ink-muted`, not `--v-verified`.
+
+**Row on focus/hover:** the active row alone expands to 76px and reveals a verbatim second line: `Text · Vision · Tools · Confidential candidate · 4.5M invocations (lifetime, provider telemetry) · 41k ctx / 41k max output · $0.104 in / $0.416 out per 1M`. Because `data-active` is currently driven by `onPointerMove`, gate the expansion on `:hover` plus keyboard-active and give it `transition: height 90ms` with a `prefers-reduced-motion` opt-out, so a mouse crossing the list does not thrash the layout.
+
+**Sticky footer, 32px, never scrolls:** the existing provenance sentence, moved out of the scroll region and re-worded to carry the caveat the design language demands: `Capabilities are source-declared; catalog metadata is not proof. Popularity and load use fresh provider telemetry when available.` Plus `Show all 340` when paging applies.
+- **Information fate.** Every capability string is kept — `Text`, `Vision`, `Video`, `Tools`, `Confidential candidate`, and the `Capabilities not declared` fallback — moved from 12 repeated prose lines at rest to glyphs at rest plus the identical full string on the focused row. — Context, max output, input price and output price: today at rest in the right column and abbreviated (`41k ctx · $0.104/$0.416 per 1M`); kept abbreviated at rest, spelled out in full on focus. — `operationalTitle()`'s popularity basis / source / observedAt / telemetry-freshness tooltip: stays as the `title` on the metric column and is additionally surfaced in the focused row's `(lifetime, provider telemetry)` parenthetical. — The provenance caveat moves from mid-scroll to a permanently visible sticky footer, i.e. more prominent, not less. — The invisible `aria-label` count becomes a visible `12 models`. — Sort options are unchanged.
+- **Files.** src/ui/model-picker.tsx, src/ui/model-picker.css
+
+### ModelPicker: fix the anchor, the width, the button text-align, and the phone sheet
+- impact **high** · effort **small** · reclaims Phone: facet block 265px → 32px and sort block ~60px → 0 (inline), so the picker's chrome falls from ~400px of 518px (77%) to ~140px (27%) and visible rows go from 1 to 5. Desktop: popover +294px wide, occlusion of 324px of candidate metadata eliminated.
+- **Problem.** The trigger is 914px wide and its popover is 620px, left-aligned — 294px (32%) narrower than the control it hangs off, and it lands on top of `.model-candidate-summary` and `.proof-policy-consent`, hiding the evidence about the model while you pick. The trigger inherits the `<button>` default `text-align:center`, so the model id floats in the middle of a 914px bar with ~350px of nothing on each side and reads as a banner, not a control. On phone the popover is `position:fixed; inset:auto 8px 8px 8px` and paints from y=214 while its trigger sits at y=404 — the trigger disappears under the sheet with no explanation.
+- **Design.** **Trigger.** `.model-picker-trigger { text-align:left; justify-content:flex-start; }` and give the caret `margin-left:auto`. Add a leading label so the control names itself: `[logo] Qwen/Qwen3-32B-TEE  ·  ✦ privacy-first recommendation ⌄`, with the badge only when `value === candidate.recommendedModelId`. Add `:hover`/`[aria-expanded=true]` border-brass treatment matching `.menu-select-trigger` so it reads as a control at rest.
+
+**Popover width.** `width: max(100%, min(680px, calc(100vw - 28px)))` — never narrower than its own trigger. Keep `left:0`, add a right-flip when `getBoundingClientRect().right > innerWidth - 12`.
+
+**No occlusion at `#access`.** At `min-width:900px`, render the open popover in flow (`position:static; box-shadow:none; margin-top:8px`) inside the candidate card so it pushes the summary down instead of covering it — the selected-model stats stay readable the whole time you are choosing.
+
+**Phone sheet.** Keep the bottom sheet, but make it explicit: add a 44px sticky sheet header — left `Session model`, right a `Done` button — and a scrim behind it. Above all, replace the vertical facet stack: at `max-width:640px` the facets get `display:flex; flex-wrap:nowrap; overflow-x:auto`, 32px tall, and the sort control returns to an inline `Popular ⌄` on the same status line rather than a full-width block with its own `SORT` label.
+- **Information fate.** Nothing removed. The `Model · privacy-first recommendation` label currently sitting above the trigger as a separate 22px `<label>` line moves *into* the trigger as the `✦ privacy-first recommendation` badge, so the recommendation travels with the model it describes instead of floating above the control. The five facets keep their labels and gain counts; they are laid out horizontally rather than deleted. `Done` is additive.
+- **Files.** src/ui/model-picker.css, src/ui/model-picker.tsx, src/ui/access-view.tsx
+
+### #access candidate panel: 637px of prose becomes a 2-column confirm card where the picker is the hero
+- impact **transformative** · effort **medium** · reclaims Panel 637px → ~360px (277px, 31% of a 900px viewport). Proof policy 179px → ~64px. Catalog provenance 58px → 0 as a band. The picker's share of the panel goes 6.9% → ~15%.
+- **Problem.** After discovery, `.connection-candidate` is 914x637 with 146 words / 1048 characters. The selection control — the whole point of the screen — is 44px, 6.9% of the panel. The single biggest block is the 179px `TURN PROOF POLICY` fieldset (28%), and 108px of that is a 465px-wide tile of grey prose for `Strict fail-closed · unavailable`, a button that is permanently `disabled` in this build.
+- **Design.** Restructure `.connection-candidate` into four rows, two columns:
+
+**Row 1, 44px:** `[lock] Chutes API key · direct session   (?)` on the left; on the right a chip `Catalog read 9:50 AM ⌄`.
+**Row 2, 56px:** `MODEL` eyebrow + the full-width, left-aligned picker trigger from the previous proposal, carrying its own `✦ privacy-first recommendation` badge.
+**Row 3, ~150px, two columns:** left = the existing `.model-candidate-summary` 4-tile grid; right = the proof-policy control, reduced (below).
+**Row 4, 44px:** `Use a different credential` / `Finish: verify & connect`, unchanged.
+
+**Proof policy, capability-keyed disclosure.** When `CHUTES_STRICT_ENDPOINT_PROOF_CAPABILITY.available` is `false` — always, today — render one selected chip, `Verify & record · recommended`, then one line: `Strict fail-closed is unavailable in this build. Why? ⌄`. The disclosure contains, verbatim, both the recommended option's full description and the strict option's full `reason` string. When the capability flips to `true`, the current two-tile `<fieldset>` renders exactly as it does now — the disclosure is keyed on capability, not on taste, so the day strict becomes real the full choice reappears without a design change.
+
+The closing line `This policy is not proof. Completed receipts record only what the browser actually verified.` stays on screen at all times, outside any disclosure. It is the honesty line; it does not get progressive-disclosed.
+- **Information fate.** `Profile, billing, and inference are read directly; Chutes remains authoritative.` (the 2nd line of `credentialKindDetail`): moves behind the `(?)` on the credential-kind row, verbatim. — `.catalog-provenance` (58px band): the timestamp becomes the visible chip; the freshness sentence (`Inference + management metadata loaded` / `Authoritative inference catalog · management enrichment deferred` / `Partial provider metadata`), the `Load live availability metadata` button and the existing `N catalog notices` `<details>` all move inside the chip's disclosure, unchanged. — Proof-policy: both option descriptions kept verbatim behind `Why?`; the `This policy is not proof` caveat kept in place at full prominence. — `.model-candidate-summary`'s four tiles (Availability / Context / Input-output / Trust readiness) are all kept, repositioned; the Trust readiness tile gains a third line, `catalog metadata is not proof`, so that caveat attaches to the model rather than living in a paragraph elsewhere. — `.model-pinning-note` in the *connected* branch (`Changing a model creates a new session manifest…`) is unchanged.
+- **Files.** src/ui/access-view.tsx, src/ui/access-view.css
+
+### #access: collapse the 231px page preamble while a credential candidate is open
+- impact **high** · effort **small** · reclaims 231px of preamble (26% of a 900px viewport) while the picker is the task; removes a 589px unexplained auto-scroll.
+- **Problem.** Above the candidate panel sit topbar 58 + trust-hub tabs 61 + `.access-connection-heading` 187 + `.access-provider-jump` 44 = 350px of chrome, on a view whose scrollHeight is 3061px. Discovery papers over this by auto-scrolling the user 589px down the page, which lands them mid-document with no anchor to what they were doing.
+- **Design.** When `candidate` is non-null, swap `.access-connection-heading` (187px: eyebrow + H1 + paragraph) for a 44px sticky task bar: left `Connect models · Chutes`, right `About this page ⌄`. Hide `.access-provider-jump` for the duration — its two buttons (`Providers`, `Cloud keys & local models`) navigate away from a half-finished credential, which is the wrong offer at that moment; they return the instant the candidate is resolved or cancelled.
+
+With 231px reclaimed the candidate panel fits without the 589px jump: replace the `scrollIntoView` with a scroll to the top of `#connect-surface-card` and a one-frame brass focus ring on the panel, so the user sees where they landed.
+- **Information fate.** `INFERENCE CONNECTIONS` eyebrow and the H1 `Connect models` merge into the sticky bar's `Connect models · Chutes` — both words survive, and `Chutes` is added so the bar names the task in progress. The paragraph `Use Chutes for application-encrypted inference, or connect browser-direct cloud and local models below. Credentials remain in page memory.` moves verbatim behind `About this page ⌄`. The jump nav is hidden, not deleted, and returns on candidate resolution; the sections it targets remain reachable by scroll throughout.
+- **Files.** src/ui/access-view.tsx, src/ui/access-view.css
+
+### Stop rendering the model id twice, truncated in both places
+- impact **medium** · effort **small** · reclaims ~170px of topbar width on chat; removes one of two competing model identities in the same 140px vertical band.
+- **Problem.** On `#chat` the connected model appears in the topbar pill as `Chutes · Qwen3-32B-T…` (truncated) and again 40px below in the stage header as `Qwen3-32B-…` (truncated at 169px). The same fact, ellipsized twice, 40px apart, while `.session-model-chip` needs the width.
+- **Design.** In `app.tsx` (~line 850) make `inferenceStatusLabel` route-aware. On `view === "chat"`, where the stage-header chip is the authoritative, untruncated model display, the topbar pill becomes `Chutes · E2EE` (provider + boundary) — the two facts the chip's 8px dot only encodes as colour. On every other route the pill keeps its current `Chutes · Qwen3-32B-TEE` form, because there it is the only model display on screen.
+
+Its existing `title`/`detail` string is unchanged in both cases: `inferenceStatusDetail` already carries the full untruncated `connection.model` plus `encrypted invocation verified` / `…ready; permission not tested yet`.
+- **Information fate.** On chat the topbar loses only the *duplicate, truncated* rendering of the model id; the full id is 40px away in the chip, spelled out, plus in the pill's own hover detail, plus in the chip's `aria-label`. This is the one place I am calling something genuinely redundant, and it is redundant with a strictly better rendering of the same fact on the same screen. The `E2EE` boundary word is promoted from hover-only to visible in the pill. Disconnected states (`Chutes · disconnected`, `Connect a model`) are untouched.
+- **Files.** src/ui/app.tsx
+
+
+## Chat chrome, density, and the 220px problem
+
+**Diagnosis.** MEASURED BAND STACK (live at http://127.0.0.1:4173/#chat, Playwright, real geometry).
+
+1440x900, empty conversation:
+- 0-58 topbar (58px, 6.4%) — brand 232px + 3 status pills spanning x248-646 (161+95+128px) + "Local kernel ready" 109px + 3 icon buttons 34px each.
+- 58-176 .stage-header (118px, 13.1%) — eyebrow "ACTIVE SESSION · GENERAL" 11.69px (y78,h15); H1 21.25px serif (y97,h24); .session-meta 11.69px mono (y134,h27); plus a detached .session-runtime card 420x51 floated at x998,y74.
+- 176-219 .chat-live-guidance (43px, 4.8%) — full-width banner + "Connect a model" button.
+- CHROME TOTAL 219px = 24.3% of viewport.
+- 219-403: 184px of void (20.4%). Message 403-530 (127px). Starters 567-625 (58px). 625-815: 190px of void (21.1%).
+- 815-900 .composer-wrap 85px (9.4%).
+Content = 205px = 22.8%. Chrome = 304px = 33.8%. VOID = 374px = 41.6%. The void is larger than the content and larger than the chrome.
+
+1440x900 with 3 real turns (I sent them through the demo provider): .stage-header grows to 165px because the H1 title wraps to 2 lines. CHROME = 266px = 29.6%. Transcript clientHeight = 549px = 61%. Scrolling to the bottom changes nothing: stageTop 58, stageH 165, transcriptTop 266 identical before and after. Nothing collapses, ever. The top message is sliced by the banner's hard 1px border with no scrim, which reads as broken rather than scrolled.
+
+1280x800: chrome 219px = 27.4%. Void 274px.
+iPad Pro 11 (834x1194): topbar 58 + stage-header 149 (session-meta wraps to 2 rows, 58px) + guidance 46 = 253px = 21.2%. The model card collides with the mobile "+" button — the "Local" pill renders clipped as "Loca".
+iPhone 14 Pro Max (430x932): topbar 52 + stage-header 85 + guidance 43 = 180px = 19.3%; composer-wrap 85; tab bar 56. Non-transcript chrome = 321px = 34.4%.
+
+DUPLICATION — same variable rendered twice, 76px apart:
+(a) attestationSeal.label: topbar StatusSeal (truncates to "Secure hardware not c…" once a 4th axis appears) AND .session-attestation at x254 w325 in full.
+(b) Durability: topbar vault-axis pill "Ephemeral" (95x27) AND .session-meta DurabilityIndicator "Ephemeral · this page only" (233x27). In the default state both mean "page memory, nothing synced". A 3rd DOM instance sits in .mobile-session-details.
+(c) "Connect a model" x3 on one empty screen: topbar pill 128px, banner button 86px, starter chip 257px.
+(d) The demo fact x3: .session-runtime "SESSION MODEL / airship/demo-v1 / Local", banner "this composer is a deterministic demo", composer footer "local demo · page memory".
+(e) Profile "General" x4: eyebrow, sidebar Profiles row, pinned AGENT PROFILE card, topbar GE monogram.
+
+The codebase already contains the fix and does not use it. platform-shell.tsx:376 TrustPostureSheet renders every axis with full label + detail and its own body copy says "The weakest claim is shown in the topbar." worstTrustAxis() exists at app.tsx:1195. Both are gated to mobile AND to inferenceConnected. On desktop the topbar instead spills all 4 axes as full-text pills, one of which truncates — the opposite of what the component promises.
+
+TYPE DEFECTS IN THE BAND: .session-meta is 11.69px mono but .durability-indicator inside it is 12.75px — two type sizes in one 27px row. That durability pill is the only 1px-dashed border in the header and at 233px it out-shouts the 21.25px H1.
+
+COMPOSER: .composer-input-row is 788px; the textarea is 338px (42.9%); .composer-footer is 450px (57.1%) sitting inline to its right. textarea scrollHeight 71 vs clientHeight 58 at 1440x900 and 1280x800 — placeholder clipped. On iPhone: textarea 209px wide, scrollHeight 97 vs clientHeight 58, ~39px (two lines) clipped. The correct layout already exists as .composer-input-row[data-multiline] (styles.css:2019-2023), which drops the footer to its own row and makes the textarea 788px — it is just gated behind having already typed a newline.
+
+The governing arithmetic: the chat screen spends 24-30% of the viewport telling you facts it also tells you somewhere else, and 42% telling you nothing at all.
+
+### Collapse .stage-header (118-165px) into one 38px .session-bar
+- impact **transformative** · effort **medium** · reclaims 123px vertical at 1440x900 empty, 170px with turns, 157px on iPad Pro 11 (24.3% → 10.7% of viewport chrome)
+- **Problem.** Measured .stage-header = 118px empty / 165px with a real (wrapping) title at 1440x900; 149px on iPad where .session-meta wraps to 2 rows. It stacks four bands — eyebrow 15px, H1 24px, session-meta 27px, plus a visually detached 420x51 model card floated into the top-right — to carry six facts that together need one row. On iPad the model card collides with the mobile + button and clips 'Local' to 'Loca'.
+- **Design.** Replace the .stage-header grid (app.tsx 4780-4874; styles.css .stage-header block 993-1075) with a single 38px row: `grid-template-columns: minmax(0,1fr) auto; padding: 6px 22px; min-height: 38px`.
+
+Left: `<button class="session-bar__identity">` = the existing 18px `.profile-monogram` (GE) followed by `<h1>` at 14.5px serif, one line, `text-overflow: ellipsis`, `title={fullTitle}`. Click opens the sessions view.
+
+Right: `<div class="session-bar__chips">` holding three 26px chips plus the + button, in this order: ModelControl (variant="chip"), SessionStatusChip (Proposal 2), JournalChip, then `.mobile-new-conversation` promoted to all widths so it can never overlap the model card again.
+
+Model chip copy: `⬡ airship/demo-v1  ·Local·` where the boundary keeps its existing brass micro-pill. aria-label = "Session model. airship/demo-v1. Local boundary. Change model."
+
+Journal chip copy: `⌗ 20 · #3af63bf0`. title = "20 recorded steps (page-journal events) in conversation #3af63bf0." When `manifest.lineage.kind === 'fork'`, a leading `⑂` glyph appears with title "Branch from #xxxxxxxx — open source conversation"; the glyph is its own click target, the rest opens sessions.
+
+Height proof: 26px chip + 6px top + 6px bottom = 38px. The 14.5px/20 H1 fits inside the 26px row. 58 topbar + 38 = 96px chrome, vs 219px empty / 266px with turns.
+- **Information fate.** eyebrow 'ACTIVE SESSION · GENERAL' → becomes the GE monogram glyph immediately left of the title, title/aria-label 'Active session · General profile'. The words 'Active session' label the screen you are already on; the profile name survives as glyph + tooltip and is still spelled out in three other places on the same screen. H1 conversation title → kept, one line, ellipsis + full text in title attr (it is also in the sidebar list). 'SESSION MODEL' eyebrow → the model chip's aria-label prefix; it is a label, not a fact. 'airship/demo-v1' → kept as chip text. 'Local' boundary → kept as the chip's trailing micro-pill. 'Secure hardware not checked · this session' → moves into the session status chip + popover (Proposal 2), where its detail string becomes visible body text instead of a tooltip. 'Ready' / 'Turn in progress' / 'Last turn completed|failed|cancelled' → same. 'Ephemeral · this page only' → same. '20 recorded steps' → journal chip visible text '⌗ 20', long form in title. '#3af63bf0' → journal chip visible text. Branch-from-fork link → ⑂ glyph on the journal chip with the full source id in title. Nothing is deleted.
+- **Files.** src/ui/app.tsx, src/ui/styles.css, src/ui/chat/session-bar.tsx, src/ui/chat-layout.test.ts, src/ui/density-contract.test.ts
+
+### One session status chip that expands to the full three-fact stack
+- impact **transformative** · effort **medium** · reclaims 27px vertical band removed; 619px of horizontal row reduced to ~135px
+- **Problem.** Three separate controls occupy 619px of the 1164px session-meta row: .session-attestation 325px, .session-lifecycle 47px, DurabilityIndicator 233px. Two of the three are duplicated in the topbar (same attestationSeal.label, same durability fact). The durability pill renders at 12.75px inside an 11.69px row and is the only dashed border in the header. On phone the same pair inside .mobile-session-details renders a meaningless doubled ○ ○ glyph, because a compact Seal glyph and a DurabilityIndicator glyph sit adjacent with no separator.
+- **Design.** New `src/ui/chat/session-status-chip.tsx`. One 26px button, ~135px wide:
+
+```
+<button class="session-status-chip" data-state={worst.state}>
+  <Seal state={worst.state} size={14} compact />   // one glyph, never two
+  <span>{worst.short}</span>
+  <small>3</small>
+</button>
+```
+
+Precedence for `worst`: any `failed`/`attention` axis first; then a running turn; then the weaker of attestation vs durability by SEAL_STATES order; ties go to attestation. Reuse `worstTrustAxis` (app.tsx:1195).
+
+Exact chip copy, mapped from the real label vocabularies (sessions/domain.ts:99, durability-indicator.tsx, describeAttestationSeal):
+- attestation none + ephemeral + Ready → `○ Not checked · 3`
+- turn running → `◔ Working · 3`
+- attestation asserted → `◐ Asserted · 3`
+- attestation verified → `● Verified · 3`
+- durability local → `● On this device · 3`
+- durability syncing → `◔ Syncing · 3`
+- attestation failed → `✕ Check failed · 3`
+- lifecycle 'Last turn failed' → `✕ Turn failed · 3`
+- lifecycle 'Last turn cancelled' → `△ Cancelled · 3`
+- offline → `△ Offline · 3`
+
+The trailing count is the disclosure affordance and is honest about how much is hidden. Hover 150ms (pointer: fine) or tap (coarse) opens SessionStatePopover, 320px, anchored under the chip, sharing one renderer with TrustPostureSheet (extract the body from platform-shell.tsx:376):
+
+```
+SESSION STATE
+[seal] Secure hardware not checked · this session
+       No endpoint proof has been requested in this session.   → Proof
+[dot]  Ephemeral · this page only
+       This session journal exists only in page memory.
+       Nothing is synced.                                      → Vault
+[dot]  Ready
+       No turn has started in this session.
+```
+- **Information fate.** Every string above is an existing variable: attestationSeal.label/.detail, durabilityLabel(sessionDurability.state) + sessionDurability.detail, sessionLifecycle.label + its current title text. This is a net INCREASE in disclosed information — three detail strings that are hover-only tooltips today become visible body text in the popover. Nothing moves to a place with no affordance: the count '· 3' states exactly how many facts are inside, and the popover keeps the existing → Proof / → Vault navigation. The doubled ○ ○ on phone disappears because the chip renders exactly one Seal glyph and the durability state is carried by the word, not a second glyph.
+- **Files.** src/ui/chat/session-status-chip.tsx, src/ui/app.tsx, src/ui/platform-shell.tsx, src/ui/styles.css, src/ui/durability-indicator.tsx, src/ui/posture-chip.test.ts
+
+### Topbar: 3-5 spelled-out axis pills → the posture chip the code already promises
+- impact **high** · effort **small** · reclaims 248px of horizontal topbar band; eliminates the truncated 4th pill
+- **Problem.** .topbar-center is 958px wide and holds 3 pills spanning x248-646 (398px: 'Browser / Edge runtime' 161px, 'Ephemeral' 95px, 'Connect a model' 128px). Once the attestation axis appears a 4th pill truncates to 'Secure hardware not c…' — while the same variable is spelled out in full 76px below in .session-meta. TrustPostureSheet's own body copy already states 'The weakest claim is shown in the topbar', which is false on desktop; and .mobile-trust-chip (app.tsx:4607) is gated to `inferenceConnected` so most users never see the pattern at all.
+- **Design.** Render exactly one chip in .topbar-center at every width and in every connection state, using the existing PostureChip + worstTrustAxis:
+
+`[seal glyph] Local only · 4 axes`
+
+where the label is `worstTrustAxis(trustAxes).label` shortened to ≤14 chars by the same short-form table as Proposal 2, and '4 axes' is `trustAxes.length` (5 when connectivitySeal is present, so it self-corrects to '5 axes' offline). Hover on pointer:fine / tap on coarse opens the existing TrustPostureSheet body as a 340px popover anchored under the chip; keep the full-height sheet on phone. Remove the `inferenceConnected` gate on .mobile-trust-chip so the pattern is universal.
+
+Establish and document the boundary rule in docs/DESIGN_LANGUAGE.md: **topbar = facts true of this browser tab; session bar = facts true of this conversation.** That rule is what makes each of 'Ephemeral' and 'Secure hardware not checked' have exactly one home.
+
+Topbar height stays 58px; the center band drops from 398px to ~150px and stops truncating.
+- **Information fate.** All four axis labels (local / vault / e2ee / attestation) and all four .detail strings move from 27px pills — where the 4th truncates mid-word — into a popover that shows every label and every detail in full, with the existing → proof / → vault / → access links. Net increase in readable information. The topbar's 'Ephemeral' pill is not lost: the vault axis is row 2 of the popover with its full detail ('No cloud vault is configured.'). The topbar's 'Connect a model' action pill is not lost: the e2ee axis row keeps its action affordance and the empty state (Proposal 5) plus the model chip (Proposal 4) both carry the same CTA. 'Local kernel ready', the profile menu and the 3 icon buttons are untouched.
+- **Files.** src/ui/app.tsx, src/ui/platform-shell.tsx, src/ui/posture-chip.tsx, src/ui/styles.css, docs/DESIGN_LANGUAGE.md
+
+### Delete the 43px guidance band; fold both its claims into the model chip and the empty state
+- impact **high** · effort **small** · reclaims 43px on every desktop/laptop viewport, 46px on iPad, 43px on phone — in every conversation, permanently
+- **Problem.** .chat-live-guidance is a permanent full-width 43px band (46px on iPad) present in every conversation for every unconnected user, forever — 4.8% of a 900px viewport, 4.6% of a phone. It states two facts that are each already on screen: 'Workspace, editor, terminal and Git work right now' is the welcome message's first sentence 184px below it, and 'this composer is a deterministic demo' is restated by the model card ('airship/demo-v1 · Local') and by the composer footer ('local demo · page memory'). It also supplies the second of three 'Connect a model' targets on one screen.
+- **Design.** Remove the `!inferenceConnected ? <div class="chat-live-guidance">` block (app.tsx 4875-4878) and its `.chat-stage:has(> .chat-live-guidance)` grid row (styles.css:961). Two replacements:
+
+1. The model chip in the session bar takes a demo variant: `data-state="demo"` renders `⬡ Demo · local` in brass outline instead of `airship/demo-v1 · Local`. Its popover row reads, verbatim:
+   **Deterministic local demo.** Chat replies are generated on-device from a fixed script — the model id is `airship/demo-v1`. Workspace, editor, terminal and browser-owned Git are real and need no account.
+   [ Connect a model → ]
+
+2. The empty state (Proposal 5) carries the same two claims in prose, once, as its intro copy.
+
+An unconnected user therefore meets the fact twice — in the chip they will look at, and in the first screen — instead of three times in three registers, and the band stops costing 43px in every conversation they ever open.
+- **Information fate.** 'Workspace, editor, terminal and Git work right now.' → kept verbatim as sentence 1 of the empty state and paraphrased in the model-chip popover ('Workspace, editor, terminal and browser-owned Git are real and need no account'). 'Chat needs a model provider; this composer is a deterministic demo.' → kept as sentence 2 of the empty state and as the model-chip popover's lead. The `airship/demo-v1` model id, which the chip's short form drops, is restored explicitly in the popover body. The 'Connect a model' button → kept as the popover's action and as the third starter chip; the topbar posture chip's e2ee row is a third path. The `id="chat-demo-guidance"` referenced by aria-describedby must move onto the model chip so the composer's accessible description is preserved.
+- **Files.** src/ui/app.tsx, src/ui/styles.css, src/ui/model-control.tsx, src/ui/chat/session-bar.tsx, src/ui/model-control.test.ts
+
+### Empty state: dock the launch pad to the composer instead of floating one card in 374px of void
+- impact **high** · effort **small** · reclaims 374px of dead space at 1440x900 (41.6% of the viewport) put back into the conversation column; 274px at 1280x800
+- **Problem.** Measured at 1440x900: the transcript is 596px tall, carries 205px of content and 374px (62.8%) of nothing; the welcome message's top edge sits at y=403, i.e. 45% down the viewport, with 184px of void above it and 190px between the starter chips and the composer. At 1280x800 the void is 274px (55% of the transcript). The cause is `align-content: safe center` on `.transcript.no-turns` (styles.css:1241). The welcome message is also dressed as a turn it is not — it gets an avatar, an 'Initial · Browser baseline' receipt pill and a '…' action menu offering Copy/Retry/Branch on a message no model produced.
+- **Design.** In styles.css:1241 change `.transcript.no-turns { display: grid; align-content: safe center }` to `align-content: end; padding-bottom: 24px`. The zero-state block then sits directly above the composer — eye and cursor travel from the last suggestion to the input drops from 190px to 24px.
+
+Replace the MessageCard for `messages.length <= 1` with a `.transcript-intro` block (new, in src/ui/chat/transcript-intro.tsx), 790px measure, no avatar, no action menu:
+
+  line 1, 15px ink:      **Airship is running in this tab.** Workspace, editor, terminal and browser-owned Git work right now, with no account.
+  line 2, 12.75px muted: Chat replies come from a deterministic local demo until you connect a model provider.
+  right-aligned 11.7px mono chip: `Browser baseline`
+
+That copy is the union of today's welcome-message text and today's guidance-banner text, deduped — the two currently assert the same thing twice, 184px apart. The three existing 257x58 starter chips stay directly beneath, unchanged.
+
+Height: intro ~56px + 16 gap + starters 58 = 130px, bottom-docked. The remaining headroom above becomes deliberate breathing room that collapses to zero the instant a real turn arrives, which is the correct behaviour for a scroll container.
+- **Information fate.** Welcome message body text → kept verbatim as line 1 + line 2 of the intro, merged with the banner's wording so neither claim is stated twice. 'Initial · Browser baseline' receipt pill → the 'Initial' half is redundant (it is by definition the first thing in an empty transcript); 'Browser baseline' is kept as a right-aligned mono chip with the same click target and the same receipt tooltip. Avatar 'A' → dropped: it marks speaker attribution in a transcript of turns, and this block is explicitly not a turn (it also removes a Copy/Retry/Branch menu that offers three operations no model-produced message backs). The three starter chips and their hint lines → unchanged, same copy, same actions. Once messages.length > 1 the intro is replaced by real turns exactly as today.
+- **Files.** src/ui/styles.css, src/ui/app.tsx, src/ui/chat/transcript-intro.tsx, src/ui/chat-layout.test.ts, src/ui/design-contract.test.ts
+
+### Composer: make the always-multiline layout the only layout — the typing field goes 338px → 788px
+- impact **high** · effort **small** · reclaims 9px vertical (85 → 76px) while widening the typing field from 338px to 788px, +133%
+- **Problem.** At 1440x900 .composer-input-row is 788px but the textarea is only 338px (42.9%) because .composer-footer (Attach image, 'local demo · page memory' lock line, 'Ask First' pill, chevron) is 450px (57.1%) inline to its right. The textarea reports scrollHeight 71 against clientHeight 58, so the placeholder 'Ask Airship or type / for tools and session commands…' is visibly clipped mid-word at both 1440x900 and 1280x800. On iPhone 14 Pro Max the textarea is 209px wide with scrollHeight 97 vs clientHeight 58 — roughly two lines clipped. The correct layout already exists and is gated: .composer-input-row[data-multiline] (styles.css:2019-2023) drops the footer to its own row, at which point the textarea measures 788px — but only after the user has already typed a newline.
+- **Design.** Ungate it. In styles.css:2013-2027 make .composer-input-row always `display: grid; grid-template-rows: auto auto` with the textarea on row 1 spanning full width and .composer-footer on row 2, and delete the `[data-multiline]` variant as a separate case. Textarea: `min-height: 28px` (one line), `max-height: 40vh`, autogrow on input.
+
+Resting composer height: 28 textarea + 32 footer + 16 padding = 76px, i.e. 9px SHORTER than today's 85px while making the input 2.3x wider. Growth is then honest ChatGPT/Claude behaviour: the box grows downward from 76px as you type and caps at 40vh.
+
+Placeholder becomes exactly: **'Ask Airship, or / for commands'** — 30 chars, which fits 338px at 13.8px and 209px at 16px, so it can never clip again even at the narrowest measured width.
+- **Information fate.** 'Ask Airship or type / for tools and session commands…' → shortened to 'Ask Airship, or / for commands'. The dropped words are not information: pressing / opens the existing slash menu, which enumerates every tool and session command by name — the placeholder was describing a menu that describes itself, and it was clipped so the words were not being read anyway. 'Attach image' → kept, unchanged, on row 2. 'Ask First' approval pill + chevron → kept, unchanged, on row 2. The 'local demo · page memory' lock line → this is the third statement of a fact the model chip and the session status chip both own after Proposals 1-2, but it sits at the exact moment the user is about to create ephemeral data, so keep the 🔒 glyph with the full string in title and add the same sentence as a row in the session status popover. Send button unchanged.
+- **Files.** src/ui/styles.css, src/ui/app.tsx, src/ui/chat/composer-state.ts, src/ui/chat/composer-focus.ts, src/ui/type-floor.test.ts
+
+### Prove the header is subordinate: collapse-on-scroll plus a scroll scrim
+- impact **medium** · effort **small** · reclaims 10px further when scrolled; removes the hard-cut slice at the transcript's top edge
+- **Problem.** Measured: scrolling the transcript to the bottom with 3 turns loaded changes nothing — .stage-header stays 165px, transcriptTop stays 266. The header is pinned at full weight through the entire conversation. Worse, the scrolled screenshot shows a message card sliced cleanly at y=266 by the guidance band's hard 1px border with no gradient, which reads as a rendering fault rather than as content scrolling under a header.
+- **Design.** Two additions to .session-bar (Proposal 1) and .transcript:
+
+1. On `.transcript` scroll past 48px, set `data-scrolled` on .chat-stage. `.session-bar[data-scrolled]` transitions `min-height: 38px → 28px` over 120ms; the H1 goes 14.5px → 12.75px; the three chips drop their text and keep their glyph + count, retaining every title/aria-label. Restores on scroll back to top. The chips never disappear — the model chip in particular must stay reachable mid-conversation.
+
+2. Add a 24px `linear-gradient(to bottom, var(--ground), transparent)` scrim as a `::before` on .transcript, pinned under the session bar, so cards fade rather than get guillotined. Pair it with the existing `.transcript-jump` sticky pill so the two scroll affordances read as one system.
+
+Combined with Proposals 1-6 the target is met and provable:
+1440x900: 219px empty / 266px with turns → **96px (10.7%)**, 86px when scrolled.
+1280x800: 219px (27.4%) → **96px (12.0%)**.
+iPad Pro 11: 253px (21.2%) → **96px (8.0%)**.
+iPhone 14 Pro Max: 180px (19.3%) → 52 + 36 = **88px (9.4%)**.
+Total non-transcript chrome at 1440x900: 304px (33.8%) → 172px (19.1%); conversation viewport 596px → 728px, +22%.
+Phone: 321px (34.4%) → 220px (23.6%); transcript 611px → 712px, +16.5%.
+- **Information fate.** Nothing is removed. On scroll the chips shed their text labels only — every glyph keeps its title and aria-label, the count badge keeps stating how many facts are inside, and one tap still opens the full popover with every detail string. The conversation title shrinks by 1.75px and keeps its full text in the title attribute. Scrolling back to the top restores every label. The scrim is purely decorative and covers no content that is not also reachable by scrolling.
+- **Files.** src/ui/styles.css, src/ui/app.tsx, src/ui/chat/session-bar.tsx, src/ui/scroll-affordance.ts, src/ui/scroll-affordance.test.ts
+
+
+## Connect surface information architecture (`#access`)
+
+**Diagnosis.** MEASURED ON THE RUNNING LAB (localhost:4173, Chromium). Desktop 1440x900: `main.main` is 1208x842 and holds 2689px of content = **3.19 screens**. The five lanes — the reason the page exists — do not begin until **656px in, 78% of the first screen**, behind: topbar 58 + hub tabs 61 + `.access-connection-heading` 187 (eyebrow 14 + H1 46 at **45.9px** + 2-line paragraph 48 + jump nav 44) + card padding 18 + `.connect-surface__heading` 100 (eyebrow 14 + H2 27 + 2-line paragraph 41) + `.companion-overview` 219. The primary CTA "Sign in to Chutes" sits at document y=**944** — **102px below the fold**. Only 186px of the first screen shows any lane at all.
+
+THE PAGE RENDERS EVERY CLOUD PROVIDER TWICE. `body.innerText` contains OpenAI x5, Anthropic x5, xAI x5, Ollama x3, "page memory" x11, in 614 words. The lane list (y 714–1333) has Chutes/Anthropic/xAI/Ollama+LM Studio/OpenAI; `.provider-fabric` (y 1676–2706, **1030px**) renders OpenAI/Anthropic/xAI key cards and Ollama/LM Studio cards again, ~1300px lower. The lane's own "API key" tab contains no field — only a `Configure API key` button that calls `focusDirectProviders()` and **scrolls you 1300px down to the lane's own duplicate**.
+
+THREE OF FIVE LANES OPEN ONTO THE METHOD THAT CANNOT WORK. `CloudMethodPanel` hardcodes `useState("oauth")`. Opening OpenAI (245px tall) renders the heading **"Sign in with ChatGPT" with nothing beneath it** — `CodexPanel` returns `null` for non-`ready` status — under a tab whose own sub-label reads "Not available here". Anthropic (483px) and xAI open onto an OAuth tab whose sub-label is clipped by `text-overflow` to **"Add the Airship e…"**, while the route that works is the second tab.
+
+PHONE (iPhone 14 Pro Max, 430x740 CSS, pane 632): 3549px = **5.62 screens**. `.companion-overview` is **415px = 66% of the viewport** to say "Extension not detected" plus three cells reading Not observed / Not active / Not active. `.provider-fabric` is 1996px = 3.16 phone screens of duplicate.
+
+THE FIX IS ALREADY IN THE CODEBASE, SCOPED TO 640px. `connect-surface.css:641` and `access-view.css:820` already `display:none` the page eyebrow, the page paragraph, the jump nav, the entire `.connect-surface__heading`, and the lane detail line, and `order` the Companion below the lanes — with comments saying each one "delayed the first usable credential control by more than a viewport". Desktop keeps all of them. Measured proof: `surfaceHeading_h` is 100.31 on desktop and **0 on phone**. Desktop is strictly worse than the mobile layout the team already shipped.
+
+FOUR COLUMN MEASURES, ONE PAGE: main 1208 → `.access-connection-view` 1156 → `.access-connection-layout` 980 → `.connect-surface` 942, then `.oauth-browser-boundary` and `.provider-fabric` snap back to 1156. The lane list has a **266px dead right gutter** inside its own column while the boundary card beside it runs 214px wider.
+
+SEVENTEEN FONT SIZES. 17 distinct `font-size` values carry visible text; **eight of them fall between 11.69px and 13.81px**. Cause is precisely located: `access-view.css` has 36 hardcoded rem font-sizes across 18 distinct values (0.69/0.7/0.72/0.74/0.75/0.76/0.77/0.78/0.8/0.82/0.84/0.86/0.88/0.9rem — fourteen sizes inside a 3.6px band) against only 8 uses of the `--fs-*` tokens. `connect-surface.css` is clean: 36 token uses, zero hardcodes.
+
+Contrast is NOT a problem and needs no work: page paragraph 7.39:1, lane subtitle 4.73:1, companion status 5.05:1, fact values 14.48:1 — all pass. The problem is quantity and altitude, not legibility.
+
+### Collapse the six-level page chrome into one 44px route bar with a live count chip and one "How connections are held" disclosure
+- impact **transformative** · effort **medium** · reclaims 604px of always-visible chrome replaced by a 44px bar = 560px reclaimed vertically on desktop (66% of one 842px pane). Phone: heading 31px → 44px (+13) but the boundary aside 240px is re-homed, net 227px reclaimed.
+- **Problem.** Measured desktop: 604px of always-visible page chrome above and around the lanes — `.access-connection-heading` 187px (eyebrow 14 + H1 46 at 45.9px + 2-line paragraph 48 + jump nav 44), `.connect-surface__heading` 100px (eyebrow 14 + H2 27 + paragraph 41), `.oauth-browser-boundary` 168px, `.provider-fabric__heading` 99px, `.provider-fabric__empty` 50px. "Connect models" (H1, 45.9px) sits 24px below the already-active hub tab "Connection" and 22px below the eyebrow "INFERENCE CONNECTIONS": the same word three times in 60px of height. The H2 "Providers" repeats the H1 90px lower. The jump nav's two buttons are `.access-provider-jump` scroll anchors dressed as tabs (access-view.tsx:614–617) — they are not tabs, they scroll a 3.19-screen page.
+- **Design.** Replace `.access-connection-heading` and `.connect-surface__heading` with a single 44px row, full content width, `--fs-h3` (22px) display face, sticky at `top:0` inside `main`:
+
+`Connect models`  ·······  `[ ○ No model connected · 4 ready ]`  ·······  `[ How connections are held ⌄ ]`
+
+COUNT CHIP — derived, one of three exact strings:
+- 0 connected: `No model connected · {n} ready`  (n = lanes whose status.kind is "ready")
+- 1 connected: `{Title} connected · {n} more ready`
+- 2+: `{k} connected · {n} more ready`
+The chip carries `title="Connect one, or several at once. Connecting one never closes the others."` — this is where the eyebrow "ONE, OR SEVERAL AT ONCE" survives, and it is now a fact the chip's own number demonstrates.
+
+DISCLOSURE — `<details class="connect-route-note">`, summary `How connections are held`, opens a 760px popover panel holding, verbatim and in this order:
+1. "Use Chutes for application-encrypted inference, or connect browser-direct cloud and local models here. Credentials remain in page memory." (one word changed: `below` → `here`, because there is no longer a below)
+2. "Everything else in Airship — workspace, editor, terminal and Git — already works without this. Only chat needs a model, and connecting one never closes the others."
+3. "Every conversation remains pinned to the exact connection generation and model that created it."
+
+H1 drops 45.9px → 22px. Route bar height 44px.
+- **Information fate.** KEPT, RESTYLED: "Connect models" (45.9px → 22px, same words, same `<h1 id="access-connection-title">`).
+MOVED TO THE ROUTE-BAR DISCLOSURE: the page paragraph "Use Chutes for application-encrypted inference…" (one word edited, `below`→`here`); the Providers paragraph "Everything else in Airship — workspace, editor, terminal and Git — already works without this. Only chat needs a model, and connecting one never closes the others."; the fabric paragraph clause "Every conversation remains pinned to the exact connection generation and model that created it."
+MERGED INTO THE COUNT CHIP'S TOOLTIP: eyebrow "ONE, OR SEVERAL AT ONCE" → "Connect one, or several at once. Connecting one never closes the others."
+MERGED INTO THE COUNT CHIP: `.provider-fabric__count` "0 connections".
+MOVED INTO THE CHUTES LANE (see proposal 6): the entire `.oauth-browser-boundary` aside — "Local token-handler boundary" / "Public-client OAuth boundary", its paragraph, its `Registration details` details with Homepage/Callback/Scopes, the "Deployment detail: …" warning line, and the "Start sign-in again" button.
+DELETED, 4 items, each justified: (a) eyebrow "INFERENCE CONNECTIONS" — the hub tab "Connection" is active 24px above it and the H1 is 22px below it, so the word appears three times inside 60px; (b) H2 "Providers" — verbatim duplicate of the H1's job, 90px apart; (c) the two `.access-provider-jump` buttons "Providers" / "Cloud keys & local models" — proposal 2 removes both destinations as separate sections, so these anchors have nothing to point at; (d) `.provider-fabric__empty` "No additional provider is connected. Chutes connection controls remain available above." — the count chip states the first clause as a number and every lane's own seal states its own connection state, and after proposal 2 there is no "above".
+- **Files.** src/ui/access-view.tsx, src/ui/access-view.css, src/ui/connect/connect-surface.tsx, src/ui/connect/connect-surface.css, src/ui/provider-connections-view.tsx
+
+### Merge the provider fabric into the lanes it duplicates: the "API key" tab renders the real field in place, not a scroll-jump to a second copy of itself
+- impact **transformative** · effort **large** · reclaims Desktop: 1030px section removed; ~380px of it re-homed into lane panels that are collapsed by default → 881px off the default scroll. Phone: 1996px removed (3.16 phone screens). Every cloud provider name drops from 5 mentions to 2.
+- **Problem.** Measured: `.provider-fabric` is 1030px on desktop and 1996px on phone (3.16 phone screens) and renders OpenAI, Anthropic, xAI, Ollama and LM Studio a second time, ~1300px below the lanes that already name them. `body.innerText` counts OpenAI x5, Anthropic x5, xAI x5. The lane's API-key tab contains no input at all — `CloudMethodPanel` (connect-surface.tsx:274–293) renders a paragraph and a `Configure API key` button wired to `onOpenDirectProviders(provider)`, which scrolls to `#provider-setup-{id}` in the duplicate. A person who opens the Anthropic lane, reads "An Anthropic API key connects straight from this page and needs no extension", and presses the only button, is thrown 1300px down the page to a card with the same provider name on it.
+- **Design.** `CloudProviderCard` and `LocalProviderCard` already exist as standalone components (provider-connections-view.tsx:379 and :450). Lift them and render them inside the lane that names them:
+
+- `CloudMethodPanel`'s `api-key` tabpanel renders `<CloudProviderCard provider={…}/>` directly, with `cardId` retained for the deep-link.
+- The Local lane's `LocalPanel` renders both `<LocalProviderCard/>`s beneath its existing "Check this machine" probe button.
+- `.provider-fabric` stops rendering its own `__setup` block; `ProviderConnectionsView` keeps only `.provider-fabric__connections` (the list of live connections), which is what actually belongs on a page after you have connected something — and that list moves inside each lane's body as its connected state.
+- `onOpenDirectProviders` becomes `onSelectMethod("api-key")` on the same lane: the button label changes from `Configure API key` to `Use an API key` and switches the tab beside it instead of scrolling.
+
+Inside the lane, the card sheds two now-duplicated strings: its own `<h4>OpenAI</h4>` (the lane header says OpenAI 60px above) and its `API KEY · PAGE MEMORY` eyebrow (the tab it lives in is literally labelled `API key / Page memory`). Everything else in the card renders unchanged.
+- **Information fate.** MOVED INTO THE MATCHING LANE'S API-KEY TAB, VERBATIM: each provider's `Why API key instead of OAuth?` disclosure and its full paragraph ("Airship ships OpenAI's own Codex client with product-owner approval…", "Anthropic documents account OAuth inside Claude Code, not a reviewed third-party public-PKCE inference registration…", "xAI's inference documentation specifies bearer API keys…"); the key field label "{Provider} API key · page memory only"; the input; the risk-acceptance checkbox and its full sentence ("I accept this browser-direct credential boundary. OpenAI says standard API keys must not be exposed in browser or app client code…" and the Anthropic/xAI variants); the `Connect {Provider}` button.
+MOVED INTO THE LOCAL LANE BODY, VERBATIM: both local cards — "Ollama" / `http://127.0.0.1:11434`, "LM Studio" / `http://127.0.0.1:1234`, "Reads the service's live model catalog and only displays capabilities supported by returned evidence.", `Check Ollama` / `Check LM Studio`, and the `Local connection requirements` disclosure.
+EDITED TO STAY TRUE: the Local lane's own sentence loses the two literal addresses it now shares a container with — "Airship checks 127.0.0.1:11434 for Ollama and 127.0.0.1:1234 for LM Studio, and only when you press Check." becomes "Airship contacts only the addresses below, and only when you press Check. Your browser and the local service both have to allow this page."
+MOVED TO THE ROUTE BAR (proposal 1): `.provider-fabric__count` "0 connections"; the paragraph clause "Every conversation remains pinned to the exact connection generation and model that created it."
+DELETED, grouping chrome only, each replaced by a label already present at the new location: eyebrow "PROVIDER FABRIC"; H2 "Cloud and local models"; "Keep multiple providers in page memory" (the route-bar disclosure now says "Credentials remain in page memory" and every key field says "page memory only"); eyebrow "REMOTE" + H3 "Cloud providers" + "API-key methods · page memory"; summary "Configure cloud API keys" + "3 provider adapters · credentials stay in page memory"; eyebrow "ON THIS MACHINE" + H3 "Local model servers" + "No remote account" (the Local lane's own summary already reads "A model server you host yourself. No account, and nothing leaves this computer."); the per-card `<h4>` provider name and `API KEY · PAGE MEMORY` eyebrow.
+- **Files.** src/ui/connect/connect-surface.tsx, src/ui/provider-connections-view.tsx, src/ui/access-view.tsx, src/ui/provider-fabric-panel.css, src/ui/connect/connect-surface.css
+
+### Companion becomes the sixth row in the lane list, in the same vocabulary — not a 219px/415px card that outranks the providers
+- impact **high** · effort **medium** · reclaims Desktop 219px → 44px collapsed = 175px. Phone 415px → 48px = 367px, which is 58% of a 632px phone viewport. Also removes one of the two competing status-glyph vocabularies.
+- **Problem.** Measured: `.companion-overview` is 219px on desktop and **415px on phone = 66% of a 632px viewport**, and it sits between the Providers heading and the lane list, so on desktop it is the last thing before the lanes and pushes them to y=714. Its payload at rest is one status word ("Extension not detected"), a 3-line paragraph, a 3-column 50px `<dl>` reading Not observed / Not active / Not active, and one host sentence. It uses its own dot glyph (`.companion-overview__dot`, an 8px bordered circle) instead of the app's `Seal` family, so the surface has two status-glyph vocabularies 200px apart. The mobile stylesheet already `order:2`s it below the lanes, conceding the point.
+- **Design.** Render the Companion as a sixth `ConnectLaneCard` at the foot of `.connect-lane-list`, same 44px header, same `Seal`, `data-lane="companion"`. Header is `[puzzle icon] Airship Companion · {qualifier}` + seal.
+
+EXACT HEADER COPY AND SEAL PER STATE:
+- observation undefined → `Airship Companion · Checking this tab` / seal `checking` / label `Checking`
+- state available → `Airship Companion · Extension {version}` / seal `verified` / label `Connected`, and the collapsed row gains a right-aligned fact strip: `Relay {n} routes · Cache {n} pages · Compute on`
+- not detected, `host.kind === "installable"` and an install URL exists → `Airship Companion · Not installed` / seal `attention` / label `Get the extension` (the row's own right-hand affordance is the install link)
+- not detected, `host.kind === "installable"` but no install URL → `Airship Companion · No install page in this build` / seal `attention` / label `Unavailable here`
+- not detected, `host.kind === "cannot-host"` → `Airship Companion · Not possible in this browser` / seal `attention` / label `Not supported`
+
+BODY (disclosure) keeps everything, with the 3-column table becoming one wrapping `<dl>` line so `dt` labels stay machine-readable and screen-reader-addressable:
+`Provider relay Not observed · Encrypted cache Not active · Background compute Not active`
+at `--fs-caption` with `dt` at `--fs-micro` in the muted ink — same two-tone treatment, one line instead of a 50px boxed grid.
+- **Information fate.** KEPT VERBATIM IN THE LANE BODY: "Adds a reviewed provider relay, opt-in encrypted local cache, and bounded background hash/vector work. Provider account authorization is offered only when Airship also has a supported provider grant flow."; the host sentence in both of its forms ("This browser can load the Airship Companion." and "This browser reports itself as iOS or iPadOS, where an extension has to ship as an App Store app. Airship does not publish one yet."); the install link "Get the extension ↗" / "Downloads & setup ↗".
+KEPT, RE-LAID-OUT, ZERO WORDS CHANGED: the three `dt`/`dd` pairs PROVIDER RELAY / ENCRYPTED CACHE / BACKGROUND COMPUTE and every derived value string ("Not observed", "{n} routes live", "Not active", "Available · off", "{n} pages", "Hash + vector ranking") — from a 3-column 50px grid to one wrapping line, and, when the extension IS present, promoted to the collapsed row so the truthful state is observable without opening anything.
+MERGED INTO THE ROW HEADER: the status line "Extension not detected" / "Extension {version} connected" / "Checking this tab" becomes the header qualifier, with the state now also carried by the shared `Seal` glyph instead of a bespoke dot.
+DELETED: `.companion-overview__dot` as a distinct glyph — replaced by `Seal`, which is the same information in the app's one status vocabulary.
+- **Files.** src/ui/connect/connect-surface.tsx, src/ui/connect/connect-surface.css, src/ui/connect/connect-lanes.ts, src/ui/seal.tsx
+
+### Open every lane onto the method that works; never render a method heading with no control under it
+- impact **high** · effort **small** · reclaims No net height change; converts 245px of dead OpenAI lane and ~120px of misdirected Anthropic/xAI panel into the working control. Removes one text-overflow ellipsis from load-bearing status copy.
+- **Problem.** Measured, by opening each lane in Chromium: `CloudMethodPanel` hardcodes `useState<"oauth"|"api-key">("oauth")` (connect-surface.tsx:241). The OpenAI lane opens 245px tall and its OAuth panel renders the bold heading **"Sign in with ChatGPT" followed by nothing** — `CodexPanel` returns `null` when `status.kind !== "ready"` (connect-surface.tsx:364) — beneath a tab whose own sub-label says "Not available here". A heading that names an action, above empty space, in a lane whose seal says the action is impossible. Anthropic (483px) and xAI open onto an OAuth tab whose sub-label is clipped by `text-overflow: ellipsis` to "Add the Airship e…" inside a 205px tab, while the route that works ("API key") is the unselected tab beside it. Three of five lanes default to a dead end.
+- **Design.** 1. `CloudMethodPanel` initial state becomes `oauthStatus.kind === "ready" || oauthStatus.kind === "connected" ? "oauth" : "api-key"`. The OAuth tab stays present and selectable at all times — that is where the honest reason lives — it simply is not the default when it cannot work.
+2. The OAuth tabpanel never renders a bare title. `<p class="connect-method__title">{oauthLabel}</p>` renders only when the panel below it has a control. Otherwise the panel renders a single `.connect-method__blocked` block: `<Icon name="warning">` + `status.detail` + a `Use an API key` button that switches the tab beside it.
+3. Tab sub-labels get short strings that fit 205px at `--fs-micro` and never truncate:
+   - ready → `Primary`
+   - connected → `Connected`
+   - checking → `Checking`
+   - needs-extension → `Needs the extension`  (replaces the clipped "Add the Airship e…")
+   - extension-unavailable → `Not in this browser`
+   - unavailable → `Not available here`
+   - offline → `Offline`
+
+EXACT BLOCKED-PANEL COPY, one string per state, all lifted from `connect-lanes.ts` with only the now-false navigation clause corrected:
+- OpenAI `unavailable`: "Codex sign-in is not wired into this build. Use the API key tab beside this one."  (was: "…An OpenAI API key connection is listed with the browser-direct providers below." — after proposal 2 there is no below, the key field is one tab away)
+- Anthropic/xAI `needs-extension`, extension answered but does not carry it: "The Airship extension answered (version {v}) but does not carry {Claude|Grok}.{ It named the cause: {refusal}}" then, on its own line, "An {Anthropic|xAI} API key connects straight from this page and needs no extension." + button `Use an API key`.
+- Anthropic/xAI `needs-extension`, no extension: "{Anthropic|xAI} does not let a browser page read its sign-in replies, so Airship needs the extension to carry them." + `Add the Airship extension ↗` + "An {Anthropic|xAI} API key connects straight from this page and needs no extension." + button `Use an API key`.
+- `extension-unavailable`: the same why-sentence + the host reason verbatim ("This browser reports itself as iOS or iPadOS, where an extension has to ship as an App Store app. Airship does not publish one yet.") + the alternative + `Use an API key`.
+- `checking`: "Checking the extension in this tab before offering account authorization."
+- `offline`: "This browser reports no network, so {name} cannot be reached. Nothing was changed."
+- **Information fate.** KEPT, ALL OF IT — this proposal changes only which panel is open on arrival and where three sentences sit. Every `status.detail`, every `status.alternative`, every bridge-observation sentence ("No browser extension answered the bridge handshake within 1500 ms. Anthropic and xAI OAuth stay unavailable; API keys and every other provider are unaffected."), and the whole `What the extension is allowed to do` six-bullet disclosure stay exactly where they are.
+EDITED, one clause, because proposal 2 makes it false: "An OpenAI API key connection is listed with the browser-direct providers below." → "Use the API key tab beside this one."
+RESTYLED, no words lost: three tab sub-labels that currently truncate get short forms; the long forms they were truncating from are the `status.label` values, which remain in full on the lane's own seal and in the panel body.
+NEWLY VISIBLE: the OpenAI OAuth panel's `status.detail`, which today is rendered nowhere at all because `CodexPanel` returns null before reaching it.
+- **Files.** src/ui/connect/connect-surface.tsx, src/ui/connect/connect-lanes.ts, src/ui/connect/connect-surface.css
+
+### Lane header carries the whole lane in one 44px row; kill the "Chutes / Chutes" title-equals-subtitle case and the 34px body misalignment
+- impact **high** · effort **small** · reclaims 54px → 44px per lane header x 6 rows = 60px, and removes a 34px horizontal misalignment inside every open lane. Makes the Chutes lane's defining sentence visible while collapsed.
+- **Problem.** Measured: `.connect-lane__header` is 54.14px and stacks a 15.94px `<strong>` over an 11.69px `<small>` in a `.connect-lane__identity` column. For the Chutes lane those two strings are **identical — "Chutes" over "Chutes"** (`describeConnectLanes` calls `lane("chutes", "Chutes", "Chutes", …)` at connect-lanes.ts:138), so the lead lane, the first thing on the page, renders its own name twice in a 34px stack. Separately, the open lane's body text starts at x=289 while the header's title starts at x=323: a **34px misalignment inside one card**, because `.connect-lane__header` and `.connect-lane__body` use different horizontal padding and the icon is inside the header's flex row but has no gutter counterpart in the body.
+- **Design.** One row, 44px, `align-items:center`, single horizontal padding shared by header and body (`padding-inline: 14px`) with a `--lane-gutter: 34px` text indent applied to both so body copy hangs under the title, not under the icon:
+
+`[icon 20]  {Title} · {qualifier}` ····························· `{Seal dot} {label}   ⌄`
+
+Title at `--fs-body` 15px/600; qualifier at `--fs-caption` in `--ink-muted`, same baseline, separated by a middot. This is `vendor`, unchanged, for four lanes:
+- `OpenAI · Codex account or API`
+- `Anthropic · Claude account or API`
+- `xAI · Grok account or API`
+- `Ollama & LM Studio · This machine`
+
+For Chutes, `vendor` changes from the duplicate `"Chutes"` to `"Encrypted inference with per-turn evidence"` — the first clause of the lane's own summary, promoted. `CHUTES_LANE` then stops being prefixed onto every summary arm, so the Chutes summary reduces to its action clause and no sentence is repeated:
+- ready, sign-in configured: summary `Sign in, or paste an API key.`
+- ready, sign-in not configured: summary `Paste an API key to connect.`
+- connected: summary `Connected in page memory for this tab.`
+- offline: summary stays the offline detail.
+
+Also raise the lane's own seal to describe the LANE, not its OAuth leg. Today OpenAI's lane seal reads `Not available here` and `STATUS_RANK.unavailable = 5` sorts it dead last — but an OpenAI API key demonstrably connects from this page (its own fabric card, 1300px below, proves it). Change `codexLane()` to return `kind:"ready", label:"API key only"` and carry the Codex sign-in state in `oauthStatus`, which is exactly the shape `bridgeProviderLane` already uses for Anthropic and xAI. The unavailability of Codex sign-in keeps its honest home in the OAuth tab sub-label and blocked panel (proposal 4). This makes the lane label true at the lane's own altitude and fixes a sort that currently buries a working route.
+- **Information fate.** KEPT: every `title`, every `status.label`, every `Seal` state, every `summary` and `detail` sentence.
+PROMOTED, NOT DUPLICATED: "Encrypted inference with per-turn evidence." moves from the head of every Chutes summary arm into the lane header as the qualifier, and is therefore visible when the lane is CLOSED — currently it is only visible when open.
+DELETED, exact duplicate: the Chutes `vendor` string "Chutes", which today renders directly beneath the identical `title` string "Chutes".
+RE-HOMED, not softened: OpenAI's "Not available here" moves from the lane seal (where it describes the lane, and is false — the key route works) to the OAuth method tab's sub-label and its blocked panel (where it describes the OAuth leg, and is true). Its full detail sentence gains a rendering location for the first time.
+- **Files.** src/ui/connect/connect-lanes.ts, src/ui/connect/connect-surface.tsx, src/ui/connect/connect-surface.css
+
+### Move the OAuth boundary aside inside the Chutes lane's existing "How this works" disclosure, where it describes the thing it describes
+- impact **medium** · effort **small** · reclaims 168px desktop / 240px phone of always-visible chrome, moved behind a disclosure that already exists and that a person only opens when they are actually looking at Chutes sign-in.
+- **Problem.** Measured: `.oauth-browser-boundary` is a 168px always-visible card on desktop (240px on phone) sitting between the lane list and the provider fabric, titled "Local token-handler boundary", carrying a 3-line paragraph about the localhost token handler, a `Registration details` disclosure (Homepage / Callback / Scopes / the client_secret_post explanation / the "Deployment detail:" operator warning) and a `Start sign-in again` button. Every word of it is about the Chutes OAuth flow specifically. It is rendered at page altitude, so it is visible to a person who has come to paste an Ollama address and will never touch Chutes sign-in. Meanwhile the Chutes lane's own `<details>How this works</details>` (access-view.tsx:770) says almost the same thing in one sentence, 400px above.
+- **Design.** Append the entire aside into the existing `.oauth-mechanism` disclosure inside the Chutes lane's OAuth panel, after its current paragraph, with `Registration details` remaining as a nested `<details>`. The disclosure's summary changes from `How this works` to `How this works · what the handler can see` so the second half of its contents is announced.
+
+Resulting nesting inside the Chutes lane, OAuth tab:
+```
+Sign in to Chutes
+  Your password never touches Airship. The app secret stays in
+  the localhost process, outside browser JavaScript.
+  ▸ How this works · what the handler can see
+      The browser creates the Authorization Code + S256 PKCE request… (existing)
+      Local token-handler boundary  ← was the page-level aside
+      The localhost handler receives only the one-time code, PKCE verifier,
+      and memory-only token requests… (verbatim)
+      ▸ Registration details
+          The callback must match exactly. This localhost registration uses
+          client_secret_post; only the same-origin handler performs token operations.
+          Homepage  http://localhost:4173
+          Callback  http://localhost:4173/auth/chutes/callback
+          Scopes    openid · profile · chutes:invoke · billing:read
+          Deployment detail: {oauthOrigin.reason}   (when sign-in is unavailable)
+          [ Start sign-in again ]
+  [ Sign in to Chutes ]
+```
+The `oauthNotice` / `oauthDiagnosticError` alert lines stay at lane level, not inside the disclosure — an error must never be behind a closed triangle.
+- **Information fate.** MOVED, VERBATIM, ONE LEVEL DEEPER: "Local token-handler boundary" / "Public-client OAuth boundary" as a heading; "The localhost handler receives only the one-time code, PKCE verifier, and memory-only token requests. It adds its process-held app secret and returns the provider response without persisting it. Access and rotating refresh tokens remain in this page's memory." and its public-client variant; the `Registration details` disclosure with its callback paragraph, the Homepage/Callback/Scopes `<dl>`, the "Deployment detail: …" warning and the `Start sign-in again` button.
+KEPT AT LANE LEVEL, NOT BEHIND A DISCLOSURE: `oauthNotice` when its tone is `error`, and `oauthDiagnosticError` — both already render as `role="alert"` beside the Sign in button and must stay visible.
+EDITED: disclosure summary "How this works" → "How this works · what the handler can see", so the added contents are announced rather than hidden.
+DELETED: nothing.
+- **Files.** src/ui/access-view.tsx, src/ui/access-view.css
+
+### One column measure and one type ladder: 4 widths → 1, 17 font sizes → 6, by using the tokens the design system already defines
+- impact **medium** · effort **small** · reclaims 42px collapsed on the capability row (82 → 40). Horizontally: removes a 266px one-sided dead gutter and reconciles four column measures (1208/1156/980/942) into one 760px measure. Typographically: 17 sizes → 6, eliminating the eight-sizes-in-a-2.1px-band texture that reads as 'funky'.
+- **Problem.** Measured widths on one page: `main` 1208 → `.access-connection-view` 1156 → `.access-connection-layout` 980 (`max-width:980px`, access-view.css:71) → `.connect-surface` 942 → but `.oauth-browser-boundary` and `.provider-fabric` snap back to 1156. The lane list therefore has a **266px dead right gutter** while the card directly beneath it runs 214px wider, and the whole surface hugs the left edge of a 1440 screen. Measured type: **17 distinct font-sizes carry visible text**, eight of them between 11.69px and 13.81px. Cause is one file: `access-view.css` has 36 hardcoded rem font-sizes across 18 distinct values — 0.69, 0.7, 0.72, 0.74, 0.75, 0.76, 0.77, 0.78, 0.8, 0.82, 0.84, 0.86, 0.88, 0.9rem is **fourteen sizes inside a 3.6px band** — against only 8 uses of `--fs-*`. `connect-surface.css` is already correct: 36 token uses, zero hardcodes.
+- **Design.** WIDTH: introduce `--connect-measure: 760px`. `.access-connection-view` becomes `max-width: var(--connect-measure); margin-inline: auto;` and every descendant inherits it — route bar, lane list, companion row, capability row. On a 1208px pane that is 224px of symmetrical margin instead of 266px of dead space on one side only. Below 1050px it goes `max-width:none`. Delete `.access-connection-layout`'s competing `max-width:980px` and `.connect-surface`'s inset; one measure, one edge. The one element that genuinely wants more width is the open capability table (942x260) — it gets `max-width:none; margin-inline:calc(50% - 50vw)`-style breakout only in its `[open]` state, or simply scrolls horizontally as it already does via `.capability-table-wrap`.
+
+TYPE: `styles.css:35–40` already defines the ladder — `--fs-micro` .6875rem, `--fs-caption` .75rem, `--fs-meta` .8125rem, `--fs-body` .9375rem, `--fs-lead` 1.0625rem, `--fs-h3` 1.375rem. Replace all 36 hardcoded rem values in `access-view.css` with these six, mapping by role, not by nearest value:
+- eyebrows, `dt`, seal sub-labels, monospace meta → `--fs-micro`
+- disclosure bodies, fact values, caveats, boundary paragraphs → `--fs-caption`
+- buttons, tabs, table cells → `--fs-meta`
+- lane summaries, lane titles' qualifier, page paragraphs → `--fs-body`
+- lane titles → `--fs-lead`
+- the route-bar H1 → `--fs-h3`
+That is 17 sizes → 6, and it deletes the 45.9px `clamp(1.75rem, 4vw, 2.7rem)` H1 rule as a side effect of proposal 1.
+
+CAPABILITY ROW: `.capability-card` (82px collapsed, `CONNECTION METHODS` eyebrow over `Compare capabilities`) becomes a 40px row matching the lane rows, summary `Compare what each method can do`, placed directly beneath the lane list so the stack reads as one list of six lanes plus one comparison.
+- **Information fate.** KEPT, EVERY WORD: the capability table's four column headers, all four rows (Identity / Account / Balance / Inference) with their `strong` labels and `span` details, all twelve `CapabilityMark` cells, and the caveat "These are credential-class eligibility rules, not observed grants. Protected invocation and account reads report their own provider-authoritative result."
+MERGED: the eyebrow "CONNECTION METHODS" and the strong "Compare capabilities" become one summary line, "Compare what each method can do" — the eyebrow was a category label for a one-item category.
+DELETED: nothing. This proposal changes only `font-size` values, `max-width` values and one summary's wording; no sentence, number, mark or caveat is removed or relocated.
+- **Files.** src/ui/access-view.css, src/ui/connect/connect-surface.css, src/ui/styles.css, src/ui/access-view.tsx
+
+### Net result, measured: 3.19 screens → 1.21, and the primary CTA moves 694px up, above the fold
+- impact **transformative** · effort **small** · reclaims Desktop: content 2689px → ~1023px (3.19 screens → 1.21). Chrome above the lanes 656px → 62px, i.e. 78% of the first screen → 7%. Primary CTA from y=944 (102px below fold) to y≈250, a 694px rise. Phone: 3549px → ~909px (5.62 screens → 1.44).
+- **Problem.** This is the arithmetic of proposals 1–7 against the measured baseline, stated so the build can be verified rather than felt. Baseline desktop 1440x900: `main` pane 1208x842, content 2689px = 3.19 screens; lanes begin at 656px = 78% of the first screen is chrome; primary CTA at document y=944, 102px below the fold. Baseline phone 430x740: pane 632, content 3549px = 5.62 screens; Companion 415px = 66% of the viewport.
+- **Design.** Predicted desktop first screen, 842px pane, all six rows visible with the lead lane already open:
+```
+  0  route bar                                    44px   (was 287px of heading blocks)
+ 58  gap                                          14px
+ 72  ▾ Chutes · Encrypted inference…  ○ Sign in   44px
+116    Sign in, or paste an API key.              21px
+137    Sign in with your Chutes account, or…      21px
+158    [ OAuth · Primary ][ API key · Page mem ]  52px
+210    Sign in to Chutes  ────────────────────   148px   ← primary CTA at y≈250
+358  ▸ Anthropic · Claude account or API          44px
+408  ▸ xAI · Grok account or API                  44px
+458  ▸ Ollama & LM Studio · This machine          44px
+508  ▸ OpenAI · Codex account or API              44px
+558  ▸ Airship Companion · Not installed          44px
+608  ▸ Compare what each method can do            40px
+648  ────────────────────────────────────────
+```
+648px used of 842. All five providers, the Companion state, and the comparison are simultaneously reachable in one screen with 194px to spare, and connecting one still never closes another — every other lane is one 44px row away, unchanged.
+
+Acceptance checks to write as e2e assertions in `e2e/`:
+1. `main.scrollHeight / main.clientHeight < 1.4` at 1440x900 and `< 1.6` at 390x844.
+2. The `Sign in to Chutes` button's document Y is less than `main.clientHeight` at 1440x900 (it is 944 vs 842 today).
+3. `document.querySelectorAll('.connect-lane').length === 6` and all six headers are within the first viewport at 1440x900.
+4. `body.innerText.match(/Anthropic/g).length <= 2` (5 today) — proves the duplicate is gone without proving anything about wording.
+5. No element on `#access` has `scrollWidth > clientWidth` on a `<small>` inside `.connect-method__switch` — proves no status sub-label truncates.
+6. Opening every lane and every method tab yields no tabpanel whose only content is a heading — proves no dead panel.
+- **Information fate.** Nothing. This proposal adds no UI; it records the target geometry and the six assertions that keep proposals 1–7 from regressing. Every sentence's destination is specified in proposals 1–7 above; the complete accounting is: 3 sentences moved to the route-bar disclosure, 1 aside (4 blocks) moved into the Chutes lane's existing disclosure, 3 cloud setup cards and 2 local cards moved into their own lanes, 1 companion block moved into a lane row, 1 clause promoted from a summary to a header, 1 clause edited for a navigation direction that no longer exists, 1 clause edited to drop two addresses now rendered beside it, and 12 strings deleted — each one a verbatim or near-verbatim duplicate of another string within 100px of it, listed individually with its duplicate named.
+- **Files.** e2e/, src/ui/access-view.tsx, src/ui/connect/connect-surface.tsx
+
+
+## Tool-call rendering — the rollup that swallows the next message
+
+**Diagnosis.** I ran two real connected turns against `zai-org/GLM-5.2-TEE` at 1440x900 and 430x932 and measured the DOM (scripts: `/Users/chrisk/chutes-jumpmaster/airship/.aesthetic/lane-tools.mjs`, `lane-tools2.mjs`; shots: `/Users/chrisk/chutes-jumpmaster/airship/.aesthetic/shots/tools/`).
+
+"Swallows" is four separate, measurable failures.
+
+**1. The typography is inverted.** Computed styles inside an operation summary: the seal's word "Tool step completed" renders at **17px** Inter, `rgb(103,163,154)` verdigris, **175px wide** — because `.message-part.operation` never scopes a font-size onto `.seal`, so it inherits the root 17px. The tool's *name* (`read_file`) renders at **11px** mono. The assistant's answer renders at **13px**. So the word "completed" is **55% larger than the name of the tool** and **31% larger than the answer**. In one 3-tool turn that identical 175px string is painted **six times**, covering 21,000 px² of chromatic text versus the answer's opening paragraph at 717x23 = 16,491 px². The status of the machinery is literally the loudest thing in the transcript. See `b-desktop-turn-top.png`: six identical green stripes, and you cannot tell what any of them did.
+
+**2. Every tool invocation renders as two independent cards.** `tool-call` and `tool-result` are separate sibling `<details>` in a flat 8px grid. Three calls = six cards. Worse, the model issued three calls in parallel, so the render order was CALL read_file / CALL list_files / CALL read_file / RESULT read_file / RESULT list_files / RESULT read_file — **two identical `read_file` rows**, and matching a result to its call requires opening four disclosures and eyeballing `call_8f2…` ids. Each row encodes status **four times**: coloured seal glyph + "Tool step completed" + eyebrow "TOOL CALL"/"TOOL RESULT" + pill "COMPLETED"/"SUCCESS".
+
+**3. The turn does not fit, at rest, fully collapsed.** Transcript viewport is 571px (top 225, bottom 796). Run B (3 calls, all success): assistant message = **821px = 1.44 viewports**, of which operations+gaps ≈ 373px (45%). Run A (3 calls, one failed and immediately retried): `.message-parts` = 671px, of which prose = **139px (20.7%)** and operations = **441px (65.7%)**. The self-corrected error alone forced two cards open (146px + 103px = **249px, 37% of the whole message**) to display `{"path":""}` and one sentence — because `tool-call` auto-opens on `failed` and `tool-result` auto-opens on anything but `success`. Phone 430x932: transcript 612px, assistant message **1259px = 2.06 viewports**, six op rows = 377px = **62% of the phone's conversation area**, with every tool name truncated to `rea…` / `lis…` / `read_f…`. The 175px useless string keeps its full width while the one essential field is elided to three characters.
+
+**4. Expanding pushes the answer off the screen.** Measured in Run A: opening every operation took transcript `scrollHeight` from 1088 → **2017px (+85%)**. The answer moved from y=591 to y=1377; the browser's own scroll anchoring compensated only +99px, so the answer was displaced **687px = 1.20 transcript viewports** and left the screen entirely — at which point the app's own **"Jump to latest" pill appeared** (visible in `all-expanded.png`), the UI conceding that the answer is gone. A single expanded `read_file` result is **392px**; a single expanded tool-call is **146px** to show 34 characters of JSON.
+
+Two supporting defects. The summary grid declares four columns; `::after` is pinned `grid-column: 3` and `.operation-state` (third child) auto-places into column 3 as well — column 4 is never used, and `.operation-state { margin-right: 17px }` exists only to dodge the glyph, which is why the `+` floats stranded mid-row and there is a 17px dead gutter at the right edge. And during streaming there are two simultaneous progress indicators (a "Thinking" chip at the top of the message, a three-dot pulse at the bottom), a running call renders `open` at 146px then collapses to 48px on completion (a 98px layout jump per step), and the message column is full-width while streaming but 780px once the claim-stack rail mounts — so every tool row re-wraps when the turn settles.
+
+The prose itself is good (see `b-phone-turn-bottom.png`). Nothing is wrong with the answer. The problem is entirely getting to it.
+
+### Join call+result into one row per tool invocation
+- impact **transformative** · effort **medium** · reclaims Desktop 325px → 104px (3 rows @32px + 2 dividers): 221px reclaimed, 39% of the 571px transcript viewport. Phone 377px → 140px (3 rows @44px): 237px reclaimed, 39% of the 612px phone viewport.
+- **Problem.** Three tool calls render as six `<details>` cards, 285px of card plus 88px of grid gaps = ~373px on desktop and 377px on phone (62% of the phone transcript viewport). Parallel calls render CALL/CALL/CALL then RESULT/RESULT/RESULT, producing two indistinguishable `read_file` rows; pairing a result to its call requires opening four disclosures and comparing `call_8f2…` ids.
+- **Design.** Add `pairOperations(parts)` to `message-parts-view.tsx`: fold each `ToolResultPart` into the `ToolCallPart` with the same `callId`, render the joined row at the *call's* chronological index, and drop the result's own slot. Orphan results (no call seen) and orphan calls (still running) render the same row shape with the missing half marked. Resting row is one line, `grid-template-columns: auto auto minmax(0,1fr) auto auto`, min-height 32px (`44px` under the existing `(max-width: 640px)` density block so the touch-target gate still passes):
+
+`[seal 13px] read_file   /workspace/README.md              845 B   ›`
+
+- col 1 seal glyph, `size={13}`
+- col 2 tool name, `font: 500 var(--fs-micro)/1.4 var(--font-mono)`, `--ink`, `min-content`, never truncated
+- col 3 **argument digest** — first scalar value of `argumentsSummary` (`{"path":"/workspace/README.md"}` → `/workspace/README.md`), 11px mono `--ink-muted`, flexible with `text-overflow: ellipsis`
+- col 4 **result digest** — derived from `metadataSummary`/`summary`, right-aligned, `--ink-faint`, no shrink: JSON object with `size` → `845 B`; JSON array → `23 items`; plain text → `1.2 KB`; error → the first clause of the error
+- col 5 disclosure chevron at an actual edge
+
+Exact status words (replacing the two pills): `Ran` / `Running…` / `Failed` / `Denied` / `Queued` / `Approved`.
+
+Also fixes the grid collision: `::after` moves to column 5 and `.operation-state { margin-right: 17px }` is deleted.
+- **Information fate.** `TOOL CALL`/`TOOL RESULT` eyebrows — merged; a paired row *is* a call and its result, and the distinction is recoverable in the expansion, which is labelled `Arguments · bounded display` and `Result`. `COMPLETED` + `SUCCESS` pills — merged into one status word, since a joined row has one outcome. `argumentsSummary` — its head is **promoted** from behind a disclosure onto the resting row; the full bounded JSON stays in the expansion. `summary` / `metadataSummary` — full bounded text stays in the expansion; a digest is promoted to the row. `callId` — stays in the expansion. `capabilityTier` — see the expansion-sheet proposal.
+- **Files.** src/ui/chat/message-parts-view.tsx, src/ui/chat/message-parts-view.css, src/ui/chat/message-parts.ts
+
+### Shrink the status word to the row's own type size and stop repeating the sentence
+- impact **high** · effort **small** · reclaims 149px of horizontal width per row — which is what stops the phone from truncating the tool name to `rea…`. Vertically ~13px per row from the 20px seal line box dropping to 15px.
+- **Problem.** `.seal__label` inside an operation summary computes to 17px Inter / 175px wide because nothing scopes a font onto it, while the tool name is 11px and the answer is 13px. The identical string "Tool step completed" is painted six times in one turn — 21,000 px² of chromatic text, more area than the answer's opening paragraph (16,491 px²).
+- **Design.** The Seal contract requires an adjacent word so colour is never the sole carrier — satisfy it once per row, at row scale, not six times at heading scale.
+
+In `message-parts-view.tsx`: `<Seal state={operationSeal(status)} label={outcomeWord(status)} detail={toolStatusLabel(status)} size={13} compact />` where `outcomeWord` returns exactly `Ran` / `Running…` / `Failed` / `Denied` / `Queued` / `Approved`. `Seal` already concatenates `detail` into `aria-label` and puts it in `title`, so the accessible string becomes `"Ran. Tool step completed."` — unchanged in substance.
+
+In `message-parts-view.css`, the one missing declaration:
+`.op__row .seal { font: 500 var(--fs-micro)/1.4 var(--font-mono); }`
+`.op__row .seal__label { letter-spacing: .04em; }`
+
+11px is exactly the `--fs-micro` floor that `type-floor.test.ts` enforces, and it scales with `--type-scale`.
+- **Information fate.** "Tool step completed" / "Tool step failed" / "Tool step denied" — moved verbatim into the row's `title` tooltip and `aria-label`; nothing is deleted and screen readers hear the same sentence. The visible word becomes `Ran`/`Failed` in the same state colour, 26px wide instead of 175px. Colour is still not the only carrier.
+- **Files.** src/ui/chat/message-parts-view.tsx, src/ui/chat/message-parts-view.css
+
+### One activity strip instead of six competing cards; give the answer body size
+- impact **transformative** · effort **medium** · reclaims ~10px per row from removing per-card border+radius insets (60px on a 6-op turn), plus the perceptual reclaim of six objects becoming one.
+- **Problem.** `.message-part.text` and `.message-part.operation` are undifferentiated siblings in one 8px grid — same gap, no grouping. Every operation carries its own border, radius and raised fill; the answer carries nothing. The answer is 13px unframed neutral text sitting under six framed 17px chromatic status lines. In the failure turn the answer was 20.7% of the message and the machinery 65.7%.
+- **Design.** Group each maximal run of consecutive operation parts into a single `<section class="op-strip">` with **one** border and **one** background; rows become dividers, not cards.
+
+```
+.op-strip { overflow: clip; border: 1px solid var(--line); border-radius: var(--radius-control); background: color-mix(in srgb, var(--surface-soft) 91%, transparent); }
+.op-strip > .op + .op { border-top: 1px solid var(--line); }
+.op { border: 0; border-radius: 0; background: none; }
+```
+
+Then restore the hierarchy in `styles.css`:
+- `.message-parts .message-part.text { font-size: var(--fs-body); }` — the answer moves 13px → 15px, so the ratio becomes 15px prose over 11px machinery instead of today's 13px prose under 17px machinery.
+- The **last** text part of a settled assistant turn gets `.message-part.text--answer { margin-top: 12px; color: var(--ink); }`.
+- Interstitial narration (any text part with an operation after it) gets `.message-part.text--narration { font-size: var(--fs-meta); color: var(--ink-muted); }`, so the reader can distinguish "I'll inspect the requested state in parallel since the three reads are independent" (planning) from "This is an Airship edge workspace rooted at /workspace…" (the answer). Both stay fully visible.
+- **Information fate.** Every text part and every operation part stays on screen. Only size, colour and containment change, and they change to encode role: answer at body size, narration at meta size and muted, machinery at micro size inside one bordered strip. No per-row chrome is deleted — it is merged into the strip's single border.
+- **Files.** src/ui/chat/message-parts-view.tsx, src/ui/chat/message-parts-view.css, src/ui/styles.css
+
+### Bound the expansion and hold the answer in place when a row opens
+- impact **transformative** · effort **medium** · reclaims Caps a single expansion at 320px instead of 392px+, and reduces worst-case turn growth from +929px to +320px. Displacement of the answer: 687px → 0px.
+- **Problem.** Measured: expanding all operations took transcript `scrollHeight` from 1088 → 2017px (+85%). The answer moved from y=591 to y=1377 while the browser auto-anchored only +99px — a net displacement of 687px = 1.20 transcript viewports. The answer left the screen and the app's own "Jump to latest" pill appeared. One expanded `read_file` result is 392px because only the inner `pre` is capped (`max-height: 260px`) while the body, its label rows and the metadata block are unbounded.
+- **Design.** Keep native `<details>` so keyboard, find-in-page and no-JS all still work, but make the opened body a bounded, self-scrolling sheet:
+
+```
+.op__body { display: grid; gap: 7px; max-height: min(320px, 38vh); padding: 9px; overflow: auto; border-top: 1px solid var(--line); background: color-mix(in srgb, var(--ground) 65%, transparent); }
+.op__body pre { max-height: none; }   /* the sheet owns the scroll, not each pre */
+```
+
+Sheet header is a two-column label row so the merge from proposal 1 stays legible:
+`ARGUMENTS · BOUNDED DISPLAY` … `RESULT · <capability tier>` … `call_8f2a…`
+
+Accordion within a strip: `onToggle` closes sibling rows. That is the difference between +85% scroll height and a fixed +320px.
+
+Answer-anchoring, six lines in `MessagePartsView`: before toggling, read `answerEl.getBoundingClientRect().top`; after the toggle commits, `container.scrollTop += (newTop - oldTop)`. The sheet then appears to open *behind* the answer — the answer does not move a pixel, and "Jump to latest" never fires from an expand.
+- **Information fate.** Nothing removed. Full bounded `argumentsSummary`, full bounded result `summary`, `metadataSummary`, `callId` and `capabilityTier` all live in the sheet; the tier keeps its `capabilityTierDetail()` tooltip. The only change is that the sheet scrolls internally past 320px instead of pushing the document.
+- **Files.** src/ui/chat/message-parts-view.tsx, src/ui/chat/message-parts-view.css
+
+### Collapse the strip to one honest summary row on settled turns
+- impact **high** · effort **medium** · reclaims Desktop: 325px of cards → 32px header = 293px reclaimed (51% of the 571px transcript viewport). Phone: 377px → 44px = 333px reclaimed (54% of the 612px viewport). On the measured failure turn the forced-open 249px becomes a 32px row reading `⟡ 5 steps · 1 failed, then recovered · list_files`.
+- **Problem.** A settled all-success turn still spends 373px on machinery the reader has no reason to inspect, and a self-corrected failure force-opens 249px (37% of the message) to show `{"path":""}` and one error sentence for a mistake the model fixed one step later. The current auto-open policy (`tool-call` opens on failed/denied/running, `tool-result` opens on anything but success) is applied at the wrong altitude.
+- **Design.** When a settled turn has ≥3 operations, render the strip as a single 32px header row (44px under the coarse-pointer density block) that is itself the disclosure. Exact copy per state:
+
+- all completed → `⟡ 4 steps · read_file ×2, list_files · all completed` … `Show steps`
+- recovered failure → `⟡ 5 steps · 1 failed, then recovered · list_files` … `Show steps`
+- unrecovered failure → `⟡ 3 steps · 1 failed · read_file` … `Show steps`
+- denied → `⟡ 3 steps · 1 denied by Ask First · write_file` … `Show steps`
+- mixed → `⟡ 7 steps · 6 completed, 1 failed` … `Show steps`
+- parallel batch → append ` · 3 in parallel` when a group of calls shares one `sequence` (already derivable: `message.toolCalls` from a single journal event share `sequence` and differ only by `ordinal`; parallelism is invisible today)
+
+Open state header: `⟡ 4 steps · all completed` … `Hide steps`.
+
+Default open policy: **collapsed when every step completed** (nothing to inspect); **expanded when any step failed or was denied** (something to inspect). Same honesty rule as today, hoisted from the individual card to the group.
+
+Fold `operation-overflow` into this. Keep `boundedMessageParts` — the chronological guarantee is real and worth keeping — but render the overflow as further rows inside the same strip rather than a `<details>` nested inside a `<details>`; the strip header already states the true total, e.g. `⟡ 18 steps · 12 shown in order · all completed`.
+- **Information fate.** The count, the tool names ranked by frequency, the outcome distribution and the parallelism are all promoted onto the *face* of the collapsed header — more is legible at rest than today, where six identical rows say only "completed" six times. Every individual row and every expansion sheet remains one tap away and remains in strict chronological order. The `operation-overflow` summary copy ("12 of N tool steps shown · Show chronological remainder") is merged into the header's count clause, not dropped.
+- **Files.** src/ui/chat/message-parts-view.tsx, src/ui/chat/message-parts-view.css
+
+### One progress locus while streaming, and a layout that does not jump
+- impact **high** · effort **medium** · reclaims 114px per in-flight call (146px auto-opened → 32px), and eliminates a 98px scroll jolt per completed step plus a full-turn re-wrap at settle.
+- **Problem.** Three streaming defects, all visible in `stream-14000.png` vs `settled-viewport.png`: (a) the message shows a "Thinking" chip at its top *and* a three-dot pulse at its bottom — two indicators for one turn; (b) a running `tool-call` renders `open` at 146px and collapses to 48px on completion, a 98px layout jump per step, while the anchor pins the *bottom* of the card so every arriving row shoves the content above it upward; (c) the message column is full-width during streaming and 780px once the claim-stack rail mounts on settle, so every tool row re-wraps at the moment the turn finishes.
+- **Design.** **(a)** While the turn is streaming the strip is always expanded and its header reads `⟡ Working · 3 steps` with the seal in `checking` state (its existing `data-acting` rotation is the motion). On settle the header re-renders to the resting copy from the previous proposal. Suppress the bottom three-dot pulse for assistant messages that have an active strip; keep it for messages with no operations, where it is the only indicator.
+
+**(b)** Rows are a fixed 32px whether running or done — a running row shows `Running…` with the checking seal and an empty result-digest cell; on completion the seal, the word and the digest change **in place** with no height change. Remove the `open={status === "running"}` auto-open entirely; a running call's arguments are already summarised in the row's argument-digest cell.
+
+**(c)** Reserve the claim-stack column at all times in the `#chat` grid (render an empty placeholder while streaming), or pin `.message` to `width: min(100%, 780px)` independent of rail presence. Either way the measure is constant across the streaming→settled transition and nothing re-wraps.
+- **Information fate.** "Thinking" survives as the strip header's word plus the animated checking seal. The bottom pulse's meaning is fully carried by that header. A running call's arguments move from a 146px auto-opened body to the row's own argument-digest cell — promoted to always-visible, not hidden — with the full bounded JSON still one tap away in the sheet.
+- **Files.** src/ui/app.tsx, src/ui/chat/message-parts-view.tsx, src/ui/chat/message-parts-view.css, src/ui/styles.css
+
+### Make parallelism and per-call identity readable at rest
+- impact **medium** · effort **small** · reclaims None; this trades zero pixels for removing four disclosure-opens needed today to answer "which read_file is which".
+- **Problem.** In the measured turn the model issued three calls in one assistant step. That fact is entirely invisible: it renders as three sequential CALL rows and three sequential RESULT rows, with two of them reading `read_file` identically. There is no way at rest to tell which `read_file` read the README and which read `docs/architecture.md`, nor that they ran concurrently rather than in sequence.
+- **Design.** Two additions on top of the joined row. First, the argument digest already disambiguates at rest — the two rows read `read_file /workspace/README.md` and `read_file /workspace/docs/architecture.md` instead of `read_file` twice. Second, rows whose calls share one `sequence` (issued together) get a 2px `--line-strong` bracket on the strip's inner-left edge spanning the group, and the strip header appends ` · 3 in parallel`. Give the bracket `aria-label="3 steps issued together"` on the group wrapper so the structure is not purely visual.
+
+```
+.op-group[data-parallel="true"] { box-shadow: inset 2px 0 0 var(--line-strong); }
+```
+- **Information fate.** Purely additive: `sequence` and `ordinal` already exist on every tool-call fact and are currently discarded at render time. `argumentsSummary` — already present, previously reachable only by opening a disclosure, now readable at rest. Nothing is removed.
+- **Files.** src/ui/chat/message-parts-view.tsx, src/ui/chat/message-parts-view.css
+
+
+## Cross-surface design system
+
+**Diagnosis.** I walked all ten routes at 1440x900 and measured the rendered result rather than reading the CSS. The finding that reframes this whole review: **Airship's design system is already correct in the token layer and is ignored almost everywhere in the component layer.** This is not a "we need a design system" problem. It is a "we have one and 6,022 lines of CSS route around it" problem, which makes almost every fix below subtractive and cheap.
+
+MEASURED EVIDENCE.
+
+**Type.** `:root` defines a clean 6-step ramp (`--fs-micro` 11 / `--fs-caption` 12 / `--fs-meta` 13 / `--fs-body` 15 / `--fs-lead` 17 / `--fs-h3` 22), every step correctly multiplied by `--type-scale`. The ten routes render **35 distinct font sizes in 58 size/weight pairs** — on an empty app with no conversation. Nine font weights are in play (400, 500, 600, 620, 650, 700, 750, 900). The ramp stops at 22px, so there is **no `--fs-h1` token at all**, and as a result there are **eight separate H1 rules with five different clamp formulas**: `.page-heading h1` `clamp(30px,4vw,47px)`, `.access-connection-heading h1` `clamp(1.75rem,4vw,2.7rem)`, `.attestations-heading h1` `clamp(1.7rem,4vw,2.65rem)`, `.client-context-heading h1` `clamp(1.75rem,4vw,2.7rem)`, `.terminal-route__heading h1` `clamp(1.65rem,2vw,2.2rem)`, plus `.stage-header h1`, `.session-library-heading h1` and `.boot-screen h1` (which re-types `Georgia, "Times New Roman", serif` inline instead of using the token). The same semantic slot — route title — renders at **47px (Proof/Memory/Profiles/Account/Editor), 45.9px (Connect models), 34px (Vault), 28.8px (Terminal), 21.25px (Chat)**. That is a 2.2x spread for one role. Worse: `.page-heading h1`'s clamp uses **px literals**, so the `--type-scale` accessibility knob does not move the largest text in the product (WCAG 1.4.4). Vault's H1 renders in **Inter**, not the display serif, because `vault-view.css` never sets `--font-display`; on iPhone 14 Pro Max, Vault's H1 stays a fixed 34px while Proof's clamps down to 28.9px, so Vault has the biggest heading in the product on a phone.
+
+**Spacing.** 28 distinct padding values, 21 gap values, 11 radii. Against P8's stated "exact 4px grid": **79% of padding instances and 82% of gap instances are off-grid**. The single most common padding is 10px (384 instances), the most common gap is **7px** (156). `--radius-control: 6px` and `--radius-panel: 10px` both exist as tokens, yet the dominant rendered radius is **5px (319 instances)** — neither token — alongside 3, 4, 6, 8, 50% and 999px.
+
+**Status vocabulary.** `seal.tsx` is genuinely excellent: one component, six SVG shapes, seven named states, word-first labels, `role="img"`. It is the north-star artifact and it works. It is also surrounded by **49 independent status/notice CSS families** (`.status-seal`, `.posture-chip`, `.durability-indicator`, `.runtime-posture`, `.audit-state`, `.account-state`, `.receipt-chip`, `.attestation-chip`, `.claim-seal`, `.proof-hero-seal`, `.proof-level`, `.connection-badge`, `.mobile-trust-chip`, `.nav-proof-dot`, `.pulse-dot`, `.composer-policy__dot`, `.state-label`, `.skill-state`, `.callout`, `.compact-callout`, five separate `__notice` classes…). **18 of them render simultaneously** on the empty ten-route walk, across 5 border-radius treatments (0, 3px, 5px, 8px, 50%, 999px), 2 font families and mixed casing. On `#chat` alone, seven different grammars answer "what is the state of things": outlined-circle topbar pills, a bare teal dot + sans text ("Local kernel ready"), a brass outline pill ("Local"), a naked circle glyph + mono prose ("○ Secure hardware not checked"), a dashed-border mono pill ("○ Ephemeral · this page only"), a boxed mono token (`#3b75fd98`), and a bold-sans dot pair ("● Ask First").
+
+**Tabs.** Nine tab-strip CSS families (`.editor-route__tabs`, `.editor-tabs`, `.memory-mode-tabs`, `.profile-hub-tabs`, `.proof-surface-tabs`, `.terminal-tabs`, `.trust-hub-tabs`, `.workbench-mode-tabs`, `.workbench-mobile-switch`) plus `.connect-method__switch`. Eight render, using **four different "you are here" encodings** — solid brass fill (`.profile-hub-tabs`, 1156px wide, `rgb(223,186,114)`), 6% brass wash + 2px underline (`.workbench-mode-tabs`), dark fill with no border (`.editor-route__tabs`, `.proof-surface-tabs`), and dark fill + 1px border (`.trust-hub-tabs`, `.terminal-tabs`) — at **11.69px, 12.92px and 17px** for the same tab role. `#workspace` stacks two of these grammars 320px apart, at 17px and 11.69px.
+
+**Density.** The route header block (column top → bottom of subhead) measures **194–213px on six of ten routes** — 23–25% of the 842px content viewport, spent on a mono brass eyebrow, a serif H1 and a one-sentence description that never change and are already answered by the active sidebar item. That same 200px tax is levied on routes that then run dry — `#account` has **329px of dead space (37% of the viewport)** below its last text, `#workspace` 200px (22%) — and on routes that then overflow: `#connection` scrolls to **2,743px (3.3 screens)**, `#memory` 1,764px (2.1), `#proof` 1,540px (1.8).
+
+**Colour.** Body text is in good shape and I want to say so plainly: `--ink` 15.13:1, `--ink-muted` 7.39:1, `--accent` 7.08:1, `--v-verified` 6.42:1, `--v-caution` 8.23:1. Only 3 of 129 unique text styles fail AA and two of those are a transparent live-region false positive. The real colour problems are elsewhere. (a) **The accent is spent on decoration.** Of 347 brass-tinted element instances at 41 sites, the two largest consumers are `.nav-nested-marker` — the sidebar "↳" glyph — at **40 instances**, and `.eyebrow` at **23**. That is 63 of ~90 brass text sites, **70%, encoding nothing**. Brass simultaneously means "you are here" (nav rail), "act here" (primary button, `.status-seal--action`), "this is a heading ornament" (eyebrow) and "this line is indented" (↳). (b) **`--line` is 1.26:1** and `--line-strong` is 1.55:1, both far below WCAG 1.4.11's 3:1 for control boundaries — these are the borders of nearly every card, tab and input, which is why the routes read as text floating on black. (c) **Disabled controls composite to illegibility**: two ad-hoc opacities (.45 and .48); the disabled Send button's glyph lands at **1.71:1**, and "Remove profile" is `--v-failed` at .45 → **1.91:1**, conflating "disabled" with "danger". (d) `--ink-faint` #858d8a is the highest-volume text colour (323 of the sampled instances) and the *weakest* at **4.73:1 on `--surface-raised`** — the tier carrying the most text has the least contrast, and it carries a **9.74px** `<small>` on `#profiles`, below the blueprint's own 11px P4 floor. (e) One rogue `rgb(158,158,255)` link — "Get the extension ↗" on `#connection` — is the generic AI blue-purple the design language explicitly forbids.
+
+**The serif.** `--font-display` is **`Georgia, "Times New Roman", serif`**. The design language asks for "a high-contrast editorial serif only for brief display moments." Georgia is the opposite: a low-contrast, large-x-height, wide screen face designed in 1993 to survive 96dpi bitmaps. At 47px with `letter-spacing: -1.175px` it reads soft and generic, and its full-height lining figures make "152" and "0.056" on `#memory` look like body copy rather than instrument readout. The serif is also applied by coin flip — it sets Proof's card titles but not Memory's, Account's CTA title but not Vault's H1 — via 13 scattered `font-family: var(--font-display)` declarations and zero shared heading class.
+
+### One type ramp: eight tokens retire 35 rendered sizes and eight H1 rules
+- impact **transformative** · effort **medium** · reclaims 19px per route from the title alone (47→28); the ten-route H1 spread collapses from 2.2x to 1.0x
+- **Problem.** 35 distinct font sizes in 58 size/weight pairs across ten empty routes; nine font weights; no token above 22px so eight separate H1 rules with five clamp formulas render the same slot at 47 / 45.9 / 34 / 28.8 / 21.25px. `.page-heading h1`'s `clamp(30px,4vw,47px)` uses px literals, so `--type-scale` cannot move the biggest text in the product (WCAG 1.4.4).
+- **Design.** Extend the existing ramp in `styles.css` `:root` with three steps and one weight set. Every value keeps the `calc(… * var(--type-scale))` wrapper that the first six already have:
+
+```css
+--fs-micro:   calc(.6875rem * var(--type-scale)); /* 11 */
+--fs-caption: calc(.75rem   * var(--type-scale)); /* 12 */
+--fs-meta:    calc(.8125rem * var(--type-scale)); /* 13 */
+--fs-body:    calc(.9375rem * var(--type-scale)); /* 15 */
+--fs-lead:    calc(1.0625rem* var(--type-scale)); /* 17 */
+--fs-title:   calc(1.25rem  * var(--type-scale)); /* 20 — NEW */
+--fs-display: calc(1.75rem  * var(--type-scale)); /* 28 — NEW */
+--fs-hero:    calc(2.375rem * var(--type-scale)); /* 38 — NEW */
+--fw-body: 400; --fw-strong: 600; --fw-title: 700;
+```
+
+Use rules, one line each, to be pasted into `docs/DESIGN_LANGUAGE.md`:
+- `--fs-micro` 11px — mono, uppercase, 0.11em tracking. Column headers and metric-strip labels ONLY. Nothing else may be 11px. This is the floor; no computed size may fall below it.
+- `--fs-caption` 12px — Seal chip labels, table captions, timestamps, digests.
+- `--fs-meta` 13px — supporting sentences under a title; card subtitles.
+- `--fs-body` 15px — all default UI text and all transcript body.
+- `--fs-lead` 17px — list-row primaries, tab labels, card titles, button labels.
+- `--fs-title` 20px — section and card headings. Replaces the entire 17.85/18/19/19.89/20/21.25/23.38/25.5px cluster.
+- `--fs-display` 28px — the route title, once per route. Replaces 47/45.9/34/28.8/21.25.
+- `--fs-hero` 38px — reserved for exactly two places: the boot screen wordmark and a single hero verdict number per route (e.g. Account balance). Never a route title.
+
+Weights collapse 400/500/600/620/650/700/750/900 → three: `--fw-body` 400, `--fw-strong` 600, `--fw-title` 700. Delete every 500, 620, 650, 750 and 900 declaration.
+
+Delete all eight H1 rules (`styles.css:2705` `.page-heading h1`, `styles.css:1031` `.stage-header h1`, `access-view.css:50`, `attestations-view.css:27-31`, `context-view.css:23-26`, `terminal-view.css:2`, `sessions-view.css:28`, `styles.css:3263` `.boot-screen h1`) and replace with one rule: `.route-title { font: var(--fw-title) var(--fs-display)/1.15 var(--font-display); letter-spacing: -.01em; }`. Add `font-family: var(--font-display)` to Vault's H1 so it stops rendering in Inter. Add a CI guard extending the existing `type-floor.test.ts`: fail the build on any `font-size` or `font:` shorthand in `src/ui/**.css` that is not `var(--fs-*)`, and on any computed size below 11px (currently catches the 9.74px `<small>` on `#profiles`).
+- **Information fate.** No text is removed. Every string keeps its current words. Route titles shrink 47px→28px and Chat's grows 21.25px→28px, so the ten routes finally agree. The `<small>` at 9.74px on `#profiles` rises to 11px `--fs-micro` and its content is unchanged. Vault's H1 changes typeface only. The nine weights collapse to three, so `.local-lab__status` at 620 and `Google Drive` at 900 render at 600 and 700 — same words, same emphasis rank.
+- **Files.** src/ui/styles.css, src/ui/access-view.css, src/ui/attestations-view.css, src/ui/context-view.css, src/ui/terminal-view.css, src/ui/sessions-view.css, src/ui/vault-view.css, src/ui/type-floor.test.ts
+
+### The 200px route header becomes a 44px title bar — one `<RouteHeader>` for all ten routes
+- impact **transformative** · effort **large** · reclaims 150–169px of vertical space on six routes (194–213px → 44px), i.e. 18–20% of the 842px content viewport handed back to content; combined with auto-fit, `#connection` drops from 2,743px to roughly 1,300px of scroll
+- **Problem.** The header block measures 194–213px on six of ten routes (workspace 212, connection 213, vault 205, profiles 202, proof 194, account 194) — 23–25% of the 842px content viewport — to show three facts that never change and that the active sidebar item already answers. That same tax is charged to routes that run dry (`#account` 329px dead, 37% of viewport; `#workspace` 200px, 22%) and to routes that overflow (`#connection` 2,743px = 3.3 screens; `#memory` 2.1; `#proof` 1.8).
+- **Design.** One new component `src/ui/route-header.tsx`, used by all ten routes, replacing five bespoke header blocks (`.page-heading`, `.access-connection-heading`, `.attestations-heading`, `.client-context-heading`, `.terminal-route__heading`, `.vault-view__header`, `.session-library-heading`).
+
+Structure — a single 44px flex row, `padding: 0 var(--sp-6)`, `border-bottom: 1px solid var(--line)`:
+`[ h1.route-title 28px ] [ ⓘ info button 24px ] ——— flex spacer ——— [ status Seal chips ] [ route actions ]`
+
+The eyebrow and the description do not disappear; they move into the ⓘ. The ⓘ is a 24px `--ink-faint` circled-i, `aria-label="About this view"`, opening a 320px popover anchored under it containing exactly the text that is on screen today:
+- Proof: eyebrow "INSPECTABLE, PORTABLE EVIDENCE" as the popover's first line, then "Endpoint attestation and conversation receipts are different claims. Airship never presents one as the other."
+- Memory: "PRIVATE RECALL & ON-DEVICE RETRIEVAL" / "One private query across conversation, profile memory, workspace index, and typed relationships."
+- Terminal: "WORKSPACE · BROWSER PROCESS ROOM" / "Real interactive Node processes run inside this page's WebContainer. This is not your device shell, host Bash, SSH, or a remote Airship backend." — this one is load-bearing honesty and must stay verbatim.
+- Vault, Profiles, Account, Editor, Connection, Chat: same treatment, existing strings verbatim.
+The popover is remembered-dismissed per route in page memory and auto-opens on a route's first visit, so first-run users still read the caveat without a permanent 200px tax.
+
+Route-level status moves into the row's right side as Seal chips (proposal 3): Vault's floating "Disconnected" pill, Workspace's two-line-wrapping "Ephemeral · this page only" orphan, Account's "Account telemetry unavailable" card, and Terminal's "Reconcile workspace / New terminal" actions all land in this one row instead of four different places.
+
+Density rule for what sits below, which fixes both failure modes with one primitive: the route body is `display:grid; gap: var(--sp-5); grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); align-content: start;`. On `#account` and `#workspace` the auto-fit reflows the under-filled cards into the 329px/200px of dead space instead of stacking them in a single 700px column. On `#connection`, `#memory` and `#proof` the same rule packs 2–3 cards per row, cutting 3.3 screens toward ~1.5.
+- **Information fate.** Nothing is deleted. Ten eyebrows and ten descriptions move behind a named, first-run-auto-opening ⓘ disclosure with their exact current copy. Route titles stay on screen permanently at 28px. Four different route-level status treatments (Vault's `Disconnected` pill, Workspace's wrapping durability pill, Account's telemetry card, Terminal's action pair) are merged into one right-aligned slot without losing a word — each becomes a Seal chip whose tap opens its full detail. The Terminal WebContainer caveat and the Proof "different claims" caveat are explicitly preserved verbatim.
+- **Files.** src/ui/route-header.tsx, src/ui/styles.css, src/ui/app.tsx, src/ui/vault-view.css, src/ui/terminal-view.css, src/ui/access-view.css, src/ui/memory-view.css, src/ui/route-layout.test.ts
+
+### One status family: `<Seal>` at three densities retires 49 competing status classes
+- impact **transformative** · effort **large** · reclaims Proof hero seal 60px→28px; Workspace's two-line-wrapping durability pill 42px→24px single line; ~49 CSS families collapse to 1
+- **Problem.** `seal.tsx` is the correct artifact — six shapes, seven named states, word-first labels, `role="img"` — and it is drowned by 49 independent status/notice CSS families, 18 of which render simultaneously on the empty ten-route walk across 5 radii (0/3px/5px/8px/50%/999px), 2 fonts and mixed casing. `#chat` alone answers "what is the state of things" in seven different grammars; `#proof` renders the same label/verdict/detail card three times with three different label styles and three different detail styles.
+- **Design.** Freeze the seven states already in `seal.tsx` (`none` "Not checked", `checking` "Checking", `stale` "Stale", `verified` "Verified", `asserted` "Asserted", `attention` "Attention", `failed` "Failed") and add three densities as a `density` prop. This is the entire status vocabulary of the product:
+
+- `density="dot"` — 10px SVG, no label, `aria-label` carries the word. For nav badges and inline row markers where a label is already adjacent. Replaces `.nav-proof-dot`, `.pulse-dot`, `.composer-policy__dot`, `.companion-overview__dot`, `.terminal-status`, `.attestation-status-mark`.
+- `density="chip"` — the default. 16px SVG + label, `border-radius: var(--radius-chip)` (999px), `font: var(--fw-strong) var(--fs-caption)/1 var(--font-body)`, sentence case, `padding: 0 var(--sp-2)`, min-height 24px, `background: color-mix(in srgb, currentColor 10%, transparent)`, `border: 1px solid color-mix(in srgb, currentColor 34%, transparent)`. Replaces `.status-seal`, `.posture-chip`, `.durability-indicator`, `.runtime-posture`, `.audit-state`, `.receipt-chip`, `.attestation-chip`, `.connection-badge`, `.mobile-trust-chip`, `.state-label`, `.skill-state`, `.operation-state`, `.account-state`, `.editor-status`, `.proof-level`, `.access-live-status`, `.context-*-status`, `.embedding-engine-state`, `.evidence-join__state`.
+- `density="hero"` — 28px SVG + `--fs-title` label + one `--fs-meta` detail line, horizontal, max ONE per route. Replaces `.proof-hero-seal` and `.claim-seal`. Note this *shrinks* Proof's current 60px-diameter naked circle, which on iPhone 14 Pro Max spends ~90x110px to say "Not checked".
+
+**The disclosure contract — this is how information is preserved rather than lost.** Every `chip` and `hero` renders as a `<button>` that opens the claim-stack popover already modelled in `claim-stack-model.ts`. The chip shows the ranked plain-language verdict (P11); the popover shows issuer, subject, scope, age, expiry, evidence digest, verifier policy and export, exactly as `docs/DESIGN_LANGUAGE.md` specifies. Nothing currently in prose is deleted — it becomes the chip's expansion.
+
+Exact chip copy, preserving today's strings so no claim weakens:
+- `none` + "Not checked" — detail "Secure hardware not checked · this session"
+- `none` + "Ephemeral" — detail "This page only. Nothing is written to disk." (from `durabilityLabel("ephemeral")`)
+- `verified` + "Encrypted · this device" (from `durabilityLabel("local")`)
+- `checking` + "Syncing" — detail "Syncing encrypted state"
+- `verified` + "Synced" — detail "Encrypted state synced"
+- `none` + "Local" — detail "No remote inference required." (from `posturePresentation`)
+- `asserted` + "Encrypted · no proof gate" — detail "Encryption is required, but fresh endpoint proof is not enforced."
+- `asserted` + "Encrypted · proof required" — detail "Policy requires fresh endpoint proof before invocation; only turn evidence can verify the claim."
+- `attention` + "Plaintext remote" — detail "Remote plaintext permitted."
+- `failed` + "Not established" — detail "production remote mode must fail closed"
+
+Retire the five `__notice`/`callout` classes (`.composer-notice`, `.workbench-notice`, `.provider-fabric__notice`, `.google-drive-setup__notice`, `.local-device-vault__notice`, `.callout`, `.compact-callout`) into one `.notice` that is a chip plus a sentence on one row, using the same seven states.
+
+Fix while here: `#chat`'s "Ephemeral" renders as a doubled `○ ○` glyph on phone because `.durability-indicator` draws its own `<i>` next to a Seal — the single `<Seal>` removes the second circle.
+- **Information fate.** Every status string is kept verbatim; the list above is a copy manifest, not a rewrite. What changes is the container, not the content. Prose that currently states a claim inline ("○ Secure hardware not checked · this session", "production remote mode must fail closed", "No cloud vault is configured.") becomes the `detail` on a chip and is shown in full in the claim-stack popover on tap — one gesture away, deep-linkable, per P6. The duplicated "Ephemeral" on `#chat` (topbar pill + session status row) is the one genuinely redundant item: it is the same durability state rendered twice within 170px, so the session-row instance is dropped and the topbar chip keeps the full detail. Proof's hero seal shrinks 60px→28px but gains a label and a detail line it does not currently have.
+- **Files.** src/ui/seal.tsx, src/ui/styles.css, src/ui/posture-chip.tsx, src/ui/durability-indicator.tsx, src/ui/durability-indicator.css, src/ui/claim-stack-model.ts, src/ui/proof-view.tsx, src/ui/seal.test.ts
+
+### One `<Tabs>` component retires nine tab-strip families and four "you are here" encodings
+- impact **high** · effort **medium** · reclaims Profiles tab strip 47px tall × 1156px of brass reduced to a 40px intrinsic-width strip; trust-hub strip 61px → 40px; ~21px per tabbed route
+- **Problem.** Nine tab-strip CSS families exist; eight render. The same tab role uses four different active-state encodings — solid brass fill (`.profile-hub-tabs`, 1156px wide, `rgb(223,186,114)`), 6% brass wash + 2px underline (`.workbench-mode-tabs`), dark fill no border (`.editor-route__tabs`, `.proof-surface-tabs`), dark fill + 1px border (`.trust-hub-tabs`, `.terminal-tabs`) — at 11.69px, 12.92px and 17px. `#workspace` stacks two of these grammars 320px apart at 17px and 11.69px. `.profile-hub-tabs`' full-bleed brass block is the loudest object in the product and it marks a passive tab, not an action.
+- **Design.** One `src/ui/tabs.tsx` exporting `<Tabs>` with two variants and nothing else.
+
+`variant="section"` — the default, for switching the content of a region (Proof/Vault/Connection/Account; Receipt & journal / Attestation evidence; Files & editor / Sources; Explorer / Source Control; OAuth / API key; Profiles / Capabilities / Skills):
+```css
+.tabs { display:flex; gap:var(--sp-1); border-bottom:1px solid var(--line); }
+.tabs button { min-height:40px; padding:0 var(--sp-3); border:0; border-bottom:2px solid transparent;
+  font:var(--fw-strong) var(--fs-lead)/1 var(--font-body); color:var(--ink-muted); background:none; }
+.tabs button[aria-selected="true"] { color:var(--ink); border-bottom-color:var(--accent); }
+.tabs button:focus-visible { outline:2px solid var(--focus); outline-offset:-2px; }
+```
+One encoding for "you are here": a 2px brass underline plus a lift from `--ink-muted` to `--ink`. Width is intrinsic — never full-bleed. Text is 17px `--fs-lead` on every strip, ending the 11.69/12.92/17px spread.
+
+`variant="document"` — only for closable document tabs (`.terminal-tabs`, `.editor-tabs`), which are a different object: they carry a name, a live state and a close affordance. Same 40px height, same 17px, `--radius-control` 6px top corners, `border:1px solid var(--line-control)`, active gets `background:var(--surface-raised)` and the brass underline. The per-tab state ("Running") becomes a `density="dot"` Seal, not a second text line — which also removes the duplicated "● Running" that currently appears twice within 90px on `#terminal`.
+
+Counts move with the label as `<span class="tabs__count">` at `--fs-caption` `--ink-faint` (Source Control's "3"), not as a filled badge.
+
+Delete `.editor-route__tabs`, `.editor-tabs`, `.memory-mode-tabs`, `.profile-hub-tabs`, `.proof-surface-tabs`, `.terminal-tabs`, `.trust-hub-tabs`, `.workbench-mode-tabs`, `.workbench-mobile-switch`, `.connect-method__switch`. The mobile switch is not a special case — the section variant already scrolls horizontally with `overflow-x:auto; scrollbar-width:none` and 44px targets.
+- **Information fate.** Every tab label, every count and every tab's live state is kept. Profiles/Capabilities/Skills keep all three labels; they simply stop being a 1156px brass block. Terminal tab state "Running" moves from a second text line to an adjacent dot Seal carrying the same word in `aria-label` and `title`. Source Control's "3" is kept as an inline count. Nothing moves behind a disclosure here — this is purely one grammar replacing four.
+- **Files.** src/ui/tabs.tsx, src/ui/styles.css, src/ui/workspace-view.css, src/ui/editor-view.css, src/ui/terminal-view.css, src/ui/memory-view.css, src/ui/access-view.css, src/ui/connect/connect-surface.css
+
+### One `<MetricStrip>` retires five competing stat grammars
+- impact **high** · effort **medium** · reclaims `#memory` loses one full 56px strip and the duplicate-count confusion; `#proof`'s three stacked cards become one 96px strip, saving ~60px
+- **Problem.** Five different label/value grammars present numbers: (1) `#memory` top — serif 20px label + inline mono value ("Recall / 3 private scopes"); (2) `#memory` bottom — sans 15px label + serif 24px number + mono caption ("Nodes / 152 / real page inputs + derived terms"); (3) `#profiles` — mono uppercase label + mixed value ("RUNTIME / airship-demo · airship…"); (4) `#connection` companion — mono uppercase label + sans value ("PROVIDER RELAY / Not observed"); (5) `#proof` cards — sans label + serif verdict + mono detail ("TEE verification / Not established / production remote mode must fail closed"). `#memory` runs two of these on one page and they disagree about the same data: the top strip says "Relationships 152 nodes" while the bottom says "Nodes 152" and "Relationships 647".
+- **Design.** One `src/ui/metric-strip.tsx`. A `<MetricStrip>` is a `display:grid; grid-auto-flow:column; grid-auto-columns:1fr; gap:0` row of `<Metric>` cells separated by `border-left:1px solid var(--line)`, each cell `padding: var(--sp-3) var(--sp-4)`:
+
+```
+[ LABEL          ]  --fs-micro, mono, uppercase, .11em, --ink-muted
+[ Value          ]  --fs-title (20px) --font-display, tabular-nums, --ink
+[ caption / seal  ]  --fs-caption, --ink-faint, or a density="chip" Seal
+```
+
+Three rules that end the disagreement:
+1. **The label is always `--fs-micro` mono uppercase.** The serif never sets a label.
+2. **The value is always `--fs-title` display serif with `font-variant-numeric: tabular-nums`** — numbers align in a column, which is the actual reason to have a serif here. If the value is a state rather than a number it is a `density="chip"` Seal instead, never a serif word.
+3. **The caption is always `--fs-caption` `--ink-faint`, one line, and is where the provenance sentence lives.** "real page inputs + derived terms", "typed, bounded edges", "not vector similarity", "current relationship islands" all survive here verbatim.
+
+Apply: `#memory`'s two strips merge into one four-cell strip — Nodes 152 / Relationships 647 / Components 4 / Density 0.056 — with the top strip's three facts ("3 private scopes", "152 nodes", "3 sources") becoming the captions of the cells they describe, resolving the current 152-vs-647 contradiction by showing each number exactly once. `#profiles`' RUNTIME/MINIMUM PROOF/SKILLS RESOLVED/PARENT strip and `#connection`'s PROVIDER RELAY/ENCRYPTED CACHE/BACKGROUND COMPUTE table adopt the same cell, with "Not observed"/"Not active"/"Local" rendering as chip Seals in the value slot. `#proof`'s three cards become one three-cell strip: Proof level / Session journal / TEE verification.
+- **Information fate.** Every number, label, caption and provenance sentence is kept verbatim — "real page inputs + derived terms", "typed, bounded edges", "not vector similarity", "production remote mode must fail closed" all move into the caption slot unchanged. `#memory`'s top strip is the one genuine removal: its three facts ("3 private scopes", "152 nodes", "3 sources") are re-presented as captions on the bottom strip's cells rather than shown twice with conflicting counts. State words that currently render as serif prose ("Not established", "Not observed", "Local") become Seal chips carrying the same word plus a tap-to-expand claim stack, so they gain detail rather than lose it.
+- **Files.** src/ui/metric-strip.tsx, src/ui/styles.css, src/ui/memory-view.css, src/ui/memory-view.tsx, src/ui/proof-view.tsx, src/ui/access-view.css
+
+### A 7-step 4px spacing grid and 3 radii, replacing 28 padding values and 11 radii
+- impact **medium** · effort **medium** · reclaims Chip padding 10→8px and gaps 7→8px net out; the visible gain is that 28 paddings become 7, so nothing is 1px off from its neighbour
+- **Problem.** 28 distinct padding values, 21 gaps, 11 radii. 79% of padding instances and 82% of gap instances are off the 4px grid that principle P8 declares. The most common padding is 10px and the most common gap is 7px. `--radius-control: 6px` and `--radius-panel: 10px` already exist as tokens, yet the dominant rendered radius is 5px (319 instances) — neither token — beside 3, 4, 6, 8, 50% and 999px.
+- **Design.** Add to `:root` and use exclusively:
+```css
+--sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px;
+--sp-5: 24px; --sp-6: 32px; --sp-7: 48px;
+--radius-chip: 999px; --radius-control: 6px; --radius-panel: 10px;
+```
+Where each step applies — one rule per step, so there is no judgement left to make:
+- `--sp-1` 4px — gap between an icon/Seal and its label; vertical padding inside a chip.
+- `--sp-2` 8px — horizontal padding inside a chip; vertical padding inside a control; gap between items in a dense list row. (Absorbs today's 6, 7, 9 and 10px.)
+- `--sp-3` 12px — horizontal padding inside a control; gap between sibling controls; padding of a compact card. (Absorbs 11, 13, 14px.)
+- `--sp-4` 16px — padding inside a card; gap between cards in a group. (Absorbs 15, 17, 18px.)
+- `--sp-5` 24px — gap between sections within a route body; the `gap` on the auto-fit grid from proposal 2. (Absorbs 22, 25, 26px.)
+- `--sp-6` 32px — the route body's inline padding, left and right. (Absorbs 34, 39px.)
+- `--sp-7` 48px — space above a route footer or between major regions.
+
+Radius, three values only: `--radius-chip` for Seal chips and dots (the only round things); `--radius-control` 6px for buttons, inputs, tabs and menu items; `--radius-panel` 10px for cards, popovers and dialogs. Delete every 3px, 4px, 5px, 8px and 50% radius; `50%` on `.pulse-dot`/`.companion-overview__dot` is superseded by the dot Seal.
+
+CI guard alongside the existing `density-contract.test.ts`: fail on any `padding`, `margin`, `gap`, `row-gap`, `column-gap` or `border-radius` literal in `src/ui/**.css` that is not a `var(--sp-*)` / `var(--radius-*)` token or `0`. This is the only way the grid survives; the existing tokens prove that convention alone does not hold.
+- **Information fate.** No information is touched — this is pure geometry. Card padding rises from 10–15px to a consistent 16px and chip padding falls from 10–11px to 8px, so dense objects get denser and containers get more breathing room, which is exactly the trade `docs/DESIGN_LANGUAGE.md` asks for ("generous breathing room around dense, operational information"). Nothing reflows out of view: the auto-fit grid in proposal 2 absorbs the width changes.
+- **Files.** src/ui/styles.css, src/ui/density-contract.test.ts, src/ui/css-variable-contract.test.ts
+
+### Reclaim the brass: 70% of accent usage currently encodes nothing
+- impact **high** · effort **small** · reclaims no vertical gain; the gain is that brass instances drop 347→~90 and the one brass call-to-action above the fold becomes unmissable
+- **Problem.** 347 brass-tinted element instances across 41 sites. The two largest consumers are `.nav-nested-marker` — the sidebar "↳" glyph — at 40 instances, and `.eyebrow` at 23. That is 63 of roughly 90 brass text sites, 70%, spent on ornament. Because of it, brass simultaneously means "you are here" (nav rail), "act here" (primary button, `.status-seal--action` "Connect a model"), "this is a heading ornament" (eyebrow) and "this line is indented" (↳). A separate offender: `rgb(158,158,255)` on "Get the extension ↗" (`#connection`) is the generic AI blue-purple that `docs/DESIGN_LANGUAGE.md` explicitly forbids, and it is the only link of its kind in the product.
+- **Design.** Write the accent contract into `docs/DESIGN_LANGUAGE.md` as four permitted uses and forbid the rest:
+
+**Brass (`--accent` #c19a58, 7.08:1) may only mean one of:**
+1. **You are here** — the active nav rail (3px left bar), the active tab underline (2px), the active menu item.
+2. **Act here** — primary button fill (`--accent-bright` #dfba72, 10.05:1, with `--ground` ink on top), and the `attention`/action Seal state.
+3. **Focus** — `--focus` outline, unchanged.
+4. **The mark** — the Airship seal in the topbar, which uses `--copper` #b8734f and stays.
+
+**Forbidden:** brass on any label, eyebrow, kicker, list marker, tree glyph, divider or decorative rule.
+
+Concrete changes:
+- `.nav-nested-marker` (`styles.css`) `color: var(--brass)` → `var(--ink-faint)`. Better: delete the "↳" character entirely and express nesting with the 12px indent and a 1px `--line` rail that is already there. −40 brass instances.
+- `.eyebrow` `color: var(--brass)` → `var(--ink-muted)`. In proposal 2 most eyebrows move into the ⓘ popover anyway, where they are a popover title and need no accent. −23 instances.
+- The five duplicate eyebrow implementations (`styles.css:867` `.eyebrow`, `sessions-view.css:42` `.session-library-eyebrow` which uses `--accent-bright` and 0.12em instead of 0.11em, `vault-view.css:31`, `local-lab-setup.css:25`, `local-device-vault-setup.css:53`) collapse to the one `.eyebrow`.
+- "Get the extension ↗" adopts `--accent` like every other link. Delete `rgb(158,158,255)`.
+
+Result: brass instances fall from 347 to roughly 90, and when brass appears the user can act on it or is standing on it. `#chat`'s topbar "Connect a model" pill — currently one brass thing among many — becomes the only brass object above the fold, which is precisely the one thing a disconnected user must do.
+- **Information fate.** Zero information change. Every eyebrow string, every nested nav label and the extension link text are unchanged; only their colour moves from `--accent` to `--ink-muted`/`--ink-faint`, both of which measure better than the 4.5:1 floor (7.39:1 and 5.44:1 on ground). The "↳" glyph is the one deletion, and it is genuinely redundant: nesting is already carried by a 12px indent, a 1px rail and the DOM's `aria-level`, so removing the character costs no information to any user or screen reader.
+- **Files.** src/ui/styles.css, src/ui/sessions-view.css, src/ui/vault-view.css, src/ui/local-lab-setup.css, src/ui/local-device-vault-setup.css, src/ui/connect/connect-surface.css, docs/DESIGN_LANGUAGE.md
+
+### Fix the three real contrast failures: hairlines at 1.26:1, disabled Send at 1.71:1, and the highest-volume text tier
+- impact **high** · effort **small** · reclaims none — this is a legibility and materiality fix, not a space fix
+- **Problem.** Body text is healthy and should be left alone (`--ink` 15.13:1, `--ink-muted` 7.39:1, `--accent` 7.08:1, `--v-caution` 8.23:1; only 3 of 129 unique text styles fail AA and two are a false positive). Three specific things fail. (a) `--line` measures **1.26:1** and `--line-strong` **1.55:1**, both far below WCAG 1.4.11's 3:1 for control boundaries — and these are the borders of nearly every card, input and tab, which is why the routes read as text floating on black. (b) Disabled controls use two ad-hoc opacities (.45, .48); the disabled Send button's glyph composites to **1.71:1**, and "Remove profile" is `--v-failed` at .45 → **1.91:1**, conflating disabled with danger. (c) `--ink-faint` #858d8a is the single highest-volume text colour (323 sampled instances) and the weakest at **4.73:1 on `--surface-raised`**; `--v-failed`, `--truth-remote` and `--copper` all sit at **4.24:1 on `--surface-raised`**, below AA.
+- **Design.** Four token edits in `styles.css` `:root`, each solved against a measured target:
+
+```css
+--line:         rgba(225, 217, 200, 0.105); /* 1.26:1 — KEEP, decorative dividers only */
+--line-control: rgba(225, 217, 200, 0.40);  /* 3.07:1 — NEW, every control boundary */
+--ink-faint:    #949c99;                    /* 6.59:1 ground / 5.72:1 raised (was 5.44 / 4.73) */
+--ink-disabled: #6b726f;                    /* 3.48:1 on --surface */
+--surface-disabled: #1a1f23;
+```
+
+Rules:
+- `--line` stays at 0.105 and is permitted **only** for decorative internal dividers, where 1.4.11 does not apply. Every `border` on a `button`, `input`, `select`, `textarea`, `[role="tab"]`, `[role="button"]` or card that is a click target switches to `--line-control`. This is one find-and-replace scoped by selector, and it is what will make the interface finally look built rather than sketched.
+- Delete every `opacity: .45` / `.48` on a disabled control. Replace with `:disabled, [aria-disabled="true"] { color: var(--ink-disabled); background: var(--surface-disabled); border-color: var(--line); cursor: not-allowed; }` — disabled state carried by explicit colour, never by transparency, so it composites predictably on every surface. The disabled Send glyph goes 1.71:1 → 3.48:1.
+- "Remove profile from new work" stops using `--v-failed` while disabled; danger colour is reserved for enabled destructive actions.
+- Forbid `--v-failed`, `--truth-remote` and `--copper` as *text* on `--surface-raised` (all 4.24:1). They remain legal as Seal stroke colours, where P2 already guarantees shape plus an adjacent word carries the meaning, and where 1.4.11's 3:1 applies rather than 4.5:1.
+
+Add these thresholds to the existing `css-variable-contract.test.ts` so they are release gates, matching the design language's statement that contrast is a release gate rather than theme polish.
+- **Information fate.** No information change whatsoever; four hex/alpha values move. Every string, number and state keeps its exact position and wording. The visible effect is that card and control edges become perceptible (1.26:1 → 3.07:1), disabled controls become readable instead of ghosted, and the 323 instances of the faintest text tier gain roughly 1.2 points of contrast. The 9.74px `<small>` on `#profiles` is separately raised to 11px by proposal 1.
+- **Files.** src/ui/styles.css, src/ui/css-variable-contract.test.ts, src/ui/platform-shell.css, docs/DESIGN_LANGUAGE.md
+
+### Replace Georgia and give the display serif exactly two jobs
+- impact **medium** · effort **small** · reclaims none directly; the serif's 13 ad-hoc application sites collapse to 2 defined roles
+- **Problem.** `--font-display` is `Georgia, "Times New Roman", serif`. The design language asks for "a high-contrast editorial serif only for brief display moments"; Georgia is the opposite — a low-contrast, wide, large-x-height face drawn in 1993 to survive 96dpi bitmaps. At 47px with `letter-spacing: -1.175px` it reads soft and generic, and its full-height lining figures make `#memory`'s "152" and "0.056" look like body copy rather than instrument readout. It is also applied by coin flip: it sets Proof's card titles but not Memory's, Account's CTA title but not Vault's H1, via 13 scattered `font-family: var(--font-display)` declarations and no shared heading class. `.boot-screen h1` re-types the stack inline instead of using the token.
+- **Design.** Two changes.
+
+**1. Change the face.** `--font-display: "Source Serif 4", "Spectral", Georgia, serif;` — a self-hosted subset (Latin, weights 600/700, ~28KB woff2), which is the only condition `docs/DESIGN_LANGUAGE.md` permits ("self-hosted subset fonts only if they beat system fallbacks under measured budgets"). Source Serif 4 has genuinely high stroke contrast, a tighter x-height, and — the reason it matters here — **optional tabular oldstyle figures**, so metric values align in a column and read as engraved instrument numerals rather than prose. Georgia stays in the stack as the fallback, so nothing blocks on the font: the build must not fail if the subset is absent. If the ~28KB budget is refused, the honest alternative is to drop the serif entirely and set displays in Inter at `--fw-title` with `-0.02em` tracking — a decorative serif that cannot be afforded is not worth a coin-flip application.
+
+**2. Give it exactly two jobs, written into `docs/DESIGN_LANGUAGE.md`:**
+- **Job A — the route title.** One per route, `--fs-display` 28px, via the single `.route-title` class from proposal 1. Nothing else on a route may be serif at display size.
+- **Job B — the metric value.** `--fs-title` 20px with `font-variant-numeric: tabular-nums oldstyle-nums`, via the `<Metric>` cell from proposal 5. This is where the serif does real work: it makes 152 / 647 / 4 / 0.056 scan as a set.
+
+**Forbidden everywhere else.** Delete `font-family: var(--font-display)` from `capabilities-view.css` (3 sites), `attestations-view.css`, `access-view.css`, `context-view.css`, `provider-fabric-panel.css`, `sources-view.css`, `terminal-view.css`, `workspace-view.css`, `platform-shell.css` (2 sites) and `chat/message-parts-view.css`. Card and section headings all become `--fs-title` `--fw-title` in `--font-body` — this is what ends the current situation where Proof's "Verification" is serif and Memory's "Results across private scopes" is not. The one deliberate exception is `.markdown h1–h6` in the transcript, where serif headings inside model output usefully distinguish the model's structure from Airship's chrome — keep that, and note it in the doc as the exception so it is not deleted by a later cleanup.
+- **Information fate.** No text changes. Every heading keeps its words; roughly 20 headings move from serif to sans at the same size, and two roles (route title, metric value) keep the serif and gain internal consistency. Vault's H1 moves *into* the serif for the first time, matching the other nine routes. Metric numbers gain tabular alignment they do not currently have. If the subset font is rejected on budget, the fallback is Georgia and the layout is byte-identical to today.
+- **Files.** src/ui/styles.css, src/ui/capabilities-view.css, src/ui/attestations-view.css, src/ui/access-view.css, src/ui/context-view.css, src/ui/provider-fabric-panel.css, src/ui/terminal-view.css, docs/DESIGN_LANGUAGE.md

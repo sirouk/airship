@@ -2,7 +2,14 @@
 
 ## Decision
 
-Airship treats ordinary S3-compatible object storage as the encrypted, authoritative substrate for workspace context. The browser does not download a whole vector database and does not depend on a continuously running retrieval service. It holds a small decrypted routing mirror in memory, selects a sparse set of context experts, range-fetches only their independently authenticated pages, scores them locally, and streams useful results into the active turn.
+Airship treats the selected encrypted `ObjectStore`—Google Drive by default,
+S3-compatible storage as an advanced adapter, or page memory while
+Ephemeral—as the authoritative substrate for workspace context. The browser
+does not download a whole vector database and does not depend on a continuously
+running retrieval service. It holds a small decrypted routing mirror in memory,
+selects a sparse set of context experts, range-fetches only their independently
+authenticated pages when the active adapter has passed its exact-range contract,
+scores them locally, and streams useful results into the active turn.
 
 This is a data mixture-of-experts, not a claim that a neural MoE is running in the browser. The gate routes over directory, Git, profile, task, source, recency, lexical, and semantic signals. Each expert owns a bounded partition of the context index.
 
@@ -17,7 +24,170 @@ This is a data mixture-of-experts, not a claim that a neural MoE is running in t
 7. Fetch full-precision vector tails or source chunks only for finalists, then optionally run a local cross-encoder or late-interaction reranker.
 8. Inject cited chunks into the turn and commit the mirror digest, query digest, exact object ranges, ETags, page digests, selected experts, and result digest to the conversation receipt.
 
-The current executable slice implements steps 1–6 and the retrieval commitment in `src/retrieval/`. It uses full vectors in encrypted JSON pages and a deterministic feature-hash embedding provider for testability. Those are bootstrap codecs, not the production quality target.
+The current executable slice implements steps 1–6 and the retrieval commitment
+in `src/retrieval/`. `FederatedTurnContextProvider` is the provider-neutral seam
+called by every model turn. It selects separately governed active-profile
+memory and workspace results, then seals a version-two context commitment. Each
+hit references a shared generation record containing source revision/digest,
+extractor, chunker, embedding provider/dimensions/posture, index format,
+persistence, session/profile/workspace scope, and generation digest. This avoids
+copying that metadata into every hit while retaining complete lineage.
+
+`VaultTurnContextProvider` implements the same seam for encrypted object shards.
+It routes a compact mirror, range-fetches only selected authenticated blocks,
+and seals the adapter, exact range contract, mirror/result digests, expert IDs,
+object/block IDs, offsets, lengths, ETags, plaintext digests, byte count, and
+completion state into the turn selection. When an encrypted Vault becomes the
+active runtime, the built-in application rebuilds the exact local generation
+and read-only resolves an existing routing mirror. A matching mirror activates
+the ranged provider behind the same federated turn seam; a missing, malformed,
+or stale mirror leaves the local generation active and exposes that fallback
+reason. Runtime adoption never publishes a shard. Publication is a separate
+operation whose API requires the literal `explicit-user-approved` policy, so a
+Vault connection or page reload cannot silently upload an index. The production
+Vault screen is the sole built-in caller: **Publish encrypted index** snapshots
+the current local generation, encrypts its derived expert shards, and advances
+the authenticated routing mirror. **Update encrypted index** performs the same
+explicit operation for a newer generation. The installed ranged provider is
+generation-fenced on every turn; if the workspace has changed since publication,
+the fresh on-device generation serves that turn until the user republishes.
+Neither publication nor provider replacement rewrites the active session
+manifest or its append-only journal.
+
+The bootstrap index still uses full vectors in encrypted JSON pages and a
+deterministic feature-hash embedding provider for testability. Those are
+bootstrap codecs, not the production quality target.
+
+## Turn history compression
+
+The session manifest copies authoritative provider-catalog context-window
+metadata when the session is created; Airship never guesses capacity from a
+model name or re-reads a mutable catalog while replaying an old conversation.
+Historical manifests without that optional pin retain full history. The trigger
+is configurable from 80–85% (82% in the current remote-client policy). It
+preserves recent complete turns and summarizes only boundaries ending at
+`turn.completed`, so tool-call/result pairs are never split.
+
+Remote sessions pin a tool-free inference-transport summarizer. It calls the
+already selected transport directly—not the agent loop—and records its adapter,
+provider, model, posture, request digest, response digest, and optional receipt
+ID in the summary commitment. Its input is exact journal-linked source records
+plus the previous bounded projection. Empty, oversized, malformed, tool-calling,
+or incomplete output fails validation. The pinned failure policy either retains
+full history or uses the deterministic extractive fallback; fallback events are
+explicitly labeled with the failed attempt and are never presented as
+model-intelligent summaries.
+
+Compression is iterative and append-only. Each `context.summary.updated` event
+stores only the newly covered summary delta plus exact journal sequence/digest
+anchors and the prior summary digest. Provider materialization substitutes one
+bounded digest-linked reference projection for the covered prefix; the raw
+journal remains authoritative, replayable, and audit-verifiable. Old source
+messages and prior summary bodies are not copied into each update. A malformed
+range, digest, or chain fails audit and is not trusted.
+
+The reference chain has higher tiers. When appending the next delta would push
+the materialized projection past its byte budget, the same commitment also
+carries a `compaction` record: a higher-tier body that replaces the oldest
+contiguous run of deltas, naming every summary digest it subsumes, the exact
+journal sequence range it covers, its own body digest, its tier level, and
+whether a summarizer or the deterministic extractive path produced it. That last
+label is no longer a bare self-assertion: a tier claiming `summarizer-port-v1`
+must carry summarizer provenance whose `responseDigest` is the tier's own
+`bodyDigest`, and an extractive tier must carry none, so the label cannot be
+moved in either direction without also producing provenance that commits to this
+exact body. The tier now gets the delta's other half too: during audit its
+provenance is cross-checked against the session-pinned summarizer adapter,
+provider, model and posture, so a fabricated-but-self-consistent tier provenance
+naming material this session never pinned fails replay. And when a configured
+summarizer is called for a tier and does not return an evidenced body, the
+commitment records a `compaction.attempt` — the summarizer id and whether the
+failure was `adapter-error` or `invalid-output` — exactly as `summarizerAttempt`
+does for the delta; an extractive tier under a summarizer policy without that
+record is refused rather than accepted as an ordinary extractive tier.
+`src/core/context-compaction-provenance.test.ts` drives each of those refusals
+against a real journal. Replay
+verifies that the named run is exactly the oldest contiguous prefix of the chain
+and that no earlier tier is left outside it, so a tier can never stand in for
+material it does not cover.
+Compaction re-summarizes those deltas instead of dropping them, and its input is
+the previous tier's body plus the deltas added since — never a re-read of the
+whole history. The recursion is real rather than theoretical: a compaction that
+subsumes a compaction commits level 2, and
+`src/core/context-compaction.test.ts` drives a real journal until the observed
+committed level sequence is exactly `[1, 2]`, then asserts that a tier relabelled
+one level higher or lower fails replay. The projection reports
+`omittedDeltaCount`; when the budget is exhausted anyway, the omission is stated
+in the projected text with the journal digests needed to find what was left out.
+The projection budget scales with the pinned context window (12% of the window
+in bytes, 48 KiB floor, 512 KiB ceiling) rather than a fixed 48 KiB.
+
+Both free-text bodies are bounded by the same pinned budget. Replay checks
+`summaryDelta` *and* `compaction.body` against the session-pinned
+`maxSummaryDeltaBytes` through `summaryBodiesWithinPolicy()` in
+`src/core/context-summary-projection.ts`, called from
+`summaryMatchesContextPolicy()` in `src/core/session-audit.ts`. Without the
+second half a tier body would be limited only by the canonicalizer's 64 KiB hard
+ceiling — several times a typical pinned budget — and would ride into every
+future prompt.
+
+The trigger's byte-per-token basis is calibrated from provider-reported
+`prompt_tokens` already recorded in the journal for this session, model and
+tokenizer: the ratio is re-derived from the prefix that actually produced each
+usage event, exponentially averaged over the last three samples, and clamped to
+[2.0, 6.0] because `prompt_tokens` is provider-controlled input feeding a
+client-side control decision. Until a usage event exists the estimate falls back
+to 3.6 bytes/token. The basis used is recorded in the commitment as
+`bytesPerToken` so a replay can see which basis produced `estimatedTokensBefore`.
+
+Compression runs at turn boundaries, so the tool loop inside a turn is bounded
+separately. Each step measures the projected request against a per-turn ceiling
+and gives the step's tool results the bytes that remain; an over-budget result is
+stored truncated with an explicit marker and `contextBudgetTruncated` metadata,
+so the turn survives and the transcript never claims the model saw more than it
+did. If in-loop growth still passes that ceiling, the turn fails with a specific,
+auditable message rather than a provider context-length error.
+
+The ceiling is the pinned window, except for a turn whose opening request is
+already over the window under the byte-per-token estimate: refusing that turn
+outright would destroy turns providers still accept, so it is granted a fixed
+2,048-token allowance above where it opened. One ceiling drives both the refusal
+and the tool-output budget deliberately. Measuring the budget against the window
+while measuring the refusal against the opening size handed such a turn zero
+bytes for its tool results, stored the result as nothing but its truncation
+marker, and then failed the turn for the marker's own bytes — the estimate-based
+refusal the step-0 check exists to avoid, one step later and lossier.
+
+This follows the useful Hermes pattern of iterative re-compression, protected
+recent context, and boundary-aware compaction. Airship's 80–85% policy is a
+product requirement, not a claim that it is Hermes' current default.
+
+### Measured reduction
+
+`src/core/context-compression-benchmark.test.ts` replays the shipped path over a
+corpus pinned inside that test file (three workload families — TypeScript-shaped
+code, markdown-shaped prose, JSON tool output — twelve turns each, 8,192-token
+window, deterministic extractive summarizer) and measures projected prompt bytes
+with the reference chain against the same history without it. Measured on corpus
+digest `sha256:7cHZr7feFeV8RSq0SxqdSWNk7sJywgkQ9cgfcYYKkJM`:
+
+| Family | Prompt-byte reduction |
+| --- | --- |
+| code-editing | 58.8% |
+| doc Q&A | 59.0% |
+| tool-output JSON | 50.9% |
+
+Those are the numbers the harness measured, not a universal ratio, and not the
+master prompt's unproven 60–78%. They use the deterministic extractive
+summarizer, so they are a floor rather than a best case. The corpus is pinned
+rather than read from live repository files precisely so the digest is a real
+anchor: an earlier version of this table was measured against live sources, and
+editing any of those sources silently invalidated it. The digest can now only
+move when the fixture moves, and then the table must be re-measured in the same
+change; a digest that no longer matches means the table above describes a
+different corpus and should be re-measured rather than trusted. No
+storage-reduction figure is published here: content-addressed chunk dedup and
+vault block reuse are not implemented, so there is nothing honest to measure yet.
 
 ## Cloud object layout
 
@@ -37,7 +207,18 @@ encrypted root pointer (small, mutable by CAS)
 
 Logical names are HMAC-derived opaque object IDs. A generation is immutable and content-addressed. A small root object advances through conditional writes (`If-Match`/ETag), so a crashed or competing client cannot silently replace a generation. Page descriptors live inside an authenticated encrypted manifest. Page AAD binds workspace epoch, namespace, opaque object, revision, block ID and index, byte offset, lengths, and plaintext digest.
 
-Whole-object AES-GCM is not used for large index objects because it defeats range reads. `src/storage/encrypted-segments.ts` provides the independently decryptable page format; `ObjectStore.getRange` enforces exact ranges and rejects a storage endpoint that ignores non-zero ranges.
+Whole-object AES-GCM is not used for large index objects because it defeats
+range reads. `src/storage/encrypted-segments.ts` provides the independently
+decryptable page format; `ObjectStore.getRange` enforces exact `206` ranges and
+rejects a storage endpoint that ignores or changes a requested range.
+
+Every adapter exposes a versioned capability record distinguishing in-process
+enforcement from live-provider evidence. The conformance probe returns a
+time-stamped result only after exact ranges, atomic create, and CAS have all
+passed. It does not turn one successful probe into a permanent provider claim.
+Google Drive additionally supports active-call resumable uploads for large
+immutable shards; S3 in this repository retries shard objects but does not claim
+multipart/resumable upload. No adapter persists a resume bearer capability.
 
 ## Routing mirror and experts
 
@@ -96,9 +277,13 @@ No dependency is adopted solely because its benchmark is impressive. Airship rec
 
 ## Privacy boundary
 
-The private default uses ordinary S3 objects containing opaque, encrypted pages. Managed vector APIs, including S3 Vectors, are optional non-E2EE adapters because the service must see embeddings and filter metadata to search them.
+The private default uses opaque, encrypted page objects in the selected Vault.
+Managed vector APIs, including S3 Vectors, are optional non-E2EE adapters because
+the service must see embeddings and filter metadata to search them.
 
-Encryption does not hide every access pattern. S3 can observe object identifiers, requested ranges, sizes, timing, and frequency. Mitigations are selectable because each costs bandwidth:
+Encryption does not hide every access pattern. Google Drive or S3 can observe
+object identifiers, requested ranges, sizes, timing, and frequency. Mitigations
+are selectable because each costs bandwidth:
 
 - fixed page classes and padded final pages;
 - fetch coalescing and bounded cover reads;
@@ -116,6 +301,16 @@ Source plaintext, embeddings, lexical terms, paths, profile instructions, and ro
 - Default expert fan-out: four, raised only when recall telemetry justifies it.
 - Page size classes: benchmark 64 KiB–1 MiB; avoid hundreds of tiny WAN requests.
 - All requests cancellable; stale directory/task queries are abandoned rather than completed in the background.
+- Turn selection is capped at eight hits and 32 KiB; the ordinary federated
+  policy uses six hits and 24 KiB.
+- Summary deltas default to 12 KiB (64 KiB hard maximum), and the materialized
+  digest-reference chain is capped at 12% of the pinned context window in bytes,
+  with a 48 KiB floor and a 512 KiB ceiling. Deltas that no longer fit are
+  re-compacted into a higher tier, not dropped. Airship writes tier bodies under
+  the same 12 KiB pinned budget, and replay re-checks that budget for the delta
+  and for every tier body, so a hostile journal cannot smuggle a tier up to the
+  64 KiB hard ceiling. The calibrated byte-per-token estimate and measured
+  reductions are workload evidence, not a universal ratio claim.
 - Recent writes are searchable before compaction.
 - An unavailable expert degrades recall and produces a visible receipt warning; it does not corrupt the session.
 
@@ -123,15 +318,18 @@ Source plaintext, embeddings, lexical terms, paths, profile instructions, and ro
 
 ## Required storage behavior
 
-The bucket or S3-compatible endpoint must support:
+Any remote Vault selected for streamed context must pass:
 
 - CORS for the Airship origin;
 - `GET`, `HEAD`, and conditional `PUT`;
 - request header `Range`;
 - exposed response headers `ETag`, `Content-Length`, `Content-Range`, and `Last-Modified`;
-- exact `206 Partial Content` behavior for non-zero ranges;
+- exact `206 Partial Content` behavior for every requested range;
 - short-lived least-privilege credentials or presigned capabilities;
 - versioning/lifecycle policies where the provider offers them.
 
-Airship tests range semantics during connection setup and refuses to label a store “streaming ready” when it silently returns whole objects.
-
+S3 deployments additionally require the listed CORS/exposed-header policy.
+Google Drive uses its authorized `files.get?alt=media` byte-range path and its
+own CORS/auth contract. Airship tests range semantics during connection setup
+and refuses to label a store “streaming ready” when it silently returns whole
+objects.

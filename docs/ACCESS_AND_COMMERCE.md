@@ -29,12 +29,15 @@ The user connects their own Chutes identity. Inference goes directly from the de
 
 If balance is insufficient, the agent turn becomes durably `awaiting_funding`, Airship opens the Chutes top-up or subscription flow, and the client rechecks Chutes on return. When funding is visible, the same idempotent turn resumes without losing work. Chutes currently offers pay-as-you-go top-ups and optional Plus/Pro plans on its [pricing page](https://chutes.ai/pricing).
 
-Chutes supports public applications (`public: true`) that exchange an
-authorization code with S256 PKCE and no client secret. Airship uses that flow
-directly from the registered browser origin, keeps access/refresh material in
-page memory, and rotates refresh tokens through the provider. A confidential
-registration still requires a secret and is therefore limited to the disclosed
-loopback development bridge; it must never be embedded in a static build.
+Chutes discovery advertises browser/native token authentication `none`, but a
+registration must actually be created or converted with that method; directory
+visibility (`public: true`) is unrelated. Airship uses the secretless flow
+directly from a registered production browser origin, keeps access/refresh
+material in page memory, and rotates refresh tokens through the provider. The
+currently deployed localhost registration is confidential, so local testing
+uses the disclosed same-origin process handler. Its secret must never be
+embedded in a static build or extension. Converting an existing registration
+invalidates its prior grants and requires fresh consent.
 
 Users may instead choose an in-memory `cpk_` API key. Airship never embeds a
 client secret or pooled inference key, and it does not silently fall back from

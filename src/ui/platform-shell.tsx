@@ -4,8 +4,16 @@ import type { SlashCommandDescriptor } from "../commands/types";
 import type { SessionListItem } from "../sessions/domain";
 import { CANONICAL_DESTINATIONS, SETTINGS_OVERLAY_ENTRY, type NavigationView } from "./navigation-model";
 import { Seal, type SealState } from "./seal";
+import { trapFocus } from "./focus-trap";
 import type { ApprovalMode } from "../approvals/modes";
 import { MenuSelect } from "./menu-select";
+import { isDeployableGoogleOAuthClientId } from "../storage/google-drive-configuration";
+import {
+  DEFAULT_TRANSCRIPT_OPERATIONS,
+  parseTranscriptOperationsMode,
+  setTranscriptOperationsMode,
+  type TranscriptOperationsMode,
+} from "./chat/transcript-operations";
 
 export type PaletteEntry = Readonly<{
   id: string;
@@ -214,39 +222,139 @@ export type PreferenceOverrides = Readonly<{
   corners: "subtle" | "square" | "rounded";
   bodyFont: "system-sans" | "system-serif";
   /**
-   * Durable-storage backend. Google Drive is the default user-owned encrypted
-   * transport; local MinIO remains a development adapter and ephemeral keeps
-   * everything in page memory.
+   * Durable-storage backend. A configured build may default to the user-owned
+   * Google Drive transport; Local Device is the safe deployable fallback,
+   * local MinIO remains a development adapter, and ephemeral stays page-only.
    */
-  vaultBackend: "google-drive" | "local-lab" | "ephemeral";
+  vaultBackend: "local-device" | "google-drive" | "local-lab" | "ephemeral";
   approvalMode: ApprovalMode;
+  /**
+   * Expert override for the transcript's tool rows. `summary` collapses a
+   * settled, wholly-completed run of four or more steps to its header;
+   * `rows` never collapses. Neither hides that a step occurred or which
+   * tool ran, and any failure or denial keeps the rows open in both.
+   */
+  transcriptOperations: TranscriptOperationsMode;
 }>;
 
 export type VaultBackend = PreferenceOverrides["vaultBackend"];
 
-export function resolveDefaultVaultBackend(value: string | undefined): PreferenceOverrides["vaultBackend"] {
-  return value === "local-lab" || value === "ephemeral" ? value : "google-drive";
+function availableVaultBackend(
+  value: unknown,
+  googleClientId?: string | null,
+): VaultBackend | undefined {
+  if (value === "google-drive") {
+    return isDeployableGoogleOAuthClientId(googleClientId) ? value : undefined;
+  }
+  return value === "local-device" || value === "local-lab" || value === "ephemeral"
+    ? value
+    : undefined;
+}
+
+export function resolveDefaultVaultBackend(
+  value: string | undefined,
+  googleClientId?: string | null,
+): PreferenceOverrides["vaultBackend"] {
+  return availableVaultBackend(value, googleClientId)
+    ?? (isDeployableGoogleOAuthClientId(googleClientId) ? "google-drive" : "local-device");
+}
+
+/**
+ * ── The Durability row ───────────────────────────────────────────────────
+ *
+ * Every other row in Preferences chooses a rendering. This one chooses a
+ * *destination for a person's data*, and it was printing that destination as
+ * though it were the state of the world: "Encrypted Google Drive ·
+ * cross-device", with no qualifier, while `#vault` two clicks away read
+ * "Disconnected | No vault claim | No cloud vault is configured." One fact, two
+ * surfaces, opposite answers — and the answer a person who never opens `#vault`
+ * would carry away is that their workspace is encrypted in Drive when nothing
+ * is attached.
+ *
+ * The fix is at the source rather than in either string: the row renders
+ * selection *plus* state, so a selection can no longer read as an adoption.
+ */
+/**
+ * Each destination, and what choosing it costs or buys, in one table.
+ *
+ * The consequence is the option's description rather than part of its label:
+ * the label is also the collapsed trigger, and "Encrypted Google Driv…"
+ * truncating with 210px of void beside it is what a four-word label buys.
+ */
+const DURABILITY: Readonly<Record<VaultBackend, readonly [destination: string, consequence: string]>> = Object.freeze({
+  "local-device": Object.freeze(["This device", "Encrypted here. Not on your other devices."] as const),
+  "google-drive": Object.freeze(["Google Drive", "Encrypted in your own Drive, on every device."] as const),
+  "local-lab": Object.freeze(["Local MinIO lab", "A development adapter, not a place to keep anything."] as const),
+  ephemeral: Object.freeze(["Page memory only", "Nothing survives closing this tab."] as const),
+});
+
+/** Every destination, in the order the row offers them. */
+export const VAULT_BACKENDS: readonly VaultBackend[] = Object.freeze(Object.keys(DURABILITY) as VaultBackend[]);
+
+/**
+ * Whether the selected destination is actually holding anything.
+ *
+ * `undefined` is the honest third arm and the default: a host that does not
+ * pass the vault's state has not established one, so the row states the
+ * destination alone and claims nothing about adoption. It can only under-claim,
+ * which is the only direction this row is allowed to be wrong in.
+ */
+export type DurabilityAdoption = "connected" | "not-connected" | undefined;
+
+export function durabilityOptionLabel(backend: VaultBackend, adoption: DurabilityAdoption): string {
+  const destination = DURABILITY[backend][0];
+  // Page memory has no adoption axis: it is the absence of a vault, and
+  // "Page memory only · not connected" would invent a failure out of a choice.
+  if (backend === "ephemeral" || adoption === undefined) return destination;
+  return `${destination} · ${adoption === "connected" ? "connected" : "not connected"}`;
+}
+
+/**
+ * The row's helper sentence, in the state the row is actually in.
+ *
+ * `Tool steps` already gets a sentence like this. This row needs one more,
+ * because it is the only value in the dialog that is a claim about the world.
+ */
+export function durabilityRowNote(adoption: DurabilityAdoption): string {
+  const purpose = "Where conversations survive a closed tab.";
+  if (adoption === "connected") return `${purpose} Vault holds it, and can detach it.`;
+  if (adoption === "not-connected") return `${purpose} Nothing is attached yet — set it up in Vault.`;
+  return `${purpose} Vault states what is attached.`;
 }
 
 export const DEFAULT_PREFERENCES: PreferenceOverrides = Object.freeze({
-  mode: "dark", typeScale: "default", density: "comfortable", corners: "subtle", bodyFont: "system-sans", vaultBackend: resolveDefaultVaultBackend(import.meta.env.VITE_AIRSHIP_DEFAULT_VAULT_PROVIDER), approvalMode: "ask-first",
+  mode: "dark", typeScale: "default", density: "comfortable", corners: "subtle", bodyFont: "system-sans", vaultBackend: resolveDefaultVaultBackend(import.meta.env.VITE_AIRSHIP_DEFAULT_VAULT_PROVIDER, import.meta.env.VITE_GOOGLE_CLIENT_ID), approvalMode: "ask-first", transcriptOperations: DEFAULT_TRANSCRIPT_OPERATIONS,
 });
 
 const PREFERENCE_STORAGE_KEY = "airship.display-preferences.v1";
 
-export function loadPreferenceOverrides(storage: Pick<Storage, "getItem"> | undefined = typeof localStorage === "undefined" ? undefined : localStorage): PreferenceOverrides {
+export function loadPreferenceOverrides(
+  storage: Pick<Storage, "getItem"> | undefined = typeof localStorage === "undefined" ? undefined : localStorage,
+  availability: Readonly<{
+    googleClientId?: string | null;
+    defaultVaultBackend?: VaultBackend;
+  }> = {},
+): PreferenceOverrides {
   if (!storage) return DEFAULT_PREFERENCES;
   try {
     const value = JSON.parse(storage.getItem(PREFERENCE_STORAGE_KEY) ?? "null") as Partial<PreferenceOverrides> | null;
     if (!value) return DEFAULT_PREFERENCES;
+    const googleClientId = "googleClientId" in availability
+      ? availability.googleClientId
+      : import.meta.env.VITE_GOOGLE_CLIENT_ID;
+    const availableDefault = resolveDefaultVaultBackend(
+      availability.defaultVaultBackend ?? DEFAULT_PREFERENCES.vaultBackend,
+      googleClientId,
+    );
     return Object.freeze({
       mode: value.mode === "light" ? "light" : "dark",
       typeScale: value.typeScale === "large" || value.typeScale === "x-large" ? value.typeScale : "default",
       density: value.density === "compact" ? "compact" : "comfortable",
       corners: value.corners === "square" || value.corners === "rounded" ? value.corners : "subtle",
       bodyFont: value.bodyFont === "system-serif" ? "system-serif" : "system-sans",
-      vaultBackend: value.vaultBackend === "ephemeral" || value.vaultBackend === "local-lab" ? value.vaultBackend : "google-drive",
+      vaultBackend: availableVaultBackend(value.vaultBackend, googleClientId) ?? availableDefault,
       approvalMode: value.approvalMode === "auto-approve" || value.approvalMode === "full-access" ? value.approvalMode : "ask-first",
+      transcriptOperations: parseTranscriptOperationsMode(value.transcriptOperations),
     });
   } catch { return DEFAULT_PREFERENCES; }
 }
@@ -262,13 +370,28 @@ export function applyPreferenceOverrides(value: PreferenceOverrides, root = docu
   root.dataset.corners = value.corners;
   root.dataset.bodyFont = value.bodyFont;
   root.style.colorScheme = value.mode;
+  // The transcript renderer sits below the prop tree that carries preferences,
+  // so applying one is also how it becomes live there.
+  setTranscriptOperationsMode(value.transcriptOperations);
 }
 
-export function PreferencesDialog({ open, value, onChange, onClose }: Readonly<{
+export function PreferencesDialog({ open, value, onChange, onClose, profileApproval, vaultProviderSwitching = false, vaultAdopted }: Readonly<{
   open: boolean;
   value: PreferenceOverrides;
   onChange(value: PreferenceOverrides): void;
   onClose(): void;
+  vaultProviderSwitching?: boolean;
+  /**
+   * Whether the selected backend is holding anything right now, read from the
+   * same vault snapshot `#vault` renders from. Optional because absence is the
+   * one safe default: without it the Durability row states the destination and
+   * asserts nothing about adoption.
+   */
+  vaultAdopted?: boolean;
+  profileApproval?: Readonly<{
+    mode: ApprovalMode;
+    onManage(): void;
+  }>;
 }>) {
   const dialog = useRef<HTMLDivElement>(null);
   const restore = useRef<HTMLElement>();
@@ -280,18 +403,52 @@ export function PreferencesDialog({ open, value, onChange, onClose }: Readonly<{
   }, [open]);
   if (!open) return null;
   const update = <K extends keyof PreferenceOverrides>(key: K, next: PreferenceOverrides[K]) => onChange(Object.freeze({ ...value, [key]: next }));
+  /*
+   * Page memory is not an adoption question: choosing it *is* the state, and
+   * a host that reports no vault state leaves this `undefined` so the row can
+   * only under-claim.
+   */
+  const adoption: DurabilityAdoption = value.vaultBackend === "ephemeral" || vaultAdopted === undefined
+    ? undefined
+    : vaultAdopted ? "connected" : "not-connected";
   return (
     <div class="platform-scrim" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <div ref={dialog} class="preferences-dialog" role="dialog" aria-modal="true" aria-labelledby="preferences-title" tabIndex={-1} onKeyDown={(event) => { if (event.key === "Escape") onClose(); else if (event.key === "Tab") trapFocus(event, dialog.current); }}>
-        <header><div><span class="eyebrow">Runtime controls</span><h2 id="preferences-title">Preferences</h2><p>Change the interface, browser-agent policy, and durability mode without editing an agent profile.</p></div><button type="button" onClick={onClose}>Done</button></header>
-        <PreferenceSelect label="Agent approvals" value={value.approvalMode} options={[["ask-first","Ask First · prompt before effects"],["auto-approve","Auto Approve · model safety review"],["full-access","Full Access · bounded browser sandbox"]]} onChange={(next) => update("approvalMode", next as PreferenceOverrides["approvalMode"])} />
-        <p><strong>{approvalModeLabel(value.approvalMode)}.</strong> {approvalModeDescription(value.approvalMode)}</p>
+        <header><div><span class="eyebrow">Runtime controls</span><h2 id="preferences-title">Preferences</h2><p>Change presentation and durability. Agent behavior remains pinned to its profile.</p></div><button type="button" onClick={onClose}>Done</button></header>
+        {profileApproval ? <div class="profile-approval-preference">
+          <div><span>Active profile approvals</span><strong>{approvalModeLabel(profileApproval.mode)}</strong></div>
+          <button type="button" onClick={profileApproval.onManage}>Manage in Profiles</button>
+          <p>{approvalModeDescription(profileApproval.mode)} A saved change creates a new profile revision and takes effect in a new pinned conversation.</p>
+        </div> : <>
+          <PreferenceSelect label="Legacy session approvals" value={value.approvalMode} options={[["ask-first","Ask First · prompt before effects"],["auto-approve","Auto Approve · model safety review"],["full-access","Full Access · bounded browser sandbox"]]} onChange={(next) => update("approvalMode", next as PreferenceOverrides["approvalMode"])} />
+          <p><strong>{approvalModeLabel(value.approvalMode)}.</strong> {approvalModeDescription(value.approvalMode)}</p>
+        </>}
         <PreferenceSelect label="Color mode" value={value.mode} options={[['dark','Dark instrument'],['light','Paper']]} onChange={(next) => update("mode", next as PreferenceOverrides["mode"])} />
         <PreferenceSelect label="Type scale" value={value.typeScale} options={[['default','Default'],['large','Large'],['x-large','Extra large']]} onChange={(next) => update("typeScale", next as PreferenceOverrides["typeScale"])} />
         <PreferenceSelect label="Density" value={value.density} options={[['comfortable','Comfortable'],['compact','Compact']]} onChange={(next) => update("density", next as PreferenceOverrides["density"])} />
         <PreferenceSelect label="Corners" value={value.corners} options={[['subtle','Subtle'],['square','Square'],['rounded','Rounded']]} onChange={(next) => update("corners", next as PreferenceOverrides["corners"])} />
+        <PreferenceSelect label="Tool steps" value={value.transcriptOperations} options={[['summary','Summary'],['rows','Every step']]} onChange={(next) => update("transcriptOperations", next as PreferenceOverrides["transcriptOperations"])} />
+        <p>A folded run still states how many steps ran, which tools ran them and how they ended. A failed or denied step is never folded.</p>
         <PreferenceSelect label="Body font" value={value.bodyFont} options={[['system-sans','System sans'],['system-serif','System serif']]} onChange={(next) => update("bodyFont", next as PreferenceOverrides["bodyFont"])} />
-        <PreferenceSelect label="Durability" value={value.vaultBackend} options={[['google-drive','Encrypted Google Drive · recommended'],['local-lab','Encrypted S3 · local MinIO lab'],['ephemeral','Ephemeral · page memory only']]} onChange={(next) => update("vaultBackend", next as PreferenceOverrides["vaultBackend"])} />
+        {/*
+          Under its own divider, so a claim about where a person's data lives is
+          not read as the ninth in a run of presentation rows.
+        */}
+        <p class="preferences-dialog__divider">Storage</p>
+        <PreferenceSelect
+          label="Durability"
+          // The last row in a scrolling dialog. Down is where the room is not.
+          placement="up"
+          value={value.vaultBackend}
+          disabled={vaultProviderSwitching}
+          options={VAULT_BACKENDS.map((backend) => [
+            backend,
+            durabilityOptionLabel(backend, backend === value.vaultBackend ? adoption : vaultAdopted === undefined ? undefined : "not-connected"),
+            DURABILITY[backend][1],
+          ] as const)}
+          onChange={(next) => update("vaultBackend", next as PreferenceOverrides["vaultBackend"])}
+        />
+        <p>{durabilityRowNote(adoption)}</p>
         <button class="preferences-dialog__reset" type="button" onClick={() => onChange(DEFAULT_PREFERENCES)}>Reset preferences</button>
       </div>
     </div>
@@ -310,11 +467,60 @@ export function approvalModeDescription(mode: ApprovalMode): string {
   return "Read-only actions proceed automatically; write, network, execute, and identity actions require one-time approval.";
 }
 
-function PreferenceSelect({ label, value, options, onChange }: Readonly<{ label: string; value: string; options: readonly (readonly [string,string])[]; onChange(value: string): void }>) {
-  return <div class="preference-row"><span>{label}</span><MenuSelect className="preference-menu" ariaLabel={label} value={value} options={options.map(([id, name]) => ({ value: id, label: name }))} onChange={onChange} /></div>;
+/**
+ * Placement is a prop, and it is not cosmetic.
+ *
+ * The sheet used to be forced downward by a stylesheet override while
+ * `MenuSelect` still believed it was placed upward, so neither the component's
+ * fit measurement nor its own geometry applied: the last row in a scrolling
+ * dialog opened a list that ran 25px past the bottom of the window and was
+ * clipped by the dialog's own scroll box 78px before that. `down` is right for
+ * a row with the whole dialog beneath it and measures the room it has; a row in
+ * the lower third opens upward instead, where the room actually is.
+ */
+function PreferenceSelect({ label, value, options, onChange, disabled = false, placement = "down" }: Readonly<{ label: string; value: string; options: readonly (readonly [string, string] | readonly [string, string, string])[]; onChange(value: string): void; disabled?: boolean; placement?: "up" | "down" }>) {
+  return <div class="preference-row"><span>{label}</span><MenuSelect className="preference-menu" ariaLabel={label} value={value} disabled={disabled} placement={placement} options={options.map(([id, name, description]) => ({ value: id, label: name, ...(description ? { description } : {}) }))} onChange={onChange} /></div>;
 }
 
-export type TrustAxis = Readonly<{ id: "local" | "vault" | "e2ee" | "attestation"; label: string; state: SealState; detail: string; view: NavigationView }>;
+/**
+ * Which band owns a claim, and therefore which band may state it as text.
+ *
+ * `tab` — true of this browser tab regardless of which conversation is open:
+ * where the kernel runs, whether a vault backend has been adopted, whether the
+ * page is online. `conversation` — true only of the open conversation: its
+ * connection posture and the endpoint evidence collected under it.
+ *
+ * The distinction is not decorative. All four axes used to render in the topbar
+ * as four pills, so a turn whose endpoint evidence could not be fetched printed
+ * "Evidence unavailable" in the topbar *and* "Evidence unavailable · this
+ * session" in the session bar 40px below it — one fact, two bands, two
+ * sentences. Tagging the scope lets the topbar speak for the tab and reference
+ * the conversation band for the rest, without any axis ceasing to exist.
+ */
+export type TrustAxisScope = "tab" | "conversation";
+
+export type TrustAxis = Readonly<{ id: "local" | "vault" | "e2ee" | "attestation"; label: string; state: SealState; detail: string; view: NavigationView; scope: TrustAxisScope }>;
+
+/**
+ * Where a scope's claims are stated at rest, named so a reference can say it.
+ *
+ * A collapse that does not say what it contains is a burial, so every surface
+ * that stops printing a claim points at the band that still does.
+ */
+export const TRUST_SCOPE_BANDS: Readonly<Record<TrustAxisScope, Readonly<{ heading: string; restingHome: string }>>> = Object.freeze({
+  tab: Object.freeze({
+    heading: "This browser tab",
+    restingHome: "Stated at rest in the topbar chip.",
+  }),
+  conversation: Object.freeze({
+    heading: "This conversation",
+    restingHome: "Stated at rest in the session bar, on the conversation these claims belong to.",
+  }),
+});
+
+export function trustAxesInScope(axes: readonly TrustAxis[], scope: TrustAxisScope): readonly TrustAxis[] {
+  return axes.filter((axis) => axis.scope === scope);
+}
 
 const TRUST_STATE_SEVERITY: Readonly<Record<SealState, number>> = Object.freeze({
   failed: 7, attention: 6, stale: 5, asserted: 4, none: 3, checking: 2, verified: 1,
@@ -327,11 +533,48 @@ export function worstTrustAxis(axes: readonly TrustAxis[]): TrustAxis | undefine
   undefined);
 }
 
+/**
+ * One claim, rendered in full: seal, verbatim label, verbatim sentence, and the
+ * route that owns the record. This is the body of every level-1 disclosure in
+ * the product — the runtime trust sheet and the chat session-status popover
+ * render the same rows from different scopes, so a claim reads identically
+ * wherever the user reaches it.
+ */
+export type ClaimRow = Readonly<{
+  id: string;
+  state: SealState;
+  label: string;
+  detail: string;
+  /** Absent only for a claim with no route of its own; the row then states it without a target. */
+  action?: Readonly<{ label: string; onSelect(): void }>;
+}>;
+
+export function ClaimRows({ rows }: Readonly<{ rows: readonly ClaimRow[] }>) {
+  return <div class="claim-rows">{rows.map((row) => {
+    const body = <><Seal state={row.state} label={row.label} detail={row.detail} /><small>{row.detail}</small>{row.action ? <span aria-hidden="true">→</span> : null}</>;
+    return row.action
+      ? <button key={row.id} type="button" onClick={row.action.onSelect}>{body}</button>
+      : <p key={row.id}>{body}</p>;
+  })}</div>;
+}
+
 export function TrustPostureSheet({ open, axes, onClose, onNavigate }: Readonly<{ open: boolean; axes: readonly TrustAxis[]; onClose(): void; onNavigate(view: NavigationView): void }>) {
   const dialog = useRef<HTMLDivElement>(null);
   useEffect(() => { if (open) requestAnimationFrame(() => dialog.current?.focus({ preventScroll: true })); }, [open]);
   if (!open) return null;
-  return <div class="platform-scrim trust-sheet-scrim" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><div ref={dialog} class="trust-sheet" role="dialog" aria-modal="true" aria-labelledby="trust-sheet-title" tabIndex={-1} onKeyDown={(event) => { if (event.key === "Escape") onClose(); else if (event.key === "Tab") trapFocus(event, dialog.current); }}><header><div><span class="eyebrow">Four-axis posture</span><h2 id="trust-sheet-title">Runtime trust</h2></div><button type="button" onClick={onClose}>Close</button></header><p>Each axis is independently scoped. The weakest claim is shown in the topbar.</p><div>{axes.map((axis) => <button key={axis.id} type="button" onClick={() => { onClose(); onNavigate(axis.view); }}><Seal state={axis.state} label={axis.label} detail={axis.detail} /><small>{axis.detail}</small><span aria-hidden="true">→</span></button>)}</div></div></div>;
+  /*
+   * Grouped by scope, not merged. Every axis still renders its own row with its
+   * own verbatim label, sentence and destination — the devil's advocate pass
+   * rejected replacing the four-axis posture with a claim count, and this sheet
+   * is where the independent-axis property is guaranteed. The headings are the
+   * only addition, and they exist because the topbar chip now speaks for two of
+   * these axes and defers to the session bar for the other two: a reader who
+   * follows the deferral has to be able to see which group they arrived at.
+   */
+  const groups = (["tab", "conversation"] as const)
+    .map((scope) => ({ scope, band: TRUST_SCOPE_BANDS[scope], axes: trustAxesInScope(axes, scope) }))
+    .filter((group) => group.axes.length > 0);
+  return <div class="platform-scrim trust-sheet-scrim" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><div ref={dialog} class="trust-sheet" role="dialog" aria-modal="true" aria-labelledby="trust-sheet-title" tabIndex={-1} onKeyDown={(event) => { if (event.key === "Escape") onClose(); else if (event.key === "Tab") trapFocus(event, dialog.current); }}><header><div><span class="eyebrow">Four-axis posture</span><h2 id="trust-sheet-title">Runtime trust</h2></div><button type="button" onClick={onClose}>Close</button></header><p>Each axis is independently scoped. The weakest claim in this browser tab is shown in the topbar; the conversation's own claims are shown in its session bar.</p>{groups.map((group) => <section key={group.scope} class="trust-sheet__scope" aria-label={group.band.heading}><h3 class="eyebrow">{group.band.heading}</h3><p class="trust-sheet__where">{group.band.restingHome}</p><ClaimRows rows={group.axes.map((axis) => Object.freeze({ id: axis.id, state: axis.state, label: axis.label, detail: axis.detail, action: Object.freeze({ label: axis.label, onSelect: () => { onClose(); onNavigate(axis.view); } }) }))} /></section>)}</div></div>;
 }
 
 const TRUST_TABS: readonly Readonly<{ view: NavigationView; label: string }>[] = Object.freeze([
@@ -352,7 +595,7 @@ export function TrustHubTabs({ view, onNavigate }: Readonly<{ view: NavigationVi
     });
     return () => cancelAnimationFrame(frame);
   }, [view]);
-  return <nav ref={tabs} class="trust-hub-tabs" aria-label="Trust hub, five horizontally scrollable views">{TRUST_TABS.map((tab) => <button key={tab.view} type="button" class={view === tab.view ? "is-active" : ""} aria-current={view === tab.view ? "page" : undefined} onClick={() => onNavigate(tab.view)}>{tab.label}</button>)}</nav>;
+  return <nav ref={tabs} class="trust-hub-tabs" aria-label="Trust hub, four horizontally scrollable views">{TRUST_TABS.map((tab) => <button key={tab.view} type="button" class={view === tab.view ? "is-active" : ""} aria-current={view === tab.view ? "page" : undefined} onClick={() => onNavigate(tab.view)}>{tab.label}</button>)}</nav>;
 }
 
 type ViewBoundaryProps = { name: string; onRecover(): void; children: ComponentChildren };
@@ -406,9 +649,14 @@ export function useVisualViewport(root = typeof document === "undefined" ? undef
 export function usePwaUpdate(): Readonly<{ updateReady: boolean; reload(): void }> {
   const [registration, setRegistration] = useState<ServiceWorkerRegistration>();
   const [updateReady, setUpdateReady] = useState(false);
+  const reloadRequested = useRef(false);
+  const userInteracted = useRef(false);
   useEffect(() => {
     if (!("serviceWorker" in navigator)) return;
     let current = true;
+    const markInteraction = (event: Event) => { if (event.isTrusted) userInteracted.current = true; };
+    const interactionEvents = ["pointerdown", "keydown", "beforeinput", "drop"] as const;
+    interactionEvents.forEach((type) => window.addEventListener(type, markInteraction, true));
     const watch = (candidate: ServiceWorkerRegistration) => {
       if (!current) return;
       setRegistration(candidate);
@@ -421,16 +669,26 @@ export function usePwaUpdate(): Readonly<{ updateReady: boolean; reload(): void 
       });
     };
     void navigator.serviceWorker.getRegistration().then((candidate) => candidate && watch(candidate));
-    const controllerChange = () => window.location.reload();
+    const controllerChange = () => {
+      // The first static-host takeover must establish COOP/COEP, but never
+      // interrupt work a person has already started. A page that observed a
+      // trusted input gesture keeps running and offers the explicit reload.
+      if (!reloadRequested.current && userInteracted.current) setUpdateReady(true);
+      else window.location.reload();
+    };
     navigator.serviceWorker.addEventListener("controllerchange", controllerChange);
-    return () => { current = false; navigator.serviceWorker.removeEventListener("controllerchange", controllerChange); };
+    return () => {
+      current = false;
+      interactionEvents.forEach((type) => window.removeEventListener(type, markInteraction, true));
+      navigator.serviceWorker.removeEventListener("controllerchange", controllerChange);
+    };
   }, []);
-  return Object.freeze({ updateReady, reload() { if (registration?.waiting) registration.waiting.postMessage({ type: "SKIP_WAITING" }); else window.location.reload(); } });
+  return Object.freeze({ updateReady, reload() { reloadRequested.current = true; if (registration?.waiting) registration.waiting.postMessage({ type: "SKIP_WAITING" }); else window.location.reload(); } });
 }
 
 export function PwaUpdateBanner({ updateReady, onReload }: Readonly<{ updateReady: boolean; onReload(): void }>) {
   if (!updateReady) return null;
-  return <div class="pwa-update" role="status"><span><strong>New version available</strong><small>The current shell stays active until you choose to reload.</small></span><button type="button" onClick={onReload}>Reload Airship</button></div>;
+  return <div class="pwa-update" role="status"><span><strong>Runtime update ready</strong><small>Your current work stays active until you choose to reload.</small></span><button type="button" onClick={onReload}>Reload Airship</button></div>;
 }
 
 export function filterPaletteEntries(entries: readonly PaletteEntry[], query: string): readonly PaletteEntry[] {
@@ -447,12 +705,4 @@ function shortId(id: string): string { return id.length > 12 ? `${id.slice(0, 8)
 function safeId(id: string): string { return id.replace(/[^a-z0-9_-]/giu, "-"); }
 function isTypingTarget(target: EventTarget | null): boolean {
   return target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/u.test(target.tagName));
-}
-function trapFocus(event: KeyboardEvent, container: HTMLElement | null): void {
-  if (!container) return;
-  const focusable = [...container.querySelectorAll<HTMLElement>('button:not([disabled]),input:not([disabled]),select:not([disabled]),a[href],[tabindex]:not([tabindex="-1"])')];
-  if (!focusable.length) { event.preventDefault(); container.focus(); return; }
-  const first = focusable[0]!; const last = focusable.at(-1)!;
-  if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
-  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
 }

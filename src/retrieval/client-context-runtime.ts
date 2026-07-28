@@ -1,12 +1,16 @@
 import {
   ClientContextEngine,
   type ClientContextEngineOptions,
+  type ClientContextSchedulingPolicy,
   type ClientContextEngineState,
   type ClientContextGeneration,
+  type ClientContextGenerationExport,
   type ClientContextSearchOptions,
   type ClientContextSearchResult,
 } from "../indexing/client-context-engine";
+import { getBrowserCapabilityRegistry } from "../capabilities/browser-runtime";
 import { sealContextSelection, type CanonicalContextHit, type CanonicalContextSelection } from "../core/context-selection";
+import type { TurnContextRequest } from "../core/context-selection";
 import { sha256 } from "../core/hash";
 import type { WorkspaceEntry, WorkspacePort } from "../workspace/contracts";
 import { HashEmbeddingProvider } from "../indexing/hash-embeddings";
@@ -48,7 +52,12 @@ export class ClientContextRuntime {
     const embeddings = engineOptions.embeddings ?? createDefaultEmbeddingProvider(engineOptions.dimensions);
     this.embeddings = embeddings;
     if (embeddings instanceof SwitchableEmbeddingProvider) this.switchable = embeddings;
-    this.engine = new ClientContextEngine({ workspace, ...engineOptions, embeddings });
+    this.engine = new ClientContextEngine({
+      workspace,
+      ...engineOptions,
+      embeddings,
+      scheduling: engineOptions.scheduling ?? browserContextScheduling,
+    });
   }
 
   get embeddingProviderId(): string { return this.embeddings!.id; }
@@ -70,6 +79,7 @@ export class ClientContextRuntime {
   }
 
   getState(): ClientContextEngineState { return this.engine.getState(); }
+  exportActiveGeneration(): ClientContextGenerationExport { return this.engine.exportActiveGeneration(); }
   subscribe(listener: (state: ClientContextEngineState) => void): () => void { return this.engine.subscribe(listener); }
   cancelSearch(reason?: unknown): void { this.engine.cancelSearch(reason); }
   updateWorkspace(entries: readonly WorkspaceEntry[]): Promise<ClientContextGeneration> { return this.engine.updateWorkspace(entries); }
@@ -100,14 +110,27 @@ export class ClientContextRuntime {
     return this.engine.search(query, options);
   }
 
+  async selectForTurn(query: string, request: TurnContextRequest): Promise<CanonicalContextSelection>;
   async selectForTurn(
     query: string,
     signal?: AbortSignal,
-    limits: Readonly<{ maxHits?: number; maxBytes?: number }> = {},
+    limits?: Readonly<{ maxHits?: number; maxBytes?: number }>,
+  ): Promise<CanonicalContextSelection>;
+  async selectForTurn(
+    query: string,
+    requestOrSignal?: TurnContextRequest | AbortSignal,
+    requestedLimits: Readonly<{ maxHits?: number; maxBytes?: number }> = {},
   ): Promise<CanonicalContextSelection> {
+    const request = isTurnContextRequest(requestOrSignal) ? requestOrSignal : undefined;
+    const signal = request ? request.signal : requestOrSignal as AbortSignal | undefined;
+    const limits = request ? { maxHits: request.maxHits, maxBytes: request.maxBytes } : requestedLimits;
     const maxHits = boundedInteger(limits.maxHits ?? DEFAULT_TURN_HITS, 1, 8);
     const maxBytes = boundedInteger(limits.maxBytes ?? DEFAULT_TURN_BYTES, 1, 32 * 1024);
     const result = await this.search(query.slice(0, 8_192), { limit: maxHits, signal });
+    const generation = this.engine.getState().generation;
+    if (!generation || generation.lineage.generationDigest !== result.generationDigest) {
+      throw new Error("Context lineage changed before the turn selection was sealed.");
+    }
     const hits: CanonicalContextHit[] = [];
     let selectedBytes = 0;
     let truncated = result.hits.length > maxHits;
@@ -128,11 +151,14 @@ export class ClientContextRuntime {
         score: hit.score,
         text,
         textDigest: await sha256(text),
+        corpus: "workspace",
+        sourceId: hit.path,
+        lineageRef: generation.lineage.generationDigest,
       }));
       if (text !== hit.text) break;
     }
     return sealContextSelection({
-      version: 1,
+      version: 2,
       queryDigest: result.queryDigest,
       generationDigest: result.generationDigest,
       workspaceSnapshotDigest: result.workspaceSnapshotDigest,
@@ -142,6 +168,25 @@ export class ClientContextRuntime {
       selectedBytes,
       truncated,
       hits: Object.freeze(hits),
+      lineage: Object.freeze({
+        retriever: "airship-workspace-turn-context-v1",
+        scope: Object.freeze({}),
+        generations: Object.freeze([Object.freeze({
+          id: generation.lineage.generationDigest,
+          corpus: "workspace",
+          sourceRevision: generation.workspaceSnapshotDigest,
+          sourceDigest: generation.workspaceSnapshotDigest,
+          extractor: generation.lineage.extractor,
+          chunker: `${generation.lineage.chunker};max=${generation.lineage.maxChunkCharacters};overlap=${generation.lineage.overlapCharacters}`,
+          embedding: Object.freeze({
+            provider: generation.lineage.embeddingProvider,
+            dimensions: generation.lineage.embeddingDimensions,
+            posture: generation.lineage.embeddingPosture,
+          }),
+          indexFormat: generation.lineage.indexFormat,
+          persistence: generation.lineage.persistence,
+        })]),
+      }),
     });
   }
 
@@ -186,12 +231,30 @@ export class ClientContextRuntime {
   }
 }
 
+function isTurnContextRequest(value: TurnContextRequest | AbortSignal | undefined): value is TurnContextRequest {
+  return Boolean(value) && typeof value === "object" && "sessionId" in value;
+}
+
 function createDefaultEmbeddingProvider(dimensions?: number) {
   // Custom low-dimensional providers remain deterministic for unit tests and
   // embeddings that are not compatible with the pinned 384d semantic model.
   return dimensions && dimensions !== 384
     ? new HashEmbeddingProvider(dimensions)
     : new SwitchableEmbeddingProvider(384);
+}
+
+function browserContextScheduling(): ClientContextSchedulingPolicy {
+  const policy = getBrowserCapabilityRegistry().snapshot()?.scheduling;
+  if (!policy) {
+    // Startup remains responsive before the asynchronous probe completes. A
+    // later generation re-reads the registry and can safely widen its lanes.
+    return Object.freeze({ embeddingBatchSize: 4, maxIndexingConcurrency: 1, yieldEveryMs: 8 });
+  }
+  return Object.freeze({
+    embeddingBatchSize: policy.embeddingBatchSize,
+    maxIndexingConcurrency: policy.maxIndexingConcurrency,
+    yieldEveryMs: policy.yieldEveryMs,
+  });
 }
 
 export function getClientContextRuntime(

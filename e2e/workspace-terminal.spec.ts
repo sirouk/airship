@@ -12,7 +12,17 @@ async function openEphemeralTerminal(page: Page): Promise<void> {
   })));
   await page.goto("/#terminal");
   await expect(page.getByRole("heading", { name: "Terminal", level: 1 })).toBeVisible();
-  await expect(page.getByText("This is not your device shell", { exact: false })).toBeVisible();
+  const setup = page.locator("details.terminal-route__setup");
+  const boundary = page.getByText("This is not your device shell", { exact: false });
+  if (await setup.locator("summary").isVisible()) {
+    await expect(setup.locator("summary")).toContainText("Browser Node shell");
+    await setup.locator("summary").click();
+    await expect(boundary).toBeVisible();
+    await setup.locator("summary").click();
+    await expect(boundary).toBeHidden();
+  } else {
+    await expect(boundary).toBeVisible();
+  }
 }
 
 test("desktop terminal manages page-local tabs without claiming host Bash", async ({ page }, testInfo) => {

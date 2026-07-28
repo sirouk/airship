@@ -277,6 +277,46 @@ describe("ChutesAttestationEvidenceClient", () => {
     });
   });
 
+  it("promotes a bound GPU batch only when an independent NVIDIA verifier completes", async () => {
+    const quote = await buildQuote(NONCE, E2E_PUBLIC_KEY);
+    const binding = await sha256Hex(`${NONCE}${E2E_PUBLIC_KEY}`);
+    const gpu = boundGpuEvidence(binding);
+    const verify = vi.fn(async () => ({
+      status: "verified" as const,
+      summary: "NVIDIA signed EAT, nonce, RIM, revocation, and confidential mode passed.",
+      allDevicesVerified: true as const,
+      confidentialComputeVerified: true as const,
+      bindingVerified: true as const,
+      policyDigest: "sha256:nvidia-policy",
+    }));
+    const client = authenticatedClient({
+      fetch: vi.fn(async () => jsonResponse({
+        ...evidenceBody(quote),
+        gpu_evidence: [gpu],
+      })) as typeof fetch,
+      verifierPorts: {
+        nvidia: { id: "nvidia-signed-eat", version: "1", verify },
+      },
+    });
+
+    const record = await client.get({
+      instanceId: INSTANCE_ID,
+      e2ePublicKey: E2E_PUBLIC_KEY,
+      includePublishedPolicy: false,
+    });
+
+    expect(verify).toHaveBeenCalledWith(expect.objectContaining({
+      instanceId: INSTANCE_ID,
+      expectedBindingDigestHex: binding,
+      gpuEvidence: [gpu],
+    }), expect.any(AbortSignal));
+    expect(record.claims.gpuTee).toMatchObject({
+      state: "verified",
+      verifier: "nvidia-signed-eat@1",
+    });
+    expect(record.warnings.join(" ")).toContain("complete GPU verdict");
+  });
+
   it("rejects a quote that does not match any current published runtime policy", async () => {
     const quote = await buildQuote(NONCE, E2E_PUBLIC_KEY, MEASUREMENTS);
     const different = { ...MEASUREMENTS, rtmr3: "66".repeat(48) };
@@ -356,6 +396,67 @@ describe("ChutesAttestationEvidenceClient", () => {
     controller.abort();
 
     await expect(acquisition).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("bounds a verifier that ignores cancellation instead of hanging evidence acquisition", async () => {
+    const quote = await buildQuote(NONCE, E2E_PUBLIC_KEY);
+    let markVerifierStarted!: () => void;
+    const verifierStarted = new Promise<void>((resolve) => { markVerifierStarted = resolve; });
+    const verifier = vi.fn(async () => {
+      markVerifierStarted();
+      return await new Promise<never>(() => undefined);
+    });
+    const client = authenticatedClient({
+      timeoutMs: 50,
+      fetch: vi.fn(async () => jsonResponse(evidenceBody(quote))) as typeof fetch,
+      verifierPorts: { dcap: { id: "hung-qvl", version: "1", verify: verifier } },
+    });
+    const acquisition = client.get({
+      instanceId: INSTANCE_ID,
+      e2ePublicKey: E2E_PUBLIC_KEY,
+      includePublishedPolicy: false,
+    });
+    await verifierStarted;
+    expect(verifier).toHaveBeenCalledOnce();
+
+    await expect(acquisition).rejects.toMatchObject({
+      code: "timeout",
+      message: "Chutes attestation evidence verification timed out.",
+    });
+  });
+
+  it("bounds an evidence fetch implementation that ignores cancellation", async () => {
+    const client = authenticatedClient({
+      timeoutMs: 25,
+      fetch: vi.fn(async () => await new Promise<Response>(() => undefined)) as typeof fetch,
+    });
+
+    await expect(client.get({
+      instanceId: INSTANCE_ID,
+      e2ePublicKey: E2E_PUBLIC_KEY,
+      includePublishedPolicy: false,
+    })).rejects.toMatchObject({
+      code: "timeout",
+      message: "Chutes attestation evidence request timed out.",
+    });
+  });
+
+  it("bounds an evidence response body that stops making progress", async () => {
+    const client = authenticatedClient({
+      timeoutMs: 25,
+      fetch: vi.fn(async () => new Response(new ReadableStream<Uint8Array>({
+        start() { /* deliberately never enqueue or close */ },
+      }), { headers: { "content-type": "application/json" } })) as typeof fetch,
+    });
+
+    await expect(client.get({
+      instanceId: INSTANCE_ID,
+      e2ePublicKey: E2E_PUBLIC_KEY,
+      includePublishedPolicy: false,
+    })).rejects.toMatchObject({
+      code: "timeout",
+      message: "Chutes attestation evidence request timed out.",
+    });
   });
 
   it("deduplicates a subject, isolates caller abort, and serves only fresh memory evidence", async () => {
@@ -848,6 +949,17 @@ function evidenceBodyWithMarker(quote: string, marker: string) {
   return {
     ...evidenceBody(quote),
     gpu_evidence: [{ arch: "HOPPER", evidence: marker }],
+  };
+}
+
+function boundGpuEvidence(binding: string) {
+  const evidence = new Uint8Array(87);
+  evidence.set([0x11, 0xe0, 0x01, 0xff]);
+  evidence.set(hexToBytes(binding), 4);
+  return {
+    arch: "BLACKWELL",
+    certificate: CERTIFICATE,
+    evidence: bytesToBase64(evidence),
   };
 }
 

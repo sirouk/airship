@@ -105,7 +105,27 @@ creation, immediate visibility, exact range size/ETag, special-key injectivity,
 requested-prefix isolation, empty-prefix listing, missing/stale CAS behavior,
 a two-writer CAS race with exactly one winner, and visibility of the winning
 root. It returns the keys it creates because the narrow runtime store does not
-include deletion.
+include deletion. A caller whose store also implements the optional
+`ReclaimableObjectStore` may sweep those keys afterwards — `VaultCoordinator`
+does, and reports only the removals the provider confirmed. Every other caller
+must still configure provider expiry or clean them out-of-band.
+
+Every adapter also exposes a provider-neutral, immutable capability record for
+range limits, conditional-write intent, upload mode, and interruption
+recovery. That record describes code paths; it is not evidence that a selected
+deployment honors them. Only the live conformance result promotes exact range,
+conditional create, and CAS to `verified`. Google Drive advertises
+`resumable-active-call`; S3 advertises retry of an immutable shard because its
+multipart-resume contract is not implemented here. Neither adapter claims a
+persisted upload session, partial-object encryption, or cross-refresh resume.
+
+The optional local accelerator is outside provider conformance. Conformance
+runs directly against Drive/S3 before the wrapper is installed, so an OPFS or
+IndexedDB hit can never manufacture provider evidence. Once ready, only
+protocol-declared immutable ciphertext families may be read from the cache;
+mutable heads, list, conditional create, and CAS continue through the tested
+provider. The exact boundary is documented in
+[CLIENT_STORAGE_ACCELERATION.md](CLIENT_STORAGE_ACCELERATION.md).
 
 [`EncryptedObjectJournalBackend`](../src/storage/encrypted-object-journal.ts)
 is the first consumer of that contract. It proves the ordering requirement in

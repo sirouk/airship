@@ -1,101 +1,570 @@
-.workspace-workbench { min-width: 0; }
-.workspace-heading { display: flex; align-items: end; justify-content: space-between; gap: 1rem; }
-.workspace-heading > div { min-width: 0; }
-.workbench-shell { display: grid; grid-template-columns: minmax(15rem, 21rem) minmax(0, 1fr); min-height: min(70vh, 720px); overflow: hidden; border: 1px solid var(--line-strong); border-radius: var(--radius-panel); background: var(--surface); box-shadow: 0 12px 35px rgba(0,0,0,.12); }
-.workbench-activity { min-width: 0; border-right: 1px solid var(--line); background: color-mix(in srgb, var(--surface-soft) 80%, transparent); }
-.workbench-mode-tabs { display: grid; grid-template-columns: 1fr 1fr; min-height: 42px; border-bottom: 1px solid var(--line); }
-.workbench-mode-tabs button { display: flex; align-items: center; justify-content: center; gap: .42rem; border: 0; border-bottom: 2px solid transparent; color: var(--ink-faint); background: transparent; font-size: var(--fs-micro); cursor: pointer; }
-.workbench-mode-tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); background: color-mix(in srgb, var(--accent) 6%, transparent); }
-.workbench-mode-tabs b { min-width: 1.15rem; padding: .05rem .25rem; border-radius: 2rem; color: var(--ink-muted); background: var(--surface-raised); font: 11px/1.5 var(--font-mono); }
-.workbench-section-heading { display: flex; align-items: center; justify-content: space-between; min-height: 34px; padding: 0 .62rem; color: var(--ink-faint); font: 11px/1 var(--font-mono); letter-spacing: .08em; }
-.workbench-section-heading button { width: 26px; height: 26px; border: 0; color: var(--ink-muted); background: transparent; font-size: 18px; cursor: pointer; }
-.workspace-tree { position: relative; height: 432px; overflow: auto; contain: strict; }
+/*
+ * The workbench: a rail that fills its height, a code column that outranks the
+ * file list, and a file strip that is on screen instead of 59px below the fold.
+ */
+
+.workspace-workbench {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+}
+
+/*
+ * `clamp(15rem, 26%, 22rem)` replaces `minmax(15rem, 21rem)`, which handed the
+ * rail 357px of a 693px iPad workbench and left 301px of actual code — 18% of
+ * the tablet viewport, with the file list outranking the file. 26% of that same
+ * workbench is 180px, and the splitter beside it lets a reader disagree.
+ */
+.workbench-shell {
+  display: grid;
+  grid-template-columns: clamp(15rem, var(--workbench-rail, 26%), 22rem) 6px minmax(0, 1fr);
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.workbench-activity {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  border-right: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface-soft) 80%, transparent);
+}
+
+/* A keyboard-operable separator: ←/→ nudge, Home/End go to the two limits.
+   `--line-control` rather than `--line`: this is a control boundary, and
+   WCAG 1.4.11 wants 3:1 for one, not the 1.26:1 a decorative divider gets. */
+.workbench-splitter {
+  cursor: col-resize;
+  background: var(--line-control);
+  touch-action: none;
+}
+
+.workbench-splitter:hover {
+  background: var(--accent);
+}
+
+.workbench-splitter:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+  background: var(--accent);
+}
+
+/*
+ * A 6px separator cannot be a 44px touch target and must not pretend to be
+ * one, so on a coarse pointer it is not offered at all: the clamp above is the
+ * whole fix on a tablet, and every fact the rail holds is reachable without it.
+ */
+@media (pointer: coarse) {
+  .workbench-shell {
+    grid-template-columns: clamp(15rem, var(--workbench-rail, 26%), 22rem) minmax(0, 1fr);
+  }
+
+  .workbench-splitter {
+    display: none;
+  }
+}
+
+.tabs.workbench-mode-tabs {
+  flex: 0 0 auto;
+  padding: 0 var(--sp-2);
+}
+
+/*
+ * The one place the tab ramp steps down, and why: this strip lives inside a
+ * 240px column. At `--fs-lead` "Source Control" plus its change count does not
+ * fit, so the count — the number that tells you there is uncommitted work —
+ * disappears into the overflow menu on every tablet. A legible 15px label that
+ * keeps the count visible beats a 17px one that hides it.
+ */
+.tabs.workbench-mode-tabs .tabs__tab-button {
+  padding: 0 var(--sp-1);
+  font-size: var(--fs-body);
+}
+
+/*
+ * The rail header no longer restates WORKSPACE: the route title, the Explorer
+ * tab 40px above and the tree's own `aria-label="Workspace files"` all say it.
+ * The row spends its width on the two things the tree had neither of — a way
+ * to find a file, and a creation control that is not a bare 26x26 glyph.
+ */
+.workbench-section-heading {
+  display: grid;
+  gap: var(--sp-2);
+  align-items: center;
+  min-height: 36px;
+  padding: var(--sp-1) var(--sp-2);
+}
+
+/*
+ * The creation row. `New folder` shares it with `New file` and with the file
+ * count, so both affordances are named at rest without the count buying a line
+ * of its own. It wraps rather than truncating: a rail dragged to its 12%
+ * minimum must not be able to hide either verb.
+ */
+.workspace-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-2);
+  align-items: center;
+  padding: 0 var(--sp-2) var(--sp-1);
+}
+
+.workspace-actions .workspace-filter-count {
+  flex: 1 1 auto;
+  padding: 0;
+}
+
+.workspace-filter {
+  min-width: 0;
+  min-height: 30px;
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--line-control);
+  border-radius: var(--radius-control);
+  color: var(--ink);
+  background: var(--surface);
+  font-size: var(--fs-caption);
+}
+
+.workspace-new {
+  display: inline-flex;
+  gap: var(--sp-1);
+  align-items: center;
+  min-height: 30px;
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--line-control);
+  border-radius: var(--radius-control);
+  color: var(--ink-muted);
+  background: var(--surface);
+  cursor: pointer;
+  font-size: var(--fs-caption);
+  white-space: nowrap;
+}
+
+.workspace-new:hover {
+  color: var(--ink);
+}
+
+/* The filtered state states its own cost, so it cannot read as an empty tree. */
+.workspace-filter-count {
+  margin: 0;
+  padding: 0 var(--sp-2) var(--sp-1);
+  color: var(--ink-faint);
+  font-size: var(--fs-micro);
+  font-variant-numeric: tabular-nums;
+}
+
+/*
+ * The tree fills the rail it is given. It used to be `height: 432px` inside a
+ * 628px desktop and 718px tablet rail, so 53% of a bordered panel was dead
+ * space; the virtualization window is now measured from this box.
+ */
+.workspace-tree {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  contain: strict;
+}
+
 .tree-row-wrap { position: relative; height: 34px; }
 .tree-row { display: grid; grid-template-columns: 12px 18px minmax(0,1fr) auto; align-items: center; gap: 3px; width: 100%; height: 34px; padding-right: 2rem; border: 0; color: var(--ink-muted); background: transparent; text-align: left; cursor: default; }
 .tree-row:hover, .tree-row.active { color: var(--ink); background: color-mix(in srgb, var(--accent) 9%, transparent); }
 .tree-row.drop-target { box-shadow: inset 2px 0 var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
 .tree-row:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
 .tree-row > span:nth-of-type(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tree-row small { color: var(--ink-faint); font: 11px var(--font-mono); }
-.tree-chevron { text-align: center; color: var(--ink-faint); font-size: 15px; }
+.tree-row small { color: var(--ink-faint); font: var(--fs-micro) var(--font-mono); }
+.tree-chevron { text-align: center; color: var(--ink-faint); font-size: var(--fs-meta); }
 .tree-overflow { position: absolute; top: 4px; right: 3px; width: 28px; height: 26px; padding: 0; border: 0; opacity: 0; pointer-events: none; color: var(--ink-muted); background: color-mix(in srgb, var(--surface-raised) 92%, transparent); cursor: pointer; }
 .tree-row-wrap:hover .tree-overflow, .tree-overflow:focus-visible { opacity: 1; pointer-events: auto; }
-.workbench-editor { display: flex; min-width: 0; min-height: 0; flex-direction: column; background: color-mix(in srgb, var(--ground) 65%, var(--surface)); }
-.editor-tabs { display: flex; min-height: 38px; overflow-x: auto; border-bottom: 1px solid var(--line); background: var(--surface-soft); scrollbar-width: thin; }
-.editor-tabs > div { display: flex; flex: 0 0 auto; align-items: stretch; border-right: 1px solid var(--line); border-top: 2px solid transparent; }
-.editor-tabs > div.active { border-top-color: var(--accent); background: var(--surface); }
-.editor-tabs button { display: flex; align-items: center; gap: .38rem; padding: 0 .65rem; border: 0; color: var(--ink-muted); background: transparent; font-size: var(--fs-micro); cursor: pointer; }
-.editor-tabs > div > button:last-child { padding: 0 .5rem; color: var(--ink-faint); font-size: 17px; }
-.editor-tabs b { color: var(--accent); font-size: 11px; transform: scale(.72); }
-.editor-toolbar { display: flex; align-items: center; justify-content: space-between; gap: .8rem; min-height: 42px; padding: .35rem .7rem; border-bottom: 1px solid var(--line); color: var(--ink-muted); font: 11px/1.3 var(--font-mono); }
-.editor-toolbar > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.editor-toolbar > div { display: flex; flex: 0 0 auto; align-items: center; gap: .65rem; }
-.editor-toolbar button { min-height: 29px; padding: 0 .72rem; }
-.code-editor { box-sizing: border-box; width: 100%; min-height: 0; flex: 1 1 24rem; resize: none; padding: 1rem 1.15rem 2rem; border: 0; border-radius: 0; outline: 0; color: color-mix(in srgb, var(--ink) 92%, white); background: transparent; caret-color: var(--accent); font: 12px/1.72 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; tab-size: 2; white-space: pre; overflow: auto; }
+
+/*
+ * Row actions were revealed on hover, or below 760px. A tablet is neither: it
+ * has no hover and it is 834px wide, so every per-file action was unreachable
+ * there. Reveal on the absence of a hover, not on a width.
+ */
+@media (pointer: coarse) {
+  .tree-row { padding-right: 3rem; }
+
+  .tree-overflow {
+    top: 0;
+    width: 44px;
+    height: 44px;
+    opacity: 1;
+    pointer-events: auto;
+    background: transparent;
+  }
+
+  .tree-overflow:active, .tree-overflow:focus-visible { background: var(--surface-raised); }
+}
+
+.workbench-editor {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  background: color-mix(in srgb, var(--ground) 65%, var(--surface));
+}
+
+/* The document strip owns its own row; only the code between them scrolls. */
+.tabs.editor-tabs {
+  flex: 0 0 auto;
+  padding: var(--sp-1) var(--sp-2) 0;
+  background: var(--surface-soft);
+}
+
+/*
+ * The overflow control is the only way to reach a tab the strip is cutting
+ * off, so it may not be the thing that gets cut off. Measured at 9 open tabs,
+ * where the flex row shrank it past the viewport edge.
+ */
+.tabs.editor-tabs .tabs__overflow {
+  flex: 0 0 auto;
+}
+
+.code-editor-frame { display: flex; flex: 1 1 auto; min-height: 0; min-width: 0; }
+/* The gutter must share the textarea's exact metrics or the numbers drift out
+   of register as the file scrolls. Keep the font/line-height/padding paired. */
+.code-gutter { box-sizing: border-box; flex: 0 0 auto; margin: 0; padding: 1rem .55rem 2rem .8rem; border-right: 1px solid var(--line); color: var(--ink-faint); background: var(--surface-soft); font: var(--fs-caption)/1.72 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; text-align: right; overflow: hidden; user-select: none; -webkit-user-select: none; }
+.code-editor { box-sizing: border-box; width: 100%; min-height: 0; flex: 1 1 auto; resize: none; padding: 1rem 1.15rem 2rem; border: 0; border-radius: 0; outline: 0; color: color-mix(in srgb, var(--ink) 92%, white); background: transparent; caret-color: var(--accent); font: var(--fs-caption)/1.72 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; tab-size: 2; white-space: pre; overflow: auto; }
+/* Soft wrap is a mode the user owns, defaulted by width in `defaultEditorWrap`
+   and persisted with the open tabs. `anywhere` because the thing that overflows
+   a 390px pane is usually one unbroken URL or path. */
+.code-editor[data-wrap="on"] { white-space: pre-wrap; overflow-wrap: anywhere; }
 .code-editor:focus { box-shadow: inset 2px 0 var(--accent); }
-.editor-status { display: flex; justify-content: space-between; min-height: 25px; padding: 0 .7rem; border-top: 1px solid var(--line); color: var(--ink-faint); font: 11px/25px var(--font-mono); }
-.workbench-empty { display: flex; flex: 1; flex-direction: column; align-items: center; justify-content: center; gap: .5rem; color: var(--ink-faint); }
-.workbench-empty strong { color: var(--ink-muted); }
-.workbench-notice { margin-bottom: .55rem; padding: .48rem .7rem; border: 1px solid color-mix(in srgb, var(--v-ready) 25%, var(--line)); border-radius: var(--radius-control); color: var(--ink-muted); background: color-mix(in srgb, var(--v-ready) 5%, var(--surface)); font-size: var(--fs-micro); }
-.workbench-notice.error { border-color: color-mix(in srgb, var(--danger) 35%, var(--line)); color: var(--danger); }
+.workspace-binary-preview { display: grid; flex: 1 1 auto; place-content: center; justify-items: center; gap: .55rem; padding: clamp(1.5rem, 6vw, 4rem); color: var(--ink-faint); text-align: center; }
+.workspace-binary-preview strong { color: var(--ink); font: var(--fw-strong) var(--fs-body)/1.3 var(--font-body); }
+.workspace-binary-preview span { max-width: 34rem; color: var(--ink-muted); font-size: var(--fs-meta); line-height: 1.55; }
+
+/*
+ * One strip replaces a 50px toolbar and a 26px footer that asserted the same
+ * file state twice. Nothing here is ever `display: none`: the revision hash and
+ * the byte size that the old `.editor-toolbar small` rule deleted below 760px
+ * wrap onto a second line instead of disappearing.
+ */
+.editor-strip {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-3);
+  align-items: center;
+  min-height: 32px;
+  padding: var(--sp-1) var(--sp-3);
+  border-top: 1px solid var(--line);
+  color: var(--ink-muted);
+  background: var(--surface-soft);
+  font-size: var(--fs-caption);
+}
+
+.editor-strip__path {
+  overflow: hidden;
+  /* Does not grow: the leftover width belongs to the controls group's
+     `margin-left: auto`, so the strip stays one row until it genuinely cannot.
+     With `flex-grow: 1` the path ate the slack and pushed Save onto line two. */
+  flex: 0 1 8rem;
+  min-width: 0;
+  color: var(--ink-muted);
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.editor-strip__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-3);
+  color: var(--ink-faint);
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+}
+
+/*
+ * Wrap is a state, not a command, so it is a toggle that reads its own state
+ * through `aria-pressed` rather than a button whose label flips between "Wrap"
+ * and "Unwrap" — the label that never tells you which one you are in.
+ */
+.editor-strip__wrap {
+  min-height: 30px;
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--line-control);
+  border-radius: var(--radius-control);
+  color: var(--ink-muted);
+  background: var(--surface);
+  cursor: pointer;
+  font-size: var(--fs-micro);
+}
+
+.editor-strip__wrap[aria-pressed="true"] {
+  color: var(--ink);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.editor-strip__controls {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+  margin-left: auto;
+}
+
+.editor-strip__save {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+}
+
+.editor-strip__save button {
+  min-height: 30px;
+  padding: 0 var(--sp-3);
+}
+
+/*
+ * A brass "Save" beside a status reading "Saved" is the accent contract
+ * broken: brass means "act here", and there is nothing to act on. Disabled is
+ * carried by explicit colour rather than transparency so it composites
+ * predictably.
+ */
+.editor-strip__save button:disabled {
+  border-color: var(--line-control);
+  color: var(--ink-disabled);
+  background: var(--surface-disabled);
+  cursor: not-allowed;
+}
+
+.editor-strip__save kbd {
+  color: var(--ink-faint);
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+}
+
+/*
+ * The touch floor follows the finger, not the viewport. Every rule below was
+ * previously scoped to `max-width: 760px`, which shipped 27-36px targets to
+ * every tablet — a device with no hover and no keyboard.
+ */
+@media (pointer: coarse) {
+  .editor-strip__save button,
+  .editor-strip__wrap,
+  .workspace-filter,
+  .workspace-new,
+  .workbench-context button,
+  .workbench-notice.notice > button,
+  .workspace-scm button,
+  .workspace-scm textarea,
+  .move-targets button {
+    min-height: 44px;
+  }
+
+  .workbench-section-heading { min-height: 52px; }
+  .scm-row > div button { width: 44px; height: 44px; }
+}
+
+/*
+ * 464,000 dead pixels on desktop became the route's orientation surface. Both
+ * shipped sentences stay verbatim; the route header's paragraph lands here
+ * rather than being burned into every populated session's chrome.
+ */
+.workbench-empty {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: var(--sp-2);
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-5);
+  color: var(--ink-faint);
+  text-align: center;
+}
+
+.workbench-empty strong { color: var(--ink); font-size: var(--fs-title); }
+.workbench-empty > span { max-width: 44ch; color: var(--ink-muted); font-size: var(--fs-meta); }
+
+.workbench-empty__files {
+  display: grid;
+  gap: var(--sp-1);
+  width: min(26rem, 100%);
+  margin-top: var(--sp-2);
+}
+
+.workbench-empty__files button {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: var(--sp-2);
+  align-items: center;
+  min-height: 40px;
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--line-control);
+  border-radius: var(--radius-control);
+  color: var(--ink-muted);
+  background: var(--surface);
+  cursor: pointer;
+  font-size: var(--fs-caption);
+  text-align: left;
+}
+
+.workbench-empty__files button:hover { color: var(--ink); }
+.workbench-empty__files button > span:nth-of-type(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workbench-empty__files small { color: var(--ink-faint); font-family: var(--font-mono); font-size: var(--fs-micro); }
+
+.workbench-empty__actions {
+  display: flex;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-top: var(--sp-2);
+}
+
+.workbench-empty__actions button { min-height: 40px; padding: 0 var(--sp-3); }
+
+.workbench-empty__note {
+  max-width: 52ch;
+  margin: var(--sp-4) 0 0;
+  color: var(--ink-faint);
+  font-size: var(--fs-micro);
+  line-height: 1.5;
+}
+
+/*
+ * A completion sentence is worth reading; it is not worth 40px of permanent
+ * layout that pushes the workbench down and never gives the space back. The
+ * notice is a toast over the workbench — no shift — and it keeps the shared
+ * `.notice` recipe's seven states.
+ */
+.workbench-notice.notice {
+  position: absolute;
+  z-index: 5;
+  bottom: var(--sp-4);
+  left: var(--sp-4);
+  max-width: min(34rem, calc(100% - 2 * var(--sp-4)));
+  background: var(--surface-raised);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, .38);
+}
+
+.workbench-notice.notice > button {
+  min-height: 30px;
+  margin-left: auto;
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--line-control);
+  border-radius: var(--radius-control);
+  color: var(--ink-muted);
+  background: transparent;
+  cursor: pointer;
+  font-size: var(--fs-caption);
+}
+
+.workbench-notice.error { color: var(--ink); }
+
 .workspace-boundary { padding: .5rem .75rem; border-bottom: 1px solid var(--line); color: var(--ink-faint); background: var(--surface-soft); font: var(--fs-micro)/1.4 var(--font-mono); }
 .workspace-boundary.attention { color: var(--v-caution); }
 .workbench-context { position: fixed; z-index: 100; display: grid; min-width: 12rem; padding: .35rem; border: 1px solid var(--line-strong); border-radius: var(--radius-control); background: var(--surface-raised); box-shadow: 0 18px 55px rgba(0,0,0,.4); }
 .workbench-context button { min-height: 34px; border: 0; color: var(--ink); background: transparent; text-align: left; cursor: pointer; }
 .workbench-context button:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
 .workbench-context .danger, .workbench-dialog .danger { color: var(--danger); }
-.workbench-dialog-scrim { position: fixed; z-index: 110; inset: 0; display: grid; place-items: center; padding: 1rem; background: rgba(4,7,8,.72); backdrop-filter: blur(4px); }
+
+/* Replaces a "Close" row that duplicated a binding the menu already had. */
+.workbench-context__hint {
+  margin: var(--sp-1) 0 0;
+  padding: 0 var(--sp-2) var(--sp-1);
+  color: var(--ink-faint);
+  font-size: var(--fs-micro);
+}
+
+.workbench-dialog-scrim { position: fixed; z-index: 110; inset: 0; display: grid; place-items: center; padding: 1rem; background: rgba(4,7,8,.72); }
 .workbench-dialog { width: min(28rem, 100%); max-height: min(34rem, 86dvh); overflow: auto; padding: 1rem; border: 1px solid var(--line-strong); border-radius: var(--radius-panel); background: var(--surface-raised); box-shadow: 0 24px 80px rgba(0,0,0,.45); }
-.workbench-dialog h2 { margin: 0 0 1rem; font-family: var(--font-display); }
+/* The serif has exactly one job in this product and it is `.route-title`. */
+.workbench-dialog h2 { margin: 0 0 var(--sp-2); font-size: var(--fs-title); }
 .workbench-dialog label { display: grid; gap: .45rem; color: var(--ink-muted); font-size: var(--fs-micro); }
+.workbench-dialog label small { color: var(--ink-faint); font-size: var(--fs-micro); line-height: 1.5; }
 .workbench-dialog input, .workbench-dialog textarea { width: 100%; }
 .workbench-dialog > div:last-child { display: flex; justify-content: flex-end; gap: .5rem; margin-top: 1rem; }
+
+/* The dialog never said which file it was about. Now it does, twice. */
+.workbench-dialog__where {
+  margin: 0 0 var(--sp-2);
+  color: var(--ink-faint);
+  font-size: var(--fs-micro);
+}
+
+/*
+ * A folder delete names the files it is about to remove. Bounded, because the
+ * dialog has to stay readable on a 300-file folder — the overflow row states
+ * how many it is not printing rather than trailing off.
+ */
+.workbench-dialog__paths {
+  max-height: 12rem;
+  margin: var(--sp-2) 0;
+  padding: var(--sp-1) var(--sp-2);
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  color: var(--ink-muted);
+  font: var(--fs-micro)/1.7 var(--font-mono);
+  list-style: none;
+}
+
+.workbench-dialog__paths-more { color: var(--ink-faint); font-family: var(--font-body); font-style: italic; }
+
+.workbench-dialog__caveat { margin: 0; color: var(--ink-faint); font-size: var(--fs-micro); line-height: 1.5; }
+
+/* Specific enough to beat `.workbench-dialog label small`, which is the muted
+   caption colour every other line in this dialog uses. */
+.workbench-dialog label small.workbench-dialog__error { color: var(--danger); }
+
 .move-targets { display: grid; max-height: 19rem; overflow: auto; border: 1px solid var(--line); }
-.move-targets button { min-height: 36px; padding: 0 .7rem; border: 0; border-bottom: 1px solid var(--line); color: var(--ink-muted); background: transparent; text-align: left; }
+/* 44px at every width: the ≤760px block raised `.workspace-scm button` and
+   silently left the move destinations at 36px. */
+.move-targets button { min-height: 44px; padding: 0 .7rem; border: 0; border-bottom: 1px solid var(--line); color: var(--ink-muted); background: transparent; text-align: left; }
 .move-targets button[aria-selected="true"] { color: var(--ink); background: color-mix(in srgb, var(--accent) 10%, transparent); }
-.workspace-scm { display: grid; gap: .55rem; padding: .65rem; }
-.workspace-scm label { display: grid; gap: .3rem; color: var(--ink-faint); font: 11px var(--font-mono); }
+.workspace-scm { display: grid; gap: .55rem; padding: .65rem; overflow: auto; }
+.workspace-scm label { display: grid; gap: .3rem; color: var(--ink-faint); font: var(--fs-micro) var(--font-mono); }
 .workspace-scm select { min-width: 0; height: 32px; color: var(--ink); background: var(--surface); border: 1px solid var(--line); }
 .scm-summary { display: flex; justify-content: space-between; color: var(--ink-muted); font-size: var(--fs-micro); }
 .scm-toolbar { display: grid; grid-template-columns: 1fr 1fr; gap: .35rem; }
 .scm-toolbar button { min-height: 32px; border: 1px solid var(--line); color: var(--ink-muted); background: var(--surface); }
 .scm-group { display: grid; }
-.scm-group > header { display: flex; align-items: center; justify-content: space-between; min-height: 30px; color: var(--ink-faint); font: 11px var(--font-mono); letter-spacing: .05em; }
+.scm-group > header { display: flex; align-items: center; justify-content: space-between; min-height: 30px; color: var(--ink-faint); font: var(--fs-micro) var(--font-mono); letter-spacing: .05em; }
 .scm-row { display: grid; grid-template-columns: minmax(0,1fr) auto; border-bottom: 1px solid var(--line); }
 .scm-row > button { display: flex; min-width: 0; justify-content: space-between; gap: .5rem; padding: .45rem .2rem; border: 0; color: var(--ink-muted); background: transparent; text-align: left; }
 .scm-row > button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.scm-row > button b { color: var(--accent); font: 11px var(--font-mono); }
+.scm-row > button b { color: var(--accent); font: var(--fs-micro) var(--font-mono); }
 .scm-row > button:disabled { opacity: .72; cursor: not-allowed; }
 .scm-row > div { display: flex; align-items: center; }
 .scm-row > div button { width: 27px; height: 27px; border: 1px solid var(--line); color: var(--ink); background: var(--surface); }
 .scm-commit { display: grid; gap: .4rem; margin-top: .5rem; }
 .scm-commit textarea { min-height: 64px; resize: vertical; }
-.workbench-mobile-switch { display: none; }
+.tabs.workbench-mobile-switch { display: none; }
 
-:root[data-density="comfortable"] .workspace-workbench .code-editor { font-size: 15px; line-height: 1.78; padding: 1.25rem 1.35rem 2.4rem; }
-:root[data-density="comfortable"] .workspace-workbench .editor-tabs { min-height: 46px; }
-:root[data-density="comfortable"] .workspace-workbench .editor-toolbar { min-height: 50px; padding-inline: 1rem; }
-:root[data-density="comfortable"] .workspace-workbench .workbench-mode-tabs { min-height: 48px; }
-:root[data-density="compact"] .workspace-workbench .code-editor { font-size: 11px; line-height: 1.55; padding: .7rem .85rem 1.4rem; }
-:root[data-density="compact"] .workspace-workbench .editor-tabs { min-height: 34px; }
-:root[data-density="compact"] .workspace-workbench .editor-toolbar { min-height: 36px; padding-block: .2rem; }
-:root[data-density="compact"] .workspace-workbench .workbench-mode-tabs { min-height: 36px; }
+:root[data-density="comfortable"] .workspace-workbench .code-editor { font-size: var(--fs-body); line-height: 1.78; padding: 1.25rem 1.35rem 2.4rem; }
+:root[data-density="comfortable"] .workspace-workbench .code-gutter { font-size: var(--fs-body); line-height: 1.78; padding-block: 1.25rem 2.4rem; }
+:root[data-density="comfortable"] .workspace-workbench .editor-strip { min-height: 38px; padding-inline: var(--sp-4); }
+:root[data-density="compact"] .workspace-workbench .code-editor { font-size: var(--fs-micro); line-height: 1.55; padding: .7rem .85rem 1.4rem; }
+:root[data-density="compact"] .workspace-workbench .code-gutter { font-size: var(--fs-micro); line-height: 1.55; padding-block: .7rem 1.4rem; }
+:root[data-density="compact"] .workspace-workbench .editor-strip { min-height: 28px; padding-block: 0; }
 
 @media (max-width: 760px) {
-  .workspace-heading { align-items: start; }
-  .workspace-heading .durability-indicator { flex: 0 0 auto; max-width: 10rem; }
-  .workbench-mobile-switch { display: grid; grid-template-columns: 1fr 1fr; margin-bottom: .55rem; padding: .2rem; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--surface-soft); }
-  .workbench-mobile-switch button { min-height: 36px; border: 0; border-radius: calc(var(--radius-control) - 2px); color: var(--ink-muted); background: transparent; }
-  .workbench-mobile-switch button[aria-selected="true"] { color: var(--ink); background: color-mix(in srgb, var(--accent) 13%, var(--surface)); }
-  .workbench-shell { display: block; min-height: min(68dvh, 660px); }
-  .workbench-activity, .workbench-editor { display: none; min-height: min(68dvh, 660px); border: 0; }
+  /*
+   * One segmented control instead of two. Three identically-weighted tab
+   * strips used to stack to y=424 on a 932px phone before the first file row;
+   * the route strip is now inside the 44px route bar, and Explorer/Source
+   * Control merge into the pane switch with the change count intact.
+   */
+  .tabs.workbench-mobile-switch { display: flex; flex: 0 0 auto; padding-inline: var(--sp-2); }
+  .tabs.workbench-mode-tabs { display: none; }
+  .workbench-shell { display: block; }
+  .workbench-activity, .workbench-editor { display: none; min-height: 0; height: 100%; border: 0; }
   .workbench-activity.mobile-active, .workbench-editor.mobile-active { display: flex; flex-direction: column; }
-  .workspace-tree { height: auto; flex: 1; max-height: none !important; }
-  .tree-overflow { width: 44px; height: 44px; top: 0; opacity: 1; pointer-events: auto; }
+  .workbench-splitter { display: none; }
   .workbench-context { inset: auto .6rem max(4.8rem, env(safe-area-inset-bottom)) .6rem !important; }
-  .workbench-context button { min-height: 45px; }
-  .code-editor { font-size: 13px; line-height: 1.68; padding-inline: .8rem; }
-  .editor-toolbar small { display: none; }
-  .scm-row > div button { width: 44px; height: 44px; }
-  .workspace-scm button, .workspace-scm textarea { min-height: 44px; }
+  .code-editor { font-size: var(--fs-meta); line-height: 1.68; padding-inline: .8rem; }
+  /*
+   * The gutter used to be `display: none` here, which deleted the line numbers
+   * on every phone with nothing said and no way back. It is now retired by the
+   * wrap toggle instead — which defaults on at this width, states itself in the
+   * file strip, and can be turned off.
+   */
 }

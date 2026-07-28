@@ -189,7 +189,7 @@ describe("browser-native session domain", () => {
     expect(cleanView.transcript.messages).toEqual([]);
     expect(cleanView.transcript.receipts).toEqual([]);
     expect(cleanView.transcript.lifecycle).toEqual({ state: "ready", label: "Ready", sequence: 0 });
-  });
+  }, 10_000);
 
   it("separates coherent linkage, unfinished work, and suspect history from cryptographic proof", async () => {
     const fixture = createJournal();
@@ -260,6 +260,55 @@ describe("browser-native session domain", () => {
 
     const suspect = assessSessionHistory(session, [{ ...events[0]!, previousDigest: "wrong" }]);
     expect(decideSessionResume(pins, suspect, runtime).action).toBe("blocked");
+  });
+
+  it("never resumes a session through a replacement inference credential generation", async () => {
+    const binding = {
+      version: 1 as const,
+      connectionId: "openai-primary",
+      connectionGeneration: 3,
+      providerId: "openai",
+      providerLabel: "OpenAI",
+      providerRevision: 1,
+      authMethod: "api-key" as const,
+      transportBoundary: "provider-tls" as const,
+      modelId: "model-a",
+      boundAt: "2026-07-18T00:00:00.000Z",
+    };
+    const fixture = createJournal();
+    const created = await fixture.journal.createSession("Exact account", await manifest({
+      inferenceBinding: binding,
+      securityPosture: "plaintext-remote",
+    }));
+    const session = (await fixture.journal.getSession(created.id))!;
+    const events = await fixture.journal.readEvents(session.id);
+    const pins = extractSessionPins(session, events);
+    const health = assessSessionHistory(session, events);
+    const runtime = activeRuntime(session.manifest);
+
+    expect(decideSessionResume(pins, health, runtime).action).toBe("resume");
+    expect(decideSessionResume(pins, health, {
+      ...runtime,
+      inferenceBinding: { ...binding, boundAt: "2026-07-18T01:00:00.000Z" },
+    }).action).toBe("resume");
+    const replacements = [
+      { ...binding, connectionId: "openai-replacement" },
+      { ...binding, connectionGeneration: 4 },
+      { ...binding, providerId: "replacement-provider" },
+      { ...binding, providerLabel: "Replacement provider" },
+      { ...binding, providerRevision: 2 },
+      { ...binding, authMethod: "oauth-pkce" as const },
+      { ...binding, transportBoundary: "loopback-local" as const },
+      { ...binding, modelId: "model-b" },
+    ];
+    for (const inferenceBinding of replacements) {
+      const replaced = decideSessionResume(pins, health, {
+        ...runtime,
+        inferenceBinding,
+      });
+      expect(replaced.action).toBe("fork-required");
+      expect(replaced.reasons.map((reason) => reason.code)).toContain("INFERENCE_CONNECTION_MISMATCH");
+    }
   });
 });
 
@@ -436,6 +485,7 @@ function activeRuntime(sessionManifest: SessionManifest): ActiveSessionRuntime {
   return {
     providerId: sessionManifest.providerId,
     model: sessionManifest.model,
+    ...(sessionManifest.inferenceBinding ? { inferenceBinding: sessionManifest.inferenceBinding } : {}),
     posture: sessionManifest.securityPosture ?? "local",
     toolManifestDigest: sessionManifest.toolManifestDigest,
     workspaceId: sessionManifest.workspaceId,

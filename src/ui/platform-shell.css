@@ -17,7 +17,7 @@ button.status-seal:hover { border-color: var(--line-strong); background: var(--s
 .nav-item.active::after { background: var(--accent-bright); opacity: 1; }
 .nav-item.active::before { content: none; }
 .session-attestation { display: inline-flex; min-height: 2rem; align-items: center; padding: .25rem .5rem; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--surface-soft); }
-.trust-hub-tabs { position: sticky; z-index: 8; top: 0; display: flex; gap: .25rem; min-height: 2.75rem; align-items: center; padding: .375rem max(1rem, env(safe-area-inset-left)); overflow-x: auto; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--ground) 94%, transparent); scroll-snap-type: x proximity; scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
+.trust-hub-tabs { position: sticky; z-index: 8; top: 0; display: flex; gap: .25rem; min-height: 2.75rem; align-items: center; padding: .375rem max(1rem, env(safe-area-inset-left)); overflow-x: auto; border-bottom: 1px solid var(--line); background: var(--ground); scroll-snap-type: x proximity; scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
 .trust-hub-tabs::-webkit-scrollbar { height: 3px; }
 .trust-hub-tabs::-webkit-scrollbar-thumb { border-radius: 3px; background: var(--line-strong); }
 .trust-hub-tabs button { min-height: 2.75rem; padding: 0 .75rem; border: 1px solid transparent; border-radius: var(--radius-control); background: transparent; color: var(--ink-muted); scroll-snap-align: nearest; }
@@ -48,17 +48,17 @@ button.status-seal:hover { border-color: var(--line-strong); background: var(--s
   outline: 0;
   background: transparent;
   color: var(--ink);
-  font-size: 1rem;
+  font-size: var(--fs-field);
 }
 
-.command-palette kbd { padding: .15rem .35rem; border: 1px solid var(--line-strong); border-radius: 3px; background: var(--surface-soft); color: var(--ink-muted); font-size: .6875rem; }
+.command-palette kbd { padding: .15rem .35rem; border: 1px solid var(--line-strong); border-radius: 3px; background: var(--surface-soft); color: var(--ink-muted); font-size: var(--fs-micro); }
 .command-palette__results { max-height: min(29rem, 58vh); overflow-y: auto; padding: .375rem; }
 .command-palette__results > button { display: grid; grid-template-columns: minmax(0,1fr) auto; width: 100%; min-height: 3rem; padding: .5rem .625rem; border: 1px solid transparent; border-radius: var(--radius-control); background: none; text-align: left; }
 .command-palette__results > button.is-active { border-color: var(--line-strong); background: color-mix(in srgb, var(--accent) 10%, var(--surface)); box-shadow: inset 2px 0 var(--accent); }
 .command-palette__results strong, .command-palette__results small { display: block; }
-.command-palette__results small, .command-palette__results em { margin-top: .15rem; color: var(--ink-muted); font-size: .6875rem; font-style: normal; }
+.command-palette__results small, .command-palette__results em { margin-top: .15rem; color: var(--ink-muted); font-size: var(--fs-micro); font-style: normal; }
 .command-palette__empty { padding: 2rem; color: var(--ink-muted); text-align: center; }
-.command-palette footer { display: flex; gap: 1rem; justify-content: flex-end; padding: .5rem .75rem; border-top: 1px solid var(--line); color: var(--ink-faint); font-size: .6875rem; }
+.command-palette footer { display: flex; gap: 1rem; justify-content: flex-end; padding: .5rem .75rem; border-top: 1px solid var(--line); color: var(--ink-faint); font-size: var(--fs-micro); }
 .command-palette footer span { display: flex; gap: .25rem; align-items: center; }
 
 .preferences-dialog {
@@ -74,22 +74,56 @@ button.status-seal:hover { border-color: var(--line-strong); background: var(--s
   box-shadow: var(--shadow);
 }
 .preferences-dialog > header, .trust-sheet > header { display: flex; gap: 1rem; justify-content: space-between; align-items: start; padding-bottom: 1rem; }
-.preferences-dialog h2, .trust-sheet h2 { margin: .15rem 0; font-family: var(--font-display); font-size: 1.5rem; }
-.preferences-dialog header p, .trust-sheet > p { margin: .25rem 0 0; color: var(--ink-muted); font-size: .8125rem; }
+.preferences-dialog h2, .trust-sheet h2 { margin: .15rem 0; font-family: var(--font-display); font-size: var(--fs-title); }
+.preferences-dialog header p, .trust-sheet > p { margin: .25rem 0 0; color: var(--ink-muted); font-size: var(--fs-meta); }
 .preferences-dialog button, .trust-sheet button, .pwa-update button, .view-error > button { min-height: 2.5rem; border: 1px solid var(--line-strong); border-radius: var(--radius-control); background: var(--surface); }
 .preference-row { display: grid; grid-template-columns: 1fr minmax(10rem, 45%); align-items: center; gap: 1rem; min-height: 3.25rem; border-top: 1px solid var(--line); }
 .preference-menu { width: 100%; }
 .preference-menu .menu-select-trigger { min-height: 2.5rem; border-color: var(--line-strong); background: var(--surface-soft); }
-.preference-menu .menu-select-popover { top: calc(100% + .35rem); right: 0; bottom: auto; min-width: min(22rem, calc(100vw - 2rem)); }
+/* Right-aligned only. `top`/`bottom` used to be set here, which forced the
+   sheet downward while `MenuSelect` still thought it was placed upward — so the
+   arm that measures the room below the trigger never ran, and the last row in a
+   scrolling dialog opened a list that ran past the bottom of the window. The
+   component now owns the axis; this owns the edge it hangs from. */
+.preference-menu .menu-select-popover { right: 0; left: auto; min-width: min(22rem, calc(100vw - 2rem)); }
+/* A claim about where a person's data lives, not the ninth presentation row. */
+.preferences-dialog__divider { margin: 1.25rem 0 0; padding-top: .75rem; border-top: 1px solid var(--line-strong); color: var(--ink-muted); font-family: var(--font-mono); font-size: var(--fs-micro); letter-spacing: .11em; text-transform: uppercase; }
+.preferences-dialog__divider + .preference-row { border-top: 0; }
+.profile-approval-preference { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .65rem 1rem; align-items: center; padding: .75rem 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.profile-approval-preference > div { display: grid; gap: .2rem; }
+.profile-approval-preference > div span { color: var(--ink-muted); font-size: var(--fs-caption); }
+.profile-approval-preference > div strong { font-size: var(--fs-body); }
+.profile-approval-preference > button { padding-inline: .75rem; color: var(--accent-bright); }
+.profile-approval-preference > p { grid-column: 1 / -1; margin: 0; color: var(--ink-muted); font-size: var(--fs-caption); line-height: 1.45; }
 .preferences-dialog__reset { width: 100%; margin-top: 1rem; }
 
 .trust-sheet { width: min(34rem, 100%); padding: 1rem; border: 1px solid var(--line-strong); border-radius: var(--radius-panel); background: var(--surface-raised); box-shadow: var(--shadow); }
-.trust-sheet > div > button { display: grid; grid-template-columns: 10rem minmax(0,1fr) auto; align-items: center; gap: .75rem; width: 100%; min-height: 3.75rem; padding: .625rem .75rem; border-width: 1px 0 0; text-align: left; }
-.trust-sheet > div small { overflow: visible; color: var(--ink-muted); font-size: .6875rem; text-overflow: clip; white-space: normal; }
+/* Descendant, not child: the rows sit inside a per-scope <section> now. The
+   selector used to be `> div > button`, which silently stopped matching when
+   the grouping landed and dropped the whole three-column grid. */
+.trust-sheet .claim-rows > button { display: grid; grid-template-columns: minmax(8rem, 12rem) minmax(0,1fr) auto; align-items: center; gap: .75rem; width: 100%; min-height: 3.75rem; padding: .625rem .75rem; border-width: 1px 0 0; text-align: left; }
+.trust-sheet .claim-rows small { overflow: visible; color: var(--ink-muted); font-size: var(--fs-micro); text-overflow: clip; white-space: normal; }
+/* The sheet is the destination of the ladder, not a rung on it. `Secure
+   hardware n…` and `Browser / Edge run…` were truncated verdicts at the one
+   place the full claim is supposed to arrive — the same rule `popover.css`
+   already applies to the identical rows in the session status popover. */
+.trust-sheet .claim-rows .seal { max-width: 100%; }
+.trust-sheet .claim-rows .seal__label { overflow: visible; text-overflow: clip; white-space: normal; }
+
+/*
+ * The sheet groups its rows by the band that owns them. Every axis still
+ * renders its own row with its own words — the grouping adds two headings and
+ * removes nothing, so the four-axis posture survives the topbar chip having
+ * stopped speaking for two of them.
+ */
+.trust-sheet__scope { margin-top: 1rem; }
+.trust-sheet__scope:first-of-type { margin-top: .5rem; }
+.trust-sheet__scope > h3 { margin: 0; }
+.trust-sheet__where { margin: .25rem 0 .5rem; color: var(--ink-muted); font-size: var(--fs-caption); line-height: 1.45; }
 
 .pwa-update { position: fixed; z-index: 90; right: max(1rem, env(safe-area-inset-right)); bottom: max(1rem, env(safe-area-inset-bottom)); display: flex; gap: 1rem; align-items: center; max-width: min(30rem, calc(100vw - 2rem)); padding: .75rem; border: 1px solid var(--v-caution); border-radius: var(--radius-panel); background: var(--surface-raised); box-shadow: var(--shadow); transition: opacity 120ms ease, transform 120ms ease; }
 .pwa-update span, .pwa-update small { display: block; }
-.pwa-update small { margin-top: .2rem; color: var(--ink-muted); font-size: .6875rem; }
+.pwa-update small { margin-top: .2rem; color: var(--ink-muted); font-size: var(--fs-micro); }
 
 .route-loading { display: grid; align-content: start; gap: .75rem; min-height: 12rem; padding: 1rem; }
 .route-loading > span { display: block; height: .875rem; width: 68%; border-radius: 2px; background: linear-gradient(90deg, var(--surface-soft), var(--surface-raised), var(--surface-soft)); background-size: 200% 100%; animation: route-loading 1.2s linear infinite; }
@@ -111,15 +145,27 @@ button.status-seal:hover { border-color: var(--line-strong); background: var(--s
   --line-strong: rgba(23,26,29,.24);
   --shadow: 0 14px 38px rgba(60,50,30,.14);
 }
-:root[data-type-scale="x-large"] { font-size: 19px; }
+/*
+ * `:root[data-type-scale="x-large"] { font-size: 19px }` stood here. It was
+ * the pre-ramp way of moving type, and it had been dead since `tokens.css`
+ * started setting a root `font-size` per density: both selectors are (0,2,0)
+ * and tokens.css is later in the barrel, so `data-density` — which the shell
+ * always writes — won every time. Verified in the running app: the root
+ * measures 17px at every scale. `--type-scale` is the whole preference now,
+ * which is also what stops x-large compounding 1.1875 × 1.25.
+ */
 :root[data-corners="subtle"] { --radius-control: 6px; --radius-panel: 10px; }
 :root[data-density="comfortable"] .nav-item { min-height: 40px; }
 
 :root[data-keyboard-open="true"] .fixed-mobile-nav { visibility: hidden; pointer-events: none; }
 :root[data-keyboard-open="true"] .composer-wrap { bottom: var(--visual-viewport-bottom, 0); }
 
-@media (max-width: 640px) {
-  .trust-hub-tabs { box-shadow: inset 16px 0 13px -16px var(--ink-muted), inset -16px 0 13px -16px var(--ink-muted); }
+@media (max-width: 640px), (max-width: 950px) and (max-height: 500px) {
+  .trust-hub-tabs { box-sizing: border-box; min-height: 45px; padding-block: 0; padding-inline-start: max(8px, env(safe-area-inset-left)); padding-inline-end: max(8px, env(safe-area-inset-right)); background: var(--ground); box-shadow: none; scrollbar-width: none; overscroll-behavior-inline: contain; }
+  .trust-hub-tabs::-webkit-scrollbar { display: none; }
+  .trust-hub-tabs button { min-height: 44px; padding-inline: 12px; border: 0; border-radius: 0; background: transparent; white-space: nowrap; }
+  .trust-hub-tabs button.is-active { border: 0; background: transparent; box-shadow: inset 0 -2px var(--accent); }
+  .trust-hub-tabs button:focus-visible { outline: 2px solid var(--accent-bright); outline-offset: -3px; }
   .platform-scrim { place-items: end center; padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
   .command-palette, .preferences-dialog, .trust-sheet { width: 100%; max-height: min(84vh, 44rem); border-radius: var(--radius-panel) var(--radius-panel) 0 0; }
   .preferences-dialog { -webkit-overflow-scrolling: touch; }
@@ -132,6 +178,8 @@ button.status-seal:hover { border-color: var(--line-strong); background: var(--s
   }
   .command-palette__results { max-height: 55vh; }
   .preference-row { grid-template-columns: 1fr; gap: .35rem; padding: .55rem 0; }
+  .profile-approval-preference { grid-template-columns: 1fr; }
+  .profile-approval-preference > button { justify-self: stretch; }
   .pwa-update { right: .5rem; bottom: calc(4.5rem + env(safe-area-inset-bottom)); left: .5rem; }
 }
 

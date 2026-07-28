@@ -1,5 +1,6 @@
 import type { FileSystemTree } from "@webcontainer/api";
 import { isWorkspaceControlPlanePath, normalizeWorkspacePath, WorkspaceConflictError, type WorkspacePort } from "../workspace/contracts";
+import { decodeWorkspaceBytes, encodeWorkspaceBytes, workspaceContentByteLength } from "../workspace/content-codec";
 import { TERMINAL_WORKSPACE_MOUNT } from "./contracts";
 
 const MAX_FILES = 2_048;
@@ -10,7 +11,10 @@ const MAX_CHANGED_BYTES = 8 * 1_024 * 1_024;
 const EXCLUDED = new Set([".git", ".airship", "node_modules"]);
 
 type Host = Readonly<{
-  fs: Readonly<{ mkdir(path: string, options: { recursive: true }): Promise<string | undefined> }>;
+  fs: Readonly<{
+    mkdir(path: string, options: { recursive: true }): Promise<string | undefined>;
+    rm(path: string, options: { recursive: true; force: true }): Promise<void>;
+  }>;
   mount(tree: FileSystemTree, options: { mountPoint: string }): Promise<void>;
   export(path: string, options: { format: "json"; excludes: string[] }): Promise<FileSystemTree>;
 }>;
@@ -36,11 +40,11 @@ export async function mountTerminalWorkspace(host: Host, workspace: WorkspacePor
     if (!path) continue;
     const file = await (workspace.readBounded?.(entry.path, MAX_FILE_BYTES + 1) ?? workspace.read(entry.path));
     if (!file || file.revision !== entry.revision) throw new WorkspaceConflictError(`Workspace changed while opening Terminal: ${entry.path}`);
-    const bytes = new TextEncoder().encode(file.content).byteLength;
+    const bytes = workspaceContentByteLength(file.content);
     if (bytes > MAX_FILE_BYTES) throw new Error(`Terminal workspace file exceeds 2 MiB: ${entry.path}`);
     total += bytes;
     if (total > MAX_TOTAL_BYTES) throw new Error("Terminal workspace exceeds the 16 MiB mount limit.");
-    insert(tree, path.split("/"), file.content);
+    insert(tree, path.split("/"), decodeWorkspaceBytes(file.content));
     files.set(path, Object.freeze({ content: file.content, revision: file.revision }));
   }
   await host.fs.mkdir(TERMINAL_WORKSPACE_MOUNT, { recursive: true });
@@ -65,7 +69,7 @@ export async function syncTerminalWorkspace(
   for (const [path, content] of exported) {
     const original = baseline.files.get(path);
     if (original?.content === content) continue;
-    const size = new TextEncoder().encode(content).byteLength;
+    const size = workspaceContentByteLength(content);
     if (size > MAX_FILE_BYTES) throw new Error(`Terminal output file exceeds 2 MiB: ${path}`);
     bytes += size;
     changes.push(Object.freeze({
@@ -99,8 +103,13 @@ export async function syncTerminalWorkspace(
   const nextFiles = new Map<string, BaselineFile>();
   for (const [path, content] of exported) {
     const committed = await workspace.read(normalizeWorkspacePath(`${baseline.root}/${path}`));
-    if (!committed || committed.content !== content) throw new WorkspaceConflictError(`Terminal sync could not confirm: ${path}`);
-    nextFiles.set(path, Object.freeze({ content, revision: committed.revision }));
+    const terminalChanged = baseline.files.get(path)?.content !== content;
+    if (terminalChanged && (!committed || committed.content !== content)) {
+      throw new WorkspaceConflictError(`Terminal sync could not confirm: ${path}`);
+    }
+    // An untouched terminal copy never overwrites a later Editor revision.
+    // Reconciliation remounts this authoritative value (or its deletion).
+    if (committed) nextFiles.set(path, Object.freeze({ content: committed.content, revision: committed.revision }));
   }
   return Object.freeze({
     snapshot: Object.freeze({ root: baseline.root, files: nextFiles }),
@@ -108,11 +117,27 @@ export async function syncTerminalWorkspace(
   });
 }
 
+/**
+ * Reconcile both directions at one revision fence. Terminal deltas are first
+ * adopted into the authoritative workspace; only then is the terminal mount
+ * rebuilt from that resulting workspace so Editor changes also become visible.
+ */
+export async function reconcileTerminalWorkspace(
+  host: Host,
+  workspace: WorkspacePort,
+  baseline: TerminalWorkspaceSnapshot,
+): Promise<Readonly<{ snapshot: TerminalWorkspaceSnapshot; changedPaths: readonly string[] }>> {
+  const outgoing = await syncTerminalWorkspace(host, workspace, baseline);
+  await host.fs.rm(TERMINAL_WORKSPACE_MOUNT, { recursive: true, force: true });
+  const snapshot = await mountTerminalWorkspace(host, workspace, baseline.root);
+  return Object.freeze({ snapshot, changedPaths: outgoing.changedPaths });
+}
+
 function relative(path: string, root: string): string {
   return path === root ? "" : path.slice(root.length + 1);
 }
 
-function insert(tree: FileSystemTree, segments: readonly string[], content: string): void {
+function insert(tree: FileSystemTree, segments: readonly string[], content: Uint8Array): void {
   let cursor = tree;
   for (let index = 0; index < segments.length - 1; index += 1) {
     const segment = segments[index]!;
@@ -128,7 +153,9 @@ function flatten(tree: FileSystemTree, prefix: readonly string[], result: Map<st
   for (const [name, node] of Object.entries(tree)) {
     const path = [...prefix, name];
     if ("directory" in node) flatten(node.directory, path, result);
-    else if ("contents" in node.file) result.set(path.join("/"), typeof node.file.contents === "string" ? node.file.contents : new TextDecoder("utf-8", { fatal: true }).decode(node.file.contents));
+    else if ("contents" in node.file) result.set(path.join("/"), encodeWorkspaceBytes(
+      typeof node.file.contents === "string" ? new TextEncoder().encode(node.file.contents) : node.file.contents,
+    ));
     else throw new Error(`Terminal output contains an unsupported symlink: ${path.join("/")}`);
   }
 }

@@ -1,6 +1,6 @@
 import { sha256 } from "../core/hash";
 import { WorkspaceRootKey } from "../storage/encrypted-envelope";
-import type { VaultSnapshot } from "./coordinator";
+import type { VaultProbeEvidence, VaultSnapshot } from "./coordinator";
 import { VaultCoordinator } from "./coordinator";
 import { MemoryOnlyLocalLabCredentialProvider } from "./local-lab";
 
@@ -54,8 +54,15 @@ export type PublicLiveVaultEvidence = Readonly<{
   artifacts: Readonly<{
     createdObjectCount?: number;
     inventory: "complete-key-list-withheld" | "unknown-after-failed-probe" | "none-observed";
-    deletionAvailableInRuntime: false;
-    cleanup: "provider-lifecycle-or-out-of-band";
+    /**
+     * Reported from the coordinator's observed sweep, never asserted. A literal
+     * `false` here would misreport a provider that can in fact reclaim.
+     */
+    deletionAvailableInRuntime: boolean;
+    cleanup: "provider-lifecycle-or-out-of-band" | "runtime-reclaimed";
+    /** Counts only; probe keys are never serialized into public evidence. */
+    reclaimedObjectCount?: number;
+    retainedObjectCount?: number;
   }>;
   diagnostic?: Readonly<{
     code: string;
@@ -199,8 +206,7 @@ async function publicEvidence(args: {
       artifacts: Object.freeze({
         createdObjectCount: snapshot.evidence.createdKeys.length,
         inventory: "complete-key-list-withheld",
-        deletionAvailableInRuntime: false,
-        cleanup: "provider-lifecycle-or-out-of-band",
+        ...publicCleanupArtifacts(snapshot.evidence.cleanup),
       }),
     });
   }
@@ -216,8 +222,9 @@ async function publicEvidence(args: {
       checks: Object.freeze([]),
       artifacts: Object.freeze({
         inventory: snapshot.probeResidue ? "unknown-after-failed-probe" : "none-observed",
-        deletionAvailableInRuntime: false,
-        cleanup: "provider-lifecycle-or-out-of-band",
+        // No probe completed, so no sweep was observed: the conservative claim
+        // is the only honest one here.
+        ...NO_OBSERVED_RECLAMATION,
       }),
       diagnostic: Object.freeze({
         code: snapshot.diagnostic.code,
@@ -237,14 +244,44 @@ async function publicEvidence(args: {
     checks: Object.freeze([]),
     artifacts: Object.freeze({
       inventory: "none-observed",
-      deletionAvailableInRuntime: false,
-      cleanup: "provider-lifecycle-or-out-of-band",
+      ...NO_OBSERVED_RECLAMATION,
     }),
     diagnostic: Object.freeze({
       code: "harness-failed",
       retryable: false,
       commitState: "not-applicable",
     }),
+  });
+}
+
+/** The only claim a run without a completed probe can make about reclamation. */
+const NO_OBSERVED_RECLAMATION = Object.freeze({
+  deletionAvailableInRuntime: false,
+  cleanup: "provider-lifecycle-or-out-of-band",
+} as const);
+
+/**
+ * Projects the coordinator's observed probe sweep onto the public envelope.
+ *
+ * This is a projection, not an assertion: whether the provider could delete at
+ * runtime is whatever `VaultCoordinator` actually observed while reclaiming, so
+ * a run against a reclaiming provider reports `runtime-reclaimed` instead of
+ * silently emitting a stale "no runtime deletion" claim. Only counts cross the
+ * boundary; probe keys never do.
+ */
+export function publicCleanupArtifacts(
+  cleanup: VaultProbeEvidence["cleanup"],
+): Readonly<{
+  deletionAvailableInRuntime: boolean;
+  cleanup: PublicLiveVaultEvidence["artifacts"]["cleanup"];
+  reclaimedObjectCount?: number;
+  retainedObjectCount?: number;
+}> {
+  return Object.freeze({
+    deletionAvailableInRuntime: cleanup.deletionAvailableInRuntime,
+    cleanup: cleanup.policy,
+    ...(cleanup.reclaimedKeys ? { reclaimedObjectCount: cleanup.reclaimedKeys.length } : {}),
+    ...(cleanup.retainedKeys ? { retainedObjectCount: cleanup.retainedKeys.length } : {}),
   });
 }
 

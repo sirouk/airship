@@ -1,0 +1,331 @@
+/*
+ * The one anchored disclosure.
+ *
+ * Rung L1 of the ladder: a chip, one gesture, the full claim. Below 640px it
+ * becomes a bottom sheet rather than a narrower popover, because an anchored
+ * panel on a phone either overflows the viewport or shrinks the very text it
+ * exists to show in full.
+ */
+.popover {
+  position: relative;
+  display: inline-flex;
+  min-width: 0;
+}
+
+.popover__trigger {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+/*
+ * Every disclosure in the product is a `.popover__trigger`, so the touch floor
+ * belongs to the primitive rather than to each route that remembered. Routes
+ * had patched this individually (sessions, billing) while the shared control
+ * stayed 24px tall on a coarse pointer — below the 44px rule everywhere the
+ * route had not noticed.
+ */
+@media (pointer: coarse) {
+  .popover__trigger {
+    min-height: 44px;
+    padding-block: var(--sp-1);
+  }
+}
+
+/*
+ * Arrival, departure, and where from.
+ *
+ * This sheet used to contain no `transition` and no `animation` at all, and the
+ * panel was hidden with the `hidden` attribute — which removes the box, and a
+ * box that does not exist cannot transition. Every overlay in the product
+ * therefore blinked into place with no indication of which control had produced
+ * it. That is the one thing an anchored disclosure has to say, because the whole
+ * claim of the pattern is *this panel belongs to that chip*.
+ *
+ * `display` is still `none` while closed — with `allow-discrete` it now flips at
+ * the end of the exit instead of the start, so the fade runs and the closed
+ * panel still contributes nothing: no box, no scrollable overflow inside the
+ * transcript, no tab stop, no accessibility-tree node. That is a stronger
+ * guarantee than a visually hidden panel can make, and it is why this is not
+ * written as `opacity: 0` alone.
+ *
+ * 120ms in, 90ms out. Entrance is acknowledgement, not decoration: a duration
+ * long enough to read as waiting is a duration that has stopped acknowledging
+ * anything.
+ */
+.popover__panel {
+  /* The movement lives in one custom property so reduced motion can retract it
+     with a single declaration and the opacity fade — the part that carries the
+     meaning — survives untouched. */
+  --popover-lift: translateY(-4px) scale(.985);
+  position: absolute;
+  z-index: 60;
+  top: calc(100% + var(--sp-2));
+  display: grid;
+  width: var(--popover-width, 320px);
+  max-width: calc(100vw - (2 * var(--sp-3)));
+  border: 1px solid var(--line-control);
+  border-radius: var(--radius-panel);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow);
+  color: var(--ink);
+  text-align: left;
+  transform-origin: var(--popover-origin, top center);
+  transition: opacity 120ms ease, transform 120ms ease, display 120ms allow-discrete;
+}
+
+.popover__panel[data-open="false"] {
+  display: none;
+  opacity: 0;
+  transform: var(--popover-lift);
+  transition-duration: 90ms;
+}
+
+@starting-style {
+  .popover__panel {
+    opacity: 0;
+    transform: var(--popover-lift);
+  }
+}
+
+.popover[data-align="start"] .popover__panel {
+  left: 0;
+  /* The origin is the anchor. A panel that scales out of its own centre is a
+     panel with no author; growing from the trigger's corner is the sentence
+     "this came from there", said in 120ms instead of in words. */
+  --popover-origin: top left;
+}
+
+/* The right-edge flip. Without it the last chip in any right-hand cluster
+   opens a panel that runs off the viewport, which is the one failure mode a
+   hand-rolled anchor has to get right. */
+.popover[data-align="end"] .popover__panel {
+  right: 0;
+  --popover-origin: top right;
+}
+
+.popover__header {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+  justify-content: space-between;
+  min-height: 44px;
+  padding: 0 var(--sp-3);
+  border-bottom: 1px solid var(--line);
+}
+
+.popover__header > strong {
+  overflow: hidden;
+  color: var(--ink-muted);
+  font: var(--fw-strong) var(--fs-micro)/1.2 var(--font-mono);
+  letter-spacing: 0.11em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.popover__done {
+  min-height: 28px;
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--line-control);
+  border-radius: var(--radius-control);
+  color: var(--ink-muted);
+  background: transparent;
+  cursor: pointer;
+  font-size: var(--fs-caption);
+}
+
+.popover__done:hover {
+  color: var(--ink);
+}
+
+.popover__body {
+  display: grid;
+  gap: var(--sp-2);
+  max-height: min(420px, 60vh);
+  overflow: auto;
+  padding: var(--sp-3);
+  font-size: var(--fs-caption);
+  line-height: 1.5;
+}
+
+/*
+ * Touch sheets slide, and the slide is the explanation of what a sheet is: it
+ * comes from the bottom edge because that is where a thumb reaches it and where
+ * dismissing it will send it back. 180ms rather than 120ms because the distance
+ * is the height of the panel rather than four pixels, and a long travel run at a
+ * short duration reads as a jump-cut.
+ *
+ * The `sheet` mode is only ever set below 640px, so this rule is scoped by its
+ * own data attribute rather than by a second media query.
+ */
+.popover[data-mode="sheet"] .popover__panel {
+  --popover-lift: translateY(100%);
+  --popover-origin: bottom center;
+  transition: opacity 120ms ease, transform 180ms cubic-bezier(.2, .8, .2, 1), display 180ms allow-discrete;
+}
+
+@media (max-width: 640px) {
+  .popover[data-mode="sheet"] .popover__panel {
+    position: fixed;
+    z-index: 120;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    top: auto;
+    width: auto;
+    max-width: none;
+    border-width: 1px 0 0;
+    border-radius: var(--radius-panel) var(--radius-panel) 0 0;
+  }
+
+  .popover[data-mode="sheet"] .popover__header {
+    position: sticky;
+    top: 0;
+    background: var(--surface-raised);
+  }
+
+  /* 44px is the touch floor, and a dismissal control the thumb misses is why
+     a sheet feels like a trap. */
+  .popover[data-mode="sheet"] .popover__done {
+    min-width: 64px;
+    min-height: 44px;
+  }
+
+  .popover[data-mode="sheet"] .popover__body {
+    max-height: 56vh;
+    padding-bottom: calc(var(--sp-4) + env(safe-area-inset-bottom));
+  }
+}
+
+/*
+ * The claim rows every disclosure body is made of.
+ *
+ * `TrustPostureSheet` and the session-status chip render the same component
+ * from different scopes, so a claim reads identically wherever a user reaches
+ * it — and the `detail` sentence that used to be hover-only is body text here,
+ * which is the whole point of the ladder on a device with no hover.
+ */
+.popover__body .claim-rows {
+  display: grid;
+  gap: var(--sp-1);
+}
+
+.popover__body .claim-rows > button,
+.popover__body .claim-rows > p {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--sp-1) var(--sp-2);
+  align-items: center;
+  width: 100%;
+  min-height: 44px;
+  margin: 0;
+  padding: var(--sp-2);
+  border: 0;
+  border-radius: var(--radius-control);
+  color: inherit;
+  background: none;
+  text-align: left;
+}
+
+.popover__body .claim-rows > button { cursor: pointer; }
+.popover__body .claim-rows > button:hover { background: var(--surface-soft); }
+
+/*
+ * Explicit placement, because the row's source order is seal, sentence, arrow
+ * and auto-placement puts the arrow on a third line of its own.
+ */
+.popover__body .claim-rows .seal {
+  grid-area: 1 / 1;
+  justify-self: start;
+  max-width: 100%;
+}
+
+/*
+ * A claim in a popover is the destination of the ladder, not a rung on it, so
+ * it wraps rather than ellipsising. `Secure hardware not checked · this
+ * session` reading as `Secure hardware not checked · this…` here would put a
+ * truncation at the one place the full string is supposed to arrive.
+ */
+.popover__body .claim-rows .seal .seal__label {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.popover__body .claim-rows > button > span[aria-hidden="true"] {
+  grid-area: 1 / 2;
+  color: var(--ink-faint);
+}
+
+.popover__body .claim-rows small {
+  grid-area: 2 / 1 / 3 / -1;
+  color: var(--ink-muted);
+  font-size: var(--fs-caption);
+  line-height: 1.45;
+}
+
+/* Rung L2 travels with the claim: a chip that stands in front of a fact still
+   reaches the route that owns the record. */
+.popover__action {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 0 var(--sp-3);
+  border: 1px solid color-mix(in srgb, var(--accent-bright) 50%, var(--line-control));
+  border-radius: var(--radius-control);
+  color: var(--accent-bright);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  cursor: pointer;
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-strong);
+}
+
+.popover__body > p { margin: 0; color: var(--ink-muted); }
+
+/*
+ * The scope boundary, stated rather than left as a silence.
+ *
+ * A popover that lists four claims and stops implies those four are everything
+ * Airship knows. This line says which band holds the rest — the difference
+ * between a fact that lives somewhere else and a fact that is missing. It is
+ * `--ink-muted` rather than `--ink-faint` because it has to be readable: a
+ * pointer nobody can read is the same as no pointer.
+ */
+.popover__scope-note {
+  margin: var(--sp-2) 0 0;
+  padding-top: var(--sp-2);
+  border-top: 1px solid var(--line);
+  color: var(--ink-muted);
+  font-size: var(--fs-caption);
+  line-height: 1.45;
+}
+
+/*
+ * Reduced motion retracts the travel; the global reset handles the rest.
+ *
+ * `routes.css:3271` already collapses every duration in the product to 0.01ms
+ * under this preference, so the panel arrives instantly either way. What that
+ * rule cannot reach is where the arrival *starts*: a 0.01ms transition still
+ * begins at `translateY(100%)`, and one frame of a full sheet height is a jump.
+ * Retracting `--popover-lift` is the only part left, which is why nothing else
+ * is declared here.
+ *
+ * Both selectors are restated so this outranks the sheet's own `--popover-lift`
+ * at equal specificity; a single `.popover__panel` rule would lose the sheet to
+ * the more specific declaration above and leave the one panel that moves
+ * furthest as the one panel still moving.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .popover__panel,
+  .popover[data-mode="sheet"] .popover__panel {
+    --popover-lift: none;
+  }
+}

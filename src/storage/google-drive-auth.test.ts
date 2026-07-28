@@ -5,8 +5,61 @@ import {
   GoogleDriveAuthorizationRequiredError,
   GoogleIdentityServicesAuthorizer,
   MemoryOnlyGoogleAccessTokenProvider,
+  isDeployableGoogleOAuthClientId,
   readGoogleAccountIdentity,
 } from "./google-drive-auth";
+
+describe("deployment configuration for the Google Drive vault", () => {
+  it("accepts exactly the client IDs the authorizer will construct with", () => {
+    const configured = "123456789012-airship-browser-acceptance.apps.googleusercontent.com";
+    expect(isDeployableGoogleOAuthClientId(configured)).toBe(true);
+    expect(isDeployableGoogleOAuthClientId(` ${configured} `)).toBe(true);
+    expect(() => new GoogleIdentityServicesAuthorizer(configured, new MemoryOnlyGoogleAccessTokenProvider())).not.toThrow();
+  });
+
+  it("sends the trimmed client ID it accepted, never the padded build-time value", async () => {
+    const configured = "123456789012-airship-browser-acceptance.apps.googleusercontent.com";
+    let sentClientId: string | undefined;
+    const authorizer = new GoogleIdentityServicesAuthorizer(
+      `\n ${configured}  `,
+      new MemoryOnlyGoogleAccessTokenProvider(),
+      async () => ({ accounts: { oauth2: { initTokenClient: (options) => {
+        sentClientId = options.client_id;
+        return { requestAccessToken: () => {} };
+      } } } }),
+    );
+    await authorizer.prepare();
+    // A padded value would reach Google's token client verbatim and fail there
+    // with an opaque error instead of being normalized at the accepting edge.
+    expect(sentClientId).toBe(configured);
+  });
+
+  it("agrees with the authorizer about which client IDs are constructible", () => {
+    for (const value of [
+      undefined,
+      null,
+      "",
+      "   ",
+      "not-a-client-id",
+      "short.apps.googleusercontent.com",
+      "123456789012-airship.apps.googleusercontent.com.evil.test",
+      `${"a".repeat(600)}.apps.googleusercontent.com`,
+    ]) {
+      expect(isDeployableGoogleOAuthClientId(value)).toBe(false);
+    }
+    // What this pins is agreement between the two edges: a value the predicate
+    // rejects is a value the authorizer refuses to construct with, and vice
+    // versa, so a caller that does consult the predicate is never surprised at
+    // construction. It is *not* a guarantee that a build cannot ship Drive as an
+    // unreachable default — nothing forces provider selection through this
+    // predicate, and a deployment that skips it fails at the authorizer instead.
+    for (const value of ["not-a-client-id", "short.apps.googleusercontent.com", "   "]) {
+      expect(isDeployableGoogleOAuthClientId(value)).toBe(false);
+      expect(() => new GoogleIdentityServicesAuthorizer(value, new MemoryOnlyGoogleAccessTokenProvider()))
+        .toThrow("Google OAuth client ID is invalid.");
+    }
+  });
+});
 
 describe("browser-only Google account authorization", () => {
   it("keeps a narrow, expiring grant in memory and reads bounded account context", async () => {
@@ -28,6 +81,10 @@ describe("browser-only Google account authorization", () => {
     });
     expect(fetcher).toHaveBeenCalledWith("https://openidconnect.googleapis.com/v1/userinfo", expect.objectContaining({
       headers: { Authorization: "Bearer temporary-google-token" },
+      cache: "no-store",
+      credentials: "omit",
+      redirect: "error",
+      referrerPolicy: "no-referrer",
     }));
     provider.reset();
     await expect(provider.getAccessToken()).rejects.toBeInstanceOf(GoogleDriveAuthorizationRequiredError);
@@ -59,9 +116,121 @@ describe("browser-only Google account authorization", () => {
     expect(configuredScope.split(" ")).toEqual(GOOGLE_ACCOUNT_SCOPES);
   });
 
+  it("replaces an expired grant in place without persisting or rebuilding the GIS authority", async () => {
+    const provider = new MemoryOnlyGoogleAccessTokenProvider();
+    const callbacks: Array<(response: Record<string, unknown>) => void> = [];
+    const prompts: string[] = [];
+    let clients = 0;
+    const authorizer = new GoogleIdentityServicesAuthorizer(
+      "123456789012-airship.apps.googleusercontent.com",
+      provider,
+      async () => ({ accounts: { oauth2: { initTokenClient: (options) => {
+        clients += 1;
+        callbacks.push(options.callback as (response: Record<string, unknown>) => void);
+        return { requestAccessToken: (request) => { prompts.push(request?.prompt ?? ""); } };
+      } } } }),
+    );
+    await authorizer.prepare();
+    provider.replace({
+      accessToken: "expired-google-token",
+      expiresInSeconds: 3_600,
+      grantedScopes: GOOGLE_ACCOUNT_SCOPES,
+    }, Date.now() - 3_600_000);
+    await expect(provider.getAccessToken()).rejects.toBeInstanceOf(GoogleDriveAuthorizationRequiredError);
+
+    const pending = authorizer.reauthorize();
+    expect(prompts).toEqual([""]);
+    callbacks[0]?.({
+      access_token: "replacement-google-token",
+      expires_in: 3_600,
+      scope: GOOGLE_ACCOUNT_SCOPES.join(" "),
+    });
+
+    await expect(pending).resolves.toMatchObject({ accessToken: "replacement-google-token" });
+    await expect(provider.getAccessToken()).resolves.toMatchObject({ accessToken: "replacement-google-token" });
+    expect(clients).toBe(1);
+  });
+
+  it("clears a synchronously blocked popup attempt so an explicit retry can succeed", async () => {
+    const provider = new MemoryOnlyGoogleAccessTokenProvider();
+    let callback: ((response: Record<string, unknown>) => void) | undefined;
+    let attempts = 0;
+    const authorizer = new GoogleIdentityServicesAuthorizer(
+      "123456789012-airship.apps.googleusercontent.com",
+      provider,
+      async () => ({ accounts: { oauth2: { initTokenClient: (options) => {
+        callback = options.callback as (response: Record<string, unknown>) => void;
+        return { requestAccessToken: () => {
+          attempts += 1;
+          if (attempts === 1) throw new Error("popup blocked");
+        } };
+      } } } }),
+    );
+    await authorizer.prepare();
+    await expect(authorizer.authorize()).rejects.toMatchObject({
+      name: "GoogleDriveAuthorizationRequiredError",
+      message: "popup blocked",
+    });
+
+    const retry = authorizer.authorize();
+    callback?.({
+      access_token: "replacement-google-token",
+      expires_in: 3_600,
+      scope: GOOGLE_ACCOUNT_SCOPES.join(" "),
+    });
+    await expect(retry).resolves.toMatchObject({ accessToken: "replacement-google-token" });
+    expect(attempts).toBe(2);
+  });
+
+  it("releases a chooser that never calls back instead of wedging later authorization", async () => {
+    vi.useFakeTimers();
+    try {
+      const provider = new MemoryOnlyGoogleAccessTokenProvider();
+      let requests = 0;
+      const authorizer = new GoogleIdentityServicesAuthorizer(
+        "123456789012-airship.apps.googleusercontent.com",
+        provider,
+        async () => ({ accounts: { oauth2: { initTokenClient: () => ({
+          requestAccessToken: () => { requests += 1; },
+        }) } } }),
+      );
+      await authorizer.prepare();
+      const stalled = authorizer.authorize();
+      const rejected = expect(stalled).rejects.toMatchObject({
+        name: "GoogleDriveAuthorizationRequiredError",
+        message: expect.stringContaining("did not finish"),
+      });
+      await vi.advanceTimersByTimeAsync(2 * 60_000);
+      await rejected;
+
+      const retry = authorizer.authorize();
+      expect(requests).toBe(2);
+      authorizer.reset();
+      await expect(retry).rejects.toMatchObject({ name: "GoogleDriveAuthorizationRequiredError" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("fails closed when Drive consent is missing", () => {
     const provider = new MemoryOnlyGoogleAccessTokenProvider();
     expect(() => provider.replace({ accessToken: "temporary-google-token", expiresInSeconds: 3_600, grantedScopes: ["openid", "email", "profile"] }))
       .toThrow("Drive file scope");
+  });
+
+  it("rejects an oversized chunked account response before parsing it", async () => {
+    const provider = new MemoryOnlyGoogleAccessTokenProvider();
+    provider.replace({ accessToken: "temporary-google-token", expiresInSeconds: 3_600, grantedScopes: GOOGLE_ACCOUNT_SCOPES });
+    const response = JSON.stringify({
+      sub: "google-subject-123",
+      email: "pilot@example.test",
+      ignoredPadding: "x".repeat(70 * 1024),
+    });
+
+    await expect(readGoogleAccountIdentity(
+      provider,
+      undefined,
+      async () => new Response(response, { headers: { "content-type": "application/json" } }),
+    )).rejects.toThrow("invalid JSON");
   });
 });

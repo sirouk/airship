@@ -24,22 +24,30 @@
   text-transform: uppercase;
 }
 
-.attestations-heading h1,
-.attestations-heading h2 {
+.attestations-heading h1 {
   margin: 6px 0 8px;
   font-family: var(--font-display);
-  font-size: clamp(1.7rem, 4vw, 2.65rem);
-  line-height: 1;
+  font-size: var(--fs-display);
+  line-height: 1.15;
 }
 
+/*
+ * Embedded, this is a section heading inside the Proof route, not a second
+ * page title. It was rendering up to 28.8px of display serif 44px below the
+ * route's own H1 and the tab that already says "Attestation evidence" — three
+ * renderings of one destination inside 558px of preamble.
+ */
 .attestations-view--embedded .attestations-heading { padding-top: 2px; }
-.attestations-view--embedded .attestations-heading h2 { font-size: clamp(1.35rem, 2.4vw, 1.8rem); }
+.attestations-view--embedded .attestations-heading h2 {
+  margin: 2px 0 4px;
+  font: var(--fw-title) var(--fs-title) / 1.2 var(--font-body);
+}
 
 .attestations-heading p {
   max-width: 82ch;
   margin: 0;
   color: var(--ink-muted);
-  font-size: 0.86rem;
+  font-size: var(--fs-meta);
   line-height: 1.55;
 }
 
@@ -61,7 +69,7 @@
   color: var(--ink);
   background: var(--surface-raised);
   font-family: inherit;
-  font-size: 0.75rem;
+  font-size: var(--fs-caption);
   font-weight: 700;
   line-height: 1.2;
   cursor: pointer;
@@ -107,9 +115,9 @@
 
 .attestations-boundary > svg { color: var(--accent-bright); }
 .attestations-boundary > div { display: grid; gap: 3px; }
-.attestations-boundary strong { font-size: 0.8rem; }
+.attestations-boundary strong { font-size: var(--fs-meta); }
 .attestations-boundary span,
-.attestations-boundary small { color: var(--ink-muted); font-size: 0.72rem; line-height: 1.4; }
+.attestations-boundary small { color: var(--ink-muted); font-size: var(--fs-caption); line-height: 1.4; }
 .attestations-boundary small { white-space: nowrap; }
 
 .attestations-alert {
@@ -122,7 +130,7 @@
   border-radius: var(--radius-control);
   color: var(--signal);
   background: color-mix(in srgb, var(--signal) 6%, transparent);
-  font-size: 0.76rem;
+  font-size: var(--fs-caption);
 }
 
 .attestations-alert.error {
@@ -182,15 +190,24 @@
   overscroll-behavior: contain;
 }
 
+/*
+ * The seal sits above the identity, not beside it.
+ *
+ * Side by side, the chip took 110px of a 241px rail and the record's title —
+ * the only thing that tells one record from another — was left with ~100px and
+ * rendered as "C…". A rail that is 81% empty vertically has no business
+ * spending its width on a word the card states again in its own text.
+ */
 .attestation-record-list > button {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  gap: 9px;
+  grid-template-columns: minmax(0, 1fr);
+  justify-items: start;
+  gap: 7px;
   min-height: 76px;
   padding: 10px;
   text-align: left;
   content-visibility: auto;
-  contain-intrinsic-size: auto 76px;
+  contain-intrinsic-size: auto 96px;
 }
 
 .attestation-record-list > button.active {
@@ -204,18 +221,37 @@
   min-width: 0;
 }
 
-.attestation-record-list strong,
-.attestation-record-list small,
-.attestation-record-list em {
+/*
+ * A record's identity may wrap; it may not be destroyed.
+ *
+ * Measured at 1440px: a 212px card rendered "C… / Qw… / Jul…" — title,
+ * subtitle and timestamp each clipped to one or three characters by
+ * `white-space: nowrap` inside a 241px rail. An ellipsis that eats the whole
+ * string is not a truncation, it is a deletion, and the rail's only job is to
+ * let a reader tell one record from another.
+ */
+.attestation-record-list > button > span:nth-child(2) { width: 100%; }
+
+.attestation-record-list strong {
+  font-size: var(--fs-meta);
+  overflow-wrap: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-.attestation-record-list strong { font-size: 0.78rem; }
-.attestation-record-list small { color: var(--ink-muted); font-size: 0.69rem; }
-.attestation-record-list em { color: var(--ink-faint); font: normal var(--fs-micro)/1.3 var(--font-mono); }
-.attestation-record-list b { color: var(--ink-faint); font: 700 var(--fs-micro)/1.2 var(--font-mono); letter-spacing: 0.08em; }
+.attestation-record-list small {
+  color: var(--ink-muted);
+  font-size: var(--fs-micro);
+  overflow-wrap: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.attestation-record-list b { color: var(--ink-faint); font: 700 var(--fs-micro)/1.2 var(--font-mono); letter-spacing: 0.08em; align-self: start; }
 
 .attestations-ledger-note {
   display: grid;
@@ -245,13 +281,30 @@
   border-bottom: 1px solid var(--line);
 }
 
-.attestation-record-heading h2 { margin: 5px 0 6px; font-size: 1.12rem; overflow-wrap: anywhere; }
-.attestation-record-heading p { max-width: 68ch; margin: 0; color: var(--ink-muted); font-size: 0.73rem; line-height: 1.5; }
-.attestation-record-heading dl { display: grid; grid-template-columns: repeat(4, minmax(50px, 1fr)); margin: 0; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-control); }
-.attestation-record-heading dl > div { min-width: 0; padding: 8px 9px; border-right: 1px solid var(--line); text-align: center; }
-.attestation-record-heading dl > div:last-child { border-right: 0; }
-.attestation-record-heading dt { color: var(--ink-faint); font-size: var(--fs-micro); text-transform: uppercase; }
-.attestation-record-heading dd { margin: 3px 0 0; font: 700 0.82rem/1 ui-monospace, monospace; }
+.attestation-record-heading h2 { margin: 5px 0 6px; font-size: var(--fs-lead); overflow-wrap: anywhere; }
+.attestation-record-heading p { max-width: 68ch; margin: 0; color: var(--ink-muted); font-size: var(--fs-caption); line-height: 1.5; }
+/*
+ * Four `n label` pairs, wrapping, never a fixed four-column grid.
+ *
+ * The 50px minimum columns rendered "VERIFIEDPARTIAL FAILED UNAV" on iPad —
+ * overlapping, truncated labels in a machine vocabulary ("Partial",
+ * "Unavailable") that no other Airship surface speaks. The words now come from
+ * `proofStatusLabel`, so the ledger counts in exactly the three state words
+ * the seals do, and each pair takes the width its own word needs.
+ */
+.attestation-record-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  margin: 0;
+  padding: 8px 11px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+}
+
+.attestation-record-counts > div { display: flex; gap: 5px; align-items: baseline; }
+.attestation-record-counts dt { color: var(--ink-muted); font-size: var(--fs-micro); text-transform: uppercase; letter-spacing: .08em; white-space: nowrap; }
+.attestation-record-counts dd { margin: 0; font: 700 0.82rem/1 var(--font-body); font-variant-numeric: tabular-nums; }
 
 .attestation-matrix {
   display: grid;
@@ -277,7 +330,7 @@
 .attestation-matrix > button.active { box-shadow: inset 0 -3px var(--accent-bright); background: color-mix(in srgb, var(--accent) 6%, var(--surface) 94%); }
 .attestation-matrix > button > span { display: flex; gap: 6px; align-items: center; }
 .attestation-matrix > button > span em { color: var(--ink-muted); font: normal var(--fs-micro)/1.2 var(--font-mono); text-transform: uppercase; }
-.attestation-matrix > button strong { font-size: 0.76rem; line-height: 1.3; }
+.attestation-matrix > button strong { font-size: var(--fs-caption); line-height: 1.3; }
 .attestation-matrix > button small { color: var(--ink-faint); font-size: var(--fs-micro); line-height: 1.35; }
 
 .attestation-status-mark {
@@ -319,11 +372,11 @@
 .attestation-verification-list > button > span { display: grid; gap: 2px; min-width: 0; }
 .attestation-verification-list strong,
 .attestation-verification-list small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.attestation-verification-list strong { font-size: 0.72rem; }
+.attestation-verification-list strong { font-size: var(--fs-caption); }
 .attestation-verification-list small { color: var(--ink-faint); font-size: var(--fs-micro); }
 .attestation-verification-list em { color: var(--ink-muted); font: normal var(--fs-micro)/1.2 var(--font-mono); }
 .attestations-no-verifier,
-.attestation-facts-empty { padding: 12px; border: 1px dashed var(--line-strong); border-radius: var(--radius-control); color: var(--ink-faint); font-size: 0.7rem; line-height: 1.45; }
+.attestation-facts-empty { padding: 12px; border: 1px dashed var(--line-strong); border-radius: var(--radius-control); color: var(--ink-faint); font-size: var(--fs-micro); line-height: 1.45; }
 
 .attestation-facts {
   display: grid;
@@ -349,13 +402,18 @@
 
 .attestation-inspection-title { display: flex; gap: 10px; align-items: start; }
 .attestation-inspection-title .attestation-status-mark { flex-direction: column; align-items: flex-start; }
-.attestation-inspection-title h2 { margin: 0 0 4px; font-size: 1rem; }
-.attestation-inspection-title strong { font: 700 var(--fs-micro)/1.2 var(--font-mono); text-transform: uppercase; }
+.attestation-inspection-title > div { display: grid; gap: 3px; min-width: 0; }
+.attestation-inspection-title h2 { margin: 0; font-size: var(--fs-lead); }
+/* Three separate lines. Inline `small` and `strong` produced "Attested
+   endpoint-key bindingASSERTED" — a claim name welded to a status word with
+   no separator, on the surface whose entire job is precision. */
+.attestation-inspection-title small { display: block; color: var(--ink-muted); font-size: var(--fs-micro); line-height: 1.35; }
+.attestation-inspection-title strong { display: block; font: 700 var(--fs-micro)/1.35 var(--font-mono); text-transform: uppercase; overflow-wrap: anywhere; }
 .attestation-inspection-title strong.verified { color: var(--signal); }
 .attestation-inspection-title strong.partial { color: var(--accent-bright); }
 .attestation-inspection-title strong.failed,
 .attestation-inspection-title strong.expired { color: var(--danger); }
-.attestation-inspection > p { margin: 0; color: var(--ink-muted); font-size: 0.74rem; line-height: 1.55; }
+.attestation-inspection > p { margin: 0; color: var(--ink-muted); font-size: var(--fs-caption); line-height: 1.55; }
 .attestation-inspection > dl { display: grid; margin: 0; border-top: 1px solid var(--line); }
 .attestation-inspection > dl > div { display: grid; grid-template-columns: minmax(85px, 0.7fr) minmax(0, 1.3fr); gap: 9px; padding: 8px 0; border-bottom: 1px solid var(--line); }
 .attestation-inspection dt { color: var(--ink-faint); font-size: var(--fs-micro); }
@@ -381,7 +439,7 @@
   border-radius: var(--radius-control);
 }
 
-.attestations-export-note strong { display: block; font-size: 0.72rem; }
+.attestations-export-note strong { display: block; font-size: var(--fs-caption); }
 .attestations-export-note p { margin: 4px 0 0; color: var(--ink-faint); font-size: var(--fs-micro); line-height: 1.45; }
 
 .attestations-empty {
@@ -396,14 +454,15 @@
   background: var(--surface);
 }
 
-.attestations-empty h2 { margin: 0; color: var(--ink); font-size: 1rem; }
-.attestations-empty p { max-width: 58ch; margin: 0; font-size: 0.76rem; line-height: 1.5; }
+.attestations-empty h2 { margin: 0; color: var(--ink); font-size: var(--fs-lead); }
+.attestations-empty p { max-width: 58ch; margin: 0; font-size: var(--fs-caption); line-height: 1.5; }
 .attestations-empty__intro { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 14px; align-items: start; max-width: 700px; margin-inline: auto; }
 .attestations-empty__intro p { margin-top: 5px; }
+.attestations-empty__connection { margin-top: 14px; }
 .attestations-empty__flow { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; width: min(760px, 100%); margin-inline: auto; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--line); }
 .attestations-empty__flow > div { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 3px 9px; align-content: start; min-width: 0; padding: 13px; background: var(--surface-soft); }
 .attestations-empty__flow span { grid-row: 1 / span 2; color: var(--accent-bright); font: var(--fs-micro)/1.3 var(--font-mono); }
-.attestations-empty__flow strong { color: var(--ink); font-size: 0.75rem; }
+.attestations-empty__flow strong { color: var(--ink); font-size: var(--fs-caption); }
 .attestations-empty__flow small { color: var(--ink-faint); font-size: var(--fs-micro); line-height: 1.4; }
 
 @media (max-width: 1180px) {

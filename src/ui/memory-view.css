@@ -1,0 +1,950 @@
+.memory-view {
+  display: grid;
+  gap: var(--sp-3);
+  width: min(1320px, 100%);
+}
+
+/*
+ * The Memory bar.
+ *
+ * What stood here was 372px of desktop chrome (44% of the content region) and
+ * 510px on phone (81%): a 128px page-slab block, a 156px query block whose
+ * `align-content: center` opened a 135px void on a stacked grid, a 44px jump
+ * nav restating the three section titles below it, and then a second 104px
+ * region header. Three different sentences stated one fact. The route title,
+ * the eyebrow and all three sentences survive — the title in the shared 44px
+ * <RouteHeader>, the rest one rung down inside its ⓘ.
+ */
+.memory-query {
+  display: grid;
+  min-width: 0;
+}
+
+.memory-query > div {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: var(--sp-2);
+  align-items: center;
+  min-width: 0;
+  min-height: 48px;
+  padding-left: var(--sp-3);
+  border: 1px solid var(--line-control);
+  border-radius: var(--radius-control);
+  color: var(--accent-bright);
+  background: var(--ground);
+}
+
+.memory-query > div:focus-within {
+  border-color: var(--accent-bright);
+  outline: 2px solid color-mix(in srgb, var(--accent-bright) 24%, transparent);
+  outline-offset: 2px;
+}
+
+.memory-query input {
+  width: 100%;
+  min-width: 0;
+  min-height: 46px;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  color: var(--ink);
+  background: transparent;
+  font-size: var(--fs-body);
+}
+
+/*
+ * One clear affordance, not two. The phone rendered the native `type=search`
+ * cross beside a 58px "Clear" button; a 44x44 icon returns that width to the
+ * field, which is what the shortened placeholder was for.
+ */
+.memory-query input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.memory-query button {
+  width: 44px;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-control);
+  color: var(--ink-muted);
+  background: transparent;
+  cursor: pointer;
+  font-size: var(--fs-caption);
+}
+
+.memory-query button:hover {
+  color: var(--ink);
+}
+
+/*
+ * The scope rail. Three 44px cells that anchor the three regions and carry
+ * their counts. The labels shorten to Recall / Graph / Index so all three fit
+ * a 430px screen — the full names live in each button's `aria-label` and in
+ * the section headings they anchor to, so nothing is off-screen and unnamed.
+ * `overflow-x: auto` stays: it is the honest affordance if a type-scale
+ * preference ever pushes the row past its track.
+ */
+.memory-scope-rail {
+  display: grid;
+  grid-auto-columns: minmax(0, 1fr);
+  grid-auto-flow: column;
+  gap: 1px;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  background: var(--line);
+}
+
+.memory-scope-rail button {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 var(--sp-3);
+  border: 0;
+  color: var(--ink-muted);
+  background: var(--surface-soft);
+  cursor: pointer;
+  font: inherit;
+}
+
+.memory-scope-rail button:hover,
+.memory-scope-rail button:focus-visible {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--surface-soft) 88%, var(--accent) 12%);
+}
+
+.memory-scope-rail small {
+  overflow: hidden;
+  color: var(--ink-faint);
+  font: var(--fs-micro)/1.2 var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memory-view .memory-federated {
+  display: grid;
+  gap: var(--sp-2);
+  scroll-margin-top: var(--sp-4);
+}
+
+.memory-view .memory-federated > .memory-search-status {
+  min-height: 24px;
+  margin: 0;
+  padding: 0 var(--sp-2);
+  border-left: 2px solid var(--accent);
+  color: var(--ink-muted);
+  font-size: var(--fs-caption);
+  line-height: 1.6;
+}
+
+/*
+ * The unsearched state, with something to press in it.
+ *
+ * Every chip is a term read out of live page state at render time, and each
+ * one says which surface it came from — the label is a claim about the corpus,
+ * so it has to be as checkable as any other claim on this route.
+ */
+.memory-starters {
+  display: grid;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-panel);
+  background: color-mix(in srgb, var(--surface-soft) 94%, transparent);
+}
+
+.memory-starters > p {
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: var(--fs-caption);
+  line-height: 1.55;
+}
+
+.memory-starters > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.memory-starters button {
+  display: grid;
+  gap: 1px;
+  min-height: 44px;
+  min-width: 0;
+  max-width: 100%;
+  padding: var(--sp-1) var(--sp-3);
+  border: 1px solid var(--line-control);
+  border-radius: var(--radius-control);
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.memory-starters button:hover,
+.memory-starters button:focus-visible {
+  border-color: var(--accent);
+  background: var(--surface-raised);
+}
+
+.memory-starters button > strong {
+  overflow: hidden;
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-strong);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memory-starters button > small {
+  color: var(--ink-faint);
+  font: var(--fs-micro)/1.3 var(--font-mono);
+}
+
+.memory-view .memory-result-lanes {
+  display: grid;
+  gap: var(--sp-3);
+  /*
+   * `align-items: start` is the whole fix for the 45%-blank results region:
+   * the three lanes were locked to a common row height, so a lane with one
+   * sentence in it was as tall as a lane with three results.
+   */
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  align-items: start;
+}
+
+/*
+ * Deliberately not `overflow: clip`. A lane holds a provenance chip, and a
+ * chip that opens an anchored panel inside a clipping box is a disclosure that
+ * cannot be read — the lineage would be reachable in the DOM and invisible on
+ * screen, which is the failure this whole package exists to remove. The
+ * rounded corner is carried by the header instead.
+ */
+.memory-view .memory-result-lane {
+  display: grid;
+  min-width: 0;
+  /* Wins over the retired lane block in routes.css, whose `overflow: hidden`
+     would clip this lane's own lineage disclosure shut. */
+  overflow: visible;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-panel);
+  background: color-mix(in srgb, var(--surface) 90%, transparent);
+}
+
+.memory-view .memory-result-lane > header {
+  border-radius: calc(var(--radius-panel) - 1px) calc(var(--radius-panel) - 1px) 0 0;
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+  min-height: 44px;
+  padding: 0 var(--sp-2) 0 var(--sp-3);
+  background: color-mix(in srgb, var(--surface-soft) 94%, transparent);
+}
+
+.memory-view .memory-result-lane[data-state="hits"] > header,
+.memory-view .memory-result-lane[data-state="searching"] > header {
+  border-bottom: 1px solid var(--line);
+}
+
+.memory-view .memory-lane-note {
+  min-height: 44px;
+  margin: 0;
+  padding: var(--sp-3);
+  color: var(--ink-muted);
+  font-size: var(--fs-caption);
+}
+
+.memory-view .memory-result-lane > header > h3 {
+  flex: 1 1 auto;
+  overflow: hidden;
+  margin: 0;
+  font-size: var(--fs-body);
+  font-weight: var(--fw-strong);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memory-view .memory-lane-count {
+  flex: 0 0 auto;
+  padding: 2px var(--sp-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-chip);
+  color: var(--ink-faint);
+  font: var(--fs-micro)/1.4 var(--font-mono);
+}
+
+.memory-view .memory-lane-hits {
+  display: grid;
+  /* Not an inner scroller: the retired rule capped this at 52vh with
+     `overflow-y: auto`, which clipped every hit's lineage chip. */
+  max-height: none;
+  overflow: visible;
+  gap: 1px;
+  background: var(--line);
+}
+
+
+/*
+ * A result with a destination.
+ *
+ * The card this replaces was `<article><strong>{eventType}</strong><p>320
+ * chars</p><small>digest…</small></article>`: a machine token for a title, an
+ * invisible truncation, no link, and nine computed fields dropped on the way
+ * to the screen.
+ */
+.memory-view .memory-hit {
+  display: grid;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  border-bottom: 0;
+  background: var(--surface);
+}
+
+.memory-view .memory-hit > header {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+  min-height: 32px;
+}
+
+.memory-view .memory-hit > header > strong {
+  flex: 1 1 auto;
+  overflow: hidden;
+  font-size: var(--fs-meta);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memory-view .memory-hit > header > time {
+  flex: 0 0 auto;
+  color: var(--ink-faint);
+  font-size: var(--fs-caption);
+}
+
+.memory-view .memory-hit__open {
+  flex: 0 0 auto;
+  min-height: 44px;
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--line-control);
+  border-radius: var(--radius-control);
+  color: var(--accent-bright);
+  background: transparent;
+  cursor: pointer;
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-strong);
+}
+
+.memory-view .memory-hit__open:hover {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.memory-view .memory-hit__text {
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: var(--fs-caption);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+/*
+ * The clamp is visual and reversible, and the control below states the length
+ * it is holding back. The text itself is always in the document.
+ */
+.memory-view .memory-hit__text[data-expanded="false"] {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  line-clamp: 4;
+}
+
+.memory-view .memory-hit__more {
+  justify-self: start;
+  min-height: 44px;
+  padding: 0 var(--sp-2);
+  border: 0;
+  border-radius: var(--radius-control);
+  color: var(--accent-bright);
+  background: transparent;
+  cursor: pointer;
+  font-size: var(--fs-caption);
+  text-align: left;
+}
+
+.memory-view .memory-hit > footer {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+}
+
+/*
+ * The zero-result state, which is where this route's argument has to be made.
+ * It used to be "No matches in this scope." printed three times across 687px.
+ */
+.memory-no-match {
+  display: grid;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-panel);
+  background: color-mix(in srgb, var(--surface) 90%, transparent);
+}
+
+.memory-no-match h3 {
+  margin: 0;
+  font-size: var(--fs-title);
+  overflow-wrap: anywhere;
+}
+
+.memory-no-match ul {
+  display: grid;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.memory-no-match li {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+  justify-content: space-between;
+  min-height: 44px;
+  padding-bottom: var(--sp-2);
+  border-bottom: 1px solid var(--line);
+  color: var(--ink-muted);
+  font-size: var(--fs-caption);
+  line-height: 1.5;
+}
+
+.memory-no-match p {
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--fs-caption);
+}
+
+.memory-disclosure {
+  min-width: 0;
+  scroll-margin-top: var(--sp-4);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-panel);
+  background: color-mix(in srgb, var(--surface) 90%, transparent);
+  box-shadow: var(--shadow);
+}
+
+.memory-disclosure > summary {
+  border-radius: calc(var(--radius-panel) - 1px) calc(var(--radius-panel) - 1px) 0 0;
+  display: flex;
+  gap: var(--sp-4);
+  align-items: center;
+  justify-content: space-between;
+  min-height: 52px;
+  padding: var(--sp-2) var(--sp-3);
+  color: var(--ink);
+  background: color-mix(in srgb, var(--surface-soft) 94%, transparent);
+  cursor: pointer;
+  list-style: none;
+}
+
+.memory-disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+
+.memory-disclosure[open] > summary {
+  border-bottom: 1px solid var(--line);
+}
+
+.memory-disclosure > summary:focus-visible {
+  outline: 2px solid var(--accent-bright);
+  outline-offset: -3px;
+}
+
+.memory-disclosure > summary > span:first-child {
+  display: flex;
+  gap: var(--sp-3);
+  align-items: center;
+  min-width: 0;
+}
+
+.memory-disclosure > summary svg {
+  flex: 0 0 auto;
+  color: var(--accent-bright);
+}
+
+.memory-disclosure > summary small,
+.memory-disclosure > summary strong {
+  display: block;
+}
+
+.memory-disclosure > summary small {
+  margin-bottom: 2px;
+  color: var(--ink-muted);
+  font: var(--fw-strong) var(--fs-micro)/1.2 var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.memory-disclosure > summary strong {
+  overflow: hidden;
+  font-size: var(--fs-meta);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memory-summary-meta {
+  display: flex;
+  flex: 0 0 auto;
+  gap: var(--sp-1);
+  align-items: center;
+  color: var(--ink-faint);
+  font: var(--fs-micro)/1.3 var(--font-mono);
+}
+
+.memory-summary-meta b {
+  font-weight: var(--fw-strong);
+  font-variant-numeric: tabular-nums;
+}
+
+.memory-summary-meta i {
+  margin-left: var(--sp-1);
+}
+
+.memory-summary-meta i {
+  width: 9px;
+  height: 9px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(45deg) translate(-2px, 2px);
+  transition: transform 140ms ease;
+}
+
+.memory-disclosure[open] .memory-summary-meta i {
+  transform: rotate(225deg) translate(-2px, 2px);
+}
+
+.memory-disclosure-body {
+  min-width: 0;
+  padding: var(--sp-3);
+}
+
+/*
+ * The four counts as one row of cells rather than four 105px cards.
+ *
+ * Same three slots the shared <MetricStrip> defines — mono uppercase label,
+ * tabular figure, provenance caption — applied to the shipped `.metric`
+ * elements. The component itself cannot be imported here: it is also imported
+ * by `billing-view`, which lives in the deferred-capabilities chunk, and the
+ * two importers would merge `memory-graph/kind-visual` into a shared chunk the
+ * release gate requires by name. Adopting the component is a one-line change
+ * for whoever owns that chunk map.
+ */
+.memory-view .memory-metrics {
+  display: grid;
+  grid-auto-columns: minmax(0, 1fr);
+  grid-auto-flow: column;
+  gap: 0;
+  margin-bottom: var(--sp-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-panel);
+}
+
+.memory-view .memory-metrics .metric {
+  display: grid;
+  gap: var(--sp-1);
+  align-content: start;
+  min-height: 0;
+  padding: var(--sp-3) var(--sp-4);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.memory-view .memory-metrics .metric + .metric {
+  border-left: 1px solid var(--line);
+}
+
+.memory-view .memory-metrics .metric > span {
+  color: var(--ink-muted);
+  font: var(--fs-micro)/1.3 var(--font-mono);
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+/*
+ * Inter, not Georgia: the display serif's default figures are oldstyle and
+ * proportional, so a column of them cannot align. Tabular Inter can.
+ */
+.memory-view .memory-metrics .metric strong {
+  margin-top: 0;
+  color: var(--ink);
+  font: var(--fw-strong) var(--fs-title)/1.2 var(--font-body);
+  font-variant-numeric: tabular-nums;
+}
+
+/* A provenance line cut in half is a claim with its qualifier removed. */
+.memory-view .memory-metrics .metric small {
+  margin-top: 0;
+  overflow: visible;
+  color: var(--ink-faint);
+  font: var(--fs-caption)/1.4 var(--font-body);
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.memory-view .memory-boundary {
+  align-items: start;
+  margin-bottom: var(--sp-2);
+  border-radius: var(--radius-control);
+  background: var(--surface-soft);
+}
+
+.memory-view .memory-boundary strong {
+  flex: 0 0 auto;
+}
+
+.memory-view .memory-shell {
+  grid-template-columns: minmax(0, 1fr) minmax(270px, 310px);
+}
+
+.memory-view .memory-toolbar {
+  align-items: start;
+  min-height: 44px;
+}
+
+.memory-graph-query {
+  display: grid;
+  flex: 1;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+
+.memory-graph-query > span {
+  overflow: hidden;
+  color: var(--ink-faint);
+  font: var(--fs-micro)/1.25 var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memory-graph-query > div {
+  display: flex;
+  gap: var(--sp-1);
+  min-width: 0;
+  padding-bottom: 1px;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  scrollbar-width: thin;
+}
+
+.memory-graph-query button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: var(--sp-1);
+  align-items: center;
+  min-height: 44px;
+  max-width: 240px;
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--line-control);
+  border-radius: var(--radius-chip);
+  color: var(--ink-muted);
+  background: transparent;
+  cursor: pointer;
+  font-size: var(--fs-micro);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memory-graph-query button span {
+  color: var(--accent-bright);
+  font: var(--fs-micro)/1 var(--font-mono);
+  text-transform: uppercase;
+}
+
+.memory-graph-query button[aria-pressed="true"],
+.memory-graph-query button:hover {
+  color: var(--ink);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.memory-graph-query p {
+  min-height: 28px;
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: var(--fs-micro);
+}
+
+/*
+ * Where the filtering rule lives: next to the legend, which is where filtering
+ * actually happens, rather than inside a bounds banner about derivation limits.
+ */
+/*
+ * The kind legend is the graph's only filter control, and its buttons measured
+ * 32px. Scoped to this route because the legend renders nowhere else, so the
+ * touch floor is fixed without reaching into a sheet another package owns.
+ */
+.memory-view .memory-legend button {
+  min-height: 44px;
+  padding: var(--sp-2) var(--sp-3);
+}
+
+.memory-filter-note {
+  margin: 0;
+  padding-top: var(--sp-2);
+  color: var(--ink-muted);
+  font-size: var(--fs-caption);
+  line-height: 1.5;
+}
+
+.memory-view .memory-detail {
+  max-height: 650px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.memory-overview {
+  display: grid;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+}
+
+.memory-overview h2 {
+  margin: 0;
+  font-size: var(--fs-title);
+}
+
+.memory-overview h3 {
+  margin: var(--sp-2) 0 0;
+  color: var(--ink-muted);
+  font: var(--fw-strong) var(--fs-micro)/1.2 var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.memory-overview__nodes {
+  display: grid;
+  gap: 1px;
+}
+
+.memory-overview__nodes button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0 var(--sp-2);
+  align-items: center;
+  min-height: 44px;
+  padding: var(--sp-1) var(--sp-2);
+  border: 0;
+  border-radius: var(--radius-control);
+  color: var(--ink);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.memory-overview__nodes button:hover {
+  background: var(--surface-soft);
+}
+
+.memory-overview__nodes button > span {
+  grid-area: 1 / 1;
+  color: var(--accent-bright);
+  font: var(--fs-micro)/1.2 var(--font-mono);
+  text-transform: uppercase;
+}
+
+.memory-overview__nodes button > strong {
+  grid-area: 2 / 1;
+  overflow: hidden;
+  font-size: var(--fs-caption);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memory-overview__nodes button > small {
+  grid-area: 1 / 2 / 3 / 3;
+  color: var(--ink-faint);
+  font-size: var(--fs-micro);
+}
+
+.memory-overview > p {
+  margin: 0;
+  color: var(--ink-faint);
+  font-size: var(--fs-caption);
+  line-height: 1.5;
+}
+
+.memory-index-disclosure .memory-disclosure-body {
+  min-height: 96px;
+  background: color-mix(in srgb, var(--ground) 35%, transparent);
+}
+
+.memory-deferred-note {
+  display: grid;
+  min-height: 80px;
+  margin: 0;
+  place-items: center;
+  color: var(--ink-muted);
+  font-size: var(--fs-caption);
+  text-align: center;
+}
+
+/*
+ * The shared-query status, on one line.
+ *
+ * Its predecessor was a card whose label pair — `SHARED MEMORY QUERY /
+ * Waiting for a query above` — existed only to report that the field 1,600px
+ * up the page was being followed, and then said it a second time in a sentence
+ * underneath. The sentence is the part that carries a fact and the part the
+ * live region announces; the query it is bound to is now named inside it.
+ *
+ * The full generation digest is inside this sentence, so a screen reader hears
+ * every character. The visible row ellipsises it and the canonical, copyable
+ * copy is the Index lineage panel below — which is what stops the same digest
+ * being printed three times on one screen.
+ */
+.memory-view .context-shared-status {
+  display: block;
+  min-width: 0;
+  min-height: 24px;
+  overflow: hidden;
+  margin: 0;
+  padding: 0 var(--sp-2);
+  border-left: 2px solid var(--signal);
+  color: var(--ink-muted);
+  font-size: var(--fs-caption);
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memory-view .context-shared-status > b {
+  color: var(--ink);
+  font-weight: var(--fw-body);
+}
+
+.memory-view .context-shared-status > b::after {
+  content: " · ";
+  color: var(--ink-faint);
+}
+
+@media (max-width: 1050px) {
+  .memory-view .memory-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .memory-view .memory-detail {
+    max-height: 440px;
+  }
+}
+
+@media (max-width: 620px) {
+  .memory-view {
+    gap: var(--sp-2);
+  }
+
+  .memory-query input {
+    font-size: var(--fs-field);
+  }
+
+  /*
+   * Two lines per cell on a phone. Side by side, "Graph 152 nodes" clipped to
+   * "152 nod…" at 430px — and a clipped count is the same failure the strip
+   * this replaced had, just smaller.
+   */
+  .memory-scope-rail button {
+    display: grid;
+    gap: 0;
+    align-content: center;
+    justify-items: start;
+    padding: 0 var(--sp-2);
+  }
+
+
+  .memory-disclosure > summary {
+    padding: var(--sp-2);
+  }
+
+  .memory-disclosure > summary strong {
+    white-space: normal;
+  }
+
+  /*
+   * The rule that used to stand here was `font-size: 0`, which did not
+   * compress "647 relationships" and "3 workspace sources" on a phone — it
+   * deleted them, on the one route whose entire argument is that it hides
+   * nothing. The count is the fact and the unit is its label, so the phone
+   * sheds the *unit* into the accessibility tree (clipped, not removed) and
+   * the number stays visible. The summary's accessible name is unchanged at
+   * every width, and the full phrase is repeated in the opened panel.
+   */
+  .memory-summary-meta small {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .memory-disclosure-body {
+    padding: var(--sp-2);
+  }
+
+  /*
+   * Two per row on a phone. Four columns here would be four ~100px tracks of
+   * clipped provenance, and the caption is the part that makes the number
+   * checkable.
+   */
+  .memory-view .memory-metrics {
+    grid-auto-flow: row;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0;
+  }
+
+  .memory-view .memory-metrics .metric {
+    min-height: 0;
+    padding: var(--sp-2);
+  }
+
+  .memory-view .memory-metrics .metric + .metric {
+    border-left: 0;
+  }
+
+  .memory-view .memory-metrics .metric:nth-child(2n) {
+    border-left: 1px solid var(--line);
+  }
+
+  .memory-view .memory-metrics .metric:nth-child(n + 3) {
+    border-top: 1px solid var(--line);
+  }
+
+  .memory-view .memory-boundary {
+    display: grid;
+    gap: var(--sp-1);
+  }
+
+  .memory-view .memory-toolbar {
+    display: grid;
+    gap: var(--sp-1);
+  }
+
+  .memory-view .memory-canvas {
+    min-height: 360px;
+  }
+
+  .memory-view .memory-detail {
+    max-height: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .memory-summary-meta i {
+    transition: none;
+  }
+}

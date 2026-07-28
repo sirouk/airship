@@ -30,6 +30,48 @@ describe("Google Drive encrypted ObjectStore", () => {
     expect(drive.filesByRole("encrypted-segment-v1").length).toBeGreaterThan(1);
   });
 
+  it("reopens the same renamed workspace from recovery material without relying on its display name", async () => {
+    const drive = new FakeDrive();
+    const provider = new MemoryOnlyGoogleAccessTokenProvider();
+    provider.replace({ accessToken: "temporary-google-token", expiresInSeconds: 3_600, grantedScopes: GOOGLE_ACCOUNT_SCOPES });
+    const { key, recoveryBytes } = await WorkspaceRootKey.generate();
+    const firstManager = new GoogleDriveWorkspaceManager(provider, key, drive.fetch);
+    const created = await firstManager.connectOrCreate("Original Airship workspace");
+    const renamed = await firstManager.rename(created, "Renamed in Drive");
+
+    // This mirrors a new browser importing the saved recovery material. The
+    // namespace derives from the root key, so the folder identity survives a
+    // user-facing rename and a different suggested name at reconnect.
+    const recoveredKey = await WorkspaceRootKey.import(recoveryBytes.slice());
+    recoveryBytes.fill(0);
+    const reopened = await new GoogleDriveWorkspaceManager(provider, recoveredKey, drive.fetch)
+      .connectExisting();
+
+    expect(reopened).toMatchObject({
+      workspaceFolderId: renamed.workspaceFolderId,
+      rootFolderId: renamed.rootFolderId,
+      segmentsFolderId: renamed.segmentsFolderId,
+      namespaceId: renamed.namespaceId,
+      workspaceName: "Renamed in Drive",
+    });
+  });
+
+  it("never creates a replacement hierarchy when imported recovery misses the selected account", async () => {
+    const drive = new FakeDrive();
+    const provider = new MemoryOnlyGoogleAccessTokenProvider();
+    provider.replace({ accessToken: "temporary-google-token", expiresInSeconds: 3_600, grantedScopes: GOOGLE_ACCOUNT_SCOPES });
+    const { key } = await WorkspaceRootKey.generate();
+    const manager = new GoogleDriveWorkspaceManager(provider, key, drive.fetch);
+
+    await expect(manager.connectExisting()).rejects.toMatchObject({
+      name: "GoogleDriveWorkspaceNotFoundError",
+      message: expect.stringContaining("no new folder was created"),
+    });
+    expect(drive.filesByRole("workspace")).toHaveLength(0);
+    expect(drive.filesByRole("root")).toHaveLength(0);
+    expect(drive.filesByRole("segments")).toHaveLength(0);
+  });
+
   it("fails closed when more than one authority index exists", async () => {
     const { drive, provider, key, workspace, store } = await driveFixture();
     await store.list("");
@@ -37,6 +79,44 @@ describe("Google Drive encrypted ObjectStore", () => {
     const reconnecting = new GoogleDriveObjectStore({ tokenProvider: provider, workspace, workspaceKey: key, fetchImplementation: drive.fetch });
     await expect(reconnecting.list("")).rejects.toMatchObject({ name: "GoogleDriveAmbiguousRootError" });
     await expect(store.putIfAbsent("must-not-commit", new Uint8Array([1]))).rejects.toMatchObject({ name: "GoogleDriveAmbiguousRootError" });
+  });
+
+  it("reclaims indexed objects entry-first and confirms each removal with Drive", async () => {
+    const { drive, store } = await driveFixture();
+    await store.putIfAbsent("probe/alpha", new TextEncoder().encode("alpha"));
+    await store.putIfAbsent("probe/beta", new TextEncoder().encode("beta"));
+    await store.putIfAbsent("keep/gamma", new TextEncoder().encode("gamma"));
+    const liveBefore = drive.liveFilesByRole("encrypted-segment-v1").length;
+
+    const receipt = await store.trash(["probe/alpha", "probe/beta", "probe/never-written"]);
+    expect(receipt).toMatchObject({
+      requested: 3,
+      reclaimed: ["probe/alpha", "probe/beta"],
+      retained: ["probe/never-written"],
+    });
+    expect(receipt.outcomes).toContainEqual({ key: "probe/never-written", reclaimed: false, reason: "not-indexed" });
+
+    // The index entry is gone and the body is out of the live listing.
+    expect(await store.list("probe/")).toEqual([]);
+    expect(await store.get("probe/alpha")).toBeUndefined();
+    expect(drive.liveFilesByRole("encrypted-segment-v1")).toHaveLength(liveBefore - 2);
+    // Untouched objects stay fully readable.
+    expect(new TextDecoder().decode((await store.get("keep/gamma"))!.bytes)).toBe("gamma");
+  });
+
+  it("never claims a removal Drive refused, and still leaves no dangling index reference", async () => {
+    const { drive, store } = await driveFixture();
+    await store.putIfAbsent("probe/refused", new TextEncoder().encode("refused"));
+    drive.refuseTrash = true;
+
+    const receipt = await store.trash(["probe/refused"]);
+    expect(receipt).toMatchObject({ requested: 1, reclaimed: [], retained: ["probe/refused"] });
+    expect(receipt.outcomes).toEqual([{ key: "probe/refused", reclaimed: false, reason: "refused" }]);
+    // Entry-first ordering means the leak is an untracked file, never a live
+    // reference whose get() would hard-fail.
+    expect(await store.list("probe/")).toEqual([]);
+    expect(await store.get("probe/refused")).toBeUndefined();
+    expect(drive.liveFilesByRole("encrypted-segment-v1").length).toBeGreaterThan(0);
   });
 
   it("fails closed when a duplicate matching workspace hierarchy folder exists", async () => {
@@ -77,6 +157,61 @@ describe("Google Drive encrypted ObjectStore", () => {
     await reader.compareAndSwap("range/expert.bin", current!.etag, new TextEncoder().encode("updated"));
     expect(drive.indexMediaReads).toBeGreaterThan(1);
   });
+
+  it("resumes a large immutable shard within the active call without persisting the session capability", async () => {
+    const { drive, store } = await driveFixture();
+    const bytes = new Uint8Array(9 * 1024 * 1024);
+    for (let index = 0; index < bytes.length; index += 1) bytes[index] = index % 251;
+
+    const result = await store.putIfAbsent("context/large-shard.enc", bytes);
+    expect(result.created).toBe(true);
+    expect(store.capabilities.upload).toEqual({
+      mode: "resumable-active-call",
+      interruptionRecovery: "resume-current-call",
+      persistsResumeCapability: false,
+    });
+    expect(drive.resumableInitiations).toBe(1);
+    expect(drive.resumableStatusQueries).toBeGreaterThan(0);
+    expect(drive.resumableChunkWrites).toBeGreaterThanOrEqual(3);
+    expect(drive.discardedResumableBodies).toBeGreaterThanOrEqual(3);
+    expect((await store.getRange("context/large-shard.enc", 4 * 1024 * 1024, 4 * 1024 * 1024 + 64))?.bytes)
+      .toEqual(bytes.slice(4 * 1024 * 1024, 4 * 1024 * 1024 + 64));
+  });
+
+  it("rejects an oversized chunked Drive metadata body before parsing it", async () => {
+    const provider = new MemoryOnlyGoogleAccessTokenProvider();
+    provider.replace({ accessToken: "temporary-google-token", expiresInSeconds: 3_600, grantedScopes: GOOGLE_ACCOUNT_SCOPES });
+    const { key } = await WorkspaceRootKey.generate();
+    const store = new GoogleDriveObjectStore({
+      tokenProvider: provider,
+      workspace: {
+        workspaceFolderId: "drive_workspace_bounded",
+        workspaceName: "Bounded Drive",
+        rootFolderId: "drive_root_bounded",
+        segmentsFolderId: "drive_segments_bounded",
+        namespaceId: "opaque-drive-bounded-response",
+      },
+      workspaceKey: key,
+      fetchImplementation: async () => new Response(JSON.stringify({
+        files: [],
+        ignoredPadding: "x".repeat(600 * 1024),
+      }), { headers: { "content-type": "application/json" } }),
+    });
+
+    await expect(store.list("")).rejects.toThrow("invalid JSON");
+  });
+
+  it("rejects oversized workspace-discovery metadata before folder creation", async () => {
+    const provider = new MemoryOnlyGoogleAccessTokenProvider();
+    provider.replace({ accessToken: "temporary-google-token", expiresInSeconds: 3_600, grantedScopes: GOOGLE_ACCOUNT_SCOPES });
+    const { key } = await WorkspaceRootKey.generate();
+    const manager = new GoogleDriveWorkspaceManager(provider, key, async () => new Response(JSON.stringify({
+      files: [],
+      ignoredPadding: "x".repeat(600 * 1024),
+    }), { headers: { "content-type": "application/json" } }));
+
+    await expect(manager.connectOrCreate()).rejects.toThrow("invalid JSON");
+  });
 });
 
 async function driveFixture() {
@@ -98,12 +233,24 @@ type StoredFile = {
   bytes: Uint8Array;
   modifiedTime: string;
   etag: string;
+  trashed: boolean;
 };
 
 class FakeDrive {
   private sequence = 10_000;
   private readonly files = new Map<string, StoredFile>();
+  private readonly uploadSessions = new Map<string, {
+    metadata: { name: string; mimeType: string; parents: string[]; appProperties: Record<string, string> };
+    total: number;
+    bytes: Uint8Array;
+    injectedUnknownCommit: boolean;
+  }>();
   indexMediaReads = 0;
+  resumableInitiations = 0;
+  resumableStatusQueries = 0;
+  resumableChunkWrites = 0;
+  discardedResumableBodies = 0;
+  refuseTrash = false;
   readonly fetch = async (input: string | URL | Request, init: RequestInit = {}): Promise<Response> => {
     const url = new URL(typeof input === "string" || input instanceof URL ? input.toString() : input.url);
     const headers = new Headers(init.headers);
@@ -111,18 +258,81 @@ class FakeDrive {
     const method = init.method ?? "GET";
     const fileMatch = /^\/drive\/v3\/files\/([^/]+)$/u.exec(url.pathname);
     const uploadMatch = /^\/upload\/drive\/v3\/files\/([^/]+)$/u.exec(url.pathname);
+    const resumableMatch = /^\/upload\/drive\/v3\/sessions\/([^/]+)$/u.exec(url.pathname);
 
     if (method === "GET" && url.pathname === "/drive/v3/files") return this.list(url);
     if (method === "POST" && url.pathname === "/drive/v3/files") return this.createFolder(init);
+    if (method === "POST" && url.pathname === "/upload/drive/v3/files" && url.searchParams.get("uploadType") === "resumable") {
+      return this.startResumable(url, init);
+    }
     if (method === "POST" && url.pathname === "/upload/drive/v3/files") return this.createMultipart(init);
-    if (method === "PATCH" && fileMatch) return this.rename(decodeURIComponent(fileMatch[1]!), init);
+    if (method === "PUT" && resumableMatch) return this.writeResumable(decodeURIComponent(resumableMatch[1]!), init);
+    if (method === "PATCH" && fileMatch) return this.patchMetadata(decodeURIComponent(fileMatch[1]!), init);
     if (method === "PATCH" && uploadMatch) return this.updateMedia(decodeURIComponent(uploadMatch[1]!), init);
     if (method === "GET" && fileMatch && url.searchParams.get("alt") === "media") return this.media(decodeURIComponent(fileMatch[1]!), headers);
     return new Response("", { status: 404 });
   };
 
+  private startResumable(url: URL, init: RequestInit): Response {
+    const metadata = JSON.parse(String(init.body)) as { name: string; mimeType: string; parents: string[]; appProperties: Record<string, string> };
+    const total = Number(new Headers(init.headers).get("x-upload-content-length"));
+    if (!Number.isSafeInteger(total) || total < 1) return new Response("", { status: 400 });
+    const id = `resume_${++this.sequence}`;
+    this.uploadSessions.set(id, { metadata, total, bytes: new Uint8Array(), injectedUnknownCommit: false });
+    this.resumableInitiations += 1;
+    const location = new URL(`/upload/drive/v3/sessions/${id}`, url.origin).href;
+    return this.resumableControlResponse(200, { location });
+  }
+
+  private async writeResumable(id: string, init: RequestInit): Promise<Response> {
+    const session = this.uploadSessions.get(id);
+    if (!session) return new Response("", { status: 404 });
+    const contentRange = new Headers(init.headers).get("content-range") ?? "";
+    if (contentRange === `bytes */${session.total}`) {
+      this.resumableStatusQueries += 1;
+      return this.resumableControlResponse(308,
+        session.bytes.byteLength ? { range: `bytes=0-${session.bytes.byteLength - 1}` } : undefined);
+    }
+    const match = /^bytes (\d+)-(\d+)\/(\d+)$/u.exec(contentRange);
+    if (!match || Number(match[1]) !== session.bytes.byteLength || Number(match[3]) !== session.total) {
+      return new Response("", { status: 400 });
+    }
+    const chunk = new Uint8Array(await new Response(init.body).arrayBuffer());
+    if (chunk.byteLength !== Number(match[2]) - Number(match[1]) + 1) return new Response("", { status: 400 });
+    const next = new Uint8Array(session.bytes.byteLength + chunk.byteLength);
+    next.set(session.bytes);
+    next.set(chunk, session.bytes.byteLength);
+    session.bytes = next;
+    this.resumableChunkWrites += 1;
+    // Model a dropped/5xx acknowledgement after Drive committed the first
+    // chunk. The adapter must query Range and continue from the server offset.
+    if (!session.injectedUnknownCommit) {
+      session.injectedUnknownCommit = true;
+      return this.resumableControlResponse(503);
+    }
+    if (session.bytes.byteLength < session.total) {
+      return this.resumableControlResponse(308, { range: `bytes=0-${session.bytes.byteLength - 1}` });
+    }
+    if (session.bytes.byteLength !== session.total) return new Response("", { status: 400 });
+    const file = this.insert(session.metadata, session.bytes);
+    this.uploadSessions.delete(id);
+    return Response.json(this.metadata(file));
+  }
+
+  private resumableControlResponse(status: number, headers?: HeadersInit): Response {
+    const drive = this;
+    return new Response(new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new Uint8Array([0])); },
+      cancel() { drive.discardedResumableBodies += 1; },
+    }), { status, headers });
+  }
+
   filesByRole(role: string): StoredFile[] {
     return [...this.files.values()].filter((file) => file.appProperties.airshipRole === role);
+  }
+
+  liveFilesByRole(role: string): StoredFile[] {
+    return this.filesByRole(role).filter((file) => !file.trashed);
   }
 
   plaintextBodies(): string {
@@ -173,8 +383,10 @@ class FakeDrive {
     const parent = /'([^']+)' in parents/u.exec(query)?.[1];
     const role = /key='airshipRole' and value='([^']+)'/u.exec(query)?.[1];
     const namespace = /key='airshipNamespace' and value='([^']+)'/u.exec(query)?.[1];
+    const excludeTrashed = query.includes("trashed = false");
     const files = [...this.files.values()].filter((file) =>
-      (!parent || file.parents.includes(parent)) && (!role || file.appProperties.airshipRole === role) && (!namespace || file.appProperties.airshipNamespace === namespace),
+      (!excludeTrashed || !file.trashed)
+      && (!parent || file.parents.includes(parent)) && (!role || file.appProperties.airshipRole === role) && (!namespace || file.appProperties.airshipNamespace === namespace),
     ).map((file) => this.metadata(file));
     return Response.json({ files });
   }
@@ -198,13 +410,17 @@ class FakeDrive {
     return Response.json(this.metadata(file), { headers: { etag: file.etag } });
   }
 
-  private async rename(id: string, init: RequestInit): Promise<Response> {
+  private async patchMetadata(id: string, init: RequestInit): Promise<Response> {
     const file = this.files.get(id);
     if (!file) return new Response("", { status: 404 });
-    const patch = JSON.parse(String(init.body)) as { name?: string };
+    const patch = JSON.parse(String(init.body)) as { name?: string; trashed?: boolean };
     if (patch.name) file.name = patch.name;
+    if (patch.trashed === true) {
+      if (this.refuseTrash) return new Response("", { status: 403 });
+      file.trashed = true;
+    }
     file.modifiedTime = new Date().toISOString();
-    return Response.json(this.metadata(file));
+    return Response.json({ ...this.metadata(file), trashed: file.trashed });
   }
 
   private async updateMedia(id: string, init: RequestInit): Promise<Response> {
@@ -234,7 +450,7 @@ class FakeDrive {
 
   private insert(metadata: { name: string; mimeType: string; parents: string[]; appProperties: Record<string, string> }, bytes: Uint8Array): StoredFile {
     const id = `drive_file_${++this.sequence}`;
-    const file: StoredFile = { id, ...metadata, bytes, modifiedTime: new Date().toISOString(), etag: `"version-${this.sequence}"` };
+    const file: StoredFile = { id, ...metadata, bytes, modifiedTime: new Date().toISOString(), etag: `"version-${this.sequence}"`, trashed: false };
     this.files.set(id, file);
     return file;
   }

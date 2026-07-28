@@ -8,6 +8,8 @@ export type StoredContextRecord = {
   chunkId: string;
   path: string;
   revision: string;
+  contentDigest: string;
+  chunkIndex: number;
   text: string;
   tokens: string[];
   vector: number[];
@@ -25,6 +27,8 @@ export function encodeExpertBlock(chunks: EmbeddedChunk[]): Uint8Array {
       chunkId: chunk.id,
       path: chunk.path,
       revision: chunk.revision,
+      contentDigest: chunk.contentDigest,
+      chunkIndex: chunk.chunkIndex,
       text: chunk.text,
       tokens: [...chunk.tokens],
       vector: [...chunk.vector],
@@ -52,6 +56,8 @@ function parseRecord(value: unknown, dimensions: number): StoredContextRecord {
     typeof record.chunkId !== "string" ||
     typeof record.path !== "string" ||
     typeof record.revision !== "string" ||
+    typeof record.contentDigest !== "string" || !/^sha256:[A-Za-z0-9_-]{43}$/u.test(record.contentDigest) ||
+    !Number.isSafeInteger(record.chunkIndex) || Number(record.chunkIndex) < 0 ||
     typeof record.text !== "string" ||
     !Array.isArray(record.tokens) ||
     !record.tokens.every((token) => typeof token === "string") ||
@@ -65,9 +71,10 @@ function parseRecord(value: unknown, dimensions: number): StoredContextRecord {
     chunkId: record.chunkId,
     path: record.path,
     revision: record.revision,
+    contentDigest: record.contentDigest,
+    chunkIndex: Number(record.chunkIndex),
     text: record.text,
     tokens: record.tokens,
     vector: record.vector,
   };
 }
-

@@ -2,7 +2,9 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Plugin } from "vite";
 
 const ROUTE = "/__airship/chutes/oauth/token";
+const REVOKE_ROUTE = "/__airship/chutes/oauth/revoke";
 const UPSTREAM = "https://api.chutes.ai/idp/token";
+const UPSTREAM_REVOKE = "https://api.chutes.ai/idp/token/revoke";
 const MAX_REQUEST_BYTES = 16 * 1024;
 const MAX_RESPONSE_BYTES = 32 * 1024;
 const ALLOWED_FIELDS = new Set([
@@ -13,6 +15,7 @@ const ALLOWED_FIELDS = new Set([
   "code_verifier",
   "refresh_token",
 ]);
+const ALLOWED_REVOCATION_FIELDS = new Set(["token", "token_type_hint", "client_id"]);
 
 type BridgeConfiguration = Readonly<{
   clientId?: string;
@@ -31,8 +34,25 @@ export function localChutesOAuthBridge(configuration: BridgeConfiguration = {}):
     apply: "serve",
     configureServer(server) {
       server.middlewares.use(async (request, response, next) => {
-        if (request.url?.split("?", 1)[0] !== ROUTE) return next();
-        await handleTokenExchange(request, response, { clientId, clientSecret, redirectUri, fetch: fetchImpl });
+        const route = request.url?.split("?", 1)[0];
+        if (route !== ROUTE && route !== REVOKE_ROUTE) return next();
+        setResponsePolicy(response);
+        if (request.method === "GET") {
+          if (!clientId || !clientSecret) return sendJson(response, 503, { error: "local_bridge_unconfigured" });
+          response.statusCode = 204;
+          return response.end();
+        }
+        await handleConfidentialPost(request, response, {
+          upstream: route === REVOKE_ROUTE ? UPSTREAM_REVOKE : UPSTREAM,
+          buildForm: route === REVOKE_ROUTE
+            ? (body, id, secret) => confidentialRevocationForm(body, id, secret)
+            : (body, id, secret) => confidentialTokenForm(body, id, secret, redirectUri),
+          // Only RFC 7009 revocation is allowed to answer with no body at all.
+          allowEmptyUpstreamBody: route === REVOKE_ROUTE,
+          clientId,
+          clientSecret,
+          fetch: fetchImpl,
+        });
       });
     },
   };
@@ -61,10 +81,55 @@ export function confidentialTokenForm(
   return incoming;
 }
 
-async function handleTokenExchange(
+/**
+ * RFC 7009 revocation for the same confidential development client.
+ *
+ * Sign-out sends only the token being dropped; no grant, redirect, or verifier
+ * is meaningful here, so anything else is refused rather than forwarded.
+ */
+export function confidentialRevocationForm(
+  body: string,
+  clientId: string,
+  clientSecret: string,
+): URLSearchParams {
+  const incoming = new URLSearchParams(body);
+  if (incoming.has("client_secret")) throw new Error("The browser must not submit a client secret.");
+  for (const field of incoming.keys()) {
+    if (!ALLOWED_REVOCATION_FIELDS.has(field)) throw new Error("The revocation request contains an unsupported field.");
+  }
+  if (incoming.get("client_id") !== clientId) throw new Error("The revocation request client does not match this bridge.");
+  const token = incoming.get("token") ?? "";
+  if (!/^(?:cak_|crt_)[\x21-\x7e]{1,4096}$/u.test(token)) {
+    throw new Error("The revocation request token is invalid.");
+  }
+  const hint = incoming.get("token_type_hint");
+  if (hint !== null && hint !== "access_token" && hint !== "refresh_token") {
+    throw new Error("The revocation request token type hint is unsupported.");
+  }
+  incoming.set("client_secret", clientSecret);
+  return incoming;
+}
+
+type ConfidentialPostConfiguration = Readonly<{
+  upstream: string;
+  buildForm: (body: string, clientId: string, clientSecret: string) => URLSearchParams;
+  clientId?: string;
+  clientSecret?: string;
+  fetch: typeof globalThis.fetch;
+  /**
+   * Whether a bodyless upstream response is a legitimate answer on this route.
+   *
+   * RFC 7009 lets a revocation endpoint reply 200 with nothing at all, but a
+   * token response without a body is a broken exchange, so the relaxation is
+   * granted per route rather than inside the shared reader.
+   */
+  allowEmptyUpstreamBody: boolean;
+}>;
+
+async function handleConfidentialPost(
   request: IncomingMessage,
   response: ServerResponse,
-  configuration: Required<Pick<BridgeConfiguration, "fetch">> & Omit<BridgeConfiguration, "fetch">,
+  configuration: ConfidentialPostConfiguration,
 ): Promise<void> {
   setResponsePolicy(response);
   if (request.method !== "POST") return sendJson(response, 405, { error: "method_not_allowed" });
@@ -79,28 +144,89 @@ async function handleTokenExchange(
   }
   try {
     const body = await readRequest(request);
-    const form = confidentialTokenForm(
+    const form = configuration.buildForm(
       body,
       configuration.clientId,
       configuration.clientSecret,
-      configuration.redirectUri,
     );
-    const upstream = await configuration.fetch(UPSTREAM, {
+    const deadline = AbortSignal.timeout(20_000);
+    const upstream = await configuration.fetch(configuration.upstream, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: form.toString(),
       cache: "no-store",
       redirect: "error",
-      signal: AbortSignal.timeout(20_000),
+      signal: deadline,
     });
-    const bytes = new Uint8Array(await upstream.arrayBuffer());
-    if (bytes.byteLength > MAX_RESPONSE_BYTES) return sendJson(response, 502, { error: "upstream_response_too_large" });
+    const bytes = await readUpstreamResponse(
+      upstream,
+      deadline,
+      configuration.allowEmptyUpstreamBody,
+    );
     response.statusCode = upstream.status;
     response.setHeader("Content-Type", upstream.headers.get("content-type")?.includes("json") ? "application/json" : "application/octet-stream");
     response.end(bytes);
   } catch {
     sendJson(response, 502, { error: "local_bridge_exchange_failed" });
   }
+}
+
+async function readUpstreamResponse(
+  response: Response,
+  signal: AbortSignal,
+  allowEmptyBody: boolean,
+): Promise<Uint8Array> {
+  const declared = response.headers.get("content-length");
+  if (declared !== null && (
+    !/^\d+$/u.test(declared) ||
+    !Number.isSafeInteger(Number(declared)) ||
+    Number(declared) > MAX_RESPONSE_BYTES
+  )) {
+    void response.body?.cancel().catch(() => undefined);
+    throw new Error("Chutes token response exceeded the bridge limit.");
+  }
+  if (!response.body) {
+    // RFC 7009 permits an empty revocation response; only the status matters.
+    if (allowEmptyBody) return new Uint8Array(0);
+    throw new Error("Chutes token response had no body.");
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await abortable(reader.read(), signal);
+      if (done) break;
+      total += value.byteLength;
+      if (total > MAX_RESPONSE_BYTES) {
+        await reader.cancel("Chutes token response exceeded the bridge limit.").catch(() => undefined);
+        throw new Error("Chutes token response exceeded the bridge limit.");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    if (signal.aborted) void reader.cancel(signal.reason).catch(() => undefined);
+    try { reader.releaseLock(); } catch { /* an aborted body may retain its reader */ }
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
+function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(signal.reason ?? new DOMException("Chutes token exchange was aborted.", "AbortError"));
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(signal.reason ?? new DOMException("Chutes token exchange was aborted.", "AbortError"));
+    signal.addEventListener("abort", abort, { once: true });
+    void promise.then(
+      (value) => { signal.removeEventListener("abort", abort); resolve(value); },
+      (error) => { signal.removeEventListener("abort", abort); reject(error); },
+    );
+  });
 }
 
 async function readRequest(request: IncomingMessage): Promise<string> {

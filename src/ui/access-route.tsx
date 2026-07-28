@@ -1,6 +1,7 @@
 import { useEffect, useState } from "preact/hooks";
 import { loadDeferredCapabilities } from "../load-deferred-capabilities";
 import type { AccessViewProps } from "./access-view";
+import { RouteHeader } from "./route-header";
 import { RouteSkeleton } from "./route-skeleton";
 
 type AccessViewComponent = typeof import("./access-view").AccessView;
@@ -32,11 +33,18 @@ export function AccessView(props: AccessViewProps) {
 
   return (
     <section class="work-view access-view" aria-labelledby="access-route-title" aria-busy={!loadError}>
-      <header class="page-heading access-heading">
-        <span class="eyebrow">Direct provider connection</span>
-        <h1 id="access-route-title">Connection</h1>
-        <p>Preparing the client-side account, model, and inference connection controls.</p>
-      </header>
+      {/* The same primitive, at the same density, as the loaded route — the
+          placeholder used to render the 47px legacy slab where the real
+          header is a 44px bar, so the title jumped 90px the moment the chunk
+          arrived. Every word is the placeholder's own, verbatim. */}
+      <RouteHeader
+        routeId="access"
+        density="tool"
+        title="Connection"
+        headingId="access-route-title"
+        eyebrow="Direct provider connection"
+        description="Preparing the client-side account, model, and inference connection controls."
+      />
       <div class="panel" role={loadError ? "alert" : "status"} aria-live="polite">
         {loadError ? <p>{loadError}</p> : <RouteSkeleton label="Loading the connection interface" />}
         {loadError ? (

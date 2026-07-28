@@ -18,12 +18,17 @@ export function airshipSemanticPackAssets(): Plugin {
         response.end("Optional semantic pack is not prepared. Run npm run semantic:prepare.");
         return;
       }
-      response.setHeader("Cache-Control", "public, max-age=31536000, immutable");
-      response.setHeader("Cross-Origin-Resource-Policy", "same-origin");
-      if (file.endsWith(".wasm")) response.setHeader("Content-Type", "application/wasm");
-      else if (file.endsWith(".mjs") || file.endsWith(".js")) response.setHeader("Content-Type", "text/javascript; charset=utf-8");
-      else if (file.endsWith(".json")) response.setHeader("Content-Type", "application/json; charset=utf-8");
-      else response.setHeader("Content-Type", "application/octet-stream");
+      const fileStats = statSync(file);
+      /*
+       * ORT's threaded WASM runtime starts same-origin module workers from this
+       * pack. Those worker responses must opt into the same embedder policy as
+       * the parent semantic worker or Chromium blocks them before execution.
+       * A concrete byte length also lets the browser finish the verified model
+       * cache entry before Transformers.js opens the same pinned artifact.
+       */
+      for (const [name, value] of Object.entries(semanticPackResponseHeaders(file, fileStats.size))) {
+        response.setHeader(name, value);
+      }
       createReadStream(file).pipe(response);
     });
   };
@@ -36,4 +41,24 @@ export function airshipSemanticPackAssets(): Plugin {
       install(server.middlewares);
     },
   };
+}
+
+export function semanticPackResponseHeaders(
+  file: string,
+  byteLength: number,
+): Readonly<Record<string, string>> {
+  const contentType = file.endsWith(".wasm")
+    ? "application/wasm"
+    : file.endsWith(".mjs") || file.endsWith(".js")
+      ? "text/javascript; charset=utf-8"
+      : file.endsWith(".json")
+        ? "application/json; charset=utf-8"
+        : "application/octet-stream";
+  return Object.freeze({
+    "Cache-Control": "public, max-age=31536000, immutable",
+    "Content-Length": String(byteLength),
+    "Content-Type": contentType,
+    "Cross-Origin-Embedder-Policy": "credentialless",
+    "Cross-Origin-Resource-Policy": "same-origin",
+  });
 }

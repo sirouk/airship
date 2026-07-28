@@ -6,6 +6,7 @@ import type {
   ObjectStore,
   ObjectSummary,
   PutIfAbsentResult,
+  ObjectStoreCapabilities,
 } from "./object-store";
 
 const EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
@@ -65,6 +66,13 @@ export class S3StorageError extends Error {
 
 /** A real S3 REST adapter: SigV4, exact ranges, conditional creates/CAS, and ListObjectsV2. */
 export class S3ObjectStore implements ObjectStore {
+  readonly capabilities: ObjectStoreCapabilities = Object.freeze({
+    version: 1,
+    adapter: "s3",
+    rangeRead: Object.freeze({ mode: "exact-or-fail", maxBytes: MAX_RANGE_BYTES, providerEvidence: "live-conformance-required" }),
+    conditionalWrite: Object.freeze({ createIfAbsent: "atomic-or-fail", compareAndSwap: "atomic-or-fail", providerEvidence: "live-conformance-required" }),
+    upload: Object.freeze({ mode: "single-request", interruptionRecovery: "retry-immutable-shard", persistsResumeCapability: false }),
+  });
   private readonly endpoint: URL;
   private readonly region: string;
   private readonly bucket: string;

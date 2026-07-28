@@ -34,8 +34,33 @@ export type SemanticProviderState = Readonly<{
 
 export type SemanticModelManifest = typeof AIRSHIP_SEMANTIC_MODEL;
 
+export type SemanticPowerPreference = "high-performance" | "low-power" | "default";
+
+/**
+ * The accelerator choices the main thread makes for the worker. It is resolved
+ * before the worker latches a backend, because the capability probe is
+ * asynchronous and reading a not-yet-observed snapshot would silently pin the
+ * WASM fallback on a WebGPU host.
+ */
+export type SemanticAccelerationPreference = Readonly<{
+  backend: SemanticBackend;
+  powerPreference?: SemanticPowerPreference;
+  /** ONNX Runtime WASM thread count; ORT spawns (wasmThreads - 1) workers. */
+  wasmThreads?: number;
+}>;
+
+export type SemanticAccelerationResolver =
+  () => SemanticAccelerationPreference | undefined | Promise<SemanticAccelerationPreference | undefined>;
+
 export type SemanticWorkerRequest =
-  | Readonly<{ type: "initialize"; requestId: string; manifest: SemanticModelManifest; preferredBackend: SemanticBackend }>
+  | Readonly<{
+      type: "initialize";
+      requestId: string;
+      manifest: SemanticModelManifest;
+      preferredBackend: SemanticBackend;
+      powerPreference?: SemanticPowerPreference;
+      wasmThreads?: number;
+    }>
   | Readonly<{ type: "embed"; requestId: string; texts: readonly string[] }>
   | Readonly<{ type: "cancel"; requestId: string }>
   | Readonly<{ type: "dispose" }>;
@@ -65,6 +90,8 @@ export interface SemanticModelLoader {
   load(args: Readonly<{
     manifest: SemanticModelManifest;
     backend: SemanticBackend;
+    powerPreference?: SemanticPowerPreference;
+    wasmThreads?: number;
     signal: AbortSignal;
     onProgress(state: Readonly<{ loadedBytes?: number; totalBytes?: number; message?: string }>): void;
   }>): Promise<SemanticLoadedModel>;
@@ -101,7 +128,7 @@ export class LazySemanticWorkerEmbeddingProvider implements EmbeddingProvider {
 
   constructor(
     private readonly workerFactory: SemanticWorkerFactory,
-    private readonly webgpuAvailable: () => boolean = defaultWebgpuAvailable,
+    private readonly acceleration: SemanticAccelerationResolver = defaultAcceleration,
   ) {}
 
   getState(): SemanticProviderState { return this.state; }
@@ -157,6 +184,24 @@ export class LazySemanticWorkerEmbeddingProvider implements EmbeddingProvider {
       this.resolveReady = resolve;
       this.rejectReady = reject;
     });
+    // The worker latches its backend for the page lifetime, so the accelerator
+    // decision must not race the capability probe: resolve the preference
+    // first, then start the worker. The resolver is deadline-bounded by the
+    // capability registry, so this adds bounded first-embed latency only.
+    void this.startWorker();
+    return this.ready;
+  }
+
+  private async startWorker(): Promise<void> {
+    let preference: SemanticAccelerationPreference;
+    try {
+      preference = (await this.acceleration()) ?? defaultAcceleration();
+    } catch {
+      // A failed capability probe is not evidence against WebGPU; the worker
+      // still reports whichever backend actually activated.
+      preference = defaultAcceleration();
+    }
+    if (this.state.phase === "disposed") return;
     try {
       this.worker = this.workerFactory();
       this.worker.addEventListener("message", this.onMessage);
@@ -164,12 +209,13 @@ export class LazySemanticWorkerEmbeddingProvider implements EmbeddingProvider {
         type: "initialize",
         requestId: "initialize",
         manifest: AIRSHIP_SEMANTIC_MODEL,
-        preferredBackend: this.webgpuAvailable() ? "webgpu" : "wasm",
+        preferredBackend: preference.backend === "webgpu" ? "webgpu" : "wasm",
+        ...(preference.powerPreference ? { powerPreference: preference.powerPreference } : {}),
+        ...(preference.wasmThreads !== undefined ? { wasmThreads: boundedThreads(preference.wasmThreads) } : {}),
       });
     } catch (error) {
       this.failInitialization(error, "SEMANTIC_PACK_UNAVAILABLE");
     }
-    return this.ready;
   }
 
   private readonly onMessage = (event: MessageEvent<SemanticWorkerResponse>) => {
@@ -255,6 +301,8 @@ export function createSemanticWorkerHandler(
           model = await loader.load({
             manifest: message.manifest,
             backend: candidate,
+            ...(message.powerPreference ? { powerPreference: message.powerPreference } : {}),
+            ...(message.wasmThreads !== undefined ? { wasmThreads: message.wasmThreads } : {}),
             signal: initialization.signal,
             onProgress: (progress) => emit({ type: "state", state: { phase: "downloading", backend: candidate, ...progress } }),
           });
@@ -317,8 +365,20 @@ function validateVectors(vectors: readonly Float32Array[], dimensions: number): 
   });
 }
 
-function defaultWebgpuAvailable(): boolean {
-  return typeof navigator !== "undefined" && "gpu" in navigator;
+/**
+ * Fallback used only when no capability policy is available. Presence of
+ * navigator.gpu is not activation evidence, so it only decides whether the
+ * WebGPU rung is attempted; the worker still reports the backend that loaded.
+ */
+function defaultAcceleration(): SemanticAccelerationPreference {
+  return Object.freeze({
+    backend: typeof navigator !== "undefined" && "gpu" in navigator ? "webgpu" : "wasm",
+  });
+}
+
+/** ORT spawns (count - 1) workers; keep the request inside the policy ceiling. */
+function boundedThreads(value: number): number {
+  return Number.isFinite(value) ? Math.max(1, Math.min(8, Math.trunc(value))) : 1;
 }
 
 function throwIfAborted(signal?: AbortSignal): void {

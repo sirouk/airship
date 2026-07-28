@@ -1,0 +1,2656 @@
+{
+  "desktop-local-lab": {
+    "viewport": {
+      "w": 1440,
+      "h": 900
+    },
+    "main": {
+      "top": 58,
+      "height": 842
+    },
+    "mainClientHeight": 842,
+    "mainScrollHeight": 1258,
+    "firstControl": {
+      "label": "Proof",
+      "y": 6.4
+    },
+    "boxes": {
+      "header": null,
+      "bar": {
+        "top": 142.5,
+        "height": 44,
+        "width": 1156
+      },
+      "chooser": {
+        "top": 509.5,
+        "height": 126,
+        "width": 1156
+      },
+      "truth": null,
+      "state": {
+        "top": 210.5,
+        "height": 136.5,
+        "width": 1156
+      },
+      "empty": null,
+      "configuration": {
+        "top": 659.5,
+        "height": 246.3,
+        "width": 1156
+      },
+      "evidence": {
+        "top": 929.8,
+        "height": 206,
+        "width": 1156
+      },
+      "context": null,
+      "localDevice": null,
+      "localDeviceHeader": null,
+      "ceremony": null,
+      "localLab": null,
+      "drive": null,
+      "setupSlot": null
+    },
+    "notConnectedRestatements": {
+      "disconnected": 0,
+      "ephemeral": 0,
+      "notOpened": 0,
+      "noAttachment": 0
+    },
+    "smallTargets": [],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    },
+    "url": "http://127.0.0.1:4173/#vault"
+  },
+  "desktop-local-lab-full": {
+    "viewport": {
+      "w": 1440,
+      "h": 900
+    },
+    "main": {
+      "top": 58,
+      "height": 842
+    },
+    "mainClientHeight": 842,
+    "mainScrollHeight": 1258,
+    "firstControl": {
+      "label": "Proof",
+      "y": 6.4
+    },
+    "boxes": {
+      "header": null,
+      "bar": {
+        "top": 142.5,
+        "height": 44,
+        "width": 1156
+      },
+      "chooser": {
+        "top": 509.5,
+        "height": 126,
+        "width": 1156
+      },
+      "truth": null,
+      "state": {
+        "top": 210.5,
+        "height": 136.5,
+        "width": 1156
+      },
+      "empty": null,
+      "configuration": {
+        "top": 659.5,
+        "height": 246.3,
+        "width": 1156
+      },
+      "evidence": {
+        "top": 929.8,
+        "height": 206,
+        "width": 1156
+      },
+      "context": null,
+      "localDevice": null,
+      "localDeviceHeader": null,
+      "ceremony": null,
+      "localLab": null,
+      "drive": null,
+      "setupSlot": null
+    },
+    "notConnectedRestatements": {
+      "disconnected": 0,
+      "ephemeral": 0,
+      "notOpened": 0,
+      "noAttachment": 0
+    },
+    "smallTargets": [],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    },
+    "url": "http://127.0.0.1:4173/#vault"
+  },
+  "desktop-local-device": {
+    "viewport": {
+      "w": 1440,
+      "h": 900
+    },
+    "main": {
+      "top": 58,
+      "height": 842
+    },
+    "mainClientHeight": 842,
+    "mainScrollHeight": 1443,
+    "firstControl": {
+      "label": "Proof",
+      "y": 6.4
+    },
+    "boxes": {
+      "header": null,
+      "bar": {
+        "top": 142.5,
+        "height": 44,
+        "width": 1156
+      },
+      "chooser": {
+        "top": 496.5,
+        "height": 528,
+        "width": 1156
+      },
+      "truth": null,
+      "state": {
+        "top": 210.5,
+        "height": 262,
+        "width": 1156
+      },
+      "empty": null,
+      "configuration": null,
+      "evidence": null,
+      "context": null,
+      "localDevice": {
+        "top": 1081.5,
+        "height": 377.3,
+        "width": 1156
+      },
+      "localDeviceHeader": {
+        "top": 1099.5,
+        "height": 44,
+        "width": 1120
+      },
+      "ceremony": null,
+      "localLab": null,
+      "drive": null,
+      "setupSlot": {
+        "top": 1052.5,
+        "height": 406.3,
+        "width": 1156
+      }
+    },
+    "notConnectedRestatements": {
+      "disconnected": 1,
+      "ephemeral": 1,
+      "notOpened": 1,
+      "noAttachment": 0
+    },
+    "smallTargets": [
+      {
+        "label": "",
+        "h": 18
+      },
+      {
+        "label": "",
+        "h": 18
+      },
+      {
+        "label": "",
+        "h": 18
+      }
+    ],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    },
+    "url": "http://127.0.0.1:4173/#vault"
+  },
+  "desktop-local-device-full": {
+    "viewport": {
+      "w": 1440,
+      "h": 900
+    },
+    "main": {
+      "top": 58,
+      "height": 842
+    },
+    "mainClientHeight": 842,
+    "mainScrollHeight": 1443,
+    "firstControl": {
+      "label": "Proof",
+      "y": 6.4
+    },
+    "boxes": {
+      "header": null,
+      "bar": {
+        "top": 142.5,
+        "height": 44,
+        "width": 1156
+      },
+      "chooser": {
+        "top": 496.5,
+        "height": 528,
+        "width": 1156
+      },
+      "truth": null,
+      "state": {
+        "top": 210.5,
+        "height": 262,
+        "width": 1156
+      },
+      "empty": null,
+      "configuration": null,
+      "evidence": null,
+      "context": null,
+      "localDevice": {
+        "top": 1081.5,
+        "height": 377.3,
+        "width": 1156
+      },
+      "localDeviceHeader": {
+        "top": 1099.5,
+        "height": 44,
+        "width": 1120
+      },
+      "ceremony": null,
+      "localLab": null,
+      "drive": null,
+      "setupSlot": {
+        "top": 1052.5,
+        "height": 406.3,
+        "width": 1156
+      }
+    },
+    "notConnectedRestatements": {
+      "disconnected": 1,
+      "ephemeral": 1,
+      "notOpened": 1,
+      "noAttachment": 0
+    },
+    "smallTargets": [
+      {
+        "label": "",
+        "h": 18
+      },
+      {
+        "label": "",
+        "h": 18
+      },
+      {
+        "label": "",
+        "h": 18
+      }
+    ],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    },
+    "url": "http://127.0.0.1:4173/#vault"
+  },
+  "desktop-ceremony": {
+    "viewport": {
+      "w": 1440,
+      "h": 900
+    },
+    "main": {
+      "top": 58,
+      "height": 842
+    },
+    "mainClientHeight": 842,
+    "mainScrollHeight": 1825,
+    "firstControl": {
+      "label": "Proof",
+      "y": 989.4
+    },
+    "boxes": {
+      "header": null,
+      "bar": {
+        "top": -840.5,
+        "height": 44,
+        "width": 1156
+      },
+      "chooser": {
+        "top": -486.5,
+        "height": 528,
+        "width": 1156
+      },
+      "truth": null,
+      "state": {
+        "top": -772.5,
+        "height": 262,
+        "width": 1156
+      },
+      "empty": null,
+      "configuration": null,
+      "evidence": null,
+      "context": null,
+      "localDevice": {
+        "top": 98.5,
+        "height": 760,
+        "width": 1156
+      },
+      "localDeviceHeader": {
+        "top": 116.5,
+        "height": 44,
+        "width": 1120
+      },
+      "ceremony": {
+        "top": 395.8,
+        "height": 324.7,
+        "width": 1120
+      },
+      "localLab": null,
+      "drive": null,
+      "setupSlot": {
+        "top": 69.5,
+        "height": 789,
+        "width": 1156
+      }
+    },
+    "notConnectedRestatements": {
+      "disconnected": 1,
+      "ephemeral": 1,
+      "notOpened": 1,
+      "noAttachment": 0
+    },
+    "smallTargets": [
+      {
+        "label": "I saved this recovery key outside Airshi",
+        "h": 25
+      },
+      {
+        "label": "",
+        "h": 18
+      },
+      {
+        "label": "",
+        "h": 18
+      },
+      {
+        "label": "",
+        "h": 18
+      },
+      {
+        "label": "",
+        "h": 18
+      }
+    ],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    },
+    "url": "http://127.0.0.1:4173/#vault"
+  },
+  "desktop-ceremony-full": {
+    "viewport": {
+      "w": 1440,
+      "h": 900
+    },
+    "main": {
+      "top": 58,
+      "height": 842
+    },
+    "mainClientHeight": 842,
+    "mainScrollHeight": 1825,
+    "firstControl": {
+      "label": "Proof",
+      "y": 989.4
+    },
+    "boxes": {
+      "header": null,
+      "bar": {
+        "top": -840.5,
+        "height": 44,
+        "width": 1156
+      },
+      "chooser": {
+        "top": -486.5,
+        "height": 528,
+        "width": 1156
+      },
+      "truth": null,
+      "state": {
+        "top": -772.5,
+        "height": 262,
+        "width": 1156
+      },
+      "empty": null,
+      "configuration": null,
+      "evidence": null,
+      "context": null,
+      "localDevice": {
+        "top": 98.5,
+        "height": 760,
+        "width": 1156
+      },
+      "localDeviceHeader": {
+        "top": 116.5,
+        "height": 44,
+        "width": 1120
+      },
+      "ceremony": {
+        "top": 395.8,
+        "height": 324.7,
+        "width": 1120
+      },
+      "localLab": null,
+      "drive": null,
+      "setupSlot": {
+        "top": 69.5,
+        "height": 789,
+        "width": 1156
+      }
+    },
+    "notConnectedRestatements": {
+      "disconnected": 1,
+      "ephemeral": 1,
+      "notOpened": 1,
+      "noAttachment": 0
+    },
+    "smallTargets": [
+      {
+        "label": "I saved this recovery key outside Airshi",
+        "h": 25
+      },
+      {
+        "label": "",
+        "h": 18
+      },
+      {
+        "label": "",
+        "h": 18
+      },
+      {
+        "label": "",
+        "h": 18
+      },
+      {
+        "label": "",
+        "h": 18
+      }
+    ],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    },
+    "url": "http://127.0.0.1:4173/#vault"
+  },
+  "desktop-google-drive": {
+    "viewport": {
+      "w": 1440,
+      "h": 900
+    },
+    "main": {
+      "top": 58,
+      "height": 842
+    },
+    "mainClientHeight": 842,
+    "mainScrollHeight": 1443,
+    "firstControl": {
+      "label": "Proof",
+      "y": 6.4
+    },
+    "boxes": {
+      "header": null,
+      "bar": {
+        "top": 142.5,
+        "height": 44,
+        "width": 1156
+      },
+      "chooser": {
+        "top": 496.5,
+        "height": 528,
+        "width": 1156
+      },
+      "truth": null,
+      "state": {
+        "top": 210.5,
+        "height": 262,
+        "width": 1156
+      },
+      "empty": null,
+      "configuration": null,
+      "evidence": null,
+      "context": null,
+      "localDevice": {
+        "top": 1081.5,
+        "height": 377.3,
+        "width": 1156
+      },
+      "localDeviceHeader": {
+        "top": 1099.5,
+        "height": 44,
+        "width": 1120
+      },
+      "ceremony": null,
+      "localLab": null,
+      "drive": null,
+      "setupSlot": {
+        "top": 1052.5,
+        "height": 406.3,
+        "width": 1156
+      }
+    },
+    "notConnectedRestatements": {
+      "disconnected": 1,
+      "ephemeral": 1,
+      "notOpened": 1,
+      "noAttachment": 0
+    },
+    "smallTargets": [
+      {
+        "label": "",
+        "h": 18
+      },
+      {
+        "label": "",
+        "h": 18
+      },
+      {
+        "label": "",
+        "h": 18
+      }
+    ],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    },
+    "url": "http://127.0.0.1:4173/#vault"
+  },
+  "desktop-google-drive-full": {
+    "viewport": {
+      "w": 1440,
+      "h": 900
+    },
+    "main": {
+      "top": 58,
+      "height": 842
+    },
+    "mainClientHeight": 842,
+    "mainScrollHeight": 1443,
+    "firstControl": {
+      "label": "Proof",
+      "y": 6.4
+    },
+    "boxes": {
+      "header": null,
+      "bar": {
+        "top": 142.5,
+        "height": 44,
+        "width": 1156
+      },
+      "chooser": {
+        "top": 496.5,
+        "height": 528,
+        "width": 1156
+      },
+      "truth": null,
+      "state": {
+        "top": 210.5,
+        "height": 262,
+        "width": 1156
+      },
+      "empty": null,
+      "configuration": null,
+      "evidence": null,
+      "context": null,
+      "localDevice": {
+        "top": 1081.5,
+        "height": 377.3,
+        "width": 1156
+      },
+      "localDeviceHeader": {
+        "top": 1099.5,
+        "height": 44,
+        "width": 1120
+      },
+      "ceremony": null,
+      "localLab": null,
+      "drive": null,
+      "setupSlot": {
+        "top": 1052.5,
+        "height": 406.3,
+        "width": 1156
+      }
+    },
+    "notConnectedRestatements": {
+      "disconnected": 1,
+      "ephemeral": 1,
+      "notOpened": 1,
+      "noAttachment": 0
+    },
+    "smallTargets": [
+      {
+        "label": "",
+        "h": 18
+      },
+      {
+        "label": "",
+        "h": 18
+      },
+      {
+        "label": "",
+        "h": 18
+      }
+    ],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    },
+    "url": "http://127.0.0.1:4173/#vault"
+  },
+  "desktop-drive-unavailable": {
+    "viewport": {
+      "w": 1440,
+      "h": 900
+    },
+    "main": {
+      "top": 58,
+      "height": 842
+    },
+    "mainClientHeight": 842,
+    "mainScrollHeight": 1324,
+    "firstControl": {
+      "label": "Proof",
+      "y": 6.4
+    },
+    "boxes": {
+      "header": null,
+      "bar": {
+        "top": 142.5,
+        "height": 44,
+        "width": 1156
+      },
+      "chooser": {
+        "top": 452.5,
+        "height": 541,
+        "width": 1156
+      },
+      "truth": null,
+      "state": {
+        "top": 210.5,
+        "height": 218,
+        "width": 1156
+      },
+      "empty": null,
+      "configuration": null,
+      "evidence": null,
+      "context": null,
+      "localDevice": null,
+      "localDeviceHeader": null,
+      "ceremony": null,
+      "localLab": null,
+      "drive": {
+        "top": 1050.5,
+        "height": 289.3,
+        "width": 1156
+      },
+      "setupSlot": {
+        "top": 1021.5,
+        "height": 318.3,
+        "width": 1156
+      }
+    },
+    "notConnectedRestatements": {
+      "disconnected": 1,
+      "ephemeral": 1,
+      "notOpened": 0,
+      "noAttachment": 1
+    },
+    "smallTargets": [],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    },
+    "url": "http://127.0.0.1:4173/#vault"
+  },
+  "desktop-drive-unavailable-full": {
+    "viewport": {
+      "w": 1440,
+      "h": 900
+    },
+    "main": {
+      "top": 58,
+      "height": 842
+    },
+    "mainClientHeight": 842,
+    "mainScrollHeight": 1324,
+    "firstControl": {
+      "label": "Proof",
+      "y": 6.4
+    },
+    "boxes": {
+      "header": null,
+      "bar": {
+        "top": 142.5,
+        "height": 44,
+        "width": 1156
+      },
+      "chooser": {
+        "top": 452.5,
+        "height": 541,
+        "width": 1156
+      },
+      "truth": null,
+      "state": {
+        "top": 210.5,
+        "height": 218,
+        "width": 1156
+      },
+      "empty": null,
+      "configuration": null,
+      "evidence": null,
+      "context": null,
+      "localDevice": null,
+      "localDeviceHeader": null,
+      "ceremony": null,
+      "localLab": null,
+      "drive": {
+        "top": 1050.5,
+        "height": 289.3,
+        "width": 1156
+      },
+      "setupSlot": {
+        "top": 1021.5,
+        "height": 318.3,
+        "width": 1156
+      }
+    },
+    "notConnectedRestatements": {
+      "disconnected": 1,
+      "ephemeral": 1,
+      "notOpened": 0,
+      "noAttachment": 1
+    },
+    "smallTargets": [],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    },
+    "url": "http://127.0.0.1:4173/#vault"
+  },
+  "desktop-ephemeral": {
+    "viewport": {
+      "w": 1440,
+      "h": 900
+    },
+    "main": {
+      "top": 58,
+      "height": 842
+    },
+    "mainClientHeight": 842,
+    "mainScrollHeight": 965,
+    "firstControl": {
+      "label": "Proof",
+      "y": 6.4
+    },
+    "boxes": {
+      "header": null,
+      "bar": {
+        "top": 142.5,
+        "height": 44,
+        "width": 1156
+      },
+      "chooser": {
+        "top": 452.5,
+        "height": 528,
+        "width": 1156
+      },
+      "truth": null,
+      "state": {
+        "top": 210.5,
+        "height": 218,
+        "width": 1156
+      },
+      "empty": null,
+      "configuration": null,
+      "evidence": null,
+      "context": null,
+      "localDevice": null,
+      "localDeviceHeader": null,
+      "ceremony": null,
+      "localLab": null,
+      "drive": null,
+      "setupSlot": null
+    },
+    "notConnectedRestatements": {
+      "disconnected": 0,
+      "ephemeral": 3,
+      "notOpened": 0,
+      "noAttachment": 1
+    },
+    "smallTargets": [],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    },
+    "url": "http://127.0.0.1:4173/#vault"
+  },
+  "desktop-ephemeral-full": {
+    "viewport": {
+      "w": 1440,
+      "h": 900
+    },
+    "main": {
+      "top": 58,
+      "height": 842
+    },
+    "mainClientHeight": 842,
+    "mainScrollHeight": 965,
+    "firstControl": {
+      "label": "Proof",
+      "y": 6.4
+    },
+    "boxes": {
+      "header": null,
+      "bar": {
+        "top": 142.5,
+        "height": 44,
+        "width": 1156
+      },
+      "chooser": {
+        "top": 452.5,
+        "height": 528,
+        "width": 1156
+      },
+      "truth": null,
+      "state": {
+        "top": 210.5,
+        "height": 218,
+        "width": 1156
+      },
+      "empty": null,
+      "configuration": null,
+      "evidence": null,
+      "context": null,
+      "localDevice": null,
+      "localDeviceHeader": null,
+      "ceremony": null,
+      "localLab": null,
+      "drive": null,
+      "setupSlot": null
+    },
+    "notConnectedRestatements": {
+      "disconnected": 0,
+      "ephemeral": 3,
+      "notOpened": 0,
+      "noAttachment": 1
+    },
+    "smallTargets": [],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    },
+    "url": "http://127.0.0.1:4173/#vault"
+  },
+  "tablet-local-lab": {
+    "viewport": {
+      "w": 834,
+      "h": 1194
+    },
+    "main": {
+      "top": 58,
+      "height": 1136
+    },
+    "mainClientHeight": 1136,
+    "mainScrollHeight": 1437,
+    "firstControl": {
+      "label": "Proof",
+      "y": 6.4
+    },
+    "boxes": {
+      "header": null,
+      "bar": {
+        "top": 135.2,
+        "height": 44,
+        "width": 692.5
+      },
+      "chooser": {
+        "top": 560.3,
+        "height": 130,
+        "width": 692.5
+      },
+      "truth": null,
+      "state": {
+        "top": 203.2,
+        "height": 174,
+        "width": 692.5
+      },
+      "empty": null,
+      "configuration": {
+        "top": 714.3,
+        "height": 246.3,
+        "width": 692.5
+      },
+      "evidence": {
+        "top": 984.7,
+        "height": 326,
+        "width": 692.5
+      },
+      "context": null,
+      "localDevice": null,
+      "localDeviceHeader": null,
+      "ceremony": null,
+      "localLab": null,
+      "drive": null,
+      "setupSlot": null
+    },
+    "notConnectedRestatements": {
+      "disconnected": 0,
+      "ephemeral": 0,
+      "notOpened": 0,
+      "noAttachment": 0
+    },
+    "smallTargets": [],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    },
+    "url": "http://127.0.0.1:4173/#vault"
+  },
+  "tablet-local-lab-full": {
+    "viewport": {
+      "w": 834,
+      "h": 1194
+    },
+    "main": {
+      "top": 58,
+      "height": 1136
+    },
+    "mainClientHeight": 1136,
+    "mainScrollHeight": 1437,
+    "firstControl": {
+      "label": "Proof",
+      "y": 6.4
+    },
+    "boxes": {
+      "header": null,
+      "bar": {
+        "top": 135.2,
+        "height": 44,
+        "width": 692.5
+      },
+      "chooser": {
+        "top": 560.3,
+        "height": 130,
+        "width": 692.5
+      },
+      "truth": null,
+      "state": {
+        "top": 203.2,
+        "height": 174,
+        "width": 692.5
+      },
+      "empty": null,
+      "configuration": {
+        "top": 714.3,
+        "height": 246.3,
+        "width": 692.5
+      },
+      "evidence": {
+        "top": 984.7,
+        "height": 326,
+        "width": 692.5
+      },
+      "context": null,
+      "localDevice": null,
+      "localDeviceHeader": null,
+      "ceremony": null,
+      "localLab": null,
+      "drive": null,
+      "setupSlot": null
+    },
+    "notConnectedRestatements": {
+      "disconnected": 0,
+      "ephemeral": 0,
+      "notOpened": 0,
+      "noAttachment": 0
+    },
+    "smallTargets": [],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    },
+    "url": "http://127.0.0.1:4173/#vault"
+  },
+  "tablet-local-device": {
+    "viewport": {
+      "w": 834,
+      "h": 1194
+    },
+    "main": {
+      "top": 58,
+      "height": 1136
+    },
+    "mainClientHeight": 1136,
+    "mainScrollHeight": 1658,
+    "firstControl": {
+      "label": "Proof",
+      "y": 6.4
+    },
+    "boxes": {
+      "header": null,
+      "bar": {
+        "top": 135.2,
+        "height": 44,
+        "width": 692.5
+      },
+      "chooser": {
+        "top": 526.7,
+        "height": 671,
+        "width": 692.5
+      },
+      "truth": null,
+      "state": {
+        "top": 203.2,
+        "height": 299.5,
+        "width": 692.5
+      },
+      "empty": null,
+      "configuration": null,
+      "evidence": null,
+      "context": null,
+      "localDevice": {
+        "top": 1254.7,
+        "height": 426.6,
+        "width": 692.5
+      },
+      "localDeviceHeader": {
+        "top": 1272.7,
+        "height": 44,
+        "width": 656.5
+      },
+      "ceremony": null,
+      "localLab": null,
+      "drive": null,
+      "setupSlot": {
+        "top": 1225.7,
+        "height": 455.6,
+        "width": 692.5
+      }
+    },
+    "notConnectedRestatements": {
+      "disconnected": 1,
+      "ephemeral": 1,
+      "notOpened": 1,
+      "noAttachment": 0
+    },
+    "smallTargets": [
+      {
+        "label": "",
+        "h": 18
+      },
+      {
+        "label": "",
+        "h": 18
+      },
+      {
+        "label": "",
+        "h": 18
+      }
+    ],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    },
+    "url": "http://127.0.0.1:4173/#vault"
+  },
+  "tablet-local-device-full": {
+    "viewport": {
+      "w": 834,
+      "h": 1194
+    },
+    "main": {
+      "top": 58,
+      "height": 1136
+    },
+    "mainClientHeight": 1136,
+    "mainScrollHeight": 1658,
+    "firstControl": {
+      "label": "Proof",
+      "y": 6.4
+    },
+    "boxes": {
+      "header": null,
+      "bar": {
+        "top": 135.2,
+        "height": 44,
+        "width": 692.5
+      },
+      "chooser": {
+        "top": 526.7,
+        "height": 671,
+        "width": 692.5
+      },
+      "truth": null,
+      "state": {
+        "top": 203.2,
+        "height": 299.5,
+        "width": 692.5
+      },
+      "empty": null,
+      "configuration": null,
+      "evidence": null,
+      "context": null,
+      "localDevice": {
+        "top": 1254.7,
+        "height": 426.6,
+        "width": 692.5
+      },
+      "localDeviceHeader": {
+        "top": 1272.7,
+        "height": 44,
+        "width": 656.5
+      },
+      "ceremony": null,
+      "localLab": null,
+      "drive": null,
+      "setupSlot": {
+        "top": 1225.7,
+        "height": 455.6,
+        "width": 692.5
+      }
+    },
+    "notConnectedRestatements": {
+      "disconnected": 1,
+      "ephemeral": 1,
+      "notOpened": 1,
+      "noAttachment": 0
+    },
+    "smallTargets": [
+      {
+        "label": "",
+        "h": 18
+      },
+      {
+        "label": "",
+        "h": 18
+      },
+      {
+        "label": "",
+        "h": 18
+      }
+    ],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    },
+    "url": "http://127.0.0.1:4173/#vault"
+  },
+  "tablet-ceremony": {
+    "viewport": {
+      "w": 834,
+      "h": 1194
+    },
+    "main": {
+      "top": 58,
+      "height": 1136
+    },
+    "mainClientHeight": 1136,
+    "mainScrollHeight": 2090,
+    "firstControl": {
+      "label": "Proof",
+      "y": 960.4
+    },
+    "boxes": {
+      "header": null,
+      "bar": {
+        "top": -818.8,
+        "height": 44,
+        "width": 692.5
+      },
+      "chooser": {
+        "top": -427.3,
+        "height": 671,
+        "width": 692.5
+      },
+      "truth": null,
+      "state": {
+        "top": -750.8,
+        "height": 299.5,
+        "width": 692.5
+      },
+      "empty": null,
+      "configuration": null,
+      "evidence": null,
+      "context": null,
+      "localDevice": {
+        "top": 300.7,
+        "height": 858.5,
+        "width": 692.5
+      },
+      "localDeviceHeader": {
+        "top": 318.7,
+        "height": 44,
+        "width": 656.5
+      },
+      "ceremony": {
+        "top": 647.2,
+        "height": 374,
+        "width": 656.5
+      },
+      "localLab": null,
+      "drive": null,
+      "setupSlot": {
+        "top": 271.7,
+        "height": 887.5,
+        "width": 692.5
+      }
+    },
+    "notConnectedRestatements": {
+      "disconnected": 1,
+      "ephemeral": 1,
+      "notOpened": 1,
+      "noAttachment": 0
+    },
+    "smallTargets": [
+      {
+        "label": "",
+        "h": 18
+      },
+      {
+        "label": "",
+        "h": 18
+      },
+      {
+        "label": "",
+        "h": 18
+      },
+      {
+        "label": "",
+        "h": 18
+      }
+    ],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    },
+    "url": "http://127.0.0.1:4173/#vault"
+  },
+  "tablet-ceremony-full": {
+    "viewport": {
+      "w": 834,
+      "h": 1194
+    },
+    "main": {
+      "top": 58,
+      "height": 1136
+    },
+    "mainClientHeight": 1136,
+    "mainScrollHeight": 2090,
+    "firstControl": {
+      "label": "Proof",
+      "y": 960.4
+    },
+    "boxes": {
+      "header": null,
+      "bar": {
+        "top": -818.8,
+        "height": 44,
+        "width": 692.5
+      },
+      "chooser": {
+        "top": -427.3,
+        "height": 671,
+        "width": 692.5
+      },
+      "truth": null,
+      "state": {
+        "top": -750.8,
+        "height": 299.5,
+        "width": 692.5
+      },
+      "empty": null,
+      "configuration": null,
+      "evidence": null,
+      "context": null,
+      "localDevice": {
+        "top": 300.7,
+        "height": 858.5,
+        "width": 692.5
+      },
+      "localDeviceHeader": {
+        "top": 318.7,
+        "height": 44,
+        "width": 656.5
+      },
+      "ceremony": {
+        "top": 647.2,
+        "height": 374,
+        "width": 656.5
+      },
+      "localLab": null,
+      "drive": null,
+      "setupSlot": {
+        "top": 271.7,
+        "height": 887.5,
+        "width": 692.5
+      }
+    },
+    "notConnectedRestatements": {
+      "disconnected": 1,
+      "ephemeral": 1,
+      "notOpened": 1,
+      "noAttachment": 0
+    },
+    "smallTargets": [
+      {
+        "label": "",
+        "h": 18
+      },
+      {
+        "label": "",
+        "h": 18
+      },
+      {
+        "label": "",
+        "h": 18
+      },
+      {
+        "label": "",
+        "h": 18
+      }
+    ],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    },
+    "url": "http://127.0.0.1:4173/#vault"
+  },
+  "tablet-google-drive": {
+    "viewport": {
+      "w": 834,
+      "h": 1194
+    },
+    "main": {
+      "top": 58,
+      "height": 1136
+    },
+    "mainClientHeight": 1136,
+    "mainScrollHeight": 1658,
+    "firstControl": {
+      "label": "Proof",
+      "y": 6.4
+    },
+    "boxes": {
+      "header": null,
+      "bar": {
+        "top": 135.2,
+        "height": 44,
+        "width": 692.5
+      },
+      "chooser": {
+        "top": 526.7,
+        "height": 671,
+        "width": 692.5
+      },
+      "truth": null,
+      "state": {
+        "top": 203.2,
+        "height": 299.5,
+        "width": 692.5
+      },
+      "empty": null,
+      "configuration": null,
+      "evidence": null,
+      "context": null,
+      "localDevice": {
+        "top": 1254.7,
+        "height": 426.6,
+        "width": 692.5
+      },
+      "localDeviceHeader": {
+        "top": 1272.7,
+        "height": 44,
+        "width": 656.5
+      },
+      "ceremony": null,
+      "localLab": null,
+      "drive": null,
+      "setupSlot": {
+        "top": 1225.7,
+        "height": 455.6,
+        "width": 692.5
+      }
+    },
+    "notConnectedRestatements": {
+      "disconnected": 1,
+      "ephemeral": 1,
+      "notOpened": 1,
+      "noAttachment": 0
+    },
+    "smallTargets": [
+      {
+        "label": "",
+        "h": 18
+      },
+      {
+        "label": "",
+        "h": 18
+      },
+      {
+        "label": "",
+        "h": 18
+      }
+    ],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    },
+    "url": "http://127.0.0.1:4173/#vault"
+  },
+  "tablet-google-drive-full": {
+    "viewport": {
+      "w": 834,
+      "h": 1194
+    },
+    "main": {
+      "top": 58,
+      "height": 1136
+    },
+    "mainClientHeight": 1136,
+    "mainScrollHeight": 1658,
+    "firstControl": {
+      "label": "Proof",
+      "y": 6.4
+    },
+    "boxes": {
+      "header": null,
+      "bar": {
+        "top": 135.2,
+        "height": 44,
+        "width": 692.5
+      },
+      "chooser": {
+        "top": 526.7,
+        "height": 671,
+        "width": 692.5
+      },
+      "truth": null,
+      "state": {
+        "top": 203.2,
+        "height": 299.5,
+        "width": 692.5
+      },
+      "empty": null,
+      "configuration": null,
+      "evidence": null,
+      "context": null,
+      "localDevice": {
+        "top": 1254.7,
+        "height": 426.6,
+        "width": 692.5
+      },
+      "localDeviceHeader": {
+        "top": 1272.7,
+        "height": 44,
+        "width": 656.5
+      },
+      "ceremony": null,
+      "localLab": null,
+      "drive": null,
+      "setupSlot": {
+        "top": 1225.7,
+        "height": 455.6,
+        "width": 692.5
+      }
+    },
+    "notConnectedRestatements": {
+      "disconnected": 1,
+      "ephemeral": 1,
+      "notOpened": 1,
+      "noAttachment": 0
+    },
+    "smallTargets": [
+      {
+        "label": "",
+        "h": 18
+      },
+      {
+        "label": "",
+        "h": 18
+      },
+      {
+        "label": "",
+        "h": 18
+      }
+    ],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    },
+    "url": "http://127.0.0.1:4173/#vault"
+  },
+  "tablet-drive-unavailable": {
+    "viewport": {
+      "w": 834,
+      "h": 1194
+    },
+    "main": {
+      "top": 58,
+      "height": 1136
+    },
+    "mainClientHeight": 1136,
+    "mainScrollHeight": 1511,
+    "firstControl": {
+      "label": "Proof",
+      "y": 6.4
+    },
+    "boxes": {
+      "header": null,
+      "bar": {
+        "top": 135.2,
+        "height": 44,
+        "width": 692.5
+      },
+      "chooser": {
+        "top": 457.2,
+        "height": 684,
+        "width": 692.5
+      },
+      "truth": null,
+      "state": {
+        "top": 203.2,
+        "height": 230,
+        "width": 692.5
+      },
+      "empty": null,
+      "configuration": null,
+      "evidence": null,
+      "context": null,
+      "localDevice": null,
+      "localDeviceHeader": null,
+      "ceremony": null,
+      "localLab": null,
+      "drive": {
+        "top": 1198.2,
+        "height": 336,
+        "width": 692.5
+      },
+      "setupSlot": {
+        "top": 1169.2,
+        "height": 365,
+        "width": 692.5
+      }
+    },
+    "notConnectedRestatements": {
+      "disconnected": 1,
+      "ephemeral": 1,
+      "notOpened": 0,
+      "noAttachment": 1
+    },
+    "smallTargets": [],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    },
+    "url": "http://127.0.0.1:4173/#vault"
+  },
+  "tablet-drive-unavailable-full": {
+    "viewport": {
+      "w": 834,
+      "h": 1194
+    },
+    "main": {
+      "top": 58,
+      "height": 1136
+    },
+    "mainClientHeight": 1136,
+    "mainScrollHeight": 1511,
+    "firstControl": {
+      "label": "Proof",
+      "y": 6.4
+    },
+    "boxes": {
+      "header": null,
+      "bar": {
+        "top": 135.2,
+        "height": 44,
+        "width": 692.5
+      },
+      "chooser": {
+        "top": 457.2,
+        "height": 684,
+        "width": 692.5
+      },
+      "truth": null,
+      "state": {
+        "top": 203.2,
+        "height": 230,
+        "width": 692.5
+      },
+      "empty": null,
+      "configuration": null,
+      "evidence": null,
+      "context": null,
+      "localDevice": null,
+      "localDeviceHeader": null,
+      "ceremony": null,
+      "localLab": null,
+      "drive": {
+        "top": 1198.2,
+        "height": 336,
+        "width": 692.5
+      },
+      "setupSlot": {
+        "top": 1169.2,
+        "height": 365,
+        "width": 692.5
+      }
+    },
+    "notConnectedRestatements": {
+      "disconnected": 1,
+      "ephemeral": 1,
+      "notOpened": 0,
+      "noAttachment": 1
+    },
+    "smallTargets": [],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    },
+    "url": "http://127.0.0.1:4173/#vault"
+  },
+  "tablet-ephemeral": {
+    "viewport": {
+      "w": 834,
+      "h": 1194
+    },
+    "main": {
+      "top": 58,
+      "height": 1136
+    },
+    "mainClientHeight": 1136,
+    "mainScrollHeight": 1213,
+    "firstControl": {
+      "label": "Proof",
+      "y": 6.4
+    },
+    "boxes": {
+      "header": null,
+      "bar": {
+        "top": 135.2,
+        "height": 44,
+        "width": 692.5
+      },
+      "chooser": {
+        "top": 482.7,
+        "height": 671,
+        "width": 692.5
+      },
+      "truth": null,
+      "state": {
+        "top": 203.2,
+        "height": 255.5,
+        "width": 692.5
+      },
+      "empty": null,
+      "configuration": null,
+      "evidence": null,
+      "context": null,
+      "localDevice": null,
+      "localDeviceHeader": null,
+      "ceremony": null,
+      "localLab": null,
+      "drive": null,
+      "setupSlot": null
+    },
+    "notConnectedRestatements": {
+      "disconnected": 0,
+      "ephemeral": 3,
+      "notOpened": 0,
+      "noAttachment": 1
+    },
+    "smallTargets": [],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    },
+    "url": "http://127.0.0.1:4173/#vault"
+  },
+  "tablet-ephemeral-full": {
+    "viewport": {
+      "w": 834,
+      "h": 1194
+    },
+    "main": {
+      "top": 58,
+      "height": 1136
+    },
+    "mainClientHeight": 1136,
+    "mainScrollHeight": 1213,
+    "firstControl": {
+      "label": "Proof",
+      "y": 6.4
+    },
+    "boxes": {
+      "header": null,
+      "bar": {
+        "top": 135.2,
+        "height": 44,
+        "width": 692.5
+      },
+      "chooser": {
+        "top": 482.7,
+        "height": 671,
+        "width": 692.5
+      },
+      "truth": null,
+      "state": {
+        "top": 203.2,
+        "height": 255.5,
+        "width": 692.5
+      },
+      "empty": null,
+      "configuration": null,
+      "evidence": null,
+      "context": null,
+      "localDevice": null,
+      "localDeviceHeader": null,
+      "ceremony": null,
+      "localLab": null,
+      "drive": null,
+      "setupSlot": null
+    },
+    "notConnectedRestatements": {
+      "disconnected": 0,
+      "ephemeral": 3,
+      "notOpened": 0,
+      "noAttachment": 1
+    },
+    "smallTargets": [],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    },
+    "url": "http://127.0.0.1:4173/#vault"
+  },
+  "phone-local-lab": {
+    "viewport": {
+      "w": 430,
+      "h": 740
+    },
+    "main": {
+      "top": 52,
+      "height": 632
+    },
+    "mainClientHeight": 632,
+    "mainScrollHeight": 1884,
+    "firstControl": {
+      "label": "Proof",
+      "y": 0
+    },
+    "boxes": {
+      "header": null,
+      "bar": {
+        "top": 111,
+        "height": 76.2,
+        "width": 404
+      },
+      "chooser": {
+        "top": 745,
+        "height": 205,
+        "width": 404
+      },
+      "truth": null,
+      "state": {
+        "top": 203.2,
+        "height": 240.5,
+        "width": 404
+      },
+      "empty": null,
+      "configuration": {
+        "top": 966,
+        "height": 330.6,
+        "width": 404
+      },
+      "evidence": {
+        "top": 1312.7,
+        "height": 345,
+        "width": 404
+      },
+      "context": null,
+      "localDevice": null,
+      "localDeviceHeader": null,
+      "ceremony": null,
+      "localLab": null,
+      "drive": null,
+      "setupSlot": null
+    },
+    "notConnectedRestatements": {
+      "disconnected": 0,
+      "ephemeral": 0,
+      "notOpened": 0,
+      "noAttachment": 0
+    },
+    "smallTargets": [],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    },
+    "url": "http://127.0.0.1:4173/#vault"
+  },
+  "phone-local-lab-full": {
+    "viewport": {
+      "w": 430,
+      "h": 740
+    },
+    "main": {
+      "top": 52,
+      "height": 632
+    },
+    "mainClientHeight": 632,
+    "mainScrollHeight": 1884,
+    "firstControl": {
+      "label": "Proof",
+      "y": 0
+    },
+    "boxes": {
+      "header": null,
+      "bar": {
+        "top": 111,
+        "height": 76.2,
+        "width": 404
+      },
+      "chooser": {
+        "top": 745,
+        "height": 205,
+        "width": 404
+      },
+      "truth": null,
+      "state": {
+        "top": 203.2,
+        "height": 240.5,
+        "width": 404
+      },
+      "empty": null,
+      "configuration": {
+        "top": 966,
+        "height": 330.6,
+        "width": 404
+      },
+      "evidence": {
+        "top": 1312.7,
+        "height": 345,
+        "width": 404
+      },
+      "context": null,
+      "localDevice": null,
+      "localDeviceHeader": null,
+      "ceremony": null,
+      "localLab": null,
+      "drive": null,
+      "setupSlot": null
+    },
+    "notConnectedRestatements": {
+      "disconnected": 0,
+      "ephemeral": 0,
+      "notOpened": 0,
+      "noAttachment": 0
+    },
+    "smallTargets": [],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    },
+    "url": "http://127.0.0.1:4173/#vault"
+  },
+  "phone-local-device": {
+    "viewport": {
+      "w": 430,
+      "h": 740
+    },
+    "main": {
+      "top": 52,
+      "height": 632
+    },
+    "mainClientHeight": 632,
+    "mainScrollHeight": 3300,
+    "firstControl": {
+      "label": "Proof",
+      "y": 0
+    },
+    "boxes": {
+      "header": null,
+      "bar": {
+        "top": 111,
+        "height": 44,
+        "width": 404
+      },
+      "chooser": {
+        "top": 557.5,
+        "height": 2149,
+        "width": 404
+      },
+      "truth": null,
+      "state": {
+        "top": 171,
+        "height": 370.5,
+        "width": 404
+      },
+      "empty": null,
+      "configuration": null,
+      "evidence": null,
+      "context": null,
+      "localDevice": {
+        "top": 2763.5,
+        "height": 568.9,
+        "width": 404
+      },
+      "localDeviceHeader": {
+        "top": 2777.5,
+        "height": 78.3,
+        "width": 376
+      },
+      "ceremony": null,
+      "localLab": null,
+      "drive": null,
+      "setupSlot": {
+        "top": 2734.5,
+        "height": 597.9,
+        "width": 404
+      }
+    },
+    "notConnectedRestatements": {
+      "disconnected": 1,
+      "ephemeral": 0,
+      "notOpened": 1,
+      "noAttachment": 0
+    },
+    "smallTargets": [
+      {
+        "label": "",
+        "h": 18
+      },
+      {
+        "label": "",
+        "h": 18
+      },
+      {
+        "label": "",
+        "h": 18
+      }
+    ],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    },
+    "url": "http://127.0.0.1:4173/#vault"
+  },
+  "phone-local-device-full": {
+    "viewport": {
+      "w": 430,
+      "h": 740
+    },
+    "main": {
+      "top": 52,
+      "height": 632
+    },
+    "mainClientHeight": 632,
+    "mainScrollHeight": 3300,
+    "firstControl": {
+      "label": "Proof",
+      "y": 0
+    },
+    "boxes": {
+      "header": null,
+      "bar": {
+        "top": 111,
+        "height": 44,
+        "width": 404
+      },
+      "chooser": {
+        "top": 557.5,
+        "height": 2149,
+        "width": 404
+      },
+      "truth": null,
+      "state": {
+        "top": 171,
+        "height": 370.5,
+        "width": 404
+      },
+      "empty": null,
+      "configuration": null,
+      "evidence": null,
+      "context": null,
+      "localDevice": {
+        "top": 2763.5,
+        "height": 568.9,
+        "width": 404
+      },
+      "localDeviceHeader": {
+        "top": 2777.5,
+        "height": 78.3,
+        "width": 376
+      },
+      "ceremony": null,
+      "localLab": null,
+      "drive": null,
+      "setupSlot": {
+        "top": 2734.5,
+        "height": 597.9,
+        "width": 404
+      }
+    },
+    "notConnectedRestatements": {
+      "disconnected": 1,
+      "ephemeral": 0,
+      "notOpened": 1,
+      "noAttachment": 0
+    },
+    "smallTargets": [
+      {
+        "label": "",
+        "h": 18
+      },
+      {
+        "label": "",
+        "h": 18
+      },
+      {
+        "label": "",
+        "h": 18
+      }
+    ],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    },
+    "url": "http://127.0.0.1:4173/#vault"
+  },
+  "phone-ceremony": {
+    "viewport": {
+      "w": 430,
+      "h": 740
+    },
+    "main": {
+      "top": 52,
+      "height": 632
+    },
+    "mainClientHeight": 632,
+    "mainScrollHeight": 3931,
+    "firstControl": {
+      "label": "Proof",
+      "y": 3183
+    },
+    "boxes": {
+      "header": null,
+      "bar": {
+        "top": -3072,
+        "height": 44,
+        "width": 404
+      },
+      "chooser": {
+        "top": -2625.5,
+        "height": 2149,
+        "width": 404
+      },
+      "truth": null,
+      "state": {
+        "top": -3012,
+        "height": 370.5,
+        "width": 404
+      },
+      "empty": null,
+      "configuration": null,
+      "evidence": null,
+      "context": null,
+      "localDevice": {
+        "top": -419.5,
+        "height": 1199.6,
+        "width": 404
+      },
+      "localDeviceHeader": {
+        "top": -405.5,
+        "height": 78.3,
+        "width": 376
+      },
+      "ceremony": {
+        "top": 89.4,
+        "height": 556.8,
+        "width": 376
+      },
+      "localLab": null,
+      "drive": null,
+      "setupSlot": {
+        "top": -448.5,
+        "height": 1228.6,
+        "width": 404
+      }
+    },
+    "notConnectedRestatements": {
+      "disconnected": 1,
+      "ephemeral": 0,
+      "notOpened": 1,
+      "noAttachment": 0
+    },
+    "smallTargets": [
+      {
+        "label": "",
+        "h": 18
+      },
+      {
+        "label": "",
+        "h": 18
+      },
+      {
+        "label": "",
+        "h": 18
+      },
+      {
+        "label": "",
+        "h": 18
+      }
+    ],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    },
+    "url": "http://127.0.0.1:4173/#vault"
+  },
+  "phone-ceremony-full": {
+    "viewport": {
+      "w": 430,
+      "h": 740
+    },
+    "main": {
+      "top": 52,
+      "height": 632
+    },
+    "mainClientHeight": 632,
+    "mainScrollHeight": 3931,
+    "firstControl": {
+      "label": "Proof",
+      "y": 3183
+    },
+    "boxes": {
+      "header": null,
+      "bar": {
+        "top": -3072,
+        "height": 44,
+        "width": 404
+      },
+      "chooser": {
+        "top": -2625.5,
+        "height": 2149,
+        "width": 404
+      },
+      "truth": null,
+      "state": {
+        "top": -3012,
+        "height": 370.5,
+        "width": 404
+      },
+      "empty": null,
+      "configuration": null,
+      "evidence": null,
+      "context": null,
+      "localDevice": {
+        "top": -419.5,
+        "height": 1199.6,
+        "width": 404
+      },
+      "localDeviceHeader": {
+        "top": -405.5,
+        "height": 78.3,
+        "width": 376
+      },
+      "ceremony": {
+        "top": 89.4,
+        "height": 556.8,
+        "width": 376
+      },
+      "localLab": null,
+      "drive": null,
+      "setupSlot": {
+        "top": -448.5,
+        "height": 1228.6,
+        "width": 404
+      }
+    },
+    "notConnectedRestatements": {
+      "disconnected": 1,
+      "ephemeral": 0,
+      "notOpened": 1,
+      "noAttachment": 0
+    },
+    "smallTargets": [
+      {
+        "label": "",
+        "h": 18
+      },
+      {
+        "label": "",
+        "h": 18
+      },
+      {
+        "label": "",
+        "h": 18
+      },
+      {
+        "label": "",
+        "h": 18
+      }
+    ],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    },
+    "url": "http://127.0.0.1:4173/#vault"
+  },
+  "phone-google-drive": {
+    "viewport": {
+      "w": 430,
+      "h": 740
+    },
+    "main": {
+      "top": 52,
+      "height": 632
+    },
+    "mainClientHeight": 632,
+    "mainScrollHeight": 3300,
+    "firstControl": {
+      "label": "Proof",
+      "y": 0
+    },
+    "boxes": {
+      "header": null,
+      "bar": {
+        "top": 111,
+        "height": 44,
+        "width": 404
+      },
+      "chooser": {
+        "top": 557.5,
+        "height": 2149,
+        "width": 404
+      },
+      "truth": null,
+      "state": {
+        "top": 171,
+        "height": 370.5,
+        "width": 404
+      },
+      "empty": null,
+      "configuration": null,
+      "evidence": null,
+      "context": null,
+      "localDevice": {
+        "top": 2763.5,
+        "height": 568.9,
+        "width": 404
+      },
+      "localDeviceHeader": {
+        "top": 2777.5,
+        "height": 78.3,
+        "width": 376
+      },
+      "ceremony": null,
+      "localLab": null,
+      "drive": null,
+      "setupSlot": {
+        "top": 2734.5,
+        "height": 597.9,
+        "width": 404
+      }
+    },
+    "notConnectedRestatements": {
+      "disconnected": 1,
+      "ephemeral": 0,
+      "notOpened": 1,
+      "noAttachment": 0
+    },
+    "smallTargets": [
+      {
+        "label": "",
+        "h": 18
+      },
+      {
+        "label": "",
+        "h": 18
+      },
+      {
+        "label": "",
+        "h": 18
+      }
+    ],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    },
+    "url": "http://127.0.0.1:4173/#vault"
+  },
+  "phone-google-drive-full": {
+    "viewport": {
+      "w": 430,
+      "h": 740
+    },
+    "main": {
+      "top": 52,
+      "height": 632
+    },
+    "mainClientHeight": 632,
+    "mainScrollHeight": 3300,
+    "firstControl": {
+      "label": "Proof",
+      "y": 0
+    },
+    "boxes": {
+      "header": null,
+      "bar": {
+        "top": 111,
+        "height": 44,
+        "width": 404
+      },
+      "chooser": {
+        "top": 557.5,
+        "height": 2149,
+        "width": 404
+      },
+      "truth": null,
+      "state": {
+        "top": 171,
+        "height": 370.5,
+        "width": 404
+      },
+      "empty": null,
+      "configuration": null,
+      "evidence": null,
+      "context": null,
+      "localDevice": {
+        "top": 2763.5,
+        "height": 568.9,
+        "width": 404
+      },
+      "localDeviceHeader": {
+        "top": 2777.5,
+        "height": 78.3,
+        "width": 376
+      },
+      "ceremony": null,
+      "localLab": null,
+      "drive": null,
+      "setupSlot": {
+        "top": 2734.5,
+        "height": 597.9,
+        "width": 404
+      }
+    },
+    "notConnectedRestatements": {
+      "disconnected": 1,
+      "ephemeral": 0,
+      "notOpened": 1,
+      "noAttachment": 0
+    },
+    "smallTargets": [
+      {
+        "label": "",
+        "h": 18
+      },
+      {
+        "label": "",
+        "h": 18
+      },
+      {
+        "label": "",
+        "h": 18
+      }
+    ],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    },
+    "url": "http://127.0.0.1:4173/#vault"
+  },
+  "phone-drive-unavailable": {
+    "viewport": {
+      "w": 430,
+      "h": 740
+    },
+    "main": {
+      "top": 52,
+      "height": 632
+    },
+    "mainClientHeight": 632,
+    "mainScrollHeight": 3040,
+    "firstControl": {
+      "label": "Proof",
+      "y": 0
+    },
+    "boxes": {
+      "header": null,
+      "bar": {
+        "top": 111,
+        "height": 76.2,
+        "width": 404
+      },
+      "chooser": {
+        "top": 494.7,
+        "height": 2149,
+        "width": 404
+      },
+      "truth": null,
+      "state": {
+        "top": 203.2,
+        "height": 275.5,
+        "width": 404
+      },
+      "empty": null,
+      "configuration": null,
+      "evidence": null,
+      "context": null,
+      "localDevice": null,
+      "localDeviceHeader": null,
+      "ceremony": null,
+      "localLab": null,
+      "drive": {
+        "top": 2700.7,
+        "height": 371.1,
+        "width": 404
+      },
+      "setupSlot": {
+        "top": 2671.7,
+        "height": 400.1,
+        "width": 404
+      }
+    },
+    "notConnectedRestatements": {
+      "disconnected": 1,
+      "ephemeral": 0,
+      "notOpened": 0,
+      "noAttachment": 1
+    },
+    "smallTargets": [],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    },
+    "url": "http://127.0.0.1:4173/#vault"
+  },
+  "phone-drive-unavailable-full": {
+    "viewport": {
+      "w": 430,
+      "h": 740
+    },
+    "main": {
+      "top": 52,
+      "height": 632
+    },
+    "mainClientHeight": 632,
+    "mainScrollHeight": 3040,
+    "firstControl": {
+      "label": "Proof",
+      "y": 0
+    },
+    "boxes": {
+      "header": null,
+      "bar": {
+        "top": 111,
+        "height": 76.2,
+        "width": 404
+      },
+      "chooser": {
+        "top": 494.7,
+        "height": 2149,
+        "width": 404
+      },
+      "truth": null,
+      "state": {
+        "top": 203.2,
+        "height": 275.5,
+        "width": 404
+      },
+      "empty": null,
+      "configuration": null,
+      "evidence": null,
+      "context": null,
+      "localDevice": null,
+      "localDeviceHeader": null,
+      "ceremony": null,
+      "localLab": null,
+      "drive": {
+        "top": 2700.7,
+        "height": 371.1,
+        "width": 404
+      },
+      "setupSlot": {
+        "top": 2671.7,
+        "height": 400.1,
+        "width": 404
+      }
+    },
+    "notConnectedRestatements": {
+      "disconnected": 1,
+      "ephemeral": 0,
+      "notOpened": 0,
+      "noAttachment": 1
+    },
+    "smallTargets": [],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    },
+    "url": "http://127.0.0.1:4173/#vault"
+  },
+  "phone-ephemeral": {
+    "viewport": {
+      "w": 430,
+      "h": 740
+    },
+    "main": {
+      "top": 52,
+      "height": 632
+    },
+    "mainClientHeight": 632,
+    "mainScrollHeight": 2663,
+    "firstControl": {
+      "label": "Proof",
+      "y": 0
+    },
+    "boxes": {
+      "header": null,
+      "bar": {
+        "top": 111,
+        "height": 76.2,
+        "width": 404
+      },
+      "chooser": {
+        "top": 545.7,
+        "height": 2149,
+        "width": 404
+      },
+      "truth": null,
+      "state": {
+        "top": 203.2,
+        "height": 326.5,
+        "width": 404
+      },
+      "empty": null,
+      "configuration": null,
+      "evidence": null,
+      "context": null,
+      "localDevice": null,
+      "localDeviceHeader": null,
+      "ceremony": null,
+      "localLab": null,
+      "drive": null,
+      "setupSlot": null
+    },
+    "notConnectedRestatements": {
+      "disconnected": 0,
+      "ephemeral": 2,
+      "notOpened": 0,
+      "noAttachment": 1
+    },
+    "smallTargets": [],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    },
+    "url": "http://127.0.0.1:4173/#vault"
+  },
+  "phone-ephemeral-full": {
+    "viewport": {
+      "w": 430,
+      "h": 740
+    },
+    "main": {
+      "top": 52,
+      "height": 632
+    },
+    "mainClientHeight": 632,
+    "mainScrollHeight": 2663,
+    "firstControl": {
+      "label": "Proof",
+      "y": 0
+    },
+    "boxes": {
+      "header": null,
+      "bar": {
+        "top": 111,
+        "height": 76.2,
+        "width": 404
+      },
+      "chooser": {
+        "top": 545.7,
+        "height": 2149,
+        "width": 404
+      },
+      "truth": null,
+      "state": {
+        "top": 203.2,
+        "height": 326.5,
+        "width": 404
+      },
+      "empty": null,
+      "configuration": null,
+      "evidence": null,
+      "context": null,
+      "localDevice": null,
+      "localDeviceHeader": null,
+      "ceremony": null,
+      "localLab": null,
+      "drive": null,
+      "setupSlot": null
+    },
+    "notConnectedRestatements": {
+      "disconnected": 0,
+      "ephemeral": 2,
+      "notOpened": 0,
+      "noAttachment": 1
+    },
+    "smallTargets": [],
+    "overflow": {
+      "document": 0,
+      "main": 0
+    },
+    "url": "http://127.0.0.1:4173/#vault"
+  }
+}

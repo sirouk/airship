@@ -30,7 +30,7 @@ import type {
   InspectChutesEndpointOptions,
   TdxRuntimeMeasurements,
 } from "./provider-types";
-import type { AttestationVerifierPorts, ChutesInstanceEvidence, DcapVerificationResult, EvidenceFetchResult, JsonObject, ParsedTdxQuote } from "./types";
+import type { AttestationVerifierPorts, ChutesInstanceEvidence, DcapVerificationResult, EvidenceFetchResult, JsonObject, NvidiaVerificationResult, ParsedTdxQuote } from "./types";
 
 export const CHUTES_TEE_MEASUREMENTS_PATH = "/servers/tee/measurements";
 export const DEFAULT_ATTESTATION_CACHE_TTL_MS = 90_000;
@@ -167,9 +167,11 @@ type DiscoveryCacheEntry = Readonly<{
 /**
  * Browser-direct Chutes endpoint-evidence client.
  *
- * It intentionally produces evidence records, not verified endpoint receipts:
- * this build has no Intel DCAP or NVIDIA verifier and Chutes does not currently
- * return a model- or transcript-bound enclave signature.
+ * It intentionally produces endpoint evidence records, not conversation proof.
+ * A configured browser verifier can independently establish Intel TDX and the
+ * client also evaluates supported NVIDIA evidence, but Chutes does not currently
+ * return a model-artifact- or transcript-bound enclave signature. Those claim
+ * axes therefore remain separate and fail closed.
  */
 export class ChutesAttestationEvidenceClient {
   private readonly options: ResolvedOptions;
@@ -403,6 +405,7 @@ export class ChutesAttestationEvidenceClient {
     signal: AbortSignal,
   ): Promise<ChutesEndpointEvidenceRecord> {
     const timeout = createTimeout(signal, this.options.timeoutMs);
+    let acquisitionStageComplete = false;
     try {
       const nonce = generateAttestationNonce(this.options.randomValues);
       const evidencePromise = this.fetchEvidence(request, nonce, timeout.signal);
@@ -420,8 +423,17 @@ export class ChutesAttestationEvidenceClient {
           )
         : Promise.resolve(undefined);
 
-      const fetched = await evidencePromise;
-      const policyResult = await policyPromise;
+      // Attach settlement handlers to both concurrent requests before either
+      // can fail. Awaiting them one after another leaves the optional policy
+      // promise unobserved when evidence fails first; cancelling the shared
+      // flight would then surface a stray AbortError after the caller had
+      // already received the primary failure.
+      const [fetched, policyResult] = await Promise.all([evidencePromise, policyPromise]);
+      // Evidence and the optional policy request have settled. Retire their
+      // shared network deadline before starting local verifier work, which has
+      // its own bounded deadline below.
+      acquisitionStageComplete = true;
+      timeout.dispose();
       const fetchedAtMs = Date.parse(fetched.fetchedAt);
       const cacheFreshUntil = new Date(fetchedAtMs + this.options.cacheTtlMs).toISOString();
       const parsedQuote = parseTdxQuote(fetched.evidence.quote);
@@ -458,27 +470,62 @@ export class ChutesAttestationEvidenceClient {
       // Fails closed: any thrown error leaves the claim at its structural default.
       let dcapResult: DcapVerificationResult | undefined;
       const dcapPort = this.options.verifierPorts?.dcap;
-      if (dcapPort) {
-        try {
-          dcapResult = await dcapPort.verify({
-            instanceId: request.instanceId,
-            nonce,
-            e2ePublicKey: request.e2ePublicKey,
-            evidence: fetched.evidence,
-            parsedQuote,
-            expectedBindingDigestHex: binding.expectedDigestHex,
-          }, signal);
-        } catch {
-          dcapResult = undefined;
-        }
-      }
-      // Real NVIDIA GPU verification (device chain to pinned NVIDIA root + SPDM
-      // report signature), fail-closed. Self-contained; needs no collateral.
       let nvidiaResult: NvidiaGpuVerification | undefined;
+      let nvidiaVerifierResult: NvidiaVerificationResult | undefined;
+      const nvidiaPort = this.options.verifierPorts?.nvidia;
+      const verifierTimeout = createTimeout(signal, this.options.timeoutMs);
       try {
-        nvidiaResult = await verifyNvidiaGpuEvidence(fetched.evidence.gpuEvidence);
-      } catch {
-        nvidiaResult = undefined;
+        if (dcapPort) {
+          try {
+            dcapResult = await abortable(Promise.resolve(dcapPort.verify({
+              instanceId: request.instanceId,
+              nonce,
+              e2ePublicKey: request.e2ePublicKey,
+              evidence: fetched.evidence,
+              parsedQuote,
+              expectedBindingDigestHex: binding.expectedDigestHex,
+            }, verifierTimeout.signal)), verifierTimeout.signal);
+          } catch (error) {
+            if (verifierTimeout.didTimeout() || signal.aborted) throw error;
+            dcapResult = undefined;
+          }
+        }
+        // The live Chutes artifact exposes the NVIDIA SPDM request nonce but
+        // not a self-contained browser-verifiable NRAS/RIM/OCSP verdict. Match
+        // that nonce locally, then allow an explicitly configured independent
+        // verifier port to promote the claim. Never promote the byte match.
+        try {
+          nvidiaResult = await abortable(
+            verifyNvidiaGpuEvidence(
+              fetched.evidence.gpuEvidence,
+              binding.expectedDigestHex,
+            ),
+            verifierTimeout.signal,
+          );
+          if (nvidiaPort && nvidiaResult.state === "matched") {
+            nvidiaVerifierResult = await abortable(Promise.resolve(nvidiaPort.verify({
+              instanceId: request.instanceId,
+              nonce,
+              e2ePublicKey: request.e2ePublicKey,
+              gpuEvidence: fetched.evidence.gpuEvidence,
+              expectedBindingDigestHex: binding.expectedDigestHex,
+            }, verifierTimeout.signal)), verifierTimeout.signal);
+          }
+        } catch (error) {
+          if (verifierTimeout.didTimeout() || signal.aborted) throw error;
+          nvidiaVerifierResult = undefined;
+        }
+      } catch (error) {
+        if (verifierTimeout.didTimeout()) {
+          throw new AttestationEvidenceClientError(
+            "timeout",
+            "Chutes attestation evidence verification timed out.",
+            { retryable: true },
+          );
+        }
+        throw error;
+      } finally {
+        verifierTimeout.dispose();
       }
       const claims = buildClaims({
         bindingMatched: binding.matched,
@@ -490,6 +537,8 @@ export class ChutesAttestationEvidenceClient {
         dcapResult,
         dcapVerifier: dcapPort ? `${dcapPort.id}@${dcapPort.version}` : undefined,
         nvidiaResult,
+        nvidiaVerifierResult,
+        nvidiaVerifier: nvidiaPort ? `${nvidiaPort.id}@${nvidiaPort.version}` : undefined,
       });
       const warnings = buildWarnings({
         gpuEvidenceCount: fetched.evidence.gpuEvidence.length,
@@ -498,6 +547,8 @@ export class ChutesAttestationEvidenceClient {
         policyUnavailable: Boolean(policyUnavailable),
         dcapVerified: dcapResult?.status === "verified",
         nvidiaState: nvidiaResult?.state,
+        nvidiaVerifierState: nvidiaVerifierResult?.status,
+        nvidiaVerifierConfigured: Boolean(nvidiaPort),
       });
 
       return deepFreeze({
@@ -566,7 +617,7 @@ export class ChutesAttestationEvidenceClient {
         warnings,
       } satisfies ChutesEndpointEvidenceRecord);
     } catch (error) {
-      if (timeout.didTimeout()) {
+      if (timeout.didTimeout() && !acquisitionStageComplete) {
         throw new AttestationEvidenceClientError(
           "timeout",
           "Chutes attestation evidence request timed out.",
@@ -1290,15 +1341,51 @@ function buildClaims(args: {
   dcapResult?: DcapVerificationResult;
   dcapVerifier?: string;
   nvidiaResult?: NvidiaGpuVerification;
+  nvidiaVerifierResult?: NvidiaVerificationResult;
+  nvidiaVerifier?: string;
 }): Readonly<Record<AttestationClaimKey, AttestationClaimSummary>> {
   const checkedAt = args.checkedAt;
   const localVerifier = "airship-structural-check/v1";
   const dcapVerifier = args.dcapVerifier ?? "intel-dcap-not-configured";
-  const nvidiaVerifier = "nvidia-gpu-webcrypto/v1";
-  const gpuTeeClaim: AttestationClaimSummary = args.nvidiaResult && args.nvidiaResult.state !== "unavailable"
-    ? { state: args.nvidiaResult.state, title: "NVIDIA GPU authenticity", summary: args.nvidiaResult.summary, verifier: nvidiaVerifier, checkedAt }
+  const nvidiaBindingVerifier = "airship-nvidia-spdm-binding/v1";
+  const verifiedNvidia = args.nvidiaVerifierResult?.status === "verified"
+    ? {
+        state: "verified" as const,
+        title: "NVIDIA GPU authenticity",
+        summary: args.nvidiaVerifierResult.summary,
+        verifier: args.nvidiaVerifier ?? "nvidia-verifier",
+        checkedAt,
+      }
+    : undefined;
+  const failedNvidia = args.nvidiaVerifierResult && args.nvidiaVerifierResult.status !== "partial" && args.nvidiaVerifierResult.status !== "unavailable"
+    ? {
+        state: args.nvidiaVerifierResult.status as "failed" | "expired",
+        title: "NVIDIA GPU authenticity",
+        summary: args.nvidiaVerifierResult.summary,
+        verifier: args.nvidiaVerifier ?? "nvidia-verifier",
+        checkedAt,
+      }
+    : undefined;
+  const gpuTeeClaim: AttestationClaimSummary = args.nvidiaResult?.state === "failed"
+    ? { state: "failed", title: "NVIDIA GPU evidence binding", summary: args.nvidiaResult.summary, verifier: nvidiaBindingVerifier, checkedAt }
+    : verifiedNvidia
+      ? verifiedNvidia
+      : failedNvidia
+        ? failedNvidia
+        : args.nvidiaResult?.state === "matched"
+          ? {
+              state: args.nvidiaVerifierResult?.status === "partial" ? "unverified" : "matched",
+              title: "NVIDIA GPU evidence binding",
+              summary: args.nvidiaVerifierResult?.status === "partial"
+                ? `${args.nvidiaResult.summary} ${args.nvidiaVerifierResult.summary}`
+                : args.nvidiaVerifierResult?.status === "unavailable"
+                  ? `${args.nvidiaResult.summary} The configured independent NVIDIA verifier was unavailable: ${args.nvidiaVerifierResult.summary}`
+                  : args.nvidiaResult.summary,
+              verifier: args.nvidiaVerifierResult ? `${nvidiaBindingVerifier}+${args.nvidiaVerifier ?? "nvidia-verifier"}` : nvidiaBindingVerifier,
+              checkedAt,
+            }
     : args.gpuEvidenceCount > 0
-      ? { state: "unverified", title: "NVIDIA GPU authenticity", summary: `${args.gpuEvidenceCount} GPU evidence object${args.gpuEvidenceCount === 1 ? " is" : "s are"} present, but NVIDIA verification was not performed.`, checkedAt }
+      ? { state: "unverified", title: "NVIDIA GPU evidence binding", summary: args.nvidiaResult?.summary ?? `${args.gpuEvidenceCount} GPU evidence object${args.gpuEvidenceCount === 1 ? " is" : "s are"} present, but the SPDM request binding could not be checked.`, checkedAt }
       : { state: "unavailable", title: "NVIDIA GPU authenticity", summary: "The response contains no GPU evidence objects.", checkedAt };
   const cpuTeeClaim: AttestationClaimSummary = args.dcapResult?.status === "verified"
     ? { state: "verified", title: "Intel TDX authenticity", summary: args.dcapResult.summary, verifier: dcapVerifier, checkedAt }
@@ -1389,6 +1476,8 @@ function buildWarnings(args: {
   policyUnavailable: boolean;
   dcapVerified: boolean;
   nvidiaState?: NvidiaGpuVerification["state"];
+  nvidiaVerifierState?: NvidiaVerificationResult["status"];
+  nvidiaVerifierConfigured: boolean;
 }): readonly string[] {
   const warnings = [
     args.dcapVerified
@@ -1399,9 +1488,14 @@ function buildWarnings(args: {
     "Endpoint evidence does not prove model weights, a request, a response, a conversation, usage, or payment.",
   ];
   if (args.gpuEvidenceCount > 0) {
-    warnings.push(args.nvidiaState === "matched"
-      ? "NVIDIA certificate/SPDM authenticity matched locally; complete nonce, RIM, firmware, and confidential-mode policy verification is not yet established."
-      : "NVIDIA evidence is present but complete GPU attestation is not established.");
+    warnings.push(args.nvidiaVerifierState === "verified"
+      ? "The configured NVIDIA verifier reported a complete GPU verdict; Airship also matched every GPU evidence request nonce to the TDX endpoint binding."
+      : args.nvidiaState === "matched"
+        ? "Every NVIDIA SPDM request nonce matched the TDX endpoint binding locally; GPU authenticity, revocation, RIM/firmware, freshness, and confidential-mode policy remain unverified."
+        : "NVIDIA evidence is present but complete GPU attestation is not established.");
+    if (args.nvidiaVerifierConfigured && !args.nvidiaVerifierState) {
+      warnings.push("The configured independent NVIDIA verifier did not return a usable result; the local nonce-binding result was retained without promotion.");
+    }
   }
   if (args.policy) {
     warnings.push("The measurement policy is Chutes-published HTTPS data, not a separately signed transparency artifact.");
@@ -1535,7 +1629,7 @@ async function requestJson(
 ): Promise<unknown> {
   let response: Response;
   try {
-    response = await fetchImpl(requestUrl, {
+    response = await abortable(Promise.resolve(fetchImpl(requestUrl, {
       method: "GET",
       headers,
       mode: "cors",
@@ -1544,7 +1638,7 @@ async function requestJson(
       redirect: "error",
       referrerPolicy: "no-referrer",
       signal,
-    });
+    })), signal);
   } catch (error) {
     if (signal.aborted) throw abortReason(signal);
     if (isBrowserCrossOrigin(requestUrl)) {
@@ -1561,7 +1655,7 @@ async function requestJson(
     );
   }
   if (!response.ok) {
-    await drainBounded(response, MAX_ERROR_RESPONSE_BYTES);
+    await drainBounded(response, MAX_ERROR_RESPONSE_BYTES, signal);
     const code = response.status === 401
       ? "unauthorized"
       : response.status === 403
@@ -1579,14 +1673,14 @@ async function requestJson(
   }
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
   if (!/^application\/(?:[a-z0-9.+-]+\+)?json(?:\s*;|$)/.test(contentType)) {
-    await drainBounded(response, MAX_ERROR_RESPONSE_BYTES);
+    await drainBounded(response, MAX_ERROR_RESPONSE_BYTES, signal);
     throw new AttestationEvidenceClientError(
       "invalid-content-type",
       "Chutes attestation endpoint did not return JSON.",
       { requestUrl, retryable: false },
     );
   }
-  const text = await readBoundedUtf8(response, maxResponseBytes, requestUrl);
+  const text = await readBoundedUtf8(response, maxResponseBytes, requestUrl, signal);
   try {
     return JSON.parse(text) as unknown;
   } catch (error) {
@@ -1602,6 +1696,7 @@ async function readBoundedUtf8(
   response: Response,
   maximum: number,
   requestUrl: string,
+  signal: AbortSignal,
 ): Promise<string> {
   const contentLength = response.headers.get("content-length");
   if (contentLength !== null) {
@@ -1633,7 +1728,7 @@ async function readBoundedUtf8(
   let total = 0;
   try {
     while (true) {
-      const { done, value } = await reader.read();
+      const { done, value } = await abortable(reader.read(), signal);
       if (done) break;
       total += value.byteLength;
       if (total > maximum) {
@@ -1647,7 +1742,8 @@ async function readBoundedUtf8(
       chunks.push(value);
     }
   } finally {
-    reader.releaseLock();
+    if (signal.aborted) void reader.cancel(signal.reason).catch(() => undefined);
+    try { reader.releaseLock(); } catch { /* an aborted body may retain its reader */ }
   }
   const bytes = new Uint8Array(total);
   let offset = 0;
@@ -1666,13 +1762,13 @@ async function readBoundedUtf8(
   }
 }
 
-async function drainBounded(response: Response, maximum: number): Promise<void> {
+async function drainBounded(response: Response, maximum: number, signal: AbortSignal): Promise<void> {
   if (!response.body) return;
   const reader = response.body.getReader();
   let total = 0;
   try {
     while (total <= maximum) {
-      const { done, value } = await reader.read();
+      const { done, value } = await abortable(reader.read(), signal);
       if (done) return;
       total += value.byteLength;
     }
@@ -1680,7 +1776,8 @@ async function drainBounded(response: Response, maximum: number): Promise<void> 
   } catch {
     // Provider error bodies may contain sensitive detail and are never surfaced.
   } finally {
-    reader.releaseLock();
+    if (signal.aborted) void reader.cancel(signal.reason).catch(() => undefined);
+    try { reader.releaseLock(); } catch { /* an aborted body may retain its reader */ }
   }
 }
 

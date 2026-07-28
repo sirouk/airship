@@ -14,7 +14,22 @@ import {
 import type {
   BrowserGitAdapter,
   GitAdapterCapabilities,
+  GitAddRemoteRequest,
   GitCloneRequest,
+  GitCommitDetail,
+  GitCommitSummary,
+  GitCreateTagRequest,
+  GitDeleteTagRequest,
+  GitLogRequest,
+  GitMergeRequest,
+  GitRemoveRemoteRequest,
+  GitResetRequest,
+  GitRestoreRequest,
+  GitSetRemoteUrlRequest,
+  GitShowRequest,
+  GitStashEntry,
+  GitStashRequest,
+  GitTagSummary,
   GitCommitRequest,
   GitCreateBranchRequest,
   GitCreateWorktreeRequest,
@@ -81,6 +96,13 @@ type GitCheckpointHead = Readonly<{
   state: DurableGitCheckpoint;
 }>;
 
+/**
+ * The durable checkpoint serializes the delegate's semantic commit graph, not a
+ * Git object database, so verbs that can only be answered from real Git storage
+ * stay unavailable here exactly as they do in the delegate.
+ */
+const DELEGATED_STATE_REASON = "this adapter checkpoints a simulated commit graph and has no Git object database, ref namespace, reflog, or config to read";
+
 export const ENCRYPTED_WORKSPACE_GIT_CAPABILITIES: GitAdapterCapabilities = deepFreeze({
   adapterId: "airship-encrypted-workspace-git",
   adapterName: "Airship encrypted workspace Git adapter",
@@ -93,6 +115,7 @@ export const ENCRYPTED_WORKSPACE_GIT_CAPABILITIES: GitAdapterCapabilities = deep
     transport: "none",
     requiresCors: true,
     credentialPersistence: "none",
+    permittedOrigins: [],
     detail: "No remote transport or credential is persisted. Approved CORS-safe snapshot import remains available.",
   },
   features: {
@@ -106,6 +129,12 @@ export const ENCRYPTED_WORKSPACE_GIT_CAPABILITIES: GitAdapterCapabilities = deep
     clone: { available: false, reason: "this adapter has no direct CORS-safe Git HTTP or host-provider transport" },
     fetch: { available: false, reason: "this adapter has no direct CORS-safe Git HTTP or host-provider transport" },
     push: { available: false, reason: "this adapter has no direct CORS-safe Git HTTP or host-provider transport" },
+    history: { available: false, reason: DELEGATED_STATE_REASON },
+    tag: { available: false, reason: DELEGATED_STATE_REASON },
+    stash: { available: false, reason: DELEGATED_STATE_REASON },
+    merge: { available: false, reason: DELEGATED_STATE_REASON },
+    restore: { available: false, reason: DELEGATED_STATE_REASON },
+    "remote-config": { available: false, reason: DELEGATED_STATE_REASON },
   },
 });
 
@@ -321,6 +350,58 @@ export class EncryptedWorkspaceGitAdapter implements BrowserGitAdapter {
   async push(request: GitPushRequest, context: GitOperationContext): Promise<GitMutationResult> {
     await this.refresh(context.signal);
     return this.delegate.push(request, context);
+  }
+
+  log(request: GitLogRequest, context: GitOperationContext): Promise<readonly GitCommitSummary[]> {
+    return this.delegate.log(request, context);
+  }
+
+  show(request: GitShowRequest, context: GitOperationContext): Promise<GitCommitDetail> {
+    return this.delegate.show(request, context);
+  }
+
+  listTags(repositoryId: string, context: GitOperationContext): Promise<readonly GitTagSummary[]> {
+    return this.delegate.listTags(repositoryId, context);
+  }
+
+  createTag(request: GitCreateTagRequest, context: GitOperationContext): Promise<GitMutationResult> {
+    return this.delegate.createTag(request, context);
+  }
+
+  deleteTag(request: GitDeleteTagRequest, context: GitOperationContext): Promise<GitMutationResult> {
+    return this.delegate.deleteTag(request, context);
+  }
+
+  listStash(request: GitStatusRequest, context: GitOperationContext): Promise<readonly GitStashEntry[]> {
+    return this.delegate.listStash(request, context);
+  }
+
+  stash(request: GitStashRequest, context: GitOperationContext): Promise<GitMutationResult> {
+    return this.delegate.stash(request, context);
+  }
+
+  merge(request: GitMergeRequest, context: GitOperationContext): Promise<GitMutationResult> {
+    return this.delegate.merge(request, context);
+  }
+
+  restore(request: GitRestoreRequest, context: GitOperationContext): Promise<GitMutationResult> {
+    return this.delegate.restore(request, context);
+  }
+
+  reset(request: GitResetRequest, context: GitOperationContext): Promise<GitMutationResult> {
+    return this.delegate.reset(request, context);
+  }
+
+  addRemote(request: GitAddRemoteRequest, context: GitOperationContext): Promise<GitMutationResult> {
+    return this.delegate.addRemote(request, context);
+  }
+
+  setRemoteUrl(request: GitSetRemoteUrlRequest, context: GitOperationContext): Promise<GitMutationResult> {
+    return this.delegate.setRemoteUrl(request, context);
+  }
+
+  removeRemote(request: GitRemoveRemoteRequest, context: GitOperationContext): Promise<GitMutationResult> {
+    return this.delegate.removeRemote(request, context);
   }
 
   private async mutate(

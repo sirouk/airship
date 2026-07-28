@@ -92,11 +92,11 @@ export class EventJournal {
     return this.backend.readEvents(sessionId, afterSequence, signal);
   }
 
-  async renameSession(sessionId: string, title: string): Promise<SessionRecord> {
+  async renameSession(sessionId: string, title: string, signal?: AbortSignal): Promise<SessionRecord> {
     const normalized = title.trim();
     if (!normalized || normalized.length > 240 || /[\u0000-\u001F\u007F]/u.test(normalized)) throw new TypeError("Session title must be between 1 and 240 printable characters.");
-    await this.append(sessionId, [{ type: "session.renamed", payload: { title: normalized } }]);
-    const session = await this.backend.getSession(sessionId);
+    await this.append(sessionId, [{ type: "session.renamed", payload: { title: normalized } }], signal);
+    const session = await this.backend.getSession(sessionId, signal);
     if (!session) throw new Error(`Unknown session: ${sessionId}`);
     return session;
   }

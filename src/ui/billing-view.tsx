@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "preact/hooks";
+import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import type {
   ChutesAccountSnapshot,
   ChutesSubscriptionWindow,
@@ -13,11 +13,19 @@ import {
   type BillingDatumStatus,
 } from "../billing/honesty";
 import type { ChutesInvocationTelemetry } from "../inference/chutes";
+import "./billing-view.css";
 import { OFFLINE_INLINE_REASON } from "./connectivity";
 import { Icon } from "./icons";
+import { Metric, MetricStrip, metricQuantity } from "./metric-strip";
+import { Popover } from "./popover";
 import { mapUnknownRequestFailure, observationState } from "./request-state";
+import { RouteHeader } from "./route-header";
+import { Seal } from "./seal";
 
 export type BillingCredentialKind = "oauth" | "api-key" | "unknown";
+
+/** The em dash a metric shows when nothing has been read. It is not a zero. */
+const NOT_READ = "—";
 
 export function BillingView({
   accountReadable,
@@ -40,6 +48,15 @@ export function BillingView({
   const [loading, setLoading] = useState(false);
   const [fatalError, setFatalError] = useState<string>();
   const [refresh, setRefresh] = useState(0);
+  /**
+   * The bucket the reader is pointing at, in either representation.
+   *
+   * The strip and the ledger print the same ten buckets with no relation
+   * between them, so a bar was unreadable and a row was unplaceable. One piece
+   * of state binds them: the chart and the table are two views of one
+   * selection, not two tables.
+   */
+  const [highlight, setHighlight] = useState<string>();
 
   useEffect(() => {
     if (!accountReadable) {
@@ -77,27 +94,42 @@ export function BillingView({
   const usageState = usageDatum(snapshot, loading);
   const quotaState = quotaDatum(snapshot, loading);
   const observed = snapshot ? observationState(snapshot.fetchedAt, 5 * 60_000) : undefined;
+  const subscriptionInactive = subscriptionState.status === "verified" && subscriptionState.value?.active === false;
+  const quota = invocationTelemetry?.quota;
 
   return (
     <section class="work-view billing-view">
-      <header class="page-heading billing-heading">
-        <span class="eyebrow">Direct user-scoped Chutes telemetry</span>
-        <h1>Account standing</h1>
-        <p>See available balance, actual charges, covered subscription runway, fixed four-hour burst capacity, quota configuration, and live invocation headers—without an Airship billing backend.</p>
-      </header>
-
-      <div class="panel billing-toolbar">
-        <div>
-          <span class={accountReadable ? "account-state ready" : "account-state"}><span />{accountReadable ? "User-scoped credential connected" : "Account telemetry unavailable"}</span>
-          <small class={observed?.stale ? "billing-observation stale" : "billing-observation"}>{observed?.label ?? credentialMessage(credentialKind)}{loading && snapshot ? " · updating" : ""}</small>
-        </div>
-        <div>
-          {online
-            ? <a class="small-button" href="https://chutes.ai/app/settings/billing" target="_blank" rel="noreferrer">Manage at Chutes ↗</a>
-            : <span class="small-button is-disabled" aria-disabled="true">Manage at Chutes ↗</span>}
-          {accountReadable ? <button class="small-button" type="button" disabled={loading || !online} onClick={() => setRefresh((value) => value + 1)}>{loading ? "Refreshing…" : "Refresh"}</button> : <button class="small-button" type="button" onClick={onOpenAccess}>Open Access</button>}
-        </div>
-      </div>
+      <RouteHeader
+        routeId="account"
+        density="tool"
+        title="Account standing"
+        eyebrow="Direct user-scoped Chutes telemetry"
+        description="See balance, provider-reported charges, subscription runway, and live limits directly from Chutes."
+        status={accountReadable ? (
+          /* The 64px `.billing-toolbar` band held one status line and one
+             external link. The status line is this chip — a real seal state
+             rather than a grey dot, with the freshness reading and the
+             credential sentence in full inside it. */
+          <Popover
+            class="billing-credential-chip"
+            heading="Account telemetry"
+            label={`Account telemetry. ${observed?.stale ? "Stale observation" : "Connected"}. Opens the credential kind and when this reading was taken.`}
+            trigger={<Seal state={observed?.stale ? "stale" : "verified"} density="chip" label={observed?.stale ? "Stale reading" : "Connected"} />}
+          >
+            <p><strong>User-scoped credential connected</strong></p>
+            <p>{observed?.label ?? credentialMessage(credentialKind)}{loading && snapshot ? " · updating" : ""}</p>
+            <p>{credentialMessage(credentialKind)}</p>
+          </Popover>
+        ) : null}
+        actions={accountReadable ? (
+          <>
+            {online
+              ? <a class="small-button" href="https://chutes.ai/app/settings/billing" target="_blank" rel="noreferrer">Manage at Chutes ↗</a>
+              : <span class="small-button is-disabled" aria-disabled="true">Manage at Chutes ↗</span>}
+            <button class="small-button" type="button" disabled={loading || !online} onClick={() => setRefresh((value) => value + 1)}>{loading ? "Refreshing…" : "Refresh"}</button>
+          </>
+        ) : null}
+      />
 
       {!online ? (
         <div class="billing-alert warning connectivity-pause" role="status" aria-live="polite">
@@ -108,16 +140,41 @@ export function BillingView({
       {fatalError ? <div class="billing-alert error" role="alert"><Icon name="warning" /><div><strong>Account read failed</strong><span>{fatalError}</span></div></div> : null}
 
       {!accountReadable ? (
-        <div class="panel billing-gate">
+        /*
+         * Not-yet-connected is a default, not a fault.
+         *
+         * This branch used to state one fact five times — a grey dot reading
+         * "Account telemetry unavailable", an eyebrow "USER-SCOPED TOKEN
+         * REQUIRED", a heading, and two near-verbatim page-memory sentences
+         * 110px apart — in Airship's own failure grammar. The sentence that
+         * carries the credential contract is kept word for word; what goes is
+         * the repetition and the alarm.
+         */
+        <div class="billing-gate panel">
           <span class="billing-gate-mark"><Icon name="lock" size={22} /></span>
           <div>
-            <span class="eyebrow">User-scoped token required</span>
-            <h2>Connect your Chutes account</h2>
+            <h2>Not connected yet</h2>
             <p>Connect with scoped Chutes sign-in or a direct API-key session. The credential remains held only in page memory.</p>
-            <details class="billing-gate-preview">
-              <summary>What becomes available</summary>
-              <p>Balance, subscription runway, charged usage, token totals, quota configuration, and live invocation headroom.</p>
-            </details>
+            <div class="billing-gate-actions">
+              <button class="primary billing-gate-action" type="button" onClick={onOpenAccess}>Connect Chutes</button>
+              {online
+                ? <a class="billing-gate-link" href="https://chutes.ai/app/settings/billing" target="_blank" rel="noreferrer">Manage at Chutes ↗</a>
+                : <span class="billing-gate-link is-disabled" aria-disabled="true">Manage at Chutes ↗</span>}
+            </div>
+          </div>
+          {/* `What becomes available` promised a list in prose that the header
+              had already promised in different words. The same six things are
+              named here as the labelled shape they arrive in, each holding an
+              em dash — which states the non-claim rather than describing it. */}
+          <div class="billing-gate-preview">
+            <MetricStrip label="What becomes available" class="billing-metric-strip">
+              <Metric label="Available Chutes balance" value={metricQuantity(NOT_READ)} />
+              <Metric label="Subscription" value={metricQuantity(NOT_READ)} />
+              <Metric label="Charged this UTC month" value={metricQuantity(NOT_READ)} />
+              <Metric label="Tokens this UTC month" value={metricQuantity(NOT_READ)} />
+              <Metric label="Live headroom" value={metricQuantity(NOT_READ)} caption="quota configuration and per-invocation headroom" />
+            </MetricStrip>
+            <p class="billing-gate-preview-note">Nothing is read from Chutes until you connect.</p>
           </div>
         </div>
       ) : null}
@@ -129,36 +186,59 @@ export function BillingView({
         </div>
       ) : null}
 
-      <div class="billing-metrics" aria-label="Account summary">
-        <BillingMetric
+      <MetricStrip label="Account summary" class="billing-metric-strip">
+        <Metric
           label="Available Chutes balance"
-          value={balanceState.value === undefined ? billingDatumLabel(balanceState.status) : formatUsd(balanceState.value)}
-          detail={balanceState.detail}
-          tone={balanceState.tone}
+          value={metricQuantity(balanceState.value === undefined ? billingDatumLabel(balanceState.status) : formatUsd(balanceState.value, "headline"))}
+          caption={balanceState.value === undefined
+            ? balanceState.detail
+            /* The wallet reads as money at two places; the four-decimal figure
+               the endpoint actually returned is never lost, it is stated here
+               in full. */
+            : `${balanceState.detail} Exactly ${formatUsd(balanceState.value, "ledger")}.`}
         />
-        <BillingMetric
+        <Metric
           label="Subscription"
-          value={subscriptionState.value
+          value={metricQuantity(subscriptionState.value
             ? subscriptionState.value.active
-              ? subscriptionState.value.monthlyPrice === undefined ? "Active" : `${formatUsd(subscriptionState.value.monthlyPrice)} / mo`
+              ? subscriptionState.value.monthlyPrice === undefined ? "Active" : `${formatUsd(subscriptionState.value.monthlyPrice, "headline")} / mo`
               : "Inactive"
-            : billingDatumLabel(subscriptionState.status)}
-          detail={subscriptionDetail(subscriptionState)}
-          tone={subscriptionState.tone}
+            : billingDatumLabel(subscriptionState.status))}
+          caption={subscriptionDetail(subscriptionState)}
         />
-        <BillingMetric
+        <Metric
           label="Charged this UTC month"
-          value={usageState.value ? formatUsd(usageState.value.totalCost) : billingDatumLabel(usageState.status)}
-          detail={usageState.value ? `${formatCompact(usageState.value.totalRequests)} charged requests in this range` : usageState.detail}
-          tone={usageState.tone}
+          value={metricQuantity(usageState.value ? formatUsd(usageState.value.totalCost, "headline") : billingDatumLabel(usageState.status))}
+          caption={usageState.value ? `${formatCompact(usageState.value.totalRequests)} charged requests in this range` : usageState.detail}
         />
-        <BillingMetric
+        <Metric
           label="Tokens this UTC month"
-          value={usageState.value ? formatCompact(usageState.value.inputTokens + usageState.value.outputTokens) : billingDatumLabel(usageState.status)}
-          detail={usageState.value ? `${formatCompact(usageState.value.inputTokens)} in · ${formatCompact(usageState.value.outputTokens)} out` : usageState.detail}
-          tone={usageState.tone}
+          value={metricQuantity(usageState.value ? formatCompact(usageState.value.inputTokens + usageState.value.outputTokens) : billingDatumLabel(usageState.status))}
+          caption={usageState.value ? `${formatCompact(usageState.value.inputTokens)} in · ${formatCompact(usageState.value.outputTokens)} out` : usageState.detail}
         />
-      </div>
+        {/* Live headroom is not a subscription fact and no longer sits in a grid
+            gated on one. It is a figure, so it is a metric. */}
+        <Metric
+          label="Live headroom"
+          value={metricQuantity(quota?.remaining === undefined
+            ? NOT_READ
+            : `${formatCompact(quota.remaining)}${quota.total === undefined ? "" : ` / ${formatCompact(quota.total)}`}`)}
+          caption={invocationTelemetry ? `observed ${formatDateTime(invocationTelemetry.capturedAt)}` : "Run a Chutes turn to observe headers"}
+        />
+      </MetricStrip>
+
+      {/* The other three header facts stay visible rather than moving into a
+          tooltip on the tile above. */}
+      <p class="billing-headroom-facts">
+        <span>Latest invocation</span>
+        <span>User rate limit {invocationTelemetry?.rateLimit?.user === undefined ? NOT_READ : invocationTelemetry.rateLimit.user === "unlimited" ? "Unlimited" : formatCompact(invocationTelemetry.rateLimit.user)}</span>
+        {/* Both limits are absent for the same reason — the header was not on
+            the last invocation. "Unavailable" asserted that Chutes has no such
+            figure; the em dash states the non-claim the other three cells
+            already state. One absence, one word. */}
+        <span>Chute rate limit {invocationTelemetry?.rateLimit?.chute === undefined ? NOT_READ : formatCompact(invocationTelemetry.rateLimit.chute)}</span>
+        <span>Observed {invocationTelemetry ? formatDateTime(invocationTelemetry.capturedAt) : NOT_READ}</span>
+      </p>
 
       {balanceState.status === "verified" && balanceState.value !== undefined && balanceState.value <= 0 ? (
         <div class="billing-alert warning funding-required" role="status">
@@ -168,41 +248,69 @@ export function BillingView({
         </div>
       ) : null}
 
-      <div class="runway-grid">
-        <RunwayCard
-          eyebrow="Burst protection"
-          title="Fixed four-hour UTC bucket"
-          window={subscriptionState.value?.fourHour}
-          inactive={subscriptionState.status === "verified" && subscriptionState.value?.active === false}
-          sourceStatus={subscriptionState.status}
-          sourceDetail={subscriptionState.detail}
-        />
-        <RunwayCard
-          eyebrow="Covered plan usage"
-          title="Subscription cycle"
-          window={subscriptionState.value?.monthly}
-          inactive={subscriptionState.status === "verified" && subscriptionState.value?.active === false}
-          sourceStatus={subscriptionState.status}
-          sourceDetail={subscriptionState.detail}
-        />
-        <LiveTelemetryCard telemetry={invocationTelemetry} />
-      </div>
+      {/*
+        * For an account with no plan — the common case — the runway triptych
+        * was 205px (26% of a 900px viewport) of three empty cards printing
+        * "Chutes reported no active subscription" three times inside 200px. The
+        * windows fact is stated once here; the provider's own sentence stays on
+        * the Subscription metric above, where the datum lives.
+        */}
+      {subscriptionInactive ? (
+        <div class="runway-inactive panel">
+          <Seal state="none" density="chip" label="Subscription · Inactive" />
+          <p>Burst and cycle windows are not published for inactive plans.</p>
+          {online
+            ? <a class="small-button" href="https://chutes.ai/app/settings/billing" target="_blank" rel="noreferrer">Add a plan at Chutes ↗</a>
+            : <span class="small-button is-disabled" aria-disabled="true">Add a plan at Chutes ↗</span>}
+        </div>
+      ) : (
+        <div class="runway-grid">
+          <RunwayCard
+            eyebrow="Burst protection"
+            title="Fixed four-hour UTC bucket"
+            window={subscriptionState.value?.fourHour}
+            inactive={false}
+            sourceStatus={subscriptionState.status}
+            sourceDetail={subscriptionState.detail}
+          />
+          <RunwayCard
+            eyebrow="Covered plan usage"
+            title="Subscription cycle"
+            window={subscriptionState.value?.monthly}
+            inactive={false}
+            sourceStatus={subscriptionState.status}
+            sourceDetail={subscriptionState.detail}
+          />
+        </div>
+      )}
 
       <div class="billing-detail-grid">
         <section class="panel usage-panel">
-          <div class="panel-heading"><span>Actual charged usage</span><span>{usageState.value ? `${formatDate(usageState.value.rangeStart)} → ${formatDate(usageState.value.rangeEnd)}` : billingDatumLabel(usageState.status)}</span></div>
-          {usageEntries.length ? <UsageBars entries={usageEntries} /> : <div class="billing-empty"><Icon name="billing" /><strong>{usageEmptyTitle(usageState.status)}</strong><p>{usageState.status === "verified" ? "Chutes returned no usage records for this requested range; activity outside the response is not inferred." : usageState.detail}</p></div>}
+          <div class="panel-heading">
+            <span>Actual charged usage</span>
+            <span>{usageState.value ? `${formatDate(usageState.value.rangeStart)} → ${formatDate(usageState.value.rangeEnd)}` : billingDatumLabel(usageState.status)}</span>
+          </div>
+          {usageEntries.length ? <UsageChart entries={usageEntries} highlight={highlight} onHighlight={setHighlight} /> : <div class="billing-empty"><Icon name="billing" /><strong>{usageEmptyTitle(usageState.status)}</strong><p>{usageState.status === "verified" ? "Chutes returned no usage records for this requested range; activity outside the response is not inferred." : usageState.detail}</p></div>}
           {usageEntries.length ? (
             <div class="usage-ledger" role="table" aria-label="Recent account usage">
               <div class="usage-ledger-head" role="row"><span>Date</span><span>Requests</span><span>Tokens</span><span>Charged</span></div>
               {[...usageEntries].reverse().slice(0, 10).map((entry) => (
-                <div class="usage-ledger-row" role="row" key={`${entry.bucket}:${entry.chuteId ?? "all"}`}>
+                <div
+                  class="usage-ledger-row"
+                  role="row"
+                  key={`${entry.bucket}:${entry.chuteId ?? "all"}`}
+                  data-highlight={entry.bucket === highlight ? "true" : undefined}
+                  onPointerEnter={() => setHighlight(entry.bucket)}
+                  onPointerLeave={() => setHighlight(undefined)}
+                >
                   <span>{formatBucket(entry.bucket)}</span>
                   <span>{formatCompact(entry.requests)}</span>
                   <span>{formatCompact(entry.inputTokens + entry.outputTokens)}</span>
-                  <strong>{formatUsd(entry.cost)}</strong>
+                  <strong>{formatUsd(entry.cost, "ledger")}</strong>
                 </div>
               ))}
+              {/* The table capped at ten rows and said so nowhere. */}
+              <p class="usage-ledger-foot">Showing the {Math.min(10, usageEntries.length)} most recent of {usageEntries.length} bucket{usageEntries.length === 1 ? "" : "s"}.</p>
             </div>
           ) : null}
         </section>
@@ -211,10 +319,10 @@ export function BillingView({
           <div class="panel-heading"><span>Configured quotas</span><span>{quotaState.status === "verified" && quotaState.value ? `${quotaState.value.rawCount} record${quotaState.value.rawCount === 1 ? "" : "s"}` : billingDatumLabel(quotaState.status)}</span></div>
           {quotaState.status === "verified" && quotaState.value?.entries.length ? (
             <div class="quota-list">
-              {quotaState.value.entries.slice(0, 10).map((quota, index) => (
-                <div key={`${quota.chuteId ?? "default"}:${index}`}>
-                  <span>{quota.chuteId ?? "Default"}</span>
-                  <strong>{quota.quota === "unlimited" ? "Unlimited" : formatCompact(quota.quota)}</strong>
+              {quotaState.value.entries.slice(0, 10).map((quotaEntry, index) => (
+                <div key={`${quotaEntry.chuteId ?? "default"}:${index}`}>
+                  <span>{quotaEntry.chuteId ?? "Default"}</span>
+                  <strong>{quotaEntry.quota === "unlimited" ? "Unlimited" : formatCompact(quotaEntry.quota)}</strong>
                 </div>
               ))}
             </div>
@@ -227,10 +335,6 @@ export function BillingView({
       </> : null}
     </section>
   );
-}
-
-function BillingMetric({ label, value, detail, tone = "neutral" }: { label: string; value: string; detail: string; tone?: "neutral" | "good" | "warning" | "danger" }) {
-  return <div class={`panel billing-metric ${tone}`}><span>{label}</span><strong>{value}</strong><small>{detail}</small></div>;
 }
 
 function RunwayCard({
@@ -259,9 +363,9 @@ function RunwayCard({
       <h2>{title}</h2>
       {inactive ? <div class="runway-empty">Chutes reported no active subscription</div> : sourceStatus !== "verified" ? <div class="runway-empty">{sourceDetail}</div> : !window ? <div class="runway-empty">Window data unavailable</div> : (
         <>
-          <div class="runway-value"><strong>{usage === undefined ? "Unknown" : formatUsd(usage)}</strong><span>{uncapped ? "used · explicitly uncapped" : cap === undefined ? "used · cap unavailable" : `of ${formatUsd(cap)} covered`}</span></div>
+          <div class="runway-value"><strong>{usage === undefined ? "Unknown" : formatUsd(usage, "ledger")}</strong><span>{uncapped ? "used · explicitly uncapped" : cap === undefined ? "used · cap unavailable" : `of ${formatUsd(cap, "ledger")} covered`}</span></div>
           <span class="runway-track" aria-label={percent === undefined ? "Usage percentage unavailable" : `${Math.round(percent)} percent used`}><span style={{ width: `${percent ?? 0}%` }} /></span>
-          <div class="runway-foot"><span>{window.remaining === undefined ? (uncapped ? "No fixed cycle cap" : "Remaining unavailable") : `${formatUsd(window.remaining)} remaining`}</span><span>{window.resetAt ? `Resets ${formatDateTime(window.resetAt)}` : "Reset unavailable"}</span></div>
+          <div class="runway-foot"><span>{window.remaining === undefined ? (uncapped ? "No fixed cycle cap" : "Remaining unavailable") : `${formatUsd(window.remaining, "ledger")} remaining`}</span><span>{window.resetAt ? `Resets ${formatDateTime(window.resetAt)}` : "Reset unavailable"}</span></div>
           {cap !== undefined && usage !== undefined && usage >= cap ? <p>Covered allowance is exhausted. Overflow capability depends on verified balance and provider billing policy.</p> : null}
         </>
       )}
@@ -269,34 +373,83 @@ function RunwayCard({
   );
 }
 
-function LiveTelemetryCard({ telemetry }: { telemetry?: ChutesInvocationTelemetry }) {
-  const quota = telemetry?.quota;
-  const rate = telemetry?.rateLimit;
-  return (
-    <section class="panel runway-card live-telemetry">
-      <span class="eyebrow">Latest invocation</span>
-      <h2>Live headroom</h2>
-      {!telemetry ? <div class="runway-empty">Run a Chutes turn to observe headers</div> : (
-        <dl>
-          <div><dt>Quota remaining</dt><dd>{quota?.remaining === undefined ? "—" : formatCompact(quota.remaining)}{quota?.total === undefined ? "" : ` / ${formatCompact(quota.total)}`}</dd></div>
-          <div><dt>User rate limit</dt><dd>{rate?.user === undefined ? "—" : rate.user === "unlimited" ? "Unlimited" : formatCompact(rate.user)}</dd></div>
-          <div><dt>Chute rate limit</dt><dd>{rate?.chute === undefined ? "Unavailable" : formatCompact(rate.chute)}</dd></div>
-          <div><dt>Observed</dt><dd>{formatDateTime(telemetry.capturedAt)}</dd></div>
-        </dl>
-      )}
-    </section>
-  );
-}
-
-function UsageBars({ entries }: { entries: ChutesUsageEntry[] }) {
+/**
+ * The usage strip, with the two things a chart has to have to be one.
+ *
+ * It rendered up to 64 bars with no scale, no baseline and a `Math.max(3, …)`
+ * floor that drew fourteen different buckets as identical stubs — a chart that
+ * misrepresents its own data at the low end. It was also `role="img"` with the
+ * per-bar figures reachable only by hovering, which a keyboard cannot do. Each
+ * bar is now a button carrying exactly the string that used to be its `title`.
+ */
+export function UsageChart({ entries, highlight, onHighlight }: {
+  entries: readonly ChutesUsageEntry[];
+  highlight?: string;
+  onHighlight?: (bucket: string | undefined) => void;
+}) {
   const recent = entries.slice(-64);
   const max = Math.max(...recent.map((entry) => entry.cost), 0);
+  const first = recent[0];
+  const middle = recent[Math.floor((recent.length - 1) / 2)];
+  const last = recent[recent.length - 1];
+  const strip = useRef<HTMLDivElement>(null);
+  // Roving tabindex: 64 bars must not become 64 tab stops between the chart
+  // and the table under it. One stop enters the group; the arrows walk it.
+  const [active, setActive] = useState(0);
+
+  function move(next: number) {
+    const index = Math.max(0, Math.min(recent.length - 1, next));
+    setActive(index);
+    onHighlight?.(recent[index]?.bucket);
+    strip.current?.querySelectorAll<HTMLButtonElement>(".usage-bar")[index]?.focus();
+  }
+
   return (
-    <div class="usage-bars" role="img" aria-label="Actual charged usage by hourly bucket">
-      {recent.map((entry) => {
-        const percent = max > 0 ? Math.max(3, (entry.cost / max) * 100) : 0;
-        return <span key={`${entry.bucket}:${entry.chuteId ?? "all"}`} style={{ height: `${percent}%` }} title={`${formatBucket(entry.bucket)} · ${formatUsd(entry.cost)} · ${entry.requests} requests`} />;
-      })}
+    <div class="usage-chart">
+      <div class="usage-chart__scale" aria-hidden="true">
+        <span>{formatUsd(max, "headline")}</span>
+        <span>$0</span>
+      </div>
+      <div
+        class="usage-bars"
+        ref={strip}
+        role="group"
+        aria-label="Actual charged usage by hourly bucket"
+        onKeyDown={(event) => {
+          if (event.key === "ArrowRight") { event.preventDefault(); move(active + 1); }
+          else if (event.key === "ArrowLeft") { event.preventDefault(); move(active - 1); }
+          else if (event.key === "Home") { event.preventDefault(); move(0); }
+          else if (event.key === "End") { event.preventDefault(); move(recent.length - 1); }
+        }}
+      >
+        {recent.map((entry, index) => {
+          // A one-percent floor keeps a non-zero bucket visible without
+          // flattening fourteen different values into the same stub.
+          const percent = max > 0 ? Math.max(1, (entry.cost / max) * 100) : 0;
+          const label = `${formatBucket(entry.bucket)} · ${formatUsd(entry.cost, "ledger")} · ${entry.requests} requests`;
+          return (
+            <button
+              class="usage-bar"
+              type="button"
+              key={`${entry.bucket}:${entry.chuteId ?? "all"}`}
+              aria-label={label}
+              title={label}
+              tabIndex={index === active ? 0 : -1}
+              data-highlight={entry.bucket === highlight ? "true" : undefined}
+              onFocus={() => { setActive(index); onHighlight?.(entry.bucket); }}
+              onPointerEnter={() => onHighlight?.(entry.bucket)}
+              onPointerLeave={() => onHighlight?.(undefined)}
+            >
+              <span style={{ height: `${percent}%` }} />
+            </button>
+          );
+        })}
+      </div>
+      <div class="usage-chart__axis" aria-hidden="true">
+        <span>{first ? formatDate(first.bucket) : ""}</span>
+        <span>{middle ? formatDate(middle.bucket) : ""}</span>
+        <span>{last ? formatDate(last.bucket) : ""}</span>
+      </div>
     </div>
   );
 }
@@ -304,6 +457,10 @@ function UsageBars({ entries }: { entries: ChutesUsageEntry[] }) {
 function credentialMessage(kind?: BillingCredentialKind): string {
   if (kind === "api-key") return "Reading account standing with your cpk_ credential";
   if (kind === "unknown") return "The active credential is not a recognized OAuth user token";
+  // Stating "no OAuth token is held" while an OAuth token is what is holding
+  // this route open was a false sentence waiting for a slow response to show
+  // it. The absence sentence is now only said when the credential is absent.
+  if (kind === "oauth") return "Reading account standing with your scoped Chutes user token";
   return "No user-scoped OAuth token is held in page memory";
 }
 
@@ -328,8 +485,22 @@ function quotaEmptyTitle(status: BillingDatumStatus): string {
   return "Quota status unknown";
 }
 
-function formatUsd(value: number): string {
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 4 }).format(value);
+/**
+ * Two money formats, because a wallet and a ledger are two different reads.
+ *
+ * One formatter with `maximumFractionDigits: 4` rendered the balance as
+ * `$46.2054` — a token price, not a balance — and produced `$0.2871`, `$0.08`,
+ * `$0.0823` in adjacent ledger rows, so nothing aligned on the decimal point.
+ * `headline` rounds for reading; `ledger` pads to a fixed width for scanning.
+ * The exact figure is never lost: the balance metric prints it in its caption.
+ */
+export function formatUsd(value: number, mode: "headline" | "ledger"): string {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: mode === "ledger" ? 4 : 2,
+    maximumFractionDigits: mode === "ledger" ? 4 : 2,
+  }).format(value);
 }
 
 function formatCompact(value: number): string {

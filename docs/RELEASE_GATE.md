@@ -39,34 +39,60 @@ ceilings are both blocking.
 | Class | Raw ceiling | Gzip ceiling |
 | --- | ---: | ---: |
 | HTML-referenced entry JavaScript | 384 KiB | 110 KiB |
-| Always-available shell JavaScript and workers, including `sw.js` | 640 KiB | 128 KiB |
-| Deferred advanced capability bundle | 384 KiB | 110 KiB |
-| Total JavaScript and workers across all packs | 1,280 KiB | 264 KiB |
-| Optional Worker/WASI/Python adapter pack | 32 KiB | 10 KiB |
+| Initial JavaScript and module preloads | 640 KiB | 132 KiB |
+| Deferred advanced capability bundle | 388 KiB | 113 KiB |
+| First-party and other non-vendor JS/workers | 1,768 KiB | 462 KiB |
+| Browser Git + Terminal vendor runtime aggregate | 656 KiB | 182 KiB |
+| Absolute installed JavaScript/worker backstop | 2,152 KiB | 643 KiB |
+| Service worker | 12 KiB | 4 KiB |
+| Optional execution broker / engine / support | 32 / 56 / 8 KiB | 10 / 14 / 3 KiB |
+| Optional pinned WASI Preview 1 Worker | 32 KiB | 8 KiB |
 | Optional Node/WebContainer pack | 32 KiB | 8 KiB |
-| Optional Workspace workbench | 24 KiB | 8 KiB |
-| Optional semantic worker facade | 16 KiB | 6 KiB |
+| Optional first-party `airship-sh` shell pack | 100 KiB | 30 KiB |
+| Unpromoted WASIX JavaScript / WASM | 0 / 0 KiB | 0 / 0 KiB |
+| Optional agent runtime / tool bundle | 48 / 128 KiB | 14 / 36 KiB |
+| Optional Workspace / Source Control / browser Git | 28 / 48 / 276 KiB | 10 / 14 / 83 KiB |
+| Optional Sessions / Memory / Memory support / Proof | 48 / 36 / 2 / 64 KiB | 14 / 12 / 1 / 20 KiB |
+| Optional Terminal | 384 KiB | 100 KiB |
+| Optional semantic worker / model catalog | 16 / 32 KiB | 6 / 10 KiB |
+| Optional inference/provider + Companion protocol packs | 124 KiB | 38 KiB |
+| Optional Intel DCAP QVL JS / WASM | 32 / 1,536 KiB | 8 / 512 KiB |
 | Pinned same-origin Pyodide distribution | 16 MiB | 8 MiB |
 | HTML-referenced entry CSS | 160 KiB | 32 KiB |
-| Each WASM artifact | 1,024 KiB | 350 KiB |
-| All WASM artifacts | 1,024 KiB | 350 KiB |
+| General WASM excluding separately capped DCAP | 1,024 KiB each and aggregate | 350 KiB each and aggregate |
 
-The aggregate JavaScript/worker and WASM compressed ceilings enforce the goals
-in `PRODUCT_SPEC.md` and `FERRARI_AUDIT.md`. The per-entry raw ceilings also
-catch parse, memory, and transfer regressions that compression could hide.
-Changing a ceiling requires an explicit code and documentation review; a build
-must not silently learn a larger baseline.
+These values mirror the executable ceilings exported by
+`scripts/release-gate.mjs`; reviewers must update this inventory in the same
+change when a ceiling moves. The 224 KiB compressed startup figure in
+`PRODUCT_SPEC.md` is an engineering target, while the stricter
+HTML-entry and 132 KiB initial-load ceilings above are blocking gates. Lazy
+route and vendor packs do not count as startup bytes, but they remain subject to
+both individual limits and the 530 KiB installed-JavaScript backstop. Raw limits
+also catch parse and memory regressions that compression can hide. Changing a
+ceiling requires an explicit code and documentation review; a build must not
+silently learn a larger baseline.
 
-The shell and shared browser capability bundle are now measured separately at
-the dynamic-import boundary already enforced by the app. The shell class pays
-for startup, routing, chat, and the service worker; the deferred class pays for
-advanced audit, S3, attestation, and route capabilities only after demand. The
+The installed-only backstop moved from 1,760 / 528 KiB to 1,768 / 530 KiB when
+genuine linked worktrees landed. That capability preserves isolated worktree
+indexes and administration state over one shared object/ref database. The
+reviewed build measured 1,767.75 KiB raw and 529.55 KiB gzip after the
+nested-repository container exclusion was added, so the new ceiling keeps less
+than 1 KiB headroom on each axis. No startup, route, service-worker,
+vendor-aggregate, or Browser Git pack ceiling changed.
+
+The shell and shared browser capability bundle are measured separately at the
+dynamic-import boundary already enforced by the app. The initial-load class
+pays for startup, routing, and chat; the service worker has its own cap. The
+deferred class pays for advanced audit, S3, attestation, and route capabilities
+only after demand. The
 full-screen Workspace workbench, Worker/WASI/Python adapter,
 Node/WebContainer adapter, and pinned Pyodide distribution remain separate,
 blocking budget classes. A new total-JavaScript ceiling prevents chunking from
 hiding aggregate growth. The gate rejects production HTML that module-preloads
-any of these packs and keeps the 110 KiB entry ceiling intact. Classifying a
-lazy pack separately never removes its own raw/gzip or total ceiling.
+any of these packs and keeps the 110 KiB entry ceiling intact. WASIX is an
+unpromoted research candidate and therefore has a zero-byte production budget.
+Classifying a lazy pack separately never removes its own raw/gzip or total
+ceiling.
 
 ## Deterministic manifest
 
@@ -83,6 +109,39 @@ system must sign or transparently anchor the release manifest and build record
 under a separately trusted release key. Until then, the UI and documentation
 must not call this release verified or reproducible merely because the hashes
 exist.
+
+## Explicit live acceptance
+
+`npm run check` remains deterministic, credential-free, and suitable for an
+offline checkout. It does not imply that a paid external provider was reachable.
+Before a release that claims real Chutes interoperability, run the separate
+fail-closed gate with a disposable credential and explicit provider model IDs:
+
+```sh
+AIRSHIP_CHUTES_API_KEY='cpk_…' \
+AIRSHIP_CHUTES_TOOL_MODEL='provider/tool-capable-model' \
+AIRSHIP_CHUTES_VISION_MODEL='provider/vision-capable-model' \
+npm run check:release:live
+```
+
+This is a post-build gate: run `npm run check` first. Its browser stage serves
+the existing `dist/` artifact through Vite Preview on strict port 4188 rather
+than transforming application source at test time.
+
+The wrapper exits unsuccessfully before starting a child process when any of
+those three values is absent or malformed. It maps the credential into process
+memory for two real suites without putting it in command arguments or wrapper
+logs:
+
+1. Chutes model discovery, WASM E2EE streaming, journal/receipt auditing, and a
+   model-directed `write_file` plus `read_file` tool turn.
+2. A hermetic Chromium session on its own strict port that discovers the
+   configured vision model, submits an encrypted inline image, receives a real
+   response, and then exercises the endpoint-attestation evidence screen.
+
+The live Playwright configuration disables screenshots, traces, video, and HTML
+reports because a failed browser run must not retain the memory-only credential.
+Models are supplied by ID instead of inferred from a hard-coded provider model.
 
 ## Hosting boundary
 
