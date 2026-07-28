@@ -39,7 +39,19 @@ describe("offline runtime UI contract", () => {
 
   it("disables provider discovery and OAuth while preserving the pending OAuth credential", () => {
     expect(access).toContain("if (!online || !oauthBootstrap");
-    expect(access).toContain("const chutesSignInAvailable = Boolean(oauthDiagnostic) && oauthOrigin.available;");
+    /*
+     * AMENDED — one conjunct added, deliberately.
+     *
+     * `oauthOrigin.available` answers "is this origin registered to sign in",
+     * which is a different question from "can this build actually exchange a
+     * code". A localhost-handler deployment whose handler is unconfigured
+     * satisfied the first and failed the second, so the lane opened with the
+     * OAuth tab marked "Primary" and a filled brass button that returned an
+     * operator's restart instruction. The handler is now asked at load, and
+     * neither arm may be claimed while the answer is still in flight.
+     */
+    expect(access).toContain("const chutesSignInAvailable = Boolean(oauthDiagnostic)\n    && oauthOrigin.available\n    && (!localOAuthHandler || handlerReadiness?.state === \"ready\");");
+    expect(access).toContain("const signInChecking = localOAuthHandler && !handlerReadiness;");
     /*
      * AMENDED — the invariant is kept and finally satisfied.
      *

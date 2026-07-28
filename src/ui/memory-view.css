@@ -8,7 +8,7 @@
  * The Memory bar.
  *
  * What stood here was 372px of desktop chrome (44% of the content region) and
- * 510px on phone (81%): a 128px page-heading block, a 156px query block whose
+ * 510px on phone (81%): a 128px page-slab block, a 156px query block whose
  * `align-content: center` opened a 135px void on a stacked grid, a 44px jump
  * nav restating the three section titles below it, and then a second 104px
  * region header. Three different sentences stated one fact. The route title,
@@ -849,7 +849,7 @@
   }
 
   .memory-query input {
-    font-size: 16px;
+    font-size: var(--fs-field);
   }
 
   /*

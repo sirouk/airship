@@ -35,7 +35,23 @@ test("disconnected Chat keeps local commands live and offers one clear inference
 test("Capabilities states that runtime activation is provider-independent", async ({ page }) => {
   await page.goto("/#capabilities");
   await expect(page.getByRole("heading", { name: "Capabilities" })).toBeVisible();
-  await expect(page.getByText(/No inference provider.*required for local activation/u)).toBeVisible();
+  /*
+   * AMENDED — relocation, with the reachability check the relocation owes.
+   *
+   * `#capabilities` joined the shared `<RouteHeader density="tool">`: one 44px
+   * bar in place of a 194px slab whose h1 was the forbidden
+   * `clamp(30px, 4vw, 47px)`. At tool density the route's own sentence is the
+   * ⓘ panel's body rather than a visible paragraph — the same move the nine
+   * routes already on the primitive made. The sentence is not shortened, not
+   * reworded and not conditional, so this asserts three things where it used
+   * to assert one: the disclosure says what it holds *before* you open it, it
+   * opens, and the sentence inside it is the whole sentence.
+   */
+  const about = page.getByRole("button", { name: /^About Capabilities\./u });
+  await expect(about).toHaveAccessibleName(/what this view does/u);
+  await about.click();
+  await expect(page.getByText("No inference provider is required for local activation.", { exact: true })).toBeVisible();
+  await page.keyboard.press("Escape");
   await expect(page.getByText(/Every effect still follows the active approval policy/u)).toBeVisible();
   await page.getByRole("button", { name: "Browse slash tools" }).click();
   await expect(page).toHaveURL(/#chat\/[^/?#]+$/);

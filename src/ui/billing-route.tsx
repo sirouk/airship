@@ -1,5 +1,6 @@
 import { useEffect, useState } from "preact/hooks";
 import { loadDeferredCapabilities } from "../load-deferred-capabilities";
+import { RouteHeader } from "./route-header";
 import { RouteSkeleton } from "./route-skeleton";
 
 type BillingViewComponent = typeof import("./billing-view").BillingView;
@@ -30,11 +31,16 @@ export function BillingView(props: BillingViewProps) {
 
   return (
     <section class="work-view billing-view" aria-labelledby="billing-route-title" aria-busy={!loadError}>
-      <header class="page-heading billing-heading">
-        <span class="eyebrow">Direct user-scoped Chutes telemetry</span>
-        <h1 id="billing-route-title">Account standing</h1>
-        <p>Preparing the account interface without transferring credentials away from this page.</p>
-      </header>
+      {/* Same primitive and same density as `BillingView`'s own header, so the
+          title does not move when the deferred chunk lands. */}
+      <RouteHeader
+        routeId="account"
+        density="tool"
+        title="Account standing"
+        headingId="billing-route-title"
+        eyebrow="Direct user-scoped Chutes telemetry"
+        description="Preparing the account interface without transferring credentials away from this page."
+      />
       <div class="panel" role={loadError ? "alert" : "status"} aria-live="polite">
         {loadError ? <p>{loadError}</p> : <RouteSkeleton label="Loading account telemetry" />}
         {loadError ? (

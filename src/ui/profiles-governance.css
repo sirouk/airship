@@ -56,7 +56,7 @@
  * nothing on this row carries it anywhere else.
  */
 .profile-governs__cell strong {
-  font-size: var(--fs-meta, 13px);
+  font-size: var(--fs-meta);
   font-weight: var(--fw-strong, 600);
   line-height: 1.3;
   overflow-wrap: anywhere;

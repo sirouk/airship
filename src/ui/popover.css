@@ -39,11 +39,32 @@
   }
 }
 
-.popover__panel[hidden] {
-  display: none;
-}
-
+/*
+ * Arrival, departure, and where from.
+ *
+ * This sheet used to contain no `transition` and no `animation` at all, and the
+ * panel was hidden with the `hidden` attribute — which removes the box, and a
+ * box that does not exist cannot transition. Every overlay in the product
+ * therefore blinked into place with no indication of which control had produced
+ * it. That is the one thing an anchored disclosure has to say, because the whole
+ * claim of the pattern is *this panel belongs to that chip*.
+ *
+ * `display` is still `none` while closed — with `allow-discrete` it now flips at
+ * the end of the exit instead of the start, so the fade runs and the closed
+ * panel still contributes nothing: no box, no scrollable overflow inside the
+ * transcript, no tab stop, no accessibility-tree node. That is a stronger
+ * guarantee than a visually hidden panel can make, and it is why this is not
+ * written as `opacity: 0` alone.
+ *
+ * 120ms in, 90ms out. Entrance is acknowledgement, not decoration: a duration
+ * long enough to read as waiting is a duration that has stopped acknowledging
+ * anything.
+ */
 .popover__panel {
+  /* The movement lives in one custom property so reduced motion can retract it
+     with a single declaration and the opacity fade — the part that carries the
+     meaning — survives untouched. */
+  --popover-lift: translateY(-4px) scale(.985);
   position: absolute;
   z-index: 60;
   top: calc(100% + var(--sp-2));
@@ -56,10 +77,30 @@
   box-shadow: var(--shadow);
   color: var(--ink);
   text-align: left;
+  transform-origin: var(--popover-origin, top center);
+  transition: opacity 120ms ease, transform 120ms ease, display 120ms allow-discrete;
+}
+
+.popover__panel[data-open="false"] {
+  display: none;
+  opacity: 0;
+  transform: var(--popover-lift);
+  transition-duration: 90ms;
+}
+
+@starting-style {
+  .popover__panel {
+    opacity: 0;
+    transform: var(--popover-lift);
+  }
 }
 
 .popover[data-align="start"] .popover__panel {
   left: 0;
+  /* The origin is the anchor. A panel that scales out of its own centre is a
+     panel with no author; growing from the trigger's corner is the sentence
+     "this came from there", said in 120ms instead of in words. */
+  --popover-origin: top left;
 }
 
 /* The right-edge flip. Without it the last chip in any right-hand cluster
@@ -67,6 +108,7 @@
    hand-rolled anchor has to get right. */
 .popover[data-align="end"] .popover__panel {
   right: 0;
+  --popover-origin: top right;
 }
 
 .popover__header {
@@ -112,6 +154,22 @@
   padding: var(--sp-3);
   font-size: var(--fs-caption);
   line-height: 1.5;
+}
+
+/*
+ * Touch sheets slide, and the slide is the explanation of what a sheet is: it
+ * comes from the bottom edge because that is where a thumb reaches it and where
+ * dismissing it will send it back. 180ms rather than 120ms because the distance
+ * is the height of the panel rather than four pixels, and a long travel run at a
+ * short duration reads as a jump-cut.
+ *
+ * The `sheet` mode is only ever set below 640px, so this rule is scoped by its
+ * own data attribute rather than by a second media query.
+ */
+.popover[data-mode="sheet"] .popover__panel {
+  --popover-lift: translateY(100%);
+  --popover-origin: bottom center;
+  transition: opacity 120ms ease, transform 180ms cubic-bezier(.2, .8, .2, 1), display 180ms allow-discrete;
 }
 
 @media (max-width: 640px) {
@@ -248,4 +306,26 @@
   color: var(--ink-muted);
   font-size: var(--fs-caption);
   line-height: 1.45;
+}
+
+/*
+ * Reduced motion retracts the travel; the global reset handles the rest.
+ *
+ * `routes.css:3271` already collapses every duration in the product to 0.01ms
+ * under this preference, so the panel arrives instantly either way. What that
+ * rule cannot reach is where the arrival *starts*: a 0.01ms transition still
+ * begins at `translateY(100%)`, and one frame of a full sheet height is a jump.
+ * Retracting `--popover-lift` is the only part left, which is why nothing else
+ * is declared here.
+ *
+ * Both selectors are restated so this outranks the sheet's own `--popover-lift`
+ * at equal specificity; a single `.popover__panel` rule would lose the sheet to
+ * the more specific declaration above and leave the one panel that moves
+ * furthest as the one panel still moving.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .popover__panel,
+  .popover[data-mode="sheet"] .popover__panel {
+    --popover-lift: none;
+  }
 }

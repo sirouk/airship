@@ -196,9 +196,63 @@ export async function createThemeManifest(draft: ThemeManifestDraft): Promise<Th
   return deepFreeze({ ...payload, digest }) as ThemeManifest;
 }
 
-export function themeCssVariables(theme: ThemeManifest): Readonly<Record<string, HexColor>> {
-  const properties: Record<string, HexColor> = {};
-  for (const role of THEME_COLOR_ROLES) properties[THEME_CSS_VARIABLES[role]] = theme.colors[role];
+/**
+ * The stylesheet's own value for every theme role, per color scheme.
+ *
+ * Mirrors `ui/tokens.css` `:root` (dark) and the `[data-mode="light"]` block in
+ * `ui/platform-shell.css` (light). `ui/css-variable-contract.test.ts` parses
+ * both sheets and fails if this table drifts from them.
+ */
+export const STYLESHEET_THEME_BASELINE = Object.freeze({
+  dark: Object.freeze({
+    ground: "#101417",
+    surface: "#171c20",
+    surfaceRaised: "#1c2226",
+    surfaceSoft: "#14191c",
+    ink: "#ece8de",
+    inkMuted: "#b0b6b3",
+    inkFaint: "#949c99",
+    accent: "#c19a58",
+    accentBright: "#dfba72",
+  }),
+  light: Object.freeze({
+    ground: "#f3efe5",
+    surface: "#efe9dc",
+    surfaceRaised: "#fbf7ee",
+    surfaceSoft: "#eae3d4",
+    ink: "#1a1d1f",
+    inkMuted: "#454b49",
+    inkFaint: "#5c635f",
+    accent: "#644d25",
+    accentBright: "#4b3711",
+  }),
+} satisfies Readonly<Record<ThemeColorScheme, SemanticThemeColors>>);
+
+/**
+ * A theme is a *diff* against the shipped palette, not a copy of it.
+ *
+ * These properties are written inline on `<html>`, so they outrank every
+ * stylesheet including the one a colour-mode preference selects. A role the
+ * theme has not actually changed therefore has to be written as the empty
+ * string — CSSOM treats that as `removeProperty`, so the declaration is
+ * cleared rather than pinned, the cascade answers for it, and switching away
+ * from a theme cannot strand the previous theme's colour on the element.
+ *
+ * This is the mechanism behind "Paper mode makes every divider invisible":
+ * `--line` is not a theme role, so the light stylesheet flipped it to a dark
+ * ink while the nine inline roles held the dark surfaces underneath it —
+ * 1.259:1 down to 1.007:1, a divider darker than the panel it divides. The
+ * default profile now writes no inline properties at all, so the mode owns
+ * the whole palette, and a theme that genuinely recolours the instrument
+ * still writes only the roles it genuinely recolours.
+ */
+export function themeCssVariables(theme: ThemeManifest): Readonly<Record<string, HexColor | "">> {
+  const baseline = STYLESHEET_THEME_BASELINE[theme.colorScheme];
+  const properties: Record<string, HexColor | ""> = {};
+  for (const role of THEME_COLOR_ROLES) {
+    const value = theme.colors[role];
+    properties[THEME_CSS_VARIABLES[role]] = value === baseline[role] ? "" : value;
+  }
   return deepFreeze(properties);
 }
 

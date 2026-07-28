@@ -88,7 +88,7 @@
 .local-lab legend + * { clear: both; }
 
 .local-lab label { display: grid; align-content: start; gap: .4rem; min-width: 0; }
-.local-lab label > span:first-child { font-size: .83rem; font-weight: 700; }
+.local-lab label > span:first-child { font-size: var(--fs-meta); font-weight: 700; }
 .local-lab__wide { grid-column: 1 / -1; }
 
 .local-lab input:not([type="checkbox"]),
@@ -206,7 +206,8 @@
   cursor: pointer;
 }
 
-.local-lab button:disabled { cursor: not-allowed; opacity: .45; }
+/* Disabled is carried by the tokens in `tokens.css`, never by transparency. */
+.local-lab button:disabled { cursor: not-allowed; }
 .local-lab .local-lab__secondary { background: transparent; color: var(--ink, #e9e8e3); }
 .local-lab .local-lab__quiet { border-color: transparent; background: transparent; color: var(--ink-muted, #aaa9a4); }
 .local-lab input:focus-visible,

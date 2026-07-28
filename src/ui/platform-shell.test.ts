@@ -1,5 +1,6 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { applyPreferenceOverrides, buildPaletteEntries, DEFAULT_PREFERENCES, filterPaletteEntries, loadPreferenceOverrides, loadRecentSessionPaletteSources, navigationJumpForChord, recentSessionPaletteSources, resolveDefaultVaultBackend, savePreferenceOverrides, trustAxesInScope, TRUST_SCOPE_BANDS, worstTrustAxis } from "./platform-shell";
+import { applyPreferenceOverrides, buildPaletteEntries, DEFAULT_PREFERENCES, filterPaletteEntries, loadPreferenceOverrides, loadRecentSessionPaletteSources, durabilityOptionLabel, durabilityRowNote, navigationJumpForChord, recentSessionPaletteSources, resolveDefaultVaultBackend, VAULT_BACKENDS, savePreferenceOverrides, trustAxesInScope, TRUST_SCOPE_BANDS, worstTrustAxis } from "./platform-shell";
 import { CANONICAL_DESTINATIONS } from "./navigation-model";
 
 describe("platform shell contracts", () => {
@@ -133,5 +134,64 @@ describe("platform shell contracts", () => {
     const library = { async list(query: unknown) { queries.push(query); return { items: [] }; } };
     await loadRecentSessionPaletteSources(library as never, () => {}, undefined, "researcher");
     expect(queries).toEqual([{ sort: "updated-desc", limit: 12, profileId: "researcher" }]);
+  });
+});
+
+describe("the Durability row states a destination and its state, never one as the other", () => {
+  it("never prints an adoption Preferences has not been told about", () => {
+    // The measured contradiction: this row read "Encrypted Google Drive ·
+    // cross-device" while `#vault` read "Disconnected | No vault claim | No
+    // cloud vault is configured." A host that passes no vault state gets the
+    // destination and no claim at all, which can only under-claim.
+    for (const backend of VAULT_BACKENDS) {
+      expect(durabilityOptionLabel(backend, undefined)).not.toMatch(/connected/iu);
+      expect(durabilityOptionLabel(backend, undefined)).not.toMatch(/encrypted/iu);
+    }
+    expect(durabilityOptionLabel("google-drive", undefined)).toBe("Google Drive");
+  });
+
+  it("reuses the Vault route's own words once it has been told", () => {
+    expect(durabilityOptionLabel("google-drive", "not-connected")).toBe("Google Drive · not connected");
+    expect(durabilityOptionLabel("google-drive", "connected")).toBe("Google Drive · connected");
+    expect(durabilityOptionLabel("local-device", "not-connected")).toBe("This device · not connected");
+  });
+
+  it("keeps page memory out of the adoption axis entirely", () => {
+    // Choosing page memory *is* the state. "Page memory only · not connected"
+    // would invent a failure out of a deliberate choice — the same mistake
+    // `vaultPhaseLabel` fixed on the Vault route by refusing to say
+    // "Disconnected" for a vault that was never created.
+    for (const adoption of ["connected", "not-connected", undefined] as const) {
+      expect(durabilityOptionLabel("ephemeral", adoption)).toBe("Page memory only");
+    }
+  });
+
+  it("says what is attached in the state the row is actually in", () => {
+    expect(durabilityRowNote("not-connected")).toBe("Where conversations survive a closed tab. Nothing is attached yet — set it up in Vault.");
+    expect(durabilityRowNote("connected")).toContain("Vault holds it, and can detach it");
+    // Unknown may not claim either way, and must still point at the surface
+    // that does know.
+    expect(durabilityRowNote(undefined)).not.toMatch(/nothing is attached|Vault holds it/iu);
+    for (const adoption of ["connected", "not-connected", undefined] as const) {
+      expect(durabilityRowNote(adoption)).toContain("Vault");
+      expect(durabilityRowNote(adoption)).toContain("Where conversations survive a closed tab.");
+    }
+  });
+
+  it("carries the consequence of each destination beside it", () => {
+    const dialog = readFileSync(new URL("./platform-shell.tsx", import.meta.url), "utf8");
+    expect(dialog).toContain("Nothing survives closing this tab.");
+    expect(dialog).toContain("DURABILITY[backend][1]");
+    // The row's own divider, so a claim about the world is not read as the
+    // ninth in a run of presentation rows.
+    expect(dialog).toContain('<p class="preferences-dialog__divider">Storage</p>');
+    // The component owns the axis, rather than a stylesheet forcing the sheet
+    // downward while `MenuSelect` still believes it opens upward — which is how
+    // the last row came to open a list the dialog's own scroll box clipped.
+    expect(dialog).toMatch(/<MenuSelect[^>]*\splacement=\{placement\}/su);
+    // The row that runs out of room downward opens upward instead.
+    expect(dialog).toMatch(/label="Durability"[\s\S]{0,200}placement="up"/u);
+    expect(readFileSync(new URL("./platform-shell.css", import.meta.url), "utf8"))
+      .not.toMatch(/\.preference-menu \.menu-select-popover \{ top:/u);
   });
 });

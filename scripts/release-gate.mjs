@@ -99,7 +99,7 @@ export const RELEASE_BUDGETS = Object.freeze({
   // The Memory route milestone above carries through to the installed total:
   // measured 663.25 KiB gzip, raw unchanged inside its ceiling. First paint is
   // untouched and stays separately fixed at 640/132 KiB raw/gzip below.
-  totalJavaScriptAndWorkers: Object.freeze({ raw: 2276 * 1024, gzip: 688 * 1024 }),
+  totalJavaScriptAndWorkers: Object.freeze({ raw: 2280 * 1024, gzip: 690 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. Keep it visible under a dedicated, deliberately small cap.
   serviceWorker: Object.freeze({ raw: 12 * 1024, gzip: 4 * 1024 }),

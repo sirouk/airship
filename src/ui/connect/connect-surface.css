@@ -440,6 +440,31 @@
   color: var(--v-caution);
 }
 
+/*
+ * The operator's sentence, one rung down.
+ *
+ * It is a provenance line — it names the process that has to change — so it is
+ * not deleted and not paraphrased. It is also addressed to somebody other than
+ * the person reading, which is why it stops being the headline. The disclosure
+ * says what it holds, so nothing is buried behind a word that means nothing.
+ */
+.connect-method__cause {
+  margin: 0;
+}
+
+.connect-method__cause > summary {
+  color: var(--ink-muted);
+  font-size: var(--fs-meta);
+  cursor: pointer;
+}
+
+.connect-method__cause > p {
+  max-width: 66ch;
+  margin: var(--sp-1) 0 0;
+  color: var(--ink-muted);
+  font: var(--fs-caption)/1.5 var(--font-mono);
+}
+
 .connect-method [role="tabpanel"][hidden] {
   display: none;
 }

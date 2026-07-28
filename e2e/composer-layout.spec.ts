@@ -172,3 +172,104 @@ test("composer growth is content-driven, bounded, and keeps approval disclosure 
     }
   }
 });
+
+/*
+ * The regression this file watched happen.
+ *
+ * `menu-select.css` switches every popover to `position: fixed` below 640px;
+ * `routes.css` overrode `inset` alone, so `calc(100% + …)` resolved against the
+ * viewport and the menu opened at top: -164px — entirely off the screen — on
+ * every phone. The suite stayed green because the assertion above reads
+ * `toBeVisible()`, which a 400×156 box at a negative offset satisfies, and
+ * because the trigger honestly reports `aria-expanded="true"` either way.
+ *
+ * So this asserts none of that. It asserts the three things a person actually
+ * needs from the control that decides whether the agent writes files and runs
+ * shell commands without asking: the options are *inside* the viewport, the
+ * pixel under each option's centre belongs to that option (nothing is covering
+ * it, and it is somewhere a thumb can land), and a tap changes the policy. The
+ * label is measured too — below 380px it used to shed to a 1×1px clip, leaving
+ * a bare coloured dot as the only statement of the agent's write posture.
+ */
+test("the approval policy opens inside the phone viewport, reads whole, and takes a tap", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile-chromium", "phone geometry contract");
+
+  for (const viewport of [
+    { width: 430, height: 932 },
+    { width: 360, height: 800 },
+    { width: 932, height: 430 },
+  ] as const) {
+    const at = `${viewport.width}×${viewport.height}`;
+    await page.setViewportSize(viewport);
+    await page.goto("/#chat");
+    const trigger = page.getByRole("button", { name: "Conversation approval policy" });
+    await expect(trigger).toBeVisible();
+    await page.getByRole("combobox", { name: "Message Airship" }).evaluate((element) => element.blur());
+
+    const label = await page.evaluate(() => {
+      const value = document.querySelector<HTMLElement>(".composer-approval-select .menu-select-value");
+      const word = document.querySelector<HTMLElement>(".composer-approval-select .menu-select-value strong");
+      return value && word
+        ? { height: value.getBoundingClientRect().height, text: word.textContent ?? "", clipped: word.scrollWidth > word.clientWidth + 1 }
+        : undefined;
+    });
+    expect(label, `${at}: the policy value renders`).toBeDefined();
+    expect(label!.height, `${at}: policy value height`).toBeGreaterThanOrEqual(12);
+    expect(label!.clipped, `${at}: policy value "${label!.text}" is not ellipsised`).toBe(false);
+
+    // What the width came from, asserted so it cannot be taken back from the
+    // wrong item. The strip buys the policy value its room by shedding the
+    // attach control's *visible* label — a duplicate of its own input's
+    // accessible name, which is why that shed costs nothing and is checked
+    // here — and never by shedding the credential posture, which is a caveat
+    // and stays on screen at every width the product supports.
+    await expect(page.getByLabel("Attach image"), `${at}: attach control still names itself`).toHaveCount(1);
+    await expect(page.locator(".composer-tools > span"), `${at}: credential posture stays visible`).toBeVisible();
+    const caveat = await page.locator(".composer-tools > span").boundingBox();
+    expect(caveat!.height, `${at}: credential posture is rendered, not clipped`).toBeGreaterThanOrEqual(12);
+
+    await trigger.click();
+    const geometry = await page.evaluate(() => {
+      const popover = document.querySelector<HTMLElement>(".composer-approval-select .menu-select-popover");
+      if (!popover) return undefined;
+      const box = popover.getBoundingClientRect();
+      return {
+        popover: { top: box.top, right: box.right, bottom: box.bottom, left: box.left },
+        viewport: { width: innerWidth, height: innerHeight },
+        options: [...popover.querySelectorAll<HTMLElement>(".menu-select-option")].map((option) => {
+          const bounds = option.getBoundingClientRect();
+          const centre = document.elementFromPoint(
+            Math.round(bounds.left + bounds.width / 2),
+            Math.round(bounds.top + bounds.height / 2),
+          );
+          return {
+            name: option.getAttribute("aria-label") ?? "",
+            height: bounds.height,
+            inside: bounds.top >= 0 && bounds.bottom <= innerHeight && bounds.left >= 0 && bounds.right <= innerWidth,
+            // The proof that "open" means reachable rather than merely laid
+            // out: the compositor hands this pixel to this option.
+            hittable: centre instanceof Element && centre.closest(".menu-select-option") === option,
+          };
+        }),
+      };
+    });
+
+    expect(geometry, `${at}: the popover is mounted`).toBeDefined();
+    expect(geometry!.popover.top, `${at}: popover top edge`).toBeGreaterThanOrEqual(0);
+    expect(geometry!.popover.left, `${at}: popover left edge`).toBeGreaterThanOrEqual(0);
+    expect(geometry!.popover.right, `${at}: popover right edge`).toBeLessThanOrEqual(geometry!.viewport.width + 1);
+    expect(geometry!.popover.bottom, `${at}: popover bottom edge`).toBeLessThanOrEqual(geometry!.viewport.height + 1);
+    expect(geometry!.options.map((option) => option.name), `${at}: every policy is offered`)
+      .toEqual(["Ask First", "Auto Approve", "Full Access"]);
+    for (const option of geometry!.options) {
+      expect(option.inside, `${at}: "${option.name}" is inside the viewport`).toBe(true);
+      expect(option.hittable, `${at}: "${option.name}" receives the pixel at its own centre`).toBe(true);
+      expect(option.height, `${at}: "${option.name}" touch target`).toBeGreaterThanOrEqual(44);
+    }
+
+    // Reachability is only a claim until the tap lands and the policy changes.
+    await page.getByRole("option", { name: "Full Access", exact: true }).click();
+    await expect(trigger, `${at}: the selected policy`).toContainText("Full Access");
+    await expect(page.getByRole("listbox", { name: "Conversation approval policy" })).toHaveCount(0);
+  }
+});

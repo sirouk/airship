@@ -448,7 +448,7 @@
 }
 
 @media (max-width: 760px) {
-  .git-sources input, .git-sources select, .git-sources textarea { font-size: 16px; }
+  .git-sources input, .git-sources select, .git-sources textarea { font-size: var(--fs-field); }
   .git-sources-trust-disclosure > summary > small { width: 100%; }
   /* Four wrapped chips cost 167px of a 632px phone. One scrolling row costs
      34px and drops no label: every chip is a swipe away and the row still

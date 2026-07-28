@@ -167,7 +167,20 @@ export function Popover({
         id={panelId}
         role="group"
         aria-label={heading}
-        hidden={!open}
+        /*
+         * `data-open` rather than `hidden`, because the sheet needs a closed
+         * *state* it can transition out of — `hidden` is a box that does not
+         * exist, and nothing transitions out of not existing. The panel is
+         * still `display: none` at rest; `popover.css` only defers the flip to
+         * the end of the exit so the fade has somewhere to run.
+         *
+         * `inert` covers exactly that deferral. For the ~90ms the closing panel
+         * is still displayed it must not be reachable by Tab or readable by a
+         * screen reader, or dismissing a disclosure would leave a live control
+         * behind it. Outside that window `display: none` already guarantees it.
+         */
+        data-open={open ? "true" : "false"}
+        inert={!open}
         style={{ "--popover-width": `${width}px` }}
       >
         <div class="popover__header">

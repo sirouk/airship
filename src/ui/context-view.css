@@ -53,7 +53,7 @@
   max-width: 78ch;
   margin: 0;
   color: var(--ink-muted);
-  font-size: 0.88rem;
+  font-size: var(--fs-meta);
   line-height: 1.6;
 }
 
@@ -74,13 +74,13 @@
 }
 
 .bootstrap-badge strong {
-  font-size: 0.8rem;
+  font-size: var(--fs-meta);
 }
 
 .bootstrap-badge span {
   margin-top: 4px;
   color: var(--ink-muted);
-  font-size: 0.73rem;
+  font-size: var(--fs-caption);
   line-height: 1.45;
 }
 
@@ -232,7 +232,7 @@
 
 .context-metric strong {
   overflow: hidden;
-  font-size: 1rem;
+  font-size: var(--fs-lead);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -256,7 +256,7 @@
   border-radius: var(--radius-control);
   color: var(--ink-muted);
   background: var(--surface-soft);
-  font-size: 0.76rem;
+  font-size: var(--fs-caption);
 }
 
 .context-engine-status > span {
@@ -302,7 +302,7 @@
 }
 
 .context-search > label span {
-  font-size: 0.8rem;
+  font-size: var(--fs-meta);
   font-weight: 700;
 }
 
@@ -335,7 +335,7 @@
   outline: 0;
   color: var(--ink);
   background: transparent;
-  font-size: 1rem;
+  font-size: var(--fs-field);
 }
 
 .client-context-view button {
@@ -350,7 +350,7 @@
   color: var(--ink);
   background: var(--surface-raised);
   font-family: inherit;
-  font-size: 0.76rem;
+  font-size: var(--fs-caption);
   font-weight: 700;
   cursor: pointer;
 }
@@ -386,7 +386,7 @@
   grid-column: 2;
   margin: 0;
   color: var(--ink-faint);
-  font-size: 0.7rem;
+  font-size: var(--fs-micro);
   line-height: 1.4;
 }
 
@@ -681,13 +681,13 @@
 .context-empty strong {
   margin-top: 11px;
   color: var(--ink-muted);
-  font-size: 0.84rem;
+  font-size: var(--fs-meta);
 }
 
 .context-empty p {
   max-width: 44ch;
   margin: 6px 0 0;
-  font-size: 0.72rem;
+  font-size: var(--fs-caption);
   line-height: 1.5;
 }
 
@@ -798,7 +798,7 @@
   }
 
   .context-search input {
-    font-size: 16px;
+    font-size: var(--fs-field);
   }
 
   .context-search button {

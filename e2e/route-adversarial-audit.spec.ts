@@ -35,17 +35,14 @@ const routes: readonly Route[] = Object.freeze([
   { hash: "skills", label: "Skills", heading: /^Skills$/i, deepLinkOnly: true },
   { hash: "proof", label: "Proof", heading: /^Proof$/i, primaryMobile: true },
   { hash: "vault", label: "Vault", heading: /^Vault$/i },
-  // AMENDED: `#connection` is the one route the design gives its own measure —
-  // `--connect-measure: 760px` with `margin-inline: auto`, inherited by every
-  // descendant including the route bar (DESIGN_DIRECTION §5.5, "One measure",
-  // which replaced four competing widths with one). Its heading therefore
-  // cannot start on the shell's outer gutter above 1050px, and holding it to
-  // that line would be asserting against the spec. The replacement below is
-  // stronger, not weaker: the blanket gutter check only ever said "26px from
-  // the left", which a route stranded hard against one edge could satisfy by
-  // accident; the symmetry check says the measure is genuinely centred, which
-  // is the property the "One measure" decision was made to obtain, and it
-  // still fails if the route regains a stray second page edge.
+  // AMENDED AGAIN: `--connect-measure` now starts *below* the route bar. It
+  // is the lane list's measure, not the page's: centring it on the whole view
+  // put this route's <h1> at x=456 while the other nine sat at x=258, so the
+  // one heading that moved on arrival was the one on the route a first-time
+  // visitor lands on. The header rejoins the shared-gutter pool; the
+  // `centredMeasure` symmetry branch below is retained because the lane list
+  // is still on its own measure and the flag still fires the moment a route
+  // puts its heading back inside one.
   { hash: "connection", label: "Connection", heading: /^Connect models$/i, centredMeasure: true },
   { hash: "account", label: "Account", heading: /^Account standing$/i },
 ]);
@@ -62,7 +59,22 @@ test("every desktop and mobile route remains usable in the live local lab", asyn
     if (message.type() !== "error") return;
     const expectedConditionalS3Response = message.location().url.startsWith("http://127.0.0.1:9900/")
       && /status of (?:404|412)/u.test(message.text());
-    if (!expectedConditionalS3Response) runtimeErrors.push(`[${activeRoute}] console: ${message.text()} (${message.location().url || "unknown source"})`);
+    /*
+     * The Chutes sign-in readiness probe, answering.
+     *
+     * `#connection` asks the localhost token handler at load whether it can
+     * exchange a code, because the alternative is what shipped: an OAuth tab
+     * marked "Primary" above a filled brass button that returned an operator's
+     * restart instruction when pressed. A lab with no process-held client
+     * secret answers 503, the browser logs the response, and the lane renders
+     * that answer — it is a reading, not a failure. Scoped to the one endpoint
+     * and the one status so a genuine 503 anywhere else still fails this audit.
+     */
+    const expectedSignInReadinessResponse = message.location().url.endsWith("/__airship/chutes/oauth/token")
+      && /status of 503/u.test(message.text());
+    if (!expectedConditionalS3Response && !expectedSignInReadinessResponse) {
+      runtimeErrors.push(`[${activeRoute}] console: ${message.text()} (${message.location().url || "unknown source"})`);
+    }
   });
 
   const namespace = `airship-live-v2/e2e/route-audit-${testInfo.project.name}-${Date.now().toString(36)}`;
@@ -74,6 +86,7 @@ test("every desktop and mobile route remains usable in the live local lab", asyn
   await expect(page.getByRole("main").getByText("Encrypted runtime active", { exact: true })).toBeVisible({ timeout: 60_000 });
   const mobile = testInfo.project.name === "mobile-chromium";
   const gutterOffsets: number[] = [];
+  const headingTypography: { route: string; size: string; family: string; step: string }[] = [];
 
   for (const route of routes) {
     activeRoute = route.hash;
@@ -113,6 +126,13 @@ test("every desktop and mobile route remains usable in the live local lab", asyn
         headingLeft: headingBox.left,
         headingRight: headingBox.right,
         viewportWidth: window.innerWidth,
+        // One heading recipe, measured rather than asserted from a class name:
+        // the legacy slab this replaced was `clamp(30px, 4vw, 47px)`, so it
+        // reported 47px on desktop and 29.75px on a phone while the route bar
+        // beside it reported one size at both.
+        headingFontSize: getComputedStyle(headingElement).fontSize,
+        headingFontFamily: getComputedStyle(headingElement).fontFamily,
+        displayStep: getComputedStyle(document.documentElement).getPropertyValue("--fs-display").trim(),
       };
     });
     expect(geometry, `${route.label} has route geometry`).toBeDefined();
@@ -134,6 +154,14 @@ test("every desktop and mobile route remains usable in the live local lab", asyn
       ).toBeLessThanOrEqual(1);
     }
     if (route.hash !== "chat" && !onOwnMeasure) gutterOffsets.push(geometry!.gutter);
+    if (route.hash !== "chat") {
+      headingTypography.push({
+        route: route.label,
+        size: geometry!.headingFontSize,
+        family: geometry!.headingFontFamily,
+        step: geometry!.displayStep,
+      });
+    }
 
     const unnamedButtons = await main.locator("button:visible").evaluateAll((buttons) => buttons
       .filter((button) => {
@@ -158,6 +186,28 @@ test("every desktop and mobile route remains usable in the live local lab", asyn
   }
 
   expect(Math.max(...gutterOffsets) - Math.min(...gutterOffsets), "route headings share one outer gutter").toBeLessThanOrEqual(1);
+
+  /*
+   * One heading recipe across every route, at one step of the ramp.
+   *
+   * Six routes rendered a second page-header primitive whose h1 was
+   * `font-size: clamp(30px, 4vw, 47px)` — the construction `tokens.css`
+   * forbids by name, citing WCAG 1.4.4, because a px-literal clamp pins the
+   * largest text in the product against the reader's Type scale preference.
+   * Measured before this landed: 47px on `#profiles`, `#capabilities` and
+   * `#skills` against 29.75px everywhere else, and 28.9px for the same three
+   * on a phone. The assertion is against `--fs-display` itself rather than a
+   * number, so it keeps holding when the preference moves the ramp.
+   */
+  const displaySteps = new Set(headingTypography.map((entry) => entry.step));
+  expect(displaySteps.size, "one --fs-display value across the audit").toBe(1);
+  const headingSizes = new Set(headingTypography.map((entry) => entry.size));
+  expect(
+    [...headingSizes],
+    `every route title is one step: ${JSON.stringify(headingTypography)}`,
+  ).toHaveLength(1);
+  const headingFamilies = new Set(headingTypography.map((entry) => entry.family.split(",")[0]!.trim()));
+  expect([...headingFamilies], "every route title is set in the one display face").toHaveLength(1);
   expect(runtimeErrors, runtimeErrors.join("\n")).toEqual([]);
 
   await page.goto(labUrl("attestations"));

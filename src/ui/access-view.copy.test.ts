@@ -5,6 +5,7 @@ import { credentialReading } from "./access-view";
 
 const source = await readFile(new URL("./access-view.tsx", import.meta.url), "utf8");
 const styles = await readFile(new URL("./access-view.css", import.meta.url), "utf8");
+const readiness = await readFile(new URL("./connect/chutes-signin-readiness.ts", import.meta.url), "utf8");
 
 describe("Chutes connection method copy", () => {
   it("pins the connection to the transport's actual security posture", () => {
@@ -25,8 +26,21 @@ describe("Chutes connection method copy", () => {
     expect(source).toContain("The app secret stays in the localhost process, outside browser JavaScript.");
     expect(source).toContain("no client secret is used.");
     expect(source).toContain("only the same-origin handler performs token operations");
-    expect(source).toContain('fetch("/__airship/chutes/oauth/token"');
-    expect(source).toContain("The local Chutes OAuth handler is not configured.");
+    /*
+     * AMENDED — the handler check moved, and gained a second caller.
+     *
+     * The endpoint and its three operator sentences used to be spelled out
+     * inline here and consulted only *after* the primary button was pressed,
+     * which is how the lane came to advertise a route only the press could
+     * discover was closed. They live in `connect/chutes-signin-readiness.ts`
+     * now, pinned verbatim by that module's own test, and both the load-time
+     * probe and the press-time check read them through one function so the two
+     * cannot say different things about one handler.
+     */
+    expect(source).toContain('from "./connect/chutes-signin-readiness"');
+    expect(source).toContain("const readiness = await probeChutesSignInHandler();");
+    expect(readiness).toContain('fetchImpl(CHUTES_OAUTH_HANDLER_URL');
+    expect(readiness).toContain("The local Chutes OAuth handler is not configured.");
     expect(source).not.toContain("extension adds the client secret");
   });
 
@@ -69,8 +83,8 @@ describe("Chutes connection method copy", () => {
     expect(source).not.toContain("Continue to Chutes");
     expect(source).not.toContain("Recommended for this local lab");
     expect(source).not.toContain("Recommended. Connect profile, billing, and inference");
-    // The operator sentence survives, but only inside the deployment detail.
-    expect(source).toContain("Deployment detail: {oauthOrigin.reason}");
+    // The operator sentence survives, one rung down, in the deployment detail.
+    expect(source).toContain("Deployment detail: {signInBlockedReason}");
   });
 
   it("keeps in-page movement off the hash router", () => {
@@ -213,14 +227,41 @@ describe("the Chutes lane says when it cannot work, and why, where a person is s
     expect(source).not.toContain("disabled={!chutesSignInAvailable}");
   });
 
-  it("renders the cause outside every disclosure, with a control that works beside it", () => {
-    const blocked = source.indexOf('<div class="connect-method__blocked">');
+  it("leads with the consequence and keeps the operator sentence one rung down", () => {
+    /*
+     * AMENDED, and this is a decision rather than a relaxation.
+     *
+     * The previous shape put the operator's restart instruction at lane
+     * altitude because it was the only place it had ever been reachable. It is
+     * reachable, and it is still the wrong headline: it is addressed to whoever
+     * runs the lab, and a person who has just arrived gets no consequence and
+     * no route from it. So the consequence and the working alternative are the
+     * lane-altitude sentence, outside every disclosure, and the operator
+     * sentence is one rung down inside a disclosure that names what it holds —
+     * not nested inside the closed `.oauth-mechanism`, which is the burial the
+     * previous fix was undoing.
+     */
+    const blocked = source.indexOf('<div class="connect-method__blocked" role="alert">');
+    const cause = source.indexOf('<details class="connect-method__cause">');
     const mechanism = source.indexOf('<details class="oauth-mechanism">');
     expect(blocked).toBeGreaterThan(-1);
-    // Above the disclosure, not inside it.
-    expect(blocked).toBeLessThan(mechanism);
-    expect(source).toContain("Deployment detail: {oauthOrigin.reason}");
+    expect(blocked).toBeLessThan(cause);
+    expect(cause).toBeLessThan(mechanism);
+    expect(source).toContain('const SIGN_IN_UNAVAILABLE = "Chutes sign-in is not available in this build.";');
+    expect(source).toContain("<strong>{SIGN_IN_UNAVAILABLE}</strong> Paste a Chutes API key instead — it works now and stays in page memory.");
+    expect(source).toContain("<summary>Why this build cannot sign in</summary>");
+    expect(source).toContain("Deployment detail: {signInBlockedReason}");
     expect(source).toContain('<button type="button" onClick={() => setChutesMethod("api-key")}>Use an API key</button>');
+    // The consequence is above the cause in the rendered order, not merely
+    // present somewhere in the file.
+    expect(source.indexOf("{SIGN_IN_UNAVAILABLE}")).toBeLessThan(cause);
+  });
+
+  it("stops calling the OAuth tab Primary before the exchange has answered", () => {
+    // `Primary` is a promise. It was printed from the registration alone, so a
+    // build whose localhost handler holds no client secret still led with it.
+    expect(source).toContain('<small>{chutesSignInAvailable ? "Primary" : signInChecking ? "Checking" : "Unavailable in this build"}</small>');
+    expect(source).not.toContain('{chutesSignInAvailable ? "Primary" : "Unavailable"}');
   });
 
   it("keeps the control that cannot run explicitly disabled, beside one that can", () => {
@@ -268,6 +309,46 @@ describe("what stands between the tab and the field", () => {
     // the same sentence a desktop does.
     expect(styles).not.toMatch(/\.api-key-alternative \.credential-types \{\s*display: none/u);
     expect(styles).not.toMatch(/\.credential-types \{\s*display: none/u);
+  });
+});
+
+describe("a refused key is reported as a refused key", () => {
+  it("names the key rather than an unrelated networking noun", () => {
+    // The shipped banner said "Endpoint discovery denied. Reconnect with
+    // chutes:invoke or an API key." to a person who had just pasted an API key,
+    // naming an OAuth scope that appears nowhere else in the product.
+    expect(source).toContain("<strong>Chutes did not accept this key.</strong> The catalog is readable without a key, so listing models succeeded; authorization is checked when you connect, and it failed. Check the key at chutes.ai → API keys, or paste a different one.");
+    expect(source).toContain('failure.kind === "credential" && credential.kind === "inference-api-key"');
+  });
+
+  it("keeps the provider's own words, verbatim, under a disclosure that says so", () => {
+    // Relocation, not removal: `chutes:invoke` and the rest of the mapped
+    // provider sentence remain in the DOM, one rung down.
+    expect(source).toContain("<summary>Provider response</summary>");
+    expect(source).toContain("{keyRefusal.providerResponse}");
+    expect(source).toContain("setKeyRefusal(Object.freeze({ providerResponse: failure.message }))");
+    const banner = source.indexOf("Chutes did not accept this key.");
+    expect(banner).toBeLessThan(source.indexOf("<summary>Provider response</summary>"));
+  });
+
+  it("leaves the field masked and filled so the key can be corrected", () => {
+    // The field emptied itself on refusal, so the only way to fix one wrong
+    // character was to fetch and paste the whole key again.
+    expect(source).toContain("field.value = credential.value;");
+    expect(source).toContain('type="password"');
+    // …and the refusal is dropped the moment the value it was about changes.
+    expect(source).toContain("setKeyRefusal(undefined);");
+  });
+
+  it("suppresses the at-rest format hint while a refusal is showing", () => {
+    // "Chutes personal keys start with cpk_" beside a well-formed cpk_ that
+    // Chutes refused describes a problem the person does not have.
+    expect(source).toContain("{keyRefusal ? null : (");
+    const suppression = source.indexOf("{keyRefusal ? null : (");
+    expect(suppression).toBeLessThan(source.indexOf('<div class="credential-types"'));
+    // The hint itself is not deleted — it is still in the file, for every
+    // state that is not a refusal.
+    expect(source).toContain("Chutes personal keys start with cpk_.");
   });
 });
 

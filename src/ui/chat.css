@@ -328,7 +328,6 @@
    the right-hand cell and has nothing to push against. */
 .transcript-intro__tier { justify-self: end; margin-right: 0; }
 
-.page-heading h1,
 .proof-hero h2,
 .inspector-heading h2 {
   margin: 4px 0 0;
@@ -496,7 +495,7 @@ button.runtime-posture {
   background: var(--surface-raised);
   box-shadow: var(--shadow);
   cursor: pointer;
-  font-size: 11px;
+  font-size: var(--fs-caption);
 }
 
 .transcript-boundary {
@@ -573,7 +572,7 @@ button.runtime-posture {
   border-color: rgba(193, 154, 88, 0.3);
   background: rgba(193, 154, 88, 0.065);
   font-family: Georgia, serif;
-  font-size: 12px;
+  font-size: var(--fs-caption);
 }
 
 .message.user .message-rail span {
@@ -587,7 +586,9 @@ button.runtime-posture {
   padding: 11px 13px;
   border: 1px solid var(--line);
   border-radius: 4px var(--radius-panel) var(--radius-panel) var(--radius-panel);
-  background: rgba(28, 34, 38, 0.73);
+  /* The literal was the dark `--surface-raised`; message bodies have to
+     follow the colour mode like every other raised surface. */
+  background: color-mix(in srgb, var(--surface-raised) 73%, transparent);
 }
 
 .message.user .message-body {
@@ -732,12 +733,24 @@ button.runtime-posture {
   display: none;
 }
 
-.message-parts .message-part.text.streaming::after {
+/*
+ * The caret has no ancestor requirement, because the element that streams has
+ * no ancestor to require. `StreamingMessageSlot` renders `.message-part.text
+ * .streaming` as its own root — it is the in-flight card, not a member of a
+ * settled card's `.message-parts` list — so an ancestor combinator here meant
+ * the rule was live, correct and permanently unmatched. The guard lives in
+ * `chat/streaming-slot.test.ts`, beside the component whose markup it describes:
+ * a selector that can only be wrong when the two files disagree belongs to
+ * both of them.
+ */
+.message-part.text.streaming::after {
   display: inline-block;
   width: 0.45em;
   height: 1em;
   margin-left: 3px;
-  border-right: 1px solid var(--state-acting);
+  /* Brass, not `--state-acting`: that steel blue is the transcript's only blue,
+     and the caret is the one mark a reader watches for seconds at a time. */
+  border-right: 1px solid var(--accent-bright);
   content: "";
   vertical-align: -0.12em;
   animation: stream-caret 1s steps(1, end) infinite;
@@ -745,6 +758,12 @@ button.runtime-posture {
 
 @keyframes stream-caret {
   50% { opacity: 0; }
+}
+
+/* The caret is a position, not an animation. Stop the blink; keep the mark,
+   because where the next character lands is information. */
+@media (prefers-reduced-motion: reduce) {
+  .message-part.text.streaming::after { animation: none; }
 }
 
 .message-part.reasoning-summary {
@@ -797,14 +816,14 @@ button.runtime-posture {
 
 .message-part.reasoning-summary > summary span {
   color: var(--ink-muted);
-  font-size: 11px;
+  font-size: var(--fs-caption);
 }
 
 .message-part.reasoning-summary > p {
   margin: 0;
   padding: 0 10px 10px 32px;
   color: var(--ink-muted);
-  font-size: 12px;
+  font-size: var(--fs-caption);
 }
 
 .message-part.reference {
@@ -827,7 +846,7 @@ button.runtime-posture {
 .message-part.reference header strong {
   overflow: hidden;
   color: var(--ink);
-  font-size: 11px;
+  font-size: var(--fs-caption);
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -843,7 +862,7 @@ button.runtime-posture {
 .message-part.reference p {
   margin: 0;
   color: var(--ink-muted);
-  font-size: 11px;
+  font-size: var(--fs-caption);
 }
 
 .message-part.reference code {
@@ -879,7 +898,7 @@ button.runtime-posture {
 .message-part.part-error p {
   margin: 3px 0 0;
   color: var(--ink-muted);
-  font-size: 11px;
+  font-size: var(--fs-caption);
 }
 
 .message-part.part-error small {
@@ -1015,7 +1034,10 @@ button.runtime-posture {
 .composer-wrap {
   padding: 9px max(22px, calc((100% - 790px) / 2)) 13px;
   border-top: 1px solid var(--line);
-  background: rgba(16, 20, 23, 0.88);
+  /* Token-derived for the same reason as `.mobile-nav`: this literal was the
+     dark `--ground`, which put a full-width black band under a warm paper
+     interface on desktop chat. */
+  background: color-mix(in srgb, var(--ground) 88%, transparent);
   backdrop-filter: blur(12px);
 }
 
@@ -1083,7 +1105,7 @@ button.runtime-posture {
 
 .slash-command-menu span {
   overflow: hidden;
-  font-size: 0.72rem;
+  font-size: var(--fs-caption);
   line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1267,10 +1289,18 @@ button.runtime-posture {
  * horizontal scroll. Both words survive in the chip's accessible name and in
  * the popover the same tap opens, so the fact is one gesture away rather than
  * gone, and the glyph and the tap target are unchanged.
+ *
+ * What the ladder had wrong was the *order*. The first thing it shed was the
+ * approval policy — the one item in this strip that no other surface on a
+ * phone screen carries, and the one that says whether the agent may write
+ * files and run commands without asking. Below 380px the control rendered as
+ * a bare coloured dot. The attach control's visible label goes first now
+ * instead: it duplicates the `aria-label` on its own file input, so shedding
+ * it costs the accessible tree nothing, and it buys the 43px the policy value
+ * needs to stay whole.
  */
-@container (max-width: 380px) {
-  .composer-posture__word,
-  .composer-approval-select .menu-select-value strong {
+@container (max-width: 420px) {
+  .composer-attach > span {
     position: absolute;
     width: 1px;
     height: 1px;
@@ -1278,7 +1308,37 @@ button.runtime-posture {
     clip-path: inset(50%);
   }
 
+  /* An ellipsised "Auto Appro…" is the same defect as a hidden label arriving
+     a few pixels later, so the safety value is the one item in the row that
+     does not give ground. Measured: the strip is saturated at every phone
+     width, so without this the longest label clips at 430px too. */
   .composer-approval-select {
+    flex: 0 0 auto;
+  }
+}
+
+@container (max-width: 380px) {
+  .composer-posture__word {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+}
+
+/*
+ * The bottom rung, and the one place the value still gives ground. At a 320px
+ * content width three items no longer fit at their natural size, and holding
+ * the value whole here wraps the credential posture — a caveat, which may not
+ * be shed — to four lines, taking the composer to a second row that
+ * `e2e/responsive-breakpoints.spec.ts` bounds at 13% of the viewport. The
+ * value ellipsises instead of disappearing: the escalation dot, the popover
+ * and the option list all still state it in full.
+ */
+@container (max-width: 320px) {
+  .composer-approval-select {
+    flex: 1 1 auto;
     min-width: 0;
   }
 }
@@ -1364,8 +1424,13 @@ button.runtime-posture {
      Approve") widen the trigger by ~25px when selected, which is the jump the
      comment above says must not happen. The width is fixed to the longest
      label instead, still in `ch` so it tracks the type scale rather than
-     clipping under it. */
-  width: 17ch;
+     clipping under it.
+
+     18ch, not 17: `ch` is the advance of "0", and "Auto Approve" is wider than
+     twelve zeroes once the dot, the gap and the caret are subtracted. At phone
+     metrics 17ch left the box 2px short of its own longest label, so the width
+     that exists to prevent clipping was clipping. */
+  width: 18ch;
 }
 
 .composer-approval-select .menu-select-trigger {
@@ -1453,9 +1518,12 @@ button.runtime-posture {
   width: 32px;
   height: 32px;
   padding: 0;
-  border: 1px solid rgba(193, 154, 88, 0.42);
+  border: 1px solid color-mix(in srgb, var(--accent) 42%, transparent);
   border-radius: var(--radius-control);
-  color: #17130c;
+  /* Same defect as the profiles primary action: a dark literal on a brass that
+     is also dark in paper mode. The send control is the most-pressed thing in
+     the product; it cannot be the one that disappears. */
+  color: var(--ground);
   background: var(--brass-bright);
   cursor: pointer;
 }
@@ -1518,7 +1586,7 @@ button.runtime-posture {
 
 .composer-wrap > p.connectivity-inline-reason {
   color: var(--v-caution);
-  font-size: 11px;
+  font-size: var(--fs-caption);
   line-height: 1.45;
 }
 
@@ -1553,7 +1621,29 @@ button.runtime-posture {
 }
 
 .inspector-heading h2 {
-  font-size: 18px;
+  font-size: var(--fs-lead);
+}
+
+/*
+ * The turn verdict, one rung *below* the answer it qualifies.
+ *
+ * It had no rule at all, so it inherited the root — 17px in a 310px rail,
+ * against the assistant's answer at 15.94px in a 751px column. The caveat was
+ * set louder than the content it is a caveat about, in a narrower measure,
+ * which reads larger still. Nothing here is removed: `verdict.chip` stays the
+ * loudest object in the rail because it is the only thing in it set in --ink
+ * at --fs-meta with a full weight, and `verdict.line` keeps every word.
+ */
+.proof-bottom-line {
+  margin: 0 0 12px;
+  color: var(--ink-muted);
+  font-size: var(--fs-meta);
+  line-height: 1.5;
+}
+
+.proof-bottom-line strong {
+  color: var(--ink);
+  font-weight: var(--fw-strong);
 }
 
 .evidence-join {
@@ -1650,7 +1740,7 @@ button.runtime-posture {
   border: 1px solid var(--line);
   border-radius: 9px;
   color: var(--ink-muted);
-  font-size: 11px;
+  font-size: var(--fs-micro);
 }
 
 .claim-group--failed > header { color: var(--v-failed); }

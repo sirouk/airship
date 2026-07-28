@@ -47,7 +47,7 @@
   max-width: 82ch;
   margin: 0;
   color: var(--ink-muted);
-  font-size: 0.86rem;
+  font-size: var(--fs-meta);
   line-height: 1.55;
 }
 
@@ -69,7 +69,7 @@
   color: var(--ink);
   background: var(--surface-raised);
   font-family: inherit;
-  font-size: 0.75rem;
+  font-size: var(--fs-caption);
   font-weight: 700;
   line-height: 1.2;
   cursor: pointer;
@@ -115,9 +115,9 @@
 
 .attestations-boundary > svg { color: var(--accent-bright); }
 .attestations-boundary > div { display: grid; gap: 3px; }
-.attestations-boundary strong { font-size: 0.8rem; }
+.attestations-boundary strong { font-size: var(--fs-meta); }
 .attestations-boundary span,
-.attestations-boundary small { color: var(--ink-muted); font-size: 0.72rem; line-height: 1.4; }
+.attestations-boundary small { color: var(--ink-muted); font-size: var(--fs-caption); line-height: 1.4; }
 .attestations-boundary small { white-space: nowrap; }
 
 .attestations-alert {
@@ -130,7 +130,7 @@
   border-radius: var(--radius-control);
   color: var(--signal);
   background: color-mix(in srgb, var(--signal) 6%, transparent);
-  font-size: 0.76rem;
+  font-size: var(--fs-caption);
 }
 
 .attestations-alert.error {
@@ -233,7 +233,7 @@
 .attestation-record-list > button > span:nth-child(2) { width: 100%; }
 
 .attestation-record-list strong {
-  font-size: 0.78rem;
+  font-size: var(--fs-meta);
   overflow-wrap: break-word;
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -243,7 +243,7 @@
 
 .attestation-record-list small {
   color: var(--ink-muted);
-  font-size: 0.69rem;
+  font-size: var(--fs-micro);
   overflow-wrap: break-word;
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -281,8 +281,8 @@
   border-bottom: 1px solid var(--line);
 }
 
-.attestation-record-heading h2 { margin: 5px 0 6px; font-size: 1.12rem; overflow-wrap: anywhere; }
-.attestation-record-heading p { max-width: 68ch; margin: 0; color: var(--ink-muted); font-size: 0.73rem; line-height: 1.5; }
+.attestation-record-heading h2 { margin: 5px 0 6px; font-size: var(--fs-lead); overflow-wrap: anywhere; }
+.attestation-record-heading p { max-width: 68ch; margin: 0; color: var(--ink-muted); font-size: var(--fs-caption); line-height: 1.5; }
 /*
  * Four `n label` pairs, wrapping, never a fixed four-column grid.
  *
@@ -330,7 +330,7 @@
 .attestation-matrix > button.active { box-shadow: inset 0 -3px var(--accent-bright); background: color-mix(in srgb, var(--accent) 6%, var(--surface) 94%); }
 .attestation-matrix > button > span { display: flex; gap: 6px; align-items: center; }
 .attestation-matrix > button > span em { color: var(--ink-muted); font: normal var(--fs-micro)/1.2 var(--font-mono); text-transform: uppercase; }
-.attestation-matrix > button strong { font-size: 0.76rem; line-height: 1.3; }
+.attestation-matrix > button strong { font-size: var(--fs-caption); line-height: 1.3; }
 .attestation-matrix > button small { color: var(--ink-faint); font-size: var(--fs-micro); line-height: 1.35; }
 
 .attestation-status-mark {
@@ -372,11 +372,11 @@
 .attestation-verification-list > button > span { display: grid; gap: 2px; min-width: 0; }
 .attestation-verification-list strong,
 .attestation-verification-list small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.attestation-verification-list strong { font-size: 0.72rem; }
+.attestation-verification-list strong { font-size: var(--fs-caption); }
 .attestation-verification-list small { color: var(--ink-faint); font-size: var(--fs-micro); }
 .attestation-verification-list em { color: var(--ink-muted); font: normal var(--fs-micro)/1.2 var(--font-mono); }
 .attestations-no-verifier,
-.attestation-facts-empty { padding: 12px; border: 1px dashed var(--line-strong); border-radius: var(--radius-control); color: var(--ink-faint); font-size: 0.7rem; line-height: 1.45; }
+.attestation-facts-empty { padding: 12px; border: 1px dashed var(--line-strong); border-radius: var(--radius-control); color: var(--ink-faint); font-size: var(--fs-micro); line-height: 1.45; }
 
 .attestation-facts {
   display: grid;
@@ -403,7 +403,7 @@
 .attestation-inspection-title { display: flex; gap: 10px; align-items: start; }
 .attestation-inspection-title .attestation-status-mark { flex-direction: column; align-items: flex-start; }
 .attestation-inspection-title > div { display: grid; gap: 3px; min-width: 0; }
-.attestation-inspection-title h2 { margin: 0; font-size: 1rem; }
+.attestation-inspection-title h2 { margin: 0; font-size: var(--fs-lead); }
 /* Three separate lines. Inline `small` and `strong` produced "Attested
    endpoint-key bindingASSERTED" — a claim name welded to a status word with
    no separator, on the surface whose entire job is precision. */
@@ -413,7 +413,7 @@
 .attestation-inspection-title strong.partial { color: var(--accent-bright); }
 .attestation-inspection-title strong.failed,
 .attestation-inspection-title strong.expired { color: var(--danger); }
-.attestation-inspection > p { margin: 0; color: var(--ink-muted); font-size: 0.74rem; line-height: 1.55; }
+.attestation-inspection > p { margin: 0; color: var(--ink-muted); font-size: var(--fs-caption); line-height: 1.55; }
 .attestation-inspection > dl { display: grid; margin: 0; border-top: 1px solid var(--line); }
 .attestation-inspection > dl > div { display: grid; grid-template-columns: minmax(85px, 0.7fr) minmax(0, 1.3fr); gap: 9px; padding: 8px 0; border-bottom: 1px solid var(--line); }
 .attestation-inspection dt { color: var(--ink-faint); font-size: var(--fs-micro); }
@@ -439,7 +439,7 @@
   border-radius: var(--radius-control);
 }
 
-.attestations-export-note strong { display: block; font-size: 0.72rem; }
+.attestations-export-note strong { display: block; font-size: var(--fs-caption); }
 .attestations-export-note p { margin: 4px 0 0; color: var(--ink-faint); font-size: var(--fs-micro); line-height: 1.45; }
 
 .attestations-empty {
@@ -454,15 +454,15 @@
   background: var(--surface);
 }
 
-.attestations-empty h2 { margin: 0; color: var(--ink); font-size: 1rem; }
-.attestations-empty p { max-width: 58ch; margin: 0; font-size: 0.76rem; line-height: 1.5; }
+.attestations-empty h2 { margin: 0; color: var(--ink); font-size: var(--fs-lead); }
+.attestations-empty p { max-width: 58ch; margin: 0; font-size: var(--fs-caption); line-height: 1.5; }
 .attestations-empty__intro { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 14px; align-items: start; max-width: 700px; margin-inline: auto; }
 .attestations-empty__intro p { margin-top: 5px; }
 .attestations-empty__connection { margin-top: 14px; }
 .attestations-empty__flow { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; width: min(760px, 100%); margin-inline: auto; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--line); }
 .attestations-empty__flow > div { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 3px 9px; align-content: start; min-width: 0; padding: 13px; background: var(--surface-soft); }
 .attestations-empty__flow span { grid-row: 1 / span 2; color: var(--accent-bright); font: var(--fs-micro)/1.3 var(--font-mono); }
-.attestations-empty__flow strong { color: var(--ink); font-size: 0.75rem; }
+.attestations-empty__flow strong { color: var(--ink); font-size: var(--fs-caption); }
 .attestations-empty__flow small { color: var(--ink-faint); font-size: var(--fs-micro); line-height: 1.4; }
 
 @media (max-width: 1180px) {

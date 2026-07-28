@@ -2,14 +2,24 @@
  * One measure. The page ran four at once — main 1208 → view 1156 → layout 980
  * → surface 942 — so the lane list carried a 266px dead right gutter while the
  * card beneath it ran 214px wider, and the whole surface hugged the left edge.
+ *
+ * The measure governs the *lane list*, not the page header. Centring it on the
+ * view put this route's <h1> at x=456 while the other nine sat at x=258 — the
+ * one route whose title moved on arrival. `--connect-measure` now starts below
+ * the route bar.
  */
 .access-connection-view {
   display: grid;
   gap: var(--sp-4);
   width: 100%;
+  color: var(--ink);
+}
+
+.access-connection-layout,
+.access-additional-providers {
+  width: 100%;
   max-width: var(--connect-measure);
   margin-inline: auto;
-  color: var(--ink);
 }
 
 .access-additional-providers {
@@ -151,6 +161,17 @@
 
 .oauth-primary-entry .oauth-primary-reason { margin-top: 8px; color: var(--v-caution); font-size: var(--fs-caption); }
 
+/* `.oauth-primary-entry p { display: block }` below is equal-specificity and
+   later in the cascade than the connect package's own flex rule, so the caution
+   mark broke onto its own line above the sentence it belongs to. */
+.oauth-primary-entry .connect-method__blocked > p {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: flex-start;
+  margin-top: var(--sp-2);
+  color: var(--ink);
+}
+
 .oauth-primary-entry strong {
   color: var(--ink);
   font-size: var(--fs-meta);
@@ -182,6 +203,52 @@
 
 .api-key-alternative .credential-entry {
   padding-top: var(--sp-2);
+}
+
+/*
+ * A refused key, stated where the key is.
+ *
+ * Caution rather than danger: nothing broke and nothing was lost — a provider
+ * declined an authorization, and the field beside this still holds the value
+ * that can be corrected. `--danger` here would read as a failure of Airship.
+ */
+.key-refusal {
+  display: grid;
+  gap: var(--sp-2);
+  justify-items: start;
+  padding: var(--sp-2);
+  border: 1px solid color-mix(in srgb, var(--v-caution) 34%, var(--line));
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--v-caution) 7%, transparent);
+}
+
+.key-refusal p {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: flex-start;
+  max-width: 66ch;
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--fs-caption);
+  line-height: 1.5;
+}
+
+.key-refusal > p > svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--v-caution);
+}
+
+.key-refusal summary {
+  color: var(--ink-muted);
+  font-size: var(--fs-meta);
+}
+
+.key-refusal details p {
+  margin-top: var(--sp-1);
+  color: var(--ink-muted);
+  font-family: var(--font-mono);
+  font-size: var(--fs-caption);
 }
 
 /* The credential class reads as a hint under its field, not as an 88px tile
@@ -884,7 +951,8 @@
 }
 
 @media (max-width: 1050px) {
-  .access-connection-view {
+  .access-connection-layout,
+  .access-additional-providers {
     max-width: none;
   }
 

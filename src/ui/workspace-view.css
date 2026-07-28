@@ -178,7 +178,7 @@
 .tree-row:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
 .tree-row > span:nth-of-type(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tree-row small { color: var(--ink-faint); font: var(--fs-micro) var(--font-mono); }
-.tree-chevron { text-align: center; color: var(--ink-faint); font-size: 15px; }
+.tree-chevron { text-align: center; color: var(--ink-faint); font-size: var(--fs-meta); }
 .tree-overflow { position: absolute; top: 4px; right: 3px; width: 28px; height: 26px; padding: 0; border: 0; opacity: 0; pointer-events: none; color: var(--ink-muted); background: color-mix(in srgb, var(--surface-raised) 92%, transparent); cursor: pointer; }
 .tree-row-wrap:hover .tree-overflow, .tree-overflow:focus-visible { opacity: 1; pointer-events: auto; }
 

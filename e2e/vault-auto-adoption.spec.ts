@@ -60,14 +60,14 @@ test("durability preference moves safely between encrypted S3 and ephemeral page
 
   await openPreferences(page);
   await page.getByRole("button", { name: "Durability" }).click();
-  await page.getByRole("option", { name: "Ephemeral · page memory only" }).click();
+  await page.getByRole("option", { name: "Page memory only" }).click();
   await page.getByRole("button", { name: "Done" }).click();
   await expect(page.locator(".runtime-line")).toHaveAttribute("title", /Ephemeral mode/u, { timeout: 20_000 });
   await expect(page.getByText("Ephemeral mode is active.", { exact: false })).toBeVisible();
 
   await openPreferences(page);
   await page.getByRole("button", { name: "Durability" }).click();
-  await page.getByRole("option", { name: "Encrypted S3 · local MinIO" }).click();
+  await page.getByRole("option", { name: "Local MinIO lab" }).click();
   await page.getByRole("button", { name: "Done" }).click();
   await expectLocalVaultAdopted(page);
 });

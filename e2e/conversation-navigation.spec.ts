@@ -337,7 +337,14 @@ test("the pinned profile row switches profiles, names each one, and reaches the 
   const manager = page.getByRole("navigation", { name: "Agent configuration" });
   await manager.getByRole("button", { name: "Capabilities", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Capabilities", level: 1 })).toBeVisible();
-  await expect(page.getByText(/No inference provider.*is required for local activation/u)).toBeVisible();
+  // AMENDED: `#capabilities` is on the shared route bar now, so its sentence is
+  // the ⓘ panel's body rather than a visible paragraph. Opening the disclosure
+  // and asserting the sentence verbatim is what makes that a relocation rather
+  // than a deletion. See `disconnected-capabilities.spec.ts` for the full note.
+  const capabilitiesAbout = page.getByRole("button", { name: /^About Capabilities\./u });
+  await capabilitiesAbout.click();
+  await expect(page.getByText("No inference provider is required for local activation.", { exact: true })).toBeVisible();
+  await page.keyboard.press("Escape");
   await manager.getByRole("button", { name: "Skills", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Skills", level: 1 })).toBeVisible();
   await expect(page.getByText("Profile scope", { exact: true })).toBeVisible();

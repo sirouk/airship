@@ -84,7 +84,7 @@
   .model-picker-popover { position:fixed; inset:auto var(--sp-2) max(var(--sp-2), env(safe-area-inset-bottom)) var(--sp-2); width:auto; max-height:80dvh; }
   .model-picker-sheet-bar { display:flex; gap:var(--sp-2); align-items:center; justify-content:space-between; min-height:44px; }
   .model-picker-done { min-height:44px; padding:0 var(--sp-3); }
-  .model-picker-header > input { min-height:44px; font-size:16px; }
+  .model-picker-header > input { min-height:44px; font-size:var(--fs-field); }
   /* One scroll-snap row, not a five-row 240px stack that put the first result
      384px into a 652px sheet. The `width` reset is load-bearing: the connect
      surface stretches every button to 100% at this breakpoint, which is what

@@ -154,6 +154,21 @@ export async function createBuiltInProfileCatalog(): Promise<ProfileCatalog> {
   });
 }
 
+/*
+ * A theme manifest is written inline on <html>, so it beats every stylesheet.
+ * Two consequences bind this table:
+ *
+ * 1. `foundry` is the shipped default and must be byte-identical to the `:root`
+ *    palette in `ui/tokens.css`. Where it agreed, the inline write was a no-op;
+ *    where it drifted, the theme silently reverted the stylesheet — which is
+ *    how `--ink-faint` shipped at 4.73:1 for a year while tokens.css carried
+ *    the 5.72:1 fix and a comment predicting exactly this. `themeCssVariables`
+ *    now omits any role that already agrees, so agreement is also what lets a
+ *    colour-mode preference reach the surfaces at all.
+ * 2. Every palette's `inkFaint` must clear AA on its own `surfaceRaised` and
+ *    its `inkMuted` 7:1 on its own `surface`; a caption is where provenance
+ *    lives. `ui/css-variable-contract.test.ts` enforces both, per theme.
+ */
 const themeDrafts: readonly ThemeManifestDraft[] = [
   {
     themeId: "foundry",
@@ -166,8 +181,8 @@ const themeDrafts: readonly ThemeManifestDraft[] = [
       surfaceRaised: "#1c2226",
       surfaceSoft: "#14191c",
       ink: "#ece8de",
-      inkMuted: "#9fa5a3",
-      inkFaint: "#858d8a",
+      inkMuted: "#b0b6b3",
+      inkFaint: "#949c99",
       accent: "#c19a58",
       accentBright: "#dfba72",
     },
@@ -186,7 +201,7 @@ const themeDrafts: readonly ThemeManifestDraft[] = [
       surfaceSoft: "#101b1c",
       ink: "#edf1eb",
       inkMuted: "#a6b4af",
-      inkFaint: "#7f938e",
+      inkFaint: "#8ba49e",
       accent: "#73a69c",
       accentBright: "#a4cec3",
     },
@@ -205,7 +220,7 @@ const themeDrafts: readonly ThemeManifestDraft[] = [
       surfaceSoft: "#111821",
       ink: "#e9edf0",
       inkMuted: "#a0aab3",
-      inkFaint: "#7e8994",
+      inkFaint: "#8a95a1",
       accent: "#7895b9",
       accentBright: "#a9c2df",
     },

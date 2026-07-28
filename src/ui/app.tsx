@@ -5292,12 +5292,13 @@ export function App() {
           />
         ) : (
           <section class="work-view panel" aria-labelledby="session-library-loading-title">
-            <div class="page-heading">
-              <div>
-                <span class="eyebrow">Conversation history</span>
-                <h1 id="session-library-loading-title">All conversations</h1>
-              </div>
-            </div>
+            <RouteBar
+              routeId="sessions"
+              title="All conversations"
+              headingId="session-library-loading-title"
+              eyebrow="Conversation history"
+              description="Loading conversation history."
+            />
             <RouteSkeleton label="Loading conversation history" />
           </section>
         ) : null}
@@ -6820,7 +6821,7 @@ function ProfileManagerView({
 
   return (
     <section class="work-view">
-      <PageHeading eyebrow="Immutable agent manifests" title="Profiles" description="Manage agent personas, instructions, and interface themes. Saves create content-addressed revisions; applying one forks a pinned session." />
+      <RouteBar routeId="profiles" title="Profiles" eyebrow="Immutable agent manifests" description="Manage agent personas, instructions, and interface themes. Saves create content-addressed revisions; applying one forks a pinned session." />
       <div class="management-layout">
         <div class="profile-catalog panel">
           <div class="panel-heading"><span>Profiles</span><button class="small-button" type="button" onClick={() => void fork()} disabled={busy}><Icon name="plus" size={14} /> Fork</button></div>
@@ -6971,7 +6972,7 @@ function SkillsManagerView({
 
   return (
     <section class="work-view">
-      <PageHeading eyebrow="Resolved instruction modules" title="Skills" description={scope === "global" ? "Set global skill defaults. Enabled instructions are pinned into the next conversation manifest." : `Set inherit/on/off overrides for ${profile.name}. Existing conversations remain pinned.`} />
+      <RouteBar routeId="skills" title="Skills" eyebrow="Resolved instruction modules" description={scope === "global" ? "Set global skill defaults. Enabled instructions are pinned into the next conversation manifest." : `Set inherit/on/off overrides for ${profile.name}. Existing conversations remain pinned.`} />
       <div class="skills-toolbar panel">
         {scope === "global" ? <div class="skill-select-field"><span>Preview resolution for</span><MenuSelect placement="down" ariaLabel="Preview profile resolution" value={profile.profileId} options={profiles.map((candidate) => ({ value: candidate.profileId, label: candidate.name }))} onChange={setSelectedProfileId} /></div> : <div><span class="eyebrow">Profile scope</span><strong>{profile.name}</strong></div>}
         <div><span class="eyebrow">Effective set</span><strong>{effectiveSkillIds(profile, catalog).length} of {catalog.skills.length}</strong></div>
@@ -7000,8 +7001,45 @@ function SkillsManagerView({
   );
 }
 
-function PageHeading({ eyebrow, title, description }: { eyebrow: string; title: string; description: string }) {
-  return <header class="page-heading"><span class="eyebrow">{eyebrow}</span><h1>{title}</h1><p>{description}</p></header>;
+/**
+ * The route bar for the three headers the *entry chunk* renders.
+ *
+ * Not `<RouteHeader>`, and the reason is a budget rather than a preference:
+ * `release-gate.mjs` classifies `route-header.tsx` as "shared route chrome
+ * fetched with any route, never at first paint", and importing it from
+ * `app.tsx` makes it a modulepreload of the entry — 1.9 KiB gzip of first
+ * paint bought for three headers, on a product whose startup cap has never
+ * been raised. The classifier rejects the build outright when that happens,
+ * which is the budget defending itself.
+ *
+ * What matters is that there is still **one heading recipe**: this emits the
+ * primitive's own class names, so `.route-header` / `.route-title` in
+ * `routes.css` draw it, and a change there moves all fourteen routes at once.
+ * The retired page slab was a second *recipe* — its own max-width, its
+ * own 47px `clamp()` — not merely a second renderer.
+ *
+ * It is fixed at document density because that is the density that hides
+ * nothing: the eyebrow and the sentence are both on screen, so no ⓘ is needed
+ * and `<Popover>` — the actual weight in `route-header.tsx` — is not reached.
+ * `route-header.test.ts` asserts the same thing about the component: with no
+ * description behind it and no notes, the disclosure does not exist at all.
+ */
+function RouteBar({ routeId, eyebrow, title, description, headingId }: {
+  routeId: string;
+  eyebrow: string;
+  title: string;
+  description: string;
+  headingId?: string;
+}) {
+  return (
+    <header class="route-header" data-density="document">
+      <div class="route-header__bar">
+        <p class="route-header__eyebrow eyebrow" id={`route-${routeId}-eyebrow`}>{eyebrow}</p>
+        <h1 class="route-title" id={headingId}>{title}</h1>
+      </div>
+      <p class="route-header__description" id={`route-${routeId}-description`}>{description}</p>
+    </header>
+  );
 }
 
 function EmptyState({ icon, title, body }: { icon: IconName; title: string; body: string }) {

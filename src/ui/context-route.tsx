@@ -1,6 +1,7 @@
 import { useEffect, useState } from "preact/hooks";
 import { loadDeferredCapabilities } from "../load-deferred-capabilities";
 import type { ContextViewProps } from "./context-view";
+import { RouteHeader } from "./route-header";
 import { RouteSkeleton } from "./route-skeleton";
 
 type ContextViewComponent = typeof import("./context-view").ContextView;
@@ -34,11 +35,14 @@ export function ContextView(props: ContextViewProps) {
 
   return (
     <section class="work-view" aria-labelledby="context-route-title" aria-busy={!loadError}>
-      {!props.embedded ? <header class="page-heading">
-        <span class="eyebrow">On-device retrieval</span>
-        <h1 id="context-route-title">Context</h1>
-        <p>Preparing the isolated workspace indexing engine in this browser.</p>
-      </header> : null}
+      {!props.embedded ? <RouteHeader
+        routeId="context"
+        density="tool"
+        title="Context"
+        headingId="context-route-title"
+        eyebrow="On-device retrieval"
+        description="Preparing the isolated workspace indexing engine in this browser."
+      /> : null}
       <div class="panel" role={loadError ? "alert" : "status"} aria-live="polite">
         {loadError ? <p>{loadError}</p> : <RouteSkeleton label="Loading the client-side context engine" />}
         {loadError ? (

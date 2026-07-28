@@ -55,7 +55,14 @@ describe("unified Memory surface", () => {
     expect(cssRule(styles, ".memory-view")).not.toMatch(/(?:^|;)\s*padding(?:-|:)/u);
     expect(styles).toContain("@media (max-width: 620px)");
     expect(styles).toContain("overflow-x: auto");
-    expect(styles).toContain("font-size: 16px");
+    /*
+     * The iOS zoom guard, which used to be asserted as the literal `16px`.
+     * It is `--fs-field` now — `max(16px, var(--fs-body))` — so the guard is
+     * unchanged at every scale that would fall short of it and the field still
+     * grows with the reader's Type scale preference above it. Asserting the
+     * token rather than the number is what keeps both halves.
+     */
+    expect(cssRule(styles, ".memory-query input", "@media (max-width: 620px)")).toContain("font-size: var(--fs-field)");
   });
 
   /*
@@ -258,8 +265,15 @@ describe("embedded index surface", () => {
   });
 });
 
-function cssRule(sourceText: string, selector: string): string {
-  const start = sourceText.indexOf(`${selector} {`);
+/**
+ * The body of `selector`'s rule, optionally the one *after* `after` — which is
+ * how a media-query override is distinguished from the base rule of the same
+ * selector without parsing the sheet.
+ */
+function cssRule(sourceText: string, selector: string, after?: string): string {
+  const from = after ? sourceText.indexOf(after) : 0;
+  expect(from, `missing ${after}`).toBeGreaterThanOrEqual(0);
+  const start = sourceText.indexOf(`${selector} {`, from);
   expect(start, `missing ${selector}`).toBeGreaterThanOrEqual(0);
   const bodyStart = sourceText.indexOf("{", start) + 1;
   return sourceText.slice(bodyStart, sourceText.indexOf("}", bodyStart));

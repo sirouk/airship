@@ -259,6 +259,69 @@ export function resolveDefaultVaultBackend(
     ?? (isDeployableGoogleOAuthClientId(googleClientId) ? "google-drive" : "local-device");
 }
 
+/**
+ * ── The Durability row ───────────────────────────────────────────────────
+ *
+ * Every other row in Preferences chooses a rendering. This one chooses a
+ * *destination for a person's data*, and it was printing that destination as
+ * though it were the state of the world: "Encrypted Google Drive ·
+ * cross-device", with no qualifier, while `#vault` two clicks away read
+ * "Disconnected | No vault claim | No cloud vault is configured." One fact, two
+ * surfaces, opposite answers — and the answer a person who never opens `#vault`
+ * would carry away is that their workspace is encrypted in Drive when nothing
+ * is attached.
+ *
+ * The fix is at the source rather than in either string: the row renders
+ * selection *plus* state, so a selection can no longer read as an adoption.
+ */
+/**
+ * Each destination, and what choosing it costs or buys, in one table.
+ *
+ * The consequence is the option's description rather than part of its label:
+ * the label is also the collapsed trigger, and "Encrypted Google Driv…"
+ * truncating with 210px of void beside it is what a four-word label buys.
+ */
+const DURABILITY: Readonly<Record<VaultBackend, readonly [destination: string, consequence: string]>> = Object.freeze({
+  "local-device": Object.freeze(["This device", "Encrypted here. Not on your other devices."] as const),
+  "google-drive": Object.freeze(["Google Drive", "Encrypted in your own Drive, on every device."] as const),
+  "local-lab": Object.freeze(["Local MinIO lab", "A development adapter, not a place to keep anything."] as const),
+  ephemeral: Object.freeze(["Page memory only", "Nothing survives closing this tab."] as const),
+});
+
+/** Every destination, in the order the row offers them. */
+export const VAULT_BACKENDS: readonly VaultBackend[] = Object.freeze(Object.keys(DURABILITY) as VaultBackend[]);
+
+/**
+ * Whether the selected destination is actually holding anything.
+ *
+ * `undefined` is the honest third arm and the default: a host that does not
+ * pass the vault's state has not established one, so the row states the
+ * destination alone and claims nothing about adoption. It can only under-claim,
+ * which is the only direction this row is allowed to be wrong in.
+ */
+export type DurabilityAdoption = "connected" | "not-connected" | undefined;
+
+export function durabilityOptionLabel(backend: VaultBackend, adoption: DurabilityAdoption): string {
+  const destination = DURABILITY[backend][0];
+  // Page memory has no adoption axis: it is the absence of a vault, and
+  // "Page memory only · not connected" would invent a failure out of a choice.
+  if (backend === "ephemeral" || adoption === undefined) return destination;
+  return `${destination} · ${adoption === "connected" ? "connected" : "not connected"}`;
+}
+
+/**
+ * The row's helper sentence, in the state the row is actually in.
+ *
+ * `Tool steps` already gets a sentence like this. This row needs one more,
+ * because it is the only value in the dialog that is a claim about the world.
+ */
+export function durabilityRowNote(adoption: DurabilityAdoption): string {
+  const purpose = "Where conversations survive a closed tab.";
+  if (adoption === "connected") return `${purpose} Vault holds it, and can detach it.`;
+  if (adoption === "not-connected") return `${purpose} Nothing is attached yet — set it up in Vault.`;
+  return `${purpose} Vault states what is attached.`;
+}
+
 export const DEFAULT_PREFERENCES: PreferenceOverrides = Object.freeze({
   mode: "dark", typeScale: "default", density: "comfortable", corners: "subtle", bodyFont: "system-sans", vaultBackend: resolveDefaultVaultBackend(import.meta.env.VITE_AIRSHIP_DEFAULT_VAULT_PROVIDER, import.meta.env.VITE_GOOGLE_CLIENT_ID), approvalMode: "ask-first", transcriptOperations: DEFAULT_TRANSCRIPT_OPERATIONS,
 });
@@ -312,12 +375,19 @@ export function applyPreferenceOverrides(value: PreferenceOverrides, root = docu
   setTranscriptOperationsMode(value.transcriptOperations);
 }
 
-export function PreferencesDialog({ open, value, onChange, onClose, profileApproval, vaultProviderSwitching = false }: Readonly<{
+export function PreferencesDialog({ open, value, onChange, onClose, profileApproval, vaultProviderSwitching = false, vaultAdopted }: Readonly<{
   open: boolean;
   value: PreferenceOverrides;
   onChange(value: PreferenceOverrides): void;
   onClose(): void;
   vaultProviderSwitching?: boolean;
+  /**
+   * Whether the selected backend is holding anything right now, read from the
+   * same vault snapshot `#vault` renders from. Optional because absence is the
+   * one safe default: without it the Durability row states the destination and
+   * asserts nothing about adoption.
+   */
+  vaultAdopted?: boolean;
   profileApproval?: Readonly<{
     mode: ApprovalMode;
     onManage(): void;
@@ -333,6 +403,14 @@ export function PreferencesDialog({ open, value, onChange, onClose, profileAppro
   }, [open]);
   if (!open) return null;
   const update = <K extends keyof PreferenceOverrides>(key: K, next: PreferenceOverrides[K]) => onChange(Object.freeze({ ...value, [key]: next }));
+  /*
+   * Page memory is not an adoption question: choosing it *is* the state, and
+   * a host that reports no vault state leaves this `undefined` so the row can
+   * only under-claim.
+   */
+  const adoption: DurabilityAdoption = value.vaultBackend === "ephemeral" || vaultAdopted === undefined
+    ? undefined
+    : vaultAdopted ? "connected" : "not-connected";
   return (
     <div class="platform-scrim" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <div ref={dialog} class="preferences-dialog" role="dialog" aria-modal="true" aria-labelledby="preferences-title" tabIndex={-1} onKeyDown={(event) => { if (event.key === "Escape") onClose(); else if (event.key === "Tab") trapFocus(event, dialog.current); }}>
@@ -352,7 +430,25 @@ export function PreferencesDialog({ open, value, onChange, onClose, profileAppro
         <PreferenceSelect label="Tool steps" value={value.transcriptOperations} options={[['summary','Summary'],['rows','Every step']]} onChange={(next) => update("transcriptOperations", next as PreferenceOverrides["transcriptOperations"])} />
         <p>A folded run still states how many steps ran, which tools ran them and how they ended. A failed or denied step is never folded.</p>
         <PreferenceSelect label="Body font" value={value.bodyFont} options={[['system-sans','System sans'],['system-serif','System serif']]} onChange={(next) => update("bodyFont", next as PreferenceOverrides["bodyFont"])} />
-        <PreferenceSelect label="Durability" value={value.vaultBackend} disabled={vaultProviderSwitching} options={[['local-device','Encrypted Local Device · offline'],['google-drive','Encrypted Google Drive · cross-device'],['local-lab','Encrypted S3 · local MinIO lab'],['ephemeral','Ephemeral · page memory only']]} onChange={(next) => update("vaultBackend", next as PreferenceOverrides["vaultBackend"])} />
+        {/*
+          Under its own divider, so a claim about where a person's data lives is
+          not read as the ninth in a run of presentation rows.
+        */}
+        <p class="preferences-dialog__divider">Storage</p>
+        <PreferenceSelect
+          label="Durability"
+          // The last row in a scrolling dialog. Down is where the room is not.
+          placement="up"
+          value={value.vaultBackend}
+          disabled={vaultProviderSwitching}
+          options={VAULT_BACKENDS.map((backend) => [
+            backend,
+            durabilityOptionLabel(backend, backend === value.vaultBackend ? adoption : vaultAdopted === undefined ? undefined : "not-connected"),
+            DURABILITY[backend][1],
+          ] as const)}
+          onChange={(next) => update("vaultBackend", next as PreferenceOverrides["vaultBackend"])}
+        />
+        <p>{durabilityRowNote(adoption)}</p>
         <button class="preferences-dialog__reset" type="button" onClick={() => onChange(DEFAULT_PREFERENCES)}>Reset preferences</button>
       </div>
     </div>
@@ -371,8 +467,19 @@ export function approvalModeDescription(mode: ApprovalMode): string {
   return "Read-only actions proceed automatically; write, network, execute, and identity actions require one-time approval.";
 }
 
-function PreferenceSelect({ label, value, options, onChange, disabled = false }: Readonly<{ label: string; value: string; options: readonly (readonly [string,string])[]; onChange(value: string): void; disabled?: boolean }>) {
-  return <div class="preference-row"><span>{label}</span><MenuSelect className="preference-menu" ariaLabel={label} value={value} disabled={disabled} options={options.map(([id, name]) => ({ value: id, label: name }))} onChange={onChange} /></div>;
+/**
+ * Placement is a prop, and it is not cosmetic.
+ *
+ * The sheet used to be forced downward by a stylesheet override while
+ * `MenuSelect` still believed it was placed upward, so neither the component's
+ * fit measurement nor its own geometry applied: the last row in a scrolling
+ * dialog opened a list that ran 25px past the bottom of the window and was
+ * clipped by the dialog's own scroll box 78px before that. `down` is right for
+ * a row with the whole dialog beneath it and measures the room it has; a row in
+ * the lower third opens upward instead, where the room actually is.
+ */
+function PreferenceSelect({ label, value, options, onChange, disabled = false, placement = "down" }: Readonly<{ label: string; value: string; options: readonly (readonly [string, string] | readonly [string, string, string])[]; onChange(value: string): void; disabled?: boolean; placement?: "up" | "down" }>) {
+  return <div class="preference-row"><span>{label}</span><MenuSelect className="preference-menu" ariaLabel={label} value={value} disabled={disabled} placement={placement} options={options.map(([id, name, description]) => ({ value: id, label: name, ...(description ? { description } : {}) }))} onChange={onChange} /></div>;
 }
 
 /**

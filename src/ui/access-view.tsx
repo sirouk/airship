@@ -40,6 +40,7 @@ import {
   type ConnectLaneInput,
 } from "./connect/connect-lanes";
 import { observeHostExtensionSupport } from "./connect/extension-bridge-presence";
+import { probeChutesSignInHandler, type ChutesSignInReadiness } from "./connect/chutes-signin-readiness";
 import { Popover } from "./popover";
 import { RouteHeader } from "./route-header";
 import { Seal } from "./seal";
@@ -67,6 +68,23 @@ const CONNECT_PROVIDERS_NOTE = "Everything else in Airship — workspace, editor
  * the thing that demonstrates it.
  */
 const CONNECT_COUNT_NOTE = "Connect one, or several at once.";
+
+/**
+ * The in-flight reading, said once. Both the lane row and the panel print it,
+ * and two spellings of "we have not asked yet" is exactly the sprawl this
+ * package exists to remove.
+ */
+const SIGN_IN_CHECKING = "Airship is checking whether this build can exchange a sign-in code";
+
+/**
+ * The consequence, said once.
+ *
+ * The lane row and the panel both state it, and two spellings of one fact is
+ * the sprawl this package exists to remove — the lane used to carry
+ * "Chutes sign-in isn't available in this build." while the panel said
+ * something else entirely.
+ */
+const SIGN_IN_UNAVAILABLE = "Chutes sign-in is not available in this build.";
 
 /** Where a Chutes personal key is created. Named on every key surface. */
 export const CHUTES_ACCOUNT_URL = "https://chutes.ai/app";
@@ -209,6 +227,16 @@ export function AccessView({
   // an unfinished observation can only render as "checking" — never as absence,
   // and never as a presence carried over from an earlier load.
   const [bridge, setBridge] = useState<ExtensionBridgeObservation>();
+  /*
+   * `undefined` until the localhost handler answers, and never a stand-in for
+   * either arm. The lane may not print "Primary" on a route it has not yet
+   * established can be taken, and it may not print "unavailable in this build"
+   * on a route it has not yet established cannot be.
+   */
+  const [handlerReadiness, setHandlerReadiness] = useState<ChutesSignInReadiness>();
+  // The key that was refused, held open so it can be corrected rather than
+  // retyped. See `activate()`.
+  const [keyRefusal, setKeyRefusal] = useState<Readonly<{ providerResponse: string }>>();
   // Recomputed from the host's live list on every render, so a lane can never
   // claim a connection that was released.
   const connectedProviders = useMemo(
@@ -227,36 +255,52 @@ export function AccessView({
     candidateTransport.current = undefined;
   }
 
+  /*
+   * The press-time check and the load-time probe read the same endpoint through
+   * the same function, so the sentence a person gets after pressing cannot
+   * differ from the one the tab was labelled with. `fetch("…")` used to be
+   * spelled out here with its three failure sentences inline, which is how the
+   * lane came to advertise a route only the press could discover was closed.
+   */
   async function beginChutesSignIn(): Promise<void> {
     if (!oauthDiagnostic) return;
     if (localOAuthHandler) {
-      let response: Response;
-      try {
-        response = await fetch("/__airship/chutes/oauth/token", {
-          method: "GET",
-          cache: "no-store",
-          credentials: "omit",
-          redirect: "error",
-          referrerPolicy: "no-referrer",
-          signal: AbortSignal.timeout(5_000),
-        });
-      } catch {
-        throw new Error("The local Chutes OAuth handler is unavailable. Restart the Airship lab with its OAuth registration configured.");
-      }
-      if (response.status === 503) {
-        throw new Error("The local Chutes OAuth handler is not configured. Restart the Airship lab with its process-held client secret.");
-      }
-      if (response.status !== 204) {
-        throw new Error(`The local Chutes OAuth handler readiness check failed with HTTP ${response.status}.`);
-      }
+      const readiness = await probeChutesSignInHandler();
+      setHandlerReadiness(readiness);
+      if (readiness.state === "blocked") throw new Error(readiness.reason);
     }
     await oauthDiagnostic.onRun();
   }
 
   function startChutesSignIn(): void {
     setOauthDiagnosticError(undefined);
-    void beginChutesSignIn().catch((caught) => setOauthDiagnosticError(errorMessage(caught)));
+    void beginChutesSignIn().catch((caught) => {
+      // Stay on the tab the person is standing on. A failed press flips
+      // `chutesSignInAvailable` to false, and without this the OAuth panel —
+      // which is where the consequence, the cause and the way out all render —
+      // would unmount in the same frame as the failure that produced them.
+      setChutesMethod("oauth");
+      setOauthDiagnosticError(errorMessage(caught));
+    });
   }
+
+  /*
+   * Ask the localhost handler whether it can exchange a code, once, at load.
+   *
+   * Only this build shape has a handler to ask: a public-PKCE deployment has no
+   * same-origin endpoint, so probing one would be inventing a check. That arm
+   * keeps `oauthOrigin` as its only availability source, exactly as before.
+   */
+  useEffect(() => {
+    if (!localOAuthHandler) return;
+    let live = true;
+    void probeChutesSignInHandler().then((readiness) => {
+      if (live) setHandlerReadiness(readiness);
+    });
+    return () => {
+      live = false;
+    };
+  }, [localOAuthHandler]);
 
   useEffect(() => () => clearEphemeral(), []);
 
@@ -302,6 +346,10 @@ export function AccessView({
 
   function inspectInput() {
     const value = credentialInput.current?.value ?? "";
+    // The refusal was about the key that was in this field. Editing it makes
+    // the verdict stale, so it stops being shown before it can be read as a
+    // verdict about the new one.
+    setKeyRefusal(undefined);
     setCredentialTyped(Boolean(value.trim()));
     if (!value.trim()) {
       setDetectedKind(undefined);
@@ -327,6 +375,7 @@ export function AccessView({
     setBusy(true);
     setStatus("Discovering encrypted-inference models available to this connection…");
     setError(undefined);
+    setKeyRefusal(undefined);
     setCandidate(undefined);
     clearEphemeral();
     const controller = new AbortController();
@@ -470,11 +519,40 @@ export function AccessView({
     } catch (caught) {
       clearEphemeral();
       setCandidate(undefined);
-      setDetectedKind(undefined);
       setStrictProof(false);
       setStatus(undefined);
-      setError(mapUnknownRequestFailure(caught, online).message);
-      requestAnimationFrame(() => credentialInput.current?.focus());
+      /*
+       * A refused key is a verdict about the key, not a networking noun.
+       *
+       * `mapRequestFailure` returns `credential` for 401/403 on the connect
+       * leg, and the sentence it hands back — "Endpoint discovery denied.
+       * Reconnect with chutes:invoke or an API key." — told a person who had
+       * just pasted an API key to reconnect with an API key, and named an OAuth
+       * scope that appears nowhere else in the product. It is not deleted: it
+       * is the provider's own words and stays verbatim under a disclosure that
+       * says so.
+       */
+      const failure = mapUnknownRequestFailure(caught, online);
+      if (failure.kind === "credential" && credential.kind === "inference-api-key") {
+        setKeyRefusal(Object.freeze({ providerResponse: failure.message }));
+        setError(undefined);
+        setDetectedKind(credential.kind);
+        setChutesMethod("api-key");
+        // Left masked and filled. The value came from this field and goes back
+        // to it, because a key that was one character wrong is corrected, not
+        // retyped.
+        requestAnimationFrame(() => {
+          const field = credentialInput.current;
+          if (!field) return;
+          field.value = credential.value;
+          field.focus();
+          field.setSelectionRange(field.value.length, field.value.length);
+        });
+      } else {
+        setDetectedKind(undefined);
+        setError(failure.message);
+        requestAnimationFrame(() => credentialInput.current?.focus());
+      }
     } finally {
       if (discoveryAbort.current === controller) discoveryAbort.current = undefined;
       setBusy(false);
@@ -532,6 +610,7 @@ export function AccessView({
     setStrictProof(false);
     setStatus(undefined);
     setError(undefined);
+    setKeyRefusal(undefined);
     requestAnimationFrame(() => credentialInput.current?.focus());
   }
 
@@ -590,7 +669,26 @@ export function AccessView({
       ? { available: false, reason: oauthDiagnostic.configurationError }
       : oauthOriginState(oauthDiagnostic.homepageUrl, typeof window === "undefined" ? "" : window.location.href)
     : { available: false, reason: "OAuth registration details are unavailable in this build." };
-  const chutesSignInAvailable = Boolean(oauthDiagnostic) && oauthOrigin.available;
+  /*
+   * Sign-in is available only when the registration allows it *and*, where a
+   * localhost handler is the exchange, that handler has said it can run. While
+   * the probe is in flight neither claim is established, so this reads false
+   * and the tab says "Checking" rather than "Primary".
+   */
+  const handlerBlocked = localOAuthHandler && handlerReadiness?.state === "blocked" ? handlerReadiness.reason : undefined;
+  const signInChecking = localOAuthHandler && !handlerReadiness;
+  const chutesSignInAvailable = Boolean(oauthDiagnostic)
+    && oauthOrigin.available
+    && (!localOAuthHandler || handlerReadiness?.state === "ready");
+  /**
+   * Which sentence names the cause, when there is one.
+   *
+   * Registration first: a callback that cannot match is true of every build of
+   * this origin, while a handler that is not configured is true only of this
+   * process. Both are provenance and neither is deleted — the one that applies
+   * is the one rendered.
+   */
+  const signInBlockedReason = oauthOrigin.available ? handlerBlocked : oauthOrigin.reason;
   /*
    * The default is the method that works; the other one stays selectable.
    *
@@ -633,10 +731,10 @@ export function AccessView({
     chutes: {
       connected: isChutesConnected(connection),
       signInAvailable: chutesSignInAvailable,
-      // Deliberately not `oauthOrigin.reason`: that string is addressed to an
-      // operator restarting a companion process. The person reading this needs
-      // the next step, and the operator detail stays in the boundary card.
-      ...(chutesSignInAvailable ? {} : { signInUnavailableReason: "Chutes sign-in isn’t available in this build." }),
+      // Deliberately not the operator sentence: that string is addressed to
+      // whoever restarts a companion process. The person reading this needs the
+      // next step, and the operator detail stays in the lane's own disclosure.
+      ...(chutesSignInAvailable ? {} : { signInUnavailableReason: signInChecking ? `${SIGN_IN_CHECKING}.` : SIGN_IN_UNAVAILABLE }),
     },
     codex: {
       connected: connectedProviders.has("openai"),
@@ -861,7 +959,12 @@ export function AccessView({
                       onClick={() => setChutesMethod("oauth")}
                     >
                       <span>OAuth</span>
-                      <small>{chutesSignInAvailable ? "Primary" : "Unavailable"}</small>
+                      {/*
+                        "Primary" is a promise, and it may only be made where
+                        the exchange has answered that it can run. Until it
+                        does, the tab says it is still asking.
+                      */}
+                      <small>{chutesSignInAvailable ? "Primary" : signInChecking ? "Checking" : "Unavailable in this build"}</small>
                     </button>
                     <button
                       type="button"
@@ -890,9 +993,27 @@ export function AccessView({
                           where the person is standing, and the way out is a
                           control rather than an instruction.
                         */}
-                        {!chutesSignInAvailable ? (
-                          <div class="connect-method__blocked">
-                            <p><Icon name="warning" size={16} />Deployment detail: {oauthOrigin.reason}</p>
+                        {signInChecking ? (
+                          <p class="oauth-primary-reason" role="status">{SIGN_IN_CHECKING}…</p>
+                        ) : !chutesSignInAvailable ? (
+                          <div class="connect-method__blocked" role="alert">
+                            {/*
+                              The consequence and the route that works, at lane
+                              altitude and outside every disclosure. What used
+                              to be here instead was the operator's sentence —
+                              a restart instruction addressed to whoever runs
+                              the lab, given to a person who has just arrived.
+                              That sentence is not deleted; it is one rung down
+                              in a disclosure that names what it holds.
+                            */}
+                            <p>
+                              <Icon name="warning" size={16} />
+                              <span><strong>{SIGN_IN_UNAVAILABLE}</strong> Paste a Chutes API key instead — it works now and stays in page memory.</span>
+                            </p>
+                            <details class="connect-method__cause">
+                              <summary>Why this build cannot sign in</summary>
+                              <p>Deployment detail: {signInBlockedReason}</p>
+                            </details>
                             <button type="button" onClick={() => setChutesMethod("api-key")}>Use an API key</button>
                           </div>
                         ) : null}
@@ -947,7 +1068,13 @@ export function AccessView({
                         >
                           Sign in to Chutes
                         </button>
-                        {oauthDiagnosticError ? <p class="oauth-boundary-status error" role="alert">{oauthDiagnosticError}</p> : null}
+                        {/*
+                          Only when the failure is not already the cause the
+                          blocked block above is stating. A press that the
+                          readiness probe explains renders one consequence and
+                          one cause, not two copies of each.
+                        */}
+                        {oauthDiagnosticError && oauthDiagnosticError !== signInBlockedReason ? <p class="oauth-boundary-status error" role="alert">{oauthDiagnosticError}</p> : null}
                       </div>
                     </section>
                   ) : null}
@@ -970,6 +1097,30 @@ export function AccessView({
                   */
                   <section class="api-key-alternative" aria-label="Connect with a Chutes API key">
                     <form class="credential-entry" onSubmit={(event) => { event.preventDefault(); void discover(); }}>
+                      {/*
+                        The verdict lands on the field it is about, above the
+                        control that has to change. It used to render as a
+                        networking banner 400px away while this field silently
+                        emptied itself and showed its at-rest format hint —
+                        describing a problem the person did not have.
+                      */}
+                      {keyRefusal ? (
+                        <div class="key-refusal" role="alert">
+                          <p>
+                            <Icon name="warning" size={16} />
+                            <span><strong>Chutes did not accept this key.</strong> The catalog is readable without a key, so listing models succeeded; authorization is checked when you connect, and it failed. Check the key at chutes.ai → API keys, or paste a different one.</span>
+                          </p>
+                          {/*
+                            The provider's own words, verbatim and including the
+                            scope name. Not the headline — it answers "what
+                            exactly came back", which is a second question.
+                          */}
+                          <details>
+                            <summary>Provider response</summary>
+                            <p>{keyRefusal.providerResponse}</p>
+                          </details>
+                        </div>
+                      ) : null}
                       <label for="chutes-credential-input">
                         <span>Chutes API key</span>
                         <input
@@ -994,12 +1145,23 @@ export function AccessView({
                         tile above the control, and its negative arm is now
                         stated rather than implied by an absent highlight.
                       */}
+                      {/*
+                        Suppressed while a refusal is showing. This block reads
+                        what the *prefix* parsed as, which is a question the
+                        provider has already answered more authoritatively — and
+                        "Chutes personal keys start with cpk_" beside a
+                        well-formed cpk_ that Chutes refused describes a problem
+                        the person does not have. It returns the moment the
+                        field is edited.
+                      */}
+                      {keyRefusal ? null : (
                       <div class="credential-types" aria-label="Optional Chutes API-key connection">
                         <CredentialTypeCard prefix="cpk_" title="Chutes API key" detail="Chutes personal keys start with cpk_. They read models, inference, profile, and account when Chutes authorizes them." active={detectedKind === "inference-api-key"} />
                         {credentialTyped ? (
                           <p class="credential-reading" role="status">{credentialReading(detectedKind)}</p>
                         ) : null}
                       </div>
+                      )}
                       <p id="chutes-credential-help">
                         Held only in page memory. Don’t have one?{" "}
                         <a href={CHUTES_ACCOUNT_URL} target="_blank" rel="noreferrer">Create a key at chutes.ai → API keys ↗</a>{" "}

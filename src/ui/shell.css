@@ -64,7 +64,6 @@
 .brand-seal {
   position: relative;
   margin-right: 10px;
-  color: var(--copper);
 }
 
 .brand-seal .seal__label,
@@ -82,7 +81,7 @@
   right: -5px;
   bottom: 4px;
   width: 7px;
-  border-top: 2px solid var(--copper);
+  border-top: 2px solid var(--brand-mark);
   content: "";
   transform: rotate(-28deg);
   transform-origin: left center;
@@ -90,7 +89,7 @@
 
 .brand-name {
   font-family: Georgia, "Times New Roman", serif;
-  font-size: 20px;
+  font-size: var(--fs-title);
   letter-spacing: 0.01em;
 }
 
@@ -260,6 +259,20 @@
   color: var(--truth-local);
 }
 
+/* The mark is not a verdict.
+ *
+ * It shares <Seal>'s grammar and `app.tsx` renders it with state="asserted",
+ * so the block above painted the logo in the copper reserved for "a remote
+ * party claims this" — one colour saying two things in the same viewport, and
+ * the reason a reader cannot learn what copper means by looking. It has to
+ * out-specify `.seal[data-state="asserted"]` to say so: the plain `.brand-seal`
+ * colour that used to sit at the top of this sheet never won a single frame,
+ * which is why the collision survived. Only the colour is separated here; the
+ * mark still draws the asserted *shape* until its call site moves. */
+.seal.brand-seal {
+  color: var(--brand-mark);
+}
+
 /* ── The retirement ledger ──────────────────────────────────────────────────
  *
  * These selectors are the status containers that still draw their own chip
@@ -319,10 +332,20 @@
 
 .status-seal[data-state="stale"],
 .status-seal[data-state="attention"],
-.attestation-chip.asserted,
 .attestation-chip.stale,
 .attestation-chip.attention {
   color: var(--v-caution);
+}
+
+/* One colour for one state. "Asserted" is a truth-source verdict — a remote
+   party's claim — and copper is the token reserved for it (ΔE 2.1 from
+   --truth-remote). Caution is a different axis: "attend to this". This chip
+   used to print asserted in caution amber while the seal two rows above
+   printed it in copper, so the same fact wore two colours on one screen.
+   The word itself is lifted to --ink by the chip-label rule above, which is
+   what keeps a 12px label clear of copper's 4.29:1 on a raised surface. */
+.attestation-chip.asserted {
+  color: var(--copper);
 }
 
 .attestation-chip.failed {
@@ -497,10 +520,10 @@
   height: 44px;
   place-items: center;
   overflow: hidden;
-  border: 1px solid rgba(193, 154, 88, 0.28);
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
   border-radius: 50%;
   color: var(--brass-bright);
-  background: rgba(193, 154, 88, 0.065);
+  background: color-mix(in srgb, var(--accent) 6.5%, transparent);
   font: var(--fs-micro) ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
@@ -522,7 +545,7 @@
   max-width: min(42vw, 380px);
   overflow: hidden;
   color: var(--ink-muted);
-  font-size: 11px;
+  font-size: var(--fs-micro);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -560,7 +583,7 @@
 .icon-button:hover {
   color: var(--ink);
   border-color: var(--line-strong);
-  background: rgba(255, 255, 255, 0.03);
+  background: color-mix(in srgb, var(--ink) 3%, transparent);
 }
 
 /* ── The rail, in three states on one width token ───────────────────────────
@@ -661,9 +684,9 @@
   color: var(--ink-faint);
   background: transparent;
   cursor: pointer;
-  font-size: 16px;
+  font-size: var(--fs-lead);
 }
-.chat-nav-new:hover:not(:disabled) { color: var(--accent-bright); border-color: var(--line-control); background: rgba(255, 255, 255, 0.026); }
+.chat-nav-new:hover:not(:disabled) { color: var(--accent-bright); border-color: var(--line-control); background: color-mix(in srgb, var(--ink) 2.6%, transparent); }
 
 .chat-nav-disclosure,
 .rail-expander {
@@ -680,9 +703,9 @@
 }
 
 .chat-nav-disclosure:hover,
-.rail-expander:hover { color: var(--ink); background: rgba(255, 255, 255, 0.026); }
+.rail-expander:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 2.6%, transparent); }
 .chat-nav-disclosure > span,
-.rail-expander > span { font-size: 17px; transform: rotate(0); transition: transform 120ms ease; }
+.rail-expander > span { font-size: var(--fs-meta); transform: rotate(0); transition: transform 120ms ease; }
 .chat-nav-disclosure[aria-expanded="true"] > span,
 .rail-expander[aria-expanded="true"] > span { transform: rotate(90deg); }
 
@@ -748,8 +771,8 @@
 }
 
 .recent-conversation:hover,
-.recent-conversation.active { color: var(--ink); background: rgba(255, 255, 255, 0.026); }
-.recent-conversation > span:first-child { color: var(--verdigris); font-size: 11px; }
+.recent-conversation.active { color: var(--ink); background: color-mix(in srgb, var(--ink) 2.6%, transparent); }
+.recent-conversation > span:first-child { color: var(--verdigris); font-size: var(--fs-micro); }
 .recent-conversation > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .recent-conversation--thread {
   grid-template-columns: 12px minmax(0, 1fr) auto;
@@ -820,7 +843,7 @@
 
 .nav-item:hover {
   color: var(--ink);
-  background: rgba(255, 255, 255, 0.026);
+  background: color-mix(in srgb, var(--ink) 2.6%, transparent);
 }
 
 .nav-item.has-active-child {
@@ -843,8 +866,8 @@
 
 .nav-item.active {
   color: var(--ink);
-  border-color: rgba(193, 154, 88, 0.19);
-  background: linear-gradient(90deg, rgba(193, 154, 88, 0.12), rgba(193, 154, 88, 0.035));
+  border-color: color-mix(in srgb, var(--accent) 19%, transparent);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 12%, transparent), color-mix(in srgb, var(--accent) 3.5%, transparent));
 }
 
 .nav-item.active::before {
@@ -957,7 +980,7 @@
   }
 
   .sidebar[data-rail-state="rail"] .rail-expander > span,
-  .sidebar[data-rail-state="rail"] .chat-nav-disclosure > span { font-size: 12px; }
+  .sidebar[data-rail-state="rail"] .chat-nav-disclosure > span { font-size: var(--fs-meta); }
 }
 .sidebar[data-rail-state="rail"] .profile-switcher { grid-template-columns: minmax(0, 1fr); justify-items: center; }
 
@@ -1106,10 +1129,10 @@
   color: var(--ink-faint);
   background: transparent;
   cursor: pointer;
-  font-size: 15px;
+  font-size: var(--fs-meta);
 }
 
-.rail-collapse:hover { color: var(--ink); background: rgba(255, 255, 255, 0.026); }
+.rail-collapse:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 2.6%, transparent); }
 
 @media (pointer: coarse) {
   .rail-collapse { min-height: 44px; }
@@ -1164,10 +1187,10 @@
   place-items: center;
   width: 30px;
   height: 30px;
-  border: 1px solid rgba(193, 154, 88, 0.3);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
   border-radius: 50%;
   color: var(--brass-bright);
-  background: rgba(193, 154, 88, 0.07);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
   font: var(--fs-micro) ui-monospace, monospace;
 }
 
@@ -1183,8 +1206,8 @@
   min-height: 0;
   overflow: auto;
   background:
-    linear-gradient(rgba(255, 255, 255, 0.012) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.009) 1px, transparent 1px);
+    linear-gradient(color-mix(in srgb, var(--ink) 1.2%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in srgb, var(--ink) 0.9%, transparent) 1px, transparent 1px);
   background-size: 32px 32px;
 }
 
@@ -1218,3 +1241,149 @@
 
 .topbar-posture-chip__elsewhere[data-state="failed"] { color: var(--v-failed); }
 .topbar-posture-chip__elsewhere[data-state="attention"] { color: var(--v-caution); }
+
+/*
+ * The overlay entrance, for the overlays that are not popovers.
+ *
+ * `popover.css` owns the anchored-disclosure arrival. This is the rest of the
+ * layer: the command palette, the Preferences dialog, the trust sheet, the modal
+ * that interrupts a turn to ask permission, the notice the workbench raises, and
+ * the pill that offers back the bottom of a transcript the reader scrolled away
+ * from. Every one of them reported `transition: all 0s; animation: none` and
+ * appeared as a completed fact with no arrival, on a surface that demonstrably
+ * understands intent everywhere else — 150ms of popover dwell, 180/240ms of rail
+ * dwell, a 6s self-clearing toast — and then threw that understanding away at
+ * the one moment a person is looking for it.
+ *
+ * All six mount and unmount rather than toggling a state, so a keyframed
+ * entrance is the whole mechanism: nothing about when they appear changes, only
+ * that appearing now takes a tenth of a second and comes from somewhere.
+ *
+ * They live in this sheet rather than in the four sheets that draw them because
+ * the defect was never a wrong duration. It was that no file owned arrival at
+ * all, so no file was ever the one that had forgotten it. One block, one
+ * durations table, one reduced-motion retraction. This sheet follows
+ * `platform-shell.css` in the barrel, which is what lets it speak for the three
+ * surfaces drawn there without editing them.
+ *
+ * 120ms fade, 140ms rise. The approval dock is the surface here a person is
+ * actually waiting on — the agent is stopped until they answer — so its entrance
+ * may never be long enough to be a delay in its own right.
+ */
+.platform-scrim,
+.approval-scrim,
+.command-palette,
+.preferences-dialog,
+.trust-sheet,
+.approval-dock,
+.workbench-notice,
+.transcript-jump {
+  animation: overlay-fade 120ms ease;
+}
+
+.command-palette,
+.preferences-dialog,
+.trust-sheet,
+.approval-dock,
+.workbench-notice,
+.transcript-jump {
+  --overlay-rise: translateY(10px);
+  animation: overlay-fade 120ms ease, overlay-rise 140ms cubic-bezier(.2, .8, .2, 1);
+}
+
+/*
+ * Below the sheet breakpoint these four are bottom sheets, not centred panels —
+ * `platform-shell.css` re-anchors the scrim to `end center` and squares off the
+ * lower corners. A sheet rises from the edge it is docked to, so the travel
+ * becomes the panel's own height rather than 10px: on a phone the slide is what
+ * says "this came up from the bottom and will go back there", which is the only
+ * dismissal cue a surface with no visible affordance has. The breakpoint is
+ * restated from `platform-shell.css:147` deliberately — the two must agree, and
+ * a rise that disagrees with its own layout is worse than no rise.
+ */
+@media (max-width: 640px), (max-width: 950px) and (max-height: 500px) {
+  .command-palette,
+  .preferences-dialog,
+  .trust-sheet,
+  .approval-dock {
+    --overlay-rise: translateY(100%);
+    animation: overlay-fade 120ms ease, overlay-rise 180ms cubic-bezier(.2, .8, .2, 1);
+  }
+}
+
+@keyframes overlay-fade {
+  from { opacity: 0; }
+}
+
+@keyframes overlay-rise {
+  from { transform: var(--overlay-rise); }
+}
+
+/*
+ * The extension of the global reduced-motion reset, not a rival to it.
+ *
+ * `routes.css:3271` already collapses every duration in the product to 0.01ms
+ * under `prefers-reduced-motion`, which is what makes these entrances arrive
+ * instantly rather than not at all. What a duration reset cannot reach is the
+ * *distance* a keyframe starts from: an animation collapsed to 0.01ms still
+ * begins at `translateY(100%)`, and a single frame of a full sheet-height jump
+ * is exactly the kind of movement the preference exists to refuse. Retracting
+ * `--overlay-rise` is the only part that global rule cannot do for us, which is
+ * why this block declares nothing else — and why it retracts the property
+ * rather than the animation, so the phone override above cannot quietly
+ * reinstate the largest travel in the product.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .command-palette,
+  .preferences-dialog,
+  .trust-sheet,
+  .approval-dock,
+  .workbench-notice,
+  .transcript-jump {
+    --overlay-rise: none;
+  }
+}
+
+/*
+ * The pressed frame.
+ *
+ * The product carried 87 `:hover` rules against one `:active`, and the
+ * transition list at the top of this sheet had been transitioning `transform`
+ * on seven selectors since nothing ever changed it. On a surface whose actions
+ * are consequential and whose answers take seconds, the pressed frame is the
+ * only confirmation that arrives at the speed of the finger — everything after
+ * it is the network's to deliver. Hover says "this is a thing"; press says "I
+ * got that", and only the second one is an answer.
+ *
+ * Position in this sheet is load bearing. `.nav-item:hover` (above) sets a
+ * background at the same specificity as `.nav-item:active`, so an equal-weight
+ * press rule declared earlier would be silently swallowed by the pointer state
+ * that is *also* true while a mouse is held down. This block therefore comes
+ * last. `.starter-chip` is the one family whose hover lives in a later sheet
+ * (`chat.css`), which no position here can outrank, so it takes the extra
+ * `:hover:active` step instead — the bare `:active` still covers keyboard and
+ * touch presses, where `:hover` was never in play.
+ */
+.nav-item:active, .topbar button:active, .small-button:active, .status-chip:active,
+.starter-chip:active, .starter-chip:hover:active, .workbench-dialog button:active,
+.approval-dock button:active, .connect-lane button:active {
+  transform: translateY(1px) scale(.994);
+  background-color: color-mix(in srgb, var(--accent) 14%, transparent);
+  transition-duration: 60ms;
+}
+
+/*
+ * Keep the acknowledgement, drop the movement. The tint is the message; the 1px
+ * is only how the message is normally spelled.
+ *
+ * The global reset at `routes.css:3271` cannot cover this one, and that is the
+ * whole reason this block exists: a pressed transform is not a transition or an
+ * animation, it is a state the element simply *has* while held, so zeroing
+ * durations leaves it in place for as long as the finger is down. Retracting it
+ * here is what makes the press honour the preference at all.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .nav-item:active, .topbar button:active, .small-button:active, .status-chip:active,
+  .starter-chip:active, .starter-chip:hover:active, .workbench-dialog button:active,
+  .approval-dock button:active, .connect-lane button:active { transform: none; }
+}

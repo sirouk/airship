@@ -41,6 +41,63 @@ export function proofStatusLabel(value: ProofStatus): string {
   return "No evidence";
 }
 
+/**
+ * ── The ladder ───────────────────────────────────────────────────────────
+ *
+ * Three rungs, strongest first: VERIFIED / ASSERTED / NO EVIDENCE. Airship had
+ * nine names for the one fact it most needs to say precisely — "Not checked",
+ * "Secure hardware not checked", "Evidence not pulled", "no evidence",
+ * "Asserted, not verified", "Local key match", "verification remains
+ * unverified", "Secure hardware evidence pending", "No evidence yet" — with
+ * five of them on screen simultaneously and two adjacent messages in one
+ * conversation carrying two different words for identical state. Vocabulary
+ * sprawl reads as uncertainty, which is the exact opposite of what this
+ * evidence model has earned.
+ *
+ * The rung words a surface prints live here as consts, and nothing else does.
+ * The predicate each one stands on — the part that must not be got wrong, and
+ * which no surface reads at runtime — lives in `trust-label-contract.ts`, next
+ * to the guard that reads it. That split is measured, not tidiness: this module
+ * is a shared chunk, so an export nothing imports is still shipped, and keeping
+ * the predicate table here cost 0.31 KiB gzip of installed bundle for data only
+ * a test consumes.
+ */
+export type TrustRung = "verified" | "asserted" | "no-evidence";
+
+/*
+ * Exported one by one so a call site this package does not own adopts the
+ * string rather than retyping it, and so an unused one costs nothing.
+ */
+/** Session bar, with a receipt in hand. */
+export const TRUST_LABEL_SESSION_ASSERTED = "Asserted";
+/** Session bar, with no provider connected — nothing was ever asked. */
+export const TRUST_LABEL_SESSION_NOT_CHECKED = "Not checked";
+/**
+ * Per-message chip. Replaces "Secure hardware evidence pending": a settled
+ * receipt with no endpoint evidence beside it is an assertion, and "pending"
+ * promised an arrival that nothing is waiting for.
+ */
+export const TRUST_LABEL_MESSAGE_ASSERTED_NO_ENDPOINT = "Asserted · no endpoint evidence";
+/**
+ * Per-message chip, with no receipt. Replaces "Evidence not pulled".
+ *
+ * The build list asked for one string across both message-chip arms. It cannot
+ * be "Asserted · …" on this arm: `turnEvidenceVerdict` reaches
+ * `evidence-blocked` only through `!hasReceipt`, so printing "Asserted" there
+ * would assert a claim no receipt records — the one thing §3 forbids outright.
+ * The acquisition fact ("not pulled") survives; only the rung word changes, and
+ * it changes to the rung the code can actually stand on.
+ */
+export const TRUST_LABEL_MESSAGE_NO_EVIDENCE = "No evidence · not pulled";
+/** The claim rail's hero verdict, verbatim and deliberately unchanged. */
+export const TRUST_LABEL_CLAIM_RAIL_HERO = "Asserted, not verified";
+/**
+ * The Connect route's TRUST READINESS caption. Replaces the tautology
+ * "verification remains unverified", which said the same word twice and neither
+ * time said when the check happens.
+ */
+export const TRUST_LABEL_CONNECT_TRUST_READINESS = "not verified yet — catalog metadata is not proof; the check runs when you connect";
+
 export function relativeEvidenceAge(timestamp: string, now = Date.now()): string {
   const then = Date.parse(timestamp);
   if (!Number.isFinite(then)) return "Time unavailable";
@@ -129,9 +186,13 @@ export type TurnEvidenceState =
 export const TURN_EVIDENCE_COPY: Readonly<Record<TurnEvidenceState, Readonly<{ seal: SealState; chip: string; line: string }>>> = Object.freeze({
   proven: Object.freeze({ seal: "verified", chip: "Proven this turn", line: "Every claim was verified by a named authority for this exact turn." }),
   "partly-proven": Object.freeze({ seal: "verified", chip: "Partly verified", line: "Some claims were verified by a named authority; the rest are assertions." }),
-  asserted: Object.freeze({ seal: "asserted", chip: "Asserted, not verified", line: "This turn was recorded and asserted. No named authority verified a claim." }),
-  "no-evidence": Object.freeze({ seal: "none", chip: "No evidence yet", line: "Evidence is recorded when a turn completes." }),
-  "evidence-blocked": Object.freeze({ seal: "attention", chip: "Evidence not pulled", line: "Evidence could not be fetched. Nothing failed verification." }),
+  asserted: Object.freeze({ seal: "asserted", chip: TRUST_LABEL_CLAIM_RAIL_HERO, line: "This turn was recorded and asserted. No named authority verified a claim." }),
+  // Both no-receipt arms speak the "No evidence" rung. The distinguishing fact
+  // — nothing was asked for yet, versus a fetch that did not land — moves into
+  // the trailing clause and the sentence, which is where a difference nobody
+  // can act on belongs.
+  "no-evidence": Object.freeze({ seal: "none", chip: "No evidence", line: "Evidence is recorded when a turn completes." }),
+  "evidence-blocked": Object.freeze({ seal: "attention", chip: TRUST_LABEL_MESSAGE_NO_EVIDENCE, line: "Evidence could not be fetched. Nothing failed verification." }),
   // Kept verbatim from the shipped ranked verdict: the strongest sentence on
   // the surface is not the place to try out new wording.
   failed: Object.freeze({ seal: "failed", chip: "Verification failed", line: "Verification failed or expired · do not rely on this receipt" }),

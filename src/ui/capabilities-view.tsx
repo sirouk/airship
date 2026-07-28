@@ -3,6 +3,7 @@ import type { ComponentChildren } from "preact";
 import { semanticWasmThreadCount, type BrowserCapabilityObservation, type BrowserRuntimeCapabilityReport } from "../capabilities/browser-runtime";
 import type { ExecutionCapability, ExecutionRuntimeId } from "../execution/runtime-registry";
 import { Icon } from "./icons";
+import { RouteHeader } from "./route-header";
 import { Seal, type SealState } from "./seal";
 import "./capabilities-view.css";
 
@@ -53,10 +54,15 @@ export function CapabilitiesView({ inspect, inspectBrowser, onCommand, onOpenSki
 
   return (
     <section class="work-view capabilities-view" aria-labelledby="capabilities-title">
-      <header class="page-heading capabilities-heading">
-        <div><span class="eyebrow">Browser-owned execution</span><h1 id="capabilities-title">Capabilities</h1><p>No inference provider is required for local activation.</p></div>
-        <button type="button" onClick={() => void refresh()}><Icon name="terminal" size={17} /> Refresh</button>
-      </header>
+      <RouteHeader
+        routeId="capabilities"
+        density="tool"
+        title="Capabilities"
+        headingId="capabilities-title"
+        eyebrow="Browser-owned execution"
+        description="No inference provider is required for local activation."
+        actions={<button class="capabilities-refresh" type="button" onClick={() => void refresh()}><Icon name="terminal" size={17} /> Refresh</button>}
+      />
 
       <div class="capability-summary" role="status">
         <Seal state={sealStateForCapabilitySummary(runtimes, Boolean(error))} acting={!error && !runtimes.length} label={status} detail="Live in-page runtime state." />

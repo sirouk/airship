@@ -132,7 +132,17 @@ test("localhost Chutes sign-in proves its token handler is ready before starting
   expect(authorize.searchParams.get("code_challenge_method")).toBe("S256");
   expect(authorize.searchParams.get("code_challenge")).toMatch(/^[A-Za-z0-9_-]{43}$/u);
   expect(authorize.searchParams.get("scope")).toBe("openid profile chutes:invoke billing:read");
-  expect(handlerChecks).toBe(1);
+  /*
+   * AMENDED: two checks, and the first one is the point.
+   *
+   * The handler is asked once at load — which is what lets the tab stop saying
+   * "Primary" in a build that cannot sign in at all — and once again
+   * immediately before the redirect, because readiness observed seconds ago is
+   * not readiness now. Both are GETs asserted above; neither carries a
+   * credential. The assertion stays exact rather than becoming `>= 1`, so a
+   * probe added on every render still fails here.
+   */
+  expect(handlerChecks).toBe(2);
 });
 
 test("localhost Chutes callback exchanges through the handler without exposing its app secret", async ({ page }) => {
@@ -195,10 +205,37 @@ test("localhost Chutes sign-in stays on Airship when its token handler is unconf
 
   await openConnect(page, "http://localhost:4173/#connection");
   const chutes = await openLane(page, "chutes");
-  await chutes.getByRole("button", { name: "Sign in to Chutes" }).click();
 
+  /*
+   * AMENDED, and strengthened: the button is never offered in the first place.
+   *
+   * The previous shape pressed "Sign in to Chutes" and asserted the operator's
+   * restart instruction came back. That instruction is addressed to whoever
+   * runs the lab; a person who has just arrived on the product's first route
+   * got no consequence and no route from it, and following the lane's own
+   * visual hierarchy — OAuth tab marked "Primary", filled brass button — led
+   * only there. The handler is now asked at load, so this build opens on the
+   * method that works and says why the other one is closed. Every assertion the
+   * old test made is still made below; three more are added.
+   */
   await expect(page).toHaveURL("http://localhost:4173/#connection");
-  await expect(chutes.getByRole("alert")).toContainText(
+  await expect(chutes.getByRole("tab", { name: /API key/u })).toHaveAttribute("aria-selected", "true");
+  await expect(chutes.locator('input[name="chutes-api-key"]')).toBeVisible();
+  const oauthTab = chutes.getByRole("tab", { name: /^OAuth/u });
+  await expect(oauthTab).toHaveAttribute("aria-selected", "false");
+  await expect(oauthTab).not.toContainText("Primary");
+  await expect(oauthTab).toContainText("Unavailable in this build");
+
+  // The OAuth panel stays selectable, because that is where the cause lives.
+  await oauthTab.click();
+  const blocked = chutes.getByRole("alert");
+  await expect(blocked).toContainText("Chutes sign-in is not available in this build.");
+  await expect(blocked).toContainText("Paste a Chutes API key instead");
+  await expect(blocked.getByRole("button", { name: "Use an API key" })).toBeVisible();
+  // The operator sentence, verbatim, one rung down and still in the DOM.
+  await expect(blocked.locator("details.connect-method__cause > summary"))
+    .toHaveText("Why this build cannot sign in");
+  await expect(blocked.locator("details.connect-method__cause")).toContainText(
     "local Chutes OAuth handler is not configured",
   );
 });

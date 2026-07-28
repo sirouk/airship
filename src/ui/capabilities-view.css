@@ -1,7 +1,7 @@
 .capabilities-view { min-width: 0; }
-.capabilities-heading { display: flex; align-items: end; justify-content: space-between; gap: 1rem; }
-.capabilities-heading > div { min-width: 0; }
-.capabilities-heading > button, .capability-extension button { display: inline-flex; gap: .45rem; align-items: center; justify-content: center; min-height: var(--density-control); padding: 0 .85rem; border: 1px solid var(--line-strong); border-radius: var(--radius-control); color: var(--ink); background: var(--surface-soft); }
+/* The route bar owns the heading anatomy now; only the Refresh verb's own
+   recipe stays, shared with the extension panel's buttons. */
+.capabilities-refresh, .capability-extension button { display: inline-flex; gap: .45rem; align-items: center; justify-content: center; min-height: var(--density-control); padding: 0 .85rem; border: 1px solid var(--line-strong); border-radius: var(--radius-control); color: var(--ink); background: var(--surface-soft); }
 .capability-summary { display: flex; gap: .8rem; align-items: center; justify-content: space-between; margin-bottom: var(--density-gap); padding: .65rem .75rem; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--surface-soft); }
 .capability-summary > span { color: var(--ink-faint); font-size: var(--fs-micro); text-align: right; }
 .capability-error { display: flex; gap: .55rem; align-items: center; margin-bottom: var(--density-gap); padding: .65rem .75rem; border: 1px solid color-mix(in srgb, var(--danger) 42%, var(--line)); border-radius: var(--radius-control); color: var(--danger); background: color-mix(in srgb, var(--danger) 5%, var(--surface)); }
@@ -66,8 +66,7 @@
 .capability-extension p { margin: 0; color: var(--ink-muted); }
 .capability-extension > div:last-child { display: flex; flex: 0 0 auto; gap: .5rem; }
 @media (max-width: 760px) {
-  .capabilities-heading { align-items: start; }
-  .capabilities-heading > button { min-width: 44px; min-height: 44px; }
+  .capabilities-refresh { min-width: 44px; min-height: 44px; }
   .capability-summary, .capability-extension { align-items: stretch; flex-direction: column; }
   .capability-summary > span { text-align: left; }
   .capability-grid { grid-template-columns: 1fr; }

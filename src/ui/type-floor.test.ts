@@ -27,11 +27,78 @@ describe("global typography floor", () => {
     expect(violations).toEqual([]);
   });
 
-  it("reserves copper for the asserted seal and brand mark", async () => {
+  /*
+   * The floor above is only half the promise. A literal *anywhere* is a size
+   * the Type scale preference cannot move — WCAG 1.4.4 asks that text scale to
+   * 200%, and a `font-size: 11px` does not scale at all. There were 60 of them
+   * across 17 sheets, 29 at 11px, and their consequence was measurable:
+   * `data-type-scale="x-large"` moved 39 of 48 elements on #chat and froze the
+   * wordmark, the runtime line, both disclosure chevrons and the largest
+   * heading, so every relationship tuned at 1x was wrong at 1.25x.
+   *
+   * `tokens.css` is the one exception, because that is where the ramp is
+   * *defined* — the rem bases and the two per-density root sizes everything
+   * else is relative to.
+   */
+  it("declares every size through the ramp, so the Type scale preference governs all of it", () => {
+    const violations: string[] = [];
+    for (const { url, source } of sources) {
+      if (url.pathname.endsWith("/tokens.css")) continue;
+      const css = source.replace(/\/\*[\s\S]*?\*\//gu, (comment) => comment.replace(/[^\n]/gu, " "));
+      for (const declaration of css.matchAll(/font-size\s*:\s*([^;}{]+)/gu)) {
+        if (/(?:^|[\s(])\d*\.?\d+px/u.test(declaration[1] ?? "")) {
+          violations.push(`${url.pathname}:${lineAt(source, declaration.index)} ${declaration[0].trim()}`);
+        }
+      }
+      /*
+       * The `font:` shorthand hides a size in the middle of a list. A px value
+       * there is a size unless it follows a `/`, which is the line-height slot
+       * — line-heights are a separate contract and are not asserted here.
+       */
+      for (const declaration of css.matchAll(/font\s*:\s*([^;}{]+)/gu)) {
+        if (/(?<!\/\s{0,4})(?:^|[\s(])\d*\.?\d+px/u.test(declaration[1] ?? "")) {
+          violations.push(`${url.pathname}:${lineAt(source, declaration.index)} ${declaration[0].trim()}`);
+        }
+      }
+    }
+    expect(violations).toEqual([]);
+  });
+
+  it("reserves copper for the asserted verdict", async () => {
     const markdownStyles = await readFile(new URL("./chat/message-parts-view.css", import.meta.url), "utf8");
     expect(markdownStyles).not.toContain("var(--copper)");
+
+    /*
+     * Copper is the asserted state — a remote party's truth claim, ΔE 2.1 from
+     * --truth-remote. It says one thing, so it may only be spent on one thing.
+     * The brand mark used to wear it, which put the logo and "asserted, not
+     * verified" in the same colour in the same viewport; it now reads from
+     * --brand-mark. The attestation chip used to print asserted in caution
+     * amber while the seal beside it printed the same fact in copper.
+     */
+    const shellStyles = await readFile(new URL("./shell.css", import.meta.url), "utf8");
+    expect(rulesFor(shellStyles, "var(--copper)")).toEqual([".attestation-chip.asserted", '.seal[data-state="asserted"]']);
+    expect(rulesFor(shellStyles, "var(--brand-mark)")).toEqual([".brand-seal::after", ".seal.brand-seal"]);
+
+    /*
+     * Specificity, not source order, is what makes that rule win: the mark is
+     * a <Seal state="asserted">, so `.seal[data-state="asserted"]` (0,2,0)
+     * outranks a bare `.brand-seal` (0,1,0) wherever it sits in the file. The
+     * first attempt at this fix was silently painted over for exactly that
+     * reason, and only a screenshot caught it.
+     */
+    expect(shellStyles).toMatch(/\.seal\.brand-seal \{\n\s*color: var\(--brand-mark\);/u);
   });
 });
+
+/** The selectors of every rule whose body spends `value`, sorted and deduped. */
+function rulesFor(source: string, value: string): string[] {
+  const css = source.replace(/\/\*[\s\S]*?\*\//gu, "");
+  const selectors = [...css.matchAll(/([^{}]+)\{([^}]*)\}/gu)]
+    .filter((rule) => (rule[2] ?? "").includes(value))
+    .flatMap((rule) => (rule[1] ?? "").split(",").map((selector) => selector.trim()));
+  return [...new Set(selectors)].sort();
+}
 
 async function collectCss(directory: URL): Promise<URL[]> {
   const entries = await readdir(directory, { withFileTypes: true });
