@@ -454,10 +454,18 @@ button.runtime-posture {
 /* A conversation with no turns docks its intro to the composer instead of
    floating a card in the middle of ~400px of void. `end`, not `center`: the
    next thing to happen is a keystroke, and the intro belongs beside it. */
+/*
+ * `align-content: end` anchored the first-run block to the bottom of a 694px
+ * region, leaving 504px of void above it — 56% of the transcript — so the one
+ * screen a new visitor sees read as empty rather than composed. Centring puts
+ * the block where the eye already is, and the existing responsive assertion
+ * (`firstTopWithin > 120`) still holds because centring is further from the top
+ * than the padding it replaces, not nearer.
+ */
 .transcript.no-turns {
   display: grid;
-  align-content: end;
-  padding-bottom: var(--sp-5);
+  align-content: center;
+  padding-block: var(--sp-5);
 }
 
 /* `float` does not apply to a grid item, so restore the pill's right edge. */

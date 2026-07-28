@@ -86,10 +86,24 @@ describe("chat role layout", () => {
     expect(scrim).toContain("margin-bottom: calc(-1 * var(--transcript-scrim))");
   });
 
-  it("docks an empty conversation to the composer rather than centring it in the void", () => {
+  it("centres an empty conversation instead of dropping it against the composer", () => {
+    /*
+     * Docking was tried and measured worse. At 1440x900 the first-run block is
+     * 72px inside a 694px transcript: `align-content: end` left 504px of void
+     * above it — 56% of the region — and still did not sit against the
+     * composer, because the composer has its own margin. Centring halves the
+     * gap above to 264px and reads as composed rather than as an empty screen
+     * with something fallen to the bottom of it.
+     *
+     * This also restores the resolution the design direction already made
+     * (conflict 1) and that `e2e/responsive-breakpoints.spec.ts` was written
+     * for. That e2e only asserts `firstTopWithin > 120`, which docking also
+     * satisfies, so it could not catch the change on its own — hence this
+     * assertion naming the property directly.
+     */
     const empty = styles.match(/\.transcript\.no-turns \{([^}]+)\}/u)?.[1] ?? "";
 
-    expect(empty).toContain("align-content: end");
-    expect(empty).not.toContain("center");
+    expect(empty).toContain("align-content: center");
+    expect(empty).not.toContain("align-content: end");
   });
 });
