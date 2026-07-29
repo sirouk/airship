@@ -1,6 +1,5 @@
 import type { SessionRecord } from "../core/journal";
 import { randomUuid } from "../core/id";
-import { loadDeferredCapabilities } from "../load-deferred-capabilities";
 import type { EncryptedObjectJournalBackend } from "../storage/encrypted-object-journal";
 import type { WorkspaceRootKey } from "../storage/encrypted-envelope";
 import { isReclaimableObjectStore, type ObjectReclamationReceipt, type ObjectStore } from "../storage/object-store";
@@ -780,7 +779,9 @@ function googleDriveRequirements(config: GoogleDriveVaultConfiguration, store: O
 let runtimeModulesPromise: Promise<VaultRuntimeModules> | undefined;
 
 function loadVaultRuntimeModules(): Promise<VaultRuntimeModules> {
-  runtimeModulesPromise ??= loadDeferredCapabilities().then((capabilities) => Object.freeze({
+  runtimeModulesPromise ??= import("../load-deferred-capabilities")
+    .then(({ loadDeferredCapabilities }) => loadDeferredCapabilities())
+    .then((capabilities) => Object.freeze({
     S3ObjectStore: capabilities.S3ObjectStore,
     runObjectStoreConformance: capabilities.runObjectStoreConformance,
     EncryptedObjectJournalBackend: capabilities.EncryptedObjectJournalBackend,
@@ -789,7 +790,7 @@ function loadVaultRuntimeModules(): Promise<VaultRuntimeModules> {
     VaultContextFabricPort: capabilities.VaultContextFabricPort,
     createClientCiphertextCache: capabilities.createClientCiphertextCache,
     CiphertextCachingObjectStore: capabilities.CiphertextCachingObjectStore,
-  }));
+    }));
   return runtimeModulesPromise;
 }
 

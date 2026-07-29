@@ -8,6 +8,7 @@ import type {
 import { sha256, stableStringify } from "./hash";
 import { randomUuid } from "./id";
 import type { DurableEvent } from "./journal";
+import { FORK_CONTEXT_EVENT_TYPE, canonicalForkContextSeed } from "./fork-context";
 import {
   INFERENCE_CONTEXT_SUMMARIZER_ID,
   resolveContextCompressionOptions,
@@ -594,7 +595,12 @@ function summarizeRange(events: readonly DurableEvent[], maximumBytes: number): 
   const lines: string[] = [];
   for (const event of events) {
     const payload = record(event.payload);
-    if (event.type === "turn.requested" && typeof payload?.content === "string") {
+    if (event.type === FORK_CONTEXT_EVENT_TYPE) {
+      for (const message of canonicalForkContextSeed(event.payload)?.messages ?? []) {
+        const label = message.role === "user" ? "Inherited user" : message.role === "assistant" ? "Inherited assistant" : "Inherited tool";
+        lines.push(`${label}: ${salient(message.content, message.role === "assistant" ? 620 : 420)}`);
+      }
+    } else if (event.type === "turn.requested" && typeof payload?.content === "string") {
       lines.push(`User: ${salient(payload.content, 420)}`);
     } else if (event.type === "assistant.completed") {
       const message = record(payload?.message);
@@ -621,6 +627,17 @@ function summarySource(events: readonly DurableEvent[]): ContextSummaryRequest["
   const source: Array<ContextSummaryRequest["source"][number]> = [];
   for (const event of events) {
     const payload = record(event.payload);
+    if (event.type === FORK_CONTEXT_EVENT_TYPE) {
+      for (const message of canonicalForkContextSeed(event.payload)?.messages ?? []) {
+        source.push(Object.freeze({
+          role: message.role,
+          content: message.content,
+          eventSequence: event.sequence,
+          eventDigest: event.digest,
+        }));
+      }
+      continue;
+    }
     if (event.type === "turn.requested" && typeof payload?.content === "string") {
       source.push(Object.freeze({ role: "user", content: payload.content, eventSequence: event.sequence, eventDigest: event.digest }));
       continue;
@@ -712,6 +729,9 @@ function salient(value: string, maximumCharacters: number): string {
 function estimateRangeTokens(events: readonly DurableEvent[], bytesPerToken: number): number {
   const text = events.flatMap((event) => {
     const payload = record(event.payload);
+    if (event.type === FORK_CONTEXT_EVENT_TYPE) {
+      return canonicalForkContextSeed(event.payload)?.messages.map((message) => message.content) ?? [];
+    }
     if (event.type === "turn.requested" && typeof payload?.content === "string") return [payload.content];
     if (event.type === "assistant.completed") {
       const message = record(payload?.message);

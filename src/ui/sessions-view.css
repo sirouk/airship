@@ -57,6 +57,19 @@
   box-shadow: var(--shadow, 0 16px 45px rgba(0, 0, 0, 0.22));
 }
 
+.session-library-profile-scope {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 0 var(--sp-3, 12px);
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--line));
+  border-radius: var(--radius-chip);
+  color: var(--ink-muted);
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface-soft));
+  font-size: var(--fs-caption);
+  white-space: nowrap;
+}
+
 .session-library-search {
   display: flex;
   gap: 8px;
@@ -207,11 +220,14 @@
  */
 .session-library-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
   align-items: center;
   border: 1px solid transparent;
   border-radius: var(--radius-control, 6px);
 }
+
+.session-library-row[draggable="true"] { cursor: grab; }
+.session-library-row[data-dragging="true"] { opacity: 0.5; }
 
 .session-library-row:has(.session-library-card:hover),
 .session-library-row:has(.session-library-card.selected) {
@@ -348,6 +364,50 @@
   cursor: pointer;
   font-size: var(--fs-meta);
   line-height: 1;
+}
+
+.session-library-favorite-order {
+  display: inline-flex;
+  align-items: center;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.session-library-row:hover .session-library-favorite-order,
+.session-library-row:focus-within .session-library-favorite-order {
+  opacity: 1;
+}
+
+.session-library-favorite-drag {
+  width: 14px;
+  color: var(--ink-faint, #858d8a);
+  cursor: grab;
+  font-size: var(--fs-micro);
+  letter-spacing: -3px;
+}
+
+.session-library-favorite-order button {
+  display: inline-grid;
+  width: 26px;
+  height: 38px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  color: var(--ink-faint, #858d8a);
+  background: transparent;
+  cursor: pointer;
+}
+
+.session-library-favorite-order button:hover,
+.session-library-favorite-order button:focus-visible {
+  color: var(--accent-bright, #dfba72);
+  background: var(--surface, #171c20);
+}
+
+.session-library-favorite-order button:disabled {
+  color: var(--ink-disabled);
+  cursor: default;
 }
 
 .session-library-pin[aria-pressed="true"] {
@@ -1276,6 +1336,19 @@
   .session-library-rename input,
   .session-library-rename button {
     min-height: 44px;
+  }
+
+  .session-library-favorite-order {
+    opacity: 1;
+  }
+
+  .session-library-favorite-drag {
+    display: none;
+  }
+
+  .session-library-favorite-order button {
+    width: 42px;
+    height: 44px;
   }
 
   .session-library-detail-heading {

@@ -1,5 +1,6 @@
 import {
   JournalConflictError,
+  projectedSessionTitle,
   type DurableEvent,
   type JournalBackend,
   type SessionRecord,
@@ -111,7 +112,7 @@ export class IndexedDbJournalBackend implements JournalBackend {
     }
     const updated: SessionRecord = {
       ...stored,
-      title: renamedTitle(events) ?? stored.title,
+      title: projectedSessionTitle(events, stored.title),
       updatedAt: last.recordedAt,
       headSequence: last.sequence,
       headDigest: last.digest,
@@ -152,7 +153,3 @@ export class IndexedDbJournalBackend implements JournalBackend {
   }
 }
 
-function renamedTitle(events: readonly DurableEvent[]): string | undefined {
-  for (let index = events.length - 1; index >= 0; index -= 1) { const event = events[index]!; if (event.type === "session.renamed" && event.payload && !Array.isArray(event.payload) && typeof event.payload === "object" && typeof event.payload.title === "string") return event.payload.title; }
-  return undefined;
-}

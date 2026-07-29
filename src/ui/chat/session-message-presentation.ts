@@ -548,6 +548,39 @@ function sessionMarker(event: DurableEvent): SessionPresentationMarker {
       detail: "Earlier turns were summarised into context; the original events remain in the journal.",
     });
   }
+  if (event.type === "session.favorite.changed" && typeof payload?.favorite === "boolean") {
+    return Object.freeze({
+      ...base,
+      presentable: true,
+      detail: payload.favorite ? "Added to this profile’s favorites." : "Removed from this profile’s favorites.",
+    });
+  }
+  if (
+    event.type === "profile.favorite-order.moved"
+    && payload?.version === 1
+    && typeof payload.profileId === "string"
+    && typeof payload.sessionId === "string"
+    && Number.isSafeInteger(payload.generation)
+  ) {
+    return Object.freeze({
+      ...base,
+      presentable: true,
+      detail: "Moved within this profile’s favorite conversations.",
+    });
+  }
+  if (
+    event.type === "profile.active-conversation.selected"
+    && payload?.version === 1
+    && typeof payload.profileId === "string"
+    && typeof payload.sessionId === "string"
+    && Number.isSafeInteger(payload.generation)
+  ) {
+    return Object.freeze({
+      ...base,
+      presentable: true,
+      detail: "Selected as this profile’s active conversation.",
+    });
+  }
   return Object.freeze({
     ...base,
     presentable: false,

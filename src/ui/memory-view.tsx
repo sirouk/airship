@@ -62,6 +62,35 @@ export type MemoryViewProps = Readonly<{
   onOpenSource?: (target: MemorySourceTarget) => void;
 }>;
 
+export type MemoryPresentationState = Readonly<{
+  query: string;
+  relationshipsExpanded: boolean;
+  indexExpanded: boolean;
+  indexMounted: boolean;
+}>;
+
+/** Page-memory presentation state, partitioned by workspace, Profile, and conversation. */
+export class ProfileScopedMemoryPageStore {
+  private readonly workspaces = new WeakMap<WorkspacePort, Map<string, MemoryPresentationState>>();
+
+  read(workspace: WorkspacePort, profileId: string, sessionId?: string): MemoryPresentationState | undefined {
+    return this.workspaces.get(workspace)?.get(memoryPresentationScope(profileId, sessionId));
+  }
+
+  write(
+    workspace: WorkspacePort,
+    profileId: string,
+    sessionId: string | undefined,
+    state: MemoryPresentationState,
+  ): void {
+    const scopes = this.workspaces.get(workspace) ?? new Map<string, MemoryPresentationState>();
+    scopes.set(memoryPresentationScope(profileId, sessionId), Object.freeze({ ...state }));
+    this.workspaces.set(workspace, scopes);
+  }
+}
+
+const MEMORY_PRESENTATIONS = new ProfileScopedMemoryPageStore();
+
 /** Where the profile lane's records are actually stored, stated once. */
 const PROFILE_MEMORY_PATH = "/workspace/.airship/memory.json";
 
@@ -76,6 +105,18 @@ const PROFILE_MEMORY_PATH = "/workspace/.airship/memory.json";
  */
 const DEFAULT_HIDDEN_KINDS: readonly MemoryNodeKind[] = Object.freeze(["term"]);
 
+function memoryPresentationScope(profileId: string, sessionId?: string): string {
+  return `${memoryIdentitySegment(profileId, "Profile ID")}.${memoryIdentitySegment(sessionId ?? "no-session", "Session ID")}`;
+}
+
+function memoryIdentitySegment(value: string, label: string): string {
+  if (!value || value.length > 512 || /[\u0000-\u001f\u007f]/u.test(value)) {
+    throw new Error(`${label} is invalid for Memory presentation state.`);
+  }
+  const points = [...value];
+  return `${String(points.length)}-${points.map((point) => point.codePointAt(0)!.toString(16)).join("-")}`;
+}
+
 /** Heavy graph derivation stays behind the Memory route boundary. */
 export function MemoryView({
   sessionId,
@@ -88,15 +129,32 @@ export function MemoryView({
   initialTab,
   onOpenSource,
 }: MemoryViewProps) {
-  const [query, setQuery] = useState("");
+  const restoredPresentation = workspace
+    ? MEMORY_PRESENTATIONS.read(workspace, activeProfile.profileId, sessionId)
+    : undefined;
+  const [query, setQuery] = useState(restoredPresentation?.query ?? "");
   const [selectedNodeId, setSelectedNodeId] = useState<string>();
   const [hiddenMemoryKinds, setHiddenMemoryKinds] = useState<ReadonlySet<MemoryNodeKind>>(() => new Set(DEFAULT_HIDDEN_KINDS));
   const [hiddenMemoryNodeIds, setHiddenMemoryNodeIds] = useState<ReadonlySet<string>>(() => new Set());
   const [relationshipLimit, setRelationshipLimit] = useState(18);
-  const [relationshipsExpanded, setRelationshipsExpanded] = useState(initialTab !== "index");
-  const [indexExpanded, setIndexExpanded] = useState(initialTab === "index");
-  const [indexMounted, setIndexMounted] = useState(initialTab === "index");
+  const [relationshipsExpanded, setRelationshipsExpanded] = useState(
+    initialTab === "index" ? false : restoredPresentation?.relationshipsExpanded ?? true,
+  );
+  const [indexExpanded, setIndexExpanded] = useState(
+    initialTab === "index" ? true : restoredPresentation?.indexExpanded ?? false,
+  );
+  const [indexMounted, setIndexMounted] = useState(
+    initialTab === "index" || restoredPresentation?.indexMounted === true,
+  );
   const [contextGeneration, setContextGeneration] = useState<string>();
+  const presentationRef = useRef<MemoryPresentationState>({
+    query,
+    relationshipsExpanded,
+    indexExpanded,
+    indexMounted,
+  });
+  const priorInitialTab = useRef(initialTab);
+  presentationRef.current = { query, relationshipsExpanded, indexExpanded, indexMounted };
   const indexRef = useRef<HTMLDetailsElement>(null);
   const alignIndex = useCallback(() => indexRef.current?.scrollIntoView({ block: "start" }), []);
   const workspaceAuthority = indexMounted ? contextGeneration : files;
@@ -137,6 +195,8 @@ export function MemoryView({
     });
   }, [activeProfile, catalog, files, messages, sessionId]);
   useEffect(() => {
+    const changed = priorInitialTab.current !== initialTab;
+    priorInitialTab.current = initialTab;
     if (initialTab === "index") {
       setIndexExpanded(true);
       setIndexMounted(true);
@@ -148,10 +208,19 @@ export function MemoryView({
       setRelationshipsExpanded(false);
       const frame = window.requestAnimationFrame(alignIndex);
       return () => window.cancelAnimationFrame(frame);
-    } else {
+    } else if (changed) {
       setRelationshipsExpanded(true);
     }
   }, [alignIndex, initialTab]);
+  useEffect(() => () => {
+    if (!workspace) return;
+    MEMORY_PRESENTATIONS.write(
+      workspace,
+      activeProfile.profileId,
+      sessionId,
+      presentationRef.current,
+    );
+  }, [workspace, activeProfile.profileId, sessionId]);
   useEffect(() => setRelationshipLimit(18), [selectedNodeId]);
   const normalizedQuery = query.trim();
   const starters = useMemo(() => memoryStarters(files, activeProfile.name, graph), [activeProfile.name, files, graph]);
@@ -237,17 +306,14 @@ export function MemoryView({
         <p id="memory-query-help" class="sr-only">Searches conversation, profile memory, workspace index, relationships, and the local index. Updates every loaded scope. Each corpus keeps its own scores.</p>
       </form>
 
-      <nav class="memory-scope-rail" aria-label="Memory page sections">
-        <button type="button" aria-label={`Recall · 3 private scopes${normalizedQuery ? ` · ${memoryHitTotal(memorySearch)} results` : ""}`} onClick={() => scrollToMemorySection("memory-results")}>
-          <span>Recall</span><small>{normalizedQuery ? `${memoryHitTotal(memorySearch)} hits` : "3 scopes"}</small>
-        </button>
-        <button type="button" aria-label={`Relationships · ${graph.stats.nodeCount} nodes${normalizedQuery ? ` · ${graphResults.length} graph matches` : ""}`} onClick={() => { setRelationshipsExpanded(true); window.requestAnimationFrame(() => scrollToMemorySection("memory-relationships")); }}>
-          <span>Graph</span><small>{normalizedQuery ? `${graphResults.length} matches` : `${graph.stats.nodeCount} nodes`}</small>
-        </button>
-        <button type="button" aria-label={`Local index · ${files.length} workspace sources`} onClick={() => { openIndex(true); window.requestAnimationFrame(() => scrollToMemorySection("memory-index")); }}>
-          <span>Index</span><small>{files.length} sources</small>
-        </button>
-      </nav>
+      {/*
+        * The Recall/Graph/Index strip that stood here restated three counts the
+        * sections below already state, and jumped to headings that are one
+        * scroll away on the same page. Search leads instead. Every count it
+        * carried is still on its own section: the three scope cards are the
+        * scopes, the relationship graph reports its nodes and edges, and the
+        * Index disclosure reports its workspace sources.
+        */}
 
       <FederatedMemorySearch
         state={memorySearch}

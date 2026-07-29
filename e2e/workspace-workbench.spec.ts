@@ -28,7 +28,7 @@ test("desktop workbench edits with CAS, keeps tabs, and surfaces the real Git ch
   await docs.press("ArrowRight");
   await expect(page.getByRole("treeitem", { name: /architecture\.md/ })).toBeVisible();
 
-  await page.getByRole("treeitem", { name: /README\.md/ }).click();
+  await page.getByRole("treeitem", { name: /README\.md/ }).dblclick();
   await page.getByRole("treeitem", { name: /architecture\.md/ }).click();
   await expect(page.getByRole("tab", { name: /README\.md/ })).toBeVisible();
   await expect(page.getByRole("tab", { name: /architecture\.md/ })).toHaveAttribute("aria-selected", "true");
@@ -84,6 +84,132 @@ test("desktop workbench edits with CAS, keeps tabs, and surfaces the real Git ch
   await expect(page.getByRole("tab", { name: /architecture\.md/ })).toHaveCount(0);
 });
 
+test("document tabs preview once, pin on intent, survive activity switches, and close by every supported path", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "desktop document-tab lifecycle");
+  await openIsolatedWorkspace(page);
+
+  await page.getByRole("treeitem", { name: /README\.md/u }).click();
+  const readmePreview = page.getByRole("tab", { name: /README\.md, Preview/u });
+  await expect(readmePreview).toBeVisible();
+  expect(await readmePreview.locator(".tabs__label").evaluate((node) => getComputedStyle(node).fontStyle)).toBe("italic");
+
+  // A second single-click replaces the one clean preview rather than growing
+  // the strip with every file the user inspects.
+  await page.getByRole("treeitem", { name: /architecture\.md/u }).click();
+  await expect(page.getByRole("tab", { name: /README\.md/u })).toHaveCount(0);
+  await expect(page.getByRole("tab", { name: /architecture\.md, Preview/u })).toBeVisible();
+
+  // Double-click is explicit keep-open intent. The first click replaces the
+  // preview; the double-click promotion then removes Preview from the name.
+  await page.getByRole("treeitem", { name: /retrieval\.md/u }).dblclick();
+  await expect(page.getByRole("tab", { name: /retrieval\.md, Preview/u })).toHaveCount(0);
+  await expect(page.getByRole("tab", { name: /retrieval\.md/u })).toBeVisible();
+
+  // First edit is the other pin gesture. A later preview cannot displace this
+  // dirty document, and the action is available without a double-click.
+  await page.getByRole("treeitem", { name: /README\.md/u }).click();
+  const readme = page.getByRole("textbox", { name: "Edit README.md" });
+  await readme.fill("Dirty previews pin before another file can replace them.\n");
+  await expect(page.getByRole("tab", { name: /README\.md, Preview/u })).toHaveCount(0);
+  await expect(page.getByRole("tab", { name: /README\.md, Unsaved/u })).toBeVisible();
+  await page.getByRole("treeitem", { name: /architecture\.md/u }).click();
+  await expect(page.getByRole("tab", { name: /README\.md, Unsaved/u })).toBeVisible();
+  const architecture = page.getByRole("tab", { name: /architecture\.md, Preview/u });
+  await expect(architecture).toBeVisible();
+
+  // Workspace activity switching does not remount or reset the document model.
+  await page.getByRole("tab", { name: /Source Control/u }).click();
+  await page.getByRole("tab", { name: "Explorer", exact: true }).click();
+  await expect(architecture).toBeVisible();
+  await expect(page.getByRole("tab", { name: /README\.md, Unsaved/u })).toBeVisible();
+
+  // Middle-click uses the same close contract as the explicit close button.
+  await architecture.click({ button: "middle" });
+  await expect(architecture).toHaveCount(0);
+  await page.getByRole("button", { name: "Close retrieval.md" }).click();
+  await expect(page.getByRole("tab", { name: /retrieval\.md/u })).toHaveCount(0);
+});
+
+test("source status and history open real patch documents with the shared preview lifecycle", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "desktop diff-document lifecycle");
+  await openIsolatedWorkspace(page);
+  await page.getByRole("treeitem", { name: /README\.md/u }).click();
+  await page.getByRole("textbox", { name: "Edit README.md" }).fill("Unsaved editor text is not yet a Git patch.\n");
+  await page.getByRole("tab", { name: /Source Control/u }).click();
+
+  // A status row opens the adapter's bounded diff, not the working file. The
+  // worktree version is part of the identity and verified around the read.
+  await page.getByRole("button", { name: /README\.md M/u }).click();
+  const statusPreview = page.getByRole("tab", { name: /README\.md · worktree diff, Working diff, Preview/u });
+  await expect(statusPreview).toBeVisible();
+  await expect(page.getByRole("tab", { name: /README\.md, Unsaved/u })).toBeVisible();
+  const statusPatch = page.getByRole("region", { name: "Working diff README.md" });
+  await expect(statusPatch).toContainText("Initial browser repository snapshot");
+  await expect(statusPatch).toContainText("Private workspace");
+  await expect(statusPatch).not.toContainText("Unsaved editor text");
+
+  // History comes from git.log/git.show and participates in the exact same
+  // preview slot. The previous clean status preview is displaced.
+  await page.getByRole("button", { name: /Initial browser workspace/u }).click();
+  await expect(statusPreview).toHaveCount(0);
+  const historyPreview = page.getByRole("tab", { name: /Commit [0-9a-f]+, Commit diff, Preview/u });
+  await expect(historyPreview).toBeVisible();
+  await expect(page.getByRole("region", { name: /Commit [0-9a-f]+ diff/u })).toContainText("Initial browser workspace");
+
+  // The explicit keep action is touch-accessible and pins the commit before a
+  // later status preview takes the replaceable slot.
+  await page.getByRole("button", { name: /Open and keep commit [0-9a-f]+ diff/u }).click();
+  await expect(page.getByRole("tab", { name: /Commit [0-9a-f]+, Commit diff, Preview/u })).toHaveCount(0);
+  const keptHistory = page.getByRole("tab", { name: /Commit [0-9a-f]+, Commit diff/u });
+  await page.getByRole("button", { name: /docs\/architecture\.md A/u }).click();
+  await expect(keptHistory).toBeVisible();
+  await expect(page.getByRole("tab", { name: /docs\/architecture\.md · worktree diff, Working diff, Preview/u })).toBeVisible();
+});
+
+test("file-type icons and Reveal in Explorer preserve exact document context", async ({ page }, testInfo) => {
+  await openIsolatedWorkspace(page);
+
+  const readme = page.getByRole("treeitem", { name: /README\.md/u });
+  await expect(readme.locator('[data-file-kind="markdown"]')).toBeVisible();
+  await readme.click();
+  const readmeTab = page.getByRole("tab", { name: /README\.md, Preview/u });
+  await expect(readmeTab.locator('[data-file-kind="markdown"]')).toBeVisible();
+
+  // The same explicit action works with a pointer, keyboard, or finger. It
+  // navigates to the path instead of reopening it, and focus lands on the
+  // selected tree row so keyboard traversal can continue from there.
+  await page.getByRole("button", { name: "Reveal in Explorer", exact: true }).click();
+  await expect(readme).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator(":focus")).toHaveAttribute("title", /\/workspace\/README\.md/u);
+  await expect(page.locator('.editor-tabs .tabs__tab[data-active="true"]')).toContainText("README.md");
+
+  await page.getByRole("tab", { name: /Source Control/u }).click();
+  await page.getByRole("button", { name: /Initial browser workspace/u }).click();
+  const historyTab = page.getByRole("tab", { name: /Commit [0-9a-f]+, Commit diff, Preview/u });
+  await expect(historyTab.locator("svg")).toBeVisible();
+  // This root commit has one exact changed path, so the control is direct. A
+  // multi-path commit promotes the same action to the keyboard/touch menu.
+  const historyReveal = page.getByRole("button", { name: "Reveal in Explorer", exact: true });
+  await expect(historyReveal).toBeVisible();
+  await historyReveal.click();
+  await expect(readme).toHaveAttribute("aria-selected", "true");
+  // A reveal from a whole-commit document keeps that immutable commit tab
+  // active; on a phone, the Files pane is simply presented in front of it.
+  await expect(page.locator('.editor-tabs .tabs__tab[data-active="true"]')).toContainText(/^[0-9a-f]{12}/u);
+  if (testInfo.project.name === "mobile-chromium") {
+    await page.getByRole("tab", { name: /^Editor/u }).click();
+  }
+  await expect(page.getByRole("region", { name: /Commit [0-9a-f]+ diff/u })).toBeVisible();
+
+  await page.getByRole("tab", { name: /Source Control/u }).click();
+  await page.getByRole("button", { name: /README\.md M/u }).click();
+  const statusTab = page.getByRole("tab", { name: /README\.md · worktree diff, Working diff, Preview/u });
+  await expect(statusTab.locator('[data-file-kind="markdown"]')).toBeVisible();
+  await page.getByRole("button", { name: "Reveal in Explorer", exact: true }).click();
+  await expect(readme).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator('.editor-tabs .tabs__tab[data-active="true"]')).toContainText("README.md");
+});
+
 test("each workbench destination names itself and its modal closes on Escape", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium", "desktop workbench contract");
   await openIsolatedWorkspace(page);
@@ -117,9 +243,22 @@ test("mobile workbench uses pane switching and an explicit folder move sheet", a
   test.skip(testInfo.project.name !== "mobile-chromium", "mobile workbench contract");
   await openIsolatedWorkspace(page);
 
+  await page.getByRole("tab", { name: /Source Control/u }).click();
+  const keepStatusDiff = page.getByRole("button", { name: "Open and keep unstaged diff README.md" });
+  await expect(keepStatusDiff).toBeVisible();
+  await expect(page.getByRole("button", { name: /Open and keep commit [0-9a-f]+ diff/u })).toBeVisible();
+  const target = await keepStatusDiff.boundingBox();
+  expect(target?.width).toBeGreaterThanOrEqual(44);
+  expect(target?.height).toBeGreaterThanOrEqual(44);
+  await keepStatusDiff.click();
+  await expect(page.getByRole("region", { name: "Working diff README.md" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: /README\.md · worktree diff, Working diff, Preview/u })).toHaveCount(0);
+  await page.getByRole("tab", { name: "Files", exact: true }).click();
+
   await page.getByRole("treeitem", { name: /retrieval\.md/ }).click();
   const editor = page.getByRole("textbox", { name: "Edit retrieval.md" });
   await expect(editor).toBeVisible();
+  await expect(page.getByRole("tab", { name: /retrieval\.md, Preview/u })).toBeVisible();
   // `.editor-toolbar small { display: none }` deleted the revision hash and the
   // byte size below 760px with no way to recover either. Both are on a phone.
   const strip = page.locator(".editor-strip");
@@ -127,8 +266,10 @@ test("mobile workbench uses pane switching and an explicit folder move sheet", a
   await expect(strip).toContainText(/rev [0-9a-f]{7}/u);
   await expect(strip).toContainText(/\d+ B/u);
   await editor.fill("Unsaved mobile draft follows its tab.\n");
+  await expect(page.getByRole("tab", { name: /retrieval\.md, Preview/u })).toHaveCount(0);
   await page.getByRole("tab", { name: "Files", exact: true }).click();
   await page.getByRole("button", { name: "Actions for retrieval.md" }).click();
+  await expect(page.getByRole("menuitem", { name: "Open and keep" })).toBeVisible();
   await page.getByRole("menuitem", { name: "Move…" }).click();
   const move = page.getByRole("dialog", { name: "Move retrieval.md" });
   await expect(move).toBeVisible();

@@ -8,6 +8,7 @@ import { trapFocus } from "./focus-trap";
 import type { ApprovalMode } from "../approvals/modes";
 import { MenuSelect } from "./menu-select";
 import { isDeployableGoogleOAuthClientId } from "../storage/google-drive-configuration";
+import { Icon } from "./icons";
 import {
   DEFAULT_TRANSCRIPT_OPERATIONS,
   parseTranscriptOperationsMode,
@@ -423,7 +424,13 @@ export function PreferencesDialog({ open, value, onChange, onClose, profileAppro
           <PreferenceSelect label="Legacy session approvals" value={value.approvalMode} options={[["ask-first","Ask First · prompt before effects"],["auto-approve","Auto Approve · model safety review"],["full-access","Full Access · bounded browser sandbox"]]} onChange={(next) => update("approvalMode", next as PreferenceOverrides["approvalMode"])} />
           <p><strong>{approvalModeLabel(value.approvalMode)}.</strong> {approvalModeDescription(value.approvalMode)}</p>
         </>}
-        <PreferenceSelect label="Color mode" value={value.mode} options={[['dark','Dark instrument'],['light','Paper']]} onChange={(next) => update("mode", next as PreferenceOverrides["mode"])} />
+        <PreferenceSelect
+          label="Color mode"
+          value={value.mode}
+          options={[["dark", "Dark instrument"], ["light", "Paper"]]}
+          leading={(mode) => <Icon name={mode === "dark" ? "moon" : "sun"} size={17} />}
+          onChange={(next) => update("mode", next as PreferenceOverrides["mode"])}
+        />
         <PreferenceSelect label="Type scale" value={value.typeScale} options={[['default','Default'],['large','Large'],['x-large','Extra large']]} onChange={(next) => update("typeScale", next as PreferenceOverrides["typeScale"])} />
         <PreferenceSelect label="Density" value={value.density} options={[['comfortable','Comfortable'],['compact','Compact']]} onChange={(next) => update("density", next as PreferenceOverrides["density"])} />
         <PreferenceSelect label="Corners" value={value.corners} options={[['subtle','Subtle'],['square','Square'],['rounded','Rounded']]} onChange={(next) => update("corners", next as PreferenceOverrides["corners"])} />
@@ -449,7 +456,15 @@ export function PreferencesDialog({ open, value, onChange, onClose, profileAppro
           onChange={(next) => update("vaultBackend", next as PreferenceOverrides["vaultBackend"])}
         />
         <p>{durabilityRowNote(adoption)}</p>
-        <button class="preferences-dialog__reset" type="button" onClick={() => onChange(DEFAULT_PREFERENCES)}>Reset preferences</button>
+        <button
+          class="preferences-dialog__reset"
+          type="button"
+          onClick={() => {
+            if (window.confirm("Reset display, durability, and legacy approval preferences to their defaults?")) {
+              onChange(DEFAULT_PREFERENCES);
+            }
+          }}
+        >Reset preferences</button>
       </div>
     </div>
   );
@@ -478,8 +493,8 @@ export function approvalModeDescription(mode: ApprovalMode): string {
  * a row with the whole dialog beneath it and measures the room it has; a row in
  * the lower third opens upward instead, where the room actually is.
  */
-function PreferenceSelect({ label, value, options, onChange, disabled = false, placement = "down" }: Readonly<{ label: string; value: string; options: readonly (readonly [string, string] | readonly [string, string, string])[]; onChange(value: string): void; disabled?: boolean; placement?: "up" | "down" }>) {
-  return <div class="preference-row"><span>{label}</span><MenuSelect className="preference-menu" ariaLabel={label} value={value} disabled={disabled} placement={placement} options={options.map(([id, name, description]) => ({ value: id, label: name, ...(description ? { description } : {}) }))} onChange={onChange} /></div>;
+function PreferenceSelect({ label, value, options, onChange, disabled = false, placement = "down", leading }: Readonly<{ label: string; value: string; options: readonly (readonly [string, string] | readonly [string, string, string])[]; onChange(value: string): void; disabled?: boolean; placement?: "up" | "down"; leading?(value: string): ComponentChildren }>) {
+  return <div class="preference-row"><span>{label}</span><MenuSelect className="preference-menu" ariaLabel={label} value={value} disabled={disabled} placement={placement} options={options.map(([id, name, description]) => ({ value: id, label: name, ...(description ? { description } : {}) }))} leading={leading ? (option) => leading(option.value) : undefined} onChange={onChange} /></div>;
 }
 
 /**

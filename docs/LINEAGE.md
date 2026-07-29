@@ -3,10 +3,24 @@
 Airship is informed by several existing agents but is implemented as a clean,
 browser-first runtime with its own contracts.
 
+## Local reference library
+
+The tracked catalog at
+[`references/repositories.json`](../references/repositories.json) records the
+exact repository URL, immutable revision, upstream relationship, license
+status, intended study areas, and reuse boundary for disposable external
+checkouts. The source trees live under the gitignored
+`references/checkouts/`; they are read-only research material and never build
+inputs, vendored dependencies, fixtures, or release artifacts. The operating
+rules are in [`references/README.md`](../references/README.md), and the mandatory
+specification/implementation information barrier is in
+[`references/CLEAN_ROOM.md`](../references/CLEAN_ROOM.md).
+
 ## Hermes Agent
 
-The local `~/hermes-agent` checkout is the primary behavioral
-reference. Airship adopts these ideas conceptually:
+The pinned
+`references/checkouts/open-source/nousresearch--hermes-agent` checkout is the
+primary behavioral reference. Airship adopts these ideas conceptually:
 
 - a byte-stable per-conversation prompt prefix;
 - strict message-role alternation and append-only history;
@@ -19,12 +33,35 @@ assumptions are not copied into the browser runtime.
 
 ## `sirouk/claw-code` and `sirouk/claude-code-rs`
 
-These repositories are additional Rust implementation references for compact
-agent loops, streaming, tools, terminal/workspace behavior, and native
-distribution. Before code is copied or adapted, its exact upstream lineage,
-commit, and license compatibility must be recorded here and in source headers.
+These public repositories are approved clean-room behavior studies for
+compact agent loops, streaming, tools, terminal/workspace behavior, and native
+distribution. Their pinned fork revisions have no license, and both describe
+work informed by an exposed proprietary Claude Code sourcemap. The local
+checkouts carry an absolute no-source-reuse boundary: no source,
+prompts, text, tests, structures, or assets may be copied or adapted into
+Airship. Their exact fork/parent relationships and warnings are recorded in the
+reference catalog.
 
 Current Airship milestone code does not copy source from either repository.
+
+## Conversation, workspace, terminal, and storage studies
+
+OpenAI Codex is a behavioral and architectural reference for coding-agent
+tools, environment awareness, permissions, sessions, model controls, and
+in-flight work. Code - OSS is the interaction-grammar reference for Explorer,
+editor tabs, source control, diffs, themes, keyboard behavior, and integrated
+terminals. xterm.js and isomorphic-git are the upstream component references
+behind Airship's pinned browser-terminal and browser-Git adapters.
+
+Open WebUI is a clean-room behavioral reference only for conversation,
+composer, attachment, branch, search, and responsive-message ergonomics. Its
+custom license and branding restrictions prohibit treating it as a source for
+Airship UI code or visual identity. The detailed boundary is in
+[`OPENWEBUI_CLEANROOM_CHAT.md`](OPENWEBUI_CLEANROOM_CHAT.md).
+
+The archived AGPL-licensed MinIO repository is a clean-room protocol and
+local-lab reference for S3-compatible Vault behavior. It is not an Airship
+source dependency, and its checkout is never a source-incorporation path.
 
 ## Chutes E2EE browser test
 
@@ -36,7 +73,8 @@ a negotiated v2 server contract and are not silently inserted into v1.
 
 ## Context and storage research
 
-The Context Fabric is a clean implementation informed by CocoIndex's
+The Context Fabric is a clean implementation informed by the pinned
+CocoIndex checkout's
 incremental-dataflow usefulness, object-storage-native search systems,
 Matryoshka embeddings, quantized vector search, and recent segmented/streaming
 retrieval work. Exact references and the boundary between implemented and
@@ -62,8 +100,13 @@ resulting access boundary is recorded in
 For every external implementation influence:
 
 1. record repository URL, immutable commit, upstream/origin relationship, and
-   license;
-2. distinguish a reimplementation of an idea from copied/adapted source;
-3. retain required copyright/license notices for adapted source;
-4. do not import code with unclear or incompatible licensing;
-5. keep provider-specific adaptations outside the stable runtime core.
+   license in the reference catalog;
+2. create a source-free functional specification covering behavior, inputs,
+   outputs, interfaces, invariants, failure modes, and acceptance tests;
+3. implement original Airship code from that specification rather than from the
+   source tree, even when the reference uses a permissive open-source license;
+4. do not import reference code, prompts, text, tests, assets, naming, or
+   distinctive organization; any deliberate third-party dependency remains a
+   separately reviewed package relationship with its own notices;
+5. record the spec-to-implementation decision and keep provider-specific
+   adapters outside the stable runtime core.

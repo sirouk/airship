@@ -272,7 +272,9 @@ test("route form menus use the styled accessible listbox contract", async ({ pag
     if (await expander.count()) await expander.click();
     await primary.getByRole("button", { name: "Editor", exact: true }).click();
   }
-  await page.getByRole("tab", { name: "Sources", exact: true }).click();
+  await page.getByRole("tab", { name: /Source Control/u }).click();
+  await page.getByRole("button", { name: "Advanced source controls" }).click();
+  await expect(page.getByRole("dialog", { name: "Advanced source controls" })).toBeVisible();
   // AMENDED: the branch/worktree/checkout controls rest inside a `<details>`
   // that opens itself only once a repository has more than one worktree
   // (`sources-view.tsx:533`), so on a single-worktree workspace the Repository
@@ -398,11 +400,12 @@ test("the composer changes approval policy in place through a new immutable conv
   await expect(page.getByText(/Approval policy changed to Auto Approve/u)).toBeVisible();
 });
 
-test("desktop profile menu changes the real active profile and creates a coherent pinned session", async ({ page }, testInfo) => {
+test("desktop profile menu restores each profile's conversation cockpit", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium", "desktop profile contract");
   await openReadyApp(page);
   const profile = page.locator(".sidebar .profile-menu").getByRole("button", { name: "Agent profile" });
   await expect(profile).toContainText("General");
+  const generalUrl = page.url();
   await profile.click();
   const listbox = page.getByRole("listbox", { name: "Agent profile" });
   await expect(listbox).toBeVisible();
@@ -411,6 +414,25 @@ test("desktop profile menu changes the real active profile and creates a coheren
   await expect(page.locator(".session-bar__title")).toContainText("Research");
   await expect(profile).toContainText("Research");
   await expect(listbox).toBeHidden();
+
+  const researchUrl = page.url();
+  expect(researchUrl).not.toBe(generalUrl);
+  await page.locator(".session-bar__identity-button").dblclick();
+  const title = page.getByRole("textbox", { name: "Conversation title" });
+  await title.fill("Research cockpit checkpoint");
+  await page.getByRole("combobox", { name: "Message Airship" }).click();
+  await expect(page.locator(".session-bar__title")).toHaveText("Research cockpit checkpoint");
+
+  await profile.click();
+  await listbox.getByRole("option", { name: /General/ }).click();
+  await expect(page).toHaveURL(generalUrl);
+  await expect(profile).toContainText("General");
+
+  await profile.click();
+  await listbox.getByRole("option", { name: /Research/ }).click();
+  await expect(profile).toContainText("Research");
+  await expect(page).toHaveURL(researchUrl);
+  await expect(page.locator(".session-bar__title")).toHaveText("Research cockpit checkpoint");
   await page.screenshot({ path: testInfo.outputPath("profile-switched.png"), fullPage: true });
 });
 
@@ -506,8 +528,8 @@ test("mobile session header groups wrap without overlap and profile switching re
 
   const profile = page.locator(".compact-profile-menu").getByRole("button", { name: "Agent profile" });
   await profile.click();
-  await page.getByRole("listbox", { name: "Agent profile" }).getByRole("option", { name: /Builder \/ Systems/ }).click();
-  await expect(page.getByRole("heading", { level: 1 })).toHaveAccessibleName(/Builder \/ Systems profile/u);
-  await expect(profile.locator(".profile-monogram")).toHaveText("BS");
+  await page.getByRole("listbox", { name: "Agent profile" }).getByRole("option", { name: /Developer/ }).click();
+  await expect(page.getByRole("heading", { level: 1 })).toHaveAccessibleName(/Developer profile/u);
+  await expect(profile.locator(".profile-monogram")).toHaveText("DE");
   await page.screenshot({ path: testInfo.outputPath("mobile-header-profile.png"), fullPage: true });
 });

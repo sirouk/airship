@@ -18,14 +18,14 @@ describe("memory starters", () => {
   it("takes terms from the indexed sources, the pinned profile and the graph, and names each origin", () => {
     const starters = memoryStarters(
       [entry("/workspace/notes/retrieval.md"), entry("/workspace/README.md")],
-      "Builder / Systems",
+      "Developer",
       stubGraph([node("s1", "General session", "session")], []),
     );
 
     expect(starters.map((starter) => starter.term)).toEqual([
       "retrieval",
       "README",
-      "Builder / Systems",
+      "Developer",
       "General session",
     ]);
     expect(starters.map((starter) => starter.origin)).toEqual([

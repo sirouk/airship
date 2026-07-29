@@ -171,16 +171,23 @@
   contain: strict;
 }
 
-.tree-row-wrap { position: relative; height: 34px; }
-.tree-row { display: grid; grid-template-columns: 12px 18px minmax(0,1fr) auto; align-items: center; gap: 3px; width: 100%; height: 34px; padding-right: 2rem; border: 0; color: var(--ink-muted); background: transparent; text-align: left; cursor: default; }
+/*
+ * `--tree-action-lane` is the width the row gives up to the overflow button
+ * that floats over it. Both sides have to read the same number: the button is
+ * absolutely positioned, so nothing reflows when it grows, and the row's last
+ * column — the byte size — simply slid underneath a 44px touch target while the
+ * row was still reserving 34px for it.
+ */
+.tree-row-wrap { --tree-action-lane: 34px; position: relative; isolation: isolate; height: 34px; }
+.tree-row { position: relative; z-index: 0; display: grid; grid-template-columns: 12px 18px minmax(0,1fr) auto; align-items: center; gap: 3px; width: calc(100% - var(--tree-action-lane)); height: 34px; padding-right: 0; border: 0; color: var(--ink-muted); background: transparent; text-align: left; cursor: default; }
 .tree-row:hover, .tree-row.active { color: var(--ink); background: color-mix(in srgb, var(--accent) 9%, transparent); }
 .tree-row.drop-target { box-shadow: inset 2px 0 var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
 .tree-row:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
 .tree-row > span:nth-of-type(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tree-row small { color: var(--ink-faint); font: var(--fs-micro) var(--font-mono); }
 .tree-chevron { text-align: center; color: var(--ink-faint); font-size: var(--fs-meta); }
-.tree-overflow { position: absolute; top: 4px; right: 3px; width: 28px; height: 26px; padding: 0; border: 0; opacity: 0; pointer-events: none; color: var(--ink-muted); background: color-mix(in srgb, var(--surface-raised) 92%, transparent); cursor: pointer; }
-.tree-row-wrap:hover .tree-overflow, .tree-overflow:focus-visible { opacity: 1; pointer-events: auto; }
+.tree-overflow { position: absolute; z-index: 2; top: 4px; right: 3px; width: 28px; height: 26px; padding: 0; border: 0; opacity: .45; color: var(--ink-muted); background: color-mix(in srgb, var(--surface-raised) 92%, transparent); cursor: pointer; }
+.tree-row-wrap:hover .tree-overflow, .tree-overflow:focus-visible { opacity: 1; }
 
 /*
  * Row actions were revealed on hover, or below 760px. A tablet is neither: it
@@ -188,7 +195,9 @@
  * there. Reveal on the absence of a hover, not on a width.
  */
 @media (pointer: coarse) {
-  .tree-row { padding-right: 3rem; }
+  /* 44px of button plus its 3px offset from the edge. */
+  .tree-row-wrap { --tree-action-lane: 47px; }
+  .tree-row { padding-right: 0; }
 
   .tree-overflow {
     top: 0;
@@ -236,9 +245,14 @@
    a 390px pane is usually one unbroken URL or path. */
 .code-editor[data-wrap="on"] { white-space: pre-wrap; overflow-wrap: anywhere; }
 .code-editor:focus { box-shadow: inset 2px 0 var(--accent); }
+.workspace-diff { margin: 0; cursor: text; }
+.workspace-diff-state { display: grid; flex: 1 1 auto; place-content: center; justify-items: center; gap: .55rem; padding: clamp(1.5rem, 6vw, 4rem); color: var(--ink-faint); text-align: center; }
+.workspace-diff-state strong { color: var(--ink); font: var(--fw-strong) var(--fs-body)/1.3 var(--font-body); }
+.workspace-diff-state > span:not(.workspace-file-icon) { max-width: 38rem; color: var(--ink-muted); font-size: var(--fs-meta); line-height: 1.55; }
 .workspace-binary-preview { display: grid; flex: 1 1 auto; place-content: center; justify-items: center; gap: .55rem; padding: clamp(1.5rem, 6vw, 4rem); color: var(--ink-faint); text-align: center; }
 .workspace-binary-preview strong { color: var(--ink); font: var(--fw-strong) var(--fs-body)/1.3 var(--font-body); }
-.workspace-binary-preview span { max-width: 34rem; color: var(--ink-muted); font-size: var(--fs-meta); line-height: 1.55; }
+.workspace-binary-preview > span:not(.workspace-file-icon) { max-width: 34rem; color: var(--ink-muted); font-size: var(--fs-meta); line-height: 1.55; }
+.workspace-binary-preview > .workspace-file-icon { --file-icon-size: calc(var(--fs-micro) * 2.73); }
 
 /*
  * One strip replaces a 50px toolbar and a 26px footer that asserted the same
@@ -288,7 +302,9 @@
  * through `aria-pressed` rather than a button whose label flips between "Wrap"
  * and "Unwrap" — the label that never tells you which one you are in.
  */
-.editor-strip__wrap {
+.editor-strip__wrap,
+.editor-strip__pin,
+.editor-strip__reveal {
   min-height: 30px;
   padding: 0 var(--sp-2);
   border: 1px solid var(--line-control);
@@ -296,6 +312,20 @@
   color: var(--ink-muted);
   background: var(--surface);
   cursor: pointer;
+  font-size: var(--fs-micro);
+}
+
+.editor-strip__reveal:disabled {
+  color: var(--ink-disabled);
+  background: var(--surface-disabled);
+  cursor: not-allowed;
+}
+
+.editor-strip__reveal-menu .menu-select-trigger {
+  min-height: 30px;
+  padding: 0 var(--sp-2);
+  border-color: var(--line-control);
+  background: var(--surface);
   font-size: var(--fs-micro);
 }
 
@@ -350,6 +380,9 @@
 @media (pointer: coarse) {
   .editor-strip__save button,
   .editor-strip__wrap,
+  .editor-strip__pin,
+  .editor-strip__reveal,
+  .editor-strip__reveal-menu .menu-select-trigger,
   .workspace-filter,
   .workspace-new,
   .workbench-context button,
@@ -441,6 +474,9 @@
   bottom: var(--sp-4);
   left: var(--sp-4);
   max-width: min(34rem, calc(100% - 2 * var(--sp-4)));
+  /* Completion/error prose may visually overlap dense mobile controls, but it
+     must never turn the whole toast rectangle into an invisible click shield. */
+  pointer-events: none;
   background: var(--surface-raised);
   box-shadow: 0 12px 30px rgba(0, 0, 0, .38);
 }
@@ -453,6 +489,7 @@
   border-radius: var(--radius-control);
   color: var(--ink-muted);
   background: transparent;
+  pointer-events: auto;
   cursor: pointer;
   font-size: var(--fs-caption);
 }
@@ -535,9 +572,20 @@
 .scm-row > button:disabled { opacity: .72; cursor: not-allowed; }
 .scm-row > div { display: flex; align-items: center; }
 .scm-row > div button { width: 27px; height: 27px; border: 1px solid var(--line); color: var(--ink); background: var(--surface); }
+.scm-history { margin-top: var(--sp-1); }
+.scm-history-row > button > span { display: grid; gap: 2px; }
+.scm-history-row > button strong { overflow: hidden; color: var(--ink-muted); font-size: var(--fs-micro); font-weight: var(--fw-strong); text-overflow: ellipsis; white-space: nowrap; }
+.scm-history-row > button small { color: var(--ink-faint); font: var(--fs-micro)/1.2 var(--font-mono); }
 .scm-commit { display: grid; gap: .4rem; margin-top: .5rem; }
 .scm-commit textarea { min-height: 64px; resize: vertical; }
 .tabs.workbench-mobile-switch { display: none; }
+
+/* These declarations must follow the desktop SCM dimensions above; otherwise
+   equal-specificity source order shrinks the phone's diff/stage actions back
+   to 27px after the coarse-pointer floor has applied. */
+@media (pointer: coarse) {
+  .scm-row > div button { width: 44px; height: 44px; }
+}
 
 :root[data-density="comfortable"] .workspace-workbench .code-editor { font-size: var(--fs-body); line-height: 1.78; padding: 1.25rem 1.35rem 2.4rem; }
 :root[data-density="comfortable"] .workspace-workbench .code-gutter { font-size: var(--fs-body); line-height: 1.78; padding-block: 1.25rem 2.4rem; }

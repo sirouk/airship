@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 test("opt-in semantic pack embeds, indexes, and retrieves entirely in Chromium", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium", "one authoritative browser runtime");
@@ -95,7 +95,7 @@ test("production UI activates the same-origin semantic worker and rebuilds the i
   });
   const index = page.locator("#memory-index");
   if (!await index.evaluate((element: HTMLDetailsElement) => element.open)) {
-    await page.getByRole("button", { name: /Local index/u }).click();
+    await openMemoryIndex(page);
   }
   await expect(index).toHaveJSProperty("open", true);
   await page.getByRole("button", { name: "Local semantic" }).click();
@@ -105,3 +105,16 @@ test("production UI activates the same-origin semantic worker and rebuilds the i
   await expect(page.getByText(/airship-transformersjs:4\.0\.0:mixedbread-ai\/mxbai-embed-xsmall-v1/)).toBeVisible({ timeout: 60_000 });
   expect(offOriginRequests).toEqual([]);
 });
+
+/*
+ * The Index section is reached by its own disclosure now. The scope strip that
+ * used to offer a "Local index" jump restated counts the sections already carry
+ * and was removed; the disclosure is the ordinary heading it always was.
+ */
+async function openMemoryIndex(page: Page): Promise<void> {
+  const index = page.locator("#memory-index");
+  if (!await index.evaluate((element: HTMLDetailsElement) => element.open)) {
+    await index.locator("summary").click();
+  }
+  await expect.poll(() => index.evaluate((element: HTMLDetailsElement) => element.open)).toBe(true);
+}

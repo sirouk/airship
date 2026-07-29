@@ -66,6 +66,30 @@
 
 .session-bar__identity-button:hover .session-bar__title { color: var(--accent-bright); }
 
+/* Fine pointers already have double-click/F2. Touch gets an explicit action in
+   the chip row at its breakpoint, including phone landscape where the title is
+   deliberately folded. */
+.session-bar__rename-action { display: none; }
+
+.session-bar__rename {
+  display: grid;
+  grid-template-columns: auto minmax(8rem, 1fr);
+  gap: var(--sp-1);
+  align-items: center;
+  min-width: 0;
+}
+
+.session-bar__rename input {
+  min-width: 0;
+  min-height: 30px;
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-control);
+  color: var(--ink);
+  background: var(--surface-raised);
+  font: var(--fw-body) var(--fs-body)/1.2 var(--font-display);
+}
+
 /* The retired `ACTIVE SESSION · GENERAL` eyebrow now lives in this mark's
    accessible name, so it shrinks to a glyph without becoming a mystery. */
 .session-bar .profile-monogram {
@@ -995,9 +1019,10 @@ button.runtime-posture {
   cursor: pointer;
 }
 
-/* Pointer actions overlay the card instead of reserving an empty gutter under
-   every message. Reveal changes only opacity and hit-testing, never geometry. */
-.message-actions { position: absolute; z-index: 2; top: 6px; right: 7px; height: var(--message-action-height); margin: 0; opacity: 0; pointer-events: none; transition: opacity 100ms ease; }
+/* Pointer actions follow the message content and evidence. Their small row is
+   reserved before hover, so revealing it changes neither the card nor virtual
+   transcript geometry; touch keeps the disclosure immediately after it. */
+.message-actions { position: relative; z-index: 2; display: flex; justify-content: flex-end; height: var(--message-action-height); margin: 6px 0 0; opacity: 0; pointer-events: none; transition: opacity 100ms ease; }
 .message-actions-row { display: flex; flex-wrap: nowrap; gap: .25rem; justify-content: flex-end; height: 100%; overflow: hidden; }
 .message:hover .message-actions, .message:focus-within .message-actions { opacity: 1; pointer-events: auto; }
 .message-actions button { display: inline-flex; gap: .3rem; align-items: center; height: 100%; min-height: 24px; padding: 0 .5rem; border: 1px solid transparent; border-radius: var(--radius-control); color: var(--ink-faint); background: transparent; cursor: pointer; font-size: var(--fs-micro); white-space: nowrap; }

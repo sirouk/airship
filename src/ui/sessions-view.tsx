@@ -17,7 +17,7 @@ import { DurabilityIndicator, durabilityLabel, type DurabilityState } from "./du
 import { Popover } from "./popover";
 import { RouteHeader } from "./route-header";
 import { Seal, type SealState } from "./seal";
-import { groupPinnedSessions, pagePinnedSessionIds, setPageSessionPinned } from "./session-pins";
+import { favoriteDirectionalMove, favoriteDropMove, groupPinnedSessions } from "./session-pins";
 import {
   SESSION_OUT_OF_RESULTS_CAPTION,
   SESSION_OUT_OF_RESULTS_NOTICE,
@@ -38,6 +38,9 @@ export type SessionsViewProps = Readonly<{
   library: SessionLibrary;
   runtime?: ActiveSessionRuntime;
   activeSessionId?: string;
+  /** The active profile is the ordinary conversation-library boundary. */
+  scopeProfileId: string;
+  scopeProfileName: string;
   /** Optional host-created manifest used when a fork should move to the active runtime. */
   forkManifest?: SessionManifest;
   revision?: number;
@@ -72,6 +75,8 @@ export function SessionsView({
   library,
   runtime,
   activeSessionId,
+  scopeProfileId,
+  scopeProfileName,
   forkManifest,
   revision = 0,
   onResume,
@@ -84,7 +89,6 @@ export function SessionsView({
   const [search, setSearch] = useState("");
   const [providerId, setProviderId] = useState("");
   const [model, setModel] = useState("");
-  const [profileId, setProfileId] = useState("");
   const [sort, setSort] = useState<SessionListSort>("updated-desc");
   const [page, setPage] = useState<SessionListPage>();
   const [selectedId, setSelectedId] = useState(activeSessionId);
@@ -100,7 +104,12 @@ export function SessionsView({
   const [announcement, setAnnouncement] = useState("");
   const [renameTitle, setRenameTitle] = useState("");
   const [renaming, setRenaming] = useState(false);
-  const [pinned, setPinned] = useState<ReadonlySet<string>>(pagePinnedSessionIds);
+  const [favoriteState, setFavoriteState] = useState<Readonly<{
+    profileId: string;
+    favorites: readonly Readonly<{ sessionId: string; pinnedAt: string; membershipEventId: string }>[];
+  }>>(() => Object.freeze({ profileId: "", favorites: Object.freeze([]) }));
+  const [favoriteBusy, setFavoriteBusy] = useState<string>();
+  const [draggingFavoriteId, setDraggingFavoriteId] = useState<string>();
   /*
    * How many conversations the last *unfiltered* read found.
    *
@@ -114,6 +123,12 @@ export function SessionsView({
   const toolbarId = useId();
 
   const runtimeKey = useMemo(() => runtimeFingerprint(runtime), [runtime]);
+  // Never render an async result under a different profile prop. The old
+  // projection can exist for one render while the new journal read starts;
+  // its profile tag makes that frame an empty favorite group, not a leak.
+  const favorites = favoriteState.profileId === scopeProfileId ? favoriteState.favorites : [];
+  const favoriteOrder = favorites.map((favorite) => favorite.sessionId);
+  const pinned = useMemo(() => new Set(favoriteOrder), [favoriteOrder.join("\0")]);
 
   useEffect(() => {
     const timer = setTimeout(() => setSearch(draftSearch), 140);
@@ -128,16 +143,18 @@ export function SessionsView({
       search,
       ...(providerId ? { providerId } : {}),
       ...(model ? { model } : {}),
-      ...(profileId ? { profileId: profileId as string | "unbound" } : {}),
+      profileId: scopeProfileId,
       sort,
       limit: 200,
     }, controller.signal).then(
       (next) => {
         setPage(next);
-        if (!search && !providerId && !model && !profileId) setLoadedTotal(next.total);
-        setSelectedId((current) => current ?? (activeSessionId && next.items.some((item) => item.id === activeSessionId)
-          ? activeSessionId
-          : next.items[0]?.id));
+        if (!search && !providerId && !model) setLoadedTotal(next.total);
+        setSelectedId((current) => current && next.items.some((item) => item.id === current)
+          ? current
+          : activeSessionId && next.items.some((item) => item.id === activeSessionId)
+            ? activeSessionId
+            : next.items[0]?.id);
       },
       (caught: unknown) => {
         if (!controller.signal.aborted) setError(errorMessage(caught));
@@ -146,7 +163,18 @@ export function SessionsView({
       if (!controller.signal.aborted) setLoadingList(false);
     });
     return () => controller.abort();
-  }, [activeSessionId, library, model, profileId, providerId, refresh, revision, search, sort]);
+  }, [activeSessionId, library, model, providerId, refresh, revision, scopeProfileId, search, sort]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void library.favorites(scopeProfileId, controller.signal).then(
+      (next) => setFavoriteState(Object.freeze({ profileId: scopeProfileId, favorites: next })),
+      (caught: unknown) => {
+        if (!controller.signal.aborted) setError(errorMessage(caught));
+      },
+    );
+    return () => controller.abort();
+  }, [library, refresh, revision, scopeProfileId]);
 
   useEffect(() => {
     if (!selectedId) {
@@ -239,14 +267,49 @@ export function SessionsView({
     setSearch("");
     setProviderId("");
     setModel("");
-    setProfileId("");
   }
 
-  const filterActive = Boolean(search || providerId || model || profileId);
+  async function setSessionFavorite(sessionId: string, title: string, next: boolean) {
+    setFavoriteBusy(sessionId);
+    setError(undefined);
+    try {
+      await library.setFavorite(sessionId, scopeProfileId, next);
+      const resolved = await library.favorites(scopeProfileId);
+      setFavoriteState(Object.freeze({ profileId: scopeProfileId, favorites: resolved }));
+      setAnnouncement(`${title} ${next ? "added to" : "removed from"} favorites.`);
+      setRefresh((value) => value + 1);
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setFavoriteBusy((current) => current === sessionId ? undefined : current);
+    }
+  }
+
+  async function moveSessionFavorite(sessionId: string, title: string, beforeSessionId?: string) {
+    setFavoriteBusy(sessionId);
+    setError(undefined);
+    try {
+      const resolved = await library.moveFavoriteBefore(sessionId, scopeProfileId, beforeSessionId);
+      setFavoriteState(Object.freeze({ profileId: scopeProfileId, favorites: resolved }));
+      setAnnouncement(`${title} moved in favorites.`);
+      setRefresh((value) => value + 1);
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setFavoriteBusy((current) => current === sessionId ? undefined : current);
+    }
+  }
+
+  function moveSessionFavoriteDirection(sessionId: string, title: string, direction: -1 | 1) {
+    const move = favoriteDirectionalMove(favoriteOrder, sessionId, direction);
+    if (move.changed) void moveSessionFavorite(sessionId, title, move.beforeSessionId);
+  }
+
+  const filterActive = Boolean(search || providerId || model);
   // Only the collapsible menus are counted; the search term is on the row that
   // stays visible, so counting it would name a filter the reader can already see.
-  const activeFilterCount = [providerId, model, profileId].filter(Boolean).length + (sort === "updated-desc" ? 0 : 1);
-  const groupedSessions = groupPinnedSessions(page?.items ?? [], pinned);
+  const activeFilterCount = [providerId, model].filter(Boolean).length + (sort === "updated-desc" ? 0 : 1);
+  const groupedSessions = groupPinnedSessions(page?.items ?? [], favoriteOrder);
   // Lineage is only navigable to a conversation the current filter actually
   // loaded, so the parent lookup is built from what is on screen rather than
   // from a promise that a second read would succeed.
@@ -275,7 +338,7 @@ export function SessionsView({
         title="All conversations"
         headingId="session-library-title"
         eyebrow="Conversation history"
-        description="Open a thread where you left it. Pinned runtime details remain available for audit; a fork appears only when its meaning genuinely changes."
+        description={`Open a ${scopeProfileName} thread where you left it. Search, recents, and continuation stay inside the active profile; pinned runtime details remain available for audit.`}
         status={
           /* The journal-adapter panel used to be a 52px card that `display:none`d
              itself below 1180px — the storage claim vanished on every tablet and
@@ -295,6 +358,7 @@ export function SessionsView({
       />
 
       <div class="session-library-toolbar" role="search" aria-label="Filter sessions" data-filters-open={filtersOpen ? "true" : "false"}>
+        <span class="session-library-profile-scope" title={`Profile id ${scopeProfileId}`}>Profile · {scopeProfileName}</span>
         <label class="session-library-search">
           <span class="session-library-visually-hidden">{SESSION_SEARCH_PLACEHOLDER}</span>
           <Icon name="context" size={17} />
@@ -342,18 +406,6 @@ export function SessionsView({
           onChange={setModel}
         />
         <MenuSelect
-          className="session-filter-menu"
-          placement="down"
-          ariaLabel="Filter by profile"
-          value={profileId}
-          options={[
-            { value: "", label: "All profiles" },
-            { value: "unbound", label: "No profile binding" },
-            ...(page?.facets.profiles.map((profile) => ({ value: profile, label: profile })) ?? []),
-          ]}
-          onChange={setProfileId}
-        />
-        <MenuSelect
           className="session-filter-menu session-library-sort-menu"
           placement="down"
           ariaLabel="Sort sessions"
@@ -385,13 +437,44 @@ export function SessionsView({
             <small title="Metadata only; transcripts are read on selection.">{loadingList ? "Reading journal…" : "Metadata only"}</small>
           </div>
           <div class="session-library-list" role="list" aria-label="Available conversations">
-            {groupedSessions.pinned.length ? <div class="session-library-group-label" role="presentation">Pinned · page memory</div> : null}
+            {groupedSessions.pinned.length ? <div class="session-library-group-label" role="presentation">Favorites · {durability.state === "ephemeral" ? "page memory" : "encrypted journal"}</div> : null}
             {ordered.map((item, index) => {
               const lineage = sessionLineage(item.sourceSessionId, titleById);
               const active = item.id === activeSessionId;
+              const favorite = pinned.has(item.id);
+              const favoriteIndex = favoriteOrder.indexOf(item.id);
               return (
                 <>{index === groupedSessions.pinned.length && groupedSessions.pinned.length && groupedSessions.other.length ? <div class="session-library-group-label" role="presentation">All sessions</div> : null}
-                <div class="session-library-row" role="listitem" key={item.id}>
+                <div
+                  class="session-library-row"
+                  role="listitem"
+                  key={item.id}
+                  data-session-id={item.id}
+                  data-favorite={favorite ? "true" : "false"}
+                  data-dragging={draggingFavoriteId === item.id ? "true" : undefined}
+                  draggable={favorite}
+                  onDragStart={(event) => {
+                    if (!favorite || !event.dataTransfer) { event.preventDefault(); return; }
+                    setDraggingFavoriteId(item.id);
+                    event.dataTransfer.effectAllowed = "move";
+                    event.dataTransfer.setData("text/plain", item.id);
+                  }}
+                  onDragEnd={() => setDraggingFavoriteId(undefined)}
+                  onDragOver={(event) => {
+                    if (!favorite || !draggingFavoriteId || draggingFavoriteId === item.id || !event.dataTransfer) return;
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = "move";
+                  }}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    const sourceId = draggingFavoriteId || event.dataTransfer?.getData("text/plain");
+                    setDraggingFavoriteId(undefined);
+                    const source = ordered.find((candidate) => candidate.id === sourceId);
+                    if (!source) return;
+                    const move = favoriteDropMove(favoriteOrder, source.id, item.id);
+                    if (move.changed) void moveSessionFavorite(source.id, source.title, move.beforeSessionId);
+                  }}
+                >
                   <button
                     class={`session-library-card${item.id === selectedId ? " selected" : ""}`}
                     type="button"
@@ -399,6 +482,12 @@ export function SessionsView({
                     aria-label={`${item.title}. ${relativeSessionTime(item.updatedAt)}. ${sessionEventCount(item.headSequence)}. ${item.providerId} ${item.model}${item.profileId ? `, profile ${item.profileId}` : ""}${lineage ? `, forked from ${lineage.label}` : ""}${active ? ", active session" : ""}`}
                     title={`${item.title}\n${item.providerId} · ${item.model}\nUpdated ${formatDateTime(item.updatedAt)}`}
                     onClick={() => setSelectedId(item.id)}
+                    aria-keyshortcuts={favorite ? "Alt+ArrowUp Alt+ArrowDown" : undefined}
+                    onKeyDown={(event) => {
+                      if (!favorite || !event.altKey || (event.key !== "ArrowUp" && event.key !== "ArrowDown")) return;
+                      event.preventDefault();
+                      moveSessionFavoriteDirection(item.id, item.title, event.key === "ArrowUp" ? -1 : 1);
+                    }}
                   >
                     <span class="session-library-card-top">
                       <span class="session-library-card-mark" data-active={active ? "true" : "false"} aria-hidden="true">
@@ -435,12 +524,30 @@ export function SessionsView({
                       onClick={() => setSelectedId(lineage.parentId)}
                     >↳</button>
                   ) : null}
+                  {favorite ? (
+                    <span class="session-library-favorite-order" aria-label={`Reorder favorite ${item.title}`}>
+                      <span class="session-library-favorite-drag" aria-hidden="true" title="Drag to reorder">⋮⋮</span>
+                      <button
+                        type="button"
+                        aria-label={`Move favorite ${item.title} up`}
+                        disabled={favoriteBusy === item.id || favoriteIndex <= 0}
+                        onClick={() => moveSessionFavoriteDirection(item.id, item.title, -1)}
+                      >↑</button>
+                      <button
+                        type="button"
+                        aria-label={`Move favorite ${item.title} down`}
+                        disabled={favoriteBusy === item.id || favoriteIndex < 0 || favoriteIndex >= favoriteOrder.length - 1}
+                        onClick={() => moveSessionFavoriteDirection(item.id, item.title, 1)}
+                      >↓</button>
+                    </span>
+                  ) : null}
                   <button
                     class="session-library-pin"
                     type="button"
-                    aria-pressed={pinned.has(item.id)}
-                    aria-label={`${pinned.has(item.id) ? "Unpin" : "Pin"} ${item.title}`}
-                    onClick={() => setPinned(setPageSessionPinned(item.id, !pinned.has(item.id)))}
+                    aria-pressed={favorite}
+                    aria-label={`${favorite ? "Remove from favorites" : "Add to favorites"} ${item.title}`}
+                    disabled={favoriteBusy === item.id}
+                    onClick={() => void setSessionFavorite(item.id, item.title, !favorite)}
                   >★</button>
                 </div></>
               );

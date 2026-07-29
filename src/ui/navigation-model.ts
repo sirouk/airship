@@ -71,6 +71,7 @@ export type MobilePrimaryControl = Readonly<
 export type MobileMoreRouteEntry = Readonly<{
   id: NavigationView;
   label: string;
+  description: string;
   kind: "route";
   view: NavigationView;
   hash: NavigationHash;
@@ -196,13 +197,13 @@ const RAIL_LAYOUT: readonly Readonly<{
       Object.freeze({ id: "chat" as const }),
       Object.freeze({ id: "workspace" as const, nested: Object.freeze(["editor", "terminal"] as const) }),
       Object.freeze({ id: "memory" as const }),
+      Object.freeze({ id: "proof" as const }),
     ]),
   }),
   Object.freeze({
     id: "receipts",
-    label: "Receipts & access",
+    label: "Global",
     rows: Object.freeze([
-      Object.freeze({ id: "proof" as const }),
       Object.freeze({ id: "vault" as const }),
       Object.freeze({ id: "access" as const }),
       Object.freeze({ id: "billing" as const }),
@@ -267,14 +268,16 @@ export const SETTINGS_OVERLAY_ENTRY: NavigationOverlayEntry = Object.freeze({
 });
 
 export const MOBILE_MORE_ENTRIES: readonly MobileMoreEntry[] = Object.freeze([
-  moreRoute("sessions", "All conversations", "chat"),
-  moreRoute("editor", "Editor", "workspace"),
-  moreRoute("terminal", "Terminal", "workspace"),
-  moreRoute("memory", "Memory"),
-  moreRoute("profiles", "Profiles"),
-  moreRoute("vault", "Vault"),
-  moreRoute("access", "Connection"),
-  moreRoute("billing", "Account", "access"),
+  moreRoute("sessions", "All conversations", "Search and resume past chats", "chat"),
+  moreRoute("editor", "Editor", "Files and code", "workspace"),
+  moreRoute("terminal", "Terminal", "Sandboxed command sessions", "workspace"),
+  moreRoute("memory", "Memory", "Recall, sources, and relationships"),
+  moreRoute("profiles", "Profiles", "Agent behavior and approvals"),
+  moreRoute("skills", "Skills", "Reusable instructions across profiles", "profiles"),
+  moreRoute("capabilities", "Capabilities", "Detected device and runtime support", "profiles"),
+  moreRoute("vault", "Vault", "Where your work is stored"),
+  moreRoute("access", "Connection", "Model providers and credentials"),
+  moreRoute("billing", "Account", "Chutes balance and usage", "access"),
   SETTINGS_OVERLAY_ENTRY,
 ]);
 
@@ -360,11 +363,13 @@ function nestedDestination(
 function moreRoute(
   view: NavigationView,
   label: string,
+  description: string,
   parent?: CanonicalDestinationId,
 ): MobileMoreRouteEntry {
   return Object.freeze({
     id: view,
     label,
+    description,
     kind: "route",
     view,
     hash: navigationHashForView(view),

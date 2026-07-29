@@ -1,5 +1,6 @@
 import type { JsonValue, Tool, ToolExecutionResult } from "../core/contracts";
 import {
+  isWorkspaceControlPlanePath,
   WorkspaceConflictError,
   normalizeWorkspacePath,
   type WorkspaceFile,
@@ -44,7 +45,20 @@ function integerArgument(value: JsonValue | undefined, name: string, fallback: n
 }
 
 function workspacePath(value: JsonValue | undefined, name: string): string {
-  return normalizeWorkspacePath(stringArgument(value, name));
+  return userWorkspacePath(normalizeWorkspacePath(stringArgument(value, name)));
+}
+
+function userWorkspacePath(path: string): string {
+  if (isWorkspaceControlPlanePath(path)) {
+    throw new Error(`Generic workspace tools exclude Airship control-plane paths: ${path}`);
+  }
+  return path;
+}
+
+function userWorkspaceEntries(files: readonly WorkspaceFile[]): WorkspaceFile[];
+function userWorkspaceEntries(files: readonly Omit<WorkspaceFile, "content">[]): Array<Omit<WorkspaceFile, "content">>;
+function userWorkspaceEntries(files: readonly WorkspaceFile[] | readonly Omit<WorkspaceFile, "content">[]) {
+  return files.filter((file) => !isWorkspaceControlPlanePath(file.path));
 }
 
 export function createWorkspaceToolRegistry(workspace: WorkspacePort): ToolRegistry {
@@ -63,10 +77,10 @@ export function createWorkspaceToolRegistry(workspace: WorkspacePort): ToolRegis
     },
     async execute(argumentsValue) {
       const argumentsObject = objectArguments(argumentsValue);
-      const path = normalizeWorkspacePath(
+      const path = userWorkspacePath(normalizeWorkspacePath(
         typeof argumentsObject.path === "string" ? argumentsObject.path : "/workspace",
-      );
-      const files = await workspace.list(path);
+      ));
+      const files = userWorkspaceEntries(await workspace.list(path));
       return { content: JSON.stringify(files, null, 2), metadata: { count: files.length } };
     },
   };
@@ -146,7 +160,7 @@ export function createWorkspaceToolRegistry(workspace: WorkspacePort): ToolRegis
     },
     async execute(argumentsValue): Promise<ToolExecutionResult> {
       const path = workspacePath(objectArguments(argumentsValue).path, "path");
-      const entries = await workspace.list(path);
+      const entries = userWorkspaceEntries(await workspace.list(path));
       const file = entries.find((entry) => entry.path === path);
       if (file) {
         return {
@@ -184,9 +198,9 @@ export function createWorkspaceToolRegistry(workspace: WorkspacePort): ToolRegis
     },
     async execute(argumentsValue): Promise<ToolExecutionResult> {
       const argumentsObject = objectArguments(argumentsValue);
-      const path = normalizeWorkspacePath(
+      const path = userWorkspacePath(normalizeWorkspacePath(
         typeof argumentsObject.path === "string" ? argumentsObject.path : "/workspace",
-      );
+      ));
       const query = stringArgument(argumentsObject.query, "query");
       if (!query) throw new Error("query must not be empty.");
       const caseSensitive = booleanArgument(argumentsObject.caseSensitive, "caseSensitive");
@@ -195,7 +209,7 @@ export function createWorkspaceToolRegistry(workspace: WorkspacePort): ToolRegis
         throw new Error(`maxResults must be between 1 and ${MAX_SEARCH_RESULTS}.`);
       }
 
-      const allEntries = await workspace.list(path);
+      const allEntries = userWorkspaceEntries(await workspace.list(path));
       const entries = allEntries.slice(0, MAX_SEARCH_FILES);
       const matches: Array<{ path: string; line: number; column: number; snippet: string }> = [];
       let scannedBytes = 0;

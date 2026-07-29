@@ -1,7 +1,6 @@
 import type { SessionManifest } from "../core/contracts";
-import type { EventJournal, SessionRecord } from "../core/journal";
+import { JournalConflictError, type EventJournal, type SessionRecord } from "../core/journal";
 import {
-  assessSessionHistory,
   decideSessionResume,
   extractSessionPins,
   materializeSessionMessages,
@@ -16,6 +15,20 @@ import {
   type SessionResumeCompatibility,
 } from "./domain";
 import { assessSessionHistoryAsync } from "./async-assessment";
+import {
+  resolveProfileActiveConversation,
+  selectProfileActiveConversation,
+  type ProfileActiveConversationResolution,
+  type SelectProfileActiveConversationResult,
+} from "./profile-cockpit";
+import {
+  nextFavoriteMovePayload,
+  PROFILE_FAVORITE_ORDER_MOVED_EVENT_TYPE,
+  resolveProfileFavoriteOrder,
+  type SessionFavorite,
+} from "./favorite-order";
+
+export type { SessionFavorite } from "./favorite-order";
 
 export type SessionLibraryDetail = Readonly<{
   session: SessionRecord;
@@ -30,17 +43,25 @@ export type ForkSessionRequest = Readonly<{
   title?: string;
   manifest?: SessionManifest;
   expectedSourceHead?: Readonly<{ sequence: number; digest: string }>;
-  /** Audited historical turn boundary to commit as the fork ancestor. */
+  /** Audited quiescent boundary: a terminal turn or a between-turn session-scoped record. */
   sourcePoint?: Readonly<{ sequence: number; digest: string }>;
   signal?: AbortSignal;
 }>;
 
 export type SessionForkResult = Readonly<{
   sourceSessionId: string;
+  /** Source journal snapshot observed and rechecked before destination creation. */
   sourceHeadSequence: number;
   sourceHeadDigest: string;
+  /** Audited source prefix represented by the fresh destination context seed. */
+  sourceBoundarySequence: number;
+  sourceBoundaryDigest: string;
   session: SessionRecord;
   historyCopied: false;
+  contextSeeded: true;
+  contextMessageCount: number;
+  omittedContextMessages: number;
+  omittedContextImages: number;
   abortRequestedAfterCommit: boolean;
 }>;
 
@@ -76,7 +97,22 @@ export class SessionLibrary {
     throwIfAborted(signal);
     const records = await this.journal.listSessions();
     throwIfAborted(signal);
-    return querySessionRecords(records, query);
+    // Preference writes advance the immutable journal head, but starring or
+    // reordering a thread is not conversation activity. Present a derived
+    // activity time to recency surfaces so those operations never reshuffle
+    // the Recent group. `inspect()` still returns the exact record timestamp.
+    const activityRecords = await Promise.all(records.map(async (record) => {
+      const events = await this.journal.readEvents(record.id, 0, signal);
+      throwIfAborted(signal);
+      const activity = [...events].reverse().find((event) =>
+        event.type !== "session.favorite.changed"
+        && event.type !== PROFILE_FAVORITE_ORDER_MOVED_EVENT_TYPE,
+      );
+      return activity && activity.recordedAt !== record.updatedAt
+        ? { ...record, updatedAt: activity.recordedAt }
+        : record;
+    }));
+    return querySessionRecords(activityRecords, query);
   }
 
   async inspect(
@@ -107,76 +143,106 @@ export class SessionLibrary {
   async fork(sourceSessionId: string, request: ForkSessionRequest = {}): Promise<SessionForkResult> {
     assertSessionId(sourceSessionId);
     throwIfAborted(request.signal);
-    const source = await this.journal.getSession(sourceSessionId);
-    throwIfAborted(request.signal);
-    if (!source) throw new Error(`Unknown session: ${sourceSessionId}`);
-    if (
-      request.expectedSourceHead &&
-      (request.expectedSourceHead.sequence !== source.headSequence || request.expectedSourceHead.digest !== source.headDigest)
-    ) {
-      throw new SessionForkConflictError();
-    }
-    let ancestor = { sequence: source.headSequence, digest: source.headDigest };
-    if (request.sourcePoint) {
-      const events = await this.journal.readEvents(source.id);
-      throwIfAborted(request.signal);
-      const genesis = request.sourcePoint.sequence === 0 && request.sourcePoint.digest === "genesis";
-      const point = events.find((event) => event.sequence === request.sourcePoint!.sequence);
-      if (!genesis && (!point || point.digest !== request.sourcePoint.digest || !isForkBoundary(point.type))) {
-        throw new SessionForkConflictError("The requested historical fork point is not an audited completed-turn boundary.");
-      }
-      const fresh = await this.journal.getSession(source.id);
-      if (!fresh || !sameHead(source, fresh)) throw new SessionForkConflictError();
-      ancestor = genesis ? { sequence: 0, digest: "genesis" } : { sequence: point!.sequence, digest: point!.digest };
-    }
-
-    const forkedAt = this.now();
-    if (!Number.isFinite(Date.parse(forkedAt))) throw new Error("The session library clock returned an invalid timestamp.");
-    const title = forkTitle(request.title, source.title);
-    const manifest = structuredClone(request.manifest ?? source.manifest);
-    manifest.createdAt = forkedAt;
-    manifest.lineage = {
-      version: 1,
-      kind: "fork",
-      sourceSessionId: source.id,
-      sourceHeadSequence: ancestor.sequence,
-      sourceHeadDigest: ancestor.digest,
-      forkedAt,
-    };
-    validateForkManifest(manifest);
-
-    // Fork lineage is a commitment to a specific source head. Recheck as late
-    // as possible before the cross-session mutation so an append racing the
-    // manifest preparation cannot silently produce stale ancestry.
-    if (request.expectedSourceHead) {
-      const fresh = await this.journal.getSession(source.id);
-      throwIfAborted(request.signal);
-      if (
-        !fresh ||
-        fresh.headSequence !== request.expectedSourceHead.sequence ||
-        fresh.headDigest !== request.expectedSourceHead.digest
-      ) {
-        throw new SessionForkConflictError();
-      }
-    }
-
-    // No abort check after this mutation boundary: if the journal commits while
-    // cancellation races, returning the committed identity avoids an ambiguous retry.
-    const created = await this.journal.createSession(title, manifest);
-    if (created.id === source.id) throw new Error("The journal reused the source session identity for a fork.");
-    return deepFreeze({
-      sourceSessionId: source.id,
-      sourceHeadSequence: ancestor.sequence,
-      sourceHeadDigest: ancestor.digest,
-      session: structuredClone(created),
-      historyCopied: false,
-      abortRequestedAfterCommit: request.signal?.aborted ?? false,
-    });
+    const { forkSession } = await import("./session-fork");
+    return forkSession(this.journal, this.limits, this.now, sourceSessionId, request);
   }
 
   async rename(sessionId: string, title: string): Promise<SessionRecord> {
     assertSessionId(sessionId);
     return this.journal.renameSession(sessionId, title);
+  }
+
+  /**
+   * Favorites travel with the journal authority instead of a global browser
+   * preference. Page-memory favorites therefore remain page-memory, while an
+   * adopted encrypted journal makes the same preference durable.
+   */
+  async favorites(profileId: string, signal?: AbortSignal): Promise<readonly SessionFavorite[]> {
+    return (await resolveProfileFavoriteOrder(this.journal, profileId, signal)).favorites;
+  }
+
+  async setFavorite(
+    sessionId: string,
+    profileId: string,
+    favorite: boolean,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    assertSessionId(sessionId);
+    throwIfAborted(signal);
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const session = await this.journal.getSession(sessionId, signal);
+      if (!session) throw new Error(`Unknown session: ${sessionId}`);
+      if (session.manifest.profile?.profileId !== profileId) {
+        throw new Error("A conversation can only be favorited from its active profile.");
+      }
+      const resolution = await resolveProfileFavoriteOrder(this.journal, profileId, signal);
+      if (resolution.favorites.some((entry) => entry.sessionId === sessionId) === favorite) return;
+      try {
+        await this.journal.append(sessionId, [{ type: "session.favorite.changed", payload: { favorite } }], signal);
+        return;
+      } catch (error) {
+        if (!(error instanceof JournalConflictError) || attempt === 2) throw error;
+      }
+    }
+  }
+
+  /**
+   * Append a profile-local positional operation. `beforeSessionId` omitted
+   * means move to the end. The result is the converged authoritative order,
+   * including any same-generation move committed by another writer.
+   */
+  async moveFavoriteBefore(
+    sessionId: string,
+    profileId: string,
+    beforeSessionId?: string,
+    signal?: AbortSignal,
+  ): Promise<readonly SessionFavorite[]> {
+    assertSessionId(sessionId);
+    if (beforeSessionId !== undefined) assertSessionId(beforeSessionId);
+    throwIfAborted(signal);
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const resolution = await resolveProfileFavoriteOrder(this.journal, profileId, signal);
+      const ids = resolution.favorites.map((favorite) => favorite.sessionId);
+      const sourceIndex = ids.indexOf(sessionId);
+      if (sourceIndex < 0) throw new Error("Only a current favorite can be reordered.");
+      if (beforeSessionId === sessionId) return resolution.favorites;
+      const desired = [...ids];
+      desired.splice(sourceIndex, 1);
+      const insertion = beforeSessionId === undefined ? desired.length : desired.indexOf(beforeSessionId);
+      if (insertion < 0) throw new Error("The favorite-order anchor is not in the active profile.");
+      desired.splice(insertion, 0, sessionId);
+      if (desired.every((id, index) => id === ids[index])) return resolution.favorites;
+      try {
+        await this.journal.append(sessionId, [{
+          type: PROFILE_FAVORITE_ORDER_MOVED_EVENT_TYPE,
+          payload: nextFavoriteMovePayload(resolution, sessionId, beforeSessionId),
+        }], signal);
+        return (await resolveProfileFavoriteOrder(this.journal, profileId, signal)).favorites;
+      } catch (error) {
+        if (!(error instanceof JournalConflictError) || attempt === 2) throw error;
+      }
+    }
+    return (await resolveProfileFavoriteOrder(this.journal, profileId, signal)).favorites;
+  }
+
+  /** Resolve the append-only pointer carried by this journal authority. */
+  activeConversation(
+    profileId: string,
+    signal?: AbortSignal,
+  ): Promise<ProfileActiveConversationResolution> {
+    return resolveProfileActiveConversation(this.journal, profileId, signal);
+  }
+
+  /** Commit one profile-local pointer selection, fenced to an audited head when supplied. */
+  selectActiveConversation(
+    profileId: string,
+    sessionId: string,
+    options: Readonly<{
+      expectedTargetHead?: Readonly<{ sequence: number; digest: string }>;
+      signal?: AbortSignal;
+    }> = {},
+  ): Promise<SelectProfileActiveConversationResult> {
+    return selectProfileActiveConversation(this.journal, profileId, sessionId, options);
   }
 
   private async readSnapshot(
@@ -202,39 +268,8 @@ export class SessionLibrary {
   }
 }
 
-function isForkBoundary(type: string): boolean {
-  return type === "turn.completed" || type === "local.command.completed" || type === "local.command.failed";
-}
-
 function sameHead(left: SessionRecord, right: SessionRecord): boolean {
   return left.headSequence === right.headSequence && left.headDigest === right.headDigest;
-}
-
-function forkTitle(requested: string | undefined, sourceTitle: string): string {
-  const title = (requested ?? `${sourceTitle} · fork`).trim();
-  if (!title || title.length > 240 || /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/u.test(title)) {
-    throw new TypeError("Fork title must be between 1 and 240 printable characters.");
-  }
-  return title;
-}
-
-function validateForkManifest(manifest: SessionManifest): void {
-  if (
-    (manifest.protocolVersion !== 1 && manifest.protocolVersion !== 2) ||
-    (manifest.protocolVersion === 2 &&
-      manifest.turnContext !== "required" && manifest.turnContext !== "disabled") ||
-    !manifest.providerId ||
-    manifest.providerId.length > 256 ||
-    !manifest.model ||
-    manifest.model.length > 512 ||
-    !manifest.workspaceId ||
-    manifest.workspaceId.length > 2_048 ||
-    !manifest.systemPromptDigest ||
-    !manifest.toolManifestDigest ||
-    !Array.isArray(manifest.tools)
-  ) {
-    throw new TypeError("Fork manifest does not satisfy a supported bounded session protocol shape.");
-  }
 }
 
 function assertSessionId(value: string): void {

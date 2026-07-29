@@ -19,33 +19,22 @@ import {
   type ActiveChutesConnection,
   type ChutesConnection,
 } from "../auth/connection";
-import {
-  CHUTES_ACTIVE_REGISTRATION,
-  chutesOAuthExchangeMode,
-  chutesOAuthLocationState,
-  consumeChutesAuthorizationCallback,
-  createChutesAuthorizationRequest,
-  exchangeChutesAuthorizationCode,
-  refreshChutesOAuthToken,
-  type ChutesOAuthTokenSet,
-  type ChutesPkceAttempt,
-} from "../auth/chutes-oauth";
+import type { ChutesOAuthRegistration } from "../auth/chutes-oauth-registration";
+import type { ChutesOAuthTokenSet } from "../auth/chutes-oauth";
 import type { BrowserRuntimeCapabilityReport } from "../capabilities/browser-runtime";
+import type { ExtensionBridgeObservation } from "../capabilities/extension-bridge";
 import {
   type SlashCommandPlan,
   type SlashCommandRegistry,
   type SlashCompletion,
 } from "../commands";
-import { createSessionManifest } from "../core/session-manifest";
-import type { InferenceTransport, SecurityPosture, SessionManifest } from "../core/contracts";
+import type { CanonicalMessage, InferenceTransport, SecurityPosture, SessionManifest } from "../core/contracts";
+import type { LiveEnvironmentEntry } from "../core/live-environment";
 import type { InferenceDirectoryPromptDefinition } from "../core/operating-charter";
-import { createSessionContextPolicy, sessionContextPoliciesMatch } from "../core/context-policy";
-import { prepareCanonicalImageInputs } from "../core/multimodal";
 import { EventJournal, type DurableEvent, type SessionRecord } from "../core/journal";
 import { randomUuid } from "../core/id";
 import { loadBrowserGit } from "../load-browser-git";
 import { runTurn } from "../load-agent-runtime";
-import { loadDeferredCapabilities } from "../load-deferred-capabilities";
 import { inspectBrowserExecutionTier } from "../load-execution-runtime";
 import { MemoryJournalBackend } from "../core/memory-journal";
 import type { SessionAuditReport } from "../core/session-audit";
@@ -67,6 +56,7 @@ import type {
 import type { BrowserGitClient } from "../git/client";
 import type { GitOperation, GitOperationDescriptor } from "../git/types";
 import type { WorkspaceGitRepositorySeed } from "../git/workspace-adapter";
+import type { VaultContextFabricPort } from "../vault/context-fabric-port";
 import type { ChutesInferenceTransport, ChutesInvocationTelemetry } from "../inference/chutes";
 import { modelInputModalityCapability, modelPopularitySignal, sortModels, type AirshipModel } from "../models";
 import type { ExecutionCapability } from "../execution/runtime-registry";
@@ -98,9 +88,17 @@ import {
   type SessionListItem,
 } from "../sessions";
 import {
+  profileOwnedSessions,
+  profileOwnsSession,
+  requireProfileOwnedSession,
+  resolveResumableProfileConversation,
+  resumableProfileManifestMatches,
+} from "../sessions/profile-cockpit";
+import {
   createAirshipToolRegistry,
   createVaultAwareAirshipToolRegistry,
   createVaultBackedAirshipToolRegistry,
+  type LiveEnvironmentSupplementSource,
 } from "../tools/airship-tools";
 import type { FederatedMemoryResult } from "../tools/federated-memory";
 import {
@@ -117,6 +115,8 @@ import {
 } from "../vault/local-device";
 import { isWorkspaceControlPlanePath, type WorkspaceEntry, type WorkspaceFile, type WorkspacePort } from "../workspace/contracts";
 import { MemoryWorkspace } from "../workspace/memory";
+import { ProfileWorkspacePort, adoptLegacyRootWorkspace, isProfileWorkspacePath, profileWorkspaceIdentity } from "../workspace/profile-scope";
+import { WorkspaceRefreshCoordinator, type WorkspaceRefreshAuthority } from "./workspace-refresh";
 import { composeClaimStack, type ClaimStackFact, type ClaimStackItem } from "./claim-stack-model";
 import { TURN_EVIDENCE_COPY, turnEvidenceVerdict } from "./turn-evidence";
 // The two per-message rung words, taken from the one dictionary rather than
@@ -188,6 +188,7 @@ import { SEAL_LABELS, Seal, sealStateForProofStatus, type SealState } from "./se
 import { useScrollEdges } from "./scroll-affordance";
 import { enabledSlashSelection, firstEnabledSlashIndex, moveSlashSelection } from "./slash-menu-state";
 import type { SourcesImportRequest } from "./sources-view";
+import type { MemorySourceTarget } from "./memory-view";
 import { releaseVaultAuthority, transitionVaultProvider } from "./vault-provider-transition";
 import {
   ASSISTANT_MESSAGE_ESTIMATE,
@@ -222,6 +223,7 @@ import type {
 } from "./chat/session-message-presentation";
 import { recoverPartialTurn } from "./chat/turn-recovery";
 import { claimThreadDraftHydration, readThreadDraft, writeThreadDraft } from "./chat/thread-draft";
+import { browserThreadViewportStorage, readThreadViewport, writeThreadViewport } from "./chat/thread-viewport";
 import { appendThreadQueueItem, removeThreadQueueItem } from "./chat/thread-queue";
 import {
   refreshCompletedTurnWorkspace,
@@ -243,7 +245,6 @@ import { TabPresenceNote } from "./tab-presence";
 import { ProfileThemeSwatch } from "./profile-theme-swatch";
 import { PostureChip } from "./posture-chip";
 import { durabilityLabel } from "./durability-indicator";
-import { mapUnknownRequestFailure } from "./request-state";
 import { RouteSkeleton } from "./route-skeleton";
 import type { LocalProviderProbeResult } from "./connect/connect-surface";
 import {
@@ -338,17 +339,43 @@ type QueuedComposerItem = Readonly<{
  * a person re-find a thread without exposing runtime pins or proof state. */
 type RecentConversation = Readonly<{
   id: string;
+  profileId: string;
   title: string;
   preview: string;
   updatedAt: string;
+  favorite: boolean;
   open(): void;
+  toggleFavorite(): void;
+  moveFavorite(beforeSessionId?: string): void;
 }>;
 
 type RecentConversationCacheEntry = Readonly<{ preview: string; updatedAt: string }>;
 
 type Runtime = {
+  /**
+   * The global storage authority — page memory or an adopted encrypted Vault.
+   *
+   * It owns every Profile's namespace, so this is what a Vault transition
+   * migrates and what identity checks name. Nothing that reads or writes user
+   * content should reach for it: `workspace` below is the only view a file,
+   * repository, index, terminal or tool is allowed to see.
+   */
+  storage: WorkspacePort;
+  storageId: string;
+  /**
+   * The active Profile's private namespace inside `storage`.
+   *
+   * Two Profiles resolve to disjoint subtrees, so they hold genuinely different
+   * bytes, Git object databases, worktree inventories and indexes rather than
+   * one shared filesystem behind separate presentation state. Keeping this
+   * named `workspace` is deliberate: every existing consumer became
+   * Profile-scoped by construction, and anything overlooked fails closed —
+   * scoped — instead of silently sharing.
+   */
   workspace: WorkspacePort;
   workspaceId: string;
+  /** The Profile that `workspace` belongs to; a switch rebuilds both. */
+  profileId: string;
   journal: EventJournal;
   profiles: ProfileCatalogStore;
   transport: InferenceTransport;
@@ -362,8 +389,28 @@ type Runtime = {
   inferenceDirectory?: () => InferenceDirectoryPromptDefinition;
   contextPolicy?: SessionManifest["contextPolicy"];
   contextMode?: "memory-only" | "encrypted-ranged" | "local-fallback";
+  /**
+   * The adopted Vault's context fabric, retained so a Profile switch can
+   * rebuild the same class of tool registry. Absent under page memory.
+   */
+  contextFabric?: VaultContextFabricPort;
   tools: Awaited<ReturnType<typeof createAirshipToolRegistry>>;
 };
+
+type ForkActivationAuthority = Readonly<{
+  runtime: Runtime;
+  profileId: string;
+  profileRevision: string;
+  activeSessionId: string;
+  manifest: SessionManifest;
+}>;
+
+type LocalPresentationAuthority = Readonly<{
+  runtime: Runtime;
+  profileId: string;
+  profileRevision: string;
+  sessionId: string;
+}>;
 
 type ChutesAvailabilityAuthority = Readonly<{
   connection: ActiveChutesConnection;
@@ -401,6 +448,10 @@ type DurableAdoptionDescriptor = Readonly<{
 }>;
 
 type OAuthCallbackStatus = { kind: "verified" | "blocked" | "error"; message: string };
+type ActiveOAuthRegistration = Readonly<{
+  registration: ChutesOAuthRegistration;
+  exchangeMode: "local-confidential-bridge" | "public-pkce";
+}>;
 type AttestationsScreenComponent = typeof import("./attestations-view").AttestationsView;
 type ProofInspectorComponent = typeof import("./proof-inspector").ProofInspector;
 type EditorScreenComponent = typeof import("./editor-view").EditorView;
@@ -416,6 +467,36 @@ type AccessScreenComponent = typeof import("./access-view").AccessView;
 type ProviderConnectionsScreenComponent = typeof import("./provider-connections-view").ProviderConnectionsView;
 type BillingScreenComponent = typeof import("./billing-view").BillingView;
 type ProofScreenComponent = typeof import("./proof-view").ProofView;
+type EvidenceAcquisitionQueueController = import("../attestation/evidence-acquisition-queue").ReceiptEvidenceAcquisitionQueue;
+type EvidenceAcquisitionQueueSnapshot = import("../attestation/evidence-acquisition-queue").EvidenceAcquisitionQueueSnapshot;
+type EvidenceAcquisitionQueueAuthorityController = import("../attestation/workspace-evidence-acquisition-persistence").WorkspaceEvidenceAcquisitionAuthority;
+type EvidenceAcquisitionQueueLoad = Readonly<{
+  workspace: WorkspacePort;
+  workspaceId: string;
+  profileId: string;
+  promise: Promise<EvidenceAcquisitionQueueController>;
+}>;
+type EndpointEvidenceAuthorityController = import("../attestation/workspace-endpoint-evidence-persistence").WorkspaceEndpointEvidenceAuthority;
+type EndpointEvidenceBinding = import("../attestation/workspace-endpoint-evidence-persistence").WorkspaceEndpointEvidenceBinding;
+type EndpointEvidenceRecordIdentity = import("../attestation/workspace-endpoint-evidence-persistence").EndpointEvidenceRecordIdentity;
+type EndpointEvidenceScope = Readonly<{
+  workspace: WorkspacePort;
+  workspaceId: string;
+  profileId: string;
+}>;
+type EndpointEvidenceFence = EndpointEvidenceScope & Readonly<{
+  sessionId: string;
+  receiptId?: string;
+  instanceId: string;
+  endpointKeyDigest?: string;
+}>;
+type EndpointEvidenceAuthorityLoad = EndpointEvidenceScope & Readonly<{
+  promise: Promise<EndpointEvidenceBinding>;
+}>;
+type AttestationClientBinding = EndpointEvidenceScope & Readonly<{
+  client: ChutesAttestationEvidenceClient;
+  generation: number;
+}>;
 const WORKSPACE_EDITOR_BYTE_LIMIT = 128 * 1024;
 class MountedAttestationError extends Error {
   readonly name = "AttestationEvidenceClientError";
@@ -435,6 +516,13 @@ type AttestationAcquisitionFailure = Readonly<{
   instanceId?: string;
   endpointKeyDigest?: string;
 }>;
+type AttestationPresentationState = EndpointEvidenceScope & Readonly<{
+  sessionId: string;
+  records: readonly ChutesEndpointEvidenceRecord[];
+  failure?: AttestationAcquisitionFailure;
+  selectedRecordId?: string;
+  durabilityNotice?: string;
+}>;
 type ProfileEditorDraft = {
   profileId: string;
   name: string;
@@ -449,6 +537,11 @@ type ProfileEditorDraft = {
 };
 
 const CHUTES_OAUTH_ATTEMPT_KEY = "airship.chutes.oauth-attempt.v1";
+
+async function loadDeferredCapabilities() {
+  const broker = await import("../load-deferred-capabilities");
+  return broker.loadDeferredCapabilities();
+}
 
 /**
  * Baked loopback MinIO vault (compose.local-lab.yaml). The "local-lab" storage
@@ -711,13 +804,56 @@ function transcriptMessagesFromPresentation(presentation: SessionMessagePresenta
 async function loadRecentConversations(
   library: SessionLibrary,
   open: (sessionId: string) => void,
+  setFavorite: (sessionId: string, favorite: boolean) => void,
+  moveFavorite: (sessionId: string, beforeSessionId?: string) => void,
   signal: AbortSignal,
   profileId: string,
   cache: Map<string, RecentConversationCacheEntry>,
 ): Promise<readonly RecentConversation[]> {
-  const page = await library.list({ sort: "updated-desc", limit: 10, profileId }, signal);
+  const [page, favorites] = await Promise.all([
+    library.list({ sort: "updated-desc", limit: 200, profileId }, signal),
+    library.favorites(profileId, signal),
+  ]);
   if (signal.aborted) return Object.freeze([]);
-  const conversations = await Promise.all(page.items.map(async (item) => recentConversationFor(item, library, open, signal, cache)));
+  const favoriteOrder = new Map(favorites.map((favorite, index) => [favorite.sessionId, index]));
+  const indexed = [...page.items];
+  const indexedIds = new Set(indexed.map((item) => item.id));
+  const missingFavorites = new Set(favorites.map((favorite) => favorite.sessionId).filter((id) => !indexedIds.has(id)));
+  // The shortcut is bounded to ten rows, but an old favorite must not vanish
+  // merely because more than one 200-item ledger page was created afterward.
+  for (let offset = page.limit; missingFavorites.size > 0 && offset < page.total; offset += page.limit) {
+    const next = await library.list({ sort: "updated-desc", limit: page.limit, offset, profileId }, signal);
+    if (signal.aborted) return Object.freeze([]);
+    for (const item of next.items) {
+      if (!missingFavorites.delete(item.id)) continue;
+      indexed.push(item);
+    }
+  }
+  const itemById = new Map(indexed.map((item) => [item.id, item] as const));
+  // Every favorite stays in the shortcut, even after it falls outside the
+  // ordinary recency window. Non-favorites fill the remaining ten-row budget;
+  // if a profile has more than ten favorites the scrollable tree shows all of
+  // them rather than silently dropping the oldest star.
+  const favoriteItems = favorites.flatMap((favorite) => {
+    const item = itemById.get(favorite.sessionId);
+    return item ? [item] : [];
+  });
+  const recentItems = indexed
+    .filter((item) => !favoriteOrder.has(item.id))
+    .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))
+    .slice(0, Math.max(0, 10 - favoriteItems.length));
+  const selected = [...favoriteItems, ...recentItems];
+  const conversations = await Promise.all(selected.map(async (item) => recentConversationFor(
+    item,
+    library,
+    open,
+    signal,
+    cache,
+    favoriteOrder.has(item.id),
+    setFavorite,
+    moveFavorite,
+    profileId,
+  )));
   if (signal.aborted) return Object.freeze([]);
   return Object.freeze(conversations);
 }
@@ -728,6 +864,10 @@ async function recentConversationFor(
   open: (sessionId: string) => void,
   signal: AbortSignal,
   cache: Map<string, RecentConversationCacheEntry>,
+  favorite: boolean,
+  setFavorite: (sessionId: string, favorite: boolean) => void,
+  moveFavorite: (sessionId: string, beforeSessionId?: string) => void,
+  profileId: string,
 ): Promise<RecentConversation> {
   const cached = cache.get(item.id);
   let preview = cached?.updatedAt === item.updatedAt ? cached.preview : undefined;
@@ -744,7 +884,17 @@ async function recentConversationFor(
     }
     cache.set(item.id, Object.freeze({ preview, updatedAt: item.updatedAt }));
   }
-  return Object.freeze({ id: item.id, title: item.title, preview, updatedAt: item.updatedAt, open: () => open(item.id) });
+  return Object.freeze({
+    id: item.id,
+    profileId,
+    title: item.title,
+    preview,
+    updatedAt: item.updatedAt,
+    favorite,
+    open: () => open(item.id),
+    toggleFavorite: () => setFavorite(item.id, !favorite),
+    moveFavorite: (beforeSessionId) => moveFavorite(item.id, beforeSessionId),
+  });
 }
 
 function conversationPreview(value: string, role: "user" | "assistant"): string {
@@ -782,6 +932,11 @@ export function App() {
   const [preferences, setPreferences] = useState<PreferenceOverrides>(loadPreferenceOverrides);
   const [catalog, setCatalog] = useState<ProfileCatalog>();
   const [profileId, setProfileId] = useState("general");
+  const profileAuthorityId = useRef(profileId);
+  const [profileCockpitTransition, setProfileCockpitTransition] = useState<Readonly<{
+    profileId: string;
+    name: string;
+  }>>();
   const [profileHubScope, setProfileHubScope] = useState("global");
   const [sessionId, setSessionId] = useState<string>();
   const [activeSessionRecord, setActiveSessionRecord] = useState<SessionRecord>();
@@ -790,17 +945,28 @@ export function App() {
   );
   const [sessionLibrary, setSessionLibrary] = useState<SessionLibrary>();
   const [sessionRevision, setSessionRevision] = useState(0);
+  const [pendingForkRetryRevision, setPendingForkRetryRevision] = useState(0);
   const [railPreference, setRailPreference] = useState<RailPreference>(loadRailPreference);
   // The viewport is only ever the *first* answer. Once a person has collapsed
   // or expanded the rail in this width band, that choice wins on every later
   // load — the rail stops re-deciding for them every time a lid is opened.
   const [railViewport, setRailViewport] = useState(() => readRailViewport());
   const railState: RailState = resolveRailState(railPreference, railViewport);
-  const [recentPaletteSessions, setRecentPaletteSessions] = useState<readonly Readonly<{ id: string; title: string; open(): void }>[]>([]);
+  const [recentPaletteState, setRecentPaletteState] = useState<Readonly<{
+    profileId: string;
+    sessions: readonly Readonly<{ id: string; title: string; open(): void }>[];
+  }>>(() => Object.freeze({ profileId: "", sessions: Object.freeze([]) }));
+  const recentPaletteSessions = recentPaletteState.profileId === profileId
+    ? recentPaletteState.sessions
+    : Object.freeze([]);
   const [recentProfileConversations, setRecentProfileConversations] = useState<readonly RecentConversation[]>([]);
   const [proofSelection, setProofSelection] = useState<ProofSelection | undefined>(() =>
     typeof window === "undefined" ? undefined : proofSelectionFromHash(window.location.hash)
   );
+  const [proofSelectionAuthority, setProofSelectionAuthority] = useState<Readonly<{
+    profileId: string;
+    sessionId: string;
+  }>>();
   const [proofSection, setProofSection] = useState<ProofSection>(() =>
     typeof window === "undefined" ? "summary" : proofSectionFromHash(window.location.hash)
   );
@@ -824,7 +990,13 @@ export function App() {
   const [slashMenuDismissedFor, setSlashMenuDismissedFor] = useState<string>();
   const [files, setFiles] = useState<WorkspaceEntry[]>([]);
   const [workspaceFiles, setWorkspaceFiles] = useState<WorkspaceEntry[]>([]);
-  const [selectedFile, setSelectedFile] = useState<WorkspaceFile>();
+  const [selectedFileSelection, setSelectedFileSelection] = useState<Readonly<{
+    profileId: string;
+    file: WorkspaceFile;
+  }>>();
+  const selectedFile = selectedFileSelection?.profileId === profileId
+    ? selectedFileSelection.file
+    : undefined;
   const [busy, setBusy] = useState(false);
   const [runtimeStatus, setRuntimeStatus] = useState("Starting local kernel");
   const [eventCount, setEventCount] = useState(0);
@@ -843,18 +1015,25 @@ export function App() {
   const [invocationTelemetry, setInvocationTelemetry] = useState<ChutesInvocationTelemetry>();
   const [credentialRevision, setCredentialRevision] = useState(0);
   const [oauthCallbackStatus, setOauthCallbackStatus] = useState<OAuthCallbackStatus>();
+  const [activeOAuthRegistration, setActiveOAuthRegistration] = useState<ActiveOAuthRegistration>();
   const [oauthBootstrapRevision, setOauthBootstrapRevision] = useState(0);
   const [oauthTokenRevision, setOauthTokenRevision] = useState(0);
-  const [attestationRecords, setAttestationRecords] = useState<readonly ChutesEndpointEvidenceRecord[]>([]);
-  const [attestationFailure, setAttestationFailure] = useState<AttestationAcquisitionFailure>();
+  const [attestationPresentation, setAttestationPresentation] = useState<AttestationPresentationState>();
+  const [evidenceAcquisitionSnapshot, setEvidenceAcquisitionSnapshot] = useState<EvidenceAcquisitionQueueSnapshot>();
   const [attestationNow, setAttestationNow] = useState(() => Date.now());
-  const [selectedAttestationRecordId, setSelectedAttestationRecordId] = useState<string>();
   const [AttestationsScreen, setAttestationsScreen] = useState<AttestationsScreenComponent>();
   const [attestationsViewError, setAttestationsViewError] = useState<string>();
   const [EditorScreen, setEditorScreen] = useState<EditorScreenComponent>();
   const [editorViewError, setEditorViewError] = useState<string>();
   const [TerminalScreen, setTerminalScreen] = useState<TerminalScreenComponent>();
   const [terminalViewError, setTerminalViewError] = useState<string>();
+  const [terminalOpenRequest, setTerminalOpenRequest] = useState<Readonly<{
+    id: string;
+    cwd: string;
+    name?: string;
+    profileId: string;
+    workspaceIdentity: string;
+  }>>();
   const [CapabilitiesScreen, setCapabilitiesScreen] = useState<CapabilitiesScreenComponent>();
   const [capabilitiesViewError, setCapabilitiesViewError] = useState<string>();
   const [MemoryScreen, setMemoryScreen] = useState<MemoryScreenComponent>();
@@ -878,6 +1057,8 @@ export function App() {
   const catalogCheckpoint = useRef<ProfileCatalogCheckpoint>();
   const catalogMutationTail = useRef<Promise<void>>(Promise.resolve());
   const workspaceOpenRequest = useRef(0);
+  const workspaceRefreshCoordinator = useMemo(() => new WorkspaceRefreshCoordinator(), []);
+  const proofSelectionOperation = useRef(0);
   const inferenceRouteChanging = useRef(false);
   const approvalBroker = useMemo(() => new ApprovalBroker(), []);
   const transcriptStreams = useMemo(() => new TranscriptStreamStore(), []);
@@ -928,6 +1109,7 @@ export function App() {
   const pendingOAuthCredential = useRef<string>();
   const accountCredential = useRef<string>();
   const providerCredential = useRef<string>();
+  const attestationCredentialKind = useRef<ActiveChutesConnection["credentialKind"]>();
   const chutesTransport = useRef<ChutesInferenceTransport>();
   const chutesConnectionId = useRef<string>();
   const chutesConnectionGeneration = useRef(0);
@@ -939,15 +1121,54 @@ export function App() {
   const [providerFabricRevision, setProviderFabricRevision] = useState(0);
   const providerAvailabilityTool = useRef<InspectInferenceConnectionsTool>();
   const attestationClient = useRef<ChutesAttestationEvidenceClient>();
+  const attestationClientBinding = useRef<AttestationClientBinding>();
+  const attestationClientGeneration = useRef(0);
   const attestationOperation = useRef(0);
+  const endpointEvidenceAuthority = useRef<EndpointEvidenceAuthorityController>();
+  const endpointEvidenceAuthorityLoad = useRef<EndpointEvidenceAuthorityLoad>();
+  const endpointEvidenceAuthorityOperation = useRef(0);
+  const evidenceScopeTransition = useRef(0);
+  const evidenceAcquisitionQueue = useRef<EvidenceAcquisitionQueueController>();
+  const evidenceAcquisitionQueueAuthority = useRef<EvidenceAcquisitionQueueAuthorityController>();
+  const evidenceAcquisitionQueueLoad = useRef<EvidenceAcquisitionQueueLoad>();
+  const evidenceAcquisitionQueueOperation = useRef(0);
+  const evidenceAcquisitionUnsubscribe = useRef<() => void>();
   const activeTurn = useRef<AbortController>();
   const localCommandAdmission = useRef(false);
   const activePrompt = useRef<string>();
   const activeSessionIdentity = useRef<string>();
+  const activeSessionByProfile = useRef(new Map<string, string>());
+  /**
+   * One workspace authority per Profile, for as long as the storage authority
+   * behind it lives.
+   *
+   * Rebuilding a Profile's `ProfileWorkspacePort` on every switch would be
+   * correct but not stable, and several things key on that object's identity
+   * rather than on a string: the workbench's page-memory store of unsaved
+   * drafts, and the terminal manager registry. A fresh port on every A→B→A
+   * would silently discard exactly the work a Profile switch is supposed to
+   * preserve. Entries are only reused while `storage` still matches, so a Vault
+   * transition cannot resurrect a port over the previous authority.
+   */
+  const profileAuthorities = useRef(new Map<string, Readonly<{
+    storage: WorkspacePort;
+    workspace: WorkspacePort;
+    workspaceId: string;
+    git: BrowserGitClient;
+    tools: Runtime["tools"];
+    contextMode: Runtime["contextMode"];
+  }>>());
   const queuedMessagesBySession = useRef(new Map<string, readonly QueuedComposerItem[]>());
   const queuedDispatch = useRef(false);
   const draftHydrationIdentity = useRef<string>();
   const preserveComposerForDraftIdentity = useRef<string>();
+  const pendingForkRetry = useRef<Readonly<{
+    sessionId: string;
+    profileId: string;
+    runtime: Runtime;
+    prompt: string;
+    attachments: readonly ComposerAttachment[];
+  }>>();
   const chatRouteOpening = useRef<string>();
   const textarea = useRef<HTMLTextAreaElement>(null);
   const transcriptElement = useRef<HTMLDivElement>(null);
@@ -968,6 +1189,38 @@ export function App() {
   const profileDraftDirty = useRef(false);
   const currentView = useRef<View>(view);
   currentView.current = view;
+  const liveEnvironmentSource = useMemo<LiveEnvironmentSupplementSource>(() => async ({ signal }) => {
+    signal.throwIfAborted();
+    const { probeExtensionBridge } = await import("../capabilities/extension-bridge");
+    const extension = await probeExtensionBridge();
+    signal.throwIfAborted();
+    const providers = combinedInferenceAvailability(
+      inferenceFabric.current?.availability(activeExternalRouteRef.current?.pin)
+        ?? EMPTY_INFERENCE_AVAILABILITY,
+      chutesAvailability.current,
+      runtime.current?.inferenceBinding,
+    );
+    return Object.freeze({
+      providers: liveProviderEntries(providers),
+      storage: liveStorageEntries(
+        // Durability is a property of the storage authority, which is also what
+        // the adoption descriptor names. The Profile-suffixed view would never
+        // match it, and would report every adopted Vault as mid-transition.
+        runtime.current?.storageId,
+        activeDurableAuthority.current,
+        runtime.current?.contextMode,
+      ),
+      extension: liveExtensionEntries(extension),
+      limitations: Object.freeze([
+        ...(providers.connections.length === 0
+          ? ["No live inference provider connection is currently available; the immutable session pin remains authoritative."]
+          : []),
+        ...(extension.state === "available"
+          ? []
+          : ["No usable extension bridge was observed for this turn; extension storage and background compute are unavailable."]),
+      ]),
+    });
+  }, []);
   const searchMemoryForUi = useMemo(() => async (query: string, signal: AbortSignal): Promise<FederatedMemoryResult> => {
     const active = runtime.current;
     const authoritySessionId = activeSessionIdentity.current ?? sessionId;
@@ -1020,11 +1273,72 @@ export function App() {
   const activeProfile = catalog?.profiles.find((profile) => profile.profileId === profileId);
   const activeProfileRef = useRef<ProfileRevision>();
   activeProfileRef.current = activeProfile;
+  useEffect(() => {
+    const requested = proofSelection;
+    const active = runtime.current;
+    const expectedProfileId = profileAuthorityId.current;
+    const operation = ++proofSelectionOperation.current;
+    if (
+      view !== "proof"
+      || !requested
+      || !active
+      || !sessionId
+      || requested.sessionId === sessionId
+    ) {
+      setProofSelectionAuthority(undefined);
+      return;
+    }
+    let disposed = false;
+    setProofSelectionAuthority(undefined);
+    void active.journal.getSession(requested.sessionId).then((target) => {
+      if (
+        disposed
+        || operation !== proofSelectionOperation.current
+        || runtime.current !== active
+        || profileAuthorityId.current !== expectedProfileId
+        || currentView.current !== "proof"
+        || proofSelectionFromHash(window.location.hash)?.sessionId !== requested.sessionId
+      ) return;
+      if (target && profileOwnsSession(target, expectedProfileId)) {
+        setProofSelectionAuthority(Object.freeze({
+          profileId: expectedProfileId,
+          sessionId: requested.sessionId,
+        }));
+        return;
+      }
+      const fallback = proofSelectionForSession(activeSessionIdentity.current);
+      setProofSelection(fallback);
+      setProofSelectionAuthority(undefined);
+      const canonical = proofHash(fallback, proofSection);
+      if (window.location.hash !== canonical) {
+        window.history.replaceState({ view: "proof" }, "", canonical);
+      }
+      setRuntimeStatus("Proof is scoped to the active Profile. Switch Profiles before opening that session's evidence.");
+    }).catch(() => {
+      if (disposed || operation !== proofSelectionOperation.current) return;
+      const fallback = proofSelectionForSession(activeSessionIdentity.current);
+      setProofSelection(fallback);
+      setProofSelectionAuthority(undefined);
+    });
+    return () => { disposed = true; };
+  }, [profileId, proofSection, proofSelection?.sessionId, sessionId, view]);
   const activeTheme = activeProfile
     ? catalog?.themes.find((theme) => theme.themeId === activeProfile.theme.themeId && theme.digest === activeProfile.theme.digest)
     : undefined;
   /** True once the boot screen has been replaced by the real shell chrome. */
   const shellMounted = Boolean(catalog && activeProfile && activeTheme);
+  const activeAttestationPresentation = attestationPresentation
+    && runtime.current
+    && attestationPresentation.workspace === runtime.current.workspace
+    && attestationPresentation.workspaceId === runtime.current.workspaceId
+    && attestationPresentation.profileId === profileId
+    && attestationPresentation.sessionId === sessionId
+      ? attestationPresentation
+      : undefined;
+  const attestationRecords = activeAttestationPresentation?.records ?? Object.freeze([]);
+  const attestationFailure = activeAttestationPresentation?.failure;
+  const selectedAttestationRecordId = activeAttestationPresentation?.selectedRecordId;
+  const endpointEvidenceDurabilityNotice = activeAttestationPresentation?.durabilityNotice;
   const chutesConnected = isChutesConnected(connection);
   const activeInferenceBinding = activeSessionRecord?.manifest.inferenceBinding
     ?? runtime.current?.inferenceBinding;
@@ -1200,17 +1514,23 @@ export function App() {
   useEffect(() => setSlashSelection(Math.max(0, firstEnabledSlashIndex(slashCompletions))), [input, slashCompletions]);
   useEffect(() => observeConnectivity(window, navigator, setOnline), []);
   useEffect(() => {
-    if (!sessionLibrary) { setRecentPaletteSessions([]); return; }
+    if (!sessionLibrary) {
+      setRecentPaletteState(Object.freeze({ profileId: "", sessions: Object.freeze([]) }));
+      return;
+    }
     const controller = new AbortController();
     void loadRecentSessionPaletteSources(
       sessionLibrary,
       (targetSessionId) => { void openPaletteSession(targetSessionId); },
       controller.signal,
-    ).then(setRecentPaletteSessions).catch((error) => {
+      profileId,
+    ).then((sessions) => {
+      if (!controller.signal.aborted) setRecentPaletteState(Object.freeze({ profileId, sessions }));
+    }).catch((error) => {
       if (!controller.signal.aborted) setRuntimeStatus(error instanceof Error ? error.message : "Recent sessions are unavailable.");
     });
     return () => controller.abort();
-  }, [sessionLibrary, sessionRevision]);
+  }, [sessionLibrary, sessionRevision, profileId]);
   useEffect(() => {
     if (
       view !== "chat"
@@ -1262,9 +1582,27 @@ export function App() {
   useEffect(() => {
     if (!sessionLibrary || !profileId) { setRecentProfileConversations([]); return; }
     const controller = new AbortController();
+    const ownerProfileId = profileId;
+    const ownerRuntime = runtime.current;
+    const presentMutationFailure = (error: unknown) => {
+      if (
+        controller.signal.aborted
+        || runtime.current !== ownerRuntime
+        || profileAuthorityId.current !== ownerProfileId
+      ) return;
+      setRuntimeStatus(error instanceof Error ? error.message : "The conversation preference could not be saved.");
+    };
     void loadRecentConversations(
       sessionLibrary,
       (targetSessionId) => { void openPaletteSession(targetSessionId); },
+      (targetSessionId, favorite) => {
+        void setProfileConversationFavorite(targetSessionId, favorite, ownerProfileId, ownerRuntime)
+          .catch(presentMutationFailure);
+      },
+      (targetSessionId, beforeSessionId) => {
+        void moveProfileConversationFavorite(targetSessionId, beforeSessionId, ownerProfileId, ownerRuntime)
+          .catch(presentMutationFailure);
+      },
       controller.signal,
       profileId,
       recentConversationPreviewCache.current,
@@ -1310,10 +1648,37 @@ export function App() {
     };
   }, [transcriptBoundary]);
   useEffect(() => {
-    transcriptPinned.current = true;
-    transcriptEntryAlignment.current = true;
-    setTranscriptDetached(false);
-  }, [sessionId]);
+    if (
+      !sessionId
+      || profileCockpitTransition
+      || activeSessionRecord?.manifest.profile?.profileId !== profileId
+    ) return;
+    const restored = readThreadViewport(profileId, sessionId, browserThreadViewportStorage());
+    transcriptPinned.current = restored?.pinnedToLatest ?? true;
+    transcriptEntryAlignment.current = !restored;
+    setTranscriptDetached(restored ? !restored.pinnedToLatest : false);
+    setStageScrolled((restored?.scrollTop ?? 0) > SESSION_BAR_COLLAPSE_SCROLL);
+    if (!restored || restored.pinnedToLatest) return;
+    let frame: number | undefined;
+    let pass = 0;
+    const restore = () => {
+      const element = transcriptElement.current;
+      if (!element) return;
+      element.scrollTop = Math.min(restored.scrollTop, Math.max(0, element.scrollHeight - element.clientHeight));
+      pass += 1;
+      // Windowed rows replace estimates with measured heights over the next
+      // frames. Reapply the saved coordinate after those bounded anchor
+      // corrections so A → B → A returns to A's reading position, not merely
+      // to a generic detached posture.
+      if (pass < 3) frame = requestAnimationFrame(restore);
+    };
+    frame = requestAnimationFrame(restore);
+    const settle = window.setTimeout(restore, 120);
+    return () => {
+      if (frame !== undefined) cancelAnimationFrame(frame);
+      window.clearTimeout(settle);
+    };
+  }, [profileId, sessionId, profileCockpitTransition, activeSessionRecord?.manifest.profile?.profileId]);
   useEffect(() => {
     const draftSessionId = chatRouteRequest ?? sessionId;
     if (!draftSessionId) return;
@@ -1334,6 +1699,21 @@ export function App() {
     }
     setAttachments([]);
   }, [chatRouteRequest, sessionId]);
+  useEffect(() => {
+    const pending = pendingForkRetry.current;
+    if (!pending || busy || sessionNavigationChanging.current) return;
+    if (
+      pending.sessionId !== sessionId
+      || pending.runtime !== runtime.current
+      || pending.profileId !== profileAuthorityId.current
+      || activeSessionIdentity.current !== pending.sessionId
+    ) {
+      pendingForkRetry.current = undefined;
+      return;
+    }
+    pendingForkRetry.current = undefined;
+    void sendMessage(pending.prompt, pending.attachments);
+  }, [busy, pendingForkRetryRevision, profileId, sessionId]);
   useEffect(() => {
     const draftSessionId = chatRouteRequest ?? sessionId;
     if (!draftSessionId) return;
@@ -1377,10 +1757,19 @@ export function App() {
     });
     return () => cancelAnimationFrame(frame);
   }, [messages, transcriptLeadingHeight, view, windowedTranscript.totalHeight]);
-  const proofTargetId = proofSelection?.sessionId ?? sessionId;
+  const proofSelectionAuthorized = !proofSelection
+    || proofSelection.sessionId === sessionId
+    || (
+      proofSelectionAuthority?.profileId === profileId
+      && proofSelectionAuthority.sessionId === proofSelection.sessionId
+    );
+  const effectiveProofSelection = proofSelectionAuthorized
+    ? proofSelection
+    : proofSelectionForSession(sessionId);
+  const proofTargetId = effectiveProofSelection?.sessionId ?? sessionId;
   const proofReceipt = resolveProofReceipt(
     inPageReceipts,
-    proofSelection,
+    effectiveProofSelection,
     proofTargetId === sessionId ? lastReceipt : undefined,
   );
   const attestationSeal = describeAttestationSeal({
@@ -1391,13 +1780,17 @@ export function App() {
     failure: attestationFailure,
     now: attestationNow,
   });
+  const automaticEvidenceAcquisitionNotice = evidenceAcquisitionNotice(
+    evidenceAcquisitionSnapshot,
+    proofReceipt?.receiptId,
+  );
   const localDeviceRuntimeAdopted = Boolean(
     localDeviceStatus
-    && runtime.current?.workspaceId.startsWith("vault+local-device://"),
+    && runtime.current?.storageId.startsWith("vault+local-device://"),
   );
   const cloudVaultRuntimeAdopted = vaultSnapshot.phase === "ready"
-    && runtime.current?.workspaceId.startsWith("vault+") === true
-    && !runtime.current?.workspaceId.startsWith("vault+local-device://");
+    && runtime.current?.storageId.startsWith("vault+") === true
+    && !runtime.current?.storageId.startsWith("vault+local-device://");
   const localS3VaultRuntimeAdopted = cloudVaultRuntimeAdopted
     && vaultSnapshot.phase === "ready"
     && !isGoogleDriveConfiguration(vaultSnapshot.config)
@@ -1456,13 +1849,26 @@ export function App() {
     selectedRecordId: selectedAttestationRecordId,
   }), [messages, sessionId, selectedAttestationRecordId]);
 
-  function activateSession(session: SessionRecord): void {
+  async function activateSession(session: SessionRecord): Promise<SessionRecord> {
+    const sessionProfileId = session.manifest.profile?.profileId;
+    const activeRuntime = runtime.current;
+    if (!sessionProfileId || !activeRuntime) {
+      throw new Error("The selected conversation is not bound to an active profile journal.");
+    }
+    const selection = await new SessionLibrary(activeRuntime.journal).selectActiveConversation(
+      sessionProfileId,
+      session.id,
+      { expectedTargetHead: { sequence: session.headSequence, digest: session.headDigest } },
+    );
+    const selected = selection.session;
     // Update the identity fence synchronously. An aborted prior turn can still
     // deliver its final durable signal before Preact commits the next render.
-    activeSessionIdentity.current = session.id;
-    setSessionId(session.id);
-    setActiveSessionRecord(session);
-    setMessageQueue(queuedMessagesBySession.current.get(session.id) ?? []);
+    activeSessionIdentity.current = selected.id;
+    setSessionId(selected.id);
+    setActiveSessionRecord(selected);
+    activeSessionByProfile.current.set(sessionProfileId, selected.id);
+    setMessageQueue(queuedMessagesBySession.current.get(selected.id) ?? []);
+    return selected;
   }
 
   useEffect(() => () => {
@@ -1471,8 +1877,45 @@ export function App() {
     attestationOperation.current += 1;
     attestationClient.current?.dispose();
     attestationClient.current = undefined;
+    attestationClientBinding.current = undefined;
+    endpointEvidenceAuthorityOperation.current += 1;
+    endpointEvidenceAuthorityLoad.current = undefined;
+    void endpointEvidenceAuthority.current?.release();
+    evidenceAcquisitionQueueOperation.current += 1;
+    evidenceAcquisitionUnsubscribe.current?.();
+    evidenceAcquisitionUnsubscribe.current = undefined;
+    evidenceAcquisitionQueue.current?.dispose();
+    evidenceAcquisitionQueue.current = undefined;
+    evidenceAcquisitionQueueLoad.current = undefined;
+    void evidenceAcquisitionQueueAuthority.current?.release();
     providerCredential.current = undefined;
   }, [approvalBroker]);
+
+  // Endpoint proof and its scheduler are one Profile cockpit. A switch first
+  // pauses the no-longer-authoritative worker/client, then installs a client
+  // fenced to the new Profile+WorkspacePort, recovers that Profile's records,
+  // and only then resumes persisted queue work. A disconnected page never
+  // burns queue attempts merely because no credential-backed client exists.
+  useEffect(() => {
+    const active = runtime.current;
+    if (!active) return;
+    const credential = providerCredential.current;
+    const credentialKind = attestationCredentialKind.current;
+    if (!credential || !credentialKind) {
+      setEvidenceAcquisitionSnapshot(undefined);
+      return;
+    }
+    void rebindProfileEvidenceScope(active, profileId, credential, credentialKind)
+      .catch((error) => publishAttestationFailureForCurrent({
+        label: error instanceof Error && error.message.includes("checkpoint")
+          ? "Stored endpoint evidence rejected"
+          : "Evidence client unavailable",
+        scope: "connection",
+      }));
+    // Runtime authority changes with the same Profile are rebound explicitly
+    // by storage transitions; Profile identity is this effect's only key.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profileId]);
 
   // A capability request is a real modal: the shell chrome behind it must go
   // inert, or Tab and assistive tech reach controls the scrim claims are gone.
@@ -1555,7 +1998,7 @@ export function App() {
       || !gitClient
       || vaultProviderSwitchingRef.current
       || vaultAdoptionBusy.current
-      || runtime.current.workspaceId.startsWith("vault+local-device://")
+      || runtime.current.storageId.startsWith("vault+local-device://")
     ) return;
     let cancelled = false;
     const owner = ++localDeviceAutoOpenOwner.current;
@@ -1603,7 +2046,7 @@ export function App() {
       (preferences.vaultBackend !== "google-drive" && preferences.vaultBackend !== "local-lab") ||
       vaultSnapshot.phase !== "ready" ||
       !runtime.current ||
-      runtime.current.workspaceId.startsWith("vault+") ||
+      runtime.current.storageId.startsWith("vault+") ||
       !catalog ||
       !activeProfile ||
       !gitClient ||
@@ -1622,7 +2065,7 @@ export function App() {
   // the live state into fresh page-memory adapters before dropping credentials.
   useEffect(() => {
     if (preferences.vaultBackend !== "ephemeral" || ephemeralAdoptionBusy.current) return;
-    if (!runtime.current?.workspaceId.startsWith("vault+")) {
+    if (!runtime.current?.storageId.startsWith("vault+")) {
       if (vault.snapshot.phase !== "disconnected") vault.disconnect();
       return;
     }
@@ -1644,8 +2087,12 @@ export function App() {
   }, [attestationRecords.length]);
 
   useEffect(() => {
-    setSelectedAttestationRecordId(undefined);
-  }, [sessionId]);
+    const binding = endpointEvidenceAuthority.current?.current();
+    if (binding && sessionId) projectEndpointEvidencePresentation(binding, sessionId);
+    // A selected row/failure belongs to the prior session even when the record
+    // store itself remains bound to the same Profile and workspace authority.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profileId, sessionId]);
 
   useEffect(() => {
     if (view !== "proof" || proofSection !== "attestations" || AttestationsScreen) return;
@@ -1754,6 +2201,21 @@ export function App() {
     });
     return () => { current = false; };
   }, [view, AccessScreen, BillingScreen]);
+
+  useEffect(() => {
+    if (view !== "access" || activeOAuthRegistration) return;
+    let current = true;
+    void import("../auth/chutes-oauth-registration").then((module) => {
+      if (!current) return;
+      setActiveOAuthRegistration({
+        registration: module.CHUTES_ACTIVE_REGISTRATION,
+        exchangeMode: module.chutesOAuthExchangeMode(module.CHUTES_ACTIVE_REGISTRATION),
+      });
+    }).catch(() => {
+      if (current) setAccessViewError("Chutes OAuth registration metadata could not be loaded. Existing connections were not changed.");
+    });
+    return () => { current = false; };
+  }, [view, activeOAuthRegistration]);
 
   useEffect(() => {
     if (view !== "access" || ProviderConnectionsScreen) return;
@@ -1902,9 +2364,29 @@ export function App() {
   }
 
   async function openPaletteSession(targetSessionId: string): Promise<void> {
-    if (!sessionLibrary || !sessionRuntime) { navigate("sessions"); return; }
+    const ownerRuntime = runtime.current;
+    const ownerProfile = activeProfileRef.current;
+    const ownerSessionId = activeSessionIdentity.current;
+    if (!ownerRuntime || !ownerProfile || !ownerSessionId) { navigate("sessions"); return; }
     try {
-      const detail = await sessionLibrary.inspect(targetSessionId, sessionRuntime);
+      const [target, authoritySession] = await Promise.all([
+        ownerRuntime.journal.getSession(targetSessionId),
+        ownerRuntime.journal.getSession(ownerSessionId),
+      ]);
+      if (!target || !authoritySession) throw new Error("The requested conversation is unavailable.");
+      requireProfileOwnedSession(target, ownerProfile.profileId, "open");
+      requireProfileOwnedSession(authoritySession, ownerProfile.profileId, "open");
+      const detail = await new SessionLibrary(ownerRuntime.journal).inspect(
+        target.id,
+        activeSessionRuntime(ownerRuntime, authoritySession),
+      );
+      if (
+        runtime.current !== ownerRuntime
+        || activeProfileRef.current?.revision !== ownerProfile.revision
+        || profileAuthorityId.current !== ownerProfile.profileId
+        || activeSessionIdentity.current !== ownerSessionId
+        || sessionNavigationChanging.current
+      ) throw new Error("The active Profile or conversation changed before the requested conversation could open.");
       await resumeLibrarySession(detail);
     } catch (error) {
       const { describeSessionPresentationFault } = await loadDeferredCapabilities();
@@ -1915,9 +2397,48 @@ export function App() {
     }
   }
 
+  async function setProfileConversationFavorite(
+    targetSessionId: string,
+    favorite: boolean,
+    ownerProfileId: string,
+    ownerRuntime: Runtime | undefined,
+  ): Promise<void> {
+    if (!sessionLibrary) throw new Error("The conversation journal is not ready.");
+    await sessionLibrary.setFavorite(targetSessionId, ownerProfileId, favorite);
+    if (runtime.current !== ownerRuntime || profileAuthorityId.current !== ownerProfileId) return;
+    setSessionRevision((value) => value + 1);
+    setRuntimeStatus(favorite ? "Conversation added to favorites" : "Conversation removed from favorites");
+  }
+
+  async function moveProfileConversationFavorite(
+    targetSessionId: string,
+    beforeSessionId: string | undefined,
+    ownerProfileId: string,
+    ownerRuntime: Runtime | undefined,
+  ): Promise<void> {
+    if (!sessionLibrary) throw new Error("The conversation journal is not ready.");
+    await sessionLibrary.moveFavoriteBefore(targetSessionId, ownerProfileId, beforeSessionId);
+    if (runtime.current !== ownerRuntime || profileAuthorityId.current !== ownerProfileId) return;
+    setSessionRevision((value) => value + 1);
+    setRuntimeStatus("Favorite order saved to the active profile journal");
+  }
+
+  async function renameActiveConversation(title: string): Promise<void> {
+    const active = activeSessionRecord;
+    const activeRuntime = runtime.current;
+    if (!active || !activeRuntime) throw new Error("The conversation journal is not ready yet.");
+    if (busy) throw new Error("Wait for the current turn to finish before renaming this conversation.");
+    const renamed = await activeRuntime.journal.renameSession(active.id, title);
+    if (activeSessionIdentity.current !== active.id) return;
+    setActiveSessionRecord(renamed);
+    setEventCount((count) => count + 1);
+    setSessionRevision((value) => value + 1);
+    setRuntimeStatus(`Renamed conversation to ${renamed.title}`);
+  }
+
   function openReceiptAttestation(receipt: ConversationReceipt): void {
     if (receipt.sessionId === sessionId) {
-      setSelectedAttestationRecordId(attestationRecordIdForReceipt(receipt));
+      selectEndpointEvidenceRecord(attestationRecordIdForReceipt(receipt));
     }
     const selection = proofSelectionForReceipt(receipt);
     setProofSelection(selection);
@@ -1927,16 +2448,18 @@ export function App() {
 
   async function startOAuthSignIn(): Promise<void> {
     if (!online) throw new Error(OFFLINE_INLINE_REASON);
-    if (!CHUTES_ACTIVE_REGISTRATION.configured) {
-      throw new Error(CHUTES_ACTIVE_REGISTRATION.configurationError ?? "Chutes sign-in is not configured for this build.");
+    const oauth = await import("../auth/chutes-oauth");
+    const registration = oauth.CHUTES_ACTIVE_REGISTRATION;
+    if (!registration.configured) {
+      throw new Error(registration.configurationError ?? "Chutes sign-in is not configured for this build.");
     }
-    const locationState = chutesOAuthLocationState(CHUTES_ACTIVE_REGISTRATION.homepageUrl, window.location.href);
+    const locationState = oauth.chutesOAuthLocationState(registration.homepageUrl, window.location.href);
     if (!locationState.available) throw new Error(locationState.reason);
     pendingOAuthCredential.current = undefined;
     setOauthCallbackStatus(undefined);
-    const request = await createChutesAuthorizationRequest({
-      clientId: CHUTES_ACTIVE_REGISTRATION.clientId,
-      registration: CHUTES_ACTIVE_REGISTRATION,
+    const request = await oauth.createChutesAuthorizationRequest({
+      clientId: registration.clientId,
+      registration,
     });
     try {
       sessionStorage.setItem(CHUTES_OAUTH_ATTEMPT_KEY, JSON.stringify(request.attempt));
@@ -1997,7 +2520,12 @@ export function App() {
       const nextCatalog = await createBuiltInProfileCatalog();
       const profile = nextCatalog.profiles.find((candidate) => candidate.profileId === "general") ?? nextCatalog.profiles[0];
       if (!profile) throw new Error("Airship has no built-in agent profile.");
-      const workspace = new MemoryWorkspace();
+      // Page memory is the storage authority; the bootstrap content belongs to
+      // the Profile that opens it, inside that Profile's namespace, so a second
+      // Profile starts genuinely empty rather than inheriting these files.
+      const storage = new MemoryWorkspace();
+      const storageId = "memory://airship-page";
+      const workspace = new ProfileWorkspacePort(storage, profile.profileId);
       const [{ WorkspaceGitAdapter, AIRSHIP_BOOTSTRAP_FILES, BrowserGitClient }, { browserInferenceFabric }, { InspectInferenceConnectionsTool }] = await Promise.all([
         loadBrowserGit(),
         import("../inference/fabric"),
@@ -2040,6 +2568,7 @@ export function App() {
         workspace,
         journal,
         git: nextGitClient,
+        liveEnvironment: liveEnvironmentSource,
         additionalTools: [availabilityTool],
       });
       const commandModule = await import("../commands");
@@ -2048,8 +2577,11 @@ export function App() {
       const profiles = new MemoryProfileCatalogStore();
       const initialCatalog = (await profiles.initialize(nextCatalog)).checkpoint;
       const nextRuntime: Runtime = {
+        storage,
+        storageId,
         workspace,
-        workspaceId: "memory://airship-page",
+        workspaceId: profileWorkspaceIdentity(storageId, profile.profileId),
+        profileId: profile.profileId,
         profiles,
         tools,
         journal,
@@ -2064,19 +2596,20 @@ export function App() {
         ),
       };
       runtime.current = nextRuntime;
+      rememberProfileAuthority(nextRuntime, nextGitClient);
       setSlashRegistry(commands);
       const nextSession = await createProfileSession(nextRuntime, profile, nextCatalog);
       if (disposed) return;
       publishCatalogCheckpoint(initialCatalog);
-      setProfileId(profile.profileId);
-      activateSession(nextSession);
+      publishProfileId(profile.profileId);
+      const activated = await activateSession(nextSession);
       setSessionLibrary(new SessionLibrary(nextRuntime.journal));
       setGitClient(nextGitClient);
       setSessionRevision(1);
-      setEventCount(nextSession.headSequence);
+      setEventCount(activated.headSequence);
       setSessionLifecycle(READY_SESSION_LIFECYCLE);
       setTranscriptBoundary(undefined);
-      await refreshWorkspaceState(workspace, setFiles, setWorkspaceFiles);
+      await refreshWorkspacePresentation(nextRuntime, profile.profileId);
       setRuntimeStatus("Local kernel ready");
     })().catch((error) => {
       if (disposed) return;
@@ -2119,22 +2652,27 @@ export function App() {
     }
     window.history.replaceState({ view: "access" }, "", `${import.meta.env.BASE_URL}#connection`);
     setView("access");
-    const exchangeMode = chutesOAuthExchangeMode(CHUTES_ACTIVE_REGISTRATION);
-    setOauthCallbackStatus({
-      kind: "blocked",
-      message: exchangeMode === "local-confidential-bridge"
-        ? "oauth:exchange-local"
-        : "oauth:exchange-public",
-    });
     void (async () => {
+      let oauth: typeof import("../auth/chutes-oauth") | undefined;
+      let exchangeMode: "local-confidential-bridge" | "public-pkce" = "public-pkce";
       try {
+        oauth = await import("../auth/chutes-oauth");
+        const registration = oauth.CHUTES_ACTIVE_REGISTRATION;
+        exchangeMode = oauth.chutesOAuthExchangeMode(registration);
+        if (disposed) return;
+        setOauthCallbackStatus({
+          kind: "blocked",
+          message: exchangeMode === "local-confidential-bridge"
+            ? "oauth:exchange-local"
+            : "oauth:exchange-public",
+        });
         if (!rawAttempt) throw new Error("No matching Chutes authorization attempt was found in this tab.");
-        const attempt = parsePkceAttempt(rawAttempt);
-        const callback = consumeChutesAuthorizationCallback({ search: callbackSearch, attempt });
-        const tokenSet = await exchangeChutesAuthorizationCode({
+        const attempt = oauth.parseChutesPkceAttempt(rawAttempt);
+        const callback = oauth.consumeChutesAuthorizationCallback({ search: callbackSearch, attempt });
+        const tokenSet = await oauth.exchangeChutesAuthorizationCode({
           callback,
-          clientId: CHUTES_ACTIVE_REGISTRATION.clientId,
-          registration: CHUTES_ACTIVE_REGISTRATION,
+          clientId: registration.clientId,
+          registration,
         });
         if (disposed) return;
         oauthTokens.current = tokenSet;
@@ -2151,7 +2689,11 @@ export function App() {
         if (disposed) return;
         oauthTokens.current = undefined;
         pendingOAuthCredential.current = undefined;
-        setOauthCallbackStatus({ kind: "error", message: oauthExchangeError(error, exchangeMode) });
+        setOauthCallbackStatus({
+          kind: "error",
+          message: oauth?.describeChutesOAuthExchangeError(error, exchangeMode)
+            ?? (error instanceof Error ? error.message : "Chutes sign-in could not be completed."),
+        });
       }
     })();
     return () => { disposed = true; };
@@ -2221,30 +2763,39 @@ export function App() {
     let disposed = false;
     const refreshAt = Math.max(0, tokenSet.expiresAt - Date.now() - 60_000);
     const timer = window.setTimeout(() => {
-      void refreshChutesOAuthToken({
-        clientId: CHUTES_ACTIVE_REGISTRATION.clientId,
-        refreshToken: tokenSet.refreshToken!,
-        signal: controller.signal,
-        registration: CHUTES_ACTIVE_REGISTRATION,
-      }).then((next) => {
-        if (disposed) return;
-        oauthTokens.current = next;
-        accountCredential.current = next.accessToken;
-        providerCredential.current = next.accessToken;
-        setOauthTokenRevision((value) => value + 1);
-        setCredentialRevision((value) => value + 1);
-        setOauthCallbackStatus({
-          kind: "verified",
-          message: "The memory-only Chutes session rotated successfully.",
-        });
-      }).catch((error) => {
-        if (disposed || controller.signal.aborted) return;
-        setOauthCallbackStatus({
-          kind: "error",
-          message: oauthExchangeError(error, chutesOAuthExchangeMode(CHUTES_ACTIVE_REGISTRATION)),
-        });
-        releaseChutesAuthority("Chutes OAuth rotation failed · reconnect inference; this conversation remains intact");
-      });
+      void (async () => {
+        let oauth: typeof import("../auth/chutes-oauth") | undefined;
+        let exchangeMode: "local-confidential-bridge" | "public-pkce" = "public-pkce";
+        try {
+          oauth = await import("../auth/chutes-oauth");
+          const registration = oauth.CHUTES_ACTIVE_REGISTRATION;
+          exchangeMode = oauth.chutesOAuthExchangeMode(registration);
+          const next = await oauth.refreshChutesOAuthToken({
+            clientId: registration.clientId,
+            refreshToken: tokenSet.refreshToken!,
+            signal: controller.signal,
+            registration,
+          });
+          if (disposed) return;
+          oauthTokens.current = next;
+          accountCredential.current = next.accessToken;
+          providerCredential.current = next.accessToken;
+          setOauthTokenRevision((value) => value + 1);
+          setCredentialRevision((value) => value + 1);
+          setOauthCallbackStatus({
+            kind: "verified",
+            message: "The memory-only Chutes session rotated successfully.",
+          });
+        } catch (error) {
+          if (disposed || controller.signal.aborted) return;
+          setOauthCallbackStatus({
+            kind: "error",
+            message: oauth?.describeChutesOAuthExchangeError(error, exchangeMode)
+              ?? (error instanceof Error ? error.message : "Chutes sign-in could not be completed."),
+          });
+          releaseChutesAuthority("Chutes OAuth rotation failed · reconnect inference; this conversation remains intact");
+        }
+      })();
     }, refreshAt);
     return () => {
       disposed = true;
@@ -2329,6 +2880,42 @@ export function App() {
     setCatalog(next.catalog);
   }
 
+  function publishProfileId(nextProfileId: string): void {
+    profileAuthorityId.current = nextProfileId;
+    setProfileId(nextProfileId);
+  }
+
+  function currentWorkspaceRefreshAuthority(): WorkspaceRefreshAuthority | undefined {
+    const active = runtime.current;
+    if (!active) return undefined;
+    return Object.freeze({
+      workspace: active.workspace,
+      workspaceId: active.workspaceId,
+      profileId: profileAuthorityId.current,
+    });
+  }
+
+  async function refreshWorkspacePresentation(
+    expectedRuntime = runtime.current,
+    expectedProfileId = profileAuthorityId.current,
+  ): Promise<boolean> {
+    if (!expectedRuntime || !expectedProfileId) return false;
+    return workspaceRefreshCoordinator.refresh(
+      Object.freeze({
+        workspace: expectedRuntime.workspace,
+        workspaceId: expectedRuntime.workspaceId,
+        profileId: expectedProfileId,
+      }),
+      currentWorkspaceRefreshAuthority,
+      (entries) => {
+        setFiles([...entries]);
+        // Refresh is metadata-only. Content is read only after an explicit
+        // open; indexing has its own bounded, demand-driven WorkspacePort.
+        setWorkspaceFiles(entries.slice(0, 2_000));
+      },
+    );
+  }
+
   function profileCatalogAuthorityLabel(): string {
     return runtime.current?.profiles.durability === "encrypted-vault"
       ? "the encrypted Vault"
@@ -2361,41 +2948,173 @@ export function App() {
     return operation;
   }
 
+  /**
+   * Rebuild the complete authority a Profile owns: its workspace namespace,
+   * the Git object database over it, and the tool registry bound to both.
+   *
+   * This is what makes a Profile switch a change of authority rather than a
+   * change of presentation. The tool registry has to be rebuilt with it —
+   * tools captured the old port, so reusing the registry would let the new
+   * Profile's agent read and write the previous Profile's files.
+   */
+  function rememberProfileAuthority(built: Runtime, git: BrowserGitClient): void {
+    profileAuthorities.current.set(built.profileId, Object.freeze({
+      storage: built.storage,
+      workspace: built.workspace,
+      workspaceId: built.workspaceId,
+      git,
+      tools: built.tools,
+      contextMode: built.contextMode,
+    }));
+  }
+
+  async function runtimeForProfile(
+    active: Runtime,
+    profile: ProfileRevision,
+  ): Promise<Readonly<{ runtime: Runtime; git: BrowserGitClient }>> {
+    const cached = profileAuthorities.current.get(profile.profileId);
+    if (cached && cached.storage === active.storage) {
+      return Object.freeze({
+        runtime: {
+          ...active,
+          workspace: cached.workspace,
+          workspaceId: cached.workspaceId,
+          profileId: profile.profileId,
+          tools: cached.tools,
+          ...(cached.contextMode ? { contextMode: cached.contextMode } : {}),
+        },
+        git: cached.git,
+      });
+    }
+    const authority = await openProfileWorkspaceAuthority({
+      storage: active.storage,
+      storageId: active.storageId,
+      profile,
+    });
+    const registryOptions = {
+      workspace: authority.workspace,
+      journal: active.journal,
+      git: authority.git,
+      liveEnvironment: liveEnvironmentSource,
+      additionalTools: [requireProviderAvailabilityTool()],
+    };
+    const vaultAware = active.contextFabric
+      ? await createVaultAwareAirshipToolRegistry({
+          ...registryOptions,
+          workspaceId: authority.workspaceId,
+          contextFabric: active.contextFabric,
+        })
+      : undefined;
+    const built: Runtime = {
+      ...active,
+      workspace: authority.workspace,
+      workspaceId: authority.workspaceId,
+      profileId: profile.profileId,
+      tools: vaultAware ? vaultAware.tools : await createAirshipToolRegistry(registryOptions),
+      ...(vaultAware ? { contextMode: vaultAware.contextMode } : {}),
+    };
+    rememberProfileAuthority(built, authority.git);
+    return Object.freeze({ runtime: built, git: authority.git });
+  }
+
   async function changeProfile(nextId: string, force = false) {
-    if (!runtime.current || !catalog || (!force && nextId === profileId)) return;
+    const active = runtime.current;
+    if (!active || !catalog || (!force && nextId === profileId)) return;
     if (inferenceRouteChanging.current || sessionNavigationChanging.current) {
       throw new Error("Wait for the current session or inference route change before switching profiles.");
     }
+    workspaceRefreshCoordinator.invalidate();
+    proofSelectionOperation.current += 1;
+    setProofSelection(undefined);
+    setProofSelectionAuthority(undefined);
+    pendingForkRetry.current = undefined;
     sessionNavigationChanging.current = true;
     const operation = ++profileOperation.current;
     try {
       activeTurn.current?.abort();
-      setRuntimeStatus("Forking pinned session");
+      setRuntimeStatus("Switching profile cockpit");
       let profile: ProfileRevision | undefined;
       let nextSession: SessionRecord | undefined;
+      let restoredExisting = false;
+      let switched: Readonly<{ runtime: Runtime; git: BrowserGitClient }> | undefined;
       await mutateProfileCatalog(async (current) => {
         const selected = current.profiles.find((candidate) => candidate.profileId === nextId);
         if (!selected) throw new Error(`Unknown profile: ${nextId}`);
-        const active = runtime.current;
-        if (!active) throw new Error("The active browser runtime is not ready.");
+        setProfileCockpitTransition(Object.freeze({ profileId: selected.profileId, name: selected.name }));
         profile = await bindProfileToRuntime(selected, active);
         const next = profile === selected ? current : replaceProfile(current, profile);
-        nextSession = await createProfileSession(active, profile, next);
+        /*
+         * Release the outgoing Profile's live processes before the incoming one
+         * opens its own. Each namespace gets its own terminal manager, but the
+         * page has a single WebContainer to give out — so without this the new
+         * Profile's first terminal fails to boot against a host the previous
+         * Profile still holds. Tab metadata is durable and reconstructs; the
+         * process does not, and the Terminal surface already says so.
+         */
+        await (await import("../terminal/manager")).quiesceBrowserTerminalWorkspace(
+          active.workspace,
+          `Switched to the ${selected.name} profile. Restart this terminal against that profile's workspace.`,
+        );
+        switched = await runtimeForProfile(active, profile);
+        // Sessions are resolved against the *incoming* authority so a restored
+        // or newly created conversation pins the workspace it will actually run
+        // in, rather than the one being switched away from.
+        nextSession = await compatibleProfileSession(
+          switched.runtime,
+          profile,
+          next,
+          activeSessionByProfile.current.get(nextId),
+        );
+        restoredExisting = Boolean(nextSession);
+        nextSession ??= await createProfileSession(switched.runtime, profile, next);
         return next;
       });
-      if (!profile || !nextSession) throw new Error("The profile session was not created.");
+      if (!profile || !nextSession || !switched) throw new Error("The profile session was not created.");
+      if (runtime.current !== active) throw new Error("The runtime changed before the profile cockpit could be restored.");
       if (operation !== profileOperation.current) return;
-      setProfileId(nextId);
-      activateSession(nextSession);
+      runtime.current = switched.runtime;
+      setGitClient(switched.git);
+      // Slash commands close over the tool registry, so they have to be rebuilt
+      // with it; a stale registry would run the previous Profile's tools.
+      if (slashModule) setSlashRegistry(slashModule.createSlashCommandRegistry({ tools: switched.runtime.tools }));
+      const activeRuntime = switched.runtime;
+      if (restoredExisting) {
+        const library = new SessionLibrary(activeRuntime.journal);
+        // Resume compatibility is judged against the workspace the conversation
+        // is about to run in. Inspecting through the outgoing runtime would
+        // approve a session pinned to the Profile being left behind.
+        const fresh = await library.inspect(nextSession.id, activeSessionRuntime(activeRuntime, nextSession));
+        if (fresh.compatibility?.action !== "resume") {
+          const compatibility = fresh.compatibility;
+          throw new Error(compatibility
+            ? `${compatibility.label}: ${compatibility.reasons.map((reason) => reason.message).join(" ")} ${fresh.history.issues.map((issue) => `${issue.code}: ${issue.message}`).join(" ")}`.trim()
+            : "The profile conversation no longer matches its runtime.");
+        }
+        const audited = await loadAuditedSessionSnapshot(nextSession.id);
+        if (audited.report.status !== "verified") {
+          throw new Error("The profile's last conversation failed audit and was not resumed.");
+        }
+        if (audited.session.headSequence !== fresh.session.headSequence || audited.session.headDigest !== fresh.session.headDigest) {
+          throw new Error("The profile conversation changed while it was being restored. Retry the switch.");
+        }
+        await publishAuditedSession(fresh, audited, `${profile.name} cockpit restored`);
+        publishProfileId(nextId);
+        navigate("chat");
+        return;
+      }
+      const activated = await activateSession(nextSession);
       setSessionRevision((value) => value + 1);
-      setMessages([{ ...welcomeMessage, id: randomUuid(), content: `${profile.name} profile loaded in a new pinned session. ${welcomeMessage.content}` }]);
-      setEventCount(1);
+      setMessages([{ ...welcomeMessage, id: randomUuid(), content: `${profile.name} had no compatible conversation, so Airship started one. ${welcomeMessage.content}` }]);
+      setEventCount(activated.headSequence);
       setLastReceipt(undefined);
       setSessionLifecycle(READY_SESSION_LIFECYCLE);
       setTranscriptBoundary(undefined);
-      setRuntimeStatus("Local kernel ready");
+      setRuntimeStatus(`${profile.name} cockpit started`);
+      publishProfileId(nextId);
+      navigate("chat");
     } finally {
       sessionNavigationChanging.current = false;
+      setProfileCockpitTransition(undefined);
     }
   }
 
@@ -2413,31 +3132,36 @@ export function App() {
     try {
       const created = await createProfileSession(active, activeProfile, catalog, title);
       if (runtime.current !== active) throw new Error("The inference or storage authority changed before the conversation was created.");
-      activateSession(created);
+      const activated = await activateSession(created);
       setMessages([{ ...welcomeMessage, id: randomUuid(), content: `${created.title} is a new isolated conversation. ${welcomeMessage.content}` }]);
-      setEventCount(created.headSequence);
+      setEventCount(activated.headSequence);
       setLastReceipt(undefined);
       setSessionLifecycle(READY_SESSION_LIFECYCLE);
       setTranscriptBoundary(undefined);
       setSessionRevision((value) => value + 1);
       setRuntimeStatus("New conversation ready");
       navigate("chat");
+      return created;
     } finally {
       sessionNavigationChanging.current = false;
     }
   }
 
-  async function runSlashPlan(plan: Exclude<SlashCommandPlan, { kind: "chat" }>, source: string): Promise<void> {
+  async function runSlashPlan(
+    plan: Exclude<SlashCommandPlan, { kind: "chat" }>,
+    source: string,
+    authority: LocalPresentationAuthority,
+  ): Promise<void> {
     if (plan.kind === "invalid") {
-      appendLocalExchange(source, plan.message, true);
+      appendLocalExchangeForAuthority(authority, source, plan.message, true);
       return;
     }
     if (plan.kind === "disabled") {
-      appendLocalExchange(source, `${plan.command.usage}\n\nUnavailable: ${plan.reason}`, true);
+      appendLocalExchangeForAuthority(authority, source, `${plan.command.usage}\n\nUnavailable: ${plan.reason}`, true);
       return;
     }
     if (plan.kind === "builtin") {
-      await runSlashBuiltin(plan, source);
+      await runSlashBuiltin(plan, source, authority);
       return;
     }
     await runSlashTool(plan, source);
@@ -2446,22 +3170,48 @@ export function App() {
   async function runSlashBuiltin(
     plan: Extract<SlashCommandPlan, { kind: "builtin" }>,
     source: string,
+    authority: LocalPresentationAuthority,
   ): Promise<void> {
     if (!runtime.current || !slashRegistry) return;
+    if (!localPresentationAuthorityIsCurrent(authority)) {
+      throw new Error("The active Profile or conversation changed before the command could run.");
+    }
+    const commandRuntime = authority.runtime;
+    const commandProfile = activeProfileRef.current;
+    const commandSessionId = authority.sessionId;
+    if (
+      !commandProfile
+      || commandProfile.profileId !== authority.profileId
+      || commandProfile.revision !== authority.profileRevision
+    ) {
+      throw new Error("The active Profile authority is still changing. Retry the command after it settles.");
+    }
+    if (
+      !commandSessionId
+      || activeSessionRecord?.id !== commandSessionId
+      || activeSessionRecord.manifest.profile?.profileId !== commandProfile.profileId
+    ) throw new Error("The active conversation does not belong to the active Profile.");
     const action = plan.action;
     if (action.type === "help") {
       const descriptor = action.command ? slashRegistry.resolve(action.command) : undefined;
       const response = descriptor
         ? `${descriptor.usage}\n\n${descriptor.summary}${descriptor.availability.enabled ? "" : `\nUnavailable: ${descriptor.availability.reason}`}`
         : slashRegistry.descriptors().map((command) => `${command.usage} — ${command.summary}`).join("\n");
-      appendLocalExchange(source, response || "No slash commands are authorized for this profile.");
+      appendLocalExchangeForAuthority(authority, source, response || "No slash commands are authorized for this profile.");
       return;
     }
     if (action.type === "sessions.list") {
-      const sessions = await runtime.current.journal.listSessions();
-      appendLocalExchange(source, sessions.length
+      const sessions = profileOwnedSessions(await commandRuntime.journal.listSessions(), commandProfile.profileId);
+      if (
+        runtime.current !== commandRuntime
+        || activeProfileRef.current?.revision !== commandProfile.revision
+        || profileAuthorityId.current !== commandProfile.profileId
+        || activeSessionIdentity.current !== commandSessionId
+        || sessionNavigationChanging.current
+      ) throw new Error("The Profile or session authority changed before the list could be shown.");
+      appendLocalExchangeForAuthority(authority, source, sessions.length
         ? sessions.map((session) => `${session.id === sessionId ? "•" : "○"} ${session.title} · ${session.id.slice(0, 8)} · ${session.manifest.model}`).join("\n")
-        : "No sessions are available in this page runtime.");
+        : `No conversations are available in the ${commandProfile.name} Profile.`);
       return;
     }
     if (action.type === "sessions.create") {
@@ -2470,19 +3220,52 @@ export function App() {
     }
     if (action.type === "sessions.activate") {
       if (!sessionLibrary || !sessionRuntime) throw new Error("The session library is unavailable.");
-      await resumeLibrarySession(await sessionLibrary.inspect(action.sessionId, sessionRuntime));
+      const target = await commandRuntime.journal.getSession(action.sessionId);
+      if (!target) throw new Error("The requested conversation is unavailable.");
+      requireProfileOwnedSession(target, commandProfile.profileId, "open");
+      if (
+        runtime.current !== commandRuntime
+        || activeProfileRef.current?.revision !== commandProfile.revision
+        || profileAuthorityId.current !== commandProfile.profileId
+        || activeSessionIdentity.current !== commandSessionId
+        || sessionNavigationChanging.current
+      ) throw new Error("The Profile or session authority changed before the conversation could be opened.");
+      await resumeLibrarySession(await sessionLibrary.inspect(target.id, sessionRuntime));
       return;
     }
     if (action.type === "sessions.fork") {
-      if (!sessionLibrary || !activeSessionRecord) throw new Error("The active session cannot be forked.");
-      const sourceId = action.sessionId ?? activeSessionRecord.id;
-      const sourceSession = await runtime.current.journal.getSession(sourceId);
-      if (!sourceSession) throw new Error("The requested source session is unavailable.");
-      const result = await sessionLibrary.fork(sourceId, {
-        title: `${sourceSession.title} · fork`.slice(0, 240),
-        expectedSourceHead: { sequence: sourceSession.headSequence, digest: sourceSession.headDigest },
-      });
-      await activateForkedSession(result);
+      if (!sessionLibrary || !activeSessionRecord || !catalog) throw new Error("The active session cannot be forked.");
+      if (sessionNavigationChanging.current) throw new Error("Wait for the current conversation transition before forking.");
+      sessionNavigationChanging.current = true;
+      try {
+        const sourceId = action.sessionId ?? activeSessionRecord.id;
+        const [sourceSession, targetManifest] = await Promise.all([
+          commandRuntime.journal.getSession(sourceId),
+          createProfileSessionManifest(commandRuntime, commandProfile, catalog),
+        ]);
+        if (!sourceSession) throw new Error("The requested source session is unavailable.");
+        requireProfileOwnedSession(sourceSession, commandProfile.profileId, "fork");
+        if (
+          runtime.current !== commandRuntime
+          || activeProfileRef.current?.revision !== commandProfile.revision
+          || profileAuthorityId.current !== commandProfile.profileId
+          || activeSessionIdentity.current !== commandSessionId
+        ) throw new Error("The Profile or session authority changed before the fork could be bound.");
+        const result = await new SessionLibrary(commandRuntime.journal).fork(sourceId, {
+          title: `${sourceSession.title} · fork`.slice(0, 240),
+          manifest: targetManifest,
+          expectedSourceHead: { sequence: sourceSession.headSequence, digest: sourceSession.headDigest },
+        });
+        await activateForkedSessionAgainst(result, Object.freeze({
+          runtime: commandRuntime,
+          profileId: commandProfile.profileId,
+          profileRevision: commandProfile.revision,
+          activeSessionId: commandSessionId,
+          manifest: targetManifest,
+        }));
+      } finally {
+        sessionNavigationChanging.current = false;
+      }
       return;
     }
     if (action.type === "models.list") {
@@ -2492,7 +3275,7 @@ export function App() {
         : activeExternalRoute?.models.map((model) => model.id) ?? [runtime.current.model];
       const modelIds = activeModels
         .filter((model) => !query || model.toLowerCase().includes(query));
-      appendLocalExchange(source, modelIds.length
+      appendLocalExchangeForAuthority(authority, source, modelIds.length
         ? [
             `Connection: ${activeInferenceBinding?.providerLabel ?? "local demo"} / ${activeInferenceBinding?.connectionId ?? "built-in"}`,
             ...modelIds.map((model) => `${model === runtime.current?.model ? "•" : "○"} ${model}`),
@@ -2511,9 +3294,16 @@ export function App() {
     plan: Extract<SlashCommandPlan, { kind: "tool" }>,
     source: string,
   ): Promise<void> {
-    if (!runtime.current || !sessionId || busy) return;
+    if (!runtime.current || !sessionId || busy || sessionNavigationChanging.current) return;
     const commandRuntime = runtime.current;
+    const commandProfileId = profileAuthorityId.current;
     const commandSessionId = sessionId;
+    if (
+      activeSessionIdentity.current !== commandSessionId
+      || activeProfileRef.current?.profileId !== commandProfileId
+      || activeSessionRecord?.id !== commandSessionId
+      || activeSessionRecord.manifest.profile?.profileId !== commandProfileId
+    ) return;
     const turnId = `local-command-${randomUuid()}`;
     const operationId = `tool-${randomUuid()}`;
     const assistantId = randomUuid();
@@ -2536,6 +3326,14 @@ export function App() {
     try {
       const commandSession = await commandRuntime.journal.getSession(commandSessionId);
       if (!commandSession) throw new Error("The pinned session disappeared before the local command could run.");
+      controller.signal.throwIfAborted();
+      if (
+        runtime.current !== commandRuntime
+        || activeSessionIdentity.current !== commandSessionId
+        || profileAuthorityId.current !== commandProfileId
+        || sessionNavigationChanging.current
+      ) throw new Error("The Profile or conversation authority changed before the local command could run.");
+      requireProfileOwnedSession(commandSession, commandProfileId, "open");
       await append([{
         type: "local.command.requested",
         turnId,
@@ -2582,7 +3380,7 @@ export function App() {
         setMessages((current) => current.map((message) => message.id === assistantId
           ? { ...message, content: boundedTranscriptContent(result.content), status: "Local result · excluded from model context", error: result.isError, history: { turnStatus: "completed", providerContext: "excluded" } }
           : message));
-        await refreshWorkspaceState(commandRuntime.workspace, setFiles, setWorkspaceFiles);
+        await refreshWorkspacePresentation(commandRuntime, commandProfileId);
         setRuntimeStatus(activeApprovalMode === "auto-approve"
           ? "Local command complete after separate metadata-only safety review"
           : "Local command complete; no model request made");
@@ -2602,11 +3400,33 @@ export function App() {
         setRuntimeStatus(cancelled ? "Local command stopped" : "Local command failed safely");
       }
     } finally {
-      if (activeTurn.current === controller) activeTurn.current = undefined;
+      const releasesComposer = activeTurn.current === controller;
+      if (releasesComposer) {
+        activeTurn.current = undefined;
+        setBusy(false);
+      }
       const updated = await commandRuntime.journal.getSession(commandSessionId);
       if (updated && activeSessionIdentity.current === commandSessionId) setActiveSessionRecord(updated);
-      setBusy(false);
     }
+  }
+
+  function localPresentationAuthorityIsCurrent(authority: LocalPresentationAuthority): boolean {
+    return runtime.current === authority.runtime
+      && profileAuthorityId.current === authority.profileId
+      && activeProfileRef.current?.revision === authority.profileRevision
+      && activeSessionIdentity.current === authority.sessionId
+      && !sessionNavigationChanging.current;
+  }
+
+  function appendLocalExchangeForAuthority(
+    authority: LocalPresentationAuthority,
+    source: string,
+    response: string,
+    error = false,
+  ): boolean {
+    if (!localPresentationAuthorityIsCurrent(authority)) return false;
+    appendLocalExchange(source, response, error);
+    return true;
   }
 
   function appendLocalExchange(source: string, response: string, error = false): void {
@@ -2646,30 +3466,104 @@ export function App() {
         : "Connect a vision-capable inference model before sending this image.");
   }
 
-  async function branchFromMessage(message: UiMessage): Promise<void> {
+  async function forkFromMessage(
+    message: UiMessage,
+    action: "fork" | "edit" | "retry",
+  ): Promise<void> {
     if (!sessionLibrary || !activeSessionRecord) {
       setComposerNotice("Conversation branching will be available when the local session journal is ready.");
       return;
     }
+    if (busy || sessionNavigationChanging.current || !message.sourcePoint) {
+      setComposerNotice(busy
+        ? "Stop the active turn before creating a branch."
+        : "This message does not expose a verified historical boundary yet. Resume the conversation and try again.");
+      return;
+    }
+    const prompt = action === "retry"
+      ? message.originatingPrompt
+      : action === "edit"
+        ? message.content
+        : undefined;
+    if ((action === "retry" || action === "edit") && !prompt?.trim()) {
+      setComposerNotice(`The exact prompt for this ${action} is not recoverable, so Airship did not create a misleading partial branch.`);
+      return;
+    }
+    if (
+      (action === "retry" || action === "edit")
+      && message.parts?.some((part) => part.kind === "attachment")
+      && !message.originatingAttachments?.length
+    ) {
+      setComposerNotice("The original attachment bytes are no longer in this page, so Airship did not create a text-only branch that looked equivalent.");
+      return;
+    }
+    sessionNavigationChanging.current = true;
     try {
-      const result = await sessionLibrary.fork(activeSessionRecord.id, {
-        title: `${activeSessionRecord.title} · fork`.slice(0, 240),
-        expectedSourceHead: { sequence: activeSessionRecord.headSequence, digest: activeSessionRecord.headDigest },
-        ...(message.sourcePoint ? { sourcePoint: message.sourcePoint } : {}),
+      const sourceRuntime = runtime.current;
+      const sourceProfile = activeProfileRef.current;
+      const sourceId = activeSessionRecord.id;
+      const source = await sourceRuntime?.journal.getSession(sourceId);
+      if (
+        !sourceRuntime
+        || !sourceProfile
+        || !source
+        || activeSessionIdentity.current !== sourceId
+        || runtime.current !== sourceRuntime
+        || profileAuthorityId.current !== sourceProfile.profileId
+        || activeProfileRef.current?.revision !== sourceProfile.revision
+      ) {
+        throw new Error("The active source conversation changed before its branch could be bound.");
+      }
+      requireProfileOwnedSession(source, sourceProfile.profileId, "fork");
+      const result = await sessionLibrary.fork(source.id, {
+        title: `${source.title} · ${action}`.slice(0, 240),
+        expectedSourceHead: { sequence: source.headSequence, digest: source.headDigest },
+        sourcePoint: message.sourcePoint,
       });
-      // This fork intentionally restores the selected message into the new
-      // composer. Do not let the ordinary empty-draft hydration overwrite it
-      // after Preact commits the new addressed session identity.
       preserveComposerForDraftIdentity.current = result.session.id;
-      await activateForkedSession(result);
-      setInput(message.originatingPrompt ?? message.content);
-      setAttachments(message.originatingAttachments ?? []);
-      setComposerNotice(undefined);
-      setRuntimeStatus("Pinned fork created; review the restored prompt before sending");
+      if (action === "retry") {
+        pendingForkRetry.current = Object.freeze({
+          sessionId: result.session.id,
+          profileId: sourceProfile.profileId,
+          runtime: sourceRuntime,
+          prompt: prompt!,
+          attachments: Object.freeze([...(message.originatingAttachments ?? [])]),
+        });
+      }
+      await activateForkedSessionAgainst(result, Object.freeze({
+        runtime: sourceRuntime,
+        profileId: sourceProfile.profileId,
+        profileRevision: sourceProfile.revision,
+        activeSessionId: sourceId,
+        manifest: source.manifest,
+      }));
+      if (action === "edit") {
+        setInput(prompt!);
+        setAttachments(message.originatingAttachments ?? []);
+        setComposerNotice("Edit branch created at the immutable pre-turn boundary. Review the prompt, then send when ready.");
+        setRuntimeStatus("Edit branch ready · source conversation unchanged");
+        requestAnimationFrame(() => textarea.current?.focus());
+      } else if (action === "retry") {
+        setInput("");
+        setAttachments([]);
+        setComposerNotice("Clean retry branch created; regenerating without the prior answer in provider context.");
+        setRuntimeStatus("Clean retry branch ready · regeneration queued");
+      } else {
+        setInput("");
+        setAttachments([]);
+        setComposerNotice(message.role === "assistant"
+          ? "True fork created with audited context through this answer. The source conversation remains unchanged."
+          : "True fork created immediately before this user turn. The selected prompt was not copied; use Edit & branch when you want to revise it.");
+        setRuntimeStatus("True context fork active · waiting for a new prompt");
+      }
     } catch (error) {
+      pendingForkRetry.current = undefined;
       const detail = error instanceof Error ? error.message : "The source conversation changed before its branch could be committed.";
-      setComposerNotice(`Conversation branch was not created: ${detail}`);
-      setRuntimeStatus("Conversation branch could not be created");
+      setComposerNotice(`${action === "fork" ? "Conversation fork" : action === "edit" ? "Edit branch" : "Retry branch"} was not created: ${detail}`);
+      setRuntimeStatus("Conversation branch could not be created safely");
+    } finally {
+      sessionNavigationChanging.current = false;
+      if (pendingForkRetry.current) setPendingForkRetryRevision((value) => value + 1);
     }
   }
 
@@ -2742,10 +3636,30 @@ export function App() {
       || activeTurn.current
       || localCommandAdmission.current
       || inferenceRouteChanging.current
+      || sessionNavigationChanging.current
       || catalogAuthorityChanging.current
       || vaultProviderSwitchingRef.current
       || localDeviceBusy
     ) return;
+    const admissionRuntime = runtime.current;
+    const admissionSessionId = sessionId;
+    const admissionProfile = activeProfileRef.current;
+    if (
+      !admissionProfile
+      || profileAuthorityId.current !== admissionProfile.profileId
+      || activeSessionIdentity.current !== admissionSessionId
+      || activeSessionRecord?.id !== admissionSessionId
+      || activeSessionRecord.manifest.profile?.profileId !== admissionProfile.profileId
+    ) {
+      setComposerNotice("Wait for the active Profile and conversation to finish binding before sending.");
+      return;
+    }
+    const localPresentationAuthority = Object.freeze({
+      runtime: admissionRuntime,
+      profileId: admissionProfile.profileId,
+      profileRevision: admissionProfile.revision,
+      sessionId: admissionSessionId,
+    });
     if (slashRegistry && slashModule) {
       const slashPlan = slashModule?.planSlashCommand(content, slashRegistry);
       if (slashPlan.kind !== "chat") {
@@ -2755,9 +3669,14 @@ export function App() {
         localCommandAdmission.current = true;
         setInput("");
         try {
-          await runSlashPlan(slashPlan, content);
+          await runSlashPlan(slashPlan, content, localPresentationAuthority);
         } catch (error) {
-          appendLocalExchange(content, error instanceof Error ? error.message : String(error), true);
+          appendLocalExchangeForAuthority(
+            localPresentationAuthority,
+            content,
+            error instanceof Error ? error.message : String(error),
+            true,
+          );
         } finally {
           localCommandAdmission.current = false;
         }
@@ -2767,9 +3686,18 @@ export function App() {
       content = slashPlan.content.trim();
       if (!content) return;
     }
-    const turnSessionId = sessionId;
-    const turnRuntime = runtime.current;
+    const turnSessionId = admissionSessionId;
+    const turnRuntime = admissionRuntime;
     const turnTransport = turnRuntime.transport;
+    const turnProfileId = admissionProfile.profileId;
+    const turnProfileRevision = admissionProfile.revision;
+    const turnAuthorityStillCurrent = () => (
+      runtime.current === turnRuntime
+      && activeSessionIdentity.current === turnSessionId
+      && profileAuthorityId.current === turnProfileId
+      && activeProfileRef.current?.revision === turnProfileRevision
+      && !sessionNavigationChanging.current
+    );
     const externalPreflight = turnRuntime.inferenceBinding
       && turnRuntime.inferenceBinding.providerId !== "chutes"
       ? resolveExternalInferencePreflight(
@@ -2815,15 +3743,17 @@ export function App() {
     setBusy(true);
     setRuntimeStatus("Preparing turn");
     const releasePreflight = () => {
-      if (activeTurn.current === controller) activeTurn.current = undefined;
+      if (activeTurn.current !== controller) return;
+      activeTurn.current = undefined;
       if (activePrompt.current === content) activePrompt.current = undefined;
       setBusy(false);
     };
-    let images: Awaited<ReturnType<typeof prepareCanonicalImageInputs>> | undefined = undefined;
+    let images: CanonicalMessage["images"] | undefined = undefined;
     try {
-      images = outgoingAttachments.length
-        ? await prepareCanonicalImageInputs(outgoingAttachments.map((attachment) => attachment.file))
-        : undefined;
+      if (outgoingAttachments.length) {
+        const { prepareCanonicalImageInputs } = await import("../core/multimodal");
+        images = await prepareCanonicalImageInputs(outgoingAttachments.map((attachment) => attachment.file));
+      }
       controller.signal.throwIfAborted();
     } catch (error) {
       releasePreflight();
@@ -2833,27 +3763,55 @@ export function App() {
       requestAnimationFrame(() => textarea.current?.focus());
       return;
     }
+    if (!turnAuthorityStillCurrent()) {
+      controller.abort(new DOMException("Profile or conversation authority changed.", "AbortError"));
+      releasePreflight();
+      setComposerNotice("The Profile or conversation changed while the turn was being prepared. Your prompt remains in the active draft.");
+      requestAnimationFrame(() => textarea.current?.focus());
+      return;
+    }
+    /*
+     * Name the conversation on its first real message.
+     *
+     * The gate is "still carrying its default name", not a head sequence. This
+     * used to also require `headSequence === 1`, which silently stopped being
+     * true the moment the Profile cockpit began journaling its own pointer
+     * event at creation — and titling simply stopped happening, with nothing to
+     * show for it. The default title is the fact that matters; how many
+     * bookkeeping events preceded the message is not.
+     */
     if (
       !retryPrompt
       && activeSessionRecord?.id === turnSessionId
-      && activeSessionRecord.headSequence === 1
       && activeProfile
       && activeSessionRecord.title === `${activeProfile.name} conversation`
     ) {
-      try {
-        const renamed = await turnRuntime.journal.renameSession(
-          turnSessionId,
-          conversationTitleFromPrompt(content),
-          controller.signal,
-        );
+      const applyTitle = async (title: string) => {
+        const renamed = await turnRuntime.journal.renameSession(turnSessionId, title, controller.signal);
         if (activeSessionIdentity.current === turnSessionId) {
           setActiveSessionRecord(renamed);
           setEventCount((count) => count + 1);
           setSessionRevision((value) => value + 1);
         }
+      };
+      try {
+        // The heuristic lands first so the thread is never nameless.
+        await applyTitle(conversationTitleFromPrompt(content));
       } catch {
         // Titling is presentational. A storage race must never prevent the turn.
       }
+      /*
+       * Then ask the model for a real name, off the turn's critical path. This
+       * is not awaited: the answer arrives when it arrives, the turn never
+       * waits on it, and a failed or unusable answer leaves the heuristic.
+       */
+      void conversationTitleFromModel(turnRuntime, content, controller.signal)
+        .then(async (named) => {
+          if (!named || named === conversationTitleFromPrompt(content)) return;
+          if (activeSessionIdentity.current !== turnSessionId) return;
+          await applyTitle(named);
+        })
+        .catch(() => undefined);
     }
     if (controller.signal.aborted) {
       releasePreflight();
@@ -3004,15 +3962,15 @@ export function App() {
         announceCompletedTurnAwayFromChat();
         if (turnTransport.id === "chutes-e2ee-v1") {
           setConnection((current) => isChutesConnected(current) ? withVerifiedInvocation(current) : current);
-          void acquireReceiptAttestation(result.receipt, undefined, false).catch(() => {
-            // The evidence client records a bounded public failure state. A failed
-            // background pull never changes the completed turn or its receipt.
+          void enqueueAutomaticReceiptEvidence(result.receipt, turnSessionId, turnProfileId).catch(() => {
+            // The queue and evidence client record bounded public failure state.
+            // Background acquisition never changes the completed turn or receipt.
           });
         }
       }
-      const workspaceRefreshWarning = await refreshCompletedTurnWorkspace(() =>
-        refreshWorkspaceState(turnRuntime.workspace, setFiles, setWorkspaceFiles)
-      );
+      const workspaceRefreshWarning = await refreshCompletedTurnWorkspace(async () => {
+        await refreshWorkspacePresentation(turnRuntime, turnProfileId);
+      });
       if (activeSessionIdentity.current === turnSessionId) {
         setRuntimeStatus(workspaceRefreshWarning
           ? `Turn complete · workspace refresh delayed: ${workspaceRefreshWarning}`
@@ -3022,6 +3980,11 @@ export function App() {
       const pending = `${transcriptStreams.read(assistantId)}${pendingDelta.current?.messageId === assistantId ? pendingDelta.current.text : ""}`;
       clearPendingDelta(assistantId);
       const cancelled = controller.signal.aborted;
+      const failureMessage = cancelled
+        ? "Turn stopped"
+        : await import("./request-state")
+          .then(({ mapUnknownRequestFailure }) => mapUnknownRequestFailure(error, online).message)
+          .catch(() => "Request failed. Local state was kept; no remote success is assumed.");
       if (activeSessionIdentity.current === turnSessionId) {
         setMessages((current) =>
           current.map((message) =>
@@ -3037,13 +4000,16 @@ export function App() {
               : message,
           ),
         );
-        setRuntimeStatus(cancelled ? "Turn stopped" : mapUnknownRequestFailure(error, online).message);
+        setRuntimeStatus(failureMessage);
       }
     } finally {
-      if (activeTurn.current === controller) activeTurn.current = undefined;
-      if (activePrompt.current === content) activePrompt.current = undefined;
+      const releasesComposer = activeTurn.current === controller;
+      if (releasesComposer) {
+        activeTurn.current = undefined;
+        if (activePrompt.current === content) activePrompt.current = undefined;
+      }
       releaseComposerAndReloadSession({
-        release: () => setBusy(false),
+        release: () => { if (releasesComposer) setBusy(false); },
         load: () => turnRuntime.journal.getSession(turnSessionId),
         accept: () => activeSessionIdentity.current === turnSessionId,
         apply: (updatedSession) => {
@@ -3068,7 +4034,9 @@ export function App() {
     const existing = localDeviceHandle.current;
     if (
       existing
-      && runtime.current?.workspaceId === `vault+local-device://${LOCAL_DEVICE_PARTITION}`
+      // The storage authority, not the Profile's view of it: `workspaceId`
+      // now carries a Profile suffix and would never equal a bare Vault ID.
+      && runtime.current?.storageId === `vault+local-device://${LOCAL_DEVICE_PARTITION}`
     ) return;
     setLocalDeviceBusy(true);
     setLocalDeviceError(undefined);
@@ -3209,11 +4177,33 @@ export function App() {
   async function openFile(path: string) {
     const request = ++workspaceOpenRequest.current;
     const activeWorkspace = runtime.current?.workspace;
+    const ownerProfileId = activeProfileRef.current?.profileId;
     const file = activeWorkspace
       ? await readWorkspaceFileBounded(activeWorkspace, path, WORKSPACE_EDITOR_BYTE_LIMIT)
       : undefined;
-    if (request !== workspaceOpenRequest.current || runtime.current?.workspace !== activeWorkspace) return;
-    setSelectedFile(file);
+    if (
+      request !== workspaceOpenRequest.current
+      || runtime.current?.workspace !== activeWorkspace
+      || !ownerProfileId
+      || activeProfileRef.current?.profileId !== ownerProfileId
+    ) return;
+    setSelectedFileSelection(file ? Object.freeze({ profileId: ownerProfileId, file }) : undefined);
+  }
+
+  async function openMemorySource(target: MemorySourceTarget): Promise<void> {
+    if (target.kind === "message") {
+      navigate("chat", chatHash(target.sessionId));
+      return;
+    }
+    if (!navigate("editor")) return;
+    try {
+      await openFile(target.path);
+      setRuntimeStatus(target.kind === "file"
+        ? `Opened ${target.path} from Memory`
+        : "Opened the active profile memory record in the editor");
+    } catch (error) {
+      setRuntimeStatus(error instanceof Error ? error.message : "The Memory source could not be opened.");
+    }
   }
 
   async function inspectExecutionCapabilities(): Promise<readonly ExecutionCapability[]> {
@@ -3240,9 +4230,20 @@ export function App() {
   }
 
   function openCapabilityCommand(command: string): void {
-    setInput(command);
-    navigate("chat");
-    requestAnimationFrame(() => textarea.current?.focus({ preventScroll: true }));
+    void createConversation("Capability command").then((created) => {
+      if (!created) {
+        setRuntimeStatus("Finish the current operation before opening a capability conversation");
+        return;
+      }
+      preserveComposerForDraftIdentity.current = created.id;
+      setInput(command);
+      setComposerNotice("New profile-scoped conversation · capability command prefilled");
+      if (!window.matchMedia(MOBILE_SHELL_MEDIA_QUERY).matches) {
+        requestAnimationFrame(() => textarea.current?.focus({ preventScroll: true }));
+      }
+    }).catch((error) => {
+      setRuntimeStatus(error instanceof Error ? error.message : "A capability conversation could not be opened.");
+    });
   }
 
   async function reviewGitOperation(
@@ -3365,18 +4366,46 @@ export function App() {
     authority: DurableAdoptionDescriptor,
   ): Promise<void> {
     if (catalogAuthorityChanging.current) throw new Error("Another profile storage transition is already active.");
+    const priorEvidenceRuntime = runtime.current;
+    const priorEvidenceProfileId = activeProfileRef.current?.profileId;
+    const priorEvidenceCredential = providerCredential.current;
+    const priorEvidenceCredentialKind = attestationCredentialKind.current;
+    const shouldRebindEvidence = Boolean(
+      evidenceAcquisitionQueueAuthority.current
+      || evidenceAcquisitionQueueLoad.current
+      || evidenceAcquisitionQueue.current
+      || attestationClientBinding.current
+      || endpointEvidenceAuthority.current?.current(),
+    );
+    let adoptedProfileId: string | undefined;
     catalogAuthorityChanging.current = true;
     try {
       await catalogMutationTail.current;
-      await adoptDurableRuntimeExclusive(authority);
+      adoptedProfileId = await adoptDurableRuntimeExclusive(authority);
+    } catch (error) {
+      await rebindEvidenceAfterStorageTransition(
+        shouldRebindEvidence,
+        runtime.current ?? priorEvidenceRuntime,
+        priorEvidenceProfileId,
+        priorEvidenceCredential,
+        priorEvidenceCredentialKind,
+      );
+      throw error;
     } finally {
       catalogAuthorityChanging.current = false;
     }
+    await rebindEvidenceAfterStorageTransition(
+      shouldRebindEvidence,
+      runtime.current,
+      adoptedProfileId,
+      priorEvidenceCredential,
+      priorEvidenceCredentialKind,
+    );
   }
 
   async function adoptDurableRuntimeExclusive(
     authority: DurableAdoptionDescriptor,
-  ): Promise<void> {
+  ): Promise<string> {
     const { ready, workspaceId } = authority;
     const prior = runtime.current;
     const priorCheckpoint = catalogCheckpoint.current;
@@ -3426,36 +4455,74 @@ export function App() {
       ?? adoptedProfiles.find((candidate) => candidate.profileId === "general")
       ?? adoptedProfiles[0];
     if (!selectedProfile) throw new Error("The encrypted Vault profile catalog has no profile available for new work.");
+    if (
+      evidenceAcquisitionQueueAuthority.current
+      || evidenceAcquisitionQueueLoad.current
+      || evidenceAcquisitionQueue.current
+      || attestationClientBinding.current
+      || endpointEvidenceAuthority.current?.current()
+    ) {
+      // Freeze the worker, client cache, and record CAS authority before
+      // WorkspacePort migration. Recovery is credential client → records →
+      // scheduler only after the destination authority has been adopted.
+      await releaseEvidenceAcquisitionQueue();
+      await quiesceEndpointEvidenceClientAndStore(true);
+    }
     // A freshly opened page contains deterministic sample state only. An
     // existing encrypted vault is authoritative; release-copy changes must not
     // be mistaken for user conflicts or create a throwaway session on reload.
     // Any real workspace edit or journal event disables this shortcut.
     if (!targetAuthoritative) {
-      const targetHasUserWorkspace = (await ready.workspace.list()).some((entry) => !isWorkspaceControlPlanePath(entry.path));
-      if (!pristineBootstrap || !targetHasUserWorkspace) {
-        await migrateWorkspaceState(prior.workspace, ready.workspace);
+      /*
+       * A Profile's content now lives under the storage authority's own
+       * reserved tree, so "is this target blank?" can no longer be asked by
+       * filtering control-plane paths — that reads every adopted Vault as empty
+       * and copies the local bootstrap over it, which then fails on the first
+       * file whose content differs.
+       *
+       * The invariant that matters is narrower than the classification: a
+       * pristine bootstrap has nothing worth keeping, so if the target holds
+       * anything at all, it is the authority and nothing is copied onto it.
+       */
+      const targetIsBlank = (await ready.workspace.list()).length === 0;
+      if (!pristineBootstrap || targetIsBlank) {
+        // The storage authority, not one Profile's view: every Profile's
+        // namespace has to travel, including those not currently active.
+        //
+        // A blank Vault receives the workspace whole. A Vault that already
+        // holds state is the authority, and only reaches here because this
+        // runtime has real user work to join into it — so that copy carries
+        // user files and leaves the target's repositories alone.
+        await migrateWorkspaceState(prior.storage, ready.workspace, targetIsBlank ? "seed" : "merge");
       }
       if (!pristineBootstrap) await migrateJournalState(prior.journal, ready.journal);
     }
 
-    const nextGitClient = new BrowserGitClient(await WorkspaceGitAdapter.open(
-      ready.workspace,
-      () => existingWorkspaceFallbackSeed(ready.workspace),
-    ));
+    const adoptedAuthority = await openProfileWorkspaceAuthority({
+      storage: ready.workspace,
+      storageId: workspaceId,
+      profile: selectedProfile,
+    });
+    const nextGitClient = adoptedAuthority.git;
     const journal = new EventJournal(ready.journal);
     const vaultTools = await createVaultAwareAirshipToolRegistry({
-      workspace: ready.workspace,
-      workspaceId,
+      workspace: adoptedAuthority.workspace,
+      workspaceId: adoptedAuthority.workspaceId,
       journal,
       git: nextGitClient,
+      liveEnvironment: liveEnvironmentSource,
       contextFabric: ready.contextFabric,
       additionalTools: [requireProviderAvailabilityTool()],
     });
     const tools = vaultTools.tools;
     const nextRuntime: Runtime = {
       ...prior,
-      workspace: ready.workspace,
-      workspaceId,
+      storage: ready.workspace,
+      storageId: workspaceId,
+      workspace: adoptedAuthority.workspace,
+      workspaceId: adoptedAuthority.workspaceId,
+      profileId: selectedProfile.profileId,
+      contextFabric: ready.contextFabric,
       journal,
       profiles: ready.profiles,
       contextMode: vaultTools.contextMode,
@@ -3501,7 +4568,13 @@ export function App() {
           activeSessionRuntime(nextRuntime, candidateSession),
         );
         if (detail.compatibility?.action !== "resume") {
-          throw new Error("The latest encrypted session no longer matches the adopted runtime.");
+          // Name the mismatch. "No longer matches" told a person nothing about
+          // which pin moved, and the reasons were already computed right here.
+          const because = [
+            ...(detail.compatibility?.reasons ?? []).map((reason) => reason.message),
+            ...detail.history.issues.map((issue) => `${issue.code}: ${issue.message}`),
+          ].join(" ");
+          throw new Error(`The latest encrypted session no longer matches the adopted runtime.${because ? ` ${because}` : ""}`);
         }
         const events = await journal.readEvents(candidateSession.id);
         const { auditSessionHistory, presentSessionMessages } = await loadDeferredCapabilities();
@@ -3551,7 +4624,12 @@ export function App() {
       `${profile.name} · encrypted vault`,
     );
 
+    workspaceRefreshCoordinator.invalidate();
+    // The storage authority changed, so every cached Profile authority is over
+    // the previous one and must not be reused.
+    profileAuthorities.current.clear();
     runtime.current = nextRuntime;
+    rememberProfileAuthority(nextRuntime, nextGitClient);
     activeDurableAuthority.current = authority;
     setGitClient(nextGitClient);
     const commandModule = await import("../commands");
@@ -3559,8 +4637,8 @@ export function App() {
     setSlashRegistry(commandModule.createSlashCommandRegistry({ tools }));
     setSessionLibrary(library);
     publishCatalogCheckpoint(nextCatalogCheckpoint);
-    setProfileId(profile.profileId);
-    activateSession(nextSession);
+    publishProfileId(profile.profileId);
+    const activated = await activateSession(nextSession);
     setMessages(resumedPresentation?.messages.length
       ? [...resumedPresentation.messages]
       : [{
@@ -3572,7 +4650,7 @@ export function App() {
               ? "The encrypted Local Device Vault is active. This new pinned session writes workspace files, explicit memories, task state, and session events as encrypted browser-managed objects that remain available offline."
               : "The verified Vault contract is now active. This new pinned session writes workspace files, explicit memories, task state, and session events as client-encrypted cloud objects; the previous page-memory sessions were migrated and remain separately inspectable.",
         }]);
-    setEventCount(nextSession.headSequence);
+    setEventCount(activated.headSequence);
     setQuarantinedSession(quarantined);
     setSessionRevision((value) => value + 1);
     setLastReceipt(resumedPresentation?.lastReceipt);
@@ -3580,7 +4658,7 @@ export function App() {
     setTranscriptBoundary(resumedPresentation?.boundary);
     let workspaceRefreshDeferred = false;
     try {
-      await refreshWorkspaceState(ready.workspace, setFiles, setWorkspaceFiles);
+      await refreshWorkspacePresentation(nextRuntime, profile.profileId);
     } catch {
       workspaceRefreshDeferred = true;
       setFiles([]);
@@ -3601,6 +4679,7 @@ export function App() {
       : resumableSession
         ? `${authority.label} active · audited session resumed · ${contextLabel}${workspaceRefreshDeferred ? " · file view refresh due" : ""}`
         : `${authority.label} active · ${contextLabel}${workspaceRefreshDeferred ? " · file view refresh due" : ""}`);
+    return profile.profileId;
   }
 
   async function publishEncryptedContextIndex(): Promise<void> {
@@ -3613,10 +4692,10 @@ export function App() {
     const authority = activeDurableAuthority.current;
     if (
       !active
-      || !active.workspaceId.startsWith("vault+")
+      || !active.storageId.startsWith("vault+")
       || !gitClient
       || !authority
-      || authority.workspaceId !== active.workspaceId
+      || authority.workspaceId !== active.storageId
     ) {
       setVaultContextPublicationMessage("Adopt a verified encrypted Vault before publishing context shards.");
       return;
@@ -3633,6 +4712,7 @@ export function App() {
         workspaceId: active.workspaceId,
         journal: active.journal,
         git: gitClient,
+        liveEnvironment: liveEnvironmentSource,
         contextFabric: ready.contextFabric,
         publicationPolicy: "explicit-user-approved",
         additionalTools: [requireProviderAvailabilityTool()],
@@ -3678,24 +4758,52 @@ export function App() {
 
   async function adoptEphemeralRuntime(): Promise<void> {
     if (catalogAuthorityChanging.current) throw new Error("Another profile storage transition is already active.");
+    const priorEvidenceRuntime = runtime.current;
+    const priorEvidenceProfileId = activeProfileRef.current?.profileId;
+    const priorEvidenceCredential = providerCredential.current;
+    const priorEvidenceCredentialKind = attestationCredentialKind.current;
+    const shouldRebindEvidence = Boolean(
+      evidenceAcquisitionQueueAuthority.current
+      || evidenceAcquisitionQueueLoad.current
+      || evidenceAcquisitionQueue.current
+      || attestationClientBinding.current
+      || endpointEvidenceAuthority.current?.current(),
+    );
+    let adoptedProfileId: string | undefined;
     catalogAuthorityChanging.current = true;
     try {
       await catalogMutationTail.current;
-      await adoptEphemeralRuntimeExclusive();
+      adoptedProfileId = await adoptEphemeralRuntimeExclusive();
+    } catch (error) {
+      await rebindEvidenceAfterStorageTransition(
+        shouldRebindEvidence,
+        runtime.current ?? priorEvidenceRuntime,
+        priorEvidenceProfileId,
+        priorEvidenceCredential,
+        priorEvidenceCredentialKind,
+      );
+      throw error;
     } finally {
       catalogAuthorityChanging.current = false;
     }
+    await rebindEvidenceAfterStorageTransition(
+      shouldRebindEvidence,
+      runtime.current,
+      adoptedProfileId,
+      priorEvidenceCredential,
+      priorEvidenceCredentialKind,
+    );
   }
 
-  async function adoptEphemeralRuntimeExclusive(): Promise<void> {
+  async function adoptEphemeralRuntimeExclusive(): Promise<string> {
     const prior = runtime.current;
     const priorCheckpoint = catalogCheckpoint.current;
     if (!prior || !priorCheckpoint || !activeProfile || !gitClient) {
       throw new Error("The active browser runtime is not ready for an ephemeral transition.");
     }
-    if (!prior.workspaceId.startsWith("vault+")) {
+    if (!prior.storageId.startsWith("vault+")) {
       vault.disconnect();
-      return;
+      return activeProfile.profileId;
     }
     activeTurn.current?.abort(new DOMException("Workspace durability is changing.", "AbortError"));
     setRuntimeStatus("Moving the active encrypted state into page memory");
@@ -3707,29 +4815,48 @@ export function App() {
       prior.workspace,
       "Storage authority changed to page memory. Restart this terminal against the adopted workspace.",
     );
-    const workspace = new MemoryWorkspace();
+    if (
+      evidenceAcquisitionQueueAuthority.current
+      || evidenceAcquisitionQueueLoad.current
+      || evidenceAcquisitionQueue.current
+      || attestationClientBinding.current
+      || endpointEvidenceAuthority.current?.current()
+    ) {
+      await releaseEvidenceAcquisitionQueue();
+      await quiesceEndpointEvidenceClientAndStore(true);
+    }
+    const storage = new MemoryWorkspace();
+    const storageId = "memory://airship-page";
     const journalBackend = new MemoryJournalBackend();
-    await migrateWorkspaceState(prior.workspace, workspace);
+    // Copy the whole storage authority so every Profile's namespace survives
+    // the drop to page memory, not only the one that happens to be active.
+    await migrateWorkspaceState(prior.storage, storage);
     await migrateJournalState(prior.journal, journalBackend);
 
-    const { WorkspaceGitAdapter, BrowserGitClient } = await loadBrowserGit();
-    const nextGitClient = new BrowserGitClient(await WorkspaceGitAdapter.open(
-      workspace,
-      () => existingWorkspaceFallbackSeed(workspace),
-    ));
+    const ephemeralAuthority = await openProfileWorkspaceAuthority({
+      storage,
+      storageId,
+      profile: activeProfile,
+    });
+    const workspace = ephemeralAuthority.workspace;
+    const nextGitClient = ephemeralAuthority.git;
     const journal = new EventJournal(journalBackend);
     const tools = await createAirshipToolRegistry({
       workspace,
       journal,
       git: nextGitClient,
+      liveEnvironment: liveEnvironmentSource,
       additionalTools: [requireProviderAvailabilityTool()],
     });
     const profiles = new MemoryProfileCatalogStore();
     const copiedCatalog = (await profiles.initialize(priorCheckpoint.catalog)).checkpoint;
     const nextRuntime: Runtime = {
       ...prior,
+      storage,
+      storageId,
       workspace,
-      workspaceId: "memory://airship-page",
+      workspaceId: ephemeralAuthority.workspaceId,
+      profileId: activeProfile.profileId,
       journal,
       profiles,
       tools,
@@ -3741,7 +4868,10 @@ export function App() {
       : await profiles.commit(copiedCatalog, nextCatalog);
     const nextSession = await createProfileSession(nextRuntime, profile, nextCatalog, `${profile.name} · ephemeral`);
 
+    workspaceRefreshCoordinator.invalidate();
+    profileAuthorities.current.clear();
     runtime.current = nextRuntime;
+    rememberProfileAuthority(nextRuntime, nextGitClient);
     activeDurableAuthority.current = undefined;
     setGitClient(nextGitClient);
     const commandModule = await import("../commands");
@@ -3749,27 +4879,27 @@ export function App() {
     setSlashRegistry(commandModule.createSlashCommandRegistry({ tools }));
     setSessionLibrary(new SessionLibrary(journal));
     publishCatalogCheckpoint(nextCatalogCheckpoint);
-    setProfileId(profile.profileId);
-    activateSession(nextSession);
+    publishProfileId(profile.profileId);
+    const activated = await activateSession(nextSession);
     setSessionRevision((value) => value + 1);
     setMessages([{
       ...welcomeMessage,
       id: randomUuid(),
       content: "Ephemeral mode is active. The current workspace and session history were copied into page memory, and the Vault connection was closed. New changes are not synced.",
     }]);
-    setEventCount(nextSession.headSequence);
+    setEventCount(activated.headSequence);
     setLastReceipt(undefined);
     setSessionLifecycle(READY_SESSION_LIFECYCLE);
     setTranscriptBoundary(undefined);
     let workspaceRefreshDeferred = false;
     try {
-      await refreshWorkspaceState(workspace, setFiles, setWorkspaceFiles);
+      await refreshWorkspacePresentation(nextRuntime, profile.profileId);
     } catch {
       workspaceRefreshDeferred = true;
       setFiles([]);
       setWorkspaceFiles([]);
     }
-    if (prior.workspaceId.startsWith("vault+local-device://")) {
+    if (prior.storageId.startsWith("vault+local-device://")) {
       localDeviceHandle.current?.close();
       localDeviceHandle.current = undefined;
       setLocalDeviceStatus(undefined);
@@ -3778,6 +4908,7 @@ export function App() {
     setRuntimeStatus(workspaceRefreshDeferred
       ? "Ephemeral mode · page memory only · file view refresh due"
       : "Ephemeral mode · page memory only");
+    return profile.profileId;
   }
 
   async function changeVaultProvider(next: VaultBackend): Promise<void> {
@@ -3795,7 +4926,7 @@ export function App() {
       await transitionVaultProvider({
         current: preferences.vaultBackend,
         next,
-        runtimeUsesVault: () => runtime.current?.workspaceId.startsWith("vault+") === true,
+        runtimeUsesVault: () => runtime.current?.storageId.startsWith("vault+") === true,
         adoptEphemeralRuntime,
         disconnectAuthority: () => vault.disconnect(),
         commitPreference: (provider) => setPreferences((current) => Object.freeze({ ...current, vaultBackend: provider })),
@@ -3828,7 +4959,7 @@ export function App() {
     setRuntimeStatus("Moving active Vault state into page memory");
     try {
       await releaseVaultAuthority({
-        runtimeUsesVault: () => runtime.current?.workspaceId.startsWith("vault+") === true,
+        runtimeUsesVault: () => runtime.current?.storageId.startsWith("vault+") === true,
         adoptEphemeralRuntime,
         disconnectAuthority: () => vault.disconnect(),
       });
@@ -3859,29 +4990,495 @@ export function App() {
     }
   }
 
-  async function installAttestationEvidenceClient(
+  function endpointEvidenceScope(
+    active: Runtime | undefined = runtime.current,
+    activeProfileId: string | undefined = activeProfileRef.current?.profileId,
+  ): EndpointEvidenceScope | undefined {
+    if (!active || !activeProfileId) return undefined;
+    return Object.freeze({
+      workspace: active.workspace,
+      workspaceId: active.workspaceId,
+      profileId: activeProfileId,
+    });
+  }
+
+  function endpointEvidenceFence(args: Readonly<{
+    sessionId?: string;
+    receiptId?: string;
+    instanceId: string;
+    endpointKeyDigest?: string;
+    runtime?: Runtime;
+    profileId?: string;
+  }>): EndpointEvidenceFence {
+    const scope = endpointEvidenceScope(args.runtime, args.profileId);
+    const ownerSessionId = args.sessionId ?? activeSessionIdentity.current ?? sessionId;
+    if (!scope || !ownerSessionId) {
+      throw new MountedAttestationError(
+        "invalid-input",
+        "Endpoint evidence requires an active Profile, workspace authority, and session identity.",
+      );
+    }
+    return Object.freeze({
+      ...scope,
+      sessionId: ownerSessionId,
+      ...(args.receiptId ? { receiptId: args.receiptId } : {}),
+      instanceId: args.instanceId,
+      ...(args.endpointKeyDigest ? { endpointKeyDigest: args.endpointKeyDigest } : {}),
+    });
+  }
+
+  function sameEndpointEvidenceScope(
+    left: EndpointEvidenceScope | undefined,
+    right: EndpointEvidenceScope | undefined,
+  ): boolean {
+    return Boolean(
+      left
+      && right
+      && left.workspace === right.workspace
+      && left.workspaceId === right.workspaceId
+      && left.profileId === right.profileId,
+    );
+  }
+
+  function isCurrentEndpointEvidenceFence(fence: EndpointEvidenceFence): boolean {
+    const current = endpointEvidenceScope();
+    return sameEndpointEvidenceScope(fence, current)
+      && (activeSessionIdentity.current ?? sessionId) === fence.sessionId;
+  }
+
+  function recordsForEvidenceSession(
+    binding: EndpointEvidenceBinding,
+    ownerSessionId: string,
+  ): readonly ChutesEndpointEvidenceRecord[] {
+    return Object.freeze(binding.snapshot.entries
+      .filter((entry) => entry.identity.sessionId === ownerSessionId)
+      .map((entry) => entry.record));
+  }
+
+  function projectEndpointEvidencePresentation(
+    binding: EndpointEvidenceBinding,
+    ownerSessionId: string,
+    options: Readonly<{
+      failure?: AttestationAcquisitionFailure;
+      selectedRecordId?: string;
+      durabilityNotice?: string;
+    }> = {},
+  ): void {
+    const fenceScope = endpointEvidenceScope();
+    if (!sameEndpointEvidenceScope(binding, fenceScope)) return;
+    setAttestationPresentation(Object.freeze({
+      workspace: binding.workspace,
+      workspaceId: binding.workspaceId,
+      profileId: binding.profileId,
+      sessionId: ownerSessionId,
+      records: recordsForEvidenceSession(binding, ownerSessionId),
+      ...(options.failure ? { failure: options.failure } : {}),
+      ...(options.selectedRecordId ? { selectedRecordId: options.selectedRecordId } : {}),
+      ...(options.durabilityNotice ? { durabilityNotice: options.durabilityNotice } : {}),
+    }));
+  }
+
+  function publishAttestationFailureForFence(
+    fence: EndpointEvidenceFence,
+    failure: AttestationAcquisitionFailure | undefined,
+  ): void {
+    setAttestationPresentation((current) => {
+      if (!isCurrentEndpointEvidenceFence(fence)) return current;
+      const records = current
+        && sameEndpointEvidenceScope(current, fence)
+        && current.sessionId === fence.sessionId
+          ? current.records
+          : Object.freeze([]);
+      return Object.freeze({
+        workspace: fence.workspace,
+        workspaceId: fence.workspaceId,
+        profileId: fence.profileId,
+        sessionId: fence.sessionId,
+        records,
+        ...(failure ? { failure } : {}),
+        ...(current?.selectedRecordId ? { selectedRecordId: current.selectedRecordId } : {}),
+        ...(current?.durabilityNotice ? { durabilityNotice: current.durabilityNotice } : {}),
+      });
+    });
+  }
+
+  function publishAttestationFailureForCurrent(failure: AttestationAcquisitionFailure): void {
+    const active = runtime.current;
+    const ownerSessionId = activeSessionIdentity.current ?? sessionId;
+    const activeProfileId = activeProfileRef.current?.profileId;
+    if (!active || !ownerSessionId || !activeProfileId) return;
+    const instanceId = failure.instanceId ?? "connection";
+    publishAttestationFailureForFence(Object.freeze({
+      workspace: active.workspace,
+      workspaceId: active.workspaceId,
+      profileId: activeProfileId,
+      sessionId: ownerSessionId,
+      ...(failure.receiptId ? { receiptId: failure.receiptId } : {}),
+      instanceId,
+      ...(failure.endpointKeyDigest ? { endpointKeyDigest: failure.endpointKeyDigest } : {}),
+    }), failure);
+  }
+
+  function selectEndpointEvidenceRecord(recordId: string | undefined): void {
+    const scope = endpointEvidenceScope();
+    const ownerSessionId = activeSessionIdentity.current ?? sessionId;
+    if (!scope || !ownerSessionId) return;
+    setAttestationPresentation((current) => {
+      if (!current || !sameEndpointEvidenceScope(current, scope) || current.sessionId !== ownerSessionId) return current;
+      return Object.freeze({
+        ...current,
+        ...(recordId ? { selectedRecordId: recordId } : { selectedRecordId: undefined }),
+      });
+    });
+  }
+
+  async function ensureEndpointEvidenceAuthority(
+    target: EndpointEvidenceScope,
+    expectedClientBinding: AttestationClientBinding,
+  ): Promise<EndpointEvidenceBinding> {
+    if (
+      attestationClientBinding.current !== expectedClientBinding
+      || !sameEndpointEvidenceScope(expectedClientBinding, target)
+      || !providerCredential.current
+    ) {
+      throw new DOMException("The credential-backed endpoint-evidence client is not active for this scope.", "AbortError");
+    }
+    const current = endpointEvidenceAuthority.current?.current();
+    if (current && sameEndpointEvidenceScope(current, target)) return current;
+    const pending = endpointEvidenceAuthorityLoad.current;
+    if (pending && sameEndpointEvidenceScope(pending, target)) return pending.promise;
+
+    const operation = ++endpointEvidenceAuthorityOperation.current;
+    const loading = import("../attestation/workspace-endpoint-evidence-persistence").then(async (module) => {
+      if (attestationClientBinding.current !== expectedClientBinding || !providerCredential.current) {
+        throw new DOMException("Endpoint-evidence authority changed while loading.", "AbortError");
+      }
+      const authority = endpointEvidenceAuthority.current ?? new module.WorkspaceEndpointEvidenceAuthority();
+      endpointEvidenceAuthority.current = authority;
+      const binding = await authority.activate(target);
+      if (
+        operation !== endpointEvidenceAuthorityOperation.current
+        || attestationClientBinding.current !== expectedClientBinding
+        || runtime.current?.workspace !== target.workspace
+        || runtime.current?.workspaceId !== target.workspaceId
+        || activeProfileRef.current?.profileId !== target.profileId
+      ) {
+        throw new DOMException("Endpoint-evidence recovery was superseded.", "AbortError");
+      }
+      const ownerSessionId = activeSessionIdentity.current ?? sessionId;
+      if (ownerSessionId) projectEndpointEvidencePresentation(binding, ownerSessionId);
+      return binding;
+    });
+    const load: EndpointEvidenceAuthorityLoad = Object.freeze({ ...target, promise: loading });
+    endpointEvidenceAuthorityLoad.current = load;
+    try {
+      return await loading;
+    } finally {
+      if (endpointEvidenceAuthorityLoad.current === load) endpointEvidenceAuthorityLoad.current = undefined;
+    }
+  }
+
+  async function releaseEndpointEvidenceAuthority(): Promise<boolean> {
+    const authority = endpointEvidenceAuthority.current;
+    const pending = endpointEvidenceAuthorityLoad.current;
+    const wasActive = Boolean(authority?.current() || pending);
+    endpointEvidenceAuthorityOperation.current += 1;
+    endpointEvidenceAuthorityLoad.current = undefined;
+    if (pending) await pending.promise.catch(() => undefined);
+    await authority?.release();
+    return wasActive;
+  }
+
+  async function rebindProfileEvidenceScope(
+    active: Runtime,
+    activeProfileId: string,
     credential: string,
     credentialKind: ActiveChutesConnection["credentialKind"],
   ): Promise<void> {
+    const transition = ++evidenceScopeTransition.current;
+    await releaseEvidenceAcquisitionQueue();
+    if (transition !== evidenceScopeTransition.current) return;
+    await quiesceEndpointEvidenceClientAndStore(true);
+    if (transition !== evidenceScopeTransition.current || runtime.current !== active) return;
+    const installed = await installAttestationEvidenceClient(credential, credentialKind, {
+      runtime: active,
+      profileId: activeProfileId,
+    });
+    if (!installed || transition !== evidenceScopeTransition.current || runtime.current !== active) return;
+    await ensureEvidenceAcquisitionQueue(activeProfileId, active);
+  }
+
+  async function ensureEvidenceAcquisitionQueue(
+    receiptProfileId: string,
+    expectedRuntime: Runtime | undefined = runtime.current,
+  ): Promise<EvidenceAcquisitionQueueController> {
+    if (!expectedRuntime || runtime.current !== expectedRuntime) {
+      throw new Error("The evidence acquisition workspace authority is not active.");
+    }
+    const expectedClient = attestationClientBinding.current;
+    const expectedEndpointBinding = endpointEvidenceAuthority.current?.current();
+    const evidenceScope = endpointEvidenceScope(expectedRuntime, receiptProfileId);
+    if (
+      !expectedClient
+      || !expectedEndpointBinding
+      || !evidenceScope
+      || !providerCredential.current
+      || !sameEndpointEvidenceScope(expectedClient, evidenceScope)
+      || !sameEndpointEvidenceScope(expectedEndpointBinding, evidenceScope)
+    ) {
+      throw new DOMException(
+        "Automatic endpoint evidence remains paused until a credential-backed client and matching record authority are installed.",
+        "AbortError",
+      );
+    }
+    const target = Object.freeze({
+      workspace: expectedRuntime.workspace,
+      workspaceId: expectedRuntime.workspaceId,
+      profileId: receiptProfileId,
+    });
+    const currentBinding = evidenceAcquisitionQueueAuthority.current?.current();
+    if (
+      currentBinding
+      && currentBinding.workspace === target.workspace
+      && currentBinding.workspaceId === target.workspaceId
+      && currentBinding.profileId === target.profileId
+    ) {
+      publishEvidenceAcquisitionQueue(currentBinding.queue);
+      return currentBinding.queue;
+    }
+    const pending = evidenceAcquisitionQueueLoad.current;
+    if (
+      pending
+      && pending.workspace === target.workspace
+      && pending.workspaceId === target.workspaceId
+      && pending.profileId === target.profileId
+    ) return pending.promise;
+
+    const operation = ++evidenceAcquisitionQueueOperation.current;
+    const loading = Promise.all([
+      import("../attestation/evidence-acquisition-queue"),
+      import("../attestation/workspace-evidence-acquisition-persistence"),
+    ]).then(async ([queueModule, persistenceModule]) => {
+      if (runtime.current !== expectedRuntime) {
+        throw new DOMException("Evidence acquisition authority changed while loading.", "AbortError");
+      }
+      let authority = evidenceAcquisitionQueueAuthority.current;
+      if (!authority) {
+        authority = new persistenceModule.WorkspaceEvidenceAcquisitionAuthority({
+          worker: {
+            async acquire(request, context) {
+              try {
+                await acquireEndpointAttestation({
+                  chuteId: request.chuteId,
+                  instanceId: request.instanceId,
+                  signal: context.signal,
+                  // A receipt identity receives its own fresh client challenge;
+                  // it never reuses another session's memory-cache observation.
+                  forceRefresh: true,
+                  fence: endpointEvidenceFence({
+                    runtime: expectedRuntime,
+                    profileId: request.profileId,
+                    sessionId: request.sessionId,
+                    receiptId: request.receiptId,
+                    instanceId: request.instanceId,
+                    endpointKeyDigest: request.endpointKeyDigest,
+                  }),
+                  failureTarget: {
+                    scope: "receipt",
+                    receiptId: request.receiptId,
+                    instanceId: request.instanceId,
+                    ...(request.endpointKeyDigest ? { endpointKeyDigest: request.endpointKeyDigest } : {}),
+                  },
+                });
+              } catch (error) {
+                if (error instanceof DOMException && error.name === "AbortError") throw error;
+                const mounted = error instanceof MountedAttestationError ? error : undefined;
+                const code = mounted?.code ?? "network";
+                const retryable = mounted?.context.retryable
+                  ?? ["network", "timeout", "http", "evidence-unavailable", "subject-not-found"].includes(code);
+                throw new queueModule.EvidenceAcquisitionAttemptError(
+                  code,
+                  attestationFailureLabel(code),
+                  retryable,
+                );
+              }
+            },
+          },
+        });
+        evidenceAcquisitionQueueAuthority.current = authority;
+      }
+      const binding = await authority.activate(target);
+      if (
+        operation !== evidenceAcquisitionQueueOperation.current
+        || runtime.current !== expectedRuntime
+        || attestationClientBinding.current !== expectedClient
+        || endpointEvidenceAuthority.current?.current() !== expectedEndpointBinding
+        || authority.current()?.queue !== binding.queue
+      ) {
+        throw new DOMException("Evidence acquisition binding was superseded.", "AbortError");
+      }
+      publishEvidenceAcquisitionQueue(binding.queue);
+      return binding.queue;
+    });
+    const load: EvidenceAcquisitionQueueLoad = Object.freeze({ ...target, promise: loading });
+    evidenceAcquisitionQueueLoad.current = load;
+    try {
+      return await loading;
+    } finally {
+      if (evidenceAcquisitionQueueLoad.current === load) evidenceAcquisitionQueueLoad.current = undefined;
+    }
+  }
+
+  function publishEvidenceAcquisitionQueue(queue: EvidenceAcquisitionQueueController): void {
+    if (evidenceAcquisitionQueue.current !== queue) {
+      evidenceAcquisitionUnsubscribe.current?.();
+      evidenceAcquisitionUnsubscribe.current = queue.subscribe(setEvidenceAcquisitionSnapshot);
+      evidenceAcquisitionQueue.current = queue;
+    }
+    setEvidenceAcquisitionSnapshot(queue.snapshot());
+  }
+
+  async function releaseEvidenceAcquisitionQueue(): Promise<boolean> {
+    const authority = evidenceAcquisitionQueueAuthority.current;
+    const pending = evidenceAcquisitionQueueLoad.current;
+    const wasActive = Boolean(authority?.current() || pending || evidenceAcquisitionQueue.current);
+    evidenceAcquisitionQueueOperation.current += 1;
+    evidenceAcquisitionQueueLoad.current = undefined;
+    if (pending) await pending.promise.catch(() => undefined);
+    evidenceAcquisitionUnsubscribe.current?.();
+    evidenceAcquisitionUnsubscribe.current = undefined;
+    evidenceAcquisitionQueue.current = undefined;
+    setEvidenceAcquisitionSnapshot(undefined);
+    await authority?.release();
+    return wasActive;
+  }
+
+  async function rebindEvidenceAcquisitionQueue(
+    shouldRebind: boolean,
+    nextRuntime: Runtime | undefined,
+    nextProfileId: string | undefined,
+  ): Promise<void> {
+    if (!shouldRebind || !nextRuntime || !nextProfileId || runtime.current !== nextRuntime) return;
+    try {
+      await ensureEvidenceAcquisitionQueue(nextProfileId, nextRuntime);
+    } catch (error) {
+      reportEvidenceAcquisitionQueueFailure(error);
+    }
+  }
+
+  async function rebindEvidenceAfterStorageTransition(
+    shouldRebind: boolean,
+    nextRuntime: Runtime | undefined,
+    nextProfileId: string | undefined,
+    credential: string | undefined,
+    credentialKind: ActiveChutesConnection["credentialKind"] | undefined,
+  ): Promise<void> {
+    if (!shouldRebind || !nextRuntime || !nextProfileId || !credential || !credentialKind) return;
+    if (runtime.current !== nextRuntime) return;
+    const installed = await installAttestationEvidenceClient(credential, credentialKind, {
+      runtime: nextRuntime,
+      profileId: nextProfileId,
+    });
+    if (!installed || !endpointEvidenceAuthority.current?.current()) return;
+    await rebindEvidenceAcquisitionQueue(true, nextRuntime, nextProfileId);
+  }
+
+  function reportEvidenceAcquisitionQueueFailure(error: unknown): void {
+    if (error instanceof DOMException && error.name === "AbortError") return;
+    publishAttestationFailureForCurrent({
+      label: "Automatic evidence queue unavailable",
+      scope: "connection",
+    });
+  }
+
+  async function enqueueAutomaticReceiptEvidence(
+    receipt: ConversationReceipt,
+    receiptSessionId: string,
+    receiptProfileId: string,
+  ): Promise<void> {
+    if (!isChutesReceiptProvider(receipt.provider) || !receipt.instanceId || !receipt.model) return;
+    const model = availableModels.find((candidate) => candidate.id === receipt.model);
+    if (!model) {
+      const fence = endpointEvidenceFence({
+        profileId: receiptProfileId,
+        sessionId: receiptSessionId,
+        receiptId: receipt.receiptId,
+        instanceId: receipt.instanceId,
+        endpointKeyDigest: receipt.bindings.endpointKeyDigest,
+      });
+      publishAttestationFailureForFence(fence, {
+        label: "Endpoint model unavailable",
+        scope: "receipt",
+        receiptId: receipt.receiptId,
+        instanceId: receipt.instanceId,
+        ...(receipt.bindings.endpointKeyDigest ? { endpointKeyDigest: receipt.bindings.endpointKeyDigest } : {}),
+      });
+      return;
+    }
+    const queue = await ensureEvidenceAcquisitionQueue(receiptProfileId);
+    await queue.enqueue({
+      version: 1,
+      receiptId: receipt.receiptId,
+      sessionId: receiptSessionId,
+      profileId: receiptProfileId,
+      providerId: "chutes",
+      modelId: receipt.model,
+      chuteId: model.chuteId,
+      instanceId: receipt.instanceId,
+      ...(receipt.bindings.endpointKeyDigest ? { endpointKeyDigest: receipt.bindings.endpointKeyDigest } : {}),
+    });
+  }
+
+  function cancelQueuedEvidenceAcquisitions(): void {
+    const queue = evidenceAcquisitionQueue.current;
+    if (!queue) return;
+    for (const task of queue.list()) {
+      if (["succeeded", "failed", "cancelled"].includes(task.status)) continue;
+      void queue.cancel(task.request.receiptId, "scope-released").catch(() => {
+        // The queue exposes persistence faults separately; connection teardown
+        // must still release the credential and mounted verifier immediately.
+      });
+    }
+  }
+
+  async function installAttestationEvidenceClient(
+    credential: string,
+    credentialKind: ActiveChutesConnection["credentialKind"],
+    target: Readonly<{ runtime: Runtime; profileId: string }> = {
+      runtime: runtime.current!,
+      profileId: activeProfileRef.current!.profileId,
+    },
+  ): Promise<AttestationClientBinding | undefined> {
     const operation = ++attestationOperation.current;
     attestationClient.current?.dispose();
     attestationClient.current = undefined;
+    attestationClientBinding.current = undefined;
     providerCredential.current = credential;
-    setAttestationRecords([]);
-    setAttestationFailure(undefined);
+    attestationCredentialKind.current = credentialKind;
+    const scope = endpointEvidenceScope(target.runtime, target.profileId);
+    if (!scope || runtime.current !== target.runtime) return undefined;
     try {
       const {
         ChutesAttestationEvidenceClient: EvidenceClient,
         createIntelDcapQvlVerifierPort,
       } = await loadDeferredCapabilities();
-      if (operation !== attestationOperation.current) return;
-      const cachePartition = `connection-${randomUuid()}`;
-      attestationClient.current = new EvidenceClient({
+      if (operation !== attestationOperation.current || runtime.current !== target.runtime) return undefined;
+      const generation = ++attestationClientGeneration.current;
+      const cachePartition = `connection-${scope.profileId}-${generation}-${randomUuid()}`;
+      const client = new EvidenceClient({
         authorization: {
           kind: credentialKind === "oauth-user-token" ? "oauth" : "api-key",
           cachePartition,
           getBearerToken(signal) {
             if (signal.aborted) throw signal.reason ?? new DOMException("Attestation acquisition cancelled.", "AbortError");
+            const activeBinding = attestationClientBinding.current;
+            if (
+              !activeBinding
+              || activeBinding.generation !== generation
+              || !sameEndpointEvidenceScope(activeBinding, scope)
+            ) {
+              throw new DOMException("The endpoint-evidence client authority changed.", "AbortError");
+            }
             const current = providerCredential.current;
             if (!current) throw new Error("The memory-only Chutes credential was cleared.");
             return current;
@@ -3892,22 +5489,54 @@ export function App() {
         // partial diagnosis and never promotes the claim.
         verifierPorts: { dcap: createIntelDcapQvlVerifierPort() },
       });
+      if (operation !== attestationOperation.current || runtime.current !== target.runtime) {
+        client.dispose();
+        return undefined;
+      }
+      const binding: AttestationClientBinding = Object.freeze({ ...scope, client, generation });
+      attestationClient.current = client;
+      attestationClientBinding.current = binding;
+      try {
+        await ensureEndpointEvidenceAuthority(scope, binding);
+      } catch (error) {
+        if (!(error instanceof DOMException && error.name === "AbortError")) {
+          publishAttestationFailureForCurrent({
+            label: "Stored endpoint evidence rejected",
+            scope: "connection",
+          });
+        }
+      }
+      return binding;
     } catch {
-      if (operation !== attestationOperation.current) return;
+      if (operation !== attestationOperation.current) return undefined;
       providerCredential.current = undefined;
-      setAttestationFailure({ label: "Evidence client unavailable", scope: "connection" });
+      attestationCredentialKind.current = undefined;
+      publishAttestationFailureForCurrent({ label: "Evidence client unavailable", scope: "connection" });
+      return undefined;
     }
   }
 
-  function clearAttestationEvidence(preservePresentation = false): void {
+  async function quiesceEndpointEvidenceClientAndStore(preserveCredential: boolean): Promise<boolean> {
+    const wasActive = Boolean(attestationClient.current || endpointEvidenceAuthority.current?.current());
     attestationOperation.current += 1;
+    attestationClientGeneration.current += 1;
+    attestationClient.current?.cancel();
     attestationClient.current?.dispose();
     attestationClient.current = undefined;
-    providerCredential.current = undefined;
-    if (!preservePresentation) {
-      setAttestationRecords([]);
-      setAttestationFailure(undefined);
+    attestationClientBinding.current = undefined;
+    if (!preserveCredential) {
+      providerCredential.current = undefined;
+      attestationCredentialKind.current = undefined;
     }
+    await releaseEndpointEvidenceAuthority();
+    return wasActive;
+  }
+
+  function clearAttestationEvidence(preservePresentation = false): void {
+    cancelQueuedEvidenceAcquisitions();
+    void releaseEvidenceAcquisitionQueue();
+    void quiesceEndpointEvidenceClientAndStore(false);
+    if (!preservePresentation) setAttestationPresentation(undefined);
   }
 
   async function acquireEndpointAttestation(args: {
@@ -3915,16 +5544,34 @@ export function App() {
     instanceId: string;
     signal?: AbortSignal;
     forceRefresh: boolean;
+    fence?: EndpointEvidenceFence;
     failureTarget?: Omit<AttestationAcquisitionFailure, "label">;
-  }): Promise<void> {
+  }): Promise<ChutesEndpointEvidenceRecord> {
     const client = attestationClient.current;
-    if (!client || !providerCredential.current) {
+    const clientBinding = attestationClientBinding.current;
+    const fence = args.fence ?? endpointEvidenceFence({
+      sessionId: args.failureTarget?.scope === "receipt" ? undefined : activeSessionIdentity.current ?? sessionId,
+      receiptId: args.failureTarget?.receiptId,
+      instanceId: args.instanceId,
+      endpointKeyDigest: args.failureTarget?.endpointKeyDigest,
+    });
+    if (
+      !client
+      || !clientBinding
+      || clientBinding.client !== client
+      || !providerCredential.current
+      || !sameEndpointEvidenceScope(clientBinding, fence)
+    ) {
       throw new MountedAttestationError(
         "invalid-input",
         "Connect a memory-only Chutes credential before acquiring endpoint evidence.",
       );
     }
-    const operation = ++attestationOperation.current;
+    // This is a client-authority generation, not a "latest request wins"
+    // counter. Independent receipt acquisitions may run concurrently; a
+    // Profile/client teardown increments the generation and fences every late
+    // result without causing sibling receipts to cancel one another.
+    const operation = attestationOperation.current;
     let snapshot = await client.inspect({
       chuteId: args.chuteId,
       instanceId: args.instanceId,
@@ -3952,21 +5599,97 @@ export function App() {
         signal: args.signal,
       });
     }
-    if (args.signal?.aborted || operation !== attestationOperation.current) return;
+    if (args.signal?.aborted) {
+      throw args.signal.reason ?? new DOMException("Attestation acquisition cancelled.", "AbortError");
+    }
+    if (
+      operation !== attestationOperation.current
+      || attestationClientBinding.current !== clientBinding
+      || !sameEndpointEvidenceScope(clientBinding, fence)
+    ) {
+      throw new MountedAttestationError(
+        "network",
+        "A newer evidence operation superseded this acquisition.",
+        { retryable: true },
+      );
+    }
     if (snapshot.status !== "evidence" || !snapshot.record) {
       const error = attestationSnapshotError(snapshot);
-      setAttestationFailure({
+      publishAttestationFailureForFence(fence, {
         label: attestationFailureLabel(error.code),
         ...(args.failureTarget ?? { scope: "endpoint", instanceId: args.instanceId }),
       });
       throw error;
     }
-    const viewRecord = endpointEvidenceForView(snapshot.record);
-    setAttestationRecords((current) => Object.freeze([
-      viewRecord,
-      ...current.filter((record) => record.recordId !== viewRecord.recordId),
-    ].slice(0, 8)));
-    setAttestationFailure(undefined);
+    const completeRecord = endpointEvidenceForPersistence(snapshot.record);
+    const authority = endpointEvidenceAuthority.current;
+    const binding = authority?.current();
+    if (!authority || !binding || !sameEndpointEvidenceScope(binding, fence)) {
+      throw new MountedAttestationError(
+        "network",
+        "The endpoint-evidence storage authority is not active for this Profile and workspace.",
+        { retryable: true },
+      );
+    }
+    const identity: EndpointEvidenceRecordIdentity = Object.freeze({
+      version: 1,
+      profileId: fence.profileId,
+      sessionId: fence.sessionId,
+      ...(fence.receiptId ? { receiptId: fence.receiptId } : {}),
+      instanceId: fence.instanceId,
+      endpointKeyDigest: fence.endpointKeyDigest ?? completeRecord.subject.e2ePublicKeyDigest,
+    });
+    try {
+      const result = await authority.commit(binding, { identity, record: completeRecord }, args.signal);
+      if (
+        operation !== attestationOperation.current
+        || attestationClientBinding.current !== clientBinding
+        || !sameEndpointEvidenceScope(clientBinding, fence)
+      ) {
+        throw new DOMException("Endpoint-evidence presentation was superseded after its durable commit.", "AbortError");
+      }
+      const accepted = result.disposition === "page-only" && result.reason
+        ? endpointEvidenceWithDurabilityWarning(result.entry.record, result.reason)
+        : result.entry.record;
+      if (isCurrentEndpointEvidenceFence(fence)) {
+        const activeBinding = authority.current();
+        const durableRecords = activeBinding && sameEndpointEvidenceScope(activeBinding, fence)
+          ? recordsForEvidenceSession(activeBinding, fence.sessionId)
+          : Object.freeze([]);
+        const records = result.disposition === "page-only"
+          ? Object.freeze([accepted, ...durableRecords.filter((record) => record.recordId !== accepted.recordId)])
+          : durableRecords;
+        setAttestationPresentation(Object.freeze({
+          workspace: fence.workspace,
+          workspaceId: fence.workspaceId,
+          profileId: fence.profileId,
+          sessionId: fence.sessionId,
+          records,
+          ...(result.reason ? { durabilityNotice: result.reason } : {}),
+        }));
+      }
+      return accepted;
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") throw error;
+      const reason = "The complete endpoint-evidence record remains available for this page only because its CAS persistence failed. Raw quote, certificate, GPU, nonce, key, and binding material were not truncated.";
+      const pageOnly = endpointEvidenceWithDurabilityWarning(completeRecord, reason);
+      if (isCurrentEndpointEvidenceFence(fence)) {
+        setAttestationPresentation((current) => Object.freeze({
+          workspace: fence.workspace,
+          workspaceId: fence.workspaceId,
+          profileId: fence.profileId,
+          sessionId: fence.sessionId,
+          records: Object.freeze([
+            pageOnly,
+            ...(current?.records ?? []).filter((record) => record.recordId !== pageOnly.recordId),
+          ]),
+          durabilityNotice: reason,
+        }));
+      }
+      throw new MountedAttestationError("network", "Endpoint evidence could not be committed to the active storage authority.", {
+        retryable: true,
+      });
+    }
   }
 
   /**
@@ -3977,24 +5700,33 @@ export function App() {
    */
   async function probeCurrentEndpoint(signal?: AbortSignal): Promise<void> {
     const client = attestationClient.current;
-    if (!client || !providerCredential.current || !isChutesConnected(connection)) return;
+    const clientBinding = attestationClientBinding.current;
+    if (!client || !clientBinding || !providerCredential.current || !isChutesConnected(connection)) return;
     const model = availableModels.find((candidate) => candidate.id === connection.model);
     if (!model) {
-      setAttestationFailure({ label: "Endpoint model unavailable", scope: "connection" });
+      publishAttestationFailureForCurrent({ label: "Endpoint model unavailable", scope: "connection" });
       return;
     }
     let discovery;
     try {
       discovery = await client.discover(model.chuteId, { signal, forceRefresh: true });
     } catch (error) {
-      if (!signal?.aborted) setAttestationFailure({ label: "Endpoint discovery failed", scope: "endpoint" });
+      if (!signal?.aborted && attestationClientBinding.current === clientBinding) {
+        publishAttestationFailureForCurrent({ label: "Endpoint discovery failed", scope: "endpoint" });
+      }
       throw error;
+    }
+    if (attestationClientBinding.current !== clientBinding || !sameEndpointEvidenceScope(clientBinding, endpointEvidenceScope())) {
+      throw new DOMException("Endpoint discovery completed under an obsolete Profile or workspace authority.", "AbortError");
     }
     const endpoint = discovery.endpoints[0];
     if (!endpoint) {
-      setAttestationFailure({ label: "No live endpoint is currently discoverable", scope: "endpoint" });
+      publishAttestationFailureForCurrent({ label: "No live endpoint is currently discoverable", scope: "endpoint" });
       return;
     }
+    const fence = endpointEvidenceFence({
+      instanceId: endpoint.instanceId,
+    });
     // forceRefresh:false so inspect() reuses the discovery subset we just pulled
     // above — otherwise it re-discovers a different random subset that may not
     // contain this instance, and refuses to substitute → false rejection.
@@ -4003,6 +5735,7 @@ export function App() {
       instanceId: endpoint.instanceId,
       forceRefresh: false,
       signal,
+      fence,
       failureTarget: { scope: "endpoint", instanceId: endpoint.instanceId },
     });
   }
@@ -4031,6 +5764,12 @@ export function App() {
       instanceId: receipt.instanceId,
       signal,
       forceRefresh,
+      fence: endpointEvidenceFence({
+        sessionId: receipt.sessionId,
+        receiptId: receipt.receiptId,
+        instanceId: receipt.instanceId,
+        endpointKeyDigest: receipt.bindings.endpointKeyDigest,
+      }),
       failureTarget: {
         scope: "receipt",
         receiptId: receipt.receiptId,
@@ -4058,6 +5797,10 @@ export function App() {
       instanceId: target.record.subject.instanceId,
       signal,
       forceRefresh: true,
+      fence: endpointEvidenceFence({
+        instanceId: target.record.subject.instanceId,
+        endpointKeyDigest: target.record.subject.e2ePublicKeyDigest,
+      }),
       failureTarget: {
         scope: "endpoint",
         instanceId: target.record.subject.instanceId,
@@ -4135,7 +5878,7 @@ export function App() {
         transport,
         model: model.id,
         inferenceBinding: binding,
-        contextPolicy: contextPolicyForModel(model),
+        contextPolicy: await contextPolicyForModel(model),
       };
       const nextAvailability = Object.freeze({
         connection: connectionMetadata,
@@ -4188,7 +5931,7 @@ export function App() {
       }
       activeExternalRouteRef.current = undefined;
       setActiveExternalRoute(undefined);
-      activateSession(nextSession);
+      const activated = await activateSession(nextSession);
       setSessionRevision((value) => value + 1);
       setMessages([
         {
@@ -4199,11 +5942,15 @@ export function App() {
             : `Connected to ${model.id} through Chutes E2EE v1 with the verify-and-record evidence policy. Payloads use E2EE; endpoint evidence is acquired and evaluated after completed invocations. Missing or partial verifier evidence stays visibly unverified and does not block encrypted chat.`,
         },
       ]);
-      setEventCount(1);
+      setEventCount(activated.headSequence);
       setLastReceipt(undefined);
       setSessionLifecycle(READY_SESSION_LIFECYCLE);
       setTranscriptBoundary(undefined);
-      await installAttestationEvidenceClient(credential, connectionMetadata.credentialKind);
+      const evidenceClient = await installAttestationEvidenceClient(
+        credential,
+        connectionMetadata.credentialKind,
+        { runtime: committedRuntime, profileId: nextProfile.profileId },
+      );
       if (
         chutesAuthorityRevision.current !== committedAuthorityRevision
         || chutesTransport.current !== transport
@@ -4211,6 +5958,12 @@ export function App() {
         || runtime.current !== committedRuntime
       ) {
         throw new Error("The Chutes credential authority was released while connection setup was finishing.");
+      }
+      // Reconnection is the first point after reload where a credential-backed
+      // worker can safely resume a persisted queue. Recovery before this point
+      // would spend retry attempts while no evidence client exists.
+      if (evidenceClient && endpointEvidenceAuthority.current?.current()) {
+        await rebindEvidenceAcquisitionQueue(true, committedRuntime, nextProfile.profileId);
       }
       setAvailableModels(Object.freeze(models.slice()));
       setCredentialRevision((value) => value + 1);
@@ -4309,7 +6062,7 @@ export function App() {
         transport,
         model: model.id,
         inferenceBinding: binding,
-        contextPolicy: contextPolicyForModel(model),
+        contextPolicy: await contextPolicyForModel(model),
       };
       const nextAvailability = Object.freeze({
         connection: nextConnection,
@@ -4354,22 +6107,21 @@ export function App() {
       chutesAvailability.current = nextAvailability;
       activeExternalRouteRef.current = undefined;
       setActiveExternalRoute(undefined);
-      activateSession(nextSession);
+      const activated = await activateSession(nextSession);
       setSessionRevision((value) => value + 1);
       setMessages([{
         ...welcomeMessage,
         id: randomUuid(),
         content: `${model.id} is active in a new pinned session. The prior session and its receipt chain were not rewritten.`,
       }]);
-      setEventCount(1);
+      setEventCount(activated.headSequence);
       setLastReceipt(undefined);
       setSessionLifecycle(READY_SESSION_LIFECYCLE);
       setTranscriptBoundary(undefined);
       attestationOperation.current += 1;
       attestationClient.current?.cancel();
       attestationClient.current?.clear();
-      setAttestationRecords([]);
-      setAttestationFailure(undefined);
+      setAttestationPresentation(undefined);
       setInvocationTelemetry(undefined);
       setConnection(nextConnection);
       setRuntimeStatus(encryptedSessionReadyStatus(connection.posture));
@@ -4404,7 +6156,7 @@ export function App() {
         transport: route.transport,
         model: route.pin.model.id,
         inferenceBinding: binding,
-        contextPolicy: contextPolicyForProviderModel(route.pin.model),
+        contextPolicy: await contextPolicyForProviderModel(route.pin.model),
       };
       const stagedChutesAvailability = chutesAvailability.current;
       const candidateRuntime: Runtime = {
@@ -4441,14 +6193,14 @@ export function App() {
       runtime.current = committedRuntime;
       activeExternalRouteRef.current = route;
       setActiveExternalRoute(route);
-      activateSession(nextSession);
+      const activated = await activateSession(nextSession);
       setSessionRevision((value) => value + 1);
       setMessages([{
         ...welcomeMessage,
         id: randomUuid(),
         content: `${route.pin.provider.label}/${route.pin.model.id} is active in a new immutable session through ${inferenceBoundaryLabel(route.pin.provider.transportBoundary)}. Its connection generation and model are pinned; existing conversations were not retargeted.`,
       }]);
-      setEventCount(1);
+      setEventCount(activated.headSequence);
       setLastReceipt(undefined);
       setSessionLifecycle(READY_SESSION_LIFECYCLE);
       setTranscriptBoundary(undefined);
@@ -4632,14 +6384,14 @@ export function App() {
         `${activeSessionRecord.title} · ${approvalModeLabel(nextMode)}`.slice(0, 240),
       );
       if (runtime.current !== active) throw new Error("The runtime changed before the approval policy could become active.");
-      setProfileId(revisedProfile.profileId);
-      activateSession(nextSession);
+      publishProfileId(revisedProfile.profileId);
+      const activated = await activateSession(nextSession);
       setMessages([{
         ...welcomeMessage,
         id: randomUuid(),
         content: `Approval policy changed to ${approvalModeLabel(nextMode)} in this new pinned conversation. The previous conversation remains unchanged and addressable from its URL and conversation history.`,
       }]);
-      setEventCount(nextSession.headSequence);
+      setEventCount(activated.headSequence);
       setLastReceipt(undefined);
       setSessionLifecycle(READY_SESSION_LIFECYCLE);
       setTranscriptBoundary(undefined);
@@ -4731,19 +6483,23 @@ export function App() {
     return loadChutesAccountSnapshot({ credential, signal });
   }
 
-  async function loadAuditedSessionSnapshot(targetSessionId: string): Promise<Readonly<{
+  async function loadAuditedSessionSnapshot(
+    targetSessionId: string,
+    expectedProfileId?: string,
+  ): Promise<Readonly<{
     report: SessionAuditReport;
     session: SessionRecord;
     events: readonly DurableEvent[];
   }>> {
     const activeRuntime = runtime.current;
     if (!activeRuntime) throw new Error("The local runtime is not ready.");
-    const [{ auditSessionHistory }, session, events] = await Promise.all([
+    const [{ auditSessionHistory }, session] = await Promise.all([
       loadDeferredCapabilities(),
       activeRuntime.journal.getSession(targetSessionId),
-      activeRuntime.journal.readEvents(targetSessionId),
     ]);
     if (!session) throw new Error("The active session is no longer available in this page runtime.");
+    if (expectedProfileId) requireProfileOwnedSession(session, expectedProfileId, "open");
+    const events = await activeRuntime.journal.readEvents(targetSessionId);
     return Object.freeze({
       report: await auditSessionHistory({ session, events }),
       session,
@@ -4752,7 +6508,50 @@ export function App() {
   }
 
   async function loadSessionAudit(targetSessionId: string): Promise<SessionAuditReport> {
-    return (await loadAuditedSessionSnapshot(targetSessionId)).report;
+    const expectedRuntime = runtime.current;
+    const expectedProfileId = profileAuthorityId.current;
+    if (!expectedRuntime) throw new Error("The local runtime is not ready.");
+    const audited = await loadAuditedSessionSnapshot(targetSessionId, expectedProfileId);
+    if (
+      runtime.current !== expectedRuntime
+      || profileAuthorityId.current !== expectedProfileId
+    ) throw new Error("The Profile or Proof authority changed while the session audit was loading.");
+    return audited.report;
+  }
+
+  async function publishAuditedSession(
+    fresh: SessionLibraryDetail,
+    audited: Awaited<ReturnType<typeof loadAuditedSessionSnapshot>>,
+    status: string,
+  ): Promise<void> {
+    const { describeSessionPresentationFault, presentSessionMessages } = await loadDeferredCapabilities();
+    const presentation = (() => {
+      try {
+        return presentSessionMessages({
+          session: audited.session,
+          audit: audited.report,
+          events: audited.events,
+          receipts: fresh.transcript.receipts,
+          history: presentationHistory(fresh.transcript.messages),
+        });
+      } catch (error) {
+        throw new Error(`“${fresh.session.title}” could not be replayed: ${describeSessionPresentationFault(error)} Its history is intact — open Proof.`);
+      }
+    })();
+    const activated = await activateSession(audited.session);
+    setMessages(presentation.rows.length + presentation.markers.length > 0
+      ? transcriptMessagesFromPresentation(presentation)
+      : [{ ...welcomeMessage, id: randomUuid(), content: `Resumed ${fresh.session.title}. ${welcomeMessage.content}` }]);
+    setEventCount(activated.headSequence);
+    setLastReceipt(lastPresentationRowReceipt(presentation));
+    setSessionLifecycle(fresh.transcript.lifecycle);
+    setTranscriptBoundary(fresh.transcript.truncated ? {
+      omittedMessages: fresh.transcript.omittedMessages,
+      shortened: fresh.transcript.messages.some((message) => message.truncated),
+    } : undefined);
+    setProofSelection(undefined);
+    setSessionRevision((value) => value + 1);
+    setRuntimeStatus(status);
   }
 
   async function resumeLibrarySession(detail: SessionLibraryDetail): Promise<void> {
@@ -4778,70 +6577,109 @@ export function App() {
         throw new Error("The session changed between inspection and audit. Retry resume against the new immutable head.");
       }
       const pinnedProfile = fresh.session.manifest.profile;
+      let resumedProfileId: string | undefined;
       if (pinnedProfile) {
         const profile = catalog.profiles.find((candidate) =>
           candidate.profileId === pinnedProfile.profileId && candidate.revision === pinnedProfile.profileRevision,
         );
         if (!profile) throw new Error("The exact profile revision pinned by this session is unavailable; create a fork instead.");
-        setProfileId(profile.profileId);
-      }
-      const { describeSessionPresentationFault, presentSessionMessages } = await loadDeferredCapabilities();
-      // A transcript fault is described here, once, before it leaves this
-      // function. Every caller — the Sessions route, the deep link, the command
-      // palette — then renders a sentence that names the session, the sequence
-      // and the event type, instead of the bare event UUID they each used to
-      // print because the raw `Error.message` was all they were handed.
-      const presentation = (() => {
-        try {
-          return presentSessionMessages({
-            session: audited.session,
-            audit: audited.report,
-            events: audited.events,
-            receipts: fresh.transcript.receipts,
-            history: presentationHistory(fresh.transcript.messages),
-          });
-        } catch (error) {
-          throw new Error(`“${fresh.session.title}” could not be replayed: ${describeSessionPresentationFault(error)} Its history is intact — open Proof.`);
+        resumedProfileId = profile.profileId;
+        if (profile.profileId !== profileId) {
+          workspaceRefreshCoordinator.invalidate();
+          pendingForkRetry.current = undefined;
+          setProfileCockpitTransition(Object.freeze({ profileId: profile.profileId, name: profile.name }));
         }
-      })();
-      activateSession(audited.session);
-      // Markers are not rows. Gating on rows alone dropped a conversation whose
-      // only presentable content was a session-scoped record — a rename, say —
-      // and replaced it with the welcome copy, silently discarding a durable
-      // event the adoption path at the top of this file correctly keeps. The
-      // adoption path tests `messages.length` for exactly this reason.
-      setMessages(presentation.rows.length + presentation.markers.length > 0
-        ? transcriptMessagesFromPresentation(presentation)
-        : [{ ...welcomeMessage, id: randomUuid(), content: `Resumed ${fresh.session.title}. ${welcomeMessage.content}` }]);
-      setEventCount(fresh.session.headSequence);
-      setLastReceipt(lastPresentationRowReceipt(presentation));
-      setSessionLifecycle(fresh.transcript.lifecycle);
-      setTranscriptBoundary(fresh.transcript.truncated ? {
-        omittedMessages: fresh.transcript.omittedMessages,
-        shortened: fresh.transcript.messages.some((message) => message.truncated),
-      } : undefined);
-      setProofSelection(undefined);
-      setSessionRevision((value) => value + 1);
-      setRuntimeStatus("Audited session resumed");
+      }
+      await publishAuditedSession(fresh, audited, "Audited session resumed");
+      if (resumedProfileId) publishProfileId(resumedProfileId);
       navigate("chat");
+    } finally {
+      sessionNavigationChanging.current = false;
+      setProfileCockpitTransition(undefined);
+    }
+  }
+
+  async function activateForkedSession(result: SessionForkResult): Promise<void> {
+    if (sessionNavigationChanging.current) {
+      throw new Error("Wait for the current conversation transition before activating a fork.");
+    }
+    sessionNavigationChanging.current = true;
+    try {
+      const activationRuntime = runtime.current;
+      const activationProfile = activeProfileRef.current;
+      const activationSessionId = activeSessionIdentity.current;
+      if (!activationRuntime || !activationProfile || !activationSessionId) {
+        throw new Error("The active Profile/session authority is unavailable for fork verification.");
+      }
+      const authoritySession = await activationRuntime.journal.getSession(activationSessionId);
+      if (
+        !authoritySession
+        || runtime.current !== activationRuntime
+        || activeSessionIdentity.current !== activationSessionId
+        || profileAuthorityId.current !== activationProfile.profileId
+        || activeProfileRef.current?.revision !== activationProfile.revision
+      ) throw new Error("The active Profile/session authority changed before the fork could be verified.");
+      requireProfileOwnedSession(authoritySession, activationProfile.profileId, "fork");
+      await activateForkedSessionAgainst(result, Object.freeze({
+        runtime: activationRuntime,
+        profileId: activationProfile.profileId,
+        profileRevision: activationProfile.revision,
+        activeSessionId: activationSessionId,
+        manifest: authoritySession.manifest,
+      }));
     } finally {
       sessionNavigationChanging.current = false;
     }
   }
 
-  async function activateForkedSession(result: SessionForkResult): Promise<void> {
+  async function activateForkedSessionAgainst(
+    result: SessionForkResult,
+    authority: ForkActivationAuthority,
+  ): Promise<void> {
     if (inferenceRouteChanging.current) {
       throw new Error("The inference route changed before this fork could become active.");
     }
-    activateSession(result.session);
-    setMessages([{ ...welcomeMessage, id: randomUuid(), content: `${result.session.title} is a clean immutable fork. ${welcomeMessage.content}` }]);
-    setEventCount(result.session.headSequence);
-    setLastReceipt(undefined);
-    setSessionLifecycle(READY_SESSION_LIFECYCLE);
-    setTranscriptBoundary(undefined);
-    setProofSelection(undefined);
-    setSessionRevision((value) => value + 1);
-    setRuntimeStatus("Clean session fork active");
+    if (
+      runtime.current !== authority.runtime
+      || profileAuthorityId.current !== authority.profileId
+      || activeProfileRef.current?.revision !== authority.profileRevision
+      || activeSessionIdentity.current !== authority.activeSessionId
+    ) throw new Error("The active Profile/session authority changed before this fork could become active.");
+    if (
+      result.session.manifest.profile?.profileId !== authority.profileId
+      || !resumableProfileManifestMatches(result.session.manifest, authority.manifest)
+    ) throw new Error("The fork manifest is not compatible with the active Profile and runtime authority.");
+    const library = new SessionLibrary(authority.runtime.journal);
+    const fresh = await library.inspect(
+      result.session.id,
+      sessionManifestRuntime(authority.runtime, authority.manifest),
+    );
+    if (fresh.compatibility?.action !== "resume") {
+      throw new Error(
+        fresh.compatibility
+          ? `${fresh.compatibility.label}: ${fresh.compatibility.reasons.map((reason) => reason.message).join(" ")}`
+          : "The fork did not produce a resumable session for the active authority.",
+      );
+    }
+    const audited = await loadAuditedSessionSnapshot(result.session.id);
+    if (audited.report.status !== "verified") {
+      throw new Error("The new fork did not pass its complete local journal audit.");
+    }
+    if (
+      audited.session.headSequence !== fresh.session.headSequence
+      || audited.session.headDigest !== fresh.session.headDigest
+      || audited.session.headSequence !== result.session.headSequence
+      || audited.session.headDigest !== result.session.headDigest
+    ) {
+      throw new Error("The new fork changed before its context commitment could be presented.");
+    }
+    if (
+      runtime.current !== authority.runtime
+      || profileAuthorityId.current !== authority.profileId
+      || activeProfileRef.current?.revision !== authority.profileRevision
+      || activeSessionIdentity.current !== authority.activeSessionId
+    ) throw new Error("The active Profile/session authority changed during fork verification.");
+    await publishAuditedSession(fresh, audited, "Verified context fork active");
     navigate("chat");
   }
 
@@ -4873,7 +6711,7 @@ export function App() {
   if (!catalog || !activeProfile || !activeTheme) {
     return <BootScreen status={runtimeStatus} />;
   }
-  const platformOverlayOpen = mobileMoreOpen || paletteOpen || preferencesOpen || trustSheetOpen || approvalPending;
+  const platformOverlayOpen = mobileMoreOpen || paletteOpen || preferencesOpen || trustSheetOpen || approvalPending || Boolean(profileCockpitTransition);
   const sessionDurability = localDeviceRuntimeAdopted
     ? {
         state: "local" as const,
@@ -4966,7 +6804,14 @@ export function App() {
   ]);
 
   return (
-    <div class="app-shell" data-connectivity={online ? "online" : "offline"}>
+    <div
+      class="app-shell"
+      data-connectivity={online ? "online" : "offline"}
+      data-active-profile={profileId}
+      data-session-profile={activeSessionRecord?.manifest.profile?.profileId}
+      data-active-session={sessionId}
+      data-proof-session={view === "proof" ? proofTargetId : undefined}
+    >
       {/* Tabbing from the document start otherwise crosses the whole rail, the
           recent-conversation list and the profile switcher — 35 stops — before
           reaching the composer, the highest-frequency control in the product.
@@ -5054,6 +6899,7 @@ export function App() {
         onNewConversation={() => void createConversation()}
         onChangeProfile={(nextId) => void changeProfile(nextId)}
         onToggleState={toggleRailState}
+        onInteractionError={setRuntimeStatus}
       />
 
       <ViewErrorBoundary key={view} name={destinationLabel(view) ?? "Airship"} onRecover={() => navigate("chat")}>
@@ -5089,6 +6935,8 @@ export function App() {
                     : undefined,
                 }}
                 onOpenSession={() => navigate("sessions")}
+                onRename={renameActiveConversation}
+                renameDisabled={busy}
                 onNewConversation={() => void createConversation()}
                 newConversationDisabled={busy}
                 model={inferenceConnected || pinnedExternalRoute || activeInferenceBinding?.providerId === "chutes" ? (
@@ -5121,7 +6969,8 @@ export function App() {
                           label: model.label,
                           detail: providerModelCapability(model, "image-input") === "supported" ? "Vision · evidenced" : undefined,
                         })) ?? []}
-                    busy={busy || modelSwitching}
+                    busy={busy}
+                    switching={modelSwitching}
                     onSelect={activeChutesConnection ? switchChutesModel : switchExternalModel}
                     onOpenConnection={() => navigate("access")}
                   />
@@ -5134,6 +6983,16 @@ export function App() {
                   const element = event.currentTarget;
                   const pinned = isNearLastRealCard(element, 64);
                   transcriptPinned.current = pinned;
+                  if (
+                    sessionId
+                    && !profileCockpitTransition
+                    && activeSessionRecord?.manifest.profile?.profileId === profileId
+                  ) {
+                    writeThreadViewport(profileId, sessionId, {
+                      scrollTop: element.scrollTop,
+                      pinnedToLatest: pinned,
+                    }, browserThreadViewportStorage());
+                  }
                   setTranscriptDetached(!pinned);
                   // The only scroll-driven collapse in the product. The bar sheds
                   // chip labels, never chips: every `title` and `aria-label`
@@ -5185,17 +7044,10 @@ export function App() {
                       onAttestations={() => entry.item.receipt ? openReceiptAttestation(entry.item.receipt) : openAttestationEvidence()}
                       attestation={describeMessageAttestation(entry.item.receipt, attestationRecords, attestationFailure, attestationNow)}
                       onCopy={() => void navigator.clipboard.writeText(entry.item.parts?.length ? messagePlainText(entry.item.parts) : entry.item.content)}
-                      onRetry={() => entry.item.originatingPrompt && void sendMessage(
-                        entry.item.originatingPrompt,
-                        entry.item.originatingAttachments,
-                      )}
-                      onEdit={() => {
-                        setInput(entry.item.originatingPrompt ?? entry.item.content);
-                        setAttachments(entry.item.originatingAttachments ?? []);
-                        textarea.current?.focus();
-                      }}
-                      onBranch={() => void branchFromMessage(entry.item)}
-                      branchDisabled={!sessionLibrary || !activeSessionRecord}
+                      onRetry={() => void forkFromMessage(entry.item, "retry")}
+                      onEdit={() => void forkFromMessage(entry.item, "edit")}
+                      onBranch={() => void forkFromMessage(entry.item, "fork")}
+                      branchDisabled={!sessionLibrary || !activeSessionRecord || busy || !entry.item.sourcePoint}
                       streamStore={transcriptStreams}
                     />}
                   </div>
@@ -5433,9 +7285,12 @@ export function App() {
         ) : null}
         {view === "sessions" ? sessionLibrary && SessionsScreen ? (
           <SessionsScreen
+            key={profileId}
             library={sessionLibrary}
             runtime={sessionRuntime}
             activeSessionId={sessionId}
+            scopeProfileId={profileId}
+            scopeProfileName={activeProfile.name}
             forkManifest={activeSessionRecord?.manifest}
             revision={sessionRevision}
             onResume={resumeLibrarySession}
@@ -5463,22 +7318,45 @@ export function App() {
           onOpen={openFile}
           workspace={runtime.current.workspace}
           workspaceIdentity={runtime.current.workspaceId}
+          profileId={activeProfile.profileId}
+          profileName={activeProfile.name}
+          threadId={sessionId}
           git={gitClient}
           review={reviewGitOperation}
           reviewImport={reviewSourceImport}
-          onWorkspaceChanged={() => runtime.current ? refreshWorkspaceState(runtime.current.workspace, setFiles, setWorkspaceFiles) : undefined}
+          onWorkspaceChanged={async () => { await refreshWorkspacePresentation(); }}
+          onOpenTerminalAt={(cwd) => {
+            const activeWorkspace = runtime.current;
+            if (!activeWorkspace) return;
+            setTerminalOpenRequest(Object.freeze({
+              id: randomUuid(),
+              cwd,
+              profileId: activeProfile.profileId,
+              workspaceIdentity: activeWorkspace.workspaceId,
+            }));
+          }}
+          terminalOpenRequest={terminalOpenRequest}
+          onTerminalOpenRequestHandled={(id) => setTerminalOpenRequest((current) => current?.id === id ? undefined : current)}
+          onOpenFullTerminal={() => navigate("terminal")}
           durability={sessionDurability}
         /> : editorViewError ? <section class="work-view panel" role="alert"><h1>Editor</h1><p>{editorViewError}</p></section> : <RouteSkeleton label="Loading the browser-native Workspace Editor" /> : null}
         {view === "terminal" && runtime.current && gitClient ? TerminalScreen ? <TerminalScreen
           workspace={runtime.current.workspace}
+          workspaceIdentity={runtime.current.workspaceId}
           git={gitClient}
           reviewGit={reviewGitOperation}
-          onWorkspaceChanged={() => runtime.current ? refreshWorkspaceState(runtime.current.workspace, setFiles, setWorkspaceFiles) : undefined}
+          onWorkspaceChanged={async () => { await refreshWorkspacePresentation(); }}
           threadId={sessionId}
+          profileId={activeProfile.profileId}
+          profileName={activeProfile.name}
+          durability={sessionDurability}
+          openRequest={terminalOpenRequest}
+          onOpenRequestHandled={(id) => setTerminalOpenRequest((current) => current?.id === id ? undefined : current)}
           workspaceRoot="/workspace"
         /> : terminalViewError ? <section class="work-view panel" role="alert"><h1>Terminal</h1><p>{terminalViewError}</p></section> : <RouteSkeleton label="Loading the browser terminal" /> : null}
         {view === "memory" || view === "context" ? MemoryScreen ? (
           <MemoryScreen
+            key={`${profileId}:${sessionId ?? "no-session"}`}
             sessionId={sessionId}
             messages={messages}
             files={workspaceFiles}
@@ -5487,10 +7365,11 @@ export function App() {
             workspace={runtime.current?.workspace}
             searchMemory={searchMemoryForUi}
             initialTab={view === "context" ? "index" : "search"}
+            onOpenSource={(target) => void openMemorySource(target)}
           />
         ) : memoryViewError ? <section class="work-view panel" role="alert"><h1>Memory</h1><p>{memoryViewError}</p></section> : <RouteSkeleton label="Loading private memory" /> : null}
         {view === "profiles" || view === "capabilities" || view === "skills" ? <nav class={view === "skills" ? "profile-hub-tabs with-scope" : "profile-hub-tabs"} aria-label="Agent configuration">
-          {([{"id":"profiles","label":"Profiles"},{"id":"capabilities","label":"Capabilities"},{"id":"skills","label":"Skills"}] as const).map((tab) => <button key={tab.id} type="button" aria-current={view === tab.id ? "page" : undefined} onClick={() => navigate(tab.id)}>{tab.label}</button>)}
+          {([{"id":"profiles","label":"Profiles"},{"id":"skills","label":"Skills"},{"id":"capabilities","label":"Capabilities"}] as const).map((tab) => <button key={tab.id} type="button" aria-current={view === tab.id ? "page" : undefined} onClick={() => navigate(tab.id)}>{tab.label}</button>)}
           {view === "skills" ? <div class="profile-hub-scope"><span>Applies to</span><MenuSelect placement="down" ariaLabel="Skill scope" value={profileHubScope} options={[{ value: "global", label: "All profiles" }, ...managedProfiles(catalog).map((profile) => ({ value: profile.profileId, label: profile.name }))]} onChange={setProfileHubScope} /></div> : null}
         </nav> : null}
         {view === "profiles" ? (
@@ -5593,15 +7472,16 @@ export function App() {
         ) : billingViewError ? <section class="work-view panel" role="alert"><h1>Account</h1><p>{billingViewError}</p></section> : <RouteSkeleton label="Loading Account" /> : null}
         {view === "proof" ? ProofScreen ? (
           <ProofScreen
+            key={`${profileId}:${proofTargetId ?? "no-session"}`}
             receipt={proofReceipt}
             eventCount={proofTargetId === sessionId ? eventCount : sessionRevision}
             sessionId={proofTargetId}
-            requestedReceiptId={proofSelection?.receiptId}
+            requestedReceiptId={effectiveProofSelection?.receiptId}
             loadAudit={loadSessionAudit}
             section={proofSection}
             onSectionChange={(section) => {
               setProofSection(section);
-              navigate("proof", proofHash(proofSelection, section));
+              navigate("proof", proofHash(effectiveProofSelection, section));
             }}
             summarizeReceipt={receiptSummary}
             renderInspector={(onOpenAttestations) => ProofInspector ? <ProofInspector
@@ -5614,8 +7494,12 @@ export function App() {
               endpointRecords={attestationRecords}
               receipts={attestationReceipts}
               selectedRecordId={selectedAttestationRecordId}
-              onSelectRecord={(recordId) => setSelectedAttestationRecordId(recordId)}
-              acquisitionNotice={!online ? OFFLINE_INLINE_REASON : attestationFailure ? `${attestationFailure.label}. Current endpoint evidence was not accepted, and no TEE claim was inferred.` : undefined}
+              onSelectRecord={selectEndpointEvidenceRecord}
+              acquisitionNotice={!online
+                ? OFFLINE_INLINE_REASON
+                : automaticEvidenceAcquisitionNotice
+                  ?? endpointEvidenceDurabilityNotice
+                  ?? (attestationFailure ? `${attestationFailure.label}. Current endpoint evidence was not accepted, and no TEE claim was inferred.` : undefined)}
               onOpenConnection={!chutesConnected ? () => navigate("access") : undefined}
               onRefresh={online && chutesConnected ? refreshAttestation : undefined}
               onCancel={() => attestationClient.current?.cancel()}
@@ -5646,14 +7530,14 @@ export function App() {
                   : "warning",
               message: oauthCallbackStatus.message,
             } : undefined}
-            oauthDiagnostic={{
-              homepageUrl: CHUTES_ACTIVE_REGISTRATION.homepageUrl,
-              callbackUrl: CHUTES_ACTIVE_REGISTRATION.redirectUris[0] ?? "Unavailable",
-              scopes: CHUTES_ACTIVE_REGISTRATION.scopes,
-              exchangeMode: chutesOAuthExchangeMode(CHUTES_ACTIVE_REGISTRATION),
-              configurationError: CHUTES_ACTIVE_REGISTRATION.configurationError,
+            oauthDiagnostic={activeOAuthRegistration ? {
+              homepageUrl: activeOAuthRegistration.registration.homepageUrl,
+              callbackUrl: activeOAuthRegistration.registration.redirectUris[0] ?? "Unavailable",
+              scopes: activeOAuthRegistration.registration.scopes,
+              exchangeMode: activeOAuthRegistration.exchangeMode,
+              configurationError: activeOAuthRegistration.registration.configurationError,
               onRun: startOAuthSignIn,
-            }}
+            } : undefined}
             oauthBootstrap={{
               revision: oauthBootstrapRevision,
               takeCredential: takePendingOAuthCredential,
@@ -5703,6 +7587,17 @@ export function App() {
       }} />
       <TrustPostureSheet open={trustSheetOpen} axes={trustAxes} onClose={() => setTrustSheetOpen(false)} onNavigate={navigatePrimary} />
       <PwaUpdateBanner updateReady={pwaUpdate.updateReady} onReload={pwaUpdate.reload} />
+      {profileCockpitTransition ? (
+        <div class="platform-scrim profile-cockpit-transition" data-target-profile={profileCockpitTransition.profileId}>
+          <section role="status" aria-live="assertive" aria-atomic="true">
+            <span class="pulse-dot" aria-hidden="true" />
+            <div>
+              <strong>Opening {profileCockpitTransition.name}</strong>
+              <small>Binding this Profile&rsquo;s conversation, workspace views, terminal sessions, memory, and Proof selection.</small>
+            </div>
+          </section>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -5728,9 +7623,10 @@ async function createProfileSessionManifest(
     candidate.themeId === profile.theme.themeId && candidate.digest === profile.theme.digest,
   );
   if (!theme) throw new Error(`Profile ${profile.profileId} references an unavailable theme revision.`);
-  const [{ browserCapabilityPromptEntries, getBrowserCapabilityRegistry }, capabilityTier] = await Promise.all([
+  const [{ browserCapabilityPromptEntries, getBrowserCapabilityRegistry }, capabilityTier, { createSessionManifest }] = await Promise.all([
     import("../capabilities/browser-runtime"),
     inspectBrowserExecutionTier(),
+    import("../core/session-manifest"),
   ]);
   const browserReport = await getBrowserCapabilityRegistry().refresh();
   const pin = await resolveProfileForSession({
@@ -5745,7 +7641,9 @@ async function createProfileSessionManifest(
   if (!postureSatisfies(runtime.transport.posture, pin.minimumPosture)) {
     throw new Error(`The ${runtime.transport.posture} runtime does not satisfy this profile's ${pin.minimumPosture} minimum posture.`);
   }
-  if (pin.workspaceBinding.kind === "workspace-id" && pin.workspaceBinding.workspaceId !== runtime.workspaceId) {
+  // A pinned binding names a storage authority the person typed, so it is
+  // compared against the storage ID rather than the Profile-suffixed view.
+  if (pin.workspaceBinding.kind === "workspace-id" && pin.workspaceBinding.workspaceId !== runtime.storageId) {
     throw new Error("This profile is pinned to a different workspace. Select that workspace before starting a conversation.");
   }
   const availableTools = new Set(runtime.tools.definitions().map((tool) => tool.name));
@@ -5793,41 +7691,22 @@ async function latestCompatibleProfileSession(
   profile: ProfileRevision,
   catalog: ProfileCatalog,
 ): Promise<SessionRecord | undefined> {
+  return compatibleProfileSession(runtime, profile, catalog);
+}
+
+async function compatibleProfileSession(
+  runtime: Runtime,
+  profile: ProfileRevision,
+  catalog: ProfileCatalog,
+  preferredSessionId?: string,
+): Promise<SessionRecord | undefined> {
   const expected = await createProfileSessionManifest(runtime, profile, catalog);
-  const sessions = await runtime.journal.listSessions();
-  return sessions
-    .filter((session) => sessionManifestMatches(session.manifest, expected))
-    .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0];
-}
-
-function sessionManifestMatches(actual: SessionManifest, expected: SessionManifest): boolean {
-  const actualProfile = actual.profile;
-  const expectedProfile = expected.profile;
-  return actual.providerId === expected.providerId
-    && actual.model === expected.model
-    && actual.workspaceId === expected.workspaceId
-    && sessionCapabilityTiersMatch(actual.capabilityTier, expected.capabilityTier)
-    && actual.securityPosture === expected.securityPosture
-    && (actual.turnContext ?? "disabled") === (expected.turnContext ?? "disabled")
-    && sessionContextPoliciesMatch(actual.contextPolicy, expected.contextPolicy)
-    && actual.systemPromptDigest === expected.systemPromptDigest
-    && actual.toolManifestDigest === expected.toolManifestDigest
-    && inferenceBindingsMatch(actual.inferenceBinding, expected.inferenceBinding)
-    && actualProfile?.profileId === expectedProfile?.profileId
-    && actualProfile?.profileRevision === expectedProfile?.profileRevision
-    && actualProfile?.themeDigest === expectedProfile?.themeDigest
-    && actualProfile?.skillSetDigest === expectedProfile?.skillSetDigest
-    && actualProfile?.resolutionDigest === expectedProfile?.resolutionDigest;
-}
-
-function sessionCapabilityTiersMatch(
-  actual: SessionManifest["capabilityTier"],
-  expected: SessionManifest["capabilityTier"],
-): boolean {
-  if (actual === expected) return true;
-  const actualIsBrowser = actual === "web-baseline" || actual === "web-enhanced";
-  const expectedIsBrowser = expected === "web-baseline" || expected === "web-enhanced";
-  return actualIsBrowser && expectedIsBrowser;
+  return resolveResumableProfileConversation(
+    runtime.journal,
+    profile.profileId,
+    expected,
+    preferredSessionId,
+  );
 }
 
 function inferenceBindingsMatch(
@@ -5846,10 +7725,13 @@ function inferenceBindingsMatch(
     && actual.modelId === expected.modelId;
 }
 
-function contextPolicyForModel(model: AirshipModel): SessionManifest["contextPolicy"] | undefined {
+async function contextPolicyForModel(model: AirshipModel): Promise<SessionManifest["contextPolicy"] | undefined> {
+  const contextWindowTokens = model.contextTokens ?? model.maxModelTokens;
+  if (contextWindowTokens === undefined) return undefined;
+  const { createSessionContextPolicy } = await import("../core/context-policy");
   if (model.contextTokens !== undefined) {
     return createSessionContextPolicy({
-      contextWindowTokens: model.contextTokens,
+      contextWindowTokens,
       source: { kind: "provider-catalog", field: "contextTokens" },
       summarizer: {
         mode: "inference-transport",
@@ -5860,7 +7742,7 @@ function contextPolicyForModel(model: AirshipModel): SessionManifest["contextPol
   }
   if (model.maxModelTokens !== undefined) {
     return createSessionContextPolicy({
-      contextWindowTokens: model.maxModelTokens,
+      contextWindowTokens,
       source: { kind: "provider-catalog", field: "maxModelTokens" },
       summarizer: {
         mode: "inference-transport",
@@ -5872,10 +7754,11 @@ function contextPolicyForModel(model: AirshipModel): SessionManifest["contextPol
   return undefined;
 }
 
-function contextPolicyForProviderModel(
+async function contextPolicyForProviderModel(
   model: InferenceModelDescriptor,
-): SessionManifest["contextPolicy"] | undefined {
+): Promise<SessionManifest["contextPolicy"] | undefined> {
   if (!model.contextWindowTokens) return undefined;
+  const { createSessionContextPolicy } = await import("../core/context-policy");
   return createSessionContextPolicy({
     contextWindowTokens: model.contextWindowTokens,
     source: { kind: "provider-catalog", field: "contextTokens" },
@@ -6058,6 +7941,140 @@ function combinedInferenceAvailability(
   });
 }
 
+function liveProviderEntries(snapshot: InferenceAvailabilitySnapshot): readonly LiveEnvironmentEntry[] {
+  if (snapshot.connections.length === 0) {
+    return Object.freeze([Object.freeze({
+      id: "provider-directory",
+      label: "Inference provider directory",
+      state: "available" as const,
+      evidence: "runtime-reported" as const,
+      detail: "The live provider directory was read for this turn and currently contains no connected inference authority.",
+      facets: Object.freeze(["connections=0"]),
+    })]);
+  }
+  return Object.freeze(snapshot.connections.map((connection) => Object.freeze({
+    id: `provider:${connection.id}`,
+    label: `${connection.providerLabel} · ${connection.connectionLabel}`,
+    state: connection.health === "ready" && connection.canInvoke
+      ? "ready" as const
+      : connection.health === "degraded"
+        ? "degraded" as const
+        : connection.health === "offline" || connection.health === "expired"
+          ? "unavailable" as const
+          : "available" as const,
+    evidence: "runtime-reported" as const,
+    detail: `${connection.canInvoke ? "Invocation is available" : "Invocation is not currently available"}; ${String(connection.models.length)} bounded model record${connection.models.length === 1 ? "" : "s"} are visible. No credential is included.`,
+    facets: Object.freeze([
+      `provider=${connection.providerId}`,
+      `health=${connection.health}`,
+      `models=${String(connection.models.length)}`,
+      ...(snapshot.activeSession?.connectionId === connection.id
+        ? [`active-model=${snapshot.activeSession.modelId}`, `resolution=${snapshot.activeSession.resolution}`]
+        : []),
+    ]),
+  })));
+}
+
+function liveStorageEntries(
+  workspaceId: string | undefined,
+  authority: DurableAdoptionDescriptor | undefined,
+  contextMode: Runtime["contextMode"],
+): readonly LiveEnvironmentEntry[] {
+  if (!workspaceId) {
+    return Object.freeze([Object.freeze({
+      id: "storage-authority",
+      label: "Durability authority",
+      state: "not-observed" as const,
+      evidence: "not-observed" as const,
+      detail: "The application runtime has not published an active workspace storage authority yet.",
+      facets: Object.freeze([]),
+    })]);
+  }
+  if (!workspaceId.startsWith("vault+")) {
+    return Object.freeze([Object.freeze({
+      id: "storage:page",
+      label: "Page-ephemeral workspace",
+      state: "ready" as const,
+      evidence: "runtime-reported" as const,
+      detail: "Workspace, journal, profiles, and context state are active in this page only; browser restart durability is not claimed.",
+      facets: Object.freeze(["durability=page-ephemeral", `workspace=${workspaceId}`]),
+    })]);
+  }
+  if (!authority || authority.workspaceId !== workspaceId) {
+    return Object.freeze([Object.freeze({
+      id: "storage:vault-transition",
+      label: "Encrypted Vault transition",
+      state: "activating" as const,
+      evidence: "runtime-reported" as const,
+      detail: "A Vault-backed workspace ID is active, but its adoption descriptor is changing; no stronger durability claim is inferred for this turn.",
+      facets: Object.freeze([`workspace=${workspaceId}`]),
+    })]);
+  }
+  return Object.freeze([Object.freeze({
+    id: authority.kind === "local-device" ? "storage:local-device" : "storage:encrypted-cloud",
+    label: authority.label,
+    state: "ready" as const,
+    evidence: "runtime-reported" as const,
+    detail: authority.kind === "local-device"
+      ? "The active workspace, journal, profiles, Git objects, and context state use the encrypted Local Device Vault in this browser profile. No cloud sync is implied."
+      : "The active workspace, journal, profiles, Git objects, and context state use the selected client-encrypted remote Vault authority.",
+    facets: Object.freeze([
+      `durability=${authority.kind === "local-device" ? "local-device" : "encrypted-remote"}`,
+      `context=${contextMode ?? "local-fallback"}`,
+    ]),
+  })]);
+}
+
+function liveExtensionEntries(observation: ExtensionBridgeObservation): readonly LiveEnvironmentEntry[] {
+  const entries: LiveEnvironmentEntry[] = [Object.freeze({
+    id: "extension-bridge",
+    label: observation.extensionVersion
+      ? `Airship extension ${observation.extensionVersion}`
+      : "Airship browser extension",
+    state: observation.state === "available"
+      ? "ready"
+      : observation.state === "failed"
+        ? "failed"
+        : "unavailable",
+    evidence: observation.evidence,
+    detail: observation.detail,
+    facets: Object.freeze([
+      ...observation.providers.map((provider) => `provider=${provider}`),
+      ...(observation.handshakeMs === undefined ? [] : [`handshake-ms=${String(Math.round(observation.handshakeMs))}`]),
+    ]),
+  })];
+  const companion = observation.companion;
+  if (companion) {
+    entries.push(Object.freeze({
+      id: "extension-storage",
+      label: "Extension encrypted cache",
+      state: companion.storage.state === "available"
+        ? companion.storage.enabled ? "ready" : "available"
+        : "unavailable",
+      evidence: "runtime-reported",
+      detail: companion.storage.state === "available"
+        ? `The extension reports its ciphertext-only cache ${companion.storage.enabled ? "enabled" : "available but disabled"}; it is not a plaintext workspace authority.`
+        : companion.storage.reason ?? "The extension reports no usable ciphertext cache.",
+      facets: Object.freeze([
+        `backend=${companion.storage.backend}`,
+        `boundary=${companion.storage.boundary}`,
+        `max-bytes=${String(companion.storage.maxCacheBytes)}`,
+      ]),
+    }));
+    entries.push(Object.freeze({
+      id: "extension-compute",
+      label: "Extension background compute",
+      state: companion.compute.state === "available" ? "available" : "unavailable",
+      evidence: "runtime-reported",
+      detail: companion.compute.state === "available"
+        ? "The extension reports bounded background compute for the listed operations; it is not an unrestricted host shell."
+        : companion.compute.reason ?? "The extension reports no usable background compute.",
+      facets: Object.freeze(companion.compute.operations.map((operation) => `operation=${operation}`)),
+    }));
+  }
+  return Object.freeze(entries);
+}
+
 function inferenceDirectoryFromAvailability(
   availability: InferenceAvailabilitySnapshot,
 ): InferenceDirectoryPromptDefinition {
@@ -6105,13 +8122,17 @@ function inferenceDirectoryFromAvailability(
 }
 
 function activeSessionRuntime(runtime: Runtime, session: SessionRecord): ActiveSessionRuntime {
-  const profile = session.manifest.profile;
+  return sessionManifestRuntime(runtime, session.manifest);
+}
+
+function sessionManifestRuntime(runtime: Runtime, manifest: SessionManifest): ActiveSessionRuntime {
+  const profile = manifest.profile;
   return Object.freeze({
     providerId: runtime.transport.id,
     model: runtime.model,
     ...(runtime.inferenceBinding ? { inferenceBinding: runtime.inferenceBinding } : {}),
     posture: runtime.transport.posture,
-    toolManifestDigest: session.manifest.toolManifestDigest,
+    toolManifestDigest: manifest.toolManifestDigest,
     workspaceId: runtime.workspaceId,
     ...(profile ? {
       profile: Object.freeze({
@@ -6129,9 +8150,83 @@ async function bindProfileToRuntime(profile: ProfileRevision, runtime: Runtime):
   // Provider/model are immutable conversation pins, not profile mutations.
   // A profile can express a default, while the active session selects any
   // currently authorized route without stranding older profile revisions.
+  //
+  // The workspace boundary is not resolved here. It is a whole authority —
+  // namespace, Git object database and tool registry — so it is built by
+  // `openProfileWorkspaceAuthority` and published with the runtime, not folded
+  // into a catalog revision.
   void runtime;
   return profile;
 }
+
+/**
+ * Open one Profile's private workspace authority.
+ *
+ * A Profile owns a disjoint subtree of the global storage authority, so its
+ * files, Git object database, worktree inventory and derived index are its
+ * own. Two Profiles no longer share bytes behind separate presentation state:
+ * `ProfileWorkspacePort` presents that subtree as an ordinary `/workspace`, and
+ * every consumer below this point is scoped by construction because it never
+ * receives the backing port.
+ *
+ * A profile that pins an exact `workspace-id` must resolve to the storage
+ * authority carrying that ID. Silently handing it the active one is how a
+ * pinned boundary becomes a false claim.
+ */
+async function openProfileWorkspaceAuthority(input: Readonly<{
+  storage: WorkspacePort;
+  storageId: string;
+  profile: ProfileRevision;
+}>): Promise<Readonly<{
+  workspace: WorkspacePort;
+  workspaceId: string;
+  git: BrowserGitClient;
+  adoptedLegacyPaths: number;
+}>> {
+  const binding = input.profile.workspaceBinding;
+  if (binding?.kind === "workspace-id" && binding.workspaceId !== input.storageId) {
+    throw new Error(`${input.profile.name} is pinned to workspace ${binding.workspaceId}, which is not the active storage authority.`);
+  }
+  const adoptedLegacyPaths = (await adoptLegacyRootWorkspace(input.storage, input.profile.profileId)).length;
+  const workspace = new ProfileWorkspacePort(input.storage, input.profile.profileId);
+  const { WorkspaceGitAdapter, BrowserGitClient, AIRSHIP_BOOTSTRAP_FILES } = await loadBrowserGit();
+  const git = new BrowserGitClient(await WorkspaceGitAdapter.open(
+    workspace,
+    async () => {
+      const existing = await existingWorkspaceFallbackSeed(workspace);
+      if (existing.length) return existing;
+      /*
+       * A Profile opening its namespace for the first time gets its own
+       * workspace repository, seeded exactly as the first Profile's was.
+       *
+       * Without this, isolation would read as breakage: every Profile after
+       * the first would find an empty namespace, no repository, and therefore
+       * no Explorer tree, worktree selector, diff or history — Source Control
+       * would simply be dead for it. The content is identical at the start and
+       * the bytes are its own from the first edit.
+       */
+      const files = {
+        "README.md": AIRSHIP_BOOTSTRAP_FILES.readme,
+        "docs/architecture.md": AIRSHIP_BOOTSTRAP_FILES.architecture,
+        "notes/retrieval.md": AIRSHIP_BOOTSTRAP_FILES.retrieval,
+      };
+      return Object.freeze([{
+        id: "airship-workspace",
+        name: "Airship Workspace",
+        worktreePath: "/workspace",
+        files,
+        workingFiles: files,
+      }]);
+    },
+  ));
+  return Object.freeze({
+    workspace,
+    workspaceId: profileWorkspaceIdentity(input.storageId, input.profile.profileId),
+    git,
+    adoptedLegacyPaths,
+  });
+}
+
 
 function replaceProfile(catalog: ProfileCatalog, revision: ProfileRevision): ProfileCatalog {
   return Object.freeze({
@@ -6166,18 +8261,6 @@ function applyTheme(theme: ThemeManifest) {
   root.dataset.mode = theme.colorScheme;
   root.style.colorScheme = theme.colorScheme;
   document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')?.setAttribute("content", theme.colors.ground);
-}
-
-async function refreshWorkspaceState(
-  workspace: WorkspacePort,
-  setEntries: (entries: WorkspaceEntry[]) => void,
-  setMemoryFiles: (files: WorkspaceEntry[]) => void,
-) {
-  const entries = (await workspace.list()).filter((entry) => !isWorkspaceControlPlanePath(entry.path));
-  setEntries(entries);
-  // Refresh is metadata-only. Content is read only after an explicit open;
-  // indexing has its own bounded, demand-driven workspace port.
-  setMemoryFiles(entries.slice(0, 2_000));
 }
 
 /**
@@ -6227,6 +8310,23 @@ async function existingWorkspaceFallbackSeed(workspace: WorkspacePort): Promise<
   ]);
 }
 
+/**
+ * True when this runtime holds nothing a person made.
+ *
+ * Adoption uses this to decide whether the local runtime is worth carrying into
+ * a Vault. Getting it wrong in the false direction is expensive: a disposable
+ * sample workspace then gets copied over an authoritative Vault, which is how a
+ * fresh page-load came to overwrite real device state.
+ *
+ * It therefore looks for *evidence of user work* rather than for an exact
+ * bootstrap fingerprint. The previous form required exactly one session at
+ * sequence 1 carrying exactly one `session.created` event, so the moment the
+ * Profile cockpit began journaling its own `profile.active-conversation.selected`
+ * pointer at startup, every fresh boot silently began claiming to hold user
+ * work. That polarity fails dangerously: any bookkeeping event added later
+ * flips the answer. Asking what a person actually did fails safe, because new
+ * bookkeeping is simply not evidence of a person.
+ */
 async function isPristineBootstrapRuntime(runtime: Runtime): Promise<boolean> {
   const { readme, architecture, retrieval } = (await loadBrowserGit()).AIRSHIP_BOOTSTRAP_FILES;
   const expected = new Map<string, string>([
@@ -6239,16 +8339,29 @@ async function isPristineBootstrapRuntime(runtime: Runtime): Promise<boolean> {
     runtime.journal.listSessions(),
   ]);
   const entries = allEntries.filter((entry) => !isWorkspaceControlPlanePath(entry.path));
-  if (entries.length !== expected.size || sessions.length !== 1 || sessions[0]!.headSequence !== 1) return false;
-  const bootstrapEvents = await runtime.journal.readEvents(sessions[0]!.id);
-  if (bootstrapEvents.length !== 1 || bootstrapEvents[0]!.type !== "session.created") return false;
+  if (entries.length !== expected.size) return false;
   for (const entry of entries) {
     const content = expected.get(entry.path);
     if (content === undefined) return false;
     const file = await runtime.workspace.read(entry.path);
     if (!file || file.content !== content) return false;
   }
+  for (const session of sessions) {
+    if ((await runtime.journal.readEvents(session.id)).some(recordsUserWork)) return false;
+  }
   return true;
+}
+
+/**
+ * Evidence that a person did something, rather than bookkeeping the startup
+ * path writes on its own behalf.
+ *
+ * A turn is a person asking for work. A rename is a person naming it. Session
+ * creation and the Profile's active-conversation pointer are both written
+ * before anyone has touched the page.
+ */
+function recordsUserWork(event: DurableEvent): boolean {
+  return event.type.startsWith("turn.") || event.type === "session.renamed";
 }
 
 async function readWorkspaceFileBounded(
@@ -6265,51 +8378,6 @@ async function readWorkspaceFileBounded(
     ...file,
     content: new TextDecoder("utf-8", { fatal: false }).decode(bytes.slice(0, maximumBytes)),
   };
-}
-
-function parsePkceAttempt(value: string): ChutesPkceAttempt {
-  if (value.length > 8_192) throw new Error("The saved Chutes authorization attempt exceeded its safety limit.");
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(value);
-  } catch {
-    throw new Error("The saved Chutes authorization attempt is invalid.");
-  }
-  if (!parsed || typeof parsed !== "object") throw new Error("The saved Chutes authorization attempt is invalid.");
-  const candidate = parsed as Record<string, unknown>;
-  if (
-    Object.keys(candidate).some((key) => !["state", "verifier", "redirectUri", "createdAt"].includes(key)) ||
-    typeof candidate.state !== "string" || !/^[A-Za-z0-9_-]{32,128}$/u.test(candidate.state) ||
-    typeof candidate.verifier !== "string" || !/^[A-Za-z0-9._~-]{43,128}$/u.test(candidate.verifier) ||
-    typeof candidate.redirectUri !== "string" ||
-    candidate.redirectUri.length > 2_048 ||
-    !Number.isSafeInteger(candidate.createdAt) ||
-    (candidate.createdAt as number) < 0
-  ) {
-    throw new Error("The saved Chutes authorization attempt is incomplete.");
-  }
-  return {
-    state: candidate.state,
-    verifier: candidate.verifier,
-    redirectUri: candidate.redirectUri,
-    createdAt: candidate.createdAt as number,
-  };
-}
-
-function oauthExchangeError(
-  error: unknown,
-  exchangeMode: ReturnType<typeof chutesOAuthExchangeMode>,
-): string {
-  const message = error instanceof Error ? error.message : "Chutes sign-in could not be completed.";
-  if (message.includes("invalid_client")) {
-    return exchangeMode === "local-confidential-bridge"
-      ? "oauth:invalid-local"
-      : "oauth:invalid-public";
-  }
-  if (message.includes("HTTP 502")) {
-    return "Chutes identity gateway returned 502. Retry sign-in in a fresh browser window.";
-  }
-  return message.length <= 320 ? message : "Chutes sign-in failed without changing the active connection.";
 }
 
 function boundedTranscriptContent(value: string, maximum = 64 * 1024): string {
@@ -6367,6 +8435,67 @@ function conversationTitleFromPrompt(prompt: string): string {
   const maximum = 64;
   if (normalized.length <= maximum) return normalized;
   return `${normalized.slice(0, maximum - 1).trimEnd()}…`;
+}
+
+const CONVERSATION_NAMING_PROMPT =
+  "You name conversations. Reply with a title of at most six words for the message that follows. "
+  + "Describe what it is about. No quotation marks, no trailing punctuation, no preamble.";
+
+/**
+ * Ask the active model to name a new conversation.
+ *
+ * A truncated first prompt is not a name — "Map the browser workspace bound…"
+ * is just the message restated. A title should say what the conversation is
+ * about, which is an inference, so it is asked of the model already answering.
+ *
+ * Deliberately best-effort. The conversation is titled from the local heuristic
+ * first, so it is never nameless and the turn never waits on this; this only
+ * ever improves that title, and any failure, abort, or unusable answer leaves
+ * the heuristic in place. Returning `undefined` is an ordinary outcome.
+ */
+async function conversationTitleFromModel(
+  runtime: Runtime,
+  prompt: string,
+  signal: AbortSignal,
+): Promise<string | undefined> {
+  try {
+    const events = runtime.transport.stream({
+      requestId: randomUuid(),
+      sessionId: `naming-${randomUuid()}`,
+      turnId: randomUuid(),
+      model: runtime.model,
+      systemPrompt: CONVERSATION_NAMING_PROMPT,
+      messages: [{ role: "user", content: conversationTitleFromPrompt(prompt) }],
+      tools: [],
+      idempotencyKey: randomUuid(),
+    }, signal);
+    let text = "";
+    for await (const event of events) {
+      if (event.type === "text-delta") text += event.text;
+      // A naming call that starts producing an essay is not naming anything.
+      if (text.length > 240 || event.type === "completed") break;
+    }
+    return usableConversationTitle(text);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Reduce a model answer to a title, or reject it. */
+export function usableConversationTitle(answer: string): string | undefined {
+  const normalized = answer
+    .normalize("NFKC")
+    .replace(/[\u0000-\u001f\u007f]/gu, " ")
+    // Models like to wrap a title in quotes and end it with a full stop.
+    .replace(/^\s*["\u2018\u2019\u201c\u201d'`]+|["\u2018\u2019\u201c\u201d'`]+\s*$/gu, "")
+    .replace(/\s+/gu, " ")
+    .trim()
+    .replace(/[.,;:]+$/u, "")
+    .trim();
+  if (!normalized || normalized.length > 64) return undefined;
+  // A refusal or a preamble is longer than any title worth keeping.
+  if (normalized.split(" ").length > 8) return undefined;
+  return normalized;
 }
 
 async function waitForOperationRelease(
@@ -6570,6 +8699,22 @@ function describeMessageAttestation(
   return Object.freeze(describeEndpointEvidence({ scope: "turn", receipt, records, failure, now }));
 }
 
+function evidenceAcquisitionNotice(
+  snapshot: EvidenceAcquisitionQueueSnapshot | undefined,
+  receiptId: string | undefined,
+): string | undefined {
+  if (!snapshot || !receiptId) return undefined;
+  const task = snapshot.tasks.find((candidate) => candidate.request.receiptId === receiptId);
+  if (!task || task.status === "succeeded") return undefined;
+  if (task.status === "pending") return "Automatic endpoint-evidence acquisition is queued for this completed turn.";
+  if (task.status === "running") return `Automatic endpoint-evidence acquisition is running (attempt ${String(task.attempt)}).`;
+  if (task.status === "retry") return `${task.failure.message}. Automatic acquisition will retry without changing the receipt.`;
+  if (task.status === "failed") return `${task.failure.message}. Automatic acquisition reached a terminal outcome; the receipt remains unchanged.`;
+  return task.reason === "scope-released"
+    ? "Automatic endpoint-evidence acquisition stopped when the Chutes connection was released. The receipt remains unchanged."
+    : "Automatic endpoint-evidence acquisition was cancelled. The receipt remains unchanged.";
+}
+
 function isChutesReceiptProvider(provider: string): boolean {
   return provider === "chutes" || provider === "chutes-e2ee-v1";
 }
@@ -6660,33 +8805,26 @@ function isDisplayFreshAttestation(record: ChutesEndpointEvidenceRecord, now: nu
   return Number.isFinite(freshUntil) && freshUntil > now;
 }
 
-function endpointEvidenceForView(record: ChutesEndpointEvidenceRecord): ChutesEndpointEvidenceRecord {
+function endpointEvidenceForPersistence(record: ChutesEndpointEvidenceRecord): ChutesEndpointEvidenceRecord {
   return Object.freeze({
     ...record,
-    subject: Object.freeze({
-      ...record.subject,
-      e2ePublicKey: "",
-    }),
     acquisition: Object.freeze({
       ...record.acquisition,
       requestUrl: querylessProviderUrl(record.acquisition.requestUrl),
-      requestNonce: "",
     }),
-    evidence: Object.freeze({
-      ...record.evidence,
-      quote: Object.freeze({ ...record.evidence.quote, base64: "", reportDataHex: "" }),
-      gpu: Object.freeze({ ...record.evidence.gpu, payloads: Object.freeze([]) }),
-      certificate: Object.freeze({ ...record.evidence.certificate, base64: "" }),
-    }),
-    binding: Object.freeze({
-      ...record.binding,
-      expectedDigestHex: "",
-      quotedDigestHex: "",
-      reportDataHex: "",
-    }),
+    warnings: Object.freeze([...record.warnings]),
+  });
+}
+
+function endpointEvidenceWithDurabilityWarning(
+  record: ChutesEndpointEvidenceRecord,
+  reason: string,
+): ChutesEndpointEvidenceRecord {
+  return Object.freeze({
+    ...record,
     warnings: Object.freeze([
-      ...record.warnings,
-      "Raw quote, GPU, certificate, nonce, report-data, and endpoint-key material is omitted from view state.",
+      ...record.warnings.filter((warning) => warning !== reason),
+      reason,
     ]),
   });
 }
@@ -6714,7 +8852,10 @@ function querylessProviderUrl(value: string): string {
     const url = new URL(value);
     return `${url.origin}${url.pathname}`;
   } catch {
-    return "provider endpoint withheld";
+    // Preserve an invalid provider value for the strict persistence validator
+    // to reject. Manufacturing a plausible replacement URL would hide source
+    // corruption and weaken the independent-verification record.
+    return value;
   }
 }
 
@@ -6813,72 +8954,40 @@ function MessageCard({
             ) : null}
           </div>
         ) : null}
-        {/* Pointer devices get a real toolbar that the hover/focus rule fades
-            in; touch devices get the disclosure below. This is deliberately not
-            one `<details>` for both: engines no longer paint the contents of a
-            closed `<details>`, so a summary hidden at desktop width left the
-            actions laid out, measurable, and permanently unclickable.
-
-            Pointer activation is admitted on primary press. The variable-height
-            transcript can commit its first measurement between pointer-down and
-            pointer-up, moving the overlay while the page settles; waiting for a
-            native click would then silently target the card beneath it. Keyboard
-            and assistive activation still arrives through the zero-detail click. */}
+        {/* Pointer devices get a reserved footer toolbar that fades on
+            hover/focus; touch devices get the disclosure below. This is
+            deliberately not one `<details>` for both: engines do not paint a
+            closed details body, so hiding only its summary can leave desktop
+            actions measurable but unreachable. */}
         <div class="message-actions" role="toolbar" aria-label="Message actions">
           <div class="message-actions-row">
             <button
               type="button"
-              onPointerDown={(event) => {
-                if (event.button !== 0) return;
-                event.preventDefault();
-                event.currentTarget.focus({ preventScroll: true });
-                onCopy();
-              }}
-              onClick={(event) => { if (event.detail === 0) onCopy(); }}
+              onClick={onCopy}
             >Copy</button>
-            {/* Retry is the ordinary "ask that again" gesture, not only an
-                error recovery. It re-sends into the same session, so the
-                original turn and its receipt chain stay inspectable — and the
-                earlier answer is still in provider context, which the title
-                states rather than implying a clean regeneration. */}
+            {/* Retry is a regeneration from the immutable pre-turn boundary.
+                The prior answer remains inspectable in the source conversation
+                but cannot contaminate the retry branch's provider context. */}
             {message.role === "assistant" && message.originatingPrompt ? (
               <button
                 type="button"
-                title={message.error
-                  ? "Send the same prompt again in this conversation."
-                  : "Ask again in this conversation. The earlier answer stays in the transcript and in provider context."}
-                onPointerDown={(event) => {
-                  if (event.button !== 0) return;
-                  event.preventDefault();
-                  event.currentTarget.focus({ preventScroll: true });
-                  onRetry();
-                }}
-                onClick={(event) => { if (event.detail === 0) onRetry(); }}
+                title="Regenerate in a clean fork. The prior answer remains inspectable only in the source conversation."
+                onClick={onRetry}
+                disabled={branchDisabled}
               >Retry</button>
             ) : null}
             {message.role === "user" ? (
               <button
                 type="button"
-                onPointerDown={(event) => {
-                  if (event.button !== 0) return;
-                  event.preventDefault();
-                  event.currentTarget.focus({ preventScroll: true });
-                  onEdit();
-                }}
-                onClick={(event) => { if (event.detail === 0) onEdit(); }}
-              >Edit &amp; resend</button>
+                onClick={onEdit}
+                disabled={branchDisabled}
+              >Edit &amp; branch</button>
             ) : null}
             <button
               type="button"
-              onPointerDown={(event) => {
-                if (event.button !== 0 || branchDisabled) return;
-                event.preventDefault();
-                event.currentTarget.focus({ preventScroll: true });
-                onBranch();
-              }}
-              onClick={(event) => { if (event.detail === 0 && !branchDisabled) onBranch(); }}
+              onClick={onBranch}
               disabled={branchDisabled}
-            ><Icon name="branch" size={14} /> Fork conversation</button>
+            ><Icon name="branch" size={14} /> Fork from here</button>
           </div>
         </div>
         <details class="message-actions-touch">
@@ -6886,10 +8995,10 @@ function MessageCard({
           <div role="menu" aria-label="Message actions">
             <button role="menuitem" type="button" onClick={onCopy}>Copy</button>
             {message.role === "assistant" && message.originatingPrompt ? (
-              <button role="menuitem" type="button" onClick={onRetry}>Retry</button>
+              <button role="menuitem" type="button" onClick={onRetry} disabled={branchDisabled}>Retry</button>
             ) : null}
-            {message.role === "user" ? <button role="menuitem" type="button" onClick={onEdit}>Edit &amp; resend</button> : null}
-            <button role="menuitem" type="button" onClick={onBranch} disabled={branchDisabled}><Icon name="branch" size={14} /> Fork conversation</button>
+            {message.role === "user" ? <button role="menuitem" type="button" onClick={onEdit} disabled={branchDisabled}>Edit &amp; branch</button> : null}
+            <button role="menuitem" type="button" onClick={onBranch} disabled={branchDisabled}><Icon name="branch" size={14} /> Fork from here</button>
           </div>
         </details>
       </div>

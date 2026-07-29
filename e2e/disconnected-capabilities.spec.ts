@@ -55,5 +55,7 @@ test("Capabilities states that runtime activation is provider-independent", asyn
   await expect(page.getByText(/Every effect still follows the active approval policy/u)).toBeVisible();
   await page.getByRole("button", { name: "Browse slash tools" }).click();
   await expect(page).toHaveURL(/#chat\/[^/?#]+$/);
+  await expect(page.locator(".session-bar__title")).toHaveText("Capability command");
+  await expect(page.getByText("New profile-scoped conversation · capability command prefilled")).toBeVisible();
   await expect(page.getByRole("combobox", { name: "Message Airship" })).toHaveValue("/help ");
 });

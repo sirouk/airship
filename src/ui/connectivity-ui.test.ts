@@ -1,10 +1,11 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 
-const [app, access, billing] = await Promise.all([
+const [app, access, billing, oauth] = await Promise.all([
   readFile(new URL("./app.tsx", import.meta.url), "utf8"),
   readFile(new URL("./access-view.tsx", import.meta.url), "utf8"),
   readFile(new URL("./billing-view.tsx", import.meta.url), "utf8"),
+  readFile(new URL("../auth/chutes-oauth.ts", import.meta.url), "utf8"),
 ]);
 
 describe("offline runtime UI contract", () => {
@@ -83,10 +84,25 @@ describe("offline runtime UI contract", () => {
     expect(access).toContain('class="access-network-pause"');
   });
 
+  /*
+   * `invalid_client` means one of two opposite things, and the remedy for one
+   * is wrong for the other: a localhost bridge has process credentials to
+   * repair, a public PKCE client has a registration to re-check. The mapping
+   * therefore has to read the mode the tab actually exchanged through, not the
+   * mode the reader assumes.
+   *
+   * The classification lives beside the exchange it describes rather than in
+   * App, so this asserts the whole path: App resolves the live mode and hands
+   * it to the describer, the describer separates the two codes, and Access
+   * renders distinct remedies. Asserting only App's copy of the literals is
+   * what let the strings move out from under this test.
+   */
   it("maps OAuth rejection to the active token boundary instead of prescribing the wrong client type", () => {
-    expect(app).toContain('exchangeMode === "local-confidential-bridge"');
-    expect(app).toContain('"oauth:invalid-local"');
-    expect(app).toContain('"oauth:invalid-public"');
+    expect(app).toContain("exchangeMode = oauth.chutesOAuthExchangeMode(registration)");
+    expect(app).toContain("oauth?.describeChutesOAuthExchangeError(error, exchangeMode)");
+    expect(oauth).toContain('exchangeMode === "local-confidential-bridge" ? "oauth:invalid-local" : "oauth:invalid-public"');
+    expect(access).toContain('message === "oauth:invalid-local"');
+    expect(access).toContain('message === "oauth:invalid-public"');
     expect(access).toContain("Chutes rejected the localhost app credentials.");
     expect(access).toContain("Chutes rejected this Browser/native registration.");
     expect(access).toContain("registered process credentials");

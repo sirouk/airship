@@ -54,8 +54,22 @@
 .attestations-heading-actions {
   display: flex;
   flex: 0 0 auto;
+  flex-wrap: wrap;
   gap: 8px;
+  align-items: end;
+  justify-content: end;
 }
+
+.attestations-acquisition-mode {
+  display: grid;
+  gap: 2px;
+  max-width: 32ch;
+  margin-right: 4px;
+  text-align: right;
+}
+
+.attestations-acquisition-mode strong { font-size: var(--fs-caption); }
+.attestations-acquisition-mode small { color: var(--ink-faint); font-size: var(--fs-micro); line-height: 1.35; }
 
 .attestations-view button {
   display: inline-flex;
@@ -104,21 +118,46 @@
 
 .attestations-boundary {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 11px;
-  align-items: center;
   padding: 11px 14px;
   border: 1px solid color-mix(in srgb, var(--accent-bright) 28%, transparent);
   border-radius: var(--radius-control);
   background: color-mix(in srgb, var(--accent) 5%, var(--surface) 95%);
 }
 
-.attestations-boundary > svg { color: var(--accent-bright); }
-.attestations-boundary > div { display: grid; gap: 3px; }
+.attestations-boundary > header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 11px;
+  align-items: center;
+}
+
+.attestations-boundary > header > svg { color: var(--accent-bright); }
+.attestations-boundary > header > div { display: grid; gap: 3px; }
 .attestations-boundary strong { font-size: var(--fs-meta); }
 .attestations-boundary span,
 .attestations-boundary small { color: var(--ink-muted); font-size: var(--fs-caption); line-height: 1.4; }
-.attestations-boundary small { white-space: nowrap; }
+.attestations-boundary > header > small { white-space: nowrap; }
+
+.attestations-boundary > dl {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 1px;
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--accent-bright) 18%, transparent);
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--accent-bright) 18%, transparent);
+}
+
+.attestations-boundary > dl > div {
+  min-width: 0;
+  padding: 8px 10px;
+  background: var(--surface-soft);
+}
+
+.attestations-boundary dt { font: var(--fw-strong) var(--fs-micro) / 1.25 var(--font-mono); text-transform: uppercase; letter-spacing: .07em; }
+.attestations-boundary dd { margin: 3px 0 0; color: var(--ink-faint); font-size: var(--fs-micro); line-height: 1.4; }
 
 .attestations-alert {
   display: flex;
@@ -141,7 +180,7 @@
 
 .attestations-shell {
   display: grid;
-  grid-template-columns: minmax(210px, 0.68fr) minmax(480px, 1.75fr) minmax(250px, 0.82fr);
+  grid-template-columns: minmax(220px, .28fr) minmax(0, 1fr);
   min-height: 660px;
   overflow: hidden;
   border: 1px solid var(--line);
@@ -161,7 +200,11 @@
 }
 
 .attestations-ledger { border-right: 1px solid var(--line); }
-.attestations-inspector { border-left: 1px solid var(--line); }
+.attestations-inspector {
+  grid-column: 2;
+  grid-row: 2 / span 2;
+  border-left: 1px solid var(--line);
+}
 
 .attestations-rail-heading,
 .attestations-section-heading {
@@ -267,20 +310,23 @@
 .attestations-ledger-note p { margin: 0; font-size: var(--fs-micro); line-height: 1.45; }
 
 .attestations-stage {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: minmax(360px, 1fr) minmax(280px, .56fr);
+  align-content: start;
   min-width: 0;
 }
 
 .attestation-record-heading {
-  display: flex;
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 18px;
   align-items: start;
-  justify-content: space-between;
   padding: 17px;
   border-bottom: 1px solid var(--line);
 }
 
+.attestation-record-identity { min-width: 0; }
 .attestation-record-heading h2 { margin: 5px 0 6px; font-size: var(--fs-lead); overflow-wrap: anywhere; }
 .attestation-record-heading p { max-width: 68ch; margin: 0; color: var(--ink-muted); font-size: var(--fs-caption); line-height: 1.5; }
 /*
@@ -306,32 +352,80 @@
 .attestation-record-counts dt { color: var(--ink-muted); font-size: var(--fs-micro); text-transform: uppercase; letter-spacing: .08em; white-space: nowrap; }
 .attestation-record-counts dd { margin: 0; font: 700 0.82rem/1 var(--font-body); font-variant-numeric: tabular-nums; }
 
-.attestation-matrix {
+.attestation-record-reading {
+  grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 1px;
-  padding: 1px;
-  background: var(--line);
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  background: var(--surface-soft);
 }
 
-.attestation-matrix > button {
+.attestation-record-reading > svg { color: var(--accent-bright); }
+.attestation-record-reading > div { display: grid; gap: 3px; min-width: 0; }
+.attestation-record-reading strong { font-size: var(--fs-meta); }
+.attestation-record-reading p { max-width: none; }
+.attestation-record-reading small { color: var(--ink-faint); font-size: var(--fs-micro); line-height: 1.45; }
+.attestation-record-reading[data-kind="immutable-receipt"] { border-left: 3px solid var(--copper); }
+.attestation-record-reading[data-kind="endpoint-observation"] { border-left: 3px solid var(--signal); }
+
+.attestation-matrix {
+  grid-column: 1;
+  grid-row: 2;
   display: grid;
-  gap: 8px;
+  gap: 12px;
   align-content: start;
-  justify-items: start;
-  min-height: 108px;
-  padding: 12px;
-  border: 0;
-  border-radius: 0;
-  background: var(--surface);
+  min-width: 0;
+  padding: 14px 16px 16px;
+}
+
+.attestations-stage-heading {
+  display: grid;
+  gap: 3px;
+}
+
+.attestations-stage-heading > span {
+  color: var(--accent-bright);
+  font: 700 var(--fs-micro) / 1.2 var(--font-mono);
+  letter-spacing: .11em;
+  text-transform: uppercase;
+}
+
+.attestations-stage-heading > small { color: var(--ink-faint); font-size: var(--fs-micro); line-height: 1.4; }
+
+.attestation-claim-group {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.attestation-claim-group > header { display: grid; gap: 2px; }
+.attestation-claim-group > header strong { font-size: var(--fs-caption); }
+.attestation-claim-group > header small { color: var(--ink-faint); font-size: var(--fs-micro); line-height: 1.35; }
+.attestation-claim-group > div {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.attestation-claim-group button {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 4px 8px;
+  align-content: center;
+  justify-content: start;
+  min-height: 66px;
+  padding: 9px 10px;
   text-align: left;
 }
 
-.attestation-matrix > button.active { box-shadow: inset 0 -3px var(--accent-bright); background: color-mix(in srgb, var(--accent) 6%, var(--surface) 94%); }
-.attestation-matrix > button > span { display: flex; gap: 6px; align-items: center; }
-.attestation-matrix > button > span em { color: var(--ink-muted); font: normal var(--fs-micro)/1.2 var(--font-mono); text-transform: uppercase; }
-.attestation-matrix > button strong { font-size: var(--fs-caption); line-height: 1.3; }
-.attestation-matrix > button small { color: var(--ink-faint); font-size: var(--fs-micro); line-height: 1.35; }
+.attestation-claim-group button.active { border-color: var(--accent-bright); box-shadow: inset 3px 0 var(--accent-bright); background: color-mix(in srgb, var(--accent) 6%, var(--surface) 94%); }
+.attestation-claim-group button > span { display: grid; gap: 2px; min-width: 0; }
+.attestation-claim-group button strong { font-size: var(--fs-caption); line-height: 1.3; overflow-wrap: anywhere; }
+.attestation-claim-group button small { color: var(--ink-faint); font-size: var(--fs-micro); line-height: 1.3; }
+.attestation-claim-group button em { grid-column: 2; color: var(--ink-muted); font: normal var(--fs-micro) / 1.3 var(--font-mono); overflow-wrap: anywhere; }
 
 .attestation-status-mark {
   flex: 0 0 auto;
@@ -342,11 +436,45 @@
 .attestations-bindings {
   display: grid;
   gap: 10px;
-  padding: 15px 16px;
-  border-top: 1px solid var(--line);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  background: var(--surface-raised);
+  overflow: clip;
 }
 
-.attestations-section-heading small { color: var(--ink-faint); font-size: var(--fs-micro); }
+.attestations-disclosures {
+  grid-column: 1;
+  grid-row: 3;
+  display: grid;
+  gap: 9px;
+  align-content: start;
+  min-width: 0;
+  padding: 0 16px 16px;
+}
+
+.attestations-authorities > summary,
+.attestations-bindings > summary {
+  display: grid;
+  gap: 3px;
+  min-height: 44px;
+  padding: 9px 12px;
+  cursor: pointer;
+  list-style-position: inside;
+}
+
+.attestations-authorities > summary > span,
+.attestations-bindings > summary > span {
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-strong);
+}
+
+.attestations-authorities > summary > small,
+.attestations-bindings > summary > small { color: var(--ink-faint); font-size: var(--fs-micro); line-height: 1.4; }
+.attestations-authorities[open] > summary,
+.attestations-bindings[open] > summary { border-bottom: 1px solid var(--line); }
+.attestations-authorities > .attestation-verification-list,
+.attestations-bindings > .attestation-facts,
+.attestations-bindings > .attestation-facts-empty { margin: 12px; }
 
 .attestation-verification-list {
   display: grid;
@@ -466,16 +594,27 @@
 .attestations-empty__flow small { color: var(--ink-faint); font-size: var(--fs-micro); line-height: 1.4; }
 
 @media (max-width: 1180px) {
-  .attestations-shell { grid-template-columns: minmax(190px, 0.58fr) minmax(480px, 1.55fr); }
-  .attestations-inspector { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(240px, 0.7fr); border-top: 1px solid var(--line); border-left: 0; }
+  .attestations-boundary > dl { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .attestations-shell { grid-template-columns: minmax(190px, .3fr) minmax(0, 1fr); }
+  .attestations-stage { grid-template-columns: minmax(0, 1fr); }
+  .attestation-record-heading,
+  .attestation-matrix,
+  .attestations-inspector,
+  .attestations-disclosures { grid-column: 1; }
+  .attestation-record-heading { grid-row: 1; }
+  .attestation-matrix { grid-row: 2; }
+  .attestations-inspector { grid-row: 3; display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(240px, .7fr); border-top: 1px solid var(--line); border-left: 0; }
+  .attestations-disclosures { grid-row: 4; padding-top: 16px; }
   .attestations-export-note { margin-top: 0; }
 }
 
 @media (max-width: 780px) {
   .attestations-heading { display: grid; align-items: start; }
   .attestations-heading-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .attestations-boundary { grid-template-columns: auto minmax(0, 1fr); }
-  .attestations-boundary small { grid-column: 2; white-space: normal; }
+  .attestations-acquisition-mode { grid-column: 1 / -1; max-width: none; margin: 0; text-align: left; }
+  .attestations-boundary > header { grid-template-columns: auto minmax(0, 1fr); }
+  .attestations-boundary > header > small { grid-column: 2; white-space: normal; }
+  .attestations-boundary > dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .attestations-shell { display: block; min-height: 0; overflow: visible; }
   .attestations-empty__flow { grid-template-columns: 1fr; }
   .attestations-ledger { border-right: 0; border-bottom: 1px solid var(--line); }
@@ -483,17 +622,15 @@
   .attestations-ledger-note { margin-top: 0; }
   .attestation-record-heading { display: grid; }
   .attestation-record-heading dl { width: 100%; }
-  .attestation-matrix { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .attestations-inspector { display: grid; grid-template-columns: 1fr; }
 }
 
 @media (max-width: 480px) {
   .attestations-heading-actions { grid-template-columns: 1fr; }
+  .attestations-boundary > dl { grid-template-columns: 1fr; }
   .attestation-record-list { grid-template-columns: 1fr; }
-  .attestation-record-heading dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .attestation-record-heading dl > div:nth-child(2) { border-right: 0; }
-  .attestation-record-heading dl > div:nth-child(-n + 2) { border-bottom: 1px solid var(--line); }
-  .attestation-matrix { grid-template-columns: 1fr; }
+  .attestation-record-counts { gap: 8px 10px; }
+  .attestation-claim-group > div { grid-template-columns: 1fr; }
   .attestation-verification-list { grid-template-columns: 1fr; }
   .attestation-facts { grid-template-columns: 1fr; }
   .attestations-section-heading { display: grid; }

@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import {
+  isTabCloseAuxiliaryActivation,
   middleTruncate,
   nextTabId,
   TAB_LABEL_MAX,
@@ -110,6 +111,20 @@ describe("a tab's accessible name", () => {
   it("falls back to the bare count when no unit is given", () => {
     expect(tabAccessibleName({ id: "a", label: "Sources", count: 3 })).toBe("Sources, 3");
   });
+
+  it("states replaceable preview status in addition to italicizing it", () => {
+    expect(tabAccessibleName({ id: "a", label: "README.md", detail: "docs/README.md", preview: true }))
+      .toBe("docs/README.md, Preview");
+  });
+});
+
+describe("auxiliary close", () => {
+  it("reserves only the standard middle button for closing a document tab", () => {
+    expect(isTabCloseAuxiliaryActivation(1)).toBe(true);
+    expect(isTabCloseAuxiliaryActivation(0)).toBe(false);
+    expect(isTabCloseAuxiliaryActivation(2)).toBe(false);
+    expect(isTabCloseAuxiliaryActivation(3)).toBe(false);
+  });
 });
 
 describe("roving tabindex", () => {
@@ -189,8 +204,19 @@ describe("one tab grammar", () => {
     expect(row).toContain("min-height: 44px");
     // The full path wraps here. Ellipsising it would leave the untruncated
     // name nowhere but a `title`, which a touch user cannot reach.
-    const span = routeStyles.match(/\.tabs__overflow-item > span \{([^}]+)\}/u)?.[1] ?? "";
+    const span = routeStyles.match(/\.tabs__overflow-item > \.tabs__overflow-label \{([^}]+)\}/u)?.[1] ?? "";
     expect(span).toContain("overflow-wrap: anywhere");
     expect(span).not.toContain("text-overflow");
+  });
+
+  it("italicizes the one replaceable document preview in the strip and overflow list", () => {
+    const preview = routeStyles.match(/\.tabs\[data-variant="document"\] \.tabs__tab\[data-preview="true"\] \.tabs__label,\s*\.tabs__overflow-item\[data-preview="true"\] > \.tabs__overflow-label \{([^}]+)\}/u)?.[1] ?? "";
+    expect(preview).toContain("font-style: italic");
+  });
+
+  it("gives a decorative leading mark one stable slot in both tab surfaces", async () => {
+    const source = await readFile(new URL("./tabs.tsx", import.meta.url), "utf8");
+    expect(source.match(/class="tabs__leading"/gu)).toHaveLength(2);
+    expect(source).toContain('class="tabs__overflow-label"');
   });
 });

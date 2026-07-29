@@ -2679,12 +2679,23 @@
   .session-status-chip,
   .journal-chip,
   .session-model-chip,
+  .session-bar__rename-action,
   .session-bar__new,
   .session-bar .session-runtime {
     min-height: 44px;
   }
 
   .session-bar__new { width: 44px; }
+
+  .session-bar__rename-action {
+    display: inline-grid;
+    width: 44px;
+    place-items: center;
+    border: 1px solid var(--line-control);
+    border-radius: var(--radius-chip);
+    color: var(--ink-muted);
+    background: color-mix(in srgb, var(--surface-soft) 80%, transparent);
+  }
 
   .journal-chip__branch,
   .journal-chip__record { min-height: 42px; }
@@ -3215,6 +3226,22 @@
 
   .session-bar__identity { display: none; }
 
+  .session-bar__identity.is-renaming {
+    display: block;
+    grid-column: 1 / -1;
+  }
+
+  .session-bar__rename-action {
+    display: inline-grid;
+    width: 44px;
+    min-height: 44px;
+    place-items: center;
+    border: 1px solid var(--line-control);
+    border-radius: var(--radius-chip);
+    color: var(--ink-muted);
+    background: color-mix(in srgb, var(--surface-soft) 80%, transparent);
+  }
+
   .session-bar__chips { justify-self: start; }
 
   .transcript {
@@ -3531,6 +3558,13 @@
   text-overflow: ellipsis;
 }
 
+.tabs__leading {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+}
+
 .tabs__hint {
   color: var(--ink-faint);
   font-size: var(--fs-caption);
@@ -3583,6 +3617,16 @@
   font-size: var(--fs-body);
 }
 
+/*
+ * One replaceable document preview, using the editor convention named in its
+ * accessible label. Pinning/editing removes this attribute; color never has
+ * to carry the distinction.
+ */
+.tabs[data-variant="document"] .tabs__tab[data-preview="true"] .tabs__label,
+.tabs__overflow-item[data-preview="true"] > .tabs__overflow-label {
+  font-style: italic;
+}
+
 .tabs__overflow {
   margin-left: auto;
 }
@@ -3632,7 +3676,7 @@
   text-align: left;
 }
 
-.tabs__overflow-item > span {
+.tabs__overflow-item > .tabs__overflow-label {
   grid-column: 2;
   overflow-wrap: anywhere;
 }

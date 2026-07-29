@@ -1,5 +1,6 @@
 import {
   JournalConflictError,
+  projectedSessionTitle,
   type DurableEvent,
   type JournalBackend,
   type SessionRecord,
@@ -61,7 +62,7 @@ export class MemoryJournalBackend implements JournalBackend {
     this.events.get(sessionId)!.push(...structuredClone(events));
     const updated: SessionRecord = {
       ...session,
-      title: renamedTitle(events) ?? session.title,
+      title: projectedSessionTitle(events, session.title),
       updatedAt: last.recordedAt,
       headSequence: last.sequence,
       headDigest: last.digest,
@@ -71,7 +72,3 @@ export class MemoryJournalBackend implements JournalBackend {
   }
 }
 
-function renamedTitle(events: readonly DurableEvent[]): string | undefined {
-  for (let index = events.length - 1; index >= 0; index -= 1) { const event = events[index]!; if (event.type === "session.renamed" && event.payload && !Array.isArray(event.payload) && typeof event.payload === "object" && typeof event.payload.title === "string") return event.payload.title; }
-  return undefined;
-}

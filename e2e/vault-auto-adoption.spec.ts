@@ -171,10 +171,11 @@ test("a renamed conversation still adopts its vault, and the rename is on screen
   await expect(titleField).toBeVisible();
   await titleField.fill("Renamed before reload");
   await first.getByRole("button", { name: "Save rename" }).click();
-  // The durable append is what this test is about: creation, then the rename.
+  // The durable appends are creation, the profile's active-conversation
+  // pointer, then the rename.
   // (The detail heading keeps showing the pre-rename title until the list is
   // refreshed — pre-existing, unrelated, and not what stranded the vault.)
-  await expect(first.getByText("2 events", { exact: true }).first()).toBeVisible();
+  await expect(first.getByText("3 events", { exact: true }).first()).toBeVisible();
   await first.context().close();
 
   const second = await openFreshVaultPage(browser, namespace);
@@ -186,7 +187,9 @@ test("a renamed conversation still adopts its vault, and the rename is on screen
 
   // The durable record is re-presented, not skipped: its sentence, its
   // sequence, its type and its digest.
-  const marker = second.locator(".transcript-marker").first();
+  // Address the rename marker by what it is, not by position. The Profile's
+  // active-conversation pointer is also a durable marker and sits ahead of it.
+  const marker = second.locator(".transcript-marker").filter({ hasText: "session.renamed" });
   await expect(marker).toContainText("Renamed to “Renamed before reload”");
   await expect(marker).toContainText("session.renamed");
   await expect(marker).toContainText(/Event \d+/u);

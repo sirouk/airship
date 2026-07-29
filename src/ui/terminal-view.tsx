@@ -1,17 +1,21 @@
-import type { ComponentChildren } from "preact";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import "@xterm/xterm/css/xterm.css";
 import type { BrowserGitClient } from "../git/client";
-import { runTerminalGitCommand, type TerminalGitReview } from "../git/terminal-commands";
-import type { WorkspacePort } from "../workspace/contracts";
+import type { TerminalGitReview } from "../git/terminal-commands";
+import type { ClientEncryptedWorkspacePort, WorkspacePort } from "../workspace/contracts";
 import { getBrowserTerminalManager, type BrowserTerminalManager } from "../terminal/manager";
-import type { TerminalSessionSnapshot } from "../terminal/contracts";
+import { WEB_CONTAINER_TERMINAL_RUNTIME, type TerminalSessionSnapshot } from "../terminal/contracts";
+import { durabilityLabel, type DurabilityState } from "./durability-indicator";
 import { Icon } from "./icons";
 import { RouteHeader } from "./route-header";
 import { Seal, type SealState } from "./seal";
+import { readTerminalDockState, terminalDockStorageKey, terminalOpenRequestForAuthority, updateTerminalDockState, type TerminalOpenRequest } from "./terminal-dock-state";
 import "./terminal-view.css";
+
+export { terminalOpenRequestForAuthority } from "./terminal-dock-state";
+export type { TerminalOpenRequest } from "./terminal-dock-state";
 
 /**
  * Where the runtime band's open state lives between visits.
@@ -56,27 +60,83 @@ export function terminalSealState(status: TerminalSessionSnapshot["status"]): Se
   return "none";
 }
 
-export function TerminalView({ workspace, git, reviewGit, onWorkspaceChanged, threadId, workspaceRoot = "/workspace" }: Readonly<{
+export type TerminalDurability = Readonly<{ state: DurabilityState; detail?: string; label?: string }>;
+export type TerminalViewProps = Readonly<{
   workspace: WorkspacePort;
+  /** Retained for app compatibility; the terminal never injects browser-Git commands into PTY scrollback. */
   git: BrowserGitClient;
   reviewGit: TerminalGitReview;
   onWorkspaceChanged?(): void | Promise<void>;
   threadId?: string;
+  /** App integration seam: pass the active profile so tabs never cross profile cockpits. */
+  profileId?: string;
+  profileName?: string;
+  /** Stable authority name used only to partition browser-session surface state. */
+  workspaceIdentity?: string;
+  /** App integration seam: the active workspace/journal durability claim. */
+  durability?: TerminalDurability;
+  /** App/Workspace seam: one idempotent request to open a new tab at a selected directory. */
+  openRequest?: TerminalOpenRequest;
+  onOpenRequestHandled?(requestId: string): void;
   workspaceRoot?: string;
-}>) {
-  const manager = useMemo(() => getBrowserTerminalManager(workspace), [workspace]);
+  variant?: "route" | "dock";
+  onCollapse?(): void;
+  onOpenFullView?(): void;
+}>;
+
+export function terminalPersistenceNotice(durability: TerminalDurability, profileId?: string): string {
+  const scope = profileId ? `Profile ${profileId}` : "Unscoped legacy terminal";
+  if (durability.state === "ephemeral") return `${scope} tab metadata, bounded transcript, input history, and lineage live only in this page's workspace memory. Reload loses them; processes also end.`;
+  if (durability.state === "syncing") return `${scope} terminal metadata is queued through the active encrypted workspace while synchronization is in progress. Processes remain page-local.`;
+  return `${scope} tab metadata, bounded transcript, input history, and lineage are retained through the active encrypted workspace. Processes still restart after reload.`;
+}
+
+/** Infer only what the workspace port proves. App should pass its richer durability state. */
+export function inferredTerminalDurability(workspace: WorkspacePort): TerminalDurability {
+  const encryptionBoundary = (workspace as Partial<ClientEncryptedWorkspacePort>).encryptionBoundary;
+  if (encryptionBoundary === "airship-client-envelope-v1") {
+    return Object.freeze({
+      state: "local",
+      label: "Client-encrypted workspace · tier unknown",
+      detail: "The active workspace proves Airship's client-encryption boundary. Its backing tier was not supplied to Terminal, so this view does not claim device or cloud synchronization.",
+    });
+  }
+  return Object.freeze({
+    state: "ephemeral",
+    detail: "No durable or client-encrypted workspace capability was supplied to Terminal. Metadata is treated as page/workspace-memory only.",
+  });
+}
+
+export function TerminalView(props: TerminalViewProps) {
+  const workspaceIdentity = props.workspaceIdentity ?? "page-memory";
+  const profileId = props.profileId ?? "legacy-unscoped";
+  const scope = terminalDockStorageKey(workspaceIdentity, profileId);
+  const scopedOpenRequest = terminalOpenRequestForAuthority(props.openRequest, workspaceIdentity, profileId);
+  useEffect(() => {
+    if (props.openRequest && !scopedOpenRequest) props.onOpenRequestHandled?.(props.openRequest.id);
+  }, [props.openRequest?.id, scopedOpenRequest, props.onOpenRequestHandled]);
+  return <ProfileScopedTerminalView key={scope} {...props} workspaceIdentity={workspaceIdentity} openRequest={scopedOpenRequest} />;
+}
+
+function ProfileScopedTerminalView({ workspace, onWorkspaceChanged, threadId, profileId, profileName, workspaceIdentity = "page-memory", durability, openRequest, onOpenRequestHandled, workspaceRoot = "/workspace", variant = "route", onCollapse, onOpenFullView }: TerminalViewProps) {
+  const effectiveDurability = durability ?? inferredTerminalDurability(workspace);
+  const manager = useMemo(() => getBrowserTerminalManager(workspace, profileId), [workspace]);
   const [sessions, setSessions] = useState<readonly TerminalSessionSnapshot[]>([]);
-  const [activeId, setActiveId] = useState<string>();
-  const [notice, setNotice] = useState("Loading encrypted terminal metadata…");
+  const [activeId, setActiveId] = useState<string | undefined>(() => readTerminalDockState(browserSessionStorage(), workspaceIdentity, profileId ?? "legacy-unscoped").selectedSessionId);
+  const [notice, setNotice] = useState("Loading terminal metadata through the active workspace…");
   const [syncing, setSyncing] = useState(false);
   const [renamingId, setRenamingId] = useState<string>();
   const [renameValue, setRenameValue] = useState("");
-  const [gitCommand, setGitCommand] = useState("git status");
-  const [gitRunning, setGitRunning] = useState(false);
   const [setupOpen, setSetupOpen] = useState(() => readTerminalSetupOpen(globalThis.localStorage));
   const cancelRename = useRef(false);
   const workspaceChanged = useRef(onWorkspaceChanged);
   workspaceChanged.current = onWorkspaceChanged;
+  const openRequestHandled = useRef(onOpenRequestHandled);
+  openRequestHandled.current = onOpenRequestHandled;
+
+  useEffect(() => {
+    updateTerminalDockState(browserSessionStorage(), workspaceIdentity, profileId ?? "legacy-unscoped", { selectedSessionId: activeId ?? "" });
+  }, [activeId, workspaceIdentity, profileId]);
 
   useEffect(() => {
     let current = true;
@@ -86,42 +146,45 @@ export function TerminalView({ workspace, git, reviewGit, onWorkspaceChanged, th
       setActiveId((selected) => next.some(({ id }) => id === selected)
         ? selected
         : next.find((session) => threadId && session.threadId === threadId)?.id ?? next[0]?.id);
-    });
-    void manager.ready.then(() => current && setNotice("Tab metadata is stored through the active encrypted workspace. Process memory remains page-local."), (error) => {
+    }, profileId);
+    void manager.ready.then(() => {
+      if (!current) return;
+      const ensured = openRequest
+        ? manager.openWorkspaceSession({
+            requestId: openRequest.id,
+            ...(profileId ? { profileId } : {}),
+            ...(threadId ? { threadId } : {}),
+            ...(openRequest.name ? { name: openRequest.name } : {}),
+            cwd: openRequest.cwd,
+          })
+        : manager.ensureProfileSession({ ...(profileId ? { profileId } : {}), ...(threadId ? { threadId } : {}), cwd: workspaceRoot });
+      if (openRequest) {
+        setActiveId(ensured.id);
+        setNotice(`Opened a terminal at ${ensured.cwd}.`);
+        openRequestHandled.current?.(openRequest.id);
+      } else {
+        setActiveId((selected) => selected ?? ensured.id);
+        setNotice(terminalPersistenceNotice(effectiveDurability, profileId));
+      }
+    }).catch((error) => {
       if (current) setNotice(error instanceof Error ? error.message : "Terminal metadata could not be loaded.");
     });
     return () => { current = false; unsubscribe(); };
-  }, [manager, threadId]);
+  }, [manager, threadId, profileId, workspaceRoot, openRequest?.id, openRequest?.cwd, openRequest?.name, effectiveDurability.state, effectiveDurability.detail]);
 
   useEffect(() => manager.subscribeWorkspace(() => {
     void workspaceChanged.current?.();
   }), [manager]);
 
   const active = sessions.find(({ id }) => id === activeId);
-  const runGit = async () => {
-    if (!active || gitRunning) return;
-    setGitRunning(true);
-    try {
-      const result = await runTerminalGitCommand({ command: gitCommand, cwd: active.cwd, client: git, review: reviewGit });
-      manager.recordBridgeCommand(active.id, gitCommand, result.output);
-      if (result.changed) await onWorkspaceChanged?.();
-      setNotice(result.changed ? "Shared Git state updated; Editor, agent tools, and source control now see the same revision." : "Shared Git command completed against the authoritative browser repository.");
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Shared Git command failed safely.";
-      manager.recordBridgeCommand(active.id, gitCommand, `error: ${message}\n`);
-      setNotice(message);
-    } finally {
-      setGitRunning(false);
-    }
-  };
   const createTab = () => {
-    const created = manager.create({ ...(threadId ? { threadId } : {}), cwd: workspaceRoot });
+    const created = manager.create({ ...(profileId ? { profileId } : {}), ...(threadId ? { threadId } : {}), cwd: workspaceRoot, origin: threadId ? { kind: "conversation" } : { kind: "terminal-route" } });
     setActiveId(created.id);
   };
   const sync = async () => {
     setSyncing(true);
     try {
-      const paths = await manager.syncWorkspace();
+      const paths = await manager.syncWorkspace(active?.id);
       setNotice(paths.length ? `Synced ${paths.length} revision-fenced workspace change${paths.length === 1 ? "" : "s"}.` : "Workspace is already synchronized.");
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Workspace synchronization failed safely.");
@@ -150,52 +213,65 @@ export function TerminalView({ workspace, git, reviewGit, onWorkspaceChanged, th
   };
 
   return (
-    <section class="terminal-route" aria-labelledby="terminal-title">
+    <section class={`terminal-route ${variant === "dock" ? "terminal-route--dock" : ""}`} aria-labelledby={variant === "dock" ? "workspace-terminal-dock-title" : "terminal-title"}>
       {/* The 54px eyebrow-plus-serif-H1 block named a route the rail already
           shows as selected. The words survive: the eyebrow is the ⓘ panel's
           heading, and the notes below it are facts this route states nowhere
           else — including which shell a tab actually spawns. */}
-      <RouteHeader
+      {variant === "route" ? <RouteHeader
         class="terminal-route__header"
         routeId="terminal"
         density="tool"
         title="Terminal"
         eyebrow="Workspace · browser process room"
-        description="Interactive processes, a Shared Git bridge onto the browser repository, and per-tab command history, all held inside this page."
+        description="Interactive page-local processes with profile-scoped, workspace-backed tab metadata, bounded transcripts, input history, and lineage."
         headingId="terminal-title"
         notes={<>
           {/* Verified against `manager.ts`, which spawns `jsh`, and against
               `execution-tools.ts`, where airship-sh is the agent's shell
               runtime. Neither claim is inferred from the other. */}
-          <p>Each tab spawns <code>jsh</code>, the WebContainer image's own shell. <code>airship-sh</code>, Airship's first-party POSIX interpreter, runs the agent's shell tool and is <strong>not</strong> selectable as a terminal tab in this build, so a script <code>jsh</code> rejects cannot be retried here.</p>
-          <p>{threadId ? `Attached to conversation thread ${threadId}.` : "No conversation thread is attached to this route."}</p>
+          <p>Each tab spawns one persistent, interactive <code>jsh</code> PTY inside the page's WebContainer. It is not host Bash or Linux. The real WASIX Bash pack currently runs bounded disposable jobs, so Airship does not inject commands into it and mislabel that as a terminal.</p>
+          <p>{profileId ? `Owned by profile ${profileName ?? profileId}.` : "This app integration has not supplied a profile ID, so these are legacy unscoped tabs."} {threadId ? `Attached to conversation thread ${threadId}.` : "No conversation thread is attached to this route."}</p>
         </>}
         actions={<div class="terminal-route__actions">
           <button type="button" onClick={() => void sync()} disabled={syncing || !sessions.some(({ status }) => status === "running" || status === "exited")}><Icon name="cloud" size={16} />{syncing ? "Reconciling…" : "Reconcile workspace"}</button>
           <button type="button" onClick={createTab} disabled={sessions.length >= 8}><span aria-hidden="true">＋</span> New terminal</button>
         </div>}
-      />
+      /> : <header class="terminal-dock__toolbar">
+        <div class="terminal-dock__identity">
+          <Icon name="terminal" size={16} />
+          <strong id="workspace-terminal-dock-title">Terminal</strong>
+          <small>{WEB_CONTAINER_TERMINAL_RUNTIME.engineLabel} · {WEB_CONTAINER_TERMINAL_RUNTIME.shellLabel} · page-local, not Bash/Linux</small>
+          <span>{profileId ? `Profile ${profileName ?? compactId(profileId)}` : "Legacy unscoped"}</span>
+        </div>
+        <div class="terminal-dock__actions">
+          <button type="button" onClick={() => void sync()} disabled={syncing || !sessions.some(({ status }) => status === "running" || status === "exited")} aria-label="Reconcile terminal workspace"><Icon name="cloud" size={15} /><span>{syncing ? "Reconciling…" : "Reconcile"}</span></button>
+          <button type="button" onClick={createTab} disabled={sessions.length >= 8} aria-label="New terminal"><span aria-hidden="true">＋</span><span>New</span></button>
+          {onOpenFullView ? <button type="button" onClick={onOpenFullView} aria-label="Open full Terminal view"><span aria-hidden="true">↗</span><span>Full view</span></button> : null}
+          {onCollapse ? <button type="button" onClick={onCollapse} aria-label="Collapse terminal dock"><span aria-hidden="true">⌄</span><span>Collapse</span></button> : null}
+        </div>
+      </header>}
 
       {/* One 44px row that carries every fact the 183px band carried on its
           face, and holds only the boundary paragraph inside. Its own control
           is visible at every width now, and the choice is remembered. */}
-      <details class="terminal-route__setup" open={setupOpen} onToggle={(event) => {
+      {variant === "route" ? <details class="terminal-route__setup" open={setupOpen} onToggle={(event) => {
         setSetupOpen(event.currentTarget.open);
         writeTerminalSetupOpen(event.currentTarget.open);
       }}>
         <summary>
-          <span><Icon name="terminal" size={16} /><strong>Browser Node shell</strong></span>
-          <small>WebContainer, not a device shell — read the boundary</small>
+          <span><Icon name="terminal" size={16} /><strong>{WEB_CONTAINER_TERMINAL_RUNTIME.engineLabel} · {WEB_CONTAINER_TERMINAL_RUNTIME.shellLabel}</strong></span>
+          <small>Interactive PTY, not Bash/Linux or a device shell — read the boundary</small>
           <span class="terminal-assurance" role="note">
-            <span>Processes stay hot while this page lives</span>
-            <span>Reload requires process restart</span>
-            <span>{threadId ? `Thread ${compactId(threadId)}` : "No conversation thread attached"}</span>
+            <span>Interactive process · this page</span>
+            <span>Metadata · {terminalDurabilityLabel(effectiveDurability)}</span>
+            <span>{profileId ? `Profile ${compactId(profileId)}` : "Legacy unscoped"}</span>
           </span>
         </summary>
         <div class="terminal-route__setup-body">
-          <p>Real interactive Node processes run inside this page's WebContainer. This is not your device shell, host Bash, SSH, or a remote Airship backend.</p>
+          <p>Real interactive Node processes run inside this page's WebContainer. This is not your device shell, host Bash, SSH, or a remote Airship backend. {effectiveDurability.detail ?? terminalPersistenceNotice(effectiveDurability, profileId)}</p>
         </div>
-      </details>
+      </details> : null}
 
       <div class="terminal-tabs" role="tablist" aria-label="Terminal tabs">
         {sessions.map((session) => <div key={session.id} class="terminal-tab" role="presentation" data-active={session.id === activeId ? "true" : "false"}>
@@ -227,15 +303,23 @@ export function TerminalView({ workspace, git, reviewGit, onWorkspaceChanged, th
         manager={manager}
         session={active}
         onNotice={setNotice}
-        bridge={<form class="terminal-git-bridge" onSubmit={(event) => { event.preventDefault(); void runGit(); }}>
-          {/* Output from this form is echoed into the same scrollback as the
-              shell's, so the line has to say which authority produced it. */}
-          <span class="terminal-git-bridge__mark" aria-hidden="true">git▸</span>
-          <label for="terminal-git-command"><strong>Shared Git</strong><span>Authoritative Editor/source-control state · approval policy applies</span></label>
-          <input id="terminal-git-command" value={gitCommand} spellcheck={false} onInput={(event) => setGitCommand(event.currentTarget.value)} aria-describedby="terminal-git-detail" />
-          <button type="submit" disabled={!active || gitRunning}>{gitRunning ? "Running…" : "Run"}</button>
-          <small id="terminal-git-detail">This deterministic bridge uses browser Git directly; the WebContainer never receives a second copy of <code>.git</code>. Try <code>git help</code>.</small>
-        </form>}
+        durability={effectiveDurability}
+        profileLabel={profileName ?? profileId}
+        onNewHere={() => {
+          try {
+            const created = manager.create({
+              ...(active.profileId ? { profileId: active.profileId } : {}),
+              ...(active.threadId ? { threadId: active.threadId } : {}),
+              cwd: active.cwd,
+              name: `${active.name} copy`,
+              origin: { kind: "workspace-path", path: active.cwd },
+            });
+            setActiveId(created.id);
+            setNotice(`Started a new terminal at ${active.cwd}.`);
+          } catch (error) {
+            setNotice(error instanceof Error ? error.message : "A terminal could not be opened at this path.");
+          }
+        }}
       /> : (
         <div class="terminal-empty"><Icon name="terminal" /><h2>No terminal tab</h2><p>Create a tab to cold-start an isolated browser runtime.</p><button type="button" onClick={createTab}>New terminal</button></div>
       )}
@@ -244,12 +328,13 @@ export function TerminalView({ workspace, git, reviewGit, onWorkspaceChanged, th
   );
 }
 
-function TerminalPanel({ manager, session: initial, onNotice, bridge }: Readonly<{
+function TerminalPanel({ manager, session: initial, onNotice, durability, profileLabel, onNewHere }: Readonly<{
   manager: BrowserTerminalManager;
   session: TerminalSessionSnapshot;
   onNotice(message: string): void;
-  /** The Shared Git form, rendered as the panel's own footer strip. */
-  bridge: ComponentChildren;
+  durability: TerminalDurability;
+  profileLabel?: string;
+  onNewHere(): void;
 }>) {
   const [session, setSession] = useState(initial);
   const host = useRef<HTMLDivElement>(null);
@@ -346,7 +431,23 @@ function TerminalPanel({ manager, session: initial, onNotice, bridge }: Readonly
 
   const dimensions = () => ({ cols: terminal.current?.cols ?? 100, rows: terminal.current?.rows ?? 30 });
   const restart = () => void manager.restart(session.id, dimensions());
-  const close = async () => { await manager.close(session.id); onNotice("Terminal tab closed. Its page-local process was terminated."); };
+  const close = async () => {
+    try {
+      await manager.close(session.id);
+      onNotice(durability.state === "ephemeral"
+        ? "Terminal tab closed. Its process ended; bounded lineage remains only for this page/workspace lifetime."
+        : "Terminal tab closed. Its process ended; bounded lineage remains retained by the active encrypted workspace.");
+    } catch (error) {
+      onNotice(error instanceof Error ? `Terminal remains open: ${error.message}` : "Terminal remains open because workspace reconciliation failed.");
+    }
+  };
+  const pasteInput = (command: string) => {
+    void manager.write(session.id, command).then(() => {
+      onNotice("Pasted prior input into the interactive PTY without submitting it.");
+    }, (error) => {
+      onNotice(error instanceof Error ? error.message : "Prior input could not be pasted into this terminal.");
+    });
+  };
 
   return <div class="terminal-panel">
     <div class="terminal-panel__bar">
@@ -356,6 +457,7 @@ function TerminalPanel({ manager, session: initial, onNotice, bridge }: Readonly
       <div><span aria-hidden="true"><Seal state={terminalSealState(session.status)} label={statusLabel(session)} density="dot" size={16} /></span><strong>{statusLabel(session)}</strong><code title={session.cwd}>{session.cwd}</code>{session.threadId ? <span title={session.threadId}>thread {compactId(session.threadId)}</span> : null}</div>
       <div>
         {session.status === "running" ? <button type="button" onClick={() => void manager.interrupt(session.id)} aria-label="Interrupt process">⌃C <span>Interrupt</span></button> : <span class="terminal-panel__starting" aria-live="polite">{statusLabel(session)}</span>}
+        <button type="button" onClick={onNewHere} aria-label="New terminal at current directory" title={`New terminal at ${session.cwd}`}><span aria-hidden="true">＋</span> <span>New here</span></button>
         <button type="button" onClick={restart} disabled={session.status === "starting"}><Icon name="branch" size={14} /> Restart</button>
         <button type="button" onClick={() => void close()} aria-label="Close terminal tab">× <span>Close</span></button>
       </div>
@@ -366,8 +468,36 @@ function TerminalPanel({ manager, session: initial, onNotice, bridge }: Readonly
       aria-label={`${session.name} browser terminal`}
       data-output-chars={session.bufferedOutput.length}
     />
-    {bridge}
-    <div class="terminal-panel__meta"><span>{session.detail}</span><details><summary>Command history · {session.history.length}</summary>{session.history.length ? <ol>{session.history.slice().reverse().map((command, index) => <li key={`${index}-${command}`}><code>{command}</code></li>)}</ol> : <p>No commands recorded in this page.</p>}</details></div>
+    <div class="terminal-panel__meta">
+      <span>{session.detail}</span>
+      <div class="terminal-panel__meta-actions">
+        <details>
+          <summary>Input history · {session.history.length}</summary>
+          <div class="terminal-panel__popover terminal-panel__history">
+            <p>Lines captured when submitted to the PTY. Shell-side editing and completion may differ; resulting bytes remain in the bounded transcript.</p>
+            {session.history.length ? <ol>{session.history.slice().reverse().map((command, index) => <li key={`${index}-${command}`}><code>{command}</code><button type="button" disabled={session.status !== "running"} onClick={() => pasteInput(command)} aria-label={`Paste input: ${command}`}>Paste</button></li>)}</ol> : <p>No submitted input recorded for this session.</p>}
+          </div>
+        </details>
+        <details>
+          <summary>Audit lineage · {session.audit.length}</summary>
+          <div class="terminal-panel__popover terminal-panel__lineage">
+            <dl>
+              <div><dt>Session</dt><dd><code>{compactId(session.id)}</code></dd></div>
+              <div><dt>Profile</dt><dd>{profileLabel ?? session.profileId ?? "Legacy unscoped"}</dd></div>
+              <div><dt>Runtime</dt><dd>{session.runtime.engineLabel} · {session.runtime.shellLabel}</dd></div>
+              <div><dt>Process</dt><dd>epoch {session.processEpoch} · page-local</dd></div>
+              <div><dt>Origin</dt><dd>{originLabel(session)}</dd></div>
+              <div><dt>Metadata</dt><dd>{terminalDurabilityLabel(durability)}{session.reconstructed ? " · reconstructed" : ""}</dd></div>
+            </dl>
+            {session.audit.length ? <ol>{session.audit.slice().reverse().map((record) => <li key={record.id}>
+              <span><strong>{auditKindLabel(record.kind)}</strong> · {record.outcome} · epoch {record.processEpoch}</span>
+              <small>{record.summary}</small>
+              {record.command ? <code>{record.command}</code> : null}
+            </li>)}</ol> : <p>No lifecycle records yet. Starting the PTY creates the first record.</p>}
+          </div>
+        </details>
+      </div>
+    </div>
   </div>;
 }
 
@@ -379,6 +509,23 @@ function statusLabel(session: TerminalSessionSnapshot): string {
 
 function compactId(value: string): string { return value.length > 14 ? `${value.slice(0, 7)}…${value.slice(-5)}` : value; }
 
+function terminalDurabilityLabel(durability: TerminalDurability): string {
+  return durability.label ?? durabilityLabel(durability.state);
+}
+
+function originLabel(session: TerminalSessionSnapshot): string {
+  if (session.origin.kind === "workspace-path") return `Workspace · ${session.origin.path ?? session.cwd}`;
+  if (session.origin.kind === "conversation") return session.threadId ? `Conversation · ${compactId(session.threadId)}` : "Conversation";
+  return "Terminal route";
+}
+
+function auditKindLabel(kind: TerminalSessionSnapshot["audit"][number]["kind"]): string {
+  if (kind === "interactive-input") return "PTY input";
+  if (kind === "process-start") return "Process start";
+  if (kind === "process-exit") return "Process exit";
+  return "Workspace reconcile";
+}
+
 export function terminalTypography(density?: string): Readonly<{ fontSize: number; lineHeight: number }> {
   if (density === "comfortable") return Object.freeze({ fontSize: 15, lineHeight: 1.35 });
   if (density === "compact") return Object.freeze({ fontSize: 12, lineHeight: 1.18 });
@@ -386,5 +533,26 @@ export function terminalTypography(density?: string): Readonly<{ fontSize: numbe
 }
 
 function sessionChromeSignature(session: TerminalSessionSnapshot): string {
-  return JSON.stringify([session.name, session.threadId, session.cwd, session.status, session.exitCode, session.detail, session.history]);
+  return JSON.stringify([
+    session.name,
+    session.profileId,
+    session.threadId,
+    session.origin,
+    session.runtime,
+    session.cwd,
+    session.status,
+    session.exitCode,
+    session.detail,
+    session.processEpoch,
+    session.lastProcessStartedAt,
+    session.closedAt,
+    session.reconstructed,
+    session.history,
+    session.audit,
+  ]);
+}
+
+function browserSessionStorage(): Storage | undefined {
+  try { return typeof sessionStorage === "undefined" ? undefined : sessionStorage; }
+  catch { return undefined; }
 }

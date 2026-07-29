@@ -46,7 +46,8 @@ export const WORKBENCH_SHARED_SURFACE_NOTE =
  * here. An unknown hash resolves to `workspace`, never to a third name.
  */
 export function workbenchIdentity(hash: string): WorkbenchIdentity {
-  const route: WorkbenchRoute = hash.replace(/^#/u, "").split("?")[0] === "editor" ? "editor" : "workspace";
+  const candidate = hash.replace(/^#/u, "").split("?")[0];
+  const route: WorkbenchRoute = candidate === "editor" || candidate === "sources" ? "editor" : "workspace";
   return Object.freeze({
     route,
     routeId: route,
@@ -79,6 +80,204 @@ export function workbenchTabQualifiers(paths: readonly string[]): Readonly<Recor
     qualifiers[path] = parent.slice(parent.lastIndexOf("/") + 1);
   }
   return Object.freeze(qualifiers);
+}
+
+export type WorkbenchFileDocument = Readonly<{
+  kind: "file";
+  path: string;
+}>;
+
+/** A patch from one exact, versioned plane of a browser-owned worktree. */
+export type WorkbenchStatusDiffDocument = Readonly<{
+  kind: "diff";
+  source: "status";
+  repositoryId: string;
+  worktreeId: string;
+  worktreeVersion: string;
+  path: string;
+  scope: "staged" | "worktree";
+}>;
+
+/** A commit patch is stable because its document identity carries the object ID. */
+export type WorkbenchHistoryDiffDocument = Readonly<{
+  kind: "diff";
+  source: "history";
+  repositoryId: string;
+  worktreeId: string;
+  revision: string;
+}>;
+
+export type WorkbenchDocumentIdentity =
+  | WorkbenchFileDocument
+  | WorkbenchStatusDiffDocument
+  | WorkbenchHistoryDiffDocument;
+
+const WORKBENCH_DIFF_DOCUMENT_PREFIX = "airship-diff:";
+
+/**
+ * Files retain their workspace paths as IDs so existing saved tabs migrate
+ * without translation. Diff IDs encode the complete bounded read identity;
+ * they can never be mistaken for paths or sent to `WorkspacePort`.
+ */
+export function workbenchDocumentId(document: WorkbenchDocumentIdentity): string {
+  if (document.kind === "file") return document.path;
+  return `${WORKBENCH_DIFF_DOCUMENT_PREFIX}${encodeURIComponent(JSON.stringify(document))}`;
+}
+
+/** Parse only identities this workbench can actually reopen. */
+export function parseWorkbenchDocumentId(id: string): WorkbenchDocumentIdentity | undefined {
+  if (id.startsWith("/workspace/")) return Object.freeze({ kind: "file", path: id });
+  if (!id.startsWith(WORKBENCH_DIFF_DOCUMENT_PREFIX)) return undefined;
+  try {
+    const value = JSON.parse(decodeURIComponent(id.slice(WORKBENCH_DIFF_DOCUMENT_PREFIX.length))) as Record<string, unknown>;
+    if (value.kind !== "diff" || typeof value.repositoryId !== "string" || !value.repositoryId
+      || typeof value.worktreeId !== "string" || !value.worktreeId) return undefined;
+    if (value.source === "status") {
+      if (typeof value.worktreeVersion !== "string" || !value.worktreeVersion
+        || typeof value.path !== "string" || !value.path
+        || (value.scope !== "staged" && value.scope !== "worktree")) return undefined;
+      return Object.freeze({
+        kind: "diff",
+        source: "status",
+        repositoryId: value.repositoryId,
+        worktreeId: value.worktreeId,
+        worktreeVersion: value.worktreeVersion,
+        path: value.path,
+        scope: value.scope,
+      });
+    }
+    if (value.source !== "history" || typeof value.revision !== "string" || !value.revision) return undefined;
+    return Object.freeze({
+      kind: "diff",
+      source: "history",
+      repositoryId: value.repositoryId,
+      worktreeId: value.worktreeId,
+      revision: value.revision,
+    });
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The document strip's complete lifecycle state.
+ *
+ * At most one clean document is a preview. Pinned documents are represented by
+ * every other ID in `tabs`; a dirty file buffer pins itself before its first
+ * byte changes, so the preview slot can never evict unsaved work.
+ */
+export type WorkbenchDocumentTabs = Readonly<{
+  tabs: readonly string[];
+  activeId: string;
+  previewId?: string;
+}>;
+
+export type WorkbenchDocumentOpenMode = "preview" | "pinned";
+
+export type WorkbenchDocumentTransition = Readonly<{
+  state: WorkbenchDocumentTabs;
+  /** The clean preview removed to make room for a different preview. */
+  displacedId?: string;
+}>;
+
+/**
+ * Open one document using the editor's preview/pinned grammar.
+ *
+ * - selecting an already-open pinned document never turns it back into a
+ *   preview;
+ * - a new preview replaces the sole prior preview in place;
+ * - a pinned open never displaces another document;
+ * - pinning the current preview clears the preview slot without moving it.
+ */
+export function openWorkbenchDocument(
+  current: WorkbenchDocumentTabs,
+  id: string,
+  mode: WorkbenchDocumentOpenMode,
+): WorkbenchDocumentTransition {
+  const previewId = current.previewId && current.tabs.includes(current.previewId)
+    ? current.previewId
+    : undefined;
+  const existing = current.tabs.indexOf(id);
+  if (existing >= 0) {
+    return documentTransition(documentState(
+      current.tabs,
+      id,
+      mode === "pinned" && previewId === id ? undefined : previewId,
+    ));
+  }
+  if (mode === "pinned") {
+    return documentTransition(documentState([...current.tabs, id], id, previewId));
+  }
+  if (previewId) {
+    const tabs = [...current.tabs];
+    tabs[tabs.indexOf(previewId)] = id;
+    return documentTransition(documentState(tabs, id, id), previewId);
+  }
+  return documentTransition(documentState([...current.tabs, id], id, id));
+}
+
+/** A first edit or explicit Keep open action promotes the preview in place. */
+export function pinWorkbenchDocument(current: WorkbenchDocumentTabs, id: string): WorkbenchDocumentTabs {
+  if (current.previewId !== id) return current;
+  return documentState(current.tabs, current.activeId, undefined);
+}
+
+/** Selecting a tab changes focus only; it never changes preview ownership. */
+export function activateWorkbenchDocument(current: WorkbenchDocumentTabs, id: string): WorkbenchDocumentTabs {
+  return current.tabs.includes(id) && current.activeId !== id
+    ? documentState(current.tabs, id, current.previewId)
+    : current;
+}
+
+/** Close one document and choose the adjacent survivor when it was active. */
+export function closeWorkbenchDocument(current: WorkbenchDocumentTabs, id: string): WorkbenchDocumentTabs {
+  const index = current.tabs.indexOf(id);
+  if (index < 0) return current;
+  const tabs = current.tabs.filter((candidate) => candidate !== id);
+  const activeId = current.activeId === id
+    ? tabs[Math.min(index, tabs.length - 1)] ?? ""
+    : current.activeId;
+  return documentState(tabs, activeId, current.previewId === id ? undefined : current.previewId);
+}
+
+/** Move/rename paths without changing whether their documents are previews. */
+export function remapWorkbenchDocuments(
+  current: WorkbenchDocumentTabs,
+  moves: ReadonlyMap<string, string>,
+): WorkbenchDocumentTabs {
+  return documentState(
+    current.tabs.map((id) => moves.get(id) ?? id),
+    moves.get(current.activeId) ?? current.activeId,
+    current.previewId ? moves.get(current.previewId) ?? current.previewId : undefined,
+  );
+}
+
+/** Drop deleted documents while keeping the active/preview invariants valid. */
+export function retainWorkbenchDocuments(
+  current: WorkbenchDocumentTabs,
+  retained: ReadonlySet<string>,
+): WorkbenchDocumentTabs {
+  const tabs = current.tabs.filter((id) => retained.has(id));
+  const activeId = tabs.includes(current.activeId) ? current.activeId : tabs[0] ?? "";
+  const previewId = current.previewId && tabs.includes(current.previewId) ? current.previewId : undefined;
+  return documentState(tabs, activeId, previewId);
+}
+
+function documentState(
+  tabs: readonly string[],
+  activeId: string,
+  previewId?: string,
+): WorkbenchDocumentTabs {
+  const frozenTabs = Object.freeze([...tabs]);
+  return Object.freeze({
+    tabs: frozenTabs,
+    activeId: frozenTabs.includes(activeId) ? activeId : frozenTabs[0] ?? "",
+    ...(previewId && frozenTabs.includes(previewId) ? { previewId } : {}),
+  });
+}
+
+function documentTransition(state: WorkbenchDocumentTabs, displacedId?: string): WorkbenchDocumentTransition {
+  return Object.freeze({ state, ...(displacedId ? { displacedId } : {}) });
 }
 
 /** The rail's share of the workbench, as a percentage of the shell's width. */

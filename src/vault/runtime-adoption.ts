@@ -6,11 +6,47 @@ import {
   type ProfileCatalogCheckpoint,
   type ProfileCatalogStore,
 } from "../profiles/persistence";
-import { isLegacyGitCheckpointPath, type WorkspacePort } from "../workspace/contracts";
+import { isLegacyGitCheckpointPath, isWorkspaceControlPlanePath, type WorkspacePort } from "../workspace/contracts";
+import { profileFacingWorkspacePath } from "../workspace/profile-scope";
+
+/**
+ * True for a storage path a person would recognize as their file.
+ *
+ * Storage paths all live under the reserved namespace, so the question has to
+ * be asked of the path as its Profile presents it. Everything else — `.git`
+ * object databases, the browser-Git repository catalog, evidence checkpoints —
+ * is state the target owns and regenerates for itself.
+ */
+function carriesUserContent(storagePath: string): boolean {
+  const facing = profileFacingWorkspacePath(storagePath);
+  return !isWorkspaceControlPlanePath(facing ?? storagePath);
+}
+
+/**
+ * How the source relates to the target it is being copied into.
+ *
+ * `seed` is a move: the target is blank, so it receives the workspace whole,
+ * including the `.git` object databases that make its repositories real.
+ *
+ * `merge` is a join: the target already holds an authority of its own. Copying
+ * a second repository's index and objects on top of it is both meaningless —
+ * those objects describe a history the target does not have — and guaranteed to
+ * fail, because a Git index embeds per-file revision identity and is never
+ * byte-identical across two runtimes. Merge therefore carries user files only
+ * and leaves them untracked in the target's repository, which is a state a
+ * person can see and commit, rather than a conflict that aborts adoption.
+ */
+export type WorkspaceMigrationMode = "seed" | "merge";
 
 /** Copy a stable workspace snapshot without overwriting divergent cloud state. */
-export async function migrateWorkspaceState(source: WorkspacePort, target: WorkspacePort): Promise<void> {
-  const entries = (await source.list()).filter((entry) => !isLegacyGitCheckpointPath(entry.path));
+export async function migrateWorkspaceState(
+  source: WorkspacePort,
+  target: WorkspacePort,
+  mode: WorkspaceMigrationMode = "seed",
+): Promise<void> {
+  const entries = (await source.list())
+    .filter((entry) => !isLegacyGitCheckpointPath(entry.path))
+    .filter((entry) => mode === "seed" || carriesUserContent(entry.path));
   const snapshot = [];
   for (const entry of entries) {
     // Only the retired parallel semantic checkpoint is excluded. Conventional
@@ -21,7 +57,9 @@ export async function migrateWorkspaceState(source: WorkspacePort, target: Works
     if (file.revision !== entry.revision) throw new Error(`Workspace changed during vault migration: ${entry.path}.`);
     snapshot.push(file);
   }
-  const freshEntries = (await source.list()).filter((entry) => !isLegacyGitCheckpointPath(entry.path));
+  const freshEntries = (await source.list())
+    .filter((entry) => !isLegacyGitCheckpointPath(entry.path))
+    .filter((entry) => mode === "seed" || carriesUserContent(entry.path));
   if (!sameWorkspaceSnapshot(entries, freshEntries)) {
     throw new Error("Workspace changed during vault migration; retry after writes settle.");
   }

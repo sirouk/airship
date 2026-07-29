@@ -1,4 +1,4 @@
-import { normalizeWorkspacePath, type WorkspacePort } from "../workspace/contracts";
+import { isWorkspaceControlPlanePath, normalizeWorkspacePath, type WorkspacePort } from "../workspace/contracts";
 
 const DEFAULT_MAX_FILES = 2_000;
 const DEFAULT_MAX_BYTES = 32 * 1_024 * 1_024;
@@ -67,6 +67,7 @@ export async function importGithubRepository(options: Readonly<{
   const maximumBytes = boundedInteger(options.maxBytes ?? DEFAULT_MAX_BYTES, 1_024, 128_000_000, "maxBytes");
   const destination = normalizeWorkspacePath(options.destination ?? `/workspace/sources/${identity.name}`);
   if (destination === "/workspace") throw new Error("Repository imports require a destination below /workspace.");
+  assertImportPath(destination);
   if ((await options.workspace.list(destination)).length > 0) {
     throw new Error(`Import destination is not empty: ${destination}. Choose a new destination or remove it explicitly.`);
   }
@@ -102,7 +103,8 @@ export async function importGithubRepository(options: Readonly<{
     if (!value || typeof value !== "object" || Array.isArray(value)) continue;
     const entry = value as Record<string, unknown>;
     if (entry.type !== "blob" || typeof entry.path !== "string") continue;
-    if (!safeRelativePath(entry.path)) {
+    if (!safeRelativePath(entry.path)
+      || isWorkspaceControlPlanePath(normalizeWorkspacePath(`${destination}/${entry.path}`))) {
       skippedUnsafe += 1;
       continue;
     }
@@ -135,8 +137,10 @@ export async function importGithubRepository(options: Readonly<{
     if (!response.ok) throw new Error(`GitHub file read failed with HTTP ${response.status}: ${entry.path}.`);
     const maximum = Math.min(MAX_SINGLE_FILE_BYTES, maximumBytes);
     const bytes = await boundedResponseBytes(response, maximum, options.signal, entry.path);
+    const stagedPath = normalizeWorkspacePath(`${destination}/${entry.path}`);
+    assertImportPath(stagedPath);
     const file = looksBinary(bytes) ? undefined : Object.freeze({
-      path: normalizeWorkspacePath(`${destination}/${entry.path}`),
+      path: stagedPath,
       content: new TextDecoder("utf-8", { fatal: false }).decode(bytes),
       byteLength: bytes.byteLength,
     } satisfies StagedFile);
@@ -152,6 +156,7 @@ export async function importGithubRepository(options: Readonly<{
   if (bytesWritten > maximumBytes) throw new Error(`Repository exceeds the configured ${maximumBytes}-byte text import limit.`);
 
   const manifestPath = normalizeWorkspacePath(`${destination}/.airship-import.json`);
+  assertImportPath(manifestPath);
   const manifest = `${JSON.stringify({
     version: 1,
     source: `https://github.com/${identity.owner}/${identity.name}`,
@@ -168,6 +173,7 @@ export async function importGithubRepository(options: Readonly<{
   try {
     for (const file of writes) {
       throwIfAborted(options.signal);
+      assertImportPath(file.path);
       const written = await options.workspace.write(file.path, file.content, { expectedRevision: null });
       committed.push({ path: written.path, revision: written.revision });
       emitProgress(options.onProgress, { phase: "writing", completed: committed.length, total: writes.length, bytes: bytesWritten, detail: file.path });
@@ -200,6 +206,12 @@ export async function importGithubRepository(options: Readonly<{
   });
   emitProgress(options.onProgress, { phase: "complete", completed: writes.length, total: writes.length, bytes: bytesWritten, detail: `Pinned ${commit}` });
   return result;
+}
+
+function assertImportPath(path: string): void {
+  if (isWorkspaceControlPlanePath(path)) {
+    throw new Error(`Repository imports cannot mutate Airship control-plane paths: ${path}`);
+  }
 }
 
 function emitProgress(listener: ((progress: RepositoryImportProgress) => void) | undefined, progress: RepositoryImportProgress): void {

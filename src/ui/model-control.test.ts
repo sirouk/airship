@@ -3,11 +3,13 @@ import { describe, expect, it } from "vitest";
 import type { ActiveChutesConnection } from "../auth/connection";
 import {
   activeConnectionProofLabel,
+  modelControlActivity,
   modelControlOptions,
   safeModelControlErrorMessage,
 } from "./model-control";
 
 const source = readFileSync(new URL("./model-control.tsx", import.meta.url), "utf8");
+const appSource = readFileSync(new URL("./app.tsx", import.meta.url), "utf8");
 
 describe("active model proof label", () => {
   it("shows policy before evidence and last-turn evidence only after protected invocation", () => {
@@ -48,6 +50,29 @@ describe("active model proof label", () => {
 });
 
 describe("provider-neutral model control", () => {
+  it("disables model selection during inference without claiming the model is switching", () => {
+    expect(modelControlActivity(true, false)).toEqual({
+      disabled: true,
+      switching: false,
+    });
+  });
+
+  it("announces only an actual route transition or pending model selection as switching", () => {
+    expect(modelControlActivity(false, true)).toEqual({
+      disabled: true,
+      switching: true,
+    });
+    expect(modelControlActivity(false, false, "next-model")).toEqual({
+      disabled: true,
+      switching: true,
+    });
+  });
+
+  it("passes inference busy and model transition state independently from Chat", () => {
+    expect(appSource).toContain("busy={busy}\n                    switching={modelSwitching}");
+    expect(appSource).not.toContain("busy={busy || modelSwitching}");
+  });
+
   it("retains a pinned model when a refreshed catalog no longer lists it", () => {
     expect(modelControlOptions([
       { id: "new-model", label: "New model", detail: "Vision" },

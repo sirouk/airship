@@ -572,3 +572,113 @@ function registryConflictOnce(inner: MemoryWorkspace): WorkspacePort {
     remove: (path, options) => inner.remove(path, options),
   };
 }
+
+describe("Airship control-plane fence", () => {
+  /*
+   * The workspace-rooted repository is the dangerous case: its worktree root is
+   * `/workspace`, so a repository-relative path like
+   * `.airship/endpoint-evidence/...` resolves straight onto Airship's own
+   * records. `.git/info/exclude` keeps those paths out of ordinary status, but
+   * exclusion is not authorization — forced staging exists precisely to
+   * override it, and `diff` never consulted it at all.
+   *
+   * The fence lives in the filesystem projection rather than in each verb, so
+   * these assert through the real client: read, forced stage, and the tree
+   * materialization that checkout, merge, restore and reset all share.
+   */
+  async function workspaceRepository() {
+    const workspace = new MemoryWorkspace();
+    await workspace.write("/workspace/.airship/endpoint-evidence/general/receipt.json", '{"quote":"private"}');
+    const adapter = await WorkspaceGitAdapter.open(workspace, [{
+      id: "airship-workspace",
+      name: "Airship Workspace",
+      worktreePath: "/workspace",
+      files: { "README.md": "committed\n" },
+    }], { now: () => "2026-07-22T12:00:00.000Z" });
+    return { workspace, client: new BrowserGitClient(adapter) };
+  }
+
+  it("will not read private evidence through a repository-relative diff", async () => {
+    const { workspace, client } = await workspaceRepository();
+    const repository = (await client.listRepositories(signal))[0]!;
+    // Reads answer "absent" rather than "refused" — the same answer the status
+    // walk gets, and one that does not confirm what is stored there. What
+    // matters is the byte count: this used to render the private record.
+    const diff = await client.diff({
+      repositoryId: repository.id,
+      worktreeId: repository.worktrees[0]!.id,
+      path: ".airship/endpoint-evidence/general/receipt.json",
+      scope: "worktree",
+    }, signal);
+    expect(diff.patch).not.toContain("private");
+    expect(diff.byteLength).toBe(0);
+    expect((await workspace.read("/workspace/.airship/endpoint-evidence/general/receipt.json"))!.content)
+      .toContain("private");
+  });
+
+  it("will not force-stage a control-plane path into history", async () => {
+    const { client } = await workspaceRepository();
+    const repository = (await client.listRepositories(signal))[0]!;
+    await expect(client.stage({
+      repositoryId: repository.id,
+      worktreeId: repository.worktrees[0]!.id,
+      paths: [".airship/endpoint-evidence/general/receipt.json"],
+      force: true,
+      expectedWorktreeVersion: repository.worktrees[0]!.version,
+    }, signal)).rejects.toThrow();
+  });
+
+  it("never offers the reserved namespace to a status walk", async () => {
+    const { workspace, client } = await workspaceRepository();
+    const repository = (await client.listRepositories(signal))[0]!;
+    expect(repository.worktrees[0]!.status.map((entry) => entry.path))
+      .not.toContain(".airship/endpoint-evidence/general/receipt.json");
+    const fs = new WorkspaceGitFileSystem(workspace).client;
+    expect(await fs.promises.readdir("/workspace")).not.toContain(".airship");
+    // The record itself is untouched: this fences Git, it does not delete data.
+    expect(await workspace.read("/workspace/.airship/endpoint-evidence/general/receipt.json")).toBeDefined();
+  });
+
+  it("refuses to materialize a tree over the reserved namespace, and refuses to read it", async () => {
+    const workspace = new MemoryWorkspace();
+    const fs = new WorkspaceGitFileSystem(workspace);
+    await expect(fs.writeText("/workspace/.airship/evidence-acquisition/profiles/general/queue.v1.json", "{}"))
+      .rejects.toMatchObject({ code: "EPERM" });
+    await workspace.write("/workspace/.airship/queue.v1.json", "{}");
+    await expect(fs.client.promises.readFile("/workspace/.airship/queue.v1.json"))
+      .rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.client.promises.unlink("/workspace/.airship/queue.v1.json"))
+      .rejects.toMatchObject({ code: "EPERM" });
+    expect(await workspace.read("/workspace/.airship/queue.v1.json")).toBeDefined();
+  });
+
+  it("leaves a repository's own nested .airship directory writable and committable", async () => {
+    // Only the root tree is reserved. A cloned repository that carries its own
+    // `.airship` directory is user content, and fencing it would corrupt the
+    // repository rather than protect Airship.
+    const workspace = new MemoryWorkspace();
+    const client = new BrowserGitClient(await WorkspaceGitAdapter.open(workspace, [{
+      id: "application",
+      name: "Application",
+      worktreePath: "/workspace/sources/application",
+      files: { "README.md": "main\n" },
+    }], { now: () => "2026-07-22T12:00:00.000Z" }));
+    const repository = (await client.listRepositories(signal))[0]!;
+    const worktree = repository.worktrees[0]!;
+
+    const written = await client.writeWorkingFile({
+      repositoryId: repository.id,
+      worktreeId: worktree.id,
+      path: ".airship/tasks.json",
+      content: '{"tasks":[]}',
+      expectedWorktreeVersion: worktree.version,
+    }, signal);
+    const staged = await client.stage({
+      repositoryId: repository.id,
+      worktreeId: worktree.id,
+      paths: [".airship/tasks.json"],
+      expectedWorktreeVersion: written.version,
+    }, signal);
+    expect(staged.worktree!.status[0]).toMatchObject({ path: ".airship/tasks.json", index: { kind: "added" } });
+  });
+});

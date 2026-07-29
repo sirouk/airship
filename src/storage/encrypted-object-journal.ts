@@ -2,6 +2,7 @@ import type { JsonValue, SessionManifest } from "../core/contracts";
 import { canonicalSessionContextPolicy } from "../core/context-policy";
 import {
   JournalConflictError,
+  projectedSessionTitle,
   type DurableEvent,
   type JournalBackend,
   type SessionRecord,
@@ -160,6 +161,7 @@ export class EncryptedObjectJournalBackend implements JournalBackend {
 
     const updated: SessionRecord = {
       ...current,
+      title: projectedSessionTitle(events, current.title),
       updatedAt: last.recordedAt,
       headSequence: last.sequence,
       headDigest: last.digest,

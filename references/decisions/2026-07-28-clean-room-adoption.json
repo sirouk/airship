@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "id": "2026-07-28-clean-room-adoption",
+  "kind": "policy-adoption",
+  "airshipBaselineCommit": "77ee2bf211d1724897f79b0c03069a40e8d82da7",
+  "observer": "User-supplied clean-room directive plus Codex read-only metadata audit",
+  "implementer": "Codex primary agent",
+  "referenceIds": [
+    "hermes-agent",
+    "sirouk-claw-code",
+    "sirouk-claude-code-rs",
+    "openai-codex",
+    "vscode",
+    "open-webui",
+    "minio",
+    "cocoindex",
+    "isomorphic-git",
+    "xterm-js"
+  ],
+  "observation": "references/studies/2026-07-28-policy-adoption.md",
+  "specification": "references/specs/reference-library-governance.md",
+  "result": {
+    "status": "working-tree",
+    "commit": null,
+    "paths": [
+      "references/",
+      "docs/LINEAGE.md",
+      ".gitignore"
+    ]
+  },
+  "reviewVerdict": "approved-policy-only-no-reference-informed-product-code"
+}

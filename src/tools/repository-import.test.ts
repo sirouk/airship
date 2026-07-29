@@ -102,4 +102,51 @@ describe("direct GitHub repository snapshot import", () => {
     })).rejects.toThrow("not empty");
     expect(fetched).toBe(false);
   });
+
+  it("rejects reserved destinations before network access and skips staged Git control-plane entries", async () => {
+    for (const destination of ["/workspace/.airship/import", "/workspace/repo/.git/import"]) {
+      const workspace = new MemoryWorkspace();
+      let fetched = false;
+      await expect(importGithubRepository({
+        repository: "owner/repo",
+        destination,
+        workspace,
+        fetch: (async () => {
+          fetched = true;
+          return new Response();
+        }) as typeof globalThis.fetch,
+        signal: new AbortController().signal,
+      })).rejects.toThrow(/control-plane/u);
+      expect(fetched).toBe(false);
+      expect(await workspace.list()).toEqual([]);
+    }
+
+    const fetch = (async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.endsWith("/repos/owner/repo")) return Response.json({ default_branch: "main" });
+      if (url.includes("/commits/main")) return Response.json({ sha: "abc" });
+      if (url.includes("/git/trees/abc")) {
+        return Response.json({
+          truncated: false,
+          tree: [
+            { type: "blob", path: ".git/config", size: 10 },
+            { type: "blob", path: "README.md", size: 4 },
+          ],
+        });
+      }
+      if (url.endsWith("/README.md")) return new Response("safe");
+      throw new Error(`Unexpected fetch: ${url}`);
+    }) as typeof globalThis.fetch;
+    const workspace = new MemoryWorkspace();
+    const result = await importGithubRepository({
+      repository: "owner/repo",
+      destination: "/workspace/safe-import",
+      workspace,
+      fetch,
+      signal: new AbortController().signal,
+    });
+    expect(result).toMatchObject({ filesWritten: 1, skippedUnsafe: 1 });
+    expect(await workspace.read("/workspace/safe-import/.git/config")).toBeUndefined();
+    expect((await workspace.read("/workspace/safe-import/README.md"))?.content).toBe("safe");
+  });
 });

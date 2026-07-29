@@ -1,0 +1,44 @@
+/*
+ * The badge is an `<svg>`, not a styled `<span>`, and that is a typography
+ * contract rather than a drawing preference. A two-to-three character mark in
+ * an 18px box wants roughly 6-7px of type; declared as CSS that is a literal
+ * `--type-scale` cannot move, so at `x-large` every label beside it grew and
+ * the badge did not. Sized in viewBox units the mark is a fixed fraction of
+ * the box, and the box is one ramp token, so the whole icon answers the
+ * reader's preference. `--fs-micro` is 11px at 1x, which puts the default box
+ * at 18px and the binary-preview box at 30px.
+ */
+.workspace-file-icon {
+  --file-icon-size: calc(var(--fs-micro) * 1.64);
+  display: inline-block;
+  flex: 0 0 var(--file-icon-size);
+  width: var(--file-icon-size);
+  height: var(--file-icon-size);
+  overflow: visible;
+  color: var(--ink-muted);
+  vertical-align: middle;
+}
+
+.workspace-file-icon text {
+  fill: currentColor;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  letter-spacing: -.04em;
+}
+
+.workspace-file-icon[data-file-kind="typescript"] { color: color-mix(in srgb, var(--verdigris) 82%, var(--ink)); }
+.workspace-file-icon[data-file-kind="javascript"] { color: color-mix(in srgb, var(--accent-bright) 88%, var(--ink)); }
+.workspace-file-icon[data-file-kind="json"] { color: color-mix(in srgb, var(--accent) 80%, var(--ink)); }
+.workspace-file-icon[data-file-kind="markdown"] { color: color-mix(in srgb, var(--verdigris) 62%, var(--ink)); }
+.workspace-file-icon[data-file-kind="markup"] { color: color-mix(in srgb, var(--accent-bright) 72%, var(--ink)); }
+.workspace-file-icon[data-file-kind="stylesheet"] { color: color-mix(in srgb, var(--verdigris) 70%, var(--ink)); }
+.workspace-file-icon[data-file-kind="python"] { color: color-mix(in srgb, var(--accent-bright) 68%, var(--ink)); }
+.workspace-file-icon[data-file-kind="rust"] { color: color-mix(in srgb, var(--accent-bright) 62%, var(--ink)); }
+.workspace-file-icon[data-file-kind="go"] { color: color-mix(in srgb, var(--verdigris) 88%, var(--ink)); }
+.workspace-file-icon[data-file-kind="shell"] { color: color-mix(in srgb, var(--verdigris) 70%, var(--ink)); }
+.workspace-file-icon[data-file-kind="image"] { color: color-mix(in srgb, var(--verdigris) 78%, var(--ink)); }
+.workspace-file-icon[data-file-kind="archive"] { color: color-mix(in srgb, var(--accent) 70%, var(--ink)); }
+.workspace-file-icon[data-file-kind="config"] { color: color-mix(in srgb, var(--ink-muted) 84%, var(--accent)); }
+.workspace-file-icon[data-file-kind="binary"] { color: var(--ink-faint); }
+.workspace-file-icon[data-file-kind="document"] { color: color-mix(in srgb, var(--accent-bright) 66%, var(--ink)); }
+.workspace-file-icon[data-file-kind="text"] { color: var(--ink-faint); }

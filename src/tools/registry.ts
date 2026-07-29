@@ -10,6 +10,7 @@ import { sha256, stableStringify } from "../core/hash";
 import { compileToolInputSchema } from "./schema";
 import type { ClientContextRuntime } from "../retrieval/client-context-runtime";
 import type { TurnContextProvider } from "../core/context-selection";
+import type { LiveEnvironmentProvider } from "../core/live-environment";
 
 const MAX_TOOL_OUTPUT_BYTES = 1_048_576;
 const MAX_APPROVAL_TICKETS = 256;
@@ -35,6 +36,7 @@ export class ToolRegistry {
   private readonly approvals = new Map<string, ApprovalTicket>();
   private contextRuntime?: ClientContextRuntime;
   private turnContextProvider?: TurnContextProvider;
+  private liveEnvironmentProvider?: LiveEnvironmentProvider;
 
   attachContextRuntime(runtime: ClientContextRuntime): void {
     if (this.contextRuntime && this.contextRuntime !== runtime) throw new Error("A different context runtime is already attached.");
@@ -54,6 +56,17 @@ export class ToolRegistry {
 
   getTurnContextProvider(): TurnContextProvider | undefined {
     return this.turnContextProvider;
+  }
+
+  attachLiveEnvironmentProvider(provider: LiveEnvironmentProvider): void {
+    if (this.liveEnvironmentProvider && this.liveEnvironmentProvider !== provider) {
+      throw new Error("A different live environment provider is already attached.");
+    }
+    this.liveEnvironmentProvider = provider;
+  }
+
+  getLiveEnvironmentProvider(): LiveEnvironmentProvider | undefined {
+    return this.liveEnvironmentProvider;
   }
 
   register(tool: Tool): void {

@@ -12,6 +12,7 @@ import { GitSynchronizedWorkspace } from "./git-synchronized-workspace";
 import { registerFederatedMemoryTool } from "./federated-memory";
 import { FederatedTurnContextProvider } from "../retrieval/federated-turn-context";
 import { registerBrowserCapabilityTool } from "./browser-capabilities";
+import { createToolLiveEnvironmentProvider } from "./live-environment";
 
 /** One lazy capability chunk keeps startup small without paying per-tool chunk overhead. */
 export function createLoadedAirshipToolRegistry(options: AirshipToolRegistryOptions) {
@@ -22,6 +23,10 @@ export function createLoadedAirshipToolRegistry(options: AirshipToolRegistryOpti
   const workspace = options.git ? new GitSynchronizedWorkspace(observedWorkspace, options.git) : observedWorkspace;
   const registry = createWorkspaceToolRegistry(workspace);
   registry.attachContextRuntime(contextRuntime);
+  registry.attachLiveEnvironmentProvider(createToolLiveEnvironmentProvider({
+    contextRuntime,
+    ...(options.liveEnvironment ? { supplement: options.liveEnvironment } : {}),
+  }));
   const workspaceTurnContext = options.workspaceTurnContextProvider ?? contextRuntime;
   registry.attachTurnContextProvider(new FederatedTurnContextProvider(workspaceTurnContext, workspace, options.journal));
   registerTaskTools(registry, workspace);

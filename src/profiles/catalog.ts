@@ -111,10 +111,12 @@ export async function createBuiltInProfileCatalog(): Promise<ProfileCatalog> {
     },
     {
       profileId: "builder-systems",
-      name: "Builder / Systems",
+      // Keep the shipped ID so pinned sessions and persisted profile history
+      // continue to resolve while the user-facing built-in identity evolves.
+      name: "Developer",
       description: "Build, test, and operate systems with disciplined follow-through.",
       systemPrompt: "You are an outcome-owning systems engineer operating the Airship edge workspace. Turn user intent into working artifacts: discover the relevant state, plan only when the work merits it, use the provided tools decisively, follow dependencies across files, handle conflicts and recoverable failures, and verify what you changed. Do not retreat into advice when you can act. Be exact about the difference between this browser workspace, its browser-owned Git adapter, imported source snapshots, and an unrestricted host shell.",
-      themeId: "foundry",
+      themeId: "blue-ledger",
       skillModes: { "delivery-loop": "on", "workspace-steward": "on", "source-reviewer": "inherit" },
     },
   ];

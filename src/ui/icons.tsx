@@ -17,11 +17,14 @@ export type IconName =
   | "send"
   | "stop"
   | "file"
+  | "edit"
   | "branch"
   | "check"
   | "warning"
   | "lock"
   | "cloud"
+  | "moon"
+  | "sun"
   | "terminal"
   | "plus";
 
@@ -42,11 +45,14 @@ const paths: Record<IconName, JSX.Element> = {
   send: <path d="m3 11 18-8-7.5 18-2-8zM11.5 13 21 3" />,
   stop: <path d="M7 7h10v10H7z" />,
   file: <path d="M6 2.5h8l4 4v15H6zM14 2.5v5h4" />,
+  edit: <path d="M4 20h4l11-11-4-4L4 16zM13.5 6.5l4 4M4 20l.8-4.8" />,
   branch: <path d="M6 3v13a4 4 0 0 0 4 4h2M18 3v5a4 4 0 0 1-4 4H6m9-9h6m-6 17h6" />,
   check: <path d="m4 12 5 5L20 6" />,
   warning: <path d="M12 3 2.8 20h18.4zM12 9v4m0 3.5v.2" />,
   lock: <path d="M6 10V7a6 6 0 0 1 12 0v3m-14 0h16v11H4zM12 14v3" />,
   cloud: <path d="M7 18.5H5.5a3.5 3.5 0 0 1-.4-7A6.5 6.5 0 0 1 17.7 10a4.3 4.3 0 0 1 .8 8.5H17m-5-6v9m-3-3 3 3 3-3" />,
+  moon: <path d="M20.5 15.5A8.5 8.5 0 0 1 8.5 3.5 8.5 8.5 0 1 0 20.5 15.5Z" />,
+  sun: <><circle cx="12" cy="12" r="4" /><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></>,
   terminal: <path d="m4 6 5 5-5 5m8 1h8" />,
   plus: <path d="M12 4v16M4 12h16" />,
 };

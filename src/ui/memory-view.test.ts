@@ -1,8 +1,9 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 
-const [source, contextSource, styles, contextStyles] = await Promise.all([
+const [source, appSource, contextSource, styles, contextStyles] = await Promise.all([
   readFile(new URL("./memory-view.tsx", import.meta.url), "utf8"),
+  readFile(new URL("./app.tsx", import.meta.url), "utf8"),
   readFile(new URL("./context-view.tsx", import.meta.url), "utf8"),
   readFile(new URL("./memory-view.css", import.meta.url), "utf8"),
   readFile(new URL("./context-view.css", import.meta.url), "utf8"),
@@ -38,8 +39,10 @@ describe("unified Memory surface", () => {
   it("labels the shared control and every destination it updates", () => {
     expect(source).toContain('aria-labelledby="memory-title"');
     expect(source).toContain('aria-controls="memory-results memory-relationships memory-index"');
-    expect(source).toContain('aria-label="Memory page sections"');
-    expect(source).toContain('scrollToMemorySection("memory-index")');
+    // The page-sections nav and its jump to the Index are gone with the scope
+    // strip. The shared search control still declares the three destinations it
+    // updates, which is the labelling this test exists to protect.
+    expect(source).not.toContain('aria-label="Memory page sections"');
     expect(source).not.toContain('href="#memory-');
     expect(contextSource).toContain('aria-label={embedded ? "Workspace context index" : undefined}');
   });
@@ -84,7 +87,10 @@ describe("unified Memory surface", () => {
     expect(cssRule(styles, ".memory-hit__open")).toContain("min-height: 44px");
     expect(cssRule(styles, ".memory-hit__more")).toContain("min-height: 44px");
     expect(cssRule(styles, ".memory-graph-query button")).toContain("min-height: 44px");
-    expect(cssRule(styles, ".memory-scope-rail button")).toContain("min-height: 44px");
+    // The `.memory-scope-rail` touch floor was asserted here until the strip
+    // was removed: it restated counts the sections below already carry and
+    // jumped to headings one scroll away. Search leads the route now.
+    expect(styles).not.toContain(".memory-scope-rail");
   });
 
   /*
@@ -111,6 +117,9 @@ describe("unified Memory surface", () => {
     expect(source).toContain("Show the full record (");
     // A destination is never labelled before it is bound.
     expect(source).toContain("onOpenSource || open.target.kind === \"message\"");
+    expect(appSource).toContain("async function openMemorySource(target: MemorySourceTarget)");
+    expect(appSource).toContain("onOpenSource={(target) => void openMemorySource(target)}");
+    expect(appSource).toContain("await openFile(target.path)");
   });
 
   it("states what was searched instead of three vague empty boxes", () => {

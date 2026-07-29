@@ -8,6 +8,7 @@ import { createSessionManifest } from "../../core/session-manifest";
 import { sha256, stableStringify } from "../../core/hash";
 import type { CanonicalMessage } from "../../core/contracts";
 import { auditSessionHistory } from "../../core/session-audit";
+import { selectProfileActiveConversation } from "../../sessions/profile-cockpit";
 import {
   SessionMessagePresentationError,
   describeSessionPresentationFault,
@@ -397,6 +398,25 @@ describe("presentSessionMessages", () => {
  * agreeing with a fixture instead of with the code.
  */
 describe("presentSessionMessages agrees with auditSessionHistory", () => {
+  it("presents the durable active-conversation pointer as a comprehensible session record", async () => {
+    const journal = memoryJournal();
+    const created = await journal.createSession("General conversation", await auditProfileManifest());
+    const profileId = created.manifest.profile!.profileId;
+    await selectProfileActiveConversation(journal, profileId, created.id);
+    const session = (await journal.getSession(created.id))!;
+    const events = await journal.readEvents(created.id);
+    const audit = await auditSessionHistory({ session, events });
+    expect(audit.status).toBe("verified");
+
+    const view = presentSessionMessages({ session, audit, events });
+    expect(view.markers).toHaveLength(1);
+    expect(view.markers[0]).toMatchObject({
+      kind: "profile.active-conversation.selected",
+      presentable: true,
+      detail: "Selected as this profile’s active conversation.",
+    });
+  });
+
   it("presents a renamed session, the way Airship's own auto-title writes it", async () => {
     const journal = memoryJournal();
     const created = await journal.createSession("General conversation", await auditManifest());
@@ -593,6 +613,33 @@ function auditManifest() {
     workspaceId: "memory://presentation-test",
     capabilityTier: "web-baseline",
     now: "2026-07-18T00:00:00.000Z",
+  });
+}
+
+async function auditProfileManifest() {
+  const digest = await sha256("profile-presentation-fixture");
+  return createSessionManifest({
+    systemPrompt: "Be exact and preserve profile evidence.",
+    providerId: "demo",
+    model: "airship/test-model",
+    tools: [],
+    workspaceId: "memory://presentation-test",
+    capabilityTier: "web-baseline",
+    now: "2026-07-18T00:00:00.000Z",
+    profile: {
+      version: 2,
+      profileId: "general",
+      profileRevision: digest,
+      themeId: "airship",
+      themeDigest: digest,
+      resolvedSkills: [],
+      skillSetDigest: await sha256(stableStringify([] as JsonValue)),
+      resolutionDigest: digest,
+      workspaceBinding: { kind: "active-workspace" },
+      memoryScope: "profile",
+      approvalMode: "ask-first",
+      minimumPosture: "local",
+    },
   });
 }
 

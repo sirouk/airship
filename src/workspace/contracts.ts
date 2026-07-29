@@ -53,14 +53,31 @@ export function normalizeWorkspacePath(input: string): string {
   return normalized;
 }
 
+/**
+ * Airship's own reserved namespace: the *root* `.airship` tree and nothing else.
+ *
+ * This is deliberately narrower than `isWorkspaceControlPlanePath`, which also
+ * covers every `.git` segment. Browser Git legitimately owns `.git` and has to
+ * read and write it, so a Git-facing fence needs the Airship half on its own.
+ *
+ * Only the root tree is reserved. A repository that carries its own nested
+ * `.airship` directory is user content: refusing to check it out or commit it
+ * would corrupt the repository rather than protect Airship.
+ */
+export function isAirshipReservedPath(path: string): boolean {
+  const normalized = normalizeWorkspacePath(path);
+  return normalized === "/workspace/.airship" || normalized.startsWith("/workspace/.airship/");
+}
+
 /** Private implementation records that must never enter model retrieval. */
 export function isWorkspaceControlPlanePath(path: string): boolean {
   const normalized = normalizeWorkspacePath(path);
   return isGitWorkspaceControlPlanePath(normalized)
     || isBrowserGitControlPlanePath(normalized)
-    || normalized === "/workspace/.airship/memory.json"
-    || normalized === "/workspace/.airship/context" || normalized.startsWith("/workspace/.airship/context/")
-    || normalized === "/workspace/.airship/terminal" || normalized.startsWith("/workspace/.airship/terminal/");
+    // `.airship` is a reserved implementation namespace. Keep the predicate
+    // closed over the whole namespace so a newly added checkpoint cannot
+    // accidentally become model-readable before every consumer is updated.
+    || isAirshipReservedPath(normalized);
 }
 
 export function isGitWorkspaceControlPlanePath(path: string): boolean {

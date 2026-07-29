@@ -1,4 +1,5 @@
 import type { ComponentChildren } from "preact";
+import { useEffect, useRef, useState } from "preact/hooks";
 import { Icon } from "../icons";
 import { Popover } from "../popover";
 import { SessionStatusChip, type SessionStatusFact } from "./session-status-chip";
@@ -37,6 +38,8 @@ export type SessionBarProps = Readonly<{
   durabilityLabel: string;
   journal: SessionJournal;
   onOpenSession(): void;
+  onRename(title: string): void | Promise<void>;
+  renameDisabled?: boolean;
   onNewConversation(): void;
   newConversationDisabled: boolean;
 }>;
@@ -50,26 +53,109 @@ export function SessionBar({
   durabilityLabel,
   journal,
   onOpenSession,
+  onRename,
+  renameDisabled = false,
   onNewConversation,
   newConversationDisabled,
 }: SessionBarProps) {
+  const [renaming, setRenaming] = useState(false);
+  const renameInput = useRef<HTMLInputElement>(null);
+  const renameInFlight = useRef(false);
+
+  useEffect(() => {
+    if (renaming) renameInput.current?.select();
+  }, [renaming]);
+
+  function startRename() {
+    if (renameDisabled) return;
+    setRenaming(true);
+  }
+
+  function cancelRename() {
+    if (renameInFlight.current) return;
+    setRenaming(false);
+  }
+
+  async function commitRename() {
+    if (renameInFlight.current) return;
+    const normalized = renameInput.current?.value.trim() ?? "";
+    if (!normalized) {
+      renameInput.current?.reportValidity();
+      return;
+    }
+    if (normalized === title) {
+      setRenaming(false);
+      return;
+    }
+    renameInFlight.current = true;
+    try {
+      await onRename(normalized);
+      setRenaming(false);
+    } catch {
+      requestAnimationFrame(() => renameInput.current?.focus());
+    } finally {
+      renameInFlight.current = false;
+    }
+  }
+
   return (
     <div class="session-bar">
       {/* The H1 stays an H1 — it is the document's title — but a heading is not
           phrasing content, so the control is inside it rather than around it. */}
-      <h1 class="session-bar__identity">
-        <button class="session-bar__identity-button" type="button" title={title} onClick={onOpenSession}>
-          {/* Carries the retired `ACTIVE SESSION · GENERAL` eyebrow. The words
-              are not lost, they stopped being 15px of band for a fact that
-              labels the screen the user is already looking at. */}
-          <span class="profile-monogram" role="img" aria-label={`Active session · ${profileName} profile`}>{monogram}</span>
-          <span class="session-bar__title">{title}</span>
-        </button>
+      <h1 class={renaming ? "session-bar__identity is-renaming" : "session-bar__identity"}>
+        {renaming ? (
+          <span class="session-bar__rename">
+            <span class="profile-monogram" role="img" aria-label={`Active session · ${profileName} profile`}>{monogram}</span>
+            <input
+              ref={renameInput}
+              defaultValue={title}
+              maxlength={240}
+              required
+              aria-label="Conversation title"
+              onBlur={() => void commitRename()}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.isComposing) {
+                  event.preventDefault();
+                  void commitRename();
+                } else if (event.key === "Escape") {
+                  event.preventDefault();
+                  cancelRename();
+                }
+              }}
+            />
+          </span>
+        ) : (
+          <button
+            class="session-bar__identity-button"
+            type="button"
+            title={`${title} · Double-click to rename`}
+            disabled={renameDisabled}
+            onClick={(event) => { if (event.detail === 0) startRename(); }}
+            onDblClick={startRename}
+            onKeyDown={(event) => { if (event.key === "F2") { event.preventDefault(); startRename(); } }}
+          >
+            {/* Carries the retired `ACTIVE SESSION · GENERAL` eyebrow. The words
+                are not lost, they stopped being 15px of band for a fact that
+                labels the screen the user is already looking at. */}
+            <span class="profile-monogram" role="img" aria-label={`Active session · ${profileName} profile`}>{monogram}</span>
+            <span class="session-bar__title">{title}</span>
+          </button>
+        )}
       </h1>
       <div class="session-bar__chips">
         {model}
         <SessionStatusChip facts={statusFacts} durabilityLabel={durabilityLabel} />
         <JournalChip journal={journal} onOpenSession={onOpenSession} />
+        <button
+          class="session-bar__rename-action"
+          type="button"
+          aria-label="Rename conversation"
+          title="Rename conversation"
+          disabled={renameDisabled || renaming}
+          onClick={startRename}
+        >
+          <Icon name="edit" size={16} />
+        </button>
         <button
           class="session-bar__new"
           type="button"

@@ -25,6 +25,21 @@ import {
   type CanonicalContextSelection,
 } from "./context-selection";
 import {
+  canonicalLiveEnvironmentSnapshot,
+  injectLiveEnvironment,
+  liveEnvironmentScopeMatches,
+  sealLiveEnvironmentSnapshot,
+  verifyLiveEnvironmentSnapshot,
+  type LiveEnvironmentSnapshot,
+} from "./live-environment";
+import {
+  FORK_CONTEXT_EVENT_TYPE,
+  canonicalForkContextSeed,
+  forkContextSeedMatchesScope,
+  verifyForkContextSeed,
+  type ForkContextScope,
+} from "./fork-context";
+import {
   calibrateBytesPerToken,
   contextCompressionOptionsFromPolicy,
   createInferenceTransportContextSummarizer,
@@ -118,11 +133,23 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
     throw new Error(`Turn ${unfinishedTurn} has no durable terminal event; recover or fork the session before continuing.`);
   }
   assertContextHistoryCompatible(existingEvents, session.manifest);
+  const verifiedForkContextDigest = await assertForkContextHistoryCompatible(existingEvents, {
+    sessionId: session.id,
+    lineage: session.manifest.lineage,
+  });
   const reservedOperationIds = new Set(
     existingEvents.flatMap((event) => event.operationId ? [event.operationId] : []),
   );
   const images = canonicalImageInputs(options.images);
   if (!images) throw new TypeError("Turn images do not satisfy the canonical multimodal contract.");
+
+  const liveEnvironment = await prepareLiveEnvironment({
+    sessionId: options.sessionId,
+    manifest: session.manifest,
+    tools: options.tools,
+    transportPosture: options.transport.posture,
+    signal: options.signal,
+  });
 
   const turnId = randomUuid();
   const emitted: DurableEvent[] = [];
@@ -163,6 +190,7 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
       payload: {
         content: options.content,
         ...(images.length ? { images: images as unknown as JsonValue } : {}),
+        ...(liveEnvironment ? { liveEnvironment: liveEnvironment as unknown as JsonValue } : {}),
       },
     },
   ]);
@@ -204,6 +232,8 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
         materialize: (events) => materializeMessages([...events], {
           allowEmbeddedContext: session.manifest.turnContext === undefined,
           allowSelectedContext: session.manifest.turnContext !== "disabled",
+          forkContextScope: { sessionId: session.id, lineage: session.manifest.lineage },
+          verifiedForkContextDigest,
         }),
       })
       : undefined;
@@ -214,9 +244,14 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
           injectLatestContext: false,
           allowEmbeddedContext: session.manifest.turnContext === undefined,
           allowSelectedContext: session.manifest.turnContext !== "disabled",
+          forkContextScope: { sessionId: session.id, lineage: session.manifest.lineage },
+          verifiedForkContextDigest,
         }),
         ...(bytesPerToken !== undefined ? { bytesPerToken } : {}),
-        projectedUserContent: injectContextSelection(options.content, contextSelection),
+        projectedUserContent: injectContextSelection(
+          injectLiveEnvironment(options.content, liveEnvironment),
+          contextSelection,
+        ),
         systemPrompt: session.manifest.systemPrompt,
         tools: session.manifest.tools,
         options: pinnedContextCompression,
@@ -248,6 +283,8 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
       const messages = materializeMessages(history, {
         allowEmbeddedContext: session.manifest.turnContext === undefined,
         allowSelectedContext: session.manifest.turnContext !== "disabled",
+        forkContextScope: { sessionId: session.id, lineage: session.manifest.lineage },
+        verifiedForkContextDigest,
       });
       // Compression only runs at turn boundaries, so a long tool loop can grow
       // the request past the window the boundary check just cleared.
@@ -580,6 +617,34 @@ async function prepareTurnContext(args: Readonly<{
   return canonical;
 }
 
+async function prepareLiveEnvironment(args: Readonly<{
+  sessionId: string;
+  manifest: SessionManifest;
+  tools: ToolRegistry;
+  transportPosture: InferenceTransport["posture"];
+  signal: AbortSignal;
+}>): Promise<LiveEnvironmentSnapshot | undefined> {
+  const provider = args.tools.getLiveEnvironmentProvider();
+  if (!provider) return undefined;
+  args.signal.throwIfAborted();
+  const observation = await provider.capture({ sessionId: args.sessionId, signal: args.signal });
+  args.signal.throwIfAborted();
+  const snapshot = await sealLiveEnvironmentSnapshot({
+    sessionId: args.sessionId,
+    manifest: args.manifest,
+    toolDefinitions: args.tools.definitions(),
+    transportPosture: args.transportPosture,
+    observation,
+  });
+  if (!await verifyLiveEnvironmentSnapshot(snapshot)) {
+    throw new Error("The sealed live-environment snapshot did not verify.");
+  }
+  if (!liveEnvironmentScopeMatches(snapshot, args.sessionId, args.manifest)) {
+    throw new Error("The live-environment snapshot is outside this session's pinned scope.");
+  }
+  return snapshot;
+}
+
 /**
  * Bound one tool result to the bytes this turn can still send. An unbounded
  * result would overflow the pinned window and fail the whole turn at the
@@ -640,6 +705,32 @@ function assertContextHistoryCompatible(
   if (manifest.turnContext === "disabled" && events.some((event) => event.type === "turn.context.selected")) {
     throw new Error("This session disables turn-context retrieval but its history contains a selection event.");
   }
+}
+
+async function assertForkContextHistoryCompatible(
+  events: readonly DurableEvent[],
+  scope: ForkContextScope,
+): Promise<string | undefined> {
+  const seedEvents = events.filter((event) => event.type === FORK_CONTEXT_EVENT_TYPE);
+  if (!scope.lineage) {
+    if (seedEvents.length > 0) throw new Error("A non-fork session contains fork-context seed material.");
+    return undefined;
+  }
+  const event = seedEvents.length === 1 ? seedEvents[0] : undefined;
+  if (
+    !event ||
+    events[1]?.eventId !== event.eventId ||
+    event.sessionId !== scope.sessionId ||
+    event.turnId !== undefined ||
+    event.operationId !== undefined
+  ) throw new Error("A fork session is missing its unique initial context-seed commitment.");
+  const seed = canonicalForkContextSeed(event.payload);
+  if (
+    !seed ||
+    !forkContextSeedMatchesScope(seed, scope) ||
+    !await verifyForkContextSeed(seed)
+  ) throw new Error("The fork-context seed is malformed, out of scope, or has a digest mismatch.");
+  return seed.contextDigest;
 }
 
 function notifySignal(onSignal: RunTurnOptions["onSignal"], signal: AgentSignal): void {
@@ -794,6 +885,10 @@ export function materializeMessages(
     injectLatestContext?: boolean;
     allowEmbeddedContext?: boolean;
     allowSelectedContext?: boolean;
+    /** Required before any inherited fork context is admitted to provider history. */
+    forkContextScope?: ForkContextScope;
+    /** Supplied only after the seed digest was asynchronously verified. */
+    verifiedForkContextDigest?: string;
   }> = {},
 ): CanonicalMessage[] {
   // Failed and cancelled turns remain in the durable journal for audit and
@@ -812,7 +907,16 @@ export function materializeMessages(
   const visibleEvents = summary
     ? events.filter((event) => event.sequence > summary.coveredThroughSequence)
     : events;
-  const messages: CanonicalMessage[] = summary ? [structuredClone(summary.message)] : [];
+  const seed = summary ? undefined : materializableForkContextSeed(
+    events,
+    options.forkContextScope,
+    options.verifiedForkContextDigest,
+  );
+  const messages: CanonicalMessage[] = summary
+    ? [structuredClone(summary.message)]
+    : seed
+      ? seed.messages.map((message) => structuredClone(message))
+      : [];
   const requestMessageIndexes = new Map<string, number>();
   const latestRequest = [...visibleEvents].reverse().find((event) =>
     event.type === "turn.requested" && event.turnId && !nonActionableTurns.has(event.turnId),
@@ -822,19 +926,22 @@ export function materializeMessages(
     const payload = record(event.payload);
     if (event.type === "turn.requested" && typeof payload?.content === "string") {
       const images = canonicalImageInputs(payload.images);
+      const liveEnvironment = payload.liveEnvironment === undefined
+        ? undefined
+        : canonicalLiveEnvironmentSnapshot(payload.liveEnvironment);
       const contextSelection = payload.contextSelection === undefined || options.allowEmbeddedContext === false
         ? undefined
         : canonicalContextSelection(payload.contextSelection);
       if (images && (
-        payload.contextSelection === undefined ||
-        options.allowEmbeddedContext === false ||
-        contextSelection
+        payload.liveEnvironment === undefined || liveEnvironment
+      ) && (
+        payload.contextSelection === undefined || options.allowEmbeddedContext === false || contextSelection
       )) {
         const messageIndex = messages.length;
         messages.push({
           role: "user",
           content: options.injectLatestContext !== false && event.eventId === latestRequest?.eventId
-            ? injectContextSelection(payload.content, contextSelection)
+            ? injectContextSelection(injectLiveEnvironment(payload.content, liveEnvironment), contextSelection)
             : payload.content,
           ...(images.length ? { images: [...images] } : {}),
         });
@@ -876,6 +983,27 @@ export function materializeMessages(
     }
   }
   return boundInferenceHistoryImages(messages);
+}
+
+function materializableForkContextSeed(
+  events: readonly DurableEvent[],
+  scope: ForkContextScope | undefined,
+  verifiedDigest: string | undefined,
+) {
+  if (!scope?.lineage || !verifiedDigest) return undefined;
+  const candidates = events.filter((event) => event.type === FORK_CONTEXT_EVENT_TYPE);
+  const event = candidates.length === 1 ? candidates[0] : undefined;
+  if (
+    !event ||
+    events[1]?.eventId !== event.eventId ||
+    event.sessionId !== scope.sessionId ||
+    event.turnId !== undefined ||
+    event.operationId !== undefined
+  ) return undefined;
+  const seed = canonicalForkContextSeed(event.payload);
+  return seed && seed.contextDigest === verifiedDigest && forkContextSeedMatchesScope(seed, scope)
+    ? seed
+    : undefined;
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {

@@ -42,6 +42,80 @@ type InspectorSelection =
   | Readonly<{ kind: "dimension"; key: AttestationDimensionKey }>
   | Readonly<{ kind: "verification"; id: string }>;
 
+export const ATTESTATION_CLAIM_GROUPS: readonly Readonly<{
+  id: string;
+  label: string;
+  description: string;
+  keys: readonly AttestationDimensionKey[];
+}>[] = Object.freeze([
+  Object.freeze({
+    id: "channel",
+    label: "Channel & identity",
+    description: "Transport, age, and the key bound to the observed endpoint.",
+    keys: Object.freeze(["transport", "freshness", "endpoint-key"] as const),
+  }),
+  Object.freeze({
+    id: "compute",
+    label: "Confidential compute",
+    description: "CPU TEE (including Intel TDX) and GPU TEE (including NVIDIA CC) remain separate verification lanes.",
+    keys: Object.freeze(["cpu-tee", "gpu-tee"] as const),
+  }),
+  Object.freeze({
+    id: "work-product",
+    label: "Work product & settlement",
+    description: "Model, conversation, and payment bindings never inherit a TEE result.",
+    keys: Object.freeze(["model", "conversation", "payment"] as const),
+  }),
+]);
+
+export const EVIDENCE_STATE_MEANINGS = Object.freeze([
+  Object.freeze({ label: "Verified", meaning: "The named authority checked this exact claim and it held." }),
+  Object.freeze({ label: "Asserted", meaning: "A record states the claim; no independent authority verified it." }),
+  Object.freeze({ label: "Failed", meaning: "The claim was checked or declared and did not hold." }),
+  Object.freeze({ label: "No evidence", meaning: "No observation for this exact claim is present in the selected record." }),
+  Object.freeze({ label: "Stale observation", meaning: "A time-bounded endpoint observation expired. The immutable turn receipt did not become stale." }),
+]);
+
+export type AttestationRecordReading = Readonly<{
+  kind: "immutable-receipt" | "endpoint-observation";
+  label: string;
+  detail: string;
+}>;
+
+export function attestationRecordReading(
+  record: Pick<NormalizedAttestationRecord, "source" | "overallState">,
+): AttestationRecordReading {
+  if (record.source === "conversation-receipt") {
+    const standing = record.overallState === "expired"
+      ? "contains an expired claim"
+      : proofStatusLabel(record.overallState).toLowerCase();
+    return Object.freeze({
+      kind: "immutable-receipt",
+      label: `Immutable turn receipt · ${standing}`,
+      detail: "This completion record does not change or become stale. Later endpoint observations can be compared with it, but cannot rewrite or silently upgrade it.",
+    });
+  }
+  if (record.overallState === "expired") {
+    return Object.freeze({
+      kind: "endpoint-observation",
+      label: "Stale observation",
+      detail: "At least one time-bounded claim in this endpoint observation expired. The observation remains historical evidence and does not make an immutable receipt stale.",
+    });
+  }
+  const label = record.overallState === "verified"
+    ? "Verified observation"
+    : record.overallState === "failed"
+      ? "Failed observation"
+      : record.overallState === "unavailable"
+        ? "Unavailable observation"
+        : "Observed · not fully verified";
+  return Object.freeze({
+    kind: "endpoint-observation",
+    label,
+    detail: "This is a bounded observation of one endpoint at acquisition time. Its claim states and authorities stand on their own; proximity cannot upgrade a conversation receipt.",
+  });
+}
+
 export function AttestationsView({
   endpointRecords = [],
   receipts = [],
@@ -92,6 +166,16 @@ export function AttestationsView({
     onSelectRecord?.(record.id);
   }
 
+  function inspectSelection(next: InspectorSelection) {
+    setInspector(next);
+    window.requestAnimationFrame(() => {
+      if (!window.matchMedia("(max-width: 1180px)").matches) return;
+      const detail = document.getElementById("attestation-selected-detail");
+      detail?.focus({ preventScroll: true });
+      detail?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    });
+  }
+
   async function refresh() {
     if (!selected || !onRefresh || refreshing) return;
     const target = refreshTarget(selected, endpointRecords, receipts);
@@ -106,11 +190,11 @@ export function AttestationsView({
     activeRefresh.current = operation;
     setRefreshing(true);
     setError(undefined);
-    setStatus("Refreshing evidence with a new provider acquisition…");
+    setStatus("Retrying acquisition for a new evidence observation… The selected record remains unchanged.");
     try {
       await onRefresh(target, controller.signal);
       if (!controller.signal.aborted && activeRefresh.current === operation) {
-        setStatus("Evidence refresh completed. Review the new record and its timestamps independently.");
+        setStatus("A new evidence observation was acquired. Review its identity, authorities, and timestamps independently; the prior record was not rewritten.");
       }
     } catch (caught) {
       if (!controller.signal.aborted && activeRefresh.current === operation) {
@@ -131,7 +215,7 @@ export function AttestationsView({
     operation.controller.abort();
     activeRefresh.current = undefined;
     setRefreshing(false);
-    setStatus("Refresh cancelled. Existing evidence remains unchanged.");
+    setStatus("Acquisition retry cancelled. Existing receipts and evidence observations remain unchanged.");
     onCancel?.(operation.sourceId);
   }
 
@@ -158,23 +242,27 @@ export function AttestationsView({
           <p>Each result applies only to its named claim. A fetched quote, locally matched key, verified endpoint, model artifact, and signed conversation are separate facts with separate authorities.</p>
         </div>
         <div class="attestations-heading-actions">
-          {/* Emphasis follows truth-changing power. "Refresh evidence" is the
-              only control here that changes what is known; "Export status
-              summary" produces an artifact whose own adjacent note says it is
-              not independently verifiable proof, and it was the loudest object
-              on the entire trust surface. */}
+          <span class="attestations-acquisition-mode">
+            <strong>Automatic after protected turns</strong>
+            <small>Manual acquisition is a retry and diagnostic; it never rewrites a receipt.</small>
+          </span>
           {refreshing
-            ? <button class="danger" type="button" onClick={cancelRefresh}><Icon name="stop" /> Cancel refresh</button>
-            : <button class="primary" type="button" disabled={!selected || !onRefresh} onClick={refresh}><Icon name="proof" /> Refresh evidence</button>}
+            ? <button class="danger" type="button" onClick={cancelRefresh}><Icon name="stop" /> Cancel retry</button>
+            : <button type="button" disabled={!selected || !onRefresh} onClick={refresh}><Icon name="proof" /> Retry acquisition</button>}
           <button type="button" disabled={records.length === 0} onClick={exportPublic}><Icon name="cloud" /> Export status summary</button>
         </div>
       </header>
 
-      <div class="attestations-boundary" role="note">
-        <Icon name="lock" />
-        <div><strong>Claim-scoped trust</strong><span>Structural presence and local digest matches remain partial. “Verified” requires the authority named on that exact record.</span></div>
-        <small>Raw evidence withheld by design</small>
-      </div>
+      <section class="attestations-boundary" aria-labelledby="evidence-state-meanings">
+        <header>
+          <Icon name="lock" />
+          <div><strong id="evidence-state-meanings">How to read evidence states</strong><span>Every state is claim-scoped. A receipt and a later endpoint observation remain separate records.</span></div>
+          <small>Raw evidence withheld by design</small>
+        </header>
+        <dl>
+          {EVIDENCE_STATE_MEANINGS.map((entry) => <div key={entry.label}><dt>{entry.label}</dt><dd>{entry.meaning}</dd></div>)}
+        </dl>
+      </section>
 
       {acquisitionNotice ? <div class="attestations-alert" role="status"><Icon name="warning" /><span>{acquisitionNotice}</span></div> : null}
       {error ? <div class="attestations-alert error" role="alert"><Icon name="warning" /><span>{error}</span></div> : null}
@@ -219,6 +307,7 @@ export function AttestationsView({
                   class={record.id === selected.id ? "active" : ""}
                   type="button"
                   aria-current={record.id === selected.id ? "true" : undefined}
+                  aria-controls="selected-attestation-record"
                   onClick={() => chooseRecord(record)}
                   key={record.id}
                   data-source={record.source}
@@ -244,69 +333,90 @@ export function AttestationsView({
             </div>
           </aside>
 
-          <section class="attestations-stage" aria-label="Selected attestation record">
+          <section
+            id="selected-attestation-record"
+            class="attestations-stage"
+            data-source={selected.source}
+            aria-label="Selected attestation record"
+          >
             <RecordHeader record={selected} />
-            <section class="attestation-matrix" aria-label="Attestation claim summary">
-              {ATTESTATION_DIMENSIONS.map((key) => {
-                const dimension = selected.dimensions[key];
-                const active = inspector.kind === "dimension" && inspector.key === key;
-                return (
-                  <button class={`${dimension.state}${active ? " active" : ""}`} type="button" aria-pressed={active} onClick={() => setInspector({ kind: "dimension", key })} key={key}>
-                    <span><StatusMark state={dimension.state} /></span>
-                    <strong>{dimension.title}</strong>
-                    {/* Only the delta. Falling back to the status word would
-                        print it twice per tile — the seal chip above already
-                        carries it — which is the shape of the defect this
-                        replaces, one row lower. */}
-                    {attestationQualifierLabel(dimension.qualifier)
-                      ? <small>{attestationQualifierLabel(dimension.qualifier)}</small>
-                      : null}
-                  </button>
-                );
-              })}
-            </section>
-
-            <section class="attestations-authorities">
-              <div class="attestations-section-heading"><span>Verification records</span><small>Select an authority record to inspect exactly what it checked.</small></div>
-              <div class="attestation-verification-list">
-                {selected.verifications.length ? selected.verifications.map((verification) => (
-                  <button
-                    class={inspector.kind === "verification" && inspector.id === verification.id ? "active" : ""}
-                    type="button"
-                    aria-pressed={inspector.kind === "verification" && inspector.id === verification.id}
-                    onClick={() => setInspector({ kind: "verification", id: verification.id })}
-                    key={verification.id}
-                  >
-                    <StatusMark state={verification.state} />
-                    <span><strong>{verification.title}</strong><small>{verification.authority}</small></span>
-                  </button>
-                )) : <div class="attestations-no-verifier">No verification authority records were supplied.</div>}
+            <section class="attestation-matrix" aria-labelledby="attestation-claims-heading">
+              <div class="attestations-stage-heading">
+                <span id="attestation-claims-heading">Claim summary</span>
+                <small>Select one claim to inspect its authority, age, policy, and facts.</small>
               </div>
+              {ATTESTATION_CLAIM_GROUPS.map((group) => (
+                <section class="attestation-claim-group" aria-labelledby={`attestation-group-${group.id}`} key={group.id}>
+                  <header><strong id={`attestation-group-${group.id}`}>{group.label}</strong><small>{group.description}</small></header>
+                  <div>
+                    {group.keys.map((key) => {
+                      const dimension = selected.dimensions[key];
+                      const active = inspector.kind === "dimension" && inspector.key === key;
+                      const qualifier = attestationQualifierLabel(dimension.qualifier);
+                      return (
+                        <button
+                          class={`${dimension.state}${active ? " active" : ""}`}
+                          type="button"
+                          aria-pressed={active}
+                          aria-controls="attestation-selected-detail"
+                          onClick={() => inspectSelection({ kind: "dimension", key })}
+                          key={key}
+                        >
+                          <StatusMark state={dimension.state} />
+                          <span><strong>{dimension.title}</strong><small>{ATTESTATION_TECHNICAL_LABELS[key]}</small></span>
+                          {qualifier ? <em>{qualifier}</em> : null}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </section>
+              ))}
             </section>
 
-            <section class="attestations-bindings">
-              <div class="attestations-section-heading"><span>Commitments &amp; measurements</span><small>Local normalized view · export policy may omit fields</small></div>
-              <FactGrid facts={[...selected.bindings, ...selected.evidenceFacts]} empty="No public digests or measurement metadata are available." />
-            </section>
-          </section>
-
-          <aside class="attestations-inspector" aria-label="Selected attestation evidence detail">
-            {inspectedVerification
-              ? <VerificationInspector verification={inspectedVerification} />
-              : inspectedDimension
-                ? <DimensionInspector dimension={inspectedDimension} />
-                : <p>No evidence detail selected.</p>}
-            {selected.warnings.length ? (
-              <section class="attestations-warnings">
-                <span>Record warnings</span>
-                {selected.warnings.map((warning, index) => <p key={`${index}:${warning}`}><Icon name="warning" size={14} />{warning}</p>)}
+            <aside id="attestation-selected-detail" class="attestations-inspector" aria-label="Selected attestation evidence detail" aria-live="polite" tabIndex={-1}>
+              {inspectedVerification
+                ? <VerificationInspector verification={inspectedVerification} />
+                : inspectedDimension
+                  ? <DimensionInspector dimension={inspectedDimension} />
+                  : <p>No evidence detail selected.</p>}
+              {selected.warnings.length ? (
+                <section class="attestations-warnings">
+                  <span>Record warnings</span>
+                  {selected.warnings.map((warning, index) => <p key={`${index}:${warning}`}><Icon name="warning" size={14} />{warning}</p>)}
+                </section>
+              ) : null}
+              <section class="attestations-export-note">
+                <Icon name="proof" />
+                <div><strong>Unsigned status summary</strong><p>The export is a privacy-safe snapshot, not independently verifiable proof. It omits raw quotes, certificates, signatures, public keys, nonces, provider bodies, and dictionary-testable plaintext digests.</p></div>
               </section>
-            ) : null}
-            <section class="attestations-export-note">
-              <Icon name="proof" />
-              <div><strong>Unsigned status summary</strong><p>The export is a privacy-safe snapshot, not independently verifiable proof. It omits raw quotes, certificates, signatures, public keys, nonces, provider bodies, and dictionary-testable plaintext digests.</p></div>
-            </section>
-          </aside>
+            </aside>
+
+            <div class="attestations-disclosures">
+              <details class="attestations-authorities">
+                <summary><span>Verification records</span><small>{selected.verifications.length} authority record{selected.verifications.length === 1 ? "" : "s"} · select one to inspect exactly what it checked</small></summary>
+                <div class="attestation-verification-list">
+                  {selected.verifications.length ? selected.verifications.map((verification) => (
+                    <button
+                      class={inspector.kind === "verification" && inspector.id === verification.id ? "active" : ""}
+                      type="button"
+                      aria-pressed={inspector.kind === "verification" && inspector.id === verification.id}
+                      aria-controls="attestation-selected-detail"
+                      onClick={() => inspectSelection({ kind: "verification", id: verification.id })}
+                      key={verification.id}
+                    >
+                      <StatusMark state={verification.state} />
+                      <span><strong>{verification.title}</strong><small>{verification.authority}</small></span>
+                    </button>
+                  )) : <div class="attestations-no-verifier">No verification authority records were supplied.</div>}
+                </div>
+              </details>
+
+              <details class="attestations-bindings">
+                <summary><span>Commitments &amp; measurements</span><small>{selected.bindings.length + selected.evidenceFacts.length} normalized fact{selected.bindings.length + selected.evidenceFacts.length === 1 ? "" : "s"} · raw values remain available here</small></summary>
+                <FactGrid facts={[...selected.bindings, ...selected.evidenceFacts]} empty="No public digests or measurement metadata are available." />
+              </details>
+            </div>
+          </section>
         </div>
       )}
     </section>
@@ -315,6 +425,7 @@ export function AttestationsView({
 
 function RecordHeader({ record }: { record: NormalizedAttestationRecord }) {
   const counts = countStates(record);
+  const reading = attestationRecordReading(record);
   // The record-level ceiling, in the direction it runs. "Every non-unavailable
   // claim is shown as an assertion" described the rule as it was
   // mis-implemented, and it stood above a matrix that may now read "Failed".
@@ -323,7 +434,7 @@ function RecordHeader({ record }: { record: NormalizedAttestationRecord }) {
     : "This is endpoint acquisition evidence, not a conversation receipt.";
   return (
     <header class="attestation-record-heading">
-      <div>
+      <div class="attestation-record-identity">
         <span>{record.source === "endpoint-evidence" ? "Endpoint acquisition" : "Conversation evidence"}</span>
         <h2>{record.subtitle}</h2>
         <p>{record.proofLevel ? `Declared proof level: ${proofLevelLabel(record.proofLevel)}.` : ""} {record.posture ? `Transport: ${postureLabel(record.posture as Parameters<typeof postureLabel>[0])}.` : "Inference transport is not asserted by this record."} {receiptTrust}</p>
@@ -333,11 +444,23 @@ function RecordHeader({ record }: { record: NormalizedAttestationRecord }) {
           UNAV" on iPad — overlapping labels in a machine vocabulary that no
           other surface speaks. "Partial" is the enum; "Asserted" is the word. */}
       <dl class="attestation-record-counts">
-        <div><dd>{counts.verified}</dd><dt>{proofStatusLabel("verified")}</dt></div>
-        <div><dd>{counts.partial}</dd><dt>{proofStatusLabel("partial")}</dt></div>
-        <div><dd>{counts.failed + counts.expired}</dd><dt>{proofStatusLabel("failed")}</dt></div>
-        <div><dd>{counts.unavailable}</dd><dt>{proofStatusLabel("unavailable")}</dt></div>
+        <div><dt>{proofStatusLabel("verified")}</dt><dd>{counts.verified}</dd></div>
+        <div><dt>{proofStatusLabel("partial")}</dt><dd>{counts.partial}</dd></div>
+        <div><dt>{proofStatusLabel("failed")}</dt><dd>{counts.failed}</dd></div>
+        <div><dt>{proofStatusLabel("expired")}</dt><dd>{counts.expired}</dd></div>
+        <div><dt>{proofStatusLabel("unavailable")}</dt><dd>{counts.unavailable}</dd></div>
       </dl>
+      <section class="attestation-record-reading" data-kind={reading.kind} aria-label="Selected record meaning">
+        <Icon name={reading.kind === "immutable-receipt" ? "proof" : "lock"} size={18} />
+        <div>
+          <strong>{reading.label}</strong>
+          <p>{reading.detail}</p>
+          <small>
+            {record.createdAt ? <>Recorded <time dateTime={record.createdAt}>{formatTimestamp(record.createdAt)}</time>.</> : "Observation time unavailable."}
+            {record.cacheFreshUntil ? <> Client cache reuse ended <time dateTime={record.cacheFreshUntil}>{formatTimestamp(record.cacheFreshUntil)}</time>; that cache boundary is not evidence expiry.</> : null}
+          </small>
+        </div>
+      </section>
     </header>
   );
 }

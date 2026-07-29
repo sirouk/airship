@@ -19,6 +19,10 @@
 
 .git-sources > * { flex: 0 0 auto; }
 
+.git-sources--embedded {
+  padding: 0 var(--sp-4) var(--sp-4);
+}
+
 .git-section-label {
   color: var(--ink-muted);
   font: 700 var(--fs-micro)/1.2 var(--font-mono);

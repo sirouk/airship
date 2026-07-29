@@ -13,27 +13,37 @@ import {
   isOptionalExecutionPackPath,
   isOptionalExecutionEnginePath,
   isOptionalExecutionSupportPath,
+  isOptionalExecutionToolsPath,
   isOptionalWasiPreview1WorkerPath,
   isOptionalNodeExecutionPackPath,
   isOptionalWasixJavaScriptPath,
   isOptionalWasixWasmPath,
   isOptionalAgentRuntimePath,
+  isOptionalMultimodalPath,
+  isOptionalContextPolicyPath,
   isOptionalAgentToolsPath,
   isOptionalModelCatalogPath,
   isOptionalInferenceProviderPath,
+  isOptionalChutesOAuthPath,
+  isOptionalExtensionObservationPath,
   isOptionalLocalDeviceVaultPath,
   isOptionalWorkspaceWorkbenchPath,
   isOptionalWorkspaceBindingPath,
   isOptionalWorkspaceCodecPath,
+  isOptionalRequestFailurePath,
   isOptionalSourceControlPath,
   isOptionalSourceSelectionPath,
   isOptionalBrowserGitPath,
   isOptionalSessionLibraryPath,
+  isOptionalSessionManifestPath,
+  isOptionalFavoriteOrderingPath,
+  isOptionalSessionForkPath,
   isOptionalCapabilitiesViewPath,
   isOptionalBrowserCapabilityPath,
   isOptionalMemoryViewPath,
   isOptionalMemorySupportPath,
   isOptionalProofSurfacePath,
+  isOptionalEvidenceAcquisitionPath,
   isOptionalTerminalPath,
   isOptionalSemanticWorkerPath,
   isDeferredCapabilityPackPath,
@@ -149,6 +159,8 @@ describe("release gate", () => {
     expect(isOptionalExecutionEnginePath("assets/execution-runtime-pack-Ab_12-CD.js")).toBe(false);
     expect(isOptionalExecutionSupportPath("assets/runtime-registry-Ab_12-CD.js")).toBe(true);
     expect(isOptionalExecutionSupportPath("assets/runtime-Ab_12-CD.js")).toBe(false);
+    expect(isOptionalExecutionToolsPath("assets/execution-tools-Ab_12-CD.js")).toBe(true);
+    expect(isOptionalExecutionToolsPath("assets/runtime-registry-Ab_12-CD.js")).toBe(false);
     expect(isOptionalWasiPreview1WorkerPath("assets/wasi-preview1-worker-Ab_12-CD.js")).toBe(true);
     expect(isOptionalWasiPreview1WorkerPath("assets/wasi-preview1-pack-Ab_12-CD.js")).toBe(false);
     expect(isOptionalNodeExecutionPackPath("assets/node-webcontainer-pack-Ab_12-CD.js")).toBe(true);
@@ -162,6 +174,10 @@ describe("release gate", () => {
     expect(isOptionalWasixWasmPath("assets/wasmer_js_bg-Ab_12-CD.js")).toBe(false);
     expect(isOptionalAgentRuntimePath("assets/agent-Ab_12-CD.js")).toBe(true);
     expect(isOptionalAgentRuntimePath("assets/turn-runtime-Ab_12-CD.js")).toBe(false);
+    expect(isOptionalMultimodalPath("assets/multimodal-Ab_12-CD.js")).toBe(true);
+    expect(isOptionalMultimodalPath("assets/image-input-Ab_12-CD.js")).toBe(false);
+    expect(isOptionalContextPolicyPath("assets/context-policy-Ab_12-CD.js")).toBe(true);
+    expect(isOptionalContextPolicyPath("assets/context-selection-Ab_12-CD.js")).toBe(false);
     expect(isOptionalAgentToolsPath("assets/tool-bundle-Ab_12-CD.js")).toBe(true);
     expect(isOptionalAgentToolsPath("assets/client-context-runtime-Ab_12-CD.js")).toBe(true);
     expect(isOptionalAgentToolsPath("assets/context-selection-Ab_12-CD.js")).toBe(true);
@@ -173,6 +189,8 @@ describe("release gate", () => {
     expect(isOptionalWorkspaceBindingPath("assets/workspace-bind-Ab_12-CD.js")).toBe(false);
     expect(isOptionalWorkspaceCodecPath("assets/content-codec-Ab_12-CD.js")).toBe(true);
     expect(isOptionalWorkspaceCodecPath("assets/content-Ab_12-CD.js")).toBe(false);
+    expect(isOptionalRequestFailurePath("assets/request-state-Ab_12-CD.js")).toBe(true);
+    expect(isOptionalRequestFailurePath("assets/request-status-Ab_12-CD.js")).toBe(false);
     expect(isOptionalSourceControlPath("assets/sources-view-Ab_12-CD.js")).toBe(true);
     expect(isOptionalSourceControlPath("assets/source-tree-Ab_12-CD.js")).toBe(false);
     expect(isOptionalSourceSelectionPath("assets/source-selection-Ab_12-CD.js")).toBe(true);
@@ -181,6 +199,13 @@ describe("release gate", () => {
     expect(isOptionalBrowserGitPath("assets/workspace-binding-Ab_12-CD.js")).toBe(false);
     expect(isOptionalSessionLibraryPath("assets/sessions-route-Ab_12-CD.js")).toBe(true);
     expect(isOptionalSessionLibraryPath("assets/session-view-Ab_12-CD.js")).toBe(false);
+    expect(isOptionalSessionManifestPath("assets/session-manifest-Ab_12-CD.js")).toBe(true);
+    expect(isOptionalSessionManifestPath("assets/sessions-route-Ab_12-CD.js")).toBe(false);
+    expect(isOptionalFavoriteOrderingPath("assets/session-pins-Ab_12-CD.js")).toBe(true);
+    expect(isOptionalFavoriteOrderingPath("assets/session-manifest-Ab_12-CD.js")).toBe(false);
+    expect(isOptionalSessionForkPath("assets/session-fork-Ab_12-CD.js")).toBe(true);
+    expect(isOptionalSessionForkPath("assets/fork-context-Ab_12-CD.js")).toBe(true);
+    expect(isOptionalSessionForkPath("assets/sessions-route-Ab_12-CD.js")).toBe(false);
     expect(isOptionalCapabilitiesViewPath("assets/capabilities-view-Ab_12-CD.js")).toBe(true);
     expect(isOptionalCapabilitiesViewPath("assets/capability-view-Ab_12-CD.js")).toBe(false);
     expect(isOptionalBrowserCapabilityPath("assets/browser-runtime-Ab_12-CD.js")).toBe(true);
@@ -193,8 +218,12 @@ describe("release gate", () => {
     expect(isOptionalProofSurfacePath("assets/provider-client-Ab_12-CD.js")).toBe(true);
     expect(isOptionalProofSurfacePath("assets/client-Ab_12-CD.js")).toBe(true);
     expect(isOptionalProofSurfacePath("assets/client-runtime-Ab_12-CD.js")).toBe(false);
+    expect(isOptionalEvidenceAcquisitionPath("assets/evidence-acquisition-queue-Ab_12-CD.js")).toBe(true);
+    expect(isOptionalEvidenceAcquisitionPath("assets/workspace-evidence-acquisition-persistence-Ab_12-CD.js")).toBe(true);
+    expect(isOptionalEvidenceAcquisitionPath("assets/provider-client-Ab_12-CD.js")).toBe(false);
     expect(isOptionalTerminalPath("assets/terminal-view-Ab_12-CD.js")).toBe(true);
     expect(isOptionalTerminalPath("assets/manager-Ab_12-CD.js")).toBe(true);
+    expect(isOptionalTerminalPath("assets/terminal-dock-state-Ab_12-CD.js")).toBe(true);
     expect(isOptionalTerminalPath("assets/terminal-runtime-Ab_12-CD.js")).toBe(false);
     expect(isOptionalSemanticWorkerPath("assets/semantic.worker-Ab_12-CD.js")).toBe(true);
     expect(isOptionalSemanticWorkerPath("assets/semantic-worker-Ab_12-CD.js")).toBe(false);
@@ -204,6 +233,11 @@ describe("release gate", () => {
     expect(isOptionalInferenceProviderPath("assets/fabric-Ab_12-CD.js")).toBe(true);
     expect(isOptionalInferenceProviderPath("assets/provider-connections-view-Ab_12-CD.js")).toBe(true);
     expect(isOptionalInferenceProviderPath("assets/provider-panel-Ab_12-CD.js")).toBe(false);
+    expect(isOptionalChutesOAuthPath("assets/chutes-oauth-Ab_12-CD.js")).toBe(true);
+    expect(isOptionalChutesOAuthPath("assets/chutes-oauth-registration-Ab_12-CD.js")).toBe(true);
+    expect(isOptionalChutesOAuthPath("assets/openai-Ab_12-CD.js")).toBe(false);
+    expect(isOptionalExtensionObservationPath("assets/extension-bridge-Ab_12-CD.js")).toBe(true);
+    expect(isOptionalExtensionObservationPath("assets/inference-bridge-pack-Ab_12-CD.js")).toBe(false);
     expect(isOptionalLocalDeviceVaultPath("assets/local-device-vault-setup-Ab_12-CD.js")).toBe(true);
     expect(isOptionalLocalDeviceVaultPath("assets/local-device-keyring-Ab_12-CD.js")).toBe(true);
     expect(isOptionalLocalDeviceVaultPath("assets/local-lab-Ab_12-CD.js")).toBe(true);
@@ -211,6 +245,7 @@ describe("release gate", () => {
     expect(isOptionalLocalDeviceVaultPath("assets/encrypted-envelope-Ab_12-CD.js")).toBe(true);
     expect(isOptionalLocalDeviceVaultPath("assets/local-storage-Ab_12-CD.js")).toBe(false);
     expect(isDeferredCapabilityPackPath("assets/deferred-capabilities-Ab_12-CD.js")).toBe(true);
+    expect(isDeferredCapabilityPackPath("assets/load-deferred-capabilities-Ab_12-CD.js")).toBe(true);
     expect(isDeferredCapabilityPackPath("assets/connectivity-Ab_12-CD.js")).toBe(false);
     expect(() => assertOptionalPacksAreNotPreloaded(
       '<link rel="modulepreload" href="/assets/connectivity-Ab12.js">',
@@ -225,10 +260,22 @@ describe("release gate", () => {
       '<link rel="modulepreload" href="/assets/runtime-registry-Ab12.js">',
     )).toThrow(/must not preload/iu);
     expect(() => assertOptionalPacksAreNotPreloaded(
+      '<link rel="modulepreload" href="/assets/execution-tools-Ab12.js">',
+    )).toThrow(/must not preload/iu);
+    expect(() => assertOptionalPacksAreNotPreloaded(
       '<link rel="modulepreload" href="/assets/wasi-preview1-worker-Ab12.js">',
     )).toThrow(/must not preload/iu);
     expect(() => assertOptionalPacksAreNotPreloaded(
       '<link rel="modulepreload" href="/assets/deferred-capabilities-Ab12.js">',
+    )).toThrow(/must not preload/iu);
+    expect(() => assertOptionalPacksAreNotPreloaded(
+      '<link rel="modulepreload" href="/assets/load-deferred-capabilities-Ab12.js">',
+    )).toThrow(/must not preload/iu);
+    expect(() => assertOptionalPacksAreNotPreloaded(
+      '<link rel="modulepreload" href="/assets/evidence-acquisition-queue-Ab12.js">',
+    )).toThrow(/must not preload/iu);
+    expect(() => assertOptionalPacksAreNotPreloaded(
+      '<link rel="modulepreload" href="/assets/extension-bridge-Ab12.js">',
     )).toThrow(/must not preload/iu);
     expect(() => assertOptionalPacksAreNotPreloaded(
       '<link rel="modulepreload" href="/assets/node-webcontainer-pack-Ab12.js">',
@@ -244,6 +291,12 @@ describe("release gate", () => {
     )).toThrow(/must not preload/iu);
     expect(() => assertOptionalPacksAreNotPreloaded(
       '<link rel="modulepreload" href="/assets/agent-Ab12.js">',
+    )).toThrow(/must not preload/iu);
+    expect(() => assertOptionalPacksAreNotPreloaded(
+      '<link rel="modulepreload" href="/assets/multimodal-Ab12.js">',
+    )).toThrow(/must not preload/iu);
+    expect(() => assertOptionalPacksAreNotPreloaded(
+      '<link rel="modulepreload" href="/assets/context-policy-Ab12.js">',
     )).toThrow(/must not preload/iu);
     expect(() => assertOptionalPacksAreNotPreloaded(
       '<link rel="modulepreload" href="/assets/tool-bundle-Ab12.js">',
@@ -270,6 +323,15 @@ describe("release gate", () => {
       '<link rel="modulepreload" href="/assets/sessions-route-Ab12.js">',
     )).toThrow(/must not preload/iu);
     expect(() => assertOptionalPacksAreNotPreloaded(
+      '<link rel="modulepreload" href="/assets/session-manifest-Ab12.js">',
+    )).toThrow(/must not preload/iu);
+    expect(() => assertOptionalPacksAreNotPreloaded(
+      '<link rel="modulepreload" href="/assets/session-pins-Ab12.js">',
+    )).toThrow(/must not preload/iu);
+    expect(() => assertOptionalPacksAreNotPreloaded(
+      '<link rel="modulepreload" href="/assets/session-fork-Ab12.js">',
+    )).toThrow(/must not preload/iu);
+    expect(() => assertOptionalPacksAreNotPreloaded(
       '<link rel="modulepreload" href="/assets/capabilities-view-Ab12.js">',
     )).toThrow(/must not preload/iu);
     expect(() => assertOptionalPacksAreNotPreloaded(
@@ -285,13 +347,22 @@ describe("release gate", () => {
       '<link rel="modulepreload" href="/assets/proof-view-Ab12.js">',
     )).toThrow(/must not preload/iu);
     expect(() => assertOptionalPacksAreNotPreloaded(
+      '<link rel="modulepreload" href="/assets/request-state-Ab12.js">',
+    )).toThrow(/must not preload/iu);
+    expect(() => assertOptionalPacksAreNotPreloaded(
       '<link rel="modulepreload" href="/assets/terminal-view-Ab12.js">',
+    )).toThrow(/must not preload/iu);
+    expect(() => assertOptionalPacksAreNotPreloaded(
+      '<link rel="modulepreload" href="/assets/terminal-dock-state-Ab12.js">',
     )).toThrow(/must not preload/iu);
     expect(() => assertOptionalPacksAreNotPreloaded(
       '<link rel="modulepreload" href="/assets/client-runtime-Ab12.js">',
     )).toThrow(/must not preload/iu);
     expect(() => assertOptionalPacksAreNotPreloaded(
       '<link rel="modulepreload" href="/assets/provider-connections-view-Ab12.js">',
+    )).toThrow(/must not preload/iu);
+    expect(() => assertOptionalPacksAreNotPreloaded(
+      '<link rel="modulepreload" href="/assets/chutes-oauth-Ab12.js">',
     )).toThrow(/must not preload/iu);
     expect(() => assertOptionalPacksAreNotPreloaded(
       '<link rel="modulepreload" href="/assets/local-device-keyring-Ab12.js">',

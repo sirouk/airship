@@ -8,7 +8,7 @@ test("imports a real public GitHub snapshot into workspace and browser Git", asy
   const isolatedNamespace = `airship-live-v2/e2e/github-import-${Date.now()}`;
   await page.goto(`/?airshipLabNamespace=${encodeURIComponent(isolatedNamespace)}#editor`);
   await expect(page.getByText("Encrypted state synced", { exact: true }).first()).toBeVisible({ timeout: 20_000 });
-  await page.getByRole("tab", { name: "Sources", exact: true }).click();
+  await openAdvancedSourceControls(page);
   await expect(page.getByRole("heading", { name: "Repositories & worktrees" })).toBeVisible();
   await openImportPanel(page);
 
@@ -29,6 +29,7 @@ test("imports a real public GitHub snapshot into workspace and browser Git", asy
   await expect(receipt.locator("dd").filter({ hasText: /^[0-9a-f]{40}$/ })).toBeVisible();
   await expectRepositoryReady(page, "octocat/Hello-World");
   await expect(page.getByRole("list", { name: "Changed paths" })).toContainText("README");
+  await page.getByRole("button", { name: "Close advanced source controls" }).click();
 
   // `exact` is required now that the rail carries an `Expand/Collapse Workspace`
   // sibling: a substring match resolves to both the destination and its
@@ -38,7 +39,7 @@ test("imports a real public GitHub snapshot into workspace and browser Git", asy
   await expect(page.getByRole("treeitem", { name: /^README /u })).toBeVisible();
   await expect(page.getByRole("treeitem", { name: /^\.git(?:\s|$)/u })).toHaveCount(0);
   await openEditorRoute(page);
-  await page.getByRole("tab", { name: "Sources", exact: true }).click();
+  await openAdvancedSourceControls(page);
   await expectRepositoryReady(page, "octocat/Hello-World");
 
   const changes = page.getByRole("list", { name: "Changed paths" });
@@ -93,7 +94,7 @@ test("imports a real public GitHub snapshot into workspace and browser Git", asy
   await page.reload();
   await expect(page.getByText("Encrypted state synced", { exact: true }).first()).toBeVisible({ timeout: 20_000 });
   await openEditorRoute(page);
-  await page.getByRole("tab", { name: "Sources", exact: true }).click();
+  await openAdvancedSourceControls(page);
   await expectRepositoryReady(page, "octocat/Hello-World");
   await expect(page.locator(".git-repository-meta > span")).toHaveText(committedHead);
   await openRepositoryControls(page);
@@ -119,6 +120,13 @@ async function openImportPanel(page: import("@playwright/test").Page): Promise<v
   await expect(toggle).toHaveAttribute("aria-expanded", "true");
   await expect(toggle).toHaveAccessibleName("Close import");
   await expect(page.getByRole("region", { name: "Import public GitHub snapshot" })).toBeVisible();
+}
+
+async function openAdvancedSourceControls(page: import("@playwright/test").Page): Promise<void> {
+  await page.getByRole("tab", { name: /Source Control/u }).click();
+  await page.getByRole("button", { name: "Advanced source controls" }).click();
+  await expect(page.getByRole("dialog", { name: "Advanced source controls" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Repositories & worktrees" })).toBeVisible();
 }
 
 // AMENDED: the branch, worktree and checkout controls rest inside a `<details>`

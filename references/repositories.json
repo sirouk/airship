@@ -1,0 +1,286 @@
+{
+  "schemaVersion": 2,
+  "capturedOn": "2026-07-28",
+  "checkoutRoot": "references/checkouts",
+  "defaultUse": "Approved read-only clean-room study. Extract behavior, interfaces, inputs, outputs, invariants, and tests into a source-free functional specification; implement original Airship code from that specification only.",
+  "repositories": [
+    {
+      "id": "hermes-agent",
+      "name": "Hermes Agent",
+      "introducedBy": "voice-recording",
+      "repositoryUrl": "https://github.com/NousResearch/hermes-agent",
+      "cloneUrl": "https://github.com/NousResearch/hermes-agent.git",
+      "checkoutPath": "references/checkouts/open-source/nousresearch--hermes-agent",
+      "defaultBranch": "main",
+      "revision": "237b0f5d5e6a3356cf0e95a32b355b15e92e351d",
+      "treeRevision": "0804783f4415fec55edde8a3441a4cd91083866b",
+      "classification": "open-source",
+      "licenseSpdx": "MIT",
+      "licenseFile": "LICENSE",
+      "licenseSha256": "821556e6336796450ab852d375117b48a4887e71d255794fd6318d99982a5ab6",
+      "originRelationship": "Canonical Nous Research upstream.",
+      "studyMode": "clean-room-behavior-and-concepts",
+      "sourceUse": "clean-room-idea-level-only",
+      "areas": [
+        "agent loop and stable prompt/session identity",
+        "profiles, sessions, resume, and context compression",
+        "skills, skill installation, slash commands, and tools",
+        "permission and approval behavior",
+        "memory provenance and live capability awareness"
+      ]
+    },
+    {
+      "id": "sirouk-claw-code",
+      "name": "sirouk/claw-code",
+      "introducedBy": "voice-recording-and-existing-lineage",
+      "repositoryUrl": "https://github.com/sirouk/claw-code",
+      "cloneUrl": "https://github.com/ultraworkers/claw-code.git",
+      "checkoutPath": "references/checkouts/clean-room/sirouk--claw-code",
+      "defaultBranch": "main",
+      "revision": "4fb2aceaf1e40e2ef3d09ecb8ae11ce950e4ad3d",
+      "treeRevision": "f912c0a81da716fdc6bd1a8d275728e087abb650",
+      "classification": "clean-room-public-source",
+      "licenseSpdx": "NOASSERTION",
+      "licenseFile": null,
+      "licenseSha256": null,
+      "parentRepositoryUrl": "https://github.com/ultraworkers/claw-code",
+      "parentRevision": "4fb2aceaf1e40e2ef3d09ecb8ae11ce950e4ad3d",
+      "originRelationship": "The named sirouk fork is pinned at this revision but its Git transport returned HTTP 403 during capture. The same commit is reachable from its public parent, ultraworkers/claw-code, which is used only to hydrate the fork revision. The fork revision itself has no license file; the parent's later MIT license is not assumed to apply retroactively.",
+      "studyMode": "clean-room-behavior-only",
+      "sourceUse": "no-source-reuse",
+      "areas": [
+        "compact coding-agent loop",
+        "streaming and tool-call behavior",
+        "terminal and workspace interaction",
+        "permissions and session lifecycle"
+      ],
+      "provenanceWarning": "The project describes a clean-room rewrite informed by an exposed proprietary Claude Code sourcemap. Do not copy source, prompts, text, tests, structures, or assets."
+    },
+    {
+      "id": "sirouk-claude-code-rs",
+      "name": "sirouk/claude-code-rs",
+      "introducedBy": "voice-recording-and-existing-lineage",
+      "repositoryUrl": "https://github.com/sirouk/claude-code-rs",
+      "cloneUrl": "https://github.com/sirouk/claude-code-rs.git",
+      "checkoutPath": "references/checkouts/clean-room/sirouk--claude-code-rs",
+      "defaultBranch": "main",
+      "revision": "45f7ac9071a54805c35cba9f8cf8b3a3d50f25af",
+      "treeRevision": "08e3657e300c8aa36b667f1bf7e9d7a5c81b73e0",
+      "classification": "clean-room-public-source",
+      "licenseSpdx": "NOASSERTION",
+      "licenseFile": null,
+      "licenseSha256": null,
+      "parentRepositoryUrl": "https://github.com/Kuberwastaken/claurst",
+      "parentRevision": "45f7ac9071a54805c35cba9f8cf8b3a3d50f25af",
+      "originRelationship": "Fork of Kuberwastaken/claurst. The fork revision has no license file; the parent's current GPL-3.0 license is recorded for context but is not assumed to license this fork revision.",
+      "studyMode": "clean-room-behavior-only",
+      "sourceUse": "no-source-reuse",
+      "areas": [
+        "Rust agent-loop decomposition",
+        "streaming and tool contracts",
+        "terminal and workspace behavior",
+        "native distribution architecture"
+      ],
+      "provenanceWarning": "The project describes a Rust clean-room implementation from specifications produced after examining an exposed proprietary Claude Code sourcemap. Do not copy source, prompts, text, tests, structures, or assets."
+    },
+    {
+      "id": "openai-codex",
+      "name": "OpenAI Codex",
+      "introducedBy": "voice-recording",
+      "repositoryUrl": "https://github.com/openai/codex",
+      "cloneUrl": "https://github.com/openai/codex.git",
+      "checkoutPath": "references/checkouts/open-source/openai--codex",
+      "defaultBranch": "main",
+      "revision": "50a7328f50faab7d3a4be125580dc1bf7ae070d7",
+      "treeRevision": "daa49f9d837f24405df3b9f5d1a7186116d7e97b",
+      "classification": "open-source",
+      "licenseSpdx": "Apache-2.0",
+      "licenseFile": "LICENSE",
+      "licenseSha256": "d17f227e4df5da1600391338865ce0f3055211760a36688f816941d58232d8dc",
+      "originRelationship": "Official OpenAI upstream. The repository license does not license proprietary models or services.",
+      "studyMode": "clean-room-behavior-and-concepts",
+      "sourceUse": "clean-room-idea-level-only",
+      "areas": [
+        "coding-agent loop and environment awareness",
+        "tools, shell, workspace, and codebase instructions",
+        "approval, sandbox, and full-access controls",
+        "model control, sessions, resume, and task presentation",
+        "lightweight composer and in-flight agent interaction"
+      ]
+    },
+    {
+      "id": "vscode",
+      "name": "Visual Studio Code / Code - OSS",
+      "introducedBy": "voice-recording",
+      "repositoryUrl": "https://github.com/microsoft/vscode",
+      "cloneUrl": "https://github.com/microsoft/vscode.git",
+      "checkoutPath": "references/checkouts/open-source/microsoft--vscode",
+      "defaultBranch": "main",
+      "revision": "1ad7516ef82498e28fcba9ec755525b231d70a87",
+      "treeRevision": "cc2151d5a02629f19b42e5d2268e7bf9dcd5d81a",
+      "classification": "open-source",
+      "licenseSpdx": "MIT",
+      "licenseFile": "LICENSE.txt",
+      "licenseSha256": "cce33203a80863c22499035b1cfb6aba5df5f02e4ea2669cf5bc5730c1864236",
+      "originRelationship": "Official Code - OSS source upstream. This is distinct from Microsoft's branded Visual Studio Code distribution and product license.",
+      "studyMode": "clean-room-interaction-grammar",
+      "sourceUse": "clean-room-idea-level-only",
+      "areas": [
+        "Explorer tree, filtering, file icons, and drag and drop",
+        "preview and persistent editor tabs",
+        "source-control tree, staging, history, and diff tabs",
+        "integrated contextual terminals",
+        "themes, keyboard behavior, layout, and accessibility"
+      ]
+    },
+    {
+      "id": "open-webui",
+      "name": "Open WebUI",
+      "introducedBy": "voice-recording",
+      "repositoryUrl": "https://github.com/open-webui/open-webui",
+      "cloneUrl": "https://github.com/open-webui/open-webui.git",
+      "checkoutPath": "references/checkouts/source-available/open-webui--open-webui",
+      "defaultBranch": "main",
+      "revision": "01f4282f1ffe0d6212f58d3afbeae21fffd0c4be",
+      "treeRevision": "89b6c6e20fd32f8df36309d2ffffc7c9e6043522",
+      "classification": "source-available",
+      "licenseSpdx": "NOASSERTION",
+      "licenseName": "Open WebUI License",
+      "licenseFile": "LICENSE",
+      "licenseSha256": "5f1bd74c48bf13ab0f82e177ad9e637313b92533d20ead2593d49347a47fc232",
+      "licenseHistory": [
+        {
+          "file": "LICENSE_HISTORY",
+          "sha256": "b1567cc9763241a41569e01f08272a167dac57273f717b95b31ba7b5ec935e17"
+        }
+      ],
+      "originRelationship": "Canonical Open WebUI upstream. The pinned custom license includes branding restrictions; historical files can carry earlier terms described by its LICENSE_HISTORY.",
+      "studyMode": "clean-room-behavior-only",
+      "sourceUse": "behavior-only",
+      "areas": [
+        "thread list, search, favorites, branching, and resume",
+        "composer, attachments, message actions, and queued prompts",
+        "reasoning, tools, citations, and progressive disclosure",
+        "responsive chat behavior and mobile parity"
+      ]
+    },
+    {
+      "id": "minio",
+      "name": "MinIO",
+      "introducedBy": "voice-recording",
+      "repositoryUrl": "https://github.com/minio/minio",
+      "cloneUrl": "https://github.com/minio/minio.git",
+      "checkoutPath": "references/checkouts/open-source/minio--minio",
+      "defaultBranch": "master",
+      "revision": "7aac2a2c5b7c882e68c1ce017d8256be2feea27f",
+      "treeRevision": "376b09b793c57170a905208e64590164d8ab7a3b",
+      "classification": "open-source-archived",
+      "licenseSpdx": "AGPL-3.0-only",
+      "licenseFile": "LICENSE",
+      "licenseSha256": "0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0",
+      "originRelationship": "Canonical MinIO repository, archived and described upstream as no longer maintained at capture time.",
+      "studyMode": "protocol-and-local-lab-reference",
+      "sourceUse": "clean-room-protocol-reference-only-no-source-incorporation",
+      "areas": [
+        "S3-compatible durable Vault behavior",
+        "local self-hosted storage lab",
+        "object lifecycle, CORS, health, and failure behavior",
+        "encrypted profile and workspace persistence integration"
+      ]
+    },
+    {
+      "id": "cocoindex",
+      "name": "CocoIndex",
+      "introducedBy": "existing-airship-lineage",
+      "repositoryUrl": "https://github.com/CocoIndex-io/cocoindex",
+      "cloneUrl": "https://github.com/CocoIndex-io/cocoindex.git",
+      "checkoutPath": "references/checkouts/open-source/cocoindex-io--cocoindex",
+      "defaultBranch": "main",
+      "revision": "3e9f2e9a5037ac4dc5a3e745a6bf1dd3812944b3",
+      "treeRevision": "faecc000fe1966d6517158c7b771a9b1ad5bd67f",
+      "classification": "open-source",
+      "licenseSpdx": "Apache-2.0",
+      "licenseFile": "LICENSE",
+      "licenseSha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "originRelationship": "Canonical CocoIndex upstream.",
+      "studyMode": "clean-room-research-and-concepts",
+      "sourceUse": "clean-room-idea-level-only",
+      "areas": [
+        "incremental codebase indexing",
+        "live invalidation and retrieval dataflow",
+        "semantic context and provenance",
+        "memory recall, graph, and index support"
+      ]
+    },
+    {
+      "id": "isomorphic-git",
+      "name": "isomorphic-git",
+      "introducedBy": "existing-airship-implementation",
+      "repositoryUrl": "https://github.com/isomorphic-git/isomorphic-git",
+      "cloneUrl": "https://github.com/isomorphic-git/isomorphic-git.git",
+      "checkoutPath": "references/checkouts/open-source/isomorphic-git--isomorphic-git",
+      "defaultBranch": "main",
+      "revision": "5aff8afa3135eb15b8507619ea3cd30526ebbe69",
+      "treeRevision": "c94db757e7a440b79fa4b32f4a0c16b92bc03e6d",
+      "classification": "open-source",
+      "licenseSpdx": "MIT",
+      "licenseFile": "LICENSE.md",
+      "licenseSha256": "b916888fb16893c3a1df138543f994b96bb6892d74b6777c3a080d9cd2520c48",
+      "originRelationship": "Canonical isomorphic-git upstream and the source project for Airship's pinned browser-Git dependency.",
+      "studyMode": "pinned-package-and-clean-room-concepts",
+      "sourceUse": "use-the-pinned-package-adapter; checkout-is-clean-room-idea-level-only",
+      "areas": [
+        "browser-native Git objects, refs, index, and worktrees",
+        "status, staging, history, diffs, and commits",
+        "direct Smart HTTP fetch and push",
+        "portable filesystem and hostile-repository boundaries"
+      ]
+    },
+    {
+      "id": "xterm-js",
+      "name": "xterm.js",
+      "introducedBy": "existing-airship-implementation",
+      "repositoryUrl": "https://github.com/xtermjs/xterm.js",
+      "cloneUrl": "https://github.com/xtermjs/xterm.js.git",
+      "checkoutPath": "references/checkouts/open-source/xtermjs--xterm.js",
+      "defaultBranch": "master",
+      "revision": "904ae935269eef5ec6a1415b64463c3d02eff1eb",
+      "treeRevision": "cde32e4153500f58211c703090194df27b80e373",
+      "classification": "open-source",
+      "licenseSpdx": "MIT",
+      "licenseFile": "LICENSE",
+      "licenseSha256": "b569f629d00f2626a8100df2a1798210535621e42164dfd426a6fe5aac7b0ccd",
+      "originRelationship": "Canonical xterm.js upstream and the source project for Airship's pinned terminal-renderer dependency.",
+      "studyMode": "pinned-package-and-clean-room-interaction",
+      "sourceUse": "use-the-pinned-package-adapter; checkout-is-clean-room-idea-level-only",
+      "areas": [
+        "browser terminal rendering and accessibility",
+        "fit, resize, scrollback, input, and selection",
+        "persistent terminal-tab presentation",
+        "VS Code terminal integration grammar"
+      ]
+    }
+  ],
+  "notCloned": [
+    {
+      "name": "ChatGPT",
+      "reason": "Proprietary product and UI; no canonical open-source application repository. Behavioral observation only."
+    },
+    {
+      "name": "Claude and official Claude Code",
+      "reason": "The official public repository carries Anthropic commercial terms and does not expose the core implementation. Behavioral observation only; the two approved public third-party studies above remain subject to the absolute clean-room/no-copy boundary."
+    },
+    {
+      "name": "Cursor",
+      "reason": "Proprietary product; its public repository does not contain the product source. CocoIndex supplies a legitimate open-source incremental-indexing study instead."
+    },
+    {
+      "name": "Platform and provider technologies",
+      "reason": "WebGPU, WebNN, WebAssembly, OPFS, TDX, SEV, NVIDIA Confidential Computing, Chutes, Google Drive, GitHub, and S3 are standards, hardware, or service targets rather than cloneable product-source references."
+    },
+    {
+      "name": "Incidental runtimes and tools",
+      "reason": "Git, Bash, Linux, Python, Node.js, Docker, and Moby were capability or deployment references. Mirroring their large source trees would not improve this focused Airship design library."
+    }
+  ]
+}

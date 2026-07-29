@@ -47,8 +47,16 @@ describe("conversation library empty states", () => {
   });
 
   it("only claims a searched size it actually read, and only from an unfiltered read", () => {
-    expect(source).toContain("if (!search && !providerId && !model && !profileId) setLoadedTotal(next.total);");
+    expect(source).toContain("if (!search && !providerId && !model) setLoadedTotal(next.total);");
     expect(source).toContain("loadedTotal === undefined ? {} : { loadedTotal }");
+  });
+
+  it("keeps the ordinary ledger inside the active profile", () => {
+    expect(source).toContain("profileId: scopeProfileId");
+    expect(source).toContain("Profile · {scopeProfileName}");
+    expect(source).toContain("current && next.items.some((item) => item.id === current)");
+    expect(source).not.toContain('label: "All profiles"');
+    expect(source).not.toContain('ariaLabel="Filter by profile"');
   });
 
   it("gives the empty detail pane the conversation it is standing next to", () => {

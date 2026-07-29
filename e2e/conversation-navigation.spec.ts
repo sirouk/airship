@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 test("every conversation has a stable addressed URL and new conversations do not overwrite it", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium", "desktop addressed conversation contract");
@@ -21,6 +21,42 @@ test("every conversation has a stable addressed URL and new conversations do not
   }
 });
 
+test("desktop chat title supports durable inline rename", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "desktop inline rename contract");
+  await page.goto("/#chat");
+  await expect(page.locator(".app-shell")).toBeVisible();
+
+  await page.locator(".session-bar__identity-button").dblclick();
+  const input = page.getByRole("textbox", { name: "Conversation title" });
+  await expect(input).toBeVisible();
+  await input.fill("Inline rename survives navigation");
+  // Leaving the title is the terminal-style save gesture requested in the
+  // product review. The durable journal event then repopulates the rail list.
+  await page.getByRole("combobox", { name: "Message Airship" }).click();
+
+  await expect(page.locator(".session-bar__title")).toHaveText("Inline rename survives navigation");
+  const navigation = page.getByRole("navigation", { name: "Primary" });
+  await navigation.getByRole("button", { name: "Expand recent conversations" }).click();
+  await expect(navigation.getByRole("group", { name: "Profile conversations" }))
+    .toContainText("Inline rename survives navigation");
+});
+
+test("mobile exposes an explicit durable conversation rename action", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile-chromium", "mobile rename contract");
+  await page.goto("/#chat");
+  await expect(page.locator(".app-shell")).toBeVisible();
+  await page.getByRole("button", { name: "Rename conversation" }).click();
+  const input = page.getByRole("textbox", { name: "Conversation title" });
+  await expect(input).toBeVisible();
+  await input.fill("Mobile rename persists");
+  await input.press("Enter");
+  await expect(page.locator(".session-bar__title")).toHaveText("Mobile rename persists");
+
+  await page.getByRole("navigation", { name: "Mobile navigation" }).getByRole("button", { name: "More", exact: true }).click();
+  await page.getByRole("dialog", { name: "More" }).getByRole("button").filter({ hasText: "All conversations" }).click();
+  await expect(page.getByRole("region", { name: "All conversations" })).toContainText("Mobile rename persists");
+});
+
 test("conversation branches preserve their source and navigate back through lineage", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium", "desktop immutable branch contract");
   await page.goto("/#chat");
@@ -31,26 +67,55 @@ test("conversation branches preserve their source and navigate back through line
   // Retry and Branch on it, neither of which had a referent. Branching a turn
   // that actually happened is the stronger version of this contract.
   const seedComposer = page.getByRole("combobox", { name: "Message Airship" });
-  await seedComposer.fill("/help");
+  await seedComposer.fill("Explain immutable context in one sentence.");
   await page.getByRole("button", { name: "Send message" }).click();
-  const message = page.locator("[data-transcript-card]").first();
-  const restoredPrompt = (await message.locator(".message-body > p").textContent())?.trim();
-  expect(restoredPrompt).toBeTruthy();
+  const message = page.locator('[data-transcript-card][data-message-role="assistant"]').last();
   await message.hover();
-  const fork = message.getByRole("button", { name: "Fork conversation" });
+  await expect(message.getByRole("button", { name: "Retry" })).toBeEnabled();
+  const fork = message.getByRole("button", { name: "Fork from here" });
   await expect(fork).toBeEnabled();
   await fork.click();
+  await expect(page.locator(".composer-notice")).toContainText("audited context through this answer");
   await expect.poll(() => page.url()).not.toBe(sourceUrl);
   const composer = page.getByRole("combobox", { name: "Message Airship" });
-  await expect(composer).toHaveValue(restoredPrompt!);
+  await expect(composer).toHaveValue("");
   // Cross the draft debounce and the route-request → active-session
-  // normalization. Neither is allowed to erase the intentional fork prefill.
+  // normalization. Neither may invent a copied prompt in a true fork.
   await page.waitForTimeout(240);
-  await expect(composer).toHaveValue(restoredPrompt!);
+  await expect(composer).toHaveValue("");
   const lineage = page.getByRole("button", { name: /Branch from #/u });
   await expect(lineage).toBeVisible();
   await lineage.click();
   await expect(page).toHaveURL(sourceUrl);
+});
+
+test("edit and retry create distinct immutable branches", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "desktop branch-aware message actions");
+  await page.goto("/#chat");
+  await expect(page).toHaveURL(/#chat\/[^/?#]+$/);
+  const sourceUrl = page.url();
+  const prompt = "Explain why immutable branches are useful.";
+  const composer = page.getByRole("combobox", { name: "Message Airship" });
+  await composer.fill(prompt);
+  await page.getByRole("button", { name: "Send message" }).click();
+
+  const user = page.locator('[data-transcript-card][data-message-role="user"]').last();
+  await user.hover();
+  await user.getByRole("button", { name: "Edit & branch" }).click();
+  await expect(page.locator(".composer-notice")).toContainText("immutable pre-turn boundary");
+  await expect.poll(() => page.url()).not.toBe(sourceUrl);
+  const editUrl = page.url();
+  await expect(composer).toHaveValue(prompt);
+  await page.getByRole("button", { name: /Branch from #/u }).click();
+  await expect(page).toHaveURL(sourceUrl);
+
+  const assistant = page.locator('[data-transcript-card][data-message-role="assistant"]').last();
+  await assistant.hover();
+  await assistant.getByRole("button", { name: "Retry" }).click();
+  await expect.poll(() => page.url()).not.toBe(sourceUrl);
+  await expect(page).not.toHaveURL(editUrl);
+  await expect(page.locator('[data-transcript-card][data-message-role="user"]')).toContainText(prompt);
+  await expect(composer).toHaveValue("");
 });
 
 test("each addressed conversation restores its own unsent draft", async ({ page }, testInfo) => {
@@ -100,22 +165,21 @@ test("desktop treats Chat as the conversation disclosure and preserves the full 
   await expect(navigation.getByRole("button", { name: "Sessions", exact: true })).toHaveCount(0);
   await expect(navigation.getByRole("button", { name: "Chat", exact: true })).toHaveAttribute("aria-current", "page");
 
-  // AMENDED. The conversation list is a disclosure rather than a permanent
-  // 250px scroller in the rail, so it rests closed instead of open: the ten
-  // sessions, the ledger link and the collapse control are all unchanged, and
-  // the title column went from ~105px to ~232px by leaving the rail. What the
-  // replacement asserts that the original could not: the panel is 320px wide,
-  // and `All conversations` — which used to be the last row of a hard-clipped
-  // scroller and was measured *invisible* at six or more threads — is always
-  // inside the panel's own box.
+  // The profile-local thread tree expands directly beneath Chat. It is bounded
+  // to the rail, keeps the complete-ledger action reachable, and names the
+  // active profile rather than presenting a global session bucket.
   const disclosure = navigation.getByRole("button", { name: "Expand recent conversations" });
   await expect(disclosure).toHaveAttribute("aria-expanded", "false");
   await expect(navigation.locator("#airship-recent-conversations")).toHaveCount(0);
   await disclosure.click();
   const recent = navigation.locator("#airship-recent-conversations");
   await expect(recent).toBeVisible();
+  await expect(recent).toContainText("General conversations");
   expect(await recent.locator(".recent-conversation").count()).toBeLessThanOrEqual(10);
-  expect(Math.round((await recent.boundingBox())!.width)).toBe(320);
+  const navigationBox = await navigation.boundingBox();
+  const inlineTreeBox = await recent.boundingBox();
+  expect(inlineTreeBox!.x).toBeGreaterThanOrEqual(navigationBox!.x);
+  expect(inlineTreeBox!.x + inlineTreeBox!.width).toBeLessThanOrEqual(navigationBox!.x + navigationBox!.width + 1);
   await expect(navigation.getByRole("button", { name: "Collapse recent conversations" })).toHaveAttribute("aria-expanded", "true");
   const ledger = recent.getByRole("button", { name: "All conversations", exact: true });
   const ledgerBox = await ledger.boundingBox();
@@ -131,6 +195,33 @@ test("desktop treats Chat as the conversation disclosure and preserves the full 
   // separate string beside the id.
   await page.locator(".journal-chip__record").click();
   await expect(page).toHaveURL(/#sessions$/);
+});
+
+test("desktop favorites remain journal-backed and isolated to the active profile", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "desktop profile favorite contract");
+  await page.goto("/#chat");
+  const navigation = page.getByRole("navigation", { name: "Primary" });
+  await navigation.getByRole("button", { name: "Expand recent conversations" }).click();
+  const tree = navigation.getByRole("group", { name: "Profile conversations" });
+  const active = tree.locator(".recent-conversation.active");
+  await expect(active).toBeVisible();
+  const title = (await active.locator("strong").textContent())?.trim();
+  expect(title).toBeTruthy();
+  await tree.getByRole("button", { name: `Add to favorites ${title!}` }).click();
+  await expect(tree.getByText("Favorites", { exact: true })).toBeVisible();
+  await expect(tree.getByRole("button", { name: `Remove from favorites ${title!}` })).toBeVisible();
+
+  const profile = page.locator(".sidebar .profile-menu").getByRole("button", { name: "Agent profile" });
+  await profile.click();
+  const listbox = page.getByRole("listbox", { name: "Agent profile" });
+  await listbox.getByRole("option", { name: "Research", exact: true }).click();
+  await expect(tree).toContainText("Research conversations");
+  await expect(tree.getByRole("button", { name: `Remove from favorites ${title!}` })).toHaveCount(0);
+
+  await profile.click();
+  await listbox.getByRole("option", { name: "General", exact: true }).click();
+  await expect(tree).toContainText("General conversations");
+  await expect(tree.getByRole("button", { name: `Remove from favorites ${title!}` })).toBeVisible();
 });
 
 test("mobile keeps conversations out of the fixed bar and exposes the ledger through More", async ({ page }, testInfo) => {
@@ -160,7 +251,12 @@ test("Workspace owns one Editor and Terminal while preserving the legacy Sources
   await expect(navigation.getByRole("button", { name: "Terminal", exact: true })).toBeVisible();
   await navigation.getByRole("button", { name: "Editor", exact: true }).click();
   await expect(page).toHaveURL(/#editor$/);
-  await expect(page.getByRole("tab", { name: "Files & editor" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tab", { name: "Sources", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("tab", { name: "Explorer", exact: true })).toBeVisible();
+  await page.goto("/#sources");
+  await expect(page).toHaveURL(/#editor$/);
+  await expect(page.getByRole("dialog", { name: "Advanced source controls" })).toHaveCount(0);
+  await expect(page.getByRole("tab", { name: /Source Control/u })).toBeVisible();
   await navigation.getByRole("button", { name: "Terminal", exact: true }).click();
   await expect(page).toHaveURL(/#terminal$/);
 });
@@ -168,7 +264,10 @@ test("Workspace owns one Editor and Terminal while preserving the legacy Sources
 test("Editor source tools default to a collapsible tree and Profiles archives without stranding history", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium", "desktop management information architecture");
   await page.goto("/#editor");
-  await page.getByRole("tab", { name: "Sources", exact: true }).click();
+  await page.getByRole("tab", { name: /Source Control/u }).click();
+  await page.getByRole("button", { name: "Advanced source controls" }).click();
+  const sourceTools = page.getByRole("dialog", { name: "Advanced source controls" });
+  await expect(sourceTools).toBeVisible();
   const tree = page.getByRole("button", { name: "Tree", exact: true });
   const flat = page.getByRole("button", { name: "Flat", exact: true });
   await expect(tree).toHaveAttribute("aria-pressed", "true");
@@ -229,20 +328,35 @@ test("Memory unifies federated search, graph, and the legacy Context index deep 
   })).toBe(true);
 });
 
+test("Memory workspace results open the exact file in the editor", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "desktop Memory source navigation contract");
+  await page.goto("/#memory");
+  await page.getByRole("searchbox", { name: "Search every memory surface" }).fill("workspace");
+  const hit = page.locator("#memory-results .memory-hit").filter({
+    has: page.getByRole("button", { name: "Open in editor" }),
+  }).first();
+  await expect(hit).toBeVisible();
+  const path = (await hit.locator("header strong").innerText()).trim();
+  const name = path.slice(path.lastIndexOf("/") + 1);
+
+  await hit.getByRole("button", { name: "Open in editor" }).click();
+
+  await expect(page).toHaveURL(/#editor$/);
+  await expect(page.getByRole("textbox", { name: `Edit ${name}` })).toBeVisible();
+  await expect(page.locator(".editor-strip__path")).toContainText(path.replace("/workspace/", ""));
+});
+
 test("Memory disclosures and graph stay inside the mobile viewport", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile-chromium", "mobile memory overflow contract");
   await page.goto("/#memory");
   await page.getByRole("searchbox", { name: "Search every memory surface" }).fill("workspace");
   await expect(page.locator("#memory-relationships")).toBeVisible();
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
-  const jumpNavigation = page.getByRole("navigation", { name: "Memory page sections" });
-  const overflow = await jumpNavigation.evaluate((element) => ({
-    clientWidth: element.clientWidth,
-    overflowX: getComputedStyle(element).overflowX,
-    scrollWidth: element.scrollWidth,
-  }));
-  expect(overflow.overflowX).toBe("auto");
-  expect(overflow.scrollWidth).toBeGreaterThanOrEqual(overflow.clientWidth);
+  // The horizontally scrolling jump strip that was measured here is gone; the
+  // route's own sections carry their counts. What it was protecting — that
+  // nothing on Memory pushes the phone viewport sideways — is asserted above
+  // and again at the end of this journey.
+  await expect(page.locator(".memory-scope-rail")).toHaveCount(0);
   const graph = page.getByLabel("Interactive memory relationship graph");
   await expect(graph).toBeVisible();
   const graphBounds = await graph.boundingBox();
@@ -252,7 +366,7 @@ test("Memory disclosures and graph stay inside the mobile viewport", async ({ pa
   await expect(match).toBeVisible();
   await match.click();
   await expect(page.locator("#memory-relationships .memory-node-detail h2")).toBeVisible();
-  await page.getByRole("button", { name: /Local index/u }).click();
+  await openMemoryIndex(page);
   await expect(page.getByRole("status", { name: "Shared Memory query in the workspace index" })).toContainText("Following “workspace”");
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
 });
@@ -269,7 +383,7 @@ test("Memory keeps its shared-query contract at the 768px tablet boundary", asyn
   await expect(match).toBeVisible();
   await match.click();
   await expect(relationships.locator(".memory-node-detail h2")).toBeVisible();
-  await page.getByRole("button", { name: /Local index/u }).click();
+  await openMemoryIndex(page);
   await expect(page.getByRole("status", { name: "Shared Memory query in the workspace index" })).toContainText("Following “workspace”");
   await expect.poll(() => page.evaluate(() => ({
     documentOverflow: document.documentElement.scrollWidth - innerWidth,
@@ -398,3 +512,16 @@ test("Proof owns receipt, journal, and attestation evidence without a duplicate 
   await expect(page.getByRole("tab", { name: "Receipt & journal" })).toHaveAttribute("aria-selected", "true");
   await expect(page.getByRole("heading", { name: "Session journal integrity", level: 2 })).toBeVisible();
 });
+
+/*
+ * The Index section is reached by its own disclosure now. The scope strip that
+ * used to offer a "Local index" jump restated counts the sections already carry
+ * and was removed; the disclosure is the ordinary heading it always was.
+ */
+async function openMemoryIndex(page: Page): Promise<void> {
+  const index = page.locator("#memory-index");
+  if (!await index.evaluate((element: HTMLDetailsElement) => element.open)) {
+    await index.locator("summary").click();
+  }
+  await expect.poll(() => index.evaluate((element: HTMLDetailsElement) => element.open)).toBe(true);
+}

@@ -1,10 +1,8 @@
 import { useEffect, useRef } from "preact/hooks";
 import {
-  CANONICAL_DESTINATIONS,
   MOBILE_MORE_ENTRIES,
   MOBILE_PRIMARY_CONTROLS,
   mobilePrimaryControlForView,
-  type CanonicalDestinationId,
   type MobilePrimaryControlId,
   type NavigationView,
 } from "./navigation-model";
@@ -53,10 +51,6 @@ const routeIcons: Readonly<Record<NavigationView, IconName>> = Object.freeze({
   proof: "proof",
   access: "access",
 });
-
-const parentLabels = Object.freeze(Object.fromEntries(
-  CANONICAL_DESTINATIONS.map((destination) => [destination.id, destination.label]),
-)) as Readonly<Record<CanonicalDestinationId, string>>;
 
 export function MobileNavigation({
   view,
@@ -241,7 +235,7 @@ export function MobileNavigation({
                   >
                     <Icon name={routeIcons[entry.view]} size={21} />
                     <span>{entry.label}</span>
-                    <small>{entry.parent ? `${parentLabels[entry.parent]} view` : "Destination"}</small>
+                    <small>{entry.description}</small>
                     <PendingBadge
                       count={notice}
                       label={pendingLabel(notice, "attestation item")}

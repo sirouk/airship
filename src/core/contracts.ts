@@ -80,9 +80,33 @@ export type SessionForkLineage = Readonly<{
   version: 1;
   kind: "fork";
   sourceSessionId: string;
+  /** Selected source conversation boundary, not necessarily the source's later observed journal head. */
   sourceHeadSequence: number;
   sourceHeadDigest: string;
   forkedAt: string;
+}>;
+
+/**
+ * A fresh destination-session commitment to bounded provider context recovered
+ * from an audited source prefix. It is intentionally not a copy of source
+ * journal events: source event IDs, timestamps, and turn IDs remain solely in
+ * the source session.
+ */
+export type SessionForkContextSeed = Readonly<{
+  version: 1;
+  kind: "fork-context";
+  forkSessionId: string;
+  sourceSessionId: string;
+  /** Source journal head observed and rechecked before the fork mutation. */
+  sourceHeadSequence: number;
+  sourceHeadDigest: string;
+  /** Audited prefix whose canonical provider messages produced `messages`. */
+  sourceBoundarySequence: number;
+  sourceBoundaryDigest: string;
+  messages: readonly Readonly<CanonicalMessage>[];
+  omittedMessages: number;
+  omittedImages: number;
+  contextDigest: string;
 }>;
 
 /**

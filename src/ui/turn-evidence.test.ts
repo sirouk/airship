@@ -157,4 +157,63 @@ describe("the canonical verdict's delivery boundary", () => {
     expect(app).toContain('label: TURN_EVIDENCE_COPY["evidence-blocked"].chip');
     expect(app).not.toContain('label: args.failure.label');
   });
+
+  it("recovers records and then the persisted queue only after a credential-backed client is installed", () => {
+    const connection = app.indexOf("async function connectChutes(");
+    const workerInstall = app.indexOf(
+      "const evidenceClient = await installAttestationEvidenceClient(",
+      connection,
+    );
+    const recordAuthorityGate = app.indexOf(
+      "if (evidenceClient && endpointEvidenceAuthority.current?.current())",
+      workerInstall,
+    );
+    const recovery = app.indexOf(
+      "await rebindEvidenceAcquisitionQueue(true, committedRuntime, nextProfile.profileId);",
+      connection,
+    );
+    expect(connection).toBeGreaterThanOrEqual(0);
+    expect(workerInstall).toBeGreaterThan(connection);
+    expect(recordAuthorityGate).toBeGreaterThan(workerInstall);
+    expect(recovery).toBeGreaterThan(recordAuthorityGate);
+
+    const install = app.indexOf("async function installAttestationEvidenceClient(");
+    const installBinding = app.indexOf("attestationClientBinding.current = binding;", install);
+    const recordRecovery = app.indexOf("await ensureEndpointEvidenceAuthority(scope, binding);", installBinding);
+    expect(installBinding).toBeGreaterThan(install);
+    expect(recordRecovery).toBeGreaterThan(installBinding);
+  });
+
+  it("keeps disconnected queues paused and fences recovery to Profile, WorkspacePort, and client generation", () => {
+    const profileEffect = app.indexOf("// Endpoint proof and its scheduler are one Profile cockpit.");
+    const noCredential = app.indexOf("if (!credential || !credentialKind)", profileEffect);
+    const profileRebind = app.indexOf("void rebindProfileEvidenceScope(active, profileId, credential, credentialKind)", profileEffect);
+    expect(profileEffect).toBeGreaterThanOrEqual(0);
+    expect(noCredential).toBeGreaterThan(profileEffect);
+    expect(profileRebind).toBeGreaterThan(noCredential);
+
+    const ensureQueue = app.indexOf("async function ensureEvidenceAcquisitionQueue(");
+    const credentialGate = app.indexOf("!providerCredential.current", ensureQueue);
+    const clientFence = app.indexOf("!sameEndpointEvidenceScope(expectedClient, evidenceScope)", ensureQueue);
+    const recordFence = app.indexOf("!sameEndpointEvidenceScope(expectedEndpointBinding, evidenceScope)", ensureQueue);
+    const recovery = app.indexOf("const binding = await authority.activate(target);", ensureQueue);
+    expect(credentialGate).toBeGreaterThan(ensureQueue);
+    expect(clientFence).toBeGreaterThan(credentialGate);
+    expect(recordFence).toBeGreaterThan(clientFence);
+    expect(recovery).toBeGreaterThan(recordFence);
+
+    expect(app).toContain("attestationClientBinding.current !== expectedClient");
+    expect(app).toContain("endpointEvidenceAuthority.current?.current() !== expectedEndpointBinding");
+    expect(app).toContain("attestationPresentation.profileId === profileId");
+    expect(app).toContain("attestationPresentation.sessionId === sessionId");
+    expect(app).toContain("await authority.activate(target);");
+
+    const acquireStart = app.indexOf("async function acquireEndpointAttestation(");
+    const acquireEnd = app.indexOf("async function probeCurrentEndpoint(", acquireStart);
+    const acquisition = app.slice(acquireStart, acquireEnd);
+    expect(acquisition).toContain("const operation = attestationOperation.current;");
+    expect(acquisition).not.toContain("++attestationOperation.current");
+    expect(acquisition).toContain("attestationClientBinding.current !== clientBinding");
+    expect(acquisition).toContain("isCurrentEndpointEvidenceFence(fence)");
+  });
 });

@@ -1,20 +1,24 @@
-import { useEffect, useMemo, useState } from "preact/hooks";
+import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import type { BrowserGitClient } from "../git/client";
 import type { GitOperation, GitOperationDescriptor } from "../git/types";
 import type { WorkspaceEntry, WorkspaceFile, WorkspacePort } from "../workspace/contracts";
 import { durabilityLabel, type DurabilityState } from "./durability-indicator";
+import { trapFocus } from "./focus-trap";
 import { Popover } from "./popover";
 import { RouteHeader } from "./route-header";
 import { Seal, type SealState } from "./seal";
 import type { SourcesImportRequest } from "./sources-view";
-import { Tabs } from "./tabs";
 import { WORKBENCH_SHARED_SURFACE_NOTE, workbenchIdentity } from "./workbench-model";
-import { WorkspaceView } from "./workspace-view";
+import { WorkspaceView, workspaceWorkbenchScope } from "./workspace-view";
+import type { TerminalOpenRequest } from "./terminal-dock-state";
+import { WorkspaceTerminalDock } from "./workspace-terminal-dock";
 import "./editor-view.css";
 
 type SourcesComponent = typeof import("./sources-view").SourcesView;
 
 export type EditorViewProps = Readonly<{
+  /** Active cockpit owner for all page-local workbench view state. */
+  profileId: string;
   files: readonly WorkspaceEntry[];
   selected?: WorkspaceFile;
   onOpen(path: string): void | Promise<void>;
@@ -23,14 +27,15 @@ export type EditorViewProps = Readonly<{
   review(operation: GitOperation, descriptor: GitOperationDescriptor): Promise<"allow" | "deny">;
   reviewImport(request: SourcesImportRequest): Promise<"allow" | "deny">;
   onWorkspaceChanged(): void | Promise<void>;
+  onOpenTerminalAt?(cwd: string): void;
+  terminalOpenRequest?: TerminalOpenRequest;
+  onTerminalOpenRequestHandled?(requestId: string): void;
+  onOpenFullTerminal?(): void;
+  threadId?: string;
+  profileName?: string;
   durability: Readonly<{ state: DurabilityState; detail: string }>;
   workspaceIdentity?: string;
 }>;
-
-const VIEW_TABS = Object.freeze([
-  Object.freeze({ id: "files", label: "Files & editor" }),
-  Object.freeze({ id: "sources", label: "Sources" }),
-]);
 
 /**
  * One Workspace destination with lightweight editing and full source control.
@@ -43,11 +48,20 @@ const VIEW_TABS = Object.freeze([
  * states its own name and opens its own pane.
  */
 export function EditorView(props: EditorViewProps) {
-  const [mode, setMode] = useState<"files" | "sources">("files");
+  const sourceToolsAuthority = workspaceWorkbenchScope(props.workspaceIdentity ?? "page-memory", props.profileId);
+  // Record the authority that opened the sheet rather than a bare boolean.
+  // A profile/workspace switch therefore removes the prior inventory in the
+  // same render that receives the new authority; an effect never gets one
+  // paint in which to expose the former profile's repository state.
+  const [sourceToolsAuthorityOpen, setSourceToolsAuthorityOpen] = useState<string>();
+  const sourceToolsOpen = sourceToolsAuthorityOpen === sourceToolsAuthority;
   const [Sources, setSources] = useState<SourcesComponent>();
   const [loadError, setLoadError] = useState<string>();
   const [hash, setHash] = useState(() => typeof location === "undefined" ? "" : location.hash);
   const identity = useMemo(() => workbenchIdentity(hash), [hash]);
+  const sourceToolsDialog = useRef<HTMLDivElement>(null);
+  const sourceToolsClose = useRef<HTMLButtonElement>(null);
+  const sourceToolsOpener = useRef<HTMLElement>();
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -58,7 +72,13 @@ export function EditorView(props: EditorViewProps) {
   }, []);
 
   useEffect(() => {
-    if (mode !== "sources" || Sources) return;
+    if (sourceToolsAuthorityOpen === undefined || sourceToolsOpen) return;
+    setSourceToolsAuthorityOpen(undefined);
+    sourceToolsOpener.current = undefined;
+  }, [sourceToolsAuthorityOpen, sourceToolsOpen]);
+
+  useEffect(() => {
+    if (!sourceToolsOpen || Sources) return;
     let current = true;
     setLoadError(undefined);
     void import("./sources-view").then((module) => {
@@ -67,7 +87,26 @@ export function EditorView(props: EditorViewProps) {
       if (current) setLoadError("The full source-control tools could not be loaded. Workspace files and drafts were not changed.");
     });
     return () => { current = false; };
-  }, [mode, Sources]);
+  }, [sourceToolsOpen, Sources]);
+
+  useEffect(() => {
+    if (!sourceToolsOpen) return;
+    const frame = requestAnimationFrame(() => sourceToolsClose.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [sourceToolsOpen]);
+
+  function openSourceTools(): void {
+    sourceToolsOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
+    setLoadError(undefined);
+    setSourceToolsAuthorityOpen(sourceToolsAuthority);
+  }
+
+  function closeSourceTools(): void {
+    setSourceToolsAuthorityOpen(undefined);
+    const opener = sourceToolsOpener.current;
+    sourceToolsOpener.current = undefined;
+    if (opener?.isConnected) requestAnimationFrame(() => opener.focus());
+  }
 
   return <section class="editor-route" aria-label="Workspace editor">
     {/*
@@ -86,17 +125,11 @@ export function EditorView(props: EditorViewProps) {
       headingId="workbench-route-title"
       notes={<p class="route-header__about-description">{WORKBENCH_SHARED_SURFACE_NOTE}</p>}
       status={<WorkbenchDurabilityChip state={props.durability.state} detail={props.durability.detail} />}
-      actions={<Tabs
-        class="editor-route__tabs"
-        label="Workspace views"
-        items={VIEW_TABS}
-        activeId={mode}
-        onSelect={(id) => setMode(id === "sources" ? "sources" : "files")}
-        panelId={(id) => `workbench-panel-${id}`}
-      />}
     />
-    <div class="editor-route__panel" data-mode={mode} id={`workbench-panel-${mode}`} role="tabpanel" aria-labelledby="workbench-route-title">
-      {mode === "files" ? <WorkspaceView
+    <div class="editor-route__panel" data-mode="files" aria-labelledby="workbench-route-title">
+      <div class="editor-workbench-host" aria-hidden={sourceToolsOpen ? "true" : undefined}>
+      <WorkspaceView
+        profileId={props.profileId}
         files={props.files}
         selected={props.selected}
         onOpen={props.onOpen}
@@ -105,17 +138,52 @@ export function EditorView(props: EditorViewProps) {
         git={props.git}
         review={props.review}
         onWorkspaceChanged={props.onWorkspaceChanged}
-        onOpenRepositoryManager={() => setMode("sources")}
+        onOpenTerminalAt={props.onOpenTerminalAt}
+        onOpenRepositoryManager={openSourceTools}
         opensPane={identity.opensPane}
-      /> : Sources ? <Sources
-        client={props.git}
-        author={{ name: "Local Airship User", email: "airship@local.invalid" }}
-        review={props.review}
+        opensActivity={sourceToolsOpen ? "source" : "explorer"}
+      />
+      </div>
+      <WorkspaceTerminalDock
         workspace={props.workspace}
-        reviewImport={props.reviewImport}
+        workspaceIdentity={props.workspaceIdentity ?? "page-memory"}
+        profileId={props.profileId}
+        {...(props.profileName ? { profileName: props.profileName } : {})}
+        {...(props.threadId ? { threadId: props.threadId } : {})}
+        git={props.git}
+        reviewGit={props.review}
+        durability={props.durability}
+        {...(props.terminalOpenRequest ? { openRequest: props.terminalOpenRequest } : {})}
+        {...(props.onTerminalOpenRequestHandled ? { onOpenRequestHandled: props.onTerminalOpenRequestHandled } : {})}
         onWorkspaceChanged={props.onWorkspaceChanged}
-        workspaceDurability={props.durability}
-      /> : <div class="editor-route__loading" role={loadError ? "alert" : "status"}>{loadError ?? "Loading full browser source control…"}</div>}
+        onOpenFullView={props.onOpenFullTerminal ?? (() => { if (typeof location !== "undefined") location.hash = "terminal"; })}
+      />
+      {sourceToolsOpen ? <div class="source-tools-scrim" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) closeSourceTools(); }}>
+        <div
+          class="source-tools-dialog"
+          ref={sourceToolsDialog}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Advanced source controls"
+          onKeyDown={(event) => {
+            if (event.key === "Escape") { event.preventDefault(); closeSourceTools(); }
+            else if (event.key === "Tab") trapFocus(event, sourceToolsDialog.current);
+          }}
+        >
+          <button ref={sourceToolsClose} class="source-tools-close" type="button" onClick={closeSourceTools}>Close advanced source controls</button>
+          {Sources ? <Sources
+            key={sourceToolsAuthority}
+            embedded
+            client={props.git}
+            author={{ name: "Local Airship User", email: "airship@local.invalid" }}
+            review={props.review}
+            workspace={props.workspace}
+            reviewImport={props.reviewImport}
+            onWorkspaceChanged={props.onWorkspaceChanged}
+            workspaceDurability={props.durability}
+          /> : <div class="editor-route__loading" role={loadError ? "alert" : "status"}>{loadError ?? "Loading advanced browser source controls…"}</div>}
+        </div>
+      </div> : null}
     </div>
   </section>;
 }
@@ -143,7 +211,7 @@ function WorkbenchDurabilityChip({ state, detail }: Readonly<{ state: Durability
       >
         <p class="workbench-durability__detail">{detail}</p>
         <p class="workbench-durability__detail">
-          Open tabs are remembered for this browser tab. Unsaved drafts are not — closing or reloading this page discards them.
+          Open tabs and layout are remembered for this profile in this browser tab. Unsaved drafts stay in this page and profile only — closing or reloading discards them.
         </p>
       </Popover>
     </span>

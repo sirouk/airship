@@ -552,16 +552,34 @@ for (const density of densities) {
     const navigation = sidebar.getByRole("navigation", { name: "Primary" });
     const profile = sidebar.locator(".profile-switcher");
     await expect(profile).toBeVisible();
+    /*
+     * The active profile is the workspace boundary, so it is read before any
+     * destination and must never scroll away from the top of the rail. This
+     * asserted the opposite arrangement while the switcher sat at the bottom;
+     * the shape it protects is the same either way — the switcher is pinned and
+     * the destination list is the part that moves.
+     */
     const initial = await Promise.all([sidebar.boundingBox(), navigation.boundingBox(), profile.boundingBox()]);
     expect(initial.every(Boolean)).toBe(true);
+    expect(initial[2]!.y).toBeGreaterThanOrEqual(0);
     expect(initial[2]!.y + initial[2]!.height).toBeLessThanOrEqual(560);
-    expect(initial[1]!.y + initial[1]!.height).toBeLessThanOrEqual(initial[2]!.y + 1);
+    // First control in the rail: the switcher ends where the destinations begin.
+    expect(initial[2]!.y + initial[2]!.height).toBeLessThanOrEqual(initial[1]!.y + 1);
+
+    // The destination list is the scrolling region, and driving it to its end
+    // must not move the switcher — that is the whole meaning of "pinned". The
+    // rail may or may not overflow at a given density, so this asserts the
+    // relationship rather than requiring the overflow to exist.
+    await navigation.evaluate((element) => { element.scrollTop = element.scrollHeight; });
+    const pinned = await profile.boundingBox();
+    expect(pinned!.y).toBeCloseTo(initial[2]!.y, 0);
 
     await navigation.getByRole("button", { name: "Account", exact: true }).click();
     await expect(page).toHaveURL(/#account$/);
     await expect(profile).toBeVisible();
     const after = await profile.boundingBox();
     expect(after).not.toBeNull();
+    expect(after!.y).toBeGreaterThanOrEqual(0);
     expect(after!.y + after!.height).toBeLessThanOrEqual(560);
 
     const picker = profile.getByRole("button", { name: "Agent profile" });

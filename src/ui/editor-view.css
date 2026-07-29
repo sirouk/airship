@@ -48,28 +48,56 @@
 }
 
 .editor-route__panel {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.editor-workbench-host {
+  display: grid;
   min-width: 0;
   min-height: 0;
 }
 
-/* Files own the frame; Sources is still a document and still scrolls. */
-.editor-route__panel[data-mode="files"] {
+.source-tools-scrim {
+  position: absolute;
+  z-index: 190;
+  inset: 0;
   display: grid;
+  place-items: stretch;
+  padding: clamp(var(--sp-2), 2vw, var(--sp-5));
+  background: color-mix(in srgb, var(--ground) 66%, transparent);
+  backdrop-filter: blur(3px);
+}
+
+.source-tools-dialog {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(96rem, 100%);
+  min-width: 0;
+  min-height: 0;
+  max-height: 100%;
+  margin: 0 auto;
   overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-panel);
+  background: var(--ground);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, .52);
 }
 
-.editor-route__panel[data-mode="sources"] {
-  overflow: auto;
-  padding: var(--sp-5) var(--sp-6) var(--sp-7);
-}
-
-/*
- * The route control lives inside the 44px bar rather than above it. Its own
- * underline is the "you are here" encoding; the bar already owns the rule
- * beneath, so a second border would draw the same line twice.
- */
-.tabs.editor-route__tabs {
-  border-bottom: 0;
+.source-tools-close {
+  justify-self: end;
+  min-height: 44px;
+  margin: var(--sp-2) var(--sp-3) 0;
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--line-control);
+  border-radius: var(--radius-control);
+  color: var(--ink);
+  background: var(--surface-raised);
+  cursor: pointer;
+  font-size: var(--fs-caption);
 }
 
 .editor-route__loading {
@@ -105,8 +133,13 @@
 }
 
 @media (max-width: 760px) {
-  .editor-route__panel[data-mode="sources"] {
-    padding: var(--sp-4) var(--sp-4) var(--sp-6);
+  .source-tools-scrim {
+    padding: 0;
+  }
+
+  .source-tools-dialog {
+    border: 0;
+    border-radius: 0;
   }
 
   .editor-route__loading {

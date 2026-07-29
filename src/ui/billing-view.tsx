@@ -24,6 +24,103 @@ import { Seal } from "./seal";
 
 export type BillingCredentialKind = "oauth" | "api-key" | "unknown";
 
+export type BillingProviderId = "chutes" | "openai" | "anthropic" | "xai";
+export type BillingProviderConnectionState = "connected" | "not-connected" | "unavailable";
+
+export type BillingProviderObservation = Readonly<
+  | { status: "observed"; value: string; detail?: string; observedAt?: string }
+  | { status: "not-provided"; detail?: string }
+  | { status: "unavailable"; detail?: string }
+>;
+
+export type BillingProviderAccountLink = Readonly<
+  | { status: "observed"; href: string; label?: string }
+  | { status: "not-provided"; detail?: string }
+  | { status: "unavailable"; detail?: string }
+>;
+
+/**
+ * Presentation-only provider inventory. It deliberately has no credential,
+ * token, scope, endpoint, or raw-header field; the Account route never gains
+ * authority to call another provider by receiving this value.
+ */
+export type BillingProviderInventoryEntry = Readonly<{
+  providerId: BillingProviderId;
+  state: BillingProviderConnectionState;
+  connectionDetail?: string;
+  quota?: BillingProviderObservation;
+  usage?: BillingProviderObservation;
+  reset?: BillingProviderObservation;
+  accountLink?: BillingProviderAccountLink;
+  observedAt?: string;
+}>;
+
+export type BillingProviderDefinition = Readonly<{
+  id: BillingProviderId;
+  label: "Chutes" | "OpenAI" | "Anthropic" | "xAI";
+}>;
+
+export const BILLING_PROVIDERS: readonly BillingProviderDefinition[] = Object.freeze([
+  Object.freeze({ id: "chutes", label: "Chutes" }),
+  Object.freeze({ id: "openai", label: "OpenAI" }),
+  Object.freeze({ id: "anthropic", label: "Anthropic" }),
+  Object.freeze({ id: "xai", label: "xAI" }),
+]);
+
+export type ChutesAccountIdentityPresentation = Readonly<{
+  username: string;
+  userId: string;
+}>;
+
+export function chutesAccountIdentityPresentation(
+  snapshot: ChutesAccountSnapshot | undefined,
+  loading: boolean,
+): ChutesAccountIdentityPresentation {
+  const absent = loading && !snapshot ? "Loading…" : snapshot?.account ? "Not provided" : "Unavailable";
+  return Object.freeze({
+    username: boundedDisplayText(snapshot?.account?.username, 256) ?? absent,
+    userId: boundedDisplayText(snapshot?.account?.userId, 512) ?? absent,
+  });
+}
+
+export function billingProviderDatumLabel(
+  observation: BillingProviderObservation | undefined,
+  connectionState: BillingProviderConnectionState,
+): string {
+  if (observation?.status === "observed") {
+    return boundedDisplayText(observation.value, 512) ?? "Unavailable";
+  }
+  if (observation?.status === "not-provided") return "Not provided";
+  if (observation?.status === "unavailable") return "Unavailable";
+  return connectionState === "connected" ? "Not provided" : "Unavailable";
+}
+
+export function resolveBillingProviderInventory(
+  entries: readonly BillingProviderInventoryEntry[] | undefined,
+  chutesConnected: boolean,
+): readonly BillingProviderInventoryEntry[] {
+  const supplied = new Map<BillingProviderId, BillingProviderInventoryEntry>();
+  for (const entry of entries ?? []) {
+    if (!BILLING_PROVIDERS.some((provider) => provider.id === entry.providerId) || supplied.has(entry.providerId)) continue;
+    supplied.set(entry.providerId, entry);
+  }
+  return Object.freeze(BILLING_PROVIDERS.map((provider) => {
+    const entry = supplied.get(provider.id);
+    return Object.freeze({
+      providerId: provider.id,
+      state: provider.id === "chutes"
+        ? chutesConnected ? "connected" as const : "not-connected" as const
+        : entry?.state ?? "unavailable" as const,
+      ...(entry?.connectionDetail ? { connectionDetail: entry.connectionDetail } : {}),
+      ...(entry?.quota ? { quota: entry.quota } : {}),
+      ...(entry?.usage ? { usage: entry.usage } : {}),
+      ...(entry?.reset ? { reset: entry.reset } : {}),
+      ...(entry?.accountLink ? { accountLink: entry.accountLink } : {}),
+      ...(entry?.observedAt ? { observedAt: entry.observedAt } : {}),
+    });
+  }));
+}
+
 /** The em dash a metric shows when nothing has been read. It is not a zero. */
 const NOT_READ = "—";
 
@@ -33,6 +130,7 @@ export function BillingView({
   credentialKind,
   credentialRevision,
   invocationTelemetry,
+  providerInventory,
   loadSnapshot,
   onOpenAccess,
 }: {
@@ -41,6 +139,7 @@ export function BillingView({
   credentialKind?: BillingCredentialKind;
   credentialRevision: number;
   invocationTelemetry?: ChutesInvocationTelemetry;
+  providerInventory?: readonly BillingProviderInventoryEntry[];
   loadSnapshot: (signal: AbortSignal) => Promise<ChutesAccountSnapshot>;
   onOpenAccess: () => void;
 }) {
@@ -48,6 +147,7 @@ export function BillingView({
   const [loading, setLoading] = useState(false);
   const [fatalError, setFatalError] = useState<string>();
   const [refresh, setRefresh] = useState(0);
+  const [selectedProvider, setSelectedProvider] = useState<BillingProviderId>("chutes");
   /**
    * The bucket the reader is pointing at, in either representation.
    *
@@ -96,6 +196,13 @@ export function BillingView({
   const observed = snapshot ? observationState(snapshot.fetchedAt, 5 * 60_000) : undefined;
   const subscriptionInactive = subscriptionState.status === "verified" && subscriptionState.value?.active === false;
   const quota = invocationTelemetry?.quota;
+  const providers = useMemo(
+    () => resolveBillingProviderInventory(providerInventory, accountReadable),
+    [providerInventory, accountReadable],
+  );
+  const selectedInventory = providers.find((provider) => provider.providerId === selectedProvider)!;
+  const selectedDefinition = BILLING_PROVIDERS.find((provider) => provider.id === selectedProvider)!;
+  const chutesIdentity = chutesAccountIdentityPresentation(snapshot, loading);
 
   return (
     <section class="work-view billing-view">
@@ -103,9 +210,9 @@ export function BillingView({
         routeId="account"
         density="tool"
         title="Account standing"
-        eyebrow="Direct user-scoped Chutes telemetry"
-        description="See balance, provider-reported charges, subscription runway, and live limits directly from Chutes."
-        status={accountReadable ? (
+        eyebrow="Chutes telemetry and provider inventory"
+        description="Review rich Chutes account telemetry and credential-free observations supplied for other connected providers."
+        status={selectedProvider === "chutes" && accountReadable ? (
           /* The 64px `.billing-toolbar` band held one status line and one
              external link. The status line is this chip — a real seal state
              rather than a grey dot, with the freshness reading and the
@@ -121,7 +228,7 @@ export function BillingView({
             <p>{credentialMessage(credentialKind)}</p>
           </Popover>
         ) : null}
-        actions={accountReadable ? (
+        actions={selectedProvider === "chutes" && accountReadable ? (
           <>
             {online
               ? <a class="small-button" href="https://chutes.ai/app/settings/billing" target="_blank" rel="noreferrer">Manage at Chutes ↗</a>
@@ -131,6 +238,18 @@ export function BillingView({
         ) : null}
       />
 
+      <BillingProviderTabs
+        providers={providers}
+        selected={selectedProvider}
+        onSelect={setSelectedProvider}
+      />
+
+      {selectedProvider === "chutes" ? <div
+        class="billing-provider-panel"
+        id="billing-provider-panel-chutes"
+        role="tabpanel"
+        aria-labelledby="billing-provider-tab-chutes"
+      >
       {!online ? (
         <div class="billing-alert warning connectivity-pause" role="status" aria-live="polite">
           <Icon name="warning" />
@@ -185,6 +304,14 @@ export function BillingView({
           <div><strong>Partial account snapshot</strong>{snapshot.issues.map((issue) => <span key={`${issue.source}:${issue.code}`}>{issue.message}</span>)}</div>
         </div>
       ) : null}
+
+      <section class="panel billing-account-identity" aria-label="Connected Chutes account identity">
+        <div class="panel-heading"><span>Connected Chutes account</span><span>{observed?.label ?? "Account observation unavailable"}</span></div>
+        <dl>
+          <div><dt>Username</dt><dd>{chutesIdentity.username}</dd></div>
+          <div><dt>User ID</dt><dd>{chutesIdentity.userId}</dd></div>
+        </dl>
+      </section>
 
       <MetricStrip label="Account summary" class="billing-metric-strip">
         <Metric
@@ -333,7 +460,158 @@ export function BillingView({
         </section>
       </div>
       </> : null}
+      </div> : (
+        <BillingProviderInventoryPanel
+          provider={selectedDefinition}
+          inventory={selectedInventory}
+        />
+      )}
     </section>
+  );
+}
+
+function BillingProviderTabs({
+  providers,
+  selected,
+  onSelect,
+}: {
+  providers: readonly BillingProviderInventoryEntry[];
+  selected: BillingProviderId;
+  onSelect: (provider: BillingProviderId) => void;
+}) {
+  const tablist = useRef<HTMLDivElement>(null);
+
+  function selectAt(index: number) {
+    const next = providers[(index + providers.length) % providers.length];
+    if (!next) return;
+    onSelect(next.providerId);
+    tablist.current
+      ?.querySelector<HTMLButtonElement>(`#billing-provider-tab-${next.providerId}`)
+      ?.focus();
+  }
+
+  return (
+    <div
+      class="billing-provider-tabs"
+      ref={tablist}
+      role="tablist"
+      aria-label="Account providers"
+      onKeyDown={(event) => {
+        const current = providers.findIndex((provider) => provider.providerId === selected);
+        if (event.key === "ArrowRight") { event.preventDefault(); selectAt(current + 1); }
+        else if (event.key === "ArrowLeft") { event.preventDefault(); selectAt(current - 1); }
+        else if (event.key === "Home") { event.preventDefault(); selectAt(0); }
+        else if (event.key === "End") { event.preventDefault(); selectAt(providers.length - 1); }
+      }}
+    >
+      {providers.map((inventory) => {
+        const provider = BILLING_PROVIDERS.find((candidate) => candidate.id === inventory.providerId)!;
+        const active = provider.id === selected;
+        return (
+          <button
+            class="billing-provider-tab"
+            id={`billing-provider-tab-${provider.id}`}
+            key={provider.id}
+            type="button"
+            role="tab"
+            aria-controls={`billing-provider-panel-${provider.id}`}
+            aria-selected={active}
+            tabIndex={active ? 0 : -1}
+            data-state={inventory.state}
+            onClick={() => onSelect(provider.id)}
+          >
+            <strong>{provider.label}</strong>
+            <span>{providerConnectionLabel(inventory.state)}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function BillingProviderInventoryPanel({
+  provider,
+  inventory,
+}: {
+  provider: BillingProviderDefinition;
+  inventory: BillingProviderInventoryEntry;
+}) {
+  const accountLink = safeBillingProviderAccountLink(inventory.accountLink);
+  const connectionDetail = boundedDisplayText(inventory.connectionDetail, 768) ?? (
+    inventory.state === "connected"
+      ? "Connected state was supplied by the host. This view did not call the provider API."
+      : inventory.state === "not-connected"
+        ? "No connected account is currently represented in this inventory."
+        : "Connection state was not supplied to this view."
+  );
+  const accountLinkStatus = inventory.accountLink?.status === "not-provided"
+    ? "Not provided"
+    : inventory.accountLink?.status === "unavailable"
+      ? "Unavailable"
+      : inventory.accountLink?.status === "observed"
+        ? "Unavailable"
+        : inventory.state === "connected" ? "Not provided" : "Unavailable";
+  const observedAt = inventory.observedAt
+    ? formatDateTime(inventory.observedAt)
+    : inventory.state === "connected" ? "Not provided" : "Unavailable";
+
+  return (
+    <section
+      class="panel billing-provider-inventory"
+      id={`billing-provider-panel-${provider.id}`}
+      role="tabpanel"
+      aria-labelledby={`billing-provider-tab-${provider.id}`}
+    >
+      <header class="billing-provider-inventory__header">
+        <div>
+          <span class="eyebrow">Provider account inventory</span>
+          <h2>{provider.label}</h2>
+        </div>
+        <span class="billing-provider-state" data-state={inventory.state}>{providerConnectionLabel(inventory.state)}</span>
+      </header>
+      <p class="billing-provider-inventory__detail">{connectionDetail}</p>
+
+      <dl class="billing-provider-data">
+        <ProviderInventoryDatum label="Quota" observation={inventory.quota} connectionState={inventory.state} />
+        <ProviderInventoryDatum label="Usage" observation={inventory.usage} connectionState={inventory.state} />
+        <ProviderInventoryDatum label="Reset" observation={inventory.reset} connectionState={inventory.state} />
+        <div>
+          <dt>Account management</dt>
+          <dd>{accountLink
+            ? <a href={accountLink.href} target="_blank" rel="noreferrer">{accountLink.label} ↗</a>
+            : accountLinkStatus}</dd>
+          {inventory.accountLink && "detail" in inventory.accountLink && boundedDisplayText(inventory.accountLink.detail, 512)
+            ? <small>{boundedDisplayText(inventory.accountLink.detail, 512)}</small>
+            : null}
+        </div>
+      </dl>
+
+      <p class="billing-provider-observed"><span>Inventory observed</span><strong>{observedAt}</strong></p>
+    </section>
+  );
+}
+
+function ProviderInventoryDatum({
+  label,
+  observation,
+  connectionState,
+}: {
+  label: string;
+  observation?: BillingProviderObservation;
+  connectionState: BillingProviderConnectionState;
+}) {
+  const detail = observation && "detail" in observation
+    ? boundedDisplayText(observation.detail, 512)
+    : undefined;
+  const observedAt = observation?.status === "observed" && observation.observedAt
+    ? formatDateTime(observation.observedAt)
+    : undefined;
+  return (
+    <div>
+      <dt>{label}</dt>
+      <dd>{billingProviderDatumLabel(observation, connectionState)}</dd>
+      {detail ? <small>{detail}</small> : observedAt ? <small>Observed {observedAt}</small> : null}
+    </div>
   );
 }
 
@@ -483,6 +761,37 @@ function quotaEmptyTitle(status: BillingDatumStatus): string {
   if (status === "loading") return "Loading quota data…";
   if (status === "unavailable") return "Quota data unavailable";
   return "Quota status unknown";
+}
+
+function providerConnectionLabel(state: BillingProviderConnectionState): string {
+  if (state === "connected") return "Connected";
+  if (state === "not-connected") return "Not connected";
+  return "Unavailable";
+}
+
+export function safeBillingProviderAccountLink(
+  link: BillingProviderAccountLink | undefined,
+): Readonly<{ href: string; label: string }> | undefined {
+  if (link?.status !== "observed") return undefined;
+  const href = boundedDisplayText(link.href, 2_048);
+  if (!href) return undefined;
+  try {
+    const parsed = new URL(href);
+    if (parsed.protocol !== "https:" || parsed.username || parsed.password) return undefined;
+    return Object.freeze({
+      href,
+      label: boundedDisplayText(link.label, 128) ?? "Manage account",
+    });
+  } catch {
+    return undefined;
+  }
+}
+
+function boundedDisplayText(value: unknown, maxLength: number): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const cleaned = value.replace(/[\u0000-\u001f\u007f]/gu, "").trim();
+  if (!cleaned) return undefined;
+  return cleaned.slice(0, maxLength);
 }
 
 /**

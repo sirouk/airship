@@ -56,6 +56,12 @@ describe("platform shell contracts", () => {
     expect(loadPreferenceOverrides(storage)).toEqual(DEFAULT_PREFERENCES);
   });
 
+  it("makes appearance choices visual and requires confirmation before a broad reset", () => {
+    const dialog = readFileSync(new URL("./platform-shell.tsx", import.meta.url), "utf8");
+    expect(dialog).toContain('mode === "dark" ? "moon" : "sun"');
+    expect(dialog).toContain('window.confirm("Reset display, durability, and legacy approval preferences to their defaults?")');
+  });
+
   it("downgrades a stale Drive preference to the configured available default", () => {
     const configuredClientId = "123456789012-airship.apps.googleusercontent.com";
     const staleDrive = JSON.stringify({ ...DEFAULT_PREFERENCES, vaultBackend: "google-drive" });

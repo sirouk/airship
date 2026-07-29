@@ -119,19 +119,31 @@ describe("canonical navigation model", () => {
       "terminal",
       "memory",
       "profiles",
+      "skills",
+      "capabilities",
       "vault",
       "access",
       "billing",
       "settings",
     ]);
-    expect(MOBILE_MORE_ENTRIES.find((entry) => entry.id === "skills")).toBeUndefined();
-    expect(MOBILE_MORE_ENTRIES.find((entry) => entry.id === "capabilities")).toBeUndefined();
+    expect(MOBILE_MORE_ENTRIES.find((entry) => entry.id === "skills")).toEqual(
+      expect.objectContaining({ parent: "profiles", label: "Skills", hash: "#skills", description: "Reusable instructions across profiles" }),
+    );
+    expect(MOBILE_MORE_ENTRIES.find((entry) => entry.id === "capabilities")).toEqual(
+      expect.objectContaining({ parent: "profiles", label: "Capabilities", hash: "#capabilities", description: "Detected device and runtime support" }),
+    );
     expect(MOBILE_MORE_ENTRIES.find((entry) => entry.id === "billing")).toEqual(
       expect.objectContaining({ parent: "access", label: "Account", hash: "#account" }),
     );
     expect(MOBILE_MORE_ENTRIES.find((entry) => entry.id === "sessions")).toEqual(
-      expect.objectContaining({ parent: "chat", label: "All conversations", hash: "#sessions" }),
+      expect.objectContaining({ parent: "chat", label: "All conversations", hash: "#sessions", description: "Search and resume past chats" }),
     );
+    const routeDescriptions = MOBILE_MORE_ENTRIES
+      .filter((entry) => entry.kind === "route")
+      .map((entry) => entry.description);
+    expect(routeDescriptions.every((description) => description.length > 0)).toBe(true);
+    expect(routeDescriptions).not.toContain("Destination");
+    expect(new Set(routeDescriptions).size).toBe(routeDescriptions.length);
     expect(SETTINGS_OVERLAY_ENTRY).toEqual({
       id: "settings",
       label: "Settings",
@@ -146,13 +158,15 @@ describe("canonical navigation model", () => {
 describe("the rail's filing", () => {
   const rows = RAIL_SECTIONS.flatMap((section) => section.rows);
 
-  it("leaves the first section unlabelled and renames the filing cabinet", () => {
-    expect(RAIL_SECTIONS.map((section) => section.label)).toEqual([undefined, "Receipts & access"]);
+  it("keeps profile work together and labels only the global services", () => {
+    expect(RAIL_SECTIONS.map((section) => section.label)).toEqual([undefined, "Global"]);
     // The three internal-architecture group names are gone as *labels*. "Work"
     // had nothing above it to be distinguished from, "Agent" was a group of
     // one, and this product shows receipts rather than asking for trust.
     expect(RAIL_SECTIONS.map((section) => section.label ?? "")).not.toContain("Work");
     expect(RAIL_SECTIONS.map((section) => section.label ?? "")).not.toContain("Trust");
+    expect(RAIL_SECTIONS[0]?.rows.map((row) => row.id)).toEqual(["chat", "workspace", "memory", "proof"]);
+    expect(RAIL_SECTIONS[1]?.rows.map((row) => row.id)).toEqual(["vault", "access", "billing"]);
   });
 
   it("un-nests Account and keeps Workspace as the one correct nesting", () => {

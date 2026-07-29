@@ -56,7 +56,13 @@ export class EventJournal {
     private readonly id: () => string = randomUuid,
   ) {}
 
-  async createSession(title: string, manifest: SessionManifest): Promise<SessionRecord> {
+  async createSession(
+    title: string,
+    manifest: SessionManifest,
+    initialize?: (
+      session: Readonly<SessionRecord>,
+    ) => readonly EventDraft[] | Promise<readonly EventDraft[]>,
+  ): Promise<SessionRecord> {
     const createdAt = this.now();
     const session: SessionRecord = {
       id: this.id(),
@@ -67,6 +73,12 @@ export class EventJournal {
       headSequence: 0,
       headDigest: "genesis",
     };
+    // Resolve destination-bound initial records before the first backend
+    // mutation, then commit creation and initialization in one append batch.
+    const initialized = initialize ? [...await initialize(structuredClone(session))] : [];
+    if (initialized.some((event) => event.type === "session.created")) {
+      throw new TypeError("Session initialization cannot provide a second creation event.");
+    }
     await this.backend.createSession(session);
     await this.append(session.id, [
       {
@@ -76,6 +88,7 @@ export class EventJournal {
           manifest: manifest as unknown as JsonValue,
         },
       },
+      ...initialized,
     ]);
     return (await this.backend.getSession(session.id)) ?? session;
   }
@@ -149,4 +162,33 @@ export class EventJournal {
     );
     return events;
   }
+}
+
+/**
+ * The title a session record carries after an append, given the events in it.
+ *
+ * `renameSession` only appends `session.renamed`; it never writes the record's
+ * title directly. Projecting that event into the record is therefore the
+ * backend's job, and it is the *whole* meaning of a rename — a backend that
+ * skips it stores a session whose title disagrees with its own history, which
+ * the audit reports as `SESSION_TITLE_SNAPSHOT_MISMATCH` and which makes the
+ * session refuse to resume.
+ *
+ * It lives here, once, because it was previously copied into two backends and
+ * absent from the third: renames were durable in page memory and on IndexedDB,
+ * and silently lost by the encrypted object journal, so adopting a Vault threw
+ * away the title and stranded the conversation behind it on the next reload.
+ */
+export function projectedSessionTitle(events: readonly DurableEvent[], fallback: string): string {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index]!;
+    if (
+      event.type === "session.renamed"
+      && event.payload
+      && !Array.isArray(event.payload)
+      && typeof event.payload === "object"
+      && typeof event.payload.title === "string"
+    ) return event.payload.title;
+  }
+  return fallback;
 }

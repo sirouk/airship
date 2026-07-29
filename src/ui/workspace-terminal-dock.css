@@ -1,0 +1,30 @@
+.editor-route__panel:has(> .workspace-terminal-dock){grid-template-rows:minmax(0,1fr) auto}
+
+.workspace-terminal-dock{position:relative;z-index:20;display:grid;min-width:0;min-height:0;border-top:1px solid var(--line-strong);background:var(--ground)}
+/* Runtime-owned: the dock element carries the resized height inline. The
+   fallback is TERMINAL_DOCK_DEFAULT_HEIGHT, so a dock that renders before its
+   persisted state resolves opens at its own default rather than collapsing to
+   an invalid declaration. */
+.workspace-terminal-dock[data-open=true]{height:var(--terminal-dock-height,320px);grid-template-rows:6px minmax(0,1fr);box-shadow:0 -10px 28px color-mix(in srgb,#000 20%,transparent)}
+.workspace-terminal-dock[data-open=false]{height:42px}
+.workspace-terminal-dock__resize{position:relative;z-index:2;height:6px;cursor:ns-resize;touch-action:none;background:transparent}
+.workspace-terminal-dock__resize::after{position:absolute;top:2px;left:calc(50% - 22px);width:44px;height:2px;border-radius:2px;background:var(--line-strong);content:""}
+.workspace-terminal-dock__resize:hover::after,.workspace-terminal-dock__resize:focus-visible::after{background:var(--accent-bright)}
+.workspace-terminal-dock__resize:focus-visible{outline:2px solid var(--accent-bright);outline-offset:-2px}
+.workspace-terminal-dock__collapsed{display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0;height:42px;padding:0 7px}
+.workspace-terminal-dock__collapsed button{display:inline-flex;align-items:center;gap:8px;min-width:0;min-height:34px;padding:3px 9px;border:1px solid transparent;border-radius:var(--radius-control);color:var(--ink);background:transparent;font:inherit;cursor:pointer}
+.workspace-terminal-dock__collapsed button:first-child{flex:1 1 auto;justify-content:flex-start}
+.workspace-terminal-dock__collapsed button:hover,.workspace-terminal-dock__collapsed button:focus-visible{border-color:var(--line-strong);background:var(--surface)}
+.workspace-terminal-dock__collapsed strong{font-size:var(--fs-caption)}
+.workspace-terminal-dock__collapsed span,.workspace-terminal-dock__collapsed small{overflow:hidden;color:var(--ink-muted);font-size:var(--fs-micro);text-overflow:ellipsis;white-space:nowrap}
+.workspace-terminal-dock__collapsed small{margin-left:auto}
+.workspace-terminal-dock__loading{display:flex;align-items:center;justify-content:center;gap:9px;min-height:0;padding:10px;color:var(--ink-muted);font-size:var(--fs-caption)}
+.workspace-terminal-dock__loading button{min-height:36px;padding:4px 9px;border:1px solid var(--line-strong);border-radius:var(--radius-control);color:var(--ink);background:var(--surface);font:inherit;cursor:pointer}
+
+@media(max-width:760px){
+  .workspace-terminal-dock[data-open=false]{height:48px}
+  .workspace-terminal-dock__collapsed{height:48px;padding-inline:4px}
+  .workspace-terminal-dock__collapsed button{min-height:44px;padding-inline:7px}
+  .workspace-terminal-dock__collapsed small{display:none}
+  .workspace-terminal-dock__collapsed button:last-child span{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+}

@@ -77,54 +77,6 @@
   color: var(--ink);
 }
 
-/*
- * The scope rail. Three 44px cells that anchor the three regions and carry
- * their counts. The labels shorten to Recall / Graph / Index so all three fit
- * a 430px screen — the full names live in each button's `aria-label` and in
- * the section headings they anchor to, so nothing is off-screen and unnamed.
- * `overflow-x: auto` stays: it is the honest affordance if a type-scale
- * preference ever pushes the row past its track.
- */
-.memory-scope-rail {
-  display: grid;
-  grid-auto-columns: minmax(0, 1fr);
-  grid-auto-flow: column;
-  gap: 1px;
-  overflow-x: auto;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-control);
-  background: var(--line);
-}
-
-.memory-scope-rail button {
-  display: flex;
-  gap: var(--sp-2);
-  align-items: center;
-  justify-content: space-between;
-  min-width: 0;
-  min-height: 44px;
-  padding: 0 var(--sp-3);
-  border: 0;
-  color: var(--ink-muted);
-  background: var(--surface-soft);
-  cursor: pointer;
-  font: inherit;
-}
-
-.memory-scope-rail button:hover,
-.memory-scope-rail button:focus-visible {
-  color: var(--ink);
-  background: color-mix(in srgb, var(--surface-soft) 88%, var(--accent) 12%);
-}
-
-.memory-scope-rail small {
-  overflow: hidden;
-  color: var(--ink-faint);
-  font: var(--fs-micro)/1.2 var(--font-mono);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .memory-view .memory-federated {
   display: grid;
   gap: var(--sp-2);
@@ -850,19 +802,6 @@
 
   .memory-query input {
     font-size: var(--fs-field);
-  }
-
-  /*
-   * Two lines per cell on a phone. Side by side, "Graph 152 nodes" clipped to
-   * "152 nod…" at 430px — and a clipped count is the same failure the strip
-   * this replaced had, just smaller.
-   */
-  .memory-scope-rail button {
-    display: grid;
-    gap: 0;
-    align-content: center;
-    justify-items: start;
-    padding: 0 var(--sp-2);
   }
 
 

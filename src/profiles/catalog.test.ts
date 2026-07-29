@@ -12,6 +12,16 @@ describe("built-in Airship profiles", () => {
   it("resolves every profile into a pinned prompt, skill set, and semantic theme", async () => {
     const catalog = await createBuiltInProfileCatalog();
     expect(catalog.profiles.map((profile) => profile.profileId)).toEqual(["general", "research", "builder-systems"]);
+    expect(catalog.profiles.map((profile) => ({
+      profileId: profile.profileId,
+      name: profile.name,
+      themeId: profile.theme.themeId,
+    }))).toEqual([
+      { profileId: "general", name: "General", themeId: "foundry" },
+      { profileId: "research", name: "Research", themeId: "verdigris" },
+      { profileId: "builder-systems", name: "Developer", themeId: "blue-ledger" },
+    ]);
+    expect(new Set(catalog.profiles.map((profile) => profile.theme.themeId)).size).toBe(catalog.profiles.length);
     expect(new Set(catalog.themes.map((theme) => theme.digest)).size).toBe(catalog.themes.length);
 
     for (const profile of catalog.profiles) {

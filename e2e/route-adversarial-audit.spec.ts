@@ -244,7 +244,11 @@ async function navigate(page: Page, route: Route, mobile: boolean, labUrl: (hash
     // still reached from the rail by pointer, one gesture deeper, and this
     // helper is what asserts that — a missing disclosure fails the whole audit.
     if (route.hash === "sessions") {
-      await primary.getByRole("button", { name: "Expand recent conversations" }).click();
+      // The audit visits every route repeatedly, and the disclosure stays open
+      // between visits — so expand only when it is actually collapsed, exactly
+      // as the Workspace expander below already does.
+      const expander = primary.getByRole("button", { name: "Expand recent conversations" });
+      if (await expander.count()) await expander.click();
     } else if (route.hash === "editor" || route.hash === "terminal") {
       const expander = primary.getByRole("button", { name: "Expand Workspace" });
       if (await expander.count()) await expander.click();

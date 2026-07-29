@@ -31,6 +31,9 @@ test("revealing message actions on hover does not change message or transcript g
 
   await message.hover();
   await expect(actions).toHaveCSS("opacity", "1");
+  const contentBox = await message.locator(".message-body > p").first().boundingBox();
+  const actionsBox = await actions.boundingBox();
+  expect(actionsBox!.y).toBeGreaterThanOrEqual(contentBox!.y + contentBox!.height);
   await page.waitForTimeout(150);
   const messageAfter = await message.boundingBox();
   const transcriptAfter = await transcript.evaluate((element) => ({

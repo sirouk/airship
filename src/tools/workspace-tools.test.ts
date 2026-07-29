@@ -232,4 +232,46 @@ describe("workspace tools", () => {
       await expect(execute(workspace, name, args)).rejects.toThrow(/workspace|\.\./i);
     }
   });
+
+  it("hides and rejects every Airship and Git control-plane path", async () => {
+    const workspace = new MemoryWorkspace();
+    await workspace.write("visible.txt", "public needle");
+    await workspace.write(".airship/memory.json", "private needle");
+    await workspace.write(".airship/future-checkpoint.json", "future needle");
+    await workspace.write("repo/.git/config", "git needle");
+
+    const listed = await execute(workspace, "list_files", { path: "/workspace" });
+    expect(listed.content).toContain("/workspace/visible.txt");
+    expect(listed.content).not.toContain(".airship");
+    expect(listed.content).not.toContain(".git");
+    expect(listed.metadata).toEqual({ count: 1 });
+
+    const searched = await execute(workspace, "search_text", { path: "/workspace", query: "needle" });
+    expect(JSON.parse(searched.content)).toEqual([
+      expect.objectContaining({ path: "/workspace/visible.txt" }),
+    ]);
+
+    const rootStat = await execute(workspace, "stat_path", { path: "/workspace" });
+    expect(rootStat.metadata).toMatchObject({ files: 1 });
+
+    const prohibitedCalls: ReadonlyArray<readonly [string, JsonValue]> = [
+      ["list_files", { path: "/workspace/.airship" }],
+      ["read_file", { path: "/workspace/.airship/memory.json" }],
+      ["write_file", { path: "/workspace/.airship/new.json", content: "overwrite" }],
+      ["stat_path", { path: "/workspace/repo/.git/config" }],
+      ["search_text", { path: "/workspace/.airship", query: "private" }],
+      ["replace_text", { path: "/workspace/.airship/memory.json", oldText: "private", newText: "stolen" }],
+      ["move_file", { sourcePath: "/workspace/.airship/memory.json", destinationPath: "/workspace/stolen.json" }],
+      ["move_file", { sourcePath: "/workspace/visible.txt", destinationPath: "/workspace/.airship/stolen.json" }],
+      ["remove_file", { path: "/workspace/.airship/memory.json" }],
+      ["text_editor", { edits: [{ path: "/workspace/.airship/memory.json", oldText: "private", newText: "stolen" }] }],
+    ];
+    for (const [name, args] of prohibitedCalls) {
+      await expect(execute(workspace, name, args)).rejects.toThrow(/control-plane/u);
+    }
+
+    expect((await workspace.read(".airship/memory.json"))?.content).toBe("private needle");
+    expect((await workspace.read("visible.txt"))?.content).toBe("public needle");
+    expect(await workspace.read("stolen.json")).toBeUndefined();
+  });
 });

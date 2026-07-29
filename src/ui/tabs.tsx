@@ -1,3 +1,4 @@
+import type { ComponentChildren } from "preact";
 import { useEffect, useId, useRef, useState } from "preact/hooks";
 import { Popover } from "./popover";
 import { Seal, type SealState } from "./seal";
@@ -47,6 +48,8 @@ export type TabsVariant = "section" | "document";
 
 export type TabItem = Readonly<{
   id: string;
+  /** Decorative leading mark, such as a deterministic file-type icon. */
+  leading?: ComponentChildren;
   /** What the strip shows. Truncate with `middleTruncate` and pass `detail`. */
   label: string;
   /** The untruncated identity — a workspace-relative path, a full title. */
@@ -61,6 +64,8 @@ export type TabItem = Readonly<{
   state?: SealState;
   /** The word for that state. Required reading: it is the accessible carrier. */
   stateLabel?: string;
+  /** A replaceable document preview. Its visible label is italicized. */
+  preview?: boolean;
   disabled?: boolean;
   onClose?(): void;
   closeLabel?: string;
@@ -165,8 +170,14 @@ export function tabAccessibleName(item: TabItem): string {
   const parts: string[] = [item.detail && item.detail !== item.label ? item.detail : item.label];
   if (item.hint) parts.push(item.hint);
   if (item.count !== undefined) parts.push(item.countLabel ?? String(item.count));
+  if (item.preview) parts.push("Preview");
   if (item.stateLabel) parts.push(item.stateLabel);
   return parts.join(", ");
+}
+
+/** Button 1 is the browser-standard auxiliary/middle activation. */
+export function isTabCloseAuxiliaryActivation(button: number): boolean {
+  return button === 1;
 }
 
 /**
@@ -290,6 +301,7 @@ export function Tabs({
             role="presentation"
             data-tab-id={item.id}
             data-active={item.id === activeId ? "true" : "false"}
+            data-preview={item.preview ? "true" : "false"}
           >
             <button
               class="tabs__tab-button"
@@ -303,8 +315,19 @@ export function Tabs({
               disabled={item.disabled}
               tabIndex={item.id === activeId ? 0 : -1}
               onClick={() => onSelect(item.id)}
+              onMouseDown={(event) => {
+                // Prevent the browser's middle-button autoscroll cursor. The
+                // ensuing auxiliary activation owns the close action.
+                if (item.onClose && isTabCloseAuxiliaryActivation(event.button)) event.preventDefault();
+              }}
+              onAuxClick={(event) => {
+                if (!item.onClose || !isTabCloseAuxiliaryActivation(event.button)) return;
+                event.preventDefault();
+                item.onClose();
+              }}
               onKeyDown={(event) => { if (move(event.key)) event.preventDefault(); }}
             >
+              {item.leading ? <span class="tabs__leading" aria-hidden="true">{item.leading}</span> : null}
               {item.state ? (
                 <Seal state={item.state} label={item.stateLabel} density="dot" size={16} class="tabs__state" />
               ) : null}
@@ -344,13 +367,15 @@ export function Tabs({
                 type="button"
                 aria-current={item.id === activeId ? "true" : undefined}
                 data-hidden={overflow.hidden.includes(item.id) ? "true" : "false"}
+                data-preview={item.preview ? "true" : "false"}
                 disabled={item.disabled}
                 onClick={() => onSelect(item.id)}
               >
+                {item.leading ? <span class="tabs__leading" aria-hidden="true">{item.leading}</span> : null}
                 {item.state ? (
                   <Seal state={item.state} label={item.stateLabel} density="dot" size={16} />
                 ) : null}
-                <span>{item.detail ?? item.label}</span>
+                <span class="tabs__overflow-label">{item.detail ?? item.label}</span>
                 {item.count !== undefined ? <small>{item.countLabel ?? item.count}</small> : null}
               </button>
             ))}

@@ -1,4 +1,5 @@
 import { GitAbortError, GitDomainError, GitValidationError } from "./errors";
+import { isAirshipReservedPath } from "../workspace/contracts";
 
 const encoder = new TextEncoder();
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
@@ -242,7 +243,15 @@ export function validateGitDestination(value: string): string {
       throw new GitValidationError("Git destination contains a cross-platform unsafe segment.");
     }
   }
-  return `/${parts.join("/")}`;
+  const destination = `/${parts.join("/")}`;
+  // A repository root is where clone, import and worktree creation are allowed
+  // to materialize a whole tree. Rooting one in Airship's reserved namespace
+  // would put that tree on top of the evidence and registry records Airship
+  // reads back as its own state, before any per-path fence sees a path.
+  if (isAirshipReservedPath(destination)) {
+    throw new GitValidationError("A repository cannot be rooted in Airship's private control-plane namespace.");
+  }
+  return destination;
 }
 
 export function validateFileContent(content: string): string {

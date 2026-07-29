@@ -1,5 +1,5 @@
 import type { PromiseFsClient } from "isomorphic-git";
-import { normalizeWorkspacePath, type WorkspacePort } from "../workspace/contracts";
+import { isAirshipReservedPath, normalizeWorkspacePath, type WorkspacePort } from "../workspace/contracts";
 import { decodeWorkspaceBytes, encodeWorkspaceBytes } from "../workspace/content-codec";
 import { GIT_LIMITS, asciiCompare } from "./validation";
 
@@ -79,7 +79,7 @@ export class WorkspaceGitFileSystem {
 
   async removeTree(root: string): Promise<void> {
     const normalized = fsPath(root);
-    const entries = await this.workspace.list(this.storagePath(normalized));
+    const entries = await this.workspace.list(this.mutable(normalized));
     for (const entry of [...entries].reverse()) {
       await this.workspace.remove(entry.path, { expectedRevision: entry.revision });
     }
@@ -88,9 +88,41 @@ export class WorkspaceGitFileSystem {
     }
   }
 
+  /**
+   * The Git-facing half of the control-plane fence.
+   *
+   * Every browser-Git read, write, status walk and remote-tree materialization
+   * reaches storage through this one filesystem, so this is the only place the
+   * fence is complete by construction: `diff`, forced `stage`, `commit`,
+   * `checkout`, `merge`, `restore` and `reset` cannot each be trusted to
+   * re-derive it, and a method added later would not have to remember to.
+   *
+   * Reads report ENOENT rather than a refusal because that is the truth Git
+   * needs: the control plane is not part of any worktree, so a status walk
+   * should traverse as though it were absent instead of failing. Writes refuse
+   * loudly — a checkout that would lay a remote tree over
+   * `/workspace/.airship` must stop rather than half-apply, and silently
+   * skipping the path would leave a worktree that disagrees with its own HEAD.
+   */
+  private readable(normalized: string): string {
+    const stored = this.storagePath(normalized);
+    if (isAirshipReservedPath(normalized) || isAirshipReservedPath(stored)) {
+      throw fsError("ENOENT", `No such file: ${normalized}`);
+    }
+    return stored;
+  }
+
+  private mutable(normalized: string): string {
+    const stored = this.storagePath(normalized);
+    if (isAirshipReservedPath(normalized) || isAirshipReservedPath(stored)) {
+      throw fsError("EPERM", `${normalized} is Airship's private control plane, not a worktree file.`);
+    }
+    return stored;
+  }
+
   private async readFile(path: string, options?: unknown): Promise<Uint8Array | string> {
     const normalized = fsPath(path);
-    const file = await this.workspace.read(this.storagePath(normalized));
+    const file = await this.workspace.read(this.readable(normalized));
     if (!file) throw fsError("ENOENT", `No such file: ${normalized}`);
     const bytes = decodeWorkspaceBytes(file.content);
     const encoding = requestedEncoding(options);
@@ -107,8 +139,8 @@ export class WorkspaceGitFileSystem {
       throw fsError("EFBIG", `Worktree file exceeds ${GIT_LIMITS.maxFileBytes} bytes.`);
     }
     const content = encodeWorkspaceBytes(bytes);
+    const stored = this.mutable(normalized);
     this.rememberParents(normalized);
-    const stored = this.storagePath(normalized);
     const current = await this.workspace.read(stored);
     if (current?.content === content) return;
     try {
@@ -124,7 +156,7 @@ export class WorkspaceGitFileSystem {
 
   private async unlink(path: string): Promise<void> {
     const normalized = fsPath(path);
-    const stored = this.storagePath(normalized);
+    const stored = this.mutable(normalized);
     const current = await this.workspace.read(stored);
     if (!current) throw fsError("ENOENT", `No such file: ${normalized}`);
     await this.workspace.remove(stored, { expectedRevision: current.revision });
@@ -132,7 +164,7 @@ export class WorkspaceGitFileSystem {
 
   private async readdir(path: string): Promise<string[]> {
     const normalized = fsPath(path);
-    const stored = this.storagePath(normalized);
+    const stored = this.readable(normalized);
     const exact = await this.workspace.read(stored);
     if (exact) throw fsError("ENOTDIR", `Not a directory: ${normalized}`);
     const entries = await this.workspace.list(stored);
@@ -140,12 +172,16 @@ export class WorkspaceGitFileSystem {
     for (const entry of entries) {
       const alias = stored === normalized ? entry.path : `${normalized}${entry.path.slice(stored.length)}`;
       if (alias === normalized || !alias.startsWith(`${normalized}/`)) continue;
+      // Listing `.airship` here would put it in front of every status walk and
+      // `git add .`, which would then fail on a path they should never have
+      // been offered. Omitting it is the same answer `readable` gives.
+      if (isAirshipReservedPath(alias)) continue;
       const child = alias.slice(normalized.length + 1).split("/", 1)[0];
       if (child) children.add(child);
       this.rememberParents(alias);
     }
     for (const directory of this.directories) {
-      if (!directory.startsWith(`${normalized}/`)) continue;
+      if (!directory.startsWith(`${normalized}/`) || isAirshipReservedPath(directory)) continue;
       const child = directory.slice(normalized.length + 1).split("/", 1)[0];
       if (child) children.add(child);
     }
@@ -155,7 +191,7 @@ export class WorkspaceGitFileSystem {
 
   private async mkdir(path: string): Promise<void> {
     const normalized = fsPath(path);
-    if (await this.workspace.read(this.storagePath(normalized))) throw fsError("EEXIST", `A file exists at ${normalized}.`);
+    if (await this.workspace.read(this.mutable(normalized))) throw fsError("EEXIST", `A file exists at ${normalized}.`);
     if (this.directories.has(normalized)) throw fsError("EEXIST", `Directory exists: ${normalized}.`);
     const parent = parentPath(normalized);
     if (!this.directories.has(parent) && !(await this.hasDirectory(parent))) {
@@ -166,13 +202,14 @@ export class WorkspaceGitFileSystem {
 
   private async rmdir(path: string): Promise<void> {
     const normalized = fsPath(path);
+    this.mutable(normalized);
     if ((await this.readdir(normalized)).length) throw fsError("ENOTEMPTY", `Directory is not empty: ${normalized}.`);
     if (!this.directories.delete(normalized)) throw fsError("ENOENT", `No such directory: ${normalized}.`);
   }
 
   private async stat(path: string): Promise<WorkspaceFsStat> {
     const normalized = fsPath(path);
-    const file = await this.workspace.read(this.storagePath(normalized));
+    const file = await this.workspace.read(this.readable(normalized));
     if (file) {
       return new WorkspaceFsStat("file", decodeWorkspaceBytes(file.content).byteLength, Date.parse(file.updatedAt), revisionInode(file.revision));
     }
@@ -189,8 +226,10 @@ export class WorkspaceGitFileSystem {
   }
 
   private async hasDirectory(path: string): Promise<boolean> {
+    if (isAirshipReservedPath(path)) return false;
     if (this.directories.has(path)) return true;
     const stored = this.storagePath(path);
+    if (isAirshipReservedPath(stored)) return false;
     const entries = await this.workspace.list(stored);
     if (!entries.some((entry) => entry.path.startsWith(`${stored}/`))) return false;
     this.directories.add(path);

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { createSessionManifest } from "../core/agent";
-import type { SessionManifest, ToolDefinition } from "../core/contracts";
+import { createSessionManifest, materializeMessages } from "../core/agent";
+import type { CanonicalMessage, JsonValue, SessionManifest, ToolDefinition } from "../core/contracts";
+import { FORK_CONTEXT_EVENT_TYPE, canonicalForkContextSeed } from "../core/fork-context";
+import { sha256, stableStringify } from "../core/hash";
 import { EventJournal, type SessionRecord } from "../core/journal";
 import { MemoryJournalBackend } from "../core/memory-journal";
 import { auditSessionHistory } from "../core/session-audit";
@@ -191,6 +193,33 @@ describe("browser-native session domain", () => {
     expect(cleanView.transcript.lifecycle).toEqual({ state: "ready", label: "Ready", sequence: 0 });
   }, 10_000);
 
+  it("keeps ordered favorites inside the profile journal authority", async () => {
+    const fixture = createJournal();
+    const first = await fixture.journal.createSession("First favorite", await manifest({ profile: profileBinding() }));
+    const second = await fixture.journal.createSession("Second favorite", await manifest({ profile: profileBinding() }));
+    const library = new SessionLibrary(fixture.journal);
+
+    await library.setFavorite(first.id, "profile-1", true);
+    await library.setFavorite(second.id, "profile-1", true);
+    expect((await library.favorites("profile-1")).map((favorite) => favorite.sessionId)).toEqual([first.id, second.id]);
+
+    await library.moveFavoriteBefore(second.id, "profile-1", first.id);
+    expect((await library.favorites("profile-1")).map((favorite) => favorite.sessionId)).toEqual([second.id, first.id]);
+
+    await library.setFavorite(first.id, "profile-1", false);
+    expect((await library.favorites("profile-1")).map((favorite) => favorite.sessionId)).toEqual([second.id]);
+    await expect(library.setFavorite(second.id, "another-profile", false)).rejects.toThrow(/active profile/u);
+
+    const [updated, events] = await Promise.all([
+      fixture.journal.getSession(second.id),
+      fixture.journal.readEvents(second.id),
+    ]);
+    const audit = await auditSessionHistory({ session: updated!, events });
+    expect(audit.findings.map((finding) => finding.code)).not.toContain("EVENT_TYPE_UNKNOWN");
+    expect(audit.findings.map((finding) => finding.code)).not.toContain("SESSION_FAVORITE_MALFORMED");
+    expect(audit.findings.map((finding) => finding.code)).not.toContain("PROFILE_FAVORITE_ORDER_MALFORMED");
+  });
+
   it("separates coherent linkage, unfinished work, and suspect history from cryptographic proof", async () => {
     const fixture = createJournal();
     const created = await fixture.journal.createSession("Health", await manifest({ securityPosture: "local" }));
@@ -342,20 +371,33 @@ describe("SessionLibrary", () => {
     });
     expect(result.session.id).not.toBe(source.id);
     expect(result.session.manifest.model).toBe("next-model");
+    const emptyBoundary = sourceEvents[0]!;
     expect(result.session.manifest.lineage).toEqual({
       version: 1,
       kind: "fork",
       sourceSessionId: source.id,
+      sourceHeadSequence: emptyBoundary.sequence,
+      sourceHeadDigest: emptyBoundary.digest,
+      forkedAt: "2026-07-18T10:30:00.000Z",
+    });
+    expect(result).toMatchObject({
       sourceHeadSequence: source.headSequence,
       sourceHeadDigest: source.headDigest,
-      forkedAt: "2026-07-18T10:30:00.000Z",
+      sourceBoundarySequence: emptyBoundary.sequence,
+      sourceBoundaryDigest: emptyBoundary.digest,
+      contextSeeded: true,
+      contextMessageCount: 0,
     });
     expect(result.historyCopied).toBe(false);
     expect(await fixture.journal.readEvents(source.id)).toEqual(sourceEvents);
     expect((await fixture.journal.getSession(source.id))?.headDigest).toBe(source.headDigest);
+    const forkEvents = await fixture.journal.readEvents(result.session.id);
+    expect(forkEvents.map((event) => event.type)).toEqual(["session.created", FORK_CONTEXT_EVENT_TYPE]);
+    const sourceEventIds = new Set(sourceEvents.map((event) => event.eventId));
+    expect(forkEvents.some((event) => sourceEventIds.has(event.eventId))).toBe(false);
     const audit = await auditSessionHistory({
       session: (await fixture.journal.getSession(result.session.id))!,
-      events: await fixture.journal.readEvents(result.session.id),
+      events: forkEvents,
     });
     expect(audit.status).toBe("verified");
     expect(audit.authenticity).toBe("not-proven");
@@ -402,20 +444,94 @@ describe("SessionLibrary", () => {
   it("forks from an audited historical completed-turn boundary", async () => {
     const fixture = createJournal();
     const created = await fixture.journal.createSession("Historical", await manifest());
-    const first = await fixture.journal.append(created.id, [
-      { type: "turn.requested", turnId: "one", payload: { content: "one" } },
-      { type: "assistant.completed", turnId: "one", payload: { message: { role: "assistant", content: "answer" } } },
-      { type: "turn.completed", turnId: "one", payload: {} },
-    ]);
+    const point = await appendAuditedTurn(fixture.journal, created.id, "one", "one", "answer");
     await fixture.journal.append(created.id, [{ type: "turn.requested", turnId: "two", payload: { content: "later" } }]);
     const source = (await fixture.journal.getSession(created.id))!;
-    const point = first.at(-1)!;
     const result = await new SessionLibrary(fixture.journal).fork(created.id, {
       expectedSourceHead: { sequence: source.headSequence, digest: source.headDigest },
       sourcePoint: { sequence: point.sequence, digest: point.digest },
     });
-    expect(result.sourceHeadSequence).toBe(point.sequence);
+    expect(result.sourceHeadSequence).toBe(source.headSequence);
+    expect(result.sourceBoundarySequence).toBe(point.sequence);
     expect(result.session.manifest.lineage).toMatchObject({ sourceHeadSequence: point.sequence, sourceHeadDigest: point.digest });
+    const forkEvents = await fixture.journal.readEvents(result.session.id);
+    const seed = canonicalForkContextSeed(forkEvents.find((event) => event.type === FORK_CONTEXT_EVENT_TYPE)?.payload)!;
+    expect(materializeMessages(forkEvents, {
+      forkContextScope: { sessionId: result.session.id, lineage: result.session.manifest.lineage },
+      verifiedForkContextDigest: seed.contextDigest,
+    })).toEqual([
+      { role: "user", content: "one" },
+      { role: "assistant", content: "answer" },
+    ]);
+    expect(materializeMessages(forkEvents, {
+      forkContextScope: { sessionId: result.session.id, lineage: result.session.manifest.lineage },
+      verifiedForkContextDigest: seed.contextDigest,
+    }).some((message) => message.content === "later")).toBe(false);
+  });
+
+  it("forks at an audited pre-turn rename without inheriting the following first prompt", async () => {
+    const fixture = createJournal();
+    const created = await fixture.journal.createSession("Untitled", await manifest());
+    await fixture.journal.renameSession(created.id, "First prompt title");
+    const rename = (await fixture.journal.readEvents(created.id)).at(-1)!;
+    await appendAuditedTurn(fixture.journal, created.id, "first", "first prompt", "first answer");
+    const source = (await fixture.journal.getSession(created.id))!;
+
+    const result = await new SessionLibrary(fixture.journal).fork(created.id, {
+      expectedSourceHead: { sequence: source.headSequence, digest: source.headDigest },
+      sourcePoint: { sequence: rename.sequence, digest: rename.digest },
+    });
+
+    expect(rename.type).toBe("session.renamed");
+    expect(result).toMatchObject({
+      sourceHeadSequence: source.headSequence,
+      sourceBoundarySequence: rename.sequence,
+      sourceBoundaryDigest: rename.digest,
+      contextMessageCount: 0,
+      contextSeeded: true,
+    });
+    expect(result.session.manifest.lineage).toMatchObject({
+      sourceHeadSequence: rename.sequence,
+      sourceHeadDigest: rename.digest,
+    });
+    const forkEvents = await fixture.journal.readEvents(result.session.id);
+    const seed = canonicalForkContextSeed(forkEvents.find((event) => event.type === FORK_CONTEXT_EVENT_TYPE)?.payload)!;
+    expect(materializeMessages(forkEvents, {
+      forkContextScope: { sessionId: result.session.id, lineage: result.session.manifest.lineage },
+      verifiedForkContextDigest: seed.contextDigest,
+    })).toEqual([]);
+  });
+
+  it("refuses a context seed when the selected source prefix does not pass audit", async () => {
+    const fixture = createJournal();
+    const created = await fixture.journal.createSession("Malformed source", await manifest());
+    const events = await fixture.journal.append(created.id, [
+      { type: "turn.requested", turnId: "broken", payload: { content: "request" } },
+      { type: "turn.completed", turnId: "broken", payload: {} },
+    ]);
+    const source = (await fixture.journal.getSession(created.id))!;
+    const point = events.at(-1)!;
+    await expect(new SessionLibrary(fixture.journal).fork(created.id, {
+      expectedSourceHead: { sequence: source.headSequence, digest: source.headDigest },
+      sourcePoint: { sequence: point.sequence, digest: point.digest },
+    })).rejects.toThrow(/did not pass the local journal audit/u);
+    expect(await fixture.journal.listSessions()).toHaveLength(1);
+  });
+
+  it("refuses an audited prefix when the later observed source head is structurally invalid", async () => {
+    const fixture = createJournal();
+    const created = await fixture.journal.createSession("Invalid later head", await manifest());
+    const point = await appendAuditedTurn(fixture.journal, created.id, "valid", "keep", "kept");
+    await fixture.journal.append(created.id, [
+      { type: "turn.completed", turnId: "orphaned", payload: {} },
+    ]);
+    const source = (await fixture.journal.getSession(created.id))!;
+
+    await expect(new SessionLibrary(fixture.journal).fork(created.id, {
+      expectedSourceHead: { sequence: source.headSequence, digest: source.headDigest },
+      sourcePoint: { sequence: point.sequence, digest: point.digest },
+    })).rejects.toThrow(/observed source head did not pass the local journal audit/u);
+    expect(await fixture.journal.listSessions()).toHaveLength(1);
   });
 
   it("rejects a historical point that is not a completed-turn boundary", async () => {
@@ -427,6 +543,23 @@ describe("SessionLibrary", () => {
       expectedSourceHead: { sequence: source.headSequence, digest: source.headDigest },
       sourcePoint: { sequence: request!.sequence, digest: request!.digest },
     })).rejects.toBeInstanceOf(SessionForkConflictError);
+  });
+
+  it("rejects a session-scoped record appended while a provider turn is still active", async () => {
+    const fixture = createJournal();
+    const created = await fixture.journal.createSession("Mid-turn metadata", await manifest());
+    await fixture.journal.append(created.id, [
+      { type: "turn.requested", turnId: "open", payload: { content: "unfinished" } },
+    ]);
+    await fixture.journal.renameSession(created.id, "Renamed during open turn");
+    const rename = (await fixture.journal.readEvents(created.id)).at(-1)!;
+    const source = (await fixture.journal.getSession(created.id))!;
+
+    await expect(new SessionLibrary(fixture.journal).fork(created.id, {
+      expectedSourceHead: { sequence: source.headSequence, digest: source.headDigest },
+      sourcePoint: { sequence: rename.sequence, digest: rename.digest },
+    })).rejects.toThrow(/selected source boundary did not pass/u);
+    expect(await fixture.journal.listSessions()).toHaveLength(1);
   });
 });
 
@@ -440,6 +573,64 @@ function createJournal() {
       () => `identity-${String(++identity)}`,
     ),
   };
+}
+
+async function appendAuditedTurn(
+  journal: EventJournal,
+  sessionId: string,
+  turnId: string,
+  userContent: string,
+  assistantContent: string,
+) {
+  const session = (await journal.getSession(sessionId))!;
+  const messages: CanonicalMessage[] = [{ role: "user", content: userContent }];
+  const idempotencyKey = `${session.id}:${turnId}:0`;
+  const requestDigest = await sha256(stableStringify({
+    model: session.manifest.model,
+    systemPromptDigest: session.manifest.systemPromptDigest,
+    messages,
+    tools: session.manifest.tools,
+    idempotencyKey,
+  } as unknown as JsonValue));
+  const responseDigest = await sha256(assistantContent);
+  const receipt = createLocalReceipt({
+    sessionId,
+    turnId,
+    provider: session.manifest.providerId,
+    model: session.manifest.model,
+    requestDigest,
+    responseDigest,
+    now: "2026-07-18T00:00:04.000Z",
+  });
+  await journal.append(sessionId, [
+    { type: "turn.requested", turnId, payload: { content: userContent } },
+    {
+      type: "inference.started",
+      turnId,
+      operationId: `inference-${turnId}`,
+      payload: {
+        step: 0,
+        providerId: session.manifest.providerId,
+        model: session.manifest.model,
+        posture: "local",
+        requestDigest,
+        idempotencyKey,
+      },
+    },
+    {
+      type: "assistant.completed",
+      turnId,
+      operationId: `inference-${turnId}`,
+      payload: {
+        message: { role: "assistant", content: assistantContent },
+        finishReason: "stop",
+        responseDigest,
+        receipt: receipt as unknown as JsonValue,
+      },
+    },
+    { type: "turn.completed", turnId, payload: { responseDigest, receiptId: receipt.receiptId } },
+  ]);
+  return (await journal.readEvents(sessionId)).at(-1)!;
 }
 
 async function manifest(overrides: Partial<Parameters<typeof createSessionManifest>[0]> = {}): Promise<SessionManifest> {

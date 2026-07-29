@@ -10,6 +10,9 @@ import type {
   VaultContextFabricPort,
   VaultContextFabricResolution,
 } from "../vault/context-fabric-port";
+import type { LiveEnvironmentSupplementSource } from "./live-environment";
+
+export type { LiveEnvironmentSupplement, LiveEnvironmentSupplementSource } from "./live-environment";
 
 type ToolBundle = typeof import("./tool-bundle");
 let toolBundle: Promise<ToolBundle> | undefined;
@@ -23,6 +26,12 @@ export type AirshipToolRegistryOptions = Readonly<{
   embeddings?: EmbeddingProvider;
   /** Optional encrypted/ranged workspace retrieval adapter behind the same turn seam. */
   workspaceTurnContextProvider?: TurnContextProvider;
+  /**
+   * Credential-free, freshly evaluated status for authorities owned by the App
+   * rather than this bundle: provider connections, adopted storage, and the
+   * browser extension. Core browser/runtime/index observations are automatic.
+   */
+  liveEnvironment?: LiveEnvironmentSupplementSource;
   /**
    * Small, capability-owned tools that do not belong to the workspace bundle.
    * Callers retain their authorities; the registry receives only the narrow

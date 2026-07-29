@@ -1,22 +1,49 @@
 # Attestation and conversation receipts
 
-Implementation status, 2026-07-23: the unified `ProofView` is mounted in `App`
+Implementation status, 2026-07-28: the unified `ProofView` is mounted in `App`
 with receipt, session-audit, endpoint-evidence, and verifier-ledger tabs,
-bounded in-memory evidence acquisition, and explicit acquisition notices. The
+automatic bounded evidence acquisition, and explicit acquisition notices. The
 legacy Attestations route deep-links to the evidence tab; it is not a second
 trust surface. Proof does not claim that evidence has been pulled merely
 because the route exists.
 
+Acquisition scheduler state and accepted endpoint-evidence records are separate,
+Profile-partitioned compare-and-swap checkpoints under private `.airship` paths
+through the active authoritative `WorkspacePort`. In page-memory mode they
+remain page-lifetime state. When the active port is a client-encrypted Local
+Device, Google Drive, or S3-compatible Vault, both checkpoints inherit that
+port's encrypted durability. Storage/Profile switches quiesce the old queue,
+client, and record authority before migration. After reload or a scope change,
+Airship first installs a credential-backed evidence client, then recovers the
+matching Profile/workspace record store, and only then resumes interrupted queue
+work. With no credential, persisted queue work is paused rather than spent as a
+failed attempt.
+
+The record checkpoint retains each accepted credential-free record whole:
+bounded raw TDX quote, DER certificate, NVIDIA/provider evidence, request nonce,
+endpoint public key, report data, binding digests, measurements, local verifier
+results, and warnings. It retains at most 32 records, at most 3 MiB per complete
+record, and at most 12 MiB per Profile checkpoint. There is no silent age
+pruning or capacity eviction. A record that crosses a boundary, or whose CAS
+write fails, remains explicitly page-only with a visible reason; existing proof
+is preserved and no raw field is silently truncated. The evidence client's
+transient request/cache machinery and every Chutes credential remain page-memory
+only. This is therefore a bounded durable evidence cache, not a complete proof
+archive, so Proof completeness remains partial.
+
 Airship makes proof visible at the point where a user needs it: beside each
 assistant response. A compact row of badges opens an evidence drawer. The
-Proof screen exports an **unsigned, privacy-safe status summary**, not an
-independently verifiable proof or receipt. Raw quotes, certificates, signatures,
-public keys, nonces, provider bodies, arbitrary claim detail objects, and
-dictionary-testable plaintext request/response digests are omitted. Free-form
-summaries, warnings, verifier prose/IDs, model names, instance IDs, and other
-identity metadata are omitted too. A future
-selective-disclosure verification bundle must use a canonical signed manifest
-and explicitly selected artifacts; it is never the default export.
+default **unsigned, privacy-safe status summary** omits raw quotes,
+certificates, signatures, public keys, nonces, provider bodies, arbitrary claim
+detail objects, dictionary-testable plaintext request/response digests,
+free-form verifier prose, and identity metadata. Proof also offers a separately
+labeled **raw verification bundle** containing the bounded receipt, journal
+audit, and complete endpoint-evidence records available for that Profile and
+session. Those raw artifacts can be checked by independent Intel/NVIDIA and
+binding verifiers, but the bundle is unsigned by Airship or an enclave and does
+not contain the full immutable journal. A future selective-disclosure bundle
+still needs a canonical signed manifest and explicitly selected artifacts; it
+must never replace the privacy-safe default.
 
 ## Badge vocabulary
 
@@ -76,8 +103,10 @@ separate, non-mutating follow-up:
 5. if that request is specifically unauthorized and the chute is public, try
    the anonymous public-chute batch route, then retain only the exact previously
    discovered instance/key pair;
-6. retain the returned base64 TDX quote, NVIDIA evidence, and certificate only
-   in an account-partitioned, byte-bounded, expiring memory cache;
+6. validate and retain the returned base64 TDX quote, NVIDIA evidence,
+   certificate, nonce, endpoint key, and binding material as one complete,
+   Profile/session/receipt-scoped record through the active `WorkspacePort`, or
+   mark that whole record page-only when an explicit boundary is crossed;
 7. structurally parse the TDX quote and evidence envelope;
 8. compute `SHA256(nonce + e2e_pubkey)` using the documented string
    concatenation and compare it with the first 32 bytes of TDX `report_data`;
@@ -87,11 +116,14 @@ separate, non-mutating follow-up:
 10. pass the bounded record to separately reviewed Intel, NVIDIA, model, and
     transcript verifier ports when those verifiers exist.
 
-The render state gets a redacted projection, not the raw cache: request nonces,
-query strings, endpoint keys, quotes, GPU provider bodies, certificates, and
-report-data/binding bytes are removed before the record enters React state.
-Correlation keeps only the exact instance and invocation-time endpoint-key
-digest. Evidence never rewrites or promotes the historical receipt.
+Provider request URLs are reduced to their query-free source before durable
+storage, and credentials or credential-shaped fields are rejected. The
+Profile/workspace/session-fenced presentation state keeps the complete accepted
+record so the raw bundle remains independently checkable, while the ordinary
+Proof surface renders normalized claims and lazy disclosures instead of a raw
+wall. Correlation retains the exact session, receipt, instance, and
+invocation-time endpoint-key digest. Evidence never rewrites or promotes the
+historical receipt.
 
 Evidence retrieval alone does not verify quote authenticity, current TCB,
 NVIDIA authenticity, model weights, or a conversation. Airship's deferred local
@@ -135,11 +167,14 @@ observed deployment.
 
 Because evidence batches are substantial, the UI renders normalized counts,
 digests, measurements, and claim summaries. Raw artifacts remain bounded and
-lazy/explicit rather than entering the render tree.
+appear only through explicit disclosure or raw-bundle export rather than an
+undifferentiated default render.
 
 The presentation boundary accepts at most 512 endpoint records and 512 receipts
 per supplied page, then retains the newest 128 of each source. An oversized
-page is rejected before copying or sorting and must be paginated upstream.
+page is rejected before copying or sorting and must be paginated upstream. The
+durable endpoint-record cache has the stricter 32-record, 3 MiB-per-record, and
+12 MiB-per-checkpoint boundaries described above.
 
 ## Portable receipt v1
 

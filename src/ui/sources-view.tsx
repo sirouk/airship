@@ -46,12 +46,14 @@ export type SourcesViewProps = Readonly<{
   reviewImport: SourcesImportReview;
   onWorkspaceChanged?: () => void | Promise<void>;
   workspaceDurability?: Readonly<{ state: DurabilityState; detail: string }>;
+  /** Rendered as Workspace → Source Control's advanced modal, never a route. */
+  embedded?: boolean;
 }>;
 
 /** Depth of one history read. Bounded here so the pane cannot outgrow its box. */
 const HISTORY_DEPTH = 50;
 
-export function SourcesView({ client, author, review, workspace, reviewImport, onWorkspaceChanged, workspaceDurability = { state: "ephemeral", detail: "Workspace files exist only in this page runtime." } }: SourcesViewProps) {
+export function SourcesView({ client, author, review, workspace, reviewImport, onWorkspaceChanged, workspaceDurability = { state: "ephemeral", detail: "Workspace files exist only in this page runtime." }, embedded = false }: SourcesViewProps) {
   const [repositories, setRepositories] = useState<readonly GitRepositorySnapshot[]>([]);
   const [repositoryId, setRepositoryId] = useState("");
   const [worktreeId, setWorktreeId] = useState("");
@@ -355,7 +357,7 @@ export function SourcesView({ client, author, review, workspace, reviewImport, o
   }
 
   return (
-    <section class="git-sources" aria-labelledby="git-sources-title">
+    <section class={`git-sources${embedded ? " git-sources--embedded" : ""}`} aria-labelledby="git-sources-title">
       {/* The 158px eyebrow/serif-H1/paragraph slab becomes the shared 44px bar.
           Nothing is dropped: the eyebrow is the ⓘ panel's heading and the
           paragraph is its body, both verbatim, and the ⓘ opens itself on the
@@ -366,11 +368,9 @@ export function SourcesView({ client, author, review, workspace, reviewImport, o
         routeId="sources"
         density="tool"
         title="Repositories & worktrees"
-        // The Workspace route's own header renders `Sources` as the selected
-        // tab 40px above this bar, so a second 28px route title would be the
-        // third rendering of one word. The heading stays a real <h1> for
-        // `aria-labelledby` and the document outline.
-        titleVisible={false}
+        // The advanced sheet is the only visible home for this title now; the
+        // removed route-level Sources tab no longer duplicates it above.
+        titleVisible={embedded}
         eyebrow="Browser-native source control"
         description="Inspect, stage, branch, and commit against an adapter-owned browser filesystem. Remote traffic is direct and only available when its CORS and credential contract is actually installed."
         headingId="git-sources-title"

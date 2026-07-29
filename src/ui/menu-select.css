@@ -29,7 +29,7 @@
 .menu-select.compact .menu-select-caret { position:absolute; right:-2px; bottom:-2px; display:grid; place-items:center; width:16px; height:16px; border:1.5px solid var(--ground); border-radius:50%; color:var(--ink); background:var(--surface-raised); font-size:var(--fs-micro); }
 .menu-select.compact .menu-select-popover { position:fixed; top:58px; right:8px; bottom:auto; width:min(320px,calc(100vw - 16px)); }
 .compact-profile-menu { display:none; }
-.profile-switcher .profile-menu { margin-top:9px; }
+.profile-switcher .profile-menu { margin:0; }
 .profile-switcher .profile-menu .menu-select-popover { right:auto; left:0; }
 .profile-switcher .profile-menu .menu-select-trigger { padding:6px; border:0; background:transparent; }
 .profile-switcher .profile-menu .menu-select-trigger:hover,

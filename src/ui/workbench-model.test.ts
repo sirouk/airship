@@ -1,10 +1,18 @@
 import { describe, expect, it } from "vitest";
 import {
+  activateWorkbenchDocument,
+  closeWorkbenchDocument,
   defaultEditorWrap,
   editorSurfaceNote,
   folderOperationReport,
+  openWorkbenchDocument,
+  parseWorkbenchDocumentId,
+  pinWorkbenchDocument,
+  remapWorkbenchDocuments,
+  retainWorkbenchDocuments,
   settledWorkbenchNotice,
   workbenchDialogCopy,
+  workbenchDocumentId,
   WORKBENCH_WRAP_DEFAULT_MAX_WIDTH,
   workspaceNameError,
   WORKBENCH_DESCRIPTION,
@@ -19,6 +27,7 @@ import {
   WORKBENCH_RAIL_DEFAULT_PERCENT,
   WORKBENCH_RAIL_MAX_PERCENT,
   WORKBENCH_RAIL_MIN_PERCENT,
+  type WorkbenchDocumentTabs,
 } from "./workbench-model";
 
 describe("workbench route identity", () => {
@@ -30,6 +39,7 @@ describe("workbench route identity", () => {
 
   it("lands #editor in the editor pane and #workspace in the tree", () => {
     expect(workbenchIdentity("#editor").opensPane).toBe("editor");
+    expect(workbenchIdentity("#sources")).toMatchObject({ route: "editor", title: "Editor", opensPane: "editor" });
     expect(workbenchIdentity("#workspace").opensPane).toBe("navigation");
   });
 
@@ -54,6 +64,110 @@ describe("duplicate tab basenames", () => {
     expect(qualifiers["/workspace/src/runtime/index.ts"]).toBe("runtime");
     expect(qualifiers["/workspace/src/ui/index.ts"]).toBe("ui");
     expect(qualifiers["/workspace/README.md"]).toBe("");
+  });
+});
+
+describe("document preview and pin lifecycle", () => {
+  const empty: WorkbenchDocumentTabs = Object.freeze({ tabs: Object.freeze([]), activeId: "" });
+
+  it("keeps one replaceable preview and reports exactly what it displaced", () => {
+    const first = openWorkbenchDocument(empty, "/workspace/README.md", "preview");
+    expect(first).toEqual({
+      state: {
+        tabs: ["/workspace/README.md"],
+        activeId: "/workspace/README.md",
+        previewId: "/workspace/README.md",
+      },
+    });
+
+    const second = openWorkbenchDocument(first.state, "/workspace/docs/architecture.md", "preview");
+    expect(second.displacedId).toBe("/workspace/README.md");
+    expect(second.state).toEqual({
+      tabs: ["/workspace/docs/architecture.md"],
+      activeId: "/workspace/docs/architecture.md",
+      previewId: "/workspace/docs/architecture.md",
+    });
+    expect(Object.isFrozen(second.state.tabs)).toBe(true);
+    expect(Object.isFrozen(second.state)).toBe(true);
+  });
+
+  it("pins in place on double-click or first edit so later previews cannot displace it", () => {
+    const preview = openWorkbenchDocument(empty, "/workspace/README.md", "preview").state;
+    const pinned = pinWorkbenchDocument(preview, "/workspace/README.md");
+    expect(pinned.previewId).toBeUndefined();
+
+    const next = openWorkbenchDocument(pinned, "/workspace/docs/architecture.md", "preview");
+    expect(next.displacedId).toBeUndefined();
+    expect(next.state.tabs).toEqual(["/workspace/README.md", "/workspace/docs/architecture.md"]);
+    expect(next.state.previewId).toBe("/workspace/docs/architecture.md");
+
+    const doubleClicked = openWorkbenchDocument(next.state, "/workspace/docs/architecture.md", "pinned").state;
+    expect(doubleClicked.tabs).toEqual(next.state.tabs);
+    expect(doubleClicked.previewId).toBeUndefined();
+  });
+
+  it("activates pinned tabs without turning them into previews and closes explicitly beside the active tab", () => {
+    const first = openWorkbenchDocument(empty, "/workspace/a.ts", "pinned").state;
+    const second = openWorkbenchDocument(first, "/workspace/b.ts", "pinned").state;
+    const third = openWorkbenchDocument(second, "/workspace/c.ts", "preview").state;
+    const activated = activateWorkbenchDocument(third, "/workspace/a.ts");
+    expect(activated).toMatchObject({ activeId: "/workspace/a.ts", previewId: "/workspace/c.ts" });
+
+    const closed = closeWorkbenchDocument(activated, "/workspace/a.ts");
+    expect(closed).toEqual({
+      tabs: ["/workspace/b.ts", "/workspace/c.ts"],
+      activeId: "/workspace/b.ts",
+      previewId: "/workspace/c.ts",
+    });
+  });
+
+  it("carries preview identity through moves and clears it when the file disappears", () => {
+    const current = openWorkbenchDocument(empty, "/workspace/notes/plan.md", "preview").state;
+    const moved = remapWorkbenchDocuments(
+      current,
+      new Map([["/workspace/notes/plan.md", "/workspace/docs/plan.md"]]),
+    );
+    expect(moved).toEqual({
+      tabs: ["/workspace/docs/plan.md"],
+      activeId: "/workspace/docs/plan.md",
+      previewId: "/workspace/docs/plan.md",
+    });
+    expect(retainWorkbenchDocuments(moved, new Set())).toEqual({ tabs: [], activeId: "" });
+  });
+
+  it("shares one lifecycle across file, status-diff, and history-diff identities", () => {
+    const fileId = workbenchDocumentId({ kind: "file", path: "/workspace/README.md" });
+    const statusId = workbenchDocumentId({
+      kind: "diff",
+      source: "status",
+      repositoryId: "repo",
+      worktreeId: "main",
+      worktreeVersion: "worktree:4",
+      path: "README.md",
+      scope: "worktree",
+    });
+    const historyId = workbenchDocumentId({
+      kind: "diff",
+      source: "history",
+      repositoryId: "repo",
+      worktreeId: "main",
+      revision: "0123456789abcdef",
+    });
+
+    const file = openWorkbenchDocument(empty, fileId, "pinned").state;
+    const status = openWorkbenchDocument(file, statusId, "preview").state;
+    expect(parseWorkbenchDocumentId(statusId)).toMatchObject({ source: "status", scope: "worktree", path: "README.md" });
+    expect(status).toMatchObject({ tabs: [fileId, statusId], activeId: statusId, previewId: statusId });
+
+    const history = openWorkbenchDocument(status, historyId, "preview");
+    expect(history.displacedId).toBe(statusId);
+    expect(parseWorkbenchDocumentId(historyId)).toMatchObject({ source: "history", revision: "0123456789abcdef" });
+    expect(history.state.tabs).toEqual([fileId, historyId]);
+  });
+
+  it("rejects malformed persisted diff identities rather than treating them as files", () => {
+    expect(parseWorkbenchDocumentId("airship-diff:%7Bbad")).toBeUndefined();
+    expect(parseWorkbenchDocumentId("not/a/workspace/path")).toBeUndefined();
   });
 });
 

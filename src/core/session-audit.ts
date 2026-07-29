@@ -17,6 +17,19 @@ import {
   verifyContextSelectionQuery,
 } from "./context-selection";
 import {
+  canonicalLiveEnvironmentSnapshot,
+  injectLiveEnvironment,
+  liveEnvironmentScopeMatches,
+  verifyLiveEnvironmentSnapshot,
+  type LiveEnvironmentSnapshot,
+} from "./live-environment";
+import {
+  FORK_CONTEXT_EVENT_TYPE,
+  canonicalForkContextSeed,
+  forkContextSeedMatchesScope,
+  verifyForkContextSeed,
+} from "./fork-context";
+import {
   canonicalContextSummary,
   canonicalSessionContextPolicy,
   summaryBodiesWithinPolicy,
@@ -41,6 +54,10 @@ const EVENT_FIELDS = new Set([
 const KNOWN_EVENT_TYPES = new Set([
   "session.created",
   "session.renamed",
+  "session.favorite.changed",
+  "profile.favorite-order.moved",
+  "profile.active-conversation.selected",
+  FORK_CONTEXT_EVENT_TYPE,
   "context.summary.updated",
   "turn.requested",
   "turn.context.selected",
@@ -172,6 +189,7 @@ type TurnState = {
   request?: {
     content: string;
     messageIndex: number;
+    liveEnvironment?: LiveEnvironmentSnapshot;
   };
   contextSelected?: boolean;
   inference?: {
@@ -598,6 +616,9 @@ async function validateProtocol(
   let active: TurnState | undefined;
   let activeLocal: LocalCommandState | undefined;
   let sawCreation = false;
+  let sawForkContext = false;
+  let verifiedForkContextDigest: string | undefined;
+  let projectedTitle: string | undefined;
 
   const requireActive = (event: DurableEvent): TurnState | undefined => {
     if (!active || !event.turnId || event.turnId !== active.id || active.terminal) {
@@ -653,15 +674,104 @@ async function validateProtocol(
         if (!eventManifest || stableStringify(eventManifest as JsonValue) !== stableStringify(session.manifest as unknown as JsonValue)) {
           add({ ...eventLocation(event), code: "SESSION_MANIFEST_SNAPSHOT_MISMATCH", category: "manifest", message: "Creation event manifest differs from the session record." });
         }
-        if (payload.title !== session.title) {
-          add({ ...eventLocation(event), code: "SESSION_TITLE_SNAPSHOT_MISMATCH", category: "manifest", message: "Creation event title differs from the session record.", severity: "warning" });
-        }
+        if (typeof payload.title === "string") projectedTitle = payload.title;
+      }
+      continue;
+    }
+    if (event.type === FORK_CONTEXT_EVENT_TYPE) {
+      const seed = canonicalForkContextSeed(event.payload);
+      const verified = seed ? await verifyForkContextSeed(seed) : false;
+      const scope = { sessionId: session.id, lineage: session.manifest.lineage };
+      if (
+        index !== 1 ||
+        sawForkContext ||
+        event.turnId ||
+        event.operationId ||
+        !seed ||
+        !verified ||
+        !forkContextSeedMatchesScope(seed, scope)
+      ) {
+        add({
+          ...eventLocation(event),
+          code: !seed || !verified
+            ? "FORK_CONTEXT_SEED_INVALID"
+            : !forkContextSeedMatchesScope(seed, scope)
+              ? "FORK_CONTEXT_SEED_SCOPE_MISMATCH"
+              : "FORK_CONTEXT_SEED_LIFECYCLE_INVALID",
+          category: "protocol",
+          message: "Fork context must be one verified, lineage-bound event immediately after session creation.",
+        });
+      } else {
+        sawForkContext = true;
+        verifiedForkContextDigest = seed.contextDigest;
+        messages.push(...seed.messages.map((message) => structuredClone(message)));
       }
       continue;
     }
     if (event.type === "session.renamed") {
       if (event.turnId || event.operationId || !payload || typeof payload.title !== "string" || !payload.title.trim() || payload.title.length > 240) {
         add({ severity: "error", category: "protocol", code: "SESSION_RENAME_MALFORMED", sequence: event.sequence, message: "A session rename must carry one bounded title outside any turn." });
+      } else projectedTitle = payload.title;
+      continue;
+    }
+    if (event.type === "session.favorite.changed") {
+      if (event.turnId || event.operationId || !payload || typeof payload.favorite !== "boolean") {
+        add({ severity: "error", category: "protocol", code: "SESSION_FAVORITE_MALFORMED", sequence: event.sequence, message: "A session favorite change must carry one boolean outside any turn." });
+      }
+      continue;
+    }
+    if (event.type === "profile.favorite-order.moved") {
+      const hasBeforeSession = payload?.beforeSessionId !== undefined;
+      const hasBeforeFavorite = payload?.beforeFavoriteEventId !== undefined;
+      if (
+        event.turnId
+        || event.operationId
+        || !payload
+        || payload.version !== 1
+        || !boundedString(payload.profileId, 512)
+        || !boundedString(payload.sessionId, 512)
+        || !boundedString(payload.favoriteEventId, 512)
+        || !Number.isSafeInteger(payload.generation)
+        || (payload.generation as number) < 1
+        || (payload.previousEventId !== undefined && !boundedString(payload.previousEventId, 512))
+        || (hasBeforeSession && !boundedString(payload.beforeSessionId, 512))
+        || (hasBeforeFavorite && !boundedString(payload.beforeFavoriteEventId, 512))
+        || hasBeforeSession !== hasBeforeFavorite
+        || payload.profileId !== session.manifest.profile?.profileId
+        || payload.sessionId !== session.id
+        || payload.beforeSessionId === session.id
+      ) {
+        add({
+          severity: "error",
+          category: "protocol",
+          code: "PROFILE_FAVORITE_ORDER_MALFORMED",
+          sequence: event.sequence,
+          message: "A favorite-order move must be profile-bound, membership-bound, bounded, and recorded outside any turn.",
+        });
+      }
+      continue;
+    }
+    if (event.type === "profile.active-conversation.selected") {
+      if (
+        event.turnId
+        || event.operationId
+        || active
+        || !payload
+        || payload.version !== 1
+        || !boundedString(payload.profileId, 512)
+        || !boundedString(payload.sessionId, 512)
+        || !Number.isSafeInteger(payload.generation)
+        || (payload.generation as number) < 1
+        || (payload.previousEventId !== undefined && !boundedString(payload.previousEventId, 512))
+        || payload.profileId !== session.manifest.profile?.profileId
+      ) {
+        add({
+          severity: "error",
+          category: "protocol",
+          code: "PROFILE_ACTIVE_CONVERSATION_MALFORMED",
+          sequence: event.sequence,
+          message: "A profile active-conversation selection must be profile-bound, bounded, and recorded between turns.",
+        });
       }
       continue;
     }
@@ -700,11 +810,13 @@ async function validateProtocol(
             injectLatestContext: turnBoundPreprocessing,
             allowEmbeddedContext: session.manifest.turnContext === undefined,
             allowSelectedContext: session.manifest.turnContext !== "disabled",
+            forkContextScope: { sessionId: session.id, lineage: session.manifest.lineage },
+            verifiedForkContextDigest,
           },
         ));
         if (active?.request) {
           active.request.messageIndex = messages.length - 1;
-          lastContextMessage = active.contextSelected
+          lastContextMessage = active.contextSelected || active.request.liveEnvironment
             ? { index: active.request.messageIndex, content: active.request.content }
             : undefined;
         } else {
@@ -833,6 +945,15 @@ async function validateProtocol(
         continue;
       }
       const images = canonicalImageInputs(payload?.images);
+      const liveEnvironment = payload?.liveEnvironment === undefined
+        ? undefined
+        : canonicalLiveEnvironmentSnapshot(payload.liveEnvironment);
+      const liveEnvironmentVerified = liveEnvironment
+        ? await verifyLiveEnvironmentSnapshot(liveEnvironment)
+        : false;
+      const liveEnvironmentScopeVerified = liveEnvironment
+        ? liveEnvironmentScopeMatches(liveEnvironment, session.id, session.manifest)
+        : false;
       const contextSelection = payload?.contextSelection === undefined
         ? undefined
         : canonicalContextSelection(payload.contextSelection);
@@ -849,6 +970,13 @@ async function validateProtocol(
       }
       if (!images) {
         add({ ...eventLocation(event), code: "TURN_IMAGES_INVALID", category: "protocol", message: "Turn request images violate the bounded inline-image contract." });
+      }
+      if (payload?.liveEnvironment !== undefined && !liveEnvironment) {
+        add({ ...eventLocation(event), code: "TURN_LIVE_ENVIRONMENT_INVALID", category: "protocol", message: "Turn live-environment data violates the bounded canonical snapshot contract." });
+      } else if (liveEnvironment && !liveEnvironmentVerified) {
+        add({ ...eventLocation(event), code: "TURN_LIVE_ENVIRONMENT_DIGEST_MISMATCH", category: "protocol", message: "Turn live-environment snapshot digest does not verify." });
+      } else if (liveEnvironment && !liveEnvironmentScopeVerified) {
+        add({ ...eventLocation(event), code: "TURN_LIVE_ENVIRONMENT_SCOPE_MISMATCH", category: "protocol", message: "Turn live-environment snapshot is outside the session's pinned scope." });
       }
       if (payload?.contextSelection !== undefined && !contextSelection) {
         add({ ...eventLocation(event), code: "TURN_CONTEXT_INVALID", category: "protocol", message: "Turn context selection violates the bounded provenance contract." });
@@ -876,18 +1004,27 @@ async function validateProtocol(
         lastContextMessage = undefined;
       }
       if (payload && typeof payload.content === "string" && images &&
+          (payload.liveEnvironment === undefined || (
+            liveEnvironment && liveEnvironmentVerified && liveEnvironmentScopeVerified
+          )) &&
           (payload.contextSelection === undefined || (
             embeddedContextAllowed && contextSelection && contextVerified && contextQueryVerified && contextScopeVerified
           ))) {
         const index = messages.length;
         messages.push({
           role: "user",
-          content: injectContextSelection(payload.content, contextSelection),
+          content: injectContextSelection(injectLiveEnvironment(payload.content, liveEnvironment), contextSelection),
           ...(images.length ? { images: [...images] } : {}),
         });
-        active.request = { content: payload.content, messageIndex: index };
+        active.request = {
+          content: payload.content,
+          messageIndex: index,
+          ...(liveEnvironment ? { liveEnvironment } : {}),
+        };
         active.contextSelected = embeddedContextAllowed && Boolean(contextSelection);
-        if (embeddedContextAllowed && contextSelection?.hits.length) lastContextMessage = { index, content: payload.content };
+        if (liveEnvironment || (embeddedContextAllowed && contextSelection?.hits.length)) {
+          lastContextMessage = { index, content: payload.content };
+        }
       }
       continue;
     }
@@ -940,10 +1077,13 @@ async function validateProtocol(
       }
       messages[turn.request.messageIndex] = {
         ...message,
-        content: injectContextSelection(turn.request.content, selection),
+        content: injectContextSelection(
+          injectLiveEnvironment(turn.request.content, turn.request.liveEnvironment),
+          selection,
+        ),
       };
       turn.contextSelected = true;
-      if (selection.hits.length) {
+      if (turn.request.liveEnvironment || selection.hits.length) {
         lastContextMessage = { index: turn.request.messageIndex, content: turn.request.content };
       }
       continue;
@@ -983,6 +1123,17 @@ async function validateProtocol(
         !POSTURES.has(String(payload.posture))
       ) {
         add({ ...eventLocation(event), code: "INFERENCE_BINDING_MISMATCH", category: "protocol", message: "Inference provider, model, or posture does not match the pinned session/runtime vocabulary." });
+      }
+      if (
+        turn.request?.liveEnvironment &&
+        turn.request.liveEnvironment.inference.posture !== payload.posture
+      ) {
+        add({
+          ...eventLocation(event),
+          code: "TURN_LIVE_ENVIRONMENT_POSTURE_MISMATCH",
+          category: "protocol",
+          message: "The live-environment transport posture differs from the inference operation it describes.",
+        });
       }
       const idempotencyKey = `${session.id}:${turn.id}:${String(step)}`;
       if (payload.idempotencyKey !== idempotencyKey || !DIGEST_PATTERN.test(String(payload.requestDigest))) {
@@ -1202,6 +1353,20 @@ async function validateProtocol(
 
   if (!sawCreation) {
     add({ code: "SESSION_CREATION_MISSING", category: "protocol", message: "Journal has no canonical session.created event." });
+  } else if (projectedTitle !== session.title) {
+    add({
+      code: "SESSION_TITLE_SNAPSHOT_MISMATCH",
+      category: "manifest",
+      message: "The title projected from creation and rename events differs from the session record.",
+      severity: "warning",
+    });
+  }
+  if (session.manifest.lineage && !sawForkContext) {
+    add({
+      code: "FORK_CONTEXT_SEED_MISSING",
+      category: "protocol",
+      message: "A fork manifest has no verified destination context-seed event.",
+    });
   }
   if (active) {
     add({

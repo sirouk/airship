@@ -2,10 +2,10 @@ import { useEffect, useId, useMemo, useRef, useState } from "preact/hooks";
 import type { BrowserGitClient } from "../git/client";
 import { describeGitOperation } from "../git/operations";
 import { preferredSourceRepositoryId } from "../git/source-selection";
-import { gitWorktreeWorkspaceRoot, resolveGitWorkspaceBinding } from "../git/workspace-binding";
-import type { GitAuthor, GitOperation, GitOperationDescriptor, GitRepositorySnapshot, GitStatusEntry, GitWorktreeSnapshot } from "../git/types";
+import { resolveGitWorkspaceBinding } from "../git/workspace-binding";
+import type { GitAuthor, GitCommitDetail, GitCommitFilePatch, GitCommitSummary, GitDiff, GitOperation, GitOperationDescriptor, GitRepositorySnapshot, GitStatusEntry, GitWorktreeSnapshot } from "../git/types";
 import type { WorkspaceEntry, WorkspaceFile, WorkspacePort } from "../workspace/contracts";
-import { normalizeWorkspacePath } from "../workspace/contracts";
+import { isWorkspaceControlPlanePath, normalizeWorkspacePath } from "../workspace/contracts";
 import { isWorkspaceBinaryEnvelope } from "../workspace/content-codec";
 import { moveWorkspaceFile } from "../workspace/mutations";
 import { buildWorkspaceTree, visibleWorkspaceTree, workspaceBaseName, workspaceDirectories, workspaceFilesUnder, workspaceFolderRenamePlan, workspaceParentPath, type WorkspaceMove } from "../workspace/tree";
@@ -14,10 +14,18 @@ import { Icon } from "./icons";
 import { MenuSelect } from "./menu-select";
 import { Seal } from "./seal";
 import { middleTruncate, Tabs, type TabItem } from "./tabs";
+import { WorkspaceFileIcon } from "./workspace-file-icon";
 import {
+  activateWorkbenchDocument,
+  closeWorkbenchDocument,
   defaultEditorWrap,
   editorSurfaceNote,
   folderOperationReport,
+  openWorkbenchDocument,
+  parseWorkbenchDocumentId,
+  pinWorkbenchDocument,
+  remapWorkbenchDocuments,
+  retainWorkbenchDocuments,
   settledWorkbenchNotice,
   WORKBENCH_DESCRIPTION,
   WORKBENCH_DONE_NOTICE_MS,
@@ -30,6 +38,7 @@ import {
   WORKSPACE_FOLDER_PLACEHOLDER_NOTE,
   workbenchBufferState,
   workbenchDialogCopy,
+  workbenchDocumentId,
   workbenchFilterMatches,
   workbenchNotice,
   workbenchNoticeState,
@@ -37,11 +46,16 @@ import {
   workbenchSuggestedFiles,
   workbenchTabQualifiers,
   workspaceNameError,
+  type WorkbenchDocumentOpenMode,
+  type WorkbenchDocumentTabs,
+  type WorkbenchHistoryDiffDocument,
+  type WorkbenchStatusDiffDocument,
   type WorkbenchDialogKind,
   type WorkbenchNotice,
   type WorkbenchPane,
 } from "./workbench-model";
 import "./workspace-view.css";
+import "./workspace-file-icon.css";
 
 export const WORKSPACE_FILE_ROW_HEIGHT = 34;
 export const WORKSPACE_FILE_OVERSCAN = 7;
@@ -55,30 +69,74 @@ export const WORKSPACE_EDITOR_BYTE_LIMIT = 128 * 1024;
  * bordered panel was dead and the code column was starved to pay for it.
  */
 export const WORKSPACE_FILE_VIEWPORT_HEIGHT = 432;
-const TAB_STORAGE = "airship.workspace.tabs.v1";
+const TAB_STORAGE = "airship.workspace.tabs.v2";
 /** How many doomed paths a delete confirmation names before it counts the rest. */
 const DIALOG_PATH_PREVIEW = 8;
 /** The dialogs whose subject is the path itself, so an empty field is fine. */
 const DIALOG_KINDS_WITHOUT_VALUE: readonly string[] = Object.freeze(["delete", "delete-folder", "discard"]);
-const PAGE_DRAFTS = new WeakMap<WorkspacePort, Readonly<Record<string, Buffer>>>();
-
 type Review = (operation: GitOperation, descriptor: GitOperationDescriptor) => Promise<"allow" | "deny">;
 type Buffer = WorkspaceFile & { draft: string; truncated: boolean; binary: boolean };
+type DiffBuffer = Readonly<{
+  document: WorkbenchStatusDiffDocument | WorkbenchHistoryDiffDocument;
+  content: string;
+  binary: boolean;
+  truncated: boolean;
+  byteLength?: number;
+  loading: boolean;
+  error?: string;
+  /** Present for a history read, so its exact changed paths remain actionable. */
+  files?: readonly GitCommitFilePatch[];
+}>;
 type Dialog = Readonly<{ kind: WorkbenchDialogKind; path: string }>;
-type TabState = Readonly<{ tabs: readonly string[]; activePath: string; rail: number; wrap: boolean }>;
+export type WorkspaceTabState = WorkbenchDocumentTabs & Readonly<{
+  rail: number;
+  wrap: boolean;
+  /** Profile-local Source Control selection; identifiers are revalidated on load. */
+  repositoryId?: string;
+  worktreeId?: string;
+}>;
 
-export function WorkspaceView({
-  files,
-  selected,
-  onOpen,
-  workspace,
-  git,
-  review,
-  onWorkspaceChanged,
-  workspaceIdentity = "page-memory",
-  onOpenRepositoryManager,
-  opensPane = "navigation",
-}: {
+/** Page-memory state partitioned by both authoritative workspace and profile cockpit. */
+export class ProfileScopedWorkspacePageStore<T> {
+  private readonly workspaces = new WeakMap<WorkspacePort, Map<string, T>>();
+
+  read(workspace: WorkspacePort, workspaceIdentity: string, profileId: string): T | undefined {
+    return this.workspaces.get(workspace)?.get(workspaceWorkbenchScope(workspaceIdentity, profileId));
+  }
+
+  write(workspace: WorkspacePort, workspaceIdentity: string, profileId: string, value: T): void {
+    const profiles = this.workspaces.get(workspace) ?? new Map<string, T>();
+    profiles.set(workspaceWorkbenchScope(workspaceIdentity, profileId), value);
+    this.workspaces.set(workspace, profiles);
+  }
+}
+
+const PAGE_DRAFTS = new ProfileScopedWorkspacePageStore<Readonly<Record<string, Buffer>>>();
+
+/** Treat a selection object inherited across profiles as stale until that profile selects anew. */
+export class WorkbenchProfileSelectionFence {
+  private profileId?: string;
+  private inherited?: Readonly<{ profileId: string; selected?: WorkspaceFile }>;
+
+  resolve(profileId: string, selected?: WorkspaceFile): WorkspaceFile | undefined {
+    if (this.profileId === undefined) {
+      this.profileId = profileId;
+      return selected;
+    }
+    if (this.profileId !== profileId) {
+      this.profileId = profileId;
+      this.inherited = Object.freeze({ profileId, ...(selected ? { selected } : {}) });
+      return undefined;
+    }
+    if (this.inherited?.profileId !== profileId) return selected;
+    if (this.inherited.selected === selected) return undefined;
+    this.inherited = undefined;
+    return selected;
+  }
+}
+
+export type WorkspaceViewProps = Readonly<{
+  profileId: string;
   files: readonly WorkspaceEntry[];
   selected?: WorkspaceFile;
   onOpen: (path: string) => void | Promise<void>;
@@ -86,11 +144,42 @@ export function WorkspaceView({
   git?: BrowserGitClient;
   review?: Review;
   onWorkspaceChanged: () => void | Promise<void>;
+  /** Opens one profile-scoped terminal tab at this exact workspace directory. */
+  onOpenTerminalAt?: (cwd: string) => void;
   workspaceIdentity?: string;
   onOpenRepositoryManager?: () => void;
   /** Which pane the destination that opened this workbench asks for. */
   opensPane?: WorkbenchPane;
-}) {
+  /** Compatibility/request seam for opening the Source Control activity. */
+  opensActivity?: "explorer" | "source";
+}>;
+
+/** A profile switch remounts the state owner while preserving the shared WorkspacePort. */
+export function WorkspaceView(props: WorkspaceViewProps) {
+  // App owns the durable file selection. If its prior-profile object survives
+  // a cockpit switch, do not reinterpret it as a new-profile open request.
+  const selectionFence = useRef<WorkbenchProfileSelectionFence>();
+  selectionFence.current ??= new WorkbenchProfileSelectionFence();
+  const selected = selectionFence.current.resolve(props.profileId, props.selected);
+  const scope = workspaceWorkbenchScope(props.workspaceIdentity ?? "page-memory", props.profileId);
+  return <ProfileScopedWorkspaceView key={scope} {...props} selected={selected} />;
+}
+
+function ProfileScopedWorkspaceView({
+  profileId,
+  files,
+  selected,
+  onOpen,
+  workspace,
+  git,
+  review,
+  onWorkspaceChanged,
+  onOpenTerminalAt,
+  workspaceIdentity = "page-memory",
+  onOpenRepositoryManager,
+  opensPane = "navigation",
+  opensActivity = "explorer",
+}: WorkspaceViewProps) {
   const dialogTitleId = useId();
   const [filter, setFilter] = useState("");
   const filtered = useMemo(() => workbenchFilterMatches(files, filter), [files, filter]);
@@ -112,24 +201,41 @@ export function WorkspaceView({
   const rowHeight = workspaceRowHeight();
   const rowWindow = workspaceFileWindow(visible.length, scrollTop, treeHeight, rowHeight);
   const [treeFocusPath, setTreeFocusPath] = useState("");
+  const [revealedPath, setRevealedPath] = useState("");
+  const [revealRequest, setRevealRequest] = useState<Readonly<{ path: string; sequence: number }>>();
   const [dropTarget, setDropTarget] = useState("");
-  const [mode, setMode] = useState<"explorer" | "source">("explorer");
+  const [mode, setMode] = useState<"explorer" | "source">(opensActivity);
   const [mobilePane, setMobilePane] = useState<WorkbenchPane>(opensPane);
-  const tabStorageKey = useMemo(() => workspaceTabStorageKey(workspaceIdentity), [workspaceIdentity]);
+  const tabStorageKey = useMemo(() => workspaceTabStorageKey(workspaceIdentity, profileId), [workspaceIdentity, profileId]);
   const restoredTabs = useMemo(() => readTabState(tabStorageKey), [tabStorageKey]);
-  const [tabs, setTabs] = useState<readonly string[]>(restoredTabs.tabs);
-  const [activePath, setActivePath] = useState<string>(restoredTabs.activePath);
+  const restoredBuffers = PAGE_DRAFTS.read(workspace, workspaceIdentity, profileId) ?? {};
+  const [documents, setDocuments] = useState<WorkbenchDocumentTabs>(() => {
+    const restoredPreview = restoredTabs.previewId;
+    const previewDocument = restoredPreview ? parseWorkbenchDocumentId(restoredPreview) : undefined;
+    const previewBuffer = previewDocument?.kind === "file" ? restoredBuffers[previewDocument.path] : undefined;
+    // A page-remount can recover a draft from the WeakMap. If that draft was
+    // edited before the remount, it is pinned even if sessionStorage observed
+    // the preceding preview state.
+    return restoredPreview && previewBuffer?.draft !== previewBuffer?.content
+      ? pinWorkbenchDocument(restoredTabs, restoredPreview)
+      : restoredTabs;
+  });
+  const { tabs, activeId, previewId } = documents;
   const [rail, setRail] = useState(restoredTabs.rail);
   const [wrap, setWrap] = useState(restoredTabs.wrap);
-  const [buffers, setBuffers] = useState<Readonly<Record<string, Buffer>>>(() => PAGE_DRAFTS.get(workspace) ?? {});
+  const [buffers, setBuffers] = useState<Readonly<Record<string, Buffer>>>(restoredBuffers);
+  const [diffs, setDiffs] = useState<Readonly<Record<string, DiffBuffer>>>({});
   const [context, setContext] = useState<Readonly<{ path: string; x: number; y: number }>>();
   const [dialog, setDialog] = useState<Dialog>();
   const [dialogValue, setDialogValue] = useState("");
   const [notice, setNotice] = useState<WorkbenchNotice>();
   const [busy, setBusy] = useState(false);
   const [repositories, setRepositories] = useState<readonly GitRepositorySnapshot[]>([]);
-  const [repositoryId, setRepositoryId] = useState("");
+  const [repositoryId, setRepositoryId] = useState(restoredTabs.repositoryId ?? "");
   const [worktree, setWorktree] = useState<GitWorktreeSnapshot>();
+  const [sourceSelectionResolved, setSourceSelectionResolved] = useState(false);
+  const [history, setHistory] = useState<readonly GitCommitSummary[]>([]);
+  const [historyMessage, setHistoryMessage] = useState("");
   const [scmLoading, setScmLoading] = useState(false);
   const [commitMessage, setCommitMessage] = useState("");
   const hoverTimer = useRef<number>();
@@ -140,51 +246,109 @@ export function WorkspaceView({
   const dialogBox = useRef<HTMLDivElement>(null);
   const dialogOpener = useRef<HTMLElement>();
   const filterField = useRef<HTMLInputElement>(null);
+  const documentsRef = useRef(documents);
+  const buffersRef = useRef(buffers);
+  const diffsRef = useRef(diffs);
+  const railRef = useRef(rail);
+  const wrapRef = useRef(wrap);
+  const repositoryIdRef = useRef(repositoryId);
+  const persistedWorktreeId = workspacePersistedWorktreeId(
+    restoredTabs.worktreeId,
+    worktree?.id,
+    sourceSelectionResolved,
+  );
+  const worktreeIdRef = useRef(persistedWorktreeId);
+  documentsRef.current = documents;
+  buffersRef.current = buffers;
+  diffsRef.current = diffs;
+  railRef.current = rail;
+  wrapRef.current = wrap;
+  repositoryIdRef.current = repositoryId;
+  worktreeIdRef.current = persistedWorktreeId;
+
+  useEffect(() => () => {
+    // Profile changes remount this owner. Flush refs in cleanup so a switch in
+    // the same frame as an edit/layout change cannot strand the latest state.
+    PAGE_DRAFTS.write(workspace, workspaceIdentity, profileId, buffersRef.current);
+    try {
+      const current = documentsRef.current;
+      writeWorkspaceTabState(sessionStorage, workspaceIdentity, profileId, {
+        ...current,
+        rail: railRef.current,
+        wrap: wrapRef.current,
+        ...(repositoryIdRef.current ? { repositoryId: repositoryIdRef.current } : {}),
+        ...(worktreeIdRef.current ? { worktreeId: worktreeIdRef.current } : {}),
+      });
+    } catch { /* Page-memory isolation remains valid when session storage is unavailable. */ }
+  }, [workspace, workspaceIdentity, profileId]);
 
   useEffect(() => {
     if (!selected) return;
-    setActivePath(selected.path);
-    setTabs((current) => current.includes(selected.path) ? current : [...current, selected.path]);
+    openDocumentState(workbenchDocumentId({ kind: "file", path: selected.path }), "preview");
     setBuffers((current) => {
       const prior = current[selected.path];
       if (prior && prior.draft !== prior.content) return current;
       const projection = workspaceEditorProjection(selected);
-      return { ...current, [selected.path]: { ...selected, content: projection.content, draft: projection.content, truncated: projection.truncated, binary: projection.binary } };
+      const next = { ...current, [selected.path]: { ...selected, content: projection.content, draft: projection.content, truncated: projection.truncated, binary: projection.binary } };
+      buffersRef.current = next;
+      return next;
     });
   }, [selected?.path, selected?.revision]);
 
   useEffect(() => {
     try {
-      sessionStorage.setItem(tabStorageKey, JSON.stringify({ tabs, activePath, rail, wrap }));
+      writeWorkspaceTabState(sessionStorage, workspaceIdentity, profileId, {
+        tabs,
+        activeId,
+        previewId,
+        rail,
+        wrap,
+        ...(repositoryId ? { repositoryId } : {}),
+        ...(persistedWorktreeId ? { worktreeId: persistedWorktreeId } : {}),
+      });
     } catch {
       // Open tabs and drafts remain valid page-memory state when browser
       // privacy policy denies optional session preference storage.
     }
-  }, [tabs, activePath, rail, wrap, tabStorageKey]);
+  }, [tabs, activeId, previewId, rail, wrap, repositoryId, persistedWorktreeId, tabStorageKey]);
 
   useEffect(() => {
-    PAGE_DRAFTS.set(workspace, buffers);
+    PAGE_DRAFTS.write(workspace, workspaceIdentity, profileId, buffers);
     const hasDirtyDraft = Object.values(buffers).some((candidate) => candidate.draft !== candidate.content);
     if (!hasDirtyDraft) return;
     const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
     window.addEventListener("beforeunload", warn);
     return () => window.removeEventListener("beforeunload", warn);
-  }, [buffers, workspace]);
+  }, [buffers, workspace, workspaceIdentity, profileId]);
 
   useEffect(() => {
     if (files.length === 0) return;
-    const existing = tabs.filter((path) => files.some((entry) => entry.path === path));
-    if (existing.length !== tabs.length) setTabs(existing);
-    const desired = existing.includes(activePath) ? activePath : existing[0] ?? "";
-    if (desired !== activePath) setActivePath(desired);
-    if (desired && !buffers[desired]) void onOpen(desired);
+    const filePaths = new Set(files.map((entry) => entry.path));
+    const retained = new Set(documentsRef.current.tabs.filter((id) => {
+      const document = parseWorkbenchDocumentId(id);
+      return document?.kind === "diff" || (document?.kind === "file" && filePaths.has(document.path));
+    }));
+    const next = retainWorkbenchDocuments(documentsRef.current, retained);
+    if (next !== documentsRef.current) publishDocuments(next);
+    const desired = next.activeId ? parseWorkbenchDocumentId(next.activeId) : undefined;
+    if (desired?.kind === "file" && !buffersRef.current[desired.path]) void onOpen(desired.path);
+    if (desired?.kind === "diff" && !diffsRef.current[next.activeId]) void loadDiffDocument(desired, next.activeId);
     if (!desired) setMobilePane("navigation");
-  }, [files, activePath]);
+  }, [files, activeId, git]);
 
   useEffect(() => {
     if (!git) return;
-    void refreshSourceControl();
+    void refreshSourceControl(restoredTabs.repositoryId, restoredTabs.worktreeId);
   }, [git]);
+
+  useEffect(() => {
+    // Advanced controls are entered from Source Control. Keep that activity
+    // selected while its modal is open; closing the sheet never forces a user
+    // back to Explorer.
+    if (opensActivity !== "source") return;
+    setMode("source");
+    setMobilePane("navigation");
+  }, [opensActivity]);
 
   useEffect(() => {
     if (!context) return;
@@ -210,6 +374,26 @@ export function WorkspaceView({
     return () => observer.disconnect();
   }, [mode]);
 
+  useEffect(() => {
+    if (!revealRequest || mode !== "explorer" || filter) return;
+    const index = visible.findIndex((node) => node.path === revealRequest.path);
+    if (index < 0) return;
+    const viewport = treeViewport.current;
+    if (!viewport) return;
+    if (index < rowWindow.start || index >= rowWindow.end) {
+      const centered = Math.max(0, index * rowHeight - Math.max(0, treeHeight - rowHeight) / 2);
+      viewport.scrollTop = centered;
+      setScrollTop(centered);
+      return;
+    }
+    const frame = requestAnimationFrame(() => {
+      const row = treeRowElement(index);
+      row?.focus({ preventScroll: true });
+      setRevealRequest((current) => current?.sequence === revealRequest.sequence ? undefined : current);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [revealRequest?.sequence, visible, mode, filter, scrollTop, rowWindow.start, rowWindow.end, rowHeight, treeHeight]);
+
   // A completion sentence is worth reading once; it is not worth 40px of
   // permanent layout. Errors are excluded — see `dismissNotice`.
   useEffect(() => {
@@ -230,7 +414,10 @@ export function WorkspaceView({
 
   useEffect(() => () => clearHoverExpansion(), []);
 
-  const buffer = buffers[activePath];
+  const activeDocument = activeId ? parseWorkbenchDocumentId(activeId) : undefined;
+  const treeSelectedPath = activeDocument?.kind === "file" ? activeDocument.path : revealedPath;
+  const buffer = activeDocument?.kind === "file" ? buffers[activeDocument.path] : undefined;
+  const diffBuffer = activeDocument?.kind === "diff" ? diffs[activeId] : undefined;
   const dirty = Boolean(buffer && buffer.draft !== buffer.content);
   const gutterLines = buffer && !buffer.binary ? workspaceGutterLines(buffer.draft) : undefined;
   const contextIsFile = Boolean(context && files.some((file) => file.path === context.path));
@@ -249,25 +436,49 @@ export function WorkspaceView({
     ? workspaceNameError(dialogValue)
     : undefined;
   const changeCount = worktree?.status.length ?? 0;
-  const tabQualifiers = useMemo(() => workbenchTabQualifiers(tabs), [tabs]);
+  const tabQualifiers = useMemo(() => workbenchTabQualifiers(tabs.filter((id) => parseWorkbenchDocumentId(id)?.kind === "file")), [tabs]);
   const suggestions = useMemo(() => workbenchSuggestedFiles(files), [files]);
   const verdict = buffer
     ? workbenchBufferState({ binary: buffer.binary, truncated: buffer.truncated, dirty })
     : undefined;
 
-  const fileTabs: readonly TabItem[] = tabs.map((path) => {
-    const name = workspaceBaseName(path);
-    const candidate = buffers[path];
-    const unsaved = Boolean(candidate && candidate.draft !== candidate.content);
+  const documentTabs: readonly TabItem[] = tabs.map((id) => {
+    const document = parseWorkbenchDocumentId(id)!;
+    if (document.kind === "file") {
+      const name = workspaceBaseName(document.path);
+      const candidate = buffers[document.path];
+      const unsaved = Boolean(candidate && candidate.draft !== candidate.content);
+      return {
+        id,
+        leading: <WorkspaceFileIcon path={document.path} />,
+        label: middleTruncate(name),
+        detail: document.path.replace("/workspace/", ""),
+        hint: tabQualifiers[document.path] || undefined,
+        preview: previewId === id,
+        state: unsaved ? "attention" : undefined,
+        stateLabel: unsaved ? "Unsaved" : undefined,
+        onClose: () => closeTab(id),
+        closeLabel: `Close ${name}`,
+      };
+    }
+    const candidate = diffs[id];
+    const status = document.source === "status";
+    const name = status ? workspaceBaseName(document.path) : document.revision.slice(0, 12);
+    const detail = status
+      ? `${document.path} · ${document.scope} diff`
+      : `Commit ${document.revision}`;
+    const stateLabel = candidate?.error ? "Unavailable" : candidate?.truncated ? "Truncated" : undefined;
     return {
-      id: path,
+      id,
+      leading: status ? <WorkspaceFileIcon path={document.path} /> : <Icon name="source" size={16} />,
       label: middleTruncate(name),
-      detail: path.replace("/workspace/", ""),
-      hint: tabQualifiers[path] || undefined,
-      state: unsaved ? "attention" : undefined,
-      stateLabel: unsaved ? "Unsaved" : undefined,
-      onClose: () => closeTab(path),
-      closeLabel: `Close ${name}`,
+      detail,
+      hint: status ? `${document.scope === "staged" ? "Staged" : "Working"} diff` : "Commit diff",
+      preview: previewId === id,
+      state: stateLabel ? "attention" : undefined,
+      stateLabel,
+      onClose: () => closeTab(id),
+      closeLabel: `Close ${detail}`,
     };
   });
 
@@ -276,13 +487,33 @@ export function WorkspaceView({
     setScmLoading(true);
     try {
       const next = await git.listRepositories();
-      const repository = next.find((item) => item.id === preferredRepository)
-        ?? next.find((item) => item.id === preferredSourceRepositoryId())
-        ?? next[0];
-      const nextWorktree = repository?.worktrees.find((item) => item.id === preferredWorktree) ?? repository?.worktrees[0];
+      const selection = resolveWorkspaceSourceSelection(
+        next,
+        preferredRepository,
+        preferredWorktree,
+        preferredSourceRepositoryId(),
+      );
+      const { repository, worktree: nextWorktree } = selection;
       setRepositories(next);
       setRepositoryId(repository?.id ?? "");
       setWorktree(nextWorktree);
+      setSourceSelectionResolved(true);
+      const historyCapability = repository?.capabilities.features.history;
+      if (!repository || !nextWorktree) {
+        setHistory([]);
+        setHistoryMessage("");
+      } else if (!historyCapability?.available) {
+        setHistory([]);
+        setHistoryMessage(historyCapability?.reason ?? "History is unavailable for this repository adapter.");
+      } else {
+        try {
+          setHistory(await git.log({ repositoryId: repository.id, worktreeId: nextWorktree.id, depth: 20 }));
+          setHistoryMessage("");
+        } catch (cause) {
+          setHistory([]);
+          setHistoryMessage(cause instanceof Error ? cause.message : "Commit history could not be read.");
+        }
+      }
     } catch (cause) {
       setNotice(workbenchNotice("error", cause instanceof Error ? cause.message : "Source control could not be refreshed."));
     } finally {
@@ -290,28 +521,182 @@ export function WorkspaceView({
     }
   }
 
-  async function openTab(path: string): Promise<void> {
+  function publishDocuments(next: WorkbenchDocumentTabs): void {
+    if (next === documentsRef.current) return;
+    documentsRef.current = next;
+    setDocuments(next);
+  }
+
+  /**
+   * Apply one preview/pin transition before asking the host for file content.
+   *
+   * The dirty check is intentionally repeated here in addition to the input
+   * handler: a recovered page draft must not be displaced even if an older
+   * sessionStorage snapshot still called it the preview.
+   */
+  function openDocumentState(id: string, mode: WorkbenchDocumentOpenMode): string {
+    if (!parseWorkbenchDocumentId(id)) throw new Error("The requested editor document has no valid workspace identity.");
+    let current = documentsRef.current;
+    const currentPreview = current.previewId;
+    const previewDocument = currentPreview ? parseWorkbenchDocumentId(currentPreview) : undefined;
+    const candidate = previewDocument?.kind === "file" ? buffersRef.current[previewDocument.path] : undefined;
+    if (currentPreview && candidate && candidate.draft !== candidate.content) {
+      current = pinWorkbenchDocument(current, currentPreview);
+      publishDocuments(current);
+    }
+    const transition = openWorkbenchDocument(current, id, mode);
+    publishDocuments(transition.state);
+    if (transition.displacedId) {
+      const displacedDocument = parseWorkbenchDocumentId(transition.displacedId);
+      if (displacedDocument?.kind === "file") setBuffers((currentBuffers) => {
+        const displaced = currentBuffers[displacedDocument.path];
+        // This should be unreachable because the guard above pins dirty
+        // previews. Fail safe by retaining the buffer rather than deleting an
+        // unsaved draft if an external state mutation violates the invariant.
+        if (displaced && displaced.draft !== displaced.content) return currentBuffers;
+        const next = Object.fromEntries(Object.entries(currentBuffers).filter(([key]) => key !== displacedDocument.path));
+        buffersRef.current = next;
+        return next;
+      });
+      if (displacedDocument?.kind === "diff") setDiffs((currentDiffs) => {
+        const next = Object.fromEntries(Object.entries(currentDiffs).filter(([key]) => key !== transition.displacedId));
+        diffsRef.current = next;
+        return next;
+      });
+    }
+    return id;
+  }
+
+  async function openPreviewTab(path: string): Promise<void> {
     const normalized = normalizeWorkspacePath(path);
+    openDocumentState(workbenchDocumentId({ kind: "file", path: normalized }), "preview");
     setContext(undefined);
-    setTabs((current) => current.includes(normalized) ? current : [...current, normalized]);
-    setActivePath(normalized);
     setMobilePane("editor");
     await onOpen(normalized);
   }
 
-  function closeTab(path: string, discard = false): void {
-    const candidate = buffers[path];
-    if (!discard && candidate && candidate.draft !== candidate.content) {
-      openDialog("discard", path);
+  async function openPinnedTab(path: string): Promise<void> {
+    const normalized = normalizeWorkspacePath(path);
+    openDocumentState(workbenchDocumentId({ kind: "file", path: normalized }), "pinned");
+    setContext(undefined);
+    setMobilePane("editor");
+    await onOpen(normalized);
+  }
+
+  async function openDiffDocument(document: WorkbenchStatusDiffDocument | WorkbenchHistoryDiffDocument, mode: WorkbenchDocumentOpenMode): Promise<void> {
+    const id = workbenchDocumentId(document);
+    openDocumentState(id, mode);
+    setMobilePane("editor");
+    await loadDiffDocument(document, id);
+  }
+
+  function revealWorkspacePath(path: string, contextLabel = "File"): void {
+    let normalized: string;
+    try {
+      normalized = normalizeWorkspacePath(path);
+    } catch (cause) {
+      setNotice(workbenchNotice("error", `${contextLabel} cannot be revealed: ${cause instanceof Error ? cause.message : "the path is outside this workspace."}`));
       return;
     }
-    const remaining = tabs.filter((item) => item !== path);
-    setTabs(remaining);
-    setBuffers((current) => Object.fromEntries(Object.entries(current).filter(([key]) => key !== path)));
-    if (activePath === path) {
-      const next = remaining.at(-1) ?? "";
-      setActivePath(next);
-      if (next) void onOpen(next);
+    if (!files.some((entry) => entry.path === normalized)) {
+      setNotice(workbenchNotice("error", `${contextLabel} ${normalized.replace("/workspace/", "")} is not present in the current workspace tree. It may be deleted or absent from this loaded snapshot; the open document remains available.`));
+      return;
+    }
+    // Revealing is navigation, never another open. In particular a diff keeps
+    // its active tab and bounded buffer while the tree becomes visible.
+    setFilter("");
+    setMode("explorer");
+    setMobilePane("navigation");
+    setExpanded((current) => new Set([...current, ...workspaceRevealAncestors(normalized)]));
+    setTreeFocusPath(normalized);
+    setRevealedPath(normalized);
+    setRevealRequest((current) => Object.freeze({ path: normalized, sequence: (current?.sequence ?? 0) + 1 }));
+    setNotice(workbenchNotice("done", `Revealed ${normalized.replace("/workspace/", "")} in Explorer. The open document remains active.`));
+  }
+
+  function revealGitPath(document: WorkbenchStatusDiffDocument | WorkbenchHistoryDiffDocument, relativePath: string): void {
+    const resolution = resolveWorkspacePathFromGit(repositories, document.repositoryId, document.worktreeId, relativePath);
+    if (resolution.state === "unavailable") {
+      setNotice(workbenchNotice("error", `Git path ${relativePath} cannot be revealed: ${resolution.reason} The open diff remains available.`));
+      return;
+    }
+    revealWorkspacePath(resolution.path, document.source === "history" ? "Commit path" : "Diff path");
+  }
+
+  async function loadDiffDocument(document: WorkbenchStatusDiffDocument | WorkbenchHistoryDiffDocument, id: string): Promise<void> {
+    if (diffsRef.current[id]?.loading || (diffsRef.current[id] && !diffsRef.current[id]?.error)) return;
+    const loading: DiffBuffer = { document, content: "", binary: false, truncated: false, loading: true };
+    setDiffBuffer(id, loading);
+    if (!git) {
+      setDiffBuffer(id, { ...loading, loading: false, error: "Browser Git is not connected, so this diff cannot be read." });
+      return;
+    }
+    try {
+      if (document.source === "status") {
+        const request = { repositoryId: document.repositoryId, worktreeId: document.worktreeId };
+        const before = await git.status(request);
+        if (before.version !== document.worktreeVersion) throw new Error("This status diff belongs to an earlier worktree version. Open the path again from Source Control for the current patch.");
+        const result = await git.diff({ ...request, path: document.path, scope: document.scope });
+        const after = await git.status(request);
+        if (after.version !== document.worktreeVersion) throw new Error("The worktree changed while this patch was being read. Open it again from Source Control.");
+        setDiffBuffer(id, statusDiffBuffer(document, result));
+      } else {
+        const result = await git.show({ repositoryId: document.repositoryId, worktreeId: document.worktreeId, revision: document.revision });
+        setDiffBuffer(id, historyDiffBuffer(document, result));
+      }
+    } catch (cause) {
+      setDiffBuffer(id, { ...loading, loading: false, error: cause instanceof Error ? cause.message : "This diff could not be read." });
+    }
+  }
+
+  function setDiffBuffer(id: string, value: DiffBuffer): void {
+    // A replaced preview may finish its bounded read after it has closed. Do
+    // not resurrect an orphan cache entry that no document can display.
+    if (!documentsRef.current.tabs.includes(id)) return;
+    setDiffs((current) => {
+      const next = { ...current, [id]: value };
+      diffsRef.current = next;
+      return next;
+    });
+  }
+
+  async function activateTab(id: string): Promise<void> {
+    const document = parseWorkbenchDocumentId(id);
+    if (!document) return;
+    publishDocuments(activateWorkbenchDocument(documentsRef.current, id));
+    setMobilePane("editor");
+    if (document.kind === "file") await onOpen(document.path);
+    else await loadDiffDocument(document, id);
+  }
+
+  function pinTab(id: string): void {
+    publishDocuments(pinWorkbenchDocument(documentsRef.current, id));
+  }
+
+  function closeTab(id: string, discard = false): void {
+    const document = parseWorkbenchDocumentId(id);
+    if (!document) return;
+    const filePath = document.kind === "file" ? document.path : undefined;
+    const candidate = filePath ? buffersRef.current[filePath] : undefined;
+    if (!discard && candidate && candidate.draft !== candidate.content) {
+      openDialog("discard", filePath!);
+      return;
+    }
+    const previousActive = documentsRef.current.activeId;
+    const nextDocuments = closeWorkbenchDocument(documentsRef.current, id);
+    publishDocuments(nextDocuments);
+    if (filePath) setBuffers((current) => {
+      const next = Object.fromEntries(Object.entries(current).filter(([key]) => key !== filePath));
+      buffersRef.current = next;
+      return next;
+    });
+    else setDiffs((current) => {
+      const next = Object.fromEntries(Object.entries(current).filter(([key]) => key !== id));
+      diffsRef.current = next;
+      return next;
+    });
+    if (previousActive === id) {
+      if (nextDocuments.activeId) void activateTab(nextDocuments.activeId);
       else setMobilePane("navigation");
     }
   }
@@ -345,6 +730,7 @@ export function WorkspaceView({
   }
 
   async function writeWorkspaceAndGit(path: string, content: string, expectedRevision: string | null): Promise<WorkspaceFile> {
+    assertMutableWorkspacePath(path);
     const previous = await workspace.read(path);
     const written = await workspace.write(path, content, { expectedRevision });
     try {
@@ -367,6 +753,7 @@ export function WorkspaceView({
   }
 
   async function removeWorkspaceAndGit(path: string): Promise<void> {
+    assertMutableWorkspacePath(path);
     const previous = await workspace.read(path);
     if (!previous) throw new Error("The selected file no longer exists.");
     await workspace.remove(path, { expectedRevision: previous.revision });
@@ -393,12 +780,16 @@ export function WorkspaceView({
    * fail a version fence it should have passed.
    */
   async function moveOne(source: string, target: string): Promise<WorkspaceFile> {
+    // Both ends: a move out of the control plane would expose private state as
+    // a user file just as surely as a move into it would corrupt Airship's own.
+    assertMutableWorkspacePath(source);
+    assertMutableWorkspacePath(target);
     const currentRepositories = git ? await git.listRepositories() : repositories;
     setRepositories(currentRepositories);
     const sourceBinding = resolveGitBinding(source, currentRepositories);
     const targetBinding = resolveGitBinding(target, currentRepositories);
     if ((sourceBinding || targetBinding) && (!sourceBinding || !targetBinding || targetBinding.repository.id !== sourceBinding.repository.id || targetBinding.worktree.id !== sourceBinding.worktree.id)) {
-      throw new Error("Moving a repository file across repository roots is not atomic. Move it within its worktree or use the full Sources view.");
+      throw new Error("Moving a repository file across repository roots is not atomic. Move it within its worktree or use Advanced source controls.");
     }
     const moved = await moveWorkspaceFile(workspace, source, target);
     try {
@@ -414,27 +805,40 @@ export function WorkspaceView({
   function remapPaths(moves: readonly WorkspaceMove[]): void {
     if (moves.length === 0) return;
     const map = new Map(moves.map((move) => [move.source, move.target] as const));
-    setTabs((current) => current.map((path) => map.get(path) ?? path));
-    setActivePath((current) => map.get(current) ?? current);
-    setBuffers((current) => Object.fromEntries(Object.entries(current).map(([path, value]) => {
+    publishDocuments(remapWorkbenchDocuments(documentsRef.current, map));
+    setBuffers((current) => {
+      const next = Object.fromEntries(Object.entries(current).map(([path, value]) => {
       const target = map.get(path);
       // The draft travels with the tab; the durable revision is the new one, so
       // the next save is still compare-and-swapped against a revision that exists.
       return target ? [target, { ...value, path: target }] : [path, value];
-    })));
+      }));
+      buffersRef.current = next;
+      return next;
+    });
   }
 
   /** Drops paths that no longer exist from the tab strip and the draft store. */
   function forgetPaths(removed: readonly string[]): void {
     if (removed.length === 0) return;
     const gone = new Set(removed);
-    const remaining = tabs.filter((path) => !gone.has(path));
-    setTabs(remaining);
-    setBuffers((current) => Object.fromEntries(Object.entries(current).filter(([path]) => !gone.has(path))));
-    if (!gone.has(activePath)) return;
-    const next = remaining.at(-1) ?? "";
-    setActivePath(next);
-    if (next) void onOpen(next);
+    const previousActive = documentsRef.current.activeId;
+    const nextDocuments = retainWorkbenchDocuments(
+      documentsRef.current,
+      new Set(documentsRef.current.tabs.filter((id) => {
+        const document = parseWorkbenchDocumentId(id);
+        return document?.kind === "diff" || (document?.kind === "file" && !gone.has(document.path));
+      })),
+    );
+    publishDocuments(nextDocuments);
+    setBuffers((current) => {
+      const next = Object.fromEntries(Object.entries(current).filter(([path]) => !gone.has(path)));
+      buffersRef.current = next;
+      return next;
+    });
+    const previousDocument = parseWorkbenchDocumentId(previousActive);
+    if (previousDocument?.kind !== "file" || !gone.has(previousDocument.path)) return;
+    if (nextDocuments.activeId) void activateTab(nextDocuments.activeId);
     else setMobilePane("navigation");
   }
 
@@ -448,11 +852,11 @@ export function WorkspaceView({
     const target = normalizeWorkspacePath(`${destinationDirectory}/${nextName}`);
     await transact("Moving file", async () => {
       const moved = await moveOne(source, target);
-      setTabs((current) => current.map((path) => path === source ? target : path));
-      setActivePath((current) => current === source ? target : current);
+      publishDocuments(remapWorkbenchDocuments(documentsRef.current, new Map([[source, target]])));
       setBuffers((current) => {
         const next = Object.fromEntries(Object.entries(current).filter(([path]) => path !== source));
-      next[target] = { ...moved, draft: pending?.draft ?? moved.content, truncated: pending?.truncated ?? false, binary: pending?.binary ?? isWorkspaceBinaryEnvelope(moved.content) };
+        next[target] = { ...moved, draft: pending?.draft ?? moved.content, truncated: pending?.truncated ?? false, binary: pending?.binary ?? isWorkspaceBinaryEnvelope(moved.content) };
+        buffersRef.current = next;
         return next;
       });
       await refreshAll(target);
@@ -587,7 +991,7 @@ export function WorkspaceView({
     await onWorkspaceChanged();
     const binding = open ? await gitBinding(open) : undefined;
     await refreshSourceControl(binding?.repository.id ?? repositoryId, binding?.worktree.id ?? worktree?.id);
-    if (open) await openTab(open);
+    if (open) await openPreviewTab(open);
   }
 
   async function transact(label: string, action: () => Promise<void>): Promise<void> {
@@ -707,9 +1111,12 @@ export function WorkspaceView({
         const parentIndex = visible.findIndex((candidate) => candidate.path === parent);
         if (parentIndex >= 0) focusTreeIndex(parentIndex);
       }
+    } else if (event.key === "Enter" && event.shiftKey && node.kind === "file") {
+      event.preventDefault();
+      void openPinnedTab(node.path);
     } else if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
-      if (node.kind === "directory") toggleDirectory(node.path); else void openTab(node.path);
+      if (node.kind === "directory") toggleDirectory(node.path); else void openPreviewTab(node.path);
     } else if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
       event.preventDefault();
       const bounds = treeRowElement(index)?.getBoundingClientRect();
@@ -742,7 +1149,7 @@ export function WorkspaceView({
         label="Workspace pane"
         items={[
           { id: "explorer", label: "Files" },
-          { id: "editor", label: "Editor", count: tabs.length || undefined, countLabel: `${String(tabs.length)} open files`, disabled: tabs.length === 0 },
+          { id: "editor", label: "Editor", count: tabs.length || undefined, countLabel: `${String(tabs.length)} open documents`, disabled: tabs.length === 0 },
           { id: "source", label: "Source Control", count: changeCount, countLabel: `${String(changeCount)} changes` },
         ]}
         activeId={mobilePane === "editor" ? "editor" : mode}
@@ -800,9 +1207,11 @@ export function WorkspaceView({
               <div style={{ height: visible.length * rowHeight, position: "relative" }}><div style={{ position: "absolute", top: rowWindow.start * rowHeight, left: 0, right: 0 }}>
                 {visible.slice(rowWindow.start, rowWindow.end).map((node, offset) => <div class="tree-row-wrap" style={{ height: rowHeight }} key={node.path}>
                   <button
-                    class={`tree-row ${activePath === node.path ? "active" : ""} ${dropTarget === (node.kind === "directory" ? node.path : workspaceParentPath(node.path)) ? "drop-target" : ""}`}
+                    class={`tree-row ${treeSelectedPath === node.path ? "active" : ""} ${dropTarget === (node.kind === "directory" ? node.path : workspaceParentPath(node.path)) ? "drop-target" : ""}`}
                     type="button" role="treeitem" aria-level={node.depth} aria-expanded={node.kind === "directory" ? Boolean(node.expanded) : undefined}
-                    aria-selected={activePath === node.path}
+                    aria-selected={treeSelectedPath === node.path}
+                    aria-keyshortcuts={node.kind === "file" ? "Enter Shift+Enter" : undefined}
+                    title={node.kind === "file" ? `${node.path} · Enter/click previews · Shift+Enter/double-click keeps open` : node.path}
                     data-workspace-tree-index={rowWindow.start + offset}
                     tabIndex={treeFocusPath === node.path || (!treeFocusPath && rowWindow.start + offset === 0) ? 0 : -1}
                     onFocus={() => setTreeFocusPath(node.path)}
@@ -815,13 +1224,29 @@ export function WorkspaceView({
                     onDragOver={(event) => { event.preventDefault(); if (event.dataTransfer) event.dataTransfer.dropEffect = "move"; }}
                     onDrop={(event) => { event.preventDefault(); const source = event.dataTransfer?.getData("text/x-airship-workspace-path"); const destination = node.kind === "directory" ? node.path : workspaceParentPath(node.path); clearHoverExpansion(); if (source) void moveFile(source, destination); }}
                     onContextMenu={(event) => { event.preventDefault(); setContext(clampedContext(node.path, event.clientX, event.clientY)); }}
-                    onClick={() => node.kind === "directory" ? toggleDirectory(node.path) : void openTab(node.path)}
-                  ><span class="tree-chevron">{node.kind === "directory" ? node.expanded ? "⌄" : "›" : ""}</span><Icon name={node.kind === "directory" ? "workspace" : "file"} size={15} /><span>{node.name}</span>{node.entry ? <small>{formatBytes(node.entry.size)}</small> : null}</button>
+                    onClick={() => node.kind === "directory" ? toggleDirectory(node.path) : void openPreviewTab(node.path)}
+                    onDblClick={() => { if (node.kind === "file") void openPinnedTab(node.path); }}
+                  ><span class="tree-chevron">{node.kind === "directory" ? node.expanded ? "⌄" : "›" : ""}</span>{node.kind === "directory" ? <Icon name="workspace" size={15} /> : <WorkspaceFileIcon path={node.path} />}<span>{node.name}</span>{node.entry ? <small>{formatBytes(node.entry.size)}</small> : null}</button>
                   <button class="tree-overflow" type="button" aria-label={`Actions for ${node.name}`} onClick={(event) => { const box = event.currentTarget.getBoundingClientRect(); setContext(clampedContext(node.path, box.right, box.bottom)); }}>•••</button>
                 </div>)}
               </div></div>
             </div>
-          </> : <SourceControlRail repositories={repositories} repositoryId={repositoryId} setRepositoryId={(id) => { setRepositoryId(id); setWorktree(repositories.find((item) => item.id === id)?.worktrees[0]); }} worktree={worktree} setWorktreeId={(id) => setWorktree(repositories.find((item) => item.id === repositoryId)?.worktrees.find((item) => item.id === id))} loading={scmLoading} refresh={() => void refreshSourceControl(repositoryId, worktree?.id)} openPath={(path) => { const repository = repositories.find((item) => item.id === repositoryId); const root = repository && worktree ? gitWorktreeWorkspaceRoot(repository, worktree) : "/workspace"; void openTab(normalizeWorkspacePath(`${root}/${path}`)); }} mutate={mutateSource} commitMessage={commitMessage} setCommitMessage={setCommitMessage} onOpenRepositoryManager={onOpenRepositoryManager} />}
+          </> : <SourceControlRail
+            repositories={repositories}
+            repositoryId={repositoryId}
+            selectRepository={(id) => { const target = repositories.find((item) => item.id === id)?.worktrees[0]; void refreshSourceControl(id, target?.id); }}
+            worktree={worktree}
+            selectWorktree={(id) => void refreshSourceControl(repositoryId, id)}
+            history={history}
+            historyMessage={historyMessage}
+            loading={scmLoading}
+            refresh={() => void refreshSourceControl(repositoryId, worktree?.id)}
+            openDiff={(document, openMode) => void openDiffDocument(document, openMode)}
+            mutate={mutateSource}
+            commitMessage={commitMessage}
+            setCommitMessage={setCommitMessage}
+            onOpenRepositoryManager={onOpenRepositoryManager}
+          />}
         </aside>
         <div
           class="workbench-splitter"
@@ -842,18 +1267,26 @@ export function WorkspaceView({
           }}
           onPointerUp={(event) => { event.currentTarget.releasePointerCapture(event.pointerId); }}
         />
-        <main class={`workbench-editor ${mobilePane === "editor" ? "mobile-active" : ""}`} aria-label="File editor">
+        <main class={`workbench-editor ${mobilePane === "editor" ? "mobile-active" : ""}`} aria-label="Document editor">
           <Tabs
             class="editor-tabs"
             variant="document"
-            label="Open files"
-            overflowHeading="Open files"
-            items={fileTabs}
-            activeId={activePath}
-            onSelect={(path) => void openTab(path)}
+            label="Open documents"
+            overflowHeading="Open documents"
+            items={documentTabs}
+            activeId={activeId}
+            onSelect={(id) => void activateTab(id)}
           />
-          {buffer && verdict ? <>
-            {buffer.binary ? <div class="workspace-binary-preview" role="status"><Icon name="file" size={30} /><strong>Binary file · read-only</strong><span>Airship preserves the original bytes for Git and browser execution. The internal storage envelope is never exposed as editable text.</span></div> : <>
+          {activeDocument?.kind === "diff" ? <DiffDocumentEditor
+            document={activeDocument}
+            buffer={diffBuffer}
+            preview={previewId === activeId}
+            wrap={wrap}
+            pin={() => pinTab(activeId)}
+            toggleWrap={() => setWrap((current) => !current)}
+            reveal={(path) => revealGitPath(activeDocument, path)}
+          /> : buffer && verdict ? <>
+            {buffer.binary ? <div class="workspace-binary-preview" role="status"><WorkspaceFileIcon path={buffer.path} /><strong>Binary file · read-only</strong><span>Airship preserves the original bytes for Git and browser execution. The internal storage envelope is never exposed as editable text.</span></div> : <>
               {buffer.truncated ? <div class="workspace-boundary attention" role="status">{buffer.content ? "Bounded preview only." : "Encrypted file not downloaded."} Files above {formatBytes(WORKSPACE_EDITOR_BYTE_LIMIT)} are read-only; full-object AES-GCM verification is never mislabeled as a range stream.</div> : null}
               {/* The gutter is presentational and scroll-synced from the
                   textarea, so the editable surface remains one real control. */}
@@ -862,7 +1295,27 @@ export function WorkspaceView({
                     rows, not file lines, so wrapping retires the gutter rather
                     than mislabelling it — and the file strip says so. */}
                 {gutterLines && !wrap ? <pre class="code-gutter" ref={gutter} aria-hidden="true">{gutterLines}</pre> : null}
-                <textarea class="code-editor" data-wrap={wrap ? "on" : "off"} aria-label={`Edit ${workspaceBaseName(buffer.path)}`} value={buffer.draft} readOnly={buffer.truncated} spellcheck={false} onScroll={(event) => { if (gutter.current) gutter.current.scrollTop = event.currentTarget.scrollTop; }} onInput={(event) => setBuffers((current) => ({ ...current, [buffer.path]: { ...buffer, draft: event.currentTarget.value } }))} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") { event.preventDefault(); void saveActive(); } }} />
+                <textarea
+                  class="code-editor"
+                  data-wrap={wrap ? "on" : "off"}
+                  aria-label={`Edit ${workspaceBaseName(buffer.path)}`}
+                  value={buffer.draft}
+                  readOnly={buffer.truncated}
+                  spellcheck={false}
+                  onScroll={(event) => { if (gutter.current) gutter.current.scrollTop = event.currentTarget.scrollTop; }}
+                  onInput={(event) => {
+                    // The first edit promotes a replaceable preview before its
+                    // draft changes, so a subsequent file activation cannot
+                    // evict unsaved work.
+                    pinTab(buffer.path);
+                    setBuffers((current) => {
+                      const next = { ...current, [buffer.path]: { ...buffer, draft: event.currentTarget.value } };
+                      buffersRef.current = next;
+                      return next;
+                    });
+                  }}
+                  onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") { event.preventDefault(); void saveActive(); } }}
+                />
               </div>
             </>}
             {/*
@@ -893,6 +1346,20 @@ export function WorkspaceView({
                   to whatever ends up beside it. */}
               <span class="editor-strip__controls">
               <button
+                class="editor-strip__reveal"
+                type="button"
+                title="Show this exact path in Explorer without closing the editor"
+                onClick={() => revealWorkspacePath(buffer.path)}
+              >Reveal in Explorer</button>
+              {previewId === workbenchDocumentId({ kind: "file", path: buffer.path }) ? (
+                <button
+                  class="editor-strip__pin"
+                  type="button"
+                  title="Keep this preview open when another file is selected"
+                  onClick={() => pinTab(buffer.path)}
+                >Keep open</button>
+              ) : null}
+              <button
                 class="editor-strip__wrap"
                 type="button"
                 aria-pressed={wrap}
@@ -908,10 +1375,10 @@ export function WorkspaceView({
           </> : <div class="workbench-empty">
             <Icon name="workspace" size={36} />
             <strong>{files.length === 0 ? "This workspace is empty" : "Open a file from Explorer"}</strong>
-            <span>{files.length === 0 ? "Create a file, or import a repository snapshot from Sources." : "Nothing is downloaded until you select it."}</span>
+            <span>{files.length === 0 ? "Create a file, or import a repository snapshot from Source Control." : "Nothing is downloaded until you select it."}</span>
             {suggestions.length > 0 ? <div class="workbench-empty__files">
-              {suggestions.map((entry) => <button type="button" key={entry.path} onClick={() => void openTab(entry.path)}>
-                <span aria-hidden="true">↳</span>
+              {suggestions.map((entry) => <button type="button" key={entry.path} onClick={() => void openPreviewTab(entry.path)}>
+                <WorkspaceFileIcon path={entry.path} />
                 <span>{entry.path.replace("/workspace/", "")}</span>
                 <small>{formatBytes(entry.size)}</small>
               </button>)}
@@ -936,7 +1403,12 @@ export function WorkspaceView({
         {notice.kind === "progress" ? null : <button type="button" aria-label="Dismiss this message" onClick={() => setNotice(undefined)}>Dismiss</button>}
       </div> : null}
       {context ? <div class="workbench-context" role="menu" style={{ left: `${String(context.x)}px`, top: `${String(context.y)}px` }} onPointerDown={(event) => event.stopPropagation()}>
-        <button role="menuitem" onClick={() => { if (contextIsFile) void openTab(context.path); else { toggleDirectory(context.path); setContext(undefined); } }}>{contextIsFile ? "Open" : expanded.has(context.path) ? "Collapse" : "Expand"}</button>
+        <button role="menuitem" onClick={() => { if (contextIsFile) void openPreviewTab(context.path); else { toggleDirectory(context.path); setContext(undefined); } }}>{contextIsFile ? "Open preview" : expanded.has(context.path) ? "Collapse" : "Expand"}</button>
+        {contextIsFile ? <button role="menuitem" onClick={() => void openPinnedTab(context.path)}>Open and keep</button> : null}
+        {onOpenTerminalAt ? <button role="menuitem" onClick={() => {
+          onOpenTerminalAt(contextIsFile ? workspaceParentPath(context.path) : context.path);
+          setContext(undefined);
+        }}><Icon name="terminal" size={15} /> Open terminal here</button> : null}
         <button role="menuitem" onClick={() => openDialog("create", contextIsFile ? workspaceParentPath(context.path) : context.path)}>New file…</button>
         {contextIsFile ? <>
           <button role="menuitem" onClick={() => openDialog("rename", context.path)}>Rename…</button>
@@ -1020,59 +1492,391 @@ export function WorkspaceView({
   );
 }
 
-function SourceControlRail({ repositories, repositoryId, setRepositoryId, worktree, setWorktreeId, loading, refresh, openPath, mutate, commitMessage, setCommitMessage, onOpenRepositoryManager }: { repositories: readonly GitRepositorySnapshot[]; repositoryId: string; setRepositoryId(id: string): void; worktree?: GitWorktreeSnapshot; setWorktreeId(id: string): void; loading: boolean; refresh(): void; openPath(path: string): void; mutate(operation: GitOperation): void | Promise<void>; commitMessage: string; setCommitMessage(value: string): void; onOpenRepositoryManager?: () => void }) {
+/**
+ * Restore only identifiers that still exist in the freshly-read Git inventory.
+ * A deleted/imported repository or worktree falls back inside the same live
+ * inventory; an opaque saved id is never rendered as if it remained valid.
+ */
+export function resolveWorkspaceSourceSelection<
+  R extends Readonly<{ id: string; worktrees: readonly Readonly<{ id: string }>[] }>,
+>(
+  repositories: readonly R[],
+  preferredRepositoryId?: string,
+  preferredWorktreeId?: string,
+  fallbackRepositoryId?: string,
+): Readonly<{ repository?: R; worktree?: R["worktrees"][number] }> {
+  const repository = repositories.find((item) => item.id === preferredRepositoryId)
+    ?? repositories.find((item) => item.id === fallbackRepositoryId)
+    ?? repositories[0];
+  const worktree = repository?.worktrees.find((item) => item.id === preferredWorktreeId)
+    ?? repository?.worktrees[0];
+  return Object.freeze({
+    ...(repository ? { repository } : {}),
+    ...(worktree ? { worktree } : {}),
+  });
+}
+
+/** Keep the unverified saved candidate until the first live inventory resolves. */
+export function workspacePersistedWorktreeId(
+  restoredWorktreeId: string | undefined,
+  resolvedWorktreeId: string | undefined,
+  inventoryResolved: boolean,
+): string | undefined {
+  return inventoryResolved ? resolvedWorktreeId : restoredWorktreeId;
+}
+
+function DiffDocumentEditor({ document, buffer, preview, wrap, pin, toggleWrap, reveal }: {
+  document: WorkbenchStatusDiffDocument | WorkbenchHistoryDiffDocument;
+  buffer?: DiffBuffer;
+  preview: boolean;
+  wrap: boolean;
+  pin(): void;
+  toggleWrap(): void;
+  reveal(path: string): void;
+}) {
+  const label = document.source === "status"
+    ? `${document.scope === "staged" ? "Staged" : "Working"} diff ${document.path}`
+    : `Commit ${document.revision} diff`;
+  const path = document.source === "status" ? document.path : `commit ${document.revision.slice(0, 12)}`;
+  const state = buffer?.loading || !buffer ? "checking" : buffer.error ? "failed" : "verified";
+  const stateLabel = buffer?.loading || !buffer ? "Reading patch" : buffer.error ? "Unavailable" : "Read-only diff";
+  const stateDetail = buffer?.error ?? (document.source === "status"
+    ? `Verified against worktree version ${document.worktreeVersion}.`
+    : `Read from commit object ${document.revision}.`);
+  const revealPaths = workbenchDiffRevealPaths(document, buffer?.files);
+  const diffIcon = document.source === "status"
+    ? <WorkspaceFileIcon path={document.path} />
+    : <Icon name="source" size={30} />;
+  return <>
+    {buffer?.error ? <div class="workspace-diff-state" role="alert">{diffIcon}<strong>Diff unavailable</strong><span>{buffer.error}</span></div>
+      : buffer?.loading || !buffer ? <div class="workspace-diff-state" role="status">{diffIcon}<strong>Reading local patch…</strong><span>The editor is reading the browser-owned Git repository.</span></div>
+      : <div class="code-editor-frame"><pre class="code-editor workspace-diff" data-wrap={wrap ? "on" : "off"} role="region" aria-label={label} tabIndex={0}>{buffer.content}</pre></div>}
+    <div class="editor-strip">
+      <Seal class="editor-strip__verdict" state={state} density="chip" label={stateLabel} detail={stateDetail} acting={state === "checking"} />
+      <span class="editor-strip__path" title={path}>{path}</span>
+      <span class="editor-strip__meta">
+        <span>{document.source === "status" ? `${document.scope} · snapshot ${document.worktreeVersion.slice(0, 12)}` : `object ${document.revision.slice(0, 12)}`}</span>
+        {buffer?.byteLength !== undefined ? <span>{formatBytes(buffer.byteLength)}</span> : null}
+        {buffer?.binary ? <span>binary change included</span> : null}
+        {buffer?.truncated ? <span>bounded patch · truncated</span> : null}
+      </span>
+      <span class="editor-strip__controls">
+        {revealPaths.length === 1 ? <button
+          class="editor-strip__reveal"
+          type="button"
+          title={document.source === "history" ? "Reveal this commit path in the current Explorer tree; the commit diff stays open" : "Reveal this changed path in Explorer; the diff stays open"}
+          onClick={() => reveal(revealPaths[0]!)}
+        >Reveal in Explorer</button> : revealPaths.length > 1 ? <MenuSelect
+          className="editor-strip__reveal-menu"
+          placement="up"
+          ariaLabel="Reveal a changed path from this commit in Explorer"
+          value=""
+          options={[
+            { value: "", label: "Reveal changed path…", disabled: true },
+            ...revealPaths.map((changedPath) => ({ value: changedPath, label: changedPath, description: "Show current workspace path; keep commit diff open" })),
+          ]}
+          leading={(option) => option.value ? <WorkspaceFileIcon path={option.value} /> : <Icon name="workspace" size={16} />}
+          onChange={reveal}
+        /> : <button
+          class="editor-strip__reveal"
+          type="button"
+          disabled
+          title={buffer?.loading || !buffer ? "Changed paths are still loading" : "This bounded commit read did not return an exact path to reveal"}
+        >Reveal unavailable</button>}
+        {preview ? <button class="editor-strip__pin" type="button" title="Keep this diff open when another document is selected" onClick={pin}>Keep open</button> : null}
+        <button class="editor-strip__wrap" type="button" aria-pressed={wrap} title="Soft-wrap long patch lines" onClick={toggleWrap}>Wrap</button>
+      </span>
+    </div>
+  </>;
+}
+
+function statusDiffBuffer(document: WorkbenchStatusDiffDocument, result: GitDiff): DiffBuffer {
+  return Object.freeze({
+    document,
+    content: result.patch || `${result.path}: no ${result.scope} differences.`,
+    binary: result.binary,
+    truncated: result.truncated,
+    byteLength: result.byteLength,
+    loading: false,
+  });
+}
+
+function historyDiffBuffer(document: WorkbenchHistoryDiffDocument, result: GitCommitDetail): DiffBuffer {
+  const content = workspaceHistoryPatch(result);
+  return Object.freeze({
+    document,
+    content,
+    binary: result.files.some((file) => file.binary),
+    truncated: result.truncated || result.files.some((file) => file.truncated),
+    byteLength: new TextEncoder().encode(content).byteLength,
+    loading: false,
+    files: Object.freeze([...result.files]),
+  });
+}
+
+/** A bounded, read-only commit document assembled only from `git.show`. */
+export function workspaceHistoryPatch(detail: GitCommitDetail): string {
+  const header = [
+    `commit ${detail.commit.oid}`,
+    `Author: ${detail.commit.author.name} <${detail.commit.author.email}>`,
+    `Date:   ${detail.commit.committedAt}`,
+    "",
+    detail.commit.message.trim() || "(no commit message)",
+  ];
+  const patches = detail.files.map((file) => file.patch || `${file.kind} ${file.path}${file.binary ? " (binary)" : " (no textual patch)"}`);
+  if (detail.truncated) patches.push("Additional changed paths were omitted by the bounded history read.");
+  return [...header, "", ...patches].join("\n").trimEnd();
+}
+
+/** Exact, de-duplicated paths an open diff can offer to Explorer. */
+export function workbenchDiffRevealPaths(
+  document: WorkbenchStatusDiffDocument | WorkbenchHistoryDiffDocument,
+  historyFiles?: readonly Pick<GitCommitFilePatch, "path">[],
+): readonly string[] {
+  return Object.freeze(document.source === "status"
+    ? [document.path]
+    : [...new Set(historyFiles?.map((file) => file.path) ?? [])]);
+}
+
+function commitSubject(message: string): string {
+  return message.trim().split(/\r?\n/u)[0] || "(no commit message)";
+}
+
+function SourceControlRail({ repositories, repositoryId, selectRepository, worktree, selectWorktree, history, historyMessage, loading, refresh, openDiff, mutate, commitMessage, setCommitMessage, onOpenRepositoryManager }: {
+  repositories: readonly GitRepositorySnapshot[];
+  repositoryId: string;
+  selectRepository(id: string): void;
+  worktree?: GitWorktreeSnapshot;
+  selectWorktree(id: string): void;
+  history: readonly GitCommitSummary[];
+  historyMessage: string;
+  loading: boolean;
+  refresh(): void;
+  openDiff(document: WorkbenchStatusDiffDocument | WorkbenchHistoryDiffDocument, mode: WorkbenchDocumentOpenMode): void;
+  mutate(operation: GitOperation): void | Promise<void>;
+  commitMessage: string;
+  setCommitMessage(value: string): void;
+  onOpenRepositoryManager?: () => void;
+}) {
   const repository = repositories.find((item) => item.id === repositoryId) ?? repositories[0];
   const staged = (worktree?.status.filter((entry) => entry.index) ?? []).slice(0, 250);
   const unstaged = (worktree?.status.filter((entry) => entry.worktree) ?? []).slice(0, 250);
   const truncated = (worktree?.status.length ?? 0) > 250;
   const operation = (kind: "stage" | "unstage", paths: readonly string[]): GitOperation | undefined => repository && worktree ? { kind, request: { repositoryId: repository.id, worktreeId: worktree.id, paths, expectedWorktreeVersion: worktree.version } } : undefined;
   return <div class="workspace-scm">
-    <label>Repository<MenuSelect placement="down" ariaLabel="Workspace repository" value={repository?.id ?? ""} options={repositories.map((item) => ({ value: item.id, label: item.name }))} onChange={setRepositoryId} /></label>
-    {repository && repository.worktrees.length > 1 ? <label>Worktree<MenuSelect placement="down" ariaLabel="Workspace worktree" value={worktree?.id ?? ""} options={repository.worktrees.map((item) => ({ value: item.id, label: `${item.branch} · ${item.path}` }))} onChange={setWorktreeId} /></label> : null}
-    <div class="scm-toolbar"><button type="button" onClick={refresh} disabled={loading}>{loading ? "Refreshing…" : "Refresh"}</button>{onOpenRepositoryManager ? <button type="button" onClick={onOpenRepositoryManager}>Repository manager</button> : null}</div>
+    <label>Repository<MenuSelect placement="down" ariaLabel="Workspace repository" value={repository?.id ?? ""} options={repositories.map((item) => ({ value: item.id, label: item.name }))} onChange={selectRepository} /></label>
+    {repository && repository.worktrees.length > 1 ? <label>Worktree<MenuSelect placement="down" ariaLabel="Workspace worktree" value={worktree?.id ?? ""} options={repository.worktrees.map((item) => ({ value: item.id, label: `${item.branch} · ${item.path}` }))} onChange={selectWorktree} /></label> : null}
+    <div class="scm-toolbar"><button type="button" onClick={refresh} disabled={loading}>{loading ? "Refreshing…" : "Refresh"}</button>{onOpenRepositoryManager ? <button type="button" title="Import, trust posture, branch checkout, worktrees, remote operations, full status selection, tags, and detailed history" onClick={onOpenRepositoryManager}>Advanced source controls</button> : null}</div>
     <div class="scm-summary"><strong>{worktree?.branch ?? "No worktree"}</strong><span>{worktree?.status.length ?? 0} changes</span></div>
     {!loading && !repository ? <div class="workspace-boundary">No Git repositories are connected to this workspace.</div> : null}
-    {staged.length ? <ScmGroup title="Staged" entries={staged} lane="staged" repository={repository} worktree={worktree} openPath={openPath} mutate={mutate} /> : null}
+    {staged.length ? <ScmGroup title="Staged" entries={staged} lane="staged" repository={repository} worktree={worktree} openDiff={openDiff} mutate={mutate} /> : null}
     {staged.length > 1 ? <button type="button" onClick={() => { const next = operation("unstage", staged.map((entry) => entry.path)); if (next) void mutate(next); }}>Unstage all visible</button> : null}
-    {unstaged.length ? <ScmGroup title="Changes" entries={unstaged} lane="unstaged" repository={repository} worktree={worktree} openPath={openPath} mutate={mutate} /> : null}
+    {unstaged.length ? <ScmGroup title="Changes" entries={unstaged} lane="unstaged" repository={repository} worktree={worktree} openDiff={openDiff} mutate={mutate} /> : null}
     {unstaged.length > 1 ? <button type="button" onClick={() => { const next = operation("stage", unstaged.map((entry) => entry.path)); if (next) void mutate(next); }}>Stage all visible</button> : null}
-    {truncated ? <div class="workspace-boundary attention">Showing the first 250 staged and unstaged paths. Open the repository manager for the complete, virtualized worktree.</div> : null}
+    {truncated ? <div class="workspace-boundary attention">Showing the first 250 staged and unstaged paths. Open Advanced source controls for the complete, virtualized worktree.</div> : null}
     {worktree?.status.some((entry) => entry.index) ? <div class="scm-commit"><textarea aria-label="Commit message" value={commitMessage} onInput={(event) => setCommitMessage(event.currentTarget.value)} placeholder="Commit message" /><button class="primary" type="button" disabled={!commitMessage.trim()} onClick={() => repository && mutate({ kind: "commit", request: { repositoryId: repository.id, worktreeId: worktree.id, message: commitMessage, author: DEFAULT_AUTHOR, expectedWorktreeVersion: worktree.version } })}>Commit staged</button></div> : null}
+    {repository && worktree ? <section class="scm-group scm-history"><header><strong>History</strong><span>{history.length}</span></header>
+      {history.map((entry) => {
+        const document: WorkbenchHistoryDiffDocument = { kind: "diff", source: "history", repositoryId: repository.id, worktreeId: worktree.id, revision: entry.oid };
+        const short = entry.oid.slice(0, 12);
+        return <div class="scm-row scm-history-row" key={entry.oid}>
+          <button
+            type="button"
+            title="Click previews this commit patch · Shift+Enter or double-click keeps it open"
+            aria-keyshortcuts="Enter Shift+Enter"
+            onClick={() => openDiff(document, "preview")}
+            onDblClick={() => openDiff(document, "pinned")}
+            onKeyDown={(event) => { if (event.key === "Enter" && event.shiftKey) { event.preventDefault(); openDiff(document, "pinned"); } }}
+          ><span><strong>{commitSubject(entry.message)}</strong><small>{short} · {entry.committedAt.slice(0, 10)}</small></span><b>↱</b></button>
+          <div><button type="button" aria-label={`Open and keep commit ${short} diff`} title="Open and keep" onClick={() => openDiff(document, "pinned")}>↗</button></div>
+        </div>;
+      })}
+      {historyMessage ? <div class="workspace-boundary">{historyMessage}</div> : null}
+      {!loading && history.length === 0 && !historyMessage ? <div class="workspace-boundary">No commits are available in this worktree history.</div> : null}
+    </section> : null}
   </div>;
 }
 
-function ScmGroup({ title, entries, lane, repository, worktree, openPath, mutate }: { title: string; entries: readonly GitStatusEntry[]; lane: "staged" | "unstaged"; repository?: GitRepositorySnapshot; worktree?: GitWorktreeSnapshot; openPath(path: string): void; mutate(operation: GitOperation): void | Promise<void> }) {
+function ScmGroup({ title, entries, lane, repository, worktree, openDiff, mutate }: { title: string; entries: readonly GitStatusEntry[]; lane: "staged" | "unstaged"; repository?: GitRepositorySnapshot; worktree?: GitWorktreeSnapshot; openDiff(document: WorkbenchStatusDiffDocument, mode: WorkbenchDocumentOpenMode): void; mutate(operation: GitOperation): void | Promise<void> }) {
   return <section class="scm-group"><header><strong>{title}</strong><span>{entries.length}</span></header>{entries.map((entry) => {
     const delta = lane === "staged" ? entry.index : entry.worktree;
-    const deleted = delta?.kind === "deleted";
     const conflicted = delta?.kind === "conflicted";
-    return <div class="scm-row" key={`${lane}:${entry.path}`}><button type="button" disabled={deleted} title={deleted ? "Deleted paths have no working file to open." : undefined} onClick={() => openPath(entry.path)}><span>{entry.path}</span><b>{conflicted ? "C" : delta?.kind === "added" ? "A" : delta?.kind === "deleted" ? "D" : delta?.kind === "renamed" ? "R" : "M"}</b></button><div><button type="button" aria-label={`${lane === "staged" ? "Unstage" : "Stage"} ${entry.path}`} onClick={() => repository && worktree && mutate({ kind: lane === "staged" ? "unstage" : "stage", request: { repositoryId: repository.id, worktreeId: worktree.id, paths: [entry.path], expectedWorktreeVersion: worktree.version } })}>{lane === "staged" ? "−" : "+"}</button></div></div>;
+    const document: WorkbenchStatusDiffDocument | undefined = repository && worktree ? {
+      kind: "diff",
+      source: "status",
+      repositoryId: repository.id,
+      worktreeId: worktree.id,
+      worktreeVersion: worktree.version,
+      path: entry.path,
+      scope: lane === "staged" ? "staged" : "worktree",
+    } : undefined;
+    return <div class="scm-row" key={`${lane}:${entry.path}`}>
+      <button
+        type="button"
+        disabled={!document}
+        title="Click previews this patch · Shift+Enter or double-click keeps it open"
+        aria-keyshortcuts="Enter Shift+Enter"
+        onClick={() => { if (document) openDiff(document, "preview"); }}
+        onDblClick={() => { if (document) openDiff(document, "pinned"); }}
+        onKeyDown={(event) => { if (document && event.key === "Enter" && event.shiftKey) { event.preventDefault(); openDiff(document, "pinned"); } }}
+      ><span>{entry.path}</span><b>{conflicted ? "C" : delta?.kind === "added" ? "A" : delta?.kind === "deleted" ? "D" : delta?.kind === "renamed" ? "R" : "M"}</b></button>
+      <div>
+        <button type="button" aria-label={`Open and keep ${lane} diff ${entry.path}`} title="Open and keep" disabled={!document} onClick={() => { if (document) openDiff(document, "pinned"); }}>↗</button>
+        <button type="button" aria-label={`${lane === "staged" ? "Unstage" : "Stage"} ${entry.path}`} onClick={() => repository && worktree && mutate({ kind: lane === "staged" ? "unstage" : "stage", request: { repositoryId: repository.id, worktreeId: worktree.id, paths: [entry.path], expectedWorktreeVersion: worktree.version } })}>{lane === "staged" ? "−" : "+"}</button>
+      </div>
+    </div>;
   })}</section>;
 }
 
 const DEFAULT_AUTHOR: GitAuthor = { name: "Local Airship User", email: "airship@local.invalid" };
 
+/**
+ * Airship's own control plane is not a user file, and hiding it is not fencing it.
+ *
+ * Explorer filters these paths out of the tree, which is a read concern. Every
+ * write in this view takes a path the tree never had to show: the create dialog
+ * accepts a slash-delimited name, rename and move both take a destination, and
+ * a folder plan expands into N of those. A write that lands in
+ * `/workspace/.airship/**` does not merely create an invisible file — it
+ * corrupts the evidence-acquisition queue, the endpoint-evidence store or the
+ * browser-Git repository catalog that Airship later reads back as its own
+ * state, and the failure surfaces much later as unrecoverable proof.
+ *
+ * The reserved namespace is the *root* `.airship` tree plus a `.git` segment at
+ * any depth. A repository that legitimately carries its own nested `.airship`
+ * directory is user content and stays writable.
+ */
+export function assertMutableWorkspacePath(path: string): string {
+  const normalized = normalizeWorkspacePath(path);
+  if (isWorkspaceControlPlanePath(normalized)) {
+    throw new Error(`Workspace edits cannot reach Airship's private control plane: ${normalized.replace("/workspace/", "")}`);
+  }
+  return normalized;
+}
+
 export function resolveGitBinding(path: string, repositories: readonly GitRepositorySnapshot[]) {
   return resolveGitWorkspaceBinding(path, repositories);
 }
 
-function readTabState(storageKey: string): TabState {
-  const wrapDefault = defaultEditorWrap(typeof innerWidth === "number" ? innerWidth : undefined);
-  const empty: TabState = { tabs: [], activePath: "", rail: WORKBENCH_RAIL_DEFAULT_PERCENT, wrap: wrapDefault };
-  if (typeof sessionStorage === "undefined") return empty;
+export type WorkspaceGitPathResolution =
+  | Readonly<{ state: "resolved"; path: string }>
+  | Readonly<{ state: "unavailable"; reason: string }>;
+
+/**
+ * Resolve a Git-relative changed path through the exact repository/worktree
+ * carried by a diff document. No current selector is consulted, so switching
+ * repositories cannot make an old tab reveal a similarly named file elsewhere.
+ */
+export function resolveWorkspacePathFromGit(
+  repositories: readonly GitRepositorySnapshot[],
+  repositoryId: string,
+  worktreeId: string,
+  relativePath: string,
+): WorkspaceGitPathResolution {
+  const repository = repositories.find((candidate) => candidate.id === repositoryId);
+  if (!repository) return Object.freeze({ state: "unavailable", reason: "its repository is no longer connected to this workspace." });
+  const worktree = repository.worktrees.find((candidate) => candidate.id === worktreeId);
+  if (!worktree) return Object.freeze({ state: "unavailable", reason: "its original worktree is no longer connected." });
+  const segments = relativePath.split("/");
+  if (!relativePath || relativePath.startsWith("/") || relativePath.includes("\\")
+    || /[\u0000-\u001f\u007f]/u.test(relativePath)
+    || segments.some((segment) => !segment || segment === "." || segment === "..")) {
+    return Object.freeze({ state: "unavailable", reason: "the Git-relative path does not stay inside its worktree." });
+  }
   try {
-    const value = JSON.parse(sessionStorage.getItem(storageKey) ?? "{}") as Record<string, unknown>;
-    const tabs = Array.isArray(value.tabs) ? value.tabs.filter((path: unknown): path is string => typeof path === "string" && path.startsWith("/workspace/")) : [];
-    const activePath = typeof value.activePath === "string" && tabs.includes(value.activePath) ? value.activePath : tabs[0] ?? "";
+    const root = normalizeWorkspacePath(worktree.path);
+    const path = normalizeWorkspacePath(`${root}/${relativePath}`);
+    if (!path.startsWith(`${root}/`)) {
+      return Object.freeze({ state: "unavailable", reason: "the resolved path is outside its original worktree." });
+    }
+    return Object.freeze({ state: "resolved", path });
+  } catch {
+    return Object.freeze({ state: "unavailable", reason: "the worktree path is outside this workspace." });
+  }
+}
+
+/** Every directory that must be expanded to expose one exact file path. */
+export function workspaceRevealAncestors(path: string): readonly string[] {
+  const normalized = normalizeWorkspacePath(path);
+  if (normalized === "/workspace") return Object.freeze([normalized]);
+  const ancestors: string[] = [];
+  let current = workspaceParentPath(normalized);
+  while (true) {
+    ancestors.unshift(current);
+    if (current === "/workspace") break;
+    current = workspaceParentPath(current);
+  }
+  return Object.freeze(ancestors);
+}
+
+function readTabState(
+  storageKey: string,
+  storage: Pick<Storage, "getItem"> | undefined = typeof sessionStorage === "undefined" ? undefined : sessionStorage,
+  viewportWidth: number | undefined = typeof innerWidth === "number" ? innerWidth : undefined,
+): WorkspaceTabState {
+  const wrapDefault = defaultEditorWrap(viewportWidth);
+  const empty: WorkspaceTabState = { tabs: [], activeId: "", rail: WORKBENCH_RAIL_DEFAULT_PERCENT, wrap: wrapDefault };
+  if (!storage) return empty;
+  try {
+    const value = JSON.parse(storage.getItem(storageKey) ?? "{}") as Record<string, unknown>;
+    const tabs = Array.isArray(value.tabs) ? value.tabs.filter((id: unknown): id is string => typeof id === "string" && Boolean(parseWorkbenchDocumentId(id))) : [];
+    const storedActive = typeof value.activeId === "string" ? value.activeId : value.activePath;
+    const storedPreview = typeof value.previewId === "string" ? value.previewId : value.previewPath;
+    const activeId = typeof storedActive === "string" && tabs.includes(storedActive) ? storedActive : tabs[0] ?? "";
+    const previewId = typeof storedPreview === "string" && tabs.includes(storedPreview) ? storedPreview : undefined;
     const rail = typeof value.rail === "number" ? workbenchRailPercent(value.rail) : WORKBENCH_RAIL_DEFAULT_PERCENT;
-    return { tabs, activePath, rail, wrap: typeof value.wrap === "boolean" ? value.wrap : wrapDefault };
+    const repositoryId = boundedSourceSelectionId(value.repositoryId);
+    const worktreeId = boundedSourceSelectionId(value.worktreeId);
+    return {
+      tabs,
+      activeId,
+      ...(previewId ? { previewId } : {}),
+      rail,
+      wrap: typeof value.wrap === "boolean" ? value.wrap : wrapDefault,
+      ...(repositoryId ? { repositoryId } : {}),
+      ...(worktreeId ? { worktreeId } : {}),
+    };
   } catch { return empty; }
 }
 
-export function workspaceTabStorageKey(identity: string): string {
-  let digest = 5381;
-  for (const codePoint of identity) digest = ((digest << 5) + digest) ^ codePoint.codePointAt(0)!;
-  return `${TAB_STORAGE}.${(digest >>> 0).toString(36)}`;
+function boundedSourceSelectionId(value: unknown): string | undefined {
+  return typeof value === "string"
+    && value.length > 0
+    && value.length <= 512
+    && !/[\u0000-\u001f\u007f]/u.test(value)
+    ? value
+    : undefined;
+}
+
+export function readWorkspaceTabState(
+  storage: Pick<Storage, "getItem"> | undefined,
+  workspaceIdentity: string,
+  profileId: string,
+  viewportWidth?: number,
+): WorkspaceTabState {
+  return readTabState(workspaceTabStorageKey(workspaceIdentity, profileId), storage, viewportWidth);
+}
+
+export function writeWorkspaceTabState(
+  storage: Pick<Storage, "setItem">,
+  workspaceIdentity: string,
+  profileId: string,
+  state: WorkspaceTabState,
+): void {
+  storage.setItem(workspaceTabStorageKey(workspaceIdentity, profileId), JSON.stringify(state));
+}
+
+export function workspaceWorkbenchScope(workspaceIdentity: string, profileId: string): string {
+  return `w${storageIdentitySegment(workspaceIdentity, "Workspace identity")}.p${storageIdentitySegment(profileId, "Profile ID")}`;
+}
+
+export function workspaceTabStorageKey(workspaceIdentity: string, profileId: string): string {
+  return `${TAB_STORAGE}.${workspaceWorkbenchScope(workspaceIdentity, profileId)}`;
+}
+
+function storageIdentitySegment(value: string, label: string): string {
+  if (!value || value.length > 512 || /[\u0000-\u001f\u007f]/u.test(value)) throw new Error(`${label} is invalid for workbench view state.`);
+  return [...value].map((codePoint) => codePoint.codePointAt(0)!.toString(16).padStart(6, "0")).join("");
 }
 
 /** The rendered tree row at a flattened index, if the window is showing it. */

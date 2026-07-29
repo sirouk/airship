@@ -1,6 +1,5 @@
 import type { Ref } from "preact";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
-import { trapFocus } from "./focus-trap";
 import { Icon } from "./icons";
 import { MenuSelect } from "./menu-select";
 import {
@@ -22,13 +21,10 @@ import type { RailState } from "./rail-state";
  * the fold on the default viewport, and it cost 20 tab stops (29 with eight
  * conversations) to cross on the way to the composer.
  *
- * What it is: 429px of destinations that fit without scrolling at every height
- * this product is used at, three tab stops, and two catalogs re-homed into
- * disclosures anchored where a person is already pointing. Nothing was deleted
- * — the same ten conversations, the same profile catalog, the same eleven
- * destinations — but the two lists that were *permanently* spending rail height
- * now spend it only while they are being read, and they get 320px of width to
- * do it in instead of 105px.
+ * What it is: a profile-first cockpit. The active profile is the first control,
+ * Chat expands its profile-local favorites and recent threads in place, and
+ * the global Vault, Connections, and Account services are filed separately.
+ * The full conversation ledger and profile manager remain one action away.
  *
  * The rail has three states on one width token, and the state is remembered
  * per width band rather than re-derived from the viewport on every load.
@@ -36,10 +32,15 @@ import type { RailState } from "./rail-state";
 
 export type RailConversation = Readonly<{
   id: string;
+  profileId: string;
   title: string;
   preview: string;
   updatedAt: string;
+  favorite: boolean;
   open(): void;
+  toggleFavorite(): void;
+  /** Omitted anchor means move after every current favorite. */
+  moveFavorite(beforeSessionId?: string): void;
 }>;
 
 export type RailProfile = Readonly<{
@@ -76,15 +77,11 @@ export type RailProps = Readonly<{
   onNewConversation(): void;
   onChangeProfile(profileId: string): void;
   onToggleState(): void;
+  onInteractionError(message: string): void;
 }>;
 
 /** The disclosure key that sits in the roving order beside the Chat row. */
 const RECENTS_KEY = "recents";
-
-/** Panel geometry, in the same units the stylesheet declares it in. */
-export const RAIL_RECENTS_WIDTH = 320;
-export const RAIL_RECENTS_MAX_HEIGHT = 420;
-const RAIL_RECENTS_GUTTER = 8;
 
 /**
  * The rail row an id belongs to: the row itself, or the row it is filed under.
@@ -99,34 +96,6 @@ export function railRowFor(id: string): RailRow | undefined {
     }
   }
   return undefined;
-}
-
-/**
- * Where the conversation panel opens.
- *
- * It is `position: fixed` because `.primary-nav` is a real scroll container —
- * the measured overflow mask has to keep working at short viewports — and a
- * block-axis scroller clips the inline axis too, which would slice a 320px
- * panel hanging off a 60px rail. Kept free of the DOM so the flip is assertable
- * without a browser: a panel that runs off the bottom of the screen is a list
- * of conversations nobody can reach.
- */
-export function recentsPanelAnchor(input: Readonly<{
-  trigger: Readonly<{ top: number; right: number }>;
-  viewportWidth: number;
-  viewportHeight: number;
-}>): Readonly<{ top: number; left: number }> {
-  const width = Math.min(RAIL_RECENTS_WIDTH, input.viewportWidth - RAIL_RECENTS_GUTTER * 2);
-  const height = Math.min(RAIL_RECENTS_MAX_HEIGHT, input.viewportHeight * 0.6);
-  const left = Math.max(
-    RAIL_RECENTS_GUTTER,
-    Math.min(input.trigger.right + RAIL_RECENTS_GUTTER, input.viewportWidth - width - RAIL_RECENTS_GUTTER),
-  );
-  const top = Math.max(
-    RAIL_RECENTS_GUTTER,
-    Math.min(input.trigger.top, input.viewportHeight - height - RAIL_RECENTS_GUTTER),
-  );
-  return Object.freeze({ top, left });
 }
 
 /**
@@ -157,6 +126,7 @@ export function Rail({
   onNewConversation,
   onChangeProfile,
   onToggleState,
+  onInteractionError,
 }: RailProps) {
   // Editor and Terminal are collapsed by default and remembered for the rest of
   // the page: this is the one nesting the current model gets right, and a
@@ -167,12 +137,9 @@ export function Rail({
   const [expanded, setExpanded] = useState<Readonly<Record<string, boolean>>>(() =>
     Object.freeze({ workspace: railRowFor(view)?.id === "workspace" }));
   const [recentsOpen, setRecentsOpen] = useState(false);
-  const [recentsAnchor, setRecentsAnchor] = useState<Readonly<{ top: number; left: number }>>(() =>
-    Object.freeze({ top: 0, left: 0 }));
+  const [draggingFavoriteId, setDraggingFavoriteId] = useState<string>();
   const [activeKey, setActiveKey] = useState<string>(view);
   const items = useRef(new Map<string, HTMLButtonElement>());
-  const recentsHost = useRef<HTMLDivElement>(null);
-  const recentsPanel = useRef<HTMLDivElement>(null);
   const recentsTrigger = useRef<HTMLButtonElement>(null);
 
   const order = useMemo(() => {
@@ -192,37 +159,10 @@ export function Rail({
   // user actually is, not on wherever they last arrowed to.
   useEffect(() => { setActiveKey((current) => (order.includes(view) ? view : current)); }, [view, order]);
 
-  const recents = conversations.slice(0, RAIL_RECENT_LIMIT);
-
-  useEffect(() => {
-    if (!recentsOpen) return;
-    const trigger = recentsTrigger.current;
-    if (trigger) setRecentsAnchor(recentsPanelAnchor({
-      trigger: trigger.getBoundingClientRect(),
-      viewportWidth: window.innerWidth,
-      viewportHeight: window.innerHeight,
-    }));
-    function onPointerDown(event: PointerEvent) {
-      if (!recentsHost.current?.contains(event.target as Node)) setRecentsOpen(false);
-    }
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        event.stopPropagation();
-        setRecentsOpen(false);
-        recentsTrigger.current?.focus();
-        return;
-      }
-      if (event.key === "Tab" && recentsHost.current?.contains(document.activeElement)) {
-        trapFocus(event, recentsPanel.current);
-      }
-    }
-    document.addEventListener("pointerdown", onPointerDown, true);
-    document.addEventListener("keydown", onKeyDown, true);
-    return () => {
-      document.removeEventListener("pointerdown", onPointerDown, true);
-      document.removeEventListener("keydown", onKeyDown, true);
-    };
-  }, [recentsOpen]);
+  // Props can retain the previous async read for one render while a profile
+  // switches. Filtering by the row's bound profile makes that frame empty
+  // instead of exposing another profile's titles or favorite order.
+  const scopedConversations = conversations.filter((conversation) => conversation.profileId === profileId);
 
   function focusKey(key: string) {
     setActiveKey(key);
@@ -298,7 +238,7 @@ export function Rail({
           aria-current={active ? "page" : undefined}
           data-scope={row.scope}
           title={`${row.label} · ${row.scope} scope`}
-          onClick={() => onNavigate(row.id)}
+          onClick={() => { if (row.id === "chat") setRecentsOpen(true); onNavigate(row.id); }}
           {...itemProps(row.id)}
         >
           <Icon name={row.icon} />
@@ -347,15 +287,105 @@ export function Rail({
   /**
    * The conversation list, re-homed.
    *
-   * Same ten sessions, same rows, same ordering — but as a 320px panel over the
-   * conversation instead of a 250px scroller permanently occupying the rail.
-   * The title column goes from roughly 105px to 232px, which is the difference
-   * between thirteen characters and thirty-four, and the `All conversations`
-   * ledger link stops being the sixth row of a clipped scroller.
+   * Favorites stay visible ahead of recency, while the bounded list expands
+   * directly beneath Chat. The complete profile-scoped ledger remains at the
+   * end of the tree instead of becoming another permanent rail destination.
    */
   function recentsDisclosure() {
+    const favorites = scopedConversations.filter((session) => session.favorite);
+    const recent = scopedConversations.filter((session) => !session.favorite).slice(0, RAIL_RECENT_LIMIT);
+    const visible = [...favorites, ...recent];
+    const favoriteIds = favorites.map((session) => session.id);
+    const reportFavoriteLoadFailure = (error: unknown) => {
+      const detail = error instanceof Error ? error.message : String(error);
+      onInteractionError(`Favorite reorder could not load: ${detail || "unknown deferred-pack failure"}. Retry the gesture.`);
+    };
+    const moveFavorite = (session: RailConversation, direction: -1 | 1) => {
+      void import("./session-pins").then(({ favoriteDirectionalMove }) => {
+        const move = favoriteDirectionalMove(favoriteIds, session.id, direction);
+        if (move.changed) session.moveFavorite(move.beforeSessionId);
+      }).catch(reportFavoriteLoadFailure);
+    };
+    const conversationRow = (session: RailConversation) => (
+      <div
+        class="recent-conversation-row"
+        key={session.id}
+        data-session-id={session.id}
+        data-favorite={session.favorite ? "true" : "false"}
+        data-dragging={draggingFavoriteId === session.id ? "true" : undefined}
+        draggable={session.favorite}
+        onDragStart={(event) => {
+          if (!session.favorite || !event.dataTransfer) { event.preventDefault(); return; }
+          setDraggingFavoriteId(session.id);
+          event.dataTransfer.effectAllowed = "move";
+          event.dataTransfer.setData("text/plain", session.id);
+        }}
+        onDragEnd={() => setDraggingFavoriteId(undefined)}
+        onDragOver={(event) => {
+          if (!session.favorite || !draggingFavoriteId || draggingFavoriteId === session.id || !event.dataTransfer) return;
+          event.preventDefault();
+          event.dataTransfer.dropEffect = "move";
+        }}
+        onDrop={(event) => {
+          event.preventDefault();
+          const sourceId = draggingFavoriteId || event.dataTransfer?.getData("text/plain");
+          setDraggingFavoriteId(undefined);
+          const source = favorites.find((favorite) => favorite.id === sourceId);
+          if (!source) return;
+          void import("./session-pins").then(({ favoriteDropMove }) => {
+            const move = favoriteDropMove(favoriteIds, source.id, session.id);
+            if (move.changed) source.moveFavorite(move.beforeSessionId);
+          }).catch(reportFavoriteLoadFailure);
+        }}
+      >
+        <button
+          class={session.id === activeConversationId ? "recent-conversation recent-conversation--thread active" : "recent-conversation recent-conversation--thread"}
+          type="button"
+          title={session.title}
+          aria-current={session.id === activeConversationId ? "page" : undefined}
+          aria-keyshortcuts={session.favorite ? "Alt+ArrowUp Alt+ArrowDown" : undefined}
+          onClick={session.open}
+          onKeyDown={(event) => {
+            if (!session.favorite || !event.altKey || (event.key !== "ArrowUp" && event.key !== "ArrowDown")) return;
+            event.preventDefault();
+            event.stopPropagation();
+            moveFavorite(session, event.key === "ArrowUp" ? -1 : 1);
+          }}
+        >
+          <span class="recent-conversation__mark" aria-hidden="true">{session.id === activeConversationId ? "●" : "○"}</span>
+          <span class="recent-conversation__copy">
+            <strong>{session.title}</strong>
+            <small>{session.preview}</small>
+          </span>
+          <time dateTime={session.updatedAt}>{formatTime(session.updatedAt)}</time>
+        </button>
+        {session.favorite ? (
+          <span class="recent-conversation__order" aria-label={`Reorder favorite ${session.title}`}>
+            <button
+              type="button"
+              aria-label={`Move favorite ${session.title} up`}
+              disabled={favoriteIds[0] === session.id}
+              onClick={() => moveFavorite(session, -1)}
+            >↑</button>
+            <button
+              type="button"
+              aria-label={`Move favorite ${session.title} down`}
+              disabled={favoriteIds.at(-1) === session.id}
+              onClick={() => moveFavorite(session, 1)}
+            >↓</button>
+          </span>
+        ) : null}
+        <button
+          class="recent-conversation__favorite"
+          type="button"
+          aria-pressed={session.favorite}
+          aria-label={`${session.favorite ? "Remove from favorites" : "Add to favorites"} ${session.title}`}
+          onClick={session.toggleFavorite}
+        >★</button>
+      </div>
+    );
     return (
-      <div class="rail-recents" ref={recentsHost}>
+      <div class="rail-recents">
         <button
           class="chat-nav-disclosure"
           type="button"
@@ -375,15 +405,19 @@ export function Rail({
             id="airship-recent-conversations"
             class="recent-conversations"
             role="group"
-            aria-label="Recent conversations"
-            ref={recentsPanel}
-            style={{ top: `${recentsAnchor.top}px`, left: `${recentsAnchor.left}px` }}
+            aria-label="Profile conversations"
+            onKeyDown={(event) => {
+              if (event.key !== "Escape") return;
+              event.stopPropagation();
+              setRecentsOpen(false);
+              recentsTrigger.current?.focus();
+            }}
           >
             <div class="rail-recents__header">
-              <strong>Recent conversations</strong>
+              <strong>{profiles.find((profile) => profile.profileId === profileId)?.name ?? "Profile"} conversations</strong>
               {/* The affordance states its own cost: this is how many of the
                   ledger's conversations the shortcut is showing. */}
-              <small>{recents.length}</small>
+              <small>{visible.length}</small>
               <button
                 class="chat-nav-new"
                 type="button"
@@ -393,28 +427,15 @@ export function Rail({
                 onClick={() => { setRecentsOpen(false); onNewConversation(); }}
               ><span aria-hidden="true">+</span></button>
             </div>
-            {recents.map((session) => (
-              <button
-                key={session.id}
-                class={session.id === activeConversationId ? "recent-conversation recent-conversation--thread active" : "recent-conversation recent-conversation--thread"}
-                type="button"
-                title={session.title}
-                aria-current={session.id === activeConversationId ? "page" : undefined}
-                onClick={() => { setRecentsOpen(false); session.open(); }}
-              >
-                <span class="recent-conversation__mark" aria-hidden="true">{session.id === activeConversationId ? "●" : "○"}</span>
-                <span class="recent-conversation__copy">
-                  <strong>{session.title}</strong>
-                  <small>{session.preview}</small>
-                </span>
-                <time dateTime={session.updatedAt}>{formatTime(session.updatedAt)}</time>
-              </button>
-            ))}
+            {favorites.length ? <div class="rail-conversation-group">Favorites</div> : null}
+            {favorites.map(conversationRow)}
+            {recent.length ? <div class="rail-conversation-group">Recent</div> : null}
+            {recent.map(conversationRow)}
             <button
               class={view === "sessions" ? "nav-item nav-item--nested active" : "nav-item nav-item--nested"}
               type="button"
               aria-current={view === "sessions" ? "page" : undefined}
-              onClick={() => { setRecentsOpen(false); onNavigate("sessions"); }}
+              onClick={() => onNavigate("sessions")}
             ><span class="nav-item__label">All conversations</span></button>
           </div>
         ) : null}
@@ -422,9 +443,38 @@ export function Rail({
     );
   }
 
+  function profileSwitcher() {
+    return (
+      <div class="profile-switcher">
+        <MenuSelect
+          className="profile-menu"
+          ariaLabel="Agent profile"
+          value={profileId}
+          disabled={busy}
+          placement="down"
+          options={profiles.map((profile) => ({ value: profile.profileId, label: profile.name, description: profile.description }))}
+          leading={(option) => <span class="profile-monogram" aria-hidden="true">{monogram(option.label)}</span>}
+          onChange={onChangeProfile}
+        />
+        <button
+          type="button"
+          class={view === "profiles" ? "profile-manage-link active" : "profile-manage-link"}
+          title="Manage profiles · profile scope"
+          aria-label="Manage profiles"
+          aria-current={view === "profiles" ? "page" : undefined}
+          onClick={onManageProfiles}
+        >
+          <Icon name="profiles" />
+          <span class="profile-manage-link__label">Profiles</span>
+        </button>
+      </div>
+    );
+  }
+
   return (
     <aside class="sidebar" data-rail-state={state} inert={inert} aria-hidden={inert || undefined}>
       <div class="rail">
+        {profileSwitcher()}
         <nav
           ref={navRef}
           class="primary-nav"
@@ -439,35 +489,6 @@ export function Rail({
           ))}
         </nav>
         <div class="sidebar-spacer" />
-        {/* 48px, was 120px. The eyebrow became this control's accessible name,
-            `Manage profiles` kept its own row, and the profile descriptions the
-            rail used to drop are rendered by the menu. */}
-        <div class="profile-switcher">
-          <MenuSelect
-            className="profile-menu"
-            ariaLabel="Agent profile"
-            value={profileId}
-            disabled={busy}
-            options={profiles.map((profile) => ({ value: profile.profileId, label: profile.name, description: profile.description }))}
-            leading={(option) => <span class="profile-monogram" aria-hidden="true">{monogram(option.label)}</span>}
-            onChange={onChangeProfile}
-          />
-          <button
-            type="button"
-            class={view === "profiles" ? "profile-manage-link active" : "profile-manage-link"}
-            title="Manage profiles · profile scope"
-            /* The visible word is the destination's own name so the row reads
-               in the rail's vocabulary; the accessible name keeps the verb the
-               card used, and 232px cannot hold `[GE] General ⌄` and a
-               fifteen-character link without truncating the profile itself. */
-            aria-label="Manage profiles"
-            aria-current={view === "profiles" ? "page" : undefined}
-            onClick={onManageProfiles}
-          >
-            <Icon name="profiles" />
-            <span class="profile-manage-link__label">Profiles</span>
-          </button>
-        </div>
         <button
           class="rail-collapse"
           type="button"

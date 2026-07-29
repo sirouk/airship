@@ -13,6 +13,7 @@ export function ModelControl({
   active,
   models,
   busy,
+  switching: routeSwitching,
   onSelect,
   onOpenConnection,
 }: Readonly<{
@@ -23,6 +24,7 @@ export function ModelControl({
   }>;
   models: readonly ModelControlOption[];
   busy: boolean;
+  switching: boolean;
   onSelect: (modelId: string) => Promise<void>;
   onOpenConnection: () => void;
 }>) {
@@ -30,7 +32,7 @@ export function ModelControl({
   const [pendingModelId, setPendingModelId] = useState<string>();
   const operation = useRef(0);
   const options = modelControlOptions(models, active?.modelId);
-  const switching = busy || Boolean(pendingModelId);
+  const activity = modelControlActivity(busy, routeSwitching, pendingModelId);
 
   useEffect(() => {
     operation.current += 1;
@@ -54,7 +56,7 @@ export function ModelControl({
   }
 
   return (
-    <div class="session-runtime remote" aria-busy={switching}>
+    <div class="session-runtime remote" aria-busy={activity.switching}>
       <span class="session-runtime-icon"><Icon name="model" size={17} /></span>
       <label>
         <small>{active.providerLabel} · session model</small>
@@ -63,7 +65,7 @@ export function ModelControl({
           value={active.modelId}
           placement="down"
           options={options}
-          disabled={switching || options.length < 2}
+          disabled={activity.disabled || options.length < 2}
           onChange={(modelId) => {
             const currentOperation = ++operation.current;
             setError(undefined);
@@ -92,10 +94,27 @@ export function ModelControl({
         The transient stays. "Switching…" is a lifecycle state of *this* control
         and is stated nowhere else, so it keeps its own live region.
       */}
-      {switching ? <span class="runtime-posture" role="status">Switching…</span> : null}
+      {activity.switching ? <span class="runtime-posture" role="status">Switching…</span> : null}
       {error ? <span class="session-runtime-error" role="alert">{error}</span> : null}
     </div>
   );
+}
+
+/**
+ * A running turn disables route changes, but it is not itself a route change.
+ * Keep those facts separate so sending a message never claims that the pinned
+ * model is switching while still preventing a mid-turn selection.
+ */
+export function modelControlActivity(
+  busy: boolean,
+  routeSwitching: boolean,
+  pendingModelId?: string,
+): Readonly<{ disabled: boolean; switching: boolean }> {
+  const switching = routeSwitching || Boolean(pendingModelId);
+  return Object.freeze({
+    disabled: busy || switching,
+    switching,
+  });
 }
 
 export function modelControlOptions(

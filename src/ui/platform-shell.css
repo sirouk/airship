@@ -8,6 +8,28 @@
   background: color-mix(in srgb, var(--ground) 78%, transparent);
 }
 
+.profile-cockpit-transition {
+  z-index: 140;
+  place-items: center;
+  background: var(--ground);
+}
+
+.profile-cockpit-transition > section {
+  display: flex;
+  width: min(30rem, 100%);
+  gap: .8rem;
+  align-items: center;
+  padding: 1rem 1.1rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-panel);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow);
+}
+
+.profile-cockpit-transition strong,
+.profile-cockpit-transition small { display: block; }
+.profile-cockpit-transition small { margin-top: .25rem; color: var(--ink-muted); line-height: 1.45; }
+
 button.status-seal { cursor: pointer; font-family: inherit; }
 button.status-seal:hover { border-color: var(--line-strong); background: var(--surface-raised); }
 .nav-item[data-scope]::after { position: absolute; top: .75rem; bottom: .75rem; left: -1px; width: 2px; border-radius: 2px; background: var(--ink-faint); opacity: .28; content: ""; }

@@ -1,7 +1,18 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { AttestationEvidenceClientError } from "../attestation/provider-client";
-import { attestationQualifierLabel, attestationRefreshError } from "./attestations-view";
+import {
+  ATTESTATION_CLAIM_GROUPS,
+  EVIDENCE_STATE_MEANINGS,
+  attestationQualifierLabel,
+  attestationRecordReading,
+  attestationRefreshError,
+} from "./attestations-view";
+import { ATTESTATION_DIMENSIONS } from "./attestations-model";
 import { claimQualifierLabel } from "./claim-stack-facts";
+
+const source = readFileSync(new URL("./attestations-view.tsx", import.meta.url), "utf8");
+const styles = readFileSync(new URL("./attestations-view.css", import.meta.url), "utf8");
 
 describe("attestation refresh failure copy", () => {
   it("renders an unreadable cross-origin response without inventing a CORS or TEE result", () => {
@@ -50,5 +61,65 @@ describe("one qualifier vocabulary across both Proof tabs", () => {
       expect(attestationQualifierLabel(qualifier)?.toLowerCase()).not.toContain("asserted");
     }
     expect(attestationQualifierLabel("asserted-partial")).toBeUndefined();
+  });
+});
+
+describe("evidence comprehension hierarchy", () => {
+  it("never describes an immutable receipt as stale when one of its claims expired", () => {
+    expect(attestationRecordReading({
+      source: "conversation-receipt",
+      overallState: "expired",
+    })).toEqual({
+      kind: "immutable-receipt",
+      label: "Immutable turn receipt · contains an expired claim",
+      detail: "This completion record does not change or become stale. Later endpoint observations can be compared with it, but cannot rewrite or silently upgrade it.",
+    });
+  });
+
+  it("labels expiry as a stale endpoint observation without rewriting receipt history", () => {
+    const reading = attestationRecordReading({
+      source: "endpoint-evidence",
+      overallState: "expired",
+    });
+    expect(reading.kind).toBe("endpoint-observation");
+    expect(reading.label).toBe("Stale observation");
+    expect(reading.detail).toContain("historical evidence");
+    expect(reading.detail).toContain("does not make an immutable receipt stale");
+  });
+
+  it("groups every claim exactly once without removing TEE, model, conversation, or payment facts", () => {
+    const grouped = ATTESTATION_CLAIM_GROUPS.flatMap((group) => group.keys);
+    expect([...grouped].sort()).toEqual([...ATTESTATION_DIMENSIONS].sort());
+    expect(new Set(grouped).size).toBe(ATTESTATION_DIMENSIONS.length);
+    expect(grouped).toEqual(expect.arrayContaining([
+      "cpu-tee",
+      "gpu-tee",
+      "model",
+      "conversation",
+      "payment",
+    ]));
+    expect(ATTESTATION_CLAIM_GROUPS.find((group) => group.id === "compute")?.description).toContain("Intel TDX");
+    expect(ATTESTATION_CLAIM_GROUPS.find((group) => group.id === "compute")?.description).toContain("NVIDIA CC");
+  });
+
+  it("defines verified, asserted, failed, unavailable, and stale observation meanings", () => {
+    expect(EVIDENCE_STATE_MEANINGS.map((entry) => entry.label)).toEqual([
+      "Verified",
+      "Asserted",
+      "Failed",
+      "No evidence",
+      "Stale observation",
+    ]);
+  });
+
+  it("presents manual acquisition as retry/diagnostic and preserves the full mobile fact path", () => {
+    expect(source).toContain("Manual acquisition is a retry and diagnostic; it never rewrites a receipt.");
+    expect(source).toContain("Retry acquisition");
+    expect(source).toContain('<details class="attestations-authorities">');
+    expect(source).toContain('<details class="attestations-bindings">');
+    expect(source.indexOf('class="attestation-matrix"')).toBeLessThan(source.indexOf('id="attestation-selected-detail"'));
+    expect(source.indexOf('id="attestation-selected-detail"')).toBeLessThan(source.indexOf('class="attestations-disclosures"'));
+    expect(styles).toContain(".attestation-claim-group > div { grid-template-columns: 1fr; }");
+    expect(styles).not.toMatch(/@media \(max-width: 480px\)[\s\S]*\.attestations-inspector\s*\{[^}]*display:\s*none/u);
   });
 });
