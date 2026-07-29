@@ -54,6 +54,16 @@ export function normalizeWorkspacePath(input: string): string {
 }
 
 /**
+ * The encrypted-context routing mirror: a pointer, owned by the storage
+ * authority that published the generation it names.
+ *
+ * Declared here rather than beside the fabric so the workspace layer can name
+ * it without importing the retrieval/vault graph, and so there is exactly one
+ * spelling of the path that both the writer and the adoption fence agree on.
+ */
+export const CONTEXT_ROUTING_MIRROR_PATH = "/workspace/.airship/context/routing-mirror.v2.json";
+
+/**
  * Airship's own reserved namespace: the *root* `.airship` tree and nothing else.
  *
  * This is deliberately narrower than `isWorkspaceControlPlanePath`, which also

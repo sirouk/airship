@@ -5,9 +5,9 @@ import { publishContextGeneration } from "../retrieval/publisher";
 import { VaultTurnContextProvider } from "../retrieval/vault-turn-context";
 import type { WorkspaceRootKey } from "../storage/encrypted-envelope";
 import type { ObjectStore } from "../storage/object-store";
-import { WorkspaceConflictError, type ClientEncryptedWorkspacePort } from "../workspace/contracts";
+import { CONTEXT_ROUTING_MIRROR_PATH, WorkspaceConflictError, type ClientEncryptedWorkspacePort, type WorkspacePort } from "../workspace/contracts";
 
-export const CONTEXT_ROUTING_MIRROR_PATH = "/workspace/.airship/context/routing-mirror.v2.json";
+export { CONTEXT_ROUTING_MIRROR_PATH } from "../workspace/contracts";
 const MAX_MIRROR_BYTES = 4 * 1024 * 1024;
 
 export type VaultContextFabricBinding = Readonly<{
@@ -50,6 +50,28 @@ export class VaultContextFabricPort {
     private readonly key: WorkspaceRootKey,
     private readonly workspace: ClientEncryptedWorkspacePort,
   ) {}
+
+  /**
+   * Rebind this fabric to one Profile's workspace namespace.
+   *
+   * The routing mirror is a pointer into a workspace's own indexed content, so
+   * it belongs wherever that content lives. It was left on the global storage
+   * root after every other consumer moved behind `ProfileWorkspacePort`, which
+   * had two consequences: two Profiles publishing would overwrite each other's
+   * pointer, and legacy adoption — whose only classifier is "is this path
+   * inside a Profile namespace" — read the mirror as pre-namespace user content
+   * and moved it into whichever Profile booted first. The generation survived;
+   * the pointer to it did not, so a reload found nothing to adopt.
+   *
+   * Rebinding keeps the facade non-extracting: the caller supplies a workspace
+   * it already holds and still never sees the store or the root key.
+   */
+  scopedTo(workspace: WorkspacePort): VaultContextFabricPort {
+    if ((workspace as Partial<ClientEncryptedWorkspacePort>).encryptionBoundary !== "airship-client-envelope-v1") {
+      throw new Error("The encrypted context fabric requires a client-encrypted workspace.");
+    }
+    return new VaultContextFabricPort(this.store, this.key, workspace as ClientEncryptedWorkspacePort);
+  }
 
   async install(args: Readonly<{
     workspaceId: string;

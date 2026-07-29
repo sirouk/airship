@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { CONTEXT_ROUTING_MIRROR_PATH } from "./contracts";
 import { MemoryWorkspace } from "./memory";
 import {
   ProfileWorkspacePort,
@@ -118,5 +119,49 @@ describe("adoptLegacyRootWorkspace", () => {
     await adoptLegacyRootWorkspace(storage, "general");
     expect((await general.read("README.md"))?.content).toBe("adopted and then edited");
     expect(await storage.read("/workspace/README.md")).toBeUndefined();
+  });
+});
+
+describe("global-authority records are not adoptable", () => {
+  /*
+   * The encrypted-context routing mirror is a pointer written by the *global*
+   * storage authority, at the storage root, on every publish. Legacy adoption
+   * classifies by one question — "is this inside a Profile namespace" — so it
+   * read the mirror as stray pre-namespace user content and carried it into
+   * whichever Profile booted first. The published generation survived; the
+   * pointer to it did not, so the next reload found nothing to adopt and the
+   * user was told their encrypted index had to be rebuilt.
+   */
+  it("leaves the encrypted-context routing mirror at the storage root", async () => {
+    const storage = new MemoryWorkspace();
+    await storage.write(CONTEXT_ROUTING_MIRROR_PATH, '{"generation":"g1"}');
+    await storage.write("/workspace/README.md", "legacy readme");
+
+    const adopted = await adoptLegacyRootWorkspace(storage, "general");
+
+    expect(adopted).toEqual(["/workspace/README.md"]);
+    expect((await storage.read(CONTEXT_ROUTING_MIRROR_PATH))?.content).toBe('{"generation":"g1"}');
+    expect(await new ProfileWorkspacePort(storage, "general").read(CONTEXT_ROUTING_MIRROR_PATH)).toBeUndefined();
+  });
+
+  it("reports nothing to adopt when the mirror is the only file at the root", async () => {
+    const storage = new MemoryWorkspace();
+    await storage.write(CONTEXT_ROUTING_MIRROR_PATH, '{"generation":"g1"}');
+    expect(await adoptLegacyRootWorkspace(storage, "general")).toEqual([]);
+    expect(await storage.read(CONTEXT_ROUTING_MIRROR_PATH)).toBeDefined();
+  });
+
+  it("gives each Profile its own mirror once the fabric is scoped to the namespace", async () => {
+    // Two Profiles publishing through one global fabric overwrote each other's
+    // pointer. Scoped ports keep them disjoint.
+    const storage = new MemoryWorkspace();
+    const alpha = new ProfileWorkspacePort(storage, "alpha");
+    const beta = new ProfileWorkspacePort(storage, "beta");
+    await alpha.write(CONTEXT_ROUTING_MIRROR_PATH, '{"generation":"alpha-gen"}');
+    await beta.write(CONTEXT_ROUTING_MIRROR_PATH, '{"generation":"beta-gen"}');
+
+    expect((await alpha.read(CONTEXT_ROUTING_MIRROR_PATH))?.content).toBe('{"generation":"alpha-gen"}');
+    expect((await beta.read(CONTEXT_ROUTING_MIRROR_PATH))?.content).toBe('{"generation":"beta-gen"}');
+    expect(await storage.read(CONTEXT_ROUTING_MIRROR_PATH)).toBeUndefined();
   });
 });

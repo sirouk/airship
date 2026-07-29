@@ -2998,11 +2998,14 @@ export function App() {
       liveEnvironment: liveEnvironmentSource,
       additionalTools: [requireProviderAvailabilityTool()],
     };
-    const vaultAware = active.contextFabric
+    // Scoped to the incoming Profile: the routing mirror is a pointer into that
+    // Profile's own indexed content, so it has to live in that namespace.
+    const scopedFabric = active.contextFabric?.scopedTo(authority.workspace);
+    const vaultAware = scopedFabric
       ? await createVaultAwareAirshipToolRegistry({
           ...registryOptions,
           workspaceId: authority.workspaceId,
-          contextFabric: active.contextFabric,
+          contextFabric: scopedFabric,
         })
       : undefined;
     const built: Runtime = {
@@ -3011,6 +3014,7 @@ export function App() {
       workspaceId: authority.workspaceId,
       profileId: profile.profileId,
       tools: vaultAware ? vaultAware.tools : await createAirshipToolRegistry(registryOptions),
+      ...(scopedFabric ? { contextFabric: scopedFabric } : {}),
       ...(vaultAware ? { contextMode: vaultAware.contextMode } : {}),
     };
     rememberProfileAuthority(built, authority.git);
@@ -4505,13 +4509,21 @@ export function App() {
     });
     const nextGitClient = adoptedAuthority.git;
     const journal = new EventJournal(ready.journal);
+    /*
+     * The fabric follows the Profile, not the storage root. Its routing mirror
+     * is a pointer into indexed workspace content, so leaving it at the root
+     * both collided between Profiles and looked like stray user content to
+     * legacy adoption, which carried it into the first Profile to boot and
+     * stranded every published generation behind it.
+     */
+    const adoptedFabric = ready.contextFabric.scopedTo(adoptedAuthority.workspace);
     const vaultTools = await createVaultAwareAirshipToolRegistry({
       workspace: adoptedAuthority.workspace,
       workspaceId: adoptedAuthority.workspaceId,
       journal,
       git: nextGitClient,
       liveEnvironment: liveEnvironmentSource,
-      contextFabric: ready.contextFabric,
+      contextFabric: adoptedFabric,
       additionalTools: [requireProviderAvailabilityTool()],
     });
     const tools = vaultTools.tools;
@@ -4522,7 +4534,7 @@ export function App() {
       workspace: adoptedAuthority.workspace,
       workspaceId: adoptedAuthority.workspaceId,
       profileId: selectedProfile.profileId,
-      contextFabric: ready.contextFabric,
+      contextFabric: adoptedFabric,
       journal,
       profiles: ready.profiles,
       contextMode: vaultTools.contextMode,
@@ -4713,7 +4725,9 @@ export function App() {
         journal: active.journal,
         git: gitClient,
         liveEnvironment: liveEnvironmentSource,
-        contextFabric: ready.contextFabric,
+        // Publish into the active Profile's namespace, so the mirror written
+        // here is the one this Profile's next reload reads back.
+        contextFabric: active.contextFabric ?? ready.contextFabric.scopedTo(active.workspace),
         publicationPolicy: "explicit-user-approved",
         additionalTools: [requireProviderAvailabilityTool()],
         signal: controller.signal,

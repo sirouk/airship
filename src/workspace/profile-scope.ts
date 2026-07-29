@@ -1,4 +1,5 @@
 import {
+  CONTEXT_ROUTING_MIRROR_PATH,
   normalizeWorkspacePath,
   type ClientEncryptedWorkspacePort,
   type WorkspaceEntry,
@@ -112,6 +113,21 @@ export class ProfileWorkspacePort implements WorkspacePort {
 }
 
 /**
+ * Records the *global* storage authority owns, which no Profile may adopt.
+ *
+ * Adoption's only other classifier is "is this path inside a Profile
+ * namespace", which cannot tell pre-namespace user content from a control-plane
+ * record the global authority is still actively writing. The encrypted-context
+ * routing mirror is exactly that: it sat at the storage root, adoption read it
+ * as a stray user file, and the first Profile to boot carried it off — leaving
+ * a published generation with no pointer, so a reload had nothing to adopt.
+ */
+function isGlobalAuthorityPath(path: string): boolean {
+  const normalized = normalizeWorkspacePath(path);
+  return normalized === CONTEXT_ROUTING_MIRROR_PATH;
+}
+
+/**
  * Give a pre-namespace workspace to the Profile that was using it.
  *
  * Before Profiles owned namespaces, all content sat at the storage root. Left
@@ -130,7 +146,9 @@ export async function adoptLegacyRootWorkspace(
   storage: WorkspacePort,
   profileId: string,
 ): Promise<readonly string[]> {
-  const legacy = (await storage.list("/workspace")).filter((entry) => !isProfileWorkspacePath(entry.path));
+  const legacy = (await storage.list("/workspace"))
+    .filter((entry) => !isProfileWorkspacePath(entry.path))
+    .filter((entry) => !isGlobalAuthorityPath(entry.path));
   if (legacy.length === 0) return Object.freeze([]);
   const namespace = new ProfileWorkspacePort(storage, profileId);
   const adopted: string[] = [];
