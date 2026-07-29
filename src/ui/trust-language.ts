@@ -32,12 +32,20 @@ export function postureLabel(value: SecurityPosture): string {
  * "Asserted" is kept rather than softened to "Recorded": a party asserted this
  * claim, and dropping the author is how a self-report starts reading as a
  * finding.
+ *
+ * "Stale observation" rather than "Expired" because "Expired" was a word no
+ * legend on either Proof surface defined: the Attestation tab's own legend
+ * (`EVIDENCE_STATE_MEANINGS`) teaches "Stale observation" and then every seal
+ * label, count row and inspector title on the same screen printed "Expired"
+ * beside it. The legend's word wins, and it is also the truer one — a
+ * time-bounded endpoint observation went stale; nothing was checked and found
+ * to be false, which is what "Failed" one row above already means.
  */
 export function proofStatusLabel(value: ProofStatus): string {
   if (value === "verified") return "Verified";
   if (value === "partial") return "Asserted";
   if (value === "failed") return "Failed";
-  if (value === "expired") return "Expired";
+  if (value === "expired") return "Stale observation";
   return "No evidence";
 }
 

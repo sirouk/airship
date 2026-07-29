@@ -1,6 +1,8 @@
 import type { SessionManifest } from "../core/contracts";
+import type { SessionRecord } from "../core/journal";
 import {
   type ActiveSessionRuntime,
+  type SessionListItem,
   type SessionListPage,
   type SessionListSort,
 } from "../sessions/domain";
@@ -9,6 +11,7 @@ import {
   type SessionForkResult,
   type SessionLibraryDetail,
 } from "../sessions/library";
+import { forkLibraryAnnouncement } from "./chat/fork-notice";
 import { Icon } from "./icons";
 import { MenuSelect } from "./menu-select";
 import { useEffect, useId, useMemo, useRef, useState } from "preact/hooks";
@@ -46,6 +49,15 @@ export type SessionsViewProps = Readonly<{
   revision?: number;
   onResume: (detail: SessionLibraryDetail) => void | Promise<void>;
   onForked?: (result: SessionForkResult, source: SessionLibraryDetail) => void | Promise<void>;
+  /**
+   * A durable rename landed in the journal.
+   *
+   * The list refreshes itself from its own counter, but the host owns the only
+   * copies the Chat header and the rail recents read. Without this the title a
+   * reader just committed stays stale everywhere outside this route until some
+   * unrelated turn happens to bump the host's revision.
+   */
+  onRenamed?: (record: SessionRecord) => void;
   onOpenProof?: (sessionId: string) => void;
   durability?: Readonly<{ state: DurabilityState; detail: string }>;
   /**
@@ -71,6 +83,9 @@ function durabilitySeal(state: DurabilityState): SealState {
   return state === "ephemeral" ? "none" : state === "syncing" ? "checking" : "verified";
 }
 
+/** Stable identity, so a conversation with no branches re-renders unchanged. */
+const EMPTY_BRANCHES: readonly SessionListItem[] = Object.freeze([]);
+
 export function SessionsView({
   library,
   runtime,
@@ -81,6 +96,7 @@ export function SessionsView({
   revision = 0,
   onResume,
   onForked,
+  onRenamed,
   onOpenProof,
   durability = { state: "ephemeral", detail: "This journal exists only in page memory. Nothing is synced." },
   quarantine,
@@ -238,7 +254,11 @@ export function SessionsView({
       setForkOpen(false);
       setSelectedId(result.session.id);
       setRefresh((value) => value + 1);
-      setAnnouncement(`Created ${result.session.title} as a new session. Source history was not rewritten.`);
+      // The counts `fork()` returns, in the announcement that is the only
+      // thing a screen-reader user hears about this branch. Without them the
+      // sentence claims a new session and says nothing about how much of the
+      // source actually came with it.
+      setAnnouncement(forkLibraryAnnouncement(result.session.title, result));
     } catch (caught) {
       setDetailError(errorMessage(caught));
     } finally {
@@ -254,6 +274,7 @@ export function SessionsView({
       setRenameTitle("");
       setRenaming(false);
       setRefresh((value) => value + 1);
+      onRenamed?.(renamed);
       setAnnouncement(`Renamed session to ${renamed.title}.`);
     } catch (caught) {
       setDetailError(errorMessage(caught));
@@ -267,6 +288,10 @@ export function SessionsView({
     setSearch("");
     setProviderId("");
     setModel("");
+    // Sort is one of the things the reader chose, so `Clear` has to be able to
+    // undo it. It was previously modelled as layout state, which left a
+    // non-default order stuck with no control that returns it.
+    setSort("updated-desc");
   }
 
   async function setSessionFavorite(sessionId: string, title: string, next: boolean) {
@@ -306,6 +331,11 @@ export function SessionsView({
   }
 
   const filterActive = Boolean(search || providerId || model);
+  // `Clear` reverts every choice the reader made about this list, and sort is
+  // one of them. It stays out of `filterActive` because that flag means "rows
+  // were withheld" — it words the empty state and decides whether a selected
+  // conversation is out of scope, and re-ordering a list withholds nothing.
+  const clearable = filterActive || sort !== "updated-desc";
   // Only the collapsible menus are counted; the search term is on the row that
   // stays visible, so counting it would name a filter the reader can already see.
   const activeFilterCount = [providerId, model].filter(Boolean).length + (sort === "updated-desc" ? 0 : 1);
@@ -317,6 +347,28 @@ export function SessionsView({
     () => new Map((page?.items ?? []).map((item) => [item.id, item.title] as const)),
     [page?.items],
   );
+  /*
+   * The reverse of the lineage link, which was the only direction that existed.
+   *
+   * `sourceSessionId` has always been walked upward — a branch could name the
+   * conversation it came from, but a conversation could not name its branches.
+   * So the one place a reader goes to compare "what if I had asked it
+   * differently" showed nothing at the fork point, and every alternative was
+   * only reachable by recognising its title in a flat, recency-ordered list.
+   * Built from the same page already in hand, for the same reason `titleById`
+   * is: a branch this filter did not load is not one this panel can navigate
+   * to, and claiming otherwise would be a link that goes nowhere.
+   */
+  const branchesBySourceId = useMemo(() => {
+    const index = new Map<string, SessionListItem[]>();
+    for (const item of page?.items ?? []) {
+      if (!item.sourceSessionId) continue;
+      const branches = index.get(item.sourceSessionId);
+      if (branches) branches.push(item);
+      else index.set(item.sourceSessionId, [item]);
+    }
+    return index;
+  }, [page?.items]);
   const ordered = [...groupedSessions.pinned, ...groupedSessions.other];
   const emptyState = sessionEmptyState({ filtered: filterActive, query: search, ...(loadedTotal === undefined ? {} : { loadedTotal }) });
   /*
@@ -405,6 +457,14 @@ export function SessionsView({
           options={[{ value: "", label: "All models" }, ...(page?.facets.models.map((modelId) => ({ value: modelId, label: modelId })) ?? [])]}
           onChange={setModel}
         />
+        {/*
+          * `session-library-sort-menu` carries no styling on purpose.
+          *
+          * It is the name the regression guard uses: a responsive rule that
+          * hid this control once shipped, and the only way a test can say
+          * "never hide the ordering control" is if the control has a selector
+          * to name. Keep the hook; do not give it a rule.
+          */}
         <MenuSelect
           className="session-filter-menu session-library-sort-menu"
           placement="down"
@@ -418,7 +478,7 @@ export function SessionsView({
           onChange={(next) => setSort(next as SessionListSort)}
         />
         </div>
-        {filterActive ? <button type="button" onClick={clearFilters}>Clear</button> : null}
+        {clearable ? <button type="button" onClick={clearFilters}>Clear</button> : null}
         <button type="button" onClick={() => setRefresh((value) => value + 1)} disabled={loadingList} aria-label="Refresh session library">
           {loadingList ? "Reading…" : "Refresh"}
         </button>
@@ -525,7 +585,7 @@ export function SessionsView({
                     >↳</button>
                   ) : null}
                   {favorite ? (
-                    <span class="session-library-favorite-order" aria-label={`Reorder favorite ${item.title}`}>
+                    <span class="session-library-favorite-order" role="group" aria-label={`Reorder favorite ${item.title}`}>
                       <span class="session-library-favorite-drag" aria-hidden="true" title="Drag to reorder">⋮⋮</span>
                       <button
                         type="button"
@@ -603,6 +663,7 @@ export function SessionsView({
               renaming={renaming}
               renameTitle={renameTitle}
               parentTitle={detail.pins.lineage ? titleById.get(detail.pins.lineage.sourceSessionId) : undefined}
+              alternates={branchesBySourceId.get(detail.session.id) ?? EMPTY_BRANCHES}
               onSelectSession={setSelectedId}
               onStartRename={() => { setRenameTitle(detail.session.title); setRenaming(true); }}
               onCancelRename={() => { setRenaming(false); setRenameTitle(""); }}
@@ -635,6 +696,7 @@ function SessionDetail({
   renaming,
   renameTitle,
   parentTitle,
+  alternates,
   onSelectSession,
   onStartRename,
   onCancelRename,
@@ -660,6 +722,8 @@ function SessionDetail({
   renaming: boolean;
   renameTitle: string;
   parentTitle?: string;
+  /** Conversations branched from this one, as far as the loaded page shows. */
+  alternates: readonly SessionListItem[];
   onSelectSession: (id: string) => void;
   onStartRename: () => void;
   onCancelRename: () => void;
@@ -748,6 +812,31 @@ function SessionDetail({
               >{parentTitle ?? shortSessionId(lineage.sourceSessionId)}</button>
               {" "}at head {lineage.sourceHeadSequence} · source untouched
             </p>
+          ) : null}
+          {/* The other direction of the same fact. Without it, a conversation
+              retried three times looked identical to one never branched, and
+              the three alternatives were peers in a flat list with nothing
+              saying they answered the same question. */}
+          {alternates.length ? (
+            <div class="session-library-alternates">
+              <p class="session-library-alternates__heading">
+                <Icon name="branch" size={14} />
+                Alternates ({alternates.length})
+              </p>
+              <ul>
+                {alternates.map((branch) => (
+                  <li key={branch.id}>
+                    <button
+                      type="button"
+                      class="session-library-lineage-link"
+                      aria-label={`Open the branch ${branch.title}`}
+                      onClick={() => onSelectSession(branch.id)}
+                    >{branch.title}</button>
+                    {" "}<small>branched <time dateTime={branch.createdAt}>{formatDateTime(branch.createdAt)}</time></small>
+                  </li>
+                ))}
+              </ul>
+            </div>
           ) : null}
           <p>Created <time dateTime={detail.session.createdAt}>{formatDateTime(detail.session.createdAt)}</time> · updated <time dateTime={detail.session.updatedAt}>{formatDateTime(detail.session.updatedAt)}</time></p>
         </div>
@@ -845,7 +934,12 @@ function SessionDetail({
           <div>
             <span class="session-library-eyebrow">Explicit fork</span>
             <h3 id="session-fork-title">Create a new session identity</h3>
-            <p>Fork = new identity · empty transcript · source untouched. The new manifest records the source head as immutable lineage.</p>
+            {/* This promised a blank slate, from before the seed shipped. The
+                journal is not copied — that is what `historyCopied: false`
+                means — but the branch does start with a bounded, digest-sealed
+                copy of the ancestor context, which is the opposite of what the
+                reader was being told. */}
+            <p>Fork = new identity · source untouched. The branch inherits a bounded, digest-sealed copy of the ancestor context and records the source head as immutable lineage.</p>
             {/*
               * The route claims a fork appears only when the meaning genuinely
               * changes, and then offered `Fork to continue` with nothing on
@@ -863,7 +957,7 @@ function SessionDetail({
           </div>
           <label><span>Fork title</span><input value={forkTitle} maxlength={SESSION_TITLE_MAX} onInput={(event) => onForkTitle(event.currentTarget.value)} /></label>
           <div class="session-library-fork-note"><Icon name="lock" size={16} /><span>{forkUsesActiveManifest ? "The host supplied the active runtime manifest for this fork." : "The fork keeps the source runtime pins; only its session identity and lineage change."}</span></div>
-          <div class="session-library-fork-actions"><button type="button" onClick={onCancelFork} disabled={busy}>Cancel</button><button class="primary" type="button" onClick={onCreateFork} disabled={busy || !forkTitle.trim()}>{busy ? "Creating…" : "Create clean fork"}</button></div>
+          <div class="session-library-fork-actions"><button type="button" onClick={onCancelFork} disabled={busy}>Cancel</button><button class="primary" type="button" onClick={onCreateFork} disabled={busy || !forkTitle.trim()}>{busy ? "Creating…" : "Create fork"}</button></div>
         </section>
       ) : null}
 

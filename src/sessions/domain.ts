@@ -914,16 +914,24 @@ export function querySessionRecords(
   }
   if (records.length > 10_000) rejected += records.length - 10_000;
 
+  // Profile is a scope boundary, not a filter. Folding it in with the others
+  // made the provider and model menus enumerate the whole store, so a Profile
+  // could read the name of a provider or model it has never used — and pick it,
+  // and get nothing. Facets are derived after the scope and before the filters:
+  // after, so they never cross the boundary; before, so choosing a provider
+  // does not erase the models the reader was about to compare it against.
+  const scoped = summaries.filter((item) => {
+    if (query.profileId === "unbound") return !item.profileId;
+    return !query.profileId || item.profileId === query.profileId;
+  });
   const facets = {
-    providers: uniqueSorted(summaries.map((item) => item.providerId)),
-    models: uniqueSorted(summaries.map((item) => item.model)),
-    profiles: uniqueSorted(summaries.flatMap((item) => item.profileId ? [item.profileId] : [])),
+    providers: uniqueSorted(scoped.map((item) => item.providerId)),
+    models: uniqueSorted(scoped.map((item) => item.model)),
+    profiles: uniqueSorted(scoped.flatMap((item) => item.profileId ? [item.profileId] : [])),
   };
-  const filtered = summaries.filter((item) => {
+  const filtered = scoped.filter((item) => {
     if (query.providerId && item.providerId !== query.providerId) return false;
     if (query.model && item.model !== query.model) return false;
-    if (query.profileId === "unbound" && item.profileId) return false;
-    if (query.profileId && query.profileId !== "unbound" && item.profileId !== query.profileId) return false;
     if (!search) return true;
     return [item.title, item.id, item.providerId, item.model, item.profileId ?? "", item.sourceSessionId ?? ""]
       .some((value) => searchable(value).includes(search));

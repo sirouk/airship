@@ -182,7 +182,11 @@ describe("sessionEmptyState", () => {
   it("quotes the term that failed and names the fields that were compared", () => {
     const state = sessionEmptyState({ filtered: true, query: "  plan.md  " });
     expect(state.heading).toBe("No conversation matches “plan.md”");
-    expect(state.lines[0]).toBe("Searched every conversation in this journal by title, model, profile and fork source.");
+    // The route always passes `profileId` to `library.list`, so a sentence that
+    // claimed the whole journal told a person their conversation does not
+    // exist anywhere when it exists under another profile.
+    expect(state.lines[0]).toBe("Searched this profile's conversations by title, model, profile and fork source.");
+    expect(state.lines[0]).not.toContain("every conversation in this journal");
     expect(state.offersClear).toBe(true);
   });
 

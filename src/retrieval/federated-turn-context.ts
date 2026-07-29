@@ -10,7 +10,7 @@ import { sha256, stableStringify } from "../core/hash";
 import type { JsonValue } from "../core/contracts";
 import type { EventJournal } from "../core/journal";
 import type { WorkspacePort } from "../workspace/contracts";
-import { MEMORY_PATH, parseMemoryDocument, type MemoryRecord } from "../tools/memory-tools";
+import { MEMORY_PATH, effectiveMemoryScope, parseMemoryDocument, scopedMemories, type MemoryRecord } from "../tools/memory-tools";
 import { rankProfileMemories } from "./memory-ranking";
 
 const DEFAULT_MAX_HITS = 6;
@@ -45,7 +45,11 @@ export class FederatedTurnContextProvider implements TurnContextProvider {
     const memoryFile = profile ? await this.workspace.read(MEMORY_PATH) : undefined;
     const memoryDocument = memoryFile ? parseMemoryDocument(memoryFile.content) : undefined;
     const memoryRecords = profile
-      ? scopedMemories(memoryDocument?.records ?? [], profile.profileId, profile.version === 2 ? profile.memoryScope : "profile", session.id)
+      ? scopedMemories(memoryDocument?.records ?? [], {
+        profileId: profile.profileId,
+        memoryScope: effectiveMemoryScope(profile),
+        sessionId: session.id,
+      })
       : [];
     const memoryCandidates = await rankMemories(memoryRecords, query);
     const memoryGeneration = memoryFile && memoryCandidates.length
@@ -102,7 +106,7 @@ export class FederatedTurnContextProvider implements TurnContextProvider {
       ...(profile ? {
         profileId: profile.profileId,
         profileRevision: profile.profileRevision,
-        memoryScope: profile.version === 2 ? profile.memoryScope : "profile" as const,
+        memoryScope: effectiveMemoryScope(profile),
       } : {}),
       workspaceId: session.manifest.workspaceId,
     });
@@ -131,19 +135,6 @@ export class FederatedTurnContextProvider implements TurnContextProvider {
       ...(workspaceSelection.retrieval ? { retrieval: workspaceSelection.retrieval } : {}),
     });
   }
-}
-
-function scopedMemories(
-  records: readonly MemoryRecord[],
-  profileId: string,
-  scope: "session" | "profile" | "workspace",
-  sessionId: string,
-): MemoryRecord[] {
-  return records.filter((record) =>
-    record.scope.kind === "profile" &&
-    record.scope.profileId === profileId &&
-    (scope !== "session" || record.scope.createdInSessionId === sessionId),
-  );
 }
 
 async function rankMemories(records: readonly MemoryRecord[], query: string) {

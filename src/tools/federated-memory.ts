@@ -7,7 +7,7 @@ import type { WorkspacePort } from "../workspace/contracts";
 import { memoryLineage } from "../retrieval/federated-turn-context";
 import { rankProfileMemories } from "../retrieval/memory-ranking";
 import { toolLineage, workspaceGenerationLineage } from "../retrieval/tool-lineage";
-import { MEMORY_PATH, parseMemoryDocument } from "./memory-tools";
+import { MEMORY_PATH, effectiveMemoryScope, parseMemoryDocument, scopedMemories } from "./memory-tools";
 import type { ToolRegistry } from "./registry";
 
 const MAX_HITS_PER_GROUP = 12;
@@ -119,8 +119,11 @@ export async function searchFederatedMemory(args: Readonly<{
   const threadHits = await threadMatches(events, normalized, args.limit);
   const file = await args.workspace.read(MEMORY_PATH);
   const document = file ? parseMemoryDocument(file.content) : undefined;
-  const profileScoped = (document?.records ?? [])
-    .filter((memory) => memory.scope.kind === "profile" && memory.scope.profileId === profile.profileId);
+  const profileScoped = scopedMemories(document?.records ?? [], {
+    profileId: profile.profileId,
+    memoryScope: effectiveMemoryScope(profile),
+    sessionId: session.id,
+  });
   const profileHits = await Promise.all(
     rankProfileMemories(profileScoped, args.query, { limit: args.limit })
     .map(({ record: memory }) => memory)

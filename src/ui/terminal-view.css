@@ -111,7 +111,11 @@
   .terminal-panel{grid-template-rows:auto minmax(9rem,1fr) auto}
   .terminal-panel__bar>div:first-child{display:flex;min-width:0}
   .terminal-panel__bar>div:last-child{gap:4px}
-  .terminal-panel__bar button span{display:none}
+  /* Sheds the words, not the glyphs. Written against `button span` this also
+     hid the `＋` of "New here", whose mark happens to live in a span, leaving
+     an empty 44px box on every phone. The decorative marks are already
+     aria-hidden, so the exception is exactly the set that must survive. */
+  .terminal-panel__bar button span:not([aria-hidden="true"]){display:none}
   .terminal-panel__bar button{min-width:44px;min-height:44px}
   .terminal-emulator{padding:6px}
   .terminal-panel__meta summary{min-height:44px;display:flex;align-items:center}

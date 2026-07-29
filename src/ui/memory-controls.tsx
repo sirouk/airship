@@ -2,7 +2,7 @@ import { useEffect, useState } from "preact/hooks";
 import { KIND_VISUAL, type MemoryGraphSearchHit, type MemoryNodeKind } from "../memory-graph";
 
 export function MemoryKindLegend({ counts, hidden, onToggle }: { counts: Readonly<Record<MemoryNodeKind, number>>; hidden: ReadonlySet<MemoryNodeKind>; onToggle: (kind: MemoryNodeKind) => void }) {
-  return <div class="memory-legend" aria-label="Memory kind view filters">{Object.entries(KIND_VISUAL).map(([kind, visual]) => <button type="button" aria-pressed={!hidden.has(kind as MemoryNodeKind)} onClick={() => onToggle(kind as MemoryNodeKind)} title="View filter; source unchanged"><i data-kind={kind} data-shape={visual.shape} style={{ color: `var(${visual.colorToken})` }} /><span>{kind}</span><small>{counts[kind as MemoryNodeKind]}</small></button>)}</div>;
+  return <div class="memory-legend" role="group" aria-label="Memory kind view filters">{Object.entries(KIND_VISUAL).map(([kind, visual]) => <button type="button" aria-pressed={!hidden.has(kind as MemoryNodeKind)} onClick={() => onToggle(kind as MemoryNodeKind)} title="View filter; source unchanged"><i data-kind={kind} data-shape={visual.shape} style={{ color: `var(${visual.colorToken})` }} /><span>{kind}</span><small>{counts[kind as MemoryNodeKind]}</small></button>)}</div>;
 }
 
 export function MemorySearch({ query, results, onQuery, onSelect }: { query: string; results: readonly MemoryGraphSearchHit[]; onQuery: (query: string) => void; onSelect: (id: string) => void }) {

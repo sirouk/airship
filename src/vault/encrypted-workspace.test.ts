@@ -3,6 +3,7 @@ import { MemoryObjectStore } from "../storage/memory-object-store";
 import { WorkspaceRootKey } from "../storage/encrypted-envelope";
 import { CiphertextCachingObjectStore } from "../storage/caching-object-store";
 import { ClientCiphertextCache, MemoryCiphertextPageBackend } from "../storage/client-ciphertext-cache";
+import { encodeWorkspaceBytes } from "../workspace/content-codec";
 import { WorkspaceConflictError } from "../workspace/contracts";
 import { EncryptedObjectWorkspace } from "./encrypted-workspace";
 
@@ -125,6 +126,26 @@ describe("EncryptedObjectWorkspace", () => {
       revision: "revision-1",
     });
     await expect(workspace.readBounded("large.txt", 32)).rejects.toThrow("ETag changed");
+  });
+
+  it("commits a binary file's own byte length beside the sealed object size", async () => {
+    // `size` proves the sealed plaintext and bounds the download, so it stays
+    // the base64 envelope; the decoded length rides alongside it so a bounded
+    // preview — which decrypts nothing — can still be honest about the file.
+    const { key } = await WorkspaceRootKey.generate();
+    const store = new MemoryObjectStore();
+    const workspace = makeWorkspace(store, key, () => "revision-1");
+    const envelope = encodeWorkspaceBytes(Uint8Array.from([0, 255, 1, 2]));
+
+    const written = await workspace.write("assets/raw.bin", envelope, { expectedRevision: null });
+    expect(written).toMatchObject({ size: envelope.length, contentByteLength: 4 });
+    expect(await workspace.read("assets/raw.bin")).toEqual(written);
+    expect(await workspace.list("assets")).toEqual([expect.objectContaining({ contentByteLength: 4 })]);
+    await expect(workspace.readBounded("assets/raw.bin", 8)).resolves.toMatchObject({
+      content: "",
+      size: envelope.length,
+      contentByteLength: 4,
+    });
   });
 
   it("releases superseded and lost-race revisions from the acceleration cache without touching provider authority", async () => {

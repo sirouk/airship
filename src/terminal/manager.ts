@@ -38,7 +38,10 @@ const MAX_METADATA_CAS_ATTEMPTS = 6;
 const MAX_SESSION_TOMBSTONES = 4_096;
 const TERMINAL_LEASE_ROOT = "/workspace/.airship/terminal/leases";
 const TERMINAL_LEASE_TTL_MS = 45_000;
-const TERMINAL_LEASE_RENEW_MS = 12_000;
+/** The writer-lease heartbeat interval; exported so tests drive the real one. */
+export const TERMINAL_LEASE_RENEW_MS = 12_000;
+/** How stale a takeover observation may be while this page is taking input. */
+const TERMINAL_LEASE_OBSERVE_MS = 1_000;
 const TRANSCRIPT_ENCODING_PREFIX = "airship-terminal-utf8-base64-v1:";
 const MAX_ENCODED_TRANSCRIPT_CHARS = TRANSCRIPT_ENCODING_PREFIX.length + Math.ceil(MAX_ACCEPTED_TRANSCRIPT_BYTES / 3) * 4;
 const DEFAULT_DIMENSIONS = Object.freeze({ cols: 100, rows: 30 });
@@ -64,6 +67,10 @@ type MutableSession = {
   detail: string;
   exitCode?: number;
   bufferedOutput: string;
+  /** Monotonic per append. The view uses it to know an append is an append. */
+  outputSequence: number;
+  /** Exactly the text the last append added, so no delta has to be inferred. */
+  appendedOutput: string;
   inputLine: string;
   generation: number;
   /** Set after this page observes another durable writer; omission preserves the winner. */
@@ -73,7 +80,7 @@ type MutableSession = {
   inputTail: Promise<void>;
 };
 
-type StoredSession = Omit<TerminalSessionSnapshot, "bufferedOutput"> & Readonly<{ transcriptTail: string }>;
+type StoredSession = Omit<TerminalSessionSnapshot, "bufferedOutput" | "outputSequence" | "appendedOutput"> & Readonly<{ transcriptTail: string }>;
 type ParsedStoredSession = Omit<StoredSession, "transcriptTail"> & Readonly<{ transcriptTail: string }>;
 type StoredSessionTombstone = Readonly<{ id: string; removedAt: string; reason: "bounded-closed-session-prune" }>;
 type StoredManifest = Readonly<{
@@ -119,6 +126,35 @@ export async function quiesceBrowserTerminalWorkspace(
   return manager ? manager.quiesce(reason) : Object.freeze([]);
 }
 
+/**
+ * Stop and reconcile whichever terminal currently holds the shared WebContainer,
+ * before that instance is destroyed.
+ *
+ * Deliberately *not* keyed by workspace identity. `managers` is a WeakMap over
+ * object identity, and a caller that reaches us from the tool layer does not
+ * hold the same object the Terminal route mounted against: the tool registry is
+ * built over `ClientContextRuntime.observeWorkspace()`'s frozen facade, wrapped
+ * again in `GitSynchronizedWorkspace` when Git is bound, while the Terminal
+ * route passes the raw provider. A lookup by the tool's workspace therefore
+ * always misses and silently reconciles nothing — which is exactly the silent
+ * data loss the quiesce exists to prevent.
+ *
+ * Host authority is the property that actually matters here: only one manager
+ * can hold the page-global instance at a time, and it is the only one with
+ * mount work to save. When nobody holds it — no terminal was ever started, or
+ * the runtime was never activated — this is a no-op, so a caller need not (and
+ * must not) guess at activation state of its own.
+ */
+export async function quiesceBrowserTerminalHost(
+  reason = "The shared browser runtime is being deactivated; terminal work was reconciled first.",
+): Promise<readonly string[]> {
+  // Read before awaiting: `quiesce` takes the host-authority lock itself, and if
+  // another manager wins that lock first it releases this one *with*
+  // reconciliation, so no mount work is lost by the handoff either way.
+  const manager = activeHostManager;
+  return manager ? manager.quiesce(reason) : Object.freeze([]);
+}
+
 /** Page-lifetime owner of real WebContainer PTYs and durable tab metadata. */
 export class BrowserTerminalManager {
   private readonly sessions = new Map<string, MutableSession>();
@@ -129,6 +165,8 @@ export class BrowserTerminalManager {
     timer?: ReturnType<typeof setTimeout>;
   }>>();
   private readonly observedForeignLeases = new Map<string, Readonly<{ revision: string; observedAt: number }>>();
+  private readonly leaseRenewals = new Map<string, Promise<void>>();
+  private readonly leaseOwnerProbes = new Map<string, Readonly<{ startedAt: number; inFlight: boolean }>>();
   private readonly sessionListeners = new Map<string, Set<SessionListener>>();
   private readonly listListeners = new Set<ListSubscription>();
   private readonly workspaceListeners = new Set<WorkspaceListener>();
@@ -139,6 +177,8 @@ export class BrowserTerminalManager {
   private baseline?: TerminalWorkspaceSnapshot;
   private syncTail: Promise<void> = Promise.resolve();
   private persistenceTail: Promise<void> = Promise.resolve();
+  private lastPersistenceFailure?: string;
+  private readonly persistenceListeners = new Set<(failure: string | undefined) => void>();
   private transcriptPersistTimer?: ReturnType<typeof setTimeout>;
   readonly ready: Promise<void>;
 
@@ -217,6 +257,8 @@ export class BrowserTerminalManager {
       auditSequence: 0,
       detail: "Ready to start an interactive WebContainer jsh process.",
       bufferedOutput: "",
+      outputSequence: 0,
+      appendedOutput: "",
       inputLine: "",
       generation: 0,
       suppressPersistence: false,
@@ -290,7 +332,13 @@ export class BrowserTerminalManager {
     try {
       const hadMountedHost = Boolean(this.host && this.baseline);
       const host = await this.ensureHost(signal);
-      if (hadMountedHost) await this.syncWorkspace();
+      // Reconciliation rebuilds the mount root by deleting it first, and the
+      // rebuild cannot restore mount-only state (node_modules is excluded from
+      // both export and mount). Another tab's live jsh has its cwd inside that
+      // root, so a second tab only pushes its own deltas out while any process
+      // is live; the mount is refreshed once the mount is quiescent.
+      const mountRefreshed = !hadMountedHost || this.mountIsQuiescent(session.id);
+      if (hadMountedHost) await this.runWorkspaceSync(undefined, mountRefreshed ? "reconcile" : "outgoing");
       if (generation !== session.generation) return;
       const process = await host.spawn("jsh", [], {
         cwd: hostCwd(session.cwd),
@@ -301,7 +349,9 @@ export class BrowserTerminalManager {
       session.process = process;
       session.writer = process.input.getWriter();
       session.status = "running";
-      session.detail = "Interactive jsh process running inside this page's WebContainer.";
+      session.detail = mountRefreshed
+        ? "Interactive jsh process running inside this page's WebContainer."
+        : "Interactive jsh process running inside this page's WebContainer. The workspace mount was not rebuilt because another terminal process is live; reconcile once it ends to pick up newer workspace revisions.";
       session.updatedAt = new Date().toISOString();
       session.lastProcessStartedAt = session.updatedAt;
       session.exitCode = undefined;
@@ -341,12 +391,27 @@ export class BrowserTerminalManager {
     if (data.length > 65_536) throw new Error("Terminal input chunk exceeds 64 KiB.");
     const session = this.requireSession(sessionId);
     if (session.status !== "running" || !session.writer) return;
-    await this.renewSessionLease(sessionId);
+    // The durable lease is a heartbeat, not a per-input transaction. Renewing
+    // it here made every keystroke a compare-and-swap write, and two of those
+    // in flight raced each other into a conflict this page then misread as a
+    // foreign takeover — killing the process and latching the tab off. What
+    // input still owes the operator is promptness, so it observes the lease by
+    // a read instead of waiting out a whole heartbeat behind a live PTY.
+    if (!this.sessionLeases.has(sessionId)) throw new Error("This page no longer owns the terminal writer lease; input was not submitted.");
+    this.observeSessionLeaseOwner(sessionId);
     const committed = rememberInput(session, data);
     const writer = session.writer;
     const write = session.inputTail.then(() => writer.write(data));
     session.inputTail = write.catch(() => undefined);
-    await write;
+    try {
+      await write;
+    } catch (error) {
+      // Losing the lease detaches this writer from its stream mid-flight. The
+      // operator can act on why input stopped, not on a WritableStream state
+      // error, so answer in the lease's own words when that is what happened.
+      if (!this.sessionLeases.has(sessionId)) throw new Error("This page no longer owns the terminal writer lease; input was not submitted.", { cause: error });
+      throw error;
+    }
     if (committed.length) {
       for (const command of committed) this.appendAudit(session, {
         kind: "interactive-input",
@@ -415,7 +480,7 @@ export class BrowserTerminalManager {
     session.process?.kill();
     releaseProcess(session);
     try {
-      await this.syncWorkspace(session.id);
+      await this.syncWorkspaceForSession(session.id);
     } catch (error) {
       session.status = "failed";
       session.detail = `Terminal stopped, but its tab remains open because workspace reconciliation failed: ${error instanceof Error ? error.message : String(error)}`;
@@ -434,11 +499,42 @@ export class BrowserTerminalManager {
     await this.releaseSessionLease(sessionId);
   }
 
+  /** The operator asked for it explicitly, so this is always the full reconcile. */
   syncWorkspace(sessionId?: string): Promise<readonly string[]> {
+    return this.runWorkspaceSync(sessionId, "reconcile");
+  }
+
+  /**
+   * Whether a reconcile could do anything at all: this manager holds the
+   * page-global host authority and has a mounted baseline. Session status is
+   * not a proxy for it — a failed tab's mount is still reconcilable, and a
+   * running tab whose runtime was deactivated is not.
+   */
+  canReconcile(): boolean {
+    return activeHostManager === this && Boolean(this.host && this.baseline);
+  }
+
+  /**
+   * A lifecycle-driven sync, which may not rebuild the mount under another
+   * tab's live process. See the quiescence note in `start`.
+   */
+  private syncWorkspaceForSession(sessionId: string): Promise<readonly string[]> {
+    return this.runWorkspaceSync(sessionId, this.mountIsQuiescent(sessionId) ? "reconcile" : "outgoing");
+  }
+
+  /** No other tab is holding the mount open with a live or starting process. */
+  private mountIsQuiescent(exceptSessionId: string): boolean {
+    return ![...this.sessions.values()].some((other) => other.id !== exceptSessionId
+      && (other.status === "running" || other.status === "starting"));
+  }
+
+  private runWorkspaceSync(sessionId: string | undefined, mode: "reconcile" | "outgoing"): Promise<readonly string[]> {
     let changed: readonly string[] = Object.freeze([]);
     const operation = this.syncTail.then(() => withHostAuthority(async () => {
       if (activeHostManager !== this || !this.host || !this.baseline) return;
-      const result = await reconcileTerminalWorkspace(this.host, this.workspace, this.baseline);
+      const result = mode === "reconcile"
+        ? await reconcileTerminalWorkspace(this.host, this.workspace, this.baseline)
+        : await syncTerminalWorkspace(this.host, this.workspace, this.baseline);
       this.baseline = result.snapshot;
       changed = result.changedPaths;
       this.emitWorkspaceChanges(changed);
@@ -449,8 +545,10 @@ export class BrowserTerminalManager {
           outcome: "completed",
           processEpoch: session.processEpoch,
           summary: changed.length
-            ? `Reconciled ${changed.length} revision-fenced workspace change${changed.length === 1 ? "" : "s"}.`
-            : "Reconciliation found no workspace changes.",
+            ? `${mode === "reconcile" ? "Reconciled" : "Adopted"} ${changed.length} revision-fenced workspace change${changed.length === 1 ? "" : "s"}.${mode === "outgoing" ? " The mount was not rebuilt because another terminal process is live." : ""}`
+            : mode === "reconcile"
+              ? "Reconciliation found no workspace changes."
+              : "No terminal changes to adopt; the mount was not rebuilt because another terminal process is live.",
           changedPaths: Object.freeze(changed.slice(0, MAX_AUDIT_CHANGED_PATHS)),
         });
         this.emit(session);
@@ -529,9 +627,13 @@ export class BrowserTerminalManager {
   private invalidateHost(event: NodeWebContainerLifecycleEvent): void {
     if (activeHostManager === this) activeHostManager = undefined;
     this.clearHostBinding();
+    // This path only ever runs *after* the host is gone, so nothing can be
+    // reconciled from here. Airship's own deactivation quiesces first; an
+    // external teardown does not, and the honest thing is to say so rather than
+    // let a restart imply the mount survived.
     this.stopLiveSessions(
-      "The shared browser runtime was deactivated. Start this terminal to acquire a fresh isolated host.",
-      "Airship runtime deactivated; this terminal requires restart.",
+      "The shared browser runtime was deactivated. Terminal writes made since the last reconciliation were discarded with it. Start this terminal to acquire a fresh isolated host.",
+      "Airship runtime deactivated; unreconciled terminal writes were discarded. This terminal requires restart.",
     );
   }
 
@@ -560,7 +662,10 @@ export class BrowserTerminalManager {
       if (activeHostManager === this) activeHostManager = undefined;
       this.clearHostBinding();
       this.flushTranscriptPersist();
-      await this.persistenceTail;
+      // Handled, not awaited bare: a rejection here runs inside `finally` and
+      // would replace the teardown error the caller actually needs to see.
+      // `queuePersist` records the failure, so nothing is swallowed silently.
+      await this.persistenceTail.catch(() => undefined);
       await Promise.all([...this.sessionLeases.keys()].map((sessionId) => this.releaseSessionLease(sessionId)));
     }
     if (failure) throw failure;
@@ -592,11 +697,21 @@ export class BrowserTerminalManager {
   }
 
   private clearHostBinding(): void {
+    const hadBinding = Boolean(this.host || this.baseline);
     this.unsubscribeHostLifecycle?.();
     this.unsubscribeHostLifecycle = undefined;
     this.host = undefined;
     this.baseline = undefined;
     this.hostGeneration = undefined;
+    // Dropping the binding is what makes `canReconcile()` false, and a manager
+    // whose tabs are all idle or failed loses it without any session changing
+    // state — `stopLiveSessions` has nothing to emit. Publishing here is the
+    // only signal a view gets, and without it a Reconcile control stays enabled
+    // for a mount this manager can no longer reconcile at all.
+    if (hadBinding) {
+      for (const session of this.sessions.values()) this.emitSession(session);
+      this.emitList();
+    }
   }
 
   private emitWorkspaceChanges(changed: readonly string[]): void {
@@ -636,7 +751,7 @@ export class BrowserTerminalManager {
     this.emit(session);
     this.queuePersist();
     try {
-      const changed = await this.syncWorkspace(session.id);
+      const changed = await this.syncWorkspaceForSession(session.id);
       if (changed.length) this.appendOutput(session, `\r\n\x1b[36mAirship synced ${changed.length} workspace change${changed.length === 1 ? "" : "s"}.\x1b[0m\r\n`);
     } catch (error) {
       this.appendOutput(session, `\r\n\x1b[33mWorkspace sync requires attention: ${error instanceof Error ? error.message : String(error)}\x1b[0m\r\n`);
@@ -674,6 +789,12 @@ export class BrowserTerminalManager {
 
   private appendOutput(session: MutableSession, chunk: string): void {
     session.bufferedOutput = `${session.bufferedOutput}${chunk}`.slice(-MAX_OUTPUT_CHARS);
+    // `bufferedOutput` is a sliding tail, so past the cap it is no longer an
+    // append-only buffer and a view cannot recover the delta by prefix match.
+    // Publishing the appended text plus a sequence removes the inference: a
+    // one-step advance is exactly `appendedOutput`, anything else is a redraw.
+    session.outputSequence += 1;
+    session.appendedOutput = chunk;
     session.updatedAt = new Date().toISOString();
     this.emitSession(session);
     this.scheduleTranscriptPersist();
@@ -738,6 +859,8 @@ export class BrowserTerminalManager {
           bufferedOutput: requiresRestart && transcriptTail
             ? `${transcriptTail}${RECONSTRUCTION_MARKER}`.slice(-MAX_OUTPUT_CHARS)
             : transcriptTail,
+          outputSequence: 0,
+          appendedOutput: "",
           inputLine: "",
           generation: 0,
           suppressPersistence: false,
@@ -755,7 +878,37 @@ export class BrowserTerminalManager {
       clearTimeout(this.transcriptPersistTimer);
       this.transcriptPersistTimer = undefined;
     }
-    this.persistenceTail = this.persistenceTail.then(() => this.persist(), () => this.persist());
+    // The failure was previously discarded, so the retention claim shown to the
+    // user could never disagree with it. Record the observed outcome instead,
+    // and keep the tail settled so no teardown ever awaits a rejection.
+    this.persistenceTail = this.persistenceTail
+      .then(() => this.persist(), () => this.persist())
+      .then(() => this.recordPersistence(undefined), (error) => this.recordPersistence(error ?? new Error("Terminal metadata could not be persisted.")));
+  }
+
+  /** The last durable-metadata write failure, or undefined while writes land. */
+  persistenceFailure(): string | undefined {
+    return this.lastPersistenceFailure;
+  }
+
+  /**
+   * Durability is claimed from observed writes, never from the declared tier:
+   * a surface that reads the tier alone cannot tell the user that persistence
+   * has stopped working.
+   */
+  subscribePersistence(listener: (failure: string | undefined) => void): () => void {
+    this.persistenceListeners.add(listener);
+    listener(this.lastPersistenceFailure);
+    return () => this.persistenceListeners.delete(listener);
+  }
+
+  private recordPersistence(error: unknown): void {
+    const failure = error === undefined
+      ? undefined
+      : error instanceof Error ? error.message : String(error);
+    if (failure === this.lastPersistenceFailure) return;
+    this.lastPersistenceFailure = failure;
+    for (const listener of this.persistenceListeners) listener(failure);
   }
 
   private scheduleTranscriptPersist(): void {
@@ -842,15 +995,60 @@ export class BrowserTerminalManager {
     throw new WorkspaceConflictError("Terminal writer lease kept changing; the process was not started.");
   }
 
-  private async renewSessionLease(sessionId: string): Promise<void> {
+  /**
+   * Coalesce renewals behind one in-flight promise per session.
+   *
+   * Two heartbeats overlapping is a page racing itself on its own lease file,
+   * and the loser of that compare-and-swap used to be treated as evidence of a
+   * foreign writer. Concurrent callers now share the single renewal.
+   */
+  private renewSessionLease(sessionId: string): Promise<void> {
+    const inFlight = this.leaseRenewals.get(sessionId);
+    if (inFlight) return inFlight;
+    const renewal = this.renewSessionLeaseNow(sessionId).finally(() => {
+      if (this.leaseRenewals.get(sessionId) === renewal) this.leaseRenewals.delete(sessionId);
+    });
+    this.leaseRenewals.set(sessionId, renewal);
+    return renewal;
+  }
+
+  /**
+   * Notice a foreign takeover between heartbeats, without writing.
+   *
+   * Renewing the lease per keystroke raced this page against itself, but with
+   * renewal left to the 12s heartbeat alone, input could keep reaching a live
+   * PTY for that whole window after another page took the durable lease. A read
+   * cannot lose a compare-and-swap, so this observes the takeover within a
+   * second and never manufactures the conflict the renewal path had to unlearn.
+   * It is deliberately not awaited: typing must not wait on storage, and the
+   * heartbeat remains the guarantee for a tab nobody is typing into.
+   */
+  private observeSessionLeaseOwner(sessionId: string): void {
+    const probe = this.leaseOwnerProbes.get(sessionId);
+    const startedAt = monotonicNow();
+    if (probe && (probe.inFlight || startedAt - probe.startedAt < TERMINAL_LEASE_OBSERVE_MS)) return;
+    this.leaseOwnerProbes.set(sessionId, Object.freeze({ startedAt, inFlight: true }));
+    void this.workspace.read(this.leasePath(sessionId)).then((current) => {
+      // A missing or unreadable lease file is not evidence of another writer —
+      // no other page can remove this page's lease — so only a named foreign
+      // owner stops the process here. The heartbeat still handles the rest.
+      if (!this.sessionLeases.has(sessionId) || !current) return;
+      const owner = observedLeaseOwner(current.content, sessionId);
+      if (owner && owner !== this.leaseOwnerId) this.loseSessionLease(sessionId);
+    }, () => undefined).finally(() => {
+      this.leaseOwnerProbes.set(sessionId, Object.freeze({ startedAt, inFlight: false }));
+    });
+  }
+
+  private async renewSessionLeaseNow(sessionId: string): Promise<void> {
     const held = this.sessionLeases.get(sessionId);
-    if (!held) throw new Error("This page no longer owns the terminal writer lease; input was not submitted.");
+    if (!held) throw new Error("This page no longer owns the terminal writer lease; its heartbeat stopped.");
     const path = this.leasePath(sessionId);
     const current = await this.workspace.read(path);
     const lease = current ? parseSessionLease(current.content, sessionId) : undefined;
     if (!current || !lease || lease.ownerId !== this.leaseOwnerId) {
       this.loseSessionLease(sessionId);
-      throw new Error("This page lost the terminal writer lease; input was not submitted.");
+      throw new Error("This page lost the terminal writer lease; the page-local process was stopped.");
     }
     try {
       const written = await this.workspace.write(
@@ -860,9 +1058,19 @@ export class BrowserTerminalManager {
       );
       this.installSessionLease(sessionId, written.revision);
     } catch (error) {
+      // A conflict alone is not evidence of a foreign writer: this page's own
+      // renewal may have moved the revision. Only a different owner is a
+      // takeover; otherwise adopt the observed revision and keep authority.
+      if (error instanceof WorkspaceConflictError) {
+        const observed = await this.workspace.read(path);
+        if (observed && observedLeaseOwner(observed.content, sessionId) === this.leaseOwnerId) {
+          this.installSessionLease(sessionId, observed.revision);
+          return;
+        }
+      }
       this.loseSessionLease(sessionId);
       if (error instanceof WorkspaceConflictError) {
-        throw new Error("This page lost the terminal writer lease; input was not submitted.", { cause: error });
+        throw new Error("This page lost the terminal writer lease; the page-local process was stopped.", { cause: error });
       }
       throw error;
     }
@@ -882,6 +1090,7 @@ export class BrowserTerminalManager {
     const held = this.sessionLeases.get(sessionId);
     if (held?.timer) clearTimeout(held.timer);
     this.sessionLeases.delete(sessionId);
+    this.leaseOwnerProbes.delete(sessionId);
   }
 
   private loseSessionLease(sessionId: string): void {
@@ -949,7 +1158,9 @@ function storedManifest(
     sessions: Object.freeze(sessions
       .filter((session) => !session.suppressPersistence)
       .map(snapshot)
-      .map(({ bufferedOutput, ...item }): StoredSession => Object.freeze({
+      // `outputSequence`/`appendedOutput` are page-local render bookkeeping,
+      // never lineage: the transcript tail below is the durable record.
+      .map(({ bufferedOutput, outputSequence: _sequence, appendedOutput: _appended, ...item }): StoredSession => Object.freeze({
         ...item,
         history: boundedPersistedHistory(item.history),
         audit: boundedPersistedAudit(item.audit),
@@ -1085,6 +1296,8 @@ function snapshot(session: MutableSession): TerminalSessionSnapshot {
     ...(session.exitCode === undefined ? {} : { exitCode: session.exitCode }),
     detail: session.detail,
     bufferedOutput: session.bufferedOutput,
+    outputSequence: session.outputSequence,
+    appendedOutput: session.appendedOutput,
   });
 }
 
@@ -1194,6 +1407,12 @@ function parseSessionLease(content: string, expectedSessionId: string): Readonly
   } catch {
     throw new Error(`Terminal writer lease is malformed for ${expectedSessionId}; Airship refused to take it over.`);
   }
+}
+
+/** The owner a lease file names, or undefined when it cannot be trusted at all. */
+function observedLeaseOwner(content: string, sessionId: string): string | undefined {
+  try { return parseSessionLease(content, sessionId).ownerId; }
+  catch { return undefined; }
 }
 
 function serializeSessionLease(sessionId: string, ownerId: string, expiresAt: number): string {

@@ -166,6 +166,14 @@ async function unstage(
   review: TerminalGitReview | undefined,
   signal: AbortSignal,
 ): Promise<TerminalGitResult> {
+  // Only `git restore --staged` can route a flag here, and the one it can
+  // route (`--worktree`) asks for a second destination this bridge does not
+  // restore in the same operation. Refusing beats silently unstaging a path
+  // literally named `--worktree` and leaving the working tree untouched.
+  const unsupported = unsupportedFlag(args);
+  if (unsupported) {
+    throw new Error(`Unsupported \`git restore --staged\` flag: ${unsupported}. Unstage first, then run \`git restore <paths…>\` to discard the working-tree change.`);
+  }
   const live = await client.status(target(repository, current), signal);
   const requested = stripSeparator(args).filter((word) => word !== "HEAD");
   const paths = requested.length ? requested : live.status.filter((entry) => entry.index).map((entry) => entry.path);
@@ -482,9 +490,19 @@ async function restore(
 ): Promise<TerminalGitResult> {
   requireFeature(client, "restore", "Discarding changes");
   const words = [...args];
-  const fromHead = takeFlag(words, "--source=HEAD") || takeFlag(words, "--worktree");
+  const fromHead = takeFlag(words, "--source=HEAD");
+  // `--worktree` names Git's *destination* — restore the working tree — which
+  // is exactly what this bridge already does; it is not a source selector.
+  // Reading it as `--source=HEAD` overwrote staged content with HEAD on the one
+  // command whose whole purpose is destroying uncommitted work, so consume it
+  // as a no-op and leave the source at the index.
+  takeFlag(words, "--worktree");
+  const unsupported = unsupportedFlag(words);
+  if (unsupported) {
+    throw new Error(`Unsupported \`git restore\` flag: ${unsupported}. Use \`git restore --staged <paths…>\` to unstage, or \`git restore [--worktree] [--source=HEAD] <paths…>\` to discard working-tree changes.`);
+  }
   const paths = stripSeparator(words);
-  if (!paths.length) throw new Error("Use `git restore [--source=HEAD] <paths…>` in the browser bridge.");
+  if (!paths.length) throw new Error("Use `git restore [--worktree] [--source=HEAD] <paths…>` in the browser bridge.");
   const live = await client.status(target(repository, current), signal);
   const operation: GitOperation = {
     kind: "restore",
@@ -678,7 +696,9 @@ function uniqueIdentifier(base: string, taken: readonly string[]): string {
 }
 
 function takeFlag(words: string[], flag: string): boolean {
-  const index = words.indexOf(flag);
+  // Options are only read before the `--` separator, so a path named
+  // `--worktree` or `--source=HEAD` is never eaten as an option.
+  const index = beforeSeparator(words).indexOf(flag);
   if (index < 0) return false;
   words.splice(index, 1);
   return true;
@@ -741,6 +761,21 @@ function stripSeparator(args: readonly string[]): string[] {
   return args.filter((word) => word !== "--");
 }
 
+/**
+ * Git stops reading options at the first `--`; every word after it is a
+ * pathspec however odd it looks. Scan only the words before the separator so
+ * `git restore -- --odd.txt` still discards the file literally named
+ * `--odd.txt` instead of being refused as an unsupported flag.
+ */
+function unsupportedFlag(args: readonly string[]): string | undefined {
+  return beforeSeparator(args).find((word) => word.startsWith("--"));
+}
+
+function beforeSeparator(args: readonly string[]): readonly string[] {
+  const separator = args.indexOf("--");
+  return separator < 0 ? args : args.slice(0, separator);
+}
+
 function tokenize(command: string): string[] {
   if (!command.trim() || command.length > MAX_COMMAND_CHARS || /[\u0000\r\n]/u.test(command)) {
     throw new Error("Git command must be one bounded terminal line.");
@@ -780,7 +815,7 @@ function help(): string {
     "  git log [-n <count>] [--oneline] [<revision>] [-- <path>] | git show [<revision>]",
     "  git add <paths…> | git add -A",
     "  git restore --staged [paths…] | git reset [HEAD] [paths…]",
-    "  git restore [--source=HEAD] <paths…> | git reset --soft|--mixed|--hard <revision>",
+    "  git restore [--worktree] [--source=HEAD] <paths…> | git reset --soft|--mixed|--hard <revision>",
     "  git commit -m \"message\"",
     "  git branch [name] | git switch [-c] <name> | git merge [--ff-only] <branch>",
     "  git stash [push [-m \"message\"]|list|pop|apply|drop|clear] [stash@{n}]",

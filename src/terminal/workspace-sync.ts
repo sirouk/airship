@@ -90,30 +90,46 @@ export async function syncTerminalWorkspace(
   if (changes.length > MAX_CHANGES) throw new Error(`Terminal sync exceeds ${MAX_CHANGES} changes.`);
   if (bytes > MAX_CHANGED_BYTES) throw new Error("Terminal sync exceeds the 8 MiB changed-byte limit.");
 
+  const applied: typeof changes = [];
   for (const change of changes) {
     const current = await workspace.read(change.path);
+    // A deletion whose target is already gone is agreement, not a conflict:
+    // both sides removed the same file. Failing the batch over an outcome that
+    // already holds would strand every other change the terminal made with it.
+    if (change.kind === "delete" && !current) continue;
     if (change.kind === "create" ? Boolean(current) : !current || current.revision !== change.expected) {
       throw new WorkspaceConflictError(`Terminal output conflicts with the current workspace revision: ${change.path}`);
     }
+    applied.push(change);
   }
-  for (const change of changes) {
+  for (const change of applied) {
     if (change.kind === "delete") await workspace.remove(change.path, { expectedRevision: change.expected });
     else await workspace.write(change.path, change.content!, { expectedRevision: change.expected ?? null });
   }
   const nextFiles = new Map<string, BaselineFile>();
   for (const [path, content] of exported) {
+    const original = baseline.files.get(path);
     const committed = await workspace.read(normalizeWorkspacePath(`${baseline.root}/${path}`));
-    const terminalChanged = baseline.files.get(path)?.content !== content;
+    const terminalChanged = original?.content !== content;
     if (terminalChanged && (!committed || committed.content !== content)) {
       throw new WorkspaceConflictError(`Terminal sync could not confirm: ${path}`);
     }
-    // An untouched terminal copy never overwrites a later Editor revision.
-    // Reconciliation remounts this authoritative value (or its deletion).
-    if (committed) nextFiles.set(path, Object.freeze({ content: committed.content, revision: committed.revision }));
+    // The baseline `content` is what the *mount* holds, because that is what
+    // the next export is diffed against, and this function never rebuilds the
+    // mount. Adopting a newer Editor body here would make the untouched mount
+    // copy look like a terminal edit and write it back over that Editor
+    // revision; keeping an Editor-deleted file in the baseline (at its last
+    // known revision) likewise stops the mount copy being republished as a
+    // create. The committed `revision` is still adopted so a later terminal
+    // edit fences against the revision the workspace actually holds. Callers
+    // that do remount — `reconcileTerminalWorkspace` — discard this snapshot
+    // for one taken from the fresh mount.
+    const revision = committed?.revision ?? original?.revision;
+    if (revision !== undefined) nextFiles.set(path, Object.freeze({ content, revision }));
   }
   return Object.freeze({
     snapshot: Object.freeze({ root: baseline.root, files: nextFiles }),
-    changedPaths: Object.freeze(changes.map((change) => change.path).sort()),
+    changedPaths: Object.freeze(applied.map((change) => change.path).sort()),
   });
 }
 

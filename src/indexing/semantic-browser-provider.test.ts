@@ -3,6 +3,7 @@ import {
   createBrowserSemanticProvider,
   SwitchableEmbeddingProvider,
   readEmbeddingMode,
+  readStoredEmbeddingMode,
   writeEmbeddingMode,
 } from "./semantic-browser-provider";
 import { AIRSHIP_SEMANTIC_MODEL, LazySemanticWorkerEmbeddingProvider, type SemanticWorkerRequest, type SemanticWorkerResponse } from "./semantic-worker-provider";
@@ -106,6 +107,9 @@ describe("semantic embedding selection", () => {
   it("drops the bootstrap materialization and rebuilds every unchanged revision on semantic activation", async () => {
     const workspace = new MemoryWorkspace();
     await workspace.write("/workspace/engine.md", "compressor turbine thrust", { expectedRevision: null });
+    // A recorded choice, so the capability-derived default has nothing to
+    // decide and this test observes the explicit switch it is about.
+    writeEmbeddingMode("bootstrap");
     const provider = new SwitchableEmbeddingProvider(384, "bootstrap", () =>
       new LazySemanticWorkerEmbeddingProvider(() => new FakeSemanticWorker(), () => ({ backend: "wasm" })),
     );
@@ -118,6 +122,97 @@ describe("semantic embedding selection", () => {
     expect(semantic.lineage.embeddingProvider).toContain("mxbai-embed-xsmall-v1");
   });
 });
+
+/**
+ * Semantic mode has to be the device's answer, not a button nobody finds.
+ *
+ * The probe already produced the verdict; what was missing was any branch that
+ * consumed it when no preference had been recorded. These pin that branch and
+ * both of its refusals.
+ */
+describe("capability-derived embedding mode", () => {
+  beforeEach(() => {
+    // A preference stubbed by an earlier suite is exactly the state these
+    // tests are about, so each one starts from an empty store.
+    const values = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+    });
+  });
+
+  it("activates semantic retrieval on a capable device with no recorded preference", async () => {
+    const workspace = new MemoryWorkspace();
+    await workspace.write("/workspace/engine.md", "compressor turbine thrust", { expectedRevision: null });
+    using probe = stubCapabilityReport({ scheduling: scheduling("wasm"), wasm: wasmAvailable() });
+    const provider = new SwitchableEmbeddingProvider(384, "bootstrap", () =>
+      new LazySemanticWorkerEmbeddingProvider(() => new FakeSemanticWorker(), () => ({ backend: "wasm" })),
+    );
+
+    const generation = await new ClientContextRuntime(workspace, { embeddings: provider }).refreshNow();
+
+    expect(probe.refresh).toHaveBeenCalled();
+    expect(generation.lineage.embeddingPosture).toBe("local-semantic");
+    // Derived, never recorded: the next load re-asks the device.
+    expect(readStoredEmbeddingMode()).toBeUndefined();
+  });
+
+  it("stays on bootstrap for a constrained device and for a worker that will not start", async () => {
+    const workspace = new MemoryWorkspace();
+    await workspace.write("/workspace/engine.md", "compressor turbine thrust", { expectedRevision: null });
+
+    {
+      using _constrained = stubCapabilityReport({
+        scheduling: scheduling("wasm", { class: "constrained" }),
+        wasm: wasmAvailable(),
+      });
+      const provider = new SwitchableEmbeddingProvider(384, "bootstrap", () =>
+        new LazySemanticWorkerEmbeddingProvider(() => new FakeSemanticWorker(), () => ({ backend: "wasm" })),
+      );
+      const generation = await new ClientContextRuntime(workspace, { embeddings: provider }).refreshNow();
+      expect(generation.lineage.embeddingPosture).toBe("deterministic-bootstrap");
+    }
+
+    using _capable = stubCapabilityReport({ scheduling: scheduling("wasm"), wasm: wasmAvailable() });
+    const provider = new SwitchableEmbeddingProvider(384, "bootstrap", () =>
+      new LazySemanticWorkerEmbeddingProvider(() => { throw new Error("worker construction blocked"); }, () => ({ backend: "wasm" })),
+    );
+    const runtime = new ClientContextRuntime(workspace, { embeddings: provider });
+    const generation = await runtime.refreshNow();
+    expect(generation.lineage.embeddingPosture).toBe("deterministic-bootstrap");
+    expect(generation.candidates[0]).toMatchObject({ status: "indexed", chunks: 1 });
+    expect(runtime.getEmbeddingMode()).toBe("bootstrap");
+  });
+
+  it("keeps an explicit selection ahead of the probe", async () => {
+    const workspace = new MemoryWorkspace();
+    await workspace.write("/workspace/engine.md", "compressor turbine thrust", { expectedRevision: null });
+    writeEmbeddingMode("bootstrap");
+    using _capable = stubCapabilityReport({ scheduling: scheduling("wasm"), wasm: wasmAvailable() });
+    const provider = new SwitchableEmbeddingProvider(384, "bootstrap", () =>
+      new LazySemanticWorkerEmbeddingProvider(() => new FakeSemanticWorker(), () => ({ backend: "wasm" })),
+    );
+
+    const generation = await new ClientContextRuntime(workspace, { embeddings: provider }).refreshNow();
+    expect(generation.lineage.embeddingPosture).toBe("deterministic-bootstrap");
+  });
+});
+
+/** The one WebAssembly field the activation branch reads, shaped as the probe reports it. */
+function wasmAvailable(): BrowserRuntimeCapabilityReport["wasm"] {
+  return {
+    state: "available",
+    evidence: "probe-passed",
+    detail: "test WebAssembly observation",
+  } as BrowserRuntimeCapabilityReport["wasm"];
+}
+
+/** A whole report is more than these tests need; only the read fields are stubbed. */
+function stubCapabilityReport(report: Partial<BrowserRuntimeCapabilityReport>) {
+  const refresh = vi.spyOn(getBrowserCapabilityRegistry(), "refresh")
+    .mockResolvedValue(report as BrowserRuntimeCapabilityReport);
+  return { refresh, [Symbol.dispose]: () => refresh.mockRestore() };
+}
 
 class FakeSemanticWorker {
   readonly requests: SemanticWorkerRequest[] = [];

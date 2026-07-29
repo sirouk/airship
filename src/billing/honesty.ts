@@ -1,11 +1,23 @@
-import type {
-  ChutesAccountIssue,
-  ChutesAccountSnapshot,
-  ChutesAccountSource,
-  ChutesQuotaSummary,
-  ChutesSubscriptionSummary,
-  ChutesUsageSummary,
+import {
+  USAGE_PAGE_LIMIT,
+  type ChutesAccountIssue,
+  type ChutesAccountSnapshot,
+  type ChutesAccountSource,
+  type ChutesQuotaSummary,
+  type ChutesSubscriptionSummary,
+  type ChutesUsageSummary,
 } from "./client";
+
+/**
+ * The sentence a bounded usage read has to carry wherever its total is shown.
+ *
+ * One page is requested and no paging loop follows it, so a saturated page is a
+ * lower bound, not a month. Every surface that prints a usage total prints this
+ * beside it, from one string, so the caption and the datum detail cannot drift
+ * into disagreeing about what the figure covers.
+ */
+export const USAGE_BOUNDED_READ_NOTE =
+  `Bounded read: the first ${USAGE_PAGE_LIMIT.toLocaleString("en-US")} records for this range. More may exist, so this is a lower bound.`;
 
 export type BillingDatumStatus = "verified" | "unknown" | "unavailable" | "loading";
 export type BillingDatumTone = "neutral" | "good" | "warning" | "danger";
@@ -63,7 +75,9 @@ export function usageDatum(
     return Object.freeze({
       status: "verified",
       tone: "neutral",
-      detail: "Usage totals were computed from the records returned for the requested UTC range.",
+      detail: snapshot.usage.truncated
+        ? `Usage totals were computed from the records returned for the requested UTC range. ${USAGE_BOUNDED_READ_NOTE}`
+        : "Usage totals were computed from the records returned for the requested UTC range.",
       value: snapshot.usage,
     });
   }

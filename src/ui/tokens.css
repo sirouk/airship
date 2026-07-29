@@ -245,6 +245,14 @@ body {
 :root[data-rail="rail"] { --rail-width: 60px; }
 :root[data-rail="focus"] { --rail-width: 0px; }
 
+/* Stated rather than left to the `:root` fallback. `data-type-scale` is written
+   unconditionally by two layers, so every word either can emit needs a block a
+   contract test can find; without this one, "default" resolved correctly only
+   by the accident of nothing else matching. */
+:root[data-type-scale="default"] {
+  --type-scale: 1;
+}
+
 :root[data-type-scale="large"] {
   --type-scale: 1.125;
 }

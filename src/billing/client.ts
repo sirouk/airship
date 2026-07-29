@@ -7,7 +7,14 @@ const MAX_ARRAY_ITEMS = 2_048;
 const MAX_OBJECT_KEYS = 512;
 const MAX_STRING_LENGTH = 64 * 1024;
 const MAX_CREDENTIAL_LENGTH = 16 * 1024;
-const USAGE_PAGE_LIMIT = 1_000;
+/**
+ * The single page of usage records this client asks for, and the only bound the
+ * totals below are computed over. It is exported because the honesty layer has
+ * to be able to name the number in the sentence it shows a reader — a total
+ * over "the records returned" and a total over "the records in the range" are
+ * different claims, and only this constant separates them.
+ */
+export const USAGE_PAGE_LIMIT = 1_000;
 
 export type ChutesAccountSource = "account" | "quotas" | "subscription" | "usage";
 
@@ -66,6 +73,14 @@ export type ChutesUsageSummary = Readonly<{
   outputTokens: number;
   rangeStart: string;
   rangeEnd: string;
+  /**
+   * Set when the response filled the requested page exactly, which is the only
+   * evidence available here that the range holds more records than were read.
+   * There is no paging loop, so a saturated page means the totals are a lower
+   * bound; absent means the page was not saturated and the totals cover every
+   * record Chutes returned for the range.
+   */
+  truncated?: true;
 }>;
 
 export type ChutesQuotaEntry = Readonly<{
@@ -356,6 +371,9 @@ function normalizeUsage(value: unknown, rangeStart: string, rangeEnd: string): C
     outputTokens,
     rangeStart,
     rangeEnd,
+    // A page returned full is indistinguishable from a range that happens to
+    // end there, so this claims only what it can: the read was bounded.
+    ...(items.length === USAGE_PAGE_LIMIT ? { truncated: true as const } : {}),
   });
 }
 

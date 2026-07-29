@@ -4,7 +4,11 @@ import { describe, expect, it } from "vitest";
 describe("progressive disclosure coherence contract", () => {
   it("does not render the account dashboard before a readable account exists", async () => {
     const source = await readFile(new URL("./billing-view.tsx", import.meta.url), "utf8");
-    expect(source).toContain("Connect with scoped Chutes sign-in or a direct API-key session");
+    // AMENDED: the gate no longer names which credential methods exist — that
+    // is Connection's fact, and a build without the sign-in exchange made the
+    // old sentence a promise Account had no input to keep. The page-memory
+    // contract, which Account does own, is still pinned verbatim.
+    expect(source).toContain("Connect a Chutes credential to read account telemetry. The credential remains held only in page memory.");
     expect(source).toContain("{accountReadable ? <>{snapshot?.issues.length");
     expect(source.indexOf("billing-gate-preview")).toBeLessThan(source.indexOf("{accountReadable ? <>"));
   });

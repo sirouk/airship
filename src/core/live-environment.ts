@@ -30,6 +30,8 @@ const EVIDENCE = new Set<LiveEnvironmentEvidence>([
   "configured",
   "session-pinned",
   "not-observed",
+  "permission-needed",
+  "disabled",
   "probe-failed",
 ]);
 const INDEX_STATES = new Set<LiveWorkspaceIndexObservation["state"]>([
@@ -49,6 +51,15 @@ export type LiveEnvironmentState =
   | "failed"
   | "not-observed";
 
+/**
+ * `permission-needed` and `disabled` join the vocabulary alongside the browser
+ * probes that now report them. They are the two absences with a cause the
+ * *user* owns — permission that could still be granted, a feature switched off
+ * for this browsing context — and the model is the reader most likely to
+ * misread a bare "not-observed" as "this browser cannot do it, stop asking".
+ * Keeping the two vocabularies aligned also keeps `browserEntry` a pass-through
+ * rather than a lossy narrowing.
+ */
 export type LiveEnvironmentEvidence =
   | "probe-passed"
   | "api-exposed"
@@ -56,6 +67,8 @@ export type LiveEnvironmentEvidence =
   | "configured"
   | "session-pinned"
   | "not-observed"
+  | "permission-needed"
+  | "disabled"
   | "probe-failed";
 
 export type LiveEnvironmentEntry = Readonly<{

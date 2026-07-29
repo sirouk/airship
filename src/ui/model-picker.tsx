@@ -2,6 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState } from "preact/hooks";
 import { filterModels, modelPopularitySignal, sortModels } from "../models";
 import type { AirshipModel, ModelSort } from "../models";
 import { MenuSelect } from "./menu-select";
+import { MODEL_CAPABILITY_WORDS } from "./model-vocabulary";
 import { TRUST_LABEL_CONNECT_TRUST_READINESS } from "./trust-language";
 
 /**
@@ -319,14 +320,15 @@ export function facetCounts(models: readonly AirshipModel[]): Readonly<Record<Fa
 }
 
 function facetLabel(value: Facet): string { return value[0]!.toUpperCase() + value.slice(1); }
-function capabilityLabels(model: AirshipModel): string[] {
+
+export function capabilityLabels(model: AirshipModel): string[] {
   if (model.provenance.capabilities !== "llm-models") return [];
   const labels: string[] = [];
-  if (model.inputModalities.some((value) => value.toLowerCase() === "text")) labels.push("Text");
-  if (model.inputModalities.some((value) => value.toLowerCase() === "image")) labels.push("Vision");
-  if (model.inputModalities.some((value) => value.toLowerCase() === "video")) labels.push("Video");
-  if (model.features.some((value) => value.toLowerCase() === "tools")) labels.push("Tools");
-  if (model.trust.confidentialCompute === "asserted") labels.push("Confidential candidate");
+  if (model.inputModalities.some((value) => value.toLowerCase() === "text")) labels.push(MODEL_CAPABILITY_WORDS.text);
+  if (model.inputModalities.some((value) => value.toLowerCase() === "image")) labels.push(MODEL_CAPABILITY_WORDS.vision);
+  if (model.inputModalities.some((value) => value.toLowerCase() === "video")) labels.push(MODEL_CAPABILITY_WORDS.video);
+  if (model.features.some((value) => value.toLowerCase() === "tools")) labels.push(MODEL_CAPABILITY_WORDS.tools);
+  if (model.trust.confidentialCompute === "asserted") labels.push(MODEL_CAPABILITY_WORDS.confidential);
   return labels;
 }
 /**

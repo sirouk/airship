@@ -100,6 +100,26 @@ describe("workspace tools", () => {
     expect((await workspace.read("opaque.json"))?.content).toBe(binary);
   });
 
+  it("states one size for a binary file across read, list, and stat", async () => {
+    // `read_file` refuses binaries and points at `stat_path`, so the two had
+    // better agree: the stored base64 envelope is ~4/3 of the file, and the
+    // model was previously told both numbers for the same path.
+    const workspace = new MemoryWorkspace();
+    await workspace.write("assets/raw.bin", encodeWorkspaceBytes(Uint8Array.from([0, 255, 1, 2])));
+
+    const read = await execute(workspace, "read_file", { path: "assets/raw.bin" });
+    const stat = await execute(workspace, "stat_path", { path: "assets/raw.bin" });
+    const listed = JSON.parse((await execute(workspace, "list_files", { path: "assets" })).content) as JsonValue[];
+
+    expect(read.metadata).toMatchObject({ size: 4 });
+    expect(stat.metadata).toMatchObject({ size: 4 });
+    expect(JSON.parse(stat.content)).toMatchObject({ type: "file", size: 4 });
+    expect(listed).toEqual([expect.objectContaining({ path: "/workspace/assets/raw.bin", size: 4 })]);
+    // One size in the transcript, never the storage field beside it.
+    expect(JSON.stringify(listed)).not.toContain("contentByteLength");
+    expect(stat.content).not.toContain("contentByteLength");
+  });
+
   it("refuses ambiguous replacement by default and supports explicit replace-all with revision safety", async () => {
     const workspace = new MemoryWorkspace();
     const original = await workspace.write("draft.txt", "old / old");

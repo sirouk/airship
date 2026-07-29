@@ -6,6 +6,7 @@ import {
   quotaDatum,
   subscriptionDatum,
   usageDatum,
+  USAGE_BOUNDED_READ_NOTE,
 } from "./honesty";
 
 describe("billing source honesty", () => {
@@ -62,6 +63,29 @@ describe("billing source honesty", () => {
     expect(usageDatum(failed, false).value).toBeUndefined();
     expect(billingDatumLabel(usageDatum(failed, false).status)).toBe("Unavailable");
     expect(usageDatum(explicitRows, false)).toMatchObject({ status: "verified", value: { totalCost: 0 } });
+    expect(usageDatum(explicitRows, false).detail).not.toContain("Bounded read");
+  });
+
+  it("names the page bound whenever the usage read saturated it", () => {
+    // A total over one saturated page is a lower bound, and the sentence that
+    // says so travels with the datum rather than being reinvented per surface.
+    const bounded = snapshot({
+      usage: {
+        entries: [],
+        totalCost: 12.5,
+        totalRequests: 1_000,
+        inputTokens: 10,
+        outputTokens: 5,
+        rangeStart: "2026-07-01T00:00:00",
+        rangeEnd: "2026-07-18T00:00:00",
+        truncated: true,
+      },
+    });
+
+    expect(usageDatum(bounded, false)).toMatchObject({ status: "verified", value: { totalCost: 12.5 } });
+    expect(usageDatum(bounded, false).detail).toContain(USAGE_BOUNDED_READ_NOTE);
+    expect(USAGE_BOUNDED_READ_NOTE).toContain("1,000");
+    expect(USAGE_BOUNDED_READ_NOTE).toContain("lower bound");
   });
 
   it("renders omitted, failed, or empty quotas neutrally and requires explicit unlimited data", () => {

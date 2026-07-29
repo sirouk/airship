@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { MemoryWorkspace } from "../workspace/memory";
-import { TERMINAL_METADATA_PATH, WEB_CONTAINER_TERMINAL_RUNTIME } from "./contracts";
-import { BrowserTerminalManager } from "./manager";
+import type { WorkspacePort } from "../workspace/contracts";
+import { TERMINAL_METADATA_PATH, TERMINAL_WORKSPACE_MOUNT, WEB_CONTAINER_TERMINAL_RUNTIME } from "./contracts";
+import { BrowserTerminalManager, TERMINAL_LEASE_RENEW_MS } from "./manager";
 import type { FileSystemTree, WebContainer } from "@webcontainer/api";
 
 describe("BrowserTerminalManager metadata", () => {
@@ -178,6 +179,9 @@ describe("BrowserTerminalManager metadata", () => {
   });
 
   it("grants one reconstructed terminal writer lease and rejects a concurrent process author", async () => {
+    // Fake timers from the outset so the writer-lease heartbeat is a timer this
+    // test can drive; the takeover it enforces is otherwise 12 seconds away.
+    vi.useFakeTimers();
     const workspace = new MemoryWorkspace();
     const seed = new BrowserTerminalManager(workspace, { defaultProfileId: "profile-alpha" });
     await seed.ready;
@@ -186,9 +190,10 @@ describe("BrowserTerminalManager metadata", () => {
     let resolveExit!: (code: number) => void;
     let outputController!: ReadableStreamDefaultController<string>;
     let killed = false;
+    const submitted: string[] = [];
     const process = {
       exit: new Promise<number>((resolve) => { resolveExit = resolve; }),
-      input: new WritableStream<string>(),
+      input: new WritableStream<string>({ write(chunk) { submitted.push(chunk); } }),
       output: new ReadableStream<string>({ start(controller) { outputController = controller; } }),
       kill() { killed = true; outputController.close(); resolveExit(130); },
       resize() {},
@@ -240,10 +245,20 @@ describe("BrowserTerminalManager metadata", () => {
     await workspace.write(TERMINAL_METADATA_PATH, `${JSON.stringify(takeoverManifest, null, 2)}\n`, {
       expectedRevision: beforeTakeover!.revision,
     });
-    await expect(first.write(sharedId, "echo unsafe\r")).rejects.toThrow(/lost the terminal writer lease/u);
+    // Nobody is typing into this tab, so no input-path observation can fire:
+    // the heartbeat is the whole guarantee here, and driving it is what proves
+    // the takeover is still enforced for a tab left idle.
+    await vi.advanceTimersByTimeAsync(TERMINAL_LEASE_RENEW_MS);
     expect(killed).toBe(true);
     expect(first.list("profile-alpha")[0]).toMatchObject({ status: "failed" });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(first.list("profile-alpha")[0]?.detail).toContain("Terminal writer lease was lost");
+    // And input is refused afterwards rather than reaching a process whose
+    // durable writer lease this page no longer holds.
+    await first.write(sharedId, "echo unsafe\r");
+    expect(submitted).toEqual([]);
+    // Past the 100ms transcript-persist debounce, so any write this page still
+    // wanted to make has been made by the time the manifest is read back.
+    await vi.advanceTimersByTimeAsync(200);
     const afterLoss = JSON.parse((await workspace.read(TERMINAL_METADATA_PATH))!.content) as {
       sessions: Array<{ id: string; history: string[]; detail: string }>;
     };
@@ -255,6 +270,7 @@ describe("BrowserTerminalManager metadata", () => {
     await workspace.remove(leasePath, { expectedRevision: foreignLease!.revision });
     await expect(first.start(sharedId)).rejects.toThrow(/Reload the workspace to hydrate the authoritative transcript/u);
     await first.quiesce("test cleanup");
+    vi.useRealTimers();
   });
 
   it("slides the bounded audit window past 64 records for one lease owner", async () => {
@@ -546,6 +562,11 @@ describe("BrowserTerminalManager metadata", () => {
     expect(manager.list()[0]).toMatchObject({ status: "restart-required" });
     expect(manager.list()[0]?.detail).toContain("fresh isolated host");
     expect(manager.list()[0]?.bufferedOutput).toContain("requires restart");
+    // This path runs only after the host is already gone, so nothing here can
+    // be reconciled. Airship's own deactivation quiesces first; an external
+    // teardown does not, and the loss has to be stated rather than implied.
+    expect(manager.list()[0]?.detail).toContain("discarded");
+    expect(manager.list()[0]?.bufferedOutput).toContain("unreconciled terminal writes were discarded");
   });
 
   it("reconciles and revokes the prior workspace before the page-global host is remounted", async () => {
@@ -594,7 +615,364 @@ describe("BrowserTerminalManager metadata", () => {
     expect(treeText(mounted, "second.txt")).toBe("second\n");
     await second.close(second.list()[0]!.id);
   });
+
+  it("never destroys the shared mount under another tab's live process", async () => {
+    const workspace = new MemoryWorkspace();
+    await workspace.write("/workspace/README.md", "mounted\n", { expectedRevision: null });
+    const { host, removed, mounted, install } = recordingHost();
+    const manager = new BrowserTerminalManager(workspace, { activateHost: async () => host });
+    await manager.ready;
+    const first = manager.list()[0]!;
+    await manager.start(first.id);
+    // Mount-only state the shell produced: an install carries no workspace
+    // revision, is excluded from export, and therefore cannot be remounted.
+    install("node_modules", "installed\n");
+
+    const second = manager.create({ name: "Second tab" });
+    await manager.start(second.id);
+
+    expect(manager.list().find(({ id }) => id === first.id)).toMatchObject({ status: "running" });
+    expect(removed).toEqual([]);
+    expect(mounted().node_modules).toBeDefined();
+    expect(treeText((mounted().node_modules as { directory: FileSystemTree }).directory, "installed")).toBe("installed\n");
+    expect(manager.list().find(({ id }) => id === second.id)?.detail).toContain("mount was not rebuilt");
+    await manager.quiesce("test cleanup");
+  });
+
+  it("still rebuilds the shared mount once no other terminal process is live", async () => {
+    const workspace = new MemoryWorkspace();
+    await workspace.write("/workspace/README.md", "mounted\n", { expectedRevision: null });
+    const { host, removed } = recordingHost();
+    const manager = new BrowserTerminalManager(workspace, { activateHost: async () => host });
+    await manager.ready;
+    const first = manager.list()[0]!;
+    await manager.start(first.id);
+    await manager.close(first.id);
+    removed.length = 0;
+
+    const second = manager.create({ name: "Second tab" });
+    await manager.start(second.id);
+
+    expect(removed).toEqual([TERMINAL_WORKSPACE_MOUNT]);
+    expect(manager.list().find(({ id }) => id === second.id)?.detail).not.toContain("mount was not rebuilt");
+    await manager.quiesce("test cleanup");
+  });
+
+  it("keeps an Editor revision committed while a tab was live instead of reverting it from the stale mount", async () => {
+    const workspace = new MemoryWorkspace();
+    const created = await workspace.write("/workspace/f.txt", "original\n", { expectedRevision: null });
+    const { host } = recordingHost();
+    const manager = new BrowserTerminalManager(workspace, { activateHost: async () => host });
+    await manager.ready;
+    const first = manager.list()[0]!;
+    await manager.start(first.id);
+    // The Editor commits while the live process pins the mount open, so the
+    // mount keeps the old body until a reconcile can rebuild it.
+    await workspace.write("/workspace/f.txt", "from editor\n", { expectedRevision: created.revision });
+
+    const second = manager.create({ name: "Second tab" });
+    await manager.start(second.id);
+    await manager.close(first.id);
+    await manager.close(second.id);
+
+    // The mount-only syncs must not have adopted "from editor" as a baseline
+    // the mount never received; otherwise the final reconcile republishes the
+    // stale mount copy as a terminal edit.
+    await expect(workspace.read("/workspace/f.txt")).resolves.toMatchObject({ content: "from editor\n" });
+    await manager.quiesce("test cleanup");
+  });
+
+  it("leaves a file the Editor deleted while a tab was live deleted", async () => {
+    const workspace = new MemoryWorkspace();
+    const created = await workspace.write("/workspace/gone.txt", "original\n", { expectedRevision: null });
+    const { host } = recordingHost();
+    const manager = new BrowserTerminalManager(workspace, { activateHost: async () => host });
+    await manager.ready;
+    const first = manager.list()[0]!;
+    await manager.start(first.id);
+    await workspace.remove("/workspace/gone.txt", { expectedRevision: created.revision });
+
+    const second = manager.create({ name: "Second tab" });
+    await manager.start(second.id);
+    await manager.close(first.id);
+    await manager.close(second.id);
+
+    await expect(workspace.read("/workspace/gone.txt")).resolves.toBeUndefined();
+    await manager.quiesce("test cleanup");
+  });
+
+  it("publishes the moment its mount stops being reconcilable, with no session state to change", async () => {
+    const first = new MemoryWorkspace();
+    const second = new MemoryWorkspace();
+    const { host } = recordingHost();
+    const holder = new BrowserTerminalManager(first, { activateHost: async () => host });
+    const taker = new BrowserTerminalManager(second, { activateHost: async () => host });
+    await Promise.all([holder.ready, taker.ready]);
+    const tab = holder.list()[0]!;
+    await holder.start(tab.id);
+    await holder.close(tab.id);
+    expect(holder.canReconcile()).toBe(true);
+    // A closed tab is not live, so authority loss changes no session status;
+    // a view that reads `canReconcile()` during render has nothing else to go on.
+    let publications = 0;
+    const unsubscribe = holder.subscribeList(() => { publications += 1; });
+
+    await taker.start(taker.list()[0]!.id);
+
+    expect(holder.canReconcile()).toBe(false);
+    expect(publications).toBeGreaterThan(1);
+    unsubscribe();
+    await taker.quiesce("test cleanup");
+  });
+
+  it("stops a live process from the input path once another page owns the lease", async () => {
+    const workspace = new MemoryWorkspace();
+    const { host } = recordingHost();
+    const manager = new BrowserTerminalManager(workspace, { activateHost: async () => host });
+    await manager.ready;
+    const tab = manager.list()[0]!;
+    await manager.start(tab.id);
+    const leasePath = `/workspace/.airship/terminal/leases/${encodeURIComponent(tab.id)}.json`;
+    const lease = (await workspace.read(leasePath))!;
+    await workspace.write(leasePath, `${JSON.stringify({
+      version: 1,
+      sessionId: tab.id,
+      ownerId: "other-authority",
+      expiresAt: Date.now() + 45_000,
+    })}\n`, { expectedRevision: lease.revision });
+
+    // Whether this exact chunk reaches the PTY is a race with the probe's read;
+    // the guarantee under test is what happens to the process next.
+    const refusal = await manager.write(tab.id, "echo hello\r").then(() => undefined, (error: Error) => error.message);
+    if (refusal !== undefined) expect(refusal).toMatch(/no longer owns the terminal writer lease/u);
+
+    // No heartbeat is driven here: input itself observes the takeover by a
+    // read, so this page stops feeding its PTY inside a second rather than
+    // running whatever else is typed for the rest of the 12s renewal window.
+    await vi.waitFor(() => {
+      expect(manager.list()[0]).toMatchObject({ status: "failed" });
+      expect(manager.list()[0]?.detail).toContain("Terminal writer lease was lost");
+    });
+    await manager.quiesce("test cleanup");
+  });
+
+  it("keeps one writer-lease heartbeat under concurrent input instead of racing itself", async () => {
+    const base = new MemoryWorkspace();
+    const writes: string[] = [];
+    const workspace = deferredWorkspace(base, writes);
+    const { host } = recordingHost();
+    const manager = new BrowserTerminalManager(workspace, { activateHost: async () => host });
+    await manager.ready;
+    const tab = manager.list()[0]!;
+    await manager.start(tab.id);
+    const leaseWritesAfterStart = writes.filter((path) => path.includes("/leases/")).length;
+
+    await Promise.all(Array.from({ length: 20 }, () => manager.write(tab.id, "a")));
+
+    expect(manager.list()[0]).toMatchObject({ status: "running" });
+    expect(manager.list()[0]?.detail).not.toMatch(/lease/u);
+    // Twenty characters are twenty characters, not twenty compare-and-swap
+    // transactions on one lease file; the heartbeat timer owns renewal.
+    expect(writes.filter((path) => path.includes("/leases/")).length).toBe(leaseWritesAfterStart);
+    await vi.waitFor(async () => {
+      const file = await base.read(TERMINAL_METADATA_PATH);
+      expect(file?.content).toContain(tab.id);
+    });
+    await manager.quiesce("test cleanup");
+  });
+
+  it("publishes the appended chunk and a sequence even once the transcript tail slides", async () => {
+    const workspace = new MemoryWorkspace();
+    let emit!: (chunk: string) => void;
+    const host = {
+      fs: { async mkdir() { return undefined; }, async rm() { return undefined; } },
+      async mount() {},
+      async export() { return {}; },
+      async spawn() {
+        return {
+          exit: new Promise<number>(() => undefined),
+          input: new WritableStream<string>(),
+          output: new ReadableStream<string>({ start(controller) { emit = (chunk) => controller.enqueue(chunk); } }),
+          kill() {},
+          resize() {},
+        };
+      },
+    } as unknown as WebContainer;
+    const manager = new BrowserTerminalManager(workspace, { activateHost: async () => host });
+    await manager.ready;
+    const tab = manager.list()[0]!;
+    const seen: Array<{ sequence: number; appended: string; length: number }> = [];
+    const unsubscribe = manager.subscribe(tab.id, (next) => {
+      seen.push({ sequence: next.outputSequence, appended: next.appendedOutput, length: next.bufferedOutput.length });
+    });
+    await manager.start(tab.id);
+
+    // Fill past the 256 KiB cap, at which point the published buffer is a
+    // sliding window and no consumer can recover the delta from it.
+    emit("x".repeat(300 * 1_024));
+    await vi.waitFor(() => expect(seen.at(-1)?.length).toBe(256 * 1_024));
+    const capped = seen.at(-1)!;
+
+    emit("0123456789");
+    await vi.waitFor(() => expect(seen.at(-1)?.sequence).toBe(capped.sequence + 1));
+    // Exactly the ten characters, one step on, and the tail did not grow.
+    expect(seen.at(-1)).toEqual({ sequence: capped.sequence + 1, appended: "0123456789", length: 256 * 1_024 });
+    unsubscribe();
+    await manager.quiesce("test cleanup");
+  });
+
+  it("reports a metadata persistence failure instead of discarding it", async () => {
+    const base = new MemoryWorkspace();
+    const workspace: WorkspacePort = {
+      read: (path) => base.read(path),
+      readBounded: (path, maxBytes) => base.readBounded(path, maxBytes),
+      list: (path) => base.list(path),
+      remove: (path, options) => base.remove(path, options),
+      write: (path, content, options) => rejectWrites
+        ? Promise.reject(new Error("The workspace storage quota is exhausted."))
+        : base.write(path, content, options),
+    };
+    let rejectWrites = true;
+    const observed: Array<string | undefined> = [];
+    const manager = new BrowserTerminalManager(workspace);
+    await manager.ready;
+    const unsubscribe = manager.subscribePersistence((failure) => observed.push(failure));
+    manager.create({ name: "Failing" });
+
+    await vi.waitFor(() => expect(manager.persistenceFailure()).toBe("The workspace storage quota is exhausted."));
+    rejectWrites = false;
+    manager.rename(manager.list()[0]!.id, "Recovered");
+    await vi.waitFor(() => expect(manager.persistenceFailure()).toBeUndefined());
+    expect(observed).toEqual([undefined, "The workspace storage quota is exhausted.", undefined]);
+    unsubscribe();
+  });
+
+  it("offers reconcile from the mount it holds, not from a session-status proxy", async () => {
+    const workspace = new MemoryWorkspace();
+    let failed = false;
+    const healthy = recordingHost();
+    const host = {
+      fs: healthy.host.fs,
+      mount: healthy.host.mount.bind(healthy.host),
+      export: healthy.host.export.bind(healthy.host),
+      async spawn(...args: Parameters<WebContainer["spawn"]>) {
+        if (!failed) return healthy.host.spawn(...args);
+        return {
+          exit: new Promise<number>(() => undefined),
+          input: new WritableStream<string>(),
+          output: new ReadableStream<string>({ start(controller) { controller.error(new Error("provider output disconnected")); } }),
+          kill() {},
+          resize() {},
+        };
+      },
+    } as unknown as WebContainer;
+    const manager = new BrowserTerminalManager(workspace, { activateHost: async () => host });
+    await manager.ready;
+    expect(manager.canReconcile()).toBe(false);
+
+    const tab = manager.list()[0]!;
+    await manager.start(tab.id);
+    expect(manager.canReconcile()).toBe(true);
+
+    // A failed tab's mount is still reconcilable — the work in it is exactly
+    // what a status-gated control would have stranded.
+    await manager.close(tab.id);
+    const failing = manager.create({ name: "Failing" });
+    failed = true;
+    await manager.start(failing.id);
+    await vi.waitFor(() => expect(manager.list()[0]?.status).toBe("failed"));
+    expect(manager.canReconcile()).toBe(true);
+
+    await manager.quiesce("test cleanup");
+    expect(manager.canReconcile()).toBe(false);
+  });
+
+  it("unmounts only the workspace projection on handoff, deliberately retaining the page-shared container", async () => {
+    const workspace = new MemoryWorkspace();
+    const { host, removed, install } = recordingHost();
+    const manager = new BrowserTerminalManager(workspace, { activateHost: async () => host });
+    await manager.ready;
+    await manager.start(manager.list()[0]!.id);
+    install("node_modules", "installed\n");
+
+    await manager.quiesce("The active workspace provider changed.");
+
+    // Deliberate, not accidental: WebContainer boots once per page, so the only
+    // thing a Profile handoff owns is this mount. Everything the shell wrote
+    // elsewhere in the container is page-shared and survives the switch — the
+    // Terminal route says so, and changing this line is a decision.
+    expect(removed).toEqual([TERMINAL_WORKSPACE_MOUNT]);
+  });
 });
+
+/**
+ * A host whose mount root can be destroyed, and whose export omits the same
+ * mount-only state the real one omits.
+ *
+ * `node_modules` is excluded from both export and mount, so a rebuild of the
+ * mount root genuinely cannot restore it — which is precisely why rebuilding
+ * under a live process is destructive rather than merely wasteful.
+ */
+function recordingHost(): Readonly<{
+  host: WebContainer;
+  removed: string[];
+  mounted: () => FileSystemTree;
+  install: (name: string, contents: string) => void;
+  killed: boolean[];
+}> {
+  const removed: string[] = [];
+  const killed: boolean[] = [];
+  let mounted: FileSystemTree = {};
+  const host = {
+    fs: {
+      async mkdir() { return undefined; },
+      async rm(path: string) { removed.push(path); mounted = {}; },
+    },
+    // The real mount writes into the mount point; it does not replace it.
+    async mount(tree: FileSystemTree) { mounted = { ...mounted, ...structuredClone(tree) }; },
+    async export() {
+      const { node_modules: _installed, ...visible } = mounted as Record<string, unknown>;
+      return structuredClone(visible) as FileSystemTree;
+    },
+    async spawn() {
+      const index = killed.push(false) - 1;
+      let closeOutput!: () => void;
+      let resolveExit!: (code: number) => void;
+      const exit = new Promise<number>((resolve) => { resolveExit = resolve; });
+      return {
+        exit,
+        input: new WritableStream<string>(),
+        output: new ReadableStream<string>({ start(controller) { closeOutput = () => controller.close(); } }),
+        kill() { killed[index] = true; closeOutput(); resolveExit(130); },
+        resize() {},
+      };
+    },
+  } as unknown as WebContainer;
+  return {
+    host,
+    removed,
+    killed,
+    mounted: () => mounted,
+    install: (name, contents) => {
+      mounted = { ...mounted, [name]: { directory: { installed: { file: { contents } } } } } as FileSystemTree;
+    },
+  };
+}
+
+/** A workspace whose every operation settles on a later microtask. */
+function deferredWorkspace(base: MemoryWorkspace, writes: string[]): WorkspacePort {
+  return {
+    async read(path) { await Promise.resolve(); return base.read(path); },
+    async readBounded(path, maxBytes) { await Promise.resolve(); return base.readBounded(path, maxBytes); },
+    async list(path) { await Promise.resolve(); return base.list(path); },
+    async write(path, content, options) {
+      await Promise.resolve();
+      writes.push(path);
+      return base.write(path, content, options);
+    },
+    async remove(path, options) { await Promise.resolve(); return base.remove(path, options); },
+  };
+}
 
 function treeText(tree: FileSystemTree, name: string): string | undefined {
   const node = tree[name];

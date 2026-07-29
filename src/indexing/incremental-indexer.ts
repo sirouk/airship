@@ -69,10 +69,11 @@ export class IncrementalWorkspaceIndexer {
   async discover(): Promise<IndexCandidate[]> {
     const entries = await this.workspace.list("/workspace");
     return entries.filter((entry) => !isWorkspaceControlPlanePath(entry.path)).map((entry) => {
-      const contentType = contentTypeFor(entry.path);
-      if (!contentType) {
-        return { ...entry, status: "unsupported", reason: "No client extractor is registered for this file type." };
-      }
+      // The suffix table labels a content type; it is not the text/binary
+      // decision. That decision is made on the actual bytes in indexCandidate,
+      // so an unknown suffix — .cpp, .rb, .sh, Dockerfile — proceeds as plain
+      // text rather than being refused sight unseen.
+      const contentType = contentTypeFor(entry.path) ?? "text/plain";
       if (entry.size > this.maxFileBytes) {
         return { ...entry, contentType, status: "too-large", reason: `File exceeds ${this.maxFileBytes} bytes.` };
       }

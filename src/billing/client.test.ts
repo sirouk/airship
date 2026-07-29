@@ -192,6 +192,82 @@ describe("loadChutesAccountSnapshot", () => {
     });
   });
 
+  it("marks a saturated usage page as a bounded read and leaves the arithmetic alone", async () => {
+    // One page is requested and no paging loop follows it, so a full page is
+    // the only evidence available that the range holds more than was read. The
+    // totals stay exactly what the returned records add up to; what changes is
+    // that the summary stops implying they cover the range.
+    const items = Array.from({ length: 1_000 }, (_unused, index) => ({
+      bucket: `2026-07-02T${String(index % 24).padStart(2, "0")}:00:00`,
+      amount: 0.5,
+      count: 2,
+      input_tokens: 10,
+      output_tokens: 4,
+    }));
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = new URL(String(input)).pathname;
+      if (path === "/users/me") return jsonResponse({ username: "saturated-user" });
+      if (path === "/users/me/quotas") return jsonResponse({});
+      if (path === "/users/me/subscription_usage") return jsonResponse({ subscription: false });
+      return jsonResponse({ total: 5_000, page: 0, limit: 1_000, items });
+    }));
+
+    const snapshot = await loadChutesAccountSnapshot({
+      credential: "cak_saturated_page",
+      signal: new AbortController().signal,
+      now: () => new Date("2026-07-02T01:02:03Z"),
+    });
+
+    expect(snapshot.usage).toMatchObject({ truncated: true, totalCost: 500, totalRequests: 2_000 });
+    expect(snapshot.usage?.entries).toHaveLength(1_000);
+  });
+
+  it("does not mark an unsaturated page, and still refuses an oversized one", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = new URL(String(input)).pathname;
+      if (path === "/users/me") return jsonResponse({ username: "page-bound-user" });
+      if (path === "/users/me/quotas") return jsonResponse({});
+      if (path === "/users/me/subscription_usage") return jsonResponse({ subscription: false });
+      return jsonResponse({
+        items: [{ bucket: "2026-07-01T09:00:00", amount: 1, count: 1, input_tokens: 3, output_tokens: 1 }],
+      });
+    }));
+    const short = await loadChutesAccountSnapshot({
+      credential: "cak_short_page",
+      signal: new AbortController().signal,
+      now: () => new Date("2026-07-02T01:02:03Z"),
+    });
+    expect(short.usage).toMatchObject({ totalCost: 1, totalRequests: 1 });
+    expect(short.usage).not.toHaveProperty("truncated");
+
+    const oversized = Array.from({ length: 1_001 }, () => ({
+      bucket: "2026-07-02T00:00:00",
+      amount: 0,
+      count: 0,
+      input_tokens: 0,
+      output_tokens: 0,
+    }));
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = new URL(String(input)).pathname;
+      if (path === "/users/me") return jsonResponse({ username: "page-bound-user" });
+      if (path === "/users/me/quotas") return jsonResponse({});
+      if (path === "/users/me/subscription_usage") return jsonResponse({ subscription: false });
+      return jsonResponse({ items: oversized });
+    }));
+    const over = await loadChutesAccountSnapshot({
+      credential: "cak_over_page",
+      signal: new AbortController().signal,
+      now: () => new Date("2026-07-02T01:02:03Z"),
+    });
+    expect(over.usage).toBeUndefined();
+    expect(over.issues).toContainEqual({
+      source: "usage",
+      code: "invalid-payload",
+      message: "Usage telemetry had an unsupported shape.",
+      retryable: false,
+    });
+  });
+
   it("keeps empty quota objects neutral instead of inferring unlimited access", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const path = new URL(String(input)).pathname;

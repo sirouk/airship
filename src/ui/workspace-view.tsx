@@ -5,10 +5,11 @@ import { preferredSourceRepositoryId } from "../git/source-selection";
 import { resolveGitWorkspaceBinding } from "../git/workspace-binding";
 import type { GitAuthor, GitCommitDetail, GitCommitFilePatch, GitCommitSummary, GitDiff, GitOperation, GitOperationDescriptor, GitRepositorySnapshot, GitStatusEntry, GitWorktreeSnapshot } from "../git/types";
 import type { WorkspaceEntry, WorkspaceFile, WorkspacePort } from "../workspace/contracts";
-import { isWorkspaceControlPlanePath, normalizeWorkspacePath } from "../workspace/contracts";
-import { isWorkspaceBinaryEnvelope } from "../workspace/content-codec";
+import { isWorkspaceControlPlanePath, normalizeWorkspacePath, workspaceEntryByteLength } from "../workspace/contracts";
+import { decodeWorkspaceBytes, isWorkspaceBinaryEnvelope } from "../workspace/content-codec";
 import { moveWorkspaceFile } from "../workspace/mutations";
 import { buildWorkspaceTree, visibleWorkspaceTree, workspaceBaseName, workspaceDirectories, workspaceFilesUnder, workspaceFolderRenamePlan, workspaceParentPath, type WorkspaceMove } from "../workspace/tree";
+import { downloadBytes, downloadFileName } from "./file-download";
 import { trapFocus } from "./focus-trap";
 import { Icon } from "./icons";
 import { MenuSelect } from "./menu-select";
@@ -36,6 +37,7 @@ import {
   WORKSPACE_FOLDER_NOT_ATOMIC_NOTE,
   WORKSPACE_FOLDER_PLACEHOLDER,
   WORKSPACE_FOLDER_PLACEHOLDER_NOTE,
+  workbenchArrivalPane,
   workbenchBufferState,
   workbenchDialogCopy,
   workbenchDocumentId,
@@ -46,6 +48,8 @@ import {
   workbenchSuggestedFiles,
   workbenchTabQualifiers,
   workspaceNameError,
+  workspacePathError,
+  WORKSPACE_GUTTER_LINE_LIMIT,
   type WorkbenchDocumentOpenMode,
   type WorkbenchDocumentTabs,
   type WorkbenchHistoryDiffDocument,
@@ -72,6 +76,22 @@ export const WORKSPACE_FILE_VIEWPORT_HEIGHT = 432;
 const TAB_STORAGE = "airship.workspace.tabs.v2";
 /** How many doomed paths a delete confirmation names before it counts the rest. */
 const DIALOG_PATH_PREVIEW = 8;
+/**
+ * How many paths each Source Control lane draws before it states its bound.
+ *
+ * The rail is a fixed-height list inside a 15rem column; a 4,000-path status is
+ * a real state after a branch switch, and drawing it here would cost more than
+ * the Advanced controls' virtualized worktree costs to open.
+ */
+export const SCM_LANE_LIMIT = 250;
+/**
+ * How deep the workbench reads commit history.
+ *
+ * One constant for the request and for the sentence that describes it: the
+ * shipped rail asked for 20 and then printed `20` where every other group in
+ * the column prints a total, so a bounded read read as a repository fact.
+ */
+export const WORKBENCH_HISTORY_DEPTH = 20;
 /** The dialogs whose subject is the path itself, so an empty field is fine. */
 const DIALOG_KINDS_WITHOUT_VALUE: readonly string[] = Object.freeze(["delete", "delete-folder", "discard"]);
 type Review = (operation: GitOperation, descriptor: GitOperationDescriptor) => Promise<"allow" | "deny">;
@@ -113,6 +133,16 @@ export class ProfileScopedWorkspacePageStore<T> {
 
 const PAGE_DRAFTS = new ProfileScopedWorkspacePageStore<Readonly<Record<string, Buffer>>>();
 
+/**
+ * The open requests this page has already answered.
+ *
+ * One entry per `openFile` result object, held weakly so it costs nothing and
+ * disappears with the selection itself. A request is a fact about a moment, not
+ * a state to be restored: replaying it after the user has closed the document
+ * it opened would contradict the action they took most recently.
+ */
+const CONSUMED_SELECTIONS = new WeakSet<WorkspaceFile>();
+
 /** Treat a selection object inherited across profiles as stale until that profile selects anew. */
 export class WorkbenchProfileSelectionFence {
   private profileId?: string;
@@ -150,6 +180,8 @@ export type WorkspaceViewProps = Readonly<{
   onOpenRepositoryManager?: () => void;
   /** Which pane the destination that opened this workbench asks for. */
   opensPane?: WorkbenchPane;
+  /** Changes on every arrival at that destination, repeats of it included. */
+  opensPaneArrival?: number;
   /** Compatibility/request seam for opening the Source Control activity. */
   opensActivity?: "explorer" | "source";
 }>;
@@ -178,9 +210,24 @@ function ProfileScopedWorkspaceView({
   workspaceIdentity = "page-memory",
   onOpenRepositoryManager,
   opensPane = "navigation",
+  opensPaneArrival = 0,
   opensActivity = "explorer",
 }: WorkspaceViewProps) {
   const dialogTitleId = useId();
+  const contextHintId = useId();
+  // One id per *window slot*, not per path: a workspace path may contain a
+  // space, and an `aria-owns` value is a space-separated IDREF list.
+  const rowActionBaseId = useId();
+  // Both tab strips in the rail switch the same region, so they name the same
+  // panel; the document strip names the editor's. Each panel is named by an
+  // `sr-only` heading inside it, which is the pattern `proof-view` already uses
+  // and the one the portability audit checks: a tabpanel must be labelled by an
+  // element that exists, not by a second string that can drift from the tab.
+  const panelBaseId = useId();
+  const activityPanelId = `${panelBaseId}-activity-panel`;
+  const activityPanelTitleId = `${panelBaseId}-activity-title`;
+  const editorPanelId = `${panelBaseId}-editor-panel`;
+  const editorPanelTitleId = `${panelBaseId}-editor-title`;
   const [filter, setFilter] = useState("");
   const filtered = useMemo(() => workbenchFilterMatches(files, filter), [files, filter]);
   const filtering = filtered.shown !== filtered.total;
@@ -205,7 +252,6 @@ function ProfileScopedWorkspaceView({
   const [revealRequest, setRevealRequest] = useState<Readonly<{ path: string; sequence: number }>>();
   const [dropTarget, setDropTarget] = useState("");
   const [mode, setMode] = useState<"explorer" | "source">(opensActivity);
-  const [mobilePane, setMobilePane] = useState<WorkbenchPane>(opensPane);
   const tabStorageKey = useMemo(() => workspaceTabStorageKey(workspaceIdentity, profileId), [workspaceIdentity, profileId]);
   const restoredTabs = useMemo(() => readTabState(tabStorageKey), [tabStorageKey]);
   const restoredBuffers = PAGE_DRAFTS.read(workspace, workspaceIdentity, profileId) ?? {};
@@ -221,6 +267,13 @@ function ProfileScopedWorkspaceView({
       : restoredTabs;
   });
   const { tabs, activeId, previewId } = documents;
+  // The first pane obeys the same rule every later arrival does. Read as a bare
+  // `useState(opensPane)` it did not: a mount at #editor with no restored tabs
+  // opened the pane whose switch tab is disabled at zero documents, which is a
+  // screen with no visible way out of it.
+  const [mobilePane, setMobilePane] = useState<WorkbenchPane>(
+    () => workbenchArrivalPane(opensPane, restoredTabs.tabs.length) ?? "navigation",
+  );
   const [rail, setRail] = useState(restoredTabs.rail);
   const [wrap, setWrap] = useState(restoredTabs.wrap);
   const [buffers, setBuffers] = useState<Readonly<Record<string, Buffer>>>(restoredBuffers);
@@ -245,6 +298,8 @@ function ProfileScopedWorkspaceView({
   const shell = useRef<HTMLDivElement>(null);
   const dialogBox = useRef<HTMLDivElement>(null);
   const dialogOpener = useRef<HTMLElement>();
+  const contextBox = useRef<HTMLDivElement>(null);
+  const contextOpener = useRef<HTMLElement>();
   const filterField = useRef<HTMLInputElement>(null);
   const documentsRef = useRef(documents);
   const buffersRef = useRef(buffers);
@@ -282,8 +337,24 @@ function ProfileScopedWorkspaceView({
     } catch { /* Page-memory isolation remains valid when session storage is unavailable. */ }
   }, [workspace, workspaceIdentity, profileId]);
 
+  // Keyed on the selection's *identity*, not on its (path, revision) value.
+  // Closing a tab discards its buffer without changing either of those fields,
+  // so reopening the same file at the same revision was indistinguishable from
+  // a no-op and the pane stayed empty. `app.tsx` publishes one fresh frozen
+  // file object per `openFile`, so this runs exactly once per open request and
+  // never on an unrelated re-render; the dirty-draft guard below keeps a
+  // re-published selection from displacing unsaved work.
+  //
+  // "Exactly once" has to survive a remount, which is why the record of what
+  // has been consumed is module-scoped rather than a ref. `app.tsx` unmounts
+  // this workbench when the destination changes between #workspace and
+  // #editor, while the selection it holds outlives that: an effect that reran
+  // on mount replayed an open request the user had already answered by closing
+  // the document, so the last tab a user closed came back by itself the next
+  // time they crossed between the two doors of the same surface.
   useEffect(() => {
-    if (!selected) return;
+    if (!selected || CONSUMED_SELECTIONS.has(selected)) return;
+    CONSUMED_SELECTIONS.add(selected);
     openDocumentState(workbenchDocumentId({ kind: "file", path: selected.path }), "preview");
     setBuffers((current) => {
       const prior = current[selected.path];
@@ -293,7 +364,7 @@ function ProfileScopedWorkspaceView({
       buffersRef.current = next;
       return next;
     });
-  }, [selected?.path, selected?.revision]);
+  }, [selected]);
 
   useEffect(() => {
     try {
@@ -350,13 +421,44 @@ function ProfileScopedWorkspaceView({
     setMobilePane("navigation");
   }, [opensActivity]);
 
+  // `opensPane` was read once, as a `useState` initializer, for a component
+  // that `app.tsx` never remounts between #workspace and #editor — so on a
+  // phone the two destinations mapped to whichever pane happened to mount
+  // first and never switched again.
+  //
+  // Re-applying it whenever the *value* changes is still not enough, because
+  // the pane leaves the destination behind without the destination moving:
+  // opening a file from the tree shows the editor pane while the hash stays
+  // `#workspace`. Asking for Workspace again then produces no change in
+  // `opensPane` — and no `hashchange` either — so the request was dropped and
+  // the door the user had just knocked on stayed shut. `opensPaneArrival`
+  // counts the requests themselves, which is the event this needs.
+  useEffect(() => {
+    const pane = workbenchArrivalPane(opensPane, documentsRef.current.tabs.length);
+    if (pane) setMobilePane(pane);
+  }, [opensPane, opensPaneArrival]);
+
+  /**
+   * The menu half of the menu: focus, and where focus goes back to.
+   *
+   * The row actions were built as a positioned popup with menu *roles* and
+   * none of the pattern's focus management, so Shift+F10 opened a `role="menu"`
+   * the keyboard could not enter and Escape dropped the caret on `<body>`. The
+   * menu now takes focus on open, roves it with the arrow keys, and hands it
+   * back to the exact control that opened it.
+   */
   useEffect(() => {
     if (!context) return;
-    const dismiss = () => setContext(undefined);
-    const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") dismiss(); };
-    window.addEventListener("pointerdown", dismiss, { once: true });
+    const dismiss = (restoreFocus: boolean) => {
+      setContext(undefined);
+      if (restoreFocus) restoreContextFocus();
+    };
+    const onPointerDown = () => dismiss(false);
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") { event.preventDefault(); dismiss(true); } };
+    window.addEventListener("pointerdown", onPointerDown, { once: true });
     window.addEventListener("keydown", onKeyDown);
-    return () => { window.removeEventListener("pointerdown", dismiss); window.removeEventListener("keydown", onKeyDown); };
+    focusContextItem(0);
+    return () => { window.removeEventListener("pointerdown", onPointerDown); window.removeEventListener("keydown", onKeyDown); };
   }, [context]);
 
   // The tree's virtualization window is driven by the rail it actually
@@ -432,8 +534,15 @@ function ProfileScopedWorkspaceView({
   // the dialog just opened is a scold, not an explanation. Whitespace-only
   // still counts as typed, because that is the case a disabled button cannot
   // explain on its own.
-  const dialogNameError = (dialog?.kind === "create-folder" || dialog?.kind === "rename-folder") && dialogValue.length > 0
-    ? workspaceNameError(dialogValue)
+  // All four name-taking kinds, not two: `create` and `rename` had neither
+  // pre-validation nor any post-failure report, because their normalization ran
+  // outside `transact`, so `..` in New file threw into a void and closed the
+  // dialog with nothing said. `create` uses the path-shaped rules — its field is
+  // documented as "Path relative to this folder", so a slash is legal there.
+  const dialogNameError = dialogValue.length > 0
+    ? dialog?.kind === "create-folder" || dialog?.kind === "rename-folder" || dialog?.kind === "rename"
+      ? workspaceNameError(dialogValue)
+      : dialog?.kind === "create" ? workspacePathError(dialogValue) : undefined
     : undefined;
   const changeCount = worktree?.status.length ?? 0;
   const tabQualifiers = useMemo(() => workbenchTabQualifiers(tabs.filter((id) => parseWorkbenchDocumentId(id)?.kind === "file")), [tabs]);
@@ -458,7 +567,11 @@ function ProfileScopedWorkspaceView({
         state: unsaved ? "attention" : undefined,
         stateLabel: unsaved ? "Unsaved" : undefined,
         onClose: () => closeTab(id),
-        closeLabel: `Close ${name}`,
+        // The disambiguator the tab's own name already carries: two files both
+        // called index.ts otherwise produced two identical "Close index.ts"
+        // buttons, so the label was unique for the tab and ambiguous for the
+        // control beside it. Unchanged for every unique basename.
+        closeLabel: `Close ${tabQualifiers[document.path] ? `${tabQualifiers[document.path]}/${name}` : name}`,
       };
     }
     const candidate = diffs[id];
@@ -467,13 +580,19 @@ function ProfileScopedWorkspaceView({
     const detail = status
       ? `${document.path} · ${document.scope} diff`
       : `Commit ${document.revision}`;
-    const stateLabel = candidate?.error ? "Unavailable" : candidate?.truncated ? "Truncated" : undefined;
+    // A status diff is a patch of one exact worktree version. When the worktree
+    // moves on, that tab is a snapshot of a state the repository is no longer
+    // in — and reopening the same path produced a second tab the strip drew
+    // identically. The version is part of document identity; now it is part of
+    // the tab's presentation too.
+    const superseded = status ? workbenchSupersededStatusDiff(document.worktreeVersion, worktree?.version) : undefined;
+    const stateLabel = candidate?.error ? "Unavailable" : candidate?.truncated ? "Truncated" : superseded ? "Superseded" : undefined;
     return {
       id,
       leading: status ? <WorkspaceFileIcon path={document.path} /> : <Icon name="source" size={16} />,
       label: middleTruncate(name),
       detail,
-      hint: status ? `${document.scope === "staged" ? "Staged" : "Working"} diff` : "Commit diff",
+      hint: status ? workbenchStatusDiffHint(document.scope, document.worktreeVersion, worktree?.version) : "Commit diff",
       preview: previewId === id,
       state: stateLabel ? "attention" : undefined,
       stateLabel,
@@ -507,7 +626,7 @@ function ProfileScopedWorkspaceView({
         setHistoryMessage(historyCapability?.reason ?? "History is unavailable for this repository adapter.");
       } else {
         try {
-          setHistory(await git.log({ repositoryId: repository.id, worktreeId: nextWorktree.id, depth: 20 }));
+          setHistory(await git.log({ repositoryId: repository.id, worktreeId: nextWorktree.id, depth: WORKBENCH_HISTORY_DEPTH }));
           setHistoryMessage("");
         } catch (cause) {
           setHistory([]);
@@ -570,7 +689,7 @@ function ProfileScopedWorkspaceView({
   async function openPreviewTab(path: string): Promise<void> {
     const normalized = normalizeWorkspacePath(path);
     openDocumentState(workbenchDocumentId({ kind: "file", path: normalized }), "preview");
-    setContext(undefined);
+    closeContextMenu();
     setMobilePane("editor");
     await onOpen(normalized);
   }
@@ -578,7 +697,7 @@ function ProfileScopedWorkspaceView({
   async function openPinnedTab(path: string): Promise<void> {
     const normalized = normalizeWorkspacePath(path);
     openDocumentState(workbenchDocumentId({ kind: "file", path: normalized }), "pinned");
-    setContext(undefined);
+    closeContextMenu();
     setMobilePane("editor");
     await onOpen(normalized);
   }
@@ -849,8 +968,11 @@ function ProfileScopedWorkspaceView({
       setNotice(workbenchNotice("done", "That file is already in this folder."));
       return;
     }
-    const target = normalizeWorkspacePath(`${destinationDirectory}/${nextName}`);
     await transact("Moving file", async () => {
+      // Inside the boundary: `normalizeWorkspacePath` throws on a name this
+      // workspace cannot address, and outside `transact` that throw had no
+      // reporter at all — the dialog simply closed and nothing moved.
+      const target = normalizeWorkspacePath(`${destinationDirectory}/${nextName}`);
       const moved = await moveOne(source, target);
       publishDocuments(remapWorkbenchDocuments(documentsRef.current, new Map([[source, target]])));
       setBuffers((current) => {
@@ -956,8 +1078,9 @@ function ProfileScopedWorkspaceView({
   async function runDialog(): Promise<void> {
     if (!dialog) return;
     if (dialog.kind === "create") {
-      const target = normalizeWorkspacePath(`${dialog.path}/${dialogValue.trim()}`);
+      if (workspacePathError(dialogValue)) return;
       await transact("Creating file", async () => {
+        const target = normalizeWorkspacePath(`${dialog.path}/${dialogValue.trim()}`);
         await writeWorkspaceAndGit(target, "", null);
         await refreshAll(target);
         setNotice(workbenchNotice("done", `Created ${target.replace("/workspace/", "")}.`));
@@ -971,6 +1094,7 @@ function ProfileScopedWorkspaceView({
     } else if (dialog.kind === "delete-folder") {
       await deleteFolder(dialog.path);
     } else if (dialog.kind === "rename") {
+      if (workspaceNameError(dialogValue)) return;
       await moveFile(dialog.path, workspaceParentPath(dialog.path), dialogValue.trim());
     } else if (dialog.kind === "move") {
       await moveFile(dialog.path, dialogValue, workspaceBaseName(dialog.path));
@@ -985,6 +1109,19 @@ function ProfileScopedWorkspaceView({
       });
     }
     closeDialog();
+  }
+
+  /** Takes one file out of the browser, whole. */
+  async function downloadFile(path: string): Promise<void> {
+    closeContextMenu();
+    const name = workspaceBaseName(path);
+    try {
+      const payload = await workspaceDownloadPayload(workspace, path);
+      downloadBytes(payload.bytes, payload.filename);
+      setNotice(workbenchNotice("done", `Downloaded ${name} — the complete stored bytes at revision ${payload.revision.slice(0, 7)}.`));
+    } catch (cause) {
+      setNotice(workbenchNotice("error", `${name} could not be downloaded: ${cause instanceof Error ? cause.message : "the workspace refused the read."}`));
+    }
   }
 
   async function refreshAll(open?: string): Promise<void> {
@@ -1018,9 +1155,10 @@ function ProfileScopedWorkspaceView({
     const decision = await review(operation, describeGitOperation(operation));
     if (decision !== "allow") { setNotice(workbenchNotice("done", "Source-control operation denied; nothing changed.")); return; }
     await transact("Updating source control", async () => {
-      if (operation.kind === "stage") await git.stage(operation.request);
-      else if (operation.kind === "unstage") await git.unstage(operation.request);
-      else if (operation.kind === "commit") await git.commit(operation.request);
+      // The clear is a consequence of the adapter *accepting* the commit, never
+      // of the click: a throw propagates out of `runSourceMutation` and the
+      // typed message survives, which is the user's only copy of it.
+      if (await runSourceMutation(git, operation)) setCommitMessage("");
       await refreshSourceControl();
     });
   }
@@ -1078,6 +1216,60 @@ function ProfileScopedWorkspaceView({
     setDropTarget("");
   }
 
+  /** Opens the row menu and records the exact control focus must return to. */
+  function openContextMenu(path: string, x: number, y: number, opener?: HTMLElement | null): void {
+    contextOpener.current = opener ?? undefined;
+    setContext(clampedContext(path, x, y));
+  }
+
+  /** The menu's items, in the order the keyboard walks them. */
+  function contextItems(): readonly HTMLElement[] {
+    return contextBox.current ? [...contextBox.current.querySelectorAll<HTMLElement>("[role=\"menuitem\"]")] : [];
+  }
+
+  /** Moves the roving tabindex with focus, so Tab never lands mid-menu. */
+  function focusContextItem(index: number): void {
+    const items = contextItems();
+    const target = items[index];
+    if (!target) return;
+    for (const [position, item] of items.entries()) item.tabIndex = position === index ? 0 : -1;
+    target.focus();
+  }
+
+  function handleContextKey(event: KeyboardEvent): void {
+    const items = contextItems();
+    const current = items.findIndex((item) => item === event.target);
+    const next = workbenchMenuFocusIndex(items.length, current, event.key);
+    if (next === undefined) return;
+    event.preventDefault();
+    focusContextItem(next);
+  }
+
+  /**
+   * Returns the keyboard to the row the menu was opened from.
+   *
+   * A menu item unmounts with its menu, so "focus whatever opened this" is only
+   * safe while that element is still connected — a virtualized row can be gone.
+   * The tree row for the same path is the honest fallback, and it is where a
+   * keyboard user was standing before Shift+F10.
+   */
+  function restoreContextFocus(): void {
+    const opener = contextOpener.current;
+    const path = context?.path;
+    contextOpener.current = undefined;
+    // No menu was open, so there is no focus to give back and nothing this may
+    // steal from — every other caller of `setContext(undefined)` is a no-op.
+    if (path === undefined) return;
+    if (opener?.isConnected) { opener.focus(); return; }
+    treeRowElement(visible.findIndex((node) => node.path === path))?.focus();
+  }
+
+  /** Dismisses the row menu and hands the keyboard back to its opener. */
+  function closeContextMenu(): void {
+    restoreContextFocus();
+    setContext(undefined);
+  }
+
   function focusTreeIndex(index: number): void {
     if (!visible.length) return;
     const bounded = Math.max(0, Math.min(index, visible.length - 1));
@@ -1111,16 +1303,19 @@ function ProfileScopedWorkspaceView({
         const parentIndex = visible.findIndex((candidate) => candidate.path === parent);
         if (parentIndex >= 0) focusTreeIndex(parentIndex);
       }
+    } else if (workspaceRowMenuKey(event)) {
+      // Ahead of the Enter branches on purpose: Control+Enter is a menu key
+      // here, not a second way to open the file.
+      event.preventDefault();
+      const row = treeRowElement(index);
+      const bounds = row?.getBoundingClientRect();
+      openContextMenu(node.path, bounds?.left ?? 24, bounds?.bottom ?? 48, row);
     } else if (event.key === "Enter" && event.shiftKey && node.kind === "file") {
       event.preventDefault();
       void openPinnedTab(node.path);
     } else if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
       if (node.kind === "directory") toggleDirectory(node.path); else void openPreviewTab(node.path);
-    } else if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
-      event.preventDefault();
-      const bounds = treeRowElement(index)?.getBoundingClientRect();
-      setContext(clampedContext(node.path, bounds?.left ?? 24, bounds?.bottom ?? 48));
     }
   }
 
@@ -1154,6 +1349,7 @@ function ProfileScopedWorkspaceView({
         ]}
         activeId={mobilePane === "editor" ? "editor" : mode}
         onSelect={selectPane}
+        panelId={(id) => id === "editor" ? editorPanelId : activityPanelId}
       />
       <div class="workbench-shell" ref={shell} style={{ "--workbench-rail": `${String(rail)}%` }}>
         <aside class={`workbench-activity ${mobilePane === "navigation" ? "mobile-active" : ""}`} aria-label="Workspace activity">
@@ -1166,7 +1362,15 @@ function ProfileScopedWorkspaceView({
             ]}
             activeId={mode}
             onSelect={(id) => setMode(id === "source" ? "source" : "explorer")}
+            panelId={() => activityPanelId}
           />
+          {/*
+            The switched region is a wrapper inside the landmark, never the
+            landmark itself: `role="tabpanel"` on `<aside>`/`<main>` would
+            delete the complementary and main landmarks this route depends on.
+          */}
+          <div class="workbench-panel" id={activityPanelId} role="tabpanel" aria-labelledby={activityPanelTitleId}>
+          <h2 class="sr-only" id={activityPanelTitleId}>{mode === "source" ? "Source Control" : "Explorer"}</h2>
           {mode === "explorer" ? <>
             <div class="workbench-section-heading">
               <input
@@ -1204,14 +1408,32 @@ function ProfileScopedWorkspaceView({
               </button>
             </div>
             <div ref={treeViewport} class="workspace-tree" role="tree" aria-label="Workspace files" onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) clearHoverExpansion(); }}>
-              <div style={{ height: visible.length * rowHeight, position: "relative" }}><div style={{ position: "absolute", top: rowWindow.start * rowHeight, left: 0, right: 0 }}>
-                {visible.slice(rowWindow.start, rowWindow.end).map((node, offset) => <div class="tree-row-wrap" style={{ height: rowHeight }} key={node.path}>
+              {/* Presentational, all three of them: a `role="tree"` owns
+                  `role="treeitem"` children, and the virtualization scaffolding
+                  put two generic boxes and a row wrapper in between. */}
+              <div role="presentation" style={{ height: visible.length * rowHeight, position: "relative" }}><div role="presentation" style={{ position: "absolute", top: rowWindow.start * rowHeight, left: 0, right: 0 }}>
+                {visible.slice(rowWindow.start, rowWindow.end).map((node, offset) => <div class="tree-row-wrap" role="presentation" style={{ height: rowHeight }} key={node.path}>
+                  {/* `aria-posinset`/`aria-setsize` are the window's restatement
+                      of the truth virtualization deleted: without them every
+                      row reports its position within the ~24 rendered rows, so
+                      row 3,891 of 40,000 announces as "1 of 24".
+                      `aria-owns` adopts the `•••` button that sits beside this
+                      row in the DOM: with the wrappers presentational it would
+                      otherwise be a `role="button"` owned directly by
+                      `role="tree"`, which owns treeitems and groups and nothing
+                      else. Adoption, not `aria-hidden`, because that button is
+                      the only way a touch screen-reader user reaches Rename,
+                      Move, Delete or Download — hiding it would trade a
+                      structural violation for a lost capability. */}
                   <button
+                    aria-owns={`${rowActionBaseId}-${String(rowWindow.start + offset)}`}
                     class={`tree-row ${treeSelectedPath === node.path ? "active" : ""} ${dropTarget === (node.kind === "directory" ? node.path : workspaceParentPath(node.path)) ? "drop-target" : ""}`}
                     type="button" role="treeitem" aria-level={node.depth} aria-expanded={node.kind === "directory" ? Boolean(node.expanded) : undefined}
                     aria-selected={treeSelectedPath === node.path}
-                    aria-keyshortcuts={node.kind === "file" ? "Enter Shift+Enter" : undefined}
-                    title={node.kind === "file" ? `${node.path} · Enter/click previews · Shift+Enter/double-click keeps open` : node.path}
+                    aria-posinset={rowWindow.start + offset + 1}
+                    aria-setsize={visible.length}
+                    aria-keyshortcuts={node.kind === "file" ? "Enter Shift+Enter Control+Enter Shift+F10" : "Control+Enter Shift+F10"}
+                    title={node.kind === "file" ? `${node.path} · Enter/click previews · Shift+Enter/double-click keeps open · Ctrl+Enter opens actions` : `${node.path} · Ctrl+Enter opens actions`}
                     data-workspace-tree-index={rowWindow.start + offset}
                     tabIndex={treeFocusPath === node.path || (!treeFocusPath && rowWindow.start + offset === 0) ? 0 : -1}
                     onFocus={() => setTreeFocusPath(node.path)}
@@ -1223,11 +1445,17 @@ function ProfileScopedWorkspaceView({
                     onDragEnter={() => scheduleHoverExpansion(node.kind === "directory" ? node.path : workspaceParentPath(node.path))}
                     onDragOver={(event) => { event.preventDefault(); if (event.dataTransfer) event.dataTransfer.dropEffect = "move"; }}
                     onDrop={(event) => { event.preventDefault(); const source = event.dataTransfer?.getData("text/x-airship-workspace-path"); const destination = node.kind === "directory" ? node.path : workspaceParentPath(node.path); clearHoverExpansion(); if (source) void moveFile(source, destination); }}
-                    onContextMenu={(event) => { event.preventDefault(); setContext(clampedContext(node.path, event.clientX, event.clientY)); }}
+                    onContextMenu={(event) => { event.preventDefault(); openContextMenu(node.path, event.clientX, event.clientY, event.currentTarget); }}
                     onClick={() => node.kind === "directory" ? toggleDirectory(node.path) : void openPreviewTab(node.path)}
                     onDblClick={() => { if (node.kind === "file") void openPinnedTab(node.path); }}
-                  ><span class="tree-chevron">{node.kind === "directory" ? node.expanded ? "⌄" : "›" : ""}</span>{node.kind === "directory" ? <Icon name="workspace" size={15} /> : <WorkspaceFileIcon path={node.path} />}<span>{node.name}</span>{node.entry ? <small>{formatBytes(node.entry.size)}</small> : null}</button>
-                  <button class="tree-overflow" type="button" aria-label={`Actions for ${node.name}`} onClick={(event) => { const box = event.currentTarget.getBoundingClientRect(); setContext(clampedContext(node.path, box.right, box.bottom)); }}>•••</button>
+                  ><span class="tree-chevron">{node.kind === "directory" ? node.expanded ? "⌄" : "›" : ""}</span>{node.kind === "directory" ? <Icon name="workspace" size={15} /> : <WorkspaceFileIcon path={node.path} />}<span>{node.name}</span>{node.entry ? <small>{formatBytes(workspaceEntryByteLength(node.entry))}</small> : null}</button>
+                  {/* Not in the tab order: the tree's contract is that Tab
+                      leaves it in one press, and the same menu is on the row
+                      itself via ContextMenu, Shift+F10 and — for the Macs where
+                      neither of those keys exists — Ctrl+Enter. It keeps its
+                      name and its pointer/touch reachability, and the row above
+                      `aria-owns` it so the tree still owns treeitems only. */}
+                  <button id={`${rowActionBaseId}-${String(rowWindow.start + offset)}`} class="tree-overflow" type="button" tabIndex={-1} aria-label={`Actions for ${node.name}`} onClick={(event) => { const box = event.currentTarget.getBoundingClientRect(); openContextMenu(node.path, box.right, box.bottom, event.currentTarget); }}>•••</button>
                 </div>)}
               </div></div>
             </div>
@@ -1247,6 +1475,7 @@ function ProfileScopedWorkspaceView({
             setCommitMessage={setCommitMessage}
             onOpenRepositoryManager={onOpenRepositoryManager}
           />}
+          </div>
         </aside>
         <div
           class="workbench-splitter"
@@ -1276,7 +1505,10 @@ function ProfileScopedWorkspaceView({
             items={documentTabs}
             activeId={activeId}
             onSelect={(id) => void activateTab(id)}
+            panelId={() => editorPanelId}
           />
+          <div class="workbench-panel" id={editorPanelId} role="tabpanel" aria-labelledby={editorPanelTitleId}>
+          <h2 class="sr-only" id={editorPanelTitleId}>Open document</h2>
           {activeDocument?.kind === "diff" ? <DiffDocumentEditor
             document={activeDocument}
             buffer={diffBuffer}
@@ -1330,7 +1562,10 @@ function ProfileScopedWorkspaceView({
               <span class="editor-strip__path" title={buffer.path}>{buffer.path.replace("/workspace/", "")}</span>
               <span class="editor-strip__meta">
                 <span title={`Revision ${buffer.revision} — every save is compare-and-swapped against this exact revision.`}>rev {buffer.revision.slice(0, 7)}</span>
-                <span>{formatBytes(buffer.size)}</span>
+                {/* The file's own bytes, not the storage envelope: a binary
+                    buffer's `size` is its base64 encoding and read one third
+                    larger here than `read_file` reported for the same path. */}
+                <span>{formatBytes(workspaceEntryByteLength(buffer))}</span>
                 {/*
                   `.code-editor` was `white-space: pre` at every width, so on a
                   390px pane a markdown paragraph was reachable only by
@@ -1339,7 +1574,7 @@ function ProfileScopedWorkspaceView({
                   and this sentence states what the editing surface is rather
                   than letting the line numbers vanish silently below 760px.
                 */}
-                <span>{editorSurfaceNote({ wrap, binary: buffer.binary })}</span>
+                <span>{editorSurfaceNote({ wrap, binary: buffer.binary, gutter: Boolean(gutterLines) })}</span>
               </span>
               {/* One group so the strip's two controls stay together when it
                   wraps: a Save button on a line of its own reads as belonging
@@ -1380,7 +1615,7 @@ function ProfileScopedWorkspaceView({
               {suggestions.map((entry) => <button type="button" key={entry.path} onClick={() => void openPreviewTab(entry.path)}>
                 <WorkspaceFileIcon path={entry.path} />
                 <span>{entry.path.replace("/workspace/", "")}</span>
-                <small>{formatBytes(entry.size)}</small>
+                <small>{formatBytes(workspaceEntryByteLength(entry))}</small>
               </button>)}
             </div> : null}
             <div class="workbench-empty__actions">
@@ -1395,6 +1630,7 @@ function ProfileScopedWorkspaceView({
             */}
             <p class="workbench-empty__note">{WORKBENCH_DESCRIPTION} Every write is compare-and-swapped against the revision you opened.</p>
           </div>}
+          </div>
         </main>
       </div>
       {notice ? <div class={`notice workbench-notice ${notice.kind}`} data-state={workbenchNoticeState(notice.kind)} role={notice.kind === "error" ? "alert" : "status"}>
@@ -1402,18 +1638,28 @@ function ProfileScopedWorkspaceView({
         <p>{notice.message}</p>
         {notice.kind === "progress" ? null : <button type="button" aria-label="Dismiss this message" onClick={() => setNotice(undefined)}>Dismiss</button>}
       </div> : null}
-      {context ? <div class="workbench-context" role="menu" style={{ left: `${String(context.x)}px`, top: `${String(context.y)}px` }} onPointerDown={(event) => event.stopPropagation()}>
-        <button role="menuitem" onClick={() => { if (contextIsFile) void openPreviewTab(context.path); else { toggleDirectory(context.path); setContext(undefined); } }}>{contextIsFile ? "Open preview" : expanded.has(context.path) ? "Collapse" : "Expand"}</button>
-        {contextIsFile ? <button role="menuitem" onClick={() => void openPinnedTab(context.path)}>Open and keep</button> : null}
-        {onOpenTerminalAt ? <button role="menuitem" onClick={() => {
+      {context ? <div
+        class="workbench-context"
+        ref={contextBox}
+        role="menu"
+        aria-label={`Actions for ${workspaceBaseName(context.path)}`}
+        aria-describedby={contextHintId}
+        style={{ left: `${String(context.x)}px`, top: `${String(context.y)}px` }}
+        onKeyDown={handleContextKey}
+        onPointerDown={(event) => event.stopPropagation()}
+      >
+        <button role="menuitem" tabIndex={-1} onClick={() => { if (contextIsFile) void openPreviewTab(context.path); else { toggleDirectory(context.path); closeContextMenu(); } }}>{contextIsFile ? "Open preview" : expanded.has(context.path) ? "Collapse" : "Expand"}</button>
+        {contextIsFile ? <button role="menuitem" tabIndex={-1} onClick={() => void openPinnedTab(context.path)}>Open and keep</button> : null}
+        {contextIsFile ? <button role="menuitem" tabIndex={-1} onClick={() => void downloadFile(context.path)}>Download</button> : null}
+        {onOpenTerminalAt ? <button role="menuitem" tabIndex={-1} onClick={() => {
           onOpenTerminalAt(contextIsFile ? workspaceParentPath(context.path) : context.path);
           setContext(undefined);
         }}><Icon name="terminal" size={15} /> Open terminal here</button> : null}
-        <button role="menuitem" onClick={() => openDialog("create", contextIsFile ? workspaceParentPath(context.path) : context.path)}>New file…</button>
+        <button role="menuitem" tabIndex={-1} onClick={() => openDialog("create", contextIsFile ? workspaceParentPath(context.path) : context.path)}>New file…</button>
         {contextIsFile ? <>
-          <button role="menuitem" onClick={() => openDialog("rename", context.path)}>Rename…</button>
-          <button role="menuitem" onClick={() => openDialog("move", context.path)}>Move…</button>
-          <button class="danger" role="menuitem" onClick={() => openDialog("delete", context.path)}>Delete…</button>
+          <button role="menuitem" tabIndex={-1} onClick={() => openDialog("rename", context.path)}>Rename…</button>
+          <button role="menuitem" tabIndex={-1} onClick={() => openDialog("move", context.path)}>Move…</button>
+          <button class="danger" role="menuitem" tabIndex={-1} onClick={() => openDialog("delete", context.path)}>Delete…</button>
         </> : <>
           {/*
             A folder used to offer Expand and New file and nothing else, so the
@@ -1421,12 +1667,17 @@ function ProfileScopedWorkspaceView({
             one drag at a time. These three run exactly that, in one confirmed
             step, and each dialog says how many files it is really touching.
           */}
-          <button role="menuitem" onClick={() => openDialog("create-folder", context.path)}>New folder…</button>
-          <button role="menuitem" onClick={() => openDialog("rename-folder", context.path)}>Rename folder…</button>
-          <button class="danger" role="menuitem" onClick={() => openDialog("delete-folder", context.path)}>Delete folder…</button>
+          <button role="menuitem" tabIndex={-1} onClick={() => openDialog("create-folder", context.path)}>New folder…</button>
+          <button role="menuitem" tabIndex={-1} onClick={() => openDialog("rename-folder", context.path)}>Rename folder…</button>
+          <button class="danger" role="menuitem" tabIndex={-1} onClick={() => openDialog("delete-folder", context.path)}>Delete folder…</button>
         </>}
-        {/* Replaces a "Close" row that duplicated behaviour already bound. */}
-        <p class="workbench-context__hint">Esc or a tap outside dismisses this menu.</p>
+        {/*
+          Replaces a "Close" row that duplicated behaviour already bound. It is
+          presentational and referenced by `aria-describedby` rather than left
+          as a generic child of `role="menu"`, whose only permitted element
+          children are its items.
+        */}
+        <p class="workbench-context__hint" id={contextHintId} role="presentation">Esc or a tap outside dismisses this menu. Arrow keys move between actions.</p>
       </div> : null}
       {dialog && dialogCopy ? <div class="workbench-dialog-scrim" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) closeDialog(); }}>
         <div
@@ -1659,9 +1910,9 @@ function SourceControlRail({ repositories, repositoryId, selectRepository, workt
   onOpenRepositoryManager?: () => void;
 }) {
   const repository = repositories.find((item) => item.id === repositoryId) ?? repositories[0];
-  const staged = (worktree?.status.filter((entry) => entry.index) ?? []).slice(0, 250);
-  const unstaged = (worktree?.status.filter((entry) => entry.worktree) ?? []).slice(0, 250);
-  const truncated = (worktree?.status.length ?? 0) > 250;
+  const lanes = workbenchSourceLanes(worktree?.status ?? []);
+  const { staged, unstaged } = lanes;
+  const truncation = workbenchSourceTruncationNote(lanes);
   const operation = (kind: "stage" | "unstage", paths: readonly string[]): GitOperation | undefined => repository && worktree ? { kind, request: { repositoryId: repository.id, worktreeId: worktree.id, paths, expectedWorktreeVersion: worktree.version } } : undefined;
   return <div class="workspace-scm">
     <label>Repository<MenuSelect placement="down" ariaLabel="Workspace repository" value={repository?.id ?? ""} options={repositories.map((item) => ({ value: item.id, label: item.name }))} onChange={selectRepository} /></label>
@@ -1673,9 +1924,16 @@ function SourceControlRail({ repositories, repositoryId, selectRepository, workt
     {staged.length > 1 ? <button type="button" onClick={() => { const next = operation("unstage", staged.map((entry) => entry.path)); if (next) void mutate(next); }}>Unstage all visible</button> : null}
     {unstaged.length ? <ScmGroup title="Changes" entries={unstaged} lane="unstaged" repository={repository} worktree={worktree} openDiff={openDiff} mutate={mutate} /> : null}
     {unstaged.length > 1 ? <button type="button" onClick={() => { const next = operation("stage", unstaged.map((entry) => entry.path)); if (next) void mutate(next); }}>Stage all visible</button> : null}
-    {truncated ? <div class="workspace-boundary attention">Showing the first 250 staged and unstaged paths. Open Advanced source controls for the complete, virtualized worktree.</div> : null}
+    {truncation ? <div class="workspace-boundary attention">{truncation}</div> : null}
     {worktree?.status.some((entry) => entry.index) ? <div class="scm-commit"><textarea aria-label="Commit message" value={commitMessage} onInput={(event) => setCommitMessage(event.currentTarget.value)} placeholder="Commit message" /><button class="primary" type="button" disabled={!commitMessage.trim()} onClick={() => repository && mutate({ kind: "commit", request: { repositoryId: repository.id, worktreeId: worktree.id, message: commitMessage, author: DEFAULT_AUTHOR, expectedWorktreeVersion: worktree.version } })}>Commit staged</button></div> : null}
-    {repository && worktree ? <section class="scm-group scm-history"><header><strong>History</strong><span>{history.length}</span></header>
+    {/*
+      The count is the read's bound, not the repository's total: `git.log` is
+      asked for exactly WORKBENCH_HISTORY_DEPTH commits, and a bare `20` in the
+      slot where Staged and Changes print totals read as "this repository has 20
+      commits". The `20+` and the sentence below both name the same constant.
+    */}
+    {repository && worktree ? <section class="scm-group scm-history"><header><strong>History</strong><span>{workbenchHistoryCount(history.length)}</span></header>
+      {history.length >= WORKBENCH_HISTORY_DEPTH ? <div class="workspace-boundary">Showing the most recent {WORKBENCH_HISTORY_DEPTH} commits on this worktree.</div> : null}
       {history.map((entry) => {
         const document: WorkbenchHistoryDiffDocument = { kind: "diff", source: "history", repositoryId: repository.id, worktreeId: worktree.id, revision: entry.oid };
         const short = entry.oid.slice(0, 12);
@@ -1879,6 +2137,176 @@ function storageIdentitySegment(value: string, label: string): string {
   return [...value].map((codePoint) => codePoint.codePointAt(0)!.toString(16).padStart(6, "0")).join("");
 }
 
+/**
+ * Whether an open status diff still describes the live worktree.
+ *
+ * `undefined` for the live version means "not known yet" — Source Control has
+ * not resolved — and an unknown version may not be used to call a tab stale.
+ */
+export function workbenchSupersededStatusDiff(worktreeVersion: string, liveWorktreeVersion?: string): boolean {
+  return liveWorktreeVersion !== undefined && liveWorktreeVersion !== worktreeVersion;
+}
+
+/** The tab qualifier for a status diff, which states its snapshot once stale. */
+export function workbenchStatusDiffHint(
+  scope: "staged" | "worktree",
+  worktreeVersion: string,
+  liveWorktreeVersion?: string,
+): string {
+  const lane = scope === "staged" ? "Staged" : "Working";
+  return workbenchSupersededStatusDiff(worktreeVersion, liveWorktreeVersion)
+    ? `${lane} diff · snapshot ${worktreeVersion.slice(0, 8)}`
+    : `${lane} diff`;
+}
+
+/**
+ * The two Source Control lanes, each bounded on its own.
+ *
+ * The shipped truncation banner tested `status.length > 250`, which is neither
+ * lane: 200 staged plus 100 unstaged entries cut nothing and claimed it had,
+ * while 260 staged entries with nothing unstaged cut ten paths and said
+ * nothing. The slice bound and the predicate now share this one expression.
+ */
+export function workbenchSourceLanes<Entry extends Readonly<{ index?: unknown; worktree?: unknown }>>(
+  status: readonly Entry[],
+  limit = SCM_LANE_LIMIT,
+): Readonly<{
+  staged: readonly Entry[];
+  unstaged: readonly Entry[];
+  stagedTotal: number;
+  unstagedTotal: number;
+  clipped: readonly ("staged" | "unstaged")[];
+}> {
+  const stagedAll = status.filter((entry) => entry.index);
+  const unstagedAll = status.filter((entry) => entry.worktree);
+  return Object.freeze({
+    staged: Object.freeze(stagedAll.slice(0, limit)),
+    unstaged: Object.freeze(unstagedAll.slice(0, limit)),
+    stagedTotal: stagedAll.length,
+    unstagedTotal: unstagedAll.length,
+    clipped: Object.freeze([
+      ...(stagedAll.length > limit ? ["staged" as const] : []),
+      ...(unstagedAll.length > limit ? ["unstaged" as const] : []),
+    ]),
+  });
+}
+
+/** The sentence a clipped lane owes the reader: which lane, and how many. */
+export function workbenchSourceTruncationNote(
+  lanes: Readonly<{ stagedTotal: number; unstagedTotal: number; clipped: readonly ("staged" | "unstaged")[] }>,
+  limit = SCM_LANE_LIMIT,
+): string | undefined {
+  if (lanes.clipped.length === 0) return undefined;
+  const named = lanes.clipped.map((lane) => lane === "staged"
+    ? `Staged (${String(lanes.stagedTotal)} paths)`
+    : `Changes (${String(lanes.unstagedTotal)} paths)`);
+  return `${named.join(" and ")} ${lanes.clipped.length === 1 ? "is" : "are"} showing the first ${String(limit)}. Open Advanced source controls for the complete, virtualized worktree.`;
+}
+
+/**
+ * What the History header may claim.
+ *
+ * `git.log` is asked for a fixed depth, so the list length is a bound and not a
+ * total — and it was printed in the same position every other group in this
+ * rail prints a total. A saturated read says so.
+ */
+export function workbenchHistoryCount(count: number, depth = WORKBENCH_HISTORY_DEPTH): string {
+  return count >= depth ? `${String(depth)}+` : String(count);
+}
+
+/**
+ * The exact bytes, name and revision one Explorer download will carry.
+ *
+ * Deliberately re-read from `WorkspacePort` rather than served from the open
+ * buffer: that buffer is a bounded projection — above
+ * `WORKSPACE_EDITOR_BYTE_LIMIT` it is a preview, and for opaque bytes it is
+ * empty — so downloading it would hand the user a truncated file under the real
+ * file's name. A file that has gone since the tree was read is refused with the
+ * reason, never with silence, and the revision travels back so the notice can
+ * say *which* version left the browser.
+ */
+export async function workspaceDownloadPayload(
+  workspace: Readonly<Pick<WorkspacePort, "read">>,
+  path: string,
+): Promise<Readonly<{ bytes: Uint8Array; filename: string; revision: string }>> {
+  const file = await workspace.read(path);
+  if (!file) throw new Error("it is no longer present in this workspace.");
+  return Object.freeze({
+    bytes: decodeWorkspaceBytes(file.content),
+    filename: downloadFileName(path),
+    revision: file.revision,
+  });
+}
+
+/**
+ * The three source-control verbs the workbench rail can issue.
+ *
+ * Structural on purpose: the rail holds a whole `BrowserGitClient`, but the
+ * post-condition below only needs to know which call was accepted, so a test
+ * can state a commit that rejects without standing up an adapter.
+ */
+export type WorkbenchSourceMutations = Readonly<{
+  stage(request: Extract<GitOperation, { kind: "stage" }>["request"]): Promise<unknown>;
+  unstage(request: Extract<GitOperation, { kind: "unstage" }>["request"]): Promise<unknown>;
+  commit(request: Extract<GitOperation, { kind: "commit" }>["request"]): Promise<unknown>;
+}>;
+
+/**
+ * Runs one source-control operation and reports whether it consumed the
+ * composed commit message.
+ *
+ * `true` only after the adapter has returned: the box is the user's only copy
+ * of that message, so a rejected commit must keep it, and an accepted one must
+ * lose it — a message left behind is a loaded gun, because the next "Commit
+ * staged" reuses it verbatim for an unrelated set of files. Returning the fact
+ * instead of writing the state is what makes the rule testable without a DOM.
+ */
+export async function runSourceMutation(git: WorkbenchSourceMutations, operation: GitOperation): Promise<boolean> {
+  if (operation.kind === "stage") { await git.stage(operation.request); return false; }
+  if (operation.kind === "unstage") { await git.unstage(operation.request); return false; }
+  if (operation.kind === "commit") { await git.commit(operation.request); return true; }
+  // The rail issues exactly the three verbs above; anything else reaching here
+  // is a caller bug, and refreshing the pane is the honest response to it.
+  return false;
+}
+
+/**
+ * Where ArrowDown/ArrowUp/Home/End move inside a menu, or `undefined`.
+ *
+ * Returns `undefined` for every key the menu does not own — a menu that
+ * swallowed Tab or Enter would be the keyboard trap this pattern exists to
+ * avoid — and wraps at both ends, which is what the menu pattern specifies and
+ * what the tree beside it already does.
+ */
+export function workbenchMenuFocusIndex(count: number, current: number, key: string): number | undefined {
+  if (count <= 0) return undefined;
+  if (key === "Home") return 0;
+  if (key === "End") return count - 1;
+  const step = key === "ArrowDown" ? 1 : key === "ArrowUp" ? -1 : 0;
+  if (step === 0) return undefined;
+  if (current < 0) return step === 1 ? 0 : count - 1;
+  return (current + step + count) % count;
+}
+
+/**
+ * Whether a keypress on a tree row asks for that row's action menu.
+ *
+ * `ContextMenu` and `Shift+F10` are the platform conventions, and on macOS
+ * neither one exists: an Apple keyboard has no ContextMenu key, and F10 is a
+ * system media key unless the user has changed a global setting. Rename, Move,
+ * Delete and Download live only behind this menu, and the `•••` affordance is
+ * deliberately out of the tab order so Tab leaves the tree in one press — so
+ * with only the two conventions those actions were unreachable from a Mac
+ * keyboard. `Control+Enter` is the third door and the only one every platform
+ * can open; it is declared on the row as `aria-keyshortcuts` so it is findable
+ * rather than folklore.
+ */
+export function workspaceRowMenuKey(event: Readonly<{ key: string; shiftKey: boolean; ctrlKey: boolean }>): boolean {
+  if (event.key === "ContextMenu") return true;
+  if (event.key === "F10") return event.shiftKey;
+  return event.key === "Enter" && event.ctrlKey;
+}
+
 /** The rendered tree row at a flattened index, if the window is showing it. */
 function treeRowElement(index: number): HTMLButtonElement | null {
   if (index < 0 || typeof document === "undefined") return null;
@@ -1918,12 +2346,9 @@ export function workspaceEditorProjection(file: WorkspaceFile) {
   });
 }
 
-/**
- * A line gutter is a rendering cost proportional to the file, so it is only
- * offered while that cost stays trivial. Past the cap the editor keeps working
- * without numbers rather than doubling the DOM on a very large buffer.
- */
-export const WORKSPACE_GUTTER_LINE_LIMIT = 5_000;
+// Defined with the strip sentence that names it, in `workbench-model`, and
+// re-exported here so the cap and the words describing it cannot drift.
+export { WORKSPACE_GUTTER_LINE_LIMIT };
 
 /** The gutter's rendered text, or undefined when no gutter may be shown. */
 export function workspaceGutterLines(draft: string, limit = WORKSPACE_GUTTER_LINE_LIMIT): string | undefined {

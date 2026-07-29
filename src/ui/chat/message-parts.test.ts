@@ -230,6 +230,46 @@ describe("message parts", () => {
     ]);
     expect(messagePlainText(parts)).not.toContain("First");
   });
+
+  /**
+   * The durable projection used to drop `turn.requested.images` entirely, so a
+   * resumed image-bearing prompt was indistinguishable from a text-only one —
+   * and the Edit/Retry attachment guards, which look for exactly this part
+   * kind, could never fire on a reloaded transcript.
+   */
+  it("projects the images a request was journaled with as attachment parts", () => {
+    const events = eventSequence([
+      draft("turn.requested", {
+        content: "What is in these screenshots?",
+        images: [
+          { type: "image", name: "one.png", mediaType: "image/png", dataUrl: "data:image/png;base64,AAAA", sizeBytes: 3 },
+          { type: "image", name: "two.jpeg", mediaType: "image/jpeg", dataUrl: "data:image/jpeg;base64,AAAAAA==", sizeBytes: 4 },
+        ],
+      }),
+    ]);
+    const parts = messagePartsFromDurableEvents(events, { includeTurnRequest: true });
+    expect(parts.map((part) => part.kind)).toEqual(["text", "attachment", "attachment"]);
+    expect(parts[1]).toMatchObject({
+      kind: "attachment",
+      name: "one.png",
+      mediaType: "image/png",
+      sizeBytes: 3,
+      status: "available",
+    });
+    expect(parts[2]).toMatchObject({ kind: "attachment", name: "two.jpeg", mediaType: "image/jpeg", sizeBytes: 4 });
+    // The bytes are never re-rendered from the journal, so nothing here may
+    // carry the data URL back into the page.
+    expect(JSON.stringify(parts)).not.toContain("base64");
+  });
+
+  it("still marks an unreadable images record as an attachment rather than nothing", () => {
+    const events = eventSequence([
+      draft("turn.requested", { content: "Look at this", images: [{ type: "image", name: "x" }] }),
+    ]);
+    const parts = messagePartsFromDurableEvents(events, { includeTurnRequest: true });
+    expect(parts.map((part) => part.kind)).toEqual(["text", "attachment"]);
+    expect(parts[1]).toMatchObject({ kind: "attachment", status: "failed" });
+  });
 });
 
 type DraftFixture = Readonly<{

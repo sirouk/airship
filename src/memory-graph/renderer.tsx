@@ -7,6 +7,8 @@ import type { MemoryNodeKind } from "./types";
 type CanvasSurface = typeof import("./canvas-renderer").CanvasMemoryGraphSurface;
 type WrapperStatus = "waiting" | "loading" | "empty" | "error";
 
+export type MemoryGraphViewportControls = import("./canvas-renderer").MemoryGraphViewportControls;
+
 export type MemoryGraphRendererProps = {
   graph: MemoryRelationshipGraph;
   selectedNodeId?: string;
@@ -17,6 +19,12 @@ export type MemoryGraphRendererProps = {
   minHeight?: number;
   hiddenKinds?: ReadonlySet<MemoryNodeKind>;
   hiddenNodeIds?: ReadonlySet<string>;
+  /**
+   * Publishes the loaded surface's viewport commands, and withdraws them on
+   * teardown. A host renders zoom controls only while they are real, so the
+   * lazy surface can never leave a live button pointing at nothing.
+   */
+  onViewportControls?: (controls: MemoryGraphViewportControls | undefined) => void;
 };
 
 /**
@@ -33,6 +41,7 @@ export function MemoryGraphRenderer({
   minHeight = 320,
   hiddenKinds,
   hiddenNodeIds,
+  onViewportControls,
 }: MemoryGraphRendererProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const [visible, setVisible] = useState(() => typeof IntersectionObserver === "undefined");
@@ -90,7 +99,7 @@ export function MemoryGraphRenderer({
       style={{ position: "relative", width: "100%", minHeight: Math.max(160, minHeight), overflow: "hidden", ...style }}
     >
       {Surface && graph.nodes.length > 0 ? (
-        <Surface graph={graph} selectedNodeId={selectedNodeId} onSelect={onSelect} hiddenKinds={hiddenKinds} hiddenNodeIds={hiddenNodeIds} />
+        <Surface graph={graph} selectedNodeId={selectedNodeId} onSelect={onSelect} hiddenKinds={hiddenKinds} hiddenNodeIds={hiddenNodeIds} onViewportControls={onViewportControls} />
       ) : (
         <div
           role={status === "error" ? "alert" : "status"}

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks"
 import {
   MemoryGraphRenderer,
   deriveMemoryRelationshipGraph,
+  type MemoryGraphViewportControls,
   type MemoryNodeKind,
   type MemoryRelationshipGraph,
 } from "../memory-graph";
@@ -147,6 +148,9 @@ export function MemoryView({
     initialTab === "index" || restoredPresentation?.indexMounted === true,
   );
   const [contextGeneration, setContextGeneration] = useState<string>();
+  // Held in state, not a ref: the graph surface is loaded lazily, so the zoom
+  // controls have to re-render disabled until the engine that answers them exists.
+  const [viewportControls, setViewportControls] = useState<MemoryGraphViewportControls>();
   const presentationRef = useRef<MemoryPresentationState>({
     query,
     relationshipsExpanded,
@@ -370,18 +374,48 @@ export function MemoryView({
             <strong>{hiddenMemoryNodeIds.size ? "Bounded view · you hid nodes" : "Bounded relationship view"}</strong>
             <span>{truncationCount ? `Showing ${graph.stats.nodeCount} of ${graph.stats.nodeCount + truncationCount} items — this view is bounded on purpose (${truncationCount} source/derived items exceeded bounds). ` : "Within derivation bounds. "}{graph.stats.isolatedNodeCount} isolated · max degree {graph.stats.maxDegree} · {hiddenMemoryNodeIds.size} hidden · rev {graph.revision.slice(-9)}.</span>
           </div>
+          {/*
+            * Hiding was a one-way door: the count was reported in a status
+            * string, so the state was legible but not operable. A filter the
+            * user applied has to be a filter the user can lift, by name.
+            */}
+          {hiddenMemoryNodeIds.size ? (
+            <details class="memory-hidden-nodes">
+              <summary>{hiddenMemoryNodeIds.size} hidden<small>restore any node you removed from the picture</small></summary>
+              <ul>
+                {[...hiddenMemoryNodeIds].map((nodeId) => (
+                  <li key={nodeId}>
+                    <span>{graph.getNode(nodeId)?.label ?? nodeId}</span>
+                    <button class="small-button" type="button" onClick={() => selectMemoryNode(nodeId)}>Restore</button>
+                  </li>
+                ))}
+              </ul>
+              <button class="small-button" type="button" onClick={() => setHiddenMemoryNodeIds(new Set())}>Restore all</button>
+            </details>
+          ) : null}
           <div class="memory-shell">
             <div class="memory-graph-panel panel">
               <div class="memory-toolbar">
                 <div class="memory-graph-query">
                   <span role="status" aria-live="polite">{normalizedQuery ? `Graph matches for “${normalizedQuery}”` : "Graph follows the shared query"}</span>
                   {normalizedQuery ? (
-                    graphResults.length ? <div aria-label="Matching relationship nodes">{graphResults.map((result) => <button key={result.node.id} type="button" aria-pressed={selectedNodeId === result.node.id} onClick={() => selectMemoryNode(result.node.id)}><span>{result.node.kind}</span>{result.node.label}</button>)}</div>
+                    graphResults.length ? <div role="group" aria-label="Matching relationship nodes">{graphResults.map((result) => <button key={result.node.id} type="button" aria-pressed={selectedNodeId === result.node.id} onClick={() => selectMemoryNode(result.node.id)}><span>{result.node.kind}</span>{result.node.label}</button>)}</div>
                       : <p>No relationship nodes match this query.</p>
                   ) : <p>Enter a query above to find and focus matching nodes.</p>}
                 </div>
+                {/*
+                  * The same clamped viewport command the wheel and the pinch
+                  * gesture use, reachable by keyboard and assistive technology.
+                  * Disabled until the lazily loaded surface publishes them, so
+                  * a control is never live before the engine behind it is.
+                  */}
+                <div class="memory-graph-controls" role="group" aria-label="Graph viewport">
+                  <button class="small-button" type="button" disabled={!viewportControls} onClick={() => viewportControls?.zoomIn()}>Zoom in</button>
+                  <button class="small-button" type="button" disabled={!viewportControls} onClick={() => viewportControls?.zoomOut()}>Zoom out</button>
+                  <button class="small-button" type="button" disabled={!viewportControls} onClick={() => viewportControls?.fit()}>Fit</button>
+                </div>
               </div>
-              <MemoryGraphRenderer graph={graph} hiddenKinds={hiddenMemoryKinds} hiddenNodeIds={hiddenMemoryNodeIds} selectedNodeId={selectedNodeId} onSelect={(selection) => selectMemoryNode(selection?.focus?.id)} class="memory-canvas" minHeight={470} ariaLabel="Interactive memory relationship graph" />
+              <MemoryGraphRenderer graph={graph} hiddenKinds={hiddenMemoryKinds} hiddenNodeIds={hiddenMemoryNodeIds} selectedNodeId={selectedNodeId} onSelect={(selection) => selectMemoryNode(selection?.focus?.id)} onViewportControls={setViewportControls} class="memory-canvas" minHeight={470} ariaLabel="Interactive memory relationship graph" />
               <MemoryKindLegend counts={graph.stats.nodesByKind} hidden={hiddenMemoryKinds} onToggle={(kind) => setHiddenMemoryKinds((current) => { const next = new Set(current); next.has(kind) ? next.delete(kind) : next.add(kind); return next; })} />
               <p class="memory-filter-note">{hiddenTermCount
                 ? `${hiddenTermCount} derived terms are hidden from the picture. They are still in the graph, still searchable, and still counted above. Filters never alter memory.`
@@ -424,13 +458,15 @@ export function MemoryView({
                   <h2>This graph</h2>
                   <h3>Most connected</h3>
                   <div class="memory-overview__nodes">
-                    {mostConnectedNodes(graph, hiddenMemoryKinds).map((entry) => (
+                    {mostConnectedNodes(graph, hiddenMemoryKinds, hiddenMemoryNodeIds).map((entry) => (
                       <button key={entry.id} type="button" onClick={() => selectMemoryNode(entry.id)}>
                         <span>{entry.kind}</span><strong>{entry.label}</strong><small>{entry.degree} links</small>
                       </button>
                     ))}
                   </div>
-                  <p>Pan, zoom, search, or select a node to inspect relationships and source metadata.</p>
+                  {/* Names the controls that exist rather than a capability
+                      the reader has to discover. */}
+                  <p>Drag to pan, pinch or use Zoom in · Zoom out · Fit above the graph, search, or select a node to inspect relationships and source metadata.</p>
                 </div>
               )}
             </aside>
@@ -589,7 +625,7 @@ export function memoryStarters(
     push(dot > 0 ? base.slice(0, dot) : base, "workspace source");
   }
   push(profileName, "active profile");
-  for (const node of mostConnectedNodes(graph, new Set(), limit)) {
+  for (const node of mostConnectedNodes(graph, new Set(), new Set(), limit)) {
     push(node.label, `most connected ${node.kind}`);
   }
   return Object.freeze(starters);
@@ -906,14 +942,18 @@ export type MemoryOverviewNode = Readonly<{ id: string; label: string; kind: str
  *
  * Hidden kinds are excluded because this list is a launcher: offering to select
  * a node the canvas is not drawing would select something the user cannot see.
+ * Individually hidden nodes are excluded for the same reason — selecting one
+ * used to un-hide it as an undocumented side effect, which is now the Restore
+ * control's job to do on purpose.
  */
 export function mostConnectedNodes(
   graph: MemoryRelationshipGraph,
   hiddenKinds: ReadonlySet<MemoryNodeKind>,
+  hiddenNodeIds: ReadonlySet<string> = new Set(),
   limit = 5,
 ): readonly MemoryOverviewNode[] {
   return Object.freeze(graph.nodes
-    .filter((node) => !hiddenKinds.has(node.kind))
+    .filter((node) => !hiddenKinds.has(node.kind) && !hiddenNodeIds.has(node.id))
     .map((node) => Object.freeze({
       id: node.id,
       label: node.label,

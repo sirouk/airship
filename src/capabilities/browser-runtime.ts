@@ -11,7 +11,26 @@
  */
 
 export type BrowserProbeState = "available" | "unavailable" | "failed";
-export type BrowserProbeEvidence = "probe-passed" | "api-exposed" | "not-observed" | "probe-failed";
+/**
+ * How strong the observation was — and, for the two refusal values, *why* the
+ * capability is absent.
+ *
+ * `probe-passed`, `api-exposed` and `not-observed` grade evidence; they say
+ * nothing about cause, which is why a presentation layer reading only those
+ * three collapsed every absent capability into the single word "Unavailable"
+ * and could offer the reader nothing to do about it. `permission-needed` and
+ * `disabled` are the two causes a browser actually reports and a reader can
+ * actually act on: the page was refused permission it could be granted, or the
+ * feature is switched off for this browsing context (a private window, a
+ * disabled preference). Both are still observations, never grants.
+ */
+export type BrowserProbeEvidence =
+  | "probe-passed"
+  | "api-exposed"
+  | "not-observed"
+  | "permission-needed"
+  | "disabled"
+  | "probe-failed";
 export type WasmFeatureId = "simd" | "threads" | "memory64" | "multi-memory" | "relaxed-simd" | "tail-call";
 
 export type BrowserCapabilityObservation = Readonly<{
@@ -148,6 +167,15 @@ export type BrowserCapabilityProbeHost = Readonly<{
   /** Injectable so the Cache Storage probe stays hermetic in unit tests. */
   cacheKeys?: () => Promise<readonly string[]>;
   exposedInterfaces: ReadonlySet<string>;
+  /**
+   * Separate from `exposedInterfaces` because the capability is not a global
+   * constructor name. In a window realm the only observable evidence is the
+   * prototype method `FileSystemFileHandle.prototype.createSyncAccessHandle`;
+   * the `FileSystemSyncAccessHandle` constructor is exposed to workers only.
+   * A constructor-name allowlist can express neither, so routing this through
+   * it made the field permanently negative in every shipping browser.
+   */
+  hasSyncAccessHandleInterface: boolean;
   validateWasm(feature: WasmFeatureId, bytes: Uint8Array): boolean;
   canTransferSharedArrayBuffer(): boolean;
   now(): Date;
@@ -482,6 +510,7 @@ function createProbeHost(overrides: Partial<BrowserCapabilityProbeHost>): Browse
     cacheKeys: "caches" in globalThis ? () => caches.keys() : undefined,
     exposedInterfaces: new Set(["VideoEncoder", "VideoDecoder", "AudioEncoder", "AudioDecoder", "ImageDecoder", "WebTransport"]
       .filter((name) => typeof globalRecord[name] === "function")),
+    hasSyncAccessHandleInterface: hasSyncAccessHandleInterface(globalRecord),
     validateWasm: (_feature, bytes) => {
       try { return typeof WebAssembly !== "undefined" && WebAssembly.validate(bytes as unknown as BufferSource); } catch { return false; }
     },
@@ -502,6 +531,21 @@ function createProbeHost(overrides: Partial<BrowserCapabilityProbeHost>): Browse
     timeoutMs: 3_000,
     ...overrides,
   });
+}
+
+/**
+ * Read the sync-access interface where it actually lives.
+ *
+ * A window realm sees the method on `FileSystemFileHandle.prototype` and never
+ * a `FileSystemSyncAccessHandle` global; a worker realm sees both. Reading the
+ * prototype off the global record rather than the DOM type keeps this honest in
+ * a realm (Node, jsdom) where neither name is defined.
+ */
+function hasSyncAccessHandleInterface(globalRecord: Record<string, unknown>): boolean {
+  const fileHandle = globalRecord.FileSystemFileHandle as { prototype?: unknown } | undefined;
+  const prototype = fileHandle?.prototype as Record<string, unknown> | undefined;
+  return typeof prototype?.createSyncAccessHandle === "function"
+    || typeof globalRecord.FileSystemSyncAccessHandle === "function";
 }
 
 async function probeSignals(host: BrowserCapabilityProbeHost): Promise<BrowserSignalReport> {
@@ -600,7 +644,7 @@ async function probeWebGpu(
     return deepFreeze({
       ...unavailableWebGpu(powerPreference, boundedFailure("WebGPU adapter probe failed", error)),
       state: "failed",
-      evidence: "probe-failed",
+      evidence: refusalEvidence(error),
     }) as WebGpuObservation;
   }
 }
@@ -624,7 +668,7 @@ async function probeWebNn(
     }
     return Object.freeze({ state: "available", evidence: "probe-passed", detail: "A WebNN context was created and released; no graph or model is loaded." });
   } catch (error) {
-    return Object.freeze({ state: "failed", evidence: "probe-failed", detail: boundedFailure("WebNN context probe failed", error) });
+    return Object.freeze({ state: "failed", evidence: refusalEvidence(error), detail: boundedFailure("WebNN context probe failed", error) });
   }
 }
 
@@ -660,10 +704,7 @@ function probeWebAssembly(host: BrowserCapabilityProbeHost): WebAssemblyObservat
 
 async function probeOpfs(host: BrowserCapabilityProbeHost): Promise<OpfsObservation> {
   const storage = host.navigator?.storage;
-  const syncAccessHandle = host.exposedInterfaces.has("FileSystemSyncAccessHandle")
-    || host.exposedInterfaces.has("FileSystemFileHandle.createSyncAccessHandle")
-    ? "api-exposed" as const
-    : "not-observed" as const;
+  const syncAccessHandle = host.hasSyncAccessHandleInterface ? "api-exposed" as const : "not-observed" as const;
   if (!storage?.getDirectory) {
     return Object.freeze({ ...unavailable("Origin Private File System API was not observed."), syncAccessHandle });
   }
@@ -682,7 +723,7 @@ async function probeOpfs(host: BrowserCapabilityProbeHost): Promise<OpfsObservat
       syncAccessHandle,
     });
   } catch (error) {
-    return Object.freeze({ state: "failed", evidence: "probe-failed", detail: boundedFailure("OPFS root probe failed", error), syncAccessHandle });
+    return Object.freeze({ state: "failed", evidence: refusalEvidence(error), detail: boundedFailure("OPFS root probe failed", error), syncAccessHandle });
   }
 }
 
@@ -694,7 +735,23 @@ async function probeOpfs(host: BrowserCapabilityProbeHost): Promise<OpfsObservat
  */
 async function probeServiceWorker(host: BrowserCapabilityProbeHost): Promise<BrowserCapabilityObservation> {
   const container = host.navigator?.serviceWorker;
-  if (container === undefined) return unavailable("Service Worker API was not observed.");
+  if (container === undefined) {
+    // Absence in a *secure* context is a different fact from absence anywhere
+    // else. Every engine that can run this page ships service workers and only
+    // withholds the container when the context has them switched off — a
+    // private window, or a disabled preference. Saying so gives the reader
+    // something to change; "not observed" ends the conversation. Outside a
+    // secure context the API is simply not exposed, and no user action in the
+    // browser would change that, so it keeps the weaker word.
+    if (host.navigator !== undefined && host.isSecureContext) {
+      return Object.freeze({
+        state: "unavailable",
+        evidence: "disabled",
+        detail: "This secure context exposes no Service Worker container, which is how a browser reports service workers switched off — a private window, or a disabled preference.",
+      });
+    }
+    return unavailable("Service Worker API was not observed.");
+  }
   if (container.controller != null) {
     return Object.freeze({
       state: "available",
@@ -723,7 +780,7 @@ async function probeServiceWorker(host: BrowserCapabilityProbeHost): Promise<Bro
         : "Service Worker API is exposed; no worker is registered for this page.",
     });
   } catch (error) {
-    return Object.freeze({ state: "failed", evidence: "probe-failed", detail: boundedFailure("Service worker registration probe failed", error) });
+    return Object.freeze({ state: "failed", evidence: refusalEvidence(error), detail: boundedFailure("Service worker registration probe failed", error) });
   }
 }
 
@@ -754,8 +811,11 @@ async function probeCacheStorage(host: BrowserCapabilityProbeHost): Promise<Brow
     return Object.freeze(observation);
   } catch (error) {
     // Some engines (Firefox private browsing) raise on caches.keys(); an
-    // unconditional "available" would overstate what this page can do.
-    return Object.freeze({ state: "failed", evidence: "probe-failed", detail: boundedFailure("Cache Storage probe failed", error) });
+    // unconditional "available" would overstate what this page can do. That
+    // engine raises `SecurityError`, which `refusalEvidence` turns into
+    // `disabled` — the reader learns the private window is the reason rather
+    // than that Airship broke.
+    return Object.freeze({ state: "failed", evidence: refusalEvidence(error), detail: boundedFailure("Cache Storage probe failed", error) });
   }
 }
 
@@ -855,6 +915,24 @@ function boundedNumber(value: unknown, minimum: number, maximum: number): number
 function boundedFailure(prefix: string, error: unknown): string {
   const name = error instanceof DOMException ? error.name : error instanceof Error ? error.name : "Error";
   return `${prefix} (${boundedText(name, 48) ?? "Error"}).`;
+}
+
+/**
+ * A rejection is not one fact, and the browser already told us which one.
+ *
+ * `NotAllowedError` is the browser saying this page was refused permission it
+ * could still be granted; `SecurityError` is how engines report a feature that
+ * is switched off for this browsing context — Firefox private windows raise it
+ * from `caches.keys()` and from OPFS, with the feature intact everywhere else
+ * in the same browser. Anything else is a probe that genuinely broke. Reading
+ * the name here rather than in the view keeps the cause with the observation,
+ * where the detail sentence already lives.
+ */
+function refusalEvidence(error: unknown): BrowserProbeEvidence {
+  const name = error instanceof Error ? error.name : "";
+  if (name === "NotAllowedError") return "permission-needed";
+  if (name === "SecurityError") return "disabled";
+  return "probe-failed";
 }
 
 async function withDeadline<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {

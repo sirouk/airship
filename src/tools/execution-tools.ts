@@ -297,21 +297,9 @@ export function registerExecutionTools(registry: ToolRegistry, workspace?: Works
         additionalProperties: false,
       },
     },
-    async execute(argumentsValue) {
-      const args = objectArguments(argumentsValue);
-      const runtimeId = stringArgument(args.runtime, "runtime") as ExecutionRuntimeId;
-      if (runtimeId !== "node-webcontainer") throw new Error(`${runtimeId} cannot be deactivated by this Airship release.`);
-      if (runtimeId === "node-webcontainer" && nodePack) await (await nodePack).deactivateNodeWebContainer();
-      getClientExecutionRuntime().unregister(runtimeId);
-      getClientExecutionRuntime().clearOptionalState(runtimeId);
-      return {
-        content: JSON.stringify(
-          getClientExecutionRuntime().capabilities().find(({ id }) => id === runtimeId),
-          null,
-          2,
-        ),
-      };
-    },
+    execute: (argumentsValue) => deactivateExecutionRuntime(
+      stringArgument(objectArguments(argumentsValue).runtime, "runtime") as ExecutionRuntimeId,
+    ),
   });
   registry.register({
     definition: {
@@ -498,18 +486,7 @@ export async function executeExecutionTool(
       return executeShellTool(args, context, workspace);
     }
     case "deactivate_execution_runtime": {
-      const runtimeId = stringArgument(args.runtime, "runtime") as ExecutionRuntimeId;
-      if (runtimeId !== "node-webcontainer") throw new Error(`${runtimeId} cannot be deactivated by this Airship release.`);
-      if (runtimeId === "node-webcontainer" && nodePack) await (await nodePack).deactivateNodeWebContainer();
-      getClientExecutionRuntime().unregister(runtimeId);
-      getClientExecutionRuntime().clearOptionalState(runtimeId);
-      return {
-        content: JSON.stringify(
-          getClientExecutionRuntime().capabilities().find(({ id }) => id === runtimeId),
-          null,
-          2,
-        ),
-      };
+      return deactivateExecutionRuntime(stringArgument(args.runtime, "runtime") as ExecutionRuntimeId);
     }
     case "execute_wasix_shell": {
       throw new Error(wasixUnavailableDetail());
@@ -548,6 +525,65 @@ export async function executeExecutionTool(
     default:
       throw new Error(`Unknown execution tool: ${name}`);
   }
+}
+
+/**
+ * Deactivation is not the execution runtime's business alone.
+ *
+ * The WebContainer instance this tears down is *shared*: Workspace Terminal
+ * mounts the same instance, and everything typed into a terminal lives only in
+ * that mount until it is reconciled back into the workspace. Tearing the
+ * instance down first destroyed that work with no trace — the lifecycle event
+ * that tells the terminal it lost its host is published after the instance is
+ * already gone, far too late for anything to be saved. So the terminal holding
+ * that instance is quiesced (stopped, reconciled, unmounted) *before* the
+ * runtime goes away, and the reconciled paths are named in the result so the
+ * deactivation is auditable rather than merely quiet.
+ *
+ * The quiesce is addressed by *host authority*, not by this tool's workspace
+ * handle. The workspace a tool sees is the context runtime's observation facade
+ * (and a `GitSynchronizedWorkspace` around it when Git is bound), never the raw
+ * provider object the Terminal route keys its manager by, so a workspace-keyed
+ * lookup would miss in the real app and quietly reconcile nothing. Addressing
+ * the holder of the shared instance also gates the work correctly: when no
+ * terminal ever mounted it, there is nothing to stop and this costs nothing.
+ *
+ * A reconciliation failure does not hide behind a success: quiesce has already
+ * released the terminal's authority by the time it throws, so the runtime is
+ * still torn down, but the result is an error naming what could not be saved.
+ */
+async function deactivateExecutionRuntime(runtimeId: ExecutionRuntimeId): Promise<ToolExecutionResult> {
+  if (runtimeId !== "node-webcontainer") throw new Error(`${runtimeId} cannot be deactivated by this Airship release.`);
+  let reconciledPaths: readonly string[] = [];
+  let reconcileError: string | undefined;
+  try {
+    const { quiesceBrowserTerminalHost } = await import("../terminal/manager");
+    reconciledPaths = await quiesceBrowserTerminalHost(
+      "The shared browser runtime is being deactivated; terminal work was reconciled first.",
+    );
+  } catch (error) {
+    reconcileError = error instanceof Error ? error.message : String(error);
+  }
+  if (nodePack) await (await nodePack).deactivateNodeWebContainer();
+  getClientExecutionRuntime().unregister(runtimeId);
+  getClientExecutionRuntime().clearOptionalState(runtimeId);
+  return {
+    content: JSON.stringify(
+      {
+        capability: getClientExecutionRuntime().capabilities().find(({ id }) => id === runtimeId) ?? null,
+        reconciledTerminalPaths: [...reconciledPaths],
+        ...(reconcileError ? { terminalReconcileError: reconcileError } : {}),
+      },
+      null,
+      2,
+    ),
+    metadata: {
+      runtime: runtimeId,
+      reconciledTerminalPaths: [...reconciledPaths],
+      ...(reconcileError ? { terminalReconcileError: reconcileError } : {}),
+    },
+    ...(reconcileError ? { isError: true } : {}),
+  };
 }
 
 /** Optional same-origin packs call this only after their pinned assets load. */

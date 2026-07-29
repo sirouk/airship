@@ -20,7 +20,7 @@ async function setActiveProfileApproval(page: Page, option: "Ask First" | "Auto 
   await page.getByRole("listbox", { name: "Profile approval policy" }).getByRole("option", { name: option, exact: true }).click();
   await page.getByRole("button", { name: "Save new revision" }).click();
   await expect(page.getByText("Revision saved in page memory. Existing sessions remain pinned.")).toBeVisible();
-  await page.getByRole("button", { name: "Apply in a new session" }).click();
+  await page.getByRole("button", { name: "Switch to this profile" }).click();
   await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Chat", exact: true }).click();
   await expect(page.locator(".composer-tools")).toContainText(option);
 }

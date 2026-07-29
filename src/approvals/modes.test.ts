@@ -49,6 +49,28 @@ describe("approval modes", () => {
     expect(broker.snapshot().pending).toHaveLength(0);
   });
 
+  it("Full Access records the confinement each effect actually had, not one borrowed sentence", async () => {
+    const broker = new ApprovalBroker();
+    const policy = createApprovalModePolicy({ mode: "full-access", broker });
+    const reasonFor = async (effect: ToolDefinition["effect"]): Promise<string> => {
+      const toolContext = context(`full-${effect}`);
+      await policy.review({ ...writeTool, effect }, {}, toolContext);
+      return approvalProvenance(policy, toolContext)?.reason ?? "";
+    };
+
+    const write = await reasonFor("write");
+    const network = await reasonFor("network");
+
+    // The journaled reason is the durable record of why an effect ran without a
+    // prompt. A network allow is confined to HTTPS and to the origin's CORS
+    // policy; nothing path-confines it, so it must not say so.
+    expect(network).not.toBe(write);
+    expect(network).not.toContain("path boundaries");
+    expect(network).toContain("not path-confined");
+    expect(network).toContain("remote origin");
+    expect(write).toContain("path confinement");
+  });
+
   it("Auto Approve allows only a structured safe verdict and denies an unsafe verdict", async () => {
     const broker = new ApprovalBroker();
     const safetyReview = vi.fn(async (_tool: ToolDefinition, _args: JsonValue): Promise<SafetyReviewResult> => ({

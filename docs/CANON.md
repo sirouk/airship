@@ -307,7 +307,10 @@ not a reduced product.
 
 Source Control is part of the Workspace Editor. Historical `#sources` links
 resolve to Editor. Sessions are user-facing as conversations; the detailed
-session library remains available for search, audit, resume, and clean forks.
+session library remains available for search, audit, resume, and forking. A
+fork does not copy the ancestor's journal, but it is not started blind either:
+it carries a digest-sealed, bounded copy of the ancestor's context up to the
+selected boundary, and says what that copy left out.
 
 Chat navigation is inline with the active Profile rather than hidden in browser
 history or a detached flyout. Favorited conversations form a stable, reorderable
@@ -1009,7 +1012,8 @@ remain alive.
 - static installable PWA and responsive desktop/mobile shell;
 - framework-independent TypeScript agent loop and deterministic local provider;
 - immutable session events, pinned manifests, conversation library, audited
-  resume, clean forks, an explicit Profile-local active-conversation pointer,
+  resume, forks seeded with a digest-sealed bounded ancestor context rather
+  than copied history, an explicit Profile-local active-conversation pointer,
   and journal-backed user-ordered favorites with convergent concurrent moves;
 - an inline Profile-local Chat tree and All conversations surface with
   Favorites before stable recents, pointer drag/drop, keyboard movement,

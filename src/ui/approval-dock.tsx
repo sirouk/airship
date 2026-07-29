@@ -32,7 +32,7 @@ export function ApprovalDock({ broker }: { broker: ApprovalBroker }) {
 
   if (!current) return null;
 
-  const writeFacts = current.effect === "write" ? writeApprovalFacts(current.displayArguments) : undefined;
+  const writeFacts = current.effect === "write" ? writeApprovalFacts(current.toolName, current.displayArguments) : undefined;
   return (
     <div
       class="approval-scrim"
@@ -68,16 +68,19 @@ export function ApprovalDock({ broker }: { broker: ApprovalBroker }) {
 
         <p id="approval-description" class="approval-description">{current.description}</p>
 
-        <div class="approval-facts" aria-label="Approval identity">
+        <div class="approval-facts" role="group" aria-label="Approval identity">
           <span><small>Effect</small><strong>{current.effect}</strong></span>
           <span title={current.operationId}><small>Operation</small><strong>{compactId(current.operationId)}</strong></span>
           <span title={current.turnId}><small>Turn</small><strong>{compactId(current.turnId)}</strong></span>
           <span><small>Requested</small><strong>{formatApprovalTime(current.requestedAt)}</strong></span>
         </div>
 
+        {/* Rendered for every write request, including one whose tool has no
+            mapped consequence: omitting the section there would make an
+            unrecognised write look like a request with no consequence at all. */}
         {writeFacts ? <section class="approval-write-facts" aria-label="Write consequence">
-          <div><small>Target path</small><strong>{writeFacts.target ?? "Adapter-selected target"}</strong></div>
-          <div><small>Change</small><strong class="approval-disposition">{writeFacts.disposition}</strong></div>
+          <div><small>Target</small><strong>{writeFacts.targets.length ? writeFacts.targets.join(", ") : "Adapter-selected target"}</strong></div>
+          <div><small>Change</small><strong class="approval-disposition" data-derived={writeFacts.derived ? "true" : "false"}>{writeFacts.disposition}</strong></div>
           <div><small>New size</small><strong>{writeFacts.byteLength === undefined ? "Not supplied" : `${writeFacts.byteLength} bytes`}</strong></div>
           <div><small>Size delta</small><strong>{writeFacts.byteDelta === undefined ? "Not supplied" : `${writeFacts.byteDelta >= 0 ? "+" : ""}${writeFacts.byteDelta} bytes`}</strong></div>
           {writeFacts.before !== undefined || writeFacts.after !== undefined ? <div class="approval-diff"><small>Bounded old → new preview</small><pre><del>{writeFacts.before || "∅"}</del>{"\n"}<ins>{writeFacts.after || "∅"}</ins></pre></div> : null}

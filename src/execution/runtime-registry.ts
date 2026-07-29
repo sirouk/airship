@@ -1,5 +1,23 @@
+import { getRuntimeLoadMonitor, type RuntimeLoadMonitor } from "../capabilities/runtime-load";
 import type { JsonValue, ToolOutputChunk } from "../core/contracts";
 import type { WorkspacePort } from "../workspace/contracts";
+
+/**
+ * The broker is the only thing that knows a run started, so it publishes the
+ * load monitor rather than making every surface reach past it for the same
+ * singleton. Keeping the one import path also keeps the monitor inside this
+ * pack's chunk instead of emitting a shared artifact no release-gate
+ * classification owns.
+ */
+export {
+  RUNTIME_LOAD_BOUNDARY,
+  getRuntimeLoadMonitor,
+  measuredBytesLabel,
+  runtimeLoadFigures,
+  runtimeLoadLaneSummary,
+  type RuntimeLoadMonitor,
+  type RuntimeLoadReport,
+} from "../capabilities/runtime-load";
 
 export type ExecutionRuntimeId =
   | "javascript-worker"
@@ -57,6 +75,16 @@ export type ExecutionCapability = Readonly<{
    */
   cancellation: "terminate-worker" | "terminate-worker-tree" | "kill-process" | "abort-interpreter" | "unavailable";
   detail: string;
+  /**
+   * Why an advertised runtime is unavailable *on this host*, and what would
+   * change it. Its absence is a different claim from its presence: absent means
+   * the release itself offers no path (wasix), which nothing the reader does can
+   * fix; present means the release does advertise one and this browser or page
+   * blocked it, which is usually the reader's to act on. Collapsing the two is
+   * what let the Capabilities route tell a cross-origin-isolation failure that
+   * no activation path was advertised.
+   */
+  blocker?: Readonly<{ condition: string; remedy: string }>;
 }>;
 
 export type ExecutionRequest = Readonly<{
@@ -176,6 +204,14 @@ const OPTIONAL_CAPABILITIES: readonly ExecutionCapability[] = Object.freeze([
   },
 ]);
 
+/** One host condition, stated once, kept in the detail and in the blocker. */
+function blockedBy(
+  capability: ExecutionCapability,
+  blocker: NonNullable<ExecutionCapability["blocker"]>,
+): ExecutionCapability {
+  return { ...capability, state: "unavailable", detail: `${capability.detail} ${blocker.condition}`, blocker };
+}
+
 /** Labels for cold or future packs never promote a session capability tier. */
 export function deriveBrowserExecutionTier(
   capabilities: readonly Pick<ExecutionCapability, "state" | "tier">[],
@@ -207,7 +243,11 @@ export class ClientExecutionRuntime {
   private readonly adapters = new Map<ExecutionRuntimeId, ExecutionAdapter>();
   private readonly optionalStates = new Map<ExecutionRuntimeId, ExecutionCapability>();
 
-  constructor(private readonly optional = OPTIONAL_CAPABILITIES) {}
+  constructor(
+    private readonly optional = OPTIONAL_CAPABILITIES,
+    /** In-flight runs are the one utilisation figure this page can state truthfully. */
+    private readonly load: RuntimeLoadMonitor = getRuntimeLoadMonitor(),
+  ) {}
 
   register(adapter: ExecutionAdapter): void {
     if (this.adapters.has(adapter.capability.id)) throw new Error(`Execution runtime already registered: ${adapter.capability.id}`);
@@ -254,7 +294,15 @@ export class ClientExecutionRuntime {
       if (capability?.state === "failed") throw new Error(`${capability.label} activation failed. ${capability.detail}`);
       throw new Error(`${capability?.label ?? request.runtime} is unavailable on this device.`);
     }
-    const result = await adapter.execute(request);
+    // Counted around the adapter call only: a request refused above never ran,
+    // and counting it would make the load figure a count of intentions.
+    const finished = this.load.begin(request.runtime);
+    let result: ExecutionResult;
+    try {
+      result = await adapter.execute(request);
+    } finally {
+      finished();
+    }
     if (result.runtime !== request.runtime) throw new Error("Execution adapter returned a mismatched runtime identity.");
     if (result.provenance.capabilityTier !== adapter.capability.tier || result.provenance.authority !== "browser") {
       throw new Error("Execution adapter returned provenance that does not match its registered capability tier.");
@@ -262,19 +310,41 @@ export class ClientExecutionRuntime {
     return result;
   }
 
+  /**
+   * Each host branch names its own condition once and carries it in both the
+   * prose detail and the structured `blocker`, so a surface can state the real
+   * reason without parsing the sentence back out of the detail.
+   */
   private resolveOptionalState(capability: ExecutionCapability): ExecutionCapability {
+    // A runtime this release does not promote is already unavailable for a
+    // reason no host condition can change. Layering a host blocker on top would
+    // tell the reader to fix their browser to reach something the build never
+    // shipped, and would bury the release's own stated reason.
+    if (capability.state === "unavailable") return { ...capability };
     if (typeof Worker === "undefined" || typeof WebAssembly === "undefined") {
-      return { ...capability, state: "unavailable", detail: `${capability.detail} This browser has no Worker/WebAssembly runtime.` };
+      return blockedBy(capability, {
+        condition: "This browser has no Worker/WebAssembly runtime.",
+        remedy: "Open Airship in a browser release that exposes Web Workers and WebAssembly.",
+      });
     }
     if (capability.id === "node-webcontainer" || capability.id === "wasix") {
       if (typeof document === "undefined") {
-        return { ...capability, state: "unavailable", detail: `${capability.detail} This environment has no browser document.` };
+        return blockedBy(capability, {
+          condition: "This environment has no browser document.",
+          remedy: "Open Airship in a browser tab; this runtime cannot boot in a worker-only realm.",
+        });
       }
       if (globalThis.isSecureContext === false) {
-        return { ...capability, state: "unavailable", detail: `${capability.detail} HTTPS or a loopback secure context is required.` };
+        return blockedBy(capability, {
+          condition: "HTTPS or a loopback secure context is required.",
+          remedy: "Reopen Airship over HTTPS, or on http://localhost or http://127.0.0.1.",
+        });
       }
       if (!globalThis.crossOriginIsolated || typeof SharedArrayBuffer === "undefined") {
-        return { ...capability, state: "unavailable", detail: `${capability.detail} This page is not cross-origin isolated.` };
+        return blockedBy(capability, {
+          condition: "This page is not cross-origin isolated.",
+          remedy: "Serve Airship with the COOP and COEP headers it ships with, then reload; a proxy or embed that strips them removes this runtime.",
+        });
       }
     }
     return { ...capability };

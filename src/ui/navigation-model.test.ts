@@ -48,13 +48,21 @@ describe("canonical navigation model", () => {
     const profiles = CANONICAL_DESTINATIONS.find((entry) => entry.id === "profiles");
     const connection = CANONICAL_DESTINATIONS.find((entry) => entry.id === "access");
     expect(chat?.nested).toEqual([
-      expect.objectContaining({ id: "sessions", label: "All conversations", hash: "#sessions" }),
+      // `global` here was the parent-agnostic default, and the palette prints
+      // the tag verbatim: the route enforces profile scope, so the tag has to.
+      expect.objectContaining({ id: "sessions", label: "All conversations", hash: "#sessions", scope: "profile" }),
     ]);
     expect(workspace?.nested).toEqual([
       expect.objectContaining({ id: "editor", label: "Editor", hash: "#editor" }),
       expect.objectContaining({ id: "terminal", label: "Terminal", hash: "#terminal" }),
     ]);
-    expect(profiles?.nested).toEqual([]);
+    // Both were legal views with legal hashes and no entry point on desktop
+    // until they were filed here; the rail, the palette and the jump chords
+    // all read this one table.
+    expect(profiles?.nested).toEqual([
+      expect.objectContaining({ id: "skills", label: "Skills", hash: "#skills" }),
+      expect.objectContaining({ id: "capabilities", label: "Capabilities", hash: "#capabilities" }),
+    ]);
     expect(connection?.nested).toEqual([
       expect.objectContaining({ id: "billing", label: "Account", hash: "#account" }),
     ]);
@@ -149,9 +157,23 @@ describe("canonical navigation model", () => {
       label: "Settings",
       kind: "overlay",
       overlay: "settings",
-      hash: "#settings",
     });
     expect(CANONICAL_DESTINATIONS.map((entry) => String(entry.id))).not.toContain(SETTINGS_OVERLAY_ENTRY.id);
+  });
+
+  it("advertises a hash only where the router can honour one", () => {
+    // `#settings` was modelled, exported and asserted, and the router has never
+    // known the token: `navigationViewFromHash` fell it through to Chat, so a
+    // shared link silently rewrote the reader's location. Every hash this model
+    // publishes has to round-trip, and an overlay — which opens over whatever
+    // route is current — publishes none.
+    for (const entry of MOBILE_MORE_ENTRIES) {
+      if (entry.kind !== "route") {
+        expect(entry, `${entry.id} is an overlay and must not advertise an address`).not.toHaveProperty("hash");
+        continue;
+      }
+      expect(navigationViewFromHash(entry.hash), `${entry.hash} round-trips`).toBe(entry.view);
+    }
   });
 });
 

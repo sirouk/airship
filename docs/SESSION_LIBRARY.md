@@ -54,6 +54,8 @@ Render the library and make activation an explicit host action:
   }}
   onForked={async (result) => {
     setSessionId(result.session.id);
+    // The fork's own transcript is empty of turns; its inherited ancestor
+    // context lives in the seed event and is materialized for the provider.
     setMessages([]);
   }}
   onOpenProof={(id) => openProofFor(id)}
@@ -75,7 +77,9 @@ Pass a fresh `forkManifest` to move a branch onto the active runtime. If it is o
 }
 ```
 
-The source transcript is not copied, summarized, or rewritten. The returned `historyCopied: false` field and the UI state this explicitly. A future protocol can resolve ancestor transcripts for conversational branching without invalidating source receipts.
+The source journal is not copied, summarized, or rewritten — that is what the returned `historyCopied: false` field means, and no source receipt is invalidated. Conversational branching is nonetheless already shipped: the fork's first event after creation is a `session.fork.context.seeded` record (`FORK_CONTEXT_EVENT_TYPE` in `src/core/fork-context.ts`) carrying a digest-sealed copy of the ancestor's materialized provider messages up to the selected boundary. The result reports `contextSeeded: true` with `contextMessageCount`, `omittedContextMessages`, and `omittedContextImages`.
+
+The seed is bounded, so a long ancestor is normally truncated rather than refused: at most `MAX_FORK_CONTEXT_MESSAGES` (256) messages and `MAX_FORK_CONTEXT_BYTES` (768 KiB) of canonical payload, dropped as whole turns from the oldest end so the seed is never a half-turn. When the single newest turn alone still does not fit, its images are stripped to keep the words. When even the stripped turn does not fit, `prepareForkContext` throws a `RangeError` and the fork is refused: the bound is never met by cutting inside a turn, so one pathological turn is the case truncation cannot serve. Whatever was left out is counted in the omission fields so the surface can say so. The seed is admitted into provider history only after its `contextDigest` is verified and its sealed scope matches the fork's own session ID and lineage; a seed that is tampered with, duplicated, or moved off the second event position is ignored entirely.
 
 ## Posture and proof language
 

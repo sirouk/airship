@@ -543,6 +543,10 @@ export function LocalDeviceVaultSetup({
               data-state={ceremony}
               ref={ceremonyRegion}
               tabIndex={-1}
+              /* Focus is moved here when the ceremony opens, so this element's
+                 own name is what gets announced — and a name on a generic div
+                 is dropped. `group` is the smallest role that keeps it. */
+              role="group"
               aria-labelledby="local-device-ceremony-title"
             >
               <div>

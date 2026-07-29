@@ -1,7 +1,16 @@
 import { useEffect, useState } from "preact/hooks";
 import type { ComponentChildren } from "preact";
 import { semanticWasmThreadCount, type BrowserCapabilityObservation, type BrowserRuntimeCapabilityReport } from "../capabilities/browser-runtime";
-import type { ExecutionCapability, ExecutionRuntimeId } from "../execution/runtime-registry";
+import {
+  RUNTIME_LOAD_BOUNDARY,
+  getRuntimeLoadMonitor,
+  runtimeLoadFigures,
+  runtimeLoadLaneSummary,
+  type ExecutionCapability,
+  type ExecutionRuntimeId,
+  type RuntimeLoadMonitor,
+  type RuntimeLoadReport,
+} from "../execution/runtime-registry";
 import { Icon } from "./icons";
 import { RouteHeader } from "./route-header";
 import { Seal, type SealState } from "./seal";
@@ -10,8 +19,18 @@ import "./capabilities-view.css";
 export type CapabilitiesViewProps = Readonly<{
   inspect(): Promise<readonly ExecutionCapability[]>;
   inspectBrowser(): Promise<BrowserRuntimeCapabilityReport>;
+  /**
+   * The registry's publish side. `inspectBrowser` is a pull, and a pull cannot
+   * hear the registry re-probe when a device changes — the route kept a private
+   * copy that silently diverged from the generation the agent reads. Subscribing
+   * makes this surface an observer of the canonical report rather than the owner
+   * of a snapshot. Optional so a harness can drive the panel without a registry.
+   */
+  subscribeBrowser?(listener: (report: BrowserRuntimeCapabilityReport) => void): () => void;
   onCommand(command: string): void;
   onOpenSkills(): void;
+  /** Injectable for tests; the page monitor is a singleton like the capability registry. */
+  loadMonitor?: RuntimeLoadMonitor;
 }>;
 
 /**
@@ -30,9 +49,10 @@ export function sealStateForCapabilitySummary(
   return ready === runtimes.length ? "verified" : "asserted";
 }
 
-export function CapabilitiesView({ inspect, inspectBrowser, onCommand, onOpenSkills }: CapabilitiesViewProps) {
+export function CapabilitiesView({ inspect, inspectBrowser, subscribeBrowser, onCommand, onOpenSkills, loadMonitor }: CapabilitiesViewProps) {
   const [runtimes, setRuntimes] = useState<readonly ExecutionCapability[]>([]);
   const [browser, setBrowser] = useState<BrowserRuntimeCapabilityReport>();
+  const [load, setLoad] = useState<RuntimeLoadReport>();
   const [status, setStatus] = useState("Inspecting this browser…");
   const [error, setError] = useState<string>();
 
@@ -43,7 +63,12 @@ export function CapabilitiesView({ inspect, inspectBrowser, onCommand, onOpenSki
       const [next, report] = await Promise.all([inspect(), inspectBrowser()]);
       setRuntimes(next);
       setBrowser(report);
-      setStatus(`${next.filter((runtime) => runtime.state === "ready").length}/${next.length} runtimes ready · probe current`);
+      // The count is what this line owns. When the browser report was observed
+      // is the report's own fact, read at render from whichever generation is
+      // on screen — a status string baked at probe time could only ever say
+      // "current", which is exactly the claim that stopped being true the
+      // moment the registry re-probed behind this route's back.
+      setStatus(`${next.filter((runtime) => runtime.state === "ready").length}/${next.length} runtimes ready`);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Runtime inspection failed safely.");
       setStatus("Runtime state unavailable");
@@ -51,6 +76,24 @@ export function CapabilitiesView({ inspect, inspectBrowser, onCommand, onOpenSki
   }
 
   useEffect(() => { void refresh(); }, []);
+
+  // The registry publishes on its own lifecycle triggers (pageshow, online,
+  // visibility, network and battery change), and `subscribe` either replays the
+  // cached report immediately or starts a probe. Nothing here re-pulls.
+  useEffect(() => {
+    if (!subscribeBrowser) return;
+    return subscribeBrowser(setBrowser);
+  }, [subscribeBrowser]);
+
+  // Load is a live subscription rather than part of `refresh`: it changes when
+  // work starts and stops, not when the capability probe runs. The measured
+  // values are asked for once, because measuring page memory is itself work.
+  useEffect(() => {
+    const monitor = loadMonitor ?? getRuntimeLoadMonitor();
+    const unsubscribe = monitor.subscribe(setLoad);
+    void monitor.measure().catch(() => undefined);
+    return unsubscribe;
+  }, [loadMonitor]);
 
   return (
     <section class="work-view capabilities-view" aria-labelledby="capabilities-title">
@@ -65,15 +108,21 @@ export function CapabilitiesView({ inspect, inspectBrowser, onCommand, onOpenSki
       />
 
       <div class="capability-summary" role="status">
-        <Seal state={sealStateForCapabilitySummary(runtimes, Boolean(error))} acting={!error && !runtimes.length} label={status} detail="Live in-page runtime state." />
+        <Seal state={sealStateForCapabilitySummary(runtimes, Boolean(error))} acting={!error && !runtimes.length} label={browser && !error ? `${status} · observed ${formatObservedAt(browser.observedAt)}` : status} detail="Live in-page runtime state." />
         <span>Every effect still follows the active approval policy.</span>
       </div>
       {error ? <div class="capability-error" role="alert"><Icon name="warning" />{error}</div> : null}
 
-      {browser ? <BrowserCapabilityPanel report={browser} /> : null}
+      {load ? <RuntimeLoadPanel report={load} /> : null}
+
+      {/* The re-probe a device card offers is this route's own Refresh verb,
+          not a second one: a card that granted permission needs the same probe
+          re-run, and two spellings of one action is how a surface ends up with
+          two answers on screen. */}
+      {browser ? <BrowserCapabilityPanel report={browser} onReprobe={() => void refresh()} /> : null}
 
       <div class="capability-section-heading"><span class="eyebrow">Executable now or on activation</span><h2>Language runtimes</h2></div>
-      <div class="capability-grid" aria-label="Browser execution runtimes">
+      <div class="capability-grid" role="group" aria-label="Browser execution runtimes">
         {runtimes.map((runtime) => <RuntimeCard key={runtime.id} runtime={runtime} onCommand={onCommand} />)}
       </div>
 
@@ -85,7 +134,25 @@ export function CapabilitiesView({ inspect, inspectBrowser, onCommand, onOpenSki
   );
 }
 
-function BrowserCapabilityPanel({ report }: Readonly<{ report: BrowserRuntimeCapabilityReport }>) {
+/**
+ * Live utilisation, kept to what this page can count or measure.
+ *
+ * Every figure here is either a run Airship started (a count it owns) or a
+ * value a browser API returned. Nothing derived from `AdaptiveSchedulingPolicy`
+ * appears: those are ceilings, and `maxWorkerConcurrency` in particular must
+ * never be rendered as a number of running workers.
+ */
+function RuntimeLoadPanel({ report }: Readonly<{ report: RuntimeLoadReport }>) {
+  return <section class="capability-load" aria-label="Live in-page load">
+    <dl class="capability-signal-strip">
+      {runtimeLoadFigures(report).map(([label, value]) => <div><dt>{label}</dt><dd>{value}</dd></div>)}
+    </dl>
+    <p>{runtimeLoadLaneSummary(report)}</p>
+    <p>{RUNTIME_LOAD_BOUNDARY}</p>
+  </section>;
+}
+
+function BrowserCapabilityPanel({ report, onReprobe }: Readonly<{ report: BrowserRuntimeCapabilityReport; onReprobe(): void }>) {
   const primitives = [
     ["Service Worker", report.serviceWorker],
     ["Cache Storage", report.cacheStorage],
@@ -111,16 +178,16 @@ function BrowserCapabilityPanel({ report }: Readonly<{ report: BrowserRuntimeCap
     </dl>
 
     <div class="capability-device-grid">
-      <DeviceCard title="WebGPU" observation={report.webgpu} detail={report.webgpu.state === "available"
+      <DeviceCard title="WebGPU" observation={report.webgpu} onReprobe={onReprobe} detail={report.webgpu.state === "available"
         ? `${report.webgpu.features.length ? `${report.webgpu.features.length} optional features` : "Core adapter"} · ${report.webgpu.powerPreference} preference`
         : undefined}>
-        {report.webgpu.features.length ? <div class="capability-tags" aria-label="Observed WebGPU features">{report.webgpu.features.slice(0, 8).map((feature) => <span>{feature}</span>)}</div> : null}
+        {report.webgpu.features.length ? <div class="capability-tags" role="group" aria-label="Observed WebGPU features">{report.webgpu.features.slice(0, 8).map((feature) => <span>{feature}</span>)}</div> : null}
         {Object.keys(report.webgpu.limits).length || Object.keys(report.webgpu.adapterInfo).length ? <details><summary>Adapter facts</summary><dl>{Object.entries({ ...report.webgpu.adapterInfo, ...report.webgpu.limits }).map(([name, value]) => <div><dt>{humanize(name)}</dt><dd>{String(value)}</dd></div>)}</dl></details> : null}
       </DeviceCard>
-      <DeviceCard title="WebNN" observation={report.webnn} detail="Context creation probe" />
-      <DeviceCard title="OPFS" observation={report.opfs} detail={report.opfs.syncAccessHandle === "api-exposed" ? "Root + sync interface observed" : "Root availability only"} />
-      <DeviceCard title="WebAssembly" observation={report.wasm} detail={wasmFeatures.length ? `${wasmFeatures.length} advanced features` : "Portable baseline"}>
-        {wasmFeatures.length ? <div class="capability-tags" aria-label="Validated WebAssembly features">{wasmFeatures.map((feature) => <span>{feature}</span>)}</div> : null}
+      <DeviceCard title="WebNN" observation={report.webnn} onReprobe={onReprobe} detail="Context creation probe" />
+      <DeviceCard title="OPFS" observation={report.opfs} onReprobe={onReprobe} detail={report.opfs.syncAccessHandle === "api-exposed" ? "Root + sync interface observed" : "Root availability only"} />
+      <DeviceCard title="WebAssembly" observation={report.wasm} onReprobe={onReprobe} detail={wasmFeatures.length ? `${wasmFeatures.length} advanced features` : "Portable baseline"}>
+        {wasmFeatures.length ? <div class="capability-tags" role="group" aria-label="Validated WebAssembly features">{wasmFeatures.map((feature) => <span>{feature}</span>)}</div> : null}
       </DeviceCard>
     </div>
 
@@ -152,18 +219,40 @@ function BrowserCapabilityPanel({ report }: Readonly<{ report: BrowserRuntimeCap
   </section>;
 }
 
-function DeviceCard({ title, observation, detail, children }: Readonly<{
+function DeviceCard({ title, observation, detail, onReprobe, children }: Readonly<{
   title: string;
   observation: BrowserCapabilityObservation;
   detail?: string;
+  /** Absent for a card a harness drives without a registry behind it. */
+  onReprobe?: () => void;
   children?: ComponentChildren;
 }>) {
   const [state, label] = probePresentation(observation);
+  const action = onReprobe ? probeAction(observation, onReprobe) : undefined;
   return <article class={`capability-device-card ${observation.state}`}>
     <header><div><h3>{title}</h3>{detail ? <small>{detail}</small> : null}</div><Seal state={state} label={label} detail={observation.detail} compact /></header>
     {children}
     <p>{observation.detail}</p>
+    {action ? <button class="capability-device-card__action" type="button" onClick={action.onSelect}>{action.label}</button> : null}
   </article>;
+}
+
+/**
+ * When the rendered report was observed. Local to this pack for the same reason
+ * billing-view keeps its own: importing a formatter across a route boundary
+ * merges the two chunks the release gate keeps apart. The word and the shape
+ * match billing-view's "observed" reading so one vocabulary describes both.
+ */
+export function formatObservedAt(value: string): string {
+  const parsed = Date.parse(value);
+  if (Number.isNaN(parsed)) return "an unreadable time";
+  return new Date(parsed).toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZoneName: "short",
+  });
 }
 
 function connectionLabel(report: BrowserRuntimeCapabilityReport): string {
@@ -173,19 +262,57 @@ function connectionLabel(report: BrowserRuntimeCapabilityReport): string {
   return `${connection.effectiveType ?? "Online"}${connection.saveData ? " · data saver" : ""}`;
 }
 
-function probePresentation(observation: BrowserCapabilityObservation): readonly [SealState, string] {
+/**
+ * Cause is read before strength, because a refusal is not a fault.
+ *
+ * `state` grades the outcome and `evidence` grades the observation, and neither
+ * on its own can tell a browser that withheld permission from a probe that
+ * broke — which is how four different worlds arrived on screen as the single
+ * word "Unavailable" with nothing the reader could do next. The two refusal
+ * evidences are therefore checked first: both arrive carrying a `failed` or
+ * `unavailable` state that would otherwise swallow them.
+ */
+export function probePresentation(observation: BrowserCapabilityObservation): readonly [SealState, string] {
+  if (observation.evidence === "permission-needed") return ["attention", "Permission needed"];
+  if (observation.evidence === "disabled") return ["attention", "Switched off here"];
   if (observation.state === "failed") return ["failed", "Probe failed"];
   if (observation.evidence === "probe-passed") return ["verified", "Probe passed"];
   if (observation.evidence === "api-exposed") return ["asserted", "API observed"];
   return ["none", "Unavailable"];
 }
 
+/**
+ * The one control an observation may offer, and only where acting can change
+ * the answer.
+ *
+ * A probe that broke, a feature this engine does not ship, and a capability
+ * that simply passed all get no button: an affordance that cannot work is worse
+ * than none, and four buttons on four cards that each re-run the same probe is
+ * the "Refresh" verb duplicated four times. Only `permission-needed` and
+ * `disabled` name something the reader owns, so only they earn a control.
+ */
+export function probeAction(
+  observation: BrowserCapabilityObservation,
+  onReprobe: () => void,
+): Readonly<{ label: string; onSelect(): void }> | undefined {
+  if (observation.evidence === "permission-needed") {
+    return Object.freeze({ label: "Grant access, then re-probe", onSelect: onReprobe });
+  }
+  if (observation.evidence === "disabled") {
+    return Object.freeze({ label: "Enable it, then re-probe", onSelect: onReprobe });
+  }
+  return undefined;
+}
+
 function RuntimeCard({ runtime, onCommand }: Readonly<{ runtime: ExecutionCapability; onCommand(command: string): void }>) {
   const action = runtimeAction(runtime);
+  const boundary = action ? undefined : runtimeBoundary(runtime);
   const [state, label] = runtimePresentation(runtime.state);
   return <article class={`capability-runtime ${runtime.state}`}>
-    <header><span class="capability-runtime__icon"><Icon name={runtime.id === "node-webcontainer" ? "terminal" : "model"} /></span><div><h2>{runtime.label}</h2><small>{runtime.languages.join(" · ")}</small></div><Seal state={state} label={label} detail={runtime.detail} size={15} compact /></header>
-    {action ? <button class="primary" type="button" onClick={() => onCommand(action.command)}>{action.label}<span aria-hidden="true">→</span></button> : <span class="capability-runtime__boundary">No activation path is advertised by this release.</span>}
+    <header><span class="capability-runtime__icon"><Icon name={runtimeGlyph(runtime)} /></span><div><h2>{runtime.label}</h2><small>{runtime.languages.join(" · ")}</small></div><Seal state={state} label={label} detail={runtime.detail} size={15} compact /></header>
+    {action
+      ? <button class="primary" type="button" onClick={() => onCommand(action.command)}>{action.label}<span aria-hidden="true">→</span></button>
+      : <p class="capability-runtime__boundary">{boundary!.condition}{boundary!.remedy ? <span>{boundary!.remedy}</span> : null}</p>}
     <details class="capability-runtime__details">
       <summary>Technical boundary</summary>
       <p>{runtime.detail}</p>
@@ -194,18 +321,56 @@ function RuntimeCard({ runtime, onCommand }: Readonly<{ runtime: ExecutionCapabi
   </article>;
 }
 
-function runtimeAction(runtime: ExecutionCapability): Readonly<{ label: string; command: string }> | undefined {
+/**
+ * Follows the capability record rather than an id: `shell` already names which
+ * runtimes present a command line, so a new shell pack gets the terminal mark
+ * without this file learning its id. Card-by-id is what put the model glyph on
+ * airship-sh, the one shell that is always ready.
+ */
+export function runtimeGlyph(runtime: Pick<ExecutionCapability, "shell">): "terminal" | "model" {
+  return runtime.shell === "none" ? "model" : "terminal";
+}
+
+export function runtimeAction(runtime: ExecutionCapability): Readonly<{ label: string; command: string }> | undefined {
   if (runtime.state === "unavailable" || runtime.state === "activating") return undefined;
   if (runtime.state === "installable" || runtime.state === "failed") {
     return { label: runtime.state === "failed" ? "Review and retry in Chat" : "Activate in Chat", command: `/install-execution-runtime ${runtime.id}` };
   }
+  // "Run a probe" must run something on *this* runtime. A runtime with no entry
+  // here can only be inspected, so it says so instead of offering a probe that
+  // would have listed every runtime and exercised none.
   const probes: Partial<Record<ExecutionRuntimeId, string>> = {
     "javascript-worker": "/execute-code --json '{\"runtime\":\"javascript-worker\",\"code\":\"return 6 * 7\"}'",
-    "wasi-preview1": "/inspect-execution-runtimes",
     "python-pyodide": "/execute-code --json '{\"runtime\":\"python-pyodide\",\"code\":\"print(6 * 7)\"}'",
     "node-webcontainer": "/execute-node-project --json '{\"workspaceRoot\":\"/workspace\",\"command\":\"node\",\"args\":[\"-e\",\"console.log(6 * 7)\"]}'",
+    "airship-sh": "/execute-shell --json '{\"script\":\"echo $((6 * 7))\"}'",
   };
-  return { label: runtime.id === "wasi-preview1" ? "Inspect runtime" : "Run a probe", command: probes[runtime.id] ?? "/inspect-execution-runtimes" };
+  const probe = probes[runtime.id];
+  return probe ? { label: "Run a probe", command: probe } : { label: "Inspect runtime", command: "/inspect-execution-runtimes" };
+}
+
+/**
+ * What a card says when `runtimeAction` has nothing to offer.
+ *
+ * "No action available" is not one fact, and three different worlds used to
+ * share one sentence. `activating` has no action precisely because the
+ * activation is already running — telling that reader the release advertises no
+ * path contradicts the "Activating" seal beside it. A host blocker states a
+ * condition the reader can usually clear, and carries its own remedy. Only a
+ * runtime this release genuinely never shipped earns the release-level
+ * sentence, which is the one claim none of the other two may make.
+ */
+export function runtimeBoundary(
+  runtime: Pick<ExecutionCapability, "state" | "blocker">,
+): Readonly<{ condition: string; remedy?: string }> {
+  if (runtime.state === "activating") {
+    return Object.freeze({
+      condition: "Activation is running now.",
+      remedy: "This card updates when the runtime reports ready or reports a failure.",
+    });
+  }
+  if (runtime.blocker) return Object.freeze({ condition: runtime.blocker.condition, remedy: runtime.blocker.remedy });
+  return Object.freeze({ condition: "No activation path is advertised by this release." });
 }
 
 function runtimePresentation(state: ExecutionCapability["state"]): readonly [SealState, string] {

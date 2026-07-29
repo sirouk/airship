@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { JsonValue } from "../../core/contracts";
+import { CONVERSATION_NAMED_EVENT_TYPE, HUMAN_INTENT_EVENT_TYPE } from "../../core/contracts";
 import type { DurableEvent } from "../../core/journal";
 import { createLocalReceipt, type ConversationReceipt } from "../../receipts/types";
 import { EventJournal } from "../../core/journal";
@@ -9,6 +10,7 @@ import { sha256, stableStringify } from "../../core/hash";
 import type { CanonicalMessage } from "../../core/contracts";
 import { auditSessionHistory } from "../../core/session-audit";
 import { selectProfileActiveConversation } from "../../sessions/profile-cockpit";
+import { SessionLibrary } from "../../sessions/library";
 import {
   SessionMessagePresentationError,
   describeSessionPresentationFault,
@@ -83,6 +85,34 @@ describe("presentSessionMessages", () => {
     expect(Object.isFrozen(view)).toBe(true);
     expect(Object.isFrozen(view.rows)).toBe(true);
     expect(view.rows.every(Object.isFrozen)).toBe(true);
+  });
+
+  it("states an assistant row's pre-turn boundary separately from its fork-from-here boundary", () => {
+    // Two boundaries, two meanings. "Fork from here" on an answer keeps the
+    // answer, so `sourcePoint` is the turn's terminal event. Retry regenerates
+    // the turn, so it needs the point before the request — reusing
+    // `sourcePoint` for it handed the replacement answer the answer it was
+    // replacing.
+    const events = sequence([
+      draft("session.created", undefined, {}),
+      ...agentTurn("turn-1", "First", "First answer"),
+      ...agentTurn("turn-2", "Second", "Second answer"),
+    ]);
+    const view = presentSessionMessages(input(events));
+    const request = events.find((event) => event.type === "turn.requested" && event.turnId === "turn-2")!;
+    const completed = events.find((event) => event.type === "turn.completed" && event.turnId === "turn-2")!;
+    const assistant = assistantRow(view.rows, "turn-2");
+
+    expect(assistant.sourcePoint).toEqual({ sequence: completed.sequence, digest: completed.digest });
+    expect(assistant.turnStartPoint).toEqual({
+      sequence: request.sequence - 1,
+      digest: request.previousDigest,
+    });
+    expect(assistant.turnStartPoint).not.toEqual(assistant.sourcePoint);
+    // The user row's own source point already is that boundary, so the two
+    // rows agree about where the turn began.
+    expect(view.rows.find((row) => row.turnId === "turn-2" && row.role === "user")?.sourcePoint)
+      .toEqual(assistant.turnStartPoint);
   });
 
   it("replays completed, denied, and failed local commands between ordinary agent turns", () => {
@@ -492,6 +522,143 @@ describe("presentSessionMessages agrees with auditSessionHistory", () => {
     expect(view.markers[0]!.detail).toContain("intact in the journal");
   });
 
+  /**
+   * Every branch — fork, Edit & branch, retry — opens on this record, and it
+   * opened by telling its author the build could not replay something the
+   * build had written itself one operation earlier. The marker now carries the
+   * lineage the seed proves: where the branch was taken, and what came across.
+   */
+  it("presents the fork context seed it wrote itself as a lineage sentence", async () => {
+    const journal = memoryJournal();
+    const created = await journal.createSession("Source", await auditManifest());
+    await appendAuditableTurn(journal, created.id, "turn-1", "First", "One");
+    const library = new SessionLibrary(journal, { now: () => "2026-07-18T00:01:00.000Z" });
+    const fork = await library.fork(created.id);
+
+    const session = (await journal.getSession(fork.session.id))!;
+    const events = await journal.readEvents(session.id);
+    const audit = await auditSessionHistory({ session, events });
+    expect(audit.status).toBe("verified");
+
+    const view = presentSessionMessages({ session, audit, events });
+    expect(view.markers).toHaveLength(1);
+    const marker = view.markers[0]!;
+    expect(marker.kind).toBe("session.fork.context.seeded");
+    expect(marker.presentable).toBe(true);
+    expect(marker.detail).toContain(`at event ${String(fork.sourceBoundarySequence)}`);
+    expect(marker.detail).toContain(`${String(fork.contextMessageCount)} ancestor messages carried`);
+    expect(marker.detail).toContain(`${String(fork.omittedContextMessages)} omitted`);
+    expect(marker.detail).not.toContain("cannot replay");
+    // The raw event type belongs to the provenance line under the sentence,
+    // never inside the sentence a reader is meant to understand.
+    expect(marker.detail).not.toContain("session.fork.context.seeded");
+  });
+
+  /*
+   * The record of a decision the *person* proposed — Create branch, Import
+   * repository, probe the vault — is written with a fresh turn and operation ID
+   * precisely so the audit can prove it is not a step of any turn. The grouper
+   * read that identity as turn membership, looked for the `turn.requested`
+   * boundary the contract says will never exist, and threw. One approved Git
+   * operation therefore made the whole conversation unreplayable, and because
+   * the renderer runs inside the profile switch, switching back to that profile
+   * failed and silently reverted to the profile the user had just left.
+   */
+  it("presents a human-initiated approval as the out-of-turn record the audit defines", async () => {
+    const journal = memoryJournal();
+    const created = await journal.createSession("General silo checkpoint", await auditManifest());
+    await appendAuditableTurn(journal, created.id, "turn-1", "First", "One");
+    // Exactly the shape `reviewHumanIntent` writes for a Git approval taken
+    // from the Workspace while a conversation is open.
+    await journal.append(created.id, [{
+      type: HUMAN_INTENT_EVENT_TYPE,
+      turnId: "human-git-8f2c",
+      operationId: "git-4b19",
+      payload: {
+        toolName: "git_branch-create",
+        effect: "write",
+        decision: "allow",
+        summary: "Create the local branch profile-silo-alpha.",
+        arguments: { branch: "profile-silo-alpha" },
+        approval: { source: "bounded-browser-sandbox", mode: "full-access" },
+      },
+    }]);
+    await appendAuditableTurn(journal, created.id, "turn-2", "Second", "Two");
+    const session = (await journal.getSession(created.id))!;
+    const events = await journal.readEvents(session.id);
+    const audit = await auditSessionHistory({ session, events });
+
+    // The premise: the audit rates this journal sound. The renderer disagreeing
+    // with it is the defect, so reconciling them by loosening the audit would
+    // be reconciling the wrong one.
+    expect(audit.status).toBe("verified");
+
+    const view = presentSessionMessages({ session, audit, events });
+    // Both turns survive, in their own places, with the decision between them.
+    expect(view.turnCount).toBe(2);
+    expect(view.rows.map((row) => row.turnId)).toEqual(["turn-1", "turn-1", "turn-2", "turn-2"]);
+    expect(view.markers).toHaveLength(1);
+    const marker = view.markers[0]!;
+    expect(marker.kind).toBe(HUMAN_INTENT_EVENT_TYPE);
+    expect(marker.presentable).toBe(true);
+    expect(marker.detail).toContain("Allowed git_branch-create");
+    expect(marker.detail).toContain("write effect");
+    expect(marker.detail).toContain("outside any turn");
+    // The authority is named for the same reason the tool cards name it.
+    expect(marker.detail).toContain("Full Access");
+    expect(marker.detail).not.toContain("cannot replay");
+    expect(marker.sequence).toBeGreaterThan(view.rows[1]!.endSequence);
+    expect(marker.sequence).toBeLessThan(view.rows[2]!.sequence);
+  });
+
+  /*
+   * Naming is a real billed request made beside a turn rather than in it, so it
+   * declares its own identity and then reports its usage under it. The audit
+   * admits that usage against the record that declared it; the renderer refused
+   * it, which would have stranded every auto-named conversation the same way.
+   */
+  it("presents the naming inference and the usage it declared, and still refuses an undeclared one", async () => {
+    const journal = memoryJournal();
+    const created = await journal.createSession("General conversation", await auditManifest());
+    await appendAuditableTurn(journal, created.id, "turn-1", "Say the single word: ok", "ok");
+    await journal.append(created.id, [
+      {
+        type: CONVERSATION_NAMED_EVENT_TYPE,
+        turnId: "naming-turn-1",
+        operationId: "naming-operation-1",
+        payload: { title: "Saying the word ok", answer: "Saying the word ok", model: "airship/test-model" },
+      },
+      {
+        type: "inference.usage",
+        turnId: "naming-turn-1",
+        operationId: "naming-operation-1",
+        payload: { inputTokens: 42, outputTokens: 5, source: "conversation-naming" },
+      },
+    ]);
+    const session = (await journal.getSession(created.id))!;
+    const events = await journal.readEvents(session.id);
+    const audit = await auditSessionHistory({ session, events });
+    expect(audit.status).toBe("verified");
+
+    const view = presentSessionMessages({ session, audit, events });
+    expect(view.turnCount).toBe(1);
+    expect(view.markers.map((entry) => entry.kind)).toEqual([CONVERSATION_NAMED_EVENT_TYPE, "inference.usage"]);
+    expect(view.markers[0]!.presentable).toBe(true);
+    expect(view.markers[0]!.detail).toContain("Saying the word ok");
+    expect(view.markers[0]!.detail).toContain("airship/test-model");
+    expect(view.markers[1]!.presentable).toBe(true);
+    expect(view.markers.every((entry) => !entry.detail.includes("cannot replay"))).toBe(true);
+
+    // The admission is exactly as wide as the audit's: usage is out-of-turn
+    // only when a naming record ahead of it declared that identity. An orphan
+    // is still a protocol violation, so the leniency cannot be borrowed to
+    // smuggle a turn event past its missing boundary.
+    expectPresentationError(() => presentSessionMessages(input(sequence([
+      draft("session.created", undefined, {}),
+      { type: "inference.usage", turnId: "naming-turn-1", operationId: "naming-operation-1", payload: { inputTokens: 42 } },
+    ]))), "TURN_PROTOCOL_INVALID");
+  });
+
   it("still refuses a turn event that lost its turn identity, and says which one", () => {
     // The permissiveness above is scoped to types that are not turn-scoped. An
     // `assistant.completed` with no turn is a real protocol violation and stays
@@ -519,6 +686,98 @@ describe("presentSessionMessages agrees with auditSessionHistory", () => {
       // The short id, which is what a fault line has room for.
       expect(described).toContain("in session session-1".slice(0, "in session ".length + 8));
     }
+  });
+
+  /*
+   * The journal has recorded who authorized every tool call since approval
+   * modes shipped, and the transcript read none of it: a call a person clicked
+   * Allow on, one a review model waved through, and one Full Access ran unasked
+   * were three identical cards. Those are three different accountability
+   * claims.
+   */
+  it("labels each approved tool call with the authority that actually allowed it", () => {
+    const call = (id: string, name: string) => ({ id, name, arguments: {} });
+    const events = sequence([
+      draft("session.created", undefined, {}),
+      draft("turn.requested", "turn-1", { content: "Do three things." }),
+      draft("assistant.completed", "turn-1", {
+        message: {
+          role: "assistant",
+          content: "",
+          toolCalls: [call("call-1", "write_file"), call("call-2", "write_file"), call("call-3", "write_file")],
+        },
+      }),
+      draft("tool.requested", "turn-1", { call: call("call-1", "write_file") }),
+      draft("tool.approved", "turn-1", {
+        callId: "call-1",
+        name: "write_file",
+        approval: { mode: "ask-first", source: "human", reason: "Allowed once by the user." },
+      }),
+      draft("tool.requested", "turn-1", { call: call("call-2", "write_file") }),
+      draft("tool.approved", "turn-1", {
+        callId: "call-2",
+        name: "write_file",
+        approval: { mode: "auto-approve", source: "model-review", reason: "Reviewed as safe." },
+      }),
+      draft("tool.requested", "turn-1", { call: call("call-3", "write_file") }),
+      draft("tool.approved", "turn-1", {
+        callId: "call-3",
+        name: "write_file",
+        approval: { mode: "full-access", source: "bounded-browser-sandbox", reason: "Allowed by Full Access." },
+      }),
+      draft("turn.completed", "turn-1", {}),
+    ]);
+
+    const view = presentSessionMessages(input(events));
+
+    expect(assistantRow(view.rows, "turn-1").toolAuthorities).toEqual([
+      { callId: "call-1", mode: "ask-first", source: "human", label: "You approved" },
+      { callId: "call-2", mode: "auto-approve", source: "model-review", label: "Model review" },
+      { callId: "call-3", mode: "full-access", source: "bounded-browser-sandbox", label: "Full Access" },
+    ]);
+  });
+
+  it("leaves the authority absent rather than guessing when the provenance is unreadable", () => {
+    const events = sequence([
+      draft("session.created", undefined, {}),
+      draft("turn.requested", "turn-1", { content: "Do one thing." }),
+      draft("assistant.completed", "turn-1", {
+        message: { role: "assistant", content: "", toolCalls: [{ id: "call-1", name: "write_file", arguments: {} }] },
+      }),
+      draft("tool.requested", "turn-1", { call: { id: "call-1", name: "write_file", arguments: {} } }),
+      draft("tool.approved", "turn-1", { callId: "call-1", name: "write_file", approval: null }),
+      draft("turn.completed", "turn-1", {}),
+    ]);
+
+    // "We do not know who approved this" must never render as "you approved it".
+    expect(assistantRow(presentSessionMessages(input(events)).rows, "turn-1").toolAuthorities).toBeUndefined();
+  });
+
+  it("labels a local command with the authority recorded on its own approval", () => {
+    const events = sequence([
+      draft("session.created", undefined, {}),
+      localDraft("local.command.requested", "local-1", "operation-1", {
+        content: "/read README.md",
+        toolName: "read_file",
+        arguments: { path: "README.md" },
+      }),
+      localDraft("local.command.approved", "local-1", "operation-1", {
+        toolName: "read_file",
+        approval: { mode: "ask-first", source: "human", reason: "Allowed once by the user." },
+      }),
+      localDraft("local.command.completed", "local-1", "operation-1", {
+        toolName: "read_file",
+        content: "# Airship",
+        isError: false,
+      }),
+    ]);
+    const value = input(events);
+
+    const view = presentSessionMessages({ ...value, audit: { ...value.audit, status: "incomplete" } });
+
+    expect(assistantRow(view.rows, "local-1").toolAuthorities).toEqual([
+      { callId: "operation-1", mode: "ask-first", source: "human", label: "You approved" },
+    ]);
   });
 });
 

@@ -27,6 +27,17 @@ export type TurnEvidenceCounts = Readonly<{
   asserted: number;
   noEvidence: number;
   failed: number;
+  /**
+   * Its own bucket, not a share of `failed`.
+   *
+   * `ProofStatus` has five members and this reducer had four buckets, so the
+   * trailing `else` quietly filed every expired claim under `failed` and the
+   * Proof summary tab printed "Failed: 1" for a claim that was never found to
+   * be false — while the Attestation tab, reading the same claim, called it a
+   * stale observation. The verdict still fails closed on either (see the gate
+   * below); only the count a reader is shown stops lying about which happened.
+   */
+  expired: number;
   total: number;
 }>;
 
@@ -58,13 +69,15 @@ export function turnEvidenceCounts(items: readonly ClaimStackItem[]): TurnEviden
   let asserted = 0;
   let noEvidence = 0;
   let failed = 0;
+  let expired = 0;
   for (const item of items) {
     if (item.status === "verified") verified += 1;
     else if (item.status === "partial") asserted += 1;
     else if (item.status === "unavailable") noEvidence += 1;
+    else if (item.status === "expired") expired += 1;
     else failed += 1;
   }
-  return Object.freeze({ verified, asserted, noEvidence, failed, total: items.length });
+  return Object.freeze({ verified, asserted, noEvidence, failed, expired, total: items.length });
 }
 
 /**
@@ -98,7 +111,10 @@ export function turnEvidenceVerdict(input: Readonly<{
   const base = Object.freeze({ counts, declaredVerified, ceilings: Object.freeze(ceilings) });
   const modifier = input.acquisitionFailure ? { modifier: input.acquisitionFailure } : {};
 
-  if (counts.failed > 0 || input.attestedFieldsDisagree) {
+  // Splitting `expired` out of `failed` above must not soften the verdict: an
+  // expired claim still fails closed, and `TURN_EVIDENCE_COPY.failed` already
+  // reads "Verification failed or expired", so the hero is unchanged.
+  if (counts.failed > 0 || counts.expired > 0 || input.attestedFieldsDisagree) {
     return Object.freeze({ ...base, ...modifier, ...TURN_EVIDENCE_COPY.failed, state: "failed" });
   }
   if (!input.hasReceipt) {

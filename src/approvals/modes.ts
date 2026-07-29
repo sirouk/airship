@@ -15,6 +15,14 @@ export type SafetyReviewResult = Readonly<{
   reason: string;
   requestId?: string;
   model?: string;
+  /**
+   * What the review itself cost, when the transport reported it. Auto Approve
+   * issues one provider request per effectful action, so leaving this off the
+   * result made those requests structurally unrecordable rather than merely
+   * unrecorded. Absent means "not reported", never zero.
+   */
+  inputTokens?: number;
+  outputTokens?: number;
 }>;
 
 export type SafetyReview = (
@@ -52,7 +60,7 @@ export function createApprovalModePolicy(options: Readonly<{
         remember(context, {
           mode: options.mode,
           source: "bounded-browser-sandbox",
-          reason: "Allowed by Full Access inside the existing browser capability and path boundaries.",
+          reason: fullAccessReason(tool.effect),
         });
         return "allow";
       }
@@ -116,6 +124,78 @@ export function createApprovalModePolicy(options: Readonly<{
       return value;
     },
   };
+}
+
+/**
+ * What Full Access actually allowed, in the terms of the effect it allowed.
+ *
+ * One constant used to answer for every effect class, and it said "path
+ * boundaries" — a property the workspace tools really do have and the network
+ * ones do not. A `network` allow is confined to HTTPS and to whatever the
+ * origin's CORS policy permits; no path, host or allow-list narrows it. The
+ * journaled reason is the durable record of why an effect ran unprompted, so it
+ * has to name the confinement that existed rather than borrow one.
+ */
+function fullAccessReason(effect: ToolDefinition["effect"]): string {
+  if (effect === "network" || effect === "identity") {
+    return "Allowed by Full Access; this effect sends data to a remote origin over HTTPS and is not path-confined or host-restricted.";
+  }
+  if (effect === "execute") {
+    return "Allowed by Full Access inside the existing browser execution capability; no host shell or capability beyond it was granted.";
+  }
+  return "Allowed by Full Access inside the existing browser capability and its workspace path confinement.";
+}
+
+export type HumanIntentReview = Readonly<{
+  decision: ApprovalDecision;
+  provenance: ApprovalProvenance;
+}>;
+
+/**
+ * Adjudicate an effect the *person* proposed, not one the model asked for.
+ *
+ * Auto Approve's whole premise is "have a model review what the model wants to
+ * do". When the proposer is the human at the keyboard — staging a commit,
+ * importing a repository, probing a vault — asking a model for permission
+ * inverts the relationship, and a model verdict of `unsafe` becomes a machine
+ * vetoing its operator. So Auto Approve resolves to the same thing Ask First
+ * does here: the person is asked.
+ *
+ * Full Access is unchanged, because it is the person's own standing decision
+ * that their actions need no prompt.
+ *
+ * The provenance still names the mode the session is pinned to — that is the
+ * authority in force — with `human` as the source that actually decided, which
+ * is exactly what the audit's closed vocabulary expects.
+ */
+export async function decideHumanIntent(options: Readonly<{
+  mode: ApprovalMode;
+  broker: ApprovalBroker;
+  tool: ToolDefinition;
+  argumentsValue: JsonValue;
+  context: ToolContext;
+}>): Promise<HumanIntentReview> {
+  if (options.mode === "full-access") {
+    return Object.freeze({
+      decision: "allow" as const,
+      provenance: Object.freeze({
+        mode: options.mode,
+        source: "bounded-browser-sandbox" as const,
+        reason: fullAccessReason(options.tool.effect),
+      }),
+    });
+  }
+  const decision = await options.broker.request(options.tool, options.argumentsValue, options.context);
+  return Object.freeze({
+    decision,
+    provenance: Object.freeze({
+      mode: options.mode,
+      source: "human" as const,
+      reason: decision === "allow"
+        ? "Allowed once by the user, who proposed the action."
+        : "Denied or expired without user approval.",
+    }),
+  });
 }
 
 export function approvalProvenance(

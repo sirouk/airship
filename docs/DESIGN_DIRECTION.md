@@ -87,7 +87,7 @@ Legend: **STAYS** = visible text, same or better prominence · **CHIP→** = bec
 
 | Information | Fate | Carrier after |
 |---|---|---|
-| "Tool step completed" ×6 per turn, 17px, 175px wide | **REMOVED as visible text** | The row's visible word becomes `Ran`/`Running…`/`Failed`/`Denied`/`Queued`/`Approved` at `--fs-micro`; the full sentence is verbatim in `title` and `aria-label` (`Seal` already concatenates `detail`). Screen readers hear the identical string. Colour is still not the sole carrier. |
+| "Tool step completed" ×6 per turn, 17px, 175px wide | **REMOVED as visible text** | The row's visible word becomes `Ran`/`Running…`/`Failed`/`Denied`/`Queued`/`Stopped` at `--fs-micro`; the full sentence is verbatim in `title` and `aria-label` (`Seal` already concatenates `detail`). Screen readers hear the identical string. Colour is still not the sole carrier. |
 | Eyebrows `TOOL CALL` / `TOOL RESULT` | MERGES | A joined row *is* a call and its result; the distinction is labelled inside the sheet (`ARGUMENTS · BOUNDED DISPLAY` / `RESULT`) |
 | Pills `COMPLETED` + `SUCCESS` | MERGES into one outcome word | A joined row has one outcome |
 | `argumentsSummary` (behind a disclosure) | **PROMOTED to the resting row** | Argument-digest cell, first scalar value, ellipsised; full bounded JSON in the sheet |
@@ -524,7 +524,7 @@ grid-template-columns: auto auto minmax(0,1fr) auto auto;  min-height: 32px  (44
 | 4 | Result digest from `metadataSummary`/`summary` — `845 B` / `23 items` / `1.2 KB` / first error clause | `--fs-micro` `--ink-faint`, no shrink |
 | 5 | Disclosure chevron | at an actual edge |
 
-Outcome words: `Ran` / `Running…` / `Failed` / `Denied` / `Queued` / `Approved`. The 175px 17px string "Tool step completed" becomes a 26px 11px word; the full sentence stays in `title` and `aria-label` (`Seal` already concatenates `detail`). **This 149px of reclaimed width is what stops the phone truncating the tool name to `rea…`.**
+Outcome words: `Ran` / `Running…` / `Failed` / `Denied` / `Queued` / `Stopped`. (`Approved` was specified here originally and was never shipped: approval is an authority, not an outcome — a step the turn ended underneath is `Stopped`, which is the case that actually needed a word.) The 175px 17px string "Tool step completed" becomes a 26px 11px word; the full sentence stays in `title` and `aria-label` (`Seal` already concatenates `detail`). **This 149px of reclaimed width is what stops the phone truncating the tool name to `rea…`.**
 
 Fix the grid collision while here: `::after` moves to column 5 and `.operation-state { margin-right: 17px }` is deleted — it existed only to dodge the stranded glyph, and produced a 17px dead right gutter.
 

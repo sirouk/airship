@@ -76,6 +76,29 @@ export function assertRemoteOriginPermitted(url: string, operation: "clone" | "f
   );
 }
 
+/**
+ * The same question `assertRemoteOriginPermitted` answers, asked without
+ * throwing and against a capability snapshot rather than the ambient page.
+ * Reachability is a property of one remote URL, not of the build: a surface
+ * that reads `features.fetch.available` learns only that *some* origin is
+ * permitted (the page's own always is), which says nothing about the remote
+ * actually configured. Any UI offering fetch/push must ask about that remote.
+ * An unparseable URL is unreachable — it can never match a permitted origin.
+ */
+export function isRemoteOriginPermitted(url: string, permittedOrigins: readonly string[]): boolean {
+  const origin = remoteOrigin(url);
+  return origin !== undefined && permittedOrigins.includes(origin);
+}
+
+/** The origin a remote URL would be contacted on, or undefined if it is not a URL. */
+export function remoteOrigin(url: string): string | undefined {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return undefined;
+  }
+}
+
 export function assertNotAborted(signal: AbortSignal): void {
   if (signal.aborted) throw new GitAbortError();
 }

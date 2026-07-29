@@ -271,6 +271,26 @@ export type ApprovalProvenance = Readonly<{
   reviewModel?: string;
 }>;
 
+/**
+ * The journal record of a decision on an effect the *person* proposed from the
+ * interface, rather than one the model asked for.
+ *
+ * It lives here, beside the provenance it carries, because the producer (the
+ * shell) and the validator (the session audit) must agree on the string and
+ * neither should have to import the other's module to say it.
+ */
+export const HUMAN_INTENT_EVENT_TYPE = "human.intent.reviewed";
+
+/**
+ * The journal record of the inference that named a conversation.
+ *
+ * Naming is a real provider request made on the conversation's behalf, off the
+ * turn's critical path. It used to be issued against a fabricated session id,
+ * so its receipt and its cost belonged to nothing and could never be shown
+ * beside the conversation they were spent on. This binds them to it.
+ */
+export const CONVERSATION_NAMED_EVENT_TYPE = "conversation.named";
+
 export interface ApprovalPolicy {
   review(tool: ToolDefinition, argumentsValue: JsonValue, context: ToolContext): Promise<ApprovalDecision>;
   /** One-shot provenance for the immediately completed decision. */

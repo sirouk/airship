@@ -559,6 +559,66 @@
   flex: 0 0 auto;
 }
 
+/*
+ * The inverse of "Hide from view", kept beside the count that reports it so
+ * the state and the control that lifts it are read as one thing.
+ */
+.memory-view .memory-hidden-nodes {
+  margin-bottom: var(--sp-2);
+  padding: var(--sp-2);
+  border: 1px solid var(--line-control);
+  border-radius: var(--radius-control);
+  background: var(--surface-soft);
+}
+
+.memory-view .memory-hidden-nodes summary {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: baseline;
+  min-height: 44px;
+  color: var(--ink);
+  cursor: pointer;
+  font-size: var(--fs-micro);
+}
+
+.memory-view .memory-hidden-nodes summary small {
+  color: var(--ink-faint);
+}
+
+.memory-view .memory-hidden-nodes ul {
+  display: grid;
+  gap: var(--sp-1);
+  margin: var(--sp-1) 0;
+  padding: 0;
+  list-style: none;
+}
+
+.memory-view .memory-hidden-nodes li {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.memory-view .memory-hidden-nodes li span {
+  overflow: hidden;
+  color: var(--ink-muted);
+  font-size: var(--fs-micro);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+ * Zoom as a control, not only a gesture. Touch and keyboard reach the scale
+ * here; the canvas keeps vertical swipes for the page scroller.
+ */
+.memory-view .memory-graph-controls {
+  display: flex;
+  flex: 0 0 auto;
+  gap: var(--sp-1);
+}
+
 .memory-view .memory-shell {
   grid-template-columns: minmax(0, 1fr) minmax(270px, 310px);
 }

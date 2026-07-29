@@ -15,7 +15,10 @@ import {
   workbenchDocumentId,
   WORKBENCH_WRAP_DEFAULT_MAX_WIDTH,
   workspaceNameError,
+  workspacePathError,
+  WORKSPACE_GUTTER_LINE_LIMIT,
   WORKBENCH_DESCRIPTION,
+  workbenchArrivalPane,
   workbenchBufferState,
   workbenchFilterMatches,
   workbenchIdentity,
@@ -46,6 +49,19 @@ describe("workbench route identity", () => {
   it("resolves an unknown hash to Workspace rather than inventing a third name", () => {
     expect(workbenchIdentity("#chat")).toMatchObject({ route: "workspace", title: "Workspace" });
     expect(workbenchIdentity("")).toMatchObject({ route: "workspace" });
+  });
+
+  it("honours every arrival, including a repeat of the destination on screen", () => {
+    // The pane leaves the destination behind — opening a file shows the editor
+    // pane while the hash stays #workspace — so the answer may not depend on
+    // the pane the user is currently looking at, only on what was asked for.
+    expect(workbenchArrivalPane("navigation", 0)).toBe("navigation");
+    expect(workbenchArrivalPane("navigation", 3)).toBe("navigation");
+    expect(workbenchArrivalPane("editor", 1)).toBe("editor");
+  });
+
+  it("refuses to strand an arrival on the pane switch's disabled Editor tab", () => {
+    expect(workbenchArrivalPane("editor", 0)).toBeUndefined();
   });
 
   it("keeps the route sentence verbatim so the ⓘ carries the original words", () => {
@@ -308,6 +324,26 @@ describe("workspace name validation", () => {
     expect(workspaceNameError("a/b")).toContain("one segment");
     expect(workspaceNameError("..")).toContain("not names this workspace can address");
   });
+
+  it("refuses a backslash and control characters in a single name", () => {
+    // `\` is not a separator here, so it would survive into the filename
+    // itself; a rename carrying one used to fail silently inside `transact`.
+    expect(workspaceNameError("a\\b")).toContain("\\");
+    expect(workspaceNameError(`bell${String.fromCodePoint(7)}`)).toContain("control characters");
+  });
+
+  it("validates the New file field as a path, keeping slashes legal", () => {
+    // The field is documented as "Path relative to this folder", and the
+    // create dialog states that a path with slashes creates the folders it
+    // names, so the one rule a folder name has cannot apply here.
+    expect(workspacePathError("notes/2026/plan.md")).toBeUndefined();
+    expect(workspacePathError("plan.md")).toBeUndefined();
+    expect(workspacePathError("  ")).toBe("Enter a name.");
+    expect(workspacePathError("..")).toContain("not names this workspace can address");
+    expect(workspacePathError("notes/../../escape.md")).toContain("not names this workspace can address");
+    expect(workspacePathError("notes//plan.md")).toContain("empty folder name");
+    expect(workspacePathError("notes\\plan.md")).toContain("\\");
+  });
 });
 
 describe("folder operation reporting", () => {
@@ -338,5 +374,19 @@ describe("editor wrap", () => {
     expect(editorSurfaceNote({ wrap: false, binary: false })).toBe("UTF-8 · LF · client-side");
     // A binary buffer has no editable surface to describe either way.
     expect(editorSurfaceNote({ wrap: true, binary: true })).toBe("Binary · read-only · client-side");
+  });
+
+  it("states the line cap too, which is the other way the gutter disappears", () => {
+    // The shipped note covered wrap alone, so an unwrapped 6,000-line file lost
+    // its numbers in silence — the exact failure this sentence exists to stop.
+    const capped = editorSurfaceNote({ wrap: false, binary: false, gutter: false });
+    expect(capped).toContain("no line numbers above");
+    expect(capped).toContain(WORKSPACE_GUTTER_LINE_LIMIT.toLocaleString("en-US"));
+    // With the gutter on screen, and where the caller does not know, the
+    // sentence is exactly the one that shipped.
+    expect(editorSurfaceNote({ wrap: false, binary: false, gutter: true })).toBe("UTF-8 · LF · client-side");
+    expect(editorSurfaceNote({ wrap: false, binary: false })).toBe("UTF-8 · LF · client-side");
+    // Wrapping already explains itself; the cap does not overwrite that.
+    expect(editorSurfaceNote({ wrap: true, binary: false, gutter: false })).toBe("UTF-8 · LF · client-side · wrapped, no line numbers");
   });
 });

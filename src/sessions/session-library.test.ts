@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { createSessionManifest, materializeMessages } from "../core/agent";
 import type { CanonicalMessage, JsonValue, SessionManifest, ToolDefinition } from "../core/contracts";
@@ -15,7 +16,7 @@ import {
   querySessionRecords,
   type ActiveSessionRuntime,
 } from "./domain";
-import { SessionForkConflictError, SessionLibrary } from "./library";
+import { SessionForkConflictError, SessionLibrary, UnknownSessionError } from "./library";
 import { SessionsView } from "../ui/sessions-view";
 
 const DIGEST = `sha256:${"A".repeat(43)}`;
@@ -47,6 +48,43 @@ describe("browser-native session domain", () => {
     expect(filtered.total).toBe(1);
     expect(filtered.items[0]?.id).toBe("s-3");
     expect(Object.isFrozen(filtered)).toBe(true);
+  });
+
+  /*
+   * Profile is a scope boundary, not a filter.
+   *
+   * Folding it into the same pass as provider/model/search left the facets
+   * derived from every record in the store, so the provider and model menus of
+   * one Profile enumerated the other Profile's inventory — a name it has never
+   * used, selectable, and yielding nothing. Facets are taken after the scope
+   * and before the filters, so they stay stable as the reader narrows.
+   */
+  it("derives filter facets from the profile scope, never from the whole store", async () => {
+    const records = [
+      record("a-1", "Profile A", await manifest({ providerId: "chutes", model: "model-a", profile: profileBinding() }), "2026-07-18T01:00:00.000Z"),
+      record("b-1", "Profile B", await manifest({ providerId: "demo", model: "model-b", profile: { ...profileBinding(), profileId: "profile-2" } }), "2026-07-18T02:00:00.000Z"),
+      record("u-1", "Unbound", await manifest({ providerId: "ollama", model: "model-c" }), "2026-07-18T03:00:00.000Z"),
+    ];
+
+    expect(querySessionRecords(records, { profileId: "profile-1" }).facets).toEqual({
+      providers: ["chutes"],
+      models: ["model-a"],
+      profiles: ["profile-1"],
+    });
+    expect(querySessionRecords(records, { profileId: "unbound" }).facets).toEqual({
+      providers: ["ollama"],
+      models: ["model-c"],
+      profiles: [],
+    });
+    // Narrowing inside the scope must not shrink the menus the reader is
+    // choosing from, which is why the facets come before the filters.
+    const narrowed = querySessionRecords(records, { providerId: "chutes", model: "model-a", search: "Profile" });
+    expect(narrowed.facets).toEqual({
+      providers: ["chutes", "demo", "ollama"],
+      models: ["model-a", "model-b", "model-c"],
+      profiles: ["profile-1", "profile-2"],
+    });
+    expect(narrowed.items.map((item) => item.id)).toEqual(["a-1"]);
   });
 
   it("materializes only bounded user and assistant text and reports every omission", async () => {
@@ -342,6 +380,48 @@ describe("browser-native session domain", () => {
 });
 
 describe("SessionLibrary", () => {
+  /*
+   * A conversation this journal never had is a different fault from one this
+   * runtime cannot open yet, and only the first is permanent. The deep-link
+   * resolver in app.tsx branches on the type to decide whether to keep holding
+   * the URL open, so absence has to be recognisable without string matching —
+   * and the id must not ride along in the message any surface may print.
+   */
+  it("reports an absent conversation as typed absence, not as an opaque internal string", async () => {
+    const fixture = createJournal();
+    const library = new SessionLibrary(fixture.journal);
+    const missing = "018f40e0-7c62-7c70-9db7-6d5de37ae52c";
+
+    const error = await library.inspect(missing).catch((thrown: unknown) => thrown);
+    expect(error).toBeInstanceOf(UnknownSessionError);
+    expect((error as UnknownSessionError).sessionId).toBe(missing);
+    expect((error as Error).message).not.toContain(missing);
+    expect((error as Error).message).not.toContain("Unknown session");
+  });
+
+  it("keeps a readable conversation resolvable so only real absence takes the absence arm", async () => {
+    const fixture = createJournal();
+    const created = await fixture.journal.createSession("Present", await manifest({ securityPosture: "local" }));
+    const library = new SessionLibrary(fixture.journal);
+    await expect(library.inspect(created.id)).resolves.toMatchObject({ session: { id: created.id } });
+  });
+
+  it("routes only absence through the deep-link reset, leaving every other fault holding its URL", () => {
+    const source = readFileSync(new URL("../ui/app.tsx", import.meta.url), "utf8");
+    const resolver = source.match(
+      /void sessionLibrary\.inspect\(requestedSessionId, sessionRuntime\)[\s\S]*?\n      \.finally\(/u,
+    )?.[0] ?? "";
+    expect(resolver).toContain("error instanceof UnknownSessionError");
+    // Clearing the request is what lets the canonicalisation effect rewrite the
+    // hash to the conversation actually open; keeping it set is what made a
+    // transient miss permanent.
+    const absence = resolver.slice(resolver.indexOf("error instanceof UnknownSessionError"));
+    expect(absence).toContain("setChatRouteRequest((current) => current === requestedSessionId ? undefined : current)");
+    expect(absence).toContain("did not survive the reload");
+    expect(absence.slice(0, absence.indexOf("Keep the URL intact"))).not.toContain("describeSessionPresentationFault");
+    expect(resolver).toContain("Keep the URL intact");
+  });
+
   it("loads a stable bounded detail snapshot with a compatibility decision", async () => {
     const fixture = createJournal();
     const created = await fixture.journal.createSession("Inspectable", await manifest({ securityPosture: "local" }));
@@ -469,6 +549,118 @@ describe("SessionLibrary", () => {
     }).some((message) => message.content === "later")).toBe(false);
   });
 
+  it("forks at a turn's own pre-turn boundary without inheriting that turn's prompt or answer", async () => {
+    // The boundary Retry forks at: the assistant row's `turnStartPoint`, which
+    // is the requesting event's `previousDigest`. Retry used to reuse the
+    // row's `sourcePoint` — the post-answer terminal — so the regenerated turn
+    // was handed the answer it was replacing as provider context.
+    const fixture = createJournal();
+    const created = await fixture.journal.createSession("Retry source", await manifest());
+    await appendAuditedTurn(fixture.journal, created.id, "one", "first prompt", "first answer");
+    await appendAuditedTurn(fixture.journal, created.id, "two", "second prompt", "second answer", [
+      { role: "user", content: "first prompt" },
+      { role: "assistant", content: "first answer" },
+    ]);
+    const request = (await fixture.journal.readEvents(created.id))
+      .find((event) => event.type === "turn.requested" && event.turnId === "two")!;
+    const source = (await fixture.journal.getSession(created.id))!;
+
+    const result = await new SessionLibrary(fixture.journal).fork(created.id, {
+      expectedSourceHead: { sequence: source.headSequence, digest: source.headDigest },
+      sourcePoint: { sequence: request.sequence - 1, digest: request.previousDigest },
+    });
+
+    const forkEvents = await fixture.journal.readEvents(result.session.id);
+    const seed = canonicalForkContextSeed(forkEvents.find((event) => event.type === FORK_CONTEXT_EVENT_TYPE)?.payload)!;
+    const seeded = materializeMessages(forkEvents, {
+      forkContextScope: { sessionId: result.session.id, lineage: result.session.manifest.lineage },
+      verifiedForkContextDigest: seed.contextDigest,
+    });
+    expect(seeded).toEqual([
+      { role: "user", content: "first prompt" },
+      { role: "assistant", content: "first answer" },
+    ]);
+    expect(seeded.some((message) => message.content === "second prompt")).toBe(false);
+    expect(seeded.some((message) => message.content === "second answer")).toBe(false);
+  });
+
+  /*
+   * Quiescence is about nothing being in flight, not about the last thing
+   * having gone well.
+   *
+   * A user row's fork point is the event immediately before its own
+   * turn.requested, so the message typed right after Stop, right after a
+   * provider error, or right after a denied local command pointed at
+   * turn.cancelled / turn.failed / local.command.denied — none of which were
+   * boundaries, so `Edit & branch` and `Fork` were rejected there with "not an
+   * audited quiescent conversation boundary". The abandoned turn is still kept
+   * out of the seed: materializeMessages drops non-actionable turns whole.
+   */
+  it.each([
+    ["turn.cancelled", "cancelled"],
+    ["turn.failed", "failed"],
+  ])("forks at a %s boundary without inheriting the abandoned prompt", async (terminalType) => {
+    const fixture = createJournal();
+    const created = await fixture.journal.createSession("Interrupted", await manifest());
+    await appendAuditedTurn(fixture.journal, created.id, "one", "kept question", "kept answer");
+    const appended = await fixture.journal.append(created.id, [
+      { type: "turn.requested", turnId: "two", payload: { content: "abandoned prompt" } },
+      { type: terminalType, turnId: "two", payload: { error: "the reader pressed Stop" } },
+    ]);
+    const point = appended.at(-1)!;
+    const source = (await fixture.journal.getSession(created.id))!;
+
+    const result = await new SessionLibrary(fixture.journal).fork(created.id, {
+      expectedSourceHead: { sequence: source.headSequence, digest: source.headDigest },
+      sourcePoint: { sequence: point.sequence, digest: point.digest },
+    });
+
+    expect(result.session.manifest.lineage).toMatchObject({
+      sourceHeadSequence: point.sequence,
+      sourceHeadDigest: point.digest,
+    });
+    const forkEvents = await fixture.journal.readEvents(result.session.id);
+    const seed = canonicalForkContextSeed(forkEvents.find((event) => event.type === FORK_CONTEXT_EVENT_TYPE)?.payload)!;
+    expect(materializeMessages(forkEvents, {
+      forkContextScope: { sessionId: result.session.id, lineage: result.session.manifest.lineage },
+      verifiedForkContextDigest: seed.contextDigest,
+    })).toEqual([
+      { role: "user", content: "kept question" },
+      { role: "assistant", content: "kept answer" },
+    ]);
+  });
+
+  it("forks at a denied local command, which is as quiescent as a completed one", async () => {
+    const fixture = createJournal();
+    const created = await fixture.journal.createSession("Denied", await manifest());
+    await appendAuditedTurn(fixture.journal, created.id, "one", "kept question", "kept answer");
+    const appended = await fixture.journal.append(created.id, [
+      { type: "local.command.requested", turnId: "local-1", operationId: "local-op-1", payload: { toolName: "read_file", content: "/read secrets", arguments: {} } },
+      { type: "local.command.denied", turnId: "local-1", operationId: "local-op-1", payload: { toolName: "read_file", content: "The operator declined." } },
+    ]);
+    const point = appended.at(-1)!;
+    const source = (await fixture.journal.getSession(created.id))!;
+
+    const result = await new SessionLibrary(fixture.journal).fork(created.id, {
+      expectedSourceHead: { sequence: source.headSequence, digest: source.headDigest },
+      sourcePoint: { sequence: point.sequence, digest: point.digest },
+    });
+
+    expect(result.session.manifest.lineage).toMatchObject({
+      sourceHeadSequence: point.sequence,
+      sourceHeadDigest: point.digest,
+    });
+    const forkEvents = await fixture.journal.readEvents(result.session.id);
+    const seed = canonicalForkContextSeed(forkEvents.find((event) => event.type === FORK_CONTEXT_EVENT_TYPE)?.payload)!;
+    expect(materializeMessages(forkEvents, {
+      forkContextScope: { sessionId: result.session.id, lineage: result.session.manifest.lineage },
+      verifiedForkContextDigest: seed.contextDigest,
+    })).toEqual([
+      { role: "user", content: "kept question" },
+      { role: "assistant", content: "kept answer" },
+    ]);
+  });
+
   it("forks at an audited pre-turn rename without inheriting the following first prompt", async () => {
     const fixture = createJournal();
     const created = await fixture.journal.createSession("Untitled", await manifest());
@@ -581,9 +773,12 @@ async function appendAuditedTurn(
   turnId: string,
   userContent: string,
   assistantContent: string,
+  // The request digest covers the whole materialized message list, so a second
+  // audited turn has to state the turns that precede it.
+  priorMessages: readonly CanonicalMessage[] = [],
 ) {
   const session = (await journal.getSession(sessionId))!;
-  const messages: CanonicalMessage[] = [{ role: "user", content: userContent }];
+  const messages: CanonicalMessage[] = [...priorMessages, { role: "user", content: userContent }];
   const idempotencyKey = `${session.id}:${turnId}:0`;
   const requestDigest = await sha256(stableStringify({
     model: session.manifest.model,

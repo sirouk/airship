@@ -60,7 +60,26 @@ type ActivePointer = {
   moved: boolean;
 };
 
-type CanvasEngine = {
+/**
+ * The viewport as a command surface rather than a wheel-only affordance.
+ *
+ * Scale used to be reachable from exactly one input class. Everything that can
+ * change it — wheel, pinch, and the route's own buttons — now goes through this
+ * one handle, so a keyboard, a touch screen and assistive technology reach the
+ * same clamped operation the mouse does.
+ */
+export type MemoryGraphViewportControls = Readonly<{
+  zoomIn: () => void;
+  zoomOut: () => void;
+  fit: () => void;
+  /** Current scale, so a caller can report or assert what the gesture did. */
+  scale: () => number;
+}>;
+
+/** One press of a zoom control. Matched to roughly three wheel notches. */
+const ZOOM_STEP = 1.35;
+
+export type CanvasEngine = {
   canvas: HTMLCanvasElement;
   context: CanvasRenderingContext2D;
   graph: MemoryRelationshipGraph;
@@ -75,7 +94,10 @@ type CanvasEngine = {
   frame?: number;
   centerFrame?: number;
   hoverId?: string;
-  pointer?: ActivePointer;
+  /** Every pointer currently down, so a two-finger gesture is representable. */
+  pointers: Map<number, ActivePointer>;
+  /** Distance between the two pinching pointers at the previous move. */
+  pinchDistance?: number;
   reducedMotion: boolean;
   disposed: boolean;
   fail: (error: unknown) => void;
@@ -85,9 +107,9 @@ type CanvasEngine = {
   hiddenNodeIds: () => ReadonlySet<string>;
 };
 
-type CanvasMemoryGraphSurfaceProps = Pick<MemoryGraphRendererProps, "graph" | "selectedNodeId" | "onSelect" | "hiddenKinds" | "hiddenNodeIds">;
+type CanvasMemoryGraphSurfaceProps = Pick<MemoryGraphRendererProps, "graph" | "selectedNodeId" | "onSelect" | "hiddenKinds" | "hiddenNodeIds" | "onViewportControls">;
 
-export function CanvasMemoryGraphSurface({ graph, selectedNodeId, onSelect, hiddenKinds, hiddenNodeIds }: CanvasMemoryGraphSurfaceProps) {
+export function CanvasMemoryGraphSurface({ graph, selectedNodeId, onSelect, hiddenKinds, hiddenNodeIds, onViewportControls }: CanvasMemoryGraphSurfaceProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<CanvasEngine>();
   const graphRef = useRef(graph);
@@ -98,6 +120,8 @@ export function CanvasMemoryGraphSurface({ graph, selectedNodeId, onSelect, hidd
   const onSelectRef = useRef(onSelect);
   const hiddenKindsRef = useRef<ReadonlySet<string>>(hiddenKinds ?? new Set());
   const hiddenNodeIdsRef = useRef<ReadonlySet<string>>(hiddenNodeIds ?? new Set());
+  const onViewportControlsRef = useRef(onViewportControls);
+  onViewportControlsRef.current = onViewportControls;
   hiddenKindsRef.current = hiddenKinds ?? new Set();
   hiddenNodeIdsRef.current = hiddenNodeIds ?? new Set();
   const [internalSelection, setInternalSelection] = useState<string>();
@@ -166,6 +190,7 @@ export function CanvasMemoryGraphSurface({ graph, selectedNodeId, onSelect, hidd
         fittedScale: viewport.scale,
         userViewport: false,
         dpr: 1,
+        pointers: new Map(),
         reducedMotion: motionQuery?.matches ?? false,
         disposed: false,
         fail: (error) => {
@@ -197,10 +222,12 @@ export function CanvasMemoryGraphSurface({ graph, selectedNodeId, onSelect, hidd
       };
       motionQuery?.addEventListener?.("change", onMotionChange);
       resize();
+      onViewportControlsRef.current?.(createViewportControls(engine));
       setStatus("ready");
 
       return () => {
         if (!engine) return;
+        onViewportControlsRef.current?.(undefined);
         engine.disposed = true;
         if (engine.frame !== undefined) cancelAnimationFrame(engine.frame);
         if (engine.centerFrame !== undefined) cancelAnimationFrame(engine.centerFrame);
@@ -224,7 +251,13 @@ export function CanvasMemoryGraphSurface({ graph, selectedNodeId, onSelect, hidd
       <canvas
         ref={canvasRef}
         aria-hidden="true"
-        style={{ position: "absolute", inset: 0, width: "100%", height: "100%", touchAction: "none", cursor: "grab" }}
+        /*
+         * `pan-y` rather than `none`: the canvas fills the route, so claiming
+         * every touch gesture made a vertical swipe that started inside it
+         * scroll nothing at all. The browser keeps vertical scrolling; zoom is
+         * reached by pinch or by the viewport controls beside the graph.
+         */
+        style={{ position: "absolute", inset: 0, width: "100%", height: "100%", touchAction: "pan-y", cursor: "grab" }}
       />
       {status !== "ready" ? (
         <div role={status === "error" ? "alert" : "status"} aria-live="polite" style={STATUS_STYLE}>
@@ -469,7 +502,44 @@ export function hitTestMemoryNode(
   return closest;
 }
 
-function bindCanvasInteractions(
+/**
+ * Applies one clamped scale change to the engine's viewport.
+ *
+ * Wheel, pinch and the explicit controls all land here so no entry point can
+ * drift away from the fitted-scale clamps the others obey.
+ */
+export function zoomEngineViewport(engine: CanvasEngine, factor: number, anchor?: CanvasPoint): void {
+  engine.viewport = constrainMemoryGraphViewport(
+    zoomMemoryGraphViewport(
+      engine.viewport,
+      anchor ?? { x: engine.viewport.width / 2, y: engine.viewport.height / 2 },
+      factor,
+      engine.fittedScale * 0.35,
+      engine.fittedScale * 16,
+    ),
+    engine.bounds,
+  );
+  engine.userViewport = true;
+  requestCanvasDraw(engine);
+}
+
+export function createViewportControls(engine: CanvasEngine): MemoryGraphViewportControls {
+  return Object.freeze({
+    zoomIn: () => zoomEngineViewport(engine, ZOOM_STEP),
+    zoomOut: () => zoomEngineViewport(engine, 1 / ZOOM_STEP),
+    fit: () => {
+      // Fit is the inverse of every accumulated gesture, so it also drops the
+      // "the user is driving" flag that suppresses automatic refitting.
+      engine.viewport = fitMemoryGraphViewport(engine.bounds, engine.viewport.width, engine.viewport.height);
+      engine.fittedScale = engine.viewport.scale;
+      engine.userViewport = false;
+      requestCanvasDraw(engine);
+    },
+    scale: () => engine.viewport.scale,
+  });
+}
+
+export function bindCanvasInteractions(
   engine: CanvasEngine,
   emitSelection: (nodeId: string | undefined) => void,
 ): () => void {
@@ -492,14 +562,17 @@ function bindCanvasInteractions(
   const onPointerDown = (event: PointerEvent) => {
     if (event.button !== 0) return;
     const point = pointForEvent(event);
-    engine.pointer = {
+    engine.pointers.set(event.pointerId, {
       id: event.pointerId,
       startX: point.x,
       startY: point.y,
       lastX: point.x,
       lastY: point.y,
       moved: false,
-    };
+    });
+    // A second finger converts the gesture in flight: the pinch baseline is
+    // taken now so the first move produces a ratio, not a jump.
+    engine.pinchDistance = engine.pointers.size >= 2 ? pinchSpan(engine)?.distance : undefined;
     canvas.style.cursor = "grabbing";
     try {
       canvas.setPointerCapture(event.pointerId);
@@ -510,13 +583,23 @@ function bindCanvasInteractions(
   };
   const onPointerMove = (event: PointerEvent) => {
     const point = pointForEvent(event);
-    const pointer = engine.pointer;
-    if (pointer?.id === event.pointerId) {
+    const pointer = engine.pointers.get(event.pointerId);
+    if (pointer) {
       const deltaX = point.x - pointer.lastX;
       const deltaY = point.y - pointer.lastY;
       pointer.lastX = point.x;
       pointer.lastY = point.y;
       if (Math.hypot(point.x - pointer.startX, point.y - pointer.startY) > 3) pointer.moved = true;
+      const span = engine.pointers.size >= 2 ? pinchSpan(engine) : undefined;
+      if (span) {
+        // Two fingers scale about their midpoint. Every pointer counts as
+        // moved so lifting one cannot be mistaken for a tap-to-select.
+        for (const active of engine.pointers.values()) active.moved = true;
+        const previous = engine.pinchDistance;
+        engine.pinchDistance = span.distance;
+        if (previous && previous > 0) zoomEngineViewport(engine, span.distance / previous, span.midpoint);
+        return;
+      }
       engine.viewport = constrainMemoryGraphViewport(
         panMemoryGraphViewport(engine.viewport, deltaX, deltaY),
         engine.bounds,
@@ -533,11 +616,14 @@ function bindCanvasInteractions(
     }
   };
   const finishPointer = (event: PointerEvent, cancelled: boolean) => {
-    const pointer = engine.pointer;
-    if (!pointer || pointer.id !== event.pointerId) return;
+    const pointer = engine.pointers.get(event.pointerId);
+    if (!pointer) return;
     const point = pointForEvent(event);
-    engine.pointer = undefined;
-    canvas.style.cursor = engine.hoverId ? "pointer" : "grab";
+    engine.pointers.delete(event.pointerId);
+    // A surviving finger keeps panning from where it already is, so the
+    // baseline is rebuilt rather than carried over from the two-finger span.
+    engine.pinchDistance = engine.pointers.size >= 2 ? pinchSpan(engine)?.distance : undefined;
+    if (engine.pointers.size === 0) canvas.style.cursor = engine.hoverId ? "pointer" : "grab";
     try {
       canvas.releasePointerCapture(event.pointerId);
     } catch {
@@ -549,7 +635,7 @@ function bindCanvasInteractions(
   const onPointerUp = (event: PointerEvent) => finishPointer(event, false);
   const onPointerCancel = (event: PointerEvent) => finishPointer(event, true);
   const onPointerLeave = () => {
-    if (engine.pointer || engine.hoverId === undefined) return;
+    if (engine.pointers.size > 0 || engine.hoverId === undefined) return;
     engine.hoverId = undefined;
     canvas.style.cursor = "grab";
     requestCanvasDraw(engine);
@@ -562,18 +648,7 @@ function bindCanvasInteractions(
         : 1;
     const delta = clamp(event.deltaY * unit, -240, 240);
     const sensitivity = engine.reducedMotion ? 0.0008 : 0.0015;
-    engine.viewport = constrainMemoryGraphViewport(
-      zoomMemoryGraphViewport(
-        engine.viewport,
-        pointForEvent(event),
-        Math.exp(-delta * sensitivity),
-        engine.fittedScale * 0.35,
-        engine.fittedScale * 16,
-      ),
-      engine.bounds,
-    );
-    engine.userViewport = true;
-    requestCanvasDraw(engine);
+    zoomEngineViewport(engine, Math.exp(-delta * sensitivity), pointForEvent(event));
     event.preventDefault();
   };
   canvas.addEventListener("pointerdown", onPointerDown);
@@ -589,6 +664,18 @@ function bindCanvasInteractions(
     canvas.removeEventListener("pointercancel", onPointerCancel);
     canvas.removeEventListener("pointerleave", onPointerLeave);
     canvas.removeEventListener("wheel", onWheel);
+  };
+}
+
+/** The first two live pointers as a midpoint and separation, or nothing. */
+function pinchSpan(engine: CanvasEngine): { midpoint: CanvasPoint; distance: number } | undefined {
+  const [first, second] = [...engine.pointers.values()];
+  if (!first || !second) return undefined;
+  const distance = Math.hypot(first.lastX - second.lastX, first.lastY - second.lastY);
+  if (!Number.isFinite(distance) || distance <= 0) return undefined;
+  return {
+    midpoint: { x: (first.lastX + second.lastX) / 2, y: (first.lastY + second.lastY) / 2 },
+    distance,
   };
 }
 
@@ -645,7 +732,7 @@ function drawCanvasEngine(engine: CanvasEngine): void {
   const visibleNodes = queryMemoryNodeSpatialIndex(engine.index, visibleBounds).filter((node) => !hiddenKinds.has(node.kind) && !hiddenNodeIds.has(node.id));
   const selected = engine.selected();
   const neighbors = engine.neighbors();
-  const moving = engine.pointer?.moved === true;
+  const moving = [...engine.pointers.values()].some((pointer) => pointer.moved);
 
   if (!moving || engine.edges.length <= 2_000) {
     for (const prepared of engine.edges) {

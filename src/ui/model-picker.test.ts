@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { AirshipModel } from "../models";
-import { catalogTokens, facetCounts, facetModels, modelFacts, MODEL_PICKER_PROVENANCE, nextModelIndex, visibleModelCount } from "./model-picker";
+import { capabilityLabels, catalogTokens, facetCounts, facetModels, modelFacts, MODEL_PICKER_PROVENANCE, nextModelIndex, visibleModelCount } from "./model-picker";
+import { MODEL_CAPABILITY_WORDS } from "./model-vocabulary";
 import { TRUST_LABEL_CONNECT_TRUST_READINESS } from "./trust-language";
 
 const source = readFileSync(new URL("./model-picker.tsx", import.meta.url), "utf8");
@@ -66,8 +67,17 @@ describe("row honesty", () => {
   it("keeps every capability as a readable word, never a bare glyph", () => {
     // A glyph's absence is a silent negative the first time a non-confidential
     // model appears, and today every row in this catalogue is confidential.
-    expect(source).toContain('labels.push("Confidential candidate")');
-    expect(source).toContain('labels.push("Vision")');
+    //
+    // AMENDED — asserted on the words this renders rather than on the source
+    // form that produces them. The literals moved into `MODEL_CAPABILITY_WORDS`
+    // so Chat and Connection could stop keeping two spellings of one fact; the
+    // requirement was never that the string be inline, it was that a capability
+    // reach the row as a word.
+    const confidential = model({ inputModalities: ["text", "image"] });
+    expect(capabilityLabels({
+      ...confidential,
+      trust: { ...confidential.trust, confidentialCompute: "asserted" },
+    })).toEqual(["Text", "Vision", "Confidential candidate"]);
     expect(source).toContain("Capabilities not declared");
     expect(source).toContain("capabilityLabels(model).map((label) => <span key={label}>{label}</span>)");
   });
@@ -152,5 +162,39 @@ describe("the catalogue metadata travels with the model", () => {
     expect(styles).toContain(".model-picker-meta small {");
     expect(styles).toMatch(/\.model-picker-meta small \{[^}]*overflow-wrap:anywhere/u);
     expect(styles).not.toMatch(/\.model-picker-meta small \{[^}]*text-overflow:ellipsis/u);
+  });
+});
+
+describe("one model vocabulary across Chat and Connection", () => {
+  const APP_TSX = readFileSync(new URL("./app.tsx", import.meta.url), "utf8");
+  const CONTROL = readFileSync(new URL("./model-control.tsx", import.meta.url), "utf8");
+
+  it("draws every capability word from the shared vocabulary", () => {
+    // Chat had its own formatter, `compactModelCapabilityDetail`, which printed
+    // "Vision · Tools · 4.2k req/h" where this picker prints "Vision"/"Tools"
+    // and puts demand in its own column. Two spellings of one fact on two
+    // screens, and neither was more true.
+    expect(APP_TSX).not.toContain("compactModelCapabilityDetail(");
+    expect(capabilityLabels(model({ inputModalities: ["text", "image"], features: ["tools"] })))
+      .toEqual([MODEL_CAPABILITY_WORDS.text, MODEL_CAPABILITY_WORDS.vision, MODEL_CAPABILITY_WORDS.tools]);
+    // The one surface the picker cannot serve — an external provider has no
+    // AirshipModel — still reads its nouns from the shared table rather than
+    // coining "Vision · evidenced".
+    expect(APP_TSX).toContain("MODEL_CAPABILITY_WORDS.vision");
+    expect(APP_TSX).toContain("MODEL_CAPABILITY_WORDS.tools");
+    expect(APP_TSX).not.toContain('"Vision · evidenced"');
+  });
+
+  it("opens this picker from Chat over the same catalogue Connection uses", () => {
+    // `availableModels` is the AirshipModel roster the Connection picker reads;
+    // Chat used to flatten it to {id,label,detail}, which is why it could not
+    // offer search, facets or sorts at all.
+    expect(APP_TSX).toContain("<ModelPickerControl");
+    expect(APP_TSX).toContain("models={availableModels}");
+    expect(APP_TSX).toContain('void import("./model-picker")');
+    // Through the control's own instrumented select, so a failed switch still
+    // reaches the alert rather than becoming an unhandled rejection.
+    expect(APP_TSX).toContain("onSelect={control.select}");
+    expect(CONTROL).toContain("picker({ select, disabled: activity.disabled })");
   });
 });

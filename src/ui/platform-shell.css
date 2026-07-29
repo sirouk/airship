@@ -179,7 +179,20 @@ button.status-seal:hover { border-color: var(--line-strong); background: var(--s
 :root[data-corners="subtle"] { --radius-control: 6px; --radius-panel: 10px; }
 :root[data-density="comfortable"] .nav-item { min-height: 40px; }
 
-:root[data-keyboard-open="true"] .fixed-mobile-nav { visibility: hidden; pointer-events: none; }
+/*
+ * Soft-keyboard compensation, and the two halves it needs to have any effect.
+ *
+ * `visibility: hidden` stood here, which suppresses the nav's paint but not
+ * the 56px `.app-shell` grid track it is assigned to — the band stayed, empty,
+ * under a composer that had just been lifted above it. The track is collapsed
+ * beside the mobile grid that declares it (`routes.css`), and the element
+ * leaves the layout here so it cannot contribute overflow inside a 0 track.
+ *
+ * The `bottom` offset is only meaningful because `.composer-wrap` is given a
+ * positioning scheme in the same phone block; on a static element an inset is
+ * discarded silently, which is how this shipped inert.
+ */
+:root[data-keyboard-open="true"] .fixed-mobile-nav { display: none; }
 :root[data-keyboard-open="true"] .composer-wrap { bottom: var(--visual-viewport-bottom, 0); }
 
 @media (max-width: 640px), (max-width: 950px) and (max-height: 500px) {

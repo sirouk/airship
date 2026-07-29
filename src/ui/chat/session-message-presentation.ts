@@ -1,4 +1,6 @@
-import type { JsonValue } from "../../core/contracts";
+import type { JsonValue, SessionForkContextSeed } from "../../core/contracts";
+import { CONVERSATION_NAMED_EVENT_TYPE, HUMAN_INTENT_EVENT_TYPE } from "../../core/contracts";
+import { FORK_CONTEXT_EVENT_TYPE, canonicalForkContextSeed } from "../../core/fork-context";
 import type { DurableEvent, SessionRecord } from "../../core/journal";
 import type { SessionAuditReport } from "../../core/session-audit";
 import type { ConversationReceipt } from "../../receipts/types";
@@ -12,6 +14,28 @@ import {
 export type SessionPresentationTurnStatus = "completed" | "failed" | "cancelled" | "incomplete";
 export type SessionPresentationProviderContext = "included" | "excluded";
 
+/**
+ * Who let one tool call run, projected from the approval's journaled provenance.
+ *
+ * The journal has recorded this since approval modes shipped and no view read
+ * it, so every approved tool card in the transcript looked identical whether a
+ * person clicked Allow, a review model judged it safe, or Full Access let it
+ * through unasked. Those are three different claims about who is accountable
+ * for the effect, and a transcript that renders them the same way is not a
+ * record of what happened.
+ *
+ * It is keyed by `callId` and carried beside the row's parts rather than inside
+ * them: the part shapes are the message-parts contract, and the durable
+ * authority of a decision is a fact about the turn, not about a card's layout.
+ */
+export type SessionPresentationToolAuthority = Readonly<{
+  callId: string;
+  mode: "ask-first" | "auto-approve" | "full-access";
+  source: "automatic-read" | "human" | "model-review" | "human-fallback" | "bounded-browser-sandbox";
+  /** One short, already-presentable phrase; see AUTHORITY_LABELS. */
+  label: string;
+}>;
+
 export type SessionPresentationRow = Readonly<{
   id: string;
   sessionId: string;
@@ -20,12 +44,33 @@ export type SessionPresentationRow = Readonly<{
   sequence: number;
   endSequence: number;
   sourcePoint: Readonly<{ sequence: number; digest: string }>;
+  /**
+   * The boundary immediately *before* this row's turn was requested.
+   *
+   * An assistant row's `sourcePoint` is deliberately the post-answer terminal,
+   * because "Fork from here" on an answer means "keep this answer". Retry means
+   * the opposite — regenerate the turn — and forking at the post-answer point
+   * hands the replacement answer the answer it is replacing. The two boundaries
+   * are different facts, so the row states both rather than letting the caller
+   * guess. Present on assistant rows only; a user row's `sourcePoint` already
+   * is the pre-turn boundary.
+   */
+  turnStartPoint?: Readonly<{ sequence: number; digest: string }>;
   recordedAt?: string;
   parts: readonly MessagePart[];
   turnStatus: SessionPresentationTurnStatus;
   providerContext: SessionPresentationProviderContext;
   /** A validated receipt object remains separate from its display-only FooterPart. */
   receipt?: Readonly<ConversationReceipt>;
+  /**
+   * Authority for each approved tool call in this turn, in durable order.
+   *
+   * Present on assistant rows only, and only for approvals whose journaled
+   * provenance is well formed — an unreadable record is left absent rather than
+   * given a reassuring default, because "we do not know who approved this" and
+   * "the user approved this" must never render the same.
+   */
+  toolAuthorities?: readonly SessionPresentationToolAuthority[];
 }>;
 
 /**
@@ -232,6 +277,26 @@ const LOCAL_COMMAND_TYPES = new Set([
  * turn-scoped in the first place.
  */
 const TURN_SCOPED_PREFIX = /^(?:turn|inference|assistant|tool|local)\./u;
+/**
+ * The records that are session-scoped *despite* carrying turn and operation IDs.
+ *
+ * The rule above reads identity to decide scope, and for these two that reading
+ * is wrong. `auditSessionHistory` defines both as deliberately outside the turn
+ * protocol — a person can approve a commit or a vault probe while a turn is
+ * running, and the naming inference runs beside a turn rather than in it — and
+ * requires each to carry a *fresh* turn/operation ID precisely so it can never
+ * be mistaken for a step of a real turn. The grouper saw that identity, looked
+ * for the `turn.requested` boundary that by contract does not exist, and threw.
+ *
+ * That is the same "two validators disagree and the stricter one is the
+ * renderer" defect described below, with the same blast radius: the renderer
+ * runs inside profile switching and vault adoption, so one approved Git
+ * operation made the whole conversation unreplayable and reverted the switch.
+ * Naming them here keeps the disagreement closed by *type*, so their identity
+ * is used for what it is for — collision detection in the audit — rather than
+ * read as turn membership.
+ */
+const OUT_OF_TURN_RECORD_TYPES = new Set<string>([HUMAN_INTENT_EVENT_TYPE, CONVERSATION_NAMED_EVENT_TYPE]);
 const TURN_STATUSES = new Set<SessionPresentationTurnStatus>([
   "completed",
   "failed",
@@ -291,6 +356,7 @@ export function presentSessionMessages(
     if (group.kind === "local-command" && indexedReceipt) {
       fail("RECEIPT_MISMATCH", "A local command cannot carry a provider conversation receipt.");
     }
+    const toolAuthorities = toolAuthoritiesForGroup(group);
     const receipt = group.kind === "agent" ? indexedReceipt : undefined;
     if (group.kind === "agent") validateTurnReceipt(group, turnStatus, receipt);
     const lastEvent = group.events.at(-1) ?? group.request;
@@ -319,11 +385,13 @@ export function presentSessionMessages(
           ? { sequence: lastEvent.sequence, digest: lastEvent.digest }
           : { sequence: group.request.sequence - 1, digest: group.request.previousDigest },
       ),
+      turnStartPoint: Object.freeze({ sequence: group.request.sequence - 1, digest: group.request.previousDigest }),
       recordedAt: lastEvent.recordedAt,
       parts: assistantParts,
       turnStatus,
       providerContext,
       ...(receipt ? { receipt } : {}),
+      ...(toolAuthorities.length ? { toolAuthorities: Object.freeze(toolAuthorities) } : {}),
     }));
   }
 
@@ -436,6 +504,17 @@ function groupTurns(
   const groups: TurnGroup[] = [];
   const markers: SessionPresentationMarker[] = [];
   const seenTurnIds = new Set<string>();
+  /**
+   * `operationId` → `turnId` for each ancillary inference this page declared.
+   *
+   * The naming request is billed, so it emits `inference.usage` under the same
+   * fresh identity as its `conversation.named` record. That type is turn-scoped
+   * by prefix and has no `turn.requested` boundary, so it would be refused here
+   * while `auditSessionHistory` admits it against exactly this map. Admitted on
+   * the same terms — the declaring record must come first, and both IDs must
+   * match it — so an ordinary orphaned usage event stays the violation it is.
+   */
+  const ancillaryInferences = new Map<string, string>();
   let active: TurnGroup | undefined;
 
   for (const event of events) {
@@ -481,9 +560,17 @@ function groupTurns(
       continue;
     }
 
-    // A session-scoped record: no turn identity, and not a turn type. It is
-    // kept, counted and rendered, never dropped — see `SessionPresentationMarker`.
-    if (!event.turnId && !event.operationId && !TURN_SCOPED_PREFIX.test(event.type)) {
+    // A session-scoped record: it carries no turn identity, or it is one of the
+    // out-of-turn records that own a fresh identity by contract. It is kept,
+    // counted and rendered, never dropped — see `SessionPresentationMarker`.
+    if (
+      OUT_OF_TURN_RECORD_TYPES.has(event.type)
+      || isAncillaryInferenceUsage(event, ancillaryInferences)
+      || (!event.turnId && !event.operationId && !TURN_SCOPED_PREFIX.test(event.type))
+    ) {
+      if (event.type === CONVERSATION_NAMED_EVENT_TYPE && event.turnId && event.operationId) {
+        ancillaryInferences.set(event.operationId, event.turnId);
+      }
       markers.push(sessionMarker(event));
       continue;
     }
@@ -518,6 +605,15 @@ function groupTurns(
   }
 
   return { groups, markers };
+}
+
+function isAncillaryInferenceUsage(
+  event: DurableEvent,
+  ancillaryInferences: ReadonlyMap<string, string>,
+): boolean {
+  return event.type === "inference.usage"
+    && Boolean(event.operationId)
+    && ancillaryInferences.get(event.operationId!) === event.turnId;
 }
 
 /**
@@ -581,11 +677,89 @@ function sessionMarker(event: DurableEvent): SessionPresentationMarker {
       detail: "Selected as this profile’s active conversation.",
     });
   }
+  // Airship writes this record itself, one operation before rendering it, so
+  // the unread fallback below was never honest about it: every fork, edit and
+  // retry branch opened by telling its author the build could not replay the
+  // record it had just written. The seed is re-validated rather than trusted,
+  // because a marker that states a lineage must state one the payload proves.
+  if (event.type === FORK_CONTEXT_EVENT_TYPE) {
+    const seed = canonicalForkContextSeed(event.payload);
+    if (seed) return Object.freeze({ ...base, presentable: true, detail: forkContextDetail(seed) });
+  }
+  /*
+   * The two out-of-turn records, said in the transcript rather than counted in
+   * it. Reaching the fallback below would have been a lie of a second kind:
+   * "this build cannot replay" a record this build writes itself, one operation
+   * before it renders it. Each payload is re-read rather than trusted, so a
+   * malformed record still falls through to the honest unread marker.
+   */
+  if (event.type === HUMAN_INTENT_EVENT_TYPE) {
+    const detail = humanIntentDetail(payload);
+    if (detail) return Object.freeze({ ...base, presentable: true, detail });
+  }
+  if (event.type === CONVERSATION_NAMED_EVENT_TYPE) {
+    const named = typeof payload?.title === "string" ? presentableTitle(payload.title) : undefined;
+    const model = typeof payload?.model === "string" ? presentableTitle(payload.model) : undefined;
+    if (named) {
+      return Object.freeze({
+        ...base,
+        presentable: true,
+        detail: `Named “${named}” by ${model ?? "an inference request"} made for this conversation, beside the turn rather than in it.`,
+      });
+    }
+  }
+  if (event.type === "inference.usage") {
+    return Object.freeze({
+      ...base,
+      presentable: true,
+      detail: "Token usage for the inference that named this conversation.",
+    });
+  }
   return Object.freeze({
     ...base,
     presentable: false,
     detail: `This build cannot replay a ${event.type} record; the record is intact in the journal.`,
   });
+}
+
+/**
+ * The lineage sentence a branch opens with.
+ *
+ * The boundary sequence is the point in the source conversation this branch
+ * was taken from, and the carried/omitted counts are what the bounded seed
+ * could and could not bring across — a reader who is told neither cannot tell
+ * a complete continuation from a truncated one.
+ */
+function forkContextDetail(seed: SessionForkContextSeed): string {
+  const carried = `${String(seed.messages.length)} ancestor ${plural(seed.messages.length, "message")} carried`;
+  const images = seed.omittedImages > 0
+    ? ` (${String(seed.omittedImages)} ${plural(seed.omittedImages, "image")} omitted)`
+    : "";
+  return `Continued from the source conversation at event ${String(seed.sourceBoundarySequence)}`
+    + ` · ${carried}, ${String(seed.omittedMessages)} omitted${images}.`;
+}
+
+function plural(count: number, noun: string): string {
+  return count === 1 ? noun : `${noun}s`;
+}
+
+/**
+ * The sentence for a decision the *person* proposed, not the model.
+ *
+ * It names the authority the provenance recorded, for the same reason the tool
+ * cards do: "you approved this" and "a standing grant approved this" are
+ * different claims about who is accountable, and an unreadable provenance
+ * yields no claim at all rather than a reassuring one.
+ */
+function humanIntentDetail(payload: Readonly<Record<string, unknown>> | undefined): string | undefined {
+  if (!payload) return undefined;
+  const decision = payload.decision === "allow" ? "Allowed" : payload.decision === "deny" ? "Denied" : undefined;
+  const toolName = typeof payload.toolName === "string" ? presentableTitle(payload.toolName) : undefined;
+  if (!decision || !toolName) return undefined;
+  const effect = typeof payload.effect === "string" ? presentableTitle(payload.effect) : undefined;
+  const source = record(payload.approval)?.source as SessionPresentationToolAuthority["source"] | undefined;
+  const authority = source && source in AUTHORITY_LABELS ? ` ${AUTHORITY_LABELS[source]}.` : "";
+  return `${decision} ${toolName}${effect ? ` (${effect} effect)` : ""} — requested from the interface, outside any turn.${authority}`;
 }
 
 /**
@@ -659,6 +833,40 @@ function userPartsForGroup(group: TurnGroup): readonly MessagePart[] {
     text: payload.content as string,
     segmentId: `local-request:${group.request.eventId}`,
   }]);
+}
+
+/**
+ * The label a person reads instead of the vocabulary the policy engine speaks.
+ *
+ * "You approved" and "Model review" are different accountability claims, and
+ * Full Access is a standing grant rather than a decision about this call. The
+ * mapping lives here so every surface says the same three things.
+ */
+const AUTHORITY_LABELS: Readonly<Record<SessionPresentationToolAuthority["source"], string>> = Object.freeze({
+  human: "You approved",
+  "human-fallback": "You approved",
+  "model-review": "Model review",
+  "bounded-browser-sandbox": "Full Access",
+  "automatic-read": "Read-only, automatic",
+});
+const AUTHORITY_MODES = new Set(["ask-first", "auto-approve", "full-access"]);
+
+function toolAuthoritiesForGroup(group: TurnGroup): SessionPresentationToolAuthority[] {
+  const authorities: SessionPresentationToolAuthority[] = [];
+  for (const event of group.events) {
+    if (event.type !== "tool.approved" && event.type !== "local.command.approved") continue;
+    const payload = record(event.payload);
+    const approval = record(payload?.approval);
+    const callId = event.type === "tool.approved" ? payload?.callId : requiredOperationId(event);
+    if (!approval || typeof callId !== "string" || callId.length === 0) continue;
+    const source = approval.source as SessionPresentationToolAuthority["source"];
+    const mode = approval.mode as SessionPresentationToolAuthority["mode"];
+    // An unreadable provenance record yields no row rather than a default: a
+    // wrong authority label is a false claim about who is accountable.
+    if (!(source in AUTHORITY_LABELS) || !AUTHORITY_MODES.has(mode)) continue;
+    authorities.push(Object.freeze({ callId, mode, source, label: AUTHORITY_LABELS[source] }));
+  }
+  return authorities;
 }
 
 function assistantPartsForGroup(group: TurnGroup): readonly MessagePart[] {

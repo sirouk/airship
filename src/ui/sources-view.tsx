@@ -17,6 +17,7 @@ import type {
 } from "../git/types";
 import type { BrowserGitClient } from "../git/client";
 import { preferredSourceRepositoryId, rememberSourceRepository } from "../git/source-selection";
+import { isRemoteOriginPermitted, remoteOrigin } from "../git/validation";
 import type { RepositoryImportProgress, RepositoryImportResult } from "../tools/repository-import";
 import { importAndAdmitGithubRepository } from "../tools/repository-admission";
 import type { WorkspacePort } from "../workspace/contracts";
@@ -125,6 +126,11 @@ export function SourcesView({ client, author, review, workspace, reviewImport, o
   const statusTree = useMemo(() => buildStatusTree(worktree?.status ?? []), [worktree?.status]);
   const stagedCount = worktree?.status.filter((entry) => entry.index).length ?? 0;
   const remote = repository?.remotes.find((item) => item.name === "origin") ?? repository?.remotes[0];
+  // `features.fetch/push.available` is one flag for the whole build, and it is
+  // true whenever any origin is permitted — the page's own always is. The
+  // decision that actually governs a fetch or push is per-remote
+  // (`assertRemoteOriginPermitted`), so the controls follow the remote in hand.
+  const remoteReachable = remote ? isRemoteOriginPermitted(remote.url, client.capabilities.remote.permittedOrigins) : false;
   const hasConflict = selectedStatus.some(isConflicted);
   const posture = useMemo(
     () => sourcePostureFacts(client.capabilities, workspaceDurability),
@@ -447,7 +453,7 @@ export function SourcesView({ client, author, review, workspace, reviewImport, o
             <button class="primary" type="button" onClick={() => setImportOpen(true)}><Icon name="plus" /> Import a public GitHub snapshot</button>
             <button type="button" onClick={() => setRefreshKey((value) => value + 1)}>Check available browser sources</button>
           </div>
-          <small>{client.capabilities.features.clone.available ? "A clone-capable adapter is available." : `Full-history clone unavailable: ${client.capabilities.features.clone.reason ?? "no direct adapter is installed"}.`}</small>
+          <small>{cloneBoundaryNote(client.capabilities)}</small>
         </div>
       ) : (
         <div class="git-sources-layout">
@@ -598,7 +604,7 @@ export function SourcesView({ client, author, review, workspace, reviewImport, o
                   1,030-character remote essay was permanently on screen while
                   both of its buttons were disabled; the live claim
                   (`upstreamStatus`) stays visible either way. */}
-              <details class="git-remote-boundary" open={Boolean(remote) && (client.capabilities.features.fetch.available || client.capabilities.features.push.available)}>
+              <details class="git-remote-boundary" open={remoteReachable && (client.capabilities.features.fetch.available || client.capabilities.features.push.available)}>
                 <summary>
                   <span class="eyebrow">Remote boundary</span>
                   <strong>{remote ? `${remote.name} · ${remote.transport}` : "No remote configured"}</strong>
@@ -606,16 +612,17 @@ export function SourcesView({ client, author, review, workspace, reviewImport, o
                 </summary>
                 <div class="git-remote-boundary__body">
                   {remote ? <small class="git-remote-url">{remote.url}</small> : null}
-                  <button type="button" disabled={Boolean(busy) || !remote || !client.capabilities.features.fetch.available} onClick={fetchRemote}><Icon name="cloud" /> Fetch direct</button>
-                  <button type="button" disabled={Boolean(busy) || !remote || !client.capabilities.features.push.available} onClick={pushRemote}><Icon name="source" /> Push {worktree.branch}</button>
+                  <button type="button" disabled={Boolean(busy) || !remoteReachable || !client.capabilities.features.fetch.available} onClick={fetchRemote}><Icon name="cloud" /> Fetch direct</button>
+                  <button type="button" disabled={Boolean(busy) || !remoteReachable || !client.capabilities.features.push.available} onClick={pushRemote}><Icon name="source" /> Push {worktree.branch}</button>
                   <p class="git-push-warning">Push is always reviewed. A non-fast-forward update is blocked unless the remote is fetched and reconciled first.</p>
-                  {!client.capabilities.features.push.available ? <p>{client.capabilities.features.push.reason}</p> : <>
-                    <p>{gitCredentialBoundary(client)}</p>
-                    <p>If the final response is lost, Airship reports the outcome as unknown and never retries automatically. Fetch before retrying.</p>
-                  </>}
+                  {remoteBoundaryParagraphs(client.capabilities, remote).map((paragraph) => <p key={paragraph}>{paragraph}</p>)}
                   {/* The transport's own contract paragraph is stated once, in
-                      Source posture. This is a pointer to it, not a reprint. */}
-                  <p>What this build's Content-Security-Policy permits is stated once, under <button class="git-inline-link" type="button" onClick={revealPosture}>Source posture ↑</button>.</p>
+                      Source posture. This is a pointer to it, not a reprint —
+                      and an adapter with no transport has no CSP permission to
+                      point at, so it gets the pointer without the claim. */}
+                  {client.capabilities.remote.transport === "none"
+                    ? <p>This adapter's remote contract is stated once, under <button class="git-inline-link" type="button" onClick={revealPosture}>Source posture ↑</button>.</p>
+                    : <p>What this build's Content-Security-Policy permits is stated once, under <button class="git-inline-link" type="button" onClick={revealPosture}>Source posture ↑</button>.</p>}
                 </div>
               </details>
           </div>
@@ -698,7 +705,12 @@ function ChangedPathRow({ entry, selected, onToggle, onInspect, depth = 0, displ
 }>) {
   return <div class={`git-change-row ${selected ? "selected" : ""} ${isConflicted(entry) ? "conflicted" : ""}`} role="listitem" style={{ "--tree-depth": depth }}>
     <label><input type="checkbox" checked={selected} disabled={isConflicted(entry)} title={isConflicted(entry) ? "Resolve this conflict before staging." : undefined} onChange={() => onToggle(entry.path)} /><Icon name="file" /><span><strong title={entry.path}>{displayName ?? entry.path}</strong><small>{entry.index ? `staged · ${entry.index.kind}` : ""}{entry.index && entry.worktree ? " · " : ""}{entry.worktree ? `working · ${entry.worktree.kind}` : ""}</small></span></label>
-    <span class="git-delta-slots" aria-label={gitStatusLabel(entry)}>{entry.index ? <b class="git-delta filled" title={`Staged ${entry.index.kind}`}>{deltaLetter(entry.index.kind)}</b> : <i />}{entry.worktree ? <b class="git-delta outlined" title={`Working ${entry.worktree.kind}`}>{deltaLetter(entry.worktree.kind)}</b> : <i />}</span>
+    {/* The two slots read as single letters — "M", "A", "?" — so the label is
+        the only text that says what they mean. On a bare span ARIA drops it:
+        naming an element whose computed role is generic is forbidden. `role="img"`
+        is the smallest role that permits a name and keeps the letters as the
+        decoration they are. */}
+    <span class="git-delta-slots" role="img" aria-label={gitStatusLabel(entry)}>{entry.index ? <b class="git-delta filled" title={`Staged ${entry.index.kind}`}>{deltaLetter(entry.index.kind)}</b> : <i />}{entry.worktree ? <b class="git-delta outlined" title={`Working ${entry.worktree.kind}`}>{deltaLetter(entry.worktree.kind)}</b> : <i />}</span>
     {entry.index?.fromPath || entry.worktree?.fromPath ? <small class="git-rename">{entry.index?.fromPath ?? entry.worktree?.fromPath} → {entry.path}</small> : null}
     <span class="git-change-count"><i>+{entry.additions ?? 0}</i><b>−{entry.deletions ?? 0}</b></span>
     <div class="git-diff-actions">
@@ -1135,14 +1147,67 @@ function storageLabel(backend: string): string {
   return "Page-memory repository";
 }
 
-function gitCredentialBoundary(client: BrowserGitClient): string {
-  if (client.capabilities.remote.credentialPersistence === "memory-only") {
+function gitCredentialBoundary(capabilities: BrowserGitClient["capabilities"]): string {
+  if (capabilities.remote.credentialPersistence === "memory-only") {
     return "Authenticated challenges use an integration-supplied credential held only in this page's memory. It is never written to Git config or Vault.";
   }
-  if (client.capabilities.remote.credentialPersistence === "host-managed") {
+  if (capabilities.remote.credentialPersistence === "host-managed") {
     return "The selected Git host owns credential custody; Airship does not persist or display the credential.";
   }
   return "Anonymous direct push only. This build has no Git credential broker, so an authenticated remote will refuse the request.";
+}
+
+/**
+ * The paragraphs under the remote boundary, in order. A remote this build's
+ * CSP cannot reach never gets the credential-custody sentence: no request is
+ * ever sent, so custody is not the thing standing in the way, and saying
+ * "anonymous direct push only" would describe a push that cannot happen.
+ */
+export function remoteBoundaryParagraphs(
+  capabilities: BrowserGitClient["capabilities"],
+  remote: Readonly<{ url: string }> | undefined,
+): readonly string[] {
+  // A transport-less adapter (memory, encrypted workspace) permits no origin
+  // because it installs no Git HTTP client at all, not because the page's
+  // policy refused one — and it can still carry a real GitHub `origin` that
+  // snapshot import registered. Answering with the CSP sentence there would
+  // blame the wrong layer and bury the adapter's own reason, so the adapter
+  // speaks first and the policy sentence is kept for builds that do have a
+  // transport and a remote that transport may not reach.
+  if (capabilities.remote.transport === "none") {
+    return [capabilities.features.push.reason ?? "This adapter installs no Git remote transport, so fetch and push never leave this page."];
+  }
+  if (remote && !isRemoteOriginPermitted(remote.url, capabilities.remote.permittedOrigins)) {
+    const origin = remoteOrigin(remote.url) ?? remote.url;
+    return [
+      `This build's Content-Security-Policy does not permit ${origin}, so fetch and push against this remote are refused before any request is sent — the adapter's capability flags describe the build, not this remote.`,
+      `Git Smart HTTP may reach ${permittedOriginList(capabilities)} from this page.`,
+    ];
+  }
+  if (!capabilities.features.push.available) {
+    return [capabilities.features.push.reason ?? "Push is unavailable on this adapter."];
+  }
+  return [
+    gitCredentialBoundary(capabilities),
+    "If the final response is lost, Airship reports the outcome as unknown and never retries automatically. Fetch before retrying.",
+  ];
+}
+
+/**
+ * The empty state offers the snapshot importer and no clone control, so it may
+ * not advertise a clone adapter as if one could be driven from here. State the
+ * origin boundary a clone would actually be judged against instead.
+ */
+export function cloneBoundaryNote(capabilities: BrowserGitClient["capabilities"]): string {
+  if (!capabilities.features.clone.available) {
+    return `Full-history clone unavailable: ${capabilities.features.clone.reason ?? "no direct adapter is installed"}.`;
+  }
+  return `Full-history clone can reach only ${permittedOriginList(capabilities)} — the origins this build's Content-Security-Policy permits Git Smart HTTP to. Every other remote is refused before a request is sent.`;
+}
+
+function permittedOriginList(capabilities: BrowserGitClient["capabilities"]): string {
+  const permitted = capabilities.remote.permittedOrigins;
+  return permitted.length ? permitted.join(", ") : "no origin at all";
 }
 
 function remoteLabel(transport: string): string {

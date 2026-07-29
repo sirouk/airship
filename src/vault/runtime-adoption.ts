@@ -1,6 +1,7 @@
 import type { JsonValue } from "../core/contracts";
 import { stableStringify } from "../core/hash";
 import type { EventJournal, JournalBackend, SessionRecord } from "../core/journal";
+import { createBuiltInProfileCatalog, reconcileBuiltInSkills } from "../profiles/catalog";
 import {
   ProfileCatalogConflictError,
   type ProfileCatalogCheckpoint,
@@ -146,9 +147,48 @@ export async function migrateProfileCatalogState(
     if (initialized.disposition === "created") {
       return Object.freeze({ checkpoint: initialized.checkpoint, disposition: "created" });
     }
-    return resolveExistingCatalog(source, initialized.checkpoint, options.sourceIsBootstrap);
+    return reconcileMigration(target, resolveExistingCatalog(source, initialized.checkpoint, options.sourceIsBootstrap), signal);
   }
-  return resolveExistingCatalog(source, initial, options.sourceIsBootstrap);
+  return reconcileMigration(target, resolveExistingCatalog(source, initial, options.sourceIsBootstrap), signal);
+}
+
+async function reconcileMigration(
+  target: ProfileCatalogStore,
+  migration: ProfileCatalogMigration,
+  signal?: AbortSignal,
+): Promise<ProfileCatalogMigration> {
+  const checkpoint = await reconcileAdoptedProfileCatalog(target, migration.checkpoint, signal);
+  return checkpoint === migration.checkpoint
+    ? migration
+    : Object.freeze({ checkpoint, disposition: migration.disposition });
+}
+
+/**
+ * Bring an adopted catalog up to this release's built-in skills.
+ *
+ * An adopted catalog is authoritative for everything a person authored, but it
+ * is not authoritative about which skills this build ships: nothing unions the
+ * two, so a Vault written by an older release froze the skill set for every
+ * later boot, and a skill added after adoption could never appear. The union is
+ * committed as an ordinary generation bump so the digest/etag chain stays
+ * valid and the change is as auditable as any other catalog revision.
+ *
+ * It is best-effort by design. A concurrent writer, an offline authority, or a
+ * store that refuses the write leaves the reader with exactly what they had —
+ * a missing skill card is not a reason to fail adoption and strand a workspace.
+ */
+export async function reconcileAdoptedProfileCatalog(
+  target: ProfileCatalogStore,
+  checkpoint: ProfileCatalogCheckpoint,
+  signal?: AbortSignal,
+): Promise<ProfileCatalogCheckpoint> {
+  const reconciled = reconcileBuiltInSkills(checkpoint.catalog, await createBuiltInProfileCatalog());
+  if (reconciled === checkpoint.catalog) return checkpoint;
+  try {
+    return await target.commit(checkpoint, reconciled, signal);
+  } catch {
+    return checkpoint;
+  }
 }
 
 function resolveExistingCatalog(

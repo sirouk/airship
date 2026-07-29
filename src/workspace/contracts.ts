@@ -3,10 +3,38 @@ export type WorkspaceFile = {
   content: string;
   revision: string;
   updatedAt: string;
+  /**
+   * Bytes the storage authority holds for this object: the UTF-8 length of
+   * `content` exactly as written. For a binary file that is the base64
+   * `airship-git-binary-v1:` envelope, so it is a storage/quota bound and an
+   * integrity witness — never the number to show a person.
+   */
   size: number;
+  /**
+   * The file's own byte length, with the binary envelope decoded — what the
+   * agent tools already report and what the Explorer and editor must show.
+   *
+   * Optional only because manifests and IndexedDB records written before this
+   * field existed cannot supply it; read it through `workspaceEntryByteLength`
+   * rather than directly so the legacy fallback stays in one place.
+   */
+  contentByteLength?: number;
 };
 
 export type WorkspaceEntry = Omit<WorkspaceFile, "content">;
+
+/**
+ * The size to show a person, in the file's own bytes.
+ *
+ * Binaries cross the string-valued WorkspacePort inside a base64 envelope that
+ * is ~4/3 of the file, so rendering `size` made every image and archive read a
+ * third larger than `read_file`/`stat_path` reported for the same path. Entries
+ * predating `contentByteLength` still fall back to `size`: that is exactly as
+ * wrong as before for those, and correct for text, which is the majority.
+ */
+export function workspaceEntryByteLength(entry: Pick<WorkspaceEntry, "size" | "contentByteLength">): number {
+  return entry.contentByteLength ?? entry.size;
+}
 
 export interface WorkspacePort {
   read(path: string): Promise<WorkspaceFile | undefined>;

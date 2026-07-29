@@ -4,12 +4,14 @@ import { Icon } from "./icons";
 import { MenuSelect } from "./menu-select";
 import {
   RAIL_SECTIONS,
+  canonicalParentForView,
   railTraversal,
   type NavigationView,
   type RailNestedDestination,
   type RailRow,
 } from "./navigation-model";
 import type { RailState } from "./rail-state";
+import { RuntimeLoadIndicator } from "./runtime-load-indicator";
 
 /**
  * The left rail.
@@ -37,6 +39,12 @@ export type RailConversation = Readonly<{
   preview: string;
   updatedAt: string;
   favorite: boolean;
+  /**
+   * Branches of this row's lineage the shortcut collapsed behind it. Stated on
+   * the row rather than merely acted on: a hidden conversation that is not
+   * counted is one the shortcut silently lost.
+   */
+  hiddenBranchCount?: number;
   open(): void;
   toggleFavorite(): void;
   /** Omitted anchor means move after every current favorite. */
@@ -84,6 +92,23 @@ export type RailProps = Readonly<{
 const RECENTS_KEY = "recents";
 
 /**
+ * The conversation subtree's keys.
+ *
+ * The disclosure was added as free-form markup inside a `role="group"` and was
+ * never given keys in the destination-only traversal model, so opening it — which
+ * clicking Chat forces — added one tab stop per thread plus the ledger link, and
+ * the "one composite widget, not twenty tab stops" contract in the header
+ * comment stopped being true of the widget it describes.
+ *
+ * A row is one stop. Its favorite and reorder buttons are reached with
+ * `ArrowRight`, which is the same nesting gesture `onNavKeyDown` already
+ * implements for a rail row's nested destinations.
+ */
+const CONVERSATION_PREFIX = "conversation:";
+const NEW_CONVERSATION_KEY = "new-conversation";
+const ALL_CONVERSATIONS_KEY = "all-conversations";
+
+/**
  * The rail row an id belongs to: the row itself, or the row it is filed under.
  *
  * One lookup rather than two, because "which row owns this key" is the only
@@ -106,6 +131,28 @@ export function railRowFor(id: string): RailRow | undefined {
  * that was the defect.
  */
 export const RAIL_RECENT_LIMIT = 10;
+
+/**
+ * Which row holds the rail's single tab stop, for a view that may not be a row.
+ *
+ * The roving seed treated `view` as if it were always a rail key. Five of the
+ * fourteen `NavigationView`s are not — `sessions`, `profiles`, `skills`,
+ * `capabilities`, `context` — so a deep link to any of them named a row that
+ * does not exist, no row matched the `tabIndex 0` test, and the primary nav had
+ * zero tab stops: unreachable by keyboard until the user navigated elsewhere.
+ *
+ * `order` is the authority, so the answer is resolved through it: the view if
+ * the rail renders it, else whatever stop we already had, else the row the view
+ * is filed under (Chat for `sessions`, Memory for `context`), else the first
+ * row. The last two arms are what make this correct for the *initial* seed,
+ * where `current` is itself the off-rail value.
+ */
+export function rovingKey(view: NavigationView, order: readonly string[], current?: string): string {
+  if (order.includes(view)) return view;
+  if (current !== undefined && order.includes(current)) return current;
+  const parent = canonicalParentForView(view);
+  return order.includes(parent) ? parent : order[0] ?? view;
+}
 
 export function Rail({
   view,
@@ -138,9 +185,25 @@ export function Rail({
     Object.freeze({ workspace: railRowFor(view)?.id === "workspace" }));
   const [recentsOpen, setRecentsOpen] = useState(false);
   const [draggingFavoriteId, setDraggingFavoriteId] = useState<string>();
-  const [activeKey, setActiveKey] = useState<string>(view);
+  // Seeded through the traversal, not from `view` directly: `view` is only
+  // sometimes a rail key, and a seed that names a row the rail does not render
+  // leaves the whole nav with no tab stop at all.
+  const [activeKey, setActiveKey] = useState<string>(() =>
+    rovingKey(view, railTraversal({ workspace: railRowFor(view)?.id === "workspace" })));
   const items = useRef(new Map<string, HTMLButtonElement>());
   const recentsTrigger = useRef<HTMLButtonElement>(null);
+
+  // Props can retain the previous async read for one render while a profile
+  // switches. Filtering by the row's bound profile makes that frame empty
+  // instead of exposing another profile's titles or favorite order.
+  const scopedConversations = conversations.filter((conversation) => conversation.profileId === profileId);
+  const favorites = scopedConversations.filter((session) => session.favorite);
+  const recent = scopedConversations.filter((session) => !session.favorite).slice(0, RAIL_RECENT_LIMIT);
+  const visibleConversations = [...favorites, ...recent];
+  // Depended on as a string so the memo is not invalidated by a fresh array
+  // holding the same threads in the same order, which every parent re-render
+  // would otherwise produce.
+  const conversationKeys = visibleConversations.map((session) => `${CONVERSATION_PREFIX}${session.id}`).join("\n");
 
   const order = useMemo(() => {
     const destinations = railTraversal(expanded);
@@ -149,20 +212,24 @@ export function Rail({
       keys.push(id);
       // The disclosure belongs beside the row it discloses, so `ArrowDown` from
       // Chat reaches the conversation list rather than skipping past it.
-      if (id === "chat") keys.push(RECENTS_KEY);
+      if (id !== "chat") continue;
+      keys.push(RECENTS_KEY);
+      // Only while it is open: a closed disclosure's rows are not in the tree,
+      // and arrowing to a row nobody can see is the same defect as arrowing to
+      // a collapsed nested destination.
+      if (!recentsOpen) continue;
+      keys.push(NEW_CONVERSATION_KEY, ...(conversationKeys ? conversationKeys.split("\n") : []), ALL_CONVERSATIONS_KEY);
     }
     return keys;
-  }, [expanded]);
+  }, [expanded, recentsOpen, conversationKeys]);
 
   // A route can change from the palette, a hash, or a link inside the page.
   // The roving stop follows it so `Tab` into the rail always lands on where the
   // user actually is, not on wherever they last arrowed to.
-  useEffect(() => { setActiveKey((current) => (order.includes(view) ? view : current)); }, [view, order]);
-
-  // Props can retain the previous async read for one render while a profile
-  // switches. Filtering by the row's bound profile makes that frame empty
-  // instead of exposing another profile's titles or favorite order.
-  const scopedConversations = conversations.filter((conversation) => conversation.profileId === profileId);
+  // `order` is a dependency as well as `view`: collapsing Workspace while the
+  // stop sits on Terminal withdraws the stop's own row, and keeping `current`
+  // unconditionally would leave the nav with none.
+  useEffect(() => { setActiveKey((current) => rovingKey(view, order, current)); }, [view, order]);
 
   function focusKey(key: string) {
     setActiveKey(key);
@@ -187,16 +254,35 @@ export function Rail({
    * arrows walk it. This is the standard tree/toolbar contract, and it is
    * added to the existing reach rather than substituted for it — every row is
    * still a real `<button>` with its own accessible name and `aria-current`.
+   *
+   * The promise covers the conversation disclosure too, which it did not when
+   * that subtree was added: its rows were free-form markup with no keys in the
+   * traversal model, so opening it — which clicking Chat forces — put one tab
+   * stop per thread back into the rail, plus the ledger link and the new-thread
+   * button. A conversation row is one stop; its favorite and reorder buttons
+   * are one `ArrowRight` away, the same nesting gesture a rail row's nested
+   * destinations use.
    */
   function onNavKeyDown(event: KeyboardEvent) {
-    const key = (event.target as HTMLElement | null)?.dataset?.railKey;
-    if (!key) return;
+    const target = event.target as HTMLElement | null;
+    const key = target?.dataset?.railKey;
+    // A conversation row's favorite and reorder buttons carry no key: they are
+    // the row's secondary actions, reached from the row itself rather than
+    // being stops of their own.
+    if (!key) { onConversationActionKeyDown(event, target); return; }
     switch (event.key) {
       case "ArrowDown": event.preventDefault(); step(key, 1); return;
       case "ArrowUp": event.preventDefault(); step(key, -1); return;
       case "Home": event.preventDefault(); focusKey(order[0]!); return;
       case "End": event.preventDefault(); focusKey(order[order.length - 1]!); return;
       case "ArrowRight": {
+        if (key.startsWith(CONVERSATION_PREFIX)) {
+          const action = conversationRowActions(target)[0];
+          if (!action) return;
+          event.preventDefault();
+          action.focus();
+          return;
+        }
         const row = railRowFor(key);
         if (!row || row.id !== key || row.nested.length === 0) return;
         event.preventDefault();
@@ -212,6 +298,40 @@ export function Rail({
       }
       default:
     }
+  }
+
+  /**
+   * Arrow behaviour inside a conversation row's secondary actions.
+   *
+   * `ArrowLeft` returns to the row — the same escape the nested-destination
+   * arm gives — and `ArrowDown`/`ArrowUp` resume the walk from the row, so a
+   * person who stepped sideways into the star is never stranded there.
+   */
+  function onConversationActionKeyDown(event: KeyboardEvent, target: HTMLElement | null) {
+    const actions = conversationRowActions(target);
+    const index = actions.indexOf(target as HTMLButtonElement);
+    if (index < 0) return;
+    const thread = target?.closest(".recent-conversation-row")?.querySelector<HTMLElement>(".recent-conversation--thread");
+    const rowKey = thread?.dataset.railKey;
+    if (event.key === "ArrowRight" && actions[index + 1]) { event.preventDefault(); actions[index + 1]!.focus(); return; }
+    if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      (index === 0 ? thread : actions[index - 1])?.focus();
+      return;
+    }
+    if ((event.key === "ArrowDown" || event.key === "ArrowUp") && rowKey) {
+      event.preventDefault();
+      step(rowKey, event.key === "ArrowDown" ? 1 : -1);
+    }
+  }
+
+  /** A row's enabled secondary buttons, in visual order. Disabled edges of the
+      reorder pair are excluded: an unfocusable stop is not a stop. */
+  function conversationRowActions(target: HTMLElement | null): readonly HTMLButtonElement[] {
+    const row = target?.closest(".recent-conversation-row");
+    if (!row) return [];
+    return [...row.querySelectorAll<HTMLButtonElement>("button:not(.recent-conversation--thread)")]
+      .filter((button) => !button.disabled);
   }
 
   function itemProps(key: string) {
@@ -243,8 +363,11 @@ export function Rail({
         >
           <Icon name={row.icon} />
           <span class="nav-item__label">{row.label}</span>
+          {/* `role="img"` so the count reaches the button's name as "3 completed
+              turns" rather than a bare "3": a name on a generic span is dropped,
+              and only the ancestor's name-from-content walk was rescuing it. */}
           {row.id === "chat" && unreadTurnCount > 0
-            ? <span class="nav-turn-badge" aria-label={`${String(unreadTurnCount)} completed turn${unreadTurnCount === 1 ? "" : "s"}`}>{unreadTurnCount}</span>
+            ? <span class="nav-turn-badge" role="img" aria-label={`${String(unreadTurnCount)} completed turn${unreadTurnCount === 1 ? "" : "s"}`}>{unreadTurnCount}</span>
             : null}
           {row.id === "proof" && hasReceipt ? <span class="nav-proof-dot" /> : null}
         </button>
@@ -292,9 +415,7 @@ export function Rail({
    * end of the tree instead of becoming another permanent rail destination.
    */
   function recentsDisclosure() {
-    const favorites = scopedConversations.filter((session) => session.favorite);
-    const recent = scopedConversations.filter((session) => !session.favorite).slice(0, RAIL_RECENT_LIMIT);
-    const visible = [...favorites, ...recent];
+    const visible = visibleConversations;
     const favoriteIds = favorites.map((session) => session.id);
     const reportFavoriteLoadFailure = (error: unknown) => {
       const detail = error instanceof Error ? error.message : String(error);
@@ -344,6 +465,7 @@ export function Rail({
           title={session.title}
           aria-current={session.id === activeConversationId ? "page" : undefined}
           aria-keyshortcuts={session.favorite ? "Alt+ArrowUp Alt+ArrowDown" : undefined}
+          {...itemProps(`${CONVERSATION_PREFIX}${session.id}`)}
           onClick={session.open}
           onKeyDown={(event) => {
             if (!session.favorite || !event.altKey || (event.key !== "ArrowUp" && event.key !== "ArrowDown")) return;
@@ -356,19 +478,31 @@ export function Rail({
           <span class="recent-conversation__copy">
             <strong>{session.title}</strong>
             <small>{session.preview}</small>
+            {/* The rows this one stands for. The shortcut shows one row per
+                lineage so three retries cannot evict three unrelated threads,
+                and this line is what stops that from being a silent deletion:
+                the branches are all in All conversations, below. */}
+            {session.hiddenBranchCount ? <small class="recent-conversation__branches">
+              {session.hiddenBranchCount} more branch{session.hiddenBranchCount === 1 ? "" : "es"} in All conversations
+            </small> : null}
           </span>
           <time dateTime={session.updatedAt}>{formatTime(session.updatedAt)}</time>
         </button>
+        {/* `tabIndex -1` on the secondary actions is what makes the row one
+            stop rather than four. They keep their accessible names and their
+            pointer behaviour, and `ArrowRight` from the row walks them. */}
         {session.favorite ? (
-          <span class="recent-conversation__order" aria-label={`Reorder favorite ${session.title}`}>
+          <span class="recent-conversation__order" role="group" aria-label={`Reorder favorite ${session.title}`}>
             <button
               type="button"
+              tabIndex={-1}
               aria-label={`Move favorite ${session.title} up`}
               disabled={favoriteIds[0] === session.id}
               onClick={() => moveFavorite(session, -1)}
             >↑</button>
             <button
               type="button"
+              tabIndex={-1}
               aria-label={`Move favorite ${session.title} down`}
               disabled={favoriteIds.at(-1) === session.id}
               onClick={() => moveFavorite(session, 1)}
@@ -378,6 +512,7 @@ export function Rail({
         <button
           class="recent-conversation__favorite"
           type="button"
+          tabIndex={-1}
           aria-pressed={session.favorite}
           aria-label={`${session.favorite ? "Remove from favorites" : "Add to favorites"} ${session.title}`}
           onClick={session.toggleFavorite}
@@ -425,6 +560,7 @@ export function Rail({
                 title="New conversation"
                 disabled={busy}
                 onClick={() => { setRecentsOpen(false); onNewConversation(); }}
+                {...itemProps(NEW_CONVERSATION_KEY)}
               ><span aria-hidden="true">+</span></button>
             </div>
             {favorites.length ? <div class="rail-conversation-group">Favorites</div> : null}
@@ -436,6 +572,7 @@ export function Rail({
               type="button"
               aria-current={view === "sessions" ? "page" : undefined}
               onClick={() => onNavigate("sessions")}
+              {...itemProps(ALL_CONVERSATIONS_KEY)}
             ><span class="nav-item__label">All conversations</span></button>
           </div>
         ) : null}
@@ -489,6 +626,11 @@ export function Rail({
           ))}
         </nav>
         <div class="sidebar-spacer" />
+        {/* The one live-utilisation reading the shell carries. It lives here
+            rather than on the Capabilities route alone because "what is this
+            running right now" is a question asked while doing something else,
+            and the rail is the only band every route renders. */}
+        <RuntimeLoadIndicator />
         <button
           class="rail-collapse"
           type="button"

@@ -151,7 +151,12 @@ export function SessionStatusChip({
             than the two stacked seals the mobile details button used to show. */}
         <Seal state={worst.state} density="dot" size={16} label={worst.label} acting={worst.state === "checking"} />
         <span class="session-status-chip__word" data-state={worst.state}>{worst.short}</span>
-        <small class="session-status-chip__count">{facts.length}</small>
+        {/* Same rule as the journal chip: the count states its own unit in
+            text, so the two adjacent chips never read as two bare numbers. */}
+        <small class="session-status-chip__count">
+          {facts.length}{" "}
+          <span class="session-status-chip__unit">{facts.length === 1 ? "claim" : "claims"}</span>
+        </small>
       </>}
     >
       <ClaimRows rows={rows} />

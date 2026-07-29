@@ -72,7 +72,13 @@ export function ContextView({ workspace, entries, dimensions = 384, resultLimit 
     ? localSearchError
     : sharedSearch?.searching ? undefined : sharedSearch?.status;
 
-  useEffect(() => runtime.subscribe(setEngineState), [runtime]);
+  // The mode is no longer fixed at mount: the runtime may derive it from this
+  // device's capability probe before the first generation, so it is re-read
+  // with every engine state rather than trusted from the initial render.
+  useEffect(() => runtime.subscribe((state) => {
+    setEngineState(state);
+    setEmbeddingMode(runtime.getEmbeddingMode());
+  }), [runtime]);
   useEffect(() => runtime.subscribeSemantic(setSemanticState), [runtime]);
   useEffect(() => {
     if (!onReady) return;
@@ -193,7 +199,7 @@ export function ContextView({ workspace, entries, dimensions = 384, resultLimit 
         * and the two embedding paragraphs are one gesture away, and the state
         * word, the counts and the engine's own live status never were.
         */}
-      <div class="context-index-status" aria-label="Context index status">
+      <div class="context-index-status" role="group" aria-label="Context index status">
         <div class="context-index-status__row">
           <button
             class="context-index-status__toggle"

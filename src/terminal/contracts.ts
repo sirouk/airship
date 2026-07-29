@@ -64,7 +64,18 @@ export type TerminalSessionSnapshot = Readonly<{
   audit: readonly TerminalAuditRecord[];
   exitCode?: number;
   detail: string;
+  /** A sliding tail, capped: past the cap this is no longer append-only. */
   bufferedOutput: string;
+  /**
+   * Monotonic, incremented once per appended PTY chunk.
+   *
+   * A consumer that advanced by exactly one may write `appendedOutput` alone;
+   * any other step (first mount, resubscribe, reconstruction) means it has to
+   * redraw from `bufferedOutput`. Page-local render bookkeeping, never lineage.
+   */
+  outputSequence: number;
+  /** Exactly the text the append that produced `outputSequence` added. */
+  appendedOutput: string;
 }>;
 
 export type TerminalDimensions = Readonly<{ cols: number; rows: number }>;

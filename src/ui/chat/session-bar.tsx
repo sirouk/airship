@@ -231,7 +231,15 @@ function JournalChip({ journal, onOpenSession }: Readonly<{ journal: SessionJour
         onClick={onOpenSession}
       >
         <span class="journal-chip__glyph" aria-hidden="true">⌗</span>
-        <span class="journal-chip__count">{journal.eventCount}</span>
+        {/* The unit is rendered text, not an attribute. A bare integer beside
+            the model chip's own bare integer is two numbers of unstated kind;
+            a glyph plus a tooltip is not a label for the one number a reader
+            is asked to compare with the one next to it. It is clipped with the
+            short id at scrolled widths, so it costs nothing at rest. */}
+        <span class="journal-chip__count">
+          {journal.eventCount}{" "}
+          <span class="journal-chip__unit">{journal.eventCount === 1 ? "event" : "events"}</span>
+        </span>
         <small class="journal-chip__id">#{shortId}</small>
       </button>
     </span>

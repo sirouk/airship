@@ -44,7 +44,14 @@ import { probeChutesSignInHandler, type ChutesSignInReadiness } from "./connect/
 import { Popover } from "./popover";
 import { RouteHeader } from "./route-header";
 import { Seal } from "./seal";
+import { nextTabId } from "./tabs";
 import "./access-view.css";
+
+/** The Chutes switch's two tabs, in strip order, for the shared movement rule. */
+const CHUTES_METHOD_TABS = Object.freeze([
+  Object.freeze({ id: "oauth", label: "OAuth" }),
+  Object.freeze({ id: "api-key", label: "API key" }),
+]);
 
 /**
  * The page paragraph, verbatim, with the one word the layout falsified.
@@ -127,7 +134,13 @@ export type AccessViewProps = Readonly<{
   }>;
   oauthBootstrap?: Readonly<{
     revision: number;
-    takeCredential: () => string | undefined;
+    /**
+     * Reads the completed exchange without consuming it, so a remount of this
+     * conditionally-mounted view can re-enter discovery instead of stranding a
+     * credential the user already round-tripped for. The host clears it on
+     * commit or release.
+     */
+    readCredential: () => string | undefined;
     getBearerToken: () => string | Promise<string>;
   }>;
   /** Lazily loaded provider-neutral cloud and local inference connections. */
@@ -207,6 +220,10 @@ export function AccessView({
   const ephemeralTokenSource = useRef<(() => string | Promise<string>)>();
   const candidateTransport = useRef<ChutesInferenceTransport>();
   const discoveryAbort = useRef<AbortController>();
+  // Set only by the returning OAuth redirect: that journey verifies itself
+  // through to a connection. A pasted key still discovers and stops, because
+  // choosing the model is the reason that lane has a panel.
+  const autoConnectAfterDiscovery = useRef(false);
   const [candidate, setCandidate] = useState<Candidate>();
   const [modelId, setModelId] = useState("");
   const [detectedKind, setDetectedKind] = useState<ChutesCredentialKind>();
@@ -432,6 +449,9 @@ export function AccessView({
       requestAnimationFrame(() => focusConnectSurface());
     } catch (caught) {
       clearEphemeral();
+      // A discovery that produced no candidate can never be auto-connected, and
+      // a stale flag would silently connect the next credential someone typed.
+      autoConnectAfterDiscovery.current = false;
       if (input) input.value = "";
       setDetectedKind(undefined);
       setStatus(undefined);
@@ -451,10 +471,30 @@ export function AccessView({
 
   useEffect(() => {
     if (!online || !oauthBootstrap || isChutesConnected(connection)) return;
-    const credential = oauthBootstrap.takeCredential();
+    const credential = oauthBootstrap.readCredential();
     if (!credential) return;
+    // A returning redirect is a decision already made: the person asked to
+    // connect, authorized Chutes, and came back. Everything after that is
+    // verification, not choice, so the sign-in journey carries itself through
+    // to a verified connection. The model and proof policy remain editable on
+    // the connected summary, where they are corrections rather than gates.
+    autoConnectAfterDiscovery.current = true;
     void discoverCredential(credential, oauthBootstrap.getBearerToken);
   }, [oauthBootstrap?.revision, connection.kind, online]);
+
+  /*
+   * The credential is only verified by `activate()`, and `activate()` reads the
+   * candidate and the pre-selected model from state, so the automatic leg has
+   * to wait for that state to land rather than calling straight out of
+   * discovery. One effect, one flag, cleared before the call so a failed
+   * verification falls back to the manual panel instead of retrying forever.
+   */
+  useEffect(() => {
+    if (!autoConnectAfterDiscovery.current) return;
+    if (busy || !candidate || !modelId) return;
+    autoConnectAfterDiscovery.current = false;
+    void activate();
+  }, [candidate, modelId, busy]);
 
   async function activate() {
     const credential = ephemeralCredential.current;
@@ -701,6 +741,20 @@ export function AccessView({
   const activeChutesMethod = chutesMethod ?? (chutesSignInAvailable ? "oauth" : "api-key");
 
   /**
+   * The keyboard half of `role="tab"`, which the switch below declared and did
+   * not implement. The movement rule is `tabs.tsx`'s `nextTabId`, so there is
+   * still exactly one implementation of the tablist contract in the app.
+   */
+  const moveChutesMethod = (event: KeyboardEvent & { currentTarget: HTMLDivElement }) => {
+    const next = nextTabId(CHUTES_METHOD_TABS, activeChutesMethod, event.key);
+    if (next === undefined) return;
+    event.preventDefault();
+    setChutesMethod(next === "oauth" ? "oauth" : "api-key");
+    const tabs = event.currentTarget.querySelectorAll<HTMLButtonElement>('button[role="tab"]');
+    tabs[CHUTES_METHOD_TABS.findIndex((item) => item.id === next)]?.focus();
+  };
+
+  /**
    * Moves to the browser-direct provider list without touching `location.hash`,
    * which is the router: the anchors this replaced navigated to `#chat` and
    * ejected people out of the connection route entirely.
@@ -756,6 +810,21 @@ export function AccessView({
   };
 
   const lanes = describeConnectLanes(laneInput);
+
+  /*
+   * The notice reports the exchange, and one state falsifies it: a committed
+   * connection, after which there is nothing left to say about a handoff that
+   * has already become the summary above. Everything else survives — including
+   * a failed discovery, because "the sign-in itself worked" is precisely what
+   * locates such a failure downstream of Chutes rather than in it.
+   *
+   * It deliberately does NOT depend on `candidate`. Gating the sentence on the
+   * chooser silenced the only confirmation a returning redirect produces for
+   * the whole discovery window, and permanently whenever discovery failed; the
+   * instruction that made the chooser load-bearing is gone from this copy and
+   * now lives once, in `.oauth-finish-banner`, beside the chooser it names.
+   */
+  const oauthNoticeVisible = oauthNotice !== undefined && !isChutesConnected(connection);
 
   return (
     <section class="access-connection-view" aria-labelledby="access-connection-title">
@@ -828,7 +897,7 @@ export function AccessView({
               in-flight and completion messages had a single home on a card that
               no longer exists.
             */}
-            {oauthNotice ? <p class={`oauth-boundary-status ${oauthNotice.tone}`} role={oauthNotice.tone === "error" ? "alert" : "status"}>{oauthNoticeMessage}</p> : null}
+            {oauthNotice && oauthNoticeVisible ? <p class={`oauth-boundary-status ${oauthNotice.tone}`} role={oauthNotice.tone === "error" ? "alert" : "status"}>{oauthNoticeMessage}</p> : null}
             {isChutesConnected(connection) ? (
             <div class="active-connection-summary">
               <div class="access-section-heading">
@@ -907,7 +976,14 @@ export function AccessView({
                   trigger={<><Icon name="proof" size={14} />Catalog read {formatCatalogTime(candidate.fetchedAt)}</>}
                 >
                   <p class={candidate.sourceComplete ? "complete" : "partial"}>{candidate.managementState === "fresh" ? "Inference + management metadata loaded" : candidate.sourceComplete ? "Authoritative inference catalog · management enrichment deferred" : "Partial provider metadata"}</p>
-                  {candidate.managementState === "disabled" ? <button type="button" onClick={() => void enrichCatalog()} disabled={busy || !online}>Load live availability metadata</button> : null}
+                  {/* The retry is offered for every management state that is
+                      not `fresh`. Gating it on `disabled` alone made it
+                      unreachable: this view always loads with
+                      `includeManagement: true`, so a management read that a
+                      person could actually retry lands as `failed`, and the one
+                      state the old gate named is the one this route never
+                      produces. */}
+                  {candidate.managementState !== "fresh" ? <button type="button" onClick={() => void enrichCatalog()} disabled={busy || !online}>Load live availability metadata</button> : null}
                   {candidate.issues.length > 0 ? (
                     <details><summary>{candidate.issues.length} catalog notice{candidate.issues.length === 1 ? "" : "s"}</summary>{candidate.issues.map((issue, index) => <p key={`${issue.source}-${issue.code}-${index}`}>{issue.source}: {issue.message}</p>)}</details>
                   ) : null}
@@ -951,11 +1027,17 @@ export function AccessView({
             </div>
           ) : (
                 <div class="connection-entry-stack">
-                  <div class="connect-method__switch" role="tablist" aria-label="Chutes connection method">
+                  {/* `role="tab"` obliges the whole widget contract: one tab in
+                      the tab order, ←/→/Home/End moving selection and focus,
+                      and a panel each tab actually points at. The movement rule
+                      is `tabs.tsx`'s, so it is not reimplemented here. */}
+                  <div class="connect-method__switch" role="tablist" aria-label="Chutes connection method" onKeyDown={moveChutesMethod}>
                     <button
                       type="button"
                       role="tab"
                       aria-selected={activeChutesMethod === "oauth"}
+                      aria-controls="chutes-method-panel-oauth"
+                      tabIndex={activeChutesMethod === "oauth" ? 0 : -1}
                       onClick={() => setChutesMethod("oauth")}
                     >
                       <span>OAuth</span>
@@ -970,6 +1052,8 @@ export function AccessView({
                       type="button"
                       role="tab"
                       aria-selected={activeChutesMethod === "api-key"}
+                      aria-controls="chutes-method-panel-api-key"
+                      tabIndex={activeChutesMethod === "api-key" ? 0 : -1}
                       onClick={() => setChutesMethod("api-key")}
                     >
                       <span>API key</span>
@@ -977,7 +1061,7 @@ export function AccessView({
                     </button>
                   </div>
                   {activeChutesMethod === "oauth" ? (
-                    <section class="oauth-primary-entry" aria-labelledby="oauth-primary-title">
+                    <section class="oauth-primary-entry" id="chutes-method-panel-oauth" role="tabpanel" aria-labelledby="oauth-primary-title">
                       <Icon name="access" size={22} />
                       <div>
                         <strong id="oauth-primary-title">Sign in to Chutes</strong>
@@ -1095,7 +1179,7 @@ export function AccessView({
                     it sat inside the lane card, inside the route card. What is
                     left before the input is the tab you just pressed.
                   */
-                  <section class="api-key-alternative" aria-label="Connect with a Chutes API key">
+                  <section class="api-key-alternative" aria-label="Connect with a Chutes API key" id="chutes-method-panel-api-key" role="tabpanel">
                     <form class="credential-entry" onSubmit={(event) => { event.preventDefault(); void discover(); }}>
                       {/*
                         The verdict lands on the field it is about, above the
@@ -1155,7 +1239,7 @@ export function AccessView({
                         field is edited.
                       */}
                       {keyRefusal ? null : (
-                      <div class="credential-types" aria-label="Optional Chutes API-key connection">
+                      <div class="credential-types" role="group" aria-label="Optional Chutes API-key connection">
                         <CredentialTypeCard prefix="cpk_" title="Chutes API key" detail="Chutes personal keys start with cpk_. They read models, inference, profile, and account when Chutes authorizes them." active={detectedKind === "inference-api-key"} />
                         {credentialTyped ? (
                           <p class="credential-reading" role="status">{credentialReading(detectedKind)}</p>
@@ -1205,7 +1289,7 @@ export function AccessView({
       </div>
 
       {additionalProviders ? (
-        <div id="additional-inference-providers" class="access-additional-providers" aria-label="Additional cloud and local inference providers" tabIndex={-1}>
+        <div id="additional-inference-providers" class="access-additional-providers" role="group" aria-label="Additional cloud and local inference providers" tabIndex={-1}>
           {additionalProviders}
         </div>
       ) : null}
@@ -1294,14 +1378,25 @@ function CredentialTypeCard({
   return <div class={active ? "credential-type active" : "credential-type"}><code>{prefix}</code><strong>{title}</strong><span>{detail}</span></div>;
 }
 
+/*
+ * Each sentence states only what its own step established.
+ *
+ * The completion messages used to append an instruction to pick a model and
+ * finish the connection — a sentence about a control this paragraph does not
+ * contain, is not adjacent to, and cannot promise exists: discovery runs after
+ * the exchange and may fail, and a returning redirect now finishes itself. That
+ * next step is stated once, by `.oauth-finish-banner`, which renders only with
+ * the chooser it is about. What is left here is the fact of the exchange, which
+ * no later step can retract.
+ */
 function presentOAuthNotice(message: string): string {
   if (message === "oauth:exchange-local") return "Exchanging the code through the localhost handler…";
   if (message === "oauth:exchange-public") return "Exchanging the code with Chutes…";
   if (message === "oauth:complete-local") {
-    return "Chutes sign-in complete with S256 PKCE through the localhost handler. Choose a model, then finish the connection.";
+    return "Chutes sign-in complete with S256 PKCE through the localhost handler.";
   }
   if (message === "oauth:complete-public") {
-    return "Chutes sign-in complete with S256 PKCE. Choose a model, then finish the connection.";
+    return "Chutes sign-in complete with S256 PKCE.";
   }
   if (message === "oauth:invalid-local") {
     return "Chutes rejected the localhost app credentials. Restart the lab with its registered process credentials, then sign in again.";
@@ -1312,8 +1407,22 @@ function presentOAuthNotice(message: string): string {
   return message;
 }
 
+/*
+ * The only text in this cell is a tick or a dash, so the name has to survive.
+ *
+ * `aria-label` on a bare `<span>` is discarded — ARIA forbids naming an element
+ * whose computed role is generic — which left the whole eligibility matrix
+ * announcing "✓" and "—". `role="img"` is the smallest role that permits a name
+ * and does not claim the mark is interactive; the glyph beneath it is decoration
+ * once the word is carried, and the extra element is a no-op inside the
+ * `inline-grid` centring `.capability-mark` already applies.
+ */
 function CapabilityMark({ available }: { available: boolean }) {
-  return <span class={available ? "capability-mark available" : "capability-mark"} aria-label={available ? "Available" : "Unavailable"}>{available ? "✓" : "—"}</span>;
+  return (
+    <span class={available ? "capability-mark available" : "capability-mark"} role="img" aria-label={available ? "Available" : "Unavailable"}>
+      <span aria-hidden="true">{available ? "✓" : "—"}</span>
+    </span>
+  );
 }
 
 function credentialKindLabel(kind: ChutesCredentialKind): string {

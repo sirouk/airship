@@ -3,6 +3,7 @@ import {
   isWorkspaceControlPlanePath,
   WorkspaceConflictError,
   normalizeWorkspacePath,
+  workspaceEntryByteLength,
   type WorkspaceFile,
   type WorkspacePort,
 } from "../workspace/contracts";
@@ -61,6 +62,21 @@ function userWorkspaceEntries(files: readonly WorkspaceFile[] | readonly Omit<Wo
   return files.filter((file) => !isWorkspaceControlPlanePath(file.path));
 }
 
+/**
+ * One size in the transcript, and it is the file's own.
+ *
+ * `WorkspaceEntry.size` is the storage envelope, so a binary listed here would
+ * read ~4/3 too large while `read_file` reported it correctly for the same
+ * path. Emit the decoded length as `size` and drop the storage field rather
+ * than hand the model two competing numbers to choose between.
+ */
+function presentedWorkspaceEntry(
+  entry: Omit<WorkspaceFile, "content">,
+): Omit<WorkspaceFile, "content" | "contentByteLength"> {
+  const { contentByteLength: _stored, ...rest } = entry;
+  return { ...rest, size: workspaceEntryByteLength(entry) };
+}
+
 export function createWorkspaceToolRegistry(workspace: WorkspacePort): ToolRegistry {
   const registry = new ToolRegistry();
 
@@ -80,7 +96,7 @@ export function createWorkspaceToolRegistry(workspace: WorkspacePort): ToolRegis
       const path = userWorkspacePath(normalizeWorkspacePath(
         typeof argumentsObject.path === "string" ? argumentsObject.path : "/workspace",
       ));
-      const files = userWorkspaceEntries(await workspace.list(path));
+      const files = userWorkspaceEntries(await workspace.list(path)).map(presentedWorkspaceEntry);
       return { content: JSON.stringify(files, null, 2), metadata: { count: files.length } };
     },
   };
@@ -164,12 +180,12 @@ export function createWorkspaceToolRegistry(workspace: WorkspacePort): ToolRegis
       const file = entries.find((entry) => entry.path === path);
       if (file) {
         return {
-          content: JSON.stringify({ type: "file", ...file }, null, 2),
-          metadata: { type: "file", path: file.path, revision: file.revision, size: file.size },
+          content: JSON.stringify({ type: "file", ...presentedWorkspaceEntry(file) }, null, 2),
+          metadata: { type: "file", path: file.path, revision: file.revision, size: workspaceEntryByteLength(file) },
         };
       }
       if (entries.length > 0 || path === "/workspace") {
-        const totalSize = entries.reduce((sum, entry) => sum + entry.size, 0);
+        const totalSize = entries.reduce((sum, entry) => sum + workspaceEntryByteLength(entry), 0);
         return {
           content: JSON.stringify({ type: "directory", path, files: entries.length, totalSize }, null, 2),
           metadata: { type: "directory", path, files: entries.length, totalSize },
@@ -357,7 +373,7 @@ export function createWorkspaceToolRegistry(workspace: WorkspacePort): ToolRegis
       }
       return {
         content: `Moved ${sourcePath} to ${destination.path}.`,
-        metadata: { sourcePath, destinationPath: destination.path, revision: destination.revision, size: destination.size },
+        metadata: { sourcePath, destinationPath: destination.path, revision: destination.revision, size: workspaceEntryByteLength(destination) },
       };
     },
   };
@@ -385,7 +401,7 @@ export function createWorkspaceToolRegistry(workspace: WorkspacePort): ToolRegis
       if (!file) return { content: `File not found: ${path}`, isError: true };
       if (expectedRevision !== undefined && expectedRevision !== file.revision) throw new WorkspaceConflictError();
       await workspace.remove(path, { expectedRevision: file.revision });
-      return { content: `Removed ${path}.`, metadata: { path, revision: file.revision, size: file.size } };
+      return { content: `Removed ${path}.`, metadata: { path, revision: file.revision, size: workspaceEntryByteLength(file) } };
     },
   };
 

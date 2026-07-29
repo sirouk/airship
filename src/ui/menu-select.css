@@ -36,7 +36,12 @@
 .profile-switcher .profile-menu .menu-select-trigger[aria-expanded="true"] { background:var(--surface-soft); }
 .profile-manage-link { width:100%; margin-top:7px; padding:5px 7px; border:0; color:var(--ink-faint); background:transparent; cursor:pointer; font-size:var(--fs-micro); text-align:left; }
 .profile-manage-link:hover { color:var(--accent-bright); }
-@media (max-width:860px) { .compact-profile-menu { display:block; } }
+/* The reveal condition has to be the complement of the withdrawal condition.
+   `routes.css` withdraws the rail on the shell query (≤640px, or ≤950px when
+   the viewport is also ≤500px tall); this reveal was a plain ≤860px, so a
+   932×430 landscape phone lost the rail's profile switcher and never gained
+   its replacement — no way to change profile on that screen at all. */
+@media (max-width:860px), (max-width:950px) and (max-height:500px) { .compact-profile-menu { display:block; } }
 /* The narrow-viewport bottom sheet. `position` changes here, not just `inset`,
    so any per-instance override below 640px has to restate `position` as well —
    an override that sets `inset` alone leaves `calc(100% + …)` resolving against

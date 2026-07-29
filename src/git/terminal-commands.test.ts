@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { MemoryWorkspace } from "../workspace/memory";
 import { BrowserGitClient } from "./client";
 import { runTerminalGitCommand } from "./terminal-commands";
+import type { GitOperation } from "./types";
 import { WorkspaceGitAdapter } from "./workspace-adapter";
 
 describe("terminal Git command bridge", () => {
@@ -178,6 +179,87 @@ describe("terminal Git command bridge", () => {
       "tag-create", "stash", "stash", "restore", "branch-create", "stage", "commit",
       "branch-switch", "merge", "remote-add", "remote-remove",
     ]);
+  });
+
+  it("reads `git restore --worktree` as a destination, so staged content survives the discard", async () => {
+    const workspace = new MemoryWorkspace();
+    const client = new BrowserGitClient(await WorkspaceGitAdapter.open(workspace, [{
+      id: "airship-workspace",
+      name: "Airship Workspace",
+      worktreePath: "/workspace",
+      files: { "f.txt": "committed\n" },
+    }]));
+    const operations: GitOperation[] = [];
+    const review = async (operation: GitOperation) => {
+      operations.push(operation);
+      return "allow" as const;
+    };
+    const run = (command: string) => runTerminalGitCommand({ command, cwd: "/workspace", client, review });
+    const overwrite = async (content: string) => {
+      await workspace.write("/workspace/f.txt", content, {
+        expectedRevision: (await workspace.read("/workspace/f.txt"))!.revision,
+      });
+    };
+
+    await overwrite("staged\n");
+    await run("git add f.txt");
+    await overwrite("working\n");
+
+    await run("git restore --worktree f.txt");
+    expect(operations.at(-1)).toMatchObject({ kind: "restore", request: { source: "stage", paths: ["f.txt"] } });
+    // `--worktree` picks the destination Git writes to; it must not reach past
+    // the index and take the staged content with it.
+    expect((await workspace.read("/workspace/f.txt"))?.content).toBe("staged\n");
+
+    await overwrite("working again\n");
+    await run("git restore f.txt");
+    expect(operations.at(-1)).toMatchObject({ kind: "restore", request: { source: "stage" } });
+    expect((await workspace.read("/workspace/f.txt"))?.content).toBe("staged\n");
+
+    await run("git restore --source=HEAD f.txt");
+    expect(operations.at(-1)).toMatchObject({ kind: "restore", request: { source: "head" } });
+    expect((await workspace.read("/workspace/f.txt"))?.content).toBe("committed\n");
+
+    await expect(run("git restore --worktree --staged f.txt")).rejects.toThrow(/Unsupported `git restore` flag: --staged/u);
+    await expect(run("git restore --staged --worktree f.txt")).rejects.toThrow(/Unsupported `git restore --staged` flag: --worktree/u);
+  });
+
+  it("reads every word after `--` as a path, so a file named like a flag is still restorable", async () => {
+    const workspace = new MemoryWorkspace();
+    const client = new BrowserGitClient(await WorkspaceGitAdapter.open(workspace, [{
+      id: "airship-workspace",
+      name: "Airship Workspace",
+      worktreePath: "/workspace",
+      files: { "--odd.txt": "committed\n" },
+    }]));
+    const operations: GitOperation[] = [];
+    const review = async (operation: GitOperation) => {
+      operations.push(operation);
+      return "allow" as const;
+    };
+    const run = (command: string) => runTerminalGitCommand({ command, cwd: "/workspace", client, review });
+    const overwrite = async (content: string) => {
+      await workspace.write("/workspace/--odd.txt", content, {
+        expectedRevision: (await workspace.read("/workspace/--odd.txt"))!.revision,
+      });
+    };
+
+    await overwrite("working\n");
+    // Git stops reading options at the separator. Rejecting these as unknown
+    // flags would leave a legitimately named file with no way to be discarded
+    // or unstaged from the bridge at all.
+    await run("git restore -- --odd.txt");
+    expect(operations.at(-1)).toMatchObject({ kind: "restore", request: { paths: ["--odd.txt"] } });
+
+    await overwrite("staged again\n");
+    await run("git add -- --odd.txt");
+    await run("git restore --staged -- --odd.txt");
+    expect(operations.at(-1)).toMatchObject({ kind: "unstage", request: { paths: ["--odd.txt"] } });
+
+    // A word named `--worktree` after the separator is a path, not the
+    // destination selector, so it must not be silently consumed as a flag: the
+    // failure names the missing path rather than the bridge's usage line.
+    await expect(run("git restore -- --worktree")).rejects.toThrow("--worktree has no change to discard.");
   });
 
   it("refuses a clone its own page policy cannot reach before asking for approval", async () => {

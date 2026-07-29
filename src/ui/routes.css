@@ -33,6 +33,18 @@
   margin-inline: auto;
 }
 
+/*
+ * 1160px is a *prose* measure, and it was applied to every route child because
+ * there was no way for a route to say it is a work surface instead. The Editor
+ * opted out with a `:has()` one-off in its own sheet; a second one-off per
+ * dense route is how a cascade stops being readable. A route declares its own
+ * kind here instead, and the default stays prose.
+ */
+.route-layout > [data-route-measure="wide"] {
+  width: 100%;
+  max-width: none;
+}
+
 .trust-route-layout {
   padding-top: 0;
 }
@@ -2326,10 +2338,6 @@
     grid-template-columns: auto minmax(160px, 1fr) minmax(0, auto);
   }
 
-  .compact-profile-select {
-    display: grid;
-  }
-
   .chat-layout {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -2388,6 +2396,19 @@
       calc(56px + env(safe-area-inset-bottom));
   }
 
+  /*
+   * The nav band is an explicit grid track, so suppressing the nav element
+   * cannot reclaim it: `display: none` on the child leaves 56px of dead
+   * `--ground` under a composer that has just been lifted above the keyboard.
+   * The track has to collapse with the element, and it has to collapse here
+   * rather than in `platform-shell.css`, because `.app-shell` is only a
+   * three-row grid inside this block — writing this unconditionally would
+   * impose row tracks on the desktop two-column shell.
+   */
+  :root[data-keyboard-open="true"] .app-shell {
+    grid-template-rows: calc(52px + env(safe-area-inset-top)) minmax(0, 1fr) 0;
+  }
+
   /* Three children, three columns. Two columns wrapped the actions onto a
      second row, which is why the connect verb used to land on top of the
      session bar the moment the centre band stopped being `display: none`. */
@@ -2444,7 +2465,6 @@
     padding-right: 9px;
   }
 
-  .compact-profile-select,
   .topbar-actions > .icon-button {
     display: none;
   }
@@ -2665,9 +2685,16 @@
    * 740px viewport. One 48px bar carries the same claims: 44px targets, no
    * scroll collapse under a thumb, and nothing that wraps or scrolls sideways.
    */
+  /* Logical properties rather than a hand-ordered physical shorthand: the two
+     `env()` terms were transposed here, so a device with an asymmetric cutout
+     padded the bar away from the notch on the wrong side. Naming the side in
+     the property is what stops the pair being written in the wrong order, and
+     it matches how `platform-shell.css` states the same insets. */
   .session-bar {
     gap: var(--sp-1) var(--sp-2);
-    padding: var(--sp-1) max(var(--sp-3), env(safe-area-inset-left)) var(--sp-1) max(var(--sp-3), env(safe-area-inset-right));
+    padding-block: var(--sp-1);
+    padding-inline-start: max(var(--sp-3), env(safe-area-inset-left));
+    padding-inline-end: max(var(--sp-3), env(safe-area-inset-right));
   }
 
   :root[data-density] .session-bar {
@@ -2783,12 +2810,38 @@
     font-size: var(--fs-body);
   }
 
+  /*
+   * `position` is the half the soft-keyboard compensation omitted. The offset
+   * it publishes (`platform-shell.css`, keyed on `data-keyboard-open`) is a
+   * `bottom` inset, and an inset on a statically positioned element is
+   * discarded outright: the composer sat under the keyboard on every phone
+   * while the shell reported that it had moved it. `relative` rather than
+   * `fixed` because the resting geometry — a composer that ends the chat
+   * stage's grid — is already correct and must stay byte-identical when the
+   * keyboard is closed; a relative offset moves the painted box without
+   * disturbing the track it came from.
+   */
   .composer-wrap {
+    position: relative;
     padding:
       7px
       max(9px, env(safe-area-inset-right))
       9px
       max(9px, env(safe-area-inset-left));
+  }
+
+  /* The lifted composer paints over the foot of the transcript, so the
+     transcript has to be able to scroll that much further. Zero at rest,
+     because `--visual-viewport-bottom` is only non-zero while a keyboard is
+     obscuring the viewport.
+
+     Room to scroll is not the same as being scrolled: growing this padding
+     leaves an already-pinned transcript showing the same pixels with the last
+     card now beneath the composer. `publishVisualViewportOffset`
+     (`platform-shell.tsx`) re-anchors it in the same step that sets the
+     variable, because nothing about a keyboard changes Preact state. */
+  :root[data-keyboard-open="true"] .transcript {
+    padding-bottom: calc(20px + var(--visual-viewport-bottom, 0px));
   }
 
   /* `--fs-field` is the iOS zoom guard: anything smaller and focusing the
@@ -2836,6 +2889,22 @@
     min-height: 44px;
     min-width: 44px;
     padding-inline: .25rem;
+  }
+
+  /* The queue and the attachment chips mount conditionally, so they were absent
+     from the screens the phone touch-floor pass was captured against and kept
+     their 30px/28px desktop boxes next to a row of 44px siblings. Discarding a
+     queued message and removing an attachment are both destructive, which is
+     the last place a 28px target belongs. */
+  .composer-queue__item button,
+  .queue-button {
+    min-height: 44px;
+    padding-inline: 12px;
+  }
+
+  .composer-attachments button {
+    min-width: 44px;
+    min-height: 44px;
   }
 
   .composer-approval-select .menu-select-trigger {
@@ -3002,9 +3071,27 @@
     padding-inline: 9px;
   }
 
-  .usage-ledger-head span:nth-child(3),
-  .usage-ledger-row span:nth-child(3) {
-    display: none;
+  /* The Tokens column used to be `display: none` at this width — a fact the
+     account route exists to state, deleted rather than restacked, on the one
+     screen where a person is most likely to be checking what a day cost. All
+     four values survive: the token total takes its own labelled sub-line,
+     which is the restacking `vault-view.css` already does for the provider
+     matrix. */
+  .usage-ledger-head > :nth-child(4),
+  .usage-ledger-row > :nth-child(4) {
+    grid-area: 1 / 3;
+  }
+
+  .usage-ledger-head > :nth-child(3),
+  .usage-ledger-row > :nth-child(3) {
+    grid-area: 2 / 1 / 3 / -1;
+    color: var(--ink-muted);
+    font-size: var(--fs-micro);
+  }
+
+  .usage-ledger-row > :nth-child(3)::before {
+    content: "Tokens ";
+    color: var(--ink-faint);
   }
 
   .topbar,

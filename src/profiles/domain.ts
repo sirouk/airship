@@ -245,13 +245,27 @@ export const STYLESHEET_THEME_BASELINE = Object.freeze({
  * default profile now writes no inline properties at all, so the mode owns
  * the whole palette, and a theme that genuinely recolours the instrument
  * still writes only the roles it genuinely recolours.
+ *
+ * The diff is taken against the cascade that is *actually in force*, which is
+ * the global colour-mode preference — not the manifest's own `colorScheme`.
+ * Getting that backwards is what broke Paper mode on the Research and
+ * Developer profiles: a dark-scheme theme diffed against the dark sheet, so
+ * all nine roles read as "changed" relative to a light sheet nobody consulted,
+ * and a full dark palette was pinned inline on top of the light stylesheet.
+ * The theme layer has no light expression of a dark palette to substitute, so
+ * when the mode disagrees with the manifest the only truthful answer is to
+ * write nothing and let the mode own the instrument entirely.
  */
-export function themeCssVariables(theme: ThemeManifest): Readonly<Record<string, HexColor | "">> {
-  const baseline = STYLESHEET_THEME_BASELINE[theme.colorScheme];
+export function themeCssVariables(
+  theme: ThemeManifest,
+  mode: ThemeColorScheme = theme.colorScheme,
+): Readonly<Record<string, HexColor | "">> {
+  const baseline = STYLESHEET_THEME_BASELINE[mode];
+  const deferToStylesheet = mode !== theme.colorScheme;
   const properties: Record<string, HexColor | ""> = {};
   for (const role of THEME_COLOR_ROLES) {
     const value = theme.colors[role];
-    properties[THEME_CSS_VARIABLES[role]] = value === baseline[role] ? "" : value;
+    properties[THEME_CSS_VARIABLES[role]] = deferToStylesheet || value === baseline[role] ? "" : value;
   }
   return deepFreeze(properties);
 }
@@ -284,6 +298,11 @@ export async function createProfileRevision(draft: ProfileRevisionDraft): Promis
 /**
  * Resolves the implicit defaults of a historical v1 profile without rewriting
  * its digest. Callers should pin this result, never mutate the legacy object.
+ *
+ * This is also the payload normalizer every revision digest is derived from, so
+ * it must stay byte-stable for values already stored: it validates the enum, it
+ * does not withdraw members of it. Withdrawal happens at the seams that *use* a
+ * scope — see `enforcedMemoryScope`.
  */
 export function resolveProfileSilo(profile: Pick<ProfileRevisionDraft,
   "workspaceBinding" | "memoryScope" | "approvalMode"
@@ -293,6 +312,25 @@ export function resolveProfileSilo(profile: Pick<ProfileRevisionDraft,
     memoryScope: oneOf(profile.memoryScope ?? "profile", ["session", "profile", "workspace"] as const, "memory scope"),
     approvalMode: oneOf(profile.approvalMode ?? "ask-first", ["ask-first", "auto-approve", "full-access"] as const, "approval mode"),
   }) as ResolvedProfileSilo;
+}
+
+/**
+ * The memory boundary a pin will actually enforce.
+ *
+ * `workspace` reads as `profile`, because it has never been anything else:
+ * memory records are per-workspace by file location but per-profile by scope
+ * stamp, and every reader — the turn seam, `recall_memory`, `search_memory` —
+ * narrows on `profileId` equality, so a `workspace` pin returned exactly the
+ * records a `profile` pin returns. Widening it to mean what it says would be a
+ * deliberate silo change, not a bug fix, so the honest value to pin and to
+ * display is the one that was enforced.
+ *
+ * The member stays in the schema, and stored revisions keep it, so no persisted
+ * profile fails its revision check and no manifest or audit validator has to
+ * reject a value it previously accepted.
+ */
+export function enforcedMemoryScope(scope: ProfileMemoryScope): ProfileMemoryScope {
+  return scope === "workspace" ? "profile" : scope;
 }
 
 export async function resolveProfileForSession(args: Readonly<{
@@ -364,7 +402,14 @@ export async function resolveProfileForSession(args: Readonly<{
     args.inferenceDirectory,
   );
   const systemPromptDigest = asContentDigest(await sha256(systemPrompt));
-  const silo = resolveProfileSilo(args.profile);
+  const stored = resolveProfileSilo(args.profile);
+  // The pin carries the boundary the session will be governed by, not the one
+  // the revision was written with, so a withdrawn scope is resolved here rather
+  // than left for each reader to reinterpret.
+  const silo: ResolvedProfileSilo = Object.freeze({
+    ...stored,
+    memoryScope: enforcedMemoryScope(stored.memoryScope),
+  });
   const resolutionDigest = await digestJson({
     version: 2,
     profile: { profileId: args.profile.profileId, revision: args.profile.revision },

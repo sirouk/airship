@@ -3,6 +3,7 @@ import { AIRSHIP_CORE_CHARTER } from "../core/operating-charter";
 import {
   createGlobalSkillSettings,
   createProfileRevision,
+  enforcedMemoryScope,
   resolveProfileSilo,
   createSkillRevision,
   createThemeManifest,
@@ -84,17 +85,31 @@ describe("profile domain", () => {
     const profile = await createProfileRevision({
       ...profileDraft(theme, {}),
       workspaceBinding: { kind: "workspace-id", workspaceId: "vault+gdrive://workspace/root" },
-      memoryScope: "workspace",
+      memoryScope: "session",
       approvalMode: "auto-approve",
     });
     const pin = await resolveProfileForSession({ profile, theme, skills: [], globalSkills: {} });
 
     expect(profile.version).toBe(2);
     expect(pin.workspaceBinding).toEqual({ kind: "workspace-id", workspaceId: "vault+gdrive://workspace/root" });
-    expect(pin.memoryScope).toBe("workspace");
+    expect(pin.memoryScope).toBe("session");
     expect(pin.approvalMode).toBe("auto-approve");
     expect(pin.minimumPosture).toBe("encrypted-attested");
     expect(pin.resolutionDigest).toMatch(/^sha256:/u);
+  });
+
+  it("pins a stored workspace memory scope as the profile scope every reader enforces", async () => {
+    const theme = await createThemeManifest(themeDraft(colors));
+    const stored = await createProfileRevision({ ...profileDraft(theme, {}), memoryScope: "workspace" });
+
+    // The stored revision keeps the value it was digested with, so a profile
+    // written before the widening was withdrawn still passes its revision check
+    // and stays loadable; only what the pin enforces changes.
+    expect(stored.memoryScope).toBe("workspace");
+    expect(resolveProfileSilo(stored).memoryScope).toBe("workspace");
+    expect(enforcedMemoryScope(stored.memoryScope ?? "profile")).toBe("profile");
+    const pin = await resolveProfileForSession({ profile: stored, theme, skills: [], globalSkills: {} });
+    expect(pin.memoryScope).toBe("profile");
   });
 
   it("resolves legacy v1 profiles with explicit safe silo defaults without changing their digest", async () => {

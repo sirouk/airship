@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "preact/hooks";
+import type { ComponentChildren } from "preact";
 import type { ActiveChutesConnection } from "../auth/connection";
 import { Icon } from "./icons";
 import { MenuSelect } from "./menu-select";
@@ -16,6 +17,7 @@ export function ModelControl({
   switching: routeSwitching,
   onSelect,
   onOpenConnection,
+  picker,
 }: Readonly<{
   active?: Readonly<{
     providerLabel: string;
@@ -27,12 +29,48 @@ export function ModelControl({
   switching: boolean;
   onSelect: (modelId: string) => Promise<void>;
   onOpenConnection: () => void;
+  /**
+   * The catalogue-aware picker, for a route whose models are real
+   * `AirshipModel`s.
+   *
+   * A slot rather than an import: `ModelPicker` travels in a deferred pack with
+   * its own stylesheet, and this control is in the entry chunk. Chat and
+   * Connection now open the same picker over the same catalogue instead of two
+   * controls with two capability vocabularies — but the chrome around it stays
+   * here, because the provider caption, the "Switching…" live region and the
+   * selection-failure alert are facts about *this* control and are stated
+   * nowhere else.
+   *
+   * A render prop rather than an element, so the picker's choice runs through
+   * the same instrumented `select` the menu uses. Handed a finished element,
+   * the caller would have to fire its own promise, and a failed switch would
+   * become an unhandled rejection with nothing on screen.
+   */
+  picker?: (control: Readonly<{ select(modelId: string): void; disabled: boolean }>) => ComponentChildren;
 }>) {
   const [error, setError] = useState<string>();
   const [pendingModelId, setPendingModelId] = useState<string>();
   const operation = useRef(0);
   const options = modelControlOptions(models, active?.modelId);
   const activity = modelControlActivity(busy, routeSwitching, pendingModelId);
+
+  /**
+   * One selection path for both renderings. The operation counter is what makes
+   * a late failure from a superseded choice unable to overwrite the current
+   * one's state.
+   */
+  function select(modelId: string): void {
+    const currentOperation = ++operation.current;
+    setError(undefined);
+    setPendingModelId(modelId);
+    void onSelect(modelId)
+      .catch((caught) => {
+        if (operation.current === currentOperation) setError(safeModelControlErrorMessage(caught));
+      })
+      .finally(() => {
+        if (operation.current === currentOperation) setPendingModelId(undefined);
+      });
+  }
 
   useEffect(() => {
     operation.current += 1;
@@ -58,6 +96,15 @@ export function ModelControl({
   return (
     <div class="session-runtime remote" aria-busy={activity.switching}>
       <span class="session-runtime-icon"><Icon name="model" size={17} /></span>
+      {picker ? (
+        // Not a `<label>`: the picker's trigger is a button that names itself
+        // from its contents, and wrapping it would forward stray clicks inside
+        // the open popover back to the trigger.
+        <div class="session-runtime-picker">
+          <small>{active.providerLabel} · session model</small>
+          {picker({ select, disabled: activity.disabled })}
+        </div>
+      ) : (
       <label>
         <small>{active.providerLabel} · session model</small>
         <MenuSelect
@@ -66,22 +113,10 @@ export function ModelControl({
           placement="down"
           options={options}
           disabled={activity.disabled || options.length < 2}
-          onChange={(modelId) => {
-            const currentOperation = ++operation.current;
-            setError(undefined);
-            setPendingModelId(modelId);
-            void onSelect(modelId)
-              .catch((caught) => {
-                if (operation.current === currentOperation) {
-                  setError(safeModelControlErrorMessage(caught));
-                }
-              })
-              .finally(() => {
-                if (operation.current === currentOperation) setPendingModelId(undefined);
-              });
-          }}
+          onChange={select}
         />
       </label>
+      )}
       {/*
         The posture pill is gone from this control, and only from this control.
         It rendered `activeConnectionBoundaryLabel(connection)` — the identical

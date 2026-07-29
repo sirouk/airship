@@ -1,14 +1,19 @@
+import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import {
+  COMPOSER_ATTACHMENT_NEEDS_TEXT,
   COMPOSER_MAX_HEIGHT,
   COMPOSER_PLACEHOLDER,
   COMPOSER_PLACEHOLDER_NARROW,
   COMPOSER_VIEWPORT_SHARE,
+  composerAttachmentNotice,
   composerGrowthCap,
   composerKeyhints,
   composerPlaceholder,
   composerPosture,
+  type ComposerPostureKind,
 } from "./composer";
+import { COMPOSER_ATTACHMENT_LIMIT } from "./composer-state";
 import { OFFLINE_INLINE_REASON } from "../connectivity";
 
 describe("composer placeholder", () => {
@@ -89,5 +94,96 @@ describe("composer keyhint", () => {
 
   it("uses the same modifier glyph in both states so only the verb moves", () => {
     expect(composerKeyhints(false)[1]).toEqual(composerKeyhints(true)[1]);
+  });
+});
+
+/*
+ * The two footer facts, and the mount point they spent a wave without.
+ *
+ * `ComposerPostureChip` and `ComposerKeyhintLegend` landed as a module plus
+ * CSS plus the tests above, and the call site in `app.tsx` was never switched
+ * over — so the credential posture kept rendering as the caption that is
+ * `display: none` on a phone, and the Enter contract rendered nowhere at all,
+ * while a green suite reported both as done. A pure function nothing mounts is
+ * not a shipped fact, so the mount is asserted here beside the behaviour.
+ */
+const app = await readFile(new URL("../app.tsx", import.meta.url), "utf8");
+const composerSource = await readFile(new URL("./composer.tsx", import.meta.url), "utf8");
+const routeStyles = await readFile(new URL("../routes.css", import.meta.url), "utf8");
+
+describe("the composer footer's stated facts are mounted", () => {
+  it("renders the credential posture as the chip rather than the phone-hidden caption", () => {
+    expect(app).toContain("<ComposerPostureChip");
+    expect(app).toContain("authMethod: activeInferenceBinding?.authMethod,");
+    // The caption this replaces, in the exact words it shipped with.
+    expect(app).not.toContain('"local demo · page memory"');
+  });
+
+  it("renders the Enter contract in the footer", () => {
+    expect(app).toContain("<ComposerKeyhintLegend busy={busy} />");
+  });
+
+  it("builds the chip's accessible name from both halves of every posture claim", () => {
+    expect(composerSource).toContain("label={`Credential posture. ${claim.label}. ${claim.detail}`}");
+    const kinds: readonly ComposerPostureKind[] = ["local-demo", "local-endpoint", "key-in-memory", "offline"];
+    const claims = [
+      composerPosture({ online: true, offlineReason: OFFLINE_INLINE_REASON, inferenceConnected: false }),
+      composerPosture({ online: true, offlineReason: OFFLINE_INLINE_REASON, inferenceConnected: true, authMethod: "local-none" }),
+      composerPosture({ online: true, offlineReason: OFFLINE_INLINE_REASON, inferenceConnected: true, authMethod: "api-key" }),
+      composerPosture({ online: false, offlineReason: OFFLINE_INLINE_REASON, inferenceConnected: true, authMethod: "api-key" }),
+    ];
+    expect(claims.map((claim) => claim.kind)).toEqual(kinds);
+    // Four kinds, four sentences: an empty detail would give the chip an
+    // accessible name that stops at its own one-word label.
+    for (const claim of claims) expect(claim.detail.length).toBeGreaterThan(0);
+  });
+
+  it("keeps the chip a 44px touch target at the phone breakpoint", () => {
+    const phone = routeStyles.match(/\.composer-posture \{[^}]*min-height: 44px;[^}]*\}/u);
+    expect(phone, "routes.css must give .composer-posture a 44px phone minimum").not.toBeNull();
+  });
+});
+
+describe("composer attachment admission", () => {
+  it("names the cap and the files it refused, not just the ones it took", () => {
+    const notice = composerAttachmentNotice({ added: 2, rejected: 0, overflow: 2, capability: "supported" });
+    expect(notice).toContain(String(COMPOSER_ATTACHMENT_LIMIT));
+    expect(notice).toContain("2 images were not added");
+    expect(notice).toContain("2 images are ready");
+  });
+
+  it("never phrases a fully refused add as a success", () => {
+    const notice = composerAttachmentNotice({ added: 0, rejected: 0, overflow: 1, capability: "supported" });
+    expect(notice).not.toContain("0 image");
+    expect(notice).not.toContain("ready");
+    expect(notice).toContain(`at most ${COMPOSER_ATTACHMENT_LIMIT} attachments`);
+  });
+
+  it("states both refusals when a drop mixes non-images with overflow", () => {
+    const notice = composerAttachmentNotice({ added: 0, rejected: 1, overflow: 3, capability: "supported" });
+    expect(notice).toContain("1 non-image attachment was not added");
+    expect(notice).toContain("3 images were not added");
+  });
+
+  it("keeps the capability sentence for an admitted image on a model without vision", () => {
+    expect(composerAttachmentNotice({ added: 1, rejected: 0, overflow: 0, capability: "model-lacks-vision" }))
+      .toContain("explicitly includes image input");
+    expect(composerAttachmentNotice({ added: 1, rejected: 0, overflow: 0, capability: "disconnected" }))
+      .toContain("Connect a vision-capable inference model");
+  });
+
+  it("says nothing when nothing was offered", () => {
+    expect(composerAttachmentNotice({ added: 0, rejected: 0, overflow: 0, capability: "supported" })).toBeUndefined();
+  });
+});
+
+describe("an attachment with no prompt refuses out loud", () => {
+  it("names the reason on the disabled control and in the imperative guard", () => {
+    expect(COMPOSER_ATTACHMENT_NEEDS_TEXT.length).toBeGreaterThan(0);
+    // Both admission paths speak the same sentence: the silent `return` that
+    // shipped made an attachment-only Enter indistinguishable from a dead key.
+    expect(app).toContain("setComposerNotice(COMPOSER_ATTACHMENT_NEEDS_TEXT)");
+    expect(app).toContain("? COMPOSER_ATTACHMENT_NEEDS_TEXT");
+    expect(app).toContain("const attachmentsAwaitText = attachments.length > 0 && !input.trim();");
   });
 });

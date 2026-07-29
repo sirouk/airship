@@ -131,3 +131,53 @@ export function createLocalReceipt(args: {
     ],
   };
 }
+
+/**
+ * Adds only the canonical client-owned transcript bindings to a provider
+ * receipt. Provider ciphertext/evidence commitments and proof claims remain
+ * unchanged; these local digests do not upgrade the receipt's proof level.
+ *
+ * It lives beside the receipt rather than inside the turn loop because a turn
+ * is not the only request a session pays for: the conversation-naming
+ * inference returns a provider receipt too, and it has to be normalized
+ * identically — a transport's own `provider` string is not the runtime's
+ * transport ID, so an unfinalized receipt names a provider the session
+ * manifest never pinned.
+ */
+export function finalizeProviderReceipt(
+  receipt: ConversationReceipt,
+  providerId: string,
+  requestDigest: string,
+  responseDigest: string,
+): ConversationReceipt {
+  const finalized = structuredClone(receipt);
+  removeUndefinedReceiptProperties(finalized);
+  return {
+    ...finalized,
+    provider: providerId,
+    bindings: {
+      ...finalized.bindings,
+      algorithm: "SHA-256",
+      requestDigest,
+      responseDigest,
+    },
+  };
+}
+
+function removeUndefinedReceiptProperties(value: unknown): void {
+  if (!value || typeof value !== "object") return;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      if (item === undefined) throw new Error("Provider receipt arrays cannot contain undefined values.");
+      removeUndefinedReceiptProperties(item);
+    }
+    return;
+  }
+  for (const [key, item] of Object.entries(value)) {
+    if (item === undefined) {
+      delete (value as Record<string, unknown>)[key];
+    } else {
+      removeUndefinedReceiptProperties(item);
+    }
+  }
+}

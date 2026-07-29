@@ -1,7 +1,8 @@
 import { useRef, useState } from "preact/hooks";
+import { isDeployableGoogleOAuthClientId } from "../storage/google-drive-configuration";
 import { isGoogleDriveConfiguration, type VaultSnapshot } from "../vault/coordinator";
 import type { LocalDeviceVaultStatus } from "../vault/local-device";
-import type { VaultBackend } from "./platform-shell";
+import { vaultBackendUnavailableReason, type VaultBackend } from "./platform-shell";
 import { MenuSelect } from "./menu-select";
 import { Seal, type SealState } from "./seal";
 import "./vault-view.css";
@@ -96,15 +97,21 @@ export const PROVIDER_PROFILES: readonly ProviderProfile[] = Object.freeze([
   Object.freeze({
     id: "local-lab",
     title: "S3-compatible / MinIO",
-    description: "Advanced provider or local development lab",
-    note: "Encrypted journal and workspace state travel directly between this device and the selected storage provider. On a loopback lab endpoint nothing is cloud-synchronized.",
+    // This rung used to describe the S3 adapter's theoretical capability — "in
+    // your bucket", "Reaches other devices: Yes" — but `createLocalLabConfigureRequest`
+    // can only build `mode: "local-development"`, which `validateVaultS3Configuration`
+    // confines to a loopback hostname and `changeVaultProvider` to a loopback
+    // page. There is no shippable configuration behind the promise, so the row
+    // answers for the one mode this build can construct.
+    description: "Loopback development lab",
+    note: "On a loopback lab endpoint nothing is cloud-synchronized. Encrypted journal and workspace state travel directly between this device and the selected storage provider.",
     facts: Object.freeze({
-      survives: "Yes · encrypted in your bucket",
+      survives: "Yes · encrypted in your loopback lab",
       offline: "No · needs the endpoint",
-      reach: "Yes",
-      supply: "Endpoint and keys",
+      reach: "No · loopback only",
+      supply: "A loopback endpoint and disposable keys",
       keep: "A recovery key",
-      lose: "Deleting the bucket",
+      lose: "Deleting the lab bucket",
     }),
   }),
   Object.freeze({
@@ -124,12 +131,16 @@ export const PROVIDER_PROFILES: readonly ProviderProfile[] = Object.freeze([
 ] as const);
 
 /**
- * Build-time Drive availability, read from the same variable the Drive panel
- * reads. It is the one provider-availability fact this build actually
- * computes, so it is the only one this surface is allowed to state.
+ * Build-time Drive availability, decided by the product's one availability
+ * predicate rather than by a second reading of the same variable.
+ *
+ * Raw truthiness answered "available" for any non-empty string, so a malformed
+ * client ID printed a live connect route while `availableVaultBackend` — which
+ * uses the strict predicate — silently rewrote the stored preference and the
+ * authorizer threw at construction. One fact, one implementation.
  */
-function googleDriveConfiguredInBuild(): boolean {
-  return ((import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined)?.trim() ?? "").length > 0;
+export function googleDriveAvailableInBuild(clientId: string | undefined): boolean {
+  return isDeployableGoogleOAuthClientId(clientId);
 }
 
 /** Evidence-first vault status surface. It intentionally has no secret inputs. */
@@ -162,7 +173,7 @@ export function VaultView({
     : undefined;
   const localObjectStore = s3Configuration?.mode === "local-development";
   const adoptedDrive = runtimeAdopted && googleDrive;
-  const driveInBuild = googleDriveConfiguredInBuild();
+  const driveInBuild = googleDriveAvailableInBuild(import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined);
   /**
    * Drive is the selected provider and this build cannot open it.
    *
@@ -171,6 +182,20 @@ export function VaultView({
    * what decides whether the route's primary action leads anywhere.
    */
   const driveUnavailable = provider === "google-drive" && !driveInBuild;
+  /**
+   * Why this build cannot open a destination, in the one place that decides it.
+   *
+   * The same predicate answers for Preferences' Durability row and for
+   * `changeVaultProvider`'s precondition, so the selector cannot offer a
+   * destination the shell would then refuse — or, worse, detach the adopted
+   * Vault for.
+   */
+  const providerUnopenableReason = (backend: VaultBackend): string | undefined =>
+    vaultBackendUnavailableReason(
+      backend,
+      import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined,
+      typeof window === "undefined" ? undefined : window.location,
+    );
   const compare = useRef<HTMLDetailsElement>(null);
   const providerControl = useRef<HTMLDivElement>(null);
   const [attachmentsOpen, setAttachmentsOpen] = useState(false);
@@ -331,13 +356,19 @@ export function VaultView({
           ariaLabel="Vault storage provider"
           value={provider}
           disabled={providerSwitching}
-          options={PROVIDER_PROFILES.map((profile) => ({
-            value: profile.id,
-            label: profile.title,
-            description: profile.id === "google-drive" && !driveInBuild
-              ? `${profile.description} — unavailable in this build`
-              : profile.description,
-          }))}
+          options={PROVIDER_PROFILES.map((profile) => {
+            // Availability is a selectability fact, not a description suffix.
+            // Rendered as prose only, Drive stayed choosable on a build with no
+            // client ID — and choosing it released the attached Vault before
+            // anything asked whether the destination could be opened.
+            const unopenable = providerUnopenableReason(profile.id);
+            return {
+              value: profile.id,
+              label: profile.title,
+              description: unopenable ?? profile.description,
+              ...(unopenable ? { disabled: true } : {}),
+            };
+          })}
           onChange={(value) => onProviderChange(value as VaultBackend)}
         />
         {providerSwitching ? <span role="status">Moving the active runtime safely…</span> : null}
@@ -352,7 +383,7 @@ export function VaultView({
                   <th key={profile.id} scope="col" data-current={profile.id === provider ? "true" : "false"}>
                     {profile.title}
                     {profile.id === provider ? <small>Selected</small> : null}
-                    {profile.id === "google-drive" && !driveInBuild ? <small>Unavailable in this build</small> : null}
+                    {providerUnopenableReason(profile.id) ? <small>Unavailable here</small> : null}
                   </th>
                 ))}
               </tr>

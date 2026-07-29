@@ -141,8 +141,19 @@ export async function forkSession(
   });
 }
 
+// A boundary is quiescent when nothing is in flight, not when the last thing
+// went well. A cancelled turn, a failed turn and a denied local command leave
+// the conversation exactly as idle as their successful counterparts, and
+// materializeMessages already drops non-actionable turns from provider history,
+// so the seed built from such a prefix carries no abandoned intent.
 function isForkBoundary(type: string): boolean {
-  return type === "session.created" || type === "turn.completed" || type === "local.command.completed" || type === "local.command.failed";
+  return type === "session.created" ||
+    type === "turn.completed" ||
+    type === "turn.failed" ||
+    type === "turn.cancelled" ||
+    type === "local.command.completed" ||
+    type === "local.command.failed" ||
+    type === "local.command.denied";
 }
 
 function resolveForkBoundary(

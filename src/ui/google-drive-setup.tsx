@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { loadDeferredCapabilities } from "../load-deferred-capabilities";
+import { isDeployableGoogleOAuthClientId } from "../storage/google-drive-configuration";
 import type { GoogleIdentityServicesAuthorizer, MemoryOnlyGoogleAccessTokenProvider } from "../storage/google-drive-auth";
 import type { ConfigureGoogleDriveVaultRequest } from "../vault";
 import type { JSX } from "preact";
@@ -36,6 +37,15 @@ export function GoogleDriveSetup({ onConfigure }: Readonly<{
   onConfigure(request: ConfigureGoogleDriveVaultRequest): void;
 }>) {
   const clientId = (import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined)?.trim() ?? "";
+  /**
+   * Whether this build can open a Drive workspace at all — the same predicate
+   * `GoogleIdentityServicesAuthorizer` enforces at construction, so the panel
+   * cannot offer a connect flow that the authorizer will reject. A non-empty
+   * but malformed client ID used to pass the truthiness check here, render the
+   * whole connect flow, and then park its primary button on "Preparing Google
+   * sign-in…" forever because `prepare()` never resolved.
+   */
+  const available = isDeployableGoogleOAuthClientId(clientId);
   const [folderName, setFolderName] = useState("Airship Workspace");
   const [recovery, setRecovery] = useState<WorkspaceRecoveryMaterial>();
   const [importedRecovery, setImportedRecovery] = useState("");
@@ -51,7 +61,7 @@ export function GoogleDriveSetup({ onConfigure }: Readonly<{
   } }), []);
 
   useEffect(() => {
-    if (!clientId) return;
+    if (!available) return;
     let current = true;
     void loadDeferredCapabilities().then(async (capabilities) => {
       const provider = new capabilities.MemoryOnlyGoogleAccessTokenProvider();
@@ -70,7 +80,7 @@ export function GoogleDriveSetup({ onConfigure }: Readonly<{
       if (!authorityHandedOff.current) session.current?.authorizer.reset();
       session.current = undefined;
     };
-  }, [clientId, session]);
+  }, [available, clientId, session]);
 
   async function generateRecovery(): Promise<void> {
     recovery?.clear();
@@ -141,25 +151,28 @@ export function GoogleDriveSetup({ onConfigure }: Readonly<{
     }
   }
 
-  return <section class="google-drive-setup" data-available={clientId ? "true" : "false"} aria-labelledby="google-drive-setup-title">
+  return <section class="google-drive-setup" data-available={available ? "true" : "false"} aria-labelledby="google-drive-setup-title">
     <header>
       {/* A heading is an instruction. Printing "Connect your Google Drive"
           over a build that cannot open a Drive folder tells a person to do
           something no control on the page can do, and a state chip one line
           right does not undo a heading. The heading states the state; the
           panel below states what to do instead. */}
-      <h2 id="google-drive-setup-title">{clientId
+      <h2 id="google-drive-setup-title">{available
         ? "Connect your Google Drive"
         : "Google Drive is not available in this build"}</h2>
-      {clientId ? <p class="google-drive-setup__eyebrow">Recommended durability</p> : null}
-      <span data-state={clientId ? "ready" : "unavailable"}>{clientId ? "Browser → Drive" : "Unavailable in this build"}</span>
+      {available ? <p class="google-drive-setup__eyebrow">Recommended durability</p> : null}
+      <span data-state={available ? "ready" : "unavailable"}>{available ? "Browser → Drive" : "Unavailable in this build"}</span>
     </header>
     {/* A build with no OAuth client cannot open a Drive folder, so it does not
         claim it can. The capability sentence renders only where it is true. */}
-    {clientId
+    {available
       ? <p>Airship creates a visible folder in your Drive and stores only client-encrypted manifests and segments. Google never receives the workspace key.</p>
-      : <p>This deployment has no Google OAuth client ID, so Airship cannot open a Drive workspace. Your data is not affected: nothing has been sent to Google, and no vault state has changed.</p>}
-    {!clientId ? <>
+      /* "no usable", not "no": this state is now also reached by a deployment
+         that set a malformed client ID, and telling that operator they set
+         nothing would send them looking in the wrong place. */
+      : <p>This deployment has no usable Google OAuth client ID, so Airship cannot open a Drive workspace. Your data is not affected: nothing has been sent to Google, and no vault state has changed.</p>}
+    {!available ? <>
       <div class="google-drive-setup__actions">
         <button type="button" onClick={() => {
           const provider = document.querySelector<HTMLElement>(".vault-provider-selector button");

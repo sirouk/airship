@@ -59,6 +59,7 @@ describe("CSS variable contract", () => {
  */
 const TOKENS_CSS = await readFile(new URL("./tokens.css", import.meta.url), "utf8");
 const PLATFORM_SHELL_CSS = await readFile(new URL("./platform-shell.css", import.meta.url), "utf8");
+const APP_TSX = await readFile(new URL("./app.tsx", import.meta.url), "utf8");
 
 /** WCAG 1.4.3 AA for text below 18.66px, which is every caption in the product. */
 const AA_TEXT = 4.5;
@@ -156,6 +157,77 @@ describe("colour contract", () => {
       });
     });
     expect(failures).toEqual([]);
+  });
+
+  /*
+   * The cascade the app actually produces, not the one the manifest describes.
+   *
+   * Every assertion above reads one layer at a time: the palette on its own, or
+   * the mode's stylesheet on its own. The screen is the composition of the two,
+   * and the composition is where Paper mode broke — a dark-scheme theme diffed
+   * against the dark sheet wrote all nine roles inline, and inline beats the
+   * `[data-mode="light"]` block, so Research and Developer rendered a dark
+   * palette under light-mode dividers and inks. This crosses every shipped
+   * theme with every mode and re-runs the verdict, ink and line floors on the
+   * overlay.
+   */
+  it("keeps every theme legible in every colour mode once the layers are composed", async () => {
+    const { themes } = await createBuiltInProfileCatalog();
+    const failures = themes.flatMap((theme) => (["dark", "light"] as const).flatMap((mode) => {
+      const tokens: Record<string, string> = { ...resolvedTokens(mode) };
+      for (const [property, value] of Object.entries(themeCssVariables(theme, mode))) {
+        // An empty value is `removeProperty`: the stylesheet keeps the role.
+        if (value !== "") tokens[property] = value;
+      }
+      const surface = tokens["--surface"]!;
+      const raised = tokens["--surface-raised"]!;
+      const ground = tokens["--ground"]!;
+      const checks: readonly [string, string, number][] = [
+        ["--v-verified", surface, AA_TEXT],
+        ["--v-caution", surface, AA_TEXT],
+        ["--v-info", surface, AA_TEXT],
+        // Same split as the single-layer test above: --v-failed and --copper
+        // are glyph, border and fill colours whose chip label is lifted to
+        // --ink by shell.css, so 1.4.11's 3:1 is the applicable rule for them.
+        ["--v-failed", surface, NON_TEXT],
+        ["--copper", raised, NON_TEXT],
+        ["--ink-faint", raised, AA_TEXT],
+        ["--ink-disabled", tokens["--surface-disabled"]!, NON_TEXT],
+        ["--line", ground, 1.2],
+        ["--line-strong", ground, 1.2],
+      ];
+      return checks.flatMap(([token, bed, floor]) => {
+        const ratio = contrast(tokens[token]!, bed);
+        return ratio >= floor ? [] : [`${theme.themeId}/${mode} ${token} ${ratio.toFixed(3)}:1 (needs ${floor})`];
+      });
+    }));
+    expect(
+      failures,
+      "themeCssVariables must diff against the mode in force; diffing against theme.colorScheme pins a palette on the wrong sheet.",
+    ).toEqual([]);
+  });
+
+  /*
+   * The other half of that composition: nothing may write the palette layer
+   * without re-stating the preference layer in the same breath.
+   *
+   * `applyTheme` also writes the five `<html>` attributes the preference layer
+   * owns (mode, type scale, density, corners, body font), so a caller that used
+   * it directly silently reset the user's global display preferences —
+   * previewing a theme in the Profiles editor did exactly that, and nothing put
+   * them back. This is asserted on the source because the defect is *which
+   * function is called*, which no rendered pixel can show.
+   */
+  it("writes the theme layer only through the wrapper that reasserts preferences", () => {
+    const calls = [...APP_TSX.matchAll(/(?<![\w.])applyTheme\(/gu)];
+    // Two: the declaration, and the one call inside `applyThemeWithPreferences`.
+    expect(calls).toHaveLength(2);
+    const wrapper = APP_TSX.slice(APP_TSX.indexOf("function applyThemeWithPreferences("));
+    // The third argument is load-bearing: it hands the theme's presentation to
+    // the preference layer as the base it diffs against, which is the only
+    // reason a theme's typography and layout survive the reassertion at all.
+    expect(wrapper.slice(0, wrapper.indexOf("}")))
+      .toContain("applyPreferenceOverrides(preferences, document.documentElement, themePresentation(theme))");
   });
 
   it("never carries a disabled state on transparency", () => {

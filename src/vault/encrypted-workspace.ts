@@ -9,6 +9,7 @@ import {
   type ClientEncryptedWorkspacePort,
   type WorkspacePort,
 } from "../workspace/contracts";
+import { workspaceContentByteLength } from "../workspace/content-codec";
 import {
   WorkspaceRootKey,
   decodeEnvelope,
@@ -83,7 +84,16 @@ export class EncryptedObjectWorkspace implements WorkspacePort, ClientEncryptedW
     // file, returning committed metadata and an empty preview avoids silently
     // downloading/decrypting the whole object under a bounded-read request.
     if (entry.size > maxBytes) {
-      return { path: entry.path, content: "", revision: entry.revision, updatedAt: entry.updatedAt, size: entry.size };
+      return {
+        path: entry.path,
+        content: "",
+        revision: entry.revision,
+        updatedAt: entry.updatedAt,
+        size: entry.size,
+        // Nothing was decrypted, so the committed entry is the only witness of
+        // the decoded length. Legacy entries have none and fall back to `size`.
+        ...(entry.contentByteLength === undefined ? {} : { contentByteLength: entry.contentByteLength }),
+      };
     }
     return this.readEntry(entry);
   }
@@ -119,7 +129,11 @@ export class EncryptedObjectWorkspace implements WorkspacePort, ClientEncryptedW
       content,
       revision: this.id(),
       updatedAt: validTimestamp(this.now(), "workspace update time"),
+      // `size` stays the sealed plaintext length: `openFile` proves the object
+      // against it. The decoded length is carried beside it so a binary file
+      // is not presented as its ~4/3 base64 envelope.
       size: contentBytes.byteLength,
+      contentByteLength: workspaceContentByteLength(content),
     };
     const logicalId = fileLogicalId(file.path, file.revision);
     const cloudKey = `${this.prefix}/files/${await this.key.opaqueObjectId(logicalId)}`;
@@ -146,6 +160,7 @@ export class EncryptedObjectWorkspace implements WorkspacePort, ClientEncryptedW
       revision: file.revision,
       updatedAt: file.updatedAt,
       size: file.size,
+      contentByteLength: file.contentByteLength,
       cloudKey,
       etag,
     };
@@ -306,7 +321,10 @@ export class EncryptedObjectWorkspace implements WorkspacePort, ClientEncryptedW
     ) {
       throw new Error("Encrypted workspace file metadata does not match its contents.");
     }
-    return { path, content, revision, updatedAt, size: expectedSize };
+    // Derived from the plaintext AES-GCM just authenticated rather than copied
+    // from the manifest, so an object opened from a pre-`contentByteLength`
+    // manifest still reports its true decoded length.
+    return { path, content, revision, updatedAt, size: expectedSize, contentByteLength: workspaceContentByteLength(content) };
   }
 }
 
@@ -340,11 +358,22 @@ function parseManifestEntry(value: unknown): WorkspaceManifestEntry {
   if (path === "/workspace") throw new Error("Encrypted workspace manifest contains the workspace root as a file.");
   const size = requiredInteger(value.size, "workspace file size", true);
   if (size > MAX_FILE_BYTES) throw new Error("Encrypted workspace manifest file exceeds the client limit.");
+  // Optional by design: manifests sealed before this field existed are still
+  // valid, and every read path can re-derive the length from the plaintext.
+  // A present value is validated as strictly as `size` and can never exceed it,
+  // because decoding an envelope only ever removes bytes.
+  const contentByteLength = value.contentByteLength === undefined
+    ? undefined
+    : requiredInteger(value.contentByteLength, "workspace file content byte length", true);
+  if (contentByteLength !== undefined && contentByteLength > size) {
+    throw new Error("Encrypted workspace manifest content byte length exceeds its stored size.");
+  }
   return {
     path,
     revision: requiredString(value.revision, "workspace revision", 512),
     updatedAt: validTimestamp(requiredString(value.updatedAt, "workspace update time", 128), "workspace update time"),
     size,
+    ...(contentByteLength === undefined ? {} : { contentByteLength }),
     cloudKey: requiredString(value.cloudKey, "workspace cloud key", 4_096),
     etag: requiredString(value.etag, "workspace ETag", 4_096),
   };

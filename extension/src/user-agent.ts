@@ -121,6 +121,8 @@ export type WebRequestApi = Readonly<{
     ): void;
     /** Optional: not every engine exposes it, so it is read back only if present. */
     hasListener?(listener: WebRequestListener): boolean;
+    /** Optional for the same reason; a replacement is only honest if it removes. */
+    removeListener?(listener: WebRequestListener): void;
   }>;
 }>;
 
@@ -175,6 +177,20 @@ function ruleReadsBack(
 }
 
 /**
+ * The blocking listener this module attached, and what it was built for.
+ *
+ * `installUserAgentOverride` describes a desired state and is called again on
+ * every capability re-observation. The declarativeNetRequest branch is already
+ * idempotent — `updateSessionRules` removes the same ids it adds — but
+ * `addListener` is additive, so without this reference each re-observation
+ * stacked another blocking rewriter on the same requests, unremovable because
+ * nothing held the previous function. The event surface is part of the identity
+ * so a different host (a fresh worker, or a test) is a fresh install rather
+ * than a `removeListener` aimed at somebody else's API.
+ */
+let installedWebRequest: { events: WebRequestApi["onBeforeSendHeaders"]; listener: WebRequestListener; signature: string } | undefined;
+
+/**
  * Install the override and report what actually happened.
  *
  * The two mechanisms give evidence of different strength, and `live` is the
@@ -215,8 +231,25 @@ export async function installUserAgentOverride(
   const webRequest = host?.webRequest;
   if (webRequest) {
     try {
+      const events = webRequest.onBeforeSendHeaders;
+      const attached = events.hasListener;
+      // Where the engine can be asked, ask: an `addListener` that returned
+      // without attaching anything must not read as a live override. Asking
+      // about the *retained* listener keeps this an observation rather than a
+      // tautology about the object we just created.
+      const isAttached = (candidate: WebRequestListener): boolean =>
+        typeof attached !== "function" || attached.call(events, candidate);
+      const wanted = destinationSignature(destinations);
+      if (installedWebRequest && installedWebRequest.events === events) {
+        // Same event surface, same destinations: this is a re-observation, not
+        // a first install, and adding a second listener for the same requests
+        // would leave a rewriter nobody holds a reference to.
+        if (installedWebRequest.signature === wanted && isAttached(installedWebRequest.listener)) return "live";
+        events.removeListener?.(installedWebRequest.listener);
+        installedWebRequest = undefined;
+      }
       const listener: WebRequestListener = (details) => applyUserAgentHeader(details, destinations);
-      webRequest.onBeforeSendHeaders.addListener(
+      events.addListener(
         listener,
         {
           urls: overrideDestinations(destinations).map((destination) => `${destination.prefix}*`),
@@ -224,10 +257,8 @@ export async function installUserAgentOverride(
         },
         ["blocking", "requestHeaders"],
       );
-      const attached = webRequest.onBeforeSendHeaders.hasListener;
-      // Where the engine can be asked, ask: an `addListener` that returned
-      // without attaching anything must not read as a live override.
-      if (typeof attached !== "function" || attached.call(webRequest.onBeforeSendHeaders, listener)) {
+      if (isAttached(listener)) {
+        installedWebRequest = { events, listener, signature: wanted };
         return "live";
       }
     } catch {
@@ -235,4 +266,11 @@ export async function installUserAgentOverride(
     }
   }
   return "unavailable";
+}
+
+/** Identity of the rewrite the retained listener performs, prefix and agent. */
+function destinationSignature(destinations: readonly BridgeDestination[]): string {
+  return overrideDestinations(destinations)
+    .map((destination) => `${destination.prefix} ${destination.userAgent ?? ""}`)
+    .join("");
 }

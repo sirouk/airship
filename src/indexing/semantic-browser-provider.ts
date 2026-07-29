@@ -17,15 +17,27 @@ const PREFERENCE_KEY = "airship.context.embedding.v1";
 
 export type EmbeddingMode = "bootstrap" | "semantic";
 
-export function readEmbeddingMode(): EmbeddingMode {
-  if (typeof localStorage === "undefined") return "bootstrap";
+/**
+ * The recorded choice, or nothing when the person has never made one.
+ *
+ * "No preference" and "prefers bootstrap" are different facts: collapsing them
+ * is what left the capability probe with no branch to act on, so every device
+ * stayed on hash vectors until someone found a button.
+ */
+export function readStoredEmbeddingMode(): EmbeddingMode | undefined {
+  if (typeof localStorage === "undefined") return undefined;
   try {
-    return localStorage.getItem(PREFERENCE_KEY) === "semantic" ? "semantic" : "bootstrap";
+    const stored = localStorage.getItem(PREFERENCE_KEY);
+    return stored === "semantic" || stored === "bootstrap" ? stored : undefined;
   } catch {
     // Storage can be denied by browser privacy policy even when the API is
     // present. Keep the deterministic on-device provider available.
-    return "bootstrap";
+    return undefined;
   }
+}
+
+export function readEmbeddingMode(): EmbeddingMode {
+  return readStoredEmbeddingMode() ?? "bootstrap";
 }
 
 export function writeEmbeddingMode(mode: EmbeddingMode): void {
@@ -129,6 +141,18 @@ export class SwitchableEmbeddingProvider implements EmbeddingProvider {
   setMode(mode: EmbeddingMode): void {
     this.mode = mode;
     writeEmbeddingMode(mode);
+  }
+
+  /**
+   * A mode derived from this device's capabilities rather than chosen.
+   *
+   * Deliberately not persisted: recording it would turn "no preference" into a
+   * preference, so the probe would never run again and a device that later
+   * became constrained could not be demoted. Only a person's own selection is
+   * durable.
+   */
+  applyDerivedMode(mode: EmbeddingMode): void {
+    this.mode = mode;
   }
 
   embed(texts: string[], signal?: AbortSignal): Promise<Float32Array[]> {

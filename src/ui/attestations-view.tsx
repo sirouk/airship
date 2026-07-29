@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import type { ChutesEndpointEvidenceRecord } from "../attestation/provider-client";
 import type { ConversationReceipt, ProofStatus } from "../receipts/types";
+import { downloadText } from "./file-download";
 import { Icon } from "./icons";
 import { Seal, sealStateForProofStatus } from "./seal";
 import { postureLabel, proofLevelLabel, proofStatusLabel, relativeEvidenceAge } from "./trust-language";
@@ -257,7 +258,12 @@ export function AttestationsView({
         <header>
           <Icon name="lock" />
           <div><strong id="evidence-state-meanings">How to read evidence states</strong><span>Every state is claim-scoped. A receipt and a later endpoint observation remain separate records.</span></div>
-          <small>Raw evidence withheld by design</small>
+          {/* Says where the raw material *is*, because the bare "withheld by
+              design" left the panel's other privacy sentence — the bindings
+              disclosure 155 lines down — free to claim raw values were right
+              here. A boundary a reader cannot cross and cannot see the far side
+              of reads as a refusal; naming the export makes it a boundary. */}
+          <small>Raw evidence withheld here; export the raw verification bundle from Receipt &amp; journal</small>
         </header>
         <dl>
           {EVIDENCE_STATE_MEANINGS.map((entry) => <div key={entry.label}><dt>{entry.label}</dt><dd>{entry.meaning}</dd></div>)}
@@ -289,7 +295,7 @@ export function AttestationsView({
                 : null}
             </div>
           </div>
-          {!inputOverflow ? <div class="attestations-empty__flow" aria-label="Evidence lifecycle">
+          {!inputOverflow ? <div class="attestations-empty__flow" role="group" aria-label="Evidence lifecycle">
             <div><span>01</span><strong>Acquire</strong><small>{onOpenConnection
               ? "Connect Chutes inference, then fetch fresh endpoint evidence for that runtime."
               : "Fetch fresh endpoint evidence for the selected Chutes runtime."}</small></div>
@@ -412,7 +418,7 @@ export function AttestationsView({
               </details>
 
               <details class="attestations-bindings">
-                <summary><span>Commitments &amp; measurements</span><small>{selected.bindings.length + selected.evidenceFacts.length} normalized fact{selected.bindings.length + selected.evidenceFacts.length === 1 ? "" : "s"} · raw values remain available here</small></summary>
+                <summary><span>Commitments &amp; measurements</span><small>{selected.bindings.length + selected.evidenceFacts.length} normalized fact{selected.bindings.length + selected.evidenceFacts.length === 1 ? "" : "s"} · digests and measurement metadata only</small></summary>
                 <FactGrid facts={[...selected.bindings, ...selected.evidenceFacts]} empty="No public digests or measurement metadata are available." />
               </details>
             </div>
@@ -651,16 +657,14 @@ function formatTimestamp(value: string): string {
   });
 }
 
+/**
+ * The status summary leaves through the product's one download path.
+ *
+ * This file used to own a second copy of the Blob/objectURL/anchor dance that
+ * revoked on a different schedule from the one in `proof-view`; the only thing
+ * particular to this export is the name it carries, so that is all that is
+ * left here.
+ */
 function downloadPublicJson(json: string): void {
-  const blob = new Blob([json], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = `airship-attestation-status-summary-${new Date().toISOString().slice(0, 10)}.json`;
-  anchor.rel = "noopener";
-  anchor.hidden = true;
-  document.body.append(anchor);
-  anchor.click();
-  anchor.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 0);
+  downloadText(json, `airship-attestation-status-summary-${new Date().toISOString().slice(0, 10)}.json`);
 }

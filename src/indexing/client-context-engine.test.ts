@@ -15,7 +15,9 @@ describe("ClientContextEngine", () => {
   it("indexes a revision snapshot and exposes exact local lineage and hybrid hits", async () => {
     const workspace = new MemoryWorkspace();
     const architecture = await workspace.write("docs/architecture.md", "Confidential storage uses authenticated encrypted context pages.");
-    await workspace.write("assets/diagram.png", "not really an image");
+    // A real image arrives as a binary envelope, which is what the exclusion
+    // actually keys on — the suffix alone no longer decides admission.
+    await workspace.write("assets/diagram.png", encodeWorkspaceBytes(Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff])));
     await workspace.write(".airship/git/head.v1.json", "private Git control-plane state must never be embedded");
     await workspace.write(".airship/memory.json", "profile-private memory must never enter the shared workspace index");
     const engine = new ClientContextEngine({ workspace, dimensions: 64, maxChunkCharacters: 64, overlapCharacters: 8 });
@@ -91,6 +93,41 @@ describe("ClientContextEngine", () => {
     ]);
     expect(engine.exportActiveGeneration().chunks).toEqual([]);
     expect((await engine.search("airship-git-binary-v1")).hits).toEqual([]);
+    engine.dispose();
+  });
+
+  it("indexes source languages the suffix table never enumerated", async () => {
+    const workspace = new MemoryWorkspace();
+    await workspace.write("src/main.cpp", "int main() { return quartz_pressure(); }");
+    await workspace.write("app/app.rb", "def quartz_pressure; 42; end");
+    await workspace.write("bin/deploy.sh", "#!/bin/sh\nexec quartz_pressure --once");
+    await workspace.write("Dockerfile", "FROM scratch\nRUN quartz_pressure");
+    const engine = new ClientContextEngine({ workspace, dimensions: 64 });
+
+    const generation = await engine.updateWorkspace(await workspace.list());
+    expect(generation.candidates.map((candidate) => candidate.status)).toEqual(["indexed", "indexed", "indexed", "indexed"]);
+    for (const candidate of generation.candidates) expect(candidate.chunks).toBe(1);
+    expect(generation.candidates.map((candidate) => candidate.contentType)).toEqual([
+      "text/plain", "text/plain", "text/plain", "text/plain",
+    ]);
+    const hits = (await engine.search("quartz_pressure", { limit: 8 })).hits;
+    expect(hits.map((hit) => hit.path).sort()).toEqual([
+      "/workspace/Dockerfile", "/workspace/app/app.rb", "/workspace/bin/deploy.sh", "/workspace/src/main.cpp",
+    ]);
+    engine.dispose();
+  });
+
+  it("keeps the labelled content type for the suffixes it does know", async () => {
+    const workspace = new MemoryWorkspace();
+    await workspace.write("notes/readme.md", "markdown body");
+    await workspace.write("config/settings.yaml", "key: value");
+    const engine = new ClientContextEngine({ workspace, dimensions: 64 });
+
+    const generation = await engine.updateWorkspace(await workspace.list());
+    expect(generation.candidates.map((candidate) => [candidate.path, candidate.contentType])).toEqual([
+      ["/workspace/config/settings.yaml", "application/yaml"],
+      ["/workspace/notes/readme.md", "text/markdown"],
+    ]);
     engine.dispose();
   });
 

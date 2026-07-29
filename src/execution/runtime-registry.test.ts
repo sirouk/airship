@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   ClientExecutionRuntime,
   deriveBrowserExecutionTier,
@@ -148,6 +148,40 @@ describe("ClientExecutionRuntime", () => {
       id: "node-webcontainer",
       state: "unavailable",
     }));
+  });
+
+  it("names the host condition that blocked an advertised runtime, and what would change it", () => {
+    // A page that is not cross-origin isolated is the shipped reason
+    // node-webcontainer cannot boot. The route used to answer that with "No
+    // activation path is advertised by this release" — a claim about the build,
+    // when the blocker was the page.
+    vi.stubGlobal("Worker", class {});
+    vi.stubGlobal("document", {});
+    vi.stubGlobal("crossOriginIsolated", false);
+    try {
+      const blocked = new ClientExecutionRuntime().capabilities().find(({ id }) => id === "node-webcontainer");
+      expect(blocked?.state).toBe("unavailable");
+      expect(blocked?.blocker?.condition).toBe("This page is not cross-origin isolated.");
+      expect(blocked?.blocker?.remedy).toContain("COOP");
+      // The condition is stated once and carried in both places, so a surface
+      // never has to parse it back out of the prose.
+      expect(blocked?.detail).toContain("This page is not cross-origin isolated.");
+
+      vi.stubGlobal("crossOriginIsolated", true);
+      const offered = new ClientExecutionRuntime().capabilities().find(({ id }) => id === "node-webcontainer");
+      expect(offered?.state).toBe("installable");
+      expect(offered?.blocker).toBeUndefined();
+
+      // wasix is unavailable because this release does not promote it. No host
+      // condition may overwrite that with something the reader could "fix".
+      vi.stubGlobal("crossOriginIsolated", false);
+      const unadvertised = new ClientExecutionRuntime().capabilities().find(({ id }) => id === "wasix");
+      expect(unadvertised?.state).toBe("unavailable");
+      expect(unadvertised?.blocker).toBeUndefined();
+      expect(unadvertised?.detail).not.toContain("This page is not cross-origin isolated.");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("rejects a pack result that spoofs another runtime identity", async () => {

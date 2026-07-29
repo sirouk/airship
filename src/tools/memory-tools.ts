@@ -9,6 +9,34 @@ import type { ToolRegistry } from "./registry";
 export const MEMORY_PATH = "/workspace/.airship/memory.json";
 const MAX_MEMORIES = 512;
 
+export type MemoryScope = "session" | "profile" | "workspace";
+
+/**
+ * The pinned silo boundary, resolved for pins that predate it. A v1 pin never
+ * carried a scope, so it reads as the profile-wide default it was written under
+ * — narrowing it retroactively would hide records the session already used.
+ */
+export function effectiveMemoryScope(profile: SessionProfileBinding): MemoryScope {
+  return profile.version === 2 ? profile.memoryScope : "profile";
+}
+
+/**
+ * The single gate every read of memory.json passes through. Scope is a
+ * boundary, not a presentation preference, so the turn seam, `recall_memory`
+ * and `search_memory` must all narrow identically or the silo leaks through
+ * whichever reader was forgotten.
+ */
+export function scopedMemories(
+  records: readonly MemoryRecord[],
+  binding: Readonly<{ profileId: string; memoryScope: MemoryScope; sessionId: string }>,
+): MemoryRecord[] {
+  return records.filter((item) =>
+    item.scope.kind === "profile" &&
+    item.scope.profileId === binding.profileId &&
+    (binding.memoryScope !== "session" || item.scope.createdInSessionId === binding.sessionId),
+  );
+}
+
 type ProfileMemoryScope = Readonly<{
   kind: "profile";
   profileId: string;
@@ -58,7 +86,12 @@ export function registerMemoryTools(
       const limit = typeof args.limit === "number" ? args.limit : 12;
       const file = await workspace.read(MEMORY_PATH);
       const document = file ? parseMemoryDocument(file.content) : emptyDocument();
-      const records = profileRecords(document.records, profile.profileId);
+      const memoryScope = effectiveMemoryScope(profile);
+      const records = scopedMemories(document.records, {
+        profileId: profile.profileId,
+        memoryScope,
+        sessionId: context.sessionId,
+      });
       // An empty query is a browse, not a search: keep the newest records. A real
       // query uses the same ranker as automatic turn injection, so the agent's
       // fallback can never be worse than the lane that already ran.
@@ -75,7 +108,7 @@ export function registerMemoryTools(
           count: selected.length,
           total: records.length,
           ranking: query ? "bounded-bm25-recent-v1" : "reverse-chronological",
-          scope: "profile",
+          scope: memoryScope,
           profileId: profile.profileId,
           profileRevision: profile.profileRevision,
           legacyQuarantined: document.legacyCount,
@@ -109,6 +142,11 @@ export function registerMemoryTools(
       const action = stringArgument(args.action, "action");
       const current = await workspace.read(MEMORY_PATH);
       const document = current ? parseMemoryDocument(current.content) : emptyDocument();
+      const binding = {
+        profileId: profile.profileId,
+        memoryScope: effectiveMemoryScope(profile),
+        sessionId: context.sessionId,
+      };
       let next: MemoryRecord[];
       let message: string;
       if (action === "remember") {
@@ -129,9 +167,9 @@ export function registerMemoryTools(
         message = `Remembered ${record.id} for pinned profile ${profile.profileId}.`;
       } else if (action === "forget") {
         const id = stringArgument(args.id, "id");
-        const owned = document.records.some((record) =>
-          record.id === id && record.scope.kind === "profile" && record.scope.profileId === profile.profileId,
-        );
+        // Forget is authorised from the same visible set as recall: a silo the
+        // session cannot read must not be one it can destroy by guessing an ID.
+        const owned = scopedMemories(document.records, binding).some((record) => record.id === id);
         if (!owned) throw new Error(`Memory not found in pinned profile ${profile.profileId}: ${id}.`);
         next = document.records.filter((record) => record.id !== id);
         message = `Forgot memory ${id} from pinned profile ${profile.profileId}.`;
@@ -144,8 +182,8 @@ export function registerMemoryTools(
       return {
         content: message,
         metadata: {
-          count: profileRecords(next, profile.profileId).length,
-          scope: "profile",
+          count: scopedMemories(next, binding).length,
+          scope: binding.memoryScope,
           profileId: profile.profileId,
           profileRevision: profile.profileRevision,
           legacyQuarantined: next.filter((record) => record.scope.kind === "legacy-unscoped").length,
@@ -212,10 +250,6 @@ async function pinnedProfile(journal: EventJournal, context: ToolContext): Promi
   strictString(session.manifest.profile.profileId, "pinned memory profile ID", 256);
   strictString(session.manifest.profile.profileRevision, "pinned memory profile revision", 256);
   return session.manifest.profile;
-}
-
-function profileRecords(records: readonly MemoryRecord[], profileId: string): MemoryRecord[] {
-  return records.filter((item) => item.scope.kind === "profile" && item.scope.profileId === profileId);
 }
 
 function emptyDocument(): MemoryDocument {

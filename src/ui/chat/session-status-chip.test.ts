@@ -166,6 +166,36 @@ describe("sessionStatusName", () => {
 });
 
 /*
+ * The two counted chips sit next to each other in one 40px row, and both used
+ * to render a bare integer with the unit hidden in `title`/`aria-label`. Two
+ * adjacent numbers of unstated kind — beside a model name — are not labelled
+ * by a tooltip nobody on a touch screen can open. Asserted against the source
+ * because there is no DOM in this suite; the visible-text form is what the
+ * browser journey checks.
+ */
+const sessionBarSource = await readFile(new URL("./session-bar.tsx", import.meta.url), "utf8");
+const statusChipSource = await readFile(new URL("./session-status-chip.tsx", import.meta.url), "utf8");
+const chatStyles = await readFile(new URL("../chat.css", import.meta.url), "utf8");
+
+describe("the counted chips state their own unit", () => {
+  it("renders the journal count's unit as text beside the number", () => {
+    expect(sessionBarSource).toContain('<span class="journal-chip__unit">{journal.eventCount === 1 ? "event" : "events"}</span>');
+  });
+
+  it("renders the claim count's unit as text beside the number", () => {
+    expect(statusChipSource).toContain('<span class="session-status-chip__unit">{facts.length === 1 ? "claim" : "claims"}</span>');
+  });
+
+  it("clips the units with the other shed labels rather than dropping them from the markup", () => {
+    const scrolled = chatStyles.match(/@media \(pointer: fine\) \{[\s\S]*?\n\}/u)?.[0] ?? "";
+    expect(scrolled).toContain('.chat-stage[data-scrolled="true"] .journal-chip__unit');
+    expect(scrolled).toContain('.chat-stage[data-scrolled="true"] .session-status-chip__unit');
+    // Clipped, not display:none — the words stay in the accessible name.
+    expect(scrolled).toContain("clip-path: inset(50%)");
+  });
+});
+
+/*
  * The two durability claims.
  *
  * "Ephemeral" printed twice on one screen because two components had access to

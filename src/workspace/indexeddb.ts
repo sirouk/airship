@@ -1,4 +1,5 @@
 import { randomUuid } from "../core/id";
+import { workspaceContentByteLength } from "./content-codec";
 import { checkRevision } from "./memory";
 import {
   normalizeWorkspacePath,
@@ -78,6 +79,10 @@ export class IndexedDbWorkspace implements WorkspacePort {
       revision: randomUuid(),
       updatedAt: new Date().toISOString(),
       size: new TextEncoder().encode(content).byteLength,
+      // Records written before this field existed keep only the envelope
+      // length; `workspaceEntryByteLength` degrades to that rather than lying
+      // about having decoded them.
+      contentByteLength: workspaceContentByteLength(content),
     };
     store.put(file);
     await done;

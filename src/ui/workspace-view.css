@@ -87,6 +87,22 @@
 }
 
 /*
+ * The switched region each tab strip controls. It exists so `role="tabpanel"`
+ * has somewhere to live that is not the `<aside>` or the `<main>` — putting it
+ * on either would delete the complementary and main landmarks. It is a pass-
+ * through box: the same flex column its contents used to sit in directly, so
+ * the tree and the code frame still take the height their `flex: 1 1 auto`
+ * asks for.
+ */
+.workbench-panel {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+}
+
+/*
  * The rail header no longer restates WORKSPACE: the route title, the Explorer
  * tab 40px above and the tree's own `aria-label="Workspace files"` all say it.
  * The row spends its width on the two things the tree had neither of — a way

@@ -29,6 +29,11 @@ describe("most connected nodes", () => {
 
     const unfiltered = mostConnectedNodes(graph, new Set<MemoryNodeKind>());
     expect(unfiltered).toHaveLength(3);
+
+    // An individually hidden node is hidden for the same reason a hidden kind
+    // is: the canvas is not drawing it, so the launcher must not offer it.
+    expect(mostConnectedNodes(graph, new Set<MemoryNodeKind>(), new Set(["session-1"])).map((entry) => entry.id))
+      .toEqual(["file-1", "term-1"]);
   });
 
   it("breaks degree ties by label so the list does not reshuffle on rerender", () => {
@@ -46,7 +51,7 @@ describe("most connected nodes", () => {
       Array.from({ length: 9 }, (_, index) => node(`n${index}`, `Node ${index}`, "skill")),
       [],
     );
-    const top = mostConnectedNodes(graph, new Set<MemoryNodeKind>(), 5);
+    const top = mostConnectedNodes(graph, new Set<MemoryNodeKind>(), new Set(), 5);
     expect(top).toHaveLength(5);
     expect(Object.isFrozen(top)).toBe(true);
     expect(Object.isFrozen(top[0])).toBe(true);

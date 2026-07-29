@@ -1,0 +1,54 @@
+/*
+ * The rail's live-load row. Its own file rather than a block in shell.css so
+ * the indicator ships with the component that owns it, the way the route views
+ * already carry their own sheets.
+ */
+.rail-load {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--sp-1);
+  align-items: center;
+  flex: 0 0 auto;
+  min-height: 28px;
+  padding: 0 var(--sp-2);
+  border-top: 1px solid var(--line);
+  color: var(--ink-faint);
+  font-size: var(--fs-micro);
+}
+
+/* Idle is stated in the same ink as everything else at rest. Only a live run
+   earns the accent, because a colour that is always on stops being a signal. */
+.rail-load__count {
+  min-width: 1.4em;
+  padding: 0 .3em;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--ink-muted);
+  font: var(--fs-micro)/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+  text-align: center;
+}
+
+.rail-load[data-running="true"] .rail-load__count {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  color: var(--accent-bright);
+}
+
+.rail-load__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The icon rail clips words out of the layout rather than removing them, the
+   same rule the destination labels follow: the count and the row's accessible
+   name still state the reading at 60px. */
+.sidebar[data-rail-state="rail"] .rail-load { grid-template-columns: minmax(0, 1fr); justify-items: center; padding: 0; }
+
+.sidebar[data-rail-state="rail"] .rail-load__label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}

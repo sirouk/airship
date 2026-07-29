@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { originatingPromptForRow, type RetryPromptRow } from "./retry-prompt";
-import type { MessagePart } from "./message-parts";
+import { messagePartsFromDurableEvents, type MessagePart } from "./message-parts";
+import type { DurableEvent } from "../../core/journal";
 
 describe("originatingPromptForRow", () => {
   it("recovers the prompt of a resumed assistant row from its own turn", () => {
@@ -57,6 +58,23 @@ describe("originatingPromptForRow", () => {
     expect(originatingPromptForRow(rows, 1)).toBeUndefined();
   });
 
+  /**
+   * The guard above is only worth anything if a *durable* row can reach it.
+   * It could not: the projection dropped `turn.requested.images`, so after a
+   * reload the very rows the guard exists for looked text-only and Retry
+   * offered to re-send them without their image. Built from journal events
+   * rather than a hand-made part, because a hand-made part is exactly what hid
+   * this.
+   */
+  it("refuses a prompt whose user row was rebuilt from a durable image-bearing request", () => {
+    const rows = [
+      durableRow("user", "turn-1", durableImageRequestParts()),
+      row("assistant", "turn-1", "A dashboard."),
+    ];
+    expect(rows[0]!.parts.some((part) => part.kind === "attachment")).toBe(true);
+    expect(originatingPromptForRow(rows, 1)).toBeUndefined();
+  });
+
   it("still recovers the neighbouring text-only turn in the same transcript", () => {
     const rows = [
       withAttachment(row("user", "turn-1", "What is in this screenshot?")),
@@ -85,6 +103,35 @@ function withAttachment(source: RetryPromptRow): RetryPromptRow {
     status: "available",
   });
   return Object.freeze({ ...source, parts: Object.freeze([...source.parts, attachment]) });
+}
+
+function durableRow(role: "user" | "assistant", turnId: string, parts: readonly MessagePart[]): RetryPromptRow {
+  return Object.freeze({ role, turnId, parts });
+}
+
+function durableImageRequestParts(): readonly MessagePart[] {
+  const event: DurableEvent = {
+    version: 1,
+    eventId: "event-1",
+    sessionId: "session-1",
+    turnId: "turn-1",
+    sequence: 1,
+    type: "turn.requested",
+    payload: {
+      content: "What is in this screenshot?",
+      images: [{
+        type: "image",
+        name: "screenshot.png",
+        mediaType: "image/png",
+        dataUrl: "data:image/png;base64,AAAA",
+        sizeBytes: 3,
+      }],
+    },
+    recordedAt: "2026-07-18T00:00:01.000Z",
+    previousDigest: "genesis",
+    digest: "digest-1",
+  };
+  return messagePartsFromDurableEvents([event], { includeTurnRequest: true });
 }
 
 function row(role: "user" | "assistant", turnId: string, content: string): RetryPromptRow {

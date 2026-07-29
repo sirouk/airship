@@ -77,7 +77,7 @@ export function ProfileGovernanceStrip({ cells, editors, onFollowLink, class: cl
         })}
       </div>
       {open && openEditor !== undefined ? (
-        <div class="profile-governs__editor" id={panelId} aria-label={open.label}>
+        <div class="profile-governs__editor" id={panelId} role="group" aria-label={open.label}>
           {openEditor}
         </div>
       ) : null}

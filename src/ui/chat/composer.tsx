@@ -1,6 +1,7 @@
 import { useEffect, useState } from "preact/hooks";
 import { Popover } from "../popover";
 import { Seal, type SealState } from "../seal";
+import { COMPOSER_ATTACHMENT_LIMIT } from "./composer-state";
 
 /**
  * The parts of the composer that are decisions rather than plumbing.
@@ -178,6 +179,49 @@ export function ComposerPostureChip({
       {blockedReason ? <p class="composer-posture__blocked" role="status">{blockedReason}</p> : null}
     </Popover>
   );
+}
+
+/** Why an attachment-only composer refuses Enter, in one sentence, everywhere. */
+export const COMPOSER_ATTACHMENT_NEEDS_TEXT =
+  "Add a message to send with this attachment. The image travels inside the encrypted request beside your prompt, so a turn needs both.";
+
+/** What this page runtime can currently do with an image the composer holds. */
+export type ComposerVisionCapability = "supported" | "model-lacks-vision" | "disconnected";
+
+/**
+ * What just happened to the files someone dropped on the composer.
+ *
+ * Every refusal is counted, including the one that used to be silent. The
+ * attachment cap was treated as a non-event: only the MIME rejection produced
+ * a sentence, and the success clause was derived from the *admitted* count, so
+ * dropping a ninth image onto eight pending ones announced "0 images are ready
+ * for inline encrypted vision inference" — a success sentence, with a zero in
+ * it, for a file that was thrown away. A refusal that cannot be read is
+ * indistinguishable from a bug, so the counts are stated and the success
+ * clause only appears when something was actually admitted.
+ */
+export function composerAttachmentNotice(input: Readonly<{
+  added: number;
+  rejected: number;
+  overflow: number;
+  capability: ComposerVisionCapability;
+}>): string | undefined {
+  const refusals: string[] = [];
+  if (input.rejected > 0) {
+    refusals.push(`${input.rejected} non-image attachment${input.rejected === 1 ? " was" : "s were"} not added — this milestone sends bounded image inputs`);
+  }
+  if (input.overflow > 0) {
+    refusals.push(`${input.overflow} image${input.overflow === 1 ? " was" : "s were"} not added: the composer holds at most ${COMPOSER_ATTACHMENT_LIMIT} attachments`);
+  }
+  const admitted = input.added > 0
+    ? input.capability === "supported"
+      ? `${input.added} image${input.added === 1 ? " is" : "s are"} ready for inline encrypted vision inference.`
+      : input.capability === "model-lacks-vision"
+        ? "Choose a model whose provider or local-discovery record explicitly includes image input before sending."
+        : "Connect a vision-capable inference model before sending this image."
+    : undefined;
+  if (refusals.length === 0) return admitted;
+  return `${refusals.join("; ")}.${admitted ? ` ${admitted}` : ""}`;
 }
 
 export type ComposerKeyhint = Readonly<{ key: string; action: string }>;

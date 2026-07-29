@@ -78,12 +78,20 @@ export type MobileMoreRouteEntry = Readonly<{
   parent?: CanonicalDestinationId;
 }>;
 
+/**
+ * An overlay is not an address.
+ *
+ * This entry used to carry `hash: "#settings"`, a URL contract no router has
+ * ever implemented: `navigationViewFromHash` does not know the token, so
+ * `#settings` fell through to Chat and the shell silently rewrote the location
+ * of anyone who followed it. Overlays open over whatever route is current and
+ * have no restorable address, so the field is gone rather than half-honoured.
+ */
 export type NavigationOverlayEntry = Readonly<{
   id: "settings";
   label: "Settings";
   kind: "overlay";
   overlay: "settings";
-  hash: "#settings";
 }>;
 
 export type MobileMoreEntry = MobileMoreRouteEntry | NavigationOverlayEntry;
@@ -111,14 +119,25 @@ const navigationViews = new Set<NavigationView>(Object.keys(VIEW_HASHES) as Navi
 
 export const CANONICAL_DESTINATIONS: readonly CanonicalDestination[] = Object.freeze([
   destination("chat", "Chat", "Work", "session", [
-    nestedDestination("sessions", "All conversations", "global"),
+    // Profile, not global: the route lists the *active profile's* conversations,
+    // and the palette prints this tag verbatim as the entry's description.
+    nestedDestination("sessions", "All conversations", "profile"),
   ]),
   destination("workspace", "Workspace", "Work", "workspace", [
     nestedDestination("editor", "Editor", "workspace"),
     nestedDestination("terminal", "Terminal", "workspace"),
   ]),
   destination("memory", "Memory", "Work", "session"),
-  destination("profiles", "Profiles", "Agent", "profile"),
+  // Skills and Capabilities were legal views with legal hashes and a legal
+  // parent, but they were absent from this table — which is the single source
+  // the rail, the command palette and the jump chords all derive from. The
+  // effect on desktop was that neither had any entry point at all outside the
+  // profile hub's own tab strip: not searchable, not deep-linkable from within
+  // the product, reachable only by typing the URL.
+  destination("profiles", "Profiles", "Agent", "profile", [
+    nestedDestination("skills", "Skills", "profile"),
+    nestedDestination("capabilities", "Capabilities", "profile"),
+  ]),
   destination("proof", "Proof", "Trust", "session"),
   destination("vault", "Vault", "Trust", "global"),
   destination("access", "Connection", "Trust", "global", [
@@ -264,7 +283,6 @@ export const SETTINGS_OVERLAY_ENTRY: NavigationOverlayEntry = Object.freeze({
   label: "Settings",
   kind: "overlay",
   overlay: "settings",
-  hash: "#settings",
 });
 
 export const MOBILE_MORE_ENTRIES: readonly MobileMoreEntry[] = Object.freeze([

@@ -38,11 +38,22 @@ function stack(items: readonly ClaimStackItem[]): ClaimStackModel {
 const STATUSES: readonly ProofStatus[] = ["verified", "partial", "unavailable", "failed", "expired"];
 
 describe("turnEvidenceCounts", () => {
-  it("sorts every status into exactly one of the four buckets", () => {
+  it("sorts every status into exactly one of the five buckets", () => {
     const counts = turnEvidenceCounts(STATUSES.map((status) => item({ status })));
 
-    expect(counts).toEqual({ verified: 1, asserted: 1, noEvidence: 1, failed: 2, total: 5 });
-    expect(counts.verified + counts.asserted + counts.noEvidence + counts.failed).toBe(counts.total);
+    expect(counts).toEqual({ verified: 1, asserted: 1, noEvidence: 1, failed: 1, expired: 1, total: 5 });
+    expect(counts.verified + counts.asserted + counts.noEvidence + counts.failed + counts.expired).toBe(counts.total);
+  });
+
+  it("never files an expired claim under failed", () => {
+    // The measured defect: `ProofStatus` has five members and this reducer had
+    // four buckets, so the Proof summary tab printed "Failed: 1" for a claim
+    // nothing had found to be false, while the Attestation tab called the same
+    // claim a stale observation.
+    const counts = turnEvidenceCounts([item({ status: "expired" })]);
+
+    expect(counts.expired).toBe(1);
+    expect(counts.failed).toBe(0);
   });
 });
 
@@ -93,6 +104,21 @@ describe("turnEvidenceVerdict", () => {
 
     expect(verdict.state).toBe("failed");
     expect(verdict.line).toBe(TURN_EVIDENCE_COPY.failed.line);
+  });
+
+  it("still fails closed on expiry now that expiry has its own count", () => {
+    const verdict = turnEvidenceVerdict({
+      stack: stack([item({ status: "verified" }), item({ status: "expired" })]),
+      hasReceipt: true,
+    });
+
+    // Separating the bucket must not soften the verdict: the copy already says
+    // "failed or expired", so the hero is unchanged and only the count a reader
+    // is shown stops claiming a check was run and failed.
+    expect(verdict.state).toBe("failed");
+    expect(verdict.line).toBe(TURN_EVIDENCE_COPY.failed.line);
+    expect(verdict.counts.expired).toBe(1);
+    expect(verdict.counts.failed).toBe(0);
   });
 
   it("reports both ceilings separately, and only when one actually moved a claim", () => {

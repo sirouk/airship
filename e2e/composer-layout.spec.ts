@@ -38,7 +38,7 @@ async function readComposerGeometry(page: Page): Promise<ComposerGeometry> {
      * still fails because the value it settles on is the one compared.
      */
     const measured = [".composer", '[aria-label="Message Airship"]',
-      '[aria-label="Conversation approval policy"]', ".composer-attach", ".composer-footer"];
+      '.composer-approval-select .menu-select-trigger', ".composer-attach", ".composer-footer"];
     const geometry = () => measured.map((selector) => {
       const rect = document.querySelector(selector)?.getBoundingClientRect();
       return rect ? `${rect.x},${rect.y},${rect.width},${rect.height}` : "-";
@@ -69,7 +69,10 @@ async function readComposerGeometry(page: Page): Promise<ComposerGeometry> {
     return {
       composer: snapshot(document.querySelector(".composer")!),
       textarea: snapshot(document.querySelector('[aria-label="Message Airship"]')!),
-      approval: snapshot(document.querySelector('[aria-label="Conversation approval policy"]')!),
+      // Anchored on the class, not the accessible name: the name states the
+      // control's scope in prose and is free to be reworded, and an exact
+      // attribute selector silently returns null when it is.
+      approval: snapshot(document.querySelector(".composer-approval-select .menu-select-trigger")!),
       attach: snapshot(document.querySelector(".composer-attach")!),
       footer: snapshot(document.querySelector(".composer-footer")!),
     };
@@ -169,7 +172,7 @@ test("composer growth is content-driven, bounded, and keeps approval disclosure 
   await expect(menu).toBeVisible();
   await expect(menu.getByRole("option", { name: "Ask First", exact: true })).toContainText("Prompt before effectful actions.");
   await expect(menu.getByRole("option", { name: "Auto Approve", exact: true })).toContainText("Ask the active model to review each effect; prompt when uncertain.");
-  await expect(menu.getByRole("option", { name: "Full Access", exact: true })).toContainText("Allow effects inside the bounded browser workspace without prompting.");
+  await expect(menu.getByRole("option", { name: "Full Access", exact: true })).toContainText("Allow every effect without prompting, including requests to any HTTPS origin.");
   const disclosed = await readComposerGeometry(page);
   expectNear(disclosed.composer.height, multiline.composer.height, "open policy disclosure: composer height");
   expectApprovalAnchored(disclosed, multiline, "open policy disclosure");
@@ -248,8 +251,8 @@ test("the approval policy opens inside the phone viewport, reads whole, and take
     // here — and never by shedding the credential posture, which is a caveat
     // and stays on screen at every width the product supports.
     await expect(page.getByLabel("Attach image"), `${at}: attach control still names itself`).toHaveCount(1);
-    await expect(page.locator(".composer-tools > span"), `${at}: credential posture stays visible`).toBeVisible();
-    const caveat = await page.locator(".composer-tools > span").boundingBox();
+    await expect(page.locator(".composer-posture"), `${at}: credential posture stays visible`).toBeVisible();
+    const caveat = await page.locator(".composer-posture").boundingBox();
     expect(caveat!.height, `${at}: credential posture is rendered, not clipped`).toBeGreaterThanOrEqual(12);
 
     await trigger.click();

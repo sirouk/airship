@@ -5,6 +5,7 @@ import "@xterm/xterm/css/xterm.css";
 import type { BrowserGitClient } from "../git/client";
 import type { TerminalGitReview } from "../git/terminal-commands";
 import type { ClientEncryptedWorkspacePort, WorkspacePort } from "../workspace/contracts";
+import { nextTabId } from "./tabs";
 import { getBrowserTerminalManager, type BrowserTerminalManager } from "../terminal/manager";
 import { WEB_CONTAINER_TERMINAL_RUNTIME, type TerminalSessionSnapshot } from "../terminal/contracts";
 import { durabilityLabel, type DurabilityState } from "./durability-indicator";
@@ -51,6 +52,45 @@ function writeTerminalSetupOpen(open: boolean): void {
   } catch { /* Page-memory only. The band still works for this page's lifetime. */ }
 }
 
+/**
+ * The boundary the Profile switch actually enforces, said plainly.
+ *
+ * Only the workspace mount is Profile-owned: handoff unmounts and rebuilds it.
+ * The rest of the WebContainer filesystem is booted once per page and shared by
+ * every Profile that uses the terminal in that page, so anything a shell writes
+ * outside the mount survives the switch. Stated here rather than assumed,
+ * because the alternative — a container teardown and reboot per handoff — is a
+ * multi-second cost that has not been taken.
+ */
+export const TERMINAL_CONTAINER_SCOPE_NOTICE = "Only the workspace mount is Profile-owned. The rest of this WebContainer's filesystem is page-shared: it is booted once per page, so anything a shell writes outside the mount is visible to every Profile that uses the terminal in this page and survives a Profile switch.";
+
+export type TerminalEmulatorWrite =
+  | Readonly<{ kind: "append"; text: string }>
+  | Readonly<{ kind: "redraw"; text: string }>
+  | Readonly<{ kind: "none" }>;
+
+/**
+ * What the emulator has to be told, given what it last rendered.
+ *
+ * The manager publishes a *sliding* 256 KiB tail. Past that cap the buffer is
+ * no longer append-only, so a view that reconstructed the delta by prefix
+ * matching fell through to clear-and-rewrite on every single chunk — 256 KiB
+ * of writes per keystroke of output. The sequence removes the inference: one
+ * step forward is exactly `appendedOutput`, and only a discontinuity (first
+ * mount, resubscribe, a reconstructed session) is worth a full redraw.
+ * xterm's own 5,000-line scrollback owns history from there.
+ */
+export function terminalEmulatorWrite(
+  rendered: number | undefined,
+  next: Pick<TerminalSessionSnapshot, "outputSequence" | "appendedOutput" | "bufferedOutput">,
+): TerminalEmulatorWrite {
+  if (rendered === next.outputSequence) return Object.freeze({ kind: "none" });
+  if (rendered !== undefined && next.outputSequence === rendered + 1 && next.appendedOutput) {
+    return Object.freeze({ kind: "append", text: next.appendedOutput });
+  }
+  return Object.freeze({ kind: "redraw", text: next.bufferedOutput });
+}
+
 /** The one status vocabulary, fed by the terminal's own lifecycle. */
 export function terminalSealState(status: TerminalSessionSnapshot["status"]): SealState {
   if (status === "running") return "verified";
@@ -91,6 +131,20 @@ export function terminalPersistenceNotice(durability: TerminalDurability, profil
   return `${scope} tab metadata, bounded transcript, input history, and lineage are retained through the active encrypted workspace. Processes still restart after reload.`;
 }
 
+/**
+ * What the footer may claim, given what durable writes have actually done.
+ *
+ * A persistence failure was previously swallowed while this line kept promising
+ * the lineage was retained, so the two could never disagree. An observed
+ * failure now replaces the claim outright, and its return is the claim's only
+ * licence to come back.
+ */
+export function terminalFooterNotice(notice: string, persistenceFailure?: string): string {
+  return persistenceFailure
+    ? `Terminal metadata, transcript and lineage are not reaching storage: ${persistenceFailure} Nothing shown here is retained until this clears.`
+    : notice;
+}
+
 /** Infer only what the workspace port proves. App should pass its richer durability state. */
 export function inferredTerminalDurability(workspace: WorkspacePort): TerminalDurability {
   const encryptionBoundary = (workspace as Partial<ClientEncryptedWorkspacePort>).encryptionBoundary;
@@ -128,7 +182,9 @@ function ProfileScopedTerminalView({ workspace, onWorkspaceChanged, threadId, pr
   const [renamingId, setRenamingId] = useState<string>();
   const [renameValue, setRenameValue] = useState("");
   const [setupOpen, setSetupOpen] = useState(() => readTerminalSetupOpen(globalThis.localStorage));
+  const [persistenceFailure, setPersistenceFailure] = useState<string>();
   const cancelRename = useRef(false);
+  const strip = useRef<HTMLDivElement>(null);
   const workspaceChanged = useRef(onWorkspaceChanged);
   workspaceChanged.current = onWorkspaceChanged;
   const openRequestHandled = useRef(onOpenRequestHandled);
@@ -176,6 +232,11 @@ function ProfileScopedTerminalView({ workspace, onWorkspaceChanged, threadId, pr
     void workspaceChanged.current?.();
   }), [manager]);
 
+  // The retention claim is only allowed to come from writes that landed. While
+  // metadata is failing to persist, the footer says so instead of repeating the
+  // declared durability tier back at the user.
+  useEffect(() => manager.subscribePersistence(setPersistenceFailure), [manager]);
+
   const active = sessions.find(({ id }) => id === activeId);
   const createTab = () => {
     const created = manager.create({ ...(profileId ? { profileId } : {}), ...(threadId ? { threadId } : {}), cwd: workspaceRoot, origin: threadId ? { kind: "conversation" } : { kind: "terminal-route" } });
@@ -189,6 +250,21 @@ function ProfileScopedTerminalView({ workspace, onWorkspaceChanged, threadId, pr
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Workspace synchronization failed safely.");
     } finally { setSyncing(false); }
+  };
+  /**
+   * Selection follows focus, per the tablist pattern. Returns whether the key
+   * belonged to the strip, so a key it does not own — Tab above all — is left
+   * alone rather than turned into a keyboard trap.
+   */
+  const moveTab = (key: string): boolean => {
+    const next = nextTabId(sessions.map(({ id, name }) => ({ id, label: name })), activeId ?? "", key);
+    if (next === undefined) return false;
+    setActiveId(next);
+    for (const child of strip.current?.children ?? []) {
+      if (!(child instanceof HTMLElement) || child.dataset.tabId !== next) continue;
+      child.querySelector<HTMLButtonElement>('button[role="tab"]')?.focus();
+    }
+    return true;
   };
   const beginRename = (session: TerminalSessionSnapshot) => {
     cancelRename.current = false;
@@ -213,7 +289,15 @@ function ProfileScopedTerminalView({ workspace, onWorkspaceChanged, threadId, pr
   };
 
   return (
-    <section class={`terminal-route ${variant === "dock" ? "terminal-route--dock" : ""}`} aria-labelledby={variant === "dock" ? "workspace-terminal-dock-title" : "terminal-title"}>
+    <section
+      class={`terminal-route ${variant === "dock" ? "terminal-route--dock" : ""}`}
+      // A process room, not a document: the shell's 1160px prose measure left
+      // ~640px of empty gutter per side at 1920px while the transcript inside
+      // wrapped. `routes.css` reads this attribute; the dock variant is not a
+      // route child, so the declaration is simply inert there.
+      data-route-measure="wide"
+      aria-labelledby={variant === "dock" ? "workspace-terminal-dock-title" : "terminal-title"}
+    >
       {/* The 54px eyebrow-plus-serif-H1 block named a route the rail already
           shows as selected. The words survive: the eyebrow is the ⓘ panel's
           heading, and the notes below it are facts this route states nowhere
@@ -234,7 +318,10 @@ function ProfileScopedTerminalView({ workspace, onWorkspaceChanged, threadId, pr
           <p>{profileId ? `Owned by profile ${profileName ?? profileId}.` : "This app integration has not supplied a profile ID, so these are legacy unscoped tabs."} {threadId ? `Attached to conversation thread ${threadId}.` : "No conversation thread is attached to this route."}</p>
         </>}
         actions={<div class="terminal-route__actions">
-          <button type="button" onClick={() => void sync()} disabled={syncing || !sessions.some(({ status }) => status === "running" || status === "exited")}><Icon name="cloud" size={16} />{syncing ? "Reconciling…" : "Reconcile workspace"}</button>
+          {/* Enabled by the fact the manager actually holds — a mounted host
+              with a baseline — not by a session-status proxy for it. A failed
+              tab's mount is still reconcilable, and that was the work at risk. */}
+          <button type="button" onClick={() => void sync()} disabled={syncing || !manager.canReconcile()}><Icon name="cloud" size={16} />{syncing ? "Reconciling…" : "Reconcile workspace"}</button>
           <button type="button" onClick={createTab} disabled={sessions.length >= 8}><span aria-hidden="true">＋</span> New terminal</button>
         </div>}
       /> : <header class="terminal-dock__toolbar">
@@ -245,7 +332,7 @@ function ProfileScopedTerminalView({ workspace, onWorkspaceChanged, threadId, pr
           <span>{profileId ? `Profile ${profileName ?? compactId(profileId)}` : "Legacy unscoped"}</span>
         </div>
         <div class="terminal-dock__actions">
-          <button type="button" onClick={() => void sync()} disabled={syncing || !sessions.some(({ status }) => status === "running" || status === "exited")} aria-label="Reconcile terminal workspace"><Icon name="cloud" size={15} /><span>{syncing ? "Reconciling…" : "Reconcile"}</span></button>
+          <button type="button" onClick={() => void sync()} disabled={syncing || !manager.canReconcile()} aria-label="Reconcile terminal workspace"><Icon name="cloud" size={15} /><span>{syncing ? "Reconciling…" : "Reconcile"}</span></button>
           <button type="button" onClick={createTab} disabled={sessions.length >= 8} aria-label="New terminal"><span aria-hidden="true">＋</span><span>New</span></button>
           {onOpenFullView ? <button type="button" onClick={onOpenFullView} aria-label="Open full Terminal view"><span aria-hidden="true">↗</span><span>Full view</span></button> : null}
           {onCollapse ? <button type="button" onClick={onCollapse} aria-label="Collapse terminal dock"><span aria-hidden="true">⌄</span><span>Collapse</span></button> : null}
@@ -270,11 +357,27 @@ function ProfileScopedTerminalView({ workspace, onWorkspaceChanged, threadId, pr
         </summary>
         <div class="terminal-route__setup-body">
           <p>Real interactive Node processes run inside this page's WebContainer. This is not your device shell, host Bash, SSH, or a remote Airship backend. {effectiveDurability.detail ?? terminalPersistenceNotice(effectiveDurability, profileId)}</p>
+          {/* Stated where someone can act on it: the mount is the Profile
+              boundary, and the shell can reach past it. A Profile switch
+              unmounts the workspace projection, which is all this manager
+              owns — the WebContainer is booted once per page and cannot be
+              rebooted per Profile without a multi-second teardown. */}
+          <p>{TERMINAL_CONTAINER_SCOPE_NOTICE}</p>
         </div>
       </details> : null}
 
-      <div class="terminal-tabs" role="tablist" aria-label="Terminal tabs">
-        {sessions.map((session) => <div key={session.id} class="terminal-tab" role="presentation" data-active={session.id === activeId ? "true" : "false"}>
+      {/* `role="tab"` obliges the whole widget contract, not just the styling:
+          one tab in the tab order, ←/→/Home/End moving selection and focus.
+          The movement rule is `tabs.tsx`'s `nextTabId` rather than a second
+          copy of it — this strip cannot adopt `Tabs` itself because a tab
+          being renamed is replaced by a text input, which `TabItem` has no
+          shape for. */}
+      <div ref={strip} class="terminal-tabs" role="tablist" aria-label="Terminal tabs" onKeyDown={(event) => {
+        // The rename input lives inside the strip and owns its own arrows.
+        if (event.target instanceof HTMLInputElement) return;
+        if (moveTab(event.key)) event.preventDefault();
+      }}>
+        {sessions.map((session) => <div key={session.id} class="terminal-tab" role="presentation" data-tab-id={session.id} data-active={session.id === activeId ? "true" : "false"}>
           {renamingId === session.id ? <input
             class="terminal-tab__name-input"
             aria-label={`Rename ${session.name}`}
@@ -287,7 +390,16 @@ function ProfileScopedTerminalView({ workspace, onWorkspaceChanged, threadId, pr
               if (event.key === "Enter") event.currentTarget.blur();
               if (event.key === "Escape") { cancelRename.current = true; event.currentTarget.blur(); }
             }}
-          /> : <button type="button" role="tab" aria-selected={session.id === activeId} onClick={() => setActiveId(session.id)} onDblClick={() => beginRename(session)}>
+          /> : <button
+            type="button"
+            role="tab"
+            id={terminalTabId(session.id)}
+            aria-selected={session.id === activeId}
+            aria-controls={terminalPanelId(session.id)}
+            tabIndex={session.id === activeId ? 0 : -1}
+            onClick={() => setActiveId(session.id)}
+            onDblClick={() => beginRename(session)}
+          >
             {/* The status word was printed twice within 90px — here and again
                 in the panel bar below. It is one seal now, and the word it
                 dropped is the seal's accessible name. */}
@@ -323,7 +435,12 @@ function ProfileScopedTerminalView({ workspace, onWorkspaceChanged, threadId, pr
       /> : (
         <div class="terminal-empty"><Icon name="terminal" /><h2>No terminal tab</h2><p>Create a tab to cold-start an isolated browser runtime.</p><button type="button" onClick={createTab}>New terminal</button></div>
       )}
-      <footer class="terminal-route__footer" role="status"><Icon name="proof" size={15} /><span>{notice}</span></footer>
+      <footer class="terminal-route__footer" role="status">
+        {persistenceFailure
+          ? <Seal state="attention" label="Terminal metadata is not reaching storage" density="dot" size={15} />
+          : <Icon name="proof" size={15} />}
+        <span>{terminalFooterNotice(notice, persistenceFailure)}</span>
+      </footer>
     </section>
   );
 }
@@ -339,16 +456,17 @@ function TerminalPanel({ manager, session: initial, onNotice, durability, profil
   const [session, setSession] = useState(initial);
   const host = useRef<HTMLDivElement>(null);
   const terminal = useRef<Terminal>();
-  const renderedOutput = useRef("");
+  const renderedSequence = useRef<number>();
   const chromeSignature = useRef(sessionChromeSignature(initial));
 
   useEffect(() => manager.subscribe(initial.id, (next) => {
     host.current?.setAttribute("data-output-chars", String(next.bufferedOutput.length));
     const emulator = terminal.current;
-    if (emulator && next.bufferedOutput !== renderedOutput.current) {
-      if (next.bufferedOutput.startsWith(renderedOutput.current)) emulator.write(next.bufferedOutput.slice(renderedOutput.current.length));
-      else { emulator.clear(); emulator.write(next.bufferedOutput); }
-      renderedOutput.current = next.bufferedOutput;
+    if (emulator) {
+      const action = terminalEmulatorWrite(renderedSequence.current, next);
+      if (action.kind === "redraw") emulator.clear();
+      if (action.kind !== "none") emulator.write(action.text);
+      renderedSequence.current = next.outputSequence;
     }
     const signature = sessionChromeSignature(next);
     if (signature !== chromeSignature.current) {
@@ -376,10 +494,9 @@ function TerminalPanel({ manager, session: initial, onNotice, durability, profil
     emulator.loadAddon(fitter);
     emulator.open(host.current);
     terminal.current = emulator;
-    if (initial.bufferedOutput) {
-      emulator.write(initial.bufferedOutput);
-      renderedOutput.current = initial.bufferedOutput;
-    }
+    // One full write on mount; every later chunk arrives as its own append.
+    if (initial.bufferedOutput) emulator.write(initial.bufferedOutput);
+    renderedSequence.current = initial.outputSequence;
     const sendInput = (data: string) => {
       if (!data) return;
       void manager.write(initial.id, data).catch((error) => onNotice(error instanceof Error ? error.message : "Terminal input failed safely."));
@@ -449,7 +566,7 @@ function TerminalPanel({ manager, session: initial, onNotice, durability, profil
     });
   };
 
-  return <div class="terminal-panel">
+  return <div class="terminal-panel" id={terminalPanelId(session.id)} role="tabpanel" aria-labelledby={terminalTabId(session.id)}>
     <div class="terminal-panel__bar">
       {/* The seal is hidden from the accessible tree because the word it
           carries is the `<strong>` immediately beside it — shape and word are
@@ -465,6 +582,7 @@ function TerminalPanel({ manager, session: initial, onNotice, durability, profil
     <div
       class="terminal-emulator"
       ref={host}
+      role="group"
       aria-label={`${session.name} browser terminal`}
       data-output-chars={session.bufferedOutput.length}
     />
@@ -508,6 +626,15 @@ function statusLabel(session: TerminalSessionSnapshot): string {
 }
 
 function compactId(value: string): string { return value.length > 14 ? `${value.slice(0, 7)}…${value.slice(-5)}` : value; }
+
+/**
+ * The tab/panel id pair. Only the selected session's panel is in the DOM — a
+ * terminal panel owns a live PTY viewport, so the unselected ones are not
+ * rendered hidden — which is why `aria-labelledby` on the panel points back at
+ * the tab that is guaranteed to exist.
+ */
+function terminalPanelId(sessionId: string): string { return `terminal-panel-${sessionId}`; }
+function terminalTabId(sessionId: string): string { return `terminal-tab-${sessionId}`; }
 
 function terminalDurabilityLabel(durability: TerminalDurability): string {
   return durability.label ?? durabilityLabel(durability.state);

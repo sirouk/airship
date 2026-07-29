@@ -59,6 +59,21 @@ export function workbenchIdentity(hash: string): WorkbenchIdentity {
 }
 
 /**
+ * Which pane an arrival at a destination lands in, or `undefined` when the
+ * arrival must leave the pane exactly where the user left it.
+ *
+ * The one exception is Editor with nothing open: the phone's pane switch
+ * disables that tab at zero documents, so honouring the request would strand
+ * the user on a disabled pane with no visible way back to the tree.
+ */
+export function workbenchArrivalPane(
+  opensPane: WorkbenchPane,
+  openDocuments: number,
+): WorkbenchPane | undefined {
+  return opensPane === "editor" && openDocuments === 0 ? undefined : opensPane;
+}
+
+/**
  * The parent directory each open tab needs in order to be distinguishable.
  *
  * Two tabs both reading `index.ts` are the same word twice; the qualifier is
@@ -330,6 +345,44 @@ export function workspaceNameError(name: string): string | undefined {
   if (trimmed.length === 0) return "Enter a name.";
   if (trimmed.includes("/")) return "A folder name is one segment — it cannot contain “/”.";
   if (trimmed === "." || trimmed === "..") return "“.” and “..” are not names this workspace can address.";
+  return workspaceSegmentError(trimmed);
+}
+
+/**
+ * Why a proposed *path* cannot be used, or `undefined`.
+ *
+ * The New file field is documented as "Path relative to this folder", so a
+ * slash is the one rule `workspaceNameError` enforces that does not apply here.
+ * Every other rejection `normalizeWorkspacePath` would raise is stated beside
+ * the field instead of thrown after the dialog has already closed — the shipped
+ * failure was `..` in New file producing a silent no-op with no notice at all.
+ */
+export function workspacePathError(value: string): string | undefined {
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return "Enter a name.";
+  const segments = trimmed.split("/").filter((segment, index, all) => !(segment === "" && index === all.length - 1));
+  if (segments.some((segment) => segment.trim().length === 0)) return "A path cannot contain an empty folder name.";
+  if (segments.some((segment) => segment === "." || segment === "..")) {
+    return "“.” and “..” are not names this workspace can address.";
+  }
+  for (const segment of segments) {
+    const error = workspaceSegmentError(segment);
+    if (error) return error;
+  }
+  return undefined;
+}
+
+/**
+ * The rules a single path segment shares with every other Airship path check.
+ *
+ * `\` is not a separator here, so a name carrying one would become a literal
+ * backslash inside a filename that Git, the OS filesystem projection and the
+ * repository importer each read differently. Control characters are refused for
+ * the same reason `resolveWorkspacePathFromGit` refuses them.
+ */
+function workspaceSegmentError(segment: string): string | undefined {
+  if (segment.includes("\\")) return "A workspace name cannot contain “\\”. Use “/” to name folders.";
+  if ([...segment].some((character) => { const code = character.codePointAt(0) ?? 0; return code < 0x20 || code === 0x7f; })) return "A workspace name cannot contain control characters.";
   return undefined;
 }
 
@@ -354,13 +407,30 @@ export function defaultEditorWrap(width: number | undefined): boolean {
  * soft-wrapped buffer label visual rows, not file lines, so a wrapped editor
  * shows no gutter — and then has to say that rather than letting the numbers
  * disappear silently, which is what the ≤760px stylesheet used to do.
+ *
+ * Wrap is not the only suppressor. `workspaceGutterLines` withholds the gutter
+ * entirely past `WORKSPACE_GUTTER_LINE_LIMIT`, and this note was written
+ * against wrap alone — so on an unwrapped 6,000-line file the numbers vanished
+ * with the strip still claiming the surface unchanged, which is the exact
+ * silence the sentence exists to prevent. `gutter` is therefore the third
+ * input: whether the gutter is actually on screen.
  */
-export function editorSurfaceNote(input: Readonly<{ wrap: boolean; binary: boolean }>): string {
+export function editorSurfaceNote(input: Readonly<{ wrap: boolean; binary: boolean; gutter?: boolean }>): string {
   if (input.binary) return "Binary · read-only · client-side";
-  return input.wrap
-    ? "UTF-8 · LF · client-side · wrapped, no line numbers"
+  if (input.wrap) return "UTF-8 · LF · client-side · wrapped, no line numbers";
+  return input.gutter === false
+    ? `UTF-8 · LF · client-side · no line numbers above ${WORKSPACE_GUTTER_LINE_LIMIT.toLocaleString("en-US")} lines`
     : "UTF-8 · LF · client-side";
 }
+
+/**
+ * A line gutter is a rendering cost proportional to the file, so it is only
+ * offered while that cost stays trivial. Past the cap the editor keeps working
+ * without numbers rather than doubling the DOM on a very large buffer — and
+ * `editorSurfaceNote` states the cap by name, so the bound and the sentence
+ * that describes it cannot drift.
+ */
+export const WORKSPACE_GUTTER_LINE_LIMIT = 5_000;
 
 export type WorkbenchDialogKind =
   | "create"

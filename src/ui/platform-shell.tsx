@@ -15,6 +15,7 @@ import {
   setTranscriptOperationsMode,
   type TranscriptOperationsMode,
 } from "./chat/transcript-operations";
+import { isNearLastRealCard, scrollToLastRealCard } from "./chat/transcript-anchor";
 
 export type PaletteEntry = Readonly<{
   id: string;
@@ -240,16 +241,39 @@ export type PreferenceOverrides = Readonly<{
 
 export type VaultBackend = PreferenceOverrides["vaultBackend"];
 
+/**
+ * Whether this deployment can actually reach a destination.
+ *
+ * `location` is optional and its absence means "not asked": the persisted-value
+ * sanitizer deliberately calls without it, because a stored choice must not be
+ * silently rewritten by a deployment change. The render path passes it, so the
+ * row can grey a destination and say why instead of deleting it.
+ */
 function availableVaultBackend(
   value: unknown,
   googleClientId?: string | null,
+  location?: Pick<Location, "hostname">,
 ): VaultBackend | undefined {
   if (value === "google-drive") {
     return isDeployableGoogleOAuthClientId(googleClientId) ? value : undefined;
   }
-  return value === "local-device" || value === "local-lab" || value === "ephemeral"
-    ? value
-    : undefined;
+  if (value === "local-lab") {
+    return location && !isLoopbackVaultOrigin(location) ? undefined : value;
+  }
+  return value === "local-device" || value === "ephemeral" ? value : undefined;
+}
+
+/**
+ * The same origin test the local-lab auto-connect in `app.tsx` applies before
+ * it will talk to the baked MinIO endpoint. It is restated rather than imported
+ * because `app.tsx` imports this module: taking the dependency the other way
+ * would close an evaluation cycle through a 7,000-line shell module. The two
+ * are pinned together by `platform-shell.test.ts`, which asserts the same four
+ * loopback spellings `local-lab-namespace.test.ts` asserts of the original.
+ */
+function isLoopbackVaultOrigin(location: Pick<Location, "hostname">): boolean {
+  const hostname = location.hostname.trim().toLocaleLowerCase();
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname === "[::1]";
 }
 
 export function resolveDefaultVaultBackend(
@@ -316,6 +340,61 @@ export function durabilityOptionLabel(backend: VaultBackend, adoption: Durabilit
  * `Tool steps` already gets a sentence like this. This row needs one more,
  * because it is the only value in the dialog that is a claim about the world.
  */
+export type DurabilityOption = Readonly<{
+  value: VaultBackend;
+  label: string;
+  description: string;
+  disabled?: boolean;
+}>;
+
+/**
+ * Every destination, with the unreachable ones greyed and explained.
+ *
+ * Availability used to be a validation step applied to *persisted input* only,
+ * while the option list was derived from the presentation table — which
+ * describes what each destination is, not whether this deployment can reach
+ * it. So the row offered Google Drive on a build with no client ID and the
+ * MinIO lab on a public origin, and choosing either produced a preference the
+ * shell then had to quietly correct.
+ *
+ * The list is not filtered: dropping a row would rewrite the control's contents
+ * on a deployment change, so a person who had chosen a destination would find
+ * their selection gone with nothing said. Greyed, with the reason as the
+ * option's own description, states the same fact and keeps the choice legible.
+ */
+export function durabilityOptions(input: Readonly<{
+  selected: VaultBackend;
+  adoption: DurabilityAdoption;
+  /** Absent means the host reported no vault state; see `durabilityOptionLabel`. */
+  vaultAdopted?: boolean;
+  googleClientId?: string | null;
+  location?: Pick<Location, "hostname">;
+}>): readonly DurabilityOption[] {
+  return Object.freeze(VAULT_BACKENDS.map((backend) => {
+    const reason = vaultBackendUnavailableReason(backend, input.googleClientId, input.location);
+    const adoption = backend === input.selected
+      ? input.adoption
+      : input.vaultAdopted === undefined ? undefined : "not-connected";
+    return Object.freeze({
+      value: backend,
+      label: durabilityOptionLabel(backend, adoption),
+      description: reason ?? DURABILITY[backend][1],
+      ...(reason ? { disabled: true } : {}),
+    });
+  }));
+}
+
+/** Why this deployment cannot reach a destination, in the words the row prints. */
+export function vaultBackendUnavailableReason(
+  backend: VaultBackend,
+  googleClientId?: string | null,
+  location?: Pick<Location, "hostname">,
+): string | undefined {
+  if (availableVaultBackend(backend, googleClientId, location)) return undefined;
+  if (backend === "google-drive") return "Unavailable: this build has no Google OAuth client ID, so Drive authorization cannot be opened.";
+  return "Unavailable: the baked MinIO lab is reachable only from a loopback origin. Configure an S3-compatible provider in Vault instead.";
+}
+
 export function durabilityRowNote(adoption: DurabilityAdoption): string {
   const purpose = "Where conversations survive a closed tab.";
   if (adoption === "connected") return `${purpose} Vault holds it, and can detach it.`;
@@ -364,12 +443,49 @@ export function savePreferenceOverrides(value: PreferenceOverrides, storage: Pic
   try { storage?.setItem(PREFERENCE_STORAGE_KEY, JSON.stringify(value)); } catch { /* Display preferences remain live for this page. */ }
 }
 
-export function applyPreferenceOverrides(value: PreferenceOverrides, root = document.documentElement): void {
+/**
+ * The presentation layer a theme establishes under the preference layer.
+ *
+ * `typeScale` carries one more value than the preference enum because a theme
+ * may ask for the compact ramp and no global preference can; the union here is
+ * the complete vocabulary of `data-type-scale`, and every member of it has a
+ * `--type-scale` block in tokens.css.
+ */
+export type PresentationDefaults = Readonly<{
+  typeScale: PreferenceOverrides["typeScale"] | "compact";
+  density: PreferenceOverrides["density"];
+  corners: PreferenceOverrides["corners"];
+  bodyFont: PreferenceOverrides["bodyFont"];
+}>;
+
+/** What the stylesheet renders when neither a theme nor a preference speaks. */
+export const STYLESHEET_PRESENTATION_DEFAULTS: PresentationDefaults = Object.freeze({
+  typeScale: DEFAULT_PREFERENCES.typeScale,
+  density: DEFAULT_PREFERENCES.density,
+  corners: DEFAULT_PREFERENCES.corners,
+  bodyFont: DEFAULT_PREFERENCES.bodyFont,
+});
+
+export function applyPreferenceOverrides(
+  value: PreferenceOverrides,
+  root = document.documentElement,
+  base: PresentationDefaults = STYLESHEET_PRESENTATION_DEFAULTS,
+): void {
   root.dataset.mode = value.mode;
-  root.dataset.typeScale = value.typeScale;
-  root.dataset.density = value.density;
-  root.dataset.corners = value.corners;
-  root.dataset.bodyFont = value.bodyFont;
+  /*
+   * An override layer, not a rewrite. Writing all four unconditionally is what
+   * made `ThemeManifest.typography` and `.layout` dead contract: the theme set
+   * them and this layer overwrote them with its own defaults one statement
+   * later, so no theme could ever change type, density, corners or body font.
+   * A preference the user has not moved off default now resolves to whatever
+   * the theme established. The resolved value is still always written, so
+   * returning a preference *to* default cannot strand the previous override on
+   * the element.
+   */
+  root.dataset.typeScale = value.typeScale === DEFAULT_PREFERENCES.typeScale ? base.typeScale : value.typeScale;
+  root.dataset.density = value.density === DEFAULT_PREFERENCES.density ? base.density : value.density;
+  root.dataset.corners = value.corners === DEFAULT_PREFERENCES.corners ? base.corners : value.corners;
+  root.dataset.bodyFont = value.bodyFont === DEFAULT_PREFERENCES.bodyFont ? base.bodyFont : value.bodyFont;
   root.style.colorScheme = value.mode;
   // The transcript renderer sits below the prop tree that carries preferences,
   // so applying one is also how it becomes live there.
@@ -448,11 +564,13 @@ export function PreferencesDialog({ open, value, onChange, onClose, profileAppro
           placement="up"
           value={value.vaultBackend}
           disabled={vaultProviderSwitching}
-          options={VAULT_BACKENDS.map((backend) => [
-            backend,
-            durabilityOptionLabel(backend, backend === value.vaultBackend ? adoption : vaultAdopted === undefined ? undefined : "not-connected"),
-            DURABILITY[backend][1],
-          ] as const)}
+          options={durabilityOptions({
+            selected: value.vaultBackend,
+            adoption,
+            ...(vaultAdopted === undefined ? {} : { vaultAdopted }),
+            googleClientId: import.meta.env.VITE_GOOGLE_CLIENT_ID,
+            ...(typeof window === "undefined" ? {} : { location: window.location }),
+          }).map((option) => [option.value, option.label, option.description, option.disabled ?? false] as const)}
           onChange={(next) => update("vaultBackend", next as PreferenceOverrides["vaultBackend"])}
         />
         <p>{durabilityRowNote(adoption)}</p>
@@ -477,8 +595,8 @@ export function approvalModeLabel(mode: ApprovalMode): string {
 }
 
 export function approvalModeDescription(mode: ApprovalMode): string {
-  if (mode === "auto-approve") return "A separate tool-free model inference must return a valid safe verdict; unsafe actions are denied and indeterminate reviews fall back to asking you.";
-  if (mode === "full-access") return "Actions run without prompts, but only through the same explicit browser tools, schemas, path confinement, and network boundaries.";
+  if (mode === "auto-approve") return "Each effectful action's parameters, including any script, command or URL, are sent to your active provider in a separate tool-free inference that must return a valid safe verdict; file-content payloads are withheld, unsafe actions are denied, and indeterminate reviews fall back to asking you.";
+  if (mode === "full-access") return "Actions run without prompts, through the same explicit browser tools and schemas: workspace writes stay path-confined, but network and identity effects may contact any HTTPS origin that permits it, with no prompt.";
   return "Read-only actions proceed automatically; write, network, execute, and identity actions require one-time approval.";
 }
 
@@ -493,8 +611,12 @@ export function approvalModeDescription(mode: ApprovalMode): string {
  * a row with the whole dialog beneath it and measures the room it has; a row in
  * the lower third opens upward instead, where the room actually is.
  */
-function PreferenceSelect({ label, value, options, onChange, disabled = false, placement = "down", leading }: Readonly<{ label: string; value: string; options: readonly (readonly [string, string] | readonly [string, string, string])[]; onChange(value: string): void; disabled?: boolean; placement?: "up" | "down"; leading?(value: string): ComponentChildren }>) {
-  return <div class="preference-row"><span>{label}</span><MenuSelect className="preference-menu" ariaLabel={label} value={value} disabled={disabled} placement={placement} options={options.map(([id, name, description]) => ({ value: id, label: name, ...(description ? { description } : {}) }))} leading={leading ? (option) => leading(option.value) : undefined} onChange={onChange} /></div>;
+function PreferenceSelect({ label, value, options, onChange, disabled = false, placement = "down", leading }: Readonly<{ label: string; value: string; options: readonly (readonly [string, string] | readonly [string, string, string] | readonly [string, string, string, boolean])[]; onChange(value: string): void; disabled?: boolean; placement?: "up" | "down"; leading?(value: string): ComponentChildren }>) {
+  // The fourth member is per-option availability, passed straight through:
+  // `MenuSelect` already refuses to choose a disabled option and already skips
+  // it in arrow/Home/End traversal, so a row that can state "unreachable, and
+  // here is why" needs no new interaction contract.
+  return <div class="preference-row"><span>{label}</span><MenuSelect className="preference-menu" ariaLabel={label} value={value} disabled={disabled} placement={placement} options={options.map(([id, name, description, optionDisabled]) => ({ value: id, label: name, ...(description ? { description } : {}), ...(optionDisabled ? { disabled: true } : {}) }))} leading={leading ? (option) => leading(option.value) : undefined} onChange={onChange} /></div>;
 }
 
 /**
@@ -634,6 +756,34 @@ export function useBeforeUnloadGuard(active: boolean): void {
   }, [active]);
 }
 
+/**
+ * Publishes the obscured height and re-anchors a transcript that was already
+ * riding its last card.
+ *
+ * The re-anchor belongs here because the soft keyboard moves the layout through
+ * CSS alone: `--visual-viewport-bottom` widens the transcript's bottom padding
+ * and lifts the composer, and no Preact state changes, so the transcript's own
+ * re-pin effect — which is keyed on messages and measured heights — never
+ * re-runs. Without this, opening the keyboard slides the newest card under the
+ * lifted composer and the person has to scroll to read the reply they just
+ * asked for.
+ */
+export function publishVisualViewportOffset(root: HTMLElement, obscured: number): void {
+  const published = `${Math.round(obscured)}px`;
+  // A visualViewport `scroll` fires for every pinch-pan, not just a keyboard
+  // change. Re-anchoring on those would yank the transcript up to the 64px
+  // threshold under the reader's own finger, so only an offset that actually
+  // moved is allowed to move the transcript.
+  if (root.style.getPropertyValue("--visual-viewport-bottom") === published) return;
+  const transcript = root.querySelector<HTMLElement>(".transcript");
+  // Ask before the offset lands. Once the padding grows, the container has
+  // already drifted away from the last card and the answer is always "no".
+  const anchored = transcript !== null && isNearLastRealCard(transcript);
+  root.style.setProperty("--visual-viewport-bottom", published);
+  root.dataset.keyboardOpen = obscured > 80 ? "true" : "false";
+  if (transcript && anchored) scrollToLastRealCard(transcript, "auto");
+}
+
 /** Publishes the obscured keyboard height without guessing on unsupported browsers. */
 export function useVisualViewport(root = typeof document === "undefined" ? undefined : document.documentElement): void {
   useEffect(() => {
@@ -643,9 +793,7 @@ export function useVisualViewport(root = typeof document === "undefined" ? undef
     const update = () => {
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => {
-        const obscured = Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop);
-        root.style.setProperty("--visual-viewport-bottom", `${Math.round(obscured)}px`);
-        root.dataset.keyboardOpen = obscured > 80 ? "true" : "false";
+        publishVisualViewportOffset(root, Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop));
       });
     };
     viewport.addEventListener("resize", update);

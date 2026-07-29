@@ -15,6 +15,7 @@ import { sha256 } from "../core/hash";
 import type { WorkspaceEntry, WorkspacePort } from "../workspace/contracts";
 import { HashEmbeddingProvider } from "../indexing/hash-embeddings";
 import {
+  readStoredEmbeddingMode,
   SwitchableEmbeddingProvider,
   type EmbeddingMode,
 } from "../indexing/semantic-browser-provider";
@@ -44,6 +45,7 @@ export class ClientContextRuntime {
   private scheduledResolve?: (value: ClientContextGeneration) => void;
   private scheduledReject?: (reason: unknown) => void;
   private observed?: WorkspacePort;
+  private derivedMode?: Promise<void>;
 
   constructor(workspace: WorkspacePort, options: ClientContextRuntimeOptions = {}) {
     const { debounceMs, ...engineOptions } = options;
@@ -70,6 +72,9 @@ export class ClientContextRuntime {
   /** Switch only after any active generation completes, then rebuild atomically. */
   async setEmbeddingMode(mode: EmbeddingMode): Promise<ClientContextGeneration> {
     if (!this.switchable) throw new Error("This context runtime uses an application-supplied embedding provider.");
+    // An explicit selection settles the question the probe exists to answer,
+    // including when it arrives before the first generation.
+    this.derivedMode = Promise.resolve();
     if (this.switchable.getMode() === mode && this.engine.getState().generation) return this.refreshNow();
     try { await this.refreshNow(); } catch { /* A failed old generation does not prevent a clean rebuild. */ }
     this.engine.cancelSearch(new DOMException("Embedding mode changed.", "AbortError"));
@@ -82,7 +87,46 @@ export class ClientContextRuntime {
   exportActiveGeneration(): ClientContextGenerationExport { return this.engine.exportActiveGeneration(); }
   subscribe(listener: (state: ClientContextEngineState) => void): () => void { return this.engine.subscribe(listener); }
   cancelSearch(reason?: unknown): void { this.engine.cancelSearch(reason); }
-  updateWorkspace(entries: readonly WorkspaceEntry[]): Promise<ClientContextGeneration> { return this.engine.updateWorkspace(entries); }
+  async updateWorkspace(entries: readonly WorkspaceEntry[]): Promise<ClientContextGeneration> {
+    await this.resolveDerivedEmbeddingMode();
+    return this.engine.updateWorkspace(entries);
+  }
+
+  /**
+   * Chooses the embedding mode from this device when nobody has chosen one.
+   *
+   * Mode selection used to read a single input — a recorded preference — and
+   * had no branch for "none recorded", so the capability probe's verdict was
+   * computed and then ignored. This joins the two, once per runtime, before the
+   * first generation is built. It never persists: the durable preference stays
+   * the person's alone, and an explicit selection still wins on the next load.
+   */
+  private resolveDerivedEmbeddingMode(): Promise<void> {
+    return this.derivedMode ??= (async () => {
+      const switchable = this.switchable;
+      if (!switchable || readStoredEmbeddingMode() !== undefined) return;
+      try {
+        const report = await getBrowserCapabilityRegistry().refresh();
+        // The probe is not instant, and a person may have chosen during it.
+        if (readStoredEmbeddingMode() !== undefined) return;
+        const scheduling = report.scheduling;
+        const backendAvailable = scheduling.preferredSemanticBackend === "webgpu"
+          ? report.webgpu.state === "available"
+          : report.wasm.state === "available";
+        // `heavyPackLoading` gates nothing on its own; activating semantic mode
+        // downloads the optional pack, so this is that consumer gating its own
+        // fetch on an offline or data-saving device.
+        if (!backendAvailable || scheduling.class === "constrained" || scheduling.heavyPackLoading === "manual") return;
+        switchable.applyDerivedMode("semantic");
+        // Proving the worker starts before a generation depends on it: a
+        // capability report is a prediction, and an unstarted worker would
+        // otherwise fail every candidate instead of degrading to bootstrap.
+        await switchable.embed(["airship semantic activation probe"]);
+      } catch {
+        switchable.applyDerivedMode("bootstrap");
+      }
+    })();
+  }
 
   /** Debounced refresh used after successful client-side mutations/imports. */
   scheduleRefresh(): Promise<ClientContextGeneration> {
@@ -221,6 +265,7 @@ export class ClientContextRuntime {
     this.scheduledReject = undefined;
     this.timer = undefined;
     try {
+      await this.resolveDerivedEmbeddingMode();
       const generation = await this.engine.updateWorkspace(await this.workspace.list("/workspace"));
       resolve?.(generation);
       return generation;

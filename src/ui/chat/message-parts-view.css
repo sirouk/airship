@@ -70,8 +70,12 @@ summary.op-strip__header::-webkit-details-marker { display: none; }
 .op[open] > .op__summary::after { content: "\2304"; }
 .op__summary:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
 .op__outcome { display: inline-flex; gap: var(--sp-1); align-items: center; white-space: nowrap; }
-.op[data-outcome="ran"] .op__outcome, .op[data-outcome="approved"] .op__outcome { color: var(--v-verified); }
+/* Only a completed step wears the completed colour: an unsettled one sharing
+   it made a granted permission look like a finished call. */
+.op[data-outcome="ran"] .op__outcome { color: var(--v-verified); }
 .op[data-outcome="running"] .op__outcome, .op[data-outcome="queued"] .op__outcome { color: var(--state-acting); }
+/* A step the turn ended underneath is neither acting nor settled. */
+.op[data-outcome="abandoned"] .op__outcome { color: var(--ink-muted); }
 /* The crossed seal beside it is red; the word is not. `--v-failed` is 4.24:1
    and §4.3 forbids it as text, where P2 already guarantees shape plus word. */
 .op[data-outcome="failed"] .op__outcome, .op[data-outcome="denied"] .op__outcome { color: var(--ink); }

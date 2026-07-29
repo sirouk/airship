@@ -35,6 +35,49 @@ export function archiveProfileRevision(catalog: ProfileCatalog, profileId: strin
   });
 }
 
+/**
+ * Union the shipped skills into a catalog written by an earlier release.
+ *
+ * The skill set is a build-time constant, and the catalog is durable state, so
+ * the two drift the moment a Vault is adopted: the persisted catalog wins for
+ * every later boot and the release's new skills are unreachable forever. There
+ * is no authoring path yet either, so the shipped set is the only source a
+ * skill can come from and a missing one is unambiguous absence, not a deletion
+ * the reader chose.
+ *
+ * The join is therefore deliberately narrow and one-directional:
+ *
+ * - a built-in absent from the persisted catalog is added;
+ * - a built-in whose content changed between releases is replaced, because a
+ *   built-in's text is release-owned and past conversations carry their own
+ *   pinned copy of the revision they ran under;
+ * - anything else in `persisted.skills` is left exactly as it is, including
+ *   skills this build has never heard of;
+ * - `globalSkills`, `skillModes`, profiles, themes and archive state are never
+ *   touched — an absent entry already reads as off/inherit downstream.
+ *
+ * Identity is returned when nothing changed, which is what lets callers skip a
+ * pointless generation bump and keep the digest chain still.
+ */
+export function reconcileBuiltInSkills(persisted: ProfileCatalog, builtIn: ProfileCatalog): ProfileCatalog {
+  const shippedById = new Map(builtIn.skills.map((skill) => [skill.skillId, skill]));
+  const persistedIds = new Set(persisted.skills.map((skill) => skill.skillId));
+  let changed = false;
+  const skills = persisted.skills.map((skill) => {
+    const shipped = shippedById.get(skill.skillId);
+    if (!shipped || shipped.digest === skill.digest) return skill;
+    changed = true;
+    return shipped;
+  });
+  for (const shipped of builtIn.skills) {
+    if (persistedIds.has(shipped.skillId)) continue;
+    skills.push(shipped);
+    changed = true;
+  }
+  if (!changed) return persisted;
+  return Object.freeze({ ...persisted, skills: Object.freeze(skills) });
+}
+
 export async function createBuiltInProfileCatalog(): Promise<ProfileCatalog> {
   const themes = await Promise.all(themeDrafts.map(createThemeManifest));
   const themeById = new Map(themes.map((theme) => [theme.themeId, theme]));
@@ -133,7 +176,11 @@ export async function createBuiltInProfileCatalog(): Promise<ProfileCatalog> {
       model: "airship/demo-v1",
       minimumPosture: "local",
       workspaceBinding: { kind: "active-workspace" },
-      memoryScope: profile.profileId === "research" ? "workspace" : "profile",
+      // Research shipped as `workspace`, which never widened anything: every
+      // memory reader narrows on the pinned profile ID, so it resolved exactly
+      // as `profile` did. Seeding the scope that is actually enforced keeps the
+      // built-in catalog from advertising a boundary the runtime does not have.
+      memoryScope: "profile",
       approvalMode: profile.profileId === "builder-systems" ? "auto-approve" : "ask-first",
       theme: { themeId: theme.themeId, digest: theme.digest },
       skillModes: profile.skillModes,

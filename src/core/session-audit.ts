@@ -1,3 +1,4 @@
+import { CONVERSATION_NAMED_EVENT_TYPE, HUMAN_INTENT_EVENT_TYPE } from "./contracts";
 import type {
   CanonicalMessage,
   JsonValue,
@@ -77,11 +78,30 @@ const KNOWN_EVENT_TYPES = new Set([
   "local.command.completed",
   "local.command.denied",
   "local.command.failed",
+  /*
+   * A decision on an effect the person proposed from the interface — a stage or
+   * commit, a repository import, a vault probe. It is not a turn event and
+   * never becomes one: it carries no message, no receipt and no result, only
+   * who allowed what. Without it the entire UI-initiated approval path was
+   * adjudicated and then forgotten, so the journal claimed a completeness it
+   * did not have.
+   */
+  HUMAN_INTENT_EVENT_TYPE,
+  /*
+   * The inference that named the conversation. It is not a turn step — it runs
+   * beside one — but it is a billed provider request made on this session's
+   * behalf, so its receipt and its cost belong to this session's record rather
+   * than to the throwaway identity it used to be issued under.
+   */
+  CONVERSATION_NAMED_EVENT_TYPE,
 ]);
 const DIGEST_PATTERN = /^sha256:[A-Za-z0-9_-]{43}$/u;
 const EFFECTS = new Set(["read", "write", "network", "execute", "identity"]);
 const POSTURES = new Set(["local", "plaintext-remote", "encrypted-unattested", "encrypted-attested"]);
 const CAPABILITY_TIERS = new Set(["web-baseline", "web-enhanced", "native", "remote-confidential"]);
+/** The closed authority vocabulary of `ApprovalProvenance`; see approvalProvenanceIssue. */
+const APPROVAL_SOURCES = new Set(["automatic-read", "human", "model-review", "human-fallback", "bounded-browser-sandbox"]);
+const APPROVAL_MODES = new Set(["ask-first", "auto-approve", "full-access"]);
 const FINISH_REASONS = new Set(["stop", "tool-calls", "length"]);
 const encoder = new TextEncoder();
 
@@ -615,6 +635,12 @@ async function validateProtocol(
   let lastContextMessage: LastContextMessage | undefined;
   let active: TurnState | undefined;
   let activeLocal: LocalCommandState | undefined;
+  /**
+   * Inferences this session paid for that are not turn steps, by operation ID.
+   * Their usage is admitted against the record that declared them, which is the
+   * only identity they have.
+   */
+  const ancillaryInferences = new Map<string, string>();
   let sawCreation = false;
   let sawForkContext = false;
   let verifiedForkContextDigest: string | undefined;
@@ -892,6 +918,8 @@ async function validateProtocol(
           });
         } else {
           command.approved = true;
+          const issue = approvalProvenanceIssue(payload.approval, session.manifest);
+          if (issue) add({ ...eventLocation(event), code: "TOOL_APPROVAL_PROVENANCE_INVALID", category: "protocol", message: issue });
         }
         continue;
       }
@@ -923,6 +951,88 @@ async function validateProtocol(
         counts.terminalLocalCommands += 1;
       }
       activeLocal = undefined;
+      continue;
+    }
+
+    if (event.type === CONVERSATION_NAMED_EVENT_TYPE) {
+      /*
+       * The naming inference runs beside a turn rather than inside one, so it
+       * gets its own identity and touches no turn state. What it must carry is
+       * the title it produced, the answer that title was derived from — so the
+       * receipt's response digest can be recomputed from the record instead of
+       * trusted — and, when the transport issued one, a receipt that names this
+       * session: the binding whose absence made the call unprovable at all.
+       *
+       * The answer is length-bounded rather than character-bounded: it is a
+       * verbatim provider string, and a model that emits an odd control
+       * character must not make an otherwise honest record permanently invalid.
+       */
+      const turnId = boundedString(event.turnId, 512);
+      const operationId = boundedString(event.operationId, 512);
+      const title = boundedString(payload?.title, 240);
+      if (
+        !payload ||
+        !turnId ||
+        !operationId ||
+        !title ||
+        seenTurns.has(turnId) ||
+        seenOperations.has(operationId) ||
+        boundedString(payload.model, 256) === undefined ||
+        (payload.answer !== undefined && (typeof payload.answer !== "string" || payload.answer.length > 4_096)) ||
+        (payload.receipt !== undefined && !receiptIdentityMatches(asPlainRecord(payload.receipt), session, turnId))
+      ) {
+        add({
+          ...eventLocation(event),
+          code: "CONVERSATION_NAMING_INVALID",
+          category: "protocol",
+          message: "A conversation naming record must have new turn/operation IDs, a bounded title and model, and any receipt must name this session and operation.",
+        });
+        continue;
+      }
+      seenTurns.add(turnId);
+      seenOperations.add(operationId);
+      ancillaryInferences.set(operationId, turnId);
+      continue;
+    }
+
+    if (event.type === HUMAN_INTENT_EVENT_TYPE) {
+      /*
+       * A human-initiated decision is deliberately outside the turn protocol:
+       * the person can stage a commit or probe a vault while a turn is running,
+       * and nothing about that belongs to the turn. So this validates itself
+       * and touches no turn state — but it must still be complete evidence, so
+       * it needs its own fresh identity, a decision, and the provenance record
+       * naming the authority that allowed it. Anything less is the decoration
+       * the tool-approval path was already found to be.
+       */
+      const turnId = boundedString(event.turnId, 512);
+      const operationId = boundedString(event.operationId, 512);
+      const name = boundedString(payload?.toolName, 256);
+      const decision = payload?.decision;
+      if (
+        !payload ||
+        !turnId ||
+        !operationId ||
+        !name ||
+        seenTurns.has(turnId) ||
+        seenOperations.has(operationId) ||
+        (decision !== "allow" && decision !== "deny") ||
+        !EFFECTS.has(String(payload.effect))
+      ) {
+        add({
+          ...eventLocation(event),
+          code: "HUMAN_INTENT_INVALID",
+          category: "protocol",
+          message: "A human-initiated approval must carry new turn/operation IDs, a bounded tool name, a known effect, and an allow/deny decision.",
+        });
+        continue;
+      }
+      seenTurns.add(turnId);
+      seenOperations.add(operationId);
+      const issue = approvalProvenanceIssue(payload.approval, session.manifest);
+      if (issue) {
+        add({ ...eventLocation(event), code: "HUMAN_INTENT_PROVENANCE_INVALID", category: "protocol", message: issue });
+      }
       continue;
     }
 
@@ -1163,9 +1273,32 @@ async function validateProtocol(
     }
 
     if (event.type === "inference.usage") {
-      const turn = requireActive(event);
-      if (!turn || !turn.inference || event.operationId !== turn.inference.operationId || !payload) {
-        add({ ...eventLocation(event), code: "INFERENCE_USAGE_ORPHANED", category: "protocol", message: "Usage event does not match an active inference." });
+      /*
+       * Two inferences can bill a session, and only one of them is a turn step.
+       * The other is Auto Approve's safety review, which runs between a tool
+       * call being requested and being decided, so it has no step of its own
+       * and borrows the identity of the call it adjudicates. Its cost is real,
+       * so refusing to record it would make an unavoidable charge invisible.
+       *
+       * The window stays narrow on purpose: a review usage must name the call
+       * (or the client-only local command) that is *pending a decision* right
+       * now. Nothing here can carry a response, a receipt or a message, so the
+       * relaxation admits token counts and nothing else.
+       */
+      const turnOfEvent = active && event.turnId === active.id && !active.terminal ? active : undefined;
+      const stepUsage = Boolean(turnOfEvent?.inference && event.operationId === turnOfEvent.inference.operationId);
+      const reviewOfPendingCall = Boolean(turnOfEvent?.tools.some((tool) =>
+        tool.call.id === event.operationId && tool.requested && !tool.decision && !tool.terminal));
+      const reviewOfPendingLocalCommand = Boolean(activeLocal
+        && !activeLocal.approved
+        && event.turnId === activeLocal.turnId
+        && event.operationId === activeLocal.operationId);
+      // The third payer: an ancillary inference that already declared itself,
+      // such as the request that named this conversation.
+      const ancillary = Boolean(event.operationId
+        && ancillaryInferences.get(event.operationId) === event.turnId);
+      if (!payload || (!stepUsage && !reviewOfPendingCall && !reviewOfPendingLocalCommand && !ancillary)) {
+        add({ ...eventLocation(event), code: "INFERENCE_USAGE_ORPHANED", category: "protocol", message: "Usage event does not match an active inference or a tool action pending a decision." });
         continue;
       }
       for (const tokenField of ["inputTokens", "outputTokens"] as const) {
@@ -1273,6 +1406,10 @@ async function validateProtocol(
         continue;
       }
       tool.decision = event.type === "tool.approved" ? "approved" : "denied";
+      if (event.type === "tool.approved") {
+        const issue = approvalProvenanceIssue(payload.approval, session.manifest);
+        if (issue) add({ ...eventLocation(event), code: "TOOL_APPROVAL_PROVENANCE_INVALID", category: "protocol", message: issue });
+      }
       if (event.type === "tool.denied") {
         if (typeof payload.content !== "string") {
           add({ ...eventLocation(event), code: "TOOL_DENIAL_INVALID", category: "protocol", message: "Tool denial lacks its canonical tool-message content." });
@@ -1498,6 +1635,34 @@ function parseToolCalls(
   return calls;
 }
 
+/**
+ * Whose request this receipt claims to be for.
+ *
+ * Shared with the naming inference, which produces a genuine receipt for a
+ * request that is not a turn step: its digests bind a prompt this journal
+ * deliberately does not carry, so identity is everything that can be checked
+ * there, and it is checked identically to a turn's.
+ */
+function receiptIdentityMatches(
+  receipt: Record<string, unknown> | undefined,
+  session: SessionRecord,
+  turnId: string,
+): boolean {
+  const bindings = asPlainRecord(receipt?.bindings);
+  return Boolean(
+    receipt
+    && receipt.version === 1
+    && boundedString(receipt.receiptId, 2_048)
+    && receipt.sessionId === session.id
+    && receipt.turnId === turnId
+    && receipt.provider === session.manifest.providerId
+    && (receipt.model === undefined || receipt.model === session.manifest.model)
+    && POSTURES.has(String(receipt.posture))
+    && bindings
+    && bindings.algorithm === "SHA-256",
+  );
+}
+
 function validateReceipt(
   value: unknown,
   session: SessionRecord,
@@ -1509,22 +1674,11 @@ function validateReceipt(
   const receipt = asPlainRecord(value);
   const bindings = asPlainRecord(receipt?.bindings);
   const receiptId = boundedString(receipt?.receiptId, 2_048);
-  if (
-    !receipt ||
-    receipt.version !== 1 ||
-    !receiptId ||
-    receipt.sessionId !== session.id ||
-    receipt.turnId !== turn.id ||
-    receipt.provider !== session.manifest.providerId ||
-    (receipt.model !== undefined && receipt.model !== session.manifest.model) ||
-    !POSTURES.has(String(receipt.posture)) ||
-    !bindings ||
-    bindings.algorithm !== "SHA-256"
-  ) {
+  if (!receiptIdentityMatches(receipt, session, turn.id)) {
     add({ ...eventLocation(event), code: "RECEIPT_IDENTITY_MISMATCH", category: "receipt", message: "Receipt does not match the session, turn, provider, model, or digest algorithm." });
     return receiptId;
   }
-  if (bindings.requestDigest !== turn.inference?.requestDigest || bindings.responseDigest !== responseDigest) {
+  if (bindings?.requestDigest !== turn.inference?.requestDigest || bindings?.responseDigest !== responseDigest) {
     add({ ...eventLocation(event), code: "RECEIPT_BINDING_MISMATCH", category: "receipt", message: "Receipt request/response bindings do not match the audited turn." });
   }
   return receiptId;
@@ -1673,6 +1827,32 @@ function inspectJson(
 
   const problem = visit(value, 0);
   return problem ? { valid: false, message: problem } : { valid: true };
+}
+
+/**
+ * Provenance is the whole answer to "who let this run", so the audit has to ask.
+ *
+ * It was journaled from the day approval modes shipped and read by nobody: the
+ * reducer's per-event required-field table never mentioned it, so an approval
+ * carrying `approval: null` verified clean, and one claiming Full Access
+ * authority inside a session pinned to ask-first verified clean too. A field no
+ * side of the contract validates is not evidence — it is decoration that looks
+ * like evidence, which is worse than nothing on a proof surface.
+ *
+ * The mode is compared against the manifest's pinned `approvalMode` where there
+ * is one. A v1 profile pin, or a session with no profile at all, pinned no mode,
+ * so there is nothing to disagree with and only the shape is checked.
+ */
+function approvalProvenanceIssue(value: unknown, manifest: SessionManifest): string | undefined {
+  const approval = asPlainRecord(value);
+  if (!approval) return "An approval must carry the provenance record that authorized it.";
+  if (!APPROVAL_SOURCES.has(String(approval.source))) return "Approval provenance names no known authority source.";
+  if (!APPROVAL_MODES.has(String(approval.mode))) return "Approval provenance names no known approval mode.";
+  const pinned = manifest.profile && "approvalMode" in manifest.profile ? manifest.profile.approvalMode : undefined;
+  if (pinned && approval.mode !== pinned) {
+    return "Approval provenance claims an approval mode the session manifest did not pin.";
+  }
+  return undefined;
 }
 
 function asPlainRecord(value: unknown): Record<string, unknown> | undefined {

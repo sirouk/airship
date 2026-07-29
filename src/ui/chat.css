@@ -165,6 +165,9 @@
   color: var(--ink-faint);
   font-size: var(--fs-micro);
   font-variant-numeric: tabular-nums;
+  /* The count now carries its unit, and a count that wraps onto two lines
+     inside a 28px chip states its number and its kind in different places. */
+  white-space: nowrap;
 }
 
 .journal-chip {
@@ -296,7 +299,9 @@
   .chat-stage[data-scrolled="true"] .session-bar__title { font-size: var(--fs-caption); }
 
   .chat-stage[data-scrolled="true"] .session-status-chip__word,
+  .chat-stage[data-scrolled="true"] .session-status-chip__unit,
   .chat-stage[data-scrolled="true"] .journal-chip__id,
+  .chat-stage[data-scrolled="true"] .journal-chip__unit,
   .chat-stage[data-scrolled="true"] .session-model-chip__label,
   .chat-stage[data-scrolled="true"] .session-bar .runtime-posture {
     position: absolute;
@@ -419,13 +424,20 @@ button.session-runtime {
   background: color-mix(in srgb, var(--accent) 5%, transparent);
 }
 
+/* `.session-runtime-picker` is the same grid cell as the label, for the route
+   whose catalogue is rich enough to open the shared model picker. It stands in
+   rather than wraps, so it needs the same `min-width: 0` — a trigger holding a
+   full model id must be allowed to shrink inside the track. */
 .session-runtime label,
-.session-runtime label small {
+.session-runtime-picker,
+.session-runtime label small,
+.session-runtime-picker > small {
   display: block;
   min-width: 0;
 }
 
 .session-runtime label small,
+.session-runtime-picker > small,
 .session-runtime.local small {
   overflow: hidden;
   color: var(--ink-faint);
@@ -776,6 +788,18 @@ button.runtime-posture {
 .message-parts .message-part.text--answer {
   color: var(--ink);
   font-size: var(--fs-body);
+}
+
+/* Both rules above are inheritable properties on a *wrapper*, and the only
+   element under it that carries text re-declares all three on itself
+   (`chat/message-parts-view.css:1`). Inheritance loses to a declaration every
+   time, so the hierarchy this pair encodes rendered nowhere: narration and
+   answer were the same 15px ink. Opting the prose back into its wrapper is the
+   fix at the join rather than a second set of tuned values in a second file. */
+.message-parts .message-part.text > .markdown {
+  color: inherit;
+  font-size: inherit;
+  line-height: inherit;
 }
 
 /* One indicator per turn: an active operation strip already says "Working",
@@ -1215,16 +1239,19 @@ button.runtime-posture {
 /* Content scrolled above the cap must read as scrolled, not as a rendering
    fault: the half-sliced top line was the single most confusing pixel in the
    surface. Both fades are keyed on real scroll state, never assumed. */
-.composer-input-row[data-scrolled="top"] .composer textarea,
-.composer-input-row[data-scrolled="both"] .composer textarea {
+/* `.composer` is the *outer* element — `.composer-wrap > .composer >
+   .composer-input-row > textarea` — so a descendant step for it here made all
+   four selectors permanently unmatchable and the fade never rendered. */
+.composer-input-row[data-scrolled="top"] textarea,
+.composer-input-row[data-scrolled="both"] textarea {
   mask-image: linear-gradient(to bottom, transparent 0, #000 14px);
 }
 
-.composer-input-row[data-scrolled="bottom"] .composer textarea {
+.composer-input-row[data-scrolled="bottom"] textarea {
   mask-image: linear-gradient(to top, transparent 0, #000 14px);
 }
 
-.composer-input-row[data-scrolled="both"] .composer textarea {
+.composer-input-row[data-scrolled="both"] textarea {
   mask-image: linear-gradient(to bottom, transparent 0, #000 14px, #000 calc(100% - 14px), transparent 100%);
 }
 

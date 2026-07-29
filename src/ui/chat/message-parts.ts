@@ -1,5 +1,6 @@
 import type { JsonValue, SessionManifest } from "../../core/contracts";
 import type { DurableEvent } from "../../core/journal";
+import { canonicalImageInputs } from "../../core/multimodal";
 import { parseCapabilityTier } from "./capability-tier";
 
 export const MESSAGE_PART_KINDS = [
@@ -301,6 +302,45 @@ export function messagePartFactsFromDurableEvents(
         text: payload.content,
         segmentId: `request:${event.eventId}`,
       });
+      // The images the turn was sent with are part of what was asked, and the
+      // journal records their name, media type and size. Dropping them here
+      // made a reloaded prompt look text-only, which is not merely a missing
+      // chip: Edit & branch and Retry decide whether they may resend a request
+      // by asking whether the row carries an attachment, so a resumed page
+      // silently re-sent an image-bearing turn without its image.
+      const images = canonicalImageInputs(payload.images);
+      if (images === undefined) {
+        // An images field this build cannot canonicalise still becomes an
+        // attachment part rather than nothing: the row must keep saying it
+        // carried one, or the resend guards stop firing for exactly the record
+        // whose contents are least trustworthy.
+        facts.push({
+          kind: "attachment",
+          factId: eventFactId(event, "image-unreadable"),
+          sequence: event.sequence,
+          ordinal: 1,
+          attachmentId: eventFactId(event, "image-unreadable"),
+          name: "Unreadable attachment record",
+          summary: "This request recorded attachments this build cannot read.",
+          status: "failed",
+        });
+      }
+      for (const [index, image] of (images ?? []).entries()) {
+        facts.push({
+          kind: "attachment",
+          factId: eventFactId(event, `image-${String(index)}`),
+          sequence: event.sequence,
+          ordinal: index + 1,
+          attachmentId: eventFactId(event, `image-${String(index)}`),
+          name: image.name,
+          mediaType: image.mediaType,
+          sizeBytes: image.sizeBytes,
+          // Named as journaled bytes because no preview is recoverable after a
+          // reload: the durable record holds the description, not a page URL.
+          summary: "Inline image bytes recorded in the journal with this request.",
+          status: "available",
+        });
+      }
       continue;
     }
 

@@ -75,7 +75,11 @@ test("conversation branches preserve their source and navigate back through line
   const fork = message.getByRole("button", { name: "Fork from here" });
   await expect(fork).toBeEnabled();
   await fork.click();
-  await expect(page.locator(".composer-notice")).toContainText("audited context through this answer");
+  // The notice names the boundary and the reach of the bounded seed. It used
+  // to claim "audited context through this answer" unconditionally, which is a
+  // completeness claim the bounded fork seed does not guarantee.
+  await expect(page.locator(".composer-notice")).toContainText("True fork created at the audited boundary after this answer");
+  await expect(page.locator(".composer-notice")).toContainText(/Carrying \d+ ancestor message/u);
   await expect.poll(() => page.url()).not.toBe(sourceUrl);
   const composer = page.getByRole("combobox", { name: "Message Airship" });
   await expect(composer).toHaveValue("");
@@ -153,9 +157,29 @@ test("an addressed draft survives a full page reload before session resume", asy
 
   await page.reload();
 
-  await expect(page).toHaveURL(addressedUrl);
+  // AMENDED: the address itself no longer survives, and that is deliberate. A
+  // conversation held only in page memory is permanently absent after a
+  // reload, so the deep-link resolver now retires the dead address and says so
+  // instead of holding the URL open for a conversation that can never load
+  // (src/sessions/session-library.test.ts, "routes only absence through the
+  // deep-link reset"). What must survive is the person's unsent text, and the
+  // assertions below are stronger than the single `toHaveURL(addressedUrl)`
+  // they replace: the draft has to be re-homed on the conversation that is
+  // actually open, proven by surviving a *second* reload from its new address.
+  // The old assertion also only ever passed on a race — the first URL poll ran
+  // before canonicalisation rewrote the hash.
   await expect(page.locator(".app-shell")).toBeVisible();
   await expect(composer).toHaveValue("Restore this addressed draft after reload");
+  await expect(page.locator(".composer-notice")).toContainText("did not survive the reload");
+  await expect(page).toHaveURL(/#chat\/[^/?#]+$/);
+  await expect.poll(() => page.url()).not.toBe(addressedUrl);
+  const rehomedUrl = page.url();
+
+  await page.reload();
+
+  await expect(page.locator(".app-shell")).toBeVisible();
+  await expect(composer).toHaveValue("Restore this addressed draft after reload");
+  await expect.poll(() => page.url()).not.toBe(rehomedUrl);
 });
 
 test("desktop treats Chat as the conversation disclosure and preserves the full ledger", async ({ page }, testInfo) => {

@@ -7,6 +7,9 @@ import { MemoryJournalBackend } from "./memory-journal";
 import { createLocalReceipt } from "../receipts/types";
 import { auditSessionHistory } from "./session-audit";
 
+/** The provenance a real ask-first approval journals; see approvalProvenanceIssue. */
+const HUMAN_APPROVAL = { mode: "ask-first", source: "human", reason: "Allowed once by the user." } as const;
+
 const writeTool: ToolDefinition = {
   name: "write_file",
   description: "Write a virtual workspace file",
@@ -111,7 +114,7 @@ describe("auditSessionHistory", () => {
         payload: { message: { role: "assistant", content: "", toolCalls: [call] }, finishReason: "tool-calls" },
       },
       { type: "tool.requested", turnId, operationId: call.id, payload: { call } },
-      { type: "tool.approved", turnId, operationId: call.id, payload: { callId: call.id, name: call.name } },
+      { type: "tool.approved", turnId, operationId: call.id, payload: { callId: call.id, name: call.name, approval: HUMAN_APPROVAL } },
       {
         type: "tool.resulted",
         turnId,
@@ -163,6 +166,108 @@ describe("auditSessionHistory", () => {
     expect(report.findings).toEqual([]);
   });
 
+  /*
+   * Auto Approve pays a provider for a verdict on every effectful call. That
+   * inference has no step of its own — it happens while a call waits for a
+   * decision — so the journal had nowhere to put its cost and the charge was
+   * invisible. It is admitted against the pending call, and only there.
+   */
+  it("admits a safety-review usage against the call it adjudicates, and only while that call is pending", async () => {
+    const call: ToolCall = {
+      id: "call-write-review",
+      name: "write_file",
+      arguments: { path: "/workspace/report.md", content: "verified" },
+    };
+    const build = async (reviewUsageAfterTerminal: boolean) => {
+      const fixture = await createFixture([writeTool]);
+      const turnId = "turn-review";
+      const firstInference = "inference-review-0";
+      const secondInference = "inference-review-1";
+      const user: CanonicalMessage = { role: "user", content: "Create a report." };
+      await fixture.journal.append(fixture.session.id, [{ type: "turn.requested", turnId, payload: { content: user.content } }]);
+      const firstDigest = await inferenceDigest(fixture.session, turnId, 0, [user]);
+      const reviewUsage = {
+        type: "inference.usage" as const,
+        turnId,
+        operationId: call.id,
+        payload: { inputTokens: 412, outputTokens: 19, source: "approval-review", model: "review-model" },
+      };
+      const result = {
+        type: "tool.resulted" as const,
+        turnId,
+        operationId: call.id,
+        payload: { callId: call.id, name: call.name, content: "Wrote report.md", isError: false, metadata: null },
+      };
+      await fixture.journal.append(fixture.session.id, [
+        {
+          type: "inference.started",
+          turnId,
+          operationId: firstInference,
+          payload: inferencePayload(fixture.session, turnId, 0, firstDigest),
+        },
+        {
+          type: "assistant.completed",
+          turnId,
+          operationId: firstInference,
+          payload: { message: { role: "assistant", content: "", toolCalls: [call] }, finishReason: "tool-calls" },
+        },
+        { type: "tool.requested", turnId, operationId: call.id, payload: { call } },
+        ...(reviewUsageAfterTerminal ? [] : [reviewUsage]),
+        { type: "tool.approved", turnId, operationId: call.id, payload: { callId: call.id, name: call.name, approval: HUMAN_APPROVAL } },
+        result,
+        ...(reviewUsageAfterTerminal ? [reviewUsage] : []),
+      ]);
+      const transcript: CanonicalMessage[] = [
+        user,
+        { role: "assistant", content: "", toolCalls: [call] },
+        { role: "tool", toolCallId: call.id, content: "Wrote report.md" },
+      ];
+      const secondDigest = await inferenceDigest(fixture.session, turnId, 1, transcript);
+      const content = "The report is ready.";
+      const responseDigest = await sha256(content);
+      const receipt = createLocalReceipt({
+        sessionId: fixture.session.id,
+        turnId,
+        provider: fixture.session.manifest.providerId,
+        model: fixture.session.manifest.model,
+        requestDigest: secondDigest,
+        responseDigest,
+        now: "2026-07-18T00:00:10.000Z",
+      });
+      await fixture.journal.append(fixture.session.id, [
+        {
+          type: "inference.started",
+          turnId,
+          operationId: secondInference,
+          payload: inferencePayload(fixture.session, turnId, 1, secondDigest),
+        },
+        {
+          type: "assistant.completed",
+          turnId,
+          operationId: secondInference,
+          payload: {
+            message: { role: "assistant", content },
+            finishReason: "stop",
+            responseDigest,
+            receipt: receipt as unknown as JsonValue,
+          },
+        },
+        { type: "turn.completed", turnId, payload: { responseDigest, receiptId: receipt.receiptId } },
+      ]);
+      return auditFixture(fixture);
+    };
+
+    const pending = await build(false);
+    expect(pending.status).toBe("verified");
+    expect(pending.findings).toEqual([]);
+
+    // The relaxation is a window, not a hole: once the call is decided and
+    // terminal, a usage claiming its ID is still an orphan.
+    const afterTerminal = await build(true);
+    expect(afterTerminal.status).toBe("invalid");
+    expect(afterTerminal.findings.map((finding) => finding.code)).toContain("INFERENCE_USAGE_ORPHANED");
+  });
+
   it("verifies completed, denied, and failed local commands without admitting them to provider context", async () => {
     const fixture = await createFixture([writeTool]);
     await fixture.journal.append(fixture.session.id, [
@@ -180,7 +285,7 @@ describe("auditSessionHistory", () => {
         type: "local.command.approved",
         turnId: "local-complete",
         operationId: "local-operation-complete",
-        payload: { toolName: "write_file" },
+        payload: { toolName: "write_file", approval: HUMAN_APPROVAL },
       },
       {
         type: "local.command.completed",
@@ -223,7 +328,7 @@ describe("auditSessionHistory", () => {
         type: "local.command.approved",
         turnId: "local-failed",
         operationId: "local-operation-failed",
-        payload: { toolName: "write_file" },
+        payload: { toolName: "write_file", approval: HUMAN_APPROVAL },
       },
       {
         type: "local.command.failed",
@@ -283,6 +388,189 @@ describe("auditSessionHistory", () => {
       unknownEvents: 0,
     });
     expect(report.findings).toEqual([]);
+  });
+
+  /*
+   * Provenance is the whole answer to "who let this run". It was journaled from
+   * the day approval modes shipped and read by nobody: a `tool.approved`
+   * carrying `approval: null` audited clean, and so did one claiming Full Access
+   * authority inside a session pinned to ask-first. A field no side of the
+   * contract validates is decoration that looks like evidence.
+   */
+  it("refuses a tool approval that does not name the authority that allowed it", async () => {
+    const report = await auditFixture(await approvalFixture(null));
+
+    expect(report.status).toBe("invalid");
+    expect(report.checks.protocol).toBe(false);
+    expect(report.findings.map((finding) => finding.code)).toContain("TOOL_APPROVAL_PROVENANCE_INVALID");
+  });
+
+  it("refuses a tool approval claiming an approval mode the manifest never pinned", async () => {
+    const report = await auditFixture(await approvalFixture(
+      { mode: "full-access", source: "bounded-browser-sandbox", reason: "Allowed by Full Access." },
+      await askFirstProfile(),
+    ));
+
+    expect(report.status).toBe("invalid");
+    expect(report.findings.map((finding) => finding.code)).toContain("TOOL_APPROVAL_PROVENANCE_INVALID");
+  });
+
+  it("accepts a tool approval whose provenance matches the pinned approval mode", async () => {
+    const report = await auditFixture(await approvalFixture(HUMAN_APPROVAL, await askFirstProfile()));
+
+    expect(report.findings.map((finding) => finding.code)).not.toContain("TOOL_APPROVAL_PROVENANCE_INVALID");
+  });
+
+  /*
+   * Naming a conversation is a second provider request, issued beside the turn
+   * and previously against an invented session id, so its receipt proved
+   * nothing about the conversation it named and its tokens were unrecordable.
+   */
+  it("binds the conversation-naming inference, its receipt and its cost to the session it named", async () => {
+    const fixture = await createFixture([writeTool]);
+    const namingTurnId = "naming-1";
+    const namingOperationId = "naming-request-1";
+    const receipt = createLocalReceipt({
+      sessionId: fixture.session.id,
+      turnId: namingTurnId,
+      provider: fixture.session.manifest.providerId,
+      model: fixture.session.manifest.model,
+      requestDigest: await sha256("naming-request"),
+      responseDigest: await sha256("Workspace boundaries"),
+      now: "2026-07-18T00:00:04.000Z",
+    });
+    await fixture.journal.append(fixture.session.id, [
+      {
+        type: "conversation.named",
+        turnId: namingTurnId,
+        operationId: namingOperationId,
+        payload: {
+          title: "Workspace boundaries",
+          answer: "Workspace boundaries",
+          model: fixture.session.manifest.model,
+          receipt: receipt as unknown as JsonValue,
+        },
+      },
+      {
+        type: "inference.usage",
+        turnId: namingTurnId,
+        operationId: namingOperationId,
+        payload: { inputTokens: 96, outputTokens: 4, source: "conversation-naming" },
+      },
+    ]);
+
+    const report = await auditFixture(fixture);
+    expect(report.status).toBe("verified");
+    expect(report.findings).toEqual([]);
+  });
+
+  it("refuses a naming receipt bound to another session, and usage naming no declared inference", async () => {
+    const fixture = await createFixture([writeTool]);
+    const strayReceipt = createLocalReceipt({
+      sessionId: "some-other-session",
+      turnId: "naming-2",
+      provider: fixture.session.manifest.providerId,
+      model: fixture.session.manifest.model,
+      requestDigest: await sha256("naming-request"),
+      responseDigest: await sha256("Elsewhere"),
+      now: "2026-07-18T00:00:05.000Z",
+    });
+    await fixture.journal.append(fixture.session.id, [
+      {
+        type: "conversation.named",
+        turnId: "naming-2",
+        operationId: "naming-request-2",
+        payload: { title: "Elsewhere", model: fixture.session.manifest.model, receipt: strayReceipt as unknown as JsonValue },
+      },
+      {
+        type: "inference.usage",
+        turnId: "naming-3",
+        operationId: "naming-request-3",
+        payload: { inputTokens: 1 },
+      },
+    ]);
+
+    const report = await auditFixture(fixture);
+    expect(report.status).toBe("invalid");
+    const codes = report.findings.map((finding) => finding.code);
+    expect(codes).toContain("CONVERSATION_NAMING_INVALID");
+    expect(codes).toContain("INFERENCE_USAGE_ORPHANED");
+  });
+
+  /*
+   * The interface's own effects — a stage or commit, a repository import, a
+   * vault probe that writes immutable objects — were adjudicated and then
+   * forgotten. They are not turn events and never become them, so they are
+   * evidence in their own right or they are nothing.
+   */
+  it("records a human-initiated decision as complete evidence, outside the turn protocol", async () => {
+    const fixture = await createFixture([writeTool], await askFirstProfile());
+    await fixture.journal.append(fixture.session.id, [{
+      type: "human.intent.reviewed",
+      turnId: "human-git-1",
+      operationId: "git-1",
+      payload: {
+        toolName: "git_commit",
+        effect: "write",
+        decision: "allow",
+        summary: "Commit staged changes in the browser-owned repository.",
+        arguments: { message: "Ship it" },
+        approval: HUMAN_APPROVAL,
+      },
+    }]);
+
+    const report = await auditFixture(fixture);
+    expect(report.status).toBe("verified");
+    expect(report.findings).toEqual([]);
+  });
+
+  it("refuses a human-initiated decision that names no authority or no outcome", async () => {
+    const fixture = await createFixture([writeTool], await askFirstProfile());
+    await fixture.journal.append(fixture.session.id, [
+      {
+        type: "human.intent.reviewed",
+        turnId: "human-vault-1",
+        operationId: "vault-probe-1",
+        payload: { toolName: "vault_live_conformance", effect: "network", decision: "allow", approval: null },
+      },
+      {
+        type: "human.intent.reviewed",
+        turnId: "human-vault-2",
+        operationId: "vault-probe-2",
+        payload: { toolName: "vault_live_conformance", effect: "network", approval: HUMAN_APPROVAL },
+      },
+    ]);
+
+    const report = await auditFixture(fixture);
+    expect(report.status).toBe("invalid");
+    const codes = report.findings.map((finding) => finding.code);
+    expect(codes).toContain("HUMAN_INTENT_PROVENANCE_INVALID");
+    expect(codes).toContain("HUMAN_INTENT_INVALID");
+  });
+
+  it("refuses a local-command approval that does not name its authority", async () => {
+    const fixture = await createFixture([writeTool]);
+    await fixture.journal.append(fixture.session.id, [
+      {
+        type: "local.command.requested",
+        turnId: "local-unprovenanced",
+        operationId: "local-operation-unprovenanced",
+        payload: {
+          content: "/write report.md verified",
+          toolName: "write_file",
+          arguments: { path: "report.md", content: "verified" },
+        },
+      },
+      {
+        type: "local.command.approved",
+        turnId: "local-unprovenanced",
+        operationId: "local-operation-unprovenanced",
+        payload: { toolName: "write_file", approval: null },
+      },
+    ]);
+
+    const report = await auditFixture(fixture);
+    expect(report.findings.map((finding) => finding.code)).toContain("TOOL_APPROVAL_PROVENANCE_INVALID");
   });
 
   it("rejects out-of-order and malformed local-command terminals", async () => {
@@ -588,6 +876,51 @@ async function createFixture(tools: ToolDefinition[], profile?: SessionRecord["m
   });
   const session = await journal.createSession("Audit fixture", manifest);
   return { journal, session };
+}
+
+/** A turn stopped at `tool.approved`, so the approval's provenance is the subject under audit. */
+async function approvalFixture(approval: JsonValue, profile?: SessionRecord["manifest"]["profile"]) {
+  const fixture = await createFixture([writeTool], profile);
+  const turnId = "turn-approval";
+  const operationId = "inference-approval";
+  const call: ToolCall = {
+    id: "call-approval",
+    name: "write_file",
+    arguments: { path: "/workspace/report.md", content: "verified" },
+  };
+  const user: CanonicalMessage = { role: "user", content: "Create a report." };
+  await fixture.journal.append(fixture.session.id, [{ type: "turn.requested", turnId, payload: { content: user.content } }]);
+  const digest = await inferenceDigest(fixture.session, turnId, 0, [user]);
+  await fixture.journal.append(fixture.session.id, [
+    { type: "inference.started", turnId, operationId, payload: inferencePayload(fixture.session, turnId, 0, digest) },
+    {
+      type: "assistant.completed",
+      turnId,
+      operationId,
+      payload: { message: { role: "assistant", content: "", toolCalls: [call] }, finishReason: "tool-calls" },
+    },
+    { type: "tool.requested", turnId, operationId: call.id, payload: { call } },
+    { type: "tool.approved", turnId, operationId: call.id, payload: { callId: call.id, name: call.name, approval } },
+  ]);
+  return fixture;
+}
+
+async function askFirstProfile(): Promise<SessionRecord["manifest"]["profile"]> {
+  const resolvedSkills: never[] = [];
+  return {
+    version: 2,
+    profileId: "general",
+    profileRevision: await sha256("profile-v2"),
+    themeId: "foundry",
+    themeDigest: await sha256("theme-v2"),
+    resolvedSkills,
+    skillSetDigest: await sha256(stableStringify(resolvedSkills as unknown as JsonValue)),
+    resolutionDigest: await sha256("resolution-v2"),
+    workspaceBinding: { kind: "active-workspace" },
+    memoryScope: "profile",
+    approvalMode: "ask-first",
+    minimumPosture: "encrypted-unattested",
+  };
 }
 
 async function auditFixture(fixture: Awaited<ReturnType<typeof createFixture>>) {

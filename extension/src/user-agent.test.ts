@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ANTHROPIC_OAUTH_INFERENCE_USER_AGENT, ANTHROPIC_TOKEN_USER_AGENT } from "./policy";
+import { ANTHROPIC_OAUTH_INFERENCE_USER_AGENT, ANTHROPIC_TOKEN_USER_AGENT, BRIDGE_DESTINATIONS } from "./policy";
 import {
   USER_AGENT_RULE_ID_BASE,
   type DeclarativeNetRequestRule,
@@ -167,6 +167,74 @@ describe("override installation", () => {
       },
     };
     await expect(installUserAgentOverride(host)).resolves.toBe("unavailable");
+  });
+
+  /**
+   * A fake Firefox event surface that answers `hasListener` from what is
+   * actually attached, so a stacked listener is visible as a count rather than
+   * inferred. Each call builds its own surface, which is also how the module
+   * tells one worker's API from another's.
+   */
+  function blockingWebRequestHost() {
+    const attachedListeners: unknown[] = [];
+    const removed: unknown[] = [];
+    const events = {
+      addListener(listener: unknown) { attachedListeners.push(listener); },
+      hasListener(listener: unknown) { return attachedListeners.includes(listener); },
+      removeListener(listener: unknown) {
+        removed.push(listener);
+        const index = attachedListeners.indexOf(listener);
+        if (index >= 0) attachedListeners.splice(index, 1);
+      },
+    };
+    return { attachedListeners, removed, host: { webRequest: { onBeforeSendHeaders: events } } };
+  }
+
+  it("replaces rather than stacks its blocking listener across re-observations", async () => {
+    // Capability state has a TTL, so this function is called again on every
+    // re-observation. Before this, each one attached another blocking rewriter
+    // to the same requests that nothing held a reference to.
+    const firefox = blockingWebRequestHost();
+    await expect(installUserAgentOverride(firefox.host)).resolves.toBe("live");
+    await expect(installUserAgentOverride(firefox.host)).resolves.toBe("live");
+    await expect(installUserAgentOverride(firefox.host)).resolves.toBe("live");
+    expect(firefox.attachedListeners).toHaveLength(1);
+    expect(firefox.removed).toHaveLength(0);
+  });
+
+  it("removes the previous listener before installing one for different destinations", async () => {
+    const firefox = blockingWebRequestHost();
+    await expect(installUserAgentOverride(firefox.host)).resolves.toBe("live");
+    const first = firefox.attachedListeners[0];
+    const narrowed = [BRIDGE_DESTINATIONS.find((destination) => destination.prefix === "https://api.anthropic.com/v1/")!];
+    await expect(installUserAgentOverride(firefox.host, narrowed)).resolves.toBe("live");
+    expect(firefox.removed).toEqual([first]);
+    expect(firefox.attachedListeners).toHaveLength(1);
+    expect(firefox.attachedListeners[0]).not.toBe(first);
+    // The replacement rewrites the new destination set, not the old one.
+    const listener = firefox.attachedListeners[0] as (details: unknown) => unknown;
+    expect(listener({ url: "https://api.anthropic.com/v1/messages", tabId: -1 }))
+      .toEqual({ requestHeaders: [{ name: "User-Agent", value: ANTHROPIC_OAUTH_INFERENCE_USER_AGENT }] });
+    expect(listener({ url: "https://claude.ai/oauth/token", tabId: -1 })).toBeUndefined();
+  });
+
+  it("still reports unavailable when a host attaches nothing, and retains no listener to reuse", async () => {
+    const silent = {
+      webRequest: {
+        onBeforeSendHeaders: {
+          addListener() { return undefined; },
+          hasListener() { return false; },
+        },
+      },
+    };
+    await expect(installUserAgentOverride(silent)).resolves.toBe("unavailable");
+    await expect(installUserAgentOverride(silent)).resolves.toBe("unavailable");
+    // A host that never attached must not be remembered as installed: the next
+    // browser to offer a working surface has to get a real first install.
+    const working = blockingWebRequestHost();
+    await expect(installUserAgentOverride(working.host)).resolves.toBe("live");
+    expect(working.attachedListeners).toHaveLength(1);
+    expect(working.removed).toHaveLength(0);
   });
 
   it("reports unavailable on a browser that offers neither mechanism", async () => {

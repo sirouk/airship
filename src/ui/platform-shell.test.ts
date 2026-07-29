@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { applyPreferenceOverrides, buildPaletteEntries, DEFAULT_PREFERENCES, filterPaletteEntries, loadPreferenceOverrides, loadRecentSessionPaletteSources, durabilityOptionLabel, durabilityRowNote, navigationJumpForChord, recentSessionPaletteSources, resolveDefaultVaultBackend, VAULT_BACKENDS, savePreferenceOverrides, trustAxesInScope, TRUST_SCOPE_BANDS, worstTrustAxis } from "./platform-shell";
+import { applyPreferenceOverrides, approvalModeDescription, buildPaletteEntries, DEFAULT_PREFERENCES, filterPaletteEntries, loadPreferenceOverrides, loadRecentSessionPaletteSources, durabilityOptionLabel, durabilityOptions, durabilityRowNote, navigationJumpForChord, publishVisualViewportOffset, recentSessionPaletteSources, resolveDefaultVaultBackend, VAULT_BACKENDS, savePreferenceOverrides, trustAxesInScope, TRUST_SCOPE_BANDS, worstTrustAxis } from "./platform-shell";
 import { CANONICAL_DESTINATIONS } from "./navigation-model";
 
 describe("platform shell contracts", () => {
@@ -28,6 +28,43 @@ describe("platform shell contracts", () => {
     expect(filterPaletteEntries(entries, "conn").map((entry) => entry.label)).toContain("Connection");
     expect(filterPaletteEntries(entries, "#account").map((entry) => entry.label)).toContain("Account");
     expect(filterPaletteEntries(entries, "paper").map((entry) => entry.label)).toContain("Preferences");
+  });
+
+  it("carries Skills and Capabilities, which had no desktop entry point at all", () => {
+    const visited: string[] = [];
+    const entries = buildPaletteEntries({ navigate(view) { visited.push(view); }, openPreferences() {} });
+    for (const [id, label] of [["skills", "Skills"], ["capabilities", "Capabilities"]] as const) {
+      const entry = entries.find((candidate) => candidate.id === `view:${id}`);
+      expect(entry?.label, `${id} is in the palette`).toBe(label);
+      expect(filterPaletteEntries(entries, label).map((candidate) => candidate.label)).toContain(label);
+      entry?.run();
+    }
+    expect(visited).toEqual(["skills", "capabilities"]);
+  });
+
+  it("describes All conversations with the scope the route enforces", () => {
+    // The palette derives this line mechanically from the destination's scope
+    // tag, so a wrong tag is wrong user-facing copy: the route lists the active
+    // profile's conversations, never the whole journal.
+    const entries = buildPaletteEntries({ navigate() {}, openPreferences() {} });
+    expect(entries.find((entry) => entry.id === "view:sessions")?.description).toBe("Chat · Profile scope");
+    expect(filterPaletteEntries(entries, "global").map((entry) => entry.label)).not.toContain("All conversations");
+  });
+
+  it("states what each approval mode really permits, without borrowed confinement", () => {
+    // Full Access inherited the workspace tools' path confinement and applied
+    // the word to every effect class, including `network`, which has none: an
+    // allowed fetch may reach any HTTPS origin that grants CORS.
+    const fullAccess = approvalModeDescription("full-access");
+    expect(fullAccess).not.toContain("network boundaries");
+    expect(fullAccess).toContain("any HTTPS origin");
+
+    // Auto Approve is a provider round-trip per effectful action, and the
+    // action body — script, command, URL — is exactly what is sent.
+    const autoApprove = approvalModeDescription("auto-approve");
+    expect(autoApprove).not.toContain("only bounded metadata");
+    expect(autoApprove).toContain("sent to your active provider");
+    expect(autoApprove).toContain("script, command or URL");
   });
 
   it("applies only global personality and layout overrides", () => {
@@ -172,6 +209,50 @@ describe("the Durability row states a destination and its state, never one as th
     }
   });
 
+  it("offers every destination and greys the ones this deployment cannot reach", () => {
+    // The availability predicate used to gate *loading* a persisted value and
+    // nothing else, so the row happily offered Drive on a build with no client
+    // ID and the MinIO lab on a public origin — choices the shell then had to
+    // quietly correct behind the user.
+    const configuredClientId = "123456789012-airship.apps.googleusercontent.com";
+    const remote = durabilityOptions({ selected: "local-device", adoption: undefined, location: { hostname: "airship.example" } });
+    expect(remote.map((option) => option.value)).toEqual([...VAULT_BACKENDS]);
+    expect(remote.find((option) => option.value === "google-drive")).toMatchObject({ disabled: true });
+    expect(remote.find((option) => option.value === "local-lab")).toMatchObject({ disabled: true });
+    expect(remote.find((option) => option.value === "local-lab")?.description).toMatch(/loopback/iu);
+    expect(remote.find((option) => option.value === "google-drive")?.description).toMatch(/client ID/iu);
+    for (const reachable of ["local-device", "ephemeral"] as const) {
+      expect(remote.find((option) => option.value === reachable)?.disabled).toBeUndefined();
+    }
+
+    // The lab origin the e2e vault-adoption journey runs on, and every loopback
+    // spelling `isLoopbackAirshipLocation` accepts in `app.tsx`.
+    for (const hostname of ["localhost", "127.0.0.1", "::1", "[::1]"] as const) {
+      const loopback = durabilityOptions({ selected: "local-device", adoption: undefined, location: { hostname } });
+      expect(loopback.find((option) => option.value === "local-lab")?.disabled, hostname).toBeUndefined();
+    }
+
+    const deployable = durabilityOptions({ selected: "local-device", adoption: undefined, googleClientId: configuredClientId, location: { hostname: "airship.example" } });
+    expect(deployable.find((option) => option.value === "google-drive")?.disabled).toBeUndefined();
+
+    // No location supplied is "not asked", not "unreachable": a stored choice
+    // must never be rewritten by the absence of a question.
+    const unasked = durabilityOptions({ selected: "local-lab", adoption: undefined });
+    expect(unasked.find((option) => option.value === "local-lab")?.disabled).toBeUndefined();
+  });
+
+  it("keeps the destination's consequence as its description while it is reachable", () => {
+    const options = durabilityOptions({ selected: "local-device", adoption: "connected", vaultAdopted: true, location: { hostname: "localhost" } });
+    expect(options.find((option) => option.value === "local-device")).toEqual({
+      value: "local-device",
+      label: "This device · connected",
+      description: "Encrypted here. Not on your other devices.",
+    });
+    // Every other destination is reported against the vault state the host did
+    // supply, which is the same under-claiming rule `durabilityOptionLabel` has.
+    expect(options.find((option) => option.value === "local-lab")?.label).toBe("Local MinIO lab · not connected");
+  });
+
   it("says what is attached in the state the row is actually in", () => {
     expect(durabilityRowNote("not-connected")).toBe("Where conversations survive a closed tab. Nothing is attached yet — set it up in Vault.");
     expect(durabilityRowNote("connected")).toContain("Vault holds it, and can detach it");
@@ -199,5 +280,88 @@ describe("the Durability row states a destination and its state, never one as th
     expect(dialog).toMatch(/label="Durability"[\s\S]{0,200}placement="up"/u);
     expect(readFileSync(new URL("./platform-shell.css", import.meta.url), "utf8"))
       .not.toMatch(/\.preference-menu \.menu-select-popover \{ top:/u);
+  });
+});
+
+/**
+ * A phone shell whose geometry answers the way a real one does. Publishing the
+ * obscured height is itself what lifts the composer and widens the transcript's
+ * bottom padding, so the container's floor rises at exactly that moment, and
+ * scrolling the container moves the last card with it.
+ */
+function fakePhoneShell(cardBottom: number, scrollTop = 1_000) {
+  const scrolls: number[] = [];
+  const values = new Map<string, string>();
+  const dataset: Record<string, string> = {};
+  let floor = 700;
+  const transcript = {
+    scrollTop,
+    getBoundingClientRect: () => ({ top: 120, bottom: floor }),
+    querySelectorAll: () => ({
+      length: 1,
+      item: (index: number) => (index === 0 ? card : null),
+    }),
+    scrollTo(target: { top: number }) {
+      scrolls.push(target.top);
+      this.scrollTop = target.top;
+    },
+  };
+  const card = {
+    getBoundingClientRect: () => ({
+      top: cardBottom - 120 - (transcript.scrollTop - scrollTop),
+      bottom: cardBottom - (transcript.scrollTop - scrollTop),
+    }),
+  };
+  const root = {
+    dataset,
+    style: {
+      getPropertyValue: (name: string) => values.get(name) ?? "",
+      setProperty(name: string, value: string) {
+        values.set(name, value);
+        if (name === "--visual-viewport-bottom") floor = 700 - Number.parseFloat(value);
+      },
+    },
+    querySelector: () => transcript,
+  };
+  return { root: root as unknown as HTMLElement, dataset, scrolls, floor: () => floor, transcript };
+}
+
+describe("the soft keyboard's effect on a pinned transcript", () => {
+  it("re-anchors the last card after the keyboard takes the bottom of the transcript", () => {
+    // The regression this pins: the keyboard moves the layout through CSS only
+    // — no Preact state changes — so the transcript's own re-pin effect never
+    // re-runs, and the reply the person just asked for ends up under the lifted
+    // composer.
+    const shell = fakePhoneShell(690);
+    publishVisualViewportOffset(shell.root, 336);
+    expect(shell.dataset.keyboardOpen).toBe("true");
+    expect(shell.scrolls).toEqual([1_326]);
+    // The card is back on the floor of the shortened container, not below it.
+    expect(shell.transcript.getBoundingClientRect().bottom).toBe(364);
+  });
+
+  it("leaves a transcript the reader scrolled away from exactly where they left it", () => {
+    const shell = fakePhoneShell(900);
+    publishVisualViewportOffset(shell.root, 336);
+    expect(shell.dataset.keyboardOpen).toBe("true");
+    expect(shell.scrolls).toEqual([]);
+  });
+
+  it("returns the anchored card to the floor when the keyboard closes", () => {
+    const shell = fakePhoneShell(690);
+    publishVisualViewportOffset(shell.root, 336);
+    publishVisualViewportOffset(shell.root, 0);
+    expect(shell.dataset.keyboardOpen).toBe("false");
+    expect(shell.scrolls).toEqual([1_326, 990]);
+  });
+
+  it("ignores a pinch-pan that republishes the offset it already published", () => {
+    // `visualViewport` fires `scroll` for every pan, not only for a keyboard.
+    // Re-anchoring on those would yank the transcript under the reader's finger.
+    const shell = fakePhoneShell(690);
+    publishVisualViewportOffset(shell.root, 336);
+    publishVisualViewportOffset(shell.root, 336.4);
+    publishVisualViewportOffset(shell.root, 336);
+    expect(shell.scrolls).toEqual([1_326]);
   });
 });

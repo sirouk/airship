@@ -14,6 +14,7 @@ import {
   CLAIM_STATE_LEGEND,
 } from "./claim-stack-facts";
 import { composeClaimStack, type ClaimStackItem } from "./claim-stack-model";
+import { downloadFileName, downloadText } from "./file-download";
 import { Icon } from "./icons";
 import { Popover } from "./popover";
 import "./popover.css";
@@ -95,14 +96,11 @@ export function ProofView({
 
   function download(payload: string, filename: string, status: string) {
     try {
-      const objectUrl = URL.createObjectURL(new Blob([payload], { type: "application/json" }));
-      const anchor = document.createElement("a");
-      anchor.href = objectUrl;
-      anchor.download = filename;
-      document.body.append(anchor);
-      anchor.click();
-      anchor.remove();
-      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
+      // One download path for the whole product: the Blob, the object URL and
+      // the revoke live in `file-download`, so a receipt cannot leak an object
+      // URL that this copy forgot to revoke. The name is sanitized on the way
+      // through because it interpolates an id this view did not mint.
+      downloadText(payload, downloadFileName(filename, "airship-export.json"));
       setReceiptAction(status);
     } catch (error) {
       setReceiptAction(error instanceof Error ? error.message : String(error));
@@ -254,6 +252,15 @@ export function ProofView({
               </div>
             ))}
             {verdict.counts.failed > 0 ? <div data-status="failed"><dt><Seal state="failed" density="dot" size={16} />Failed</dt><dd>{verdict.counts.failed}</dd><small>A claim was checked or declared and did not hold.</small></div> : null}
+            {/* Its own row, beside Failed and never inside it. Expiry used to
+                fall through this tab's `else` and be counted as a failed check,
+                so one expired endpoint observation printed "Failed: 1" here
+                while the Attestation tab called the same claim a stale
+                observation. The word comes from `proofStatusLabel` — the
+                legend's own — and doubles as the dot's label, because the seal
+                for expiry is the failure seal and would otherwise announce
+                "Failed" beside a line that does not say it. */}
+            {verdict.counts.expired > 0 ? <div data-status="expired"><dt><Seal state={sealStateForProofStatus("expired")} density="dot" size={16} label={proofStatusLabel("expired")} />{proofStatusLabel("expired")}</dt><dd>{verdict.counts.expired}</dd><small>A time-bounded endpoint observation expired. The immutable turn receipt did not become stale.</small></div> : null}
           </dl>
           {verdict.ceilings.length > 0 ? (
             <section class="proof-ceilings" aria-label="Why declared verifications are shown as assertions">
@@ -292,7 +299,7 @@ export function ProofView({
             <p class="proof-journal__scope"><span class="eyebrow">Independent local consistency check</span></p>
             {audit ? <>
               <div class="audit-boundary"><Icon name={audit.status === "invalid" ? "warning" : "proof"} size={18} /><p><strong>A valid hash chain is not proof of authorship.</strong> This report checks schema, ordering, manifest bindings, turn/tool protocol, and receipt bindings. No separately trusted author identity was verified.</p></div>
-              <div class="audit-check-grid" aria-label="Journal audit checks">{auditChecks(audit).map(([label, passed]) => <div key={label} class={passed ? "pass" : "fail"}><Seal state={passed ? "verified" : "failed"} label={passed ? "Passed" : "Failed"} size={16} compact /><strong>{label}</strong><small>{passed ? "consistent" : "attention required"}</small></div>)}</div>
+              <div class="audit-check-grid" role="group" aria-label="Journal audit checks">{auditChecks(audit).map(([label, passed]) => <div key={label} class={passed ? "pass" : "fail"}><Seal state={passed ? "verified" : "failed"} label={passed ? "Passed" : "Failed"} size={16} compact /><strong>{label}</strong><small>{passed ? "consistent" : "attention required"}</small></div>)}</div>
               <dl class="audit-commitment"><div><dt>Session</dt><dd>{audit.sessionId}</dd></div><div><dt>Journal events</dt><dd>{audit.commitment.sequence}</dd></div><div><dt>Checked</dt><dd><time dateTime={audit.checkedAt} title={new Date(audit.checkedAt).toLocaleString()}>{relativeEvidenceAge(audit.checkedAt)}</time></dd></div><div><dt>External anchor</dt><dd>{audit.anchor.status === "not-supplied" ? "Not supplied" : audit.anchor.status === "matched" ? "Matched" : "Did not match"}</dd></div></dl>
               <details><summary>Technical journal details</summary><code>{audit.commitment.digest}</code></details>
               {/* Open whenever findings exist. A warning collapsed under a row
@@ -301,7 +308,7 @@ export function ProofView({
             </> : <p class="audit-loading" role="status">{auditError ?? (auditLoading ? "Recomputing the session commitment…" : "No active session is available to audit.")}</p>}
           </div>
         </details>
-        <div class="proof-actions" aria-label="Portable evidence actions">
+        <div class="proof-actions" role="group" aria-label="Portable evidence actions">
           {/* Emphasis follows verifiability: the bundle a third party can
               actually check is the primary, and the privacy-safe summary — whose
               own note says it is not proof — stops being the loudest control on
@@ -336,7 +343,7 @@ function ClaimPopoverRow({ item }: Readonly<{ item: ClaimStackItem }>) {
           actually renders per claim. Left to default, the seal announces
           SEAL_LABELS[state] — "Not checked" for `none` and "Failed" for
           `expired` — while the word rendered two nodes away says "No evidence"
-          and "Expired". In the default local-demo state seven of eight rows
+          and "Stale observation". In the default local-demo state seven of eight rows
           did it, so a screen-reader user heard a different verdict from the
           one on screen. The visible word is the label. */}
       <Seal state={sealStateForProofStatus(item.status)} density="dot" label={proofStatusLabel(item.status)} />

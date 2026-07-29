@@ -292,7 +292,11 @@ export function sessionEmptyState(input: Readonly<{
     });
   }
   const query = input.query.trim();
-  const lines: string[] = [`Searched every conversation in this journal by ${SESSION_SEARCH_SCOPE}.`];
+  // The route issues a profile-scoped query; this sentence used to be written
+  // against `querySessionRecords`'s field list, which is journal-wide. It was
+  // describing the matcher rather than the search, and so told a person who had
+  // just failed to find a conversation that it does not exist anywhere.
+  const lines: string[] = [`Searched this profile's conversations by ${SESSION_SEARCH_SCOPE}.`];
   // Stated as of the read that produced it. The library re-reads the journal on
   // every filter change, so a bare "25 conversations searched" would be a claim
   // about a number this render never saw.

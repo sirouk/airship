@@ -1,8 +1,17 @@
+import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
-import { messagePartsFromFacts, type MessagePart, type MessagePartFact } from "./message-parts";
+import type { DurableEvent } from "../../core/journal";
+import {
+  messagePartsFromDurableEvents,
+  messagePartsFromFacts,
+  type MessagePart,
+  type MessagePartFact,
+} from "./message-parts";
+import { recoverPartialTurn } from "./turn-recovery";
 import {
   boundedMessageParts,
   DEFAULT_OPERATION_RENDER_LIMIT,
+  errorHeading,
   operationHeadline,
   operationStripState,
   pairOperations,
@@ -167,6 +176,113 @@ describe("operation strip state", () => {
   });
 });
 
+/**
+ * Three defects with one cause: the strip read a tool's own status and nothing
+ * else. A stop cancels the turn's signal, which is exactly what stops the
+ * settling `tool.*` appends being written, so `requested`/`approved` are the
+ * last words the journal will ever have on those calls — and the strip read
+ * them as work in progress for ever, in the page and after every reload.
+ */
+describe("terminal-aware operations", () => {
+  const stoppedTurn = () => durableEvents([
+    draft("turn.requested", { content: "Read both files" }),
+    draft("assistant.completed", {
+      message: {
+        role: "assistant",
+        content: "Reading them.",
+        toolCalls: [
+          { id: "call-1", name: "read_file", arguments: { path: "a" } },
+          { id: "call-2", name: "read_file", arguments: { path: "b" } },
+        ],
+      },
+    }),
+    draft("tool.requested", { call: { id: "call-1", name: "read_file", arguments: { path: "a" } } }),
+    draft("tool.requested", { call: { id: "call-2", name: "read_file", arguments: { path: "b" } } }),
+    draft("tool.approved", { callId: "call-1" }),
+    draft("turn.cancelled", { error: "Stopped by the operator." }),
+  ]);
+
+  it("reads every unsettled step of a stopped turn as stopped, not as working", () => {
+    const parts = messagePartsFromDurableEvents(stoppedTurn());
+    const steps = operations(pairOperations(parts).find((node) => node.kind === "operations")!);
+    const state = operationStripState(steps);
+
+    expect(steps.map((step) => step.outcome)).toEqual(["abandoned", "abandoned"]);
+    expect(steps.map((step) => step.statusSentence))
+      .toEqual(["Tool step stopped before it completed", "Tool step stopped before it completed"]);
+    expect(state.active).toBe(false);
+    expect(state.headline).not.toContain("Working");
+    expect(state.headline).toContain("2 stopped");
+    // `active` is the sole gate on the strip's `role="status"` and on the
+    // acting seal, so a settled strip can carry neither.
+    expect(steps.some((step) => step.outcome === "running" || step.outcome === "queued")).toBe(false);
+  });
+
+  it("holds the same reading for the in-page path after recovery runs over it", () => {
+    const parts = recoverPartialTurn(messagePartsFromDurableEvents(stoppedTurn()), "", "", true);
+    const steps = operations(pairOperations(parts).find((node) => node.kind === "operations")!);
+
+    expect(steps.map((step) => step.outcome)).toEqual(["abandoned", "abandoned"]);
+    expect(operationStripState(steps).active).toBe(false);
+  });
+
+  it("names an approved step with no result as running rather than approved", () => {
+    const running = messagePartsFromDurableEvents(durableEvents([
+      draft("tool.requested", { call: { id: "call-1", name: "read_file", arguments: { path: "a" } } }),
+      draft("tool.approved", { callId: "call-1" }),
+    ]));
+    const [step] = operations(pairOperations(running)[0]!);
+    expect(step).toMatchObject({ outcome: "running", statusSentence: "Tool step running" });
+    expect(operationStripState([step!]).active).toBe(true);
+
+    const settled = messagePartsFromDurableEvents(durableEvents([
+      draft("tool.requested", { call: { id: "call-1", name: "read_file", arguments: { path: "a" } } }),
+      draft("tool.approved", { callId: "call-1" }),
+      draft("tool.resulted", { callId: "call-1", name: "read_file", content: "# Airship" }),
+    ]));
+    expect(operations(pairOperations(settled)[0]!)[0]).toMatchObject({ outcome: "ran" });
+  });
+
+  it("names a step waiting on approval as queued rather than as an unverified proof", () => {
+    const [step] = operations(pairOperations(messagePartsFromFacts([
+      call("call-1", 1, "read_file", { path: "a" }),
+    ]))[0]!);
+    expect(step?.outcome).toBe("queued");
+    expect(step?.statusSentence).not.toContain("not checked");
+    expect(step?.statusSentence).toBe("Tool step queued — waiting for your approval");
+  });
+
+  it("keeps the completed colour to the completed outcome alone", async () => {
+    const css = await readFile(new URL("./message-parts-view.css", import.meta.url), "utf8");
+    for (const rule of css.split("\n").filter((line) => line.includes("var(--v-verified)"))) {
+      for (const unsettled of ["running", "queued", "approved", "abandoned"]) {
+        expect(rule, `${unsettled} must not share the completed colour`)
+          .not.toContain(`data-outcome="${unsettled}"`);
+      }
+    }
+  });
+
+  it("heads a stop with words rather than with the journal event type", () => {
+    expect(errorHeading("turn.cancelled")).toBe("Turn stopped");
+    expect(errorHeading("turn.failed")).toBe("Turn failed");
+    expect(errorHeading(undefined)).toBe("Turn stopped safely");
+    expect(errorHeading("turn.exploded")).not.toContain("turn.");
+  });
+
+  it("heads a local command with command words, never with turn words", () => {
+    expect(errorHeading("local.command.failed")).toBe("Command failed");
+    expect(errorHeading("local.command.cancelled")).toBe("Command cancelled");
+    // A local command is not a turn, so no heading on that path may claim one.
+    for (const code of ["local.command.failed", "local.command.cancelled", "local.command.exploded"]) {
+      expect(errorHeading(code).toLowerCase(), code).not.toContain("turn");
+    }
+  });
+
+  it("claims nothing it cannot know about an unrecognised code", () => {
+    expect(errorHeading("some.future.code")).toBe("Something went wrong");
+  });
+});
+
 describe("row digests", () => {
   it("promotes the first scalar of the arguments and falls back to the raw summary", () => {
     expect(scalarDigest('{"path":"/workspace/README.md"}')).toBe("/workspace/README.md");
@@ -194,6 +310,27 @@ describe("row digests", () => {
 
 function operations(node: { kind: string }): readonly PairedOperation[] {
   return (node as OperationsNode).operations;
+}
+
+function draft(type: string, payload: Record<string, unknown>): Readonly<{ type: string; payload: Record<string, unknown> }> {
+  return { type, payload };
+}
+
+function durableEvents(
+  drafts: readonly Readonly<{ type: string; payload: Record<string, unknown> }>[],
+): readonly DurableEvent[] {
+  return drafts.map((entry, index) => ({
+    version: 1,
+    eventId: `event-${String(index + 1)}`,
+    sessionId: "session-1",
+    turnId: "turn-1",
+    sequence: index + 1,
+    type: entry.type,
+    payload: entry.payload as DurableEvent["payload"],
+    recordedAt: `2026-07-18T00:00:${String(index + 1).padStart(2, "0")}.000Z`,
+    previousDigest: index === 0 ? "genesis" : `digest-${String(index)}`,
+    digest: `digest-${String(index + 1)}`,
+  }));
 }
 
 function call(callId: string, sequence: number, name: string, args: Record<string, string>): MessagePartFact {

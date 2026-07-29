@@ -25,9 +25,14 @@ describe("unified Memory surface", () => {
   });
 
   it("keeps relationship and index potency behind native progressive disclosure", () => {
-    expect(source.match(/<details/gu)).toHaveLength(2);
+    // The two route sections, plus the hidden-node restore list — which is a
+    // disclosure for the same reason they are: it exists only when it has
+    // something to say, and it is the control that lifts what it reports.
+    expect(source.match(/<details/gu)).toHaveLength(3);
     expect(source).toContain('id="memory-relationships"');
     expect(source).toContain('id="memory-index"');
+    expect(source).toContain('<details class="memory-hidden-nodes">');
+    expect(source).toContain("setHiddenMemoryNodeIds(new Set())}>Restore all");
     expect(source).toContain("graph.stats.componentCount");
     expect(source).toContain("groupMemoryRelationships(selectedEdges, relationshipLimit)");
     expect(source).toContain("<ContextView workspace={workspace} entries={files} embedded searchQuery={query} sharedSearch={memorySearch}");
@@ -120,6 +125,18 @@ describe("unified Memory surface", () => {
     expect(appSource).toContain("async function openMemorySource(target: MemorySourceTarget)");
     expect(appSource).toContain("onOpenSource={(target) => void openMemorySource(target)}");
     expect(appSource).toContain("await openFile(target.path)");
+  });
+
+  it("never announces an open for a source the workspace no longer holds", () => {
+    // `openFile` reported its outcome only through state, so "did not throw"
+    // was read as "opened" and a deleted path still announced `Opened …`.
+    expect(appSource).toContain('async function openFile(path: string): Promise<"opened" | "missing" | "superseded">');
+    expect(appSource).toContain('const outcome = await openFile(target.path);');
+    expect(appSource).toContain('if (outcome === "missing") {');
+    expect(appSource).toContain("That Memory source is no longer in the workspace: ${target.path}");
+    // A superseded request belongs to the runtime that replaced it, so it says
+    // nothing at all rather than claiming either outcome.
+    expect(appSource).toContain('if (outcome === "superseded") return;');
   });
 
   it("states what was searched instead of three vague empty boxes", () => {
@@ -230,8 +247,11 @@ describe("embedded index surface", () => {
     expect(source).toContain('{selectedNode ? selectedNode.kind : "nothing selected"}');
     expect(source).not.toContain('selectedNode.kind : "select a node"');
     // The retired placeholder's own sentence keeps its documented fate as the
-    // overview panel's footer, so the words survive where they read as help.
-    expect(source).toContain("Pan, zoom, search, or select a node to inspect relationships and source metadata.");
+    // overview panel's footer, so the words survive where they read as help —
+    // and it now names controls that exist rather than a bare "zoom" that only
+    // a mouse wheel could reach.
+    expect(source).toContain("Drag to pan, pinch or use Zoom in · Zoom out · Fit above the graph, search, or select a node to inspect relationships and source metadata.");
+    expect(source).toContain('<div class="memory-graph-controls" role="group" aria-label="Graph viewport">');
 
     // The unsearched recall state offers terms this page can prove it holds.
     expect(source).toContain("{!state.query && starters.length ? <MemoryStarters");

@@ -201,6 +201,41 @@ describe("Chutes connection method copy", () => {
     expect(source.indexOf('<p class={`oauth-boundary-status ${oauthNotice.tone}`}')).toBeLessThan(source.indexOf("{isChutesConnected(connection) ? ("));
   });
 
+  it("retires the sign-in notice on the one state that falsifies it, and never instructs from it", () => {
+    /*
+     * AMENDED, and strengthened.
+     *
+     * The previous shape kept "Choose a model, then finish the connection." in
+     * the completion copy and tried to make it true by gating the whole notice
+     * on `Boolean(candidate)`. That gate is unsatisfiable at the moment it is
+     * needed: `candidate` is only set once model discovery returns, which
+     * happens after the exchange and can fail outright, so the single
+     * confirmation a returning redirect produces was suppressed for the entire
+     * discovery window and for good whenever discovery failed — the case where
+     * it matters most, because it is what places the failure downstream of the
+     * sign-in. (e2e/connect-inference.spec.ts:148 caught exactly this.)
+     *
+     * The instruction is now deleted from the notice rather than guarded, so
+     * the assertions below are stronger than the ones they replace: the old
+     * test permitted the false sentence in one state and policed when it
+     * showed; this one forbids the notice from containing an instruction about
+     * the chooser in every state, and still asserts the terminal transition on
+     * a committed connection that the finding asked for. `.oauth-finish-banner`
+     * remains the one place that names the next step, and it renders only
+     * inside the `candidate` branch that owns the chooser.
+     */
+    expect(source).toContain("const oauthNoticeVisible = oauthNotice !== undefined && !isChutesConnected(connection);");
+    expect(source).toContain("{oauthNotice && oauthNoticeVisible ? <p class={`oauth-boundary-status ${oauthNotice.tone}`}");
+    // The exchange is reported as a fact, with no trailing instruction.
+    expect(source).toContain('return "Chutes sign-in complete with S256 PKCE through the localhost handler.";');
+    expect(source).toContain('return "Chutes sign-in complete with S256 PKCE.";');
+    expect(source).not.toContain("Choose a model, then finish the connection.");
+    // …and the next step is still stated exactly once, beside the chooser.
+    expect(source).toContain('<div class="oauth-finish-banner" role="status" aria-live="polite">');
+    expect(source.match(/Choose the session model and finish\./gu) ?? []).toHaveLength(1);
+    expect(source.indexOf('<div class="oauth-finish-banner"')).toBeGreaterThan(source.indexOf(") : candidate ? ("));
+  });
+
   it("keys the proof-policy disclosure on the capability and keeps both descriptions", () => {
     // The 465×108px tile for a permanently disabled option collapses, but only
     // while `available === false`, and both option descriptions plus the
@@ -280,7 +315,10 @@ describe("what stands between the tab and the field", () => {
     // `Connect with a Chutes API key` was the fourth rendering of the same
     // three words inside one open lane. It survives as this region's accessible
     // name, so the region is still announced.
-    expect(source).toContain('<section class="api-key-alternative" aria-label="Connect with a Chutes API key">');
+    // Open-ended: the same region now also carries the `tabpanel` half of the
+    // method switch's tablist contract. What is asserted is the accessible
+    // name surviving, not the full attribute list.
+    expect(source).toContain('<section class="api-key-alternative" aria-label="Connect with a Chutes API key"');
     expect(source).not.toContain('<strong id="chutes-api-key-title">');
   });
 
@@ -349,6 +387,30 @@ describe("a refused key is reported as a refused key", () => {
     // The hint itself is not deleted — it is still in the file, for every
     // state that is not a refusal.
     expect(source).toContain("Chutes personal keys start with cpk_.");
+  });
+});
+
+describe("the catalog enrichment retry is offered in the state it is a retry for", () => {
+  it("gates the control on 'not fresh' rather than on the state this route cannot produce", () => {
+    // Both catalog reads here pass `includeManagement: true`, so the client
+    // never returns `disabled` for management on this route: the old gate named
+    // the one member of the union that a failed read can never land in, which
+    // left a failed management read with no recovery at all.
+    expect(source).toContain('{candidate.managementState !== "fresh" ? <button type="button" onClick={() => void enrichCatalog()} disabled={busy || !online}>Load live availability metadata</button> : null}');
+    expect(source).not.toContain('candidate.managementState === "disabled" ?');
+    expect(source.match(/new ModelCatalogClient\(\{ includeManagement: true/gu)).toHaveLength(2);
+    // A second failure keeps the panel: the candidate is replaced only after
+    // the enriched catalog has produced a usable model list.
+    expect(source).toContain("if (models.length === 0) throw new Error(");
+    expect(source.indexOf("if (models.length === 0) throw new Error("))
+      .toBeLessThan(source.indexOf("setCandidate(Object.freeze({\n        ...prior,"));
+  });
+
+  it("gives the capability marks a name ARIA will not discard", () => {
+    // `aria-label` on a bare span is dropped — its computed role is generic —
+    // and a tick was the cell's only text, so the matrix announced "✓" and "—".
+    expect(source).toContain('<span class={available ? "capability-mark available" : "capability-mark"} role="img" aria-label={available ? "Available" : "Unavailable"}>');
+    expect(source).toContain('<span aria-hidden="true">{available ? "✓" : "—"}</span>');
   });
 });
 

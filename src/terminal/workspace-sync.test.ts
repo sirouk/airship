@@ -68,6 +68,70 @@ describe("terminal workspace synchronization", () => {
     expect(mountedText(mounted, "editor-only.txt")).toBe("visible after reconcile\n");
   });
 
+  it("leaves a later Editor revision alone across two syncs that never rebuild the mount", async () => {
+    const workspace = new MemoryWorkspace();
+    const original = await workspace.write("README.md", "before\n", { expectedRevision: null });
+    let mounted: FileSystemTree = {};
+    const host = {
+      fs: { async mkdir() { return undefined; }, async rm() { mounted = {}; } },
+      async mount(tree: FileSystemTree) { mounted = structuredClone(tree); },
+      async export() { return structuredClone(mounted); },
+    };
+    const baseline = await mountTerminalWorkspace(host, workspace);
+    await workspace.write("README.md", "from editor\n", { expectedRevision: original.revision });
+
+    // Sync without remounting: the mount still holds "before\n", so the next
+    // sync must not read that stale copy as a terminal edit and publish it.
+    const first = await syncTerminalWorkspace(host, workspace, baseline);
+    const second = await syncTerminalWorkspace(host, workspace, first.snapshot);
+
+    expect(first.changedPaths).toEqual([]);
+    expect(second.changedPaths).toEqual([]);
+    await expect(workspace.read("README.md")).resolves.toMatchObject({ content: "from editor\n" });
+  });
+
+  it("leaves an Editor deletion deleted across two syncs that never rebuild the mount", async () => {
+    const workspace = new MemoryWorkspace();
+    const original = await workspace.write("gone.txt", "before\n", { expectedRevision: null });
+    let mounted: FileSystemTree = {};
+    const host = {
+      fs: { async mkdir() { return undefined; }, async rm() { mounted = {}; } },
+      async mount(tree: FileSystemTree) { mounted = structuredClone(tree); },
+      async export() { return structuredClone(mounted); },
+    };
+    const baseline = await mountTerminalWorkspace(host, workspace);
+    await workspace.remove("gone.txt", { expectedRevision: original.revision });
+
+    const first = await syncTerminalWorkspace(host, workspace, baseline);
+    const second = await syncTerminalWorkspace(host, workspace, first.snapshot);
+
+    expect(second.changedPaths).toEqual([]);
+    await expect(workspace.read("gone.txt")).resolves.toBeUndefined();
+  });
+
+  it("does not fail a whole sync because the Editor already deleted what the terminal deleted", async () => {
+    const workspace = new MemoryWorkspace();
+    const doomed = await workspace.write("gone.txt", "before\n", { expectedRevision: null });
+    await workspace.write("kept.txt", "before\n", { expectedRevision: null });
+    let mounted: FileSystemTree = {};
+    const host = {
+      fs: { async mkdir() { return undefined; }, async rm() { mounted = {}; } },
+      async mount(tree: FileSystemTree) { mounted = structuredClone(tree); },
+      async export() { return structuredClone(mounted); },
+    };
+    const baseline = await mountTerminalWorkspace(host, workspace);
+    await workspace.remove("gone.txt", { expectedRevision: doomed.revision });
+    // The shell removed the same file, and edited an unrelated one.
+    delete (mounted as Record<string, unknown>)["gone.txt"];
+    mounted["kept.txt"] = { file: { contents: "from terminal\n" } };
+
+    const result = await syncTerminalWorkspace(host, workspace, baseline);
+
+    expect(result.changedPaths).toEqual(["/workspace/kept.txt"]);
+    await expect(workspace.read("kept.txt")).resolves.toMatchObject({ content: "from terminal\n" });
+    await expect(workspace.read("gone.txt")).resolves.toBeUndefined();
+  });
+
   it("round-trips opaque Git worktree bytes without mounting the storage envelope", async () => {
     const workspace = new MemoryWorkspace();
     const original = Uint8Array.from([0, 255, 1, 2, 128, 64]);

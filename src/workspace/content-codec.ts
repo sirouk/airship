@@ -39,8 +39,25 @@ export function isWorkspaceBinaryEnvelope(content: string): boolean {
   return content.startsWith(BINARY_PREFIX);
 }
 
+/**
+ * The file's own byte length, envelope decoded.
+ *
+ * Measured arithmetically rather than by decoding: every WorkspacePort now
+ * records this on write, and a 16 MiB object must not be materialised a second
+ * time just to be sized. `btoa` always emits padded quads, so the length of a
+ * real envelope is exact.
+ *
+ * It also never throws. A plain text file may legitimately open with the
+ * prefix, and refusing to save it would be a far worse failure than reporting
+ * the stored length for something that was never a real envelope.
+ */
 export function workspaceContentByteLength(content: string): number {
-  return decodeWorkspaceBytes(content).byteLength;
+  if (!isWorkspaceBinaryEnvelope(content)) return encoder.encode(content).byteLength;
+  const encoded = content.length - BINARY_PREFIX.length;
+  if (encoded === 0) return 0;
+  if (encoded % 4 !== 0) return encoder.encode(content).byteLength;
+  const padding = content.endsWith("==") ? 2 : content.endsWith("=") ? 1 : 0;
+  return (encoded / 4) * 3 - padding;
 }
 
 function equalBytes(left: Uint8Array, right: Uint8Array): boolean {

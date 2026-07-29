@@ -10,6 +10,7 @@ import {
 } from "./attestations-view";
 import { ATTESTATION_DIMENSIONS } from "./attestations-model";
 import { claimQualifierLabel } from "./claim-stack-facts";
+import { proofStatusLabel } from "./trust-language";
 
 const source = readFileSync(new URL("./attestations-view.tsx", import.meta.url), "utf8");
 const styles = readFileSync(new URL("./attestations-view.css", import.meta.url), "utf8");
@@ -110,6 +111,27 @@ describe("evidence comprehension hierarchy", () => {
       "No evidence",
       "Stale observation",
     ]);
+  });
+
+  it("prints only state words this legend defines", () => {
+    // The seals, the record-count row and the inspector title all render
+    // `proofStatusLabel`, and it used to answer "Expired" for a state this
+    // legend calls a stale observation — a sixth word, taught nowhere, on the
+    // same screen as the definition it contradicted.
+    const defined = new Set(EVIDENCE_STATE_MEANINGS.map((entry) => entry.label));
+    for (const status of ["verified", "partial", "failed", "expired", "unavailable"] as const) {
+      expect(defined).toContain(proofStatusLabel(status));
+    }
+  });
+
+  it("states one privacy boundary for raw evidence, not two that disagree", () => {
+    // The panel said raw evidence was withheld by design and, 155 lines later,
+    // that raw values remained available in the same panel. The grid renders
+    // normalized digests and measurement metadata; the raw material is reachable
+    // only through the Receipt & journal export, so the header names it.
+    expect(source).toContain("Raw evidence withheld here; export the raw verification bundle from Receipt &amp; journal");
+    expect(source).toContain("digests and measurement metadata only");
+    expect(source).not.toContain("raw values remain available here");
   });
 
   it("presents manual acquisition as retry/diagnostic and preserves the full mobile fact path", () => {

@@ -154,7 +154,7 @@ export function ProviderFabricPanel({
       </p>
 
       {snapshot.connections.length ? (
-        <div class="provider-connections" aria-label="Connected inference providers">
+        <div class="provider-connections" role="group" aria-label="Connected inference providers">
           {snapshot.connections.map((connection) => (
             <ProviderConnectionCard
               key={connection.id}
@@ -410,7 +410,7 @@ function ProviderConnectionCard({
         </span>
       </div>
 
-      <div class="provider-connection__capabilities" aria-label="Proved connection capabilities">
+      <div class="provider-connection__capabilities" role="group" aria-label="Proved connection capabilities">
         {connection.availableCapabilities.length
           ? connection.availableCapabilities.map((capability) => <span key={capability}>{capabilityLabel(capability)}</span>)
           : <span data-empty>No proved capabilities</span>}

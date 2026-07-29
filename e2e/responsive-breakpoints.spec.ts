@@ -36,9 +36,10 @@ test("the chat shell stays slim and non-overlapping on narrow and iPhone-class s
       const stage = document.querySelector<HTMLElement>(".session-bar")?.getBoundingClientRect();
       const details = document.querySelector<HTMLElement>(".session-bar__chips")?.getBoundingClientRect();
       const nav = document.querySelector<HTMLElement>(".mobile-nav")?.getBoundingClientRect();
+      const main = document.querySelector<HTMLElement>("main.main")?.getBoundingClientRect();
       const composer = document.querySelector<HTMLElement>(".composer")?.getBoundingClientRect();
-      const approval = document.querySelector<HTMLElement>('[aria-label="Conversation approval policy"]')?.getBoundingClientRect();
-      return top && stage && details && nav && composer && approval ? {
+      const approval = document.querySelector<HTMLElement>('.composer-approval-select .menu-select-trigger')?.getBoundingClientRect();
+      return top && stage && details && nav && main && composer && approval ? {
         overflow: document.documentElement.scrollWidth - innerWidth,
         topHeight: top.height,
         stageHeight: stage.height,
@@ -46,6 +47,9 @@ test("the chat shell stays slim and non-overlapping on narrow and iPhone-class s
         topBottom: top.bottom,
         detailsRight: details.right,
         navRight: nav.right,
+        navTop: nav.top,
+        mainTop: main.top,
+        composerBottom: composer.bottom,
         composerHeight: composer.height,
         approvalX: approval.x,
         approvalY: approval.y,
@@ -59,6 +63,12 @@ test("the chat shell stays slim and non-overlapping on narrow and iPhone-class s
     expect(geometry!.stageTop).toBeGreaterThanOrEqual(geometry!.topBottom - 1);
     expect(geometry!.detailsRight).toBeLessThanOrEqual(geometry!.viewportWidth + 1);
     expect(geometry!.navRight).toBeLessThanOrEqual(geometry!.viewportWidth + 1);
+    // The overlap claim, made where the nav actually renders. It used to live in
+    // the desktop breakpoint test against a class no element carries, guarded by
+    // the lookup succeeding — so it never once executed. `geometry` is undefined
+    // if the nav is missing, and the assertion above already fails on that.
+    expect(geometry!.navTop, `${viewport.width}px nav below the main content`).toBeGreaterThanOrEqual(geometry!.mainTop);
+    expect(geometry!.navTop, `${viewport.width}px nav clear of the composer`).toBeGreaterThanOrEqual(geometry!.composerBottom - 1);
     // Amended deliberately. A 44px touch row plus a 44px text row cannot fit in
     // 60px, and this same file asserts both of those minimums, so the old cap
     // was arithmetically unsatisfiable once the composer became two rows. The
@@ -88,7 +98,7 @@ test("the chat shell stays slim and non-overlapping on narrow and iPhone-class s
     await page.getByRole("combobox", { name: "Message Airship" }).focus();
     const focused = await page.evaluate(() => {
       const composer = document.querySelector<HTMLElement>(".composer")!.getBoundingClientRect();
-      const approval = document.querySelector<HTMLElement>('[aria-label="Conversation approval policy"]')!.getBoundingClientRect();
+      const approval = document.querySelector<HTMLElement>('.composer-approval-select .menu-select-trigger')!.getBoundingClientRect();
       return { composerHeight: composer.height, approvalX: approval.x, approvalY: approval.y };
     });
     expect(Math.abs(focused.composerHeight - geometry!.composerHeight)).toBeLessThanOrEqual(1);
@@ -130,7 +140,7 @@ test("short phone landscapes keep a bounded transcript and never autofocus or ov
         transcript: bounds(".transcript"),
         composerWrap: bounds(".composer-wrap"),
         composer: bounds(".composer"),
-        approval: bounds('[aria-label="Conversation approval policy"]'),
+        approval: bounds('.composer-approval-select .menu-select-trigger'),
         attachment: bounds(".composer-attach"),
         nav: bounds(".mobile-nav"),
       };
@@ -163,7 +173,7 @@ test("short phone landscapes keep a bounded transcript and never autofocus or ov
     await textarea.fill("Plan");
     const focused = await page.evaluate(() => {
       const composer = document.querySelector<HTMLElement>(".composer")!.getBoundingClientRect();
-      const approvalControl = document.querySelector<HTMLElement>('[aria-label="Conversation approval policy"]')!.getBoundingClientRect();
+      const approvalControl = document.querySelector<HTMLElement>('.composer-approval-select .menu-select-trigger')!.getBoundingClientRect();
       return {
         composerHeight: composer.height,
         composerBottom: composer.bottom,
@@ -445,7 +455,12 @@ for (const density of densities) {
         const geometry = await page.evaluate((routeHash) => {
           const main = document.querySelector<HTMLElement>("main.main");
           const heading = main?.querySelector<HTMLElement>("h1, .session-bar h1");
-          const mobileNav = document.querySelector<HTMLElement>(".mobile-navigation");
+          // FIXED: this queried a guessed class that no element carries — the
+          // nav renders as `.mobile-nav` — so the lookup always missed and the
+          // `mobileTop !== undefined` guard below silently absorbed its own
+          // failure. The unconditional geometry claim lives in the phone test
+          // above, which runs at a width where the nav actually renders.
+          const mobileNav = document.querySelector<HTMLElement>(".mobile-nav");
           const topbar = document.querySelector<HTMLElement>(".topbar");
           if (!main || !heading || !topbar) return undefined;
           const mainBox = main.getBoundingClientRect();

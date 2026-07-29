@@ -513,28 +513,12 @@
 
 .topbar-connect-action:hover { background: color-mix(in srgb, var(--accent) 18%, var(--surface-soft)); }
 
-.compact-profile-select {
-  position: relative;
-  display: none;
-  width: 44px;
-  height: 44px;
-  place-items: center;
-  overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
-  border-radius: 50%;
-  color: var(--brass-bright);
-  background: color-mix(in srgb, var(--accent) 6.5%, transparent);
-  font: var(--fs-micro) ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-
-.compact-profile-select select {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  cursor: pointer;
-  opacity: 0;
-}
+/* The native `<select>` wrapper this block styled was retired when the topbar
+   switcher became a `MenuSelect`. No element has carried its class since, and
+   the rules that survived it were two `display: none` declarations at phone
+   widths — which read as a deliberate decision to hide the profile switcher on
+   phones, the opposite of what `menu-select.css` does with the live control.
+   `dead-selector-contract.test.ts` keeps the name from coming back. */
 
 .runtime-line {
   display: flex;

@@ -27,7 +27,7 @@ export function MessagePartsView({
   const answerId = streaming ? undefined : answerPartId(parts);
   const mode = useTranscriptOperations();
   return (
-    <div class="message-parts" aria-label="Message contents">
+    <div class="message-parts" role="group" aria-label="Message contents">
       {nodes.map((node) => node.kind === "operations"
         ? <OperationStrip key={node.id} node={node} mode={mode} />
         : <MessagePartView key={node.part.id} part={node.part} answer={node.part.id === answerId} />)}
@@ -70,7 +70,7 @@ export function streamedMessageTail(
   return streaming ? streamedContent : "";
 }
 
-export const OPERATION_OUTCOMES = ["ran", "running", "failed", "denied", "queued", "approved"] as const;
+export const OPERATION_OUTCOMES = ["ran", "running", "failed", "denied", "queued", "abandoned"] as const;
 
 export type OperationOutcome = (typeof OPERATION_OUTCOMES)[number];
 
@@ -121,6 +121,7 @@ export type TranscriptNode =
  * consecutive operations becomes one strip.
  */
 export function pairOperations(parts: readonly MessagePart[]): readonly TranscriptNode[] {
+  const terminal = turnReachedTerminal(parts);
   const results = new Map<string, ToolResultPart>();
   for (const part of parts) {
     if (part.kind === "tool-result" && !results.has(part.callId)) results.set(part.callId, part);
@@ -136,14 +137,14 @@ export function pairOperations(parts: readonly MessagePart[]): readonly Transcri
     if (part.kind === "tool-call") {
       const result = results.get(part.callId);
       if (result) folded.add(result.id);
-      run.push(pairedOperation(part, result));
+      run.push(pairedOperation(part, result, terminal));
       continue;
     }
     if (part.kind === "tool-result") {
       // A second result for one call, or a result whose call never landed, is
       // never swallowed: it renders as its own row with the missing half named.
       if (folded.has(part.id)) continue;
-      run.push(pairedOperation(undefined, part));
+      run.push(pairedOperation(undefined, part, terminal));
       continue;
     }
     // A provider that emits a blank text delta between two calls must not slice
@@ -154,6 +155,23 @@ export function pairOperations(parts: readonly MessagePart[]): readonly Transcri
   }
   closeRun();
   return Object.freeze(nodes);
+}
+
+/**
+ * Whether the turn these parts belong to has already ended.
+ *
+ * A stop cancels the turn's AbortSignal, which is precisely what prevents the
+ * settling `tool.*` appends from ever being written, so a stopped turn's calls
+ * stay `requested`/`approved` in the journal for ever. Reading those statuses
+ * alone, the strip said "Working" on a turn that ended minutes ago and kept
+ * saying it after a reload. The terminal facts are already in the same parts
+ * list — the durable cancellation/failure error and the turn footer — so the
+ * strip asks them instead of asking a status that can never change again.
+ */
+export function turnReachedTerminal(parts: readonly MessagePart[]): boolean {
+  return parts.some((part) =>
+    part.kind === "footer"
+    || (part.kind === "error" && (part.code === "turn.cancelled" || part.code === "turn.failed")));
 }
 
 export function operationStripState(
@@ -167,8 +185,11 @@ export function operationStripState(
   collapsible: boolean;
   headline: string;
 }> {
-  const active = operations.some((operation) => operation.outcome === "running" || operation.outcome === "queued" || operation.outcome === "approved");
-  const forced = operations.some((operation) => operation.outcome === "failed" || operation.outcome === "denied");
+  const active = operations.some((operation) => operation.outcome === "running" || operation.outcome === "queued");
+  // A step that never got to finish is as much a reason to keep the rows on
+  // screen as one that failed: it is the evidence of what the stop interrupted.
+  const forced = operations.some((operation) =>
+    operation.outcome === "failed" || operation.outcome === "denied" || operation.outcome === "abandoned");
   const settled = !active;
   return Object.freeze({
     active,
@@ -241,8 +262,14 @@ const OUTCOME_COPY: Readonly<Record<OperationOutcome, Readonly<{
   running: { word: "Running…", clause: "running", sentence: "Tool step running", seal: "checking" },
   failed: { word: "Failed", clause: "failed", sentence: "Tool step failed", seal: "failed" },
   denied: { word: "Denied", clause: "denied", sentence: "Tool step denied", seal: "failed" },
-  queued: { word: "Queued", clause: "queued", sentence: "Tool step not checked", seal: "none" },
-  approved: { word: "Approved", clause: "approved", sentence: "Tool step approved", seal: "verified" },
+  // The seal vocabulary's own "not checked" belongs to an unverified proof, not
+  // to a step waiting on a person; borrowing it announced a pending approval as
+  // a failed verification.
+  queued: { word: "Queued", clause: "queued", sentence: "Tool step queued — waiting for your approval", seal: "none" },
+  // A step the turn ended underneath. Not a failure — nothing went wrong with
+  // it — but not settled either, so it wears the attention seal rather than the
+  // completed one.
+  abandoned: { word: "Stopped", clause: "stopped", sentence: "Tool step stopped before it completed", seal: "attention" },
 });
 
 function operationsNode(operations: readonly PairedOperation[]): OperationsNode {
@@ -265,9 +292,13 @@ function operationsNode(operations: readonly PairedOperation[]): OperationsNode 
   });
 }
 
-function pairedOperation(call: ToolCallPart | undefined, result: ToolResultPart | undefined): PairedOperation {
+function pairedOperation(
+  call: ToolCallPart | undefined,
+  result: ToolResultPart | undefined,
+  terminal: boolean,
+): PairedOperation {
   const anchor = call ?? result!;
-  const outcome = pairedOutcome(call, result);
+  const outcome = pairedOutcome(call, result, terminal);
   return Object.freeze({
     id: anchor.id,
     callId: anchor.callId,
@@ -286,12 +317,27 @@ function pairedOperation(call: ToolCallPart | undefined, result: ToolResultPart 
   });
 }
 
-function pairedOutcome(call: ToolCallPart | undefined, result: ToolResultPart | undefined): OperationOutcome {
+/**
+ * A settled call is read from its own record; an unsettled one is read from
+ * the turn.
+ *
+ * `approved` was doing double duty as "permission granted" and "currently
+ * executing" while wearing the settled-positive seal, because execution start
+ * is only ever a transient signal and never a durable status. An approved call
+ * with no result *is* the executing state, so it renders as one — and once the
+ * turn is over, no unsettled call is executing anything, so every one of them
+ * reads as stopped rather than as work that is still going on.
+ */
+function pairedOutcome(
+  call: ToolCallPart | undefined,
+  result: ToolResultPart | undefined,
+  terminal: boolean,
+): OperationOutcome {
   if (result?.status === "denied" || call?.status === "denied") return "denied";
   if (result?.status === "error" || call?.status === "failed") return "failed";
   if (result?.status === "success" || call?.status === "completed") return "ran";
-  if (call?.status === "running") return "running";
-  if (call?.status === "approved") return "approved";
+  if (terminal) return "abandoned";
+  if (call?.status === "running" || call?.status === "approved") return "running";
   return "queued";
 }
 
@@ -570,9 +616,13 @@ function MessagePartView({ part, answer }: { part: NarrativePart; answer: boolea
 
   if (part.kind === "error") {
     return (
-      <div class="message-part part-error" role="alert">
+      <div class="message-part part-error" role="alert" {...(part.code ? { "data-code": part.code } : {})}>
         <Icon name="warning" size={15} />
-        <div><strong>{part.code ?? "Turn stopped safely"}</strong><p>{part.summary}</p>{part.retryable ? <small>Retry is available.</small> : null}</div>
+        <div>
+          <strong {...(part.code ? { title: part.code } : {})}>{errorHeading(part.code)}</strong>
+          <p>{part.summary}</p>
+          {part.retryable ? <small>Retry is available.</small> : null}
+        </div>
       </div>
     );
   }
@@ -583,6 +633,38 @@ function MessagePartView({ part, answer }: { part: NarrativePart; answer: boolea
       {part.recordedAt ? <time dateTime={part.recordedAt}>{formatRecordedAt(part.recordedAt)}</time> : null}
     </footer>
   );
+}
+
+/**
+ * Every durable code an error part can carry, in the reader's words.
+ *
+ * A local command is its own group, not an agent turn (session-message-
+ * presentation.ts builds it from `local.command.*`), so its failures must not
+ * borrow turn vocabulary: a cancelled `/command` ended a command, not a turn.
+ */
+const ERROR_HEADINGS: Readonly<Record<string, string>> = Object.freeze({
+  "turn.cancelled": "Turn stopped",
+  "turn.failed": "Turn failed",
+  "local.command.cancelled": "Command cancelled",
+  "local.command.failed": "Command failed",
+});
+
+/**
+ * The heading of an error part, in words rather than in journal vocabulary.
+ *
+ * `code` is the machine-readable durable event type. Printing it made the
+ * transcript head a paragraph with `turn.cancelled`, which is a string a reader
+ * has no way to interpret and which names an implementation detail of the
+ * journal. It is kept on the element as `data-code`/`title` so the record can
+ * still be traced back to the event that produced it.
+ *
+ * An unrecognised code gets a heading that asserts nothing about *what* ended,
+ * because a wrong claim ("Turn ended" over a local command) is worse than a
+ * vague one: the summary underneath and the traced code still carry the truth.
+ */
+export function errorHeading(code?: string): string {
+  if (code === undefined) return "Turn stopped safely";
+  return ERROR_HEADINGS[code] ?? "Something went wrong";
 }
 
 function isBlankText(part: MessagePart): boolean {

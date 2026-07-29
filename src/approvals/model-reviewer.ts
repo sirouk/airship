@@ -27,6 +27,10 @@ export async function reviewToolActionWithModel(options: Readonly<{
   });
   let text = "";
   let completed = false;
+  // The review is a billed provider request like any other. Its usage was
+  // dropped on the floor, which made the only inference a person cannot see in
+  // the transcript also the only one whose cost was unrecordable.
+  let usage: Readonly<{ inputTokens?: number; outputTokens?: number }> | undefined;
   for await (const event of options.transport.stream({
     requestId,
     sessionId: options.context.sessionId,
@@ -38,27 +42,47 @@ export async function reviewToolActionWithModel(options: Readonly<{
     idempotencyKey: requestId,
   }, options.context.signal)) {
     if (event.type === "tool-call") {
-      return { verdict: "indeterminate", reason: "Safety reviewer attempted a recursive tool call.", requestId, model: options.model };
+      return { verdict: "indeterminate", reason: "Safety reviewer attempted a recursive tool call.", requestId, model: options.model, ...usageOf(usage) };
     }
     if (event.type === "text-delta") {
       text += event.text;
       if (text.length > MAX_REVIEW_RESPONSE) {
-        return { verdict: "indeterminate", reason: "Safety-review response exceeded its bound.", requestId, model: options.model };
+        return { verdict: "indeterminate", reason: "Safety-review response exceeded its bound.", requestId, model: options.model, ...usageOf(usage) };
       }
     }
+    if (event.type === "usage") usage = { inputTokens: event.inputTokens, outputTokens: event.outputTokens };
     if (event.type === "completed") completed = event.finishReason === "stop";
   }
-  if (!completed) return { verdict: "indeterminate", reason: "Safety reviewer did not complete normally.", requestId, model: options.model };
+  if (!completed) return { verdict: "indeterminate", reason: "Safety reviewer did not complete normally.", requestId, model: options.model, ...usageOf(usage) };
   try {
     const parsed = JSON.parse(text) as unknown;
     if (!isVerdict(parsed)) throw new Error("invalid verdict schema");
-    return { verdict: parsed.verdict, reason: parsed.reason.slice(0, 512), requestId, model: options.model };
+    return { verdict: parsed.verdict, reason: parsed.reason.slice(0, 512), requestId, model: options.model, ...usageOf(usage) };
   } catch {
-    return { verdict: "indeterminate", reason: "Safety reviewer returned malformed structured output.", requestId, model: options.model };
+    return { verdict: "indeterminate", reason: "Safety reviewer returned malformed structured output.", requestId, model: options.model, ...usageOf(usage) };
   }
 }
 
-function withholdPrivatePayloads(value: JsonValue, key = ""): JsonValue {
+/** Token counts only when the transport reported them; never invented zeroes. */
+function usageOf(usage: Readonly<{ inputTokens?: number; outputTokens?: number }> | undefined): Readonly<{ inputTokens?: number; outputTokens?: number }> {
+  if (!usage) return {};
+  return {
+    ...(typeof usage.inputTokens === "number" ? { inputTokens: usage.inputTokens } : {}),
+    ...(typeof usage.outputTokens === "number" ? { outputTokens: usage.outputTokens } : {}),
+  };
+}
+
+/**
+ * What the reviewer is not shown, and — just as deliberately — what it is.
+ *
+ * File-content-shaped fields are replaced by their shape, because a review does
+ * not need the bytes of a document to judge whether writing it is in scope. The
+ * action body is *not* withheld: a `script`, `command` or `url` is the thing
+ * being adjudicated, so withholding it would leave the reviewer approving a
+ * name. Exported so the boundary is pinned by a test rather than described by
+ * user-facing copy that can drift away from it.
+ */
+export function withholdPrivatePayloads(value: JsonValue, key = ""): JsonValue {
   if (key && PRIVATE_PAYLOAD_KEY.test(key)) {
     if (typeof value === "string") return `[withheld string: ${value.length} characters]`;
     if (Array.isArray(value)) return `[withheld array: ${value.length} items]`;

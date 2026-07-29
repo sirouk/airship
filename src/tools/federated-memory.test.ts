@@ -39,6 +39,32 @@ describe("federated memory lanes", () => {
     expect(result.groups[2].hits[0]).toMatchObject({ score: 0.9, scoreScope: "shared-workspace-index-only" });
   });
 
+  it("narrows the profile lane to the pinned session when the silo is session-scoped", async () => {
+    const workspace = new MemoryWorkspace();
+    const journal = new EventJournal(new MemoryJournalBackend());
+    const current = await createProfileSession(journal, "research", "session");
+    const sibling = await createProfileSession(journal, "research", "session");
+    await workspace.write(MEMORY_PATH, `${JSON.stringify({
+      version: 2,
+      records: [
+        memory("memory-current", "current session turbine", "research", current),
+        memory("memory-sibling", "sibling session turbine", "research", sibling),
+      ],
+    })}\n`);
+
+    const result = await searchFederatedMemory({
+      query: "turbine",
+      limit: 6,
+      context: context(current),
+      workspace,
+      journal,
+      runtime: fakeRuntime([]),
+    });
+
+    expect(result.groups[1].hits.map((hit) => hit.id)).toEqual(["memory-current"]);
+    expect(JSON.stringify(result)).not.toContain("sibling session turbine");
+  });
+
   it("fails the federated request instead of returning stale workspace hits", async () => {
     const fixture = await setup();
     const runtime = { search: async () => { throw new Error("workspace snapshot changed during search"); } } as unknown as ClientContextRuntime;
@@ -78,18 +104,28 @@ async function setup() {
   return { workspace, journal, engineer };
 }
 
-async function createProfileSession(journal: EventJournal, profileId: string): Promise<string> {
+async function createProfileSession(
+  journal: EventJournal,
+  profileId: string,
+  memoryScope?: "session" | "profile" | "workspace",
+): Promise<string> {
   const digest = await sha256(profileId);
+  const base = {
+    profileId, profileRevision: digest, themeId: "test", themeDigest: digest,
+    resolvedSkills: [], skillSetDigest: digest, resolutionDigest: digest,
+  };
   const manifest = await createSessionManifest({
     systemPrompt: profileId,
     providerId: "test",
     model: "test",
     tools: [],
     workspaceId: "memory://test",
-    profile: {
-      version: 1, profileId, profileRevision: digest, themeId: "test", themeDigest: digest,
-      resolvedSkills: [], skillSetDigest: digest, resolutionDigest: digest,
-    },
+    profile: memoryScope
+      ? {
+        ...base, version: 2, workspaceBinding: { kind: "active-workspace" },
+        memoryScope, approvalMode: "ask-first", minimumPosture: "local",
+      }
+      : { ...base, version: 1 },
   });
   return (await journal.createSession(profileId, manifest)).id;
 }

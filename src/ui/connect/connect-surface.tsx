@@ -2,6 +2,7 @@ import type { ComponentChildren } from "preact";
 import { useId, useRef, useState } from "preact/hooks";
 import { Icon } from "../icons";
 import { Seal } from "../seal";
+import { nextTabId } from "../tabs";
 import {
   companionFacts,
   describeConnectLanes,
@@ -75,6 +76,12 @@ const LANE_ICONS: Readonly<Record<ConnectLaneId, "lock" | "model" | "attestation
  * ellipsise. The long form is `status.label`, which stays in full on the lane's
  * own seal and inside the panel, so nothing here is the only carrier.
  */
+/** The switch's two tabs, in strip order, for the shared movement rule. */
+const CONNECTION_METHOD_TABS = Object.freeze([
+  Object.freeze({ id: "oauth", label: "OAuth" }),
+  Object.freeze({ id: "api-key", label: "API key" }),
+]);
+
 const METHOD_SUBLABELS: Readonly<Record<ConnectLaneStatus["kind"], string>> = Object.freeze({
   connected: "Connected",
   ready: "Primary",
@@ -264,12 +271,29 @@ function CloudMethodPanel({
 
   return (
     <div class="connect-method">
-      <div class="connect-method__switch" role="tablist" aria-label={`${providerLabel} connection method`}>
+      {/* Two buttons carrying `role="tab"` owe the whole tablist contract, not
+          only its look: one tab in the tab order and ←/→/Home/End moving
+          selection and focus. The movement rule is `tabs.tsx`'s, so there is
+          still one implementation of it. */}
+      <div
+        class="connect-method__switch"
+        role="tablist"
+        aria-label={`${providerLabel} connection method`}
+        onKeyDown={(event) => {
+          const next = nextTabId(CONNECTION_METHOD_TABS, method, event.key);
+          if (next === undefined) return;
+          event.preventDefault();
+          setMethod(next === "oauth" ? "oauth" : "api-key");
+          const tabs = event.currentTarget.querySelectorAll<HTMLButtonElement>('button[role="tab"]');
+          tabs[CONNECTION_METHOD_TABS.findIndex((item) => item.id === next)]?.focus();
+        }}
+      >
         <button
           type="button"
           role="tab"
           aria-selected={method === "oauth"}
           aria-controls={oauthPanelId}
+          tabIndex={method === "oauth" ? 0 : -1}
           onClick={() => setMethod("oauth")}
         >
           <span>OAuth</span>
@@ -280,6 +304,7 @@ function CloudMethodPanel({
           role="tab"
           aria-selected={method === "api-key"}
           aria-controls={keyPanelId}
+          tabIndex={method === "api-key" ? 0 : -1}
           onClick={() => setMethod("api-key")}
         >
           <span>API key</span>
@@ -435,7 +460,7 @@ function CodexPanel({
             “This site can’t be reached”. Your one-time code is in that page’s
             address bar, not in the page.
           </span>
-          <p class="connect-paste__example" aria-label="Example of the address to copy">
+          <p class="connect-paste__example" role="group" aria-label="Example of the address to copy">
             <span>http://localhost:1455/auth/callback?</span>
             <mark>code=ac_1a2b3c…</mark>
             <span>&amp;state=…</span>

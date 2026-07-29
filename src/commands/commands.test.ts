@@ -4,6 +4,7 @@ import { ToolRegistry } from "../tools/registry";
 import {
   MAX_SLASH_INPUT_CHARS,
   completeSlashCommand,
+  completeSlashCommandMenu,
   createSlashCommandRegistry,
   planSlashCommand,
   tokenizeSlashInput,
@@ -233,6 +234,34 @@ describe("browser-native slash commands", () => {
     expect(completeSlashCommand("/write --path notes/a --c", registry).map((item) => item.insertText)).toEqual([
       "--content",
     ]);
+  });
+
+  it("keeps the built-in commands visible when the tool namespace outnumbers the menu", () => {
+    // The shipped tool set is large and its names cluster early in the
+    // alphabet, so a purely alphabetical tie-break filled all ten visible rows
+    // with tools and made `/help`, `/models` and `/sessions` — the only three
+    // commands a newcomer can act on before connecting anything — unreachable.
+    const registry = createSlashCommandRegistry({
+      tools: toolRegistry(
+        Array.from({ length: 18 }, (_, index) => definition(
+          `apply_change_${String.fromCharCode(97 + index)}`,
+          "read",
+          { type: "object", properties: {}, additionalProperties: false },
+        )),
+      ),
+    });
+    const menu = completeSlashCommandMenu("/", registry, { limit: 10 });
+    expect(menu.completions.map((item) => item.label)).toEqual(expect.arrayContaining([
+      "/help",
+      "/models",
+      "/sessions",
+    ]));
+    expect(menu.completions).toHaveLength(10);
+    // The menu can only show ten, so it has to be able to say how many it hid.
+    expect(menu.total).toBe(21);
+    expect(completeSlashCommand("/", registry, { limit: 10 }).map((item) => item.label)).toEqual(
+      menu.completions.map((item) => item.label),
+    );
   });
 
   it("fails closed on malformed or oversized command input", () => {

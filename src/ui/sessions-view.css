@@ -127,6 +127,18 @@
   background: transparent;
 }
 
+/*
+ * The input is borderless so the wrapper reads as the control, which means the
+ * wrapper has to carry the focus ring the input gave up. Without this the
+ * keyboard user tabbing into Sessions gets no indication at all of where they
+ * are. Same shape as the Memory query field.
+ */
+.session-library-search:focus-within {
+  border-color: var(--accent-bright);
+  outline: 2px solid color-mix(in srgb, var(--accent-bright) 24%, transparent);
+  outline-offset: 2px;
+}
+
 .session-library-toolbar select,
 .session-library-toolbar button,
 .session-library-actions button,
@@ -1154,12 +1166,30 @@
 }
 
 @media (max-width: 1180px) {
+  /*
+   * Wraps rather than sheds, and rather than scrolls.
+   *
+   * Two relief valves were tried here and both hid a control. As
+   * `overflow-x: auto` the row put `All providers` half off the right edge of a
+   * 430px phone with no scrollbar, no fade and no chevron. As a six-track grid
+   * that drops `.session-library-sort-menu`, Sort simply ceased to exist
+   * between 1180px and 861px — the only ordering control on the route, gone,
+   * with a non-default order neither visible nor clearable. Wrapping costs a
+   * row and cannot hide a control, so no affordance has to be invented to
+   * admit that it did.
+   */
   .session-library-toolbar {
-    grid-template-columns: minmax(260px, 1fr) repeat(3, minmax(120px, auto)) auto auto;
+    display: flex;
+    flex-wrap: wrap;
+    overflow-x: visible;
   }
 
-  .session-library-sort-menu {
-    display: none;
+  .session-library-search {
+    flex: 1 1 min(60vw, 300px);
+  }
+
+  .session-library-toolbar .session-filter-menu {
+    flex: 1 1 126px;
   }
 
   .session-library-detail-grid {
@@ -1194,33 +1224,8 @@
 }
 
 @media (max-width: 860px) {
-  /*
-   * Wraps rather than scrolls.
-   *
-   * As `overflow-x: auto` the row put `All providers` half off the right edge
-   * of a 430px phone with no scrollbar, no fade and no chevron — three of the
-   * four filters were unreachable and nothing said they existed. Wrapping
-   * cannot hide a control, so no affordance has to be invented to admit that
-   * it did.
-   */
-  .session-library-toolbar {
-    display: flex;
-    flex-wrap: wrap;
-    overflow-x: visible;
-  }
-
-  .session-library-search {
-    flex: 1 1 min(60vw, 300px);
-  }
-
-  .session-library-toolbar .session-filter-menu {
-    flex: 1 1 126px;
-  }
-
-  .session-library-sort-menu {
-    display: block;
-  }
-
+  /* The toolbar already wraps from 1180px down; this block only narrows the
+     panes. */
   .session-library-layout {
     grid-template-columns: 1fr;
     overflow: visible;
@@ -1437,6 +1442,34 @@
   cursor: pointer;
   font: inherit;
   text-decoration: underline;
+}
+
+/* The downward half of lineage. Same visual weight as the "Forked from" line
+   above it, because they are the same fact read in two directions. */
+.session-library-alternates {
+  margin: 0 0 var(--sp-1, 4px);
+  color: var(--ink-muted, #9fa5a3);
+  font-size: var(--fs-caption);
+}
+
+.session-library-alternates__heading {
+  display: flex;
+  gap: var(--sp-1, 4px);
+  align-items: center;
+  margin: 0;
+}
+
+.session-library-alternates ul {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0 0 0 var(--sp-3, 12px);
+  list-style: none;
+}
+
+.session-library-alternates small {
+  color: var(--ink-faint, #7d8481);
+  font-size: var(--fs-micro);
 }
 
 .session-library-copy {

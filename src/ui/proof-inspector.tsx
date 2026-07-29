@@ -25,12 +25,19 @@ export function ProofInspector({
   endpointRecord,
   now = Date.now(),
   compact = false,
+  acquisitionFailure,
   onOpenAttestations,
 }: {
   receipt?: ConversationReceipt;
   endpointRecord?: ChutesEndpointEvidenceRecord;
   now?: number;
   compact?: boolean;
+  /**
+   * `attestationFailureLabel()`'s string, verbatim, when endpoint evidence
+   * could not be fetched. Absent means "not asked", which is a different fact
+   * from "asked and blocked" — the rail never invents either.
+   */
+  acquisitionFailure?: string;
   onOpenAttestations?: () => void;
 }) {
   const model = composeClaimStack(receipt, endpointRecord, now);
@@ -48,6 +55,7 @@ export function ProofInspector({
     stack: model,
     hasReceipt: Boolean(receipt),
     attestedFieldsDisagree: Boolean(receipt) && sealStateForReceipt(receipt) === "failed",
+    acquisitionFailure,
   });
   const evidenceTone = model.evidence === "absent"
     ? "absent"
@@ -72,7 +80,11 @@ export function ProofInspector({
           beside the posture and provider it belongs with, and the Proof route
           also states it as "Declared proof level" in `.proof-posture`. */}
       <div class="inspector-heading"><div><span class="eyebrow">Claim stack</span><h2>Verification</h2></div></div>
-      {receipt ? <p class="proof-bottom-line" data-state={verdict.state}><strong>{verdict.chip}</strong> <span>{verdict.line}</span></p> : null}
+      {/* The modifier is a trailing clause on the one verdict, never a second
+          one: a fetch that did not happen is not a verification that failed.
+          Dropping it here is what let the transcript chip say "evidence not
+          pulled" while the rail under the same turn said nothing. */}
+      {receipt ? <p class="proof-bottom-line" data-state={verdict.state}><strong>{verdict.chip}</strong> <span>{verdict.line}{verdict.modifier ? ` · ${verdict.modifier}` : ""}</span></p> : null}
       {receipt ? (
         <section class={`evidence-join evidence-join--${evidenceTone}`} aria-label="Evidence composition">
           <div class="evidence-join__heading">

@@ -118,7 +118,7 @@ export function ProviderConnectionsView({
       </header>
 
       {connections.length ? (
-        <div class="provider-fabric__connections" aria-label="Connected inference providers">
+        <div class="provider-fabric__connections" role="group" aria-label="Connected inference providers">
           {connections.map((entry) => {
             const active = isActiveConnection(entry, activeBinding);
             return (
@@ -309,7 +309,7 @@ function ConnectedProvider({
           setModelId(nextModel);
         }}
       />
-      <div class="provider-capabilities" aria-label="Capabilities supported by source evidence for the selected model">
+      <div class="provider-capabilities" role="group" aria-label="Capabilities supported by source evidence for the selected model">
         {supported.length
           ? supported.slice(0, 6).map((capability) => <span key={capability}>{capability}</span>)
           : <span>No capabilities confirmed by source evidence</span>}

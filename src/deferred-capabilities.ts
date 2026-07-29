@@ -56,7 +56,12 @@ export {
   WorkspaceRecoveryMaterial,
   importWorkspaceRecoveryKey,
 } from "./vault/recovery";
-export { migrateJournalState, migrateProfileCatalogState, migrateWorkspaceState } from "./vault/runtime-adoption";
+export {
+  migrateJournalState,
+  migrateProfileCatalogState,
+  migrateWorkspaceState,
+  reconcileAdoptedProfileCatalog,
+} from "./vault/runtime-adoption";
 export { EncryptedObjectWorkspace } from "./vault/encrypted-workspace";
 export { VaultContextFabricPort } from "./vault/context-fabric-port";
 export {

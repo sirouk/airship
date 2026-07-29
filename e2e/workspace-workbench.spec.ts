@@ -363,3 +363,192 @@ test("the editor states whether it is wrapping, and stops overflowing when it is
   await page.reload();
   await expect(page.getByRole("button", { name: "Wrap" })).toHaveAttribute("aria-pressed", "true");
 });
+
+test("the file you just closed reopens, and same-named documents keep distinct close buttons", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "desktop document lifecycle");
+  await openIsolatedWorkspace(page);
+
+  // The shipped defect: App re-published the same (path, revision) selection
+  // and the buffer-load effect was keyed on that *value*, so the open after a
+  // close was indistinguishable from a no-op and the pane stayed empty.
+  await page.getByRole("treeitem", { name: /README\.md/u }).dblclick();
+  await expect(page.getByRole("textbox", { name: "Edit README.md" })).toBeVisible();
+  await page.getByRole("button", { name: "Close README.md" }).click();
+  await expect(page.getByRole("tab", { name: /README\.md/u })).toHaveCount(0);
+  await expect(page.locator(".workbench-empty")).toBeVisible();
+
+  await page.getByRole("treeitem", { name: /README\.md/u }).click();
+  await expect(page.getByRole("tab", { name: /README\.md/u })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("textbox", { name: "Edit README.md" })).toBeVisible();
+  await expect(page.locator(".workbench-empty")).toHaveCount(0);
+
+  // The other half of keying on identity: a re-published selection for a file
+  // with a dirty draft must not overwrite that draft.
+  await page.getByRole("textbox", { name: "Edit README.md" }).fill("A draft that must survive a republished selection.\n");
+  await page.getByRole("treeitem", { name: /README\.md/u }).click();
+  await expect(page.getByRole("textbox", { name: "Edit README.md" })).toHaveValue(/must survive/u);
+
+  // Two documents whose basenames collide: the tab names were disambiguated
+  // and the close buttons beside them were not, so a screen reader offered two
+  // identical "Close index.ts" controls for two different files.
+  for (const path of ["docs/index.ts", "notes/index.ts"]) {
+    await page.getByRole("button", { name: "New file", exact: true }).click();
+    const create = page.getByRole("dialog", { name: "New file" });
+    await create.getByRole("textbox").fill(path);
+    await create.getByRole("button", { name: "Create", exact: true }).click();
+    await expect(page.locator(".workbench-notice")).toContainText(`Created ${path}`);
+  }
+  // Both are previews until they are kept, and one preview slot holds one
+  // document. The row title carries the full path, which is the only thing
+  // that tells these two rows apart.
+  await page.locator('.tree-row[title^="/workspace/docs/index.ts"]').dblclick();
+  await page.locator('.tree-row[title^="/workspace/notes/index.ts"]').dblclick();
+  await expect(page.getByRole("button", { name: "Close docs/index.ts" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Close notes/index.ts" })).toBeVisible();
+  // README.md is unique, so its label is untouched by the qualifier.
+  await expect(page.getByRole("button", { name: "Close README.md" })).toBeVisible();
+});
+
+test("the Explorer row menu is a menu: it takes focus, moves by arrow, and gives focus back", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "desktop keyboard contract");
+  await openIsolatedWorkspace(page);
+
+  const target = page.getByRole("treeitem", { name: /retrieval\.md/u });
+  await target.focus();
+  await target.press("Shift+F10");
+  const items = page.locator('.workbench-context [role="menuitem"]');
+  // Shift+F10 used to open a `role="menu"` the keyboard could not enter: the
+  // menu was a positioned popup with menu roles and none of the pattern.
+  await expect(items.first()).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(items.nth(1)).toBeFocused();
+  await page.keyboard.press("End");
+  await expect(items.last()).toBeFocused();
+  await page.keyboard.press("Home");
+  await expect(items.first()).toBeFocused();
+  await expect(page.getByRole("menu", { name: "Actions for retrieval.md" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".workbench-context")).toHaveCount(0);
+  await expect(target).toBeFocused();
+
+  // An Apple keyboard has no ContextMenu key and answers F10 with a system
+  // media action, so Ctrl+Enter is the door that exists on every platform.
+  // The whole rename below is keyboard-only — there is no click in it.
+  await target.press("Control+Enter");
+  await expect(items.first()).toBeFocused();
+  await page.keyboard.press("End");
+  await page.keyboard.press("ArrowUp");
+  await page.keyboard.press("ArrowUp");
+  await expect(items.filter({ hasText: "Rename…" })).toBeFocused();
+  await page.keyboard.press("Enter");
+  const rename = page.getByRole("dialog", { name: "Rename retrieval.md" });
+  await expect(rename).toBeVisible();
+  await rename.getByRole("textbox").fill("retrieval-notes.md");
+  await rename.getByRole("textbox").press("Enter");
+  await expect(page.getByRole("treeitem", { name: /retrieval-notes\.md/u })).toBeVisible();
+  await expect(page.getByRole("treeitem", { name: /retrieval\.md/u })).toHaveCount(0);
+});
+
+test("the virtualised tree states its real size and owns nothing but treeitems", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "desktop tree structure");
+  await openIsolatedWorkspace(page);
+
+  const structure = await page.evaluate(() => {
+    const tree = document.querySelector('[role="tree"]')!;
+    const rows = [...tree.querySelectorAll('[role="treeitem"]')];
+    return {
+      count: rows.length,
+      sizes: [...new Set(rows.map((row) => row.getAttribute("aria-setsize")))],
+      positions: rows.map((row) => Number(row.getAttribute("aria-posinset"))),
+      // Every wrapper between the tree and its rows must be presentational, or
+      // the tree owns a generic box instead of a treeitem.
+      generics: rows.filter((row) => {
+        for (let node = row.parentElement; node && node !== tree; node = node.parentElement) {
+          if (node.getAttribute("role") !== "presentation") return true;
+        }
+        return false;
+      }).length,
+      // The `•••` button is adopted by its row, so it is not a `role=button`
+      // owned directly by `role=tree`.
+      unadopted: rows.filter((row) => {
+        const owned = row.getAttribute("aria-owns");
+        const target = owned ? document.getElementById(owned) : null;
+        return !target?.classList.contains("tree-overflow");
+      }).length,
+      // Nothing inside the tree is tabbable except the one roving row.
+      tabbable: [...tree.querySelectorAll<HTMLElement>("button, a[href], input, [tabindex]")]
+        .filter((node) => node.tabIndex >= 0 && node.getAttribute("role") !== "treeitem").length,
+    };
+  });
+
+  expect(structure.count).toBeGreaterThan(3);
+  expect(structure.sizes).toEqual([String(structure.count)]);
+  expect(structure.positions).toEqual(Array.from({ length: structure.count }, (_value, index) => index + 1));
+  expect(structure.generics).toBe(0);
+  expect(structure.unadopted).toBe(0);
+  expect(structure.tabbable).toBe(0);
+
+  // The tree's own contract: Tab leaves it in one press.
+  await page.getByRole("treeitem", { name: /README\.md/u }).focus();
+  await page.keyboard.press("Tab");
+  expect(await page.evaluate(() => document.querySelector('[role="tree"]')!.contains(document.activeElement))).toBe(false);
+});
+
+test("Download is offered for a file and withheld from a folder", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "desktop export surface");
+  await openIsolatedWorkspace(page);
+
+  const file = page.getByRole("treeitem", { name: /README\.md/u });
+  await file.focus();
+  await file.press("Shift+F10");
+  await expect(page.getByRole("menuitem", { name: "Download" })).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  // Folder-as-archive was explicitly not built, so no folder may offer a verb
+  // that would have to invent one.
+  const folder = page.getByRole("treeitem", { name: /docs$/u });
+  await folder.focus();
+  await folder.press("Shift+F10");
+  await expect(page.getByRole("menuitem", { name: "New folder…" })).toBeVisible();
+  await expect(page.getByRole("menuitem", { name: "Download" })).toHaveCount(0);
+});
+
+test("phone destinations keep switching panes after the first one", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile-chromium", "mobile pane contract");
+  await openIsolatedWorkspace(page);
+
+  // `opensPane` was read once, as a `useState` initializer, for a component
+  // that is never remounted between #workspace and #editor — so the route→pane
+  // mapping applied exactly once in the component's lifetime.
+  await page.getByRole("treeitem", { name: /README\.md/u }).click();
+  await expect(page.getByRole("textbox", { name: "Edit README.md" })).toBeVisible();
+
+  await page.goto("/#workspace");
+  await expect(page.locator(".workbench-activity")).toHaveClass(/mobile-active/u);
+  await expect(page.getByRole("tree", { name: "Workspace files" })).toBeVisible();
+
+  await page.goto("/#editor");
+  await expect(page.locator(".workbench-editor")).toHaveClass(/mobile-active/u);
+  await expect(page.getByRole("textbox", { name: "Edit README.md" })).toBeVisible();
+
+  // The one exception: the mobile switch disables Editor at zero open tabs, so
+  // arriving there with nothing open must not strand the user on a dead pane.
+  //
+  // AMENDED: this went to #workspace and then clicked Close README.md, which a
+  // phone cannot do — the close button lives in the document strip inside the
+  // editor pane, and a one-pane layout showing the tree hides it. The step was
+  // only reachable while the pane was stuck, i.e. it depended on the very
+  // defect this test exists to catch. The replacement keeps the visit to
+  // #workspace, asserts the tree it lands on, and then reaches the strip the
+  // way a phone user has to — the pane switch — so it proves one thing more
+  // than the original: the in-page switch and the destinations move the same
+  // pane, rather than each owning a private idea of which one is showing.
+  await page.goto("/#workspace");
+  await expect(page.locator(".workbench-activity")).toHaveClass(/mobile-active/u);
+  await page.getByRole("tab", { name: /^Editor, 1 open documents$/u }).click();
+  await expect(page.locator(".workbench-editor")).toHaveClass(/mobile-active/u);
+  await page.getByRole("button", { name: "Close README.md" }).click();
+  await page.goto("/#editor");
+  await expect(page.locator(".workbench-activity")).toHaveClass(/mobile-active/u);
+  await expect(page.getByRole("tree", { name: "Workspace files" })).toBeVisible();
+});

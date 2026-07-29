@@ -82,14 +82,69 @@ describe("fork legibility", () => {
   it("traces an Unfinished verdict to the observations that produced it", () => {
     expect(source).toContain("structural observation${detail.history.issues.length === 1 ? \"\" : \"s\"} below");
   });
+
+  /*
+   * The panel described the pre-seed contract.
+   *
+   * `historyCopied: false` is true of the journal and was being read as "the
+   * model starts from nothing", so the panel promised an empty transcript while
+   * forkSession seals and commits a bounded ancestor-context seed on every
+   * fork. The copy has to describe what the button actually does.
+   */
+  it("states that the branch inherits bounded ancestor context, not a blank slate", () => {
+    expect(source).not.toContain("empty transcript");
+    expect(source).not.toContain("clean fork");
+    expect(source).toContain("The branch inherits a bounded, digest-sealed copy of the ancestor context");
+    expect(source).toContain('{busy ? "Creating…" : "Create fork"}');
+  });
 });
 
-describe("conversation library at a phone width", () => {
+describe("conversation library keyboard focus", () => {
+  /*
+   * The borderless-input-in-a-bordered-shell pattern moves the ring to the
+   * wrapper. Sessions copied only the `outline: 0` half, so a keyboard user
+   * tabbing into the filter field got no indication at all.
+   */
+  it("pairs every suppressed input outline with a ring on its wrapper", () => {
+    const suppressions = styles.match(/outline:\s*0\s*;/gu) ?? [];
+    expect(suppressions.length).toBeGreaterThan(0);
+    const rings = styles.match(/:focus-(?:within|visible)\s*\{/gu) ?? [];
+    expect(rings.length).toBeGreaterThanOrEqual(suppressions.length);
+    expect(styles).toContain(".session-library-search:focus-within {");
+  });
+});
+
+describe("conversation library below the full-width toolbar", () => {
   it("wraps the filter row instead of scrolling three controls off the edge", () => {
-    const phone = styles.slice(styles.indexOf("@media (max-width: 860px)"));
-    expect(phone).toContain("flex-wrap: wrap;");
-    expect(phone).toContain("overflow-x: visible;");
-    expect(phone).not.toContain("overflow-x: auto;");
+    const narrow = styles.slice(styles.indexOf("@media (max-width: 1180px)"));
+    expect(narrow).toContain("flex-wrap: wrap;");
+    expect(narrow).toContain("overflow-x: visible;");
+    expect(narrow).not.toContain("overflow-x: auto;");
+  });
+
+  /*
+   * Sort had no second home.
+   *
+   * The 1180px rule shed `.session-library-sort-menu` to relieve the six-track
+   * grid, and nothing above 860px put it back — so on a 1024px laptop the only
+   * ordering control on the route did not exist, and a `Title A-Z` already
+   * chosen could be neither seen nor undone.
+   */
+  it("never hides the only ordering control at any width", () => {
+    // Assert the hook still exists first: without it the CSS assertion below
+    // passes for the wrong reason, and the guard would go quiet exactly when
+    // someone renames the control on the way to restyling it.
+    expect(source).toContain('className="session-filter-menu session-library-sort-menu"');
+    expect(styles).not.toContain(".session-library-sort-menu {");
+  });
+
+  it("lets Clear undo the sort, since sort is one of the reader's choices", () => {
+    expect(source).toContain('const clearable = filterActive || sort !== "updated-desc";');
+    expect(source).toContain('{clearable ? <button type="button" onClick={clearFilters}>Clear</button> : null}');
+    expect(source).toContain('setSort("updated-desc");');
+    // `filterActive` still means "rows were withheld", which is what words the
+    // empty state and decides whether a selection is out of scope.
+    expect(source).toContain("const filterActive = Boolean(search || providerId || model);");
   });
 
   it("marks the matched run without rewriting the title", () => {

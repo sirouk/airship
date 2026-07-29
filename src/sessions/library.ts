@@ -70,6 +70,26 @@ export type SessionLibraryOptions = Readonly<{
   now?: () => string;
 }>;
 
+/**
+ * The conversation is not in this journal — which is not the same fault as a
+ * conversation this runtime cannot currently open.
+ *
+ * The deep-link resolver had one arm for both, so a page-memory conversation
+ * that simply did not survive a reload was treated as "temporarily
+ * unresolvable": the URL was held open for an id that can never come back, and
+ * the library's internal `Unknown session: <uuid>` was printed under the
+ * composer. Absence is typed here so that surface can state it in the product's
+ * own words and let the URL fall back to the conversation actually open. The id
+ * stays a property rather than message text; no surface has to print it.
+ */
+export class UnknownSessionError extends Error {
+  readonly name = "UnknownSessionError";
+
+  constructor(readonly sessionId: string, message = "That conversation is not in this journal.") {
+    super(message);
+  }
+}
+
 export class SessionForkConflictError extends Error {
   constructor(message = "The source session changed before the fork could be created.") {
     super(message);
@@ -254,12 +274,12 @@ export class SessionLibrary {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const before = await this.journal.getSession(sessionId);
       throwIfAborted(signal);
-      if (!before) throw new Error(`Unknown session: ${sessionId}`);
+      if (!before) throw new UnknownSessionError(sessionId);
       const events = await this.journal.readEvents(sessionId);
       throwIfAborted(signal);
       const after = await this.journal.getSession(sessionId);
       throwIfAborted(signal);
-      if (!after) throw new Error(`Session disappeared while reading: ${sessionId}`);
+      if (!after) throw new UnknownSessionError(sessionId, "That conversation was removed while it was being read.");
       lastSession = after;
       lastEvents = events;
       if (sameHead(before, after)) return { session: after, events, stable: true };

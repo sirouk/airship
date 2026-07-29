@@ -42,7 +42,8 @@ describe("browser runtime capability probes", () => {
       hasWebAssembly: true,
       hasSharedArrayBuffer: true,
       hasCacheStorage: true,
-      exposedInterfaces: new Set(["VideoEncoder", "VideoDecoder", "WebTransport", "FileSystemSyncAccessHandle"]),
+      exposedInterfaces: new Set(["VideoEncoder", "VideoDecoder", "WebTransport"]),
+      hasSyncAccessHandleInterface: true,
       validateWasm: () => true,
       canTransferSharedArrayBuffer: () => true,
       now: () => new Date("2026-07-22T12:00:00.000Z"),
@@ -110,7 +111,11 @@ describe("browser runtime capability probes", () => {
     expect(report.webgpu.detail).toContain("Error");
     expect(report.webgpu.detail).not.toContain("secret adapter diagnostic");
     expect(report.webnn).toMatchObject({ state: "failed", evidence: "probe-failed" });
-    expect(report.opfs).toMatchObject({ state: "failed", evidence: "probe-failed" });
+    // The OPFS rejection here is a SecurityError, which is how engines report
+    // storage switched off for a private window rather than a probe that broke.
+    // Failing closed is unchanged; only the stated cause is now specific.
+    expect(report.opfs).toMatchObject({ state: "failed", evidence: "disabled" });
+    expect(report.opfs.detail).not.toContain("quota details");
     const promptIds = browserCapabilityPromptEntries(report).map(({ id }) => id);
     expect(promptIds).not.toContain("webgpu-adapter");
     expect(promptIds).not.toContain("webnn-context");
@@ -169,6 +174,58 @@ describe("WebGPU adapter request options", () => {
     expect(report.webgpu).toMatchObject({ state: "available", evidence: "probe-passed", powerPreference: "default" });
     expect(browserCapabilityPromptEntries(report).map(({ id }) => id)).toContain("webgpu-adapter");
     expect(report.scheduling.preferredSemanticBackend).toBe("webgpu");
+  });
+});
+
+describe("OPFS synchronous access handle observation", () => {
+  /**
+   * The default host, not an injected name set: the previous check asked
+   * `exposedInterfaces` for a constructor called
+   * "FileSystemFileHandle.createSyncAccessHandle", a name no realm ever
+   * exposes, so it passed its injected-name test and reported "not-observed" in
+   * every shipping browser — contradicting the ciphertext cache, which runs the
+   * real sync handle in a worker on the same Chromium.
+   */
+  function withRealmGlobals(values: Readonly<Record<string, unknown>>, run: () => Promise<void>): Promise<void> {
+    const record = globalThis as unknown as Record<string, unknown>;
+    const restore = Object.keys(values).map((name) => [name, name in record ? record[name] : undefined, name in record] as const);
+    Object.assign(record, values);
+    return run().finally(() => {
+      for (const [name, previous, existed] of restore) {
+        if (existed) record[name] = previous;
+        else delete record[name];
+      }
+    });
+  }
+
+  it("observes the window-realm prototype method with no probe overrides at all", async () => {
+    await withRealmGlobals({ FileSystemFileHandle: class { createSyncAccessHandle() { return Promise.resolve({}); } } }, async () => {
+      const report = await probeBrowserRuntimeCapabilities();
+      expect(report.opfs.syncAccessHandle).toBe("api-exposed");
+    });
+  });
+
+  it("observes the worker-realm constructor with no probe overrides at all", async () => {
+    await withRealmGlobals({ FileSystemSyncAccessHandle: class {} }, async () => {
+      const report = await probeBrowserRuntimeCapabilities();
+      expect(report.opfs.syncAccessHandle).toBe("api-exposed");
+    });
+  });
+
+  it("reports not-observed when neither form of the interface exists", async () => {
+    const report = await probeBrowserRuntimeCapabilities();
+    expect(report.opfs.syncAccessHandle).toBe("not-observed");
+  });
+
+  it("keys off the observed interface rather than any constructor name", async () => {
+    // Both spellings the old allowlist accepted, including the dotted
+    // pseudo-name: neither may resurrect the capability on its own.
+    const report = await probeBrowserRuntimeCapabilities({
+      ...hermeticHost(),
+      exposedInterfaces: new Set(["FileSystemSyncAccessHandle", "FileSystemFileHandle.createSyncAccessHandle"]),
+      hasSyncAccessHandleInterface: false,
+    });
+    expect(report.opfs.syncAccessHandle).toBe("not-observed");
   });
 });
 
@@ -256,20 +313,62 @@ describe("service worker and cache storage page reality", () => {
     });
 
     expect(report.serviceWorker.detail).toContain("no worker is registered");
-    expect(report.cacheStorage).toMatchObject({ state: "failed", evidence: "probe-failed" });
+    // Firefox private browsing raises SecurityError from caches.keys(), and
+    // that is the browser reporting the feature switched off for this context —
+    // not Airship breaking. The reader gets a cause they can act on; the
+    // message itself is still bounded to the error name.
+    expect(report.cacheStorage).toMatchObject({ state: "failed", evidence: "disabled" });
     expect(report.cacheStorage.detail).not.toContain("private browsing");
     const promptIds = browserCapabilityPromptEntries(report).map(({ id }) => id);
     expect(promptIds).not.toContain("cache-storage");
   });
 
-  it("stays unavailable when neither API is exposed", async () => {
-    const report = await probeBrowserRuntimeCapabilities({
+  it("separates a probe that broke from a page that was refused permission", async () => {
+    const refused = await probeBrowserRuntimeCapabilities({
+      ...hermeticHost(),
+      navigator: {
+        serviceWorker: { getRegistration: async () => { throw new DOMException("blocked", "NotAllowedError"); } },
+      } as BrowserCapabilityProbeHost["navigator"],
+      hasCacheStorage: true,
+      cacheKeys: async () => { throw new DOMException("blocked", "NotAllowedError"); },
+    });
+    expect(refused.serviceWorker).toMatchObject({ evidence: "permission-needed" });
+    expect(refused.cacheStorage).toMatchObject({ evidence: "permission-needed" });
+
+    const broken = await probeBrowserRuntimeCapabilities({
+      ...hermeticHost(),
+      navigator: {
+        serviceWorker: { getRegistration: async () => { throw new TypeError("boom"); } },
+      } as BrowserCapabilityProbeHost["navigator"],
+      hasCacheStorage: true,
+      cacheKeys: async () => { throw new TypeError("boom"); },
+    });
+    expect(broken.serviceWorker).toMatchObject({ evidence: "probe-failed" });
+    expect(broken.cacheStorage).toMatchObject({ evidence: "probe-failed" });
+  });
+
+  it("reads an absent container in a secure context as switched off, and elsewhere as unobserved", async () => {
+    // Every engine that can run this page ships service workers; withholding
+    // the container from a secure context is how a private window or a disabled
+    // preference reports itself, and that is a cause the reader can change.
+    const secure = await probeBrowserRuntimeCapabilities({
       ...hermeticHost(),
       navigator: {} as BrowserCapabilityProbeHost["navigator"],
       hasCacheStorage: false,
     });
-    expect(report.serviceWorker).toMatchObject({ state: "unavailable", evidence: "not-observed" });
-    expect(report.cacheStorage).toMatchObject({ state: "unavailable", evidence: "not-observed" });
+    expect(secure.serviceWorker).toMatchObject({ state: "unavailable", evidence: "disabled" });
+    expect(secure.serviceWorker.detail).toContain("switched off");
+    expect(secure.cacheStorage).toMatchObject({ state: "unavailable", evidence: "not-observed" });
+
+    // Outside a secure context the API is simply not exposed, and no browser
+    // setting would change it, so the weaker word stays.
+    const insecure = await probeBrowserRuntimeCapabilities({
+      ...hermeticHost(),
+      navigator: {} as BrowserCapabilityProbeHost["navigator"],
+      isSecureContext: false,
+      hasCacheStorage: false,
+    });
+    expect(insecure.serviceWorker).toMatchObject({ state: "unavailable", evidence: "not-observed" });
   });
 });
 
@@ -348,6 +447,7 @@ function hermeticHost(): BrowserCapabilityProbeHost {
     hasSharedArrayBuffer: false,
     hasCacheStorage: false,
     exposedInterfaces: new Set(),
+    hasSyncAccessHandleInterface: false,
     validateWasm: () => false,
     canTransferSharedArrayBuffer: () => false,
     now: () => new Date("2026-07-22T12:00:00.000Z"),
@@ -364,6 +464,7 @@ async function minimalReport(observedAt: string): Promise<BrowserRuntimeCapabili
     hasSharedArrayBuffer: false,
     hasCacheStorage: false,
     exposedInterfaces: new Set(),
+    hasSyncAccessHandleInterface: false,
     validateWasm: () => false,
     canTransferSharedArrayBuffer: () => false,
     now: () => new Date(observedAt),

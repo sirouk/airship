@@ -50,6 +50,33 @@ export class JournalConflictError extends Error {
 }
 
 export class EventJournal {
+  /*
+   * One append at a time per session, per journal instance.
+   *
+   * An append is a read-head / hash / compare-and-set sequence with awaits
+   * inside it, so two writers in the same page interleave: both read the same
+   * head and whichever CAS lands second is refused with a
+   * `JournalConflictError`. Refusing the loser is *correct* between clients —
+   * it is how a stale tab is stopped from forking a history — but inside one
+   * page both writers are ours, and the refusal surfaced to the user as a
+   * failed turn when model auto-naming appended `session.renamed` beside the
+   * turn still streaming into the same session.
+   *
+   * Chaining makes the second in-page writer wait for the first head instead
+   * of racing it. It deliberately does not touch cross-instance concurrency:
+   * two `EventJournal`s over one backend hold separate chains and still settle
+   * through the backend's compare-and-set, so a stale writer is still refused.
+   *
+   * The cost is deliberate and worth naming: an append's latency is now coupled
+   * to the one before it on the same session, so a backend that answers slowly
+   * holds up everything queued behind it. That coupling *is* the ordering
+   * guarantee and cannot be timed out away — a queued writer that gave up
+   * waiting and committed anyway would read the same stale head the queue
+   * exists to prevent. The one escape is the caller's own signal: see
+   * `commitAfter`.
+   */
+  private readonly appendQueue = new Map<string, Promise<unknown>>();
+
   constructor(
     private readonly backend: JournalBackend,
     private readonly now: () => string = () => new Date().toISOString(),
@@ -114,8 +141,50 @@ export class EventJournal {
     return session;
   }
 
-  async append(sessionId: string, drafts: EventDraft[], signal?: AbortSignal): Promise<DurableEvent[]> {
-    if (!drafts.length) return [];
+  append(sessionId: string, drafts: EventDraft[], signal?: AbortSignal): Promise<DurableEvent[]> {
+    if (!drafts.length) return Promise.resolve([]);
+    const pending = this.appendQueue.get(sessionId);
+    const result = pending
+      ? this.commitAfter(pending, sessionId, drafts, signal)
+      : this.commit(sessionId, drafts, signal);
+    // The link waits for the predecessor *and then* this append, and swallows
+    // failure on both: one refused append must not cascade into everything
+    // queued behind it, and a caller that walks away on its own signal must not
+    // release the next writer while the predecessor is still mid-commit — that
+    // would hand the next writer the very stale head this queue prevents. The
+    // link clears itself only while it is still the tail, so a later writer's
+    // link is never dropped.
+    const link = (pending ?? Promise.resolve()).then(() => result).then(() => undefined, () => undefined);
+    this.appendQueue.set(sessionId, link);
+    void link.then(() => {
+      if (this.appendQueue.get(sessionId) === link) this.appendQueue.delete(sessionId);
+    });
+    return result;
+  }
+
+  /**
+   * Wait for this session's previous append before reading the head — but no
+   * longer than the caller is still asking for the write.
+   *
+   * Queuing couples an append's latency to the one ahead of it, so without this
+   * a backend that never answers would swallow a Stop the user already pressed:
+   * the turn's abort would sit behind a write it can no longer influence. The
+   * caller's signal therefore wins the race and rejects with its own reason.
+   * Nothing is committed when it does, and `append`'s link still holds the next
+   * writer behind the real in-flight commit, so leaving the queue early can
+   * never reorder the hash chain.
+   */
+  private async commitAfter(
+    pending: Promise<unknown>,
+    sessionId: string,
+    drafts: EventDraft[],
+    signal?: AbortSignal,
+  ): Promise<DurableEvent[]> {
+    await (signal ? raceAbort(pending, signal) : pending);
+    return this.commit(sessionId, drafts, signal);
+  }
+
+  private async commit(sessionId: string, drafts: EventDraft[], signal?: AbortSignal): Promise<DurableEvent[]> {
     signal?.throwIfAborted();
     const session = await this.backend.getSession(sessionId, signal);
     if (!session) throw new Error(`Unknown session: ${sessionId}`);
@@ -162,6 +231,26 @@ export class EventJournal {
     );
     return events;
   }
+}
+
+/**
+ * Settle when `pending` settles, or reject early with the signal's own reason.
+ *
+ * The abort listener is removed whichever side wins. One signal covers a whole
+ * turn and a turn appends many events, so leaving a listener per append behind
+ * would pile up a closure per write on a signal that outlives all of them.
+ */
+function raceAbort(pending: Promise<unknown>, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.reject(signal.reason);
+  let onAbort!: () => void;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+  return Promise.race([pending, aborted]).then(
+    () => { signal.removeEventListener("abort", onAbort); },
+    (error: unknown) => { signal.removeEventListener("abort", onAbort); throw error; },
+  );
 }
 
 /**

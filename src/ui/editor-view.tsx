@@ -35,6 +35,15 @@ export type EditorViewProps = Readonly<{
   profileName?: string;
   durability: Readonly<{ state: DurabilityState; detail: string }>;
   workspaceIdentity?: string;
+  /**
+   * Bumped by the shell on every request for a destination, including a repeat
+   * of the one already on screen. The route→pane mapping is keyed on this
+   * rather than on the hash value, because the hash is unchanged for exactly
+   * the case that needs re-applying: the workbench opened a file into its
+   * editor pane without leaving `#workspace`, and tapping Workspace again — or
+   * a same-document navigation back to it — must return to the tree.
+   */
+  destinationArrival?: number;
 }>;
 
 /**
@@ -68,7 +77,14 @@ export function EditorView(props: EditorViewProps) {
     const sync = () => setHash(location.hash);
     sync();
     window.addEventListener("hashchange", sync);
-    return () => window.removeEventListener("hashchange", sync);
+    // Back/forward between the two workbench doors is a same-document
+    // navigation: Chrome answers it with `popstate`, and only fires
+    // `hashchange` when the fragment differs from the one already displayed.
+    window.addEventListener("popstate", sync);
+    return () => {
+      window.removeEventListener("hashchange", sync);
+      window.removeEventListener("popstate", sync);
+    };
   }, []);
 
   useEffect(() => {
@@ -126,7 +142,7 @@ export function EditorView(props: EditorViewProps) {
       notes={<p class="route-header__about-description">{WORKBENCH_SHARED_SURFACE_NOTE}</p>}
       status={<WorkbenchDurabilityChip state={props.durability.state} detail={props.durability.detail} />}
     />
-    <div class="editor-route__panel" data-mode="files" aria-labelledby="workbench-route-title">
+    <div class="editor-route__panel" data-mode="files" role="group" aria-labelledby="workbench-route-title">
       <div class="editor-workbench-host" aria-hidden={sourceToolsOpen ? "true" : undefined}>
       <WorkspaceView
         profileId={props.profileId}
@@ -141,6 +157,7 @@ export function EditorView(props: EditorViewProps) {
         onOpenTerminalAt={props.onOpenTerminalAt}
         onOpenRepositoryManager={openSourceTools}
         opensPane={identity.opensPane}
+        opensPaneArrival={props.destinationArrival ?? 0}
         opensActivity={sourceToolsOpen ? "source" : "explorer"}
       />
       </div>

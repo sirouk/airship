@@ -45,6 +45,15 @@ describe("trust language", () => {
     // it. "Asserted" keeps the author, which is the claim being made.
     expect(proofStatusLabel("partial")).not.toBe("Recorded");
   });
+  it("speaks expiry in the word the evidence legend defines", () => {
+    // "Expired" was a sixth state word that no legend on either Proof surface
+    // defined: the Attestation tab taught "Stale observation" and then printed
+    // "Expired" on every seal, count row and inspector title beside it.
+    expect(proofStatusLabel("expired")).toBe("Stale observation");
+    for (const status of ["verified", "partial", "failed", "expired", "unavailable"] as const) {
+      expect(proofStatusLabel(status)).not.toBe("Expired");
+    }
+  });
   it("renders relative ages while timestamps remain available for time metadata", () => {
     expect(relativeEvidenceAge("2026-07-18T12:57:00.000Z", Date.parse("2026-07-18T13:00:00.000Z"))).toBe("3 minutes ago");
   });

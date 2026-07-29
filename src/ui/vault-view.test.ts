@@ -4,11 +4,13 @@ import {
   PROVIDER_PROFILES,
   attachedCount,
   attachedRows,
+  googleDriveAvailableInBuild,
   readinessTally,
   sealForState,
   vaultPhaseLabel,
   vaultState,
 } from "./vault-view";
+import { resolveDefaultVaultBackend } from "./platform-shell";
 import type { VaultSnapshot } from "../vault/coordinator";
 import type { LocalDeviceVaultStatus } from "../vault/local-device";
 
@@ -175,9 +177,36 @@ describe("provider comparison", () => {
     expect(PROVIDER_PROFILES.map((profile) => profile.description)).toEqual([
       "Encrypted, offline, and persistent in this browser profile",
       "Your encrypted cross-device Airship workspace folder",
-      "Advanced provider or local development lab",
+      // Was "Advanced provider or local development lab". The only S3
+      // configuration this build can construct is the loopback lab, so the
+      // option no longer offers an "advanced provider" it cannot open.
+      "Loopback development lab",
       "Page memory only; nothing synced",
     ]);
+  });
+
+  it("promises cross-device reach for the one provider that can deliver it", () => {
+    // `createLocalLabConfigureRequest` only ever builds `mode:
+    // "local-development"`, which validation confines to a loopback endpoint,
+    // so the S3 rung answering "Reaches other devices: Yes" was a promise no
+    // shippable configuration keeps.
+    const reaching = PROVIDER_PROFILES.filter((profile) => profile.facts.reach === "Yes");
+
+    expect(reaching.map((profile) => profile.id)).toEqual(["google-drive"]);
+  });
+
+  it("describes the S3 rung as the loopback lab it can actually open", () => {
+    const lab = PROVIDER_PROFILES.find((profile) => profile.id === "local-lab");
+
+    expect(lab?.facts.reach.startsWith("No")).toBe(true);
+    // "your bucket" claimed durability in storage the person controls off this
+    // machine; the lab bucket lives on the loopback service they are running.
+    for (const [key] of PROVIDER_FACT_ROWS) {
+      expect(lab?.facts[key], key).not.toContain("your bucket");
+    }
+    // The restriction leads the paragraph rather than trailing it, because a
+    // reader who stops after the first sentence must not stop on the promise.
+    expect(lab?.note.split(". ")[0]).toBe("On a loopback lab endpoint nothing is cloud-synchronized");
   });
 
   it("states plainly that the ephemeral option keeps nothing", () => {
@@ -192,5 +221,30 @@ describe("provider comparison", () => {
     const drive = PROVIDER_PROFILES.find((profile) => profile.id === "google-drive");
 
     expect(drive?.note).toContain("Google never receives the workspace key.");
+  });
+});
+
+describe("Drive availability", () => {
+  const canonical = "airship-example-client.apps.googleusercontent.com";
+
+  it("agrees with the preference sanitiser on every build value", () => {
+    // The route used to decide this with raw truthiness while
+    // `availableVaultBackend` used the strict predicate, so a malformed client
+    // ID rendered a live connect route whose stored preference was silently
+    // rewritten on the next load and whose authorizer threw at construction.
+    for (const clientId of [undefined, "", "   ", "not-a-client-id", "my-client-id", canonical]) {
+      const available = googleDriveAvailableInBuild(clientId);
+
+      expect(available, clientId ?? "undefined").toBe(
+        resolveDefaultVaultBackend("google-drive", clientId) === "google-drive",
+      );
+    }
+  });
+
+  it("calls only a deployable client ID available", () => {
+    expect(googleDriveAvailableInBuild(canonical)).toBe(true);
+    expect(googleDriveAvailableInBuild(` ${canonical} `)).toBe(true);
+    expect(googleDriveAvailableInBuild("not-a-client-id")).toBe(false);
+    expect(googleDriveAvailableInBuild(undefined)).toBe(false);
   });
 });

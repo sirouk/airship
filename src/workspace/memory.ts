@@ -1,4 +1,5 @@
 import { randomUuid } from "../core/id";
+import { workspaceContentByteLength } from "./content-codec";
 import {
   WorkspaceConflictError,
   normalizeWorkspacePath,
@@ -48,6 +49,9 @@ export class MemoryWorkspace implements WorkspacePort {
       revision: randomUuid(),
       updatedAt: new Date().toISOString(),
       size: new TextEncoder().encode(content).byteLength,
+      // The envelope is what storage holds; the decoded length is what the
+      // person and the agent tools are both entitled to see.
+      contentByteLength: workspaceContentByteLength(content),
     };
     this.files.set(normalized, file);
     return structuredClone(file);

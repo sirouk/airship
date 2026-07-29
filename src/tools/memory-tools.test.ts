@@ -95,6 +95,28 @@ describe("profile-scoped explicit memory", () => {
       .rejects.toThrow("pinned profile");
   });
 
+  it("honours a session-scoped pin in recall, its counts, and forget", async () => {
+    const harness = await setup();
+    const first = await harness.session("research", "session");
+    const second = await harness.session("research", "session");
+    await run(harness, first, "update_memory", {
+      action: "remember", content: "First-session quartz note", source: "turn:first",
+    }, "remember-first");
+    await run(harness, second, "update_memory", {
+      action: "remember", content: "Second-session quartz note", source: "turn:second",
+    }, "remember-second");
+
+    const recall = await run(harness, first, "recall_memory", {}, "recall-first");
+    expect(recall.content).toContain("First-session quartz note");
+    expect(recall.content).not.toContain("Second-session quartz note");
+    expect(recall.metadata).toMatchObject({ scope: "session", count: 1, total: 1 });
+
+    const document = parseMemoryDocument((await harness.workspace.read(MEMORY_PATH))!.content);
+    const siblingId = document.records[1]!.id;
+    await expect(run(harness, first, "update_memory", { action: "forget", id: siblingId }, "cross-session-forget"))
+      .rejects.toThrow("not found in pinned profile research");
+  });
+
   it("rejects duplicate IDs so forgetting cannot remove two scopes at once", () => {
     const record = {
       id: "duplicate",
@@ -116,24 +138,35 @@ async function setup() {
     workspace,
     journal,
     registry,
-    async session(profileId: string): Promise<string> {
+    async session(profileId: string, memoryScope?: "session" | "profile" | "workspace"): Promise<string> {
       const digest = await sha256(`profile:${profileId}`);
+      const base = {
+        profileId,
+        profileRevision: digest,
+        themeId: "test",
+        themeDigest: digest,
+        resolvedSkills: [],
+        skillSetDigest: digest,
+        resolutionDigest: digest,
+      };
       const manifest = await createSessionManifest({
         systemPrompt: profileId,
         providerId: "test",
         model: "test",
         tools: registry.definitions(),
         workspaceId: "memory://test",
-        profile: {
-          version: 1,
-          profileId,
-          profileRevision: digest,
-          themeId: "test",
-          themeDigest: digest,
-          resolvedSkills: [],
-          skillSetDigest: digest,
-          resolutionDigest: digest,
-        },
+        // A v1 pin has no silo fields, so it exercises the legacy default; a
+        // memoryScope argument forces the current shape that carries one.
+        profile: memoryScope
+          ? {
+            ...base,
+            version: 2,
+            workspaceBinding: { kind: "active-workspace" },
+            memoryScope,
+            approvalMode: "ask-first",
+            minimumPosture: "local",
+          }
+          : { ...base, version: 1 },
       });
       return (await journal.createSession(profileId, manifest)).id;
     },

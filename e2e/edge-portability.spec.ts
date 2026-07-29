@@ -1,7 +1,8 @@
 import { expect, test, type Page, type TestInfo } from "@playwright/test";
 
 type ProbeState = "available" | "unavailable" | "failed";
-type ProbeEvidence = "probe-passed" | "api-exposed" | "not-observed" | "probe-failed";
+/** Kept in step with `BrowserProbeEvidence`; the two refusal values are causes, not grades. */
+type ProbeEvidence = "probe-passed" | "api-exposed" | "not-observed" | "permission-needed" | "disabled" | "probe-failed";
 
 type Observation = Readonly<{
   state: ProbeState;
@@ -266,7 +267,18 @@ async function assertCapabilityCards(page: Page, snapshot: PortabilitySnapshot):
   }
 }
 
+/**
+ * Mirrors `probePresentation` in capabilities-view.tsx, including its ordering:
+ * the two refusal evidences are read before `state`, because both arrive
+ * carrying a state ("failed" for a withheld permission, "unavailable" for a
+ * feature switched off) that would otherwise swallow the cause. A profile that
+ * runs in a private window or behind a permissions policy reaches those
+ * branches, and this assertion would then be checking for a word the route
+ * deliberately stopped printing.
+ */
 function probeLabel(observation: Observation): string {
+  if (observation.evidence === "permission-needed") return "Permission needed";
+  if (observation.evidence === "disabled") return "Switched off here";
   if (observation.state === "failed") return "Probe failed";
   if (observation.evidence === "probe-passed") return "Probe passed";
   if (observation.evidence === "api-exposed") return "API observed";

@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  bindCanvasInteractions,
   calculateMemoryGraphBounds,
   centeredMemoryGraphViewport,
   canvasToGraphPoint,
   createMemoryNodeSpatialIndex,
+  createViewportControls,
   fitMemoryGraphViewport,
   graphToCanvasPoint,
   hitTestMemoryNode,
@@ -11,6 +13,7 @@ import {
   panMemoryGraphViewport,
   queryMemoryNodeSpatialIndex,
   zoomMemoryGraphViewport,
+  type CanvasEngine,
 } from "./canvas-renderer";
 import type { MemoryGraphNode } from "./types";
 
@@ -98,3 +101,134 @@ describe("Canvas memory graph spatial index", () => {
     expect(hitTestMemoryNode(index, { x: 3, y: 3 }, 100)).toBeUndefined();
   });
 });
+
+/**
+ * Zoom must be reachable by more than a wheel.
+ *
+ * The surface itself needs a browser, so the engine is driven directly here:
+ * what actually broke on touch was the gesture arithmetic and the single-slot
+ * pointer record, and both are assertable without a DOM.
+ */
+describe("Canvas memory graph gestures", () => {
+  it("scales about the two-pointer midpoint and holds that graph coordinate still", () => {
+    const harness = mountEngine();
+    const { engine } = harness;
+    harness.dispatch("pointerdown", { pointerId: 1, clientX: 300, clientY: 300 });
+    harness.dispatch("pointerdown", { pointerId: 2, clientX: 500, clientY: 300 });
+    // The anchor is the midpoint the second move produces: 300 and 700.
+    const anchor = { x: 500, y: 300 };
+    const before = canvasToGraphPoint(anchor, engine.viewport);
+
+    harness.dispatch("pointermove", { pointerId: 2, clientX: 700, clientY: 300 });
+
+    expect(engine.viewport.scale).toBeCloseTo(engine.fittedScale * 2, 6);
+    const after = canvasToGraphPoint(anchor, engine.viewport);
+    expect(Math.abs(after.x - before.x) * engine.viewport.scale).toBeLessThan(1);
+    expect(Math.abs(after.y - before.y) * engine.viewport.scale).toBeLessThan(1);
+    harness.release();
+  });
+
+  it("clamps a runaway pinch to the fitted scale range", () => {
+    const harness = mountEngine();
+    const { engine } = harness;
+    harness.dispatch("pointerdown", { pointerId: 1, clientX: 380, clientY: 300 });
+    harness.dispatch("pointerdown", { pointerId: 2, clientX: 420, clientY: 300 });
+
+    for (let step = 1; step <= 10; step += 1) {
+      harness.dispatch("pointermove", { pointerId: 2, clientX: 420 + step * 200, clientY: 300 });
+    }
+    expect(engine.viewport.scale).toBeCloseTo(engine.fittedScale * 16, 6);
+
+    for (let step = 1; step <= 10; step += 1) {
+      harness.dispatch("pointermove", { pointerId: 2, clientX: 380 + 2_000 / 2 ** step, clientY: 300 });
+    }
+    expect(engine.viewport.scale).toBeCloseTo(engine.fittedScale * 0.35, 6);
+    harness.release();
+  });
+
+  it("never reads a pinch as a tap-to-select when a finger lifts", () => {
+    const harness = mountEngine();
+    harness.dispatch("pointerdown", { pointerId: 1, clientX: 300, clientY: 300 });
+    harness.dispatch("pointerdown", { pointerId: 2, clientX: 500, clientY: 300 });
+    harness.dispatch("pointermove", { pointerId: 2, clientX: 560, clientY: 300 });
+    harness.dispatch("pointerup", { pointerId: 2, clientX: 560, clientY: 300 });
+    harness.dispatch("pointerup", { pointerId: 1, clientX: 300, clientY: 300 });
+
+    expect(harness.selections).toEqual([]);
+    expect(harness.engine.pointers.size).toBe(0);
+    expect(harness.engine.pinchDistance).toBeUndefined();
+    harness.release();
+  });
+
+  it("returns a zoomed viewport to the fit through the published controls", () => {
+    const harness = mountEngine();
+    const controls = createViewportControls(harness.engine);
+    const fitted = fitMemoryGraphViewport(
+      harness.engine.bounds,
+      harness.engine.viewport.width,
+      harness.engine.viewport.height,
+    );
+
+    controls.zoomIn();
+    expect(controls.scale()).toBeGreaterThan(fitted.scale);
+    controls.zoomOut();
+    controls.zoomOut();
+    expect(controls.scale()).toBeLessThan(fitted.scale);
+
+    controls.fit();
+    expect(harness.engine.viewport).toEqual(fitted);
+    expect(harness.engine.userViewport).toBe(false);
+    harness.release();
+  });
+});
+
+/**
+ * The engine without a browser: only the canvas members the interaction layer
+ * touches are provided. `disposed` keeps requestAnimationFrame — and therefore
+ * drawing, which does need a real 2D context — out of the way.
+ */
+function mountEngine() {
+  const listeners = new Map<string, (event: never) => void>();
+  const canvas = {
+    style: { cursor: "grab" },
+    getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 600 }),
+    setPointerCapture: () => undefined,
+    releasePointerCapture: () => undefined,
+    addEventListener: (type: string, listener: (event: never) => void) => listeners.set(type, listener),
+    removeEventListener: (type: string) => listeners.delete(type),
+  } as unknown as HTMLCanvasElement;
+  const nodes = [node("a", -5, -5), node("b", 5, 5)];
+  const bounds = calculateMemoryGraphBounds(nodes);
+  const viewport = fitMemoryGraphViewport(bounds, 800, 600);
+  const engine: CanvasEngine = {
+    canvas,
+    context: {} as CanvasRenderingContext2D,
+    graph: { nodes } as never,
+    bounds,
+    index: createMemoryNodeSpatialIndex(nodes),
+    edges: [],
+    palette: {} as never,
+    viewport,
+    fittedScale: viewport.scale,
+    userViewport: false,
+    dpr: 1,
+    pointers: new Map(),
+    reducedMotion: true,
+    disposed: true,
+    fail: () => undefined,
+    selected: () => undefined,
+    neighbors: () => new Set<string>(),
+    hiddenKinds: () => new Set<string>(),
+    hiddenNodeIds: () => new Set<string>(),
+  };
+  const selections: (string | undefined)[] = [];
+  const release = bindCanvasInteractions(engine, (nodeId) => selections.push(nodeId));
+  return {
+    engine,
+    selections,
+    release,
+    dispatch: (type: string, init: Readonly<{ pointerId: number; clientX: number; clientY: number }>) => {
+      listeners.get(type)?.({ button: 0, preventDefault: () => undefined, ...init } as never);
+    },
+  };
+}

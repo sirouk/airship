@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
 import type {
   AttestationEvidenceClientErrorCode,
   ChutesAttestationEvidenceClient,
@@ -7,8 +7,8 @@ import type {
   ChutesEndpointAttestationSnapshot,
   ChutesEndpointEvidenceRecord,
 } from "../attestation/provider-types";
-import { ApprovalBroker } from "../approvals/broker";
-import { approvalProvenance, createApprovalModePolicy, type ApprovalMode } from "../approvals/modes";
+import { ApprovalBroker, redactForDisplay } from "../approvals/broker";
+import { approvalProvenance, createApprovalModePolicy, decideHumanIntent, type ApprovalMode } from "../approvals/modes";
 import { SwitchableApprovalPolicy } from "../approvals/switchable-policy";
 import {
   DISCONNECTED_CHUTES_CONNECTION,
@@ -28,7 +28,10 @@ import {
   type SlashCommandRegistry,
   type SlashCompletion,
 } from "../commands";
-import type { CanonicalMessage, InferenceTransport, SecurityPosture, SessionManifest } from "../core/contracts";
+import { CONVERSATION_NAMED_EVENT_TYPE, HUMAN_INTENT_EVENT_TYPE } from "../core/contracts";
+import { sha256, stableStringify } from "../core/hash";
+import { finalizeProviderReceipt } from "../receipts/types";
+import type { CanonicalMessage, InferenceTransport, JsonValue, SecurityPosture, SessionManifest, ToolDefinition } from "../core/contracts";
 import type { LiveEnvironmentEntry } from "../core/live-environment";
 import type { InferenceDirectoryPromptDefinition } from "../core/operating-charter";
 import { EventJournal, type DurableEvent, type SessionRecord } from "../core/journal";
@@ -58,7 +61,7 @@ import type { GitOperation, GitOperationDescriptor } from "../git/types";
 import type { WorkspaceGitRepositorySeed } from "../git/workspace-adapter";
 import type { VaultContextFabricPort } from "../vault/context-fabric-port";
 import type { ChutesInferenceTransport, ChutesInvocationTelemetry } from "../inference/chutes";
-import { modelInputModalityCapability, modelPopularitySignal, sortModels, type AirshipModel } from "../models";
+import { modelInputModalityCapability, sortModels, type AirshipModel } from "../models";
 import type { ExecutionCapability } from "../execution/runtime-registry";
 import { archiveProfileRevision, createBuiltInProfileCatalog, managedProfileRevisions, type ProfileCatalog } from "../profiles/catalog";
 import {
@@ -69,17 +72,20 @@ import {
 import {
   createGlobalSkillSettings,
   createProfileRevision,
+  enforcedMemoryScope,
   resolveProfileSilo,
   resolveProfileForSession,
   themeCssVariables,
   type ProfileRevision,
   type SkillMode,
+  type ThemeColorScheme,
   type ThemeManifest,
 } from "../profiles/domain";
 import type { ConversationReceipt } from "../receipts/types";
 import {
   READY_SESSION_LIFECYCLE,
   SessionLibrary,
+  UnknownSessionError,
   advanceSessionLifecycle,
   type ActiveSessionRuntime,
   type SessionForkResult,
@@ -139,6 +145,7 @@ import { chatHash, chatSessionIdFromHash } from "./chat-route";
 import { MenuSelect } from "./menu-select";
 import { MobileNavigation } from "./mobile-navigation";
 import { activeConnectionProofLabel, ModelControl } from "./model-control";
+import { MODEL_CAPABILITY_WORDS } from "./model-vocabulary";
 import { CANONICAL_DESTINATIONS, navigationHashForView, navigationViewFromHash, type NavigationView } from "./navigation-model";
 import {
   CommandPalette,
@@ -158,6 +165,7 @@ import {
   useGlobalPaletteShortcut,
   usePwaUpdate,
   useVisualViewport,
+  vaultBackendUnavailableReason,
   type PreferenceOverrides,
   type VaultBackend,
   type TrustAxis,
@@ -173,6 +181,7 @@ import {
   type ProofSelection,
 } from "./proof-route";
 import { Rail } from "./rail";
+import { collapseLineageBranches } from "./recent-lineage";
 import {
   isRailToggleChord,
   loadRailPreference,
@@ -204,14 +213,21 @@ import {
 import { MessagePartsView } from "./chat/message-parts-view";
 import { capabilityTierDetail, capabilityTierLabel } from "./chat/capability-tier";
 import { useWindowedTranscript } from "./chat/use-windowed-transcript";
-import { composerAttachments, userMessageParts, type ComposerAttachment } from "./chat/composer-state";
+import { composerAttachments, userMessageParts, COMPOSER_ATTACHMENT_LIMIT, type ComposerAttachment } from "./chat/composer-state";
 import { MOBILE_SHELL_MEDIA_QUERY, shouldClaimComposerFocus } from "./chat/composer-focus";
 import {
+  composerAttachmentNotice,
   composerGrowthCap,
   composerPlaceholder,
+  composerPosture,
+  ComposerKeyhintLegend,
+  ComposerPostureChip,
+  COMPOSER_ATTACHMENT_NEEDS_TEXT,
   COMPOSER_NARROW_PLACEHOLDER_QUERY,
   COMPOSER_PLACEHOLDER_TITLE,
+  SLASH_MENU_HEADER,
 } from "./chat/composer";
+import { forkBranchNotice } from "./chat/fork-notice";
 import { originatingPromptForRow } from "./chat/retry-prompt";
 // Types only: the reducer itself stays in the deferred capability pack.
 import type {
@@ -242,7 +258,7 @@ import {
 } from "./chat/transcript-intro";
 import { TopbarPostureChip } from "./topbar";
 import { TabPresenceNote } from "./tab-presence";
-import { ProfileThemeSwatch } from "./profile-theme-swatch";
+import { ProfileThemeSwatch, themePresentation, themePresentationSummary } from "./profile-theme-swatch";
 import { PostureChip } from "./posture-chip";
 import { durabilityLabel } from "./durability-indicator";
 import { RouteSkeleton } from "./route-skeleton";
@@ -295,6 +311,16 @@ type UiMessage = {
   /** Page-memory image handles retained only so retry/edit can preserve the exact request. */
   originatingAttachments?: readonly ComposerAttachment[];
   sourcePoint?: Readonly<{ sequence: number; digest: string }>;
+  /**
+   * The pre-turn boundary, carried separately from `sourcePoint`.
+   *
+   * "Fork from here" on an answer keeps the answer, so an assistant row's
+   * `sourcePoint` is the post-answer terminal. Retry has to fork *before* the
+   * turn or the regenerated answer is handed the answer it replaces as
+   * context. Only an assistant row sets this; a user row's `sourcePoint` is
+   * already the pre-turn boundary.
+   */
+  turnStartPoint?: Readonly<{ sequence: number; digest: string }>;
   history?: Readonly<{
     turnStatus: "completed" | "failed" | "cancelled" | "incomplete";
     providerContext: "included" | "excluded";
@@ -344,6 +370,8 @@ type RecentConversation = Readonly<{
   preview: string;
   updatedAt: string;
   favorite: boolean;
+  /** Branches of this row's lineage the shortcut collapsed behind it. */
+  hiddenBranchCount: number;
   open(): void;
   toggleFavorite(): void;
   moveFavorite(beforeSessionId?: string): void;
@@ -432,12 +460,43 @@ const LOCAL_MODEL_SERVERS = Object.freeze([
 /** Wall clock for the whole two-server check. A refused port answers far sooner. */
 const LOCAL_PROBE_DEADLINE_MS = 15_000;
 
+/**
+ * The Account route's non-Chutes tabs, in the order that route lists them.
+ *
+ * Restated rather than imported from `billing-view`: importing `BILLING_PROVIDERS`
+ * would pull the Account route and its stylesheet into the shell's eager chunk
+ * for three string constants. `billing-view.test.ts` pins this list to
+ * `BILLING_PROVIDERS` so the two cannot drift. Chutes is absent on purpose —
+ * the route reads its own credential for that tab.
+ */
+const BILLING_INVENTORY_PROVIDER_IDS: readonly Exclude<BillingProviderId, "chutes">[] =
+  Object.freeze(["openai", "anthropic", "xai"]);
+
 const EMPTY_INFERENCE_AVAILABILITY: InferenceAvailabilitySnapshot = Object.freeze({
   version: 1,
   capturedAt: "1970-01-01T00:00:00.000Z",
   connections: Object.freeze([]),
   omittedConnections: 0,
 });
+
+/*
+ * Stable identities, so a route scoped away from the active conversation
+ * re-renders with the same empty collection rather than a fresh literal each
+ * pass. Frozen because these are handed to evidence surfaces that must not be
+ * able to accumulate another session's records into them.
+ */
+const EMPTY_ENDPOINT_EVIDENCE: readonly ChutesEndpointEvidenceRecord[] = Object.freeze([]);
+const EMPTY_CONVERSATION_RECEIPTS: readonly ConversationReceipt[] = Object.freeze([]);
+
+/**
+ * What the Attestation evidence ledger says when Proof is open for a
+ * conversation that is not the active one. Endpoint evidence is acquired per
+ * active session in this page runtime; it is not fetched for a conversation
+ * you have only inspected, and pretending otherwise by showing the active
+ * session's records would be the defect this sentence exists to prevent.
+ */
+const PROOF_UNSCOPED_EVIDENCE_NOTICE =
+  "Endpoint evidence for this conversation is not loaded in this page runtime. Resume the conversation to acquire its own evidence; Airship will not show another conversation's records here.";
 
 type DurableAdoptionDescriptor = Readonly<{
   ready: DurableStateRuntime;
@@ -457,6 +516,7 @@ type ProofInspectorComponent = typeof import("./proof-inspector").ProofInspector
 type EditorScreenComponent = typeof import("./editor-view").EditorView;
 type TerminalScreenComponent = typeof import("./terminal-view").TerminalView;
 type CapabilitiesScreenComponent = typeof import("./capabilities-view").CapabilitiesView;
+type ModelPickerComponent = typeof import("./model-picker").ModelPicker;
 type MemoryScreenComponent = typeof import("./memory-view").MemoryView;
 type GoogleDriveSetupComponent = typeof import("./google-drive-setup").GoogleDriveSetup;
 type LocalLabSetupComponent = typeof import("./local-lab-setup").LocalLabSetup;
@@ -466,6 +526,7 @@ type VaultScreenComponent = typeof import("./vault-view").VaultView;
 type AccessScreenComponent = typeof import("./access-view").AccessView;
 type ProviderConnectionsScreenComponent = typeof import("./provider-connections-view").ProviderConnectionsView;
 type BillingScreenComponent = typeof import("./billing-view").BillingView;
+type BillingProviderId = import("./billing-view").BillingProviderId;
 type ProofScreenComponent = typeof import("./proof-view").ProofView;
 type EvidenceAcquisitionQueueController = import("../attestation/evidence-acquisition-queue").ReceiptEvidenceAcquisitionQueue;
 type EvidenceAcquisitionQueueSnapshot = import("../attestation/evidence-acquisition-queue").EvidenceAcquisitionQueueSnapshot;
@@ -777,6 +838,7 @@ function transcriptMessagesFromPresentation(presentation: SessionMessagePresenta
       ...(originatingPrompt ? { originatingPrompt } : {}),
       history: { turnStatus: row.turnStatus, providerContext: row.providerContext },
       sourcePoint: row.sourcePoint,
+      ...(row.turnStartPoint ? { turnStartPoint: row.turnStartPoint } : {}),
     } satisfies UiMessage;
   });
   if (presentation.markers.length === 0) return rows;
@@ -809,6 +871,7 @@ async function loadRecentConversations(
   signal: AbortSignal,
   profileId: string,
   cache: Map<string, RecentConversationCacheEntry>,
+  activeSessionId: string | undefined,
 ): Promise<readonly RecentConversation[]> {
   const [page, favorites] = await Promise.all([
     library.list({ sort: "updated-desc", limit: 200, profileId }, signal),
@@ -838,11 +901,22 @@ async function loadRecentConversations(
     const item = itemById.get(favorite.sessionId);
     return item ? [item] : [];
   });
-  const recentItems = indexed
-    .filter((item) => !favoriteOrder.has(item.id))
-    .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))
-    .slice(0, Math.max(0, 10 - favoriteItems.length));
-  const selected = [...favoriteItems, ...recentItems];
+  // One row per lineage, not one row per branch. Edit & branch and Retry both
+  // produce peer sessions, so a question retried three times used to take four
+  // of the ten rows and push four unrelated conversations out of the shortcut
+  // entirely. The collapse happens *before* the ten-row budget is applied, so
+  // the rows it frees go to those unrelated conversations rather than being
+  // lost. The active conversation is pinned through it: withdrawing the row a
+  // person is currently reading would be a worse defect than the flooding.
+  const recentGroups = collapseLineageBranches(
+    indexed
+      .filter((item) => !favoriteOrder.has(item.id))
+      .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt)),
+    new Map(indexed.map((item) => [item.id, item.sourceSessionId] as const)),
+    new Set(activeSessionId ? [activeSessionId] : []),
+  ).slice(0, Math.max(0, 10 - favoriteItems.length));
+  const branchCounts = new Map(recentGroups.map((group) => [group.item.id, group.hiddenBranchCount] as const));
+  const selected = [...favoriteItems, ...recentGroups.map((group) => group.item)];
   const conversations = await Promise.all(selected.map(async (item) => recentConversationFor(
     item,
     library,
@@ -853,6 +927,7 @@ async function loadRecentConversations(
     setFavorite,
     moveFavorite,
     profileId,
+    branchCounts.get(item.id) ?? 0,
   )));
   if (signal.aborted) return Object.freeze([]);
   return Object.freeze(conversations);
@@ -868,6 +943,7 @@ async function recentConversationFor(
   setFavorite: (sessionId: string, favorite: boolean) => void,
   moveFavorite: (sessionId: string, beforeSessionId?: string) => void,
   profileId: string,
+  hiddenBranchCount: number,
 ): Promise<RecentConversation> {
   const cached = cache.get(item.id);
   let preview = cached?.updatedAt === item.updatedAt ? cached.preview : undefined;
@@ -891,6 +967,7 @@ async function recentConversationFor(
     preview,
     updatedAt: item.updatedAt,
     favorite,
+    hiddenBranchCount,
     open: () => open(item.id),
     toggleFavorite: () => setFavorite(item.id, !favorite),
     moveFavorite: (beforeSessionId) => moveFavorite(item.id, beforeSessionId),
@@ -978,6 +1055,16 @@ export function App() {
   const [composerNotice, setComposerNotice] = useState<string>();
   const [messageQueue, setMessageQueue] = useState<readonly QueuedComposerItem[]>([]);
   /*
+   * Stop has to mean stop. `busy` alone cannot say why a turn ended: the
+   * teardown that follows a completed turn and the teardown that follows an
+   * abort both land on `setBusy(false)`, so the auto-dispatch effect below
+   * read a user's Stop as "the model is free, send the next one" and fired the
+   * queue's head immediately. This latch is the missing distinction — set by
+   * `stopTurn`, cleared only by an explicit user send — so a stopped
+   * conversation stays stopped until the person who stopped it says otherwise.
+   */
+  const [queuePaused, setQueuePaused] = useState(false);
+  /*
    * The slash-command module travels with the registry it builds rather than
    * through first paint. Every call site was already gated on `slashRegistry`
    * being present, so binding the parser and completer to the same state adds
@@ -1025,6 +1112,19 @@ export function App() {
   const [attestationsViewError, setAttestationsViewError] = useState<string>();
   const [EditorScreen, setEditorScreen] = useState<EditorScreenComponent>();
   const [editorViewError, setEditorViewError] = useState<string>();
+  /**
+   * How many times the shell has been *asked* for a destination.
+   *
+   * The hash alone cannot answer that question. A destination can be re-entered
+   * without it changing — the rail and the phone tab bar both call `navigate`
+   * with the view already on screen, and a same-document navigation to the
+   * current URL fires `popstate` with an unchanged hash — while a route's own
+   * in-page state has meanwhile moved somewhere else (the workbench opens a
+   * file into its editor pane without leaving `#workspace`). A route that
+   * re-applies its arrival state only when the hash *value* changes therefore
+   * ignores every one of those requests. This counter is that missing event.
+   */
+  const [destinationArrival, setDestinationArrival] = useState(0);
   const [TerminalScreen, setTerminalScreen] = useState<TerminalScreenComponent>();
   const [terminalViewError, setTerminalViewError] = useState<string>();
   const [terminalOpenRequest, setTerminalOpenRequest] = useState<Readonly<{
@@ -1035,6 +1135,18 @@ export function App() {
     workspaceIdentity: string;
   }>>();
   const [CapabilitiesScreen, setCapabilitiesScreen] = useState<CapabilitiesScreenComponent>();
+  /*
+   * The same picker Connection opens, loaded on demand.
+   *
+   * Chat used to render a flattened `{id,label,detail}` projection through a
+   * plain menu, which is why it grew a second capability formatter: it never
+   * had the model objects the shared picker takes. It has them — `availableModels`
+   * is right here — so the only thing missing was the component, and the only
+   * reason it was missing is that the picker travels with its own stylesheet in
+   * a deferred pack. Deferred load keeps the pack boundary and still ends the
+   * second vocabulary.
+   */
+  const [ModelPickerControl, setModelPickerControl] = useState<ModelPickerComponent>();
   const [capabilitiesViewError, setCapabilitiesViewError] = useState<string>();
   const [MemoryScreen, setMemoryScreen] = useState<MemoryScreenComponent>();
   const [memoryViewError, setMemoryViewError] = useState<string>();
@@ -1076,13 +1188,44 @@ export function App() {
       // adjudicating, so it is fetched then rather than carried through first
       // paint by every visitor who never triggers one.
       const { reviewToolActionWithModel } = await import("../approvals/model-reviewer");
-      return reviewToolActionWithModel({
+      const review = await reviewToolActionWithModel({
         transport: active.transport,
         model: active.model,
         tool,
         argumentsValue,
         context,
       });
+      /*
+       * The adjudication is a provider request the person never sees, made on
+       * their behalf and billed to them, so it gets the same durable record any
+       * other inference gets. It is keyed to the call being adjudicated —
+       * `context.operationId` is the tool-call ID — because that is the only
+       * identity it has: the review has no step of its own in the turn.
+       *
+       * Best-effort by construction. A journal that refuses this append must
+       * not turn into a denied tool action, so the failure is swallowed after
+       * the fact; the append is serialized per session by `EventJournal`, so it
+       * cannot interleave with the turn's own chain.
+       */
+      if (review.inputTokens !== undefined || review.outputTokens !== undefined) {
+        try {
+          await active.journal.append(context.sessionId, [{
+            type: "inference.usage",
+            turnId: context.turnId,
+            operationId: context.operationId,
+            payload: {
+              ...(review.inputTokens !== undefined ? { inputTokens: review.inputTokens } : {}),
+              ...(review.outputTokens !== undefined ? { outputTokens: review.outputTokens } : {}),
+              source: "approval-review",
+              ...(review.requestId ? { requestId: review.requestId } : {}),
+              ...(review.model ? { model: review.model } : {}),
+            },
+          }]);
+        } catch {
+          // A recorded cost must never become a denied action.
+        }
+      }
+      return review;
     },
   }), [approvalBroker, activeApprovalMode]);
   const approvalPolicyController = useMemo(() => new SwitchableApprovalPolicy(approvalModePolicy), []);
@@ -1367,6 +1510,25 @@ export function App() {
     () => (inferenceFabric.current?.list() ?? []).map((entry) => entry.provider.id),
     [providerFabricRevision, Boolean(inferenceFabric.current)],
   );
+  /*
+   * The same fact, addressed to the Account route.
+   *
+   * Account's provider tabs default to `unavailable`, which is written for "the
+   * host said nothing" — and nothing ever said anything, so a working OpenAI
+   * connection read as an absent capability. This states connection only: no
+   * quota, usage, reset or identity is invented, because none of it is
+   * observed. Nothing is emitted until the fabric exists, so "not observed yet"
+   * still falls through to `unavailable` rather than being claimed as absence.
+   */
+  const billingProviderInventory = useMemo(
+    () => inferenceFabric.current
+      ? Object.freeze(BILLING_INVENTORY_PROVIDER_IDS.map((providerId) => Object.freeze({
+          providerId,
+          state: connectedInferenceProviderIds.includes(providerId) ? "connected" as const : "not-connected" as const,
+        })))
+      : undefined,
+    [connectedInferenceProviderIds, Boolean(inferenceFabric.current)],
+  );
   const pinnedExternalRoute = activeExternalRoute
     && activeInferenceBinding
     && inferenceBindingsMatch(activeInferenceBinding, coreInferenceBinding(activeExternalRoute))
@@ -1411,10 +1573,17 @@ export function App() {
   const sessionRuntime = activeSessionRecord && runtime.current
     ? activeSessionRuntime(runtime.current, activeSessionRecord)
     : undefined;
-  const slashCompletions = useMemo(
-    () => slashRegistry && slashModule ? slashModule.completeSlashCommand(input, slashRegistry, { limit: 10 }) : [],
+  // The menu shows ten rows out of a command set that is routinely three times
+  // that, so it carries the total as well as the slice: a list that silently
+  // stops at ten tells the user those ten are everything, which is the exact
+  // reason `/help` was believed not to exist.
+  const slashMenu = useMemo(
+    () => slashRegistry && slashModule
+      ? slashModule.completeSlashCommandMenu(input, slashRegistry, { limit: 10 })
+      : { completions: [], total: 0 },
     [input, slashRegistry, slashModule],
   );
+  const slashCompletions = slashMenu.completions;
   const paletteEntries = useMemo(() => buildPaletteEntries({
     navigate: navigatePrimary,
     openPreferences: () => setPreferencesOpen(true),
@@ -1452,6 +1621,8 @@ export function App() {
     Boolean(composerPlan && composerPlan.kind !== "chat"),
   );
   const composerUsesDemo = !inferenceConnected && (!composerPlan || composerPlan.kind === "chat");
+  /** Attachments staged, nothing typed: the one disabled Send that needs a reason. */
+  const attachmentsAwaitText = attachments.length > 0 && !input.trim();
   const windowedTranscript = useWindowedTranscript({
     items: messages,
     scrollContainerRef: transcriptElement,
@@ -1505,9 +1676,21 @@ export function App() {
     const resizeTargets = [window, window.visualViewport];
     resizeTargets.forEach((target) => target?.addEventListener("resize", fit));
     element.addEventListener("scroll", markComposerScroll, { passive: true });
+    /*
+     * The element's own `input` event, not only the `[input]` state dep.
+     *
+     * Re-fitting solely from state means any path that changes the value
+     * without settling that state on the same frame leaves the box at its
+     * previous height — which is how clearing a twelve-line draft left the
+     * composer 136px tall over an empty field. The textarea's own event is the
+     * authoritative signal that its content changed, and `fit` is idempotent,
+     * so running it from both is free.
+     */
+    element.addEventListener("input", fit);
     return () => {
       resizeTargets.forEach((target) => target?.removeEventListener("resize", fit));
       element.removeEventListener("scroll", markComposerScroll);
+      element.removeEventListener("input", fit);
     };
   }, [input]);
 
@@ -1554,6 +1737,22 @@ export function App() {
         setComposerNotice(undefined);
       })
       .catch((error) => {
+        if (error instanceof UnknownSessionError) {
+          // Absence is final, so holding the URL open for it is not patience —
+          // it is a permanent dead address. `chatRouteRequest` is also what
+          // suppresses canonicalisation, so clearing it lets the effect below
+          // rewrite the hash to the conversation that is actually open.
+          //
+          // The unsent draft is the person's, not the dead conversation's, so
+          // it moves onto the conversation that replaces the address before the
+          // request is cleared. Without this, resetting the route re-keys the
+          // composer to the live conversation, hydrates an empty draft over the
+          // text that was typed a moment before the reload, and destroys it.
+          adoptDraftFromUnresolvableAddress(requestedSessionId);
+          setChatRouteRequest((current) => current === requestedSessionId ? undefined : current);
+          setComposerNotice("That conversation existed only in page memory and did not survive the reload. This is a new conversation.");
+          return;
+        }
         // Keep the URL intact: a durable conversation can become available
         // after its Vault or exact inference connection is restored.
         void loadDeferredCapabilities().then(({ describeSessionPresentationFault }) => {
@@ -1606,11 +1805,15 @@ export function App() {
       controller.signal,
       profileId,
       recentConversationPreviewCache.current,
+      sessionId,
     ).then(setRecentProfileConversations).catch((error) => {
       if (!controller.signal.aborted) setRuntimeStatus(error instanceof Error ? error.message : "Recent conversations are unavailable.");
     });
     return () => controller.abort();
-  }, [sessionLibrary, sessionRevision, profileId]);
+    // `sessionId` is a real input now, not incidental state: the lineage
+    // collapse pins the active conversation's row, so switching branches has
+    // to recompute which member of a lineage the shortcut is showing.
+  }, [sessionLibrary, sessionRevision, profileId, sessionId]);
   useEffect(() => {
     if (!slashMenuOpen) return;
     const frame = requestAnimationFrame(() => {
@@ -1699,6 +1902,29 @@ export function App() {
     }
     setAttachments([]);
   }, [chatRouteRequest, sessionId]);
+  /**
+   * Moves an unsent draft off a conversation address that can never resolve.
+   *
+   * Drafts are stored per conversation, so a reset route would otherwise
+   * re-key the composer to the live conversation and hydrate its empty draft
+   * over text the person typed seconds earlier. The composer is claimed for
+   * the live identity through the same preserve fence that a fork uses, and
+   * the dead key is dropped so the text is never restored twice.
+   */
+  function adoptDraftFromUnresolvableAddress(unresolvableSessionId: string): void {
+    const liveSessionId = activeSessionIdentity.current ?? sessionId;
+    if (!liveSessionId || liveSessionId === unresolvableSessionId) return;
+    try {
+      const carried = readThreadDraft(unresolvableSessionId, sessionStorage);
+      writeThreadDraft(unresolvableSessionId, "", sessionStorage);
+      if (!carried) return;
+      preserveComposerForDraftIdentity.current = liveSessionId;
+      setInput((current) => current || carried);
+      writeThreadDraft(liveSessionId, carried, sessionStorage);
+    } catch {
+      // Draft persistence is optional; the live composer remains authoritative.
+    }
+  }
   useEffect(() => {
     const pending = pendingForkRetry.current;
     if (!pending || busy || sessionNavigationChanging.current) return;
@@ -1730,6 +1956,7 @@ export function App() {
     if (
       !sessionId
       || busy
+      || queuePaused
       || queuedDispatch.current
       || messageQueue.length === 0
       || inferenceRouteChanging.current
@@ -1742,7 +1969,7 @@ export function App() {
     }).finally(() => {
       queuedDispatch.current = false;
     });
-  }, [busy, messageQueue, sessionId]);
+  }, [busy, messageQueue, queuePaused, sessionId]);
   useEffect(() => {
     if (view === "chat") transcriptEntryAlignment.current = true;
   }, [view]);
@@ -1848,6 +2075,39 @@ export function App() {
     sessionId,
     selectedRecordId: selectedAttestationRecordId,
   }), [messages, sessionId, selectedAttestationRecordId]);
+  /*
+   * The Proof route carries two identities and must enforce one.
+   *
+   * `proofTargetId` is the conversation the route is *about* — the library can
+   * open Proof for a conversation that was never resumed. Endpoint evidence,
+   * receipts and acquisition failures, by contrast, are only ever acquired for
+   * the ACTIVE conversation: `activeAttestationPresentation` is fenced on
+   * `sessionId` a few hundred lines above. Handing the active collections to a
+   * route scoped to a different session is how conversation A's TDX quotes end
+   * up inside a verification bundle stamped `scope.sessionId === B`. When the
+   * two identities diverge the route is given nothing, and says so.
+   */
+  const proofScoped = proofTargetId === sessionId;
+  const proofEndpointRecords = proofScoped ? attestationRecords : EMPTY_ENDPOINT_EVIDENCE;
+  const proofLedgerReceipts = proofScoped ? attestationReceipts : EMPTY_CONVERSATION_RECEIPTS;
+  /*
+   * One turn, one verdict — including its modifier.
+   *
+   * `describeMessageAttestation` already admits an acquisition failure onto a
+   * turn only when `attestationFailureAppliesToReceipt` holds, so the Proof
+   * hero and the claim rail must apply the same predicate or the same turn
+   * reads "evidence not pulled" in the transcript and says nothing about it on
+   * the route dedicated to saying it.
+   */
+  const proofAcquisitionFailure = proofScoped
+    && attestationFailure
+    && (!proofReceipt || attestationFailureAppliesToReceipt(attestationFailure, proofReceipt))
+      ? attestationFailure.label
+      : undefined;
+  const inspectorAcquisitionFailure = attestationFailure
+    && (!lastReceipt || attestationFailureAppliesToReceipt(attestationFailure, lastReceipt))
+      ? attestationFailure.label
+      : undefined;
 
   async function activateSession(session: SessionRecord): Promise<SessionRecord> {
     const sessionProfileId = session.manifest.profile?.profileId;
@@ -1868,6 +2128,8 @@ export function App() {
     setActiveSessionRecord(selected);
     activeSessionByProfile.current.set(sessionProfileId, selected.id);
     setMessageQueue(queuedMessagesBySession.current.get(selected.id) ?? []);
+    // The pause belongs to the conversation that was stopped, not to the app.
+    setQueuePaused(false);
     return selected;
   }
 
@@ -2265,6 +2527,19 @@ export function App() {
   }, [view, CapabilitiesScreen]);
 
   useEffect(() => {
+    // Only for the route that has a catalogue to search. A failure here is not
+    // reported: the control keeps its own trigger and the flattened menu, so a
+    // pack that will not load costs the search field, never the ability to
+    // change model.
+    if (!activeChutesConnection || ModelPickerControl) return;
+    let current = true;
+    void import("./model-picker").then((module) => {
+      if (current) setModelPickerControl(() => module.ModelPicker);
+    }).catch(() => undefined);
+    return () => { current = false; };
+  }, [activeChutesConnection, ModelPickerControl]);
+
+  useEffect(() => {
     if ((view !== "memory" && view !== "context") || MemoryScreen) return;
     let current = true;
     setMemoryViewError(undefined);
@@ -2338,6 +2613,7 @@ export function App() {
       ?? (next === "chat"
         ? chatHash(activeSessionIdentity.current ?? sessionId)
         : navigationHashForView(next));
+    setDestinationArrival((current) => current + 1);
     setMobileMoreOpen(false);
     setView(next);
     if (next === "chat") setChatRouteRequest(chatSessionIdFromHash(resolvedTargetHash));
@@ -2436,6 +2712,18 @@ export function App() {
     setRuntimeStatus(`Renamed conversation to ${renamed.title}`);
   }
 
+  /*
+   * A rename committed from the conversation library is durable the moment
+   * `library.rename` resolves, but the Chat header and the rail recents read
+   * host state, not the library's own list. Adopt the returned record so the
+   * name a reader just committed is the name every surface shows, without
+   * waiting for a turn to bump the revision by accident.
+   */
+  function adoptLibraryRename(renamed: SessionRecord): void {
+    setActiveSessionRecord((current) => current?.id === renamed.id ? renamed : current);
+    setSessionRevision((value) => value + 1);
+  }
+
   function openReceiptAttestation(receipt: ConversationReceipt): void {
     if (receipt.sessionId === sessionId) {
       selectEndpointEvidenceRecord(attestationRecordIdForReceipt(receipt));
@@ -2477,10 +2765,21 @@ export function App() {
     return tokenSet.accessToken;
   }
 
-  function takePendingOAuthCredential(): string | undefined {
-    const credential = pendingOAuthCredential.current;
-    pendingOAuthCredential.current = undefined;
-    return credential;
+  /*
+   * Deliberately non-destructive.
+   *
+   * This used to consume the ref, which made a completed OAuth exchange a
+   * single-use handoff: AccessView is conditionally mounted, so navigating off
+   * #connection — or any remount at all — destroyed the only copy of a
+   * credential the user had already paid a full authorization round trip for,
+   * and the route came back as the empty entry stack. The token itself is
+   * still live in `oauthTokens`, so the honest lifetime of this pointer is
+   * "until it is committed or released": `connectChutes` clears it on commit,
+   * `startOAuthSignIn` clears it before a new exchange, and
+   * `releaseChutesAuthority` clears it when the authority goes away.
+   */
+  function readPendingOAuthCredential(): string | undefined {
+    return pendingOAuthCredential.current;
   }
 
   function clearPendingDelta(messageId: string) {
@@ -2626,10 +2925,11 @@ export function App() {
 
   useEffect(() => {
     if (!activeTheme) return;
-    applyTheme(activeTheme);
     // Profile themes establish defaults; global Preferences are the final,
     // non-profile override layer and must remain authoritative after a switch.
-    applyPreferenceOverrides(preferences);
+    // The mode is also an input to the theme, not just a layer over it: the
+    // inline palette has to be diffed against the sheet the mode selects.
+    applyThemeWithPreferences(activeTheme, preferences);
     savePreferenceOverrides(preferences);
   }, [activeTheme, preferences]);
 
@@ -2710,6 +3010,7 @@ export function App() {
         return;
       }
       const requestedChatSession = next === "chat" ? chatSessionIdFromHash(window.location.hash) : undefined;
+      setDestinationArrival((current) => current + 1);
       setMobileMoreOpen(false);
       const nextProofSelection = next === "proof" ? proofSelectionFromHash(window.location.hash) : undefined;
       const nextProofSection = next === "proof" ? proofSectionFromHash(window.location.hash) : "summary";
@@ -2909,9 +3210,21 @@ export function App() {
       currentWorkspaceRefreshAuthority,
       (entries) => {
         setFiles([...entries]);
-        // Refresh is metadata-only. Content is read only after an explicit
-        // open; indexing has its own bounded, demand-driven WorkspacePort.
-        setWorkspaceFiles(entries.slice(0, 2_000));
+        /*
+         * Refresh is metadata-only. Content is read only after an explicit
+         * open; indexing has its own bounded, demand-driven WorkspacePort.
+         *
+         * Published whole, deliberately. This array is not only a presentation
+         * input: ContextView hands it to the index engine as the *revision
+         * snapshot* it validates against the live listing, so a 2,000-entry
+         * presentation cap was silently asserting that a larger workspace had
+         * changed under the engine, and `CONTEXT_SNAPSHOT_STALE` made such a
+         * workspace impossible to index at all. Bounding belongs in the
+         * consumers that need it, and both already have it: graph derivation
+         * caps at 2,000 and reports `stats.truncated`, and the Index summary's
+         * source count is now the true one.
+         */
+        setWorkspaceFiles([...entries]);
       },
     );
   }
@@ -3021,9 +3334,17 @@ export function App() {
     return Object.freeze({ runtime: built, git: authority.git });
   }
 
-  async function changeProfile(nextId: string, force = false) {
+  /**
+   * Switches the cockpit, and reports whether the switch actually committed.
+   *
+   * The boolean is not decoration: `deleteProfile` archives the outgoing
+   * profile only if the replacement really became active, and a swallowed
+   * failure that still returned `void` would archive the profile the user is
+   * still running on.
+   */
+  async function changeProfile(nextId: string, force = false): Promise<boolean> {
     const active = runtime.current;
-    if (!active || !catalog || (!force && nextId === profileId)) return;
+    if (!active || !catalog || (!force && nextId === profileId)) return false;
     if (inferenceRouteChanging.current || sessionNavigationChanging.current) {
       throw new Error("Wait for the current session or inference route change before switching profiles.");
     }
@@ -3034,12 +3355,32 @@ export function App() {
     pendingForkRetry.current = undefined;
     sessionNavigationChanging.current = true;
     const operation = ++profileOperation.current;
+    /*
+     * Everything needed to put the outgoing cockpit back.
+     *
+     * A switch is a two-part commit — authority (runtime, Git client, tool and
+     * slash registry) and identity (`profileId`) — and it used to publish the
+     * first, then run the validation that can reject the switch, then publish
+     * the second. A rejection therefore left profile A's UI and conversation
+     * running on profile B's workspace, tools and Git client. Every call site
+     * is fire-and-forget with no catch, so it was invisible as well as
+     * inconsistent. The two publications are now adjacent, all fallible work
+     * happens before them, and a failure restores the outgoing cockpit and
+     * says so.
+     */
+    const previousProfileId = profileAuthorityId.current;
+    const previousGit = gitClient;
+    const previousRegistry = slashRegistry;
     try {
       activeTurn.current?.abort();
       setRuntimeStatus("Switching profile cockpit");
       let profile: ProfileRevision | undefined;
       let nextSession: SessionRecord | undefined;
-      let restoredExisting = false;
+      let restored: Readonly<{
+        fresh: SessionLibraryDetail;
+        audited: Awaited<ReturnType<typeof loadAuditedSessionSnapshot>>;
+      }> | undefined;
+      let unresumableReason: string | undefined;
       let switched: Readonly<{ runtime: Runtime; git: BrowserGitClient }> | undefined;
       await mutateProfileCatalog(async (current) => {
         const selected = current.profiles.find((candidate) => candidate.profileId === nextId);
@@ -3069,53 +3410,91 @@ export function App() {
           next,
           activeSessionByProfile.current.get(nextId),
         );
-        restoredExisting = Boolean(nextSession);
+        if (nextSession) {
+          /*
+           * Judge the conversation here, against the runtime it is about to run
+           * in, while the outgoing runtime is still the committed one. Both
+           * checks need only the incoming authority, never the pointer.
+           *
+           * A conversation that cannot be resumed is not a failed switch. The
+           * profile starts a fresh one — the same outcome as a profile that
+           * never had a compatible conversation — and the reason is named in
+           * the opening message rather than thrown at a caller that has no
+           * catch. The unresumable conversation itself is untouched.
+           */
+          const candidateSession = nextSession;
+          const fresh = await new SessionLibrary(switched.runtime.journal).inspect(
+            candidateSession.id,
+            activeSessionRuntime(switched.runtime, candidateSession),
+          );
+          const audited = fresh.compatibility?.action === "resume"
+            ? await loadAuditedSessionSnapshot(candidateSession.id, undefined, switched.runtime)
+            : undefined;
+          if (!audited) {
+            const compatibility = fresh.compatibility;
+            unresumableReason = compatibility
+              ? `${compatibility.label}: ${compatibility.reasons.map((reason) => reason.message).join(" ")} ${fresh.history.issues.map((issue) => `${issue.code}: ${issue.message}`).join(" ")}`.trim()
+              : "It no longer matches this profile's runtime.";
+          } else if (audited.report.status !== "verified") {
+            unresumableReason = "It did not pass the local journal audit.";
+          } else if (
+            audited.session.headSequence !== fresh.session.headSequence
+            || audited.session.headDigest !== fresh.session.headDigest
+          ) {
+            unresumableReason = "It changed while it was being restored.";
+          } else {
+            restored = Object.freeze({ fresh, audited });
+          }
+          if (!restored) nextSession = undefined;
+        }
         nextSession ??= await createProfileSession(switched.runtime, profile, next);
         return next;
       });
       if (!profile || !nextSession || !switched) throw new Error("The profile session was not created.");
       if (runtime.current !== active) throw new Error("The runtime changed before the profile cockpit could be restored.");
-      if (operation !== profileOperation.current) return;
+      if (operation !== profileOperation.current) return false;
+      // Authority and identity, adjacent. Nothing that can fail sits between
+      // them, so `profileId` and `runtime.current` can no longer disagree.
       runtime.current = switched.runtime;
       setGitClient(switched.git);
       // Slash commands close over the tool registry, so they have to be rebuilt
       // with it; a stale registry would run the previous Profile's tools.
       if (slashModule) setSlashRegistry(slashModule.createSlashCommandRegistry({ tools: switched.runtime.tools }));
-      const activeRuntime = switched.runtime;
-      if (restoredExisting) {
-        const library = new SessionLibrary(activeRuntime.journal);
-        // Resume compatibility is judged against the workspace the conversation
-        // is about to run in. Inspecting through the outgoing runtime would
-        // approve a session pinned to the Profile being left behind.
-        const fresh = await library.inspect(nextSession.id, activeSessionRuntime(activeRuntime, nextSession));
-        if (fresh.compatibility?.action !== "resume") {
-          const compatibility = fresh.compatibility;
-          throw new Error(compatibility
-            ? `${compatibility.label}: ${compatibility.reasons.map((reason) => reason.message).join(" ")} ${fresh.history.issues.map((issue) => `${issue.code}: ${issue.message}`).join(" ")}`.trim()
-            : "The profile conversation no longer matches its runtime.");
-        }
-        const audited = await loadAuditedSessionSnapshot(nextSession.id);
-        if (audited.report.status !== "verified") {
-          throw new Error("The profile's last conversation failed audit and was not resumed.");
-        }
-        if (audited.session.headSequence !== fresh.session.headSequence || audited.session.headDigest !== fresh.session.headDigest) {
-          throw new Error("The profile conversation changed while it was being restored. Retry the switch.");
-        }
-        await publishAuditedSession(fresh, audited, `${profile.name} cockpit restored`);
-        publishProfileId(nextId);
+      publishProfileId(nextId);
+      if (restored) {
+        await publishAuditedSession(restored.fresh, restored.audited, `${profile.name} cockpit restored`);
         navigate("chat");
-        return;
+        return true;
       }
       const activated = await activateSession(nextSession);
       setSessionRevision((value) => value + 1);
-      setMessages([{ ...welcomeMessage, id: randomUuid(), content: `${profile.name} had no compatible conversation, so Airship started one. ${welcomeMessage.content}` }]);
+      setMessages([{ ...welcomeMessage, id: randomUuid(), content: unresumableReason
+        ? `${profile.name}'s most recent conversation was not resumed, so Airship started a new one here. ${unresumableReason} That conversation is unchanged and still readable in Sessions. ${welcomeMessage.content}`
+        : `${profile.name} had no compatible conversation, so Airship started one. ${welcomeMessage.content}` }]);
       setEventCount(activated.headSequence);
       setLastReceipt(undefined);
       setSessionLifecycle(READY_SESSION_LIFECYCLE);
       setTranscriptBoundary(undefined);
       setRuntimeStatus(`${profile.name} cockpit started`);
-      publishProfileId(nextId);
       navigate("chat");
+      return true;
+    } catch (error) {
+      /*
+       * The outgoing cockpit survives, and the user is told.
+       *
+       * A newer switch owns the cockpit if `operation` has moved on, so this
+       * one must not write over it. Otherwise every part of the commit is put
+       * back together — including `profileId`, so the two halves settle in
+       * agreement whether or not the commit had been reached.
+       */
+      if (operation === profileOperation.current) {
+        runtime.current = active;
+        setGitClient(previousGit);
+        setSlashRegistry(previousRegistry);
+        publishProfileId(previousProfileId);
+        setRuntimeStatus(`Profile switch failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      return false;
     } finally {
       sessionNavigationChanging.current = false;
       setProfileCockpitTransition(undefined);
@@ -3362,8 +3741,13 @@ export function App() {
       const decision = await commandRuntime.tools.review(plan.toolName, plan.arguments, context, approvalPolicy);
       const provenance = approvalProvenance(approvalPolicy, context);
       if (decision !== "allow") {
+        // "Only bounded metadata" was a stronger privacy claim than the
+        // redaction makes: the reviewer is withheld file-content payloads, but
+        // it is deliberately shown the action body — the script, command or URL
+        // — because without it there is nothing to judge. The claim is the half
+        // that was wrong, not the redaction.
         const denied = activeApprovalMode === "auto-approve"
-          ? `Permission denied for local /${plan.command.name}. No tool effect ran; the separate safety review received only bounded metadata with private payload fields withheld.`
+          ? `Permission denied for local /${plan.command.name}. No tool effect ran; the safety review model received this action's parameters, including any script, command or URL, with file-content payloads withheld and values bounded.`
           : `Permission denied for local /${plan.command.name}. No tool effect ran, and nothing was sent to the model.`;
         await append([{ type: "local.command.denied", turnId, operationId, payload: { content: denied, toolName: plan.toolName, approval: provenance ?? null } }]);
         setMessages((current) => current.map((message) => message.id === assistantId
@@ -3386,7 +3770,7 @@ export function App() {
           : message));
         await refreshWorkspacePresentation(commandRuntime, commandProfileId);
         setRuntimeStatus(activeApprovalMode === "auto-approve"
-          ? "Local command complete after separate metadata-only safety review"
+          ? "Local command complete after a separate safety review of its parameters"
           : "Local command complete; no model request made");
       }
     } catch (error) {
@@ -3451,23 +3835,26 @@ export function App() {
   function addComposerFiles(filesToAdd: readonly File[]): void {
     const images = filesToAdd.filter((file) => file.type.toLowerCase().startsWith("image/"));
     const rejected = filesToAdd.length - images.length;
-    const remaining = Math.max(0, 8 - attachments.length);
+    const remaining = Math.max(0, COMPOSER_ATTACHMENT_LIMIT - attachments.length);
+    // Hitting the cap is a refusal, not a non-event. Only the MIME rejection
+    // was ever counted, so eight pending attachments plus a ninth drop printed
+    // "0 images are ready" — a success sentence for a file that was discarded.
+    const overflow = images.length - Math.min(images.length, remaining);
     const next = composerAttachments(images.slice(0, remaining), randomUuid, (file) => {
       if (typeof URL.createObjectURL !== "function") return undefined;
       const url = URL.createObjectURL(file);
       attachmentPreviewUrls.current.add(url);
       return url;
     });
-    setAttachments((current) => Object.freeze([...current, ...next].slice(0, 8)));
-    if (rejected > 0) {
-      setComposerNotice(`${rejected} non-image attachment${rejected === 1 ? " was" : "s were"} not added. This milestone sends bounded image inputs.`);
-      return;
-    }
-    setComposerNotice(imageInputCapability === "supported"
-      ? `${next.length} image${next.length === 1 ? " is" : "s are"} ready for inline encrypted vision inference.`
-      : inferenceConnected
-        ? "Choose a model whose provider or local-discovery record explicitly includes image input before sending."
-        : "Connect a vision-capable inference model before sending this image.");
+    setAttachments((current) => Object.freeze([...current, ...next].slice(0, COMPOSER_ATTACHMENT_LIMIT)));
+    setComposerNotice(composerAttachmentNotice({
+      added: next.length,
+      rejected,
+      overflow,
+      capability: imageInputCapability === "supported"
+        ? "supported"
+        : inferenceConnected ? "model-lacks-vision" : "disconnected",
+    }));
   }
 
   async function forkFromMessage(
@@ -3482,6 +3869,15 @@ export function App() {
       setComposerNotice(busy
         ? "Stop the active turn before creating a branch."
         : "This message does not expose a verified historical boundary yet. Resume the conversation and try again.");
+      return;
+    }
+    // Retry regenerates the turn, so it forks *before* the request. Fail closed
+    // rather than silently falling back to `sourcePoint`: on an assistant row
+    // that is the post-answer terminal, and a "clean retry" that carried the
+    // answer it was replacing would be a false claim, not a degraded one.
+    const forkPoint = action === "retry" ? message.turnStartPoint : message.sourcePoint;
+    if (!forkPoint) {
+      setComposerNotice("This answer does not expose a verified pre-turn boundary, so Airship did not create a retry branch that still contained the answer it was replacing.");
       return;
     }
     const prompt = action === "retry"
@@ -3522,7 +3918,7 @@ export function App() {
       const result = await sessionLibrary.fork(source.id, {
         title: `${source.title} · ${action}`.slice(0, 240),
         expectedSourceHead: { sequence: source.headSequence, digest: source.headDigest },
-        sourcePoint: message.sourcePoint,
+        sourcePoint: forkPoint,
       });
       preserveComposerForDraftIdentity.current = result.session.id;
       if (action === "retry") {
@@ -3541,23 +3937,28 @@ export function App() {
         activeSessionId: sourceId,
         manifest: source.manifest,
       }));
+      // The bound the library already computed, said out loud. `fork()` returns
+      // the carried and omitted counts precisely because the seed is bounded;
+      // announcing a branch without them asserts a complete continuation that
+      // the seed does not guarantee.
       if (action === "edit") {
         setInput(prompt!);
         setAttachments(message.originatingAttachments ?? []);
-        setComposerNotice("Edit branch created at the immutable pre-turn boundary. Review the prompt, then send when ready.");
+        setComposerNotice(forkBranchNotice("edit", result));
         setRuntimeStatus("Edit branch ready · source conversation unchanged");
         requestAnimationFrame(() => textarea.current?.focus());
       } else if (action === "retry") {
         setInput("");
         setAttachments([]);
-        setComposerNotice("Clean retry branch created; regenerating without the prior answer in provider context.");
+        setComposerNotice(forkBranchNotice("retry", result));
         setRuntimeStatus("Clean retry branch ready · regeneration queued");
       } else {
         setInput("");
         setAttachments([]);
-        setComposerNotice(message.role === "assistant"
-          ? "True fork created with audited context through this answer. The source conversation remains unchanged."
-          : "True fork created immediately before this user turn. The selected prompt was not copied; use Edit & branch when you want to revise it.");
+        setComposerNotice(forkBranchNotice(
+          message.role === "assistant" ? "fork-after-answer" : "fork-before-prompt",
+          result,
+        ));
         setRuntimeStatus("True context fork active · waiting for a new prompt");
       }
     } catch (error) {
@@ -3610,6 +4011,7 @@ export function App() {
 
   function editQueuedMessage(item: QueuedComposerItem): void {
     if (!sessionId) return;
+    setQueuePaused(false);
     removeQueuedMessage(sessionId, item.id);
     setInput(item.prompt);
     setAttachments(item.attachments);
@@ -3618,6 +4020,7 @@ export function App() {
 
   function sendQueuedMessageNow(item: QueuedComposerItem): void {
     if (!sessionId || busy) return;
+    setQueuePaused(false);
     queuedDispatch.current = true;
     void sendMessage(item.prompt, item.attachments, {
       onAdmitted: () => removeQueuedMessage(sessionId, item.id),
@@ -3632,6 +4035,16 @@ export function App() {
     queue?: Readonly<{ onAdmitted(): void }>,
   ) {
     let content = (retryPrompt ?? input).trim();
+    // The one bail that had to stop being silent. An attachment-only composer
+    // looks armed — thumbnails pending, Send in place — and Enter did nothing
+    // at all, with no way to learn why. The text requirement itself stands:
+    // the durable turn's canonical prompt part is text, and admitting an empty
+    // one would change what a receipt binds. So the refusal names itself
+    // instead of the requirement being loosened.
+    if (!content && (retryPrompt ? retryAttachments : attachments).length > 0) {
+      setComposerNotice(COMPOSER_ATTACHMENT_NEEDS_TEXT);
+      return;
+    }
     if (
       !content
       || !runtime.current
@@ -3658,6 +4071,11 @@ export function App() {
       setComposerNotice("Wait for the active Profile and conversation to finish binding before sending.");
       return;
     }
+    // An explicit send is the only thing that lifts a Stop. Placed past every
+    // admission bail so a refused send does not silently resume the queue, and
+    // scoped to non-queue sends so automatic dispatch can never clear its own
+    // latch.
+    if (!queue) setQueuePaused(false);
     const localPresentationAuthority = Object.freeze({
       runtime: admissionRuntime,
       profileId: admissionProfile.profileId,
@@ -3809,11 +4227,57 @@ export function App() {
        * is not awaited: the answer arrives when it arrives, the turn never
        * waits on it, and a failed or unusable answer leaves the heuristic.
        */
-      void conversationTitleFromModel(turnRuntime, content, controller.signal)
+      const namingTurnId = `naming-${randomUuid()}`;
+      const namingOperationId = `naming-request-${randomUuid()}`;
+      void conversationTitleFromModel(
+        turnRuntime,
+        content,
+        { sessionId: turnSessionId, turnId: namingTurnId, operationId: namingOperationId },
+        controller.signal,
+      )
         .then(async (named) => {
-          if (!named || named === conversationTitleFromPrompt(content)) return;
+          if (!named) return;
           if (activeSessionIdentity.current !== turnSessionId) return;
-          await applyTitle(named);
+          /*
+           * The record lands before the rename, and lands even when the model's
+           * answer matches the heuristic: a request that was made and paid for
+           * is a fact about this conversation whether or not it changed the
+           * title. The usage rides in its own `inference.usage` event so that
+           * every provider request this session caused is counted the same way,
+           * and the naming event carries the receipt that proves it happened.
+           */
+          try {
+            await turnRuntime.journal.append(turnSessionId, [
+              {
+                type: CONVERSATION_NAMED_EVENT_TYPE,
+                turnId: namingTurnId,
+                operationId: namingOperationId,
+                payload: {
+                  title: named.title,
+                  answer: named.answer,
+                  model: turnRuntime.model,
+                  ...(named.receipt ? { receipt: named.receipt as unknown as JsonValue } : {}),
+                },
+              },
+              ...(named.usage ? [{
+                type: "inference.usage" as const,
+                turnId: namingTurnId,
+                operationId: namingOperationId,
+                payload: {
+                  ...(named.usage.inputTokens !== undefined ? { inputTokens: named.usage.inputTokens } : {}),
+                  ...(named.usage.outputTokens !== undefined ? { outputTokens: named.usage.outputTokens } : {}),
+                  source: "conversation-naming",
+                },
+              }] : []),
+            ]);
+            setEventCount((count) => count + (named.usage ? 2 : 1));
+          } catch {
+            // Presentational titling must not be able to fail a turn, and a
+            // journal that refuses the record has already failed louder
+            // elsewhere; the heuristic title stands either way.
+          }
+          if (named.title === conversationTitleFromPrompt(content)) return;
+          await applyTitle(named.title);
         })
         .catch(() => undefined);
     }
@@ -3958,6 +4422,13 @@ export function App() {
                   ...(terminalEvent?.type === "turn.completed"
                     ? { sourcePoint: { sequence: terminalEvent.sequence, digest: terminalEvent.digest } }
                     : requestEvent ? { sourcePoint: { sequence: requestEvent.sequence - 1, digest: requestEvent.previousDigest } } : {}),
+                  // Retry forks here, not at `sourcePoint`: a live answer is
+                  // the one most likely to be retried, so the boundary that
+                  // excludes it has to be stamped in the same pass the replayed
+                  // presentation stamps it.
+                  ...(requestEvent
+                    ? { turnStartPoint: { sequence: requestEvent.sequence - 1, digest: requestEvent.previousDigest } }
+                    : {}),
                 }
               : message,
           ),
@@ -4028,6 +4499,9 @@ export function App() {
 
   function stopTurn() {
     if (activePrompt.current) setInput(activePrompt.current);
+    // Latch before the abort: the abort's teardown is what frees `busy`, and
+    // the queue effect runs on that same commit.
+    setQueuePaused(true);
     activeTurn.current?.abort(new DOMException("Stopped by user", "AbortError"));
   }
 
@@ -4178,7 +4652,16 @@ export function App() {
     }
   }
 
-  async function openFile(path: string) {
+  /**
+   * Opens a workspace path, and says which of the three things happened.
+   *
+   * A path that no longer resolves is an ordinary result of the read, not an
+   * exception, so "did not throw" was never evidence that a document opened.
+   * Callers that announce an outcome need the outcome, and the two failures are
+   * not the same thing: `missing` is about the file, `superseded` is about this
+   * request losing its runtime or profile and is nobody's business to report.
+   */
+  async function openFile(path: string): Promise<"opened" | "missing" | "superseded"> {
     const request = ++workspaceOpenRequest.current;
     const activeWorkspace = runtime.current?.workspace;
     const ownerProfileId = activeProfileRef.current?.profileId;
@@ -4190,8 +4673,9 @@ export function App() {
       || runtime.current?.workspace !== activeWorkspace
       || !ownerProfileId
       || activeProfileRef.current?.profileId !== ownerProfileId
-    ) return;
+    ) return "superseded";
     setSelectedFileSelection(file ? Object.freeze({ profileId: ownerProfileId, file }) : undefined);
+    return file ? "opened" : "missing";
   }
 
   async function openMemorySource(target: MemorySourceTarget): Promise<void> {
@@ -4201,7 +4685,15 @@ export function App() {
     }
     if (!navigate("editor")) return;
     try {
-      await openFile(target.path);
+      const outcome = await openFile(target.path);
+      // Silence on `superseded`: the runtime or profile changed under this
+      // request, so whatever is on screen belongs to that change, not to this
+      // click, and naming either outcome would describe the wrong workspace.
+      if (outcome === "superseded") return;
+      if (outcome === "missing") {
+        setRuntimeStatus(`That Memory source is no longer in the workspace: ${target.path}. No document was opened.`);
+        return;
+      }
       setRuntimeStatus(target.kind === "file"
         ? `Opened ${target.path} from Memory`
         : "Opened the active profile memory record in the editor");
@@ -4233,6 +4725,27 @@ export function App() {
     return getBrowserCapabilityRegistry().refresh(true);
   }
 
+  /*
+   * The registry's publish side, handed to the Capabilities route so it renders
+   * the same generation the agent reads rather than a copy taken at mount. The
+   * identity has to be stable — the subscribing effect keys on it — and the
+   * registry module stays deferred, so the async import is resolved inside the
+   * subscription and the returned teardown covers both the pending import and
+   * an established listener.
+   */
+  const subscribeBrowserCapabilities = useCallback((listener: (report: BrowserRuntimeCapabilityReport) => void) => {
+    let released = false;
+    let unsubscribe: (() => void) | undefined;
+    void import("../capabilities/browser-runtime").then(({ getBrowserCapabilityRegistry }) => {
+      if (released) return;
+      unsubscribe = getBrowserCapabilityRegistry().subscribe(listener);
+    }).catch(() => undefined);
+    return () => {
+      released = true;
+      unsubscribe?.();
+    };
+  }, []);
+
   function openCapabilityCommand(command: string): void {
     void createConversation("Capability command").then((created) => {
       if (!created) {
@@ -4250,13 +4763,77 @@ export function App() {
     });
   }
 
+  /**
+   * The one path every human-proposed effect takes.
+   *
+   * Three surfaces — Git, GitHub import, vault probe — each opened their own
+   * approval and then dropped everything the registry path keeps: no journal
+   * event, so an approved commit or a probe that wrote immutable objects left
+   * no evidence at all; no abort, so a broker request outlived the screen that
+   * asked for it; and Auto Approve's model reviewer sat in the middle of it,
+   * able to deny an action its own operator had just proposed.
+   *
+   * Routing all three through here is the point: a fourth surface cannot skip
+   * the record by forgetting to write it.
+   */
+  async function reviewHumanIntent(
+    definition: ToolDefinition,
+    argumentsValue: JsonValue,
+    identity: Readonly<{ turnId: string; operationId: string }>,
+  ): Promise<"allow" | "deny"> {
+    const controller = new AbortController();
+    const intentSessionId = sessionId;
+    const intentRuntime = runtime.current;
+    try {
+      const reviewed = await decideHumanIntent({
+        mode: activeApprovalMode,
+        broker: approvalBroker,
+        tool: definition,
+        argumentsValue,
+        context: {
+          sessionId: intentSessionId ?? "airship-ui",
+          turnId: identity.turnId,
+          operationId: identity.operationId,
+          signal: controller.signal,
+        },
+      });
+      if (intentSessionId && intentRuntime) {
+        try {
+          await intentRuntime.journal.append(intentSessionId, [{
+            type: HUMAN_INTENT_EVENT_TYPE,
+            turnId: identity.turnId,
+            operationId: identity.operationId,
+            payload: {
+              toolName: definition.name,
+              effect: definition.effect,
+              decision: reviewed.decision,
+              summary: definition.description.slice(0, 512),
+              arguments: redactForDisplay(argumentsValue),
+              approval: reviewed.provenance as unknown as JsonValue,
+            },
+          }]);
+        } catch (error) {
+          // An unrecorded decision is exactly the defect this closes, so the
+          // gap is stated rather than swallowed. The decision still stands:
+          // refusing an approval the person already gave would be a worse lie
+          // about what happened.
+          setRuntimeStatus(`${definition.name} was ${reviewed.decision === "allow" ? "allowed" : "denied"}, but the decision could not be journaled: ${error instanceof Error ? error.message : "the session journal refused the append"}`);
+        }
+      }
+      return reviewed.decision;
+    } finally {
+      // The controller outlived every decision it was made for, so a broker
+      // request abandoned by navigation stayed pending forever.
+      controller.abort();
+    }
+  }
+
   async function reviewGitOperation(
     operation: GitOperation,
     descriptor: GitOperationDescriptor,
   ): Promise<"allow" | "deny"> {
     if (!descriptor.approvalRequired) return "allow";
-    const controller = new AbortController();
-    return approvalPolicy.review(
+    return reviewHumanIntent(
       {
         name: `git_${operation.kind}`,
         description: `${descriptor.summary}. ${descriptor.dataLeavesDevice ? "Data may leave this device." : "No remote operation is implied."}`,
@@ -4264,18 +4841,12 @@ export function App() {
         inputSchema: { type: "object" },
       },
       descriptor.arguments,
-      {
-        sessionId: sessionId ?? "airship-ui",
-        turnId: `human-git-${randomUuid()}`,
-        operationId: `git-${randomUuid()}`,
-        signal: controller.signal,
-      },
+      { turnId: `human-git-${randomUuid()}`, operationId: `git-${randomUuid()}` },
     );
   }
 
   async function reviewSourceImport(request: SourcesImportRequest): Promise<"allow" | "deny"> {
-    const controller = new AbortController();
-    return approvalPolicy.review(
+    return reviewHumanIntent(
       {
         name: "github_snapshot_import",
         description: "Read a bounded public GitHub snapshot directly in this browser, then write its text files into the selected workspace and local Git adapter.",
@@ -4291,12 +4862,7 @@ export function App() {
         maximumFiles: 2_000,
         maximumTextBytes: 33_554_432,
       },
-      {
-        sessionId: sessionId ?? "airship-ui",
-        turnId: `human-source-${randomUuid()}`,
-        operationId: `source-${randomUuid()}`,
-        signal: controller.signal,
-      },
+      { turnId: `human-source-${randomUuid()}`, operationId: `source-${randomUuid()}` },
     );
   }
 
@@ -4307,8 +4873,7 @@ export function App() {
     }
     const snapshot = vault.snapshot;
     if (snapshot.phase === "disconnected" || snapshot.phase === "probing") return;
-    const controller = new AbortController();
-    const decision = await approvalPolicy.review(
+    const decision = await reviewHumanIntent(
       {
         name: "vault_live_conformance",
         description: "Run bounded live object-store contract checks. This creates immutable encrypted probe objects that require provider lifecycle or out-of-band cleanup.",
@@ -4324,12 +4889,7 @@ export function App() {
         cleanup: "provider-lifecycle-or-out-of-band",
         dataSynchronization: "not-evaluated",
       },
-      {
-        sessionId: sessionId ?? "airship-ui",
-        turnId: `human-vault-${randomUuid()}`,
-        operationId: `vault-probe-${randomUuid()}`,
-        signal: controller.signal,
-      },
+      { turnId: `human-vault-${randomUuid()}`, operationId: `vault-probe-${randomUuid()}` },
     );
     if (decision !== "allow") {
       setRuntimeStatus("Vault probe denied; no readiness claim changed");
@@ -4422,7 +4982,7 @@ export function App() {
     setRuntimeStatus(authority.kind === "local-device"
       ? "Opening encrypted device state"
       : "Migrating workspace and sessions into encrypted cloud objects");
-    const [{ migrateJournalState, migrateProfileCatalogState, migrateWorkspaceState }, { quiesceBrowserTerminalWorkspace }] = await Promise.all([
+    const [{ migrateJournalState, migrateProfileCatalogState, migrateWorkspaceState, reconcileAdoptedProfileCatalog }, { quiesceBrowserTerminalWorkspace }] = await Promise.all([
       loadDeferredCapabilities(),
       import("../terminal/manager"),
     ]);
@@ -4442,7 +5002,11 @@ export function App() {
       : undefined;
     const catalogMigration = targetCatalog
       ? Object.freeze({
-          checkpoint: targetCatalog,
+          // An adopted catalog owns every profile and theme in it, but it is not
+          // authoritative about which skills this build ships. Union them in
+          // before the catalog becomes this runtime's, or the Vault's release
+          // vintage silently decides the skill set forever.
+          checkpoint: await reconcileAdoptedProfileCatalog(ready.profiles, targetCatalog),
           disposition: "adopted-existing" as const,
         })
       : await migrateProfileCatalogState(
@@ -4931,6 +5495,20 @@ export function App() {
       setRuntimeStatus("Finish the current inference route change before switching storage");
       return;
     }
+    // Feasibility is checked before authority is released, not after. The
+    // transition detaches the adopted Vault first, so selecting a destination
+    // this build cannot open — Drive with no client ID, the MinIO lab off a
+    // loopback origin — used to trade a working durable runtime for one that
+    // could not be opened either.
+    const unopenable = vaultBackendUnavailableReason(
+      next,
+      import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined,
+      typeof window === "undefined" ? undefined : window.location,
+    );
+    if (unopenable) {
+      setRuntimeStatus(`${unopenable} The current Vault was left attached.`);
+      return;
+    }
     vaultContextPublication.current?.abort(new DOMException("Vault provider is changing.", "AbortError"));
     vaultProviderSwitchingRef.current = true;
     setVaultProviderSwitching(true);
@@ -4972,12 +5550,28 @@ export function App() {
     setVaultProviderSwitching(true);
     setRuntimeStatus("Moving active Vault state into page memory");
     try {
-      await releaseVaultAuthority({
+      const release = {
         runtimeUsesVault: () => runtime.current?.storageId.startsWith("vault+") === true,
         adoptEphemeralRuntime,
         disconnectAuthority: () => vault.disconnect(),
-      });
-      setVaultSetupOpen(preferences.vaultBackend !== "ephemeral");
+      };
+      if (preferences.vaultBackend === "ephemeral") {
+        // Nothing to commit, and `transitionVaultProvider` would decline the
+        // release as a no-op change.
+        await releaseVaultAuthority(release);
+      } else {
+        // Detaching *is* choosing "Page memory only": the release alone left
+        // `vaultBackend` naming the durable provider, which the Local Device
+        // auto-open effect reads as a standing instruction and used to act on a
+        // frame later, re-adopting the Vault the user had just released.
+        await transitionVaultProvider({
+          ...release,
+          current: preferences.vaultBackend,
+          next: "ephemeral",
+          commitPreference: (provider) => setPreferences((current) => Object.freeze({ ...current, vaultBackend: provider })),
+        });
+      }
+      setVaultSetupOpen(false);
       setRuntimeStatus("Vault disconnected · active workspace continues in page memory");
     } catch (error) {
       setRuntimeStatus(error instanceof Error ? error.message : "Vault disconnect stopped safely");
@@ -5933,6 +6527,9 @@ export function App() {
       runtime.current = committedRuntime;
       chutesAvailability.current = nextAvailability;
       accountCredential.current = credential;
+      // Commit is the one moment the pending OAuth handoff has done its job.
+      // Clearing it earlier is what stranded a completed exchange on remount.
+      pendingOAuthCredential.current = undefined;
       chutesTransport.current = transport;
       chutesConnectionId.current = nextConnectionId;
       chutesConnectionGeneration.current = nextGeneration;
@@ -5983,6 +6580,11 @@ export function App() {
       setCredentialRevision((value) => value + 1);
       setInvocationTelemetry(undefined);
       setConnection(connectionMetadata);
+      // The callback notice describes an exchange in flight ("finish the
+      // connection"). Commitment is its terminal transition, and nothing else
+      // wrote one, so a connected user kept being told to finish what they had
+      // already finished.
+      setOauthCallbackStatus(undefined);
       setRuntimeStatus(encryptedSessionReadyStatus(connectionMetadata.posture));
       navigate("chat");
     });
@@ -5992,6 +6594,7 @@ export function App() {
     chutesAuthorityRevision.current += 1;
     const active = runtime.current;
     const releasedTransport = chutesTransport.current;
+    const releasedTokens = oauthTokens.current;
     const releasesActiveRoute = active?.inferenceBinding?.providerId === "chutes"
       && active.transport.id === "chutes-e2ee-v1";
     if (releasesActiveRoute && active) {
@@ -6016,6 +6619,37 @@ export function App() {
     releasedTransport?.revokeCredential(
       new DOMException("Chutes connection was released from page memory.", "AbortError"),
     );
+    /*
+     * Clearing page memory ends Airship's use of the credential. It does not
+     * end the grant: a refresh token that has leaked stays valid at the
+     * provider for the rest of its lifetime unless something asks the
+     * revocation endpoint to drop it, and the only caller that ever did was a
+     * broker production never mounts. The transport's identically named
+     * `revokeCredential` above is why the gap was invisible here.
+     *
+     * Detached and best-effort by construction: teardown above is already
+     * complete and released state is set whatever happens next, so a hung or
+     * refused revocation cannot hold sign-out open. Its result is never
+     * reported as proof the provider session ended — the endpoint answers 200
+     * for tokens it has never seen (docs/gap-audit/inference.md).
+     */
+    if (releasedTokens) {
+      void (async () => {
+        const { CHUTES_ACTIVE_REGISTRATION, revokeChutesToken } = await import("../auth/chutes-oauth");
+        for (const [token, tokenTypeHint] of [
+          [releasedTokens.refreshToken, "refresh_token"],
+          [releasedTokens.accessToken, "access_token"],
+        ] as const) {
+          if (!token) continue;
+          await revokeChutesToken({
+            token,
+            tokenTypeHint,
+            clientId: CHUTES_ACTIVE_REGISTRATION.clientId,
+            registration: CHUTES_ACTIVE_REGISTRATION,
+          }).catch(() => undefined);
+        }
+      })().catch(() => undefined);
+    }
     if (releasesActiveRoute) {
       setComposerNotice("Remote inference is disconnected. This conversation remains readable and pinned to the released authority; reconnecting starts a new conversation.");
       setRuntimeStatus(status);
@@ -6369,7 +7003,7 @@ export function App() {
       || inferenceRouteChanging.current
       || sessionNavigationChanging.current
     ) {
-      setComposerNotice("Stop the active turn and wait for model or storage changes before changing this conversation's approval policy.");
+      setComposerNotice("Stop the active turn and wait for model or storage changes before changing the approval policy.");
       return;
     }
     const active = runtime.current;
@@ -6400,10 +7034,14 @@ export function App() {
       if (runtime.current !== active) throw new Error("The runtime changed before the approval policy could become active.");
       publishProfileId(revisedProfile.profileId);
       const activated = await activateSession(nextSession);
+      // Say the whole blast radius. The only place an approval mode can live is
+      // a profile revision, and this commits one through `replaceProfile`, so
+      // the profile's *next* conversation starts here too. Describing that as
+      // conversation-scoped made a durable policy change read as a local one.
       setMessages([{
         ...welcomeMessage,
         id: randomUuid(),
-        content: `Approval policy changed to ${approvalModeLabel(nextMode)} in this new pinned conversation. The previous conversation remains unchanged and addressable from its URL and conversation history.`,
+        content: `Approval policy changed to ${approvalModeLabel(nextMode)} in this new pinned conversation, and ${revisedProfile.name} will start new conversations in ${approvalModeLabel(nextMode)} until you change it again. The previous conversation remains unchanged and addressable from its URL and conversation history.`,
       }]);
       setEventCount(activated.headSequence);
       setLastReceipt(undefined);
@@ -6411,7 +7049,7 @@ export function App() {
       setTranscriptBoundary(undefined);
       setSessionRevision((value) => value + 1);
       setComposerNotice(undefined);
-      setRuntimeStatus(`${approvalModeLabel(nextMode)} active · new pinned conversation`);
+      setRuntimeStatus(`${approvalModeLabel(nextMode)} active · new pinned conversation · ${revisedProfile.name} default`);
       navigate("chat", chatHash(nextSession.id));
     } catch (error) {
       setComposerNotice(error instanceof Error ? error.message : "The approval policy could not be changed.");
@@ -6456,7 +7094,12 @@ export function App() {
     if (!managed.some((profile) => profile.profileId === profileIdToDelete)) throw new Error("The selected profile is already archived or no longer exists.");
     if (profileIdToDelete === profileId) {
       if (!replacementProfileId || replacementProfileId === profileIdToDelete) throw new Error("Choose a replacement profile before deleting the active profile.");
-      await changeProfile(replacementProfileId, true);
+      // Archiving the profile the cockpit is still running on is the one
+      // outcome this path may never produce, so the switch has to have
+      // actually committed — not merely have been attempted.
+      if (!await changeProfile(replacementProfileId, true)) {
+        throw new Error("The replacement profile did not activate, so the active profile was not archived. The status line names the reason.");
+      }
     }
     await mutateProfileCatalog((current) => archiveProfileRevision(current, profileIdToDelete));
     setRuntimeStatus("Profile archived from new work; historical conversations retain their pinned manifest and receipts");
@@ -6500,12 +7143,20 @@ export function App() {
   async function loadAuditedSessionSnapshot(
     targetSessionId: string,
     expectedProfileId?: string,
+    /*
+     * Which journal to audit. Defaults to the committed runtime, which is what
+     * every ordinary caller means. A profile switch passes the *incoming*
+     * runtime so the target conversation can be audited before any authority is
+     * published — validating after the commit is what left a rejected switch
+     * running the old UI against the new profile's workspace.
+     */
+    sourceRuntime = runtime.current,
   ): Promise<Readonly<{
     report: SessionAuditReport;
     session: SessionRecord;
     events: readonly DurableEvent[];
   }>> {
-    const activeRuntime = runtime.current;
+    const activeRuntime = sourceRuntime;
     if (!activeRuntime) throw new Error("The local runtime is not ready.");
     const [{ auditSessionHistory }, session] = await Promise.all([
       loadDeferredCapabilities(),
@@ -6878,7 +7529,7 @@ export function App() {
             disabled={busy}
             options={managedProfiles(catalog).map((profile) => ({ value: profile.profileId, label: profile.name }))}
             leading={(option) => <span class="profile-monogram" aria-hidden="true">{profileMonogram(option.label)}</span>}
-            onChange={(nextId) => void changeProfile(nextId)}
+            onChange={(nextId) => void changeProfile(nextId).catch((error) => setRuntimeStatus(`Profile switch failed: ${error instanceof Error ? error.message : String(error)}`))}
           />
           <span class="runtime-line" title={runtimeStatus}><span class="pulse-dot" /><span class="runtime-line__text">{runtimeStatus}</span></span>
           <span class="sr-only" role="status" aria-live="polite">{runtimeStatus}</span>
@@ -6911,7 +7562,7 @@ export function App() {
         onNavigate={(next) => navigatePrimary(next)}
         onManageProfiles={() => { openProfileManager(profileId); }}
         onNewConversation={() => void createConversation()}
-        onChangeProfile={(nextId) => void changeProfile(nextId)}
+        onChangeProfile={(nextId) => void changeProfile(nextId).catch((error) => setRuntimeStatus(`Profile switch failed: ${error instanceof Error ? error.message : String(error)}`))}
         onToggleState={toggleRailState}
         onInteractionError={setRuntimeStatus}
       />
@@ -6976,17 +7627,28 @@ export function App() {
                       ? sortModels(availableModels, "popularity").map((model) => ({
                           id: model.id,
                           label: compactModelLabel(model.id),
-                          detail: compactModelCapabilityDetail(model),
                         }))
                       : activeExternalConnection?.models.map((model) => ({
                           id: model.id,
                           label: model.label,
-                          detail: providerModelCapability(model, "image-input") === "supported" ? "Vision · evidenced" : undefined,
+                          // The shared word, not a second spelling of it. An
+                          // external provider has no `AirshipModel` and so no
+                          // access to `capabilityLabels`, but it may not invent
+                          // its own noun for the same declared capability.
+                          detail: externalModelCapabilityDetail(model),
                         })) ?? []}
                     busy={busy}
                     switching={modelSwitching}
                     onSelect={activeChutesConnection ? switchChutesModel : switchExternalModel}
                     onOpenConnection={() => navigate("access")}
+                    picker={activeChutesConnection && ModelPickerControl ? (control) => (
+                      <ModelPickerControl
+                        models={availableModels}
+                        value={connection.model}
+                        disabled={control.disabled}
+                        onSelect={control.select}
+                      />
+                    ) : undefined}
                   />
                 ) : <DemoModelChip onConnect={() => navigate("access")} />}
               />
@@ -7121,7 +7783,23 @@ export function App() {
                   class={`composer${busy ? " busy" : ""}`}
                 >
                   {slashMenuOpen ? (
-                    <div class="slash-command-menu" id="slash-command-menu" role="listbox" aria-label="Available slash commands">
+                    <div
+                      class="slash-command-menu"
+                      id="slash-command-menu"
+                      role="listbox"
+                      aria-label={`Available slash commands — showing ${slashCompletions.length} of ${slashMenu.total}`}
+                    >
+                      {/* Not an option: a listbox may only own options, so the
+                          count lives in the listbox's own accessible name and
+                          this row is the sighted twin of that sentence. */}
+                      <header
+                        class="slash-command-menu__header"
+                        role="presentation"
+                        style={{ display: "flex", gap: "10px", justifyContent: "space-between", alignItems: "baseline", padding: "4px 10px 6px" }}
+                      >
+                        <span>{SLASH_MENU_HEADER}</span>
+                        <small>{slashCompletions.length} of {slashMenu.total}</small>
+                      </header>
                       {slashCompletions.map((completion, index) => (
                         <button
                           key={`${completion.kind}-${completion.command.name}-${completion.insertText}`}
@@ -7145,7 +7823,11 @@ export function App() {
                     <div class="composer-queue" aria-label="Queued messages" aria-live="polite">
                       <header>
                         <strong>Up next</strong>
-                        <span>{messageQueue.length} queued</span>
+                        {/* A paused queue that looks identical to a running one
+                            tells the same lie Stop used to tell. The way out is
+                            already on screen — Send now and Edit — so the chip
+                            only has to name the state it is in. */}
+                        <span>{messageQueue.length} queued{queuePaused ? " · paused after Stop" : ""}</span>
                       </header>
                       {messageQueue.map((item, index) => (
                         <div class="composer-queue__item" key={item.id}>
@@ -7234,24 +7916,46 @@ export function App() {
                     <div class="composer-footer">
                       <div class="composer-tools">
                         <label class="composer-attach"><input type="file" aria-label="Attach image" accept="image/*" multiple onChange={(event) => { addComposerFiles(Array.from(event.currentTarget.files ?? [])); event.currentTarget.value = ""; }} /><Icon name="plus" size={14} /><span>Attach image</span></label>
-                        <span><Icon name="lock" size={14} /> {inferenceConnected
-                          ? activeInferenceBinding?.authMethod === "local-none"
-                            ? "local endpoint"
-                            : "credential in memory"
-                          : "local demo · page memory"}</span>
+                        {/* The credential posture, as a chip rather than the
+                            caption it shipped as. The caption was
+                            `display: none` on a phone, so the fact stating what
+                            this keystroke is about to trust was blank on the
+                            device most likely to be someone else's. The chip
+                            also carries the Send refusal, because a `title` has
+                            no touch gesture. */}
+                        <ComposerPostureChip
+                          claim={composerPosture({
+                            online,
+                            offlineReason: OFFLINE_INLINE_REASON,
+                            inferenceConnected,
+                            authMethod: activeInferenceBinding?.authMethod,
+                          })}
+                          blockedReason={attachmentsAwaitText ? COMPOSER_ATTACHMENT_NEEDS_TEXT : undefined}
+                        />
                         <MenuSelect
-                          ariaLabel="Conversation approval policy"
+                          // Not "Conversation approval policy": choosing here
+                          // revises the active profile, so the profile's later
+                          // conversations start in the chosen mode as well.
+                          ariaLabel="Conversation approval policy · applies to this conversation and future ones in this profile"
                           className={`composer-approval-select policy-${activeApprovalMode}`}
                           value={activeApprovalMode}
                           disabled={busy || modelSwitching || vaultProviderSwitching || localDeviceBusy}
                           options={[
                             { value: "ask-first", label: "Ask First", description: "Prompt before effectful actions." },
                             { value: "auto-approve", label: "Auto Approve", description: "Ask the active model to review each effect; prompt when uncertain." },
-                            { value: "full-access", label: "Full Access", description: "Allow effects inside the bounded browser workspace without prompting." },
+                            // "Inside the bounded browser workspace" was true of
+                            // the write effects and false of the network ones,
+                            // which reach any HTTPS origin that grants CORS.
+                            { value: "full-access", label: "Full Access", description: "Allow every effect without prompting, including requests to any HTTPS origin." },
                           ]}
                           onChange={(value) => void changeActiveApprovalMode(value as ApprovalMode)}
                         />
                       </div>
+                      {/* The Enter contract, stated before it is tripped over.
+                          Enter-sends, Shift+Enter-newlines and Enter-while-busy
+                          queues have all shipped for three waves with no
+                          on-screen statement anywhere. */}
+                      <ComposerKeyhintLegend busy={busy} />
                       {busy ? (
                         <div class="composer-primary-actions">
                           {input.trim() ? <button class="queue-button" type="button" onClick={enqueueCurrentComposer}>Queue</button> : null}
@@ -7272,9 +7976,13 @@ export function App() {
                           aria-describedby={composerUsesDemo ? "chat-demo-guidance" : undefined}
                           title={composerOfflineBlocked
                             ? "Remote inference is paused offline. Local slash commands remain available."
-                            : composerUsesDemo
-                              ? "Deterministic local demo response. Connect a model for real inference."
-                              : undefined}
+                            // The disabled state that reads as a bug unless it
+                            // is named: attachments pending, nothing typed.
+                            : attachmentsAwaitText
+                              ? COMPOSER_ATTACHMENT_NEEDS_TEXT
+                              : composerUsesDemo
+                                ? "Deterministic local demo response. Connect a model for real inference."
+                                : undefined}
                         ><Icon name="send" /></button>
                       )}
                     </div>
@@ -7293,6 +8001,7 @@ export function App() {
               endpointRecord={lastReceipt ? attestationRecords.find((record) => attestationRecordMatchesReceipt(record, lastReceipt)) : undefined}
               now={attestationNow}
               compact
+              acquisitionFailure={inspectorAcquisitionFailure}
               onOpenAttestations={() => openAttestationEvidence()}
             /></aside> : null}
           </>
@@ -7309,6 +8018,7 @@ export function App() {
             revision={sessionRevision}
             onResume={resumeLibrarySession}
             onForked={activateForkedSession}
+            onRenamed={adoptLibraryRename}
             onOpenProof={openSessionProof}
             durability={sessionDurability}
             quarantine={quarantinedSession}
@@ -7329,7 +8039,7 @@ export function App() {
           key={runtime.current.workspaceId}
           files={files}
           selected={selectedFile}
-          onOpen={openFile}
+          onOpen={async (path) => { await openFile(path); }}
           workspace={runtime.current.workspace}
           workspaceIdentity={runtime.current.workspaceId}
           profileId={activeProfile.profileId}
@@ -7353,6 +8063,7 @@ export function App() {
           onTerminalOpenRequestHandled={(id) => setTerminalOpenRequest((current) => current?.id === id ? undefined : current)}
           onOpenFullTerminal={() => navigate("terminal")}
           durability={sessionDurability}
+          destinationArrival={destinationArrival}
         /> : editorViewError ? <section class="work-view panel" role="alert"><h1>Editor</h1><p>{editorViewError}</p></section> : <RouteSkeleton label="Loading the browser-native Workspace Editor" /> : null}
         {view === "terminal" && runtime.current && gitClient ? TerminalScreen ? <TerminalScreen
           workspace={runtime.current.workspace}
@@ -7398,10 +8109,11 @@ export function App() {
             onDelete={deleteProfile}
             draftState={profileDraftDirty}
             selectedProfileId={profileHubScope === "global" ? undefined : profileHubScope}
+            preferences={preferences}
           />
         ) : null}
         {view === "capabilities" ? CapabilitiesScreen ? (
-          <CapabilitiesScreen inspect={inspectExecutionCapabilities} inspectBrowser={inspectBrowserCapabilities} onCommand={openCapabilityCommand} onOpenSkills={() => navigate("skills")} />
+          <CapabilitiesScreen inspect={inspectExecutionCapabilities} inspectBrowser={inspectBrowserCapabilities} subscribeBrowser={subscribeBrowserCapabilities} onCommand={openCapabilityCommand} onOpenSkills={() => navigate("skills")} />
         ) : capabilitiesViewError ? <section class="work-view panel" role="alert"><h1>Capabilities</h1><p>{capabilitiesViewError}</p></section> : <RouteSkeleton label="Inspecting browser capabilities" /> : null}
         {view === "skills" ? (
           <SkillsManagerView
@@ -7480,6 +8192,7 @@ export function App() {
             credentialRevision={credentialRevision}
             invocationTelemetry={invocationTelemetry}
             online={online}
+            providerInventory={billingProviderInventory}
             loadSnapshot={loadBillingSnapshot}
             onOpenAccess={() => navigate("access")}
           />
@@ -7488,7 +8201,7 @@ export function App() {
           <ProofScreen
             key={`${profileId}:${proofTargetId ?? "no-session"}`}
             receipt={proofReceipt}
-            eventCount={proofTargetId === sessionId ? eventCount : sessionRevision}
+            eventCount={proofScoped ? eventCount : sessionRevision}
             sessionId={proofTargetId}
             requestedReceiptId={effectiveProofSelection?.receiptId}
             loadAudit={loadSessionAudit}
@@ -7498,28 +8211,35 @@ export function App() {
               navigate("proof", proofHash(effectiveProofSelection, section));
             }}
             summarizeReceipt={receiptSummary}
+            acquisitionFailure={proofAcquisitionFailure}
             renderInspector={(onOpenAttestations) => ProofInspector ? <ProofInspector
               receipt={proofReceipt}
-              endpointRecord={proofReceipt ? attestationRecords.find((record) => attestationRecordMatchesReceipt(record, proofReceipt)) : undefined}
+              endpointRecord={proofReceipt ? proofEndpointRecords.find((record) => attestationRecordMatchesReceipt(record, proofReceipt)) : undefined}
               now={attestationNow}
+              acquisitionFailure={proofAcquisitionFailure}
               onOpenAttestations={onOpenAttestations}
             /> : <RouteSkeleton label="Loading the claim stack" />}
             evidenceLedger={AttestationsScreen ? <AttestationsScreen
-              endpointRecords={attestationRecords}
-              receipts={attestationReceipts}
-              selectedRecordId={selectedAttestationRecordId}
+              endpointRecords={proofEndpointRecords}
+              receipts={proofLedgerReceipts}
+              selectedRecordId={proofScoped ? selectedAttestationRecordId : undefined}
               onSelectRecord={selectEndpointEvidenceRecord}
-              acquisitionNotice={!online
-                ? OFFLINE_INLINE_REASON
-                : automaticEvidenceAcquisitionNotice
-                  ?? endpointEvidenceDurabilityNotice
-                  ?? (attestationFailure ? `${attestationFailure.label}. Current endpoint evidence was not accepted, and no TEE claim was inferred.` : undefined)}
+              acquisitionNotice={!proofScoped
+                ? PROOF_UNSCOPED_EVIDENCE_NOTICE
+                : !online
+                  ? OFFLINE_INLINE_REASON
+                  : automaticEvidenceAcquisitionNotice
+                    ?? endpointEvidenceDurabilityNotice
+                    ?? (attestationFailure ? `${attestationFailure.label}. Current endpoint evidence was not accepted, and no TEE claim was inferred.` : undefined)}
               onOpenConnection={!chutesConnected ? () => navigate("access") : undefined}
-              onRefresh={online && chutesConnected ? refreshAttestation : undefined}
+              // Refresh acquires evidence for the ACTIVE conversation. Offered
+              // from an unscoped route it would file conversation A's fetch
+              // under conversation B's page.
+              onRefresh={proofScoped && online && chutesConnected ? refreshAttestation : undefined}
               onCancel={() => attestationClient.current?.cancel()}
               embedded
             /> : attestationsViewError ? <div class="panel" role="alert">{attestationsViewError}</div> : <RouteSkeleton label="Loading attestation evidence" />}
-            endpointEvidenceRecords={attestationRecords}
+            endpointEvidenceRecords={proofEndpointRecords}
           />
         ) : proofViewError ? <section class="work-view panel" role="alert"><h1>Proof</h1><p>{proofViewError}</p></section> : <RouteSkeleton label="Loading Proof" /> : null}
         {view === "access" ? AccessScreen ? (
@@ -7554,7 +8274,7 @@ export function App() {
             } : undefined}
             oauthBootstrap={{
               revision: oauthBootstrapRevision,
-              takeCredential: takePendingOAuthCredential,
+              readCredential: readPendingOAuthCredential,
               getBearerToken: currentOAuthBearer,
             }}
             connectedProviderIds={connectedInferenceProviderIds}
@@ -8262,19 +8982,51 @@ function postureSatisfies(actual: InferenceTransport["posture"], minimum: Profil
   return actual === "encrypted-attested";
 }
 
-function applyTheme(theme: ThemeManifest) {
+/**
+ * Writes a theme onto `<html>`, diffed against the colour mode actually in force.
+ *
+ * The inline properties this sets outrank every stylesheet, so the baseline the
+ * diff is taken against has to be the sheet the *mode preference* selected, not
+ * the one the manifest names. Passing `mode` is what stops a dark-scheme theme
+ * from pinning a dark palette on top of the light sheet; see `themeCssVariables`.
+ */
+function applyTheme(theme: ThemeManifest, mode: ThemeColorScheme = theme.colorScheme) {
   const root = document.documentElement;
   root.style.removeProperty("--signal");
   root.style.removeProperty("--danger");
-  for (const [property, value] of Object.entries(themeCssVariables(theme))) root.style.setProperty(property, value);
+  for (const [property, value] of Object.entries(themeCssVariables(theme, mode))) root.style.setProperty(property, value);
   root.dataset.theme = theme.themeId;
-  root.dataset.density = theme.layout.density;
-  root.dataset.corners = theme.layout.corners;
-  root.dataset.typeScale = theme.typography.scale;
-  root.dataset.bodyFont = theme.typography.body;
-  root.dataset.mode = theme.colorScheme;
-  root.style.colorScheme = theme.colorScheme;
+  // Through `themePresentation` so the manifest's 'standard' and the preference
+  // layer's 'default' cannot both reach one attribute as different words.
+  const presentation = themePresentation(theme);
+  root.dataset.density = presentation.density;
+  root.dataset.corners = presentation.corners;
+  root.dataset.typeScale = presentation.typeScale;
+  root.dataset.bodyFont = presentation.bodyFont;
+  root.dataset.mode = mode;
+  root.style.colorScheme = mode;
   document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')?.setAttribute("content", theme.colors.ground);
+}
+
+/**
+ * The only sanctioned way to put a theme on the document.
+ *
+ * `applyTheme` is a whole-instrument commit: it writes the five layout and
+ * typography attributes the *preference* layer also owns. Every caller outside
+ * the one effect that owns both therefore silently overwrote the user's global
+ * display preferences — previewing a theme in the Profiles editor reset type
+ * scale, density, corners, body font and light/dark mode, and nothing put them
+ * back. Preferences are the final override layer, so they are reasserted in the
+ * same breath rather than left to a later effect that a preview never triggers.
+ *
+ * "Final override layer" is the whole point, and it used to be implemented as
+ * "final rewrite": the theme's presentation became the base the preference layer
+ * diffs against only when it was handed over explicitly, so that is what
+ * happens here.
+ */
+function applyThemeWithPreferences(theme: ThemeManifest, preferences: PreferenceOverrides) {
+  applyTheme(theme, preferences.mode);
+  applyPreferenceOverrides(preferences, document.documentElement, themePresentation(theme));
 }
 
 /**
@@ -8431,16 +9183,20 @@ function compactModelLabel(modelId: string): string {
   return leaf.length > 25 ? `${leaf.slice(0, 22)}…` : leaf;
 }
 
-function compactModelCapabilityDetail(model: AirshipModel): string | undefined {
+/**
+ * Capability words for a route the shared picker cannot serve.
+ *
+ * `compactModelCapabilityDetail` stood here — a second capability formatter,
+ * for the Chutes route, printing "Vision · Tools · 4.2k req/h" where Connection
+ * printed "Vision"/"Tools" and put demand in its own column. The Chutes route
+ * opens the shared picker now, so the only surface left without an
+ * `AirshipModel` is an external provider, and it reads the same nouns from
+ * `MODEL_CAPABILITY_WORDS` instead of coining its own.
+ */
+function externalModelCapabilityDetail(model: InferenceModelDescriptor): string | undefined {
   const labels: string[] = [];
-  if (modelInputModalityCapability(model, "image") === "supported") labels.push("Vision");
-  if (model.provenance.capabilities === "llm-models" && model.features.some((feature) => feature.toLowerCase() === "tools")) {
-    labels.push("Tools");
-  }
-  const popularity = modelPopularitySignal(model);
-  if (popularity) labels.push(`${new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 }).format(popularity.value)} ${popularity.basis === "lifetime-invocations" ? "invocations" : "req/h"}`);
-  const utilization = model.telemetry?.freshness === "fresh" ? model.telemetry.utilization.oneHour : undefined;
-  if (utilization !== undefined) labels.push(`${Math.round(utilization * 100)}% load`);
+  if (providerModelCapability(model, "image-input") === "supported") labels.push(MODEL_CAPABILITY_WORDS.vision);
+  if (providerModelCapability(model, "tool-calling") === "supported") labels.push(MODEL_CAPABILITY_WORDS.tools);
   return labels.length ? labels.join(" · ") : undefined;
 }
 
@@ -8455,6 +9211,15 @@ const CONVERSATION_NAMING_PROMPT =
   "You name conversations. Reply with a title of at most six words for the message that follows. "
   + "Describe what it is about. No quotation marks, no trailing punctuation, no preamble.";
 
+/** What the naming inference produced, including what it cost and what proves it. */
+type ConversationNaming = Readonly<{
+  title: string;
+  /** The provider's exact answer, so the receipt's response digest is checkable. */
+  answer: string;
+  usage?: Readonly<{ inputTokens?: number; outputTokens?: number }>;
+  receipt?: ConversationReceipt;
+}>;
+
 /**
  * Ask the active model to name a new conversation.
  *
@@ -8466,30 +9231,68 @@ const CONVERSATION_NAMING_PROMPT =
  * first, so it is never nameless and the turn never waits on this; this only
  * ever improves that title, and any failure, abort, or unusable answer leaves
  * the heuristic in place. Returning `undefined` is an ordinary outcome.
+ *
+ * It is issued against the conversation's own identity. It used to invent a
+ * `naming-<uuid>` session id, which meant the one thing a receipt exists to do
+ * — bind a request to the conversation that made it — was impossible, and the
+ * usage and receipt the transport handed back were dropped on the floor. The
+ * caller journals them; this returns them.
  */
 async function conversationTitleFromModel(
   runtime: Runtime,
   prompt: string,
+  identity: Readonly<{ sessionId: string; turnId: string; operationId: string }>,
   signal: AbortSignal,
-): Promise<string | undefined> {
+): Promise<ConversationNaming | undefined> {
   try {
+    const messages = [{ role: "user" as const, content: conversationTitleFromPrompt(prompt) }];
     const events = runtime.transport.stream({
-      requestId: randomUuid(),
-      sessionId: `naming-${randomUuid()}`,
-      turnId: randomUuid(),
+      requestId: identity.operationId,
+      sessionId: identity.sessionId,
+      turnId: identity.turnId,
       model: runtime.model,
       systemPrompt: CONVERSATION_NAMING_PROMPT,
-      messages: [{ role: "user", content: conversationTitleFromPrompt(prompt) }],
+      messages,
       tools: [],
-      idempotencyKey: randomUuid(),
+      idempotencyKey: identity.operationId,
     }, signal);
     let text = "";
+    let usage: ConversationNaming["usage"];
+    let receipt: ConversationReceipt | undefined;
     for await (const event of events) {
       if (event.type === "text-delta") text += event.text;
+      if (event.type === "usage") usage = { inputTokens: event.inputTokens, outputTokens: event.outputTokens };
+      if (event.type === "completed") receipt = event.receipt;
       // A naming call that starts producing an essay is not naming anything.
       if (text.length > 240 || event.type === "completed") break;
     }
-    return usableConversationTitle(text);
+    const title = usableConversationTitle(text);
+    if (!title) return undefined;
+    return Object.freeze({
+      title,
+      answer: text,
+      ...(usage && (usage.inputTokens !== undefined || usage.outputTokens !== undefined) ? { usage } : {}),
+      // Normalized exactly as a turn receipt is, and bound to the request that
+      // was actually made: the prompt is this constant plus the journaled first
+      // message, and the answer is stored beside it, so the two digests can be
+      // recomputed from the record rather than taken on trust.
+      ...(receipt
+        ? {
+            receipt: finalizeProviderReceipt(
+              receipt,
+              runtime.transport.id,
+              await sha256(stableStringify({
+                model: runtime.model,
+                systemPrompt: CONVERSATION_NAMING_PROMPT,
+                messages,
+                tools: [],
+                idempotencyKey: identity.operationId,
+              } as unknown as JsonValue)),
+              await sha256(text),
+            ),
+          }
+        : {}),
+    });
   } catch {
     return undefined;
   }
@@ -9030,6 +9833,7 @@ function ProfileManagerView({
   onDelete,
   draftState,
   selectedProfileId,
+  preferences,
 }: {
   catalog: ProfileCatalog;
   catalogDurability: ProfileCatalogStore["durability"];
@@ -9040,6 +9844,12 @@ function ProfileManagerView({
   onDelete: (profileId: string, replacementProfileId?: string) => Promise<void>;
   draftState: { current: boolean };
   selectedProfileId?: string;
+  /**
+   * The user's global display preferences. A theme preview writes the same
+   * `<html>` attributes these own, so this view has to be able to put them
+   * back in the same call; it never changes them.
+   */
+  preferences: PreferenceOverrides;
 }) {
   const profiles = useMemo(() => managedProfiles(catalog), [catalog]);
   const [selectedId, setSelectedId] = useState(activeProfileId);
@@ -9065,12 +9875,33 @@ function ProfileManagerView({
     if (selectedProfileId && profiles.some((profile) => profile.profileId === selectedProfileId)) setSelectedId(selectedProfileId);
   }, [profiles, selectedProfileId]);
 
+  /*
+   * The undo for a preview, and only for leaving the route.
+   *
+   * Keyed on `previewThemeId` this was not a cleanup at all: choosing a second
+   * theme re-ran it, so the first preview was reverted to the saved theme the
+   * instant the second was applied. It restores the *active* profile's theme
+   * rather than the selected one — the selected profile is whatever row the
+   * editor happens to be showing, which may not be the profile the rest of the
+   * cockpit is running on. The inputs are read from a ref so the effect can
+   * have an empty dependency list and still restore current values.
+   */
+  const previewRestore = useRef<Readonly<{
+    previewing: boolean;
+    theme?: ThemeManifest;
+    preferences: PreferenceOverrides;
+  }>>();
+  previewRestore.current = {
+    previewing: Boolean(previewThemeId),
+    theme: catalog.themes.find((theme) => theme.themeId === (
+      profiles.find((profile) => profile.profileId === activeProfileId)?.theme.themeId ?? selected.theme.themeId
+    )),
+    preferences,
+  };
   useEffect(() => () => {
-    if (previewThemeId) {
-      const active = catalog.themes.find((theme) => theme.themeId === selected.theme.themeId);
-      if (active) applyTheme(active);
-    }
-  }, [catalog.themes, previewThemeId, selected.theme.themeId]);
+    const restore = previewRestore.current;
+    if (restore?.previewing && restore.theme) applyThemeWithPreferences(restore.theme, restore.preferences);
+  }, []);
 
   async function save() {
     setBusy(true);
@@ -9130,7 +9961,7 @@ function ProfileManagerView({
 
   return (
     <section class="work-view">
-      <RouteBar routeId="profiles" title="Profiles" eyebrow="Immutable agent manifests" description="Manage agent personas, instructions, and interface themes. Saves create content-addressed revisions; applying one forks a pinned session." />
+      <RouteBar routeId="profiles" title="Profiles" eyebrow="Immutable agent manifests" description="Manage agent personas, instructions, and interface themes. Saves create content-addressed revisions; switching restores that profile's most recent compatible conversation." />
       <div class="management-layout">
         <div class="profile-catalog panel">
           <div class="panel-heading"><span>Profiles</span><button class="small-button" type="button" onClick={() => void fork()} disabled={busy}><Icon name="plus" size={14} /> Fork</button></div>
@@ -9171,10 +10002,14 @@ function ProfileManagerView({
                     class={draft.themeId === theme.themeId ? "theme-option active" : "theme-option"}
                     type="button"
                     aria-pressed={draft.themeId === theme.themeId}
-                    onClick={() => { setDraft({ ...draft, themeId: theme.themeId }); setPreviewThemeId(theme.themeId); applyTheme(theme); }}
+                    onClick={() => { setDraft({ ...draft, themeId: theme.themeId }); setPreviewThemeId(theme.themeId); applyThemeWithPreferences(theme, preferences); }}
                   >
                     <ProfileThemeSwatch theme={theme} />
-                    <span><strong>{theme.name}</strong><small>{theme.description}</small></span>
+                    {/* The presentation line, because the manifest's typography
+                        and layout are render inputs again: the option has to
+                        name the difference activation will produce, not only
+                        the colours the swatch already shows. */}
+                    <span><strong>{theme.name}</strong><small>{theme.description}</small><small>{themePresentationSummary(theme)}</small></span>
                   </button>
                 ))}
                 </div>
@@ -9187,10 +10022,16 @@ function ProfileManagerView({
                   { value: "active-workspace", label: "Current workspace", description: "Follow the workspace chosen by this runtime" },
                   { value: "workspace-id", label: "Exact workspace", description: "Only start on one pinned workspace ID" },
                 ]} onChange={(workspaceBinding) => setDraft({ ...draft, workspaceBinding: workspaceBinding as ProfileEditorDraft["workspaceBinding"] })} /></label>
+                {/* Two values, because there were only ever two boundaries.
+                    "Shared workspace" named a widening no reader implements —
+                    every memory read narrows on the pinned profile ID — so
+                    offering it sold a silo change that never happened. The
+                    draft arrives through `enforcedMemoryScope`, which reads a
+                    stored `workspace` as the `profile` it always behaved as, so
+                    an existing profile still selects a real option. */}
                 <label><span>Memory priority</span><MenuSelect ariaLabel="Profile memory scope" value={draft.memoryScope} options={[
                   { value: "session", label: "This conversation" },
                   { value: "profile", label: "This profile" },
-                  { value: "workspace", label: "Shared workspace" },
                 ]} onChange={(memoryScope) => setDraft({ ...draft, memoryScope: memoryScope as ProfileEditorDraft["memoryScope"] })} /></label>
                 <label><span>Action approvals</span><MenuSelect ariaLabel="Profile approval policy" value={draft.approvalMode} options={[
                   { value: "ask-first", label: "Ask First" },
@@ -9215,8 +10056,8 @@ function ProfileManagerView({
             </div>
             <div class="profile-actions">
               <button class="small-button" type="button" onClick={() => void save()} disabled={busy}>Save new revision</button>
-              <button class="primary-link button-link" type="button" onClick={() => void onActivate(selected.profileId)} disabled={busy || dirty} title={dirty ? "Save this revision before applying it." : undefined}>Apply in a new session</button>
-              {previewThemeId ? <button class="small-button" type="button" onClick={() => { const theme = catalog.themes.find((item) => item.themeId === selected.theme.themeId); if (theme) applyTheme(theme); setDraft(profileDraftForEditor(selected)); setPreviewThemeId(undefined); }}>Cancel preview</button> : null}
+              <button class="primary-link button-link" type="button" onClick={() => void onActivate(selected.profileId)} disabled={busy || dirty} title={dirty ? "Save this revision before applying it." : undefined}>Switch to this profile</button>
+              {previewThemeId ? <button class="small-button" type="button" onClick={() => { const theme = previewRestore.current?.theme; if (theme) applyThemeWithPreferences(theme, preferences); setDraft(profileDraftForEditor(selected)); setPreviewThemeId(undefined); }}>Cancel preview</button> : null}
               {previewThemeId ? <span>Previewing — not saved</span> : null}
               {status ? <span role="status" aria-live="polite">{status}</span> : null}
             </div>
@@ -9285,7 +10126,7 @@ function SkillsManagerView({
       <div class="skills-toolbar panel">
         {scope === "global" ? <div class="skill-select-field"><span>Preview resolution for</span><MenuSelect placement="down" ariaLabel="Preview profile resolution" value={profile.profileId} options={profiles.map((candidate) => ({ value: candidate.profileId, label: candidate.name }))} onChange={setSelectedProfileId} /></div> : <div><span class="eyebrow">Profile scope</span><strong>{profile.name}</strong></div>}
         <div><span class="eyebrow">Effective set</span><strong>{effectiveSkillIds(profile, catalog).length} of {catalog.skills.length}</strong></div>
-        <button class="small-button" type="button" onClick={() => void onApply(profile.profileId)}>Apply in a new session</button>
+        <button class="small-button" type="button" onClick={() => void onApply(profile.profileId)}>Switch to this profile</button>
       </div>
       <div class="skill-grid">
         {catalog.skills.map((skill) => {
@@ -9376,7 +10217,10 @@ function profileDraftForEditor(profile: ProfileRevision): ProfileEditorDraft {
     themeId: profile.theme.themeId,
     workspaceBinding: silo.workspaceBinding.kind,
     workspaceId: silo.workspaceBinding.kind === "workspace-id" ? silo.workspaceBinding.workspaceId : "",
-    memoryScope: silo.memoryScope,
+    // A profile stored under the withdrawn `workspace` scope opens on the value
+    // it has always behaved as, so the editor never shows a selection the
+    // control no longer offers — and saving migrates the stored revision.
+    memoryScope: enforcedMemoryScope(silo.memoryScope),
     approvalMode: silo.approvalMode,
     minimumPosture: profile.minimumPosture,
   };

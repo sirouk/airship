@@ -53,7 +53,9 @@ describe("the streaming caret", () => {
 
   it("renders the class the caret rule names, as the slot's own root", async () => {
     const source = await streamingSlotSource();
-    expect(source).toContain('class="message-part text streaming"');
+    // `text--answer` rides along because in-flight prose is the answer; the
+    // three classes the caret rule names are what this assertion is about.
+    expect(source).toContain('class="message-part text text--answer streaming"');
   });
 
   it("keeps the caret painted with the blink removed under reduced motion", async () => {

@@ -480,9 +480,16 @@ It supersedes only the rows it names.
 
 The chosen resolution was **full per-profile authority**, not an explicit
 shared-binding policy. A Profile now owns a disjoint subtree of the global
-storage authority, so its files, Git object database, worktree inventory,
-index and terminal host are genuinely its own rather than one shared
-filesystem behind separate presentation state.
+storage authority, so its files, Git object database, worktree inventory and
+index are genuinely its own rather than one shared filesystem behind separate
+presentation state. The terminal is the one qualified case: a Profile owns its
+own terminal manager, session set and workspace **mount**, but not its own
+runtime. WebContainer boots once per page, so the container filesystem *outside*
+the `airship-workspace` mount is page-shared: anything the previous Profile's
+shell wrote elsewhere in the container survives the handoff. Handoff unmounts
+and rebuilds the mount, which is the whole of what the manager owns; a stronger
+boundary means a container `teardown()` and reboot per switch, at a
+multi-second cost that has not been taken.
 
 - `Runtime` separates `storage`/`storageId` (the global authority a Vault
   transition migrates and identity checks name) from `workspace`/`workspaceId`
@@ -498,7 +505,11 @@ filesystem behind separate presentation state.
   terminal-manager registry key on port *identity*, so a fresh port on every
   A→B→A would discard exactly the work a switch is supposed to preserve.
 - A switch quiesces the outgoing Profile's live processes first. Each namespace
-  gets its own terminal manager but the page has one WebContainer to give out.
+  gets its own terminal manager but the page has one WebContainer to give out,
+  which is exactly why the paragraph above qualifies the terminal's ownership:
+  the mount is Profile-private, the container around it is not. The Terminal
+  route states that fact where a user can act on it
+  (`TERMINAL_CONTAINER_SCOPE_NOTICE`, `src/ui/terminal-view.tsx`).
 - A Profile opening its namespace for the first time is seeded with its own
   workspace repository. Without it, isolation reads as breakage: every Profile
   after the first would find no repository and therefore no Explorer tree,

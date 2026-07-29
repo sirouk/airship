@@ -1,5 +1,5 @@
 import type { ConversationReceipt } from "../receipts/types";
-import { createLocalReceipt } from "../receipts/types";
+import { createLocalReceipt, finalizeProviderReceipt } from "../receipts/types";
 import type { ToolRegistry } from "../tools/registry";
 import type {
   ApprovalPolicy,
@@ -786,49 +786,6 @@ function reserveToolCallBatch(toolCalls: readonly ToolCall[], reserved: Set<stri
     batch.add(call.id);
   }
   for (const operationId of batch) reserved.add(operationId);
-}
-
-/**
- * Adds only the canonical client-owned transcript bindings to a provider
- * receipt. Provider ciphertext/evidence commitments and proof claims remain
- * unchanged; these local digests do not upgrade the receipt's proof level.
- */
-function finalizeProviderReceipt(
-  receipt: ConversationReceipt,
-  providerId: string,
-  requestDigest: string,
-  responseDigest: string,
-): ConversationReceipt {
-  const finalized = structuredClone(receipt);
-  removeUndefinedReceiptProperties(finalized);
-  return {
-    ...finalized,
-    provider: providerId,
-    bindings: {
-      ...finalized.bindings,
-      algorithm: "SHA-256",
-      requestDigest,
-      responseDigest,
-    },
-  };
-}
-
-function removeUndefinedReceiptProperties(value: unknown): void {
-  if (!value || typeof value !== "object") return;
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      if (item === undefined) throw new Error("Provider receipt arrays cannot contain undefined values.");
-      removeUndefinedReceiptProperties(item);
-    }
-    return;
-  }
-  for (const [key, item] of Object.entries(value)) {
-    if (item === undefined) {
-      delete (value as Record<string, unknown>)[key];
-    } else {
-      removeUndefinedReceiptProperties(item);
-    }
-  }
 }
 
 async function collectInference(

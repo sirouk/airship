@@ -61,5 +61,8 @@ export function StreamingMessageSlot({ store, messageId, active }: {
       </div>
     );
   }
-  return <div class="message-part text streaming" aria-live="polite"><IncrementalMarkdownView source={content} /></div>;
+  // `text--answer` states what this part is, the same way the settled tail in
+  // `message-parts-view.tsx` does. In-flight prose is the answer, not the
+  // narration between steps, and the two now render at different weights.
+  return <div class="message-part text text--answer streaming" aria-live="polite"><IncrementalMarkdownView source={content} /></div>;
 }

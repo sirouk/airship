@@ -8,9 +8,12 @@ import {
   diffLineKind,
   diffPlaceholder,
   parseUnifiedPatch,
+  cloneBoundaryNote,
+  remoteBoundaryParagraphs,
   remoteTransportLabel,
   sourcePostureFacts,
 } from "./sources-view";
+import { isRemoteOriginPermitted } from "../git/validation";
 import type { BrowserGitClient } from "../git/client";
 
 type Capabilities = BrowserGitClient["capabilities"];
@@ -198,5 +201,85 @@ describe("patch tail handling", () => {
   it("does not number the empty string a trailing newline leaves behind", () => {
     const parsed = parseUnifiedPatch("@@ -0,0 +1,1 @@\n+only line\n");
     expect(parsed.lines.filter((line) => line.kind !== "hunk")).toHaveLength(1);
+  });
+});
+
+describe("remote reachability", () => {
+  const withFeatures = (overrides: Partial<Capabilities> = {}) => capabilities({
+    features: {
+      clone: { available: true }, fetch: { available: true }, push: { available: true },
+    } as Capabilities["features"],
+    ...overrides,
+  });
+
+  it("judges reachability per remote URL, not per build", () => {
+    // `features.fetch.available` is true here because the page's own origin is
+    // permitted, which says nothing about the remote actually configured.
+    expect(isRemoteOriginPermitted("https://github.com/o/n", ["http://localhost:4173"])).toBe(false);
+    expect(isRemoteOriginPermitted("http://localhost:4173/o/n.git", ["http://localhost:4173"])).toBe(true);
+    expect(isRemoteOriginPermitted("not a url", ["http://localhost:4173"])).toBe(false);
+  });
+
+  it("names the policy, not the credential broker, for a remote this build cannot reach", () => {
+    const paragraphs = remoteBoundaryParagraphs(
+      withFeatures({ remote: { ...capabilities().remote, permittedOrigins: ["http://localhost:4173"] } }),
+      { url: "https://github.com/o/n.git" },
+    ).join(" ");
+    expect(paragraphs).toContain("Content-Security-Policy");
+    expect(paragraphs).toContain("https://github.com");
+    expect(paragraphs).toContain("http://localhost:4173");
+    // Custody is not what stands in the way when no request is ever sent.
+    expect(paragraphs).not.toContain("Anonymous direct push only");
+  });
+
+  it("keeps the credential and lost-response paragraphs for a reachable remote", () => {
+    const paragraphs = remoteBoundaryParagraphs(
+      withFeatures({ remote: { ...capabilities().remote, permittedOrigins: ["http://localhost:4173"] } }),
+      { url: "http://localhost:4173/o/n.git" },
+    );
+    expect(paragraphs[0]).toContain("Anonymous direct push only");
+    expect(paragraphs[1]).toContain("reports the outcome as unknown");
+  });
+
+  it("blames the adapter, not the policy, when no transport is installed at all", () => {
+    // The memory and encrypted-workspace adapters declare transport "none" and
+    // no permitted origin, yet snapshot import registers a real GitHub
+    // `origin`. Reaching for the CSP sentence there would tell the operator to
+    // go fix a policy that is not what stands in the way.
+    const paragraphs = remoteBoundaryParagraphs(
+      capabilities({
+        remote: { ...capabilities().remote, transport: "none", permittedOrigins: [] },
+        features: {
+          clone: { available: false, reason: "this adapter has no direct CORS-safe Git HTTP or host-provider transport" },
+          fetch: { available: false, reason: "this adapter has no direct CORS-safe Git HTTP or host-provider transport" },
+          push: { available: false, reason: "this adapter has no direct CORS-safe Git HTTP or host-provider transport" },
+        } as Capabilities["features"],
+      }),
+      { url: "https://github.com/o/n.git" },
+    );
+    expect(paragraphs).toEqual(["this adapter has no direct CORS-safe Git HTTP or host-provider transport"]);
+    expect(paragraphs.join(" ")).not.toContain("Content-Security-Policy");
+    expect(paragraphs.join(" ")).not.toContain("no origin at all");
+  });
+
+  it("still states the adapter's own reason when push is unavailable outright", () => {
+    expect(remoteBoundaryParagraphs(
+      withFeatures({
+        features: {
+          clone: { available: false }, fetch: { available: false },
+          push: { available: false, reason: "push is unavailable on this adapter." },
+        } as Capabilities["features"],
+      }),
+      { url: "http://127.0.0.1:4173/o/n.git" },
+    )).toEqual(["push is unavailable on this adapter."]);
+  });
+
+  it("never advertises a clone adapter on a surface that offers no clone control", () => {
+    const available = cloneBoundaryNote(withFeatures());
+    expect(available).not.toContain("A clone-capable adapter is available.");
+    expect(available).toContain("http://127.0.0.1:4173");
+    expect(cloneBoundaryNote(capabilities({
+      features: { clone: { available: false, reason: "no adapter" } } as Capabilities["features"],
+    }))).toBe("Full-history clone unavailable: no adapter.");
   });
 });

@@ -184,4 +184,14 @@ export const allowAllForTests: ApprovalPolicy = {
   async review() {
     return "allow";
   },
+  // A policy that approves has to say on whose authority, or the journals these
+  // fixtures produce are not the journals Airship writes — and the audit, which
+  // now requires provenance on every approval, would be proving something else.
+  takeProvenance() {
+    return {
+      mode: "full-access",
+      source: "bounded-browser-sandbox",
+      reason: "Allowed unconditionally by the test approval policy.",
+    };
+  },
 };

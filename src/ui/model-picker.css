@@ -32,7 +32,13 @@
    one `overflow: auto` box, so search, facets, sort and the provenance caveat
    all left the screen at scrollTop 400. */
 .model-picker-popover { position:absolute; z-index:320; top:calc(100% + var(--sp-2)); left:0; display:flex; flex-direction:column; width:max(100%, min(680px, calc(100vw - 28px))); max-height:min(650px, 70dvh); border:1px solid var(--line-strong); border-radius:var(--radius-panel); background:var(--surface-raised); box-shadow:0 18px 60px rgba(0,0,0,.45); }
-.model-picker[data-open="true"] .model-picker-popover { overflow:hidden; }
+/* Clipping is off the outer box. `overflow:hidden` was there only to keep the
+   last region's square corners inside the panel radius, and it made the popover
+   a clip ancestor for the Sort listbox — an absolutely positioned child whose
+   fit logic measures the viewport, not this box. On a short popover (a query
+   leaving two or three results) the sort menu was cut off inside an element
+   that had room for it on screen. The bottom radius moves to the two elements
+   that can be last instead, which is the whole of what the clip was buying. */
 
 .model-picker-header { display:grid; flex:0 0 auto; gap:var(--sp-2); padding:var(--sp-2); border-bottom:1px solid var(--line); }
 .model-picker-sheet-bar { display:none; }
@@ -45,6 +51,9 @@
 .model-picker-status .menu-select-trigger { min-height:32px; }
 
 .model-picker-list { flex:1 1 auto; display:flex; flex-direction:column; gap:2px; overflow:auto; padding:var(--sp-2); }
+/* Last-child only: when the footer is present it is the element whose square
+   corners would otherwise cross the panel radius. */
+.model-picker-list:last-child { border-radius:0 0 var(--radius-panel) var(--radius-panel); }
 .model-picker-list > button { flex:0 0 auto; }
 /* Explicit placement, not auto-flow: a row carries five cells and the phone
    layout reflows them into four rows, which auto-placement cannot do without
@@ -70,7 +79,7 @@
 .model-picker-list > button[data-active="true"] { border-color:var(--line-strong); background:var(--surface-soft); outline:none; }
 .model-picker-empty { margin:0; padding:var(--sp-3); color:var(--ink-muted); font-size:var(--fs-caption); }
 
-.model-picker-footer { flex:0 0 auto; display:grid; gap:var(--sp-2); padding:var(--sp-2); border-top:1px solid var(--line); background:var(--surface-raised); }
+.model-picker-footer { flex:0 0 auto; display:grid; gap:var(--sp-2); padding:var(--sp-2); border-top:1px solid var(--line); border-radius:0 0 var(--radius-panel) var(--radius-panel); background:var(--surface-raised); }
 .model-picker-provenance { margin:0; color:var(--ink-faint); font-size:var(--fs-micro); line-height:1.45; }
 .model-picker-show-all { width:100%; min-height:40px; }
 

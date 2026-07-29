@@ -3,6 +3,7 @@ import type {
   ChutesAccountSnapshot,
   ChutesSubscriptionWindow,
   ChutesUsageEntry,
+  ChutesUsageSummary,
 } from "../billing/client";
 import {
   balanceDatum,
@@ -10,6 +11,7 @@ import {
   quotaDatum,
   subscriptionDatum,
   usageDatum,
+  USAGE_BOUNDED_READ_NOTE,
   type BillingDatumStatus,
 } from "../billing/honesty";
 import type { ChutesInvocationTelemetry } from "../inference/chutes";
@@ -20,7 +22,7 @@ import { Metric, MetricStrip, metricQuantity } from "./metric-strip";
 import { Popover } from "./popover";
 import { mapUnknownRequestFailure, observationState } from "./request-state";
 import { RouteHeader } from "./route-header";
-import { Seal } from "./seal";
+import { Seal, type SealState } from "./seal";
 
 export type BillingCredentialKind = "oauth" | "api-key" | "unknown";
 
@@ -48,6 +50,14 @@ export type BillingProviderInventoryEntry = Readonly<{
   providerId: BillingProviderId;
   state: BillingProviderConnectionState;
   connectionDetail?: string;
+  /**
+   * Who the host observed this provider to be authenticated as — a display
+   * identity only, and modelled as an observation like every other field here.
+   * Without a slot for it the panel could only be silent about identity, which
+   * is unavailable-by-omission: a host that did observe one had nowhere to put
+   * it, and a reader could not tell the two apart.
+   */
+  identity?: BillingProviderObservation;
   quota?: BillingProviderObservation;
   usage?: BillingProviderObservation;
   reset?: BillingProviderObservation;
@@ -83,6 +93,81 @@ export function chutesAccountIdentityPresentation(
   });
 }
 
+/**
+ * Whether Chutes accepted the credential — which is a different question from
+ * how old the reading is.
+ */
+export type ChutesAccountAcceptance = "accepted" | "rejected" | "refused";
+
+/**
+ * Acceptance, read from what the sources actually returned.
+ *
+ * The header chip used to bind to `fetchedAt`, which this client stamps whether
+ * or not a single source answered, so four consecutive 401s rendered
+ * "Connected · Verified" over an empty page. Freshness cannot carry acceptance:
+ * a snapshot's age says when the attempt happened, not that it succeeded.
+ *
+ * A source that returned a value is proof the credential was accepted, so any
+ * value at all keeps the reading "accepted" and the existing partial grammar —
+ * a scope-shaped 403 on one endpoint beside three good reads is a partial
+ * snapshot, not a rejected credential. Only when nothing was read does the
+ * refusal status matter, and then it separates an authorization refusal from a
+ * transient fault so the panel never blames a credential for a 503.
+ */
+export function chutesAccountAcceptance(snapshot: ChutesAccountSnapshot): ChutesAccountAcceptance {
+  if (snapshot.account ?? snapshot.subscription ?? snapshot.usage ?? snapshot.quotas) return "accepted";
+  return snapshot.issues.some((issue) => issue.status === 401 || issue.status === 403) ? "rejected" : "refused";
+}
+
+/**
+ * The header chip, which may only say "Connected" once something was read.
+ *
+ * `acceptance` is undefined before the first snapshot resolves; the age-driven
+ * stale/verified split is preserved for every reading that produced a value.
+ */
+export function chutesAccountChip(
+  acceptance: ChutesAccountAcceptance | undefined,
+  stale: boolean,
+): Readonly<{ state: SealState; label: string; headline: string }> {
+  if (acceptance === "rejected") {
+    return Object.freeze({
+      state: "none" as const,
+      label: "Credential not accepted",
+      headline: "Chutes refused this credential",
+    });
+  }
+  if (acceptance === "refused") {
+    return Object.freeze({
+      state: "none" as const,
+      label: "No account data read",
+      headline: "No account source returned a value",
+    });
+  }
+  return Object.freeze({
+    state: stale ? "stale" as const : "verified" as const,
+    label: stale ? "Stale reading" : "Connected",
+    headline: "User-scoped credential connected",
+  });
+}
+
+/**
+ * The freshness line, worded for what actually happened.
+ *
+ * `observationState` says "Verified · <time>", which is a claim about the age
+ * of an answer. When no source answered there is no answer to be fresh, and the
+ * only true word for that timestamp is when the attempt was made — otherwise
+ * the popover restates, in its body, the exact conflation the chip above it was
+ * changed to stop making.
+ */
+export function accountReadingLine(
+  acceptance: ChutesAccountAcceptance | undefined,
+  observedLabel: string | undefined,
+): string | undefined {
+  if (observedLabel === undefined) return undefined;
+  if (acceptance === undefined || acceptance === "accepted") return observedLabel;
+  return observedLabel.replace(/^(?:Verified|Observed)/u, "Attempted");
+}
+
 export function billingProviderDatumLabel(
   observation: BillingProviderObservation | undefined,
   connectionState: BillingProviderConnectionState,
@@ -112,6 +197,7 @@ export function resolveBillingProviderInventory(
         ? chutesConnected ? "connected" as const : "not-connected" as const
         : entry?.state ?? "unavailable" as const,
       ...(entry?.connectionDetail ? { connectionDetail: entry.connectionDetail } : {}),
+      ...(entry?.identity ? { identity: entry.identity } : {}),
       ...(entry?.quota ? { quota: entry.quota } : {}),
       ...(entry?.usage ? { usage: entry.usage } : {}),
       ...(entry?.reset ? { reset: entry.reset } : {}),
@@ -123,6 +209,18 @@ export function resolveBillingProviderInventory(
 
 /** The em dash a metric shows when nothing has been read. It is not a zero. */
 const NOT_READ = "—";
+
+/**
+ * The bound, stated on the figure it bounds.
+ *
+ * "Charged this UTC month" is a claim about a month; the client reads one page.
+ * When that page came back full the two are not the same number, and the metric
+ * must not present the smaller one as the month. The sentence is the client's,
+ * not this view's, so the caption and the datum detail say the same thing.
+ */
+function boundedUsageSuffix(usage: ChutesUsageSummary): string {
+  return usage.truncated ? ` · ${USAGE_BOUNDED_READ_NOTE}` : "";
+}
 
 export function BillingView({
   accountReadable,
@@ -194,6 +292,8 @@ export function BillingView({
   const usageState = usageDatum(snapshot, loading);
   const quotaState = quotaDatum(snapshot, loading);
   const observed = snapshot ? observationState(snapshot.fetchedAt, 5 * 60_000) : undefined;
+  const acceptance = snapshot ? chutesAccountAcceptance(snapshot) : undefined;
+  const chip = chutesAccountChip(acceptance, observed?.stale === true);
   const subscriptionInactive = subscriptionState.status === "verified" && subscriptionState.value?.active === false;
   const quota = invocationTelemetry?.quota;
   const providers = useMemo(
@@ -220,11 +320,11 @@ export function BillingView({
           <Popover
             class="billing-credential-chip"
             heading="Account telemetry"
-            label={`Account telemetry. ${observed?.stale ? "Stale observation" : "Connected"}. Opens the credential kind and when this reading was taken.`}
-            trigger={<Seal state={observed?.stale ? "stale" : "verified"} density="chip" label={observed?.stale ? "Stale reading" : "Connected"} />}
+            label={`Account telemetry. ${chip.label}. Opens the credential kind and when this reading was taken.`}
+            trigger={<Seal state={chip.state} density="chip" label={chip.label} />}
           >
-            <p><strong>User-scoped credential connected</strong></p>
-            <p>{observed?.label ?? credentialMessage(credentialKind)}{loading && snapshot ? " · updating" : ""}</p>
+            <p><strong>{chip.headline}</strong></p>
+            <p>{accountReadingLine(acceptance, observed?.label) ?? credentialMessage(credentialKind)}{loading && snapshot ? " · updating" : ""}</p>
             <p>{credentialMessage(credentialKind)}</p>
           </Popover>
         ) : null}
@@ -273,7 +373,12 @@ export function BillingView({
           <span class="billing-gate-mark"><Icon name="lock" size={22} /></span>
           <div>
             <h2>Not connected yet</h2>
-            <p>Connect with scoped Chutes sign-in or a direct API-key session. The credential remains held only in page memory.</p>
+            {/* Method-agnostic on purpose. Naming sign-in here duplicated a
+                fact only Connection computes — whether this build can run the
+                OAuth exchange at all — so a build without it promised a route
+                one press later it had to withdraw. The credential contract, the
+                part Account does own, is unchanged word for word. */}
+            <p>Connect a Chutes credential to read account telemetry. The credential remains held only in page memory.</p>
             <div class="billing-gate-actions">
               <button class="primary billing-gate-action" type="button" onClick={onOpenAccess}>Connect Chutes</button>
               {online
@@ -299,14 +404,34 @@ export function BillingView({
       ) : null}
 
       {accountReadable ? <>{snapshot?.issues.length ? (
-        <div class="billing-alert warning" role="status">
-          <Icon name="warning" />
-          <div><strong>Partial account snapshot</strong>{snapshot.issues.map((issue) => <span key={`${issue.source}:${issue.code}`}>{issue.message}</span>)}</div>
-        </div>
+        /*
+         * Two degraded rungs, because "some of it failed" and "none of it was
+         * read" are not the same event. The alert grammar had only the first,
+         * so a snapshot in which every source was refused announced itself as
+         * partial — a word that promises the rest of the page holds telemetry.
+         */
+        acceptance === "accepted" ? (
+          <div class="billing-alert warning" role="status">
+            <Icon name="warning" />
+            <div><strong>Partial account snapshot</strong>{snapshot.issues.map((issue) => <span key={`${issue.source}:${issue.code}`}>{issue.message}</span>)}</div>
+          </div>
+        ) : (
+          <div class="billing-alert error" role="alert">
+            <Icon name="warning" />
+            <div>
+              <strong>Account read refused</strong>
+              <span>{acceptance === "rejected"
+                ? "Chutes did not accept this credential: every account source refused it as unauthorized."
+                : "No account source returned a value, so nothing below has been read."}</span>
+              {snapshot.issues.map((issue) => <span key={`${issue.source}:${issue.code}`}>{issue.message}</span>)}
+              <button class="small-button" type="button" onClick={onOpenAccess}>Review connection</button>
+            </div>
+          </div>
+        )
       ) : null}
 
       <section class="panel billing-account-identity" aria-label="Connected Chutes account identity">
-        <div class="panel-heading"><span>Connected Chutes account</span><span>{observed?.label ?? "Account observation unavailable"}</span></div>
+        <div class="panel-heading"><span>Connected Chutes account</span><span>{accountReadingLine(acceptance, observed?.label) ?? "Account observation unavailable"}</span></div>
         <dl>
           <div><dt>Username</dt><dd>{chutesIdentity.username}</dd></div>
           <div><dt>User ID</dt><dd>{chutesIdentity.userId}</dd></div>
@@ -336,12 +461,12 @@ export function BillingView({
         <Metric
           label="Charged this UTC month"
           value={metricQuantity(usageState.value ? formatUsd(usageState.value.totalCost, "headline") : billingDatumLabel(usageState.status))}
-          caption={usageState.value ? `${formatCompact(usageState.value.totalRequests)} charged requests in this range` : usageState.detail}
+          caption={usageState.value ? `${formatCompact(usageState.value.totalRequests)} charged requests in this range${boundedUsageSuffix(usageState.value)}` : usageState.detail}
         />
         <Metric
           label="Tokens this UTC month"
           value={metricQuantity(usageState.value ? formatCompact(usageState.value.inputTokens + usageState.value.outputTokens) : billingDatumLabel(usageState.status))}
-          caption={usageState.value ? `${formatCompact(usageState.value.inputTokens)} in · ${formatCompact(usageState.value.outputTokens)} out` : usageState.detail}
+          caption={usageState.value ? `${formatCompact(usageState.value.inputTokens)} in · ${formatCompact(usageState.value.outputTokens)} out${boundedUsageSuffix(usageState.value)}` : usageState.detail}
         />
         {/* Live headroom is not a subscription fact and no longer sits in a grid
             gated on one. It is a figure, so it is a metric. */}
@@ -420,7 +545,13 @@ export function BillingView({
           {usageEntries.length ? <UsageChart entries={usageEntries} highlight={highlight} onHighlight={setHighlight} /> : <div class="billing-empty"><Icon name="billing" /><strong>{usageEmptyTitle(usageState.status)}</strong><p>{usageState.status === "verified" ? "Chutes returned no usage records for this requested range; activity outside the response is not inferred." : usageState.detail}</p></div>}
           {usageEntries.length ? (
             <div class="usage-ledger" role="table" aria-label="Recent account usage">
-              <div class="usage-ledger-head" role="row"><span>Date</span><span>Requests</span><span>Tokens</span><span>Charged</span></div>
+              {/* `role="table"` on the container declared a table whose rows had
+                  no cells in them: the generic spans stayed generic, so the
+                  ledger reached the accessibility tree as four rows of nothing.
+                  The roles are what make the header/cell association real, and
+                  they are what carries the Tokens value on a phone, where it is
+                  restacked onto its own sub-line rather than deleted. */}
+              <div class="usage-ledger-head" role="row"><span role="columnheader">Date</span><span role="columnheader">Requests</span><span role="columnheader">Tokens</span><span role="columnheader">Charged</span></div>
               {[...usageEntries].reverse().slice(0, 10).map((entry) => (
                 <div
                   class="usage-ledger-row"
@@ -430,10 +561,10 @@ export function BillingView({
                   onPointerEnter={() => setHighlight(entry.bucket)}
                   onPointerLeave={() => setHighlight(undefined)}
                 >
-                  <span>{formatBucket(entry.bucket)}</span>
-                  <span>{formatCompact(entry.requests)}</span>
-                  <span>{formatCompact(entry.inputTokens + entry.outputTokens)}</span>
-                  <strong>{formatUsd(entry.cost, "ledger")}</strong>
+                  <span role="cell">{formatBucket(entry.bucket)}</span>
+                  <span role="cell">{formatCompact(entry.requests)}</span>
+                  <span role="cell">{formatCompact(entry.inputTokens + entry.outputTokens)}</span>
+                  <strong role="cell">{formatUsd(entry.cost, "ledger")}</strong>
                 </div>
               ))}
               {/* The table capped at ten rows and said so nowhere. */}
@@ -572,6 +703,10 @@ function BillingProviderInventoryPanel({
       <p class="billing-provider-inventory__detail">{connectionDetail}</p>
 
       <dl class="billing-provider-data">
+        {/* Identity first: the Chutes panel opens with who you are connected as,
+            and a provider tab that cannot answer that question should say so in
+            the same place rather than by leaving the row out. */}
+        <ProviderInventoryDatum label="Authenticated identity" observation={inventory.identity} connectionState={inventory.state} />
         <ProviderInventoryDatum label="Quota" observation={inventory.quota} connectionState={inventory.state} />
         <ProviderInventoryDatum label="Usage" observation={inventory.usage} connectionState={inventory.state} />
         <ProviderInventoryDatum label="Reset" observation={inventory.reset} connectionState={inventory.state} />
@@ -642,7 +777,11 @@ function RunwayCard({
       {inactive ? <div class="runway-empty">Chutes reported no active subscription</div> : sourceStatus !== "verified" ? <div class="runway-empty">{sourceDetail}</div> : !window ? <div class="runway-empty">Window data unavailable</div> : (
         <>
           <div class="runway-value"><strong>{usage === undefined ? "Unknown" : formatUsd(usage, "ledger")}</strong><span>{uncapped ? "used · explicitly uncapped" : cap === undefined ? "used · cap unavailable" : `of ${formatUsd(cap, "ledger")} covered`}</span></div>
-          <span class="runway-track" aria-label={percent === undefined ? "Usage percentage unavailable" : `${Math.round(percent)} percent used`}><span style={{ width: `${percent ?? 0}%` }} /></span>
+          {/* The bar is a redrawing of the two figures above and below it, and
+              its `aria-label` was discarded regardless — a bare span computes as
+              generic, which ARIA forbids naming. Marked as the decoration it is;
+              the used/covered line and the remaining line carry the fact. */}
+          <span class="runway-track" aria-hidden="true"><span style={{ width: `${percent ?? 0}%` }} /></span>
           <div class="runway-foot"><span>{window.remaining === undefined ? (uncapped ? "No fixed cycle cap" : "Remaining unavailable") : `${formatUsd(window.remaining, "ledger")} remaining`}</span><span>{window.resetAt ? `Resets ${formatDateTime(window.resetAt)}` : "Reset unavailable"}</span></div>
           {cap !== undefined && usage !== undefined && usage >= cap ? <p>Covered allowance is exhausted. Overflow capability depends on verified balance and provider billing policy.</p> : null}
         </>
