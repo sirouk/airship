@@ -243,6 +243,37 @@ describe("receipt evidence acquisition queue", () => {
     queue.dispose();
   });
 
+  it("publishes the arrival of a checkpoint fault to its observers", async () => {
+    const scheduler = new FakeScheduler();
+    const persistence = new MemoryCasPersistence();
+    const worker = new ScriptedWorker(async () => undefined);
+    const queue = new ReceiptEvidenceAcquisitionQueue({ worker, scheduler, persistence });
+    await queue.recover();
+    await queue.enqueue(request("receipt-observed-fault"));
+    const observed: boolean[] = [];
+    queue.subscribe(() => observed.push(Boolean(queue.fault())));
+
+    persistence.failNextSave = true;
+    scheduler.runDue();
+    await queue.settle();
+
+    /*
+     * The fault is not part of the snapshot — it is about the write, not the
+     * work — so an emission is the only channel an observer has for learning
+     * that scheduling stopped. Without one, the paused queue is invisible: the
+     * UI cannot render the pause and, worse, nothing tells the page to call the
+     * `wake()` that is the only way out, so one transient refusal is permanent.
+     */
+    expect(queue.fault()).toBeInstanceOf(EvidenceAcquisitionQueuePersistenceError);
+    expect(observed).toContain(true);
+
+    await queue.wake();
+    await queue.settle();
+    expect(queue.fault()).toBeUndefined();
+    expect(observed.at(-1)).toBe(false);
+    queue.dispose();
+  });
+
   it("recovers an orphaned running state after a terminal-state commit fault", async () => {
     const scheduler = new FakeScheduler(2_000);
     const persistence = new MemoryCasPersistence();
@@ -278,6 +309,33 @@ describe("receipt evidence acquisition queue", () => {
     await queue.settle();
     expect(queue.get("receipt-terminal-commit")).toMatchObject({ status: "succeeded", attempts: 2 });
     expect(worker.calls.map((call) => call.attempt)).toEqual([1, 2]);
+    queue.dispose();
+  });
+
+  it("answers a scope-released receipt's re-enqueue as duplicate and re-arms it only on explicit terminal retry", async () => {
+    const scheduler = new FakeScheduler();
+    const worker = new ScriptedWorker(async () => undefined);
+    const queue = new ReceiptEvidenceAcquisitionQueue({ worker, scheduler });
+    await queue.recover();
+    expect((await queue.enqueue(request("receipt-requeue"))).disposition).toBe("queued");
+    await queue.cancel("receipt-requeue", "scope-released");
+
+    // The duplicate answer is identity truth, not scheduling truth: a caller
+    // that takes it as "already handled" leaves the terminal state standing
+    // and the receipt is never acquired. This is the exact transition
+    // `enqueueAutomaticReceiptEvidence` acts on.
+    const duplicate = await queue.enqueue({ ...request("receipt-requeue") });
+    expect(duplicate.disposition).toBe("duplicate");
+    expect(duplicate.task.status).toBe("cancelled");
+    scheduler.runDue();
+    await queue.settle();
+    expect(worker.calls).toHaveLength(0);
+
+    expect(await queue.retryTerminal("receipt-requeue")).toMatchObject({ status: "pending", attempts: 0 });
+    scheduler.runDue();
+    await queue.settle();
+    expect(queue.get("receipt-requeue")).toMatchObject({ status: "succeeded", attempts: 1 });
+    expect(worker.calls).toHaveLength(1);
     queue.dispose();
   });
 

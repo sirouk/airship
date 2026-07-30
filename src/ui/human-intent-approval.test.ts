@@ -74,13 +74,48 @@ describe("human-initiated approvals", () => {
   });
 
   it("routes every human-proposed effect through the one helper that records it", () => {
-    // A fourth surface must not be able to skip the journal by forgetting to
-    // write it, so no UI-initiated effect may call the policy directly.
+    /*
+     * The three surfaces that exist today, named — and then the scan that makes
+     * the claim true of the fourth. A hardcoded list cannot see the failure this
+     * guards: a later "push to remote" button that adjudicates a person's own
+     * effect by calling the policy or the mode helper directly appends no
+     * `HUMAN_INTENT_EVENT_TYPE` event, so the decision is adjudicated and
+     * forgotten — exactly the completeness the journal used to claim and not
+     * have — while a three-element array stays green because the new function's
+     * name is not in it.
+     */
     for (const site of ["reviewGitOperation", "reviewSourceImport", "probeVault"]) {
       const body = source.match(new RegExp(`async function ${site}\\([\\s\\S]*?\\n  \\}\\n`, "u"))?.[0] ?? "";
       expect(body, site).toContain("reviewHumanIntent(");
-      expect(body, site).not.toContain("approvalPolicy.review(");
+      expect(body, site).not.toContain("decideHumanIntent(");
     }
+
+    // One adjudication of a person's own intent in the whole surface, and it is
+    // the one inside the helper that journals it.
+    const adjudications = [...source.matchAll(/\bdecideHumanIntent\(/gu)].map((match) => match.index!);
+    expect(adjudications).toHaveLength(1);
+    const helperStart = source.indexOf("async function reviewHumanIntent(");
+    expect(helperStart).toBeGreaterThan(-1);
+    expect(adjudications[0]).toBeGreaterThan(helperStart);
+    expect(adjudications[0]).toBeLessThan(helperStart + helper.length);
+
+    /*
+     * And no surface may reach an adjudicator around it. `review()` on either
+     * policy controller, or `request()` on the broker, would both produce a
+     * decision with no journal event; the only permitted `.review(` in this file
+     * is `tools.review(`, the registry seam that mints and consumes a ticket
+     * bound to the argument digest and records its own event.
+     */
+    for (const bypass of [
+      /\bapprovalPolicy\.review\(/u,
+      /\blocalCommandPolicy\.review\(/u,
+      /\bhumanIntentPolicyController\.review\(/u,
+      /\bapprovalBroker\.request\(/u,
+    ]) expect(source, String(bypass)).not.toMatch(bypass);
+    for (const call of [...source.matchAll(/([A-Za-z_$][\w$]*)\.review\(/gu)]) {
+      expect(call[1], call[0]).toBe("tools");
+    }
+
     expect(helper).toContain("decideHumanIntent(");
     expect(helper).toContain("type: HUMAN_INTENT_EVENT_TYPE");
     expect(helper).toContain("approval: reviewed.provenance");

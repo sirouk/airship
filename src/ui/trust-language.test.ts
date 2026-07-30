@@ -20,7 +20,7 @@ import { CLAIM_STATE_LEGEND } from "./claim-stack-facts";
 import { describeAttestationSeal } from "./app";
 import { encryptedReceiptFixture, endpointRecordFixture } from "./attestation-seal.fixtures";
 import { SEAL_LABELS } from "./seal";
-import { sessionStatusShort } from "./chat/session-status-chip";
+import { SESSION_STATUS_SHORT_MAX, sessionStatusShort } from "./chat/session-status-chip";
 import { turnEvidenceVerdict } from "./turn-evidence";
 import type { ClaimStackItem, ClaimStackModel } from "./claim-stack-model";
 import type { ProofStatus } from "../receipts/types";
@@ -256,6 +256,58 @@ describe("the trust ladder is three rungs, and a rung is a predicate", () => {
     expect(sample).toEqual(["verification remains ${model.trust.verification}"]);
     expect(retiredNamePattern("verification remains unverified").test(sample[0]!)).toBe(true);
     expect(retiredNamePattern("Evidence not pulled").test(sample[0]!)).toBe(false);
+  });
+
+  /*
+   * The chip bound, measured on every state rather than on the one a fixture
+   * reaches.
+   *
+   * `TURN_EVIDENCE_COPY`'s docblock claimed "≤22" while `evidence-blocked` sat
+   * at 24, and the suite's only length assertion ran on the `asserted` verdict
+   * a receipt fixture happens to produce — exactly 22, so the over-long entry
+   * was never measured. A documented bound nothing measures is a bound a
+   * designer sizes a 40px row against and a build then breaks.
+   */
+  it("measures the resting chip and its sentence on every turn-evidence state", () => {
+    const CHIP_MAX = 24;
+    const LINE_MAX = 80;
+    for (const [state, copy] of Object.entries(TURN_EVIDENCE_COPY)) {
+      expect(copy.chip.length, `${state}: "${copy.chip}"`).toBeLessThanOrEqual(CHIP_MAX);
+      expect(copy.line.length, `${state}: "${copy.line}"`).toBeLessThanOrEqual(LINE_MAX);
+      // The one width-bound consumer never cuts a verdict: it prints the head
+      // before " · " or the seal's own word, and both must fit the 430px right
+      // cluster. This is what makes 24 safe where 22 was only arithmetic.
+      const short = sessionStatusShort(copy.chip, SEAL_LABELS[copy.seal]);
+      expect(short.length, `${state}: "${short}"`).toBeLessThanOrEqual(SESSION_STATUS_SHORT_MAX);
+      expect(copy.chip.startsWith(short) || short === SEAL_LABELS[copy.seal], `${state}: "${short}"`).toBe(true);
+    }
+    // The chip the session bar actually receives for a blocked acquisition —
+    // the 24-character entry — reaches it as a whole rung word, not a cut one.
+    expect(sessionStatusShort(TURN_EVIDENCE_COPY["evidence-blocked"].chip, SEAL_LABELS.attention)).toBe("No evidence");
+  });
+
+  it("measures the counted chip and sentence the reducer composes, at their longest", () => {
+    // `composeClaimStack` caps three of the eight keys at `partial`, so the
+    // widest counted verdict is five verified with the remaining three split
+    // across both tail clauses. The reducer writes these two strings itself;
+    // the table's bound is worthless if the composed form escapes it.
+    const widest = turnEvidenceVerdict({
+      stack: stackOf([
+        "verified", "verified", "verified", "verified", "verified",
+        "partial", "unavailable", "unavailable",
+      ]),
+      hasReceipt: true,
+    });
+    expect(widest.chip).toBe("5 of 8 verified");
+    expect(widest.chip.length).toBeLessThanOrEqual(24);
+    expect(widest.line).toBe("5 claims were verified by a named authority; 1 asserted, 2 with no evidence.");
+    expect(widest.line.length).toBeLessThanOrEqual(80);
+
+    // Singular, because "1 claims were verified" is the sentence a reader
+    // trusts least on the surface whose only job is to be trusted — and one
+    // verified claim is the commonest non-zero case on this stack.
+    const one = turnEvidenceVerdict({ stack: stackOf(["verified", "partial"]), hasReceipt: true });
+    expect(one.line).toBe("1 claim was verified by a named authority; 1 asserted.");
   });
 
   it("states the same three definitions the Proof route's legend states", () => {

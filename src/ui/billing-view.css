@@ -83,7 +83,7 @@
    needs an action from the reader, and the tab is the only Chutes state visible
    while another provider's panel is open. */
 .billing-provider-tab[data-state="rejected"] span {
-  color: var(--danger, #c86758);
+  color: var(--danger, #ce7769);
 }
 
 .billing-provider-panel {
@@ -158,8 +158,8 @@
 }
 
 .billing-provider-state[data-state="rejected"] {
-  border-color: color-mix(in srgb, var(--danger, #c86758) 45%, transparent);
-  color: var(--danger, #c86758);
+  border-color: color-mix(in srgb, var(--danger, #ce7769) 45%, transparent);
+  color: var(--danger, #ce7769);
 }
 
 .billing-provider-inventory__detail {

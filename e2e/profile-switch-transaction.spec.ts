@@ -95,7 +95,8 @@ test("a switch asked for during a switch is handled, not dropped", async ({ page
   expect(await expectCoherentCockpit(page)).toBe("general");
 
   await page.locator(".sidebar .profile-menu").getByRole("button", { name: "Agent profile" }).click();
-  await expect(page.getByRole("listbox", { name: "Agent profile" })).toBeVisible();
+  const listbox = page.getByRole("listbox", { name: "Agent profile" });
+  await expect(listbox).toBeVisible();
 
   /*
    * Both options clicked inside one task, which is what makes this
@@ -104,13 +105,28 @@ test("a switch asked for during a switch is handled, not dropped", async ({ page
    * selection is refused by the guard rather than racing it. The refusal is
    * thrown *before* the function's own rollback boundary, which is why it used
    * to escape as an unhandled rejection from a `void`-invoked call site.
+   *
+   * The two options are resolved as role locators and only then handed to one
+   * `evaluate`. `MenuSelect` used to put `aria-label` on each option; options
+   * are now named from their own contents, with the description moved to
+   * `aria-describedby` so a reader hears "Research" and not a whole sentence.
+   * Reading `aria-label` off the DOM therefore matched nothing, both clicks
+   * were silently skipped by an `?.`, and the journey asserted on a cockpit no
+   * switch had ever been asked of — it "passed" the coherence check with
+   * `general|general` and only tripped on the settled-id line. Resolving by
+   * accessible name is the stronger form twice over: it is the same contract
+   * the rest of this file and every reader use, and an option that cannot be
+   * found now fails the test at the locator instead of turning the whole
+   * concurrency assertion into a no-op.
    */
-  await page.evaluate(() => {
-    const options = [...document.querySelectorAll<HTMLButtonElement>('[role="listbox"][aria-label="Agent profile"] [role="option"]')];
-    const pick = (label: string) => options.find((option) => option.getAttribute("aria-label") === label);
-    pick("Research")?.click();
-    pick("Developer")?.click();
-  });
+  const [research, developer] = await Promise.all([
+    listbox.getByRole("option", { name: /^Research/u }).elementHandle(),
+    listbox.getByRole("option", { name: /^Developer/u }).elementHandle(),
+  ]);
+  await page.evaluate(([first, second]) => {
+    first.click();
+    second.click();
+  }, [research!, developer!] as const);
 
   // `builder-systems` is Developer's shipped id — the name changed, the id was
   // kept so pinned sessions and persisted profile history still resolve.

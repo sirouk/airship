@@ -33,6 +33,10 @@ import {
   isOptionalRequestFailurePath,
   isOptionalSourceControlPath,
   isOptionalSourceSelectionPath,
+  resolveOptionalSourceSelectionDelivery,
+  assertDocumentedBudgetMeasurements,
+  MEASUREMENT_JUSTIFIED_BUDGETS,
+  SOURCE_SELECTION_STORAGE_KEY,
   isOptionalBrowserGitPath,
   isOptionalSessionLibraryPath,
   isOptionalSessionManifestPath,
@@ -119,6 +123,114 @@ describe("release gate", () => {
       /gzip/iu,
     );
     expect(() => assertWithinBudget("fixture", { raw: 5, gzip: 5 }, { raw: 10, gzip: 10 })).not.toThrow();
+  });
+
+  /*
+   * A ceiling is only enforced while both sides of the comparison are byte counts.
+   * `undefined > limit` is false, so a caller that loses its measurement retires the
+   * ceiling and reports a pass — the failure mode that let a pack Vite had inlined be
+   * charged zero bytes. Refusing to answer is the only safe answer.
+   */
+  it("refuses to adjudicate a budget against anything that is not a byte count", () => {
+    for (const measurement of [undefined, null, {}, { raw: 5 }, { raw: 5, gzip: "10" }, { raw: -1, gzip: 0 }, { raw: 1.5, gzip: 0 }]) {
+      expect(() => assertWithinBudget("fixture", measurement, { raw: 10, gzip: 10 }), JSON.stringify(measurement ?? null))
+        .toThrow(/measurement is not a raw\/gzip byte count/u);
+    }
+    expect(() => assertWithinBudget("fixture", { raw: 5, gzip: 5 }, { raw: 10 })).toThrow(
+      /budget is not a raw\/gzip byte count/u,
+    );
+    // Zero is a real measurement — only the deliberately empty budgets use it.
+    expect(() => assertWithinBudget("fixture", { raw: 0, gzip: 0 }, { raw: 0, gzip: 0 })).not.toThrow();
+  });
+
+  /*
+   * Source selection is ~650 bytes: Vite may emit it as its own chunk or inline it
+   * into the one pack that imports it, and neither is a product fact. The delivery
+   * has to be describable without inventing a size — a fabricated `raw: 0, gzip: 0`
+   * published a measurement no artifact had *and* made the budget line below
+   * unconditionally true, so the module could have grown without bound inside its
+   * carrier and this suite would have stayed green.
+   */
+  it("describes an inlined source-selection store without inventing bytes for it", () => {
+    const dedicated = { path: "assets/source-selection-Ab_12-CD.js", payload: Buffer.from("export const store = 1;\n") };
+
+    const split = resolveOptionalSourceSelectionDelivery([dedicated], [dedicated.path]);
+    expect(split.path).toBe(dedicated.path);
+    expect(split.raw).toBe(dedicated.payload.byteLength);
+    expect(split.gzip).toBeGreaterThan(0);
+    expect(() => assertWithinBudget("Optional source selection", split, RELEASE_BUDGETS.optionalSourceSelection)).not.toThrow();
+
+    // This object is published verbatim as `measurements.optionalSourceSelection`,
+    // so its shape is the reported shape: a carrier, and no size attributed to it.
+    const inlined = resolveOptionalSourceSelectionDelivery([], ["assets/repository-admission-Ab_12-CD.js"]);
+    expect(inlined).toEqual({ inlinedInto: "assets/repository-admission-Ab_12-CD.js" });
+    expect(inlined.path).toBeUndefined();
+    expect(inlined.raw).toBeUndefined();
+    // The carrier's bytes are governed by the carrier's own class ceiling, so this
+    // budget has nothing to weigh — and cannot be talked into weighing nothing.
+    expect(() => assertWithinBudget("Optional source selection", inlined, RELEASE_BUDGETS.optionalSourceSelection))
+      .toThrow(/measurement is not a raw\/gzip byte count/u);
+    // The shape this replaced: a zero cleared every ceiling it was handed.
+    expect(() => assertWithinBudget("Optional source selection", { raw: 0, gzip: 0 }, RELEASE_BUDGETS.optionalSourceSelection))
+      .not.toThrow();
+
+    expect(() => resolveOptionalSourceSelectionDelivery([dedicated, dedicated], [dedicated.path]))
+      .toThrow(/at most one optional source-selection chunk; found 2/u);
+    expect(() => resolveOptionalSourceSelectionDelivery([], []))
+      .toThrow(/exactly one JavaScript pack; found 0/u);
+    expect(() => resolveOptionalSourceSelectionDelivery([], ["assets/a.js", "assets/b.js"]))
+      .toThrow(/exactly one JavaScript pack; found 2/u);
+  });
+
+  /** The fingerprint the gate hunts for has to be the key the store actually writes. */
+  it("fingerprints source selection with the durable key its module persists", () => {
+    const store = readFileSync(new URL("../src/git/source-selection.ts", import.meta.url), "utf8");
+    expect(store).toContain(`"${SOURCE_SELECTION_STORAGE_KEY}"`);
+  });
+
+  /*
+   * The budget comments are the only place a reviewer can see what a raise bought,
+   * and three ceilings were once raised while their comments still recorded the
+   * previous build — one of them saying the gzip ceiling "do[es] not move" directly
+   * above the constant that moved it. Hold the file to its own prose.
+   */
+  it("rejects budget comments that contradict or abandon the ceilings they justify", () => {
+    const source = readFileSync(new URL("./release-gate.mjs", import.meta.url), "utf8");
+    expect(() => assertDocumentedBudgetMeasurements(source)).not.toThrow();
+    expect(MEASUREMENT_JUSTIFIED_BUDGETS.length).toBeGreaterThan(0);
+    for (const name of MEASUREMENT_JUSTIFIED_BUDGETS) expect(RELEASE_BUDGETS[name]).toBeDefined();
+
+    // A figure the ceiling beside it would reject describes a build nobody shipped.
+    expect(() => assertDocumentedBudgetMeasurements(source.replace("15,976 B gzip", "18,976 B gzip")))
+      .toThrow(/optionalMemoryView: its comment records 18,976 B gzip, above the 16\.00 KiB gzip ceiling/u);
+    expect(() => assertDocumentedBudgetMeasurements(source.replace("74,690 B\n  // raw", "94,690 B\n  // raw")))
+      .toThrow(/optionalProofSurface: its comment records 94,690 B raw, above the 74\.00 KiB raw ceiling/u);
+    // …and a raise cannot be laundered by deleting the number it contradicts.
+    expect(() => assertDocumentedBudgetMeasurements(source.replace("Measured 73,436 B raw / 23,042", "Weighed at 73,436 B and 23,042")))
+      .toThrow(/optionalWorkspaceWorkbench: its comment no longer records a measured raw\/gzip pair/u);
+
+    /*
+     * The gzip ceilings as the review found them: a whole KiB past the smallest step
+     * that clears the measurement recorded beside them, which is transfer budget
+     * granted by a comment that said nothing about it. (deferredCapabilities is shown
+     * at two steps, because its 118 KiB is itself the justified second step.) Any step
+     * beyond the first has to be paid for with the sentence naming what the tighter one
+     * would have left — which is why the raw ceilings beside these pass untouched.
+     */
+    for (const [name, ceiling, granted] of [
+      ["optionalMemoryView", "gzip: 16 * 1024", "gzip: 17 * 1024"],
+      ["optionalProofSurface", "gzip: 24 * 1024", "gzip: 25 * 1024"],
+      ["optionalWorkspaceWorkbench", "gzip: 23 * 1024", "gzip: 24 * 1024"],
+      ["deferredCapabilities", "gzip: 118 * 1024", "gzip: 120 * 1024"],
+    ]) {
+      const raised = source.replace(new RegExp(`^  ${name}: .*$`, "mu"), (line) => line.replace(ceiling, granted));
+      expect(raised, name).not.toBe(source);
+      expect(() => assertDocumentedBudgetMeasurements(raised), name).toThrow(
+        new RegExp(`${name}: the [\\d.]+ KiB gzip ceiling is above the smallest whole-KiB step`, "u"),
+      );
+    }
+    expect(() => assertDocumentedBudgetMeasurements(source.replace(/^  optionalMemoryView: .*$/mu, "  optionalMemoryViewX: Object.freeze({ raw: 1, gzip: 1 }),")))
+      .toThrow(/optionalMemoryView: named as measurement-justified but no such release budget was found/u);
   });
 
   it("rejects unknown and multiply owned JavaScript artifacts", () => {

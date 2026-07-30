@@ -329,9 +329,21 @@ export function resolveProfileSilo(profile: Pick<ProfileRevisionDraft,
  * profile fails its revision check and no manifest or audit validator has to
  * reject a value it previously accepted.
  */
-export function enforcedMemoryScope(scope: ProfileMemoryScope): ProfileMemoryScope {
+export function enforcedMemoryScope(scope: ProfileMemoryScope): EnforcedProfileMemoryScope {
   return scope === "workspace" ? "profile" : scope;
 }
+
+/**
+ * What the scope resolves to, with `workspace` removed by construction.
+ *
+ * The return type used to be the whole `ProfileMemoryScope`, which made every
+ * caller carry a `workspace` case the function has already eliminated — so a
+ * label map keyed on the two real scopes could not be indexed without a cast,
+ * and a cast is exactly how a third scope would slip past a display surface
+ * unlabelled. Narrowing here means the type system enforces the resolution the
+ * body performs.
+ */
+export type EnforcedProfileMemoryScope = Exclude<ProfileMemoryScope, "workspace">;
 
 export async function resolveProfileForSession(args: Readonly<{
   profile: ProfileRevision;
@@ -418,7 +430,21 @@ export async function resolveProfileForSession(args: Readonly<{
     model: args.profile.model,
     minimumPosture: args.profile.minimumPosture,
     workspaceBinding: silo.workspaceBinding,
-    memoryScope: silo.memoryScope,
+    /*
+     * The STORED scope, deliberately, where the pin field above carries the
+     * enforced one.
+     *
+     * This digest identifies the resolution's *inputs*, and it is compared for
+     * equality against digests already written into other people's manifests —
+     * `compareProfiles` downgrades any difference to "Fork required". Digesting
+     * the enforced scope instead changed the digest of an unchanged profile
+     * revision the moment `workspace` was withdrawn, which would have stranded
+     * every conversation pinned under it (the shipped Research profile pinned
+     * `workspace`) behind a mismatch about a boundary that never differed. So:
+     * the digest stays byte-stable for values already stored, and the visible
+     * field states what is enforced.
+     */
+    memoryScope: stored.memoryScope,
     approvalMode: silo.approvalMode,
     resolvedSkills: resolvedSkills.map((skill) => ({
       skillId: skill.skillId,

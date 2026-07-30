@@ -50,6 +50,20 @@ describe("profile-scoped Workspace terminal dock state", () => {
     expect(readTerminalDockState(storage, "workspace-a", "profile-a")).toEqual({ open: true, height: 444, selectedSessionId: "terminal-2" });
   });
 
+  it("keeps a dock taller than the fallback when a selection update arrives with no measured height", () => {
+    const storage = memoryStorage();
+    // Seeded with a measured parent, so the 900px height is stored verbatim —
+    // above the 720px unseen-viewport fallback.
+    updateTerminalDockState(storage, "workspace-a", "profile-a", { open: true, height: 900 }, 1_400);
+    // The terminal route persists every tab selection with no height argument;
+    // that round-trip used to clamp the dock back to 720px without any resize.
+    const next = updateTerminalDockState(storage, "workspace-a", "profile-a", { selectedSessionId: "terminal-1" });
+    expect(next).toEqual({ open: true, height: 900, selectedSessionId: "terminal-1" });
+    expect(readTerminalDockState(storage, "workspace-a", "profile-a").height).toBe(900);
+    // A measured parent still clamps the stored height to real editor room on read.
+    expect(readTerminalDockState(storage, "workspace-a", "profile-a", 600).height).toBe(600 - TERMINAL_DOCK_EDITOR_FLOOR);
+  });
+
   it("fails closed on missing or malformed state and clamps to available editor room", () => {
     expect(readTerminalDockState(undefined, "workspace-a", "profile-a")).toEqual({ open: false, height: TERMINAL_DOCK_DEFAULT_HEIGHT });
     expect(readTerminalDockState({ getItem: () => "{" }, "workspace-a", "profile-a")).toEqual({ open: false, height: TERMINAL_DOCK_DEFAULT_HEIGHT });

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ChutesEndpointEvidenceRecord } from "../attestation/provider-types";
 import { createLocalReceipt } from "../receipts/types";
 import { claimCeiling, declaredClaimStatus, turnEvidenceVerdict } from "./claim-stack-facts";
-import { composeClaimStack } from "./claim-stack-model";
+import { claimStackEndpointRecord, composeClaimStack } from "./claim-stack-model";
 
 const NOW = Date.parse("2026-07-19T12:00:00.000Z");
 const KEY_DIGEST = `sha256:${"a".repeat(64)}`;
@@ -88,6 +88,29 @@ describe("claim-stack evidence composition", () => {
   });
 });
 
+describe("claim-stack record selection", () => {
+  it("binds instance AND endpoint-key digest, so a re-keyed endpoint cannot shadow the receipt's record", () => {
+    // The shipped defect: an instance-only `.find` picked the first record
+    // for the instance, so after an endpoint re-key the claim stack read the
+    // stale key's record (or "absent") while the route's export bundle — which
+    // filters on the key digest — carried the matching evidence.
+    const receipt = encryptedReceipt();
+    const reKeyed = {
+      ...endpointRecord(),
+      recordId: "urn:airship:attestation:stale-key",
+      subject: { ...endpointRecord().subject, e2ePublicKeyDigest: `sha256:${ "b".repeat(64) }` },
+    };
+    const matching = endpointRecord();
+
+    expect(claimStackEndpointRecord([reKeyed, matching], receipt)).toBe(matching);
+    expect(claimStackEndpointRecord([reKeyed], receipt)).toBeUndefined();
+    expect(claimStackEndpointRecord([matching], undefined)).toBeUndefined();
+
+    const stack = composeClaimStack(receipt, claimStackEndpointRecord([reKeyed, matching], receipt), NOW);
+    expect(stack.evidence).toBe("turn-bound");
+  });
+});
+
 describe("the two claim ceilings", () => {
   it("never lets a receipt's own declaration of verification stand as verified", () => {
     // The measured defect: one receipt, one tab click apart, read "VERIFIED 1
@@ -140,6 +163,10 @@ describe("the one turn-evidence verdict", () => {
     expect(verdict.state).toBe("asserted");
     expect(verdict.seal).toBe("asserted");
     expect(verdict.chip).toBe("Asserted, not verified");
+    // This fixture's chip only — it is the 22-character entry, which is why a
+    // bound measured here read as ≤22 for a build while `evidence-blocked` sat
+    // at 24. The table-wide bound (≤24, every state, plus the counted forms the
+    // reducer composes) is measured in `trust-language.test.ts`.
     expect(verdict.chip.length).toBeLessThanOrEqual(22);
     expect(verdict.line.length).toBeLessThanOrEqual(80);
     // Uncapped versus capped, which is the whole argument of the surface.

@@ -467,10 +467,11 @@
   flex: 0 0 auto;
 }
 
-/* Colour only — the box is the shared chip recipe. The invalid tone keeps its
-   own lighter red rather than --v-failed: #c86758 measures 4.24:1 on a raised
-   surface, and the one state that reports an integrity failure is the last
-   place to accept sub-AA body text. WP-9 owns retiring the literal. */
+/* Colour only — the box is the shared chip recipe. The literal lighter red this
+   rule carried is retired: it existed because --v-failed measured 4.24:1 on a
+   raised surface, and the one state that reports an integrity failure is the
+   last place to accept sub-AA body text. The token itself now clears 4.5:1 on
+   every bed in every theme, so the state can name the verdict token again. */
 .audit-state.verified {
   color: var(--v-verified);
 }
@@ -480,7 +481,7 @@
 }
 
 .audit-state.invalid {
-  color: #e4877e;
+  color: var(--v-failed);
 }
 
 .audit-boundary {
@@ -2769,15 +2770,56 @@
   .journal-chip__branch,
   .journal-chip__record { min-height: 42px; }
 
-  /* The right cluster owns the width a phone has; the title takes what is
-     left and ellipsises, with the whole string in `title` and in the
-     conversation list. */
+  /*
+   * The right cluster takes a full row of its own under the title, and wraps
+   * rather than sheds, and rather than scrolls — the same relief valve the
+   * sessions toolbar chose between 861px and 1180px, chosen for the same
+   * measured defect. `overflow-x: auto` never scrolled here: every child
+   * carries `min-width: 0` under the default `flex-shrink: 1`, so during a
+   * 430px render the browser compressed each chip mid-text ("2 ev…", "3…")
+   * and still left nothing to scroll to, and the resting scroll position hid
+   * rename and `+` behind a row-wide title for less. `flex: 0 0 auto` makes a
+   * chip cost exactly what it costs, `flex-wrap: wrap` pays for an overflow
+   * in height rather than in reachability, and the title keeps its column and
+   * ellipsises, the whole string still in `title` and in the conversation
+   * list.
+   */
   .session-bar__chips {
+    grid-column: 1 / -1;
+    flex-wrap: wrap;
     width: 100%;
     max-width: 100%;
+    justify-self: stretch;
+  }
+
+  .session-bar__chips > * {
+    flex: 0 0 auto;
+  }
+
+  /*
+   * The wrap row is a relief valve paid for in height, so it may only be paid
+   * for out of height the shell has.
+   *
+   * With a soft keyboard open the shell is the *visual* viewport — 374px on a
+   * 390×664 phone — and the chrome above the transcript is fixed: 52px topbar
+   * plus this bar plus a 115px composer. A second wrapped chip row costs 52px
+   * of that, which took the transcript's own box to 54px: a scroll container
+   * shorter than one card, i.e. the reader typing has no conversation left to
+   * read. The transcript is the only flexible track in `.chat-stage`, so every
+   * pixel the shrink cannot take from chrome it takes from there.
+   *
+   * The rule is the one the ≤500px-tall landscape below already states, applied
+   * to the same fact rather than to a second definition of it: a viewport with
+   * no height to spare keeps the cluster on one line. Nothing is shed and
+   * nothing is clipped mid-text — `flex: 0 0 auto` above is what finally makes
+   * `overflow-x` real here, so the row scrolls to every chip it holds instead
+   * of compressing them — and the wrap row returns the moment the keyboard
+   * does, because `data-keyboard-open` is a state that ends.
+   */
+  :root[data-keyboard-open="true"] .session-bar__chips {
+    flex-wrap: nowrap;
     overflow-x: auto;
     overscroll-behavior-inline: contain;
-    justify-self: stretch;
     scrollbar-width: thin;
   }
 
@@ -2798,6 +2840,48 @@
     height: 1px;
     overflow: hidden;
     clip-path: inset(50%);
+  }
+
+  /* Next in that order: the skills count is the popover's own lead sentence
+     and the trigger's accessible name, so an icon-only chip here costs the
+     row one glyph — less than a wrap — and clips nothing mid-word. */
+  .session-skills-chip__label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+
+  /*
+   * Last in that order, and only at the widths whose arithmetic forces it.
+   *
+   * The shed order above was measured on a 430px bar, where the cluster's
+   * 378px — two glyph chips at 8.5px and 14px, the 150px verdict chip, the
+   * 78px journal chip, 44px rename, 44px `+` and five 8px gaps — fits the
+   * 406px track and the wrap valve never fires. Below ~402px (that 378px plus
+   * the bar's 24px insets) one line cannot hold it, so the valve pays a third
+   * 44px row: on a 320×700 phone that took this bar to 153px, 22% of the
+   * screen, and pushed the transcript under half of it, which is the reader
+   * losing the conversation to its own chrome.
+   *
+   * So the two secondary quantities yield before the row does. Each goes whole
+   * rather than shedding its unit and leaving the number, because a bare
+   * number beside another bare number is exactly the ambiguity the units were
+   * added to remove; the quantity itself survives in each trigger's accessible
+   * name ("4 facts.", "2 recorded steps") and in the popover, which for both
+   * chips *is* the list being counted. The verdict word, every chip, both
+   * actions and all six 44px targets stay on the bar at full width.
+   */
+  @media (max-width: 400px) {
+    .session-status-chip__count,
+    .journal-chip__count {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+    }
   }
 
   .session-bar .session-runtime {
@@ -3356,7 +3440,14 @@
     background: color-mix(in srgb, var(--surface-soft) 80%, transparent);
   }
 
-  .session-bar__chips { justify-self: start; }
+  /* Portrait pays for the cluster's honesty with a second row; a ≤500px-tall
+     landscape has no height to pay with, so here it stays one line beside the
+     folded title. Wrapping stays on, so an overflow costs height inside the
+     cluster's own column rather than clipping a chip mid-text. */
+  .session-bar__chips {
+    grid-column: auto;
+    justify-self: start;
+  }
 
   .transcript {
     padding:

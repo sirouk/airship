@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { AIRSHIP_CORE_CHARTER } from "../core/operating-charter";
 import {
@@ -110,6 +111,27 @@ describe("profile domain", () => {
     expect(enforcedMemoryScope(stored.memoryScope ?? "profile")).toBe("profile");
     const pin = await resolveProfileForSession({ profile: stored, theme, skills: [], globalSkills: {} });
     expect(pin.memoryScope).toBe("profile");
+
+    /*
+     * …while the resolution digest still follows the STORED scope.
+     *
+     * That digest is compared for equality against digests already written into
+     * existing manifests — `compareProfiles` turns any difference into "Fork
+     * required" — so resolving the withdrawal into it would change the digest an
+     * unchanged profile revision mints, and stranding every conversation of the
+     * shipped `workspace`-scoped Research profile over a boundary that never
+     * differed. It cannot be asserted through the API: the revision digest
+     * itself covers `memoryScope`, so no two loadable revisions differ in the
+     * scope alone (`resolveProfileForSession` verifies the revision), which is
+     * why the payload is read here instead.
+     */
+    const source = readFileSync(new URL("./domain.ts", import.meta.url), "utf8");
+    const digested = source.slice(
+      source.indexOf("const resolutionDigest = await digestJson({"),
+      source.indexOf("    skillSetDigest,\n    systemPromptDigest,\n  });"),
+    );
+    expect(digested).toContain("memoryScope: stored.memoryScope,");
+    expect(digested).not.toContain("memoryScope: silo.memoryScope,");
   });
 
   it("resolves legacy v1 profiles with explicit safe silo defaults without changing their digest", async () => {

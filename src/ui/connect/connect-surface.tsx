@@ -274,7 +274,8 @@ function CloudMethodPanel({
       {/* Two buttons carrying `role="tab"` owe the whole tablist contract, not
           only its look: one tab in the tab order and ←/→/Home/End moving
           selection and focus. The movement rule is `tabs.tsx`'s, so there is
-          still one implementation of it. */}
+          still one implementation of it — enforced, not asserted:
+          `tablist-contract.test.ts` fails any strip that reimplements it. */}
       <div
         class="connect-method__switch"
         role="tablist"
@@ -620,12 +621,13 @@ function ExtensionPanel({
 }
 
 /**
- * The Local lane, where the button is the probe.
+ * The Local lane, where the button is the probe — and the bind.
  *
  * "Check this machine" issues the same loopback request the provider fabric
- * uses, and the panel renders only what came back — an answer with its model
- * count, or a refusal with the reason the browser gave. Nothing is claimed
- * before the button is pressed, and nothing is inferred after it.
+ * uses, and a server that answers is connected in this tab, not merely
+ * listed: the same press commits the fabric connection the provider rows
+ * below charge one press each for. The copy must name that consequence,
+ * because a check that silently binds is not a check.
  */
 function LocalPanel({
   onCheck,
@@ -643,9 +645,9 @@ function LocalPanel({
     <div class="connect-local">
       <p>
         Airship checks <code>127.0.0.1:11434</code> for Ollama and
-        {" "}<code>127.0.0.1:1234</code> for LM Studio, and only when you press
-        Check. Your browser and the local service both have to allow this page.
-      </p>
+        {" "}<code>127.0.0.1:1234</code> for LM Studio, and connects anything
+        that answers — only when you press Check. Your browser and the local
+        service both have to allow this page.</p>
       {onCheck ? (
         <button
           type="button"

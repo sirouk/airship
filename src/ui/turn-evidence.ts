@@ -19,7 +19,7 @@ export type { TurnEvidenceState } from "./trust-language";
  * only piece the first-paint shell reaches; this module holds the reducer and
  * travels with the surfaces that reduce a claim stack; `claim-stack-facts.ts`
  * holds the disclosure copy and re-exports both, so the Proof route's imports
- * are unchanged and there is still exactly one definition of the six states.
+ * are unchanged and there is still exactly one definition of the five states.
  */
 
 export type TurnEvidenceCounts = Readonly<{
@@ -44,7 +44,15 @@ export type TurnEvidenceCounts = Readonly<{
 export type TurnEvidenceVerdict = Readonly<{
   state: TurnEvidenceState;
   seal: SealState;
-  /** ≤22 characters. The word-form every trust surface shows at rest. */
+  /**
+   * The word-form every trust surface shows at rest.
+   *
+   * ≤24 characters — the bound `TURN_EVIDENCE_COPY` states and
+   * `trust-language.ts` explains, measured over every state in
+   * `trust-language.test.ts`. Not 22: the `evidence-blocked` arm returns
+   * "No evidence · not pulled" (24), and 22 was the length of the longest other
+   * entry rather than any surface's limit.
+   */
   chip: string;
   /** ≤80 characters. One sentence, printable beside the chip. */
   line: string;
@@ -78,6 +86,28 @@ export function turnEvidenceCounts(items: readonly ClaimStackItem[]): TurnEviden
     else failed += 1;
   }
   return Object.freeze({ verified, asserted, noEvidence, failed, expired, total: items.length });
+}
+
+/**
+ * The tail of the partly verified sentence, composed from what the counts
+ * actually hold.
+ *
+ * "…the rest are assertions" was false on the arm's own terms: `noEvidence`
+ * (status `unavailable`) claims are not assertions — there is no record of
+ * them at all, and the rest of the vocabulary calls that "No evidence". Each
+ * bucket that is zero is omitted rather than asserted.
+ *
+ * Returns "" when *every* remaining bucket is zero, which the caller must read
+ * as "there is no tail" rather than interpolate: `verified === total` is
+ * unreachable through `composeClaimStack` (the receipt-integrity ceiling caps
+ * three of the eight keys at `partial`), but `turnEvidenceVerdict` is exported
+ * and any caller may hand it a stack of one verified claim.
+ */
+function partlyVerifiedTail(counts: TurnEvidenceCounts): string {
+  const rest: string[] = [];
+  if (counts.asserted > 0) rest.push(`${counts.asserted} asserted`);
+  if (counts.noEvidence > 0) rest.push(`${counts.noEvidence} with no evidence`);
+  return rest.join(", ");
 }
 
 /**
@@ -122,20 +152,35 @@ export function turnEvidenceVerdict(input: Readonly<{
       ? Object.freeze({ ...base, ...modifier, ...TURN_EVIDENCE_COPY["evidence-blocked"], state: "evidence-blocked" })
       : Object.freeze({ ...base, ...TURN_EVIDENCE_COPY["no-evidence"], state: "no-evidence" });
   }
-  if (counts.verified === counts.total) {
-    return Object.freeze({ ...base, ...modifier, ...TURN_EVIDENCE_COPY.proven, state: "proven" });
-  }
+  /*
+   * There is deliberately no `verified === counts.total` arm.
+   *
+   * "Proven this turn" was dead copy: the eight-key stack carries three claims
+   * (encryption, conversation, payment) that only ever arrive on the receipt,
+   * and `composeClaimStack` caps every receipt-carried claim at `partial` —
+   * the receipt-integrity ceiling. At most five of the eight claims can stand
+   * at `verified`, so the arm could never render and the enumeration kept a
+   * seventh state nobody could reach. The counted verdict below is the
+   * strongest sentence this reducer can honestly print.
+   */
   if (counts.verified > 0) {
     // The count replaces the generic word: "3 of 8 verified" is the same claim
     // as "Partly verified" and strictly more of it, so the table's phrasing is
     // the floor rather than the ceiling here.
+    //
+    // Singular and plural are both spelled because one verified claim is the
+    // commonest non-zero case on the eight-key stack, and "1 claims were
+    // verified" is the sentence a reader trusts least on the surface whose only
+    // job is to be trusted. The tail is a clause, not a suffix: with nothing
+    // left to name it is omitted entirely rather than punctuated into "; .".
+    const rest = partlyVerifiedTail(counts);
     return Object.freeze({
       ...base,
       ...modifier,
       ...TURN_EVIDENCE_COPY["partly-proven"],
       state: "partly-proven",
       chip: `${counts.verified} of ${counts.total} verified`,
-      line: `${counts.verified} claims were verified by a named authority; the rest are assertions.`,
+      line: `${counts.verified} claim${counts.verified === 1 ? " was" : "s were"} verified by a named authority${rest ? `; ${rest}` : ""}.`,
     });
   }
   return Object.freeze({ ...base, ...modifier, ...TURN_EVIDENCE_COPY.asserted, state: "asserted" });

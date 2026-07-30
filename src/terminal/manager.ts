@@ -191,6 +191,8 @@ export class BrowserTerminalManager {
   private baseline?: TerminalWorkspaceSnapshot;
   private syncTail: Promise<void> = Promise.resolve();
   private persistenceTail: Promise<void> = Promise.resolve();
+  private persistInFlight = false;
+  private persistDirty = false;
   private lastPersistenceFailure?: string;
   private readonly persistenceListeners = new Set<(failure: string | undefined) => void>();
   private readonly reconcileListeners = new Set<(canReconcile: boolean) => void>();
@@ -949,12 +951,41 @@ export class BrowserTerminalManager {
       clearTimeout(this.transcriptPersistTimer);
       this.transcriptPersistTimer = undefined;
     }
-    // The failure was previously discarded, so the retention claim shown to the
-    // user could never disagree with it. Record the observed outcome instead,
-    // and keep the tail settled so no teardown ever awaits a rejection.
-    this.persistenceTail = this.persistenceTail
-      .then(() => this.persist(), () => this.persist())
-      .then(() => this.recordPersistence(undefined), (error) => this.recordPersistence(error ?? new Error("Terminal metadata could not be persisted.")));
+    // Coalesce: at most one persist in flight. Sustained PTY output re-arms the
+    // transcript timer on a ~100ms cadence, and a slow authority can take far
+    // longer than that per read+CAS round — chaining one persist per tick grew
+    // the tail without bound and kept every queued pass a full 2 MiB manifest.
+    // A dirty flag plus a drain loop gives the trailing state exactly one
+    // follow-up pass instead of one pass per tick.
+    this.persistDirty = true;
+    if (this.persistInFlight) return;
+    this.persistInFlight = true;
+    this.persistenceTail = this.persistenceTail.then(() => this.drainPersist());
+  }
+
+  private async drainPersist(): Promise<void> {
+    try {
+      // Mutations landing mid-pass raise the flag again; one trailing pass
+      // coalesces all of them. Teardown awaits `persistenceTail`, which covers
+      // this whole loop, so a trailing flush queued by `flushTranscriptPersist`
+      // cannot be lost.
+      while (this.persistDirty) {
+        this.persistDirty = false;
+        await this.persist();
+      }
+      this.recordPersistence(undefined);
+    } catch (error) {
+      // Terminate the pass rather than spinning on a failing authority: report
+      // the observed outcome once (`recordPersistence` dedupes repeats) and
+      // stay dirty so the next mutation retries. The failure was previously
+      // discarded, so the retention claim shown to the user could never
+      // disagree with it; recording it keeps the tail settled so no teardown
+      // ever awaits a rejection.
+      this.persistDirty = true;
+      this.recordPersistence(error ?? new Error("Terminal metadata could not be persisted."));
+    } finally {
+      this.persistInFlight = false;
+    }
   }
 
   /** The last durable-metadata write failure, or undefined while writes land. */
@@ -979,7 +1010,15 @@ export class BrowserTerminalManager {
       : error instanceof Error ? error.message : String(error);
     if (failure === this.lastPersistenceFailure) return;
     this.lastPersistenceFailure = failure;
-    for (const listener of this.persistenceListeners) listener(failure);
+    for (const listener of this.persistenceListeners) {
+      try {
+        listener(failure);
+      } catch {
+        // Observation cannot change persistence truth: a throwing subscriber
+        // used to escape into the drain pass, reject `persistenceTail`, and
+        // silently no-op every chained persist after it.
+      }
+    }
   }
 
   private scheduleTranscriptPersist(): void {
@@ -991,10 +1030,18 @@ export class BrowserTerminalManager {
   }
 
   private flushTranscriptPersist(): void {
-    if (!this.transcriptPersistTimer) return;
-    clearTimeout(this.transcriptPersistTimer);
-    this.transcriptPersistTimer = undefined;
-    this.queuePersist();
+    const pending = this.transcriptPersistTimer !== undefined;
+    if (pending) {
+      clearTimeout(this.transcriptPersistTimer);
+      this.transcriptPersistTimer = undefined;
+    }
+    // Forwarding only the debounce timer abandoned the failed-pass retry: a
+    // rejected drain re-arms `persistDirty` with `persistInFlight` already
+    // clear and no timer pending, so teardown's `await persistenceTail`
+    // resolved while the armed state never got its final attempt. A dirty
+    // flag at flush time is the same trailing state and earns the same
+    // single pass, chained on the tail the caller awaits next.
+    if (pending || this.persistDirty) this.queuePersist();
   }
 
   private async persist(): Promise<void> {

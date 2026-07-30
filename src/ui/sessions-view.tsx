@@ -16,10 +16,10 @@ import { Icon } from "./icons";
 import { MenuSelect } from "./menu-select";
 import { useEffect, useId, useMemo, useRef, useState } from "preact/hooks";
 import "./sessions-view.css";
-import { DurabilityIndicator, durabilityLabel, type DurabilityState } from "./durability-indicator";
+import { DurabilityIndicator, durabilityLabel, durabilitySeal, type DurabilityState } from "./durability-indicator";
 import { Popover } from "./popover";
 import { RouteHeader } from "./route-header";
-import { Seal, type SealState } from "./seal";
+import { Seal } from "./seal";
 import { favoriteDirectionalMove, favoriteDropMove, groupPinnedSessions } from "./session-pins";
 import {
   SESSION_OUT_OF_RESULTS_CAPTION,
@@ -72,15 +72,14 @@ export type SessionsViewProps = Readonly<{
   quarantine?: Readonly<{ sessionId: string; title: string; reason: string; historyVerified: boolean }>;
 }>;
 
-/** The journal-adapter sentence, unchanged, chosen by the adapter that is live. */
+/** The journal-adapter sentence, chosen by the adapter that is live. */
 function journalAdapterSentence(state: DurabilityState): string {
-  return state === "synced"
-    ? "Client-encrypted cloud journal; writes commit directly from this browser."
-    : "Page-memory journal; remote availability is not inferred.";
-}
-
-function durabilitySeal(state: DurabilityState): SealState {
-  return state === "ephemeral" ? "none" : state === "syncing" ? "checking" : "verified";
+  if (state === "synced") return "Client-encrypted cloud journal; writes commit directly from this browser.";
+  // Adopted but unreachable is still the encrypted cloud adapter. Calling it a
+  // page-memory journal would understate what this session writes and where, in
+  // the one state where a reader most needs to know which store holds it.
+  if (state === "sync-paused") return "Client-encrypted cloud journal; this browser cannot reach it right now, so commits are not landing.";
+  return "Page-memory journal; remote availability is not inferred.";
 }
 
 /** Stable identity, so a conversation with no branches re-renders unchanged. */

@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { applyPreferenceOverrides, approvalModeDescription, armBeforeUnloadGuard, scheduleTrailingValue, unloadWouldLoseWork, buildPaletteEntries, DEFAULT_PREFERENCES, filterPaletteEntries, loadPreferenceOverrides, loadRecentSessionPaletteSources, durabilityOptionLabel, durabilityOptions, durabilityRowNote, navigationJumpForChord, publishVisualViewportOffset, recentSessionPaletteSources, resolveDefaultVaultBackend, VAULT_BACKENDS, savePreferenceOverrides, trustAxesInScope, TRUST_SCOPE_BANDS, worstTrustAxis } from "./platform-shell";
+import type { SlashCommandDescriptor } from "../commands/types";
 import { CANONICAL_DESTINATIONS } from "./navigation-model";
 
 describe("platform shell contracts", () => {
@@ -40,6 +41,47 @@ describe("platform shell contracts", () => {
       entry?.run();
     }
     expect(visited).toEqual(["skills", "capabilities"]);
+  });
+
+  it("announces unavailable commands instead of enacting them silently", () => {
+    const runCommands: string[] = [];
+    const descriptor = (name: string, availability: SlashCommandDescriptor["availability"]) => Object.freeze({
+      name,
+      aliases: Object.freeze([] as string[]),
+      summary: `The ${name} command`,
+      category: "system" as const,
+      usage: `/${name}`,
+      availability,
+      arguments: Object.freeze([]),
+      subcommands: Object.freeze([]),
+      source: Object.freeze({ kind: "builtin" as const }),
+    });
+    const entries = buildPaletteEntries({
+      navigate() {},
+      openPreferences() {},
+      commands: [
+        descriptor("vault-only", { enabled: false, reason: "Requires an adopted vault." }),
+        descriptor("help", { enabled: true }),
+      ],
+      runCommand(command) { runCommands.push(command); },
+    });
+
+    // The unavailable row stays listed and greyed with its reason as the
+    // description; its run stays a no-op. The available one is untouched.
+    const unavailable = entries.find((entry) => entry.id === "command:vault-only");
+    expect(unavailable?.disabled).toBe(true);
+    expect(unavailable?.description).toBe("Requires an adopted vault.");
+    unavailable?.run();
+    const available = entries.find((entry) => entry.id === "command:help");
+    expect(available?.disabled).toBeUndefined();
+    available?.run();
+    expect(runCommands).toEqual(["/help "]);
+
+    // Choosing a disabled row must refuse without dismissing the palette —
+    // the silent close-and-no-op read as "ran, and nothing happened".
+    const dialog = readFileSync(new URL("./platform-shell.tsx", import.meta.url), "utf8");
+    expect(dialog).toContain("aria-disabled={entry.disabled || undefined}");
+    expect(dialog).toContain("if (entry.disabled) return;");
   });
 
   it("describes All conversations with the scope the route enforces", () => {
@@ -325,6 +367,43 @@ function elementsNamed(source: string, name: string): readonly string[] {
   }
   return found;
 }
+
+describe("modal focus and key ownership", () => {
+  const dialog = () => readFileSync(new URL("./platform-shell.tsx", import.meta.url), "utf8");
+
+  /** The body of `TrustPostureSheet`, from its declaration to the next top-level symbol. */
+  const trustSheetSource = () => {
+    const source = dialog();
+    const start = source.indexOf("export function TrustPostureSheet");
+    return source.slice(start, source.indexOf("const TRUST_TABS", start));
+  };
+
+  it("restores the focus Runtime trust took, the same way its sibling modals do", () => {
+    // `CommandPalette` and `PreferencesDialog` captured `document.activeElement`
+    // on open and repaid it on close; `TrustPostureSheet` focused itself and
+    // left the repayer out, so Escape left keyboard focus on `<body>`.
+    const sheet = trustSheetSource();
+    expect(sheet).toContain("restore.current = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;");
+    expect(sheet).toContain("return () => { cancelAnimationFrame(frame); restore.current?.focus({ preventScroll: true }); };");
+  });
+
+  it("does not close Preferences over an Escape a control inside it already handled", () => {
+    // `MenuSelect`'s open listbox preventDefaults its own Escape to close only
+    // itself. A dialog that closes on any Escape regardless dismissed the whole
+    // dialog underneath the listbox the reader was dismissing.
+    expect(dialog()).toContain('if (event.key === "Escape") { if (!event.defaultPrevented) onClose(); }');
+  });
+
+  it("names Full Access by what it actually permits, not by a sandbox it does not have", () => {
+    // The option claimed a "bounded browser sandbox" while the mode's own
+    // description states network and identity effects may contact any HTTPS
+    // origin. The one-line summary cannot borrow a confinement the full
+    // sentence disclaims.
+    const source = dialog();
+    expect(source).toContain('"full-access","Full Access · no prompts, any HTTPS origin"');
+    expect(source).not.toContain("bounded browser sandbox");
+  });
+});
 
 describe("the confirmation shown for leaving the page", () => {
   /*

@@ -13,7 +13,7 @@ import {
   CLAIM_CEILING_SENTENCES,
   CLAIM_STATE_LEGEND,
 } from "./claim-stack-facts";
-import { composeClaimStack, type ClaimStackItem } from "./claim-stack-model";
+import { claimStackEndpointRecord, composeClaimStack, type ClaimStackItem } from "./claim-stack-model";
 import { downloadFileName, downloadText } from "./file-download";
 import { Icon } from "./icons";
 import { Popover } from "./popover";
@@ -153,7 +153,9 @@ export function ProofView({
         : auditLoading ? "Checking journal" : "Not checked";
   const claimStack = composeClaimStack(
     receipt,
-    endpointEvidenceRecords.find((record) => record.subject.instanceId === receipt?.instanceId),
+    // Instance + key digest, like the inspector and the export above: an
+    // instance-only match binds yesterday's key after an endpoint re-key.
+    claimStackEndpointRecord(endpointEvidenceRecords, receipt),
   );
   // One reducer, one answer. `sealStateForReceipt`'s fail-closed rule (an
   // attested posture whose endpoint-key claim and proof level disagree) is fed

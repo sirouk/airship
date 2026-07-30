@@ -181,9 +181,18 @@ export function ComposerPostureChip({
   );
 }
 
-/** Why an attachment-only composer refuses Enter, in one sentence, everywhere. */
-export const COMPOSER_ATTACHMENT_NEEDS_TEXT =
-  "Add a message to send with this attachment. The image travels inside the encrypted request beside your prompt, so a turn needs both.";
+/**
+ * Why an attachment-only composer refuses Enter, in one sentence, everywhere.
+ *
+ * "Encrypted request" was claimed unconditionally, but every browser-cloud
+ * provider declares the `provider-tls` boundary — plaintext beyond TLS, which
+ * its own posture chip reads "Remote · not encrypted end to end". The word is
+ * earned only on the app-encrypted (`e2ee-attestable`) boundary; everywhere
+ * else the sentence says "the request", which is strictly true.
+ */
+export function composerAttachmentNeedsText(encryptedRequest: boolean): string {
+  return `Add a message to send with this attachment. The image travels inside the ${encryptedRequest ? "encrypted " : ""}request beside your prompt, so a turn needs both.`;
+}
 
 /** What this page runtime can currently do with an image the composer holds. */
 export type ComposerVisionCapability = "supported" | "model-lacks-vision" | "disconnected";
@@ -205,6 +214,13 @@ export function composerAttachmentNotice(input: Readonly<{
   rejected: number;
   overflow: number;
   capability: ComposerVisionCapability;
+  /**
+   * True only on the app-encrypted (`e2ee-attestable`) transport boundary.
+   * The "encrypted" in the admitted clause is the same claim
+   * `composerAttachmentNeedsText` parameterizes, and `provider-tls` does not
+   * earn it.
+   */
+  encryptedRequest: boolean;
 }>): string | undefined {
   const refusals: string[] = [];
   if (input.rejected > 0) {
@@ -215,7 +231,7 @@ export function composerAttachmentNotice(input: Readonly<{
   }
   const admitted = input.added > 0
     ? input.capability === "supported"
-      ? `${input.added} image${input.added === 1 ? " is" : "s are"} ready for inline encrypted vision inference.`
+      ? `${input.added} image${input.added === 1 ? " is" : "s are"} ready for inline ${input.encryptedRequest ? "encrypted " : ""}vision inference.`
       : input.capability === "model-lacks-vision"
         ? "Choose a model whose provider or local-discovery record explicitly includes image input before sending."
         : "Connect a vision-capable inference model before sending this image."

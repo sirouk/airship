@@ -246,6 +246,24 @@ function endpointQualifier(declared: AttestationClaimState, status: ProofStatus)
   return declared === "verified" && status !== "verified" ? "verified-without-authority" : declared;
 }
 
+/**
+ * The one endpoint record a receipt's claim stack may read.
+ *
+ * Selection is by instance AND endpoint-key digest — the same identity the
+ * inspector (`attestationRecordMatchesReceipt`) and the export bundle already
+ * bind on. An instance-only match picks the first record after an endpoint
+ * re-key, which left the claim stack reporting "absent" while the same
+ * route's export carried the matching evidence.
+ */
+export function claimStackEndpointRecord(
+  records: readonly ChutesEndpointEvidenceRecord[],
+  receipt: ConversationReceipt | undefined,
+): ChutesEndpointEvidenceRecord | undefined {
+  return receipt
+    ? records.find((record) => endpointRecordMatchesReceiptSubject(record, receipt))
+    : undefined;
+}
+
 function endpointRecordMatchesReceiptSubject(record: ChutesEndpointEvidenceRecord | undefined, receipt: ConversationReceipt): boolean {
   return Boolean(record && receipt.instanceId && receipt.bindings.endpointKeyDigest &&
     record.subject.instanceId === receipt.instanceId &&

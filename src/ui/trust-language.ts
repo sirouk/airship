@@ -162,7 +162,7 @@ export function claimExpiry(details: JsonValue | undefined): string | undefined 
 }
 
 /**
- * Every state a completed turn's evidence may be in. Six, and no seventh.
+ * Every state a completed turn's evidence may be in. Five, and no sixth.
  *
  * Ordered strongest to weakest. This enumeration exists because six independent
  * reducers used to answer "is this turn proven" from six different slices of
@@ -172,7 +172,6 @@ export function claimExpiry(details: JsonValue | undefined): string | undefined 
  * a careless one read the green check.
  */
 export type TurnEvidenceState =
-  | "proven"
   | "partly-proven"
   | "asserted"
   | "no-evidence"
@@ -188,12 +187,35 @@ export type TurnEvidenceState =
  * "Evidence not pulled" and not invent a fifth phrasing, so it reads the word
  * out of this table instead of spelling it again.
  *
- * `chip` is ≤22 characters (the resting word every trust surface shows) and
+ * `chip` is ≤24 characters (the resting word every trust surface shows) and
  * `line` is ≤80 (one sentence, printable beside it).
+ *
+ * It read "≤22" for one build while `evidence-blocked` sat at 24. 22 came from
+ * the design proposal (`docs/design-review/screen-reviews.md`) and was never a
+ * surface's limit — it is the length of "Asserted, not verified", the longest
+ * *other* entry — and shortening the copy to reach it would have bought no
+ * pixels anywhere: the per-message chip prints a 31-character sibling
+ * (`TRUST_LABEL_MESSAGE_ASSERTED_NO_ENDPOINT`) one branch away on the same 40px
+ * row. The one surface that is genuinely width-bound is the session bar, and it
+ * never truncates a verdict: `sessionStatusShort` prints the head before " · "
+ * when it fits in `SESSION_STATUS_SHORT_MAX`, and otherwise the seal's own word.
+ *
+ * `trust-language.test.ts` measures every entry, not the one a fixture happens
+ * to reach, plus the counted chip and line the reducer composes.
  */
 export const TURN_EVIDENCE_COPY: Readonly<Record<TurnEvidenceState, Readonly<{ seal: SealState; chip: string; line: string }>>> = Object.freeze({
-  proven: Object.freeze({ seal: "verified", chip: "Proven this turn", line: "Every claim was verified by a named authority for this exact turn." }),
-  "partly-proven": Object.freeze({ seal: "verified", chip: "Partly verified", line: "Some claims were verified by a named authority; the rest are assertions." }),
+  /*
+   * No "proven" rung, and that is deliberate, not a gap.
+   *
+   * `composeClaimStack` caps every receipt-carried claim (encryption,
+   * conversation, payment — three of the eight keys) at `partial`, so at most
+   * five of eight claims can read verified and `verified === total` is
+   * unreachable. "Proven this turn · Every claim was verified by a named
+   * authority" therefore never rendered; it is deleted rather than kept as a
+   * rung the product advertises and cannot earn. The strongest reachable
+   * sentence is the counted one `turnEvidenceVerdict` prints below it.
+   */
+  "partly-proven": Object.freeze({ seal: "verified", chip: "Partly verified", line: "Some verified by a named authority; the rest asserted or without evidence." }),
   asserted: Object.freeze({ seal: "asserted", chip: TRUST_LABEL_CLAIM_RAIL_HERO, line: "This turn was recorded and asserted. No named authority verified a claim." }),
   // Both no-receipt arms speak the "No evidence" rung. The distinguishing fact
   // — nothing was asked for yet, versus a fetch that did not land — moves into

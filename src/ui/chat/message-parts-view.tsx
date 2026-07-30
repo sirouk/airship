@@ -35,7 +35,12 @@ export function MessagePartsView({
       {nodes.map((node) => node.kind === "operations"
         ? <OperationStrip key={node.id} node={node} mode={mode} />
         : <MessagePartView key={node.part.id} part={node.part} answer={node.part.id === answerId} live={live} />)}
-      {tail ? <div class="message-part text text--answer streaming" aria-live="polite"><MarkdownView source={tail} streaming /></div> : null}
+      {/* No `aria-live` on the streaming tail: every delta mutating a polite
+          region is a screen-reader backlog, one queued utterance per token.
+          Both ends of the turn are announced elsewhere and exactly once each —
+          `streaming-slot.tsx` owns the composing `role="status"` at the start
+          and the settle-time arrival region that quotes what landed. */}
+      {tail ? <div class="message-part text text--answer streaming"><MarkdownView source={tail} streaming /></div> : null}
     </div>
   );
 }

@@ -187,7 +187,11 @@ The system is named **Instrument** — a precision-tool aesthetic where trust is
   /* verdict tier — drives seals, meters, status */
   --v-verified: #67a39a;  /* verdigris  — verified / attested / synced / good */
   --v-caution:  #d9a441;  /* amber      — pending / stale / refresh-due / warn */
-  --v-failed:   #c86758;  /* red        — failed / expired / blocked / danger  */
+  --v-failed:   #ce7769;  /* red        — failed / expired / blocked / danger  */
+                          /* Raised from #c86758: it paints the word "failed", not
+                             only a glyph, and #c86758 read 4.24:1 on a raised
+                             surface. 4.95:1 there now, 4.61:1 on the lightest
+                             palette-declared raised surface. */
   --v-info:     #7fa8c9;  /* steel-blue — checking / in-progress / neutral-info*/
   --v-neutral:  var(--ink-faint); /* resting / not-applicable                 */
 
@@ -1369,7 +1373,7 @@ Keep the shipped combobox (`app.tsx:1528-1595`) — it is already borrow-target 
 /* NO literal 7/8/9px anywhere in the transcript (retires the 107-site sub-10px stratum) */
 
 /* verdict tier — IMMUTABLE, outside theme (P1). Seals/chips read ONLY these. */
---v-verified:#67a39a; --v-caution:#d9a441; --v-failed:#c86758; --v-info:#7fa8c9;
+--v-verified:#67a39a; --v-caution:#d9a441; --v-failed:#ce7769; --v-info:#7fa8c9;
 --v-neutral:var(--ink-faint); --truth-remote:#bd6f4c; /* copper = asserted */ --truth-local:#8ba0a6;
 
 /* motion — transform/opacity only, ≤160ms; one acting loop */
@@ -1978,7 +1982,7 @@ APPROVAL SHEET (mobile)
 ```css
 :root{
   /* verdict tier — IMMUTABLE, never themeable (seals/meters/status) */
-  --v-verified:#67a39a; --v-caution:#d9a441; --v-failed:#c86758; --v-info:#7fa8c9; --v-neutral:var(--ink-faint);
+  --v-verified:#67a39a; --v-caution:#d9a441; --v-failed:#ce7769; --v-info:#7fa8c9; --v-neutral:var(--ink-faint);
   --truth-local:#8ba0a6; --truth-remote:#bd6f4c;
   /* type — 11px floor, scale knob actually multiplies */
   --fs-micro:calc(.6875rem*var(--type-scale)); --fs-caption:calc(.75rem*var(--type-scale));

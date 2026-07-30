@@ -14,6 +14,7 @@ import { createBrowserLocalModelProvider } from "./local/provider";
 import {
   AnthropicBrowserTransport,
   OpenAiBrowserTransport,
+  ProviderTransportError,
   XaiBrowserTransport,
 } from "./providers/browser-cloud";
 import { InferenceConnectionRegistry } from "./providers/connection-registry";
@@ -366,7 +367,30 @@ export class BrowserInferenceFabric {
     const transport = this.#transports.get(connection.id);
     if (!transport) throw new Error("The selected inference transport is no longer in page memory.");
     const model = this.models.require(connection.id, connection.generation, modelId);
-    await verifyInvocation(transport, modelId, signal);
+    try {
+      await verifyInvocation(transport, modelId, signal);
+    } catch (error) {
+      /*
+       * A 400 from the invocation probe is the provider judging the model,
+       * not the network: a directory row that can never answer this endpoint
+       * (embedding, image and moderation listings share the model directory)
+       * would otherwise stay selectable and burn a doomed probe on every
+       * press. Record the verdict back onto the row in the exact vocabulary
+       * the success path uses, so the catalog renders it as observed
+       * unavailable. Every other failure — 5xx, timeouts, refusals to
+       * connect — stays retryable and leaves the row untouched.
+       */
+      if (
+        error instanceof ProviderTransportError
+        && error.code === "http"
+        && error.status === 400
+        && this.models.get(connection.id, connection.generation, modelId) === model
+        && this.#transports.get(connection.id) === transport
+      ) {
+        this.#markProbeVerdict(connection, modelId);
+      }
+      throw error;
+    }
     /*
      * The protected request is asynchronous. A disconnect/reconnect or public
      * catalog revision can occur while it is in flight. Never apply the old
@@ -506,6 +530,39 @@ export class BrowserInferenceFabric {
     const disconnected = this.connections.disconnect(connectionId);
     if (disconnected) this.#emit();
     return disconnected;
+  }
+
+  /*
+   * Write an authoritative probe refusal onto the catalog row it is about.
+   *
+   * Deliberately only the availability row, mirroring what `activate` writes
+   * on success rather than inventing a second vocabulary: the picker and the
+   * availability snapshot already render `unavailable` as not-selectable, and
+   * the row's `source` still describes the directory listing that produced
+   * the model's id and label — a request refusal is not that listing.
+   */
+  #markProbeVerdict(
+    connection: InferenceConnectionMetadata,
+    modelId: string,
+  ): void {
+    const observedAt = this.#nowIso();
+    this.models.replaceConnectionModels(
+      connection.id,
+      connection.generation,
+      connection.providerId,
+      this.models.forConnection(connection.id, connection.generation).map((model) =>
+        model.id === modelId
+          ? Object.freeze({
+              ...model,
+              availability: Object.freeze({
+                state: "unavailable" as const,
+                source: "live-probe" as const,
+                observedAt,
+              }),
+            })
+          : model),
+    );
+    this.#emit();
   }
 
   #reserveConnectionId(baseValue: string): string {

@@ -105,6 +105,7 @@ export function MenuSelect({
         type="button"
         class="menu-select-trigger"
         aria-label={ariaLabel}
+        aria-describedby={`${listboxId}-value`}
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={open ? listboxId : undefined}
@@ -118,8 +119,21 @@ export function MenuSelect({
           }
         }}
       >
+        {/*
+          The name is the field; the value is its description.
+          `aria-label` alone left the chosen value out of everything a reader
+          hears — in compact mode the monogram carried no value at all. Folding
+          the value into the *name* fixed that and broke something worse: the
+          control could no longer be called by the field it sets, which is what
+          a voice user says and what every journey looks it up by. So the name
+          stays the field, and `aria-describedby` carries the value, which is
+          what a description is for. In compact mode the value has no visible
+          box, so the description target is hidden text rather than absent.
+        */}
         {selected && leading ? leading(selected) : null}
-        {!compact ? <span class="menu-select-value"><strong>{selected?.label ?? "Choose"}</strong></span> : null}
+        {!compact
+          ? <span class="menu-select-value" id={`${listboxId}-value`}><strong>{selected?.label ?? "Choose"}</strong></span>
+          : <span class="sr-only" id={`${listboxId}-value`}><strong>{selected?.label ?? "Choose"}</strong></span>}
         <span class="menu-select-caret" aria-hidden="true">⌄</span>
       </button>
       {open ? (
@@ -132,27 +146,62 @@ export function MenuSelect({
               type="button"
               class="menu-select-option"
               role="option"
-              aria-label={option.label}
               aria-selected={option.value === value}
               disabled={option.disabled}
+              aria-describedby={option.description ? `${listboxId}-${index}-description` : undefined}
               tabIndex={index === activeIndex ? 0 : -1}
               onPointerMove={() => { if (!option.disabled) setActiveIndex(index); }}
               onClick={() => choose(index)}
               onKeyDown={(event) => {
                 if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
                   event.preventDefault();
+                  event.stopPropagation();
                   setActiveIndex(moveMenuSelection(activeIndex, event.key, options));
                 } else if (event.key === "Enter" || event.key === " ") {
                   event.preventDefault();
+                  event.stopPropagation();
                   choose(activeIndex);
                 } else if (event.key === "Escape" || event.key === "Tab") {
-                  if (event.key === "Escape") event.preventDefault();
+                  /*
+                   * A key the listbox consumes is not the containing dialog's
+                   * key: without `stopPropagation`, Escape inside an open
+                   * `MenuSelect` bubbled into `PreferencesDialog`'s own
+                   * keydown and closed the whole dialog under the listbox the
+                   * reader was only trying to dismiss. `Tab` stays
+                   * propagating on purpose — the listbox closes and focus must
+                   * be allowed to travel onward, not be trapped behind it.
+                   */
+                  if (event.key === "Escape") {
+                    event.preventDefault();
+                    event.stopPropagation();
+                  }
                   close(event.key === "Escape");
                 }
               }}
             >
+              {/*
+                Named from contents, not from an `aria-label` that overrode
+                them — but the *name* is the label alone. Folding the
+                description into the name made every option announce a whole
+                sentence where a person wanted one word, and it is the name a
+                voice user speaks and a reader navigates the list by. The
+                description is a description: same information, announced
+                after the name, carried by `aria-describedby`.
+              */}
               {leading ? leading(option) : null}
-              <span class="menu-select-option-copy"><strong>{option.label}</strong>{option.description ? <small>{option.description}</small> : null}</span>
+              <span class="menu-select-option-copy">
+                <strong>{option.label}</strong>
+                {/*
+                  `aria-hidden` keeps the sentence out of the option's NAME
+                  while `aria-describedby` above still reads it: a referenced
+                  element's text is used for the description even when hidden.
+                  `role="presentation"` was not enough — it drops the role, not
+                  the text, so the description was still folded into the name.
+                */}
+                {option.description
+                  ? <small id={`${listboxId}-${index}-description`} aria-hidden="true">{option.description}</small>
+                  : null}
+              </span>
               {option.value === value ? <span class="menu-select-check" aria-hidden="true">✓</span> : null}
             </button>
           ))}

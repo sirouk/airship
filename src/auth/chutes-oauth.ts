@@ -84,6 +84,32 @@ export type ChutesAuthorizationCallback = {
   redirectUri: string;
 };
 
+/**
+ * The token endpoint's authoritative refusal of a grant (RFC 6749 §5.2 carried
+ * on HTTP 400/401: `invalid_grant`, `invalid_client`).
+ *
+ * Split off from every other token-request failure because the two demand
+ * opposite teardown: a refused refresh token is already dead at the provider,
+ * so keeping the connection is keeping nothing, while a refused fetch, a
+ * timeout or a 5xx says nothing about the grant and retrying can succeed. The
+ * message stays identical to the plain `Error` these cases threw before, so
+ * message-level consumers (`describeChutesOAuthExchangeError`, surface copy)
+ * read exactly what they read before.
+ */
+export class ChutesOAuthProviderRejectionError extends Error {
+  readonly providerRejected = true as const;
+}
+
+/**
+ * Duck-typed on purpose: an error re-thrown across two copies of this module
+ * (host page and deferred chunk) still classifies, where `instanceof` would not.
+ */
+export function isChutesOAuthProviderRejection(error: unknown): boolean {
+  return typeof error === "object"
+    && error !== null
+    && (error as { providerRejected?: unknown }).providerRejected === true;
+}
+
 export type ChutesOAuthTokenSet = Readonly<{
   accessToken: string;
   refreshToken?: string;
@@ -344,7 +370,14 @@ async function requestTokenSet(args: {
       const providerCode = typeof payload.error === "string" && /^[a-z_]{3,40}$/u.test(payload.error)
         ? ` (${payload.error})`
         : "";
-      throw new Error(`Chutes OAuth token request failed with HTTP ${response.status}${providerCode}.`);
+      const message = `Chutes OAuth token request failed with HTTP ${response.status}${providerCode}.`;
+      // 400/401 is the endpoint judging the grant itself; anything higher is
+      // infrastructure between this page and that judgement and says nothing
+      // about whether the token still works.
+      if (response.status === 400 || response.status === 401) {
+        throw new ChutesOAuthProviderRejectionError(message);
+      }
+      throw new Error(message);
     }
     return normalizeTokenSet(payload, args.now ?? Date.now());
   } catch (error) {

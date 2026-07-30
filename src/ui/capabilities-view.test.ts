@@ -235,6 +235,20 @@ describe("extension capability surface", () => {
     expect(source).toContain("Ciphertext cache");
     expect(source).toContain("Background compute");
   });
+
+  /*
+   * The card used to print "Live bridge handshake · this page" under every
+   * observation — including the ones where the probe said no extension
+   * answered at all. Claiming a live handshake the probe explicitly
+   * disproved is the one statement this surface may never make, so the
+   * detail is gated on `available` exactly like the WebGPU sibling card.
+   */
+  it("claims a live bridge handshake only when the probe actually answered", () => {
+    expect(source).toContain('detail={extension.state === "available" ? "Live bridge handshake · this page" : undefined}');
+    expect(source).not.toContain('detail="Live bridge handshake · this page"');
+    const card = source.slice(source.indexOf("Airship Companion"), source.indexOf("</DeviceCard>", source.indexOf("Airship Companion")));
+    expect(card).toContain('extension.state === "available"');
+  });
 });
 
 describe("probe evidence a reader can act on", () => {

@@ -100,6 +100,21 @@ export function terminalSealState(status: TerminalSessionSnapshot["status"]): Se
   return "none";
 }
 
+/**
+ * Whether selecting a tab may cold-start its session.
+ *
+ * `exited` and `failed` are endings with evidence on screen — final output,
+ * the exit code — and each owns an explicit Restart button. Merely selecting
+ * such a tab must not silently spend that evidence on a respawn: the manager
+ * would happily start it again (`start()` only short-circuits a live process),
+ * and the scrollback the user came to read would be the price. An idle or
+ * restart-required session has no process output to lose, so being shown may
+ * pick it back up.
+ */
+export function terminalPanelAutoStart(status: TerminalSessionSnapshot["status"]): boolean {
+  return status !== "exited" && status !== "failed";
+}
+
 export type TerminalDurability = Readonly<{ state: DurabilityState; detail?: string; label?: string }>;
 export type TerminalViewProps = Readonly<{
   workspace: WorkspacePort;
@@ -128,6 +143,10 @@ export function terminalPersistenceNotice(durability: TerminalDurability, profil
   const scope = profileId ? `Profile ${profileId}` : "Unscoped legacy terminal";
   if (durability.state === "ephemeral") return `${scope} tab metadata, bounded transcript, input history, and lineage live only in this page's workspace memory. Reload loses them; processes also end.`;
   if (durability.state === "syncing") return `${scope} terminal metadata is queued through the active encrypted workspace while synchronization is in progress. Processes remain page-local.`;
+  // A stopped sync is not a running one: the writes reach the adopted vault's
+  // encrypted objects, and nothing carries them off this browser until it is
+  // reachable again.
+  if (durability.state === "sync-paused") return `${scope} terminal metadata is written to the adopted encrypted workspace, but nothing is synchronizing while this browser cannot reach it. Processes remain page-local.`;
   return `${scope} tab metadata, bounded transcript, input history, and lineage are retained through the active encrypted workspace. Processes still restart after reload.`;
 }
 
@@ -547,7 +566,12 @@ function TerminalPanel({ manager, session: initial, onNotice, durability, profil
         }
         if (autoStartPending) {
           autoStartPending = false;
-          void manager.start(initial.id, dimensions).catch((error) => onNotice(error instanceof Error ? error.message : "Terminal could not start."));
+          // Being selected is a view, not a start command — ended sessions
+          // keep their final output until the explicit Restart control says so
+          // (`terminalPanelAutoStart` names the startable statuses).
+          if (terminalPanelAutoStart(initial.status)) {
+            void manager.start(initial.id, dimensions).catch((error) => onNotice(error instanceof Error ? error.message : "Terminal could not start."));
+          }
         }
       } catch { /* Hidden route or zero-size transition. */ }
     };

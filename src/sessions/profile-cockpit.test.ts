@@ -8,6 +8,7 @@ import { auditSessionHistory } from "../core/session-audit";
 import {
   PROFILE_ACTIVE_CONVERSATION_EVENT_TYPE,
   ProfileActiveConversationConflictError,
+  profileManifestResumeMismatches,
   profileOwnedSessions,
   requireProfileOwnedSession,
   resolveProfileActiveConversation,
@@ -65,6 +66,35 @@ describe("profile cockpit resume matching", () => {
       ...actual,
       profile: { ...actual.profile!, profileRevision: "sha256:new-profile" },
     })).toBe(false);
+  });
+
+  it("resumes a conversation pinned under the withdrawn workspace memory scope", async () => {
+    const expected = await manifest("Pinned prompt");
+    /*
+     * What every conversation of a `workspace`-scoped profile holds — the shipped
+     * Research profile was seeded that way — since the scope was withdrawn: the
+     * same revision, the same digests, and the word the pin was written with.
+     * `workspace` was withdrawn because no reader ever widened anything for it
+     * (every memory read narrows on the pinned profile ID), so new pins resolve
+     * it to `profile`. Comparing the raw field made the two pins disagree about a
+     * boundary that is identical, and the profile then found no resumable
+     * conversation at all: its durable pointer and every candidate were rejected,
+     * and selecting it silently started an empty conversation instead.
+     */
+    const pinnedUnderWorkspaceScope = {
+      ...expected,
+      profile: { ...expected.profile!, memoryScope: "workspace" },
+    } as SessionManifest;
+    expect(profileManifestResumeMismatches(pinnedUnderWorkspaceScope, expected)).toEqual([]);
+    expect(resumableProfileManifestMatches(pinnedUnderWorkspaceScope, expected)).toBe(true);
+
+    // Not a blanket tolerance for the field: `session` is a boundary the readers
+    // really do enforce, so it still refuses.
+    const pinnedUnderSessionScope = {
+      ...expected,
+      profile: { ...expected.profile!, memoryScope: "session" },
+    } as SessionManifest;
+    expect(profileManifestResumeMismatches(pinnedUnderSessionScope, expected)).toEqual(["profile-binding"]);
   });
 });
 

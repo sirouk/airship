@@ -92,7 +92,66 @@ describe("turnEvidenceVerdict", () => {
 
     expect(verdict.state).toBe("partly-proven");
     expect(verdict.chip).toBe("1 of 3 verified");
-    expect(verdict.chip).not.toBe(TURN_EVIDENCE_COPY.proven.chip);
+    // There is no stronger rung to round up to: the receipt-integrity ceiling
+    // caps three of the eight claim keys at `partial`, so "Proven this turn"
+    // was unreachable and is deleted, not redefined.
+    expect("proven" as string).not.toBe(verdict.state);
+  });
+
+  it("names evidence-less claims as no evidence, never as assertions", () => {
+    const verdict = turnEvidenceVerdict({
+      stack: stack([
+        item({ status: "verified" }),
+        item({ status: "partial" }),
+        item({ status: "unavailable" }),
+        item({ status: "unavailable" }),
+      ]),
+      hasReceipt: true,
+    });
+
+    // The measured defect: "the rest are assertions" filed claims with no
+    // record at all under the asserted rung — the one reading §3 forbids. The
+    // tail is composed from the buckets, omitting any whose count is zero.
+    expect(verdict.line).toBe("1 claim was verified by a named authority; 1 asserted, 2 with no evidence.");
+    expect(verdict.line).not.toContain("assertions");
+
+    const assertionsOnly = turnEvidenceVerdict({
+      stack: stack([item({ status: "verified" }), item({ status: "partial" })]),
+      hasReceipt: true,
+    });
+    expect(assertionsOnly.line).toBe("1 claim was verified by a named authority; 1 asserted.");
+
+    const nothingElse = turnEvidenceVerdict({
+      stack: stack([item({ status: "verified" }), item({ status: "unavailable" })]),
+      hasReceipt: true,
+    });
+    expect(nothingElse.line).toBe("1 claim was verified by a named authority; 1 with no evidence.");
+  });
+
+  it("speaks one verified claim in the singular and drops the tail when there is none", () => {
+    // One verified claim is the commonest non-zero case on the eight-key stack,
+    // and the sentence read "1 claims were verified by a named authority" on the
+    // Proof hero — pinned verbatim by three assertions above, which is how a
+    // grammar defect acquires a test defending it.
+    const one = turnEvidenceVerdict({
+      stack: stack([item({ status: "verified" }), item({ status: "partial" })]),
+      hasReceipt: true,
+    });
+    expect(one.line.startsWith("1 claim was verified")).toBe(true);
+    expect(one.line).not.toContain("1 claims");
+
+    const many = turnEvidenceVerdict({
+      stack: stack([item({ status: "verified" }), item({ status: "verified" }), item({ status: "partial" })]),
+      hasReceipt: true,
+    });
+    expect(many.line).toBe("2 claims were verified by a named authority; 1 asserted.");
+
+    // Unreachable through `composeClaimStack` — the receipt-integrity ceiling
+    // caps three of the eight keys at `partial` — but `turnEvidenceVerdict` is
+    // exported, and an all-verified stack used to render a dangling "; .".
+    const everything = turnEvidenceVerdict({ stack: stack([item({ status: "verified" })]), hasReceipt: true });
+    expect(everything.line).toBe("1 claim was verified by a named authority.");
+    expect(everything.line).not.toContain("; .");
   });
 
   it("fails closed on a disagreeing attested receipt even with nothing failed in the stack", () => {

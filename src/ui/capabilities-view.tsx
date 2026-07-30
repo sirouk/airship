@@ -130,8 +130,7 @@ export function CapabilitiesView({ inspect, inspectBrowser, inspectExtension, su
         <DeviceCard
           title={extension.extensionVersion ? `Airship Companion ${extension.extensionVersion}` : "Airship Companion"}
           observation={extension}
-          detail="Live bridge handshake · this page"
-          onReprobe={() => void refresh()}
+          detail={extension.state === "available" ? "Live bridge handshake · this page" : undefined}
         >
           {extension.state === "available" ? <dl class="capability-signal-strip">
             <div><dt>Provider relay</dt><dd>{extension.providers.length ? extension.providers.join(", ") : "No provider routes"}</dd></div>

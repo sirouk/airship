@@ -26,7 +26,7 @@ import { MenuSelect } from "./menu-select";
 import { RouteHeader } from "./route-header";
 import { Seal, type SealState } from "./seal";
 import { Tabs } from "./tabs";
-import { durabilityLabel, type DurabilityState } from "./durability-indicator";
+import { durabilityLabel, durabilitySeal, type DurabilityState } from "./durability-indicator";
 import "./sources-view.css";
 import { mapUnknownRequestFailure } from "./request-state";
 
@@ -1047,10 +1047,6 @@ export function sourcePostureFacts(
   return Object.freeze(facts.map((fact) => Object.freeze(fact)));
 }
 
-function durabilitySeal(state: DurabilityState): SealState {
-  return state === "ephemeral" ? "none" : state === "syncing" ? "checking" : "verified";
-}
-
 /** The transport, and how many origins this page may actually reach with it. */
 export function remoteTransportLabel(transport: string, permittedOrigins: number): string {
   const name = remoteLabel(transport);
@@ -1221,7 +1217,7 @@ function publicError(caught: unknown): string {
   return mapUnknownRequestFailure(caught, navigator.onLine).message;
 }
 
-function isConflicted(entry: GitStatusEntry): boolean {
+export function isConflicted(entry: GitStatusEntry): boolean {
   return entry.index?.kind === "conflicted" || entry.worktree?.kind === "conflicted";
 }
 

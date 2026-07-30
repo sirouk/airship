@@ -57,6 +57,48 @@ test("mobile exposes an explicit durable conversation rename action", async ({ p
   await expect(page.getByRole("region", { name: "All conversations" })).toContainText("Mobile rename persists");
 });
 
+/*
+ * The other direction of the same durable rename.
+ *
+ * Chat → library was already covered; library → Chat was not, and the rename
+ * result used to live entirely in the library's own refresh counter while the
+ * host held the only copies Chat and the rail read. So this walks back to Chat
+ * with no intervening turn, favourite toggle or resume: nothing but the host
+ * adopting the rename can put the new title on either surface.
+ */
+test("a rename from All conversations reaches the chat title and the rail recents", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "desktop library rename propagation contract");
+  await page.goto("/#chat");
+  await expect(page.locator(".app-shell")).toBeVisible();
+  await expect(page).toHaveURL(/#chat\/[^/?#]+$/);
+  const conversation = page.url();
+
+  // In-app navigation, not a reload: a reload would restart the runtime and
+  // hide the propagation this test is about.
+  const navigation = page.getByRole("navigation", { name: "Primary" });
+  await navigation.getByRole("button", { name: "Expand recent conversations" }).click();
+  await navigation.locator("#airship-recent-conversations").getByRole("button", { name: "All conversations", exact: true }).click();
+  await expect(page).toHaveURL(/#sessions$/);
+
+  // The library opens on the active conversation, so Rename targets it.
+  await page.getByRole("button", { name: "Rename", exact: true }).first().click();
+  const field = page.getByRole("textbox", { name: "Conversation title" });
+  await expect(field).toBeVisible();
+  await field.fill("Renamed from library");
+  await page.getByRole("button", { name: "Save rename" }).click();
+  await expect(page.getByRole("heading", { name: "Renamed from library", level: 2 })).toBeVisible();
+
+  await navigation.getByRole("button", { name: "Chat", exact: true }).click();
+  await expect(page).toHaveURL(conversation);
+  await expect(page.locator(".session-bar__title")).toHaveText("Renamed from library");
+  // Whether the disclosure survived the round trip is not this contract, so
+  // re-open it if it did not; what is asserted is the name it now carries.
+  const expand = navigation.getByRole("button", { name: "Expand recent conversations" });
+  if (await expand.count()) await expand.click();
+  await expect(navigation.getByRole("group", { name: "Profile conversations" }))
+    .toContainText("Renamed from library");
+});
+
 test("conversation branches preserve their source and navigate back through lineage", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium", "desktop immutable branch contract");
   await page.goto("/#chat");

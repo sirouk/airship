@@ -93,9 +93,19 @@ export function terminalDockHeight(height: number, availableHeight?: number): nu
 function clampTerminalDockState(state: TerminalDockState, availableHeight?: number): TerminalDockState {
   return Object.freeze({
     open: state.open,
-    height: terminalDockHeight(state.height, availableHeight),
+    // There is no honest upper bound without a measured parent. The 720px
+    // fallback answered that absence with a guess, and every selection-driven
+    // update — which travels with no height argument — round-tripped a dock
+    // taller than 720px back down to the guess. Trust the stored height here;
+    // the dock re-clamps against the real parent before it renders anything.
+    height: availableHeight === undefined ? storedTerminalDockHeight(state.height) : terminalDockHeight(state.height, availableHeight),
     ...(boundedSessionId(state.selectedSessionId) ? { selectedSessionId: state.selectedSessionId } : {}),
   });
+}
+
+/** Round-trip storage without an upper bound; the measured clamp is `terminalDockHeight`. */
+function storedTerminalDockHeight(height: number): number {
+  return Number.isFinite(height) ? Math.max(TERMINAL_DOCK_MIN_HEIGHT, Math.round(height)) : TERMINAL_DOCK_DEFAULT_HEIGHT;
 }
 
 function storageSegment(value: string, label: string): string {

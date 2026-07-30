@@ -102,6 +102,10 @@
 
 .vault-view__attached li strong { color: var(--v-caution); overflow-wrap: anywhere; text-align: end; }
 .vault-view__attached li[data-attached="true"] strong { color: var(--v-verified); }
+/* Caution is reserved for a prerequisite Airship can see is missing. The
+   recovery key's custody is unknowable, so painting it amber on a fully
+   enrolled Vault would report a fault that is not one. */
+.vault-view__attached li[data-attached="unknown"] strong { color: var(--ink-muted); }
 
 /* Contract verification and runtime adoption are two outcomes. They are shown
    as two rows so a green contract can never stand in for an adopted runtime. */

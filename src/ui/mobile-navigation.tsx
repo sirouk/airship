@@ -1,5 +1,7 @@
-import { useEffect, useRef } from "preact/hooks";
+import { useEffect, useId, useRef } from "preact/hooks";
 import {
+  CANONICAL_DESTINATIONS,
+  canonicalParentForView,
   MOBILE_MORE_ENTRIES,
   MOBILE_PRIMARY_CONTROLS,
   mobilePrimaryControlForView,
@@ -69,6 +71,14 @@ export function MobileNavigation({
   const moreButton = useRef<HTMLButtonElement>(null);
   const dialog = useRef<HTMLDivElement>(null);
   const activeControl = mobilePrimaryControlForView(view);
+  const overflowHintId = useId();
+  /**
+   * Which overflow route is live, when one is. This is a *description*, not part
+   * of the trigger's name: "More" is the name every caller and test knows the
+   * control by, and appending a destination to it would rename a control that
+   * has not changed. `aria-describedby` states the fact without moving it.
+   */
+  const overflowDestination = activeControl === "more" ? overflowDestinationLabel(view) : undefined;
   const proofNoticeCount = pendingCount(proofPending);
   const attestationNoticeCount = pendingCount(attestationPending);
   const chatNoticeCount = pendingCount(chatPending);
@@ -133,6 +143,24 @@ export function MobileNavigation({
           const proofPresence = control.id === "trust" && proofNoticeCount > 0 && notice === 0;
 
           if (control.kind === "overlay") {
+            /*
+             * The trigger keeps the location claim, and names the destination.
+             *
+             * Five of fourteen routes — memory, context, profiles, capabilities
+             * and skills — map to this control and to no other, so dropping
+             * `aria-current` here left the runtime's location unstated for
+             * assistive tech on all five while `.is-current` still highlighted
+             * the tab: the eye and the screen reader disagreeing about where
+             * the reader is. The double claim that removal was meant to prevent
+             * cannot happen: the sheet's entry only asserts current while the
+             * sheet is open, and this whole `<nav>` is `inert` + `aria-hidden`
+             * exactly then, so at most one current control is ever in the
+             * accessibility tree.
+             *
+             * The description is the part the old markup lacked either way:
+             * "More, current page" says a route inside the overflow is active
+             * without saying which one, so the sr-only hint below names it.
+             */
             return (
               <button
                 ref={moreButton}
@@ -143,6 +171,7 @@ export function MobileNavigation({
                 aria-controls="airship-mobile-more"
                 aria-expanded={moreOpen}
                 aria-haspopup="dialog"
+                aria-describedby={overflowDestination ? overflowHintId : undefined}
                 onClick={() => moreOpen ? closeMore() : onOpenMore()}
               >
                 <Icon name={primaryIcons[control.id]} size={20} />
@@ -166,6 +195,9 @@ export function MobileNavigation({
             </button>
           );
         })}
+        {/* Out of flow (`.sr-only` is absolutely positioned), so it consumes
+            none of the nav's five grid tracks. */}
+        {overflowDestination ? <span id={overflowHintId} class="sr-only">{`Current page: ${overflowDestination}`}</span> : null}
       </nav>
 
       {moreOpen ? (
@@ -279,6 +311,22 @@ export function completedTurnLabel(count: number): string | undefined {
 export function evidenceRecordLabel(count: number): string | undefined {
   if (count === 0) return undefined;
   return `${count} evidence record${count === 1 ? "" : "s"}`;
+}
+
+/**
+ * What the active overflow route is called, in the words the sheet uses.
+ *
+ * Read out of `MOBILE_MORE_ENTRIES` first, so the trigger and the entry it
+ * highlights can never disagree about a route's name. `context` has no entry of
+ * its own — it is Memory's index tab — so it falls back to the canonical
+ * parent's label rather than inventing a name only this file knows.
+ */
+export function overflowDestinationLabel(view: NavigationView): string | undefined {
+  for (const entry of MOBILE_MORE_ENTRIES) {
+    if (entry.kind === "route" && entry.view === view) return entry.label;
+  }
+  const parent = canonicalParentForView(view);
+  return CANONICAL_DESTINATIONS.find((destination) => destination.id === parent)?.label;
 }
 
 function navClass(current: boolean, open: boolean): string {

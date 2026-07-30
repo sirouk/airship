@@ -10,7 +10,13 @@ const defaultOutput = resolve(root, "dist");
 export const RELEASE_MANIFEST_NAME = "release-manifest.json";
 
 export const RELEASE_BUDGETS = Object.freeze({
-  entryJavaScript: Object.freeze({ raw: 384 * 1024, gzip: 110 * 1024 }),
+  // First paint on a phone, and the strictest ceiling in this file. It held at
+  // 110 KiB through the whole Pass 1 audit — ~19,000 changed lines — and moved
+  // here by 0.16 KiB when the profile editor stopped hand-spelling three labels
+  // and started reading them from `profiles-governance`, which was already in
+  // this graph. Measured 110.16 KiB gzip; one whole-KiB step, and the deferral
+  // habit documented below is still the first tool to reach for.
+  entryJavaScript: Object.freeze({ raw: 384 * 1024, gzip: 111 * 1024 }),
   // Trust composition adds ~1.8 KiB gzip to the baseline while the actual
   // entry remains below its stricter 110 KiB limit. Heavy QVL stays deferred.
   //
@@ -36,10 +42,15 @@ export const RELEASE_BUDGETS = Object.freeze({
   // Provider routes, capability activation, and the stable lazy broker remain
   // absent from first paint. The broker now also exposes the canonical runtime
   // capability read used by a cold Capabilities deep link before any session
-  // exists. Measured together at 397.69 KiB raw / 116.44 KiB gzip, so only the
-  // raw ceiling takes the next whole-KiB step; the fixed first-paint cap and
-  // the existing gzip ceiling do not move.
-  deferredCapabilities: Object.freeze({ raw: 398 * 1024, gzip: 117 * 1024 }),
+  // exists. Measured together at 398.25 KiB raw / 116.64 KiB gzip (407,804 B /
+  // 119,442 B), so both ceilings moved this time — raw 398 → 400 KiB and gzip
+  // 117 → 118 KiB. The build crossed the old 398 KiB raw step outright, and then
+  // 399 KiB raw would have left 772 bytes while 117 KiB gzip would have left 366.
+  // A ceiling a minifier rename can breach is a tripwire, not a budget — the same
+  // argument the installed-total gzip ceiling below is set by — so each takes one
+  // further whole-KiB step, leaving 1,796 bytes raw / 1,390 gzip. The fixed
+  // first-paint cap above is what did not move: none of this loads at startup.
+  deferredCapabilities: Object.freeze({ raw: 400 * 1024, gzip: 118 * 1024 }),
   // Core plus every optional route except the two independently delivered
   // vendor engines. The former 384 KiB "all routes" meaning became impossible
   // once full isomorphic-git and xterm engines were deliberately installed:
@@ -96,7 +107,7 @@ export const RELEASE_BUDGETS = Object.freeze({
   // opportunities without adding first-paint weight. Measured 1881.86 KiB raw /
   // 587.72 KiB gzip; these are the smallest whole-KiB backstops retaining
   // roughly 0.5% clearance.
-  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 1892 * 1024, gzip: 591 * 1024 }),
+  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 1894 * 1024, gzip: 593 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now measures 652.23 KiB raw / 180.61 KiB gzip:
   // the browser-Git pack grew (see optionalBrowserGit) and the Terminal pack
@@ -236,13 +247,20 @@ export const RELEASE_BUDGETS = Object.freeze({
   // deleted the line-number gutter below 760px with nothing said.
   // Preview/persistent tabs, file-type identity, editor-hosted diffs and commit
   // history, and contextual Terminal/Source Control handoffs now make this a
-  // real workbench rather than a file textarea. Measured 65,712 B raw / 20,470
-  // B gzip; the route is still fetched only when Workspace opens, so the fixed
-  // first-paint ceiling remains unchanged.
-  optionalWorkspaceWorkbench: Object.freeze({ raw: 70 * 1024, gzip: 23 * 1024 }),
+  // real workbench rather than a file textarea. Measured 73,436 B raw / 23,042
+  // B gzip — 7.54 KiB raw / 2.51 KiB gzip above the previous reading, all of it
+  // that behaviour. The 23 KiB gzip ceiling genuinely does not move: the new
+  // measurement still clears it by 510 bytes. Raw does, 70 → 73 KiB, because
+  // 72 KiB raw would have left 292 bytes. The route is still fetched only when
+  // Workspace opens, so the fixed first-paint ceiling is untouched too.
+  optionalWorkspaceWorkbench: Object.freeze({ raw: 73 * 1024, gzip: 23 * 1024 }),
   optionalWorkspaceBinding: Object.freeze({ raw: 2 * 1024, gzip: 1 * 1024 }),
   optionalWorkspaceCodec: Object.freeze({ raw: 2 * 1024, gzip: 1 * 1024 }),
   optionalSourceControl: Object.freeze({ raw: 48 * 1024, gzip: 14 * 1024 }),
+  // Binds only when Vite emits the ~650-byte store as its own chunk. In the
+  // current build it is inlined into its consumer, so these bytes are charged to
+  // the carrier's class ceiling and this line is skipped rather than passed with a
+  // zero — see resolveOptionalSourceSelectionDelivery.
   optionalSourceSelection: Object.freeze({ raw: 2 * 1024, gzip: 1 * 1024 }),
   // Full standards-compatible Git engine. It is loaded once during browser
   // runtime boot, never preloaded with the shell, and remains independently
@@ -272,10 +290,13 @@ export const RELEASE_BUDGETS = Object.freeze({
   // The lazy route now includes the live current/peak execution reading,
   // actionable primitive remediation, and the Companion relay/cache/compute
   // observation instead of making those capabilities settings-only facts.
-  // Measured 12.40 KiB raw / 4.25 KiB gzip; only the raw ceiling moves to the
-  // next whole-KiB step. The unchanged gzip ceiling keeps shipped transfer
-  // growth bounded and none of this enters first paint.
-  optionalCapabilitiesView: Object.freeze({ raw: 13 * 1024, gzip: 5 * 1024 }),
+  // Measured 12,409 B raw / 4,230 B gzip. Raw holds at 13 KiB, the smallest whole
+  // KiB above it — the route had already outgrown 11 KiB, and 12 KiB does not fit
+  // at all. Gzip comes back down to a half-KiB step: 4.5 KiB clears the
+  // measurement by 378 bytes, where the 5 KiB it had been raised to granted 21% of
+  // the pack as headroom that no measurement asked for. This route is fetched on
+  // navigation; none of it enters first paint.
+  optionalCapabilitiesView: Object.freeze({ raw: 13 * 1024, gzip: 4 * 1024 + 512 }),
   // Hardware/browser feature detection is requested after the shell starts so
   // it can select the strongest runtime without inflating the HTML preload set.
   // The Service Worker and Cache Storage probes push the raw pack to a measured
@@ -283,8 +304,8 @@ export const RELEASE_BUDGETS = Object.freeze({
   // above; gzip stays at 5.49 KiB, well under its unchanged ceiling.
   optionalBrowserCapabilities: Object.freeze({ raw: 17 * 1024 + 512, gzip: 6 * 1024 }),
   // Graph derivation and relationship controls load only on Memory/Context.
-  // Raised once, deliberately, from 36 KiB / 12 KiB to a measured 42.61 KiB raw
-  // / 14.79 KiB gzip. What the +2.8 KiB gzip bought, all of it lazily fetched
+  // Raised once, deliberately, from 36 KiB / 12 KiB to a measured 45,950 B raw
+  // / 15,976 B gzip. What the +3.6 KiB gzip bought, all of it lazily fetched
   // and none of it in the startup set: a destination and a human title on every
   // result; nine fields the federated search already computed and the view was
   // discarding (recordedAt, sequence, eventId, textDigest, createdAt,
@@ -292,9 +313,12 @@ export const RELEASE_BUDGETS = Object.freeze({
   // the per-group `ranking` / `legacyQuarantined` / `duplicatesSuppressed`
   // contracts, which rendered nowhere; the shared provenance disclosure that
   // makes those digests copyable instead of decorative; and a zero-result panel
-  // that states what each corpus actually searched. The startup ceiling is
-  // untouched — this route has always been fetched on navigation.
-  optionalMemoryView: Object.freeze({ raw: 45 * 1024, gzip: 15 * 1024 + 512 }),
+  // that states what each corpus actually searched. Both ceilings moved with it,
+  // from 45 KiB / 15.5 KiB: gzip crossed 15.5 KiB outright and takes the next
+  // whole KiB, 16, which leaves 408 bytes; 45 KiB raw would have left 130, so raw
+  // takes one step more and leaves 1,154. The startup ceiling is untouched — this
+  // route has always been fetched on navigation.
+  optionalMemoryView: Object.freeze({ raw: 46 * 1024, gzip: 16 * 1024 }),
   // Small shared node-shape vocabulary split out by Vite because both the
   // Memory route and deferred graph renderer consume it.
   optionalMemorySupport: Object.freeze({ raw: 2 * 1024, gzip: 1 * 1024 }),
@@ -305,10 +329,13 @@ export const RELEASE_BUDGETS = Object.freeze({
   // inside `app.tsx`. Nothing was added to the product: 1.69 KiB gzip of
   // first-paint weight moved out of `allJavaScriptAndWorkers` and landed here,
   // behind a panel that cannot render until a turn has produced a receipt.
-  // That is the trade this file has taken three times before, and it is the
-  // only ceiling that moved in this change. Measured 72.20 KiB raw /
-  // 22.63 KiB gzip.
-  optionalProofSurface: Object.freeze({ raw: 74 * 1024, gzip: 25 * 1024 }),
+  // That is the trade this file has taken three times before. Measured 74,690 B
+  // raw / 23,556 B gzip. Gzip did cross the 23 KiB ceiling this pack shipped under
+  // — by four bytes, but it crossed it — so it steps to 24 KiB and leaves 1,020;
+  // the 25 KiB it was briefly raised to was a further step nothing measured asked
+  // for. 73 KiB raw would have left 62 bytes, which a minifier rename can erase, so
+  // raw holds at 74 KiB and leaves 1,086.
+  optionalProofSurface: Object.freeze({ raw: 74 * 1024, gzip: 24 * 1024 }),
   // Receipt-keyed acquisition scheduling, its WorkspacePort CAS adapter, and
   // the credential-free endpoint-evidence record store. All three load only
   // when a Chutes credential can run or recover the worker, and none belongs to
@@ -424,6 +451,24 @@ export function serializeReleaseManifest(manifest) {
 }
 
 export function assertWithinBudget(label, measurement, budget) {
+  /*
+   * A budget line is a guarantee only while it compares two real byte counts.
+   * `undefined > limit` and `null > limit` are both false, so the cheapest way to
+   * retire a ceiling without anyone noticing is to hand this function something
+   * that is not a measurement — which is exactly what happened when a pack that
+   * Vite had inlined was reported as a fabricated zero. Refuse to answer instead
+   * of answering "within budget".
+   */
+  for (const [role, value] of [
+    ["measurement", measurement],
+    ["budget", budget],
+  ]) {
+    const raw = value?.raw;
+    const gzip = value?.gzip;
+    if (!Number.isInteger(raw) || !Number.isInteger(gzip) || raw < 0 || gzip < 0) {
+      throw new Error(`${label} cannot be checked against a release budget: its ${role} is not a raw/gzip byte count.`);
+    }
+  }
   const exceeded = [];
   if (measurement.raw > budget.raw) {
     exceeded.push(`raw ${formatBytes(measurement.raw)} > ${formatBytes(budget.raw)}`);
@@ -432,6 +477,165 @@ export function assertWithinBudget(label, measurement, budget) {
     exceeded.push(`gzip ${formatBytes(measurement.gzip)} > ${formatBytes(budget.gzip)}`);
   }
   if (exceeded.length > 0) throw new Error(`${label} exceeds its release budget: ${exceeded.join(", ")}.`);
+}
+
+/*
+ * Ceilings whose comment is required to state the measurement that sets them, in
+ * this file's `Measured <raw> raw / <gzip> gzip` form. Not every budget is here:
+ * several carry justifications older than this guard, and a name joins the list
+ * when its pack is next measured rather than being retro-fitted with a figure
+ * nobody re-took. Adding one is a commitment — the comment has to keep recording a
+ * real build, and it may never record a figure its own ceiling would reject.
+ */
+export const MEASUREMENT_JUSTIFIED_BUDGETS = Object.freeze([
+  "deferredCapabilities",
+  "optionalWorkspaceWorkbench",
+  "optionalCapabilitiesView",
+  "optionalMemoryView",
+  "optionalProofSurface",
+]);
+
+/*
+ * Every ceiling in RELEASE_BUDGETS is justified by a measurement written in the
+ * comment above it, and that comment is the only place a reviewer can see what a
+ * raise bought. Nothing held the two together: three ceilings were raised in one
+ * pass while their comments still recorded the previous build, and one of them
+ * asserted that the gzip ceiling "do[es] not move" on the line above the constant
+ * that moved it. A stale justification is worse than none, because it reads as
+ * confirmation that transferred weight did not grow.
+ *
+ * Three rules, so that a comment and the constant it explains cannot silently
+ * disagree again. No figure a comment records may exceed the ceiling it justifies —
+ * a ceiling that rejects its own stated measurement is describing a build nobody
+ * shipped. The budgets above must each still state a measurement at all, so a raise
+ * cannot be laundered by deleting the number it contradicts. And each ceiling must
+ * be the smallest whole-KiB step that clears its measurement, unless the comment
+ * says for that role what the tighter step would have left — the sentence this file
+ * already writes when it declines a ceiling a minifier rename could breach. The
+ * three ceilings raised against stale comments each granted 10–18% of new transfer
+ * budget in silence; that last rule is what refuses it, because the extra step now
+ * costs a sentence naming the bytes it bought.
+ */
+export function assertDocumentedBudgetMeasurements(source) {
+  const failures = [];
+  const seen = new Set();
+  for (const entry of parseDocumentedBudgets(source)) {
+    seen.add(entry.name);
+    for (const figure of entry.figures) {
+      const ceiling = entry.budget[figure.role];
+      if (figure.bytes > ceiling) {
+        failures.push(
+          `${entry.name}: its comment records ${figure.text} ${figure.role}, above the ${formatBytes(ceiling)} ${figure.role} ceiling it justifies`,
+        );
+      }
+    }
+    if (!MEASUREMENT_JUSTIFIED_BUDGETS.includes(entry.name)) continue;
+    // The largest pair a comment states is the one its ceilings have to clear; a
+    // comment may also quote a delta or the reading it grew from.
+    const documented = entry.measured.reduce((largest, pair) => (largest && largest.raw >= pair.raw ? largest : pair), null);
+    if (!documented) {
+      failures.push(`${entry.name}: its comment no longer records a measured raw/gzip pair for the ceiling it sets`);
+      continue;
+    }
+    for (const role of ["raw", "gzip"]) {
+      const ceiling = entry.budget[role];
+      const steps = new RegExp(`${role} would have left \\d`, "u").test(entry.prose) ? 2 : 1;
+      const allowed = (Math.floor(documented[role] / 1024) + steps) * 1024;
+      if (ceiling > allowed) {
+        failures.push(
+          `${entry.name}: the ${formatBytes(ceiling)} ${role} ceiling is above the smallest whole-KiB step that clears the documented ${formatBytes(documented[role])}; take the tighter step, or say in the comment what "<n> KiB ${role} would have left"`,
+        );
+      }
+    }
+  }
+  for (const name of MEASUREMENT_JUSTIFIED_BUDGETS) {
+    if (!seen.has(name)) failures.push(`${name}: named as measurement-justified but no such release budget was found`);
+  }
+  if (failures.length > 0) {
+    throw new Error(`Release budget comments disagree with their ceilings:\n- ${failures.join("\n- ")}`);
+  }
+}
+
+/**
+ * Pairs each `name: Object.freeze({ raw, gzip })` ceiling with the contiguous
+ * comment block directly above it and the byte figures that block states. Parsing
+ * this file's own comments is unusual; it is warranted because those comments are
+ * the ceilings' only justification, and an unchecked justification is the defect
+ * this guards against.
+ */
+function parseDocumentedBudgets(source) {
+  const lines = source.split("\n");
+  const start = lines.findIndex((line) => line.startsWith("export const RELEASE_BUDGETS"));
+  if (start < 0) throw new Error("Release budgets are not declared where the documentation guard expects them.");
+  const entries = [];
+  let comment = [];
+  for (let index = start + 1; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (line === "});") break;
+    const commentText = /^\s*\/\/ ?(.*)$/u.exec(line);
+    if (commentText) {
+      comment.push(commentText[1]);
+      continue;
+    }
+    const budget = /^\s{2}([A-Za-z][A-Za-z0-9]*): Object\.freeze\(\{ raw: ([^,]+), gzip: ([^}]+?) \}\),$/u.exec(line);
+    if (budget) {
+      const prose = comment.join(" ");
+      entries.push(
+        Object.freeze({
+          name: budget[1],
+          budget: Object.freeze({ raw: evaluateByteExpression(budget[2]), gzip: evaluateByteExpression(budget[3]) }),
+          prose,
+          figures: Object.freeze(parseByteFigures(prose)),
+          measured: Object.freeze(parseMeasuredPairs(prose)),
+        }),
+      );
+    }
+    comment = [];
+  }
+  return entries;
+}
+
+/**
+ * Budget ceilings are written as whole/half-KiB arithmetic — `46 * 1024`,
+ * `4 * 1024 + 512` — so a sum of products is the whole grammar. Evaluating it by
+ * hand rather than with `Function` keeps a build script free of a code path that
+ * runs text as code, however well fenced.
+ */
+function evaluateByteExpression(expression) {
+  let total = 0;
+  for (const term of expression.split("+")) {
+    let product = 1;
+    for (const factor of term.split("*")) {
+      const value = Number(factor.trim());
+      if (!Number.isInteger(value) || value < 0) throw new Error(`Unexpected release budget expression: ${expression}.`);
+      product *= value;
+    }
+    total += product;
+  }
+  return total;
+}
+
+const BYTE_FIGURE = /(\d[\d,]*(?:\.\d+)?)\s(KiB|MiB|B)\s(raw|gzip)\b/gu;
+// Only figures the file presents as a measurement of *this* pack anchor the
+// tightness rule; the same comment may also quote a delta or another surface.
+const MEASURED_PAIR =
+  /[Mm]easur\w*[^.;]{0,80}?(\d[\d,]*(?:\.\d+)?)\s(KiB|MiB|B)\sraw\s*\/\s*(\d[\d,]*(?:\.\d+)?)\s(KiB|MiB|B)\sgzip/gu;
+
+function parseByteFigures(prose) {
+  return [...prose.matchAll(BYTE_FIGURE)].map((match) =>
+    Object.freeze({ text: `${match[1]} ${match[2]}`, role: match[3], bytes: toBytes(match[1], match[2]) }),
+  );
+}
+
+function parseMeasuredPairs(prose) {
+  return [...prose.matchAll(MEASURED_PAIR)].map((match) =>
+    Object.freeze({ raw: toBytes(match[1], match[2]), gzip: toBytes(match[3], match[4]) }),
+  );
+}
+
+function toBytes(value, unit) {
+  const scale = unit === "MiB" ? 1024 * 1024 : unit === "KiB" ? 1024 : 1;
+  return Math.round(Number(value.replaceAll(",", "")) * scale);
 }
 
 /** A researched runtime that failed promotion must contribute zero release artifacts. */
@@ -531,6 +735,9 @@ export function assertForkContractDocumented(source) {
 }
 
 export async function runReleaseGate(outputDirectory = defaultOutput) {
+  // The ceilings below are only as trustworthy as the measurements that justify
+  // them, so the gate checks its own justifications before it checks the build.
+  assertDocumentedBudgetMeasurements(await readFile(fileURLToPath(import.meta.url), "utf8"));
   const output = resolve(outputDirectory);
   const files = await collectFiles(output);
   const manifestPath = posix.normalize(RELEASE_MANIFEST_NAME);
@@ -690,11 +897,17 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
     throw new Error(`Production must contain exactly one optional source-control pack; found ${optionalSourceControlPacks.length}.`);
   }
   const optionalSourceControlMeasurement = measure(optionalSourceControlPacks[0].payload);
+  // The store either ships as its own chunk or is inlined into its consumer; the
+  // key it persists is what proves it shipped, and what proves it is not eager.
   const optionalSourceSelectionPacks = javaScriptFiles.filter((file) => isOptionalSourceSelectionPath(file.path));
-  if (optionalSourceSelectionPacks.length !== 1) {
-    throw new Error(`Production must contain exactly one optional source-selection chunk; found ${optionalSourceSelectionPacks.length}.`);
+  const sourceSelectionKey = Buffer.from(SOURCE_SELECTION_STORAGE_KEY);
+  if (initialJavaScriptFiles.some((file) => file.payload.includes(sourceSelectionKey))) {
+    throw new Error("Source selection must not load at first paint.");
   }
-  const optionalSourceSelectionMeasurement = measure(optionalSourceSelectionPacks[0].payload);
+  const optionalSourceSelectionDelivery = resolveOptionalSourceSelectionDelivery(
+    optionalSourceSelectionPacks,
+    javaScriptFiles.filter((file) => file.payload.includes(sourceSelectionKey)).map((file) => file.path),
+  );
   const optionalBrowserGitPacks = javaScriptFiles.filter((file) => isOptionalBrowserGitPath(file.path));
   if (optionalBrowserGitPacks.length !== 1) {
     throw new Error(`Production must contain exactly one optional browser-Git engine pack; found ${optionalBrowserGitPacks.length}.`);
@@ -1033,7 +1246,13 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
     RELEASE_BUDGETS.optionalWorkspaceCodec,
   );
   assertWithinBudget("Optional source control", optionalSourceControlMeasurement, RELEASE_BUDGETS.optionalSourceControl);
-  assertWithinBudget("Optional source selection", optionalSourceSelectionMeasurement, RELEASE_BUDGETS.optionalSourceSelection);
+  // Only a dedicated chunk has bytes of its own to hold to this ceiling. When the
+  // module is inlined the ceiling has nothing to govern, and the honest move is to
+  // skip the line rather than feed it a zero that would pass unconditionally — the
+  // carrier's own class budget is what bounds those bytes.
+  if (optionalSourceSelectionDelivery.path) {
+    assertWithinBudget("Optional source selection", optionalSourceSelectionDelivery, RELEASE_BUDGETS.optionalSourceSelection);
+  }
   assertWithinBudget("Optional browser Git", optionalBrowserGitMeasurement, RELEASE_BUDGETS.optionalBrowserGit);
   assertWithinBudget("Optional browser-Git client", optionalBrowserGitClientMeasurement, RELEASE_BUDGETS.optionalBrowserGitClient);
   assertWithinBudget("Optional approval reviewer", optionalApprovalReviewerMeasurement, RELEASE_BUDGETS.optionalApprovalReviewer);
@@ -1204,10 +1423,10 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
         path: optionalSourceControlPacks[0].path,
         ...optionalSourceControlMeasurement,
       }),
-      optionalSourceSelection: Object.freeze({
-        path: optionalSourceSelectionPacks[0].path,
-        ...optionalSourceSelectionMeasurement,
-      }),
+      // Either `{ path, raw, gzip }` for a dedicated chunk or `{ inlinedInto }`
+      // when the bundler folded it into its consumer. Never a size it does not
+      // have: a reader of these measurements has to be able to tell the two apart.
+      optionalSourceSelection: optionalSourceSelectionDelivery,
       optionalBrowserGit: Object.freeze({
         path: optionalBrowserGitPacks[0].path,
         ...optionalBrowserGitMeasurement,
@@ -1389,6 +1608,38 @@ export function isOptionalSourceControlPath(path) {
 
 export function isOptionalSourceSelectionPath(path) {
   return /^assets\/source-selection-[A-Za-z0-9_-]+\.js$/u.test(path);
+}
+
+/** The durable key the source-selection store writes; its shipped fingerprint. */
+export const SOURCE_SELECTION_STORAGE_KEY = "airship.ui.sources.repository.v1";
+
+/**
+ * Source selection is ~650 bytes, so whether Vite emits it as its own chunk or
+ * inlines it into the one pack that imports it is a bundler decision, not a
+ * product fact — counting chunks made that decision a release blocker. What has
+ * to stay true is that the durable key it persists ships in exactly one place
+ * (and, asserted by the caller, never at first paint).
+ *
+ * When the module is inlined there is no artifact to weigh, so this returns a
+ * delivery that says so and carries no byte counts at all. Attributing
+ * `raw: 0, gzip: 0` to the carrier told two lies at once: the release
+ * measurements published a size no artifact has, and the `optionalSourceSelection`
+ * budget line compared zero against its ceiling and passed however large the
+ * module grew. Inlined bytes are not unowned — `assertExclusiveArtifactClassifications`
+ * requires the carrier to belong to exactly one capped class, so they are charged
+ * to that class's ceiling instead of to a ceiling of their own.
+ */
+export function resolveOptionalSourceSelectionDelivery(dedicatedPacks, carrierPaths) {
+  if (dedicatedPacks.length > 1) {
+    throw new Error(`Production must contain at most one optional source-selection chunk; found ${dedicatedPacks.length}.`);
+  }
+  if (carrierPaths.length !== 1) {
+    throw new Error(
+      `Production must carry the source-selection store in exactly one JavaScript pack; found ${carrierPaths.length}.`,
+    );
+  }
+  if (dedicatedPacks.length === 0) return Object.freeze({ inlinedInto: carrierPaths[0] });
+  return Object.freeze({ path: dedicatedPacks[0].path, ...measure(dedicatedPacks[0].payload) });
 }
 
 /**
@@ -1784,6 +2035,13 @@ function printResult(result) {
   );
   console.log(
     `Optional source control ${formatBytes(measurements.optionalSourceControl.raw)} raw / ${formatBytes(measurements.optionalSourceControl.gzip)} gzip`,
+  );
+  // Say which of the two shapes shipped, so a reader is never left guessing
+  // whether a missing size means "tiny" or "not measured".
+  console.log(
+    measurements.optionalSourceSelection.path
+      ? `Optional source selection ${formatBytes(measurements.optionalSourceSelection.raw)} raw / ${formatBytes(measurements.optionalSourceSelection.gzip)} gzip`
+      : `Optional source selection inlined into ${measurements.optionalSourceSelection.inlinedInto}`,
   );
   console.log(
     `Optional browser Git ${formatBytes(measurements.optionalBrowserGit.raw)} raw / ${formatBytes(measurements.optionalBrowserGit.gzip)} gzip`,

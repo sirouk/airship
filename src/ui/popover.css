@@ -37,6 +37,18 @@
     min-height: 44px;
     padding-block: var(--sp-1);
   }
+
+  /*
+   * The same floor inside the panel. The trigger was lifted while `.popover__done`
+   * (28px) and `.popover__action` (32px) — the controls a touch reader actually
+   * lands on once the disclosure is open — stayed below it. A sheet at ≤640px
+   * already sized its Done button; this is the coarse pointer at any other
+   * width, the anchored panel a fingertip still has to reach.
+   */
+  .popover__done,
+  .popover__action {
+    min-height: 44px;
+  }
 }
 
 /*

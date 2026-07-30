@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 
@@ -173,5 +174,79 @@ describe("every ARIA name lands on an element allowed to have one", () => {
     expect(offenders).toEqual(["f.tsx :: a", "f.tsx :: b"]);
     // And the entry for a container that has since been fixed is reported.
     expect([...unspent].flatMap(([record, left]) => (left > 0 ? [record] : []))).toEqual(["f.tsx :: gone"]);
+  });
+});
+
+/*
+ * The same defect on a control rather than a container: `aria-label` on a
+ * `<button>` does name it, but it *replaces* the name the contents would
+ * compute. MenuSelect's trigger once named itself by the field label alone,
+ * so the visible value — the only text a non-compact trigger shows — reached
+ * no name a voice user could call the control by (WCAG 2.5.3), a screen
+ * reader never announced what was chosen, and the compact monogram carried
+ * no value information at all. Its options compressed label + description
+ * into label alone the same way. The contract going forward: the trigger is
+ * named label + value from its own contents, and an option is named from its
+ * contents so the description is never hidden.
+ */
+/*
+ * The name is the field; the value and the description are descriptions.
+ *
+ * This block first pinned the opposite — name computed from contents, so the
+ * trigger announced "Color mode Dark instrument" and an option announced its
+ * label plus a whole sentence. That fixed a real defect (an `aria-label` had
+ * been hiding the chosen value from readers entirely) and introduced a worse
+ * one: a control can no longer be called by the thing it sets. That is the name
+ * a voice user speaks, and it is how every surface in the product refers to
+ * these controls — eight browser journeys could not find them once the value
+ * joined the name.
+ *
+ * ARIA already has the right slot for both. `aria-describedby` is announced
+ * after the name, so nothing is hidden: the trigger says "Color mode", then
+ * "Dark instrument"; an option says "Auto Approve", then its sentence. That is
+ * also what the APG listbox pattern asks for — an option's name is its label,
+ * and supplementary prose is a description, not part of the name.
+ */
+describe("menu-select names its controls by their field, and describes the rest", () => {
+  const source = readFileSync(new URL("./menu-select.tsx", import.meta.url), "utf8");
+
+  /** The attribute text of the first tag whose class marks it. */
+  function attributesOfComponentTag(marker: string): string {
+    const start = source.indexOf(`<button`);
+    let cursor = start;
+    while (cursor >= 0) {
+      const attributes = attributesOfTag(source, cursor + "<button".length);
+      if (attributes.includes(marker)) return attributes;
+      cursor = source.indexOf("<button", cursor + 1);
+    }
+    throw new Error(`no button carries ${marker}`);
+  }
+
+  it("names the trigger by the field it sets, and describes the current value", () => {
+    const attributes = attributesOfComponentTag("menu-select-trigger");
+    // The field name, so the control is addressable by what it changes.
+    expect(attributes).toContain("aria-label={ariaLabel}");
+    // The value reaches the reader as a description rather than not at all.
+    expect(attributes).toContain("aria-describedby={`${listboxId}-value`}");
+    // Visible where there is room for it; hidden text on the compact trigger,
+    // where the monogram leaves none — never absent.
+    expect(source).toContain('<span class="menu-select-value" id={`${listboxId}-value`}><strong>{selected?.label ?? "Choose"}</strong></span>');
+    expect(source).toContain('<span class="sr-only" id={`${listboxId}-value`}><strong>{selected?.label ?? "Choose"}</strong></span>');
+  });
+
+  it("names each option by its label, and describes it without hiding the sentence", () => {
+    const attributes = attributesOfComponentTag("menu-select-option");
+    // No `aria-label`: the label is the option's own content, so the two cannot
+    // drift apart the way an overriding attribute let them.
+    expect(CARRIES_A_NAME.test(attributes)).toBe(false);
+    expect(attributes).toContain("aria-describedby={option.description ? `${listboxId}-${index}-description` : undefined}");
+    /*
+     * `aria-hidden` on the sentence, and this is the subtle half: a referenced
+     * element's text is still used to build a description even when it is
+     * hidden, so the sentence is announced — it just stops being folded into
+     * the name. `role="presentation"` was tried first and is not enough: it
+     * drops the role, not the text.
+     */
+    expect(source).toContain('<small id={`${listboxId}-${index}-description`} aria-hidden="true">{option.description}</small>');
   });
 });

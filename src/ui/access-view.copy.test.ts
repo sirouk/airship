@@ -6,6 +6,20 @@ import { credentialReading } from "./access-view";
 const source = await readFile(new URL("./access-view.tsx", import.meta.url), "utf8");
 const styles = await readFile(new URL("./access-view.css", import.meta.url), "utf8");
 const readiness = await readFile(new URL("./connect/chutes-signin-readiness.ts", import.meta.url), "utf8");
+const connectSurface = await readFile(new URL("./connect/connect-surface.tsx", import.meta.url), "utf8");
+
+describe("the Local check names the bind it performs", () => {
+  it("tells the person that an answering server is connected, not merely listed", () => {
+    /*
+     * "Check this machine" commits a fabric connection for every loopback
+     * server that answers (`checkLocalModelServers` → `fabric.connectLocal`).
+     * The panel used to promise it only "renders what came back", which is a
+     * check that silently binds — the sentence now states the consequence.
+     */
+    expect(connectSurface).toMatch(/connects anything\s+that answers/u);
+    expect(connectSurface).not.toContain("renders only what came back");
+  });
+});
 
 describe("Chutes connection method copy", () => {
   it("pins the connection to the transport's actual security posture", () => {

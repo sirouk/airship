@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
+import { isLiveMemoryMessage, stableMemoryAuthoritySignature, type MemoryViewMessage } from "./memory-view";
 
 const [source, appSource, contextSource, styles, contextStyles] = await Promise.all([
   readFile(new URL("./memory-view.tsx", import.meta.url), "utf8"),
@@ -18,7 +19,7 @@ describe("unified Memory surface", () => {
     expect(source).toContain("searchQuery={query} sharedSearch={memorySearch}");
     expect(contextSource).toContain("sharedContextResult(sharedSearch, query, generationDigest)");
     expect(contextSource).toContain("workspace.generationDigest !== generationDigest");
-    expect(source).toContain("[activeProfile, catalog, messages, sessionId, workspaceAuthority]");
+    expect(source).toContain("const memoryAuthority = useMemo(() => ({}), [activeProfile, catalog, settledMessages, sessionId, workspaceAuthority])");
     expect(contextSource).not.toContain("The shared Memory query changed.");
     expect(source.match(/type="search"/gu)).toHaveLength(1);
     expect(source).not.toContain('role="tablist"');
@@ -160,6 +161,79 @@ describe("unified Memory surface", () => {
     expect(source).toContain("Filters never alter memory.");
     // Amber is reserved for a state the user created, not for the default one.
     expect(source).toContain('hiddenMemoryNodeIds.size ? "memory-boundary attention" : "memory-boundary"');
+  });
+});
+
+/*
+ * During a live turn the chat transcripts rebuild the `messages` array once
+ * per stream delta *and* mutate the live assistant row's text. Both
+ * derivations on this route — the relationship graph and the federated search
+ * authority — must update only on settled changes: a completed turn, an
+ * appended message, a durable edit. `stableMemoryAuthoritySignature` is the
+ * gate; these pin its contract.
+ */
+function chat(overrides: Partial<MemoryViewMessage> & { id: string }): MemoryViewMessage {
+  return { role: "assistant", content: "", ...overrides };
+}
+
+describe("settled-turn message signature", () => {
+  it("does not move while a turn is streaming", () => {
+    const settled = [chat({ id: "u1", role: "user", content: "hello" })];
+    const queued = [...settled, chat({ id: "a1", status: "Queued", content: "" })];
+    const streaming = [...settled, chat({ id: "a1", status: "Thinking", content: "partial par" })];
+    const moreStreaming = [...settled, chat({ id: "a1", status: "Streaming output", content: "partial partial answer" })];
+    expect(stableMemoryAuthoritySignature(streaming)).toBe(stableMemoryAuthoritySignature(queued));
+    expect(stableMemoryAuthoritySignature(moreStreaming)).toBe(stableMemoryAuthoritySignature(queued));
+    // The same deterministic signature, not reference equality.
+    expect(stableMemoryAuthoritySignature(streaming)).toBe(stableMemoryAuthoritySignature([...streaming]));
+  });
+
+  it("moves exactly when a turn settles, an append lands, or settled text is edited", () => {
+    const before = [chat({ id: "u1", role: "user", content: "hello" }), chat({ id: "a1", status: "Queued", content: "" })];
+    const after = [chat({ id: "u1", role: "user", content: "hello" }), chat({ id: "a1", content: "the answer" })];
+    expect(stableMemoryAuthoritySignature(after)).not.toBe(stableMemoryAuthoritySignature(before));
+    // An appended settled row changes it.
+    const appended = [...after, chat({ id: "u2", role: "user", content: "next question" })];
+    expect(stableMemoryAuthoritySignature(appended)).not.toBe(stableMemoryAuthoritySignature(after));
+    // An edit to settled text changes it.
+    const edited = [chat({ id: "u1", role: "user", content: "hello!" }), chat({ id: "a1", content: "the answer" })];
+    expect(stableMemoryAuthoritySignature(edited)).not.toBe(stableMemoryAuthoritySignature(after));
+    // A settled failure row changes it too — the answer is final even when it errored:
+    // its error text belongs in the graph the same moment a successful one would.
+    const failed = [chat({ id: "u1", role: "user", content: "hello" }), chat({ id: "a1", content: "Turn stopped" })];
+    expect(isLiveMemoryMessage(failed[1]!)).toBe(false);
+    expect(stableMemoryAuthoritySignature(failed)).not.toBe(stableMemoryAuthoritySignature(before));
+  });
+
+  it("reads the terminal turn record over the display status on local-tool rows", () => {
+    // A settled local-tool row keeps its "Local result ·" display status
+    // forever; the `completed` turn record is what says its text stopped
+    // moving. Treating the status line as the live marker would mask the row
+    // from the graph for the rest of the session.
+    const settledLocal = chat({ id: "a1", status: "Local result · excluded from model context", content: "tool output", history: { turnStatus: "completed" } });
+    const liveLocal = chat({ id: "a1", status: "Streaming run", content: "partial", history: { turnStatus: "incomplete" } });
+    const liveNormal = chat({ id: "a2", status: "Queued", content: "" });
+    const settledNormal = chat({ id: "a2", content: "done" });
+    expect(isLiveMemoryMessage(settledLocal)).toBe(false);
+    expect(isLiveMemoryMessage(liveLocal)).toBe(true);
+    expect(isLiveMemoryMessage(liveNormal)).toBe(true);
+    expect(isLiveMemoryMessage(settledNormal)).toBe(false);
+    // A replayed incomplete turn has no status line; nothing mutates it any
+    // more, so it counts as settled rather than being masked forever.
+    expect(isLiveMemoryMessage(chat({ id: "a3", content: "partial answer", history: { turnStatus: "incomplete" } }))).toBe(false);
+  });
+
+  it("feeds both derivations from the masked projection, not the raw array", () => {
+    expect(source).toContain("const messageSignature = stableMemoryAuthoritySignature(messages);");
+    expect(source).toContain("const settledMessages = useMemo(");
+    expect(source).toContain("[messageSignature],");
+    // The graph no longer derives from the raw streaming array.
+    expect(source).toContain("messages: settledMessages.map((message) => ({");
+    expect(source).toContain("}, [activeProfile, catalog, files, settledMessages, sessionId]);");
+    expect(source).not.toContain("}, [activeProfile, catalog, files, messages, sessionId]);");
+    // Live rows reach the graph with empty text until their turn commits.
+    expect(source).toContain('isLiveMemoryMessage(message)');
+    expect(source).toContain('content: "", status: message.status');
   });
 });
 

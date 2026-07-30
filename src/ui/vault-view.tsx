@@ -166,6 +166,9 @@ export function VaultView({
   const status = phaseCopy(snapshot);
   const localDevice = provider === "local-device";
   const ephemeral = provider === "ephemeral";
+  // Computed once: the summary's denominator and enumeration are derived from
+  // these exact rows, so they cannot drift from the list underneath them.
+  const prerequisites = attachedRows(snapshot, localDeviceStatus, localDevice);
   const googleDrive = snapshot.phase !== "disconnected" && isGoogleDriveConfiguration(snapshot.config);
   const s3Configuration = snapshot.phase !== "disconnected"
     && !isGoogleDriveConfiguration(snapshot.config)
@@ -316,10 +319,12 @@ export function VaultView({
           open={attachmentsOpen}
           onToggle={(event) => setAttachmentsOpen(event.currentTarget.open)}
         >
-          <summary>{`What's attached (${attachedCount(snapshot, localDeviceStatus, localDevice)} of 3) — the device key, the object store and the recovery key`}</summary>
+          <summary>{attachedSummary(prerequisites)}</summary>
           <ul>
-            {attachedRows(snapshot, localDeviceStatus, localDevice).map((row) => (
-              <li key={row.label} data-attached={row.attached ? "true" : "false"}>
+            {prerequisites.map((row) => (
+              /* Three states, not two: `"unknown"` must not paint an advisory
+                 row in the caution colour reserved for a real shortfall. */
+              <li key={row.label} data-attached={row.attached === "unknown" ? "unknown" : String(row.attached)}>
                 <span>{row.label}</span>
                 <strong>{row.value}</strong>
               </li>
@@ -618,7 +623,7 @@ const SEAL_WORD: Readonly<Record<VaultStateId, string>> = Object.freeze({
  * `Disconnected` — Airship's failure grammar — for what is a default. The word
  * itself is not retired; it still reports every provider that genuinely was
  * connected and is not (`google-drive-vault.spec.ts` pins that case), and the
- * itemised `What's attached (0 of 3)` rows below say which prerequisite is
+ * itemised `What's attached (0 of 2)` rows below say which prerequisite is
  * missing, which is strictly more than the word did.
  */
 export function vaultPhaseLabel(input: Readonly<{
@@ -674,13 +679,21 @@ export function vaultState(input: Readonly<{
   }
 }
 
-type AttachedRow = Readonly<{ label: string; value: string; attached: boolean }>;
+/**
+ * One prerequisite row.
+ *
+ * `attached` is three-valued because one prerequisite is not observable from
+ * here: `"unknown"` means Airship cannot prove either way, so the row is
+ * reported but never counted. A boolean forced that row to render as unmet
+ * forever, which is the one thing this list must not do — see `attachedSummary`.
+ */
+export type AttachedRow = Readonly<{ label: string; value: string; attached: boolean | "unknown" }>;
 
 /**
- * The three prerequisites, itemised.
+ * The prerequisites, itemised.
  *
  * "No endpoint, credential authority, or workspace key is attached." stays on
- * screen verbatim; this says which of the three are missing, which is strictly
+ * screen verbatim; this says which of them are missing, which is strictly
  * more than the sentence did.
  */
 export function attachedRows(
@@ -693,7 +706,19 @@ export function attachedRows(
     return Object.freeze([
       Object.freeze({ label: "Device key", value: opened ? "Enrolled · non-extractable" : "Not enrolled", attached: opened }),
       Object.freeze({ label: "Encrypted object store", value: opened ? `Created · ${localDeviceStatus?.readiness.backend === "opfs" ? "OPFS" : "IndexedDB"}` : "Not created", attached: opened }),
-      Object.freeze({ label: "Recovery key", value: opened ? "Saved by you · Airship holds no copy" : "Not saved", attached: opened }),
+      // Custody of the one-time recovery value was never recorded, so an open
+      // vault cannot certify "saved by you": the acknowledgement that hid the
+      // key is page state, gone with the tab. `"unknown"`, not `false`: an
+      // unprovable fact reported as unmet made a fully set-up device Vault sit
+      // at a permanent shortfall, so a genuinely missing prerequisite would
+      // have looked identical to the one that can never be satisfied.
+      Object.freeze({
+        label: "Recovery key",
+        value: opened
+          ? "Airship holds no copy — loss cannot be detected; confirm you can still find it"
+          : "Shown once when you create the Vault, then never again",
+        attached: "unknown" as const,
+      }),
     ]);
   }
   if (snapshot.phase === "disconnected") {
@@ -716,7 +741,37 @@ export function attachedCount(
   localDeviceStatus: LocalDeviceVaultStatus | undefined,
   localDevice: boolean,
 ): number {
-  return attachedRows(snapshot, localDeviceStatus, localDevice).filter((row) => row.attached).length;
+  return attachedRows(snapshot, localDeviceStatus, localDevice).filter((row) => row.attached === true).length;
+}
+
+/** "a, b and c" — no Oxford comma, matching the prerequisite sentence it replaced. */
+function joinPhrases(phrases: readonly string[]): string {
+  if (phrases.length <= 1) return phrases[0] ?? "";
+  return `${phrases.slice(0, -1).join(", ")} and ${phrases[phrases.length - 1]!}`;
+}
+
+/**
+ * The disclosure's summary, phrased from the rows themselves.
+ *
+ * It was a literal: `(n of 3) — the device key, the object store and the
+ * recovery key`. Two lies in one string. A Drive Vault itemises the endpoint,
+ * the credential authority and the workspace key, so the enumeration named
+ * three things that surface does not have; and the recovery key's custody is
+ * unknowable, so a device Vault with everything enrolled was stuck at `2 of 3`,
+ * naming a shortfall that can never close. A panel whose whole job is to say
+ * which prerequisite is missing cannot carry a permanent one, or a real gap
+ * reads the same as the standing one.
+ *
+ * So: the denominator is the countable rows, the enumeration is their labels,
+ * and an unprovable row is named after the count as the advisory it is.
+ */
+export function attachedSummary(rows: readonly AttachedRow[]): string {
+  const counted = rows.filter((row) => row.attached !== "unknown");
+  const attached = counted.filter((row) => row.attached === true).length;
+  const advisory = rows.filter((row) => row.attached === "unknown");
+  const head = `What's attached (${attached} of ${counted.length}) — ${joinPhrases(counted.map((row) => `the ${row.label.toLowerCase()}`))}`;
+  if (advisory.length === 0) return head;
+  return `${head}; ${joinPhrases(advisory.map((row) => `the ${row.label.toLowerCase()}`))} only you can confirm`;
 }
 
 type VaultReadiness = Extract<VaultSnapshot, { phase: "ready" }>["evidence"]["readiness"];

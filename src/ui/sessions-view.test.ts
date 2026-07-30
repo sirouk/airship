@@ -125,15 +125,33 @@ describe("conversation library keyboard focus", () => {
    * The borderless-input-in-a-bordered-shell pattern moves the ring to the
    * wrapper. Sessions copied only the `outline: 0` half, so a keyboard user
    * tabbing into the filter field got no indication at all.
+   *
+   * The pairing itself is proven by `focus-suppression-pairing.test.ts`, which
+   * parses every route stylesheet into rules and requires each suppression to
+   * have a focus rule anchored on the same component — including this file's
+   * `.session-library-search input`, named there by selector. What lived here
+   * was a count comparison (`rings.length >= suppressions.length`) that read
+   * only the `outline: 0` spelling and never tied a ring to the element whose
+   * outline was suppressed, so it went green for `outline: none` anywhere and
+   * for a ring on an unrelated element. What is left is the one fact this file
+   * is the right place to hold: which element the filter field's ring moved to.
    */
-  it("pairs every suppressed input outline with a ring on its wrapper", () => {
-    const suppressions = styles.match(/outline:\s*0\s*;/gu) ?? [];
-    expect(suppressions.length).toBeGreaterThan(0);
-    const rings = styles.match(/:focus-(?:within|visible)\s*\{/gu) ?? [];
-    expect(rings.length).toBeGreaterThanOrEqual(suppressions.length);
-    expect(styles).toContain(".session-library-search:focus-within {");
+  it("draws the filter field's ring on the wrapper it was moved to", () => {
+    const wrapper = ruleBody(".session-library-search:focus-within");
+    expect(wrapper, "the wrapper ring the input's outline: 0 promises").toBeDefined();
+    expect(wrapper).toMatch(/(?:outline|box-shadow|border-color)\s*:/u);
+    // And the suppression is still the reason the ring is on the wrapper: if the
+    // input regains its own outline this becomes a double ring, not a fix.
+    expect(ruleBody(".session-library-search input")).toMatch(/outline:\s*(?:0|none)\s*;/u);
   });
 });
+
+/** The declarations of one top-level rule, by exact selector. */
+function ruleBody(selector: string): string | undefined {
+  const open = styles.indexOf(`${selector} {`);
+  if (open < 0) return undefined;
+  return styles.slice(open + selector.length + 2, styles.indexOf("}", open));
+}
 
 describe("conversation library below the full-width toolbar", () => {
   it("wraps the filter row instead of scrolling three controls off the edge", () => {

@@ -127,8 +127,18 @@ describe("completed Chutes sign-in survives a remount and finishes itself", () =
   });
 
   it("carries the returning redirect through verification without a second press", () => {
+    /*
+     * AMENDED — one dependency added, deliberately.
+     *
+     * `oauthBootstrapRetryNonce` lets a failed OAuth-kind connect leg re-enter
+     * this effect with the exchange the host still holds, instead of leaving
+     * a full re-authorization as the only way back. The leg itself — read
+     * without consuming, auto-connect flag armed before discovery — is
+     * unchanged, and every assertion below pins the same ordering it pinned
+     * before.
+     */
     const bootstrap = accessSource.match(
-      /const credential = oauthBootstrap\.readCredential\(\);[\s\S]*?\}, \[oauthBootstrap\?\.revision, connection\.kind, online\]\);/u,
+      /const credential = oauthBootstrap\.readCredential\(\);[\s\S]*?\}, \[oauthBootstrap\?\.revision, connection\.kind, online, oauthBootstrapRetryNonce\]\);/u,
     )?.[0];
     expect(bootstrap).toBeTruthy();
     expect(bootstrap).toContain("autoConnectAfterDiscovery.current = true;");

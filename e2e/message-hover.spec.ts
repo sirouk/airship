@@ -72,6 +72,52 @@ test("touch messages expose one calm action trigger and tappable actions", async
 });
 
 /**
+ * The touch trigger carried `role="button"` — added only to suppress the
+ * disclosure triangle, which `list-style: none` and the
+ * `::-webkit-details-marker` rule already do — and its actions were wrapped in
+ * `role="menu"`/`role="menuitem"`. Both were role overrides rather than widget
+ * contracts: the first erased the native details expanded state, so the trigger
+ * announced nothing about being open or closed, and the second promised menu
+ * keyboard semantics (focus on open, roving tabindex, arrows, Escape) that no
+ * code implemented. The plain-buttons-in-a-named-group form has to keep every
+ * action reachable on touch, which is what the roles were never checked for.
+ */
+test("touch action disclosure reports its expanded state and keeps every action reachable", async ({ page }, testInfo) => {
+  test.skip(!testInfo.project.name.includes("mobile"), "touch layout contract");
+  await seedOneTurn(page);
+  // The user card exists from the first paint; Retry only exists on an answer.
+  await expect(page.locator('[data-transcript-card][data-message-role="assistant"]').last())
+    .toBeVisible({ timeout: 30_000 });
+
+  const reachable = [
+    { role: "user", actions: ["Copy", "Edit & branch", "Fork from here"] },
+    { role: "assistant", actions: ["Copy", "Retry", "Fork from here"] },
+  ] as const;
+
+  for (const { role, actions } of reachable) {
+    const card = page.locator(`[data-transcript-card][data-message-role="${role}"]`).last();
+    const disclosure = card.locator("details.message-actions-touch");
+    const trigger = disclosure.locator("summary");
+
+    // No role on the summary: the override is what cost the native mapping.
+    await expect(trigger).not.toHaveAttribute("role");
+    await expect(disclosure).toHaveJSProperty("open", false);
+    await trigger.click();
+    await expect(disclosure).toHaveJSProperty("open", true);
+
+    // A menu role here would be a contract nothing in this subtree honours.
+    await expect(disclosure.locator('[role="menu"], [role="menuitem"]')).toHaveCount(0);
+    const group = disclosure.getByRole("group", { name: "Message actions" });
+    for (const name of actions) {
+      await expect(group.getByRole("button", { name }), `${role} · ${name}`).toBeEnabled();
+    }
+    // Collapsing again is the other half of the disclosure the roles removed.
+    await trigger.click();
+    await expect(disclosure).toHaveJSProperty("open", false);
+  }
+});
+
+/**
  * The desktop path regressed silently once: the actions lived in a `<details>`
  * whose `<summary>` was hidden at pointer widths, so engines that stopped
  * painting closed-details content left every action laid out, measurable, and

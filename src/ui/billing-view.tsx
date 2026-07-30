@@ -23,6 +23,7 @@ import { Popover } from "./popover";
 import { mapUnknownRequestFailure, observationState } from "./request-state";
 import { RouteHeader } from "./route-header";
 import { Seal, type SealState } from "./seal";
+import { nextTabId } from "./tabs";
 
 export type BillingCredentialKind = "oauth" | "api-key" | "unknown";
 
@@ -236,6 +237,9 @@ export function resolveBillingProviderInventory(
 /** The em dash a metric shows when nothing has been read. It is not a zero. */
 const NOT_READ = "—";
 
+/** How long a snapshot reads as fresh before the chip demotes it to an observation. */
+const OBSERVATION_FRESHNESS_BUDGET_MS = 5 * 60_000;
+
 /**
  * The bound, stated on the figure it bounds.
  *
@@ -281,6 +285,25 @@ export function BillingView({
    * selection, not two tables.
    */
   const [highlight, setHighlight] = useState<string>();
+  /*
+   * When the freshness reading was last taken. The observed chip flips from
+   * "Verified" to "Observed" at a pure clock threshold, and nothing
+   * re-renders an idle route at a threshold — so one timeout per snapshot
+   * wakes the view at exactly fetchedAt + budget. A second timer is never
+   * needed: a stale reading only goes fresh again when a new snapshot
+   * replaces the old one, which re-arms this effect.
+   */
+  const [observedNow, setObservedNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!snapshot) return;
+    const fetchedAt = Date.parse(snapshot.fetchedAt);
+    if (!Number.isFinite(fetchedAt)) return;
+    const remaining = fetchedAt + OBSERVATION_FRESHNESS_BUDGET_MS - Date.now();
+    if (remaining <= 0) return;
+    const timer = window.setTimeout(() => setObservedNow(Date.now()), remaining);
+    return () => window.clearTimeout(timer);
+  }, [snapshot]);
 
   useEffect(() => {
     if (!accountReadable) {
@@ -317,7 +340,7 @@ export function BillingView({
   const subscriptionState = subscriptionDatum(snapshot, loading);
   const usageState = usageDatum(snapshot, loading);
   const quotaState = quotaDatum(snapshot, loading);
-  const observed = snapshot ? observationState(snapshot.fetchedAt, 5 * 60_000) : undefined;
+  const observed = snapshot ? observationState(snapshot.fetchedAt, OBSERVATION_FRESHNESS_BUDGET_MS, observedNow) : undefined;
   const acceptance = snapshot ? chutesAccountAcceptance(snapshot) : undefined;
   const chip = chutesAccountChip(acceptance, observed?.stale === true);
   const subscriptionInactive = subscriptionState.status === "verified" && subscriptionState.value?.active === false;
@@ -651,14 +674,29 @@ function BillingProviderTabs({
 }) {
   const tablist = useRef<HTMLDivElement>(null);
 
-  function selectAt(index: number) {
-    const next = providers[(index + providers.length) % providers.length];
+  /*
+   * The movement rule is `tabs.tsx`'s `nextTabId`, not a fourth copy of it.
+   *
+   * This strip shipped its own ←/→/Home/End ladder with its own wrap-around,
+   * which is how a strip drifts from the other three the day the contract
+   * changes — a Home/End rule that starts respecting disabled tabs would have
+   * reached every tablist except this one. `Tabs` itself is still not adoptable
+   * here because each tab is two lines, provider name over connection state,
+   * and `TabItem` has no shape for that.
+   */
+  const moveSelection = (event: KeyboardEvent & { currentTarget: HTMLDivElement }) => {
+    const items = providers.map(({ providerId }) => ({
+      id: providerId,
+      label: BILLING_PROVIDERS.find((candidate) => candidate.id === providerId)?.label ?? providerId,
+    }));
+    const next = providers.find((provider) => provider.providerId === nextTabId(items, selected, event.key));
     if (!next) return;
+    event.preventDefault();
     onSelect(next.providerId);
     tablist.current
       ?.querySelector<HTMLButtonElement>(`#billing-provider-tab-${next.providerId}`)
       ?.focus();
-  }
+  };
 
   return (
     <div
@@ -666,13 +704,7 @@ function BillingProviderTabs({
       ref={tablist}
       role="tablist"
       aria-label="Account providers"
-      onKeyDown={(event) => {
-        const current = providers.findIndex((provider) => provider.providerId === selected);
-        if (event.key === "ArrowRight") { event.preventDefault(); selectAt(current + 1); }
-        else if (event.key === "ArrowLeft") { event.preventDefault(); selectAt(current - 1); }
-        else if (event.key === "Home") { event.preventDefault(); selectAt(0); }
-        else if (event.key === "End") { event.preventDefault(); selectAt(providers.length - 1); }
-      }}
+      onKeyDown={moveSelection}
     >
       {providers.map((inventory) => {
         const provider = BILLING_PROVIDERS.find((candidate) => candidate.id === inventory.providerId)!;

@@ -5,6 +5,7 @@ import {
   PROVIDER_PROFILES,
   attachedCount,
   attachedRows,
+  attachedSummary,
   googleDriveAvailableInBuild,
   readinessTally,
   sealForState,
@@ -127,7 +128,7 @@ describe("prerequisite itemisation", () => {
     const rows = attachedRows(disconnected, undefined, false);
 
     expect(rows.map((row) => row.label)).toEqual(["Endpoint", "Credential authority", "Workspace key"]);
-    expect(rows.every((row) => !row.attached)).toBe(true);
+    expect(rows.every((row) => row.attached === false)).toBe(true);
     expect(attachedCount(disconnected, undefined, false)).toBe(0);
   });
 
@@ -141,8 +142,69 @@ describe("prerequisite itemisation", () => {
 
   it("counts the device prerequisites from custody, not from the selected provider", () => {
     expect(attachedCount(disconnected, undefined, true)).toBe(0);
-    expect(attachedCount(disconnected, openedDevice, true)).toBe(3);
+    /*
+     * Was 3, deliberately amended to 2. The third row certified "Recovery key
+     * · Saved by you" from nothing but `Boolean(localDeviceStatus)` — custody
+     * of the one-time value is never persisted (the acknowledgement is page
+     * state), so an open vault could not know the key was saved. The device
+     * key and object store rows keep their custody-backed counts.
+     */
+    expect(attachedCount(disconnected, openedDevice, true)).toBe(2);
     expect(attachedRows(disconnected, openedDevice, true)[1]?.value).toBe("Created · OPFS");
+  });
+
+  it("states the provable recovery-key fact instead of a custody it cannot know", () => {
+    const rows = attachedRows(disconnected, openedDevice, true);
+    const recovery = rows[2]!;
+
+    expect(recovery.label).toBe("Recovery key");
+    // "unknown", never false: an unprovable fact reported as unmet is a fault
+    // report, and this one could never be cleared.
+    expect(recovery.attached).toBe("unknown");
+    expect(recovery.value).toContain("Airship holds no copy");
+    expect(recovery.value).toContain("confirm you can still find it");
+    expect(recovery.value).not.toContain("Saved by you");
+  });
+
+  it("never puts an unknowable row in the count it advertises", () => {
+    // The defect this pins: the summary was the literal "(n of 3) — the device
+    // key, the object store and the recovery key", so a fully enrolled device
+    // Vault read "2 of 3" forever and a real gap looked the same as the
+    // standing one. Every row that is counted must be able to reach `true`.
+    for (const localDevice of [true, false]) {
+      for (const status of [undefined, openedDevice]) {
+        for (const snapshot of [disconnected, readySnapshot]) {
+          const rows = attachedRows(snapshot, status, localDevice);
+          const counted = rows.filter((row) => row.attached !== "unknown");
+          const summary = attachedSummary(rows);
+
+          expect(summary).toContain(`of ${counted.length})`);
+          for (const row of counted) expect(summary).toContain(row.label.toLowerCase());
+          for (const row of rows.filter((item) => item.attached === "unknown")) {
+            expect(summary).toContain("only you can confirm");
+            expect(summary.indexOf(row.label.toLowerCase())).toBeGreaterThan(summary.indexOf(")"));
+          }
+        }
+      }
+    }
+  });
+
+  it("reaches its own denominator once a device Vault is fully set up", () => {
+    expect(attachedSummary(attachedRows(disconnected, openedDevice, true)))
+      .toBe("What's attached (2 of 2) — the device key and the encrypted object store; the recovery key only you can confirm");
+    expect(attachedSummary(attachedRows(disconnected, undefined, true)))
+      .toBe("What's attached (0 of 2) — the device key and the encrypted object store; the recovery key only you can confirm");
+  });
+
+  it("enumerates the prerequisites the surface actually has, not the device ones", () => {
+    // A Drive/S3 Vault itemises endpoint, credential authority and workspace
+    // key. The old literal summary named the device key and the object store on
+    // that surface, which are not among its rows.
+    const summary = attachedSummary(attachedRows(readySnapshot, undefined, false));
+
+    expect(summary).toBe("What's attached (3 of 3) — the endpoint, the credential authority and the workspace key");
+    expect(summary).not.toContain("device key");
+    expect(summary).not.toContain("recovery key");
   });
 });
 

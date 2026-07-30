@@ -8,6 +8,7 @@ import {
   readTerminalSetupOpen,
   terminalEmulatorWrite,
   terminalFooterNotice,
+  terminalPanelAutoStart,
   terminalPersistenceNotice,
   terminalSealState,
   terminalTypography,
@@ -40,6 +41,21 @@ describe("terminal status in the one seal vocabulary", () => {
     expect(terminalSealState("restart-required")).toBe("attention");
     // An exited process is a finished process, not a broken one.
     expect(terminalSealState("exited")).toBe("none");
+  });
+});
+
+describe("terminal panel auto-start", () => {
+  it("lets selection wake only sessions that were never or still alive", () => {
+    // idle: never started. restart-required: was live when the page reloaded.
+    expect(terminalPanelAutoStart("idle")).toBe(true);
+    expect(terminalPanelAutoStart("restart-required")).toBe(true);
+    // running/starting short-circuit inside manager.start anyway.
+    expect(terminalPanelAutoStart("running")).toBe(true);
+    expect(terminalPanelAutoStart("starting")).toBe(true);
+    // Ended sessions own the explicit Restart control: selecting their tab is
+    // for reading final output, not for silently spending it on a respawn.
+    expect(terminalPanelAutoStart("exited")).toBe(false);
+    expect(terminalPanelAutoStart("failed")).toBe(false);
   });
 });
 
@@ -170,5 +186,21 @@ describe("terminal panel bar at phone width", () => {
     const css = readFileSync(new URL("./terminal-view.css", import.meta.url), "utf8");
     expect(css).toContain('.terminal-panel__bar button span:not([aria-hidden="true"]){display:none}');
     expect(css).not.toMatch(/\.terminal-panel__bar button span\{display:none\}/u);
+  });
+});
+
+describe("the tab rename affordance on touch surfaces", () => {
+  /*
+   * 34px wide, no height, and invisible until hover: the rename control had
+   * no reachable path on a device that cannot hover. The phone block lifts it
+   * to the same 44px square as its neighbours, and a coarse pointer anywhere
+   * keeps it painted — an affordance that only exists under hover is an
+   * affordance a touchscreen never sees.
+   */
+  it("grows to the 44px phone floor and shows itself without a hover", () => {
+    const css = readFileSync(new URL("./terminal-view.css", import.meta.url), "utf8");
+    const phone = css.slice(css.indexOf("@media(max-width:760px)"));
+    expect(phone).toContain(".terminal-tab .terminal-tab__rename{min-width:44px;min-height:44px;opacity:1}");
+    expect(css).toContain("@media(pointer:coarse){.terminal-tab .terminal-tab__rename{opacity:1}}");
   });
 });

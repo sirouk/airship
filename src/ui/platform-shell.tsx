@@ -23,6 +23,13 @@ export type PaletteEntry = Readonly<{
   description: string;
   keywords?: readonly string[];
   group: "Navigate" | "Commands" | "Sessions" | "Trust" | "Preferences";
+  /**
+   * Set for entries the runtime has declared unavailable right now. The row
+   * stays listed with its reason as the description — the same contract
+   * `MenuSelect` keeps for disabled options — but choosing it is a no-op
+   * that must not dismiss the palette.
+   */
+  disabled?: boolean;
   run(): void;
 }>;
 
@@ -66,6 +73,7 @@ export function buildPaletteEntries(args: Readonly<{
     description: command.availability.enabled ? command.summary : command.availability.reason ?? "Unavailable",
     keywords: [...command.aliases, command.category, command.usage],
     group: "Commands",
+    ...(command.availability.enabled ? {} : { disabled: true }),
     run: () => {
       if (command.availability.enabled) args.runCommand?.(`/${command.name} `);
     },
@@ -131,6 +139,14 @@ export function CommandPalette({ open, entries, onClose }: Readonly<{
   if (!open) return null;
   const choose = (entry: PaletteEntry | undefined) => {
     if (!entry) return;
+    /*
+     * An unavailable entry is announced, not enacted: the palette used to
+     * close on activation and do nothing, which read as "ran, and nothing
+     * happened". Keep it open with the row's reason still in view — the same
+     * refusal `MenuSelect` gives a disabled option, where the control stays
+     * up and the description carries the why.
+     */
+    if (entry.disabled) return;
     onClose();
     entry.run();
   };
@@ -158,7 +174,7 @@ export function CommandPalette({ open, entries, onClose }: Readonly<{
         </div>
         <div id="command-palette-results" class="command-palette__results" role="listbox">
           {filtered.length ? filtered.map((entry, index) => (
-            <button id={`palette-${safeId(entry.id)}`} key={entry.id} type="button" role="option" aria-selected={index === active} class={index === active ? "is-active" : ""} onMouseEnter={() => setActive(index)} onClick={() => choose(entry)}>
+            <button id={`palette-${safeId(entry.id)}`} key={entry.id} type="button" role="option" aria-selected={index === active} aria-disabled={entry.disabled || undefined} class={index === active ? "is-active" : ""} onMouseEnter={() => setActive(index)} onClick={() => choose(entry)}>
               <span><strong>{entry.label}</strong><small>{entry.description}</small></span><em>{entry.group}</em>
             </button>
           )) : <p class="command-palette__empty">No matching destination or command.</p>}
@@ -192,14 +208,25 @@ export function navigationJumpForChord(prefix: string | undefined, key: string):
   return prefix === "g" ? NAVIGATION_JUMPS[key.toLocaleLowerCase()] : undefined;
 }
 
-export function useGlobalNavigationJumps(navigate: (view: NavigationView) => void): void {
+export function useGlobalNavigationJumps(navigate: (view: NavigationView) => void, enabled?: () => boolean): void {
   const navigateRef = useRef(navigate);
   navigateRef.current = navigate;
+  const enabledRef = useRef(enabled);
+  enabledRef.current = enabled;
   useEffect(() => {
     let prefix: string | undefined;
     let timeout = 0;
     const clear = () => { prefix = undefined; window.clearTimeout(timeout); timeout = 0; };
     const onKeyDown = (event: KeyboardEvent) => {
+      /*
+       * Chords must not fire underneath a modal overlay. The shell makes the
+       * routed surface inert while one is open, but inert only suppresses
+       * pointer/focus interaction — a window-level keydown still lands, so a
+       * `g` chord used to swap the route and push history invisibly behind
+       * the dialog. `enabled` is the host's overlay gate; when it says closed
+       * the chord (and any pending `g` prefix) is dropped.
+       */
+      if (enabledRef.current && !enabledRef.current()) { clear(); return; }
       if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey || isTypingTarget(event.target)) { clear(); return; }
       if (!prefix && event.key.toLocaleLowerCase() === "g") {
         prefix = "g";
@@ -548,14 +575,14 @@ export function PreferencesDialog({ open, value, onChange, onClose, profileAppro
     : vaultAdopted ? "connected" : "not-connected";
   return (
     <div class="platform-scrim" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <div ref={dialog} class="preferences-dialog" role="dialog" aria-modal="true" aria-labelledby="preferences-title" tabIndex={-1} onKeyDown={(event) => { if (event.key === "Escape") onClose(); else if (event.key === "Tab") trapFocus(event, dialog.current); }}>
+      <div ref={dialog} class="preferences-dialog" role="dialog" aria-modal="true" aria-labelledby="preferences-title" tabIndex={-1} onKeyDown={(event) => { if (event.key === "Escape") { if (!event.defaultPrevented) onClose(); } else if (event.key === "Tab") trapFocus(event, dialog.current); }}>
         <header><div><span class="eyebrow">Runtime controls</span><h2 id="preferences-title">Preferences</h2><p>Change presentation and durability. Agent behavior remains pinned to its profile.</p></div><button type="button" onClick={onClose}>Done</button></header>
         {profileApproval ? <div class="profile-approval-preference">
           <div><span>Active profile approvals</span><strong>{approvalModeLabel(profileApproval.mode)}</strong></div>
           <button type="button" onClick={profileApproval.onManage}>Manage in Profiles</button>
           <p>{approvalModeDescription(profileApproval.mode)} A saved change creates a new profile revision and takes effect in a new pinned conversation.</p>
         </div> : <>
-          <PreferenceSelect label="Legacy session approvals" value={value.approvalMode} options={[["ask-first","Ask First · prompt before effects"],["auto-approve","Auto Approve · model safety review"],["full-access","Full Access · bounded browser sandbox"]]} onChange={(next) => update("approvalMode", next as PreferenceOverrides["approvalMode"])} />
+          <PreferenceSelect label="Legacy session approvals" value={value.approvalMode} options={[["ask-first","Ask First · prompt before effects"],["auto-approve","Auto Approve · model safety review"],["full-access","Full Access · no prompts, any HTTPS origin"]]} onChange={(next) => update("approvalMode", next as PreferenceOverrides["approvalMode"])} />
           <p><strong>{approvalModeLabel(value.approvalMode)}.</strong> {approvalModeDescription(value.approvalMode)}</p>
         </>}
         <PreferenceSelect
@@ -715,7 +742,19 @@ export function ClaimRows({ rows }: Readonly<{ rows: readonly ClaimRow[] }>) {
 
 export function TrustPostureSheet({ open, axes, onClose, onNavigate }: Readonly<{ open: boolean; axes: readonly TrustAxis[]; onClose(): void; onNavigate(view: NavigationView): void }>) {
   const dialog = useRef<HTMLDivElement>(null);
-  useEffect(() => { if (open) requestAnimationFrame(() => dialog.current?.focus({ preventScroll: true })); }, [open]);
+  const restore = useRef<HTMLElement>();
+  /*
+   * The same capture/restore contract `CommandPalette` and `PreferencesDialog`
+   * keep: a modal that takes focus on open owes it back on close. Without the
+   * restore, dismissing the sheet dropped keyboard focus on `<body>`, and the
+   * reader who opened it from the topbar chip lost their place entirely.
+   */
+  useEffect(() => {
+    if (!open) return;
+    restore.current = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
+    const frame = requestAnimationFrame(() => dialog.current?.focus({ preventScroll: true }));
+    return () => { cancelAnimationFrame(frame); restore.current?.focus({ preventScroll: true }); };
+  }, [open]);
   if (!open) return null;
   /*
    * Grouped by scope, not merged. Every axis still renders its own row with its

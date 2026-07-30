@@ -141,6 +141,7 @@ export function LocalDeviceVaultSetup({
   const restoreAbort = useRef<AbortController>();
 
   const ceremonyRegion = useRef<HTMLDivElement>(null);
+  const commitButton = useRef<HTMLButtonElement>(null);
 
   const [operation, setOperation] = useState<Operation>();
   const [notice, setNotice] = useState<Notice>();
@@ -178,11 +179,18 @@ export function LocalDeviceVaultSetup({
   // no focus move and no page-level signal, so the only visible change was the
   // button relabelling itself.
   useEffect(() => {
-    if (ceremony !== "revealed") return;
-    const region = ceremonyRegion.current;
-    if (!region) return;
-    region.scrollIntoView({ block: "center" });
-    region.focus();
+    if (ceremony === "revealed") {
+      const region = ceremonyRegion.current;
+      if (!region) return;
+      region.scrollIntoView({ block: "center" });
+      region.focus();
+      return;
+    }
+    if (ceremony === "acknowledged") {
+      // The checkbox that had focus unmounts with the revealed panel; without
+      // a handoff focus drops to the document body mid-ceremony.
+      commitButton.current?.focus();
+    }
   }, [ceremony]);
 
   function finishOperation(): void {
@@ -597,7 +605,7 @@ export function LocalDeviceVaultSetup({
                     Did not save it? Cancel. Nothing is enrolled until you create, and a new ceremony issues a different key.
                   </p>
                   <div class="local-device-vault__actions">
-                    <button type="button" onClick={() => void commitEnrollment()} disabled={busy}>
+                    <button type="button" ref={commitButton} onClick={() => void commitEnrollment()} disabled={busy}>
                       {operation === "creating" ? "Creating…" : "Create encrypted Vault"}
                     </button>
                     <button type="button" class="local-device-vault__quiet" onClick={cancelEnrollment} disabled={busy}>
@@ -734,7 +742,7 @@ export function LocalDeviceVaultSetup({
                     setRestoreAcknowledged(false);
                   }}
                 />
-                <span><strong>Restore into empty browser storage</strong><small>Fails if this profile already has an enrolled key or object authority.</small></span>
+                <span><strong>Restore into empty browser storage</strong><small>Fails if this profile has a different enrolled key or any existing object authority; an enrolled key matching this backup is reused.</small></span>
               </label>
             </fieldset>
             <label class="local-device-vault__check local-device-vault__restore-ack">

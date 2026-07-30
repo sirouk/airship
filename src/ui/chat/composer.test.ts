@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import {
-  COMPOSER_ATTACHMENT_NEEDS_TEXT,
+  composerAttachmentNeedsText,
   COMPOSER_MAX_HEIGHT,
   COMPOSER_PLACEHOLDER,
   COMPOSER_PLACEHOLDER_NARROW,
@@ -146,44 +146,48 @@ describe("the composer footer's stated facts are mounted", () => {
 
 describe("composer attachment admission", () => {
   it("names the cap and the files it refused, not just the ones it took", () => {
-    const notice = composerAttachmentNotice({ added: 2, rejected: 0, overflow: 2, capability: "supported" });
+    const notice = composerAttachmentNotice({ added: 2, rejected: 0, overflow: 2, capability: "supported", encryptedRequest: false });
     expect(notice).toContain(String(COMPOSER_ATTACHMENT_LIMIT));
     expect(notice).toContain("2 images were not added");
     expect(notice).toContain("2 images are ready");
   });
 
   it("never phrases a fully refused add as a success", () => {
-    const notice = composerAttachmentNotice({ added: 0, rejected: 0, overflow: 1, capability: "supported" });
+    const notice = composerAttachmentNotice({ added: 0, rejected: 0, overflow: 1, capability: "supported", encryptedRequest: false });
     expect(notice).not.toContain("0 image");
     expect(notice).not.toContain("ready");
     expect(notice).toContain(`at most ${COMPOSER_ATTACHMENT_LIMIT} attachments`);
   });
 
   it("states both refusals when a drop mixes non-images with overflow", () => {
-    const notice = composerAttachmentNotice({ added: 0, rejected: 1, overflow: 3, capability: "supported" });
+    const notice = composerAttachmentNotice({ added: 0, rejected: 1, overflow: 3, capability: "supported", encryptedRequest: false });
     expect(notice).toContain("1 non-image attachment was not added");
     expect(notice).toContain("3 images were not added");
   });
 
   it("keeps the capability sentence for an admitted image on a model without vision", () => {
-    expect(composerAttachmentNotice({ added: 1, rejected: 0, overflow: 0, capability: "model-lacks-vision" }))
+    expect(composerAttachmentNotice({ added: 1, rejected: 0, overflow: 0, capability: "model-lacks-vision", encryptedRequest: false }))
       .toContain("explicitly includes image input");
-    expect(composerAttachmentNotice({ added: 1, rejected: 0, overflow: 0, capability: "disconnected" }))
+    expect(composerAttachmentNotice({ added: 1, rejected: 0, overflow: 0, capability: "disconnected", encryptedRequest: false }))
       .toContain("Connect a vision-capable inference model");
   });
 
   it("says nothing when nothing was offered", () => {
-    expect(composerAttachmentNotice({ added: 0, rejected: 0, overflow: 0, capability: "supported" })).toBeUndefined();
+    expect(composerAttachmentNotice({ added: 0, rejected: 0, overflow: 0, capability: "supported", encryptedRequest: false })).toBeUndefined();
   });
 });
 
 describe("an attachment with no prompt refuses out loud", () => {
   it("names the reason on the disabled control and in the imperative guard", () => {
-    expect(COMPOSER_ATTACHMENT_NEEDS_TEXT.length).toBeGreaterThan(0);
+    // The sentence became a function of the transport: it only claims the image
+    // travels "inside the encrypted request" when the request actually is one.
+    expect(composerAttachmentNeedsText(false)).toContain("travels inside the request");
+    expect(composerAttachmentNeedsText(true)).toContain("inside the encrypted request");
+    expect(composerAttachmentNeedsText(false)).not.toContain("encrypted");
     // Both admission paths speak the same sentence: the silent `return` that
     // shipped made an attachment-only Enter indistinguishable from a dead key.
-    expect(app).toContain("setComposerNotice(COMPOSER_ATTACHMENT_NEEDS_TEXT)");
-    expect(app).toContain("? COMPOSER_ATTACHMENT_NEEDS_TEXT");
+    expect(app).toContain("setComposerNotice(composerAttachmentNeedsText(composerRequestEncrypted))");
+    expect(app).toContain("? composerAttachmentNeedsText(composerRequestEncrypted)");
     expect(app).toContain("const attachmentsAwaitText = attachments.length > 0 && !input.trim();");
   });
 });

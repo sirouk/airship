@@ -121,6 +121,30 @@ describe("the phone shell's soft-keyboard compensation", () => {
     const phoneBlock = routeStyles.slice(routeStyles.lastIndexOf(PHONE_QUERY));
     expect(phoneBlock).toMatch(/:root\[data-keyboard-open="true"\] \.app-shell \{\s*grid-template-rows:[^;]*\s0;/u);
   });
+
+  it("keeps the session bar's chip cluster on one line while the shell is shortened", () => {
+    /*
+     * The transcript is the only flexible track in `.chat-stage`, so a shell
+     * that shrinks by 290px takes all 290 out of the transcript unless the
+     * chrome above it yields too. The phone's chip cluster buys its overflow in
+     * height — a second 44px+ row — which left the transcript's own box at 54px
+     * with the keyboard open: shorter than one card. `flex-wrap: nowrap` here
+     * withdraws that row for the duration of the state, the way the nav band
+     * above withdraws its track, and `flex: 0 0 auto` on the children is what
+     * makes `overflow-x` a real scroll rather than the mid-text compression the
+     * wrap replaced — so no claim is shed and none is clipped.
+     */
+    const phoneBlock = routeStyles.slice(routeStyles.lastIndexOf(PHONE_QUERY));
+    expect(phoneBlock).toMatch(/\.session-bar__chips > \* \{\s*flex: 0 0 auto;/u);
+    expect(phoneBlock).toMatch(
+      /:root\[data-keyboard-open="true"\] \.session-bar__chips \{\s*flex-wrap: nowrap;\s*overflow-x: auto;/u,
+    );
+    // A shortened cluster may not shed a label or shrink a touch target: both
+    // would trade a claim, or a thumb, for the height the scroll already buys.
+    const shortened = phoneBlock.match(/:root\[data-keyboard-open="true"\] \.session-bar__chips \{([^}]*)\}/u)?.[1] ?? "";
+    expect(shortened).not.toContain("display: none");
+    expect(shortened).not.toContain("min-height");
+  });
 });
 
 describe("the phone profile switcher", () => {

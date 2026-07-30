@@ -105,17 +105,23 @@ export function Popover({
       if (!hostRef.current?.contains(event.target as Node)) setOpen(false);
     }
     function onKeyDown(event: KeyboardEvent) {
+      // Containment applies only once the keyboard is actually inside the
+      // disclosure. A fine-pointer hover can open this panel while the user is
+      // typing somewhere else entirely, and yanking their next Tab into a panel
+      // they never asked for would be worse than the tooltip this replaces.
+      // The Tab branch already honoured that boundary; the Escape branch did
+      // not — it swallowed EVERY Escape at the document while a hover-open
+      // panel sat elsewhere on the page, refocusing a trigger the typist had
+      // never touched and eating the keypress their own control was waiting
+      // for. One containment check now gates both keys identically.
+      if (!hostRef.current?.contains(document.activeElement)) return;
       if (event.key === "Escape") {
         event.stopPropagation();
         setOpen(false);
         triggerRef.current?.focus();
         return;
       }
-      // Containment applies only once the keyboard is actually inside the
-      // disclosure. A fine-pointer hover can open this panel while the user is
-      // typing somewhere else entirely, and yanking their next Tab into a panel
-      // they never asked for would be worse than the tooltip this replaces.
-      if (event.key === "Tab" && hostRef.current?.contains(document.activeElement)) {
+      if (event.key === "Tab") {
         trapFocus(event, panelRef.current);
       }
     }

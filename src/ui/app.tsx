@@ -70,6 +70,11 @@ import {
   type ProfileCatalogStore,
 } from "../profiles/persistence";
 import {
+  PROFILE_BOUNDARY_NOTE,
+  PROFILE_MEMORY_SCOPE_LABELS,
+  PROFILE_POSTURE_FIELD_LABEL,
+} from "./profiles-governance";
+import {
   createGlobalSkillSettings,
   createProfileRevision,
   enforcedMemoryScope,
@@ -223,13 +228,13 @@ import { useWindowedTranscript } from "./chat/use-windowed-transcript";
 import { composerAttachments, userMessageParts, COMPOSER_ATTACHMENT_LIMIT, type ComposerAttachment } from "./chat/composer-state";
 import { MOBILE_SHELL_MEDIA_QUERY, shouldClaimComposerFocus } from "./chat/composer-focus";
 import {
+  composerAttachmentNeedsText,
   composerAttachmentNotice,
   composerGrowthCap,
   composerPlaceholder,
   composerPosture,
   ComposerKeyhintLegend,
   ComposerPostureChip,
-  COMPOSER_ATTACHMENT_NEEDS_TEXT,
   COMPOSER_NARROW_PLACEHOLDER_QUERY,
   COMPOSER_PLACEHOLDER_TITLE,
   SLASH_MENU_HEADER,
@@ -267,7 +272,7 @@ import { TopbarPostureChip } from "./topbar";
 import { TabPresenceNote } from "./tab-presence";
 import { ProfileThemeSwatch, themePresentation, themePresentationSummary } from "./profile-theme-swatch";
 import { PostureChip } from "./posture-chip";
-import { durabilityLabel } from "./durability-indicator";
+import { durabilityLabel, durabilitySeal, type DurabilityState } from "./durability-indicator";
 import { RouteSkeleton } from "./route-skeleton";
 import type { LocalProviderProbeResult } from "./connect/connect-surface";
 import {
@@ -333,6 +338,34 @@ type UiMessage = {
     providerContext: "included" | "excluded";
   }>;
 };
+
+/** One operation's buffered live tool output, pre-flush. */
+export type PendingToolOutputUpdate = NonNullable<UiMessage["liveToolOutput"]>;
+
+/** Live tool output keeps only the tail; the panel renders at most this much. */
+const LIVE_TOOL_OUTPUT_LIMIT = 32_768;
+
+/**
+ * Coalesces a burst of `tool-output` chunks into one pending update per
+ * operation. The execution stream emits per write; applying each to messages
+ * rebuilt the whole transcript array and re-rendered every visible card per
+ * chunk, while only the latest frame is ever painted. Intermediate text
+ * merely accumulates here until the animation-frame flush applies every
+ * pending operation in a single `setMessages`.
+ */
+export function mergePendingToolOutput(
+  updates: Map<string, PendingToolOutputUpdate>,
+  operationId: string,
+  chunk: Readonly<{ stream: PendingToolOutputUpdate["stream"]; text: string }>,
+): Map<string, PendingToolOutputUpdate> {
+  const prior = updates.get(operationId);
+  updates.set(operationId, {
+    operationId,
+    stream: chunk.stream,
+    text: `${prior?.text ?? ""}${chunk.text}`.slice(-LIVE_TOOL_OUTPUT_LIMIT),
+  });
+  return updates;
+}
 
 /**
  * A conversation whose durable history is intact but whose transcript this
@@ -466,6 +499,13 @@ const LOCAL_MODEL_SERVERS = Object.freeze([
 
 /** Wall clock for the whole two-server check. A refused port answers far sooner. */
 const LOCAL_PROBE_DEADLINE_MS = 15_000;
+
+/*
+ * Scheduled OAuth rotation retries after a transient failure. Bounded on
+ * purpose: three attempts over ~3.5 minutes outlast a blip, and past that the
+ * connection claim has no honest basis left, so the original release applies.
+ */
+const OAUTH_ROTATION_RETRY_DELAYS = Object.freeze([30_000, 60_000, 120_000]);
 
 /**
  * The Account route's non-Chutes tabs, in the order that route lists them.
@@ -677,6 +717,16 @@ const welcomeMessage: UiMessage = {
 };
 
 const PROFILE_DRAFT_DISCARD_PROMPT = "Discard unsaved profile edits?";
+
+/**
+ * Why Send and Enter wait out a model or storage transition.
+ *
+ * The Enter path shipped this sentence first; a disabled Send said nothing,
+ * and `disabled` swallows `title` for touch and most screen readers. The
+ * button's `aria-label` and `title`, and the Enter guard's notice, all quote
+ * this one string so the three surfaces cannot drift.
+ */
+const COMPOSER_TRANSITION_WAIT = "Wait for the active model or storage transition. Your prompt remains in the composer.";
 
 /**
  * The resting word for a lifecycle whose full label is too long for a chip.
@@ -1189,6 +1239,17 @@ export function App() {
   const [oauthTokenRevision, setOauthTokenRevision] = useState(0);
   const [attestationPresentation, setAttestationPresentation] = useState<AttestationPresentationState>();
   const [evidenceAcquisitionSnapshot, setEvidenceAcquisitionSnapshot] = useState<EvidenceAcquisitionQueueSnapshot>();
+  /**
+   * Whether a refused queue checkpoint is currently parking acquisition.
+   *
+   * State rather than a render-time read of the controller ref: the fault is not
+   * part of the persisted snapshot, so a ref read had no reactive channel of its
+   * own — the notice appeared only if something else happened to re-render, and
+   * the self-heal effect had nothing to key on.
+   */
+  const [evidenceCheckpointFaulted, setEvidenceCheckpointFaulted] = useState(false);
+  /** Re-runs the automatic vault adoptions once a cockpit transition has settled. */
+  const [cockpitSettleRetry, setCockpitSettleRetry] = useState(0);
   const [attestationNow, setAttestationNow] = useState(() => Date.now());
   /** One automatic refresh request per expired observation record. */
   const automaticEvidenceRefreshes = useRef(new Set<string>());
@@ -1438,6 +1499,8 @@ export function App() {
   const primaryNav = useRef<HTMLElement>(null);
   const pendingDelta = useRef<{ messageId: string; text: string }>();
   const pendingDeltaFrame = useRef<number>();
+  const pendingToolOutput = useRef<{ messageId: string; updates: Map<string, PendingToolOutputUpdate> }>();
+  const pendingToolOutputFrame = useRef<number>();
   const profileOperation = useRef(0);
   const sessionNavigationChanging = useRef(false);
   const catalogAuthorityChanging = useRef(false);
@@ -1498,8 +1561,21 @@ export function App() {
     return JSON.parse(response.content) as FederatedMemoryResult;
   }, [sessionId]);
 
+  /*
+   * Any platform overlay (command palette, preferences, trust sheet, mobile
+   * "more" sheet, approval prompt, profile transition) makes the routed
+   * surface inert — but inert does not stop a window-level keydown, so a `g`
+   * chord could swap the route and push history invisibly behind the dialog.
+   * The navigation-jump hook consults this gate before acting on a chord.
+   * Rail buttons and overlay-owned navigation (palette entries, trust-sheet
+   * rows) call `navigatePrimary` directly and stay ungated.
+   */
+  const platformOverlayOpen = mobileMoreOpen || paletteOpen || preferencesOpen || trustSheetOpen || approvalPending || Boolean(profileCockpitTransition);
+  const platformOverlayOpenRef = useRef(platformOverlayOpen);
+  platformOverlayOpenRef.current = platformOverlayOpen;
+
   useGlobalPaletteShortcut(() => setPaletteOpen((open) => !open));
-  useGlobalNavigationJumps(navigatePrimary);
+  useGlobalNavigationJumps(navigatePrimary, () => !platformOverlayOpenRef.current);
   useVisualViewport();
   useEffect(() => () => {
     for (const url of attachmentPreviewUrls.current) URL.revokeObjectURL(url);
@@ -1686,6 +1762,16 @@ export function App() {
       : "unsupported";
   const activeRemoteInference = activeInferenceBinding?.transportBoundary === "e2ee-attestable"
     || activeInferenceBinding?.transportBoundary === "provider-tls";
+  /*
+   * Whether "encrypted request" is a claim this composer may make.
+   *
+   * Only the app-encrypted boundary earns the word: `provider-tls` is
+   * plaintext beyond TLS (its posture chip reads "Remote · not encrypted end
+   * to end"), `loopback-local` never leaves the machine and needs no cipher
+   * claim, and the demo makes no request at all. Every attachment sentence
+   * below speaks through this one derivation so chip and refusal cannot drift.
+   */
+  const composerRequestEncrypted = activeInferenceBinding?.transportBoundary === "e2ee-attestable";
   const sessionRuntime = activeSessionRecord && runtime.current
     ? activeSessionRuntime(runtime.current, activeSessionRecord)
     : undefined;
@@ -1706,7 +1792,17 @@ export function App() {
     commands: slashRegistry?.descriptors(),
     sessions: recentPaletteSessions,
     runCommand: (command) => {
-      setInput(command);
+      // A palette command used to replace the composer outright, and the
+      // debounced draft writer then persisted the command over the stored
+      // draft — one palette visit destroyed an unsent message. With a draft
+      // in the box the command inserts at the caret; the replace survives
+      // only where the composer is empty or already a slash line, which is
+      // the case the palette was built for.
+      setInput((current) => insertDraftCommandAtCaret(
+        current,
+        command,
+        textarea.current?.selectionStart ?? current.length,
+      ));
       navigate("chat");
       requestAnimationFrame(() => textarea.current?.focus({ preventScroll: true }));
     },
@@ -1739,6 +1835,15 @@ export function App() {
   const composerUsesDemo = !inferenceConnected && (!composerPlan || composerPlan.kind === "chat");
   /** Attachments staged, nothing typed: the one disabled Send that needs a reason. */
   const attachmentsAwaitText = attachments.length > 0 && !input.trim();
+  /*
+   * A model or storage transition holds Send the same way it holds Enter.
+   *
+   * Enter already names the reason (below); the pointer path disabled the same
+   * button with no word at all, and a `title` on a disabled control is
+   * unreachable for touch and for most screen readers — the reason belongs in
+   * the accessible name as well as in `title`. One sentence, three surfaces.
+   */
+  const composerTransitionPending = modelSwitching || vaultProviderSwitching || localDeviceBusy;
   const windowedTranscript = useWindowedTranscript({
     items: messages,
     scrollContainerRef: transcriptElement,
@@ -2080,7 +2185,16 @@ export function App() {
       return;
     }
     pendingForkRetry.current = undefined;
-    void sendMessage(pending.prompt, pending.attachments);
+    void sendMessage(pending.prompt, pending.attachments).then((admitted) => {
+      // A pre-admission refusal (offline, pinned route, image capability)
+      // consumes nothing: the fork already cleared the branch composer and
+      // the branch is not the source, so a refused regeneration would leave
+      // the prompt nowhere. Hand it back to the branch composer — but never
+      // over anything typed in the meantime.
+      if (admitted) return;
+      setInput((current) => (current.trim() ? current : pending.prompt));
+      setAttachments((current) => (current.length ? current : pending.attachments));
+    });
   }, [busy, pendingForkRetryRevision, profileId, sessionId]);
   useEffect(() => {
     const draftSessionId = chatRouteRequest ?? sessionId;
@@ -2111,7 +2225,13 @@ export function App() {
     }).finally(() => {
       queuedDispatch.current = false;
     });
-  }, [busy, messageQueue, queuePaused, sessionId]);
+    // `online`/`inferenceConnected` are not read here, but sendMessage's
+    // pre-admission refusals are keyed on them: a dispatch refused offline
+    // leaves the head in place with no other dep changing, so without these
+    // the restored connection never retried the head. The refusal itself is
+    // side-effect-safe to re-fire for an unchanged head — it only re-states
+    // the notice — and never calls onAdmitted, so no loop and no loss.
+  }, [busy, inferenceConnected, messageQueue, online, queuePaused, sessionId]);
   useEffect(() => {
     if (view === "chat") transcriptEntryAlignment.current = true;
   }, [view]);
@@ -2152,6 +2272,7 @@ export function App() {
   const automaticEvidenceAcquisitionNotice = evidenceAcquisitionNotice(
     evidenceAcquisitionSnapshot,
     proofReceipt?.receiptId,
+    evidenceCheckpointFaulted,
   );
   const localDeviceRuntimeAdopted = Boolean(
     localDeviceStatus
@@ -2160,6 +2281,11 @@ export function App() {
   const cloudVaultRuntimeAdopted = vaultSnapshot.phase === "ready"
     && runtime.current?.storageId.startsWith("vault+") === true
     && !runtime.current?.storageId.startsWith("vault+local-device://");
+  // Detectable from the adopted snapshot's own configuration, not the selected
+  // preference: the claim that follows is about the runtime that is live.
+  const googleDriveVaultAdopted = cloudVaultRuntimeAdopted
+    && vaultSnapshot.phase === "ready"
+    && isGoogleDriveConfiguration(vaultSnapshot.config);
   const localS3VaultRuntimeAdopted = cloudVaultRuntimeAdopted
     && vaultSnapshot.phase === "ready"
     && !isGoogleDriveConfiguration(vaultSnapshot.config)
@@ -2186,8 +2312,10 @@ export function App() {
         ? "Local Device Vault active"
         : localS3VaultRuntimeAdopted
           ? "Local S3 Vault active"
-          : cloudVaultRuntimeAdopted
-          ? "Cloud Vault active"
+          : googleDriveVaultAdopted && !online
+            ? "Vault adopted · currently unreachable"
+            : cloudVaultRuntimeAdopted
+            ? "Cloud Vault active"
           : preferences.vaultBackend === "local-device"
             ? localDeviceBusy ? "Opening Local Device Vault" : "Local Device setup"
             // "Ephemeral" here answered "is a vault backend adopted in this
@@ -2198,7 +2326,10 @@ export function App() {
             // stops one screen printing the same word twice for two facts.
             : vaultSnapshot.phase === "ready" ? "Vault adoption pending" : vaultSnapshot.phase === "probing" ? "Vault testing" : vaultSnapshot.phase === "configured" ? "Vault configured" : vaultSnapshot.phase === "degraded" ? "Vault blocked" : "No vault adopted",
       state: vaultRuntimeAdopted
-        ? "verified"
+        // Adoption is a local fact and stays true offline; "verified" is not.
+        // A Drive-backed runtime cannot be reached without connectivity, so
+        // the axis degrades instead of certifying a sync that cannot run.
+        ? googleDriveVaultAdopted && !online ? "attention" : "verified"
         : localDeviceBusy || vaultSnapshot.phase === "ready" || vaultSnapshot.phase === "probing"
           ? "checking"
           : vaultSnapshot.phase === "configured"
@@ -2210,7 +2341,9 @@ export function App() {
         ? "Workspace, journal, profiles, Git objects, and context state are encrypted and persistent in this browser profile. No cloud synchronization is active."
         : localS3VaultRuntimeAdopted
           ? "This page uses the tested client-encrypted local S3 workspace, journal, and profile adapters. No remote cloud synchronization is active."
-        : cloudVaultRuntimeAdopted
+        : googleDriveVaultAdopted && !online
+          ? "The adopted client-encrypted Google Drive runtime cannot be reached while this browser is offline; nothing is synchronizing and no local claim has changed."
+          : cloudVaultRuntimeAdopted
           ? "This page uses the tested client-encrypted cloud workspace, journal, and profile adapters; cross-device convergence is not certified."
           : localDeviceError ?? (vaultSnapshot.phase === "ready"
             ? "The storage contract passed, but this active runtime is still page-memory until adoption completes."
@@ -2358,6 +2491,30 @@ export function App() {
     };
   }, [vault]);
 
+  /**
+   * Holds an automatic durable adoption outside a cockpit transition.
+   *
+   * A profile switch and a vault adoption publish the *same* unit — the runtime,
+   * the Git client, the slash registry, the catalog checkpoint, the session
+   * library and the active conversation — and neither is atomic across its
+   * awaits. Landing one inside the other half-commits both: `changeProfile`
+   * captures the outgoing runtime, an adoption replaces `runtime.current`
+   * mid-negotiation, and the switch then unwinds its own half over an adopted
+   * Vault, leaving a catalog checkpoint minted by a store the runtime no longer
+   * points at. `sessionNavigationChanging` is the latch every transition already
+   * sets, and each one clears it in a `finally`, so waiting is bounded.
+   *
+   * Waiting, not refusing: these two adoptions are automatic consequences of a
+   * stored preference, so the caller has nobody to report a refusal to. The
+   * returned cleanup is the effect's own — re-checking is a re-run, which
+   * re-evaluates every other precondition at the same time.
+   */
+  function deferAdoptionUntilCockpitSettles(): (() => void) | undefined {
+    if (!sessionNavigationChanging.current) return undefined;
+    const timer = window.setTimeout(() => setCockpitSettleRetry((value) => value + 1), 150);
+    return () => window.clearTimeout(timer);
+  }
+
   // Local-lab backend auto-connects the baked MinIO vault. Google Drive waits
   // for an explicit user gesture; ephemeral remains entirely page-memory.
   // ephemeral (page memory only) when Preferences → Storage is "Ephemeral".
@@ -2416,6 +2573,8 @@ export function App() {
       || vaultAdoptionBusy.current
       || runtime.current.storageId.startsWith("vault+local-device://")
     ) return;
+    const deferred = deferAdoptionUntilCockpitSettles();
+    if (deferred) return deferred;
     let cancelled = false;
     const owner = ++localDeviceAutoOpenOwner.current;
     vaultAdoptionBusy.current = true;
@@ -2453,7 +2612,7 @@ export function App() {
       setLocalDeviceBusy(false);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [preferences.vaultBackend, catalog, activeProfile, gitClient, vaultProviderSwitching]);
+  }, [preferences.vaultBackend, catalog, activeProfile, gitClient, vaultProviderSwitching, cockpitSettleRetry]);
 
   // Readiness is not durability until the verified adapters replace the active
   // page-memory runtime. This effect waits for both halves, then adopts once.
@@ -2468,6 +2627,8 @@ export function App() {
       !gitClient ||
       vaultAdoptionBusy.current
     ) return;
+    const deferred = deferAdoptionUntilCockpitSettles();
+    if (deferred) return deferred;
     vaultAdoptionBusy.current = true;
     void adoptReadyVaultRuntime(vaultSnapshot, vault.readyRuntime())
       // Cleared on success so a later retry cannot leave a stale reason under
@@ -2482,7 +2643,7 @@ export function App() {
       })
       .finally(() => { vaultAdoptionBusy.current = false; });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [preferences.vaultBackend, vaultSnapshot, catalog, activeProfile, gitClient]);
+  }, [preferences.vaultBackend, vaultSnapshot, catalog, activeProfile, gitClient, cockpitSettleRetry]);
 
   // Ephemeral is an explicit operating mode. If an encrypted vault is active, copy
   // the live state into fresh page-memory adapters before dropping credentials.
@@ -2501,6 +2662,31 @@ export function App() {
       .finally(() => { ephemeralAdoptionBusy.current = false; });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [preferences.vaultBackend, catalog, activeProfile, gitClient]);
+
+  /*
+   * The queue's own recovery channel, keyed on the fault and nothing else.
+   *
+   * A refused checkpoint write parks `schedule()` until an explicit `wake()`,
+   * and this is the only production caller of it — so where it is driven from
+   * decides whether the "acquisition is paused until the queue snapshot commits
+   * again" notice is a promise or a lie. It used to ride the attestation
+   * freshness tick, which cannot see the state that produces the fault: that
+   * effect returns early with no records, and the *first* acquisition of a fresh
+   * conversation is exactly when there are none. The queue is Profile-scoped and
+   * outlives any one conversation, so opening a second conversation also tore
+   * the tick down and left a still-faulted queue with no waker at all.
+   *
+   * `evidenceCheckpointFaulted` is state published from the queue's own
+   * emission (see `publishEvidenceAcquisitionQueue`), so this runs whenever a
+   * queue is faulted, regardless of what the Proof route happens to be showing.
+   */
+  useEffect(() => {
+    if (!evidenceCheckpointFaulted) return;
+    const retry = () => { wakeFaultedEvidenceAcquisitionQueue(evidenceAcquisitionQueue.current); };
+    retry();
+    const timer = window.setInterval(retry, 30_000);
+    return () => window.clearInterval(timer);
+  }, [evidenceCheckpointFaulted]);
 
   useEffect(() => {
     if (attestationRecords.length === 0) return;
@@ -2985,6 +3171,56 @@ export function App() {
     });
   }
 
+  /**
+   * Buffers a live-tool-output chunk and applies it on the next animation
+   * frame — the same cadence `queueTextDelta` gives text deltas. The
+   * `tool-output` signal fires per stream write; an immediate `setMessages`
+   * per write rebuilt the whole messages array and re-rendered every visible
+   * transcript card per chunk.
+   */
+  function queueToolOutput(messageId: string, chunk: PendingToolOutputUpdate) {
+    const pending = pendingToolOutput.current?.messageId === messageId
+      ? pendingToolOutput.current
+      : { messageId, updates: new Map<string, PendingToolOutputUpdate>() };
+    mergePendingToolOutput(pending.updates, chunk.operationId, chunk);
+    pendingToolOutput.current = pending;
+    if (pendingToolOutputFrame.current !== undefined) return;
+    pendingToolOutputFrame.current = requestAnimationFrame(flushPendingToolOutput);
+  }
+
+  /**
+   * Applies every buffered operation in ONE `setMessages`. Called by the
+   * frame above, and called synchronously on turn completion/failure so the
+   * terminal stamp cannot be overtaken by a late frame re-adding live output
+   * to a settled row.
+   */
+  function flushPendingToolOutput() {
+    if (pendingToolOutputFrame.current !== undefined) {
+      cancelAnimationFrame(pendingToolOutputFrame.current);
+      pendingToolOutputFrame.current = undefined;
+    }
+    const pending = pendingToolOutput.current;
+    pendingToolOutput.current = undefined;
+    if (!pending || !pending.updates.size) return;
+    const { messageId, updates } = pending;
+    setMessages((current) => current.map((message) => {
+      if (message.id !== messageId) return message;
+      // Arrival order is the Map's insertion order: the last operation to
+      // report wins the row's single live-output slot, exactly as the
+      // per-chunk writes did.
+      let liveToolOutput = message.liveToolOutput;
+      for (const update of updates.values()) {
+        const prior = liveToolOutput?.operationId === update.operationId ? liveToolOutput.text : "";
+        liveToolOutput = {
+          operationId: update.operationId,
+          stream: update.stream,
+          text: `${prior}${update.text}`.slice(-LIVE_TOOL_OUTPUT_LIMIT),
+        };
+      }
+      return { ...message, liveToolOutput };
+    }));
+  }
+
   function requireProviderAvailabilityTool(): InspectInferenceConnectionsTool {
     const tool = providerAvailabilityTool.current;
     if (!tool) throw new Error("The inference connection directory is still starting.");
@@ -3099,6 +3335,7 @@ export function App() {
       unsubscribeProviderFabric?.();
       activeTurn.current?.abort();
       if (pendingDeltaFrame.current !== undefined) cancelAnimationFrame(pendingDeltaFrame.current);
+      if (pendingToolOutputFrame.current !== undefined) cancelAnimationFrame(pendingToolOutputFrame.current);
     };
   }, []);
 
@@ -3265,42 +3502,63 @@ export function App() {
     if (!tokenSet?.refreshToken) return;
     const controller = new AbortController();
     let disposed = false;
-    const refreshAt = Math.max(0, tokenSet.expiresAt - Date.now() - 60_000);
-    const timer = window.setTimeout(() => {
-      void (async () => {
-        let oauth: typeof import("../auth/chutes-oauth") | undefined;
-        let exchangeMode: "local-confidential-bridge" | "public-pkce" = "public-pkce";
-        try {
-          oauth = await import("../auth/chutes-oauth");
-          const registration = oauth.CHUTES_ACTIVE_REGISTRATION;
-          exchangeMode = oauth.chutesOAuthExchangeMode(registration);
-          const next = await oauth.refreshChutesOAuthToken({
-            clientId: registration.clientId,
-            refreshToken: tokenSet.refreshToken!,
-            signal: controller.signal,
-            registration,
-          });
-          if (disposed) return;
-          oauthTokens.current = next;
-          accountCredential.current = next.accessToken;
-          providerCredential.current = next.accessToken;
-          setOauthTokenRevision((value) => value + 1);
-          setCredentialRevision((value) => value + 1);
-          setOauthCallbackStatus({
-            kind: "verified",
-            message: "The memory-only Chutes session rotated successfully.",
-          });
-        } catch (error) {
-          if (disposed || controller.signal.aborted) return;
-          setOauthCallbackStatus({
-            kind: "error",
-            message: oauth?.describeChutesOAuthExchangeError(error, exchangeMode)
-              ?? (error instanceof Error ? error.message : "Chutes sign-in could not be completed."),
-          });
-          releaseChutesAuthority("Chutes OAuth rotation failed · reconnect inference; this conversation remains intact");
-        }
-      })();
-    }, refreshAt);
+    let retries = 0;
+    let timer = 0;
+    const scheduleRotation = (delayMs: number) => {
+      timer = window.setTimeout(() => {
+        void (async () => {
+          let oauth: typeof import("../auth/chutes-oauth") | undefined;
+          let exchangeMode: "local-confidential-bridge" | "public-pkce" = "public-pkce";
+          try {
+            oauth = await import("../auth/chutes-oauth");
+            const registration = oauth.CHUTES_ACTIVE_REGISTRATION;
+            exchangeMode = oauth.chutesOAuthExchangeMode(registration);
+            const next = await oauth.refreshChutesOAuthToken({
+              clientId: registration.clientId,
+              refreshToken: tokenSet.refreshToken!,
+              signal: controller.signal,
+              registration,
+            });
+            if (disposed) return;
+            oauthTokens.current = next;
+            accountCredential.current = next.accessToken;
+            providerCredential.current = next.accessToken;
+            setOauthTokenRevision((value) => value + 1);
+            setCredentialRevision((value) => value + 1);
+            setOauthCallbackStatus({
+              kind: "verified",
+              message: "The memory-only Chutes session rotated successfully.",
+            });
+          } catch (error) {
+            if (disposed || controller.signal.aborted) return;
+            /*
+             * A refused fetch, a timeout or a 5xx names a bad minute of
+             * network, not a dead grant: the refresh token may still be
+             * entirely valid, so the connection is kept and the rotation is
+             * retried on a bounded backoff. Only the token endpoint's own
+             * rejection (invalid_grant / invalid_client) releases the
+             * authority immediately — that grant is already gone no matter
+             * what this page does. Exhausted retries fall through to the
+             * original failure handling: minutes of failed rotation leave no
+             * honest basis to keep claiming the connection.
+             */
+            if (!oauth?.isChutesOAuthProviderRejection(error) && retries < OAUTH_ROTATION_RETRY_DELAYS.length) {
+              const retryDelay = OAUTH_ROTATION_RETRY_DELAYS[retries]!;
+              retries += 1;
+              scheduleRotation(retryDelay);
+              return;
+            }
+            setOauthCallbackStatus({
+              kind: "error",
+              message: oauth?.describeChutesOAuthExchangeError(error, exchangeMode)
+                ?? (error instanceof Error ? error.message : "Chutes sign-in could not be completed."),
+            });
+            releaseChutesAuthority("Chutes OAuth rotation failed · reconnect inference; this conversation remains intact");
+          }
+        })();
+      }, delayMs);
+    };
+    scheduleRotation(Math.max(0, tokenSet.expiresAt - Date.now() - 60_000));
     return () => {
       disposed = true;
       window.clearTimeout(timer);
@@ -3315,6 +3573,12 @@ export function App() {
 
   useEffect(() => {
     mainRegion.current?.focus({ preventScroll: true });
+    // `.main` is one persistent `overflow: auto` scroller across routes, so a
+    // long-scrolled sessions list would otherwise hand its scroll offset to
+    // the vault. Reset it on entry — chat excepted: the chat layout clips
+    // `.main` (`overflow: hidden`) and owns scroll inside the transcript,
+    // whose pinned-anchor effect must not race this one.
+    if (view !== "chat") mainRegion.current?.scrollTo({ top: 0, behavior: "auto" });
     if (view === "chat" && !document.hidden) setUnreadTurnCount(0);
   }, [view]);
 
@@ -3574,6 +3838,8 @@ export function App() {
     const previousProfileId = profileAuthorityId.current;
     const previousGit = gitClient;
     const previousRegistry = slashRegistry;
+    /** The runtime this call published, if it got that far. See the catch. */
+    let committed: Runtime | undefined;
     try {
       activeTurn.current?.abort();
       setRuntimeStatus("Switching profile cockpit");
@@ -3591,18 +3857,6 @@ export function App() {
         setProfileCockpitTransition(Object.freeze({ profileId: selected.profileId, name: selected.name }));
         profile = await bindProfileToRuntime(selected, active);
         const next = profile === selected ? current : replaceProfile(current, profile);
-        /*
-         * Release the outgoing Profile's live processes before the incoming one
-         * opens its own. Each namespace gets its own terminal manager, but the
-         * page has a single WebContainer to give out — so without this the new
-         * Profile's first terminal fails to boot against a host the previous
-         * Profile still holds. Tab metadata is durable and reconstructs; the
-         * process does not, and the Terminal surface already says so.
-         */
-        await (await import("../terminal/manager")).quiesceBrowserTerminalWorkspace(
-          active.workspace,
-          `Switched to the ${selected.name} profile. Restart this terminal against that profile's workspace.`,
-        );
         switched = await runtimeForProfile(active, profile);
         // Sessions are resolved against the *incoming* authority so a restored
         // or newly created conversation pins the workspace it will actually run
@@ -3659,6 +3913,7 @@ export function App() {
       // Authority and identity, adjacent. Nothing that can fail sits between
       // them, so `profileId` and `runtime.current` can no longer disagree.
       runtime.current = switched.runtime;
+      committed = switched.runtime;
       setGitClient(switched.git);
       // Slash commands close over the tool registry, so they have to be rebuilt
       // with it; a stale registry would run the previous Profile's tools.
@@ -3666,6 +3921,7 @@ export function App() {
       publishProfileId(nextId);
       if (restored) {
         await publishAuditedSession(restored.fresh, restored.audited, `${profile.name} cockpit restored`);
+        await releaseOutgoingProfileTerminals(active.workspace, profile.name);
         navigate("chat");
         return true;
       }
@@ -3679,6 +3935,7 @@ export function App() {
       setSessionLifecycle(READY_SESSION_LIFECYCLE);
       setTranscriptBoundary(undefined);
       setRuntimeStatus(`${profile.name} cockpit started`);
+      await releaseOutgoingProfileTerminals(active.workspace, profile.name);
       navigate("chat");
       return true;
     } catch (error) {
@@ -3689,18 +3946,78 @@ export function App() {
        * one must not write over it. Otherwise every part of the commit is put
        * back together — including `profileId`, so the two halves settle in
        * agreement whether or not the commit had been reached.
+       *
+       * Unless the runtime is not ours. The guard above throws precisely because
+       * `runtime.current` can be replaced mid-switch by the durable-vault
+       * adoption, which publishes a whole cockpit of its own — runtime, Git
+       * client, slash registry, catalog checkpoint, session library, durable
+       * authority and an activated Vault conversation. Restoring here would
+       * splice four of those back to the outgoing page-memory values and leave
+       * the rest adopted: the trust axis would read "not adopted" under a
+       * vault-journal conversation, and the next `mutateProfileCatalog` would
+       * hand a checkpoint minted by one store to another and fail forever.
+       * `active` and the runtime this call itself published are the only two we
+       * may write over; anything else belongs to a foreign authority, and the
+       * only honest action is to name the failure and touch nothing.
        */
+      const ownsRuntime = runtime.current === active || runtime.current === committed;
       if (operation === profileOperation.current) {
-        runtime.current = active;
-        setGitClient(previousGit);
-        setSlashRegistry(previousRegistry);
-        publishProfileId(previousProfileId);
-        setRuntimeStatus(`Profile switch failed: ${error instanceof Error ? error.message : String(error)}`);
+        if (ownsRuntime) {
+          runtime.current = active;
+          setGitClient(previousGit);
+          setSlashRegistry(previousRegistry);
+          publishProfileId(previousProfileId);
+        }
+        setRuntimeStatus(ownsRuntime
+          ? `Profile switch failed: ${error instanceof Error ? error.message : String(error)}`
+          : `Profile switch abandoned: ${error instanceof Error ? error.message : String(error)} The storage authority that replaced it stays active.`);
       }
       return false;
     } finally {
       sessionNavigationChanging.current = false;
       setProfileCockpitTransition(undefined);
+    }
+  }
+
+  /**
+   * Releases the outgoing Profile's live shell processes, after the switch.
+   *
+   * The page has one WebContainer to give out and each namespace has its own
+   * terminal manager, so the outgoing Profile's processes and mount have to be
+   * stopped and reconciled on this transaction's terms. `ensureHost` would
+   * otherwise hand the host over on the new Profile's first boot instead, at an
+   * unpredictable moment and under a stranger's reason. Tab metadata is durable
+   * and reconstructs; a running process does not, and the Terminal surface says
+   * so.
+   *
+   * Position is the whole point. This used to be the last statement inside
+   * `mutateProfileCatalog`'s callback, which is *before* the encrypted catalog
+   * commit, before the authority re-checks, and before the session publication —
+   * every one of which unwinds through a catch that restores the outgoing
+   * cockpit. A refused catalog write therefore left the user on profile A with
+   * A's build killed behind the words "Switched to the B profile". Killing
+   * processes is not undoable, so it happens only once the switch is a fact:
+   * nothing between the commit and here boots a terminal, and the next terminal
+   * boots when someone opens the Terminal route against the new profile.
+   *
+   * Reported, never thrown, for the same reason: the switch has already
+   * committed, so a quiesce failure cannot be allowed to unwind it. It means the
+   * next terminal boot has to contend for the host, which is a sentence, not a
+   * rollback.
+   */
+  async function releaseOutgoingProfileTerminals(
+    outgoingWorkspace: WorkspacePort,
+    incomingProfileName: string,
+  ): Promise<void> {
+    try {
+      await (await import("../terminal/manager")).quiesceBrowserTerminalWorkspace(
+        outgoingWorkspace,
+        `Switched to the ${incomingProfileName} profile. Restart this terminal against that profile's workspace.`,
+      );
+    } catch (error) {
+      setRuntimeStatus((current) => `${current} · the previous profile's terminal processes could not be released: ${
+        error instanceof Error ? error.message : String(error)
+      }`);
     }
   }
 
@@ -4096,6 +4413,7 @@ export function App() {
       capability: imageInputCapability === "supported"
         ? "supported"
         : inferenceConnected ? "model-lacks-vision" : "disconnected",
+      encryptedRequest: composerRequestEncrypted,
     }));
   }
 
@@ -4245,10 +4563,27 @@ export function App() {
       prompt,
       attachments: Object.freeze([...attachments]),
     });
-    publishMessageQueue(sessionId, (current) => appendThreadQueueItem(current, item));
+    // Admission and the announced count both come out of the append itself:
+    // `messageQueue` here is the last committed render value and lies by one
+    // in both directions — understating right after an enqueue, and
+    // overstating at capacity ("25 waiting" while the cap silently dropped
+    // the item the composer had just cleared). At capacity the composer keeps
+    // the prompt so the message is refused, not lost.
+    let admitted = false;
+    let waiting = 0;
+    publishMessageQueue(sessionId, (current) => {
+      const appended = appendThreadQueueItem(current, item);
+      admitted = appended.length > current.length;
+      waiting = appended.length;
+      return appended;
+    });
+    if (!admitted) {
+      setComposerNotice(`Queue full · ${String(waiting)} messages waiting — send or remove one first`);
+      return;
+    }
     setInput("");
     setAttachments([]);
-    setComposerNotice(`Queued for this conversation · ${String(messageQueue.length + 1)} waiting`);
+    setComposerNotice(`Queued for this conversation · ${String(waiting)} waiting`);
   }
 
   function editQueuedMessage(item: QueuedComposerItem): void {
@@ -4275,7 +4610,7 @@ export function App() {
     retryPrompt?: string,
     retryAttachments: readonly ComposerAttachment[] = [],
     queue?: Readonly<{ onAdmitted(): void }>,
-  ) {
+  ): Promise<boolean> {
     let content = (retryPrompt ?? input).trim();
     // The one bail that had to stop being silent. An attachment-only composer
     // looks armed — thumbnails pending, Send in place — and Enter did nothing
@@ -4284,8 +4619,8 @@ export function App() {
     // one would change what a receipt binds. So the refusal names itself
     // instead of the requirement being loosened.
     if (!content && (retryPrompt ? retryAttachments : attachments).length > 0) {
-      setComposerNotice(COMPOSER_ATTACHMENT_NEEDS_TEXT);
-      return;
+      setComposerNotice(composerAttachmentNeedsText(composerRequestEncrypted));
+      return false;
     }
     if (
       !content
@@ -4299,7 +4634,7 @@ export function App() {
       || catalogAuthorityChanging.current
       || vaultProviderSwitchingRef.current
       || localDeviceBusy
-    ) return;
+    ) return false;
     const admissionRuntime = runtime.current;
     const admissionSessionId = sessionId;
     const admissionProfile = activeProfileRef.current;
@@ -4311,7 +4646,7 @@ export function App() {
       || activeSessionRecord.manifest.profile?.profileId !== admissionProfile.profileId
     ) {
       setComposerNotice("Wait for the active Profile and conversation to finish binding before sending.");
-      return;
+      return false;
     }
     // An explicit send is the only thing that lifts a Stop. Placed past every
     // admission bail so a refused send does not silently resume the queue, and
@@ -4342,13 +4677,25 @@ export function App() {
             true,
           );
         } finally {
+          // A local plan never reaches the chat admission below, so without
+          // this the queued head neither left nor stopped: built-ins wedged
+          // the queue, and tool plans toggled `busy` — a dispatch-effect dep —
+          // which re-sent the same head in an unbounded loop, appending
+          // durable events on every iteration. Admit exactly once here, on
+          // both the success and the error path above.
+          queue?.onAdmitted();
           localCommandAdmission.current = false;
         }
         requestAnimationFrame(() => textarea.current?.focus());
-        return;
+        return true;
       }
       content = slashPlan.content.trim();
-      if (!content) return;
+      if (!content) {
+        // Same wedge as above for a plan rewritten to nothing: the item can
+        // never become a turn, so a queued head has to leave the queue here.
+        queue?.onAdmitted();
+        return false;
+      }
     }
     const turnSessionId = admissionSessionId;
     const turnRuntime = admissionRuntime;
@@ -4374,18 +4721,18 @@ export function App() {
       setComposerNotice(`${externalPreflight.detail} This conversation remains read-only; reconnecting or selecting another model starts a new pinned conversation. Your prompt remains here.`);
       setRuntimeStatus("Pinned inference route unavailable · prompt preserved");
       requestAnimationFrame(() => textarea.current?.focus());
-      return;
+      return false;
     }
     if (turnRuntime.inferenceBinding && !inferenceConnected) {
       setComposerNotice("This conversation is permanently pinned to a released inference generation and remains read-only. Reconnect in Connection to start a new pinned conversation; your prompt, messages, journal, and workspace remain here.");
       setRuntimeStatus("Remote inference disconnected · prompt preserved");
       requestAnimationFrame(() => textarea.current?.focus());
-      return;
+      return false;
     }
     if (!online && turnRuntime.inferenceBinding?.transportBoundary !== "loopback-local") {
       setRuntimeStatus("Offline · remote inference paused; prompt preserved");
       requestAnimationFrame(() => textarea.current?.focus());
-      return;
+      return false;
     }
     const outgoingAttachments = retryPrompt ? retryAttachments : attachments;
     if (outgoingAttachments.length > 0 && imageInputCapability !== "supported") {
@@ -4395,7 +4742,7 @@ export function App() {
           : `${turnRuntime.model} is text-only. Choose a vision-capable model; the image remains in this page.`
         : "Connect a vision-capable model; the image remains in this page.");
       requestAnimationFrame(() => textarea.current?.focus());
-      return;
+      return false;
     }
     // Claim the turn before the first asynchronous preprocessing or journal
     // operation. State-driven button disabling is not an admission lock: two
@@ -4425,14 +4772,14 @@ export function App() {
         ? "Turn stopped before inference; your prompt remains in the composer."
         : error instanceof Error ? error.message : "The selected image could not be prepared safely.");
       requestAnimationFrame(() => textarea.current?.focus());
-      return;
+      return false;
     }
     if (!turnAuthorityStillCurrent()) {
       controller.abort(new DOMException("Profile or conversation authority changed.", "AbortError"));
       releasePreflight();
       setComposerNotice("The Profile or conversation changed while the turn was being prepared. Your prompt remains in the active draft.");
       requestAnimationFrame(() => textarea.current?.focus());
-      return;
+      return false;
     }
     /*
      * Name the conversation on its first real message.
@@ -4547,7 +4894,7 @@ export function App() {
       releasePreflight();
       setRuntimeStatus("Turn stopped before submission");
       requestAnimationFrame(() => textarea.current?.focus());
-      return;
+      return false;
     }
     if (
       turnRuntime.inferenceBinding
@@ -4572,7 +4919,7 @@ export function App() {
         );
         setRuntimeStatus("Pinned inference route unavailable · prompt preserved");
         requestAnimationFrame(() => textarea.current?.focus());
-        return;
+        return false;
       }
     }
     queue?.onAdmitted();
@@ -4648,24 +4995,14 @@ export function App() {
             queueTextDelta(assistantId, signal.text);
           }
           if (signal.type === "tool-output" && activeSessionIdentity.current === turnSessionId) {
-            setMessages((current) => current.map((message) => {
-              if (message.id !== assistantId) return message;
-              const prior = message.liveToolOutput?.operationId === signal.operationId
-                ? message.liveToolOutput.text
-                : "";
-              return {
-                ...message,
-                liveToolOutput: {
-                  operationId: signal.operationId,
-                  stream: signal.stream,
-                  text: `${prior}${signal.text}`.slice(-32_768),
-                },
-              };
-            }));
+            queueToolOutput(assistantId, signal);
           }
         },
       });
       clearPendingDelta(assistantId);
+      // Flush before the terminal stamp: it settles `liveToolOutput` away, and
+      // a surviving buffered frame would otherwise re-add it after settlement.
+      flushPendingToolOutput();
       if (activeSessionIdentity.current === turnSessionId) {
         const requestEvent = result.events.find((event) => event.type === "turn.requested" && event.turnId === result.turnId);
         const terminalEvent = result.events.filter((event) => event.turnId === result.turnId && (event.type === "turn.completed" || event.type === "turn.failed" || event.type === "turn.cancelled")).at(-1);
@@ -4716,6 +5053,7 @@ export function App() {
     } catch (error) {
       const pending = `${transcriptStreams.read(assistantId)}${pendingDelta.current?.messageId === assistantId ? pendingDelta.current.text : ""}`;
       clearPendingDelta(assistantId);
+      flushPendingToolOutput();
       const cancelled = controller.signal.aborted;
       const failureMessage = cancelled
         ? "Turn stopped"
@@ -4757,10 +5095,16 @@ export function App() {
       });
       requestAnimationFrame(() => textarea.current?.focus());
     }
+    // The prompt reached the transcript — even on the turn-failure path above,
+    // where the user message is durable and only the answer is marked erred.
+    return true;
   }
 
   function stopTurn() {
-    if (activePrompt.current) setInput(activePrompt.current);
+    // A follow-up typed while the turn ran is newer intent than the aborted
+    // prompt; restoring unconditionally overwrote it, and the draft effect
+    // then persisted the overwrite. Restore only into an empty composer.
+    if (activePrompt.current) setInput((current) => current.trim() ? current : activePrompt.current ?? current);
     // Latch before the abort: the abort's teardown is what frees `busy`, and
     // the queue effect runs on that same commit.
     setQueuePaused(true);
@@ -4896,8 +5240,11 @@ export function App() {
     } catch (error) {
       // Restore is authenticated and atomic. If replacement did not commit,
       // reopen the prior authority so the page never remains bound to a closed
-      // storage adapter.
-      if (handleClosed && request.disposition === "open-existing") {
+      // storage adapter. The restore disposition cannot gate this: create-new
+      // reuses the enrolled key when it proves equivalent to the backup's (see
+      // `restoreBackup` in local-device-vault-setup), so that path can fail
+      // with a live vault closed behind it exactly as open-existing can.
+      if (handleClosed) {
         const reopened = Object.freeze({
           key: request.workspaceKey,
           vaultDisposition: "open-existing" as const,
@@ -6204,10 +6551,18 @@ export function App() {
   function publishEvidenceAcquisitionQueue(queue: EvidenceAcquisitionQueueController): void {
     if (evidenceAcquisitionQueue.current !== queue) {
       evidenceAcquisitionUnsubscribe.current?.();
-      evidenceAcquisitionUnsubscribe.current = queue.subscribe(setEvidenceAcquisitionSnapshot);
+      // Two publications per emission, because the queue has two kinds of truth:
+      // the task snapshot, and whether its last checkpoint write committed. The
+      // second is not in the snapshot, and it is what parks scheduling, so it
+      // gets its own reactive channel here rather than a render-time ref read.
+      evidenceAcquisitionUnsubscribe.current = queue.subscribe((snapshot) => {
+        setEvidenceAcquisitionSnapshot(snapshot);
+        setEvidenceCheckpointFaulted(Boolean(queue.fault()));
+      });
       evidenceAcquisitionQueue.current = queue;
     }
     setEvidenceAcquisitionSnapshot(queue.snapshot());
+    setEvidenceCheckpointFaulted(Boolean(queue.fault()));
   }
 
   async function releaseEvidenceAcquisitionQueue(): Promise<boolean> {
@@ -6221,6 +6576,9 @@ export function App() {
     evidenceAcquisitionUnsubscribe.current = undefined;
     evidenceAcquisitionQueue.current = undefined;
     setEvidenceAcquisitionSnapshot(undefined);
+    // No queue, no fault to heal: a released scope must not leave the self-heal
+    // effect waking a controller this page no longer owns.
+    setEvidenceCheckpointFaulted(false);
     await authority?.release();
     return wasActive;
   }
@@ -6288,7 +6646,7 @@ export function App() {
       return;
     }
     const queue = await ensureEvidenceAcquisitionQueue(receiptProfileId);
-    await queue.enqueue({
+    const enqueued = await queue.enqueue({
       version: 1,
       receiptId: receipt.receiptId,
       sessionId: receiptSessionId,
@@ -6299,6 +6657,17 @@ export function App() {
       instanceId: receipt.instanceId,
       ...(receipt.bindings.endpointKeyDigest ? { endpointKeyDigest: receipt.bindings.endpointKeyDigest } : {}),
     });
+    if (
+      enqueued.disposition === "duplicate"
+      && (enqueued.task.status === "failed" || enqueued.task.status === "cancelled")
+    ) {
+      // "Duplicate" answers the identity question, not the scheduling one: a
+      // scope-released or exhausted task stays terminal if this path takes the
+      // duplicate as "already handled", and the receipt is never re-acquired.
+      // Re-arming a completed success would re-fetch settled evidence, so only
+      // genuinely terminal non-success tasks get a fresh budget.
+      await queue.retryTerminal(receipt.receiptId);
+    }
   }
 
   function cancelQueuedEvidenceAcquisitions(): void {
@@ -7272,6 +7641,9 @@ export function App() {
     }
     const active = runtime.current;
     sessionNavigationChanging.current = true;
+    // Function scope, not try scope: the catch reads it to tell the default
+    // already committed from a refusal before the write.
+    let defaultCommitted = false;
     try {
       let revisedProfile: ProfileRevision | undefined;
       const committed = await mutateProfileCatalog(async (current) => {
@@ -7289,6 +7661,10 @@ export function App() {
       // Commit the profile revision before creating the session that pins it.
       // A catalog failure therefore cannot leave an orphan journal session
       // referring to a profile revision that never became authoritative.
+      // From here on the profile's durable default HAS changed: a failure in
+      // the activation leg below must say so instead of reading as if nothing
+      // happened.
+      defaultCommitted = true;
       const nextSession = await createProfileSession(
         active,
         revisedProfile,
@@ -7316,7 +7692,18 @@ export function App() {
       setRuntimeStatus(`${approvalModeLabel(nextMode)} active · new pinned conversation · ${revisedProfile.name} default`);
       navigate("chat", chatHash(nextSession.id));
     } catch (error) {
-      setComposerNotice(error instanceof Error ? error.message : "The approval policy could not be changed.");
+      /*
+       * Two different failures, two different sentences. Before the catalog
+       * commit nothing changed and the failure can say exactly that. After it,
+       * the profile's durable default already moved to the new mode — a
+       * "could not be changed" notice would be a false statement about
+       * state the user can verify by reopening the profile, so the notice
+       * names what actually happened: default updated, activation failed.
+       */
+      const detail = error instanceof Error ? error.message : "The approval policy could not be changed.";
+      setComposerNotice(defaultCommitted
+        ? `The profile default was updated to ${approvalModeLabel(nextMode)}, but the new conversation could not be opened. ${detail}`
+        : detail);
     } finally {
       sessionNavigationChanging.current = false;
     }
@@ -7390,8 +7777,11 @@ export function App() {
       throw new Error("Stop the active turn and wait for model or storage changes before changing this Profile's skill policy.");
     }
     if (editingActiveProfile) sessionNavigationChanging.current = true;
+    // Function scope, not try scope: the catch reads both to tell the default
+    // already committed from a refusal before the write.
+    let revisedProfile: ProfileRevision | undefined;
+    let defaultCommitted = false;
     try {
-      let revisedProfile: ProfileRevision | undefined;
       const committed = await mutateProfileCatalog(async (current) => {
         const profile = current.profiles.find((candidate) => candidate.profileId === profileIdToEdit);
         if (!profile) throw new Error("The selected profile no longer exists.");
@@ -7408,6 +7798,11 @@ export function App() {
         setRuntimeStatus(`${revisedProfile.name} skill policy revised · its next switch starts a new pinned conversation · the current conversation remains in All Conversations`);
         return;
       }
+      // From here on the profile's durable skill policy HAS changed, so a
+      // failure in the activation leg must not bubble up as if the write was
+      // refused. The caller renders the thrown message verbatim; make it say
+      // what actually happened.
+      defaultCommitted = true;
       const nextSession = await createProfileSession(
         active!,
         revisedProfile,
@@ -7429,6 +7824,11 @@ export function App() {
       setComposerNotice(undefined);
       setRuntimeStatus(`${revisedProfile.name} skill policy active · new pinned conversation`);
       navigate("chat", chatHash(nextSession.id));
+    } catch (error) {
+      if (defaultCommitted && revisedProfile) {
+        throw new Error(`The ${revisedProfile.name} profile default was updated, but the new conversation could not be opened. ${error instanceof Error ? error.message : String(error)}`);
+      }
+      throw error;
     } finally {
       if (editingActiveProfile) sessionNavigationChanging.current = false;
     }
@@ -7682,23 +8082,17 @@ export function App() {
   if (!catalog || !activeProfile || !activeTheme) {
     return <BootScreen status={runtimeStatus} />;
   }
-  const platformOverlayOpen = mobileMoreOpen || paletteOpen || preferencesOpen || trustSheetOpen || approvalPending || Boolean(profileCockpitTransition);
-  const sessionDurability = localDeviceRuntimeAdopted
-    ? {
-        state: "local" as const,
-        detail: "This session journal and workspace write encrypted objects to browser-managed storage on this device. No cloud synchronization is active.",
-      }
-    : cloudVaultRuntimeAdopted && vaultSnapshot.phase === "ready"
-    ? {
-        state: "synced" as const,
-        detail: `This session journal and workspace write client-encrypted objects directly to ${isGoogleDriveConfiguration(vaultSnapshot.config) ? vaultSnapshot.config.workspaceName : vaultSnapshot.config.bucket}.`,
-      }
-    : {
-        state: "ephemeral" as const,
-        detail: vaultSnapshot.phase === "ready"
-          ? "The cloud object-store contract is verified, but this active runtime has not adopted it; this session remains in page memory."
-          : "This session journal exists only in page memory. Nothing is synced.",
-      };
+  // `platformOverlayOpen` is computed once, next to the navigation-jump gate.
+  const sessionDurability = describeSessionDurability({
+    localDeviceRuntimeAdopted,
+    cloudVaultRuntimeAdopted,
+    googleDriveVault: googleDriveVaultAdopted,
+    vaultContractReady: vaultSnapshot.phase === "ready",
+    syncTarget: cloudVaultRuntimeAdopted && vaultSnapshot.phase === "ready"
+      ? isGoogleDriveConfiguration(vaultSnapshot.config) ? vaultSnapshot.config.workspaceName : vaultSnapshot.config.bucket
+      : undefined,
+    online,
+  });
   /*
    * An empty conversation renders its intro, not a card. The seed flag — not
    * the message count — is the fence: a materialized session can legitimately
@@ -7708,10 +8102,12 @@ export function App() {
   const seedOnlyTranscript = messages.length === 0
     || (messages.length === 1 && messages[0]!.seed === true);
   const e2eeTrustAxis = trustAxes.find((axis) => axis.id === "e2ee")!;
-  // Page memory is `none`, not `failed`: nothing has gone wrong, no durability
-  // evidence has been requested. Mirrors `DurabilityIndicator`'s own mapping,
-  // which is the vocabulary this claim belongs to.
-  const sessionDurabilitySeal: SealState = sessionDurability.state === "ephemeral" ? "none" : "verified";
+  // The vocabulary this claim belongs to owns the mapping: page memory is `none`
+  // rather than `failed` (nothing went wrong, no durability evidence was asked
+  // for), a running sync is `checking`, and a stopped one is `attention`. Read
+  // from `durability-indicator` rather than restated, because a fourth copy of
+  // the ternary is how the chip and the pill came to disagree.
+  const sessionDurabilitySeal: SealState = durabilitySeal(sessionDurability.state);
   /**
    * The four claims the session bar used to render as four separate objects —
    * an attestation button, a lifecycle dot, a durability pill and a boundary
@@ -7789,11 +8185,18 @@ export function App() {
           These are buttons, not `href="#..."` anchors: the shell routes on the
           location hash, so an in-page anchor would navigate the application. */}
       <div class="skip-links" inert={platformOverlayOpen} aria-hidden={platformOverlayOpen || undefined}>
+        {/* The first link names what it actually lands on. `.main` is the
+            transcript on `#chat` — the one route where a generic "main content"
+            would be vaguer than the product can afford, because the second link
+            (composer) only exists there and the pair has to read as two
+            distinct places. Every other route puts an arbitrary view in the
+            same element, so "main content" is the only name that stays true
+            there. */}
         <button
           class="skip-link"
           type="button"
           onClick={() => mainRegion.current?.focus({ preventScroll: true })}
-        >Skip to conversation</button>
+        >{view === "chat" ? "Skip to conversation" : "Skip to main content"}</button>
         {view === "chat" ? (
           <button
             class="skip-link"
@@ -8226,7 +8629,7 @@ export function App() {
                           if (busy && input.trim()) enqueueCurrentComposer();
                           else setComposerNotice(busy
                             ? "Type a follow-up and press Enter to queue it, or stop the current turn."
-                            : "Wait for the active model or storage transition. Your prompt remains in the composer.");
+                            : COMPOSER_TRANSITION_WAIT);
                           return;
                         }
                         if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
@@ -8252,7 +8655,7 @@ export function App() {
                             inferenceConnected,
                             authMethod: activeInferenceBinding?.authMethod,
                           })}
-                          blockedReason={attachmentsAwaitText ? COMPOSER_ATTACHMENT_NEEDS_TEXT : undefined}
+                          blockedReason={attachmentsAwaitText ? composerAttachmentNeedsText(composerRequestEncrypted) : undefined}
                         />
                         <MenuSelect
                           // Not "Conversation approval policy": choosing here
@@ -8291,20 +8694,26 @@ export function App() {
                           disabled={!input.trim()
                             || !sessionId
                             || composerOfflineBlocked
-                            || modelSwitching
-                          || vaultProviderSwitching
-                          || localDeviceBusy}
-                          aria-label={composerOfflineBlocked ? "Send unavailable while remote inference is offline" : "Send message"}
+                            || composerTransitionPending}
+                          aria-label={composerOfflineBlocked
+                            ? "Send unavailable while remote inference is offline"
+                            // A disabled control has no hover and no touch
+                            // gesture, so the reason rides in the name itself.
+                            : composerTransitionPending
+                              ? "Send unavailable while a model or storage transition settles"
+                              : "Send message"}
                           aria-describedby={composerUsesDemo ? "chat-demo-guidance" : undefined}
                           title={composerOfflineBlocked
                             ? "Remote inference is paused offline. Local slash commands remain available."
-                            // The disabled state that reads as a bug unless it
-                            // is named: attachments pending, nothing typed.
-                            : attachmentsAwaitText
-                              ? COMPOSER_ATTACHMENT_NEEDS_TEXT
-                              : composerUsesDemo
-                                ? "Deterministic local demo response. Connect a model for real inference."
-                                : undefined}
+                            : composerTransitionPending
+                              ? COMPOSER_TRANSITION_WAIT
+                              // The disabled state that reads as a bug unless it
+                              // is named: attachments pending, nothing typed.
+                              : attachmentsAwaitText
+                                ? composerAttachmentNeedsText(composerRequestEncrypted)
+                                : composerUsesDemo
+                                  ? "Deterministic local demo response. Connect a model for real inference."
+                                  : undefined}
                         ><Icon name="send" /></button>
                       )}
                     </div>
@@ -8429,7 +8838,15 @@ export function App() {
                used to throw past this line, which is what kept the editor on
                screen; now that the refusal is reported instead of thrown, the
                boolean is what has to hold the editor open. */
-            onActivate={async (id) => { if (await requestProfileChange(id, true)) navigate("chat"); }}
+            onActivate={async (id) => {
+              // The outcome is returned, not inferred. `requestProfileChange`
+              // cannot reject — it converts every refusal into the topbar runtime
+              // line and `false` — so a `Promise<void>` left the editor with
+              // nothing but an unchanged route to read a refusal from.
+              const activated = await requestProfileChange(id, true);
+              if (activated) navigate("chat");
+              return activated;
+            }}
             onSave={saveProfileRevision}
             onFork={forkProfile}
             onDelete={deleteProfile}
@@ -8448,7 +8865,11 @@ export function App() {
             activeProfileId={profileId}
             onSetGlobal={setGlobalSkill}
             onSetProfile={setProfileSkill}
-            onApply={async (id) => { if (await requestProfileChange(id, true)) navigate("chat"); }}
+            onApply={async (id) => {
+              const activated = await requestProfileChange(id, true);
+              if (activated) navigate("chat");
+              return activated;
+            }}
             scope={profileHubScope}
           />
         ) : null}
@@ -9506,6 +9927,26 @@ function insertSlashCompletion(input: string, completion: SlashCompletion): stri
   return `${boundary < 0 ? "" : input.slice(0, boundary + 1)}${completion.insertText} `;
 }
 
+/**
+ * A command-palette slash command meets an unsent draft.
+ *
+ * Replace is correct only on the palette's home turf — an empty composer, or
+ * one already holding a slash line. With any other text in the box the
+ * command inserts at the caret, spaced like a word, so the keystroke that
+ * summoned the palette cannot destroy the message that was being written.
+ * Exported because the rule is checkable without a browser, and this file's
+ * draft tests quote it.
+ */
+export function insertDraftCommandAtCaret(input: string, command: string, caret: number): string {
+  if (!input || input.startsWith("/")) return command;
+  const position = Math.max(0, Math.min(caret, input.length));
+  const before = input.slice(0, position);
+  const after = input.slice(position);
+  const lead = before.length > 0 && !/\s$/u.test(before) ? " " : "";
+  const trail = after.length > 0 && !/^\s/u.test(after) ? " " : "";
+  return `${before}${lead}${command}${trail}${after}`;
+}
+
 function slugIdentifier(value: string): string {
   const slug = value.toLowerCase().replace(/[^a-z0-9]+/gu, "-").replace(/^-|-$/gu, "").slice(0, 72);
   return slug || "profile";
@@ -9908,6 +10349,60 @@ function describeEndpointEvidence(args: {
     };
 }
 
+export type SessionDurability = Readonly<{
+  state: DurabilityState;
+  detail: string;
+}>;
+
+/**
+ * Where this session's journal lives, in the durability vocabulary.
+ *
+ * The one interesting boundary is an offline browser with an adopted Drive
+ * vault: adoption is a local fact that stays true, but "synced" is a claim about
+ * a completed round-trip that cannot currently run, so the derivation degrades
+ * to `sync-paused` with the pause named in the detail. It deliberately does not
+ * borrow `syncing`: that state's label is "Syncing encrypted state", a
+ * present-progressive activity claim, and pairing it with this detail sentence
+ * had one chip asserting both that a sync was in progress and that no sync was
+ * running — in its visible text and in its accessible name at once. Ephemeral
+ * and local-device answers do not depend on connectivity and are deliberately
+ * untouched, and a loopback lab vault is reachable exactly as independently of
+ * `navigator.onLine` as it was.
+ */
+export function describeSessionDurability(input: Readonly<{
+  localDeviceRuntimeAdopted: boolean;
+  cloudVaultRuntimeAdopted: boolean;
+  googleDriveVault: boolean;
+  vaultContractReady: boolean;
+  syncTarget?: string;
+  online: boolean;
+}>): SessionDurability {
+  if (input.localDeviceRuntimeAdopted) {
+    return Object.freeze({
+      state: "local" as const,
+      detail: "This session journal and workspace write encrypted objects to browser-managed storage on this device. No cloud synchronization is active.",
+    });
+  }
+  if (input.cloudVaultRuntimeAdopted && input.vaultContractReady) {
+    if (input.googleDriveVault && !input.online) {
+      return Object.freeze({
+        state: "sync-paused" as const,
+        detail: "Sync paused · offline. This browser cannot reach the adopted Google Drive folder; encrypted objects are not synchronizing until connectivity returns.",
+      });
+    }
+    return Object.freeze({
+      state: "synced" as const,
+      detail: `This session journal and workspace write client-encrypted objects directly to ${input.syncTarget ?? "the adopted encrypted object store"}.`,
+    });
+  }
+  return Object.freeze({
+    state: "ephemeral" as const,
+    detail: input.vaultContractReady
+      ? "The cloud object-store contract is verified, but this active runtime has not adopted it; this session remains in page memory."
+      : "This session journal exists only in page memory. Nothing is synced.",
+  });
+}
+
 /** The conversation-scoped reading, for the session bar's attestation claim. */
 export function describeAttestationSeal(args: {
   connected: boolean;
@@ -9931,13 +10426,19 @@ function describeMessageAttestation(
   return Object.freeze(describeEndpointEvidence({ scope: "turn", receipt, records, failure, now }));
 }
 
-function evidenceAcquisitionNotice(
+export function evidenceAcquisitionNotice(
   snapshot: EvidenceAcquisitionQueueSnapshot | undefined,
   receiptId: string | undefined,
+  persistenceFaulted = false,
 ): string | undefined {
   if (!snapshot || !receiptId) return undefined;
   const task = snapshot.tasks.find((candidate) => candidate.request.receiptId === receiptId);
   if (!task || task.status === "succeeded") return undefined;
+  // A checkpoint fault halts queue scheduling, so any sentence here that
+  // promises an upcoming retry would be lying while the fault stands.
+  if (persistenceFaulted) {
+    return "Evidence checkpointing failed. Automatic acquisition is paused until the queue snapshot commits again; the receipt remains unchanged.";
+  }
   if (task.status === "pending") return "Automatic endpoint-evidence acquisition is queued for this completed turn.";
   if (task.status === "running") return `Automatic endpoint-evidence acquisition is running (attempt ${String(task.attempt)}).`;
   if (task.status === "retry") return `${task.failure.message}. Automatic acquisition will retry without changing the receipt.`;
@@ -9945,6 +10446,32 @@ function evidenceAcquisitionNotice(
   return task.reason === "scope-released"
     ? "Automatic endpoint-evidence acquisition stopped when the Chutes connection was released. The receipt remains unchanged."
     : "Automatic endpoint-evidence acquisition was cancelled. The receipt remains unchanged.";
+}
+
+/**
+ * Asks a parked acquisition queue to retry the checkpoint that parked it.
+ *
+ * The queue's `schedule()` refuses to arm while a persistence fault stands, so
+ * an explicit `wake()` is the only exit — which makes *what drives it* the whole
+ * guarantee behind "acquisition is paused until the queue snapshot commits
+ * again". It is a standalone function, taking nothing but the controller,
+ * because the version this replaces was driven from the attestation-freshness
+ * tick: that effect requires attestation records to exist, and the fault is
+ * reachable on the very first acquisition of a conversation that has none. No
+ * presentation state may be able to gate the recovery, so none is offered.
+ *
+ * Returns whether a wake was attempted, so the recovery is assertable directly
+ * rather than inferred from the shape of an effect.
+ */
+export function wakeFaultedEvidenceAcquisitionQueue(
+  queue: Pick<EvidenceAcquisitionQueueController, "fault" | "wake"> | undefined,
+): boolean {
+  if (!queue?.fault()) return false;
+  void queue.wake().catch(() => {
+    // Still faulted: the acquisition notice keeps naming the checkpoint failure
+    // until a commit succeeds, and the caller arms the next attempt.
+  });
+  return true;
 }
 
 function isChutesReceiptProvider(provider: string): boolean {
@@ -10148,7 +10675,10 @@ function MessageCard({
         ) : <p>{message.content || " "}</p>}
         <StreamingMessageSlot store={streamStore} messageId={message.id} active={message.status !== undefined} />
         {message.liveToolOutput ? (
-          <section class="live-tool-output" aria-live="polite" aria-label="Live tool output">
+          // No live region here: the <pre> re-renders on every output chunk,
+          // and a polite region would re-announce the whole buffer per chunk.
+          // The turn lifecycle is already announced through the message status.
+          <section class="live-tool-output" aria-label="Live tool output">
             <header><span class="pulse-dot" /><strong>Live tool output</strong><code>{message.liveToolOutput.stream}</code></header>
             <pre>{message.liveToolOutput.text}</pre>
           </section>
@@ -10253,7 +10783,16 @@ function ProfileManagerView({
   catalog: ProfileCatalog;
   catalogDurability: ProfileCatalogStore["durability"];
   activeProfileId: string;
-  onActivate: (profileId: string) => Promise<void>;
+  /**
+   * Switches to this profile, and answers whether it actually became active.
+   *
+   * The boolean is the contract, not the absence of a rejection: the App-level
+   * wrapper is deliberately unable to reject (`requestProfileChange`), so a
+   * `Promise<void>` gave this editor no way to tell a committed switch from a
+   * refused one and left the refusal legible only as a route that did not
+   * change.
+   */
+  onActivate: (profileId: string) => Promise<boolean>;
   onSave: (draft: ProfileEditorDraft) => Promise<ProfileRevision>;
   onFork: (profile: ProfileRevision) => Promise<ProfileRevision>;
   onDelete: (profileId: string, replacementProfileId?: string) => Promise<void>;
@@ -10374,6 +10913,32 @@ function ProfileManagerView({
     }
   }
 
+  /*
+   * Activation is the one profile mutation this editor used to fire and forget.
+   * Every other outcome here lands in `status`; a `void onActivate(…)` left a
+   * refused switch to be inferred from the route not changing. Same shape as
+   * `save`/`fork`/`archive`, including `busy` — a switch in flight must not
+   * accept a second one.
+   *
+   * A refusal arrives as `false`, not as a rejection: the App wrapper converts
+   * every failure into the topbar runtime line and returns, so awaiting alone
+   * would have surfaced nothing here. The `catch` stays as the defence for a prop
+   * that does reject — it is not what makes a refusal visible.
+   */
+  async function activate() {
+    setBusy(true);
+    setStatus(undefined);
+    try {
+      if (!await onActivate(selected.profileId)) {
+        setStatus("This profile did not become active. The runtime status line at the top of the window names the reason.");
+      }
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <section class="work-view">
       <RouteBar routeId="profiles" title="Profiles" eyebrow="Immutable agent manifests" description="Manage agent personas, instructions, and interface themes. Saves create content-addressed revisions; switching restores that profile's most recent compatible conversation." />
@@ -10384,12 +10949,13 @@ function ProfileManagerView({
             {profiles.map((profile) => (
               <button key={profile.profileId} class={profile.profileId === selected.profileId ? "profile-card active" : "profile-card"} type="button" onClick={() => { if (!dirty || window.confirm(PROFILE_DRAFT_DISCARD_PROMPT)) { setStatus(undefined); setSelectedId(profile.profileId); } }}>
                 <span class="profile-monogram">{profileMonogram(profile.name)}</span>
-                <span><strong>{profile.name}</strong><small>{profile.description}</small>{/* "Minimum proof", verbatim from PROFILE_POSTURE_FIELD_LABEL — the same
-                    field is named that by the select 400px below and by the revision
-                    strip beside it. Spelled rather than imported because
-                    `profiles-governance` is not otherwise reachable from the startup
-                    chunk and one label is not worth the module. */}
-                <PostureChip posture={profile.minimumPosture} prefix="Minimum proof" /></span>
+                <span><strong>{profile.name}</strong><small>{profile.description}</small>{/* One spelling of this field's name, shared with the select below and
+                    the revision strip beside it. It used to be typed out here with a
+                    comment claiming `profiles-governance` was not in the startup
+                    chunk — which was false: `chat/message-parts-view` imports
+                    `PROFILE_APPROVAL_LABELS` from it, so the module was already
+                    there and the duplicate bought nothing but a way to drift. */}
+                <PostureChip posture={profile.minimumPosture} prefix={PROFILE_POSTURE_FIELD_LABEL} /></span>
                 {profile.profileId === activeProfileId ? <em>active</em> : null}
               </button>
             ))}
@@ -10431,7 +10997,7 @@ function ProfileManagerView({
               </div>
             </details>
             <details class="profile-editor-disclosure">
-              <summary><span>Profile boundaries</span><small>{draft.memoryScope} memory · {approvalModeLabel(draft.approvalMode)}</small></summary>
+              <summary><span>Profile boundaries</span><small>{PROFILE_MEMORY_SCOPE_LABELS[enforcedMemoryScope(draft.memoryScope)]} · {approvalModeLabel(draft.approvalMode)}</small></summary>
               <div class="profile-boundary-grid">
                 <label><span>Workspace</span><MenuSelect ariaLabel="Profile workspace binding" value={draft.workspaceBinding} options={[
                   { value: "active-workspace", label: "Current workspace", description: "Follow the workspace chosen by this runtime" },
@@ -10461,18 +11027,25 @@ function ProfileManagerView({
                 ]} onChange={(minimumPosture) => setDraft({ ...draft, minimumPosture: minimumPosture as SecurityPosture })} /></label>
                 {draft.workspaceBinding === "workspace-id" ? <label><span>Workspace ID</span><input value={draft.workspaceId} maxLength={512} placeholder="vault+gdrive://…" onInput={(event) => setDraft({ ...draft, workspaceId: event.currentTarget.value })} /></label> : null}
               </div>
-              <p class="profile-boundary-note">These settings, including the minimum proof posture below, are copied into each new session. Existing conversations keep their original pin.</p>
+              <p class="profile-boundary-note">{PROFILE_BOUNDARY_NOTE}</p>
             </details>
             <div class="revision-strip">
               <span><small>Runtime</small>{selected.providerId} · {selected.model}</span>
-              <span><PostureChip posture={selected.minimumPosture} prefix="Minimum proof" /></span>
+              <span><PostureChip posture={selected.minimumPosture} prefix={PROFILE_POSTURE_FIELD_LABEL} /></span>
               <span><small>Skills resolved</small>{effectiveSkillIds(selected, catalog).length}</span>
               <span><small>Parent</small>{selected.parentRevision?.slice(-8) ?? "origin"}</span>
             </div>
             <div class="profile-actions">
               <button class="small-button" type="button" onClick={() => void save()} disabled={busy}>Save new revision</button>
-              <button class="primary-link button-link" type="button" onClick={() => void onActivate(selected.profileId)} disabled={busy || dirty} title={dirty ? "Save this revision before applying it." : undefined}>Switch to this profile</button>
-              {previewThemeId ? <button class="small-button" type="button" onClick={() => { const theme = previewRestore.current?.theme; if (theme) applyThemeWithPreferences(theme, preferences); setDraft(profileDraftForEditor(selected)); setPreviewThemeId(undefined); }}>Cancel preview</button> : null}
+              <button class="primary-link button-link" type="button" onClick={() => void activate()} disabled={busy || dirty} title={dirty ? "Save this revision before applying it." : undefined}>Switch to this profile</button>
+              {/*
+                * Cancelling a preview undoes the preview — nothing else. The
+                * button used to replace the whole draft with the saved
+                * revision, silently discarding every unsaved name, role,
+                * instruction and boundary the editor was holding, without
+                * confirmation. Only the previewed theme field goes back.
+                */}
+              {previewThemeId ? <button class="small-button" type="button" onClick={() => { const theme = previewRestore.current?.theme; if (theme) applyThemeWithPreferences(theme, preferences); setDraft((current) => ({ ...current, themeId: selected.theme.themeId })); setPreviewThemeId(undefined); }}>Cancel preview</button> : null}
               {previewThemeId ? <span>Previewing — not saved</span> : null}
               {status ? <span role="status" aria-live="polite">{status}</span> : null}
             </div>
@@ -10506,7 +11079,8 @@ function SkillsManagerView({
   activeProfileId: string;
   onSetGlobal: (skillId: string, enabled: boolean) => Promise<void>;
   onSetProfile: (profileId: string, skillId: string, mode: SkillMode) => Promise<void>;
-  onApply: (profileId: string) => Promise<void>;
+  /** Switches to the previewed profile, answering whether it became active. */
+  onApply: (profileId: string) => Promise<boolean>;
   scope: string;
 }) {
   const [selectedProfileId, setSelectedProfileId] = useState(activeProfileId);
@@ -10535,10 +11109,13 @@ function SkillsManagerView({
     }
   }
 
+  /** Same contract as the Profiles editor: a refusal is `false`, not a rejection. */
   async function applyProfile(): Promise<void> {
     setStatus(undefined);
     try {
-      await onApply(profile.profileId);
+      if (!await onApply(profile.profileId)) {
+        setStatus("This profile did not become active. The runtime status line at the top of the window names the reason.");
+      }
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error));
     }
@@ -10550,7 +11127,7 @@ function SkillsManagerView({
       <div class="skills-toolbar panel">
         {scope === "global" ? <div class="skill-select-field"><span>Preview resolution for</span><MenuSelect placement="down" ariaLabel="Preview profile resolution" value={profile.profileId} options={profiles.map((candidate) => ({ value: candidate.profileId, label: candidate.name }))} onChange={setSelectedProfileId} /></div> : <div><span class="eyebrow">Profile scope</span><strong>{profile.name}</strong></div>}
         <div><span class="eyebrow">Effective set</span><strong>{effectiveSkillIds(profile, catalog).length} of {catalog.skills.length}</strong></div>
-        <button class="small-button" type="button" onClick={() => void applyProfile()}>Apply {profile.name} in a new conversation</button>
+        <button class="small-button" type="button" onClick={() => void applyProfile()}>Switch to {profile.name}</button>
       </div>
       <div class="skill-grid">
         {catalog.skills.map((skill) => {

@@ -367,11 +367,12 @@ test("the composer is two tab stops from the start of the document", async ({ pa
   // Reset to a document with no prior focus. `blur()` alone is not enough:
   // Chromium keeps the sequential-navigation starting point at the element
   // that was blurred, so Tab would resume mid-document instead of at the top.
-  await page.evaluate(() => {
+  const restartTabbingFromTheTop = () => page.evaluate(() => {
     (document.activeElement as HTMLElement | null)?.blur();
     document.body.tabIndex = -1;
     document.body.focus();
   });
+  await restartTabbingFromTheTop();
   await page.keyboard.press("Tab");
   const first = await describeFocus();
   expect(first.label).toBe("Skip to conversation");
@@ -382,6 +383,21 @@ test("the composer is two tab stops from the start of the document", async ({ pa
   expect((await describeFocus()).label).toBe("Skip to composer");
   await page.keyboard.press("Enter");
   expect((await describeFocus()).label).toBe("Message Airship");
+
+  // ADDED: the first link's name is route-dependent — `.main` is the transcript
+  // on `#chat` and an arbitrary view everywhere else — so pin both halves of
+  // that claim rather than only the chat half. On a route with no conversation
+  // and no composer the generic name is the accurate one, and the second stop
+  // must not offer a composer that does not exist.
+  await page.goto("/#vault");
+  await expect(page.locator(".app-shell")).toBeVisible();
+  await restartTabbingFromTheTop();
+  await page.keyboard.press("Tab");
+  const offChat = await describeFocus();
+  expect(offChat.label).toBe("Skip to main content");
+  expect(offChat.visible).toBeGreaterThanOrEqual(44);
+  await page.keyboard.press("Tab");
+  expect((await describeFocus()).label).not.toBe("Skip to composer");
 });
 
 test("mobile workspace and terminal controls preserve their content lanes", async ({ page }, testInfo) => {

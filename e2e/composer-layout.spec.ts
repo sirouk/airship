@@ -278,7 +278,17 @@ test("the approval policy opens inside the phone viewport, reads whole, and take
             Math.round(bounds.top + bounds.height / 2),
           );
           return {
-            name: option.getAttribute("aria-label") ?? "",
+            /*
+             * The word a person reads off the option, taken from the option's
+             * own contents. This used to read `aria-label`, and that attribute
+             * is deliberately gone: `MenuSelect` names each option *from* its
+             * contents now, so a screen reader announces the text that is on
+             * screen instead of a parallel string that could drift from it.
+             * Reading the rendered word is therefore the stronger read — and
+             * the computed accessible name is asserted separately below, so
+             * both halves of the naming contract are still covered.
+             */
+            name: option.querySelector(".menu-select-option-copy strong")?.textContent?.trim() ?? "",
             height: bounds.height,
             inside: bounds.top >= 0 && bounds.bottom <= innerHeight && bounds.left >= 0 && bounds.right <= innerWidth,
             // The proof that "open" means reachable rather than merely laid
@@ -294,8 +304,26 @@ test("the approval policy opens inside the phone viewport, reads whole, and take
     expect(geometry!.popover.left, `${at}: popover left edge`).toBeGreaterThanOrEqual(0);
     expect(geometry!.popover.right, `${at}: popover right edge`).toBeLessThanOrEqual(geometry!.viewport.width + 1);
     expect(geometry!.popover.bottom, `${at}: popover bottom edge`).toBeLessThanOrEqual(geometry!.viewport.height + 1);
+    const policies = ["Ask First", "Auto Approve", "Full Access"] as const;
     expect(geometry!.options.map((option) => option.name), `${at}: every policy is offered`)
-      .toEqual(["Ask First", "Auto Approve", "Full Access"]);
+      .toEqual(policies);
+
+    /*
+     * And each option is *called* by the word it shows. Two assertions where
+     * there was one: the read above proves the word is rendered, this one
+     * proves the accessible name the browser computes for the same option
+     * equals it exactly — so the description sentence stays out of the name
+     * (it is announced via `aria-describedby`), and a reader hears "Auto
+     * Approve", not "Auto Approve Ask the active model to review each effect".
+     * An `aria-label` read could never have caught that regression, because
+     * folding the sentence into the contents leaves the attribute untouched.
+     */
+    const offered = page.getByRole("listbox", { name: "Conversation approval policy" }).getByRole("option");
+    await expect(offered, `${at}: three policies in the accessibility tree`).toHaveCount(policies.length);
+    for (const [index, policy] of policies.entries()) {
+      await expect(offered.nth(index), `${at}: accessible name of policy ${index + 1}`).toHaveAccessibleName(policy);
+    }
+
     for (const option of geometry!.options) {
       expect(option.inside, `${at}: "${option.name}" is inside the viewport`).toBe(true);
       expect(option.hittable, `${at}: "${option.name}" receives the pixel at its own centre`).toBe(true);

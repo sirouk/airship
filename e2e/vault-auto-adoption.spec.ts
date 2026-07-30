@@ -105,7 +105,17 @@ test("fresh browser contexts resume one audited Vault session without creating r
     if (index === 0) {
       await page.getByRole("combobox", { name: "Message Airship" }).fill(marker);
       await page.getByRole("button", { name: "Send message" }).click();
-      await expect(page.getByText("Airship is running this turn entirely on your device", { exact: false })).toBeVisible({ timeout: 15_000 });
+      /*
+       * Scoped to the transcript card. A settled turn now also emits one
+       * `sr-only` polite announcement carrying an excerpt of the reply — the
+       * arrival notice a screen reader had been getting nothing for — so the
+       * sentence legitimately exists twice in the DOM for a few seconds. This
+       * asserts the one a person sees; the announcement has its own unit
+       * coverage in src/ui/chat/streaming-slot.test.ts.
+       */
+      await expect(page.locator("[data-transcript-card]")
+        .getByText("Airship is running this turn entirely on your device", { exact: false })
+        .first()).toBeVisible({ timeout: 15_000 });
     } else {
       await expect(page.getByText(marker, { exact: true })).toBeVisible({ timeout: 15_000 });
     }

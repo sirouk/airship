@@ -11,7 +11,7 @@ import { proofStatusLabel } from "./trust-language";
  * the shell would have paid for this file's ceiling copy, legend and popover
  * projection to draw one word. The names are re-exported so every existing
  * import of `claim-stack-facts` keeps working and there is still exactly one
- * definition of the six states.
+ * definition of the five states.
  */
 export {
   TURN_EVIDENCE_COPY,

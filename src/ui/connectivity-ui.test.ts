@@ -1,4 +1,6 @@
-import { readFile } from "node:fs/promises";
+import { readdir, readFile, stat } from "node:fs/promises";
+import { dirname, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const [app, access, billing, oauth] = await Promise.all([
@@ -114,5 +116,101 @@ describe("offline runtime UI contract", () => {
     expect(billing).toContain("disabled={loading || !online}");
     expect(billing).toContain("Account reads paused");
     expect(billing).toContain("last observation held in page memory");
+  });
+});
+
+/**
+ * A credential lifecycle nothing constructs reads as the one production runs.
+ *
+ * `ChutesCredentialBroker` was 500 lines of token custody, one-time refresh
+ * rotation, retired-token replay defence and RFC 7009 sign-out revocation, with
+ * 390 lines of passing unit tests — and no importer outside its own test. App
+ * had grown a separate inline `oauthTokens` ref path that revoked nothing, and
+ * the gap was invisible from the call site because teardown did call something
+ * named `revokeCredential` (the transport's in-page abort). The broker's
+ * existence is what made "revocation is handled" look true; sign-out left a
+ * 30-day refresh token live at the provider. Revocation is now wired into
+ * `releaseChutesAuthority` (pinned in connection-continuity.test.ts) and the
+ * broker is deleted rather than left standing as a second, unrun answer.
+ *
+ * So the guard is reachability, not that one name: a module under `src/auth`
+ * that declares behaviour must have a non-test importer somewhere in `src`, or
+ * not be in the tree. Pure re-export barrels are exempt on purpose — they hold
+ * no code, so an unimported one asserts nothing about what runs.
+ */
+describe("every credential module under src/auth is reachable from production", () => {
+  /** Runtime edges only: `import type` is erased, so it constructs nothing. */
+  const STATIC_EDGE = /(?:^|[\s;}])(?:import|export)\s+(?!type\s)(?:[^'"();]*?\sfrom\s+)?["']([^"']+)["']/gmu;
+  /** App reaches `chutes-oauth` this way, so a static-only scan would miss it. */
+  const DYNAMIC_EDGE = /\bimport\s*\(\s*["']([^"']+)["']/gu;
+  const RESOLUTION_SUFFIXES = Object.freeze(["", ".ts", ".tsx", "/index.ts", "/index.tsx"]);
+  const DECLARES_BEHAVIOUR = /^export\s+(?:async\s+function|function|class|abstract\s+class|const|let|var|default)\s/mu;
+  const sourceRoot = fileURLToPath(new URL("../", import.meta.url));
+
+  function isTest(file: string): boolean {
+    return /\.test\.tsx?$/u.test(file);
+  }
+
+  async function* sourceFiles(directory: string): AsyncGenerator<string> {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const child = join(directory, entry.name);
+      if (entry.isDirectory()) yield* sourceFiles(child);
+      else if (/\.tsx?$/u.test(entry.name)) yield child;
+    }
+  }
+
+  async function resolveModule(fromFile: string, specifier: string): Promise<string | undefined> {
+    if (!specifier.startsWith(".")) return undefined;
+    const base = resolve(dirname(fromFile), specifier);
+    for (const suffix of RESOLUTION_SUFFIXES) {
+      const candidate = `${base}${suffix}`;
+      try {
+        if ((await stat(candidate)).isFile()) return candidate;
+      } catch {
+        continue;
+      }
+    }
+    return undefined;
+  }
+
+  it("has no auth module whose only importer is its own test", async () => {
+    const importedByProduction = new Set<string>();
+    for await (const file of sourceFiles(sourceRoot)) {
+      if (isTest(file)) continue;
+      const source = await readFile(file, "utf8");
+      for (const edge of [STATIC_EDGE, DYNAMIC_EDGE]) {
+        for (const match of source.matchAll(edge)) {
+          const target = await resolveModule(file, match[1]!);
+          if (target) importedByProduction.add(target);
+        }
+      }
+    }
+
+    const orphans: string[] = [];
+    for await (const file of sourceFiles(join(sourceRoot, "auth"))) {
+      if (isTest(file) || importedByProduction.has(file)) continue;
+      // A barrel declares nothing of its own, so it cannot be a lifecycle that
+      // looks implemented while nothing runs it.
+      if (!DECLARES_BEHAVIOUR.test(await readFile(file, "utf8"))) continue;
+      orphans.push(relative(sourceRoot, file));
+    }
+    expect(orphans, "wire it into production or delete it — a tested, unmounted credential lifecycle reads as the live one").toEqual([]);
+  });
+
+  it("finds the orphan it exists to find, and does not flag a re-export barrel", async () => {
+    // The scan is the whole guarantee, so both halves of its rule are exercised
+    // here rather than by waiting for the next unmounted module.
+    const broker = 'import { revokeChutesToken } from "./chutes-oauth";\nexport class ChutesCredentialBroker {}\n';
+    const barrel = 'export { revokeChutesToken, type ChutesOAuthTokenSet } from "./chutes-oauth";\n';
+    expect(DECLARES_BEHAVIOUR.test(broker)).toBe(true);
+    expect(DECLARES_BEHAVIOUR.test(barrel)).toBe(false);
+    // And the edge scan reads a dynamic import, which is how App reaches auth.
+    const app = 'const { revokeChutesToken } = await import("../auth/chutes-oauth");';
+    expect([...app.matchAll(DYNAMIC_EDGE)].map((match) => match[1])).toEqual(["../auth/chutes-oauth"]);
+    // A type-only edge names a module without running any of it.
+    const typeOnly = 'import type { ChutesOAuthTokenSet } from "../auth/chutes-oauth";';
+    expect([...typeOnly.matchAll(STATIC_EDGE)]).toEqual([]);
+    // The module the guard was written for is gone, not merely unimported.
+    await expect(stat(join(sourceRoot, "auth/chutes-credential-broker.ts"))).rejects.toThrow();
   });
 });

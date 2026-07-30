@@ -63,7 +63,12 @@ describe("progressive disclosure coherence contract", () => {
     // One name for the profile field the catalog card, the select and the
     // revision strip all show within 400px of each other.
     expect(app).not.toContain("Minimum posture");
-    expect(app.match(/prefix="Minimum proof"/gu)).toHaveLength(2);
+    // Both chips now read the field's name from one exported constant rather
+    // than repeating the string. Counting literals was the weaker form of this
+    // assertion: two identical literals satisfy it and can still be edited
+    // apart, whereas two references to the same constant cannot drift at all.
+    expect(app.match(/prefix=\{PROFILE_POSTURE_FIELD_LABEL\}/gu)).toHaveLength(2);
+    expect(app).not.toContain('prefix="Minimum proof"');
 
     // "Established" is retired as a state word: it meant *recorded* on the
     // claim rail and *unproven* in the metric 183px away.

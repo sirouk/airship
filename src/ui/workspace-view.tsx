@@ -12,8 +12,12 @@ import { buildWorkspaceTree, visibleWorkspaceTree, workspaceBaseName, workspaceD
 import { downloadBytes, downloadFileName } from "./file-download";
 import { trapFocus } from "./focus-trap";
 import { Icon } from "./icons";
-import { MenuSelect } from "./menu-select";
+import { MenuSelect, moveMenuSelection } from "./menu-select";
 import { Seal } from "./seal";
+// One conflict predicate for every staging surface: the Advanced controls
+// exclude conflicted paths from bulk staging (`isConflicted`) and the
+// workbench rail must never be able to send what that panel refused.
+import { isConflicted } from "./sources-view";
 import { middleTruncate, Tabs, type TabItem } from "./tabs";
 import { WorkspaceFileIcon } from "./workspace-file-icon";
 import {
@@ -396,6 +400,23 @@ function ProfileScopedWorkspaceView({
     return () => window.removeEventListener("beforeunload", warn);
   }, [buffers, workspace, workspaceIdentity, profileId]);
 
+  /*
+   * Evict what the tree no longer lists.
+   *
+   * The listing is the only authority on what still exists, so this decision
+   * is made on a *change of listing* and on nothing else. It used to also
+   * depend on `activeId`, which re-asked "does this path exist?" against
+   * whichever listing happened to be in state at that moment: a local move
+   * publishes its remapped tab strip and its carried-over draft synchronously,
+   * before the refresh it then awaits has landed, so the `activeId` rerun
+   * judged the just-created target path against the pre-move listing, called
+   * it externally deleted, and discarded the unsaved draft the move had just
+   * carried across. `WorkspaceRefreshCoordinator` will not publish a
+   * superseded listing, so a listing change is always the newest truth.
+   *
+   * Loading content for whatever document is active is a separate concern and
+   * lives in the effect below, which still watches `activeId`.
+   */
   useEffect(() => {
     if (files.length === 0) return;
     const filePaths = new Set(files.map((entry) => entry.path));
@@ -404,10 +425,45 @@ function ProfileScopedWorkspaceView({
       return document?.kind === "diff" || (document?.kind === "file" && filePaths.has(document.path));
     }));
     const next = retainWorkbenchDocuments(documentsRef.current, retained);
+    // Read the pre-retain tabs: `publishDocuments` swaps the ref synchronously,
+    // so the evicted set is gone one statement later.
+    const vanished = workbenchVanishedFilePaths(documentsRef.current.tabs, filePaths);
     if (next !== documentsRef.current) publishDocuments(next);
-    const desired = next.activeId ? parseWorkbenchDocumentId(next.activeId) : undefined;
+    // An externally deleted file's tab is gone with it, and its draft can
+    // never be saved back to a path that no longer exists — an invisible dirty
+    // buffer would keep the beforeunload guard armed forever and resurrect as
+    // a stale draft if the path were created again. Discard follows the same
+    // rule everywhere else in this view, so the buffer goes with the tab.
+    if (vanished.length > 0) {
+      const gone = new Set(vanished);
+      setBuffers((current) => {
+        const nextBuffers = Object.fromEntries(Object.entries(current).filter(([path]) => !gone.has(path)));
+        buffersRef.current = nextBuffers;
+        return nextBuffers;
+      });
+    }
+    // The mirror case: the file is still listed, but an agent turn, a terminal
+    // or a checkout moved its revision. A clean buffer holds no work to
+    // protect, so it follows the external write; a dirty one keeps its draft —
+    // the compare-and-swapped save is already the fence for that race.
+    for (const path of workbenchExternalRevisionPaths(buffersRef.current, files)) {
+      void reconcileExternalRevision(path, buffersRef.current[path]?.revision ?? "");
+    }
+  }, [files]);
+
+  /*
+   * Content for whatever document is active: after the eviction above changed
+   * it, on the first listing after a restore, and when `git` arrives late for
+   * a restored diff tab. Read through `documentsRef` rather than the `activeId`
+   * render value, because the effect above has already published this commit's
+   * retained strip into the ref.
+   */
+  useEffect(() => {
+    if (files.length === 0) return;
+    const active = documentsRef.current.activeId;
+    const desired = active ? parseWorkbenchDocumentId(active) : undefined;
     if (desired?.kind === "file" && !buffersRef.current[desired.path]) void onOpen(desired.path);
-    if (desired?.kind === "diff" && !diffsRef.current[next.activeId]) void loadDiffDocument(desired, next.activeId);
+    if (desired?.kind === "diff" && active && !diffsRef.current[active]) void loadDiffDocument(desired, active);
     if (!desired) setMobilePane("navigation");
   }, [files, activeId, git]);
 
@@ -533,6 +589,10 @@ function ProfileScopedWorkspaceView({
     () => dialog?.kind === "rename-folder" || dialog?.kind === "delete-folder" ? workspaceFilesUnder(files, dialog.path) : [],
     [dialog?.kind, dialog?.path, files],
   );
+  // Folder delete discards open buffers under the path without asking — the
+  // confirmation owes those drafts the same sentence the single-file delete
+  // prints, or the honest dialog is only honest for one of the two deletes.
+  const dialogDirtyDrafts = dialog?.kind === "delete-folder" ? workbenchDirtyDraftsUnderFolder(buffers, dialog.path) : 0;
   const dialogCopy = dialog ? workbenchDialogCopy(dialog.kind, dialog.path, dialogFolderFiles.length) : undefined;
   // Only once something has been typed: "Enter a name." beside an empty field
   // the dialog just opened is a scold, not an explanation. Whitespace-only
@@ -548,6 +608,14 @@ function ProfileScopedWorkspaceView({
       ? workspaceNameError(dialogValue)
       : dialog?.kind === "create" ? workspacePathError(dialogValue) : undefined
     : undefined;
+  // The Move dialog's one Tab stop. Its listbox is full of native buttons, so
+  // without a roving tabindex Tab visited every folder it offered.
+  const moveTargetFocus = dialog?.kind === "move"
+    ? workbenchMoveTargetFocusIndex(
+        directories.map((directory) => ({ disabled: workspaceParentPath(dialog.path) === directory.path })),
+        directories.findIndex((directory) => directory.path === dialogValue),
+      )
+    : -1;
   const changeCount = worktree?.status.length ?? 0;
   const tabQualifiers = useMemo(() => workbenchTabQualifiers(tabs.filter((id) => parseWorkbenchDocumentId(id)?.kind === "file")), [tabs]);
   const suggestions = useMemo(() => workbenchSuggestedFiles(files), [files]);
@@ -965,6 +1033,34 @@ function ProfileScopedWorkspaceView({
     else setMobilePane("navigation");
   }
 
+  /**
+   * Adopt an external write into one open clean buffer.
+   *
+   * Triggered by the files-refresh effect when the tree lists a newer revision
+   * than the editor holds. The read races the user: the guarded merge in
+   * `workbenchExternalRevisionBuffer` declines the moment the buffer went dirty
+   * or moved revisions on its own, because a compare-and-swapped save is the
+   * fence for those — this path is only for following writes nobody here made.
+   */
+  async function reconcileExternalRevision(path: string, expectedRevision: string): Promise<void> {
+    let file: WorkspaceFile | undefined;
+    try {
+      file = await workspace.read(path);
+    } catch {
+      // A read failure leaves the buffer exactly as it was; the next refresh
+      // either retries or evicts the tab because the path vanished.
+      return;
+    }
+    if (!file) return;
+    setBuffers((current) => {
+      const adopted = workbenchExternalRevisionBuffer(current[path], expectedRevision, file);
+      if (!adopted) return current;
+      const next = { ...current, [path]: adopted };
+      buffersRef.current = next;
+      return next;
+    });
+  }
+
   async function moveFile(source: string, destinationDirectory: string, nextName = workspaceBaseName(source)): Promise<void> {
     const pending = buffers[source];
     const parent = workspaceParentPath(source);
@@ -1247,6 +1343,34 @@ function ProfileScopedWorkspaceView({
     if (next === undefined) return;
     event.preventDefault();
     focusContextItem(next);
+  }
+
+  /** The Move dialog's destination folders, in the order the keyboard walks them. */
+  function moveTargetItems(): readonly HTMLElement[] {
+    return dialogBox.current ? [...dialogBox.current.querySelectorAll<HTMLElement>(".move-targets [role=\"option\"]")] : [];
+  }
+
+  function handleMoveTargetKey(event: KeyboardEvent): void {
+    if (dialog?.kind !== "move") return;
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+    const items = moveTargetItems();
+    const current = items.findIndex((item) => item === event.target);
+    if (current < 0) return;
+    const parent = workspaceParentPath(dialog.path);
+    const next = moveMenuSelection(current, event.key, directories.map((directory) => ({ disabled: parent === directory.path })));
+    const directory = directories[next];
+    if (!directory) return;
+    /*
+     * Selection follows focus in this listbox. Every option is one toggle of
+     * the single fact the dialog asks for, so an arrow is already the choice
+     * and there is no focused-but-unselected state a screen reader could land
+     * on without hearing; Enter and Space keep their native button behaviour
+     * on whichever option holds the roving stop, and every other key — Escape
+     * and Tab included — still belongs to the dialog.
+     */
+    event.preventDefault();
+    setDialogValue(directory.path);
+    items[next]?.focus();
   }
 
   /**
@@ -1719,7 +1843,7 @@ function ProfileScopedWorkspaceView({
           <h2 id={dialogTitleId} title={dialog.path}>{dialogCopy.title}</h2>
           {dialog.kind === "move" ? <>
             <p class="workbench-dialog__where">Currently in {workspaceParentPath(dialog.path).replace("/workspace", "workspace")}.</p>
-            <div class="move-targets" role="listbox" aria-label="Destination folder">{directories.map((directory) => {
+            <div class="move-targets" role="listbox" aria-label="Destination folder" onKeyDown={handleMoveTargetKey}>{directories.map((directory, index) => {
               const label = directory.path.replace("/workspace", "workspace");
               return <button
                 key={directory.path}
@@ -1728,6 +1852,7 @@ function ProfileScopedWorkspaceView({
                 aria-label={label}
                 title={label}
                 disabled={workspaceParentPath(dialog.path) === directory.path}
+                tabIndex={index === moveTargetFocus ? 0 : -1}
                 style={{ paddingLeft: `${String(12 + directory.depth * 15)}px` }}
                 onClick={() => setDialogValue(directory.path)}
               >{directory.depth === 0 ? "workspace" : directory.name}</button>;
@@ -1737,7 +1862,7 @@ function ProfileScopedWorkspaceView({
             : dialog.kind === "delete-folder" ? <>
               {/* The count is the headline: a folder row hides how much a
                   single "Delete" is about to remove. Names follow, bounded. */}
-              <p>Delete <strong>{dialog.path.replace("/workspace/", "")}</strong> and the {dialogFolderFiles.length} {dialogFolderFiles.length === 1 ? "file" : "files"} in it? Each file&rsquo;s exact revision is checked before removal.</p>
+              <p>Delete <strong>{dialog.path.replace("/workspace/", "")}</strong> and the {dialogFolderFiles.length} {dialogFolderFiles.length === 1 ? "file" : "files"} in it? Each file&rsquo;s exact revision is checked before removal.{dialogDirtyDrafts > 0 ? ` The unsaved ${dialogDirtyDrafts === 1 ? "draft" : "drafts"} of the ${String(dialogDirtyDrafts)} open ${dialogDirtyDrafts === 1 ? "document" : "documents"} under it will also be discarded.` : ""}</p>
               <ul class="workbench-dialog__paths">
                 {dialogFolderFiles.slice(0, DIALOG_PATH_PREVIEW).map((entry) => <li key={entry.path}>{entry.path.replace("/workspace/", "")}</li>)}
                 {dialogFolderFiles.length > DIALOG_PATH_PREVIEW ? <li class="workbench-dialog__paths-more">and {dialogFolderFiles.length - DIALOG_PATH_PREVIEW} more under this folder</li> : null}
@@ -1911,6 +2036,90 @@ export function workbenchDiffRevealPaths(
     : [...new Set(historyFiles?.map((file) => file.path) ?? [])]);
 }
 
+/**
+ * File-document tabs the freshly listed tree no longer contains.
+ *
+ * The refresh effect evicts these from the document strip; the returned set is
+ * also the buffer purge list, because tab and draft are discarded as one unit
+ * everywhere else a document leaves this view.
+ */
+export function workbenchVanishedFilePaths(
+  tabs: readonly string[],
+  filePaths: ReadonlySet<string>,
+): readonly string[] {
+  return Object.freeze(tabs.filter((id) => {
+    const document = parseWorkbenchDocumentId(id);
+    return document?.kind === "file" && !filePaths.has(document.path);
+  }));
+}
+
+/**
+ * Open *clean* buffers whose stored revision the tree no longer lists.
+ *
+ * Listed-at-a-different-revision means the file was written outside this page
+ * — an agent turn, a terminal, a checkout. Only clean buffers are returned:
+ * a dirty draft is the user's unsaved work and its compare-and-swapped save
+ * already fences the external write.
+ */
+export function workbenchExternalRevisionPaths(
+  buffers: Readonly<Record<string, Readonly<{ revision: string; draft: string; content: string }>>>,
+  files: readonly Readonly<{ path: string; revision: string }>[],
+): readonly string[] {
+  const revisions = new Map(files.map((entry) => [entry.path, entry.revision] as const));
+  return Object.freeze(Object.keys(buffers).filter((path) => {
+    const candidate = buffers[path];
+    const listed = revisions.get(path);
+    return candidate.draft === candidate.content && listed !== undefined && listed !== candidate.revision;
+  }));
+}
+
+/**
+ * The buffer a clean open document becomes after an external write, or
+ * `undefined` when the merge must be declined.
+ *
+ * The re-read and this adoption guard are one race: the buffer must still be
+ * at the revision the refresh *triggered* on and still clean. A save or a
+ * first keystroke that landed during the read owns the buffer now, and this
+ * path yields to it.
+ */
+export function workbenchExternalRevisionBuffer(
+  candidate: Readonly<{ revision: string; draft: string; content: string }> | undefined,
+  expectedRevision: string,
+  file: WorkspaceFile,
+): (WorkspaceFile & { draft: string; truncated: boolean; binary: boolean }) | undefined {
+  if (!candidate || candidate.revision !== expectedRevision || candidate.draft !== candidate.content) return undefined;
+  const projection = workspaceEditorProjection(file);
+  return { ...file, content: projection.content, draft: projection.content, truncated: projection.truncated, binary: projection.binary };
+}
+
+/**
+ * How many open documents under a folder carry unsaved in-browser drafts.
+ *
+ * Folder delete discards every buffer under the path (`forgetPaths`), so the
+ * confirmation has to say the same sentence the single-file delete says.
+ */
+export function workbenchDirtyDraftsUnderFolder(
+  buffers: Readonly<Record<string, Readonly<{ draft: string; content: string }>>>,
+  folder: string,
+): number {
+  const prefix = `${folder}/`;
+  return Object.entries(buffers)
+    .filter(([path, candidate]) => path.startsWith(prefix) && candidate.draft !== candidate.content)
+    .length;
+}
+
+/**
+ * The paths a "Stage all visible" click may send.
+ *
+ * The Advanced source controls exclude merge-conflicted entries from their
+ * bulk stage (`isConflicted` in `sources-view`); the workbench rail sends the
+ * same operation, so it holds the same fence or the two panels stage
+ * different sets for identical clicks.
+ */
+export function workbenchVisibleStagePaths(entries: readonly GitStatusEntry[]): readonly string[] {
+  return Object.freeze(entries.filter((entry) => !isConflicted(entry)).map((entry) => entry.path));
+}
+
 function commitSubject(message: string): string {
   return message.trim().split(/\r?\n/u)[0] || "(no commit message)";
 }
@@ -1945,7 +2154,7 @@ function SourceControlRail({ repositories, repositoryId, selectRepository, workt
     {staged.length ? <ScmGroup title="Staged" entries={staged} lane="staged" repository={repository} worktree={worktree} openDiff={openDiff} mutate={mutate} /> : null}
     {staged.length > 1 ? <button type="button" onClick={() => { const next = operation("unstage", staged.map((entry) => entry.path)); if (next) void mutate(next); }}>Unstage all visible</button> : null}
     {unstaged.length ? <ScmGroup title="Changes" entries={unstaged} lane="unstaged" repository={repository} worktree={worktree} openDiff={openDiff} mutate={mutate} /> : null}
-    {unstaged.length > 1 ? <button type="button" onClick={() => { const next = operation("stage", unstaged.map((entry) => entry.path)); if (next) void mutate(next); }}>Stage all visible</button> : null}
+    {unstaged.length > 1 ? <button type="button" onClick={() => { const next = operation("stage", workbenchVisibleStagePaths(unstaged)); if (next) void mutate(next); }}>Stage all visible</button> : null}
     {truncation ? <div class="workspace-boundary attention">{truncation}</div> : null}
     {worktree?.status.some((entry) => entry.index) ? <div class="scm-commit"><textarea aria-label="Commit message" value={commitMessage} onInput={(event) => setCommitMessage(event.currentTarget.value)} placeholder="Commit message" /><button class="primary" type="button" disabled={!commitMessage.trim()} onClick={() => repository && mutate({ kind: "commit", request: { repositoryId: repository.id, worktreeId: worktree.id, message: commitMessage, author: DEFAULT_AUTHOR, expectedWorktreeVersion: worktree.version } })}>Commit staged</button></div> : null}
     {/*
@@ -2002,7 +2211,15 @@ function ScmGroup({ title, entries, lane, repository, worktree, openDiff, mutate
       ><span>{entry.path}</span><b>{conflicted ? "C" : delta?.kind === "added" ? "A" : delta?.kind === "deleted" ? "D" : delta?.kind === "renamed" ? "R" : "M"}</b></button>
       <div>
         <button type="button" aria-label={`Open and keep ${lane} diff ${entry.path}`} title="Open and keep" disabled={!document} onClick={() => { if (document) openDiff(document, "pinned"); }}>↗</button>
-        <button type="button" aria-label={`${lane === "staged" ? "Unstage" : "Stage"} ${entry.path}`} onClick={() => repository && worktree && mutate({ kind: lane === "staged" ? "unstage" : "stage", request: { repositoryId: repository.id, worktreeId: worktree.id, paths: [entry.path], expectedWorktreeVersion: worktree.version } })}>{lane === "staged" ? "−" : "+"}</button>
+        {/*
+          Staging a conflicted path cannot resolve the conflict — only mark it
+          resolved verbatim — so the Advanced controls fence it out of every
+          selection. The row gate mirrors that fence and says where the real
+          resolution flow lives.
+        */}
+        {lane === "unstaged" && isConflicted(entry)
+          ? <button type="button" aria-label={`Stage ${entry.path}`} disabled title="Merge conflict — resolve it in Advanced source controls before staging.">+</button>
+          : <button type="button" aria-label={`${lane === "staged" ? "Unstage" : "Stage"} ${entry.path}`} onClick={() => repository && worktree && mutate({ kind: lane === "staged" ? "unstage" : "stage", request: { repositoryId: repository.id, worktreeId: worktree.id, paths: [entry.path], expectedWorktreeVersion: worktree.version } })}>{lane === "staged" ? "−" : "+"}</button>}
       </div>
     </div>;
   })}</section>;
@@ -2308,6 +2525,23 @@ export function workbenchMenuFocusIndex(count: number, current: number, key: str
   if (step === 0) return undefined;
   if (current < 0) return step === 1 ? 0 : count - 1;
   return (current + step + count) % count;
+}
+
+/**
+ * Which destination in the Move dialog's listbox owns its one Tab stop.
+ *
+ * The folder the file already lives in arrives pre-selected *and* disabled —
+ * it cannot be chosen again — so a stop tied to the selection alone would
+ * leave a listbox of tabIndex -1 buttons completely unreachable. The
+ * selection owns the stop when it can take focus; otherwise the stop falls to
+ * the first folder that can actually be chosen.
+ */
+export function workbenchMoveTargetFocusIndex(
+  candidates: readonly Readonly<{ disabled: boolean }>[],
+  selected: number,
+): number {
+  if (selected >= 0 && !candidates[selected]?.disabled) return selected;
+  return candidates.findIndex((candidate) => !candidate.disabled);
 }
 
 /**

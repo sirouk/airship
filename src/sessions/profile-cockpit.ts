@@ -1,4 +1,5 @@
 import type { JsonValue, SessionManifest, SessionProfileBinding } from "../core/contracts";
+import { enforcedMemoryScope } from "../profiles/domain";
 import type { DurableEvent, EventJournal, SessionRecord } from "../core/journal";
 
 export const PROFILE_ACTIVE_CONVERSATION_EVENT_TYPE = "profile.active-conversation.selected";
@@ -271,7 +272,18 @@ function profileBindingsMatch(
   ) return false;
   if (actual.version === 1 || expected.version === 1) return actual.version === expected.version;
   return JSON.stringify(actual.workspaceBinding) === JSON.stringify(expected.workspaceBinding)
-    && actual.memoryScope === expected.memoryScope
+    /*
+     * The boundary each pin enforces, not the word it stored.
+     *
+     * `workspace` was withdrawn as a memory scope: every reader narrows on the
+     * pinned profile ID, so it always behaved as `profile`, and new pins resolve
+     * it to that. Comparing the raw field therefore rejected every conversation
+     * pinned before the withdrawal — the shipped Research profile pinned
+     * `workspace` — against an identical revision, so selecting that profile
+     * found no resumable conversation and silently started an empty one. Two
+     * pins that enforce the same boundary are the same boundary.
+     */
+    && enforcedMemoryScope(actual.memoryScope) === enforcedMemoryScope(expected.memoryScope)
     && actual.approvalMode === expected.approvalMode
     && actual.minimumPosture === expected.minimumPosture;
 }

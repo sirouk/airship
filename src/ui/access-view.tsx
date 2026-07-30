@@ -254,6 +254,16 @@ export function AccessView({
   // The key that was refused, held open so it can be corrected rather than
   // retyped. See `activate()`.
   const [keyRefusal, setKeyRefusal] = useState<Readonly<{ providerResponse: string }>>();
+  /*
+   * Set by a failed OAuth-kind connect leg: the completed exchange survived
+   * (the host holds the pending credential read-only), so the failure gets a
+   * retry control instead of a dead end whose only exit was a second full
+   * authorization round trip. `oauthBootstrapRetryNonce` re-runs the bootstrap
+   * effect below, which discovers and verifies again from exactly this state.
+   */
+  const [oauthConnectRetry, setOauthConnectRetry] = useState(false);
+  const [oauthBootstrapRetryNonce, setOauthBootstrapRetryNonce] = useState(0);
+  const oauthRetryButton = useRef<HTMLButtonElement>(null);
   // Recomputed from the host's live list on every render, so a lane can never
   // claim a connection that was released.
   const connectedProviders = useMemo(
@@ -393,6 +403,7 @@ export function AccessView({
     setStatus("Discovering encrypted-inference models available to this connection…");
     setError(undefined);
     setKeyRefusal(undefined);
+    setOauthConnectRetry(false);
     setCandidate(undefined);
     clearEphemeral();
     const controller = new AbortController();
@@ -480,7 +491,10 @@ export function AccessView({
     // the connected summary, where they are corrections rather than gates.
     autoConnectAfterDiscovery.current = true;
     void discoverCredential(credential, oauthBootstrap.getBearerToken);
-  }, [oauthBootstrap?.revision, connection.kind, online]);
+    // The nonce is the retry control's wire back in: a failed OAuth connect
+    // leg left the exchange intact, so pressing Retry re-enters this same
+    // leg rather than paying a second authorization round trip.
+  }, [oauthBootstrap?.revision, connection.kind, online, oauthBootstrapRetryNonce]);
 
   /*
    * The credential is only verified by `activate()`, and `activate()` reads the
@@ -591,7 +605,23 @@ export function AccessView({
       } else {
         setDetectedKind(undefined);
         setError(failure.message);
-        requestAnimationFrame(() => credentialInput.current?.focus());
+        if (credential.kind === "oauth-user-token" && oauthBootstrap) {
+          /*
+           * An OAuth-kind candidate can only have come from the bootstrap
+           * leg, and that exchange is not consumed by failing here — the
+           * host holds the pending credential read-only until commit or
+           * release. Offer the leg again instead of stranding a completed
+           * sign-in behind a full re-authorization.
+           */
+          setOauthConnectRetry(true);
+          requestAnimationFrame(() => oauthRetryButton.current?.focus());
+        } else if (credentialInput.current) {
+          // The entry field only mounts on the API-key tab; focus it only
+          // when it is actually there.
+          requestAnimationFrame(() => credentialInput.current?.focus());
+        } else {
+          focusConnectSurface();
+        }
       }
     } finally {
       if (discoveryAbort.current === controller) discoveryAbort.current = undefined;
@@ -658,17 +688,40 @@ export function AccessView({
     setBusy(true);
     setStatus(focusInput ? "Clearing the active connection before switching…" : "Clearing the active connection…");
     setError(undefined);
+    setOauthConnectRetry(false);
     try {
       await onDisconnect();
       clearEphemeral();
       setStatus(undefined);
-      if (focusInput) requestAnimationFrame(() => credentialInput.current?.focus());
+      if (focusInput) {
+        /*
+         * The entry field only mounts on the API-key tab, so the tab has to
+         * move before the focus RAF runs — the same ordering the refused-key
+         * path in `activate()` proves. Focusing against the OAuth tab landed
+         * on an unmounted input and the focus fell to the document body.
+         */
+        setChutesMethod("api-key");
+        requestAnimationFrame(() => credentialInput.current?.focus());
+      }
     } catch (caught) {
       setStatus(undefined);
       setError(mapUnknownRequestFailure(caught, online).message);
     } finally {
       setBusy(false);
     }
+  }
+
+  /*
+   * Re-run a failed OAuth connect leg with the exchange the host still holds.
+   * The nonce is in the bootstrap effect's dependency list, so this button
+   * alone carries the sign-in journey through discovery and verification
+   * again — the credential is never re-typed and Chutes is never re-asked.
+   */
+  function retryOAuthConnect() {
+    setOauthConnectRetry(false);
+    setStatus(undefined);
+    setError(undefined);
+    setOauthBootstrapRetryNonce((value) => value + 1);
   }
 
   async function selectActiveModel(modelId: string) {
@@ -743,7 +796,10 @@ export function AccessView({
   /**
    * The keyboard half of `role="tab"`, which the switch below declared and did
    * not implement. The movement rule is `tabs.tsx`'s `nextTabId`, so there is
-   * still exactly one implementation of the tablist contract in the app.
+   * still exactly one implementation of the tablist contract in the app —
+   * `tablist-contract.test.ts` holds that as a fact by requiring every
+   * hand-rolled strip to route its keys through `nextTabId`, because the claim
+   * was once made in this comment while a fourth strip quietly had its own.
    */
   const moveChutesMethod = (event: KeyboardEvent & { currentTarget: HTMLDivElement }) => {
     const next = nextTabId(CHUTES_METHOD_TABS, activeChutesMethod, event.key);
@@ -882,6 +938,22 @@ export function AccessView({
           */}
           {status ? <p class="access-live-status" role="status" aria-live="polite"><span />{status}</p> : null}
           {error ? <p class="access-live-error" role="alert"><Icon name="warning" size={16} />{error}</p> : null}
+          {/*
+            The answer lands where the question failed. A failed OAuth connect
+            leg kept its completed exchange, so the recovery is a retry of the
+            same leg — not the "Sign in to Chutes" round trip the OAuth panel
+            would charge for a credential that already exists.
+          */}
+          {oauthConnectRetry && error && oauthBootstrap ? (
+            <button
+              ref={oauthRetryButton}
+              type="button"
+              disabled={busy || !online}
+              onClick={retryOAuthConnect}
+            >
+              Retry connection
+            </button>
+          ) : null}
 
           <ConnectSurface
             input={laneInput}

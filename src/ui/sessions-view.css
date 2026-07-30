@@ -497,7 +497,7 @@
 }
 
 .session-integrity[data-state="failed"] {
-  border-color: color-mix(in srgb, var(--danger, #c86758) 50%, transparent);
+  border-color: color-mix(in srgb, var(--danger, #ce7769) 50%, transparent);
 }
 
 .session-integrity__row {
@@ -574,7 +574,7 @@
 }
 
 .session-library-compatibility.blocked {
-  border-color: color-mix(in srgb, var(--danger, #c86758) 40%, transparent);
+  border-color: color-mix(in srgb, var(--danger, #ce7769) 40%, transparent);
 }
 
 .session-library-compatibility > div {
@@ -630,7 +630,7 @@
 
 .session-library-reason-list li.error,
 .session-library-reason-list li.error > span {
-  color: var(--danger, #c86758);
+  color: var(--danger, #ce7769);
 }
 
 .session-library-continuity {
@@ -690,7 +690,7 @@
 }
 
 .session-library-lifecycle.failed > span {
-  background: var(--danger, #c86758);
+  background: var(--danger, #ce7769);
 }
 
 .session-library-lifecycle.cancelled > span {
@@ -942,7 +942,7 @@
 
 .session-library-message-disposition .failed,
 .session-library-message-disposition .excluded {
-  color: var(--danger, #c86758);
+  color: var(--danger, #ce7769);
 }
 
 .session-library-message-disposition .cancelled,
@@ -999,7 +999,7 @@
 }
 
 .session-library-issues li.error strong {
-  color: var(--danger, #c86758);
+  color: var(--danger, #ce7769);
 }
 
 .session-library-alert {
@@ -1015,8 +1015,8 @@
 }
 
 .session-library-alert.error {
-  border-color: color-mix(in srgb, var(--danger, #c86758) 45%, transparent);
-  color: var(--danger, #c86758);
+  border-color: color-mix(in srgb, var(--danger, #ce7769) 45%, transparent);
+  color: var(--danger, #ce7769);
 }
 
 .session-library-loading,

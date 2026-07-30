@@ -239,6 +239,27 @@ describe("a rejected credential is not a fresh reading", () => {
   });
 });
 
+describe("the freshness chip ages while the route stays open", () => {
+  it("arms one timeout per snapshot at exactly the staleness threshold", () => {
+    /*
+     * `observationState` is computed per render, and nothing re-renders an
+     * idle route at a clock threshold: the chip used to say "Connected"
+     * forever. One timer per snapshot, cancelled when the snapshot changes,
+     * wakes the view at fetchedAt + budget — and only there, because a stale
+     * reading cannot go fresh again without a new snapshot to re-arm from.
+     */
+    const effect = source.match(/if \(!snapshot\) return;[\s\S]*?\}, \[snapshot\]\);/u)?.[0] ?? "";
+    expect(effect).toContain("OBSERVATION_FRESHNESS_BUDGET_MS");
+    expect(effect).toContain("const timer = window.setTimeout(");
+    expect(effect).toContain("return () => window.clearTimeout(timer);");
+    expect(effect).toContain("setObservedNow(Date.now())");
+    expect(effect.match(/window\.setTimeout/gu)).toHaveLength(1);
+    // The render reads the clock the timer bumps, not a per-render Date.now()
+    // that only the timer's re-render can advance the threshold across.
+    expect(source).toContain("observationState(snapshot.fetchedAt, OBSERVATION_FRESHNESS_BUDGET_MS, observedNow)");
+  });
+});
+
 describe("a usage total names the bound it was read over", () => {
   it("suffixes both UTC-month captions only when the page saturated", () => {
     expect(source).toContain("function boundedUsageSuffix(usage: ChutesUsageSummary): string {");

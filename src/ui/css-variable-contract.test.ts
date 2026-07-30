@@ -122,6 +122,16 @@ describe("colour contract", () => {
         ["--v-caution", surface, AA_TEXT],
         ["--v-info", surface, AA_TEXT],
         ["--truth-local", surface, AA_TEXT],
+        // Held as text on both beds, not as a glyph on one. These two used to
+        // be granted 1.4.11's 3:1 on the premise that they only paint glyphs,
+        // borders and fills, bounded by an enumerated ledger of the twenty
+        // `color:` rules that contradicted it — sixteen of them on a word at
+        // caption size. tokens.css raised both instead, so the exemption and
+        // the ledger are gone and the floor is the one the words need.
+        ["--v-failed", surface, AA_TEXT],
+        ["--v-failed", raised, AA_TEXT],
+        ["--copper", surface, AA_TEXT],
+        ["--copper", raised, AA_TEXT],
         ["--accent", surface, AA_TEXT],
         ["--accent-bright", surface, AA_TEXT],
         // The primary button paints --ground on --accent-bright; that pairing,
@@ -129,13 +139,6 @@ describe("colour contract", () => {
         ["--ground", tokens["--accent-bright"]!, AA_TEXT],
       ];
       const glyph: readonly [string, string, number][] = [
-        // --v-failed and --copper are 4.2–4.6:1 by design, and 1.4.11's 3:1 is
-        // the applicable rule only where they paint a glyph, a border or a
-        // fill. That premise is not free: `VERDICT_TOKEN_TEXT_LEDGER` below
-        // holds every rule that spends them on `color`, so the exemption is
-        // bounded by an enumerated list rather than by a claim in a comment.
-        ["--v-failed", surface, NON_TEXT],
-        ["--copper", raised, NON_TEXT],
         ["--brand-mark", ground, NON_TEXT],
         ["--line-control", surface, NON_TEXT],
         ["--focus", ground, NON_TEXT],
@@ -184,15 +187,29 @@ describe("colour contract", () => {
       const surface = tokens["--surface"]!;
       const raised = tokens["--surface-raised"]!;
       const ground = tokens["--ground"]!;
+      /*
+       * Both beds for every verdict token, not just the two that were nearest
+       * the floor. A theme moves the surfaces and leaves the verdict tokens
+       * alone, so which bed a token is checked against was an accident of which
+       * one someone happened to write down — and the audit ledger claimed all
+       * six were held on both while three were held on one. Verdigris' #1b292a
+       * is the lightest raised surface any shipped palette declares, and it is
+       * what decided the --v-failed and --copper hexes; the rest clear it with
+       * room, which is exactly why asserting it costs nothing and closes the gap
+       * between what the suite does and what the ledger says it does.
+       */
       const checks: readonly [string, string, number][] = [
         ["--v-verified", surface, AA_TEXT],
+        ["--v-verified", raised, AA_TEXT],
         ["--v-caution", surface, AA_TEXT],
+        ["--v-caution", raised, AA_TEXT],
         ["--v-info", surface, AA_TEXT],
-        // Same split, and the same bound: 3:1 is 1.4.11's rule for a glyph, a
-        // border or a fill, and `VERDICT_TOKEN_TEXT_LEDGER` names every rule
-        // that currently spends these two on `color` instead.
-        ["--v-failed", surface, NON_TEXT],
-        ["--copper", raised, NON_TEXT],
+        ["--v-info", raised, AA_TEXT],
+        ["--v-failed", surface, AA_TEXT],
+        ["--v-failed", raised, AA_TEXT],
+        ["--copper", surface, AA_TEXT],
+        ["--copper", raised, AA_TEXT],
+        ["--ink-faint", surface, AA_TEXT],
         ["--ink-faint", raised, AA_TEXT],
         ["--ink-disabled", tokens["--surface-disabled"]!, NON_TEXT],
         ["--line", ground, 1.2],
@@ -233,26 +250,22 @@ describe("colour contract", () => {
   });
 
   /*
-   * The premise the 3:1 exemption above rests on, held as a fact.
+   * Why both verdict metals are held to AA above, kept as an enumeration.
    *
-   * Both contrast assertions grant `--v-failed` and `--copper` WCAG 1.4.11's
-   * 3:1 instead of 1.4.3's 4.5:1, and the reason given is that they are glyph,
-   * border and fill colours whose chip *label* shell.css lifts to `--ink`. On
-   * the shipped dark palette they measure 4.24:1 and 4.29:1, so that premise is
-   * the whole difference between a documented design rule and a self-granted
-   * exemption — and it is currently kept in exactly one sheet. Every other rule
-   * below paints `color` with one of the two, and a `color` that lands on a
-   * word rather than a glyph is sub-AA text.
+   * These two tokens were once granted WCAG 1.4.11's 3:1 on the premise that
+   * they only paint glyphs, borders and fills whose *label* is lifted to
+   * `--ink`. The list below is what refuted it: twenty `color:` rules across
+   * ten sheets, sixteen of them on a word at caption size, all reading against
+   * a 4.24–4.29:1 bed. `tokens.css` raised the tokens rather than flattening
+   * sixteen labels to ink, so the assertions above run at 4.5:1 and this list
+   * is no longer a debt — it is the reason the floor may never be relaxed
+   * again, and the tripwire if a new rule spends a metal on text.
    *
-   * Raising the tokens is not this file's to do — it repaints `tokens.css`
-   * for the whole product — so the debt is enumerated instead of asserted away.
-   * `toEqual`, like the disabled-opacity ledger below: a new offender fails
-   * here, and a fixed one fails until it is struck off, so the list can only
-   * shrink. Each entry is either a glyph-only use (legitimate under 1.4.11) or
-   * a word that still has to be lifted to `--ink`; the ledger does not claim to
-   * know which, only that nothing may be added without saying so.
+   * `toEqual`, like the disabled-opacity ledger below: adding or removing a
+   * text use fails here until the list says so, so no future edit can quietly
+   * widen the set of words that depend on those two hexes.
    */
-  it("names every rule that spends the 3:1 verdict tokens on `color`", () => {
+  it("names every rule that paints text with a verdict metal, all of them now above AA", () => {
     const spent = cssSources.flatMap(({ file, text }) => (
       [...withoutComments(text).matchAll(/([^{}]+)\{([^}]*)\}/gu)].flatMap((rule) => (
         (["--v-failed", "--copper"] as const).flatMap((token) => (
@@ -283,17 +296,17 @@ describe("colour contract", () => {
 });
 
 /**
- * Every `color` declaration in the product that spends a 3:1 verdict token.
+ * Every `color` declaration in the product that spends a verdict metal.
  *
- * Ordered `file selector token`. Sixteen of these carry a word, not a glyph:
- * the session status word, the error part, the claim-group header, the connect
+ * Ordered `file selector token`. Seventeen carry a word, not a glyph: the
+ * session status word, the error part, the claim-group header, the connect
  * lane's failure line, three provider-health lines, the approval diff's
- * deletions, both topbar posture chips, both attestation chips, the Git
- * conflict note and the removed-line emphasis are all text at caption size on
- * a 4.24:1 red. `.seal` rules paint a glyph and a label together, and only the
- * `[data-density="chip"]` variant lifts the label. Lifting the rest to `--ink`
- * — the fix `message-parts-view.css` already applies — is the work this ledger
- * exists to keep visible.
+ * deletions, the audit state, both topbar posture chips, both attestation
+ * chips, the Git conflict note and the removed-line emphasis are all text at
+ * caption size. `.seal` rules paint a glyph and a label together, and only the
+ * `[data-density="chip"]` variant lifts the label. All of them now read on an
+ * AA-clearing hex because the token moved; this list is the record of who
+ * depends on that.
  */
 const VERDICT_TOKEN_TEXT_LEDGER = Object.freeze([
   "ui/chat.css .claim-group--failed > header --v-failed",
@@ -306,6 +319,9 @@ const VERDICT_TOKEN_TEXT_LEDGER = Object.freeze([
   "ui/provider-fabric-panel.css .provider-fabric__error --v-failed",
   "ui/routes.css .approval-diff del --v-failed",
   "ui/routes.css .audit-check-grid .fail > .seal --v-failed",
+  // Added by the raise, not despite it: this rule carried a hand-written
+  // #e4877e precisely because --v-failed was sub-AA on a raised surface.
+  "ui/routes.css .audit-state.invalid --v-failed",
   "ui/shell.css .attestation-chip.asserted --copper",
   "ui/shell.css .attestation-chip.failed --v-failed",
   "ui/shell.css .seal[data-state=\"asserted\"] --copper",

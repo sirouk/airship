@@ -1,9 +1,12 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { enforcedMemoryScope } from "../profiles/domain";
 import {
+  PROFILE_APPROVAL_LABELS,
   PROFILE_BOUNDARY_NOTE,
   PROFILE_MEMORY_SCOPE_LABELS,
   PROFILE_POSTURE_FIELD_LABEL,
+  PROFILE_POSTURE_LABELS,
   profileGovernanceCellLabel,
   profileGovernanceCells,
   type ProfileGovernanceInput,
@@ -98,5 +101,59 @@ describe("PROFILE_BOUNDARY_NOTE", () => {
     expect(PROFILE_BOUNDARY_NOTE).not.toContain("below");
     expect(PROFILE_BOUNDARY_NOTE).toContain("copied into each new session");
     expect(PROFILE_BOUNDARY_NOTE).toContain("keep their original pin");
+  });
+});
+
+/**
+ * The label maps against the editor that is supposed to share them.
+ *
+ * The module's whole claim is "every label here is the label the *editor* uses,
+ * so a value has one name at rest and the same name while you change it". While
+ * the profile editor lives inline in `app.tsx` and spells its option labels by
+ * hand, that claim was asserted in a docblock and enforced by nothing: the maps
+ * had no production reader, so either side could be re-worded and only the
+ * screen would disagree. Reading the editor's own source is how the claim
+ * becomes a contract — the same technique `model-control.test.ts` and
+ * `vault-provider-feasibility.test.ts` use for the other values app.tsx spells.
+ */
+describe("the editor's own labels", () => {
+  const app = readFileSync(new URL("./app.tsx", import.meta.url), "utf8");
+
+  /** The `value → label` pairs of one `MenuSelect` in the profile editor. */
+  function editorOptions(ariaLabel: string): Record<string, string> {
+    const control = app.indexOf(`ariaLabel="${ariaLabel}"`);
+    expect(control, `the profile editor no longer renders a MenuSelect named "${ariaLabel}"`).toBeGreaterThan(-1);
+    const open = app.indexOf("options={[", control);
+    const block = app.slice(open, app.indexOf("]}", open));
+    const pairs = [...block.matchAll(/\{ value: "([^"]+)", label: "([^"]+)"/gu)];
+    expect(pairs.length, `no option literals found for "${ariaLabel}"`).toBeGreaterThan(0);
+    return Object.fromEntries(pairs.map(([, value, label]) => [value, label]));
+  }
+
+  it("spells the memory scopes exactly as this module labels them, and offers no third", () => {
+    // Also the guard against the withdrawn silo coming back through the editor:
+    // `workspace` is untypeable here, so if the select reintroduced it the map
+    // could not name it and this equality is the thing that notices.
+    expect(editorOptions("Profile memory scope")).toEqual({ ...PROFILE_MEMORY_SCOPE_LABELS });
+  });
+
+  it("spells the approval modes exactly as this module labels them", () => {
+    expect(editorOptions("Profile approval policy")).toEqual({ ...PROFILE_APPROVAL_LABELS });
+  });
+
+  it("spells the postures exactly as this module labels them", () => {
+    expect(editorOptions("Profile minimum proof posture")).toEqual({ ...PROFILE_POSTURE_LABELS });
+  });
+
+  it("names the minimum-proof field once, in the editor, the card and the revision strip", () => {
+    // Three renderings under two names inside 400px was the original defect;
+    // this is the assertion that keeps all three spelling it the same way.
+    expect(app).toContain(`<span>${PROFILE_POSTURE_FIELD_LABEL}</span><MenuSelect ariaLabel="Profile minimum proof posture"`);
+    // Both chips read the name from this module's constant, so the three
+    // surfaces cannot be edited apart — stronger than counting two literals
+    // that happen to match today.
+    expect(app.match(/prefix=\{PROFILE_POSTURE_FIELD_LABEL\}/gu)).toHaveLength(2);
+    expect(app).not.toContain(`prefix="${PROFILE_POSTURE_FIELD_LABEL}"`);
+    expect(app).not.toContain("Minimum posture");
   });
 });

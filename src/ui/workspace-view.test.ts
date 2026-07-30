@@ -1,7 +1,10 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import type { GitDeltaKind, GitStatusEntry } from "../git/types";
 import { encodeWorkspaceBytes } from "../workspace/content-codec";
+import type { WorkspaceEntry, WorkspaceFile } from "../workspace/contracts";
 import { MemoryWorkspace } from "../workspace/memory";
+import { retainWorkbenchDocuments } from "./workbench-model";
 import {
   ProfileScopedWorkspacePageStore,
   WorkbenchProfileSelectionFence,
@@ -20,9 +23,15 @@ import {
   workspaceHistoryPatch,
   workspacePersistedWorktreeId,
   workbenchDiffRevealPaths,
+  workbenchDirtyDraftsUnderFolder,
+  workbenchExternalRevisionBuffer,
+  workbenchExternalRevisionPaths,
   workbenchHistoryCount,
   workbenchMenuFocusIndex,
+  workbenchMoveTargetFocusIndex,
   workbenchSourceLanes,
+  workbenchVanishedFilePaths,
+  workbenchVisibleStagePaths,
   workbenchSourceTruncationNote,
   workbenchStatusDiffHint,
   workbenchSupersededStatusDiff,
@@ -541,5 +550,215 @@ describe("control-plane write fence", () => {
     expect(() => assertMutableWorkspacePath(".airship/evidence-acquisition/queue.v1.json"))
       .toThrow(/private control plane/u);
     expect(assertMutableWorkspacePath("notes/todo.md")).toBe("/workspace/notes/todo.md");
+  });
+});
+
+describe("external deletion of an open document", () => {
+  const buffersFor = (entries: ReadonlyArray<readonly [string, string, string]>) =>
+    Object.fromEntries(entries.map(([path, content, draft]) => [path, Object.freeze({
+      path,
+      content,
+      draft,
+      revision: `revision:${content}`,
+      size: content.length,
+      updatedAt: "2026-07-29T00:00:00.000Z",
+      truncated: false,
+      binary: false,
+    })] as const));
+
+  it("drops the buffer with the tab, so no invisible dirty draft keeps beforeunload armed", () => {
+    const tabs = ["/workspace/gone.md", "/workspace/stay.md"];
+    const files: readonly WorkspaceEntry[] = [{ path: "/workspace/stay.md", revision: "revision-1", updatedAt: "2026-07-29T00:00:00.000Z", size: 4 }];
+    const buffers = buffersFor([
+      ["/workspace/gone.md", "durable", "unsaved work the user typed"],
+      ["/workspace/stay.md", "clean", "clean"],
+    ]);
+
+    const vanished = workbenchVanishedFilePaths(tabs, new Set(files.map((entry) => entry.path)));
+    expect(vanished).toEqual(["/workspace/gone.md"]);
+
+    // The refresh effect's two halves, applied to this fixture: the strip loses
+    // the tab through retainWorkbenchDocuments and the buffer map loses the draft.
+    const documents = retainWorkbenchDocuments(
+      { tabs, activeId: "/workspace/gone.md" },
+      new Set(tabs.filter((tab) => !vanished.includes(tab))),
+    );
+    const remaining = Object.fromEntries(Object.entries(buffers).filter(([path]) => !vanished.includes(path)));
+
+    expect(documents.tabs).toEqual(["/workspace/stay.md"]);
+    expect(Object.keys(remaining)).toEqual(["/workspace/stay.md"]);
+    // The orphan dirty draft was the defect: it survived with no tab, kept the
+    // beforeunload guard armed, and resurrected as a stale draft if the path was
+    // ever recreated. After the purge nothing reports dirty at all.
+    expect(Object.values(remaining).some((candidate) => candidate.draft !== candidate.content)).toBe(false);
+  });
+
+  it("never treats diff documents or still-listed files as vanished", () => {
+    const diffId = `airship-diff:${encodeURIComponent(JSON.stringify({ kind: "diff", source: "history", repositoryId: "repo", worktreeId: "wt", revision: "deadbeef" }))}`;
+    const filePaths = new Set(["/workspace/kept.md"]);
+    expect(workbenchVanishedFilePaths([diffId, "/workspace/kept.md"], filePaths)).toEqual([]);
+  });
+
+  /*
+   * The purge above is correct about the fixture and was still wrong in place,
+   * because it was reached from an effect that also depended on `activeId`.
+   * A move publishes its remapped tab strip and the draft it carried across
+   * synchronously and only then awaits the refresh, so the `activeId` rerun
+   * ran this eviction against the *pre-move* listing, called the path it had
+   * just created externally deleted, and threw the unsaved draft away —
+   * "Unsaved edits moved with the tab" printed over a reverted buffer.
+   *
+   * Existence is a fact about the listing, so the effect that decides it may
+   * depend on the listing and nothing else. Asserted on the source because the
+   * defect is entirely in the dependency array: every pure helper it calls
+   * passes its own tests either way.
+   */
+  it("decides existence only when the listing changes, never on an active-tab rerun", () => {
+    const source = readFileSync(new URL("./workspace-view.tsx", import.meta.url), "utf8");
+    const eviction = source.slice(source.indexOf("Evict what the tree no longer lists"));
+    const body = eviction.slice(0, eviction.indexOf("}, ["));
+    const deps = eviction.slice(eviction.indexOf("}, ["), eviction.indexOf("}, [") + 40);
+
+    // The eviction really is the block being pinned: both purges live in it.
+    expect(body).toContain("workbenchVanishedFilePaths(");
+    expect(body).toContain("retainWorkbenchDocuments(");
+    expect(deps).toContain("}, [files]);");
+    expect(deps).not.toContain("activeId");
+  });
+});
+
+describe("external writes under an open document", () => {
+  const bufferFor = (path: string, content: string, draft: string, revision = "revision-1") => Object.freeze({
+    path,
+    content,
+    draft,
+    revision,
+    size: content.length,
+    updatedAt: "2026-07-29T00:00:00.000Z",
+    truncated: false,
+    binary: false,
+  });
+  const entryFor = (path: string, revision: string): WorkspaceEntry => Object.freeze({
+    path,
+    revision,
+    updatedAt: "2026-07-29T01:00:00.000Z",
+    size: 3,
+  });
+  const externalWrite: WorkspaceFile = Object.freeze({
+    path: "/workspace/notes.md",
+    content: "written by an agent turn",
+    revision: "revision-2",
+    updatedAt: "2026-07-29T01:00:00.000Z",
+    size: 24,
+  });
+
+  it("follows an external write into a clean buffer, content and revision together", () => {
+    const buffers = { "/workspace/notes.md": bufferFor("/workspace/notes.md", "old bytes", "old bytes") };
+    const files = [entryFor("/workspace/notes.md", "revision-2")];
+    expect(workbenchExternalRevisionPaths(buffers, files)).toEqual(["/workspace/notes.md"]);
+
+    const adopted = workbenchExternalRevisionBuffer(buffers["/workspace/notes.md"], "revision-1", externalWrite);
+    expect(adopted).toMatchObject({
+      path: "/workspace/notes.md",
+      revision: "revision-2",
+      content: "written by an agent turn",
+      draft: "written by an agent turn",
+      truncated: false,
+      binary: false,
+    });
+    // Clean and current after adoption, so the same refresh cannot loop.
+    expect(workbenchExternalRevisionPaths({ "/workspace/notes.md": adopted! }, files)).toEqual([]);
+  });
+
+  it("leaves a dirty buffer alone — the compare-and-swapped save is the fence", () => {
+    const dirty = bufferFor("/workspace/notes.md", "old bytes", "the user's unsaved paragraph");
+    const files = [entryFor("/workspace/notes.md", "revision-2")];
+    // Never queued for reconciliation in the first place.
+    expect(workbenchExternalRevisionPaths({ "/workspace/notes.md": dirty }, files)).toEqual([]);
+    // And the adoption guard declines even if it is reached anyway.
+    expect(workbenchExternalRevisionBuffer(dirty, "revision-1", externalWrite)).toBeUndefined();
+    // A save that landed during the re-read moved the revision itself.
+    const saved = bufferFor("/workspace/notes.md", "saved meanwhile", "saved meanwhile", "revision-3");
+    expect(workbenchExternalRevisionBuffer(saved, "revision-1", externalWrite)).toBeUndefined();
+  });
+});
+
+describe("folder delete draft disclosure", () => {
+  it("counts exactly the unsaved drafts of documents under the folder", () => {
+    const buffers = {
+      "/workspace/docs/a.md": { draft: "typed", content: "stored" },
+      "/workspace/docs/nested/b.md": { draft: "typed", content: "stored" },
+      "/workspace/docs/clean.md": { draft: "same", content: "same" },
+      "/workspace/other/c.md": { draft: "typed", content: "stored" },
+      // Sibling of the prefix, not a child: `/workspace/docs` must not swallow `/workspace/docsx`.
+      "/workspace/docsx/sibling.md": { draft: "typed", content: "stored" },
+    };
+    expect(workbenchDirtyDraftsUnderFolder(buffers, "/workspace/docs")).toBe(2);
+    expect(workbenchDirtyDraftsUnderFolder(buffers, "/workspace/other")).toBe(1);
+  });
+});
+
+describe("merge conflicts and the workbench stage fence", () => {
+  const entry = (path: string, index: GitDeltaKind | null, worktree: GitDeltaKind | null): GitStatusEntry => Object.freeze({
+    path,
+    index: index ? { kind: index } : null,
+    worktree: worktree ? { kind: worktree } : null,
+  });
+
+  it("excludes conflicted paths from Stage all visible, on either delta side — as the advanced controls do", () => {
+    const entries = [
+      entry("/workspace/modified.ts", null, "modified"),
+      entry("/workspace/conflicted.ts", null, "conflicted"),
+      entry("/workspace/staged-conflict.ts", "conflicted", "modified"),
+    ];
+    expect(workbenchVisibleStagePaths(entries)).toEqual(["/workspace/modified.ts"]);
+  });
+
+  it("gates the per-row stage button on the same predicate the Advanced controls use", () => {
+    // One predicate or the two surfaces drift: the rail was replicating the
+    // delta check and the checkbox panel's `isConflicted` — this test pins the
+    // shared import so the fence cannot be silently weakened on one side.
+    const source = readFileSync(new URL("./workspace-view.tsx", import.meta.url), "utf8");
+    expect(source).toContain('import { isConflicted } from "./sources-view";');
+    expect(source).toContain("isConflicted(entry)");
+    expect(source).toContain("Merge conflict — resolve it in Advanced source controls before staging.");
+  });
+});
+
+/*
+ * The Move dialog's `.move-targets` listbox rendered one native Tab stop per
+ * folder inside a focus trap — Tab walked the whole folder tree before the
+ * Cancel button, and the arrow keys the `listbox` role promises did nothing.
+ * The contract: a single roving stop that the selection owns (falling past
+ * the pre-selected, disabled current folder), arrow/Home/End handled by the
+ * shared menu-movement helper, focus following selection, and Escape/Tab left
+ * to the dialog.
+ */
+describe("move dialog listbox keyboard contract", () => {
+  it("puts the one Tab stop on the selection, or the first choosable folder past a disabled one", () => {
+    const candidates = [{ disabled: true }, { disabled: false }, { disabled: false }];
+    // The file's current folder is pre-selected and disabled: the stop must
+    // not sit on a button that cannot be tabbed to at all.
+    expect(workbenchMoveTargetFocusIndex(candidates, 0)).toBe(1);
+    expect(workbenchMoveTargetFocusIndex(candidates, 2)).toBe(2);
+    expect(workbenchMoveTargetFocusIndex(candidates, -1)).toBe(1);
+  });
+
+  it("wires the listbox for roving tabindex with arrow keys that move selection and focus", () => {
+    const source = readFileSync(new URL("./workspace-view.tsx", import.meta.url), "utf8");
+    // The listbox carries the handler the option buttons rely on…
+    expect(source).toContain('role="listbox" aria-label="Destination folder" onKeyDown={handleMoveTargetKey}');
+    // …each option roves instead of being its own Tab stop…
+    expect(source).toContain("tabIndex={index === moveTargetFocus ? 0 : -1}");
+    // …and the handler walks the folders with the shared menu-movement helper
+    // — arrows, Home and End, skipping the disabled current folder — then both
+    // selects and focuses the landing folder, because selection follows focus.
+    const handler = source.match(/function handleMoveTargetKey[\s\S]*?\n  \}/u);
+    expect(handler?.[0]).toContain("moveMenuSelection(current, event.key");
+    expect(handler?.[0]).toContain("setDialogValue(directory.path)");
+    expect(handler?.[0]).toContain("items[next]?.focus()");
+    // Escape and Tab still belong to the dialog: the handler owns arrows only.
+    expect(handler?.[0]).not.toContain('"Escape"');
+    expect(handler?.[0]).not.toContain('"Tab"');
   });
 });

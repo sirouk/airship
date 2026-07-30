@@ -407,6 +407,14 @@ export class ReceiptEvidenceAcquisitionQueue {
     return freezeSnapshot(this.scheduler.now(), this.tasks.values());
   }
 
+  /**
+   * The refused checkpoint that has parked scheduling, if one stands.
+   *
+   * A fault is not part of the persisted snapshot — it is about the write, not
+   * about the work — so `emit()` is the only channel an observer has to learn
+   * that one arrived. Both fault sites therefore emit, and a listener re-reads
+   * this accessor on every emission rather than polling it.
+   */
   fault(): EvidenceAcquisitionQueuePersistenceError | undefined {
     return this.persistenceFault;
   }
@@ -419,6 +427,12 @@ export class ReceiptEvidenceAcquisitionQueue {
   /** Retries a due scheduler transition after a transient persistence fault. */
   async wake(): Promise<void> {
     this.assertUsable();
+    // The fault is about the write, so the retry is the write. Every fault
+    // today happens to leave a non-terminal task behind whose next transition
+    // would carry a fresh save, so recommitting first is a guarantee rather
+    // than a repair: `wake()` clears a fault it is able to clear instead of
+    // depending on there being work due to carry one.
+    if (this.persistenceFault) await this.recommitCheckpoint();
     await this.pump();
   }
 
@@ -504,6 +518,10 @@ export class ReceiptEvidenceAcquisitionQueue {
       if (error instanceof EvidenceAcquisitionQueuePersistenceError) {
         this.persistenceFault = error;
         this.cancelWakeTimer();
+        // Scheduling just stopped. Nothing in the task set changed, so this
+        // emission carries no new snapshot — it exists so an observer can read
+        // `fault()` and drive the wake that is now the only way out.
+        this.emit();
       }
       throw error;
     });
@@ -575,7 +593,35 @@ export class ReceiptEvidenceAcquisitionQueue {
       if (error instanceof EvidenceAcquisitionQueuePersistenceError) {
         this.persistenceFault = error;
         this.cancelWakeTimer();
+        // Same reason as `pump`'s catch: the attempt's outcome was rolled back
+        // and scheduling is parked, and only an observer that hears about it can
+        // ask for the wake.
+        this.emit();
       }
+    });
+  }
+
+  /**
+   * Re-attempts the refused snapshot write, and nothing else.
+   *
+   * The parked state is a write that did not commit, not a task that is due, so
+   * this is what actually clears a fault. It runs under the same exclusive lock
+   * as every other transition and re-arms the fault if the port refuses again,
+   * so a caller sees a rejection rather than a silently still-parked queue.
+   */
+  private async recommitCheckpoint(): Promise<void> {
+    await this.exclusive(async () => {
+      this.assertUsable();
+      if (!this.persistenceFault) return;
+      await this.persistCurrent();
+      this.emit();
+    }).catch((error) => {
+      if (error instanceof EvidenceAcquisitionQueuePersistenceError) {
+        this.persistenceFault = error;
+        this.cancelWakeTimer();
+        this.emit();
+      }
+      throw error;
     });
   }
 

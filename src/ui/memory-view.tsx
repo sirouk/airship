@@ -7,6 +7,7 @@ import {
   type MemoryNodeKind,
   type MemoryRelationshipGraph,
 } from "../memory-graph";
+import { stableMemoryContentHash } from "../memory-graph/derive";
 import type { ProfileCatalog } from "../profiles/catalog";
 import type { ProfileRevision } from "../profiles/domain";
 import type { WorkspaceEntry, WorkspacePort } from "../workspace/contracts";
@@ -34,6 +35,19 @@ export type MemoryViewMessage = Readonly<{
   role: "user" | "assistant";
   content: string;
   parts?: readonly MessagePart[];
+  /**
+   * The live status line a turn carries until it settles ("Queued",
+   * "Streaming …"). Cleared on success, failure and cancellation alike, in
+   * the same commit the final answer lands — so its presence is the page's
+   * marker for "this row's text is still moving".
+   */
+  status?: string;
+  /**
+   * The replay/materializer turn record. A row that settled inside the page
+   * carries a terminal status here, which is what tells it apart from an
+   * in-flight one: settled local-tool rows keep a display status forever.
+   */
+  history?: Readonly<{ turnStatus?: string }>;
 }>;
 
 /**
@@ -91,6 +105,38 @@ export class ProfileScopedMemoryPageStore {
 }
 
 const MEMORY_PRESENTATIONS = new ProfileScopedMemoryPageStore();
+
+/**
+ * Whether a transcript row is still being written.
+ *
+ * A normal turn appends one assistant row with a status line and mutates its
+ * content once per stream delta, clearing the status in the same commit the
+ * answer — or the failure — lands. The local-tool path instead starts the row
+ * with an `incomplete` turn record and settles the record; those rows keep a
+ * display status after settling, so the terminal turn record outranks the
+ * status line where both exist. A replayed incomplete turn never carries a
+ * status line at all and counts as settled: its text stopped moving when the
+ * journal did.
+ */
+export function isLiveMemoryMessage(message: MemoryViewMessage): boolean {
+  if (message.history?.turnStatus && message.history.turnStatus !== "incomplete") return false;
+  return message.status !== undefined;
+}
+
+/**
+ * The derivation input's answer to "did anything *settled* change?".
+ *
+ * The rows a live turn mutates contribute identity only — their text is
+ * deliberately absent until the turn commits — while settled rows contribute
+ * identity and their content, so the key changes on a completed turn, an
+ * appended message and any durable edit, and does NOT change per stream
+ * delta. The signature itself never feeds the graph; it gates the memo whose
+ * output does, so the graph, the spatial index and the federated search
+ * re-arm once per settled change instead of once per chunk.
+ */
+export function stableMemoryAuthoritySignature(messages: readonly MemoryViewMessage[]): string {
+  return messages.map((message) => `${message.id}${isLiveMemoryMessage(message) ? " live" : ` settled:${message.content.length}:${stableMemoryContentHash(message.content)}`}`).join("");
+}
 
 /** Where the profile lane's records are actually stored, stated once. */
 const PROFILE_MEMORY_PATH = "/workspace/.airship/memory.json";
@@ -162,7 +208,26 @@ export function MemoryView({
   const indexRef = useRef<HTMLDetailsElement>(null);
   const alignIndex = useCallback(() => indexRef.current?.scrollIntoView({ block: "start" }), []);
   const workspaceAuthority = indexMounted ? contextGeneration : files;
-  const memoryAuthority = useMemo(() => ({}), [activeProfile, catalog, messages, sessionId, workspaceAuthority]);
+  /*
+   * `messages` gets a fresh identity per stream delta, so neither derivation
+   * may depend on it raw. The signature only moves on settled changes, and
+   * the memoized rows below mask an in-flight row's text until its turn
+   * commits — the graph and the search then re-arm exactly once per settled
+   * change instead of once per chunk. Everything else (profile, catalog,
+   * query) still depends on the real values.
+   */
+  const messageSignature = stableMemoryAuthoritySignature(messages);
+  const settledMessages = useMemo(
+    () => messages.map((message): MemoryViewMessage => isLiveMemoryMessage(message)
+      ? { id: message.id, role: message.role, content: "", status: message.status }
+      : message),
+    // Keyed on the settled signature by design: `messages` is read only for
+    // the masked projection, and the signature moves exactly when the
+    // projection's content does.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [messageSignature],
+  );
+  const memoryAuthority = useMemo(() => ({}), [activeProfile, catalog, settledMessages, sessionId, workspaceAuthority]);
   const memorySearch = useFederatedMemorySearch(query, searchMemory, memoryAuthority, !indexMounted || Boolean(contextGeneration));
   const graph = useMemo(() => {
     return deriveMemoryRelationshipGraph({
@@ -171,7 +236,7 @@ export function MemoryView({
         title: `${activeProfile.name} session`,
         profileId: activeProfile.profileId,
         skillIds: effectiveSkillIds(activeProfile, catalog),
-        messages: messages.map((message) => ({
+        messages: settledMessages.map((message) => ({
           id: message.id,
           role: message.role,
           content: message.parts?.length ? messagePlainText(message.parts) : message.content,
@@ -197,7 +262,7 @@ export function MemoryView({
         sessionIds: sessionId && effectiveSkillIds(activeProfile, catalog).includes(skill.skillId) ? [sessionId] : [],
       })),
     });
-  }, [activeProfile, catalog, files, messages, sessionId]);
+  }, [activeProfile, catalog, files, settledMessages, sessionId]);
   useEffect(() => {
     const changed = priorInitialTab.current !== initialTab;
     priorInitialTab.current = initialTab;
