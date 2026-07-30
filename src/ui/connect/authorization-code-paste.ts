@@ -161,7 +161,22 @@ function readFromFields(
 }
 
 function readBareCode(value: string): AuthorizationCodeReading {
-  if (/^[a-z][a-z0-9+.-]*:\/\//iu.test(value) || /^(?:localhost|127\.0\.0\.1)[:/]/u.test(value)) {
+  /*
+   * Any `scheme:` prefix — not only `https:`. The flat grammar below accepts
+   * every printable character, so `javascript:alert(1)` previously parsed as a
+   * bare code and flowed to the token exchange, where only the vendor's own
+   * refusal stood between it and the wire. A scheme can never be the code of
+   * one of these providers, and the only exception the exchange grammar carries
+   * (`sk-…` API keys) is named separately below, so a scheme-shaped value is
+   * refused now.
+   */
+  if (/^[a-z][a-z0-9+.-]*:/iu.test(value)) {
+    return rejected(
+      "address-has-no-code",
+      "That looks like an address, not the one-time code. API keys belong in the key field, and addresses belong here whole.",
+    );
+  }
+  if (/^(?:localhost|127\.0\.0\.1)[:/]/u.test(value)) {
     return rejected(
       "address-has-no-code",
       "That looks like a partial address. Paste the whole address from the page that failed to load, starting at http.",

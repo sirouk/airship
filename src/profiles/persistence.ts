@@ -216,9 +216,31 @@ export async function profileCatalogDigest(catalog: ProfileCatalog): Promise<str
   return sha256(stableStringify(catalog as unknown as JsonValue));
 }
 
+/**
+ * The Boundary Record's own rule, checked before a byte of a hostile seed is
+ * rebuilt: the three keys that walk a prototype if spread blindly. Only own
+ * properties count (everything here arrived through JSON.parse) and the walk
+ * is depth-bounded, because a validator that can be pushed into an infinite
+ * descent is itself a load amplifier. A catalog that survives this carries no
+ * `__proto__` anywhere the rebuild is about to trust.
+ */
+function rejectPoisonKeys(value: unknown, depth = 0): void {
+  // The deepest shape this record owns is roughly five levels; 24 is the same
+  // fail-closed posture the billing payload walk takes, not a guess at it.
+  if (depth > 24) throw new Error("Profile catalog exceeds its structural depth.");
+  if (!isRecord(value)) return;
+  for (const key of ["__proto__", "prototype", "constructor"] as const) {
+    if (Object.hasOwn(value, key)) {
+      throw new Error("Profile catalog contains a forbidden object key.");
+    }
+  }
+  for (const item of Object.values(value)) rejectPoisonKeys(item, depth + 1);
+}
+
 /** Rebuilds every content-addressed member and drops unrecognized JSON keys. */
 export async function validateProfileCatalog(value: unknown): Promise<ProfileCatalog> {
   if (!isRecord(value)) throw new Error("Profile catalog must be a JSON object.");
+  rejectPoisonKeys(value);
   const themeValues = boundedArray(value.themes, MAX_THEMES, "themes");
   const skillValues = boundedArray(value.skills, MAX_SKILLS, "skills");
   const profileValues = boundedArray(value.profiles, MAX_PROFILES, "profiles");
