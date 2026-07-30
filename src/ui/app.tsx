@@ -74,14 +74,21 @@ import {
   PROFILE_MEMORY_SCOPE_LABELS,
   PROFILE_POSTURE_FIELD_LABEL,
 } from "./profiles-governance";
+import { postureFloorRefusal } from "./posture-floor";
+/* The leaf record, not `attestation-gate` — that module carries the DCAP
+   verifier's WASM and this file paints first. */
+import { CHUTES_STRICT_ENDPOINT_PROOF_CAPABILITY as strictProofCapability } from "../inference/chutes/strict-proof-capability";
+import { providerBoundaryLabel } from "../inference/transport-boundary-label";
 import {
   createGlobalSkillSettings,
   createProfileRevision,
   enforcedMemoryScope,
   resolveProfileSilo,
   resolveProfileForSession,
+  resolveSkillDecisions,
   themeCssVariables,
   type ProfileRevision,
+  type ResolvedSkillDecision,
   type SkillMode,
   type ThemeColorScheme,
   type ThemeManifest,
@@ -99,6 +106,7 @@ import {
   type SessionListItem,
 } from "../sessions";
 import {
+  inferenceBindingsMatch,
   profileOwnedSessions,
   profileOwnsSession,
   requireProfileOwnedSession,
@@ -146,7 +154,7 @@ import { sealStateForReceipt } from "./seal-states";
 import { ApprovalDock } from "./approval-dock";
 import { attestationRecordIdForReceipt, sessionAttestationReceipts } from "./attestation-history";
 import type { AttestationRefreshTarget } from "./attestations-view";
-import { Icon, type IconName } from "./icons";
+import { Icon } from "./icons";
 import type {
   LocalDeviceActivationReason,
   LocalDeviceAtomicRestoreRequest,
@@ -239,7 +247,11 @@ import {
   COMPOSER_PLACEHOLDER_TITLE,
   SLASH_MENU_HEADER,
 } from "./chat/composer";
-import { forkBranchNotice } from "./chat/fork-notice";
+// The pre-click branch sentence, imported rather than retyped: the literal
+// that used to sit on the Retry button drifted away from this constant and
+// ended up promising that the prior answer IS carried into the branch, which
+// is the opposite of what the fork does.
+import { forkBranchNotice, FORK_RETRY_TOOLTIP } from "./chat/fork-notice";
 import { originatingPromptForRow } from "./chat/retry-prompt";
 // Types only: the reducer itself stays in the deferred capability pack.
 import type {
@@ -273,6 +285,7 @@ import { TabPresenceNote } from "./tab-presence";
 import { ProfileThemeSwatch, themePresentation, themePresentationSummary } from "./profile-theme-swatch";
 import { PostureChip } from "./posture-chip";
 import { durabilityLabel, durabilitySeal, type DurabilityState } from "./durability-indicator";
+import { RouteFailure } from "./route-failure";
 import { RouteSkeleton } from "./route-skeleton";
 import type { LocalProviderProbeResult } from "./connect/connect-surface";
 import {
@@ -1299,17 +1312,60 @@ export function App() {
   const [LocalLabSetupScreen, setLocalLabSetupScreen] = useState<LocalLabSetupComponent>();
   const [LocalDeviceVaultSetupScreen, setLocalDeviceVaultSetupScreen] = useState<LocalDeviceVaultSetupComponent>();
   const [SessionsScreen, setSessionsScreen] = useState<SessionsScreenComponent>();
+  /*
+   * All conversations was the one lazy route with no terminal failure state.
+   *
+   * Its catch wrote `setRuntimeStatus(...)` and nothing else, and
+   * `.runtime-line` is deleted below 640px — so a phone user whose chunk fetch
+   * dropped sat on a skeleton that has no timeout and no retry, with the only
+   * carrier of the reason removed by a media query.
+   */
+  const [sessionsViewError, setSessionsViewError] = useState<string>();
   const [quarantinedSession, setQuarantinedSession] = useState<QuarantinedSession>();
   const [VaultScreen, setVaultScreen] = useState<VaultScreenComponent>();
   const [vaultViewError, setVaultViewError] = useState<string>();
   const [AccessScreen, setAccessScreen] = useState<AccessScreenComponent>();
   const [ProviderConnectionsScreen, setProviderConnectionsScreen] = useState<ProviderConnectionsScreenComponent>();
   const [accessViewError, setAccessViewError] = useState<string>();
+  /*
+   * `provider-connections-view` is its own build asset, so it fails
+   * independently of the pack that supplies `AccessScreen`. Its catch used to
+   * write `accessViewError`, which is rendered only in the branch where
+   * `AccessScreen` is *absent* — i.e. never, in the normal case — so the
+   * OpenAI/Anthropic/xAI/local-server section spun forever and said nothing.
+   */
+  const [providerFabricError, setProviderFabricError] = useState<string>();
+  /*
+   * Same dead write, same route: a failed OAuth registration fetch reported
+   * itself into `accessViewError`, whose branch the loaded Connection route
+   * never reaches. It belongs in the Chutes panel's own notice, beside the
+   * sign-in button it disables.
+   */
+  const [oauthRegistrationError, setOAuthRegistrationError] = useState<string>();
   const [BillingScreen, setBillingScreen] = useState<BillingScreenComponent>();
   const [billingViewError, setBillingViewError] = useState<string>();
   const [ProofScreen, setProofScreen] = useState<ProofScreenComponent>();
   const [proofViewError, setProofViewError] = useState<string>();
   const [ProofInspector, setProofInspector] = useState<ProofInspectorComponent>();
+  /*
+   * `proof-inspector` and `proof-view` are separate assets, so the claim stack
+   * can fail while the route around it loads. Its catch was silent on the
+   * premise that `#proof` reports the failure; `setProofViewError` is written
+   * only by the `proof-view` catch, so nothing did — and the one route whose
+   * promise is that state is never overstated showed an indefinite skeleton
+   * where the verdict belongs.
+   */
+  const [proofInspectorError, setProofInspectorError] = useState<string>();
+  /*
+   * The second attempt every failed chunk lacked.
+   *
+   * The loaders below are keyed on `[view, Screen]`, so a user standing on the
+   * failed route could not re-enter them by any means short of a reload — the
+   * failure panels shipped a sentence and no control. Bumping this re-enters
+   * every loader whose route is open and whose chunk is still missing; the
+   * ones that already resolved early-return on their own guard.
+   */
+  const [deferredChunkAttempt, setDeferredChunkAttempt] = useState(0);
   const runtime = useRef<Runtime>();
   const catalogCheckpoint = useRef<ProfileCatalogCheckpoint>();
   const catalogMutationTail = useRef<Promise<void>>(Promise.resolve());
@@ -1749,7 +1805,7 @@ export function App() {
   const inferenceStatusDetail = activeChutesConnection
     ? `${connection.model} · ${connection.invokeAuthorization === "verified" ? "encrypted invocation verified" : "encrypted invocation ready; permission not tested yet"}`
     : activeExternalConnection
-      ? `${activeExternalConnection.pin.model.id} · invocation checked · ${inferenceBoundaryLabel(activeExternalConnection.pin.provider.transportBoundary)}`
+      ? `${activeExternalConnection.pin.model.id} · invocation checked · ${providerBoundaryLabel(activeExternalConnection.pin.provider.transportBoundary)}`
       : pinnedExternalRoute && activeExternalResolution && activeExternalResolution.state !== "ready"
         ? `${pinnedExternalRoute.pin.model.id} remains pinned to this conversation. ${activeExternalResolution.detail}`
         : activeInferenceBinding?.providerId === "chutes"
@@ -2721,6 +2777,16 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [profileId, sessionId]);
 
+  /**
+   * The one recovery verb, shared by every route that can fail to load.
+   *
+   * Each loader clears its own error as it re-enters, so this needs to do
+   * nothing but ask them all to run again.
+   */
+  function retryDeferredChunk() {
+    setDeferredChunkAttempt((value) => value + 1);
+  }
+
   useEffect(() => {
     if (view !== "proof" || proofSection !== "attestations" || AttestationsScreen) return;
     let current = true;
@@ -2733,7 +2799,7 @@ export function App() {
         if (current) setAttestationsViewError("The attestation interface chunk could not be loaded. No trust claim changed.");
       });
     return () => { current = false; };
-  }, [view, proofSection, AttestationsScreen]);
+  }, [view, proofSection, AttestationsScreen, deferredChunkAttempt]);
 
   /*
    * The claim rail is fetched the moment a receipt exists — or the Proof route
@@ -2743,15 +2809,19 @@ export function App() {
   useEffect(() => {
     if ((view !== "proof" && !lastReceipt) || ProofInspector) return;
     let current = true;
+    setProofInspectorError(undefined);
     void import("./proof-inspector").then((module) => {
       if (current) setProofInspector(() => module.ProofInspector);
     }).catch(() => {
-      // Silent by design: the rail's own claims are also rendered by `#proof`,
-      // which reports its own load failure. A second alarm for one chunk would
-      // be a second phrasing of one fact, which is what this package removes.
+      // This was silent on the premise that `#proof` reports the same failure.
+      // It does not: `proofViewError` is written only by the `proof-view`
+      // catch, and `proof-inspector` is a separate build asset that fails on
+      // its own. The premise being false is how the claim stack came to render
+      // an endless skeleton on the route that promises never to overstate.
+      if (current) setProofInspectorError("The claim stack could not be loaded. No receipt, evidence, or journal state changed.");
     });
     return () => { current = false; };
-  }, [view, lastReceipt, ProofInspector]);
+  }, [view, lastReceipt, ProofInspector, deferredChunkAttempt]);
 
   useEffect(() => {
     if (view !== "proof" || ProofScreen) return;
@@ -2763,11 +2833,12 @@ export function App() {
       if (current) setProofViewError("The Proof interface could not be loaded. No receipt, evidence, or journal state changed.");
     });
     return () => { current = false; };
-  }, [view, ProofScreen]);
+  }, [view, ProofScreen, deferredChunkAttempt]);
 
   useEffect(() => {
     if ((view !== "sessions" || SessionsScreen) && (view !== "vault" || VaultScreen)) return;
     let current = true;
+    if (view === "sessions") setSessionsViewError(undefined);
     if (view === "vault") setVaultViewError(undefined);
     void import("./sessions-route").then((module) => {
       if (!current) return;
@@ -2775,11 +2846,18 @@ export function App() {
       if (view === "vault") setVaultScreen(() => module.VaultView);
     }).catch(() => {
       if (!current) return;
-      if (view === "sessions") setRuntimeStatus("Session library interface could not be loaded");
+      // The runtime line stays — it is how a desktop reader learns without
+      // leaving the route — but it can no longer be the *only* carrier: it is
+      // `display: none` below 640px, which left the phone with a permanent
+      // skeleton and no stated reason.
+      if (view === "sessions") {
+        setRuntimeStatus("Session library interface could not be loaded");
+        setSessionsViewError("The conversation history interface could not be loaded. No session or journal state changed.");
+      }
       if (view === "vault") setVaultViewError("The Vault interface could not be loaded. No provider, key, or runtime state changed.");
     });
     return () => { current = false; };
-  }, [view, SessionsScreen, VaultScreen]);
+  }, [view, SessionsScreen, VaultScreen, deferredChunkAttempt]);
 
   useEffect(() => {
     if (view !== "vault" || (GoogleDriveSetupScreen && LocalLabSetupScreen)) return;
@@ -2793,7 +2871,7 @@ export function App() {
       if (current) setRuntimeStatus("Google Drive setup could not be loaded; no vault state changed");
     });
     return () => { current = false; };
-  }, [view, GoogleDriveSetupScreen, LocalLabSetupScreen]);
+  }, [view, GoogleDriveSetupScreen, LocalLabSetupScreen, deferredChunkAttempt]);
 
   useEffect(() => {
     if (
@@ -2810,7 +2888,7 @@ export function App() {
       );
     });
     return () => { current = false; };
-  }, [view, preferences.vaultBackend, LocalDeviceVaultSetupScreen]);
+  }, [view, preferences.vaultBackend, LocalDeviceVaultSetupScreen, deferredChunkAttempt]);
 
   useEffect(() => {
     if ((view !== "access" || AccessScreen) && (view !== "billing" || BillingScreen)) return;
@@ -2827,11 +2905,12 @@ export function App() {
       if (view === "billing") setBillingViewError("The Account interface could not be loaded. No credential or billing state changed.");
     });
     return () => { current = false; };
-  }, [view, AccessScreen, BillingScreen]);
+  }, [view, AccessScreen, BillingScreen, deferredChunkAttempt]);
 
   useEffect(() => {
     if (view !== "access" || activeOAuthRegistration) return;
     let current = true;
+    setOAuthRegistrationError(undefined);
     void import("../auth/chutes-oauth-registration").then((module) => {
       if (!current) return;
       setActiveOAuthRegistration({
@@ -2839,21 +2918,30 @@ export function App() {
         exchangeMode: module.chutesOAuthExchangeMode(module.CHUTES_ACTIVE_REGISTRATION),
       });
     }).catch(() => {
-      if (current) setAccessViewError("Chutes OAuth registration metadata could not be loaded. Existing connections were not changed.");
+      // Not `accessViewError`: that state renders only where `AccessScreen` is
+      // absent, so writing this there described the route's own chunk failing
+      // and was unreachable the moment the route loaded. The sign-in lane this
+      // actually disables carries it instead.
+      if (current) setOAuthRegistrationError("Chutes OAuth registration metadata could not be loaded, so browser sign-in is unavailable. Existing connections were not changed.");
     });
     return () => { current = false; };
-  }, [view, activeOAuthRegistration]);
+  }, [view, activeOAuthRegistration, deferredChunkAttempt]);
 
   useEffect(() => {
     if (view !== "access" || ProviderConnectionsScreen) return;
     let current = true;
+    setProviderFabricError(undefined);
     void import("./provider-connections-view").then((module) => {
       if (current) setProviderConnectionsScreen(() => module.ProviderConnectionsView);
     }).catch(() => {
-      if (current) setAccessViewError("The provider fabric could not be loaded. Existing Chutes and conversation state were not changed.");
+      // Its own state, for the same reason as the registration loader above:
+      // `accessViewError` is unrenderable once `AccessScreen` has loaded, and
+      // this chunk is the normal case's *only* path to every non-Chutes
+      // provider.
+      if (current) setProviderFabricError("The provider fabric could not be loaded. Existing Chutes and conversation state were not changed.");
     });
     return () => { current = false; };
-  }, [view, ProviderConnectionsScreen]);
+  }, [view, ProviderConnectionsScreen, deferredChunkAttempt]);
 
   useEffect(() => {
     if ((view !== "workspace" && view !== "editor") || EditorScreen) return;
@@ -2865,7 +2953,7 @@ export function App() {
       if (current) setEditorViewError("The Workspace Editor chunk could not be loaded. No file or Git state changed.");
     });
     return () => { current = false; };
-  }, [view, EditorScreen]);
+  }, [view, EditorScreen, deferredChunkAttempt]);
 
   useEffect(() => {
     if (view !== "terminal" || TerminalScreen) return;
@@ -2877,7 +2965,7 @@ export function App() {
       if (current) setTerminalViewError("The browser terminal chunk could not be loaded. No process or workspace state changed.");
     });
     return () => { current = false; };
-  }, [view, TerminalScreen]);
+  }, [view, TerminalScreen, deferredChunkAttempt]);
 
   useEffect(() => {
     if (view !== "capabilities" || CapabilitiesScreen) return;
@@ -2889,7 +2977,7 @@ export function App() {
       if (current) setCapabilitiesViewError("The runtime capability interface could not be loaded. No runtime was activated or changed.");
     });
     return () => { current = false; };
-  }, [view, CapabilitiesScreen]);
+  }, [view, CapabilitiesScreen, deferredChunkAttempt]);
 
   useEffect(() => {
     // Only for the route that has a catalogue to search. A failure here is not
@@ -2914,7 +3002,7 @@ export function App() {
       if (current) setMemoryViewError("The private Memory interface could not be loaded. No index or workspace state changed.");
     });
     return () => { current = false; };
-  }, [view, MemoryScreen]);
+  }, [view, MemoryScreen, deferredChunkAttempt]);
 
   // When the Proof evidence section opens on a live connection with no evidence yet,
   // probe + verify a currently-live endpoint so the ledger shows real state
@@ -7479,7 +7567,10 @@ export function App() {
       setMessages([{
         ...welcomeMessage,
         id: randomUuid(),
-        content: `${route.pin.provider.label}/${route.pin.model.id} is active in a new immutable session through ${inferenceBoundaryLabel(route.pin.provider.transportBoundary)}. Its connection generation and model are pinned; existing conversations were not retargeted.`,
+        // "through <label>." became "Boundary: <label>." when the two boundary
+        // sentences were merged: the surviving label is the Connect route's
+        // titled form, and a titled clause mid-sentence read as a typo.
+        content: `${route.pin.provider.label}/${route.pin.model.id} is active in a new immutable session. Boundary: ${providerBoundaryLabel(route.pin.provider.transportBoundary)}. Its connection generation and model are pinned; existing conversations were not retargeted.`,
       }]);
       setEventCount(activated.headSequence);
       setLastReceipt(undefined);
@@ -8246,7 +8337,7 @@ export function App() {
             <span aria-hidden="true">⌘</span>
           </button>
           <button class="icon-button" type="button" aria-label="Open Preferences" onClick={() => setPreferencesOpen(true)}>
-            <Icon name="model" />
+            <Icon name="settings" />
           </button>
           <button class="icon-button" type="button" aria-label="Open proof" onClick={() => openSessionProof()}>
             <Icon name="proof" />
@@ -8331,7 +8422,7 @@ export function App() {
                     } : activeExternalConnection ? {
                       providerLabel: activeExternalConnection.pin.provider.label,
                       modelId: activeExternalConnection.pin.model.id,
-                      boundaryLabel: inferenceBoundaryLabel(activeExternalConnection.pin.provider.transportBoundary),
+                      boundaryLabel: providerBoundaryLabel(activeExternalConnection.pin.provider.transportBoundary),
                     } : pinnedExternalRoute ? {
                       providerLabel: pinnedExternalRoute.pin.provider.label,
                       modelId: pinnedExternalRoute.pin.model.id,
@@ -8734,7 +8825,14 @@ export function App() {
               compact
               acquisitionFailure={inspectorAcquisitionFailure}
               onOpenAttestations={() => openAttestationEvidence()}
-            /></aside> : null}
+            /></aside>
+              /* Rendering nothing here was the silent half of the same defect:
+                 a receipt existed, the rail that inspects it did not load, and
+                 the transcript simply had no claim column — indistinguishable
+                 from a turn that produced no claims at all. */
+              : lastReceipt && proofInspectorError ? <aside class="inspector">
+                <RouteFailure inline title="the claim stack" message={proofInspectorError} onRetry={retryDeferredChunk} />
+              </aside> : null}
           </>
         ) : null}
         {view === "sessions" ? sessionLibrary && SessionsScreen ? (
@@ -8754,6 +8852,8 @@ export function App() {
             durability={sessionDurability}
             quarantine={quarantinedSession}
           />
+        ) : sessionsViewError ? (
+          <RouteFailure title="All conversations" message={sessionsViewError} onRetry={retryDeferredChunk} />
         ) : (
           <section class="work-view panel" aria-labelledby="session-library-loading-title">
             <RouteBar
@@ -8795,7 +8895,7 @@ export function App() {
           onOpenFullTerminal={() => navigate("terminal")}
           durability={sessionDurability}
           destinationArrival={destinationArrival}
-        /> : editorViewError ? <section class="work-view panel" role="alert"><h1>Editor</h1><p>{editorViewError}</p></section> : <RouteSkeleton label="Loading the browser-native Workspace Editor" /> : null}
+        /> : editorViewError ? <RouteFailure title="Editor" message={editorViewError} onRetry={retryDeferredChunk} /> : <RouteSkeleton label="Loading the browser-native Workspace Editor" /> : null}
         {view === "terminal" && runtime.current && gitClient ? TerminalScreen ? <TerminalScreen
           workspace={runtime.current.workspace}
           workspaceIdentity={runtime.current.workspaceId}
@@ -8809,7 +8909,7 @@ export function App() {
           openRequest={terminalOpenRequest}
           onOpenRequestHandled={(id) => setTerminalOpenRequest((current) => current?.id === id ? undefined : current)}
           workspaceRoot="/workspace"
-        /> : terminalViewError ? <section class="work-view panel" role="alert"><h1>Terminal</h1><p>{terminalViewError}</p></section> : <RouteSkeleton label="Loading the browser terminal" /> : null}
+        /> : terminalViewError ? <RouteFailure title="Terminal" message={terminalViewError} onRetry={retryDeferredChunk} /> : <RouteSkeleton label="Loading the browser terminal" /> : null}
         {view === "memory" || view === "context" ? MemoryScreen ? (
           <MemoryScreen
             key={`${profileId}:${sessionId ?? "no-session"}`}
@@ -8823,7 +8923,7 @@ export function App() {
             initialTab={view === "context" ? "index" : "search"}
             onOpenSource={(target) => void openMemorySource(target)}
           />
-        ) : memoryViewError ? <section class="work-view panel" role="alert"><h1>Memory</h1><p>{memoryViewError}</p></section> : <RouteSkeleton label="Loading private memory" /> : null}
+        ) : memoryViewError ? <RouteFailure title="Memory" message={memoryViewError} onRetry={retryDeferredChunk} /> : <RouteSkeleton label="Loading private memory" /> : null}
         {view === "profiles" || view === "capabilities" || view === "skills" ? <nav class={view === "skills" ? "profile-hub-tabs with-scope" : "profile-hub-tabs"} aria-label="Agent configuration">
           {([{"id":"profiles","label":"Profiles"},{"id":"skills","label":"Skills"},{"id":"capabilities","label":"Capabilities"}] as const).map((tab) => <button key={tab.id} type="button" aria-current={view === tab.id ? "page" : undefined} onClick={() => navigate(tab.id)}>{tab.label}</button>)}
           {view === "skills" ? <div class="profile-hub-scope"><span>Applies to</span><MenuSelect placement="down" ariaLabel="Skill scope" value={profileHubScope} options={[{ value: "global", label: "All profiles" }, ...managedProfiles(catalog).map((profile) => ({ value: profile.profileId, label: profile.name }))]} onChange={setProfileHubScope} /></div> : null}
@@ -8857,7 +8957,7 @@ export function App() {
         ) : null}
         {view === "capabilities" ? CapabilitiesScreen ? (
           <CapabilitiesScreen inspect={inspectExecutionCapabilities} inspectBrowser={inspectBrowserCapabilities} inspectExtension={observeExtensionBridge} subscribeBrowser={subscribeBrowserCapabilities} onCommand={openCapabilityCommand} onOpenSkills={() => navigate("skills")} />
-        ) : capabilitiesViewError ? <section class="work-view panel" role="alert"><h1>Capabilities</h1><p>{capabilitiesViewError}</p></section> : <RouteSkeleton label="Inspecting browser capabilities" /> : null}
+        ) : capabilitiesViewError ? <RouteFailure title="Capabilities" message={capabilitiesViewError} onRetry={retryDeferredChunk} /> : <RouteSkeleton label="Inspecting browser capabilities" /> : null}
         {view === "skills" ? (
           <SkillsManagerView
             catalog={catalog}
@@ -8900,7 +9000,7 @@ export function App() {
               onDisconnect={localDeviceRuntimeAdopted || vaultSnapshot.phase !== "disconnected"
                 ? () => void disconnectVaultSafely()
                 : undefined}
-            /> : vaultViewError ? <section class="panel" role="alert"><h1>Vault</h1><p>{vaultViewError}</p></section> : <RouteSkeleton label="Loading the Vault interface" />}
+            /> : vaultViewError ? <RouteFailure title="Vault" message={vaultViewError} onRetry={retryDeferredChunk} class="panel" /> : <RouteSkeleton label="Loading the Vault interface" />}
             {preferences.vaultBackend === "local-device" ? (
               <div class="vault-setup-slot">
                 {LocalDeviceVaultSetupScreen ? <LocalDeviceVaultSetupScreen
@@ -8944,7 +9044,7 @@ export function App() {
             loadSnapshot={loadBillingSnapshot}
             onOpenAccess={() => navigate("access")}
           />
-        ) : billingViewError ? <section class="work-view panel" role="alert"><h1>Account</h1><p>{billingViewError}</p></section> : <RouteSkeleton label="Loading Account" /> : null}
+        ) : billingViewError ? <RouteFailure title="Account" message={billingViewError} onRetry={retryDeferredChunk} /> : <RouteSkeleton label="Loading Account" /> : null}
         {view === "proof" ? ProofScreen ? (
           <ProofScreen
             key={`${profileId}:${proofTargetId ?? "no-session"}`}
@@ -8966,7 +9066,7 @@ export function App() {
               now={attestationNow}
               acquisitionFailure={proofAcquisitionFailure}
               onOpenAttestations={onOpenAttestations}
-            /> : <RouteSkeleton label="Loading the claim stack" />}
+            /> : proofInspectorError ? <RouteFailure inline title="the claim stack" message={proofInspectorError} onRetry={retryDeferredChunk} /> : <RouteSkeleton label="Loading the claim stack" />}
             evidenceLedger={AttestationsScreen ? <AttestationsScreen
               endpointRecords={proofEndpointRecords}
               receipts={proofLedgerReceipts}
@@ -8986,10 +9086,10 @@ export function App() {
               onRefresh={proofScoped && online && chutesConnected ? refreshAttestation : undefined}
               onCancel={() => attestationClient.current?.cancel()}
               embedded
-            /> : attestationsViewError ? <div class="panel" role="alert">{attestationsViewError}</div> : <RouteSkeleton label="Loading attestation evidence" />}
+            /> : attestationsViewError ? <RouteFailure inline title="attestation evidence" message={attestationsViewError} onRetry={retryDeferredChunk} /> : <RouteSkeleton label="Loading attestation evidence" />}
             endpointEvidenceRecords={proofEndpointRecords}
           />
-        ) : proofViewError ? <section class="work-view panel" role="alert"><h1>Proof</h1><p>{proofViewError}</p></section> : <RouteSkeleton label="Loading Proof" /> : null}
+        ) : proofViewError ? <RouteFailure title="Proof" message={proofViewError} onRetry={retryDeferredChunk} /> : <RouteSkeleton label="Loading Proof" /> : null}
         {view === "access" ? AccessScreen ? (
           <AccessScreen
             connection={connection}
@@ -9011,7 +9111,10 @@ export function App() {
                   ? "neutral"
                   : "warning",
               message: oauthCallbackStatus.message,
-            } : undefined}
+            /* A returning redirect outranks it: that status is about this
+               attempt, this one about the next. Second, because a missing
+               registration is only ever the reason the sign-in lane is inert. */
+            } : oauthRegistrationError ? { tone: "error", message: oauthRegistrationError } : undefined}
             oauthDiagnostic={activeOAuthRegistration ? {
               homepageUrl: activeOAuthRegistration.registration.homepageUrl,
               callbackUrl: activeOAuthRegistration.registration.redirectUris[0] ?? "Unavailable",
@@ -9035,9 +9138,9 @@ export function App() {
                 onActivate={activateExternalInference}
                 onDisconnect={disconnectExternalInference}
               />
-            ) : <RouteSkeleton label="Loading cloud and local provider fabric" />}
+            ) : providerFabricError ? <RouteFailure inline title="the provider fabric" message={providerFabricError} onRetry={retryDeferredChunk} /> : <RouteSkeleton label="Loading cloud and local provider fabric" />}
           />
-        ) : accessViewError ? <section class="work-view panel" role="alert"><h1>Connection</h1><p>{accessViewError}</p></section> : <RouteSkeleton label="Loading Connection" /> : null}
+        ) : accessViewError ? <RouteFailure title="Connection" message={accessViewError} onRetry={retryDeferredChunk} /> : <RouteSkeleton label="Loading Connection" /> : null}
       </main>
       </ViewErrorBoundary>
 
@@ -9127,7 +9230,11 @@ async function createProfileSessionManifest(
     inferenceDirectory: runtime.inferenceDirectory?.(),
   });
   if (!postureSatisfies(runtime.transport.posture, pin.minimumPosture)) {
-    throw new Error(`The ${runtime.transport.posture} runtime does not satisfy this profile's ${pin.minimumPosture} minimum posture.`);
+    // The raw union members used to be interpolated straight into this
+    // sentence, so a person who picked "Encrypted" was refused with
+    // "encrypted-unattested" and given no remedy. `postureFloorRefusal` reads
+    // the label dictionaries the editor's own select is spelled from.
+    throw new Error(postureFloorRefusal(runtime.transport.posture, pin.minimumPosture));
   }
   // A pinned binding names a storage authority the person typed, so it is
   // compared against the storage ID rather than the Profile-suffixed view.
@@ -9195,22 +9302,6 @@ async function compatibleProfileSession(
     expected,
     preferredSessionId,
   );
-}
-
-function inferenceBindingsMatch(
-  actual: SessionManifest["inferenceBinding"],
-  expected: SessionManifest["inferenceBinding"],
-): boolean {
-  if (!actual || !expected) return actual === expected;
-  return actual.version === expected.version
-    && actual.connectionId === expected.connectionId
-    && actual.connectionGeneration === expected.connectionGeneration
-    && actual.providerId === expected.providerId
-    && actual.providerLabel === expected.providerLabel
-    && actual.providerRevision === expected.providerRevision
-    && actual.authMethod === expected.authMethod
-    && actual.transportBoundary === expected.transportBoundary
-    && actual.modelId === expected.modelId;
 }
 
 async function contextPolicyForModel(model: AirshipModel): Promise<SessionManifest["contextPolicy"] | undefined> {
@@ -9305,16 +9396,6 @@ function providerModelCapability(
   capability: keyof InferenceModelDescriptor["capabilities"],
 ): "supported" | "unsupported" | "unknown" {
   return model.capabilities[capability]?.state ?? "unknown";
-}
-
-function inferenceBoundaryLabel(
-  boundary: NonNullable<SessionManifest["inferenceBinding"]>["transportBoundary"],
-): string {
-  switch (boundary) {
-    case "e2ee-attestable": return "application E2EE · evidence capable";
-    case "provider-tls": return "provider TLS";
-    case "loopback-local": return "this machine · loopback";
-  }
 }
 
 /**
@@ -10729,11 +10810,17 @@ function MessageCard({
             >Copy</button>
             {/* Retry is a regeneration from the immutable pre-turn boundary.
                 The prior answer remains inspectable in the source conversation
-                but cannot contaminate the retry branch's provider context. */}
+                but cannot contaminate the retry branch's provider context.
+
+                The sentence is `FORK_RETRY_TOOLTIP`, not a literal: as a
+                literal it drifted until it claimed the prior answer's sealed
+                ancestor context IS carried into the branch, while the constant
+                that every post-click branch headline is written beside says it
+                is not. Two opposite claims about one click. */}
             {message.role === "assistant" && message.originatingPrompt ? (
               <button
                 type="button"
-                title="Regenerate in a bounded-context fork. The prior answer remains inspectable in the source conversation and its sealed ancestor context is carried into the branch."
+                title={FORK_RETRY_TOOLTIP}
                 onClick={onRetry}
                 disabled={branchDisabled}
               >Retry</button>
@@ -10756,8 +10843,24 @@ function MessageCard({
           <summary aria-label="Message actions">•••</summary>
           <div role="group" aria-label="Message actions">
             <button type="button" onClick={onCopy}>Copy</button>
+            {/* The same warning, as text a touch device can actually reach.
+                `.message-actions` is `display: none` under `(hover: none)`, so
+                the phone's Retry was this bare button and the only sentence
+                describing what it does lived in a `title` no touch device can
+                surface: a phone reader tapped Retry expecting a regenerate in
+                place and silently got a new branch. Rendered as a sibling
+                rather than inside the button so the control's accessible name
+                stays the one word "Retry". */}
             {message.role === "assistant" && message.originatingPrompt ? (
-              <button type="button" onClick={onRetry} disabled={branchDisabled}>Retry</button>
+              <>
+                <button
+                  type="button"
+                  onClick={onRetry}
+                  disabled={branchDisabled}
+                  aria-describedby={`retry-branch-note-${message.id}`}
+                >Retry</button>
+                <small class="message-actions-note" id={`retry-branch-note-${message.id}`}>{FORK_RETRY_TOOLTIP}</small>
+              </>
             ) : null}
             {message.role === "user" ? <button type="button" onClick={onEdit} disabled={branchDisabled}>Edit &amp; branch</button> : null}
             <button type="button" onClick={onBranch} disabled={branchDisabled}><Icon name="branch" size={14} /> Fork from here</button>
@@ -11023,7 +11126,27 @@ function ProfileManagerView({
                   { value: "local", label: "Local", description: "No remote inference proof is required" },
                   { value: "plaintext-remote", label: "Remote", description: "Permit any connected remote runtime" },
                   { value: "encrypted-unattested", label: "Encrypted", description: "Require encrypted remote inference" },
-                  { value: "encrypted-attested", label: "Attested", description: "Require verified endpoint evidence" },
+                  /*
+                   * Offered, and honest about being unreachable in this build.
+                   *
+                   * Nothing can produce an `encrypted-attested` posture while
+                   * strict endpoint proof is unavailable, so choosing it here
+                   * used to commit a profile that could never start a
+                   * conversation — while the Connection route, a thousand lines
+                   * away, spent a whole disclosure saying strict fail-closed is
+                   * unavailable. Two surfaces, opposite answers, and the
+                   * overclaiming one silently bricked the profile.
+                   *
+                   * Disabled rather than deleted: the capability is real and
+                   * half-built, the reason is the verifier's own words, and the
+                   * option returns by itself the day `available` flips.
+                   */
+                  {
+                    value: "encrypted-attested",
+                    label: "Attested",
+                    description: strictProofCapability.available ? "Require verified endpoint evidence" : strictProofCapability.reason,
+                    disabled: !strictProofCapability.available,
+                  },
                 ]} onChange={(minimumPosture) => setDraft({ ...draft, minimumPosture: minimumPosture as SecurityPosture })} /></label>
                 {draft.workspaceBinding === "workspace-id" ? <label><span>Workspace ID</span><input value={draft.workspaceId} maxLength={512} placeholder="vault+gdrive://…" onInput={(event) => setDraft({ ...draft, workspaceId: event.currentTarget.value })} /></label> : null}
               </div>
@@ -11088,6 +11211,18 @@ function SkillsManagerView({
   const scopedProfileId = scope === "global" ? selectedProfileId : scope;
   const profile = profiles.find((candidate) => candidate.profileId === scopedProfileId) ?? profiles[0]!;
   const [status, setStatus] = useState<string>();
+  /*
+   * The grid asks `domain.ts` the same question the session pin asks it. It
+   * used to recompute `on` / `inherit` / global-default itself, so a change to
+   * the precedence had to be made here as well to keep the card's "resolved on"
+   * badge honest about what the next conversation would actually load.
+   */
+  const decisions = useMemo(() => skillDecisionsFor(profile, catalog), [profile, catalog]);
+  const decisionBySkillId = useMemo(
+    () => new Map(decisions.map((decision) => [decision.skillId, decision] as const)),
+    [decisions],
+  );
+  const resolvedCount = decisions.filter((decision) => decision.enabled).length;
 
   async function updateGlobal(skillId: string, enabled: boolean): Promise<void> {
     setStatus(undefined);
@@ -11126,14 +11261,12 @@ function SkillsManagerView({
       <RouteBar routeId="skills" title="Skills" eyebrow="Resolved instruction modules" description={scope === "global" ? "Set global skill defaults. Enabled instructions are pinned into the next conversation manifest." : `Set inherit/on/off overrides for ${profile.name}. Existing conversations remain pinned.`} />
       <div class="skills-toolbar panel">
         {scope === "global" ? <div class="skill-select-field"><span>Preview resolution for</span><MenuSelect placement="down" ariaLabel="Preview profile resolution" value={profile.profileId} options={profiles.map((candidate) => ({ value: candidate.profileId, label: candidate.name }))} onChange={setSelectedProfileId} /></div> : <div><span class="eyebrow">Profile scope</span><strong>{profile.name}</strong></div>}
-        <div><span class="eyebrow">Effective set</span><strong>{effectiveSkillIds(profile, catalog).length} of {catalog.skills.length}</strong></div>
+        <div><span class="eyebrow">Effective set</span><strong>{resolvedCount} of {catalog.skills.length}</strong></div>
         <button class="small-button" type="button" onClick={() => void applyProfile()}>Switch to {profile.name}</button>
       </div>
       <div class="skill-grid">
         {catalog.skills.map((skill) => {
-          const globalEnabled = catalog.globalSkills[skill.skillId] ?? false;
-          const mode = profile.skillModes[skill.skillId] ?? "inherit";
-          const enabled = mode === "on" || (mode === "inherit" && globalEnabled);
+          const { mode, globallyEnabled: globalEnabled, enabled } = decisionBySkillId.get(skill.skillId)!;
           return (
             <article class={enabled ? "skill-card panel enabled" : "skill-card panel"} key={skill.skillId}>
               <header><span class="skill-glyph"><Icon name="skills" /></span><div><h2>{skill.name}</h2><code>{skill.skillId}</code></div><span class={enabled ? "skill-state on" : "skill-state"}>{enabled ? "resolved on" : "resolved off"}</span></header>
@@ -11193,9 +11326,10 @@ function RouteBar({ routeId, eyebrow, title, description, headingId }: {
   );
 }
 
-function EmptyState({ icon, title, body }: { icon: IconName; title: string; body: string }) {
-  return <div class="empty-state"><Icon name={icon} /><strong>{title}</strong><p>{body}</p></div>;
-}
+/* `EmptyState` moved to `./empty-state`. It was declared here, styled in
+   `routes.css`, and rendered by nothing — a private helper inside 11k lines
+   that no route could import, which is why ten routes drew their own
+   "nothing here yet" at four different heights instead. */
 
 function humanStatus(value: string): string {
   if (value === "thinking") return "Thinking";
@@ -11227,14 +11361,27 @@ function profileDraftForEditor(profile: ProfileRevision): ProfileEditorDraft {
   };
 }
 
+/**
+ * The resolved skill set, in the order the pin composes it.
+ *
+ * A thin read of `resolveSkillDecisions`, not a second answer: this used to
+ * restate the inherit/on/off precedence and sort with `localeCompare`, where
+ * `domain.ts` sorts with `asciiCompare` — so under a locale that collates skill
+ * IDs differently the count beside "Skills resolved" was derived from an order
+ * no manifest is ever composed in.
+ */
 function effectiveSkillIds(profile: ProfileRevision, catalog: ProfileCatalog): string[] {
-  return catalog.skills
-    .filter((skill) => {
-      const mode = profile.skillModes[skill.skillId] ?? "inherit";
-      return mode === "on" || (mode === "inherit" && Boolean(catalog.globalSkills[skill.skillId]));
-    })
-    .sort((left, right) => left.promptOrder - right.promptOrder || left.skillId.localeCompare(right.skillId))
-    .map((skill) => skill.skillId);
+  return skillDecisionsFor(profile, catalog)
+    .filter((decision) => decision.enabled)
+    .map((decision) => decision.skillId);
+}
+
+function skillDecisionsFor(profile: ProfileRevision, catalog: ProfileCatalog): readonly ResolvedSkillDecision[] {
+  return resolveSkillDecisions({
+    skillModes: profile.skillModes,
+    skills: catalog.skills,
+    globalSkills: catalog.globalSkills,
+  });
 }
 
 function receiptSummary(receipt: ConversationReceipt): string {

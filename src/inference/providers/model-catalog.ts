@@ -1,3 +1,4 @@
+import { deepFreeze } from "../../core/freeze";
 import {
   MAX_MODEL_CONTEXT_WINDOW_TOKENS,
   MAX_MODEL_OUTPUT_TOKENS,
@@ -12,7 +13,6 @@ import type { InferenceProviderCatalog } from "./provider-catalog";
 import {
   boundedText,
   canonicalTimestamp,
-  deepFreeze,
   httpsUrl,
   identifier,
   opaqueIdentifier,

@@ -1,3 +1,4 @@
+import { deepFreeze } from "../core/freeze";
 import type { JsonValue } from "../core/contracts";
 import type { DurableEvent, EventJournal, SessionRecord } from "../core/journal";
 
@@ -224,12 +225,4 @@ function boundedIdentifier(value: unknown): value is string {
 
 function assertIdentifier(value: string, label: string): void {
   if (!boundedIdentifier(value)) throw new TypeError(`${label} is invalid.`);
-}
-
-function deepFreeze<T>(value: T): T {
-  if (value && typeof value === "object" && !Object.isFrozen(value)) {
-    Object.freeze(value);
-    for (const nested of Object.values(value as Record<string, unknown>)) deepFreeze(nested);
-  }
-  return value;
 }

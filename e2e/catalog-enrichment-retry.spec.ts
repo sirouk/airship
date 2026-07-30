@@ -110,7 +110,7 @@ test("a refused management read is recoverable, and the recovery restores the av
   );
 
   await page.goto("/#connection");
-  await expect(page.getByRole("heading", { name: "Connect models", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Connection", exact: true, level: 1 })).toBeVisible();
   // The route header's ⓘ auto-opens on first visit and overlays the lead lane,
   // swallowing the first click aimed beneath it.
   await page.keyboard.press("Escape");

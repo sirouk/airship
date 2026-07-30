@@ -1,3 +1,4 @@
+import { deepFreeze } from "../../core/freeze";
 import type {
   InferenceAvailabilityLimits,
   InferenceAvailabilitySnapshot,
@@ -10,7 +11,6 @@ import type { InferenceModelCatalog } from "./model-catalog";
 import type { InferenceProviderCatalog } from "./provider-catalog";
 import {
   canonicalTimestamp,
-  deepFreeze,
   positiveInteger,
 } from "./validation";
 

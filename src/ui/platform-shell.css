@@ -125,7 +125,11 @@ button.status-seal:hover { border-color: var(--line-strong); background: var(--s
    component now owns the axis; this owns the edge it hangs from. */
 .preference-menu .menu-select-popover { right: 0; left: auto; min-width: min(22rem, calc(100vw - 2rem)); }
 /* A claim about where a person's data lives, not the ninth presentation row. */
-.preferences-dialog__divider { margin: 1.25rem 0 0; padding-top: .75rem; border-top: 1px solid var(--line-strong); color: var(--ink-muted); font-family: var(--font-mono); font-size: var(--fs-micro); letter-spacing: .11em; text-transform: uppercase; }
+.preferences-dialog__divider {
+  margin: 1.25rem 0 0;
+  padding-top: .75rem;
+  border-top: 1px solid var(--line-strong);
+}
 .preferences-dialog__divider + .preference-row { border-top: 0; }
 .profile-approval-preference { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .65rem 1rem; align-items: center; padding: .75rem 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .profile-approval-preference > div { display: grid; gap: .2rem; }
@@ -192,8 +196,22 @@ button.status-seal:hover { border-color: var(--line-strong); background: var(--s
  * measures 17px at every scale. `--type-scale` is the whole preference now,
  * which is also what stops x-large compounding 1.1875 × 1.25.
  */
-:root[data-corners="subtle"] { --radius-control: 6px; --radius-panel: 10px; }
-:root[data-density="comfortable"] .nav-item { min-height: 40px; }
+/*
+ * Two more dead rules stood here, and both told the reader a value the product
+ * does not use.
+ *
+ * `:root[data-corners="subtle"] { --radius-control: 6px; --radius-panel: 10px }`
+ * duplicated tokens.css's declaration of the same block at the same (0,2,0),
+ * and tokens.css is later in the barrel — so `subtle`, which is the shipped
+ * default, has always resolved to 5px/8px. Two files answering "how round is a
+ * panel" with different numbers is one file too many; the token sheet keeps
+ * the answer.
+ *
+ * `:root[data-density="comfortable"] .nav-item { min-height: 40px }` was the
+ * third answer to "how tall is a nav row", dead for the same reason against
+ * `:root[data-density] .nav-item` in tokens.css. The rail row height is the
+ * density token plus the nested override in shell.css, and nothing else.
+ */
 
 /*
  * Soft-keyboard compensation: the nav's half.
@@ -219,9 +237,36 @@ button.status-seal:hover { border-color: var(--line-strong); background: var(--s
   .trust-hub-tabs button { min-height: 44px; padding-inline: 12px; border: 0; border-radius: 0; background: transparent; white-space: nowrap; }
   .trust-hub-tabs button.is-active { border: 0; background: transparent; box-shadow: inset 0 -2px var(--accent); }
   .trust-hub-tabs button:focus-visible { outline: 2px solid var(--accent-bright); outline-offset: -3px; }
-  .platform-scrim { place-items: end center; padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
-  .command-palette, .preferences-dialog, .trust-sheet { width: 100%; max-height: min(84vh, 44rem); border-radius: var(--radius-panel) var(--radius-panel) 0 0; }
+  /*
+   * Docked to the visual viewport, not the layout viewport.
+   *
+   * These three are bottom sheets on a phone, and the palette autofocuses its
+   * input the moment it opens. `.platform-scrim` is `position: fixed; inset: 0`
+   * with no transformed ancestor, so its containing block is the layout
+   * viewport — the one this repo documents as never shrinking when a soft
+   * keyboard opens (`routes.css`, `#app` block). Measured at 390x844 with a
+   * 290px keyboard: the sheet's floor stayed at y=844, so the lower half of
+   * `.command-palette__results` and the whole footer sat under the keyboard,
+   * and nothing scrolls the active row out from under it. `#app` already
+   * shrinks by this variable; the scrim is fixed, so it has to read it too.
+   */
+  .platform-scrim {
+    place-items: end center;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    padding-bottom: calc(env(safe-area-inset-bottom) + var(--visual-viewport-bottom, 0px));
+  }
+  /* `100%` is the third arm because the first two measure the *layout*
+     viewport: 84vh of an 844px phone is 709px, which with the keyboard open
+     would hang 155px off the top of the screen instead of under it. The scrim's
+     content box is already the visual viewport, so a percentage of it is the
+     room that actually exists. */
+  .command-palette, .preferences-dialog, .trust-sheet { width: 100%; max-height: min(84vh, 44rem, 100%); border-radius: var(--radius-panel) var(--radius-panel) 0 0; }
   .preferences-dialog { -webkit-overflow-scrolling: touch; }
+  /* A capped sheet has to give the height back from the scrolling middle, not
+     from the footer: `overflow: hidden` on the palette clipped the ⏎/Esc
+     legend rather than shortening the results list. */
+  .command-palette { display: flex; flex-direction: column; }
+  .trust-sheet { overflow-y: auto; overscroll-behavior: contain; }
   .preference-menu .menu-select-popover {
     position: fixed;
     inset: auto 8px max(8px, env(safe-area-inset-bottom)) 8px;
@@ -229,7 +274,7 @@ button.status-seal:hover { border-color: var(--line-strong); background: var(--s
     min-width: 0;
     max-width: none;
   }
-  .command-palette__results { max-height: 55vh; }
+  .command-palette__results { flex: 1 1 auto; min-height: 0; max-height: 55vh; }
   .preference-row { grid-template-columns: 1fr; gap: .35rem; padding: .55rem 0; }
   .profile-approval-preference { grid-template-columns: 1fr; }
   .profile-approval-preference > button { justify-self: stretch; }

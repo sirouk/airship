@@ -182,6 +182,18 @@ test("composer growth is content-driven, bounded, and keeps approval disclosure 
   expectApprovalAnchored(disclosed, multiline, "open policy disclosure");
 
   await page.keyboard.press("Escape");
+  /*
+   * Wait for the listbox to hand focus back before clearing.
+   *
+   * `MenuSelect` restores focus to its trigger inside a `requestAnimationFrame`
+   * so the closing panel is gone before the ring moves. That frame ends in a
+   * render, and a render of a controlled textarea re-applies the value in state
+   * — so a `fill("")` issued inside the same frame had its DOM write reverted
+   * about half the time, and the twelve lines came back. Escape-then-clear is
+   * one frame apart for a person and zero for a driver; this waits for the
+   * boundary the product actually defines rather than sleeping through it.
+   */
+  await expect(approval).toBeFocused();
   await textarea.fill("");
   // Preact reconciles the controlled value after the browser's input event.
   // Establish that boundary before measuring its layout; otherwise a loaded

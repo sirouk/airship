@@ -206,7 +206,7 @@ describe("release gate", () => {
     expect(() => assertDocumentedBudgetMeasurements(source.replace("74,690 B\n  // raw", "94,690 B\n  // raw")))
       .toThrow(/optionalProofSurface: its comment records 94,690 B raw, above the 74\.00 KiB raw ceiling/u);
     // …and a raise cannot be laundered by deleting the number it contradicts.
-    expect(() => assertDocumentedBudgetMeasurements(source.replace("Measured 73,436 B raw / 23,042", "Weighed at 73,436 B and 23,042")))
+    expect(() => assertDocumentedBudgetMeasurements(source.replace("Measured 77,789 B raw / 24,561 B gzip", "Weighed at 77,789 B and 24,561 B")))
       .toThrow(/optionalWorkspaceWorkbench: its comment no longer records a measured raw\/gzip pair/u);
 
     /*
@@ -220,7 +220,7 @@ describe("release gate", () => {
     for (const [name, ceiling, granted] of [
       ["optionalMemoryView", "gzip: 16 * 1024", "gzip: 17 * 1024"],
       ["optionalProofSurface", "gzip: 24 * 1024", "gzip: 25 * 1024"],
-      ["optionalWorkspaceWorkbench", "gzip: 23 * 1024", "gzip: 24 * 1024"],
+      ["optionalWorkspaceWorkbench", "gzip: 24 * 1024", "gzip: 25 * 1024"],
       ["deferredCapabilities", "gzip: 118 * 1024", "gzip: 120 * 1024"],
     ]) {
       const raised = source.replace(new RegExp(`^  ${name}: .*$`, "mu"), (line) => line.replace(ceiling, granted));

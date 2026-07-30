@@ -1,6 +1,7 @@
 import type { FileSystemTree, WebContainer, WebContainerProcess } from "@webcontainer/api";
 import type { JsonValue } from "../core/contracts";
 import { sha256 } from "../core/hash";
+import { randomUuid } from "../core/id";
 import { decodeWorkspaceBytes, encodeWorkspaceBytes, workspaceContentByteLength } from "../workspace/content-codec";
 import { isWorkspaceControlPlanePath, normalizeWorkspacePath, WorkspaceConflictError, type WorkspacePort } from "../workspace/contracts";
 import { emitExecutionOutput, type ExecutionAdapter, type ExecutionRequest, type ExecutionResult } from "./runtime-registry";
@@ -284,7 +285,13 @@ async function preparePageProject(
       const oldest = [...store.projects].sort((left, right) => left.lastUsed - right.lastUsed)[0]!;
       await discardPageProject(container, store, oldest);
     }
-    const id = createJobId();
+    // Job roots are `jobs/<id>` on a shared WebContainer FS; the local fallback
+    // this replaces produced `<epoch>-<Math.random>` on LAN origins (npm run
+    // dev:lan), where the browser omits the platform UUID API, so two jobs
+    // started in the same millisecond collided on a Math.random draw instead of
+    // on 122 crypto-random bits. core/id.ts is the module with a test pinning
+    // that fallback's shape.
+    const id = randomUuid();
     project = {
       id,
       jobRoot: `jobs/${id}`,
@@ -632,11 +639,6 @@ function relativePath(path: string, root: string): string {
 function relativeSegments(path: string, root: string): string[] {
   const relative = relativePath(path, root);
   return relative ? relative.split("/") : [];
-}
-
-function createJobId(): string {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
-  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 function throwIfAborted(signal: AbortSignal): void {

@@ -50,8 +50,11 @@ const routes: readonly Route[] = Object.freeze([
   // `centredMeasure` symmetry branch below is retained because the lane list
   // is still on its own measure and the flag still fires the moment a route
   // puts its heading back inside one.
-  { hash: "connection", label: "Connection", heading: /^Connect models$/i, centredMeasure: true },
-  { hash: "account", label: "Account", heading: /^Account standing$/i },
+  // AMENDED: on both rows the heading is now the `label` beside it. These
+  // were the only two routes whose <h1> disagreed with the word the rail,
+  // the palette, the Trust hub tab and the More sheet used to get here.
+  { hash: "connection", label: "Connection", heading: /^Connection$/iu, centredMeasure: true },
+  { hash: "account", label: "Account", heading: /^Account$/iu },
 ]);
 
 test("every desktop and mobile route remains usable in the live local lab", async ({ page }, testInfo) => {
@@ -64,8 +67,17 @@ test("every desktop and mobile route remains usable in the live local lab", asyn
   page.on("pageerror", (error) => runtimeErrors.push(`[${activeRoute}] pageerror: ${error.message}`));
   page.on("console", (message) => {
     if (message.type() !== "error") return;
+    /*
+     * 404 and 412 are the conditional-write protocol answering. 403 joined them
+     * when the Vault probe began reclaiming the objects it creates: the lab's
+     * MinIO credential grants Get/Put/List and not Delete, so every probe key
+     * is refused. That refusal is a supported deployment, not a fault — the
+     * reclamation receipt records the retained keys and the runtime reports
+     * `deletionAvailableInRuntime: false` rather than claiming a sweep it did
+     * not get — and the browser logs the response either way.
+     */
     const expectedConditionalS3Response = message.location().url.startsWith("http://127.0.0.1:9900/")
-      && /status of (?:404|412)/u.test(message.text());
+      && /status of (?:403|404|412)/u.test(message.text());
     /*
      * The Chutes sign-in readiness probe, answering.
      *

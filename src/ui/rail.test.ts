@@ -1,6 +1,7 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { RAIL_RECENT_LIMIT, railRowFor, rovingKey } from "./rail";
-import { railTraversal, type NavigationView } from "./navigation-model";
+import { RAIL_RECENT_LIMIT, railCurrentHint, railRowFor, railStandInFor, rovingKey } from "./rail";
+import { destinationLabel, railTraversal, type NavigationView } from "./navigation-model";
 
 describe("the shortcut's size", () => {
   it("lists the same ten conversations the rail list did", () => {
@@ -56,5 +57,76 @@ describe("the rail's single tab stop", () => {
   it("agrees with the filing `railRowFor` reports", () => {
     expect(railRowFor("terminal")?.id).toBe("workspace");
     expect(railRowFor("sessions")).toBeUndefined();
+  });
+});
+
+/**
+ * Every view marks something on the desktop rail.
+ *
+ * Measured: `#context`, `#skills` and `#capabilities` are legal hashes with
+ * routes of their own and no rail row, and the desktop rail showed no
+ * current-page state at all on all three — while the phone's bottom bar marked
+ * every one of them through `More`. The phone signal is untouched; this is the
+ * rail growing the same one.
+ */
+describe("the rail's you-are-here state", () => {
+  const everyView: readonly NavigationView[] = [
+    "chat", "sessions", "workspace", "editor", "terminal", "memory", "context",
+    "profiles", "capabilities", "skills", "vault", "billing", "proof", "access",
+  ];
+  const source = readFileSync(new URL("./rail.tsx", import.meta.url), "utf8");
+  const railKeys = new Set<string>([...railTraversal({ workspace: true }), "profiles"]);
+
+  it("marks a control for every one of the fourteen views", () => {
+    for (const view of everyView) {
+      expect(railKeys, `${view} marks a rail control`).toContain(railStandInFor(view));
+    }
+  });
+
+  it("keeps a nested row marking its parent, and never re-parents a row of its own", () => {
+    expect(railStandInFor("editor")).toBe("workspace");
+    expect(railStandInFor("terminal")).toBe("workspace");
+    // Account is a rail row in its own right, not a sub-page of a connection
+    // method. Standing on it must not light Connection up.
+    expect(railStandInFor("billing")).toBe("billing");
+    expect(railStandInFor("access")).toBe("access");
+  });
+
+  it("stands Memory in for its index and Profiles in for its two subroutes", () => {
+    expect(railStandInFor("context")).toBe("memory");
+    expect(railStandInFor("skills")).toBe("profiles");
+    expect(railStandInFor("capabilities")).toBe("profiles");
+    expect(railStandInFor("sessions")).toBe("chat");
+  });
+
+  it("names the live route wherever the stand-in's own label does not", () => {
+    // The same test the phone band makes before describing its current control.
+    for (const view of ["skills", "capabilities", "sessions"] as const) {
+      expect(railCurrentHint(view), view).toBe(destinationLabel(view));
+    }
+    for (const view of ["chat", "workspace", "editor", "profiles", "billing"] as const) {
+      expect(railCurrentHint(view), view).toBeUndefined();
+    }
+  });
+
+  it("answers #context exactly as it answers #memory, because it renders that route", () => {
+    /*
+     * `#context` opens the Memory route at its Index tab — same component, same
+     * `<h1>Memory</h1>`. The rail row it marks is Memory's, and it marks it as
+     * the page rather than as the page's container: a row reading one rung
+     * weaker than the heading beside it is a third answer to one question. No
+     * hint either, because "Current page: Context" would name a word the screen
+     * does not contain — the defect this whole batch exists to remove.
+     */
+    expect(railStandInFor("context")).toBe(railStandInFor("memory"));
+    expect(railCurrentHint("context")).toBeUndefined();
+    expect(source).toContain("const active = view === row.id || (railStandInFor(view) === row.id && !rendersOwnRoute(view));");
+  });
+
+  it("does not pay for the desktop signal by removing the phone's", () => {
+    // "Hide it on a phone" is never the fix, and neither is its inverse.
+    expect(readFileSync(new URL("./mobile-navigation.tsx", import.meta.url), "utf8"))
+      .toContain('aria-current={current ? "page" : undefined}');
+    expect(source).toContain('aria-describedby={childActive && currentHint ? CURRENT_HINT_ID : undefined}');
   });
 });

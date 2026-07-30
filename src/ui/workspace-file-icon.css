@@ -22,7 +22,7 @@
 .workspace-file-icon text {
   fill: currentColor;
   font-family: var(--font-mono);
-  font-weight: 700;
+  font-weight: var(--fw-title);
   letter-spacing: -.04em;
 }
 

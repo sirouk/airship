@@ -1,17 +1,17 @@
 /* The route owns its height so the 1fr emulator row absorbs the slack instead
    of the page scrolling behind the terminal's own scrollback: the meta strip
    carrying `session.detail` measured y=1002 in an 842px viewport. */
-.terminal-route{display:grid;grid-template-rows:auto auto auto minmax(14rem,1fr) auto;gap:10px;width:100%;height:100%;min-height:min-content;min-width:0}
+.terminal-route{display:grid;grid-template-rows:auto auto auto minmax(14rem,1fr) auto auto;gap:10px;width:100%;height:100%;min-height:min-content;min-width:0}
 .terminal-route__header{margin-bottom:2px}
 .terminal-route__actions,.terminal-panel__bar>div{display:flex;align-items:center;gap:8px}
-.terminal-route button{display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:44px;border:1px solid var(--line-strong);border-radius:var(--radius-control);background:var(--surface);color:var(--ink);font:inherit}
+.terminal-route button{display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:var(--touch-target);border:1px solid var(--line-strong);border-radius:var(--radius-control);background:var(--surface);color:var(--ink);font:inherit}
 .terminal-route button:hover:not(:disabled){border-color:var(--accent);background:var(--surface-raised)}
 .terminal-route__actions button{padding:0 11px;font-size:var(--fs-caption)}
 
 /* One 44px runtime row. Every fact the 183px band carried on its face stays on
    the face; the boundary paragraph is what the summary opens. */
 .terminal-route__setup{overflow:hidden;border:1px solid var(--line);border-radius:var(--radius-control);background:color-mix(in srgb,var(--surface) 84%,transparent)}
-.terminal-route__setup>summary{display:flex;flex-wrap:wrap;gap:4px 14px;align-items:center;min-height:44px;padding:5px 11px;color:var(--ink-muted);font-size:var(--fs-caption);cursor:pointer;list-style:none}
+.terminal-route__setup>summary{display:flex;flex-wrap:wrap;gap:4px 14px;align-items:center;min-height:var(--touch-target);padding:5px 11px;color:var(--ink-muted);font-size:var(--fs-caption);cursor:pointer;list-style:none}
 .terminal-route__setup>summary::-webkit-details-marker{display:none}
 .terminal-route__setup>summary::after{margin-left:auto;color:var(--ink-faint);content:"⌄"}
 .terminal-route__setup[open]>summary::after{content:"⌃"}
@@ -37,11 +37,11 @@
    hover is a control a coarse pointer can never find, so opacity stays 1 and
    the affordance is visible before the first tap rather than after it. */
 @media(pointer:coarse){.terminal-tab .terminal-tab__rename{opacity:1}}
-.terminal-tab__name-input{width:9rem;min-height:44px;padding:5px 8px;border:0;outline:0;background:var(--surface-raised);color:var(--ink);font:inherit}
+.terminal-tab__name-input{width:9rem;min-height:var(--touch-target);padding:5px 8px;border:0;outline:0;background:var(--surface-raised);color:var(--ink);font:inherit}
 .terminal-tab__name-input:focus{box-shadow:inset 0 0 0 1px var(--accent)}
 
 .terminal-panel{display:grid;grid-template-rows:auto minmax(14rem,1fr) auto;min-height:0;border:1px solid var(--line-strong);border-radius:var(--radius-panel);overflow:hidden;background:#0b0e0f;box-shadow:var(--shadow)}
-.terminal-panel__bar{display:flex;justify-content:space-between;gap:12px;align-items:center;min-height:44px;padding:4px 10px;border-bottom:1px solid #32383b;background:#15191b;color:#d9d3c7;font-size:var(--fs-caption)}
+.terminal-panel__bar{display:flex;justify-content:space-between;gap:12px;align-items:center;min-height:var(--touch-target);padding:4px 10px;border-bottom:1px solid #32383b;background:#15191b;color:#d9d3c7;font-size:var(--fs-caption)}
 .terminal-panel__bar>div:first-child{min-width:0}
 .terminal-panel__bar>div:last-child{flex:0 1 auto;min-width:0;overflow-x:auto;scrollbar-width:thin}
 .terminal-panel__bar code{overflow:hidden;color:#9ba6aa;text-overflow:ellipsis;white-space:nowrap}
@@ -66,7 +66,7 @@
 .terminal-panel__popover ol{display:grid;gap:6px;margin:9px 0 0;padding:0;list-style:none}
 .terminal-panel__history li{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:9px;align-items:center}
 .terminal-panel__history code{overflow-wrap:anywhere;white-space:pre-wrap}
-.terminal-panel__history button{min-height:44px;padding:4px 10px;background:#1c2224;border-color:#3b4448;font-size:var(--fs-micro)}
+.terminal-panel__history button{min-height:var(--touch-target);padding:4px 10px;background:#1c2224;border-color:#3b4448;font-size:var(--fs-micro)}
 .terminal-panel__lineage dl{display:grid;gap:4px;margin:0}
 .terminal-panel__lineage dl>div{display:grid;grid-template-columns:5.25rem minmax(0,1fr);gap:8px}
 .terminal-panel__lineage dt{color:#9ba6aa}
@@ -74,6 +74,25 @@
 .terminal-panel__lineage li{display:grid;gap:2px;padding-top:6px;border-top:1px solid #32383b}
 .terminal-panel__lineage li>span,.terminal-panel__lineage li>small,.terminal-panel__lineage li>code{overflow-wrap:anywhere}
 .terminal-panel__lineage li>small{color:#9ba6aa;line-height:1.4}
+/*
+ * The route's Git command row: the only human path to the shared bridge.
+ *
+ * `src/git/terminal-commands.ts` implements seventeen verb families against the
+ * browser-owned `.git` and nothing in the app called it, so stash, merge, tag,
+ * reset, restore, rev-parse and remote management had no reachable surface on
+ * any device. Its output is its own region and deliberately never the emulator
+ * buffer: writing bridge answers into the PTY scrollback is what made the
+ * WebContainer shell look as though it had a git binary.
+ */
+.terminal-git{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:6px 9px;align-items:center;padding:7px 10px;border:1px solid var(--line);border-radius:var(--radius-control);background:color-mix(in srgb,var(--surface) 84%,transparent)}
+.terminal-git>label{display:inline-flex;align-items:center;gap:7px;color:var(--ink);font-size:var(--fs-caption);white-space:nowrap}
+.terminal-git__command{min-width:0;min-height:var(--touch-target);padding:5px 10px;border:1px solid var(--line-strong);border-radius:var(--radius-control);background:var(--surface);color:var(--ink);font-family:"SFMono-Regular",Consolas,"Liberation Mono",monospace;font-size:var(--fs-caption)}
+.terminal-git>button{padding:0 14px;font-size:var(--fs-caption)}
+.terminal-git>p{grid-column:1 / -1;max-width:92ch;margin:0;color:var(--ink-muted);font-size:var(--fs-micro);line-height:1.45}
+.terminal-git__notice{grid-column:1 / -1}
+.terminal-git__notice>pre{max-height:14rem;margin:0;overflow:auto;padding:9px 11px;border:1px solid var(--line-strong);border-radius:var(--radius-control);background:#0b0e0f;color:#d9d3c7;font-size:var(--fs-micro);line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere}
+.terminal-git__notice>pre[data-failed=true]{border-color:var(--v-failed);color:#f0d9d3}
+
 .terminal-route__footer{display:flex;align-items:center;gap:8px;min-height:30px;color:var(--ink-muted);font-size:var(--fs-caption)}
 .terminal-empty{display:grid;place-items:center;align-content:center;gap:8px;min-height:18rem;border:1px dashed var(--line-strong);border-radius:var(--radius-panel);text-align:center}
 .terminal-empty h2,.terminal-empty p{margin:0}
@@ -100,9 +119,9 @@
 .terminal-route--dock .terminal-route__footer>span{overflow:hidden;text-overflow:ellipsis}
 
 @media(max-width:760px){
-  .terminal-route{grid-template-rows:auto auto auto minmax(9rem,1fr) auto;gap:8px}
+  .terminal-route{grid-template-rows:auto auto auto minmax(9rem,1fr) auto auto;gap:8px}
   .terminal-route__actions{display:grid;grid-template-columns:1fr 1fr;width:100%}
-  .terminal-route__actions button{min-height:44px;font-size:var(--fs-micro);white-space:nowrap}
+  .terminal-route__actions button{min-height:var(--touch-target);font-size:var(--fs-micro);white-space:nowrap}
   /* The summary keeps its stacked label/detail shape on a phone: the runtime
      name on one line, what it is not on the next, then the fact chips. */
   .terminal-route__setup>summary{display:grid;grid-template-columns:minmax(0,1fr);gap:3px;padding:7px 10px}
@@ -120,14 +139,20 @@
      an empty 44px box on every phone. The decorative marks are already
      aria-hidden, so the exception is exactly the set that must survive. */
   .terminal-panel__bar button span:not([aria-hidden="true"]){display:none}
-  .terminal-panel__bar button{min-width:44px;min-height:44px}
+  .terminal-panel__bar button{min-width:var(--touch-target);min-height:var(--touch-target)}
   /* 44px square like every other phone control in this block: the rename
      glyph was min-width:34px with no min-height at all, the one tab action
      a thumb could miss. Opacity rises with it — see the coarse-pointer rule
      above for why it cannot wait for a hover that never comes. */
-  .terminal-tab .terminal-tab__rename{min-width:44px;min-height:44px;opacity:1}
+  .terminal-tab .terminal-tab__rename{min-width:var(--touch-target);min-height:var(--touch-target);opacity:1}
   .terminal-emulator{padding:6px}
-  .terminal-panel__meta summary{min-height:44px;display:flex;align-items:center}
+  /* The label owns its own line so the field keeps a usable measure for a
+     command like `git worktree add <path> <branch>` at 390px. */
+  .terminal-git{grid-template-columns:minmax(0,1fr) auto;padding:6px 8px}
+  .terminal-git>label{grid-column:1 / -1}
+  .terminal-git>button{min-width:var(--touch-target)}
+  .terminal-git__notice>pre{max-height:11rem}
+  .terminal-panel__meta summary{min-height:var(--touch-target);display:flex;align-items:center}
   .terminal-panel__meta{display:grid;gap:4px}
   .terminal-panel__meta-actions{justify-content:flex-end;gap:12px}
   .terminal-panel__popover{width:min(34rem,calc(100vw - 2rem))}
@@ -136,8 +161,12 @@
   .terminal-dock__identity{display:grid;grid-template-columns:auto minmax(0,1fr);align-content:center;gap:2px 6px}
   .terminal-dock__identity>small{grid-column:1 / -1;max-width:13rem}
   .terminal-dock__identity>span{grid-column:1 / -1}
-  .terminal-dock__actions{display:grid;grid-template-columns:repeat(2,44px);gap:3px}
-  .terminal-dock__actions button{min-width:44px;min-height:38px;padding:2px}
+  /* One row of 44px squares rather than a 2×2 block of 44×38: "Open full
+     Terminal view" measured 44×38 here, under the floor on the axis a fingertip
+     has to find. A single auto-flow row also survives a toolbar that renders
+     three actions instead of four without leaving a hole. */
+  .terminal-dock__actions{display:grid;grid-auto-flow:column;grid-auto-columns:44px;align-content:center;gap:3px}
+  .terminal-dock__actions button{min-width:var(--touch-target);min-height:var(--touch-target);padding:2px}
   .terminal-dock__actions button>span:last-child{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
   .terminal-route--dock .terminal-panel__bar{padding-inline:5px}
   .terminal-route--dock .terminal-panel__meta{grid-template-columns:minmax(0,1fr);padding-inline:7px}

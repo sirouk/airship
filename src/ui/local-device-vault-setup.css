@@ -50,13 +50,10 @@
   color: var(--v-verified);
 }
 
-/* Brass encodes "you are here" or "act here". A category label is neither. */
+/* Type comes from the shared `.eyebrow` recipe in shell.css; only the box is
+   local. This label was one of 48 copies of that recipe. */
 .local-device-vault__eyebrow {
   margin: 0;
-  color: var(--ink-muted);
-  font: var(--fw-strong) var(--fs-micro)/1.2 var(--font-mono);
-  letter-spacing: .11em;
-  text-transform: uppercase;
 }
 
 .local-device-vault__setup,
@@ -243,7 +240,7 @@
   padding: 13px 14px;
   cursor: pointer;
   color: var(--ink);
-  font-weight: 720;
+  font-weight: var(--fw-title);
 }
 
 .local-device-vault__recover > div,
@@ -293,7 +290,7 @@
   display: grid;
   gap: 6px;
   min-width: 0;
-  font-weight: 650;
+  font-weight: var(--fw-title);
 }
 
 .local-device-vault__restore fieldset {
@@ -312,10 +309,6 @@
   width: 100%;
   margin-bottom: var(--sp-2);
   padding: 0;
-  color: var(--ink-muted);
-  font: var(--fw-strong) var(--fs-caption)/1.2 var(--font-mono);
-  letter-spacing: .11em;
-  text-transform: uppercase;
 }
 
 .local-device-vault__restore legend + * { clear: both; }

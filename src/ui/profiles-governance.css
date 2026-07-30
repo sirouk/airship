@@ -39,13 +39,6 @@
   border-left: 0;
 }
 
-.profile-governs__cell small {
-  color: var(--ink-muted, #9fa5a3);
-  font: var(--fw-strong, 600) var(--fs-micro)/1.2 var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-  letter-spacing: 0.11em;
-  text-transform: uppercase;
-}
-
 /*
  * The value wraps; it never ellipsises.
  *
@@ -58,7 +51,7 @@
  */
 .profile-governs__cell strong {
   font-size: var(--fs-meta);
-  font-weight: var(--fw-strong, 600);
+  font-weight: var(--fw-strong);
   line-height: 1.3;
   overflow-wrap: anywhere;
 }

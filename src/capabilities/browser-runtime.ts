@@ -10,6 +10,8 @@
  * fixtures here avoids loading a feature-detection package on the startup path.
  */
 
+import { deepFreeze } from "../core/freeze";
+
 export type BrowserProbeState = "available" | "unavailable" | "failed";
 /**
  * How strong the observation was — and, for the two refusal values, *why* the
@@ -970,11 +972,4 @@ function defaultLifecycle(): BrowserCapabilityLifecycle {
         }
       : undefined,
   });
-}
-
-function deepFreeze<T>(value: T): T {
-  if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
-  Object.freeze(value);
-  for (const child of Object.values(value as Record<string, unknown>)) deepFreeze(child);
-  return value;
 }

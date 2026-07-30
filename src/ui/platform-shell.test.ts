@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
-import { applyPreferenceOverrides, approvalModeDescription, armBeforeUnloadGuard, scheduleTrailingValue, unloadWouldLoseWork, buildPaletteEntries, DEFAULT_PREFERENCES, filterPaletteEntries, loadPreferenceOverrides, loadRecentSessionPaletteSources, durabilityOptionLabel, durabilityOptions, durabilityRowNote, navigationJumpForChord, publishVisualViewportOffset, recentSessionPaletteSources, resolveDefaultVaultBackend, VAULT_BACKENDS, savePreferenceOverrides, trustAxesInScope, TRUST_SCOPE_BANDS, worstTrustAxis } from "./platform-shell";
+import { applyPreferenceOverrides, approvalModeDescription, armBeforeUnloadGuard, scheduleTrailingValue, unloadWouldLoseWork, buildPaletteEntries, DEFAULT_PREFERENCES, filterPaletteEntries, loadPreferenceOverrides, loadRecentSessionPaletteSources, durabilityOptionLabel, durabilityOptions, durabilityRowNote, NAVIGATION_JUMPS, navigationChordHint, navigationJumpForChord, publishVisualViewportOffset, recentSessionPaletteSources, resolveDefaultVaultBackend, VAULT_BACKENDS, savePreferenceOverrides, trustAxesInScope, TRUST_SCOPE_BANDS, TRUST_TABS, worstTrustAxis } from "./platform-shell";
 import type { SlashCommandDescriptor } from "../commands/types";
 import { CANONICAL_DESTINATIONS } from "./navigation-model";
 
@@ -22,6 +22,25 @@ describe("platform shell contracts", () => {
     const expected = CANONICAL_DESTINATIONS.flatMap((item) => [item.id, ...item.nested.map((nested) => nested.id)]);
     for (const id of expected) expect(entries.some((entry) => entry.id === `view:${id}`)).toBe(true);
     expect(entries.some((entry) => entry.id === "settings")).toBe(true);
+  });
+
+  it("builds the Trust hub strip out of the navigation table, not a fourth set of literals", () => {
+    /*
+     * The rail, the palette and the More sheet already read
+     * `CANONICAL_DESTINATIONS`; this strip retyped the same four rows, on the
+     * phone, directly above the two headings that had drifted from it
+     * ("Connect models", "Account standing"). Asserted against the table rather
+     * than against a copy of the four labels — a test that restates the
+     * literals proves only that two copies agree.
+     */
+    const trust = CANONICAL_DESTINATIONS
+      .filter((destination) => destination.group === "Trust")
+      .flatMap((destination) => [destination, ...destination.nested]);
+    expect(TRUST_TABS.map((tab) => tab.view)).toEqual(trust.map((destination) => destination.id));
+    expect(TRUST_TABS.map((tab) => tab.label)).toEqual(trust.map((destination) => destination.label));
+    // The strip's accessible name counts them in words, so the count is pinned
+    // to the table that now produces it.
+    expect(TRUST_TABS).toHaveLength(4);
   });
 
   it("filters across labels, hashes, group, and keywords", () => {
@@ -89,8 +108,39 @@ describe("platform shell contracts", () => {
     // tag, so a wrong tag is wrong user-facing copy: the route lists the active
     // profile's conversations, never the whole journal.
     const entries = buildPaletteEntries({ navigate() {}, openPreferences() {} });
-    expect(entries.find((entry) => entry.id === "view:sessions")?.description).toBe("Chat · Profile scope");
+    // The chord is appended from NAVIGATION_JUMPS, never retyped here: a legend
+    // maintained by hand is how a printed shortcut outlives its binding.
+    expect(entries.find((entry) => entry.id === "view:sessions")?.description)
+      .toBe(`Chat · Profile scope · ${navigationChordHint("sessions")}`);
     expect(filterPaletteEntries(entries, "global").map((entry) => entry.label)).not.toContain("All conversations");
+  });
+
+  it("prints every navigation chord on the row it opens", () => {
+    /*
+     * Eight `g` chords shipped with no discovery surface anywhere: the palette
+     * footer listed only ↑↓ and ↵, and ⌘K/⌘\ were named only in `title`
+     * tooltips a touch user never sees. A keyboard-first user had no way to
+     * learn that eight-ninths of the app's keyboard vocabulary existed.
+     */
+    const entries = buildPaletteEntries({ navigate() {}, openPreferences() {} });
+    expect(entries.find((entry) => entry.id === "view:chat")?.description).toMatch(/ · g c$/u);
+    expect(entries.find((entry) => entry.id === "view:proof")?.description).toMatch(/ · g t$/u);
+
+    // Every bound chord has a printed home. `x: "context"` had none at all —
+    // #context is excluded from CanonicalDestinationId, so it appeared in no
+    // rail row, no More entry and no palette entry.
+    for (const [key, view] of Object.entries(NAVIGATION_JUMPS)) {
+      const printed = entries.filter((entry) => entry.description.endsWith(` · g ${key}`));
+      expect(printed.length, `g ${key} (${view}) is printed on a palette row`).toBeGreaterThan(0);
+    }
+
+    // …and the row it prints on is the row it opens.
+    const visited: string[] = [];
+    const wired = buildPaletteEntries({ navigate(view) { visited.push(view); }, openPreferences() {} });
+    for (const [key, view] of Object.entries(NAVIGATION_JUMPS)) {
+      wired.find((entry) => entry.description.endsWith(` · g ${key}`))?.run();
+      expect(visited.at(-1), `g ${key} opens ${view}`).toBe(view);
+    }
   });
 
   it("states what each approval mode really permits, without borrowed confinement", () => {

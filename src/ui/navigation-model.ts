@@ -230,12 +230,24 @@ const RAIL_LAYOUT: readonly Readonly<{
   }),
 ]);
 
-function railDestination(id: NavigationView): Readonly<{ label: string; scope: NavigationScope }> {
+/**
+ * The table row a view is filed under, canonical or nested.
+ *
+ * One walk, because "what is this destination called" and "what does the rail
+ * put in this row" are the same question asked by two callers.
+ */
+function filedDestination(view: NavigationView): CanonicalDestination | NestedDestination | undefined {
   for (const destination of CANONICAL_DESTINATIONS) {
-    if (destination.id === id) return destination;
-    for (const nested of destination.nested) if (nested.id === id) return nested;
+    if (destination.id === view) return destination;
+    for (const nested of destination.nested) if (nested.id === view) return nested;
   }
-  throw new Error(`No navigation destination named ${id}`);
+  return undefined;
+}
+
+function railDestination(id: NavigationView): Readonly<{ label: string; scope: NavigationScope }> {
+  const filed = filedDestination(id);
+  if (!filed) throw new Error(`No navigation destination named ${id}`);
+  return filed;
 }
 
 export const RAIL_SECTIONS: readonly RailSection[] = Object.freeze(RAIL_LAYOUT.map((section) => Object.freeze({
@@ -339,6 +351,37 @@ export function mobilePrimaryControlForView(view: NavigationView): MobilePrimary
 
 export function canonicalParentForView(view: NavigationView): CanonicalDestinationId {
   return PARENT_BY_VIEW[view];
+}
+
+/**
+ * The views that own a route and an `<h1>` but deliberately no navigation entry.
+ *
+ * `context` is Memory's index tab, not a rail row and not a palette entry;
+ * filing it in `CANONICAL_DESTINATIONS` to give it a name would give it both.
+ * It still needs one canonical name — it is a legal hash a person can be
+ * standing on — so it is named here, outside the table the navigation surfaces
+ * enumerate, rather than left for its route file to invent.
+ */
+const UNFILED_VIEW_LABELS: Readonly<Partial<Record<NavigationView, string>>> = Object.freeze({
+  context: "Context",
+});
+
+/**
+ * What a destination is called, wherever it is named.
+ *
+ * The rail, the command palette and the mobile More sheet all read the table
+ * above; two `<RouteHeader>` titles did not, and both renamed the destination
+ * on arrival. `#connection` was "Connection" in every navigation surface and
+ * "Connect models" once you were standing on it; `#account` was "Account"
+ * against a page headed "Account standing". A first-time user taps a word and
+ * has to land on a screen that contains it, so a heading reads its name from
+ * here and its extra words move to the eyebrow, which is the rung that exists
+ * for them.
+ */
+export function destinationLabel(view: NavigationView): string {
+  const label = filedDestination(view)?.label ?? UNFILED_VIEW_LABELS[view];
+  if (!label) throw new Error(`No navigation destination named ${view}`);
+  return label;
 }
 
 export function navigationHashForView(view: NavigationView): NavigationHash {

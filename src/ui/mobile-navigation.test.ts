@@ -1,7 +1,12 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { completedTurnLabel, evidenceRecordLabel, overflowDestinationLabel } from "./mobile-navigation";
-import { mobilePrimaryControlForView } from "./navigation-model";
+import {
+  completedTurnLabel,
+  currentDestinationLabel,
+  destinationHintForControl,
+  evidenceRecordLabel,
+} from "./mobile-navigation";
+import { MOBILE_PRIMARY_CONTROLS, mobilePrimaryControlForView, type NavigationView } from "./navigation-model";
 
 const source = readFileSync(new URL("./mobile-navigation.tsx", import.meta.url), "utf8");
 
@@ -37,6 +42,11 @@ describe("every route states its location to assistive tech, including the five 
     const occurrences = source.match(/aria-current=/gu) ?? [];
     // The primary route tab, the overflow trigger, and the sheet entry.
     expect(occurrences).toHaveLength(3);
+    // Whichever control is current carries the hint; the two claims are gated
+    // on the same `current`, so a tab cannot say "current page" without saying
+    // which page when its own label is not the route's name.
+    expect(source.match(/aria-describedby=\{current && currentDestination \? destinationHintId : undefined\}/gu) ?? [])
+      .toHaveLength(2);
     expect(source).toMatch(/onClick=\{\(\) => onNavigate\(control\.view\)\}/u);
     expect(source).toMatch(/aria-current=\{current \? "page" : undefined\}\s*onClick=\{\(\) => navigateFromMore/u);
   });
@@ -52,17 +62,19 @@ describe("every route states its location to assistive tech, including the five 
     // "More, current page" does not say which page; the description does. It is
     // a description and not extra name text on purpose: the control is still
     // named exactly "More", which is how every caller and journey addresses it.
-    expect(trigger).toContain("aria-describedby={overflowDestination ? overflowHintId : undefined}");
-    expect(source).toContain('const overflowDestination = activeControl === "more" ? overflowDestinationLabel(view) : undefined;');
-    expect(source).toMatch(/<span id=\{overflowHintId\} class="sr-only">\{`Current page: \$\{overflowDestination\}`\}<\/span>/u);
-    expect(source).not.toMatch(/<span>\{control\.label\}<\/span>\s*\{(?:currentDestination|overflowDestination)/u);
+    expect(trigger).toContain("aria-describedby={current && currentDestination ? destinationHintId : undefined}");
+    expect(source).toContain("const currentDestination = destinationHintForControl(activeControl, view);");
+    expect(source).toMatch(/<span id=\{destinationHintId\} class="sr-only">\{`Current page: \$\{currentDestination\}`\}<\/span>/u);
+    expect(source).not.toMatch(/<span>\{control\.label\}<\/span>\s*\{currentDestination/u);
+    // The gate that produced "Trust, current page" on three routes.
+    expect(source).not.toContain('activeControl === "more" ?');
   });
 
   it("names every overflow destination, including the one with no sheet entry of its own", () => {
     // `context` is absent from MOBILE_MORE_ENTRIES, so a lookup that only read
     // that table would leave the #context route unnamed.
     const overflow = (["memory", "context", "profiles", "capabilities", "skills"] as const)
-      .map((view) => [view, mobilePrimaryControlForView(view), overflowDestinationLabel(view)] as const);
+      .map((view) => [view, mobilePrimaryControlForView(view), currentDestinationLabel(view)] as const);
     expect(overflow).toEqual([
       ["memory", "more", "Memory"],
       ["context", "more", "Memory"],
@@ -70,6 +82,47 @@ describe("every route states its location to assistive tech, including the five 
       ["capabilities", "more", "Capabilities"],
       ["skills", "more", "Skills"],
     ]);
+  });
+
+  it("names the route on every control whose own label is not the route's name", () => {
+    /*
+     * The three `trust` views were outside both the fix and its regression net:
+     * on #vault the phone announced "Trust, current page" — a name no route
+     * carries — and tapping the highlighted tab left for Proof. Desktop states
+     * the truth on those same routes (rail.tsx puts `aria-current="page"` on a
+     * row labelled "Vault"), so the phone was the surface that lied.
+     */
+    const hinted = (["vault", "billing", "access", "sessions", "editor", "terminal"] as const)
+      .map((view) => [view, mobilePrimaryControlForView(view), destinationHintForControl(mobilePrimaryControlForView(view), view)] as const);
+    expect(hinted).toEqual([
+      ["vault", "trust", "Vault"],
+      ["billing", "trust", "Account"],
+      ["access", "trust", "Connection"],
+      ["sessions", "chat", "All conversations"],
+      ["editor", "workspace", "Editor"],
+      ["terminal", "workspace", "Terminal"],
+    ]);
+  });
+
+  it("stays silent only where the control's label already is the route", () => {
+    // A hint on #chat under a tab named "Chat" would be a second name for one
+    // place, which is the noise this description exists to avoid.
+    for (const control of MOBILE_PRIMARY_CONTROLS) {
+      if (control.kind !== "route") continue;
+      expect(destinationHintForControl(control.id, control.view)).toBeUndefined();
+    }
+    // …and never silent anywhere else: every view either names itself through
+    // its control or gets a description.
+    const views: readonly NavigationView[] = [
+      "chat", "sessions", "workspace", "editor", "terminal", "memory", "context",
+      "profiles", "capabilities", "skills", "vault", "billing", "proof", "access",
+    ];
+    for (const view of views) {
+      const controlId = mobilePrimaryControlForView(view);
+      const control = MOBILE_PRIMARY_CONTROLS.find((candidate) => candidate.id === controlId);
+      const named = control?.kind === "route" && control.view === view;
+      expect(named || Boolean(destinationHintForControl(controlId, view)), `${view} states where it is`).toBe(true);
+    }
   });
 
   it("removes the whole band from the accessibility tree while the sheet is open, so only one control is ever current", () => {

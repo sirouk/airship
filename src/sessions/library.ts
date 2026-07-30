@@ -1,3 +1,4 @@
+import { deepFreeze } from "../core/freeze";
 import type { SessionManifest } from "../core/contracts";
 import { JournalConflictError, type EventJournal, type SessionRecord } from "../core/journal";
 import {
@@ -195,6 +196,44 @@ export class SessionLibrary {
   }
 
   /**
+   * Delete a conversation, for real, from whichever durability tier holds it.
+   *
+   * The verb this library was missing. `docs/PRODUCT_SPEC.md` promises "Export,
+   * migrate, delete, or self-host all state", and `UnknownSessionError`'s
+   * default message a few lines above — "That conversation was removed while it
+   * was being read." — described a state nothing in the product could reach.
+   * Someone who pasted a credential or a client's name into a conversation had
+   * one remedy: destroy the whole Vault.
+   *
+   * Fenced on the head the caller read, so a turn that landed between the
+   * confirmation and the delete refuses rather than silently discarding a reply
+   * the person has not seen. `expectedHead` may be omitted when the caller has
+   * not read the record — the head is then read here, which is the right shape
+   * for "delete this row from a list" and the wrong one for "delete the
+   * conversation I am looking at".
+   *
+   * Favourites and the active-conversation pointer need no separate cleanup:
+   * both are projected from journal events, so they resolve from the sessions
+   * that still exist the moment this returns.
+   */
+  async delete(
+    sessionId: string,
+    options: Readonly<{
+      expectedHead?: Readonly<{ sequence: number; digest: string }>;
+      signal?: AbortSignal;
+    }> = {},
+  ): Promise<void> {
+    assertSessionId(sessionId);
+    throwIfAborted(options.signal);
+    const expectedHead = options.expectedHead ?? await (async () => {
+      const session = await this.journal.getSession(sessionId, options.signal);
+      if (!session) throw new UnknownSessionError(sessionId);
+      return { sequence: session.headSequence, digest: session.headDigest };
+    })();
+    await this.journal.deleteSession(sessionId, expectedHead, options.signal);
+  }
+
+  /**
    * Favorites travel with the journal authority instead of a global browser
    * preference. Page-memory favorites therefore remain page-memory, while an
    * adopted encrypted journal makes the same preference durable.
@@ -324,10 +363,4 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
   const error = new Error("The operation was cancelled.");
   error.name = "AbortError";
   throw error;
-}
-
-function deepFreeze<T>(value: T): T {
-  if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
-  for (const child of Object.values(value as Record<string, unknown>)) deepFreeze(child);
-  return Object.freeze(value);
 }

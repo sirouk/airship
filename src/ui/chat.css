@@ -381,6 +381,25 @@
    the right-hand cell and has nothing to push against. */
 .transcript-intro__tier { justify-self: end; margin-right: 0; }
 
+/*
+ * The tier pill is a target only where it is a button.
+ *
+ * Inside a message label it is a <span> — a legend, nothing to press. The
+ * transcript intro renders the same recipe as a real button that opens
+ * Capabilities, and it measured 137×20 on the chat route at 390×844: the width
+ * was already past the floor, the height was less than half of it. A padding
+ * bump on the shared class would have inflated the legend on every assistant
+ * turn, and a pseudo-element hit area would not have helped at all —
+ * `touch-target-floor.spec.ts` measures the element's own border box.
+ */
+@media (pointer: coarse) {
+  button.message-capability-tier {
+    min-width: var(--touch-target);
+    min-height: var(--touch-target);
+    padding-inline: var(--sp-3);
+  }
+}
+
 /* A session record — a rename, a context summary — between two turns.
    Deliberately not a card: it has no speaker, so giving it an avatar and an
    action row would make the journal look like a participant. A rule and two
@@ -435,8 +454,8 @@
 .proof-hero h2,
 .inspector-heading h2 {
   margin: 4px 0 0;
-  font-family: Georgia, "Times New Roman", serif;
-  font-weight: 500;
+  font-family: var(--font-display);
+  font-weight: var(--fw-body);
 }
 
 .session-runtime {
@@ -489,7 +508,7 @@ button.session-runtime {
 .session-runtime.local small {
   overflow: hidden;
   color: var(--ink-faint);
-  font: var(--fs-micro)/1.25 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font: var(--fs-micro)/1.25 var(--font-mono);
   text-overflow: ellipsis;
   text-transform: uppercase;
   white-space: nowrap;
@@ -498,7 +517,7 @@ button.session-runtime {
 .session-runtime.local strong {
   display: block;
   margin-top: 3px;
-  font: var(--fs-micro)/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font: var(--fs-micro)/1.2 var(--font-mono);
 }
 
 .session-runtime select {
@@ -511,7 +530,7 @@ button.session-runtime {
   border: 0;
   color: var(--ink);
   background: transparent;
-  font: var(--fs-micro)/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font: var(--fs-micro)/1.45 var(--font-mono);
   text-overflow: ellipsis;
 }
 
@@ -530,7 +549,7 @@ button.runtime-posture {
   border-radius: var(--radius-control);
   color: #e6a393;
   background: var(--surface-raised);
-  font: var(--fs-micro)/1.35 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font: var(--fs-micro)/1.35 var(--font-mono);
 }
 
 .transcript {
@@ -632,7 +651,7 @@ button.runtime-posture {
 
 .transcript-boundary strong {
   color: var(--brass-bright);
-  font-weight: 600;
+  font-weight: var(--fw-strong);
 }
 
 .message {
@@ -675,14 +694,20 @@ button.runtime-posture {
   border-radius: 50%;
   color: var(--ink-muted);
   background: var(--surface-soft);
-  font: var(--fs-micro) ui-monospace, monospace;
+  font: var(--fs-micro) var(--font-mono);
 }
 
+/* rgb(193,154,88) is the *dark* value of --accent written out by hand, so the
+   ring around the assistant's avatar — on every answer in the transcript —
+   kept a dark-brass tint in Paper mode and ignored the Research and Developer
+   profile themes, which rewrite --accent inline. Same tints, asked for by
+   name; this is the `color-mix` form the other 79 accent tints in these sheets
+   already use. */
 .message.assistant .message-rail span {
   color: var(--brass-bright);
-  border-color: rgba(193, 154, 88, 0.3);
-  background: rgba(193, 154, 88, 0.065);
-  font-family: Georgia, serif;
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+  background: color-mix(in srgb, var(--accent) 6.5%, transparent);
+  font-family: var(--font-display);
   font-size: var(--fs-caption);
 }
 
@@ -726,7 +751,7 @@ button.runtime-posture {
 .message-label strong {
   color: var(--ink-muted);
   font-size: var(--fs-micro);
-  font-weight: 600;
+  font-weight: var(--fw-strong);
   letter-spacing: 0.04em;
 }
 
@@ -929,14 +954,6 @@ button.runtime-posture {
   outline-offset: -2px;
 }
 
-.message-part.reference header > span,
-.message-part.reasoning-summary summary small {
-  color: var(--ink-faint);
-  font: var(--fs-micro)/1.3 var(--font-mono);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
 .message-part.reasoning-summary > summary span {
   color: var(--ink-muted);
   font-size: var(--fs-caption);
@@ -970,7 +987,7 @@ button.runtime-posture {
   overflow: hidden;
   color: var(--ink);
   font-size: var(--fs-caption);
-  font-weight: 600;
+  font-weight: var(--fw-strong);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -978,7 +995,7 @@ button.runtime-posture {
 .message-part.reference header small {
   margin-left: auto;
   color: var(--ink-faint);
-  font: var(--fs-micro) ui-monospace, SFMono-Regular, Menlo, monospace;
+  font: var(--fs-micro) var(--font-mono);
   text-transform: uppercase;
 }
 
@@ -1000,7 +1017,7 @@ button.runtime-posture {
   display: flex;
   gap: 7px;
   color: var(--ink-faint);
-  font: var(--fs-micro) ui-monospace, SFMono-Regular, Menlo, monospace;
+  font: var(--fs-micro) var(--font-mono);
 }
 
 .message-part.part-error {
@@ -1015,7 +1032,7 @@ button.runtime-posture {
 
 .message-part.part-error strong {
   color: var(--ink);
-  font: 600 var(--fs-micro)/1.4 var(--font-mono);
+  font: var(--fw-strong) var(--fs-micro)/1.4 var(--font-mono);
 }
 
 .message-part.part-error p {
@@ -1152,7 +1169,7 @@ button.runtime-posture {
 
 .receipt-chip > span:not(.seal) {
   color: var(--ink-faint);
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-mono);
 }
 
 .composer-wrap {
@@ -1224,7 +1241,7 @@ button.runtime-posture {
 
 .slash-command-menu code {
   color: var(--accent-bright);
-  font: 700 0.75rem/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font: var(--fw-title) var(--fs-caption)/1.2 var(--font-mono);
 }
 
 .slash-command-menu span {
@@ -1237,17 +1254,22 @@ button.runtime-posture {
 
 .slash-command-menu small {
   color: var(--ink-faint);
-  font: var(--fs-micro)/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font: var(--fs-micro)/1 var(--font-mono);
   text-transform: uppercase;
   white-space: nowrap;
 }
 
+/* The border a user sees every single time they click into the composer was
+   the dark --accent hex, hand-written. In Paper mode that is light tan on a
+   parchment field — which is the whole reason the focused composer was hard to
+   see there — and it stayed brass under a profile theme that had repainted
+   --accent to something else. Busy was the same bug against --v-verified. */
 .composer:focus-within {
-  border-color: rgba(193, 154, 88, 0.45);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
 }
 
 .composer.busy {
-  border-color: rgba(103, 163, 154, 0.28);
+  border-color: color-mix(in srgb, var(--v-verified) 28%, transparent);
 }
 
 .composer textarea {
@@ -1261,7 +1283,7 @@ button.runtime-posture {
   outline: 0;
   color: var(--ink);
   background: transparent;
-  font: var(--fw-body) var(--fs-body) / 24px var(--font-body);
+  font: var(--fw-body) var(--fs-body)/var(--lh-body) var(--font-body);
 }
 
 /*
@@ -1693,7 +1715,7 @@ button.runtime-posture {
 .starter-chip strong {
   color: var(--ink);
   font-size: var(--fs-meta);
-  font-weight: 600;
+  font-weight: var(--fw-strong);
 }
 
 .starter-chip span {
@@ -1794,7 +1816,7 @@ button.runtime-posture {
 
 .evidence-join__heading > span:last-child {
   color: var(--ink-faint);
-  font: var(--fs-micro)/1.3 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font: var(--fs-micro)/1.3 var(--font-mono);
 }
 
 .evidence-join__state {
@@ -1833,7 +1855,7 @@ button.runtime-posture {
 
 .evidence-join__facts div { display: grid; grid-template-columns: 60px minmax(0, 1fr); gap: 8px; }
 .evidence-join__facts dt { color: var(--ink-faint); font-size: var(--fs-micro); }
-.evidence-join__facts dd { min-width: 0; margin: 0; color: var(--ink-muted); font: var(--fs-micro)/1.35 ui-monospace, monospace; overflow-wrap: anywhere; }
+.evidence-join__facts dd { min-width: 0; margin: 0; color: var(--ink-muted); font: var(--fs-micro)/1.35 var(--font-mono); overflow-wrap: anywhere; }
 
 .evidence-join__action {
   width: 100%;
@@ -1857,7 +1879,7 @@ button.runtime-posture {
   align-items: center;
   margin: 0 2px 5px;
   color: var(--ink-faint);
-  font: var(--fs-micro)/1.2 ui-monospace, monospace;
+  font: var(--fs-micro)/1.2 var(--font-mono);
   text-transform: uppercase;
 }
 
@@ -1907,16 +1929,19 @@ button.runtime-posture {
   display: none;
 }
 
+/* The open claim's wash was the dark accent hex: in Paper mode an open row was
+   tinted with a colour from the dark build, on the surface whose job is to be
+   read carefully. */
 .claim-row[open] summary {
   color: var(--ink);
-  background: rgba(193, 154, 88, 0.035);
+  background: color-mix(in srgb, var(--accent) 3.5%, transparent);
 }
 
 .claim-title {
   min-width: 0;
   color: var(--ink);
   font-size: var(--fs-caption);
-  font-weight: 600;
+  font-weight: var(--fw-strong);
   line-height: 1.3;
 }
 
@@ -1926,7 +1951,7 @@ button.runtime-posture {
   align-items: center;
   justify-self: end;
   color: var(--ink-faint);
-  font: var(--fs-micro) ui-monospace, monospace;
+  font: var(--fs-micro) var(--font-mono);
   text-transform: uppercase;
   white-space: nowrap;
 }
@@ -1955,7 +1980,7 @@ button.runtime-posture {
 .claim-source {
   min-width: 0;
   color: var(--ink-faint);
-  font: var(--fs-micro)/1.3 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font: var(--fs-micro)/1.3 var(--font-mono);
   overflow-wrap: anywhere;
 }
 
@@ -1982,12 +2007,12 @@ button.runtime-posture {
 }
 
 .claim-absence > summary::-webkit-details-marker { display: none; }
-.claim-absence > summary strong { color: var(--ink-faint); font: var(--fs-micro) ui-monospace, monospace; }
+.claim-absence > summary strong { color: var(--ink-faint); font: var(--fs-micro) var(--font-mono); }
 .claim-absence > summary small { color: var(--ink-faint); font-size: var(--fs-micro); text-align: right; }
 .claim-absence__list { border-top: 1px solid var(--line); }
 .claim-absence__list > div { padding: 8px 10px; border-bottom: 1px solid var(--line); }
 .claim-absence__list > div:last-child { border-bottom: 0; }
-.claim-absence__list span { display: block; color: var(--ink-muted); font-size: var(--fs-micro); font-weight: 600; }
+.claim-absence__list span { display: block; color: var(--ink-muted); font-size: var(--fs-micro); font-weight: var(--fw-strong); }
 .claim-absence__list small { display: block; margin-top: 3px; color: var(--ink-faint); font-size: var(--fs-micro); line-height: 1.4; }
 
 .claim-meta .claim-seal {
@@ -2004,7 +2029,7 @@ button.runtime-posture {
   padding-left: 7px;
   border-left: 1px solid var(--line-strong);
   color: var(--ink-faint);
-  font: var(--fs-micro)/1.3 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font: var(--fs-micro)/1.3 var(--font-mono);
   overflow-wrap: anywhere;
 }
 
@@ -2034,7 +2059,7 @@ button.runtime-posture {
   min-width: 0;
   margin: 0;
   overflow-wrap: anywhere;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
 }
 
 .claim-detail pre {
@@ -2045,7 +2070,7 @@ button.runtime-posture {
   border: 1px solid var(--line);
   border-radius: 4px;
   background: var(--surface-soft);
-  font: var(--fs-micro)/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font: var(--fs-micro)/1.5 var(--font-mono);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -2102,7 +2127,7 @@ button.runtime-posture {
 .receipt-metadata dd {
   margin: 4px 0 0;
   color: var(--ink-muted);
-  font: var(--fs-micro)/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font: var(--fs-micro)/1.45 var(--font-mono);
   overflow-wrap: anywhere;
 }
 
@@ -2127,6 +2152,6 @@ button.runtime-posture {
 .binding-record dd {
   margin: 4px 0 0;
   color: var(--ink-muted);
-  font: var(--fs-micro)/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font: var(--fs-micro)/1.45 var(--font-mono);
   overflow-wrap: anywhere;
 }

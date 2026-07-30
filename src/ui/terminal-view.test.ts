@@ -1,13 +1,19 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { BrowserGitClient } from "../git/client";
+import { WorkspaceGitAdapter } from "../git/workspace-adapter";
+import type { GitOperation } from "../git/types";
 import { MemoryWorkspace } from "../workspace/memory";
 import {
   TERMINAL_CONTAINER_SCOPE_NOTICE,
   TERMINAL_SETUP_STORAGE_KEY,
   inferredTerminalDurability,
   readTerminalSetupOpen,
+  runTerminalGitBridge,
+  terminalCloseConfirmation,
   terminalEmulatorWrite,
   terminalFooterNotice,
+  terminalGitNotice,
   terminalPanelAutoStart,
   terminalPersistenceNotice,
   terminalSealState,
@@ -189,6 +195,43 @@ describe("terminal panel bar at phone width", () => {
   });
 });
 
+describe("the full-view control a thumb has to hit", () => {
+  /*
+   * Measured at 390×844: 29×44. The rule that hides its word on a phone left a
+   * bare ↗ inside 7px of padding, so the height floor was met and the width was
+   * 15px short — and a target's SMALLER dimension is the one a fingertip has to
+   * find. The same control renders in three places, and all three are floored.
+   */
+  /*
+   * Asserted as the token, not as the number. These pinned the literal
+   * `min-height:44px`, so converting the sheet to `var(--touch-target)` — the
+   * name the floor is supposed to have, and the thing token-vocabulary.test.ts
+   * counts down — turned three passing contracts red for being fixed. A
+   * reference cannot drift; a copied number is how 144 of them accumulated.
+   */
+  it("meets 44px on both axes wherever it renders", () => {
+    const dock = readFileSync(new URL("./workspace-terminal-dock.css", import.meta.url), "utf8");
+    const dockPhone = dock.slice(dock.indexOf("@media(max-width:760px)"));
+    expect(dockPhone).toContain(".workspace-terminal-dock__collapsed button{min-width:var(--touch-target);min-height:var(--touch-target)");
+    expect(dockPhone).toContain(".workspace-terminal-dock__loading button{min-width:var(--touch-target);min-height:var(--touch-target)}");
+
+    const route = readFileSync(new URL("./terminal-view.css", import.meta.url), "utf8");
+    const routePhone = route.slice(route.indexOf("@media(max-width:760px)"));
+    expect(routePhone).toContain(".terminal-dock__actions button{min-width:var(--touch-target);min-height:var(--touch-target)");
+    expect(routePhone).not.toContain("min-height:38px");
+  });
+});
+
+describe("the Browser Git row's own controls", () => {
+  it("floors the command field at the same 44px as the button beside it", () => {
+    const css = readFileSync(new URL("./terminal-view.css", import.meta.url), "utf8");
+    expect(css).toContain(".terminal-git__command{min-width:0;min-height:var(--touch-target)");
+    // The route's shared button rule already carries the floor, so the Run
+    // button must not restate it — a second literal is a second thing to drift.
+    expect(css).toContain(".terminal-route button{display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:var(--touch-target)");
+  });
+});
+
 describe("the tab rename affordance on touch surfaces", () => {
   /*
    * 34px wide, no height, and invisible until hover: the rename control had
@@ -200,7 +243,183 @@ describe("the tab rename affordance on touch surfaces", () => {
   it("grows to the 44px phone floor and shows itself without a hover", () => {
     const css = readFileSync(new URL("./terminal-view.css", import.meta.url), "utf8");
     const phone = css.slice(css.indexOf("@media(max-width:760px)"));
-    expect(phone).toContain(".terminal-tab .terminal-tab__rename{min-width:44px;min-height:44px;opacity:1}");
+    expect(phone).toContain(".terminal-tab .terminal-tab__rename{min-width:var(--touch-target);min-height:var(--touch-target);opacity:1}");
     expect(css).toContain("@media(pointer:coarse){.terminal-tab .terminal-tab__rename{opacity:1}}");
+  });
+});
+
+/*
+ * 836 lines, seventeen verb families, approval-gated and unit-tested — and the
+ * only reference to `runTerminalGitCommand` outside its own test file was its
+ * own `export`. stash, merge, tag, reset, restore, rev-parse and remote
+ * management shipped with no human path on any device, which is a deleted
+ * feature that still costs review. These assert the entry point, not the
+ * bridge's verbs: `git/terminal-commands.test.ts` owns those.
+ */
+describe("the shared Git bridge's entry point", () => {
+  it("is reached from non-test application source, not only from its own test", () => {
+    const callers = sourceFilesReferencing("runTerminalGitCommand");
+    expect(callers.length).toBeGreaterThanOrEqual(1);
+    expect(callers).toContain("ui/terminal-view.tsx");
+  });
+
+  it("hands the row the active approval policy rather than the bridge's optional default", () => {
+    // The comment that stood on these props — "Retained for app compatibility"
+    // — was the audit trail of the deletion: two threaded props, no consumer.
+    // The rule it also carried (bridge output never enters PTY scrollback) is
+    // still true and still stated; the compatibility excuse is gone.
+    const source = readFileSync(new URL("./terminal-view.tsx", import.meta.url), "utf8");
+    expect(source).not.toContain("Retained for app compatibility");
+    expect(source).toContain("runTerminalGitBridge({ command, cwd: gitCwd, client: git, review: reviewGit })");
+  });
+
+  it("keeps the row on the route and off the 220px dock strip", () => {
+    const source = readFileSync(new URL("./terminal-view.tsx", import.meta.url), "utf8");
+    expect(source).toContain('{variant === "route" ? <form class="terminal-git"');
+  });
+});
+
+describe("the Terminal route's Git command row", () => {
+  const openRepository = async (files: Record<string, string> = { "README.md": "ready\n" }) =>
+    new BrowserGitClient(await WorkspaceGitAdapter.open(new MemoryWorkspace(), [{
+      id: "airship-workspace",
+      name: "Airship Workspace",
+      worktreePath: "/workspace",
+      files,
+    }]));
+  const allow = async () => "allow" as const;
+
+  it("renders the supported command set, including what is absent", async () => {
+    const outcome = await runTerminalGitBridge({
+      command: "git help",
+      cwd: "/workspace",
+      client: await openRepository(),
+      review: allow,
+    });
+    expect(outcome.failed).toBe(false);
+    expect(outcome.output).toContain("git stash");
+    expect(outcome.output).toContain("git worktree list");
+    expect(outcome.output).toContain("git rev-parse");
+    // The set has to name its own holes, or the row becomes a second place to
+    // discover that `git rebase` was never implemented.
+    expect(outcome.output).toContain("Not implemented here: rebase");
+  });
+
+  it("returns the bridge's own answer for a verb with no other surface", async () => {
+    // Nothing else in the product lists stash entries; before the row existed
+    // this answer was reachable only from a unit test.
+    const outcome = await runTerminalGitBridge({
+      command: "git stash list",
+      cwd: "/workspace",
+      client: await openRepository(),
+      review: allow,
+    });
+    expect(outcome.failed).toBe(false);
+    expect(outcome.changed).toBe(false);
+    expect(outcome.output).toContain("No stash entries.");
+  });
+
+  it("puts every mutating verb through the review callback it was given", async () => {
+    const workspace = new MemoryWorkspace();
+    await workspace.write("README.md", "changed\n");
+    const client = new BrowserGitClient(await WorkspaceGitAdapter.open(workspace, [{
+      id: "airship-workspace",
+      name: "Airship Workspace",
+      worktreePath: "/workspace",
+      files: { "README.md": "original\n" },
+      workingFiles: { "README.md": "changed\n" },
+    }]));
+    const reviewed: GitOperation["kind"][] = [];
+    const outcome = await runTerminalGitBridge({
+      command: "git add -A",
+      cwd: "/workspace",
+      client,
+      review: async (operation) => { reviewed.push(operation.kind); return "deny"; },
+    });
+    expect(reviewed).toEqual(["stage"]);
+    // A denial that only throws is indistinguishable from a command that
+    // silently did nothing, so it has to arrive as an answer.
+    expect(outcome.failed).toBe(true);
+    expect(outcome.output).toContain("denied");
+    expect(terminalGitNotice(outcome)).toContain("git was refused at /workspace");
+    expect((await client.listRepositories())[0]!.worktrees[0]!.status[0])
+      .toEqual(expect.objectContaining({ worktree: { kind: "modified" } }));
+  });
+
+  it("reports a refusal instead of throwing at the surface", async () => {
+    const outcome = await runTerminalGitBridge({
+      command: "git rebase main",
+      cwd: "/workspace",
+      client: await openRepository(),
+      review: allow,
+    });
+    expect(outcome.failed).toBe(true);
+    expect(outcome.output).toContain("Unsupported shared Git command: git rebase");
+    expect(outcome.changed).toBe(false);
+  });
+
+  it("distinguishes an answer from a change in the one line the footer shows", () => {
+    const read = terminalGitNotice({ command: "git status", cwd: "/workspace", output: "", changed: false, failed: false });
+    expect(read).toContain("without changing it");
+    const wrote = terminalGitNotice({ command: "git add -A", cwd: "/workspace", output: "", changed: true, failed: false });
+    expect(wrote).toContain("changed the browser-owned repository");
+    expect(wrote).toContain("Editor, source control and the agent read that same state");
+  });
+});
+
+/**
+ * Every non-test `.ts`/`.tsx` under `src/` that names a symbol, excluding the
+ * module that defines it. Paths are returned relative to `src/` so a failure
+ * names the caller that went missing rather than an absolute machine path.
+ */
+function sourceFilesReferencing(symbol: string): string[] {
+  const found: string[] = [];
+  const walk = (directory: URL, prefix: string): void => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        walk(new URL(`${entry.name}/`, directory), `${prefix}${entry.name}/`);
+        continue;
+      }
+      if (!/\.tsx?$/u.test(entry.name) || /\.(?:test|spec)\.tsx?$/u.test(entry.name)) continue;
+      const path = `${prefix}${entry.name}`;
+      if (path === "git/terminal-commands.ts") continue;
+      if (readFileSync(new URL(entry.name, directory), "utf8").includes(symbol)) found.push(path);
+    }
+  };
+  walk(new URL("../", import.meta.url), "");
+  return found;
+}
+
+/*
+ * Closing a terminal tab ended a live process and its shell history on the
+ * first press, while deleting one workspace file two panes away opened a
+ * designed modal naming the revision check. One product, one finger, no way to
+ * read the danger off the button.
+ */
+describe("closing a terminal tab", () => {
+  const session = { name: "shell", status: "running" as const, cwd: "/workspace/sources/repo" };
+
+  it("states the same fact before the act that the receipt states after it", () => {
+    const ephemeral = terminalCloseConfirmation(session, { state: "ephemeral" });
+    expect(ephemeral.title).toBe("Close shell?");
+    expect(ephemeral.consequence).toContain("/workspace/sources/repo");
+    expect(ephemeral.consequence).toContain("bounded lineage remains only for this page and workspace lifetime");
+    expect(terminalCloseConfirmation(session, { state: "local" }).consequence)
+      .toContain("retained by the active encrypted workspace");
+  });
+
+  it("does not claim to end a process that already ended", () => {
+    const exited = terminalCloseConfirmation({ ...session, status: "exited" }, { state: "ephemeral" });
+    expect(exited.consequence).toContain("already ended");
+    expect(exited.consequence).not.toContain("This ends the process");
+  });
+
+  it("gates the close button on the shared confirmation instead of calling the manager", () => {
+    const source = readFileSync(new URL("./terminal-view.tsx", import.meta.url), "utf8");
+    expect(source).toContain('aria-label="Close terminal tab">');
+    // The press opens the dialog; only the dialog's confirm reaches the manager.
+    expect(source).toContain("onClick={() => setClosing(true)} aria-label=\"Close terminal tab\"");
+    expect(source).toMatch(/onConfirm=\{\(\) => \{ setClosing\(false\); closeButton\.current\?\.focus\(\); void close\(\); \}\}/u);
+    expect(source).toContain('import { ConfirmDialog } from "./confirm-dialog";');
   });
 });

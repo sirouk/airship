@@ -3,7 +3,9 @@
 .markdown > :last-child { margin-bottom: 0; }
 .markdown p, .markdown blockquote, .markdown ul, .markdown ol { margin: .45rem 0; }
 .markdown h1, .markdown h2, .markdown h3, .markdown h4, .markdown h5, .markdown h6 { margin: .9rem 0 .35rem; font-family: var(--font-display); line-height: var(--lh-tight); }
-.markdown h1 { font-size: var(--fs-h3); }.markdown h2 { font-size: var(--fs-lead); }.markdown h3 { font-size: var(--fs-body); }
+/* A transcript h1 heads a section of an answer, never a route, so it stops at
+   the section rung: --fs-display is reserved for .route-title. */
+.markdown h1 { font-size: var(--fs-title); }.markdown h2 { font-size: var(--fs-lead); }.markdown h3 { font-size: var(--fs-body); }
 /* h4-h6 stop growing and start differentiating by weight and colour: the body
    size is already the floor for readable prose. */
 .markdown h4, .markdown h5, .markdown h6 { font-size: var(--fs-body); font-weight: 600; }

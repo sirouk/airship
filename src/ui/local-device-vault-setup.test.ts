@@ -2,9 +2,11 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   formatLocalDeviceBytes,
+  publicError,
   readBoundedLocalDeviceBackup,
   recoveryCustodyStatus,
 } from "./local-device-vault-setup";
+import { LocalDeviceVaultCorruptionError } from "../storage/local-device-object-store";
 
 describe("local device Vault setup boundaries", () => {
   it("reads an encrypted backup exactly within the configured bound", async () => {
@@ -46,6 +48,37 @@ describe("local device Vault setup boundaries", () => {
       state: "verified",
       label: "Download requested.",
     });
+  });
+
+  it("keeps the safety sentence when the storage engine states only a symptom", () => {
+    /*
+     * The restore's fallback is the only text that tells a person their
+     * existing encrypted Vault survived a failed restore — and it was
+     * discarded in exactly the cases it was written for, because every
+     * anticipated failure is a corruption error carrying short internal prose.
+     * "Stored object authentication failed." on a new laptop does not answer
+     * "have I just destroyed my data".
+     */
+    const remedy = "The backup failed authentication. The existing Vault was not replaced.";
+    const notice = publicError(new LocalDeviceVaultCorruptionError("Stored object authentication failed."), remedy);
+    expect(notice).toContain("The existing Vault was not replaced.");
+    expect(notice).toContain("Stored object authentication failed.");
+    expect(notice.indexOf(remedy)).toBe(0);
+
+    // The restore path is the one that must pass that sentence.
+    const view = readFileSync(new URL("./local-device-vault-setup.tsx", import.meta.url), "utf8");
+    expect(view).toContain('publicError(error, "The backup failed authentication. The existing Vault was not replaced.")');
+  });
+
+  it("bounds the technical clause and never re-renders a recovery key", () => {
+    expect(publicError("not an error", "Remedy.")).toBe("Remedy.");
+    expect(publicError(new Error(""), "Remedy.")).toBe("Remedy.");
+    expect(publicError(new Error(`airship-wrk-v1.${"A".repeat(43)}`), "Remedy.")).toBe("Remedy.");
+    expect(publicError(new Error("x".repeat(241)), "Remedy.")).toBe("Remedy.");
+    // A detail that is already the remedy would print the sentence twice.
+    expect(publicError(new Error("Remedy."), "Remedy.")).toBe("Remedy.");
+    // Multi-line engine prose collapses to one clause and gains its full stop.
+    expect(publicError(new Error("line one\n  line two"), "Remedy.")).toBe("Remedy. Technical detail: line one line two.");
   });
 
   it("renders bounded human-readable byte counts", () => {

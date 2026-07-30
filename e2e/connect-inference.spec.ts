@@ -17,7 +17,7 @@ test.beforeEach(async ({ page }) => {
 
 async function openConnect(page: Page, url = "/#connection") {
   await page.goto(url);
-  await expect(page.getByRole("heading", { name: "Connect models", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Connection", exact: true, level: 1 })).toBeVisible();
   await expect(page.locator(".connect-surface")).toBeVisible();
   // The bridge lanes start as "checking" and settle only when the handshake
   // deadline passes, so every later assertion waits for a real observation
@@ -317,7 +317,7 @@ test("the API-key alternative moves to the direct providers without leaving the 
  */
 test("nothing on the connect route navigates by hash", async ({ page }) => {
   await openConnect(page);
-  await expect(page.getByRole("heading", { name: "Connect models", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Connection", exact: true, level: 1 })).toBeVisible();
   const inPageAnchors = await page.evaluate(() =>
     [...document.querySelectorAll("main a")].filter((node) => (node.getAttribute("href") ?? "").startsWith("#")).length);
   expect(inPageAnchors, "the hash is the router; an in-page anchor resolves to an unknown route").toBe(0);

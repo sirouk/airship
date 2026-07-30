@@ -322,6 +322,20 @@ const VERDICT_TOKEN_TEXT_LEDGER = Object.freeze([
   // Added by the raise, not despite it: this rule carried a hand-written
   // #e4877e precisely because --v-failed was sub-AA on a raised surface.
   "ui/routes.css .audit-state.invalid --v-failed",
+  /*
+   * These four are not new text uses — they are four that this ledger could
+   * never see. Each spelled the token `var(--danger)`, one of the three live
+   * aliases for the failed hue, so a scanner looking for `--v-failed` walked
+   * straight past a billing error, the archive route's destructive verb, the
+   * danger disclosure's open state and the runway warning. That is the concrete
+   * cost of three names for one role: the tripwire above was watching two
+   * thirds of the product. `routes.css` now names the canonical token, so they
+   * appear here and are held to the same 4.5:1 floor as the rest.
+   */
+  "ui/routes.css .billing-alert.error --v-failed",
+  "ui/routes.css .profile-archive-zone .danger --v-failed",
+  "ui/routes.css .profile-danger-disclosure[open] > summary --v-failed",
+  "ui/routes.css .runway-card > p --v-failed",
   "ui/shell.css .attestation-chip.asserted --copper",
   "ui/shell.css .attestation-chip.failed --v-failed",
   "ui/shell.css .seal[data-state=\"asserted\"] --copper",

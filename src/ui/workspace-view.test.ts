@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { formatBytes } from "../core/bytes";
 import type { GitDeltaKind, GitStatusEntry } from "../git/types";
 import { encodeWorkspaceBytes } from "../workspace/content-codec";
 import type { WorkspaceEntry, WorkspaceFile } from "../workspace/contracts";
@@ -19,6 +20,7 @@ import {
   workspaceRowMenuKey,
   workspaceEditorProjection,
   workspaceFileWindow,
+  workspaceFilterEmptyCopy,
   workspaceGutterLines,
   workspaceHistoryPatch,
   workspacePersistedWorktreeId,
@@ -719,7 +721,10 @@ describe("merge conflicts and the workbench stage fence", () => {
     // delta check and the checkbox panel's `isConflicted` — this test pins the
     // shared import so the fence cannot be silently weakened on one side.
     const source = readFileSync(new URL("./workspace-view.tsx", import.meta.url), "utf8");
-    expect(source).toContain('import { isConflicted } from "./sources-view";');
+    // `UnifiedPatch` now arrives on the same import, for the same reason: the
+    // workbench diff pane used to render its own patch instead of the one
+    // Source Control renders.
+    expect(source).toContain('import { isConflicted, UnifiedPatch } from "./sources-view";');
     expect(source).toContain("isConflicted(entry)");
     expect(source).toContain("Merge conflict — resolve it in Advanced source controls before staging.");
   });
@@ -760,5 +765,86 @@ describe("move dialog listbox keyboard contract", () => {
     // Escape and Tab still belong to the dialog: the handler owns arrows only.
     expect(handler?.[0]).not.toContain('"Escape"');
     expect(handler?.[0]).not.toContain('"Tab"');
+  });
+});
+
+/*
+ * Filtering to zero matches rendered a blank `role="tree"`: the only signal was
+ * the 12px "0 of 412 files" counter, and on a phone — where the Explorer is a
+ * full-screen pane — a mistyped filter was a blank screen with no way back
+ * except deleting text the reader could not see was the cause.
+ */
+describe("Explorer empty-after-filter state", () => {
+  it("names the term it failed to match and the workspace it searched", () => {
+    const copy = workspaceFilterEmptyCopy("  reciept  ", 412);
+    expect(copy.title).toContain("reciept");
+    expect(copy.detail).toContain("412 files");
+    expect(copy.action).toBe("Clear filter");
+  });
+
+  it("counts one file without claiming plural", () => {
+    expect(workspaceFilterEmptyCopy("x", 1).detail).toContain("1 file is in this workspace");
+  });
+
+  it("says which search came back empty, because the two ask different questions", () => {
+    expect(workspaceFilterEmptyCopy("x", 3, "path").title).toContain("No path matches");
+    expect(workspaceFilterEmptyCopy("x", 3, "contents").title).toContain("No file contains");
+    expect(workspaceFilterEmptyCopy("x", 3, "contents").detail).toContain("3 files were searched");
+  });
+
+  it("renders the block with its clear action instead of an empty tree", () => {
+    const source = readFileSync(new URL("./workspace-view.tsx", import.meta.url), "utf8");
+    // The tree keeps its element — the ResizeObserver measures it — and yields
+    // the rail to a named block whenever it has no row to draw.
+    expect(source).toContain("hidden={treeHidden}");
+    expect(source).toContain("workspaceFilterEmptyCopy(filter, filtered.total, \"path\")");
+    expect(source).toContain("onClick={clearFilter}");
+    // Escape and the button are the same two acts, so neither can drift.
+    const clear = source.match(/function clearFilter\(\): void \{[\s\S]*?\n  \}/u);
+    expect(clear?.[0]).toContain("setFilter(\"\")");
+    expect(clear?.[0]).toContain("pendingTreeFocus.current = true");
+  });
+});
+
+/*
+ * `search_text` — "Search bounded UTF-8 workspace content for a literal string"
+ * — had no button, menu item or field anywhere on the route that owns files.
+ * The one search-shaped box was a path filter, so the capability was reachable
+ * only by typing `/search-text` into the composer.
+ */
+describe("Explorer content search", () => {
+  const source = readFileSync(new URL("./workspace-view.tsx", import.meta.url), "utf8");
+
+  it("gives the existing field a mode instead of adding a second search box", () => {
+    expect([...source.matchAll(/class="workspace-filter"/gu)]).toHaveLength(1);
+    expect(source).toContain('aria-label="Search workspace by"');
+    expect(source).toContain('aria-pressed={filterMode === "contents"}');
+  });
+
+  it("reads real file content in Contents mode, through the shared bounded scan", () => {
+    expect(source).toContain("searchWorkspaceContent(workspace, files, query");
+    // The rows say which file and which line, and open the same replaceable
+    // preview a tree row opens.
+    expect(source).toContain("line {String(match.line)}");
+    expect(source).toContain("onClick={() => void openPreviewTab(match.path)}");
+  });
+
+  it("leaves the path filter exactly as it was", () => {
+    // Contents mode passes an empty query to the path matcher rather than
+    // teaching it a second behaviour.
+    expect(source).toContain('const pathFilter = filterMode === "path" ? filter : "";');
+    expect(source).toContain("workbenchFilterMatches(files, pathFilter)");
+  });
+});
+
+describe("one byte vocabulary", () => {
+  it("formats workspace sizes through the shared module, not a local copy", () => {
+    const source = readFileSync(new URL("./workspace-view.tsx", import.meta.url), "utf8");
+    expect(source).toContain('import { formatBytes } from "../core/bytes";');
+    expect(source).not.toMatch(/function formatBytes/u);
+    // The Explorer's own copy stopped at MiB, so a 2 GB file read
+    // "1907.3 MiB" here while #vault printed "1.9 GiB" for the same bytes.
+    expect(formatBytes(2_000_000_000)).toContain("GiB");
+    expect(formatBytes(12_000_000)).toBe("11 MiB");
   });
 });

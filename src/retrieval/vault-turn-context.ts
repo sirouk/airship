@@ -1,3 +1,4 @@
+import { boundChunkTextToBytes } from "./codec";
 import {
   sealContextSelection,
   type CanonicalContextGeneration,
@@ -56,7 +57,7 @@ export class VaultTurnContextProvider implements TurnContextProvider {
     for (const hit of complete.hits) {
       const remaining = maxBytes - selectedBytes;
       if (remaining <= 0 || hits.length >= maxHits) { truncated = true; break; }
-      const text = truncateUtf8(hit.text, remaining);
+      const text = boundChunkTextToBytes(hit.text, remaining);
       if (!text) { truncated = true; break; }
       const bytes = new TextEncoder().encode(text).byteLength;
       selectedBytes += bytes;
@@ -124,17 +125,6 @@ function generationLineage(mirror: ContextRoutingMirror): CanonicalContextGenera
     indexFormat: mirror.lineage.indexFormat,
     persistence: "encrypted-vault",
   });
-}
-
-function truncateUtf8(value: string, maxBytes: number): string {
-  const encoder = new TextEncoder();
-  if (encoder.encode(value).byteLength <= maxBytes) return value;
-  let output = "";
-  for (const character of value) {
-    if (encoder.encode(output + character).byteLength > maxBytes) break;
-    output += character;
-  }
-  return output;
 }
 
 function boundedInteger(value: number, minimum: number, maximum: number, label: string): number {

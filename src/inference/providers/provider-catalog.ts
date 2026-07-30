@@ -1,3 +1,4 @@
+import { deepFreeze } from "../../core/freeze";
 import {
   CONNECTION_CAPABILITIES,
   type InferenceAuthMethod,
@@ -9,7 +10,6 @@ import {
 import {
   boundedText,
   canonicalTimestamp,
-  deepFreeze,
   headerName,
   httpsUrl,
   identifier,

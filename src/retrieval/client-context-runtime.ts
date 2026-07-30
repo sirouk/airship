@@ -1,3 +1,4 @@
+import { boundChunkTextToBytes } from "./codec";
 import {
   ClientContextEngine,
   type ClientContextEngineOptions,
@@ -181,7 +182,7 @@ export class ClientContextRuntime {
     for (const hit of result.hits.slice(0, maxHits)) {
       const remaining = maxBytes - selectedBytes;
       if (remaining <= 0) { truncated = true; break; }
-      const text = truncateUtf8(hit.text, remaining);
+      const text = boundChunkTextToBytes(hit.text, remaining);
       if (!text) { truncated = true; break; }
       const bytes = new TextEncoder().encode(text).byteLength;
       selectedBytes += bytes;
@@ -316,17 +317,6 @@ export function getClientContextRuntime(
   const runtime = new ClientContextRuntime(workspace, options);
   runtimes.set(workspace, runtime);
   return runtime;
-}
-
-function truncateUtf8(value: string, maxBytes: number): string {
-  const encoder = new TextEncoder();
-  if (encoder.encode(value).byteLength <= maxBytes) return value;
-  let output = "";
-  for (const character of value) {
-    if (encoder.encode(output + character).byteLength > maxBytes) break;
-    output += character;
-  }
-  return output;
 }
 
 function boundedInteger(value: number, minimum: number, maximum: number): number {

@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
-import { isLiveMemoryMessage, stableMemoryAuthoritySignature, type MemoryViewMessage } from "./memory-view";
+import type { FederatedMemorySearchState } from "../tools/federated-memory";
+import { isLiveMemoryMessage, memoryLaneCountLabel, memoryLaneState, memorySearchFailed, stableMemoryAuthoritySignature, type MemoryViewMessage } from "./memory-view";
 
 const [source, appSource, contextSource, styles, contextStyles] = await Promise.all([
   readFile(new URL("./memory-view.tsx", import.meta.url), "utf8"),
@@ -12,7 +13,7 @@ const [source, appSource, contextSource, styles, contextStyles] = await Promise.
 
 describe("unified Memory surface", () => {
   it("uses one query for recall, graph matching, and the embedded index", () => {
-    expect(source).toContain("const memorySearch = useFederatedMemorySearch(query, searchMemory, memoryAuthority, !indexMounted || Boolean(contextGeneration))");
+    expect(source).toContain("const memorySearch = useFederatedMemorySearch(query, searchMemory, memoryAuthority, !indexMounted || Boolean(contextGeneration), searchAttempt)");
     expect(source).toContain("<FederatedMemorySearch");
     expect(source).toContain("state={memorySearch}");
     expect(source).toContain("graph.search(normalizedQuery, { limit: 12 })");
@@ -86,7 +87,10 @@ describe("unified Memory surface", () => {
     expect(lanes).toContain("repeat(auto-fit, minmax(320px, 1fr))");
     expect(styles).not.toContain(".memory-lane-empty");
     // A scope with nothing in it is one 44px row that still names its corpus.
-    expect(source).toContain('state === "empty" ? "No matches"');
+    // The word itself is the projection's, so a fourth lane state cannot be
+    // added without a fourth definition beside the other three.
+    expect(memoryLaneCountLabel("empty", 0)).toBe("No matches");
+    expect(source).toContain("const count = memoryLaneCountLabel(state, lane.count);");
     expect(source).toContain('{state === "hits" ? <div class="memory-lane-hits">{lane.hits}</div> : null}');
     // A lane header and every hit control clear the touch floor.
     expect(cssRule(styles, ".memory-result-lane > header")).toContain("min-height: 44px");
@@ -284,7 +288,10 @@ describe("embedded index surface", () => {
   });
 
   it("files a candidate's lineage instead of printing it at full length per card", () => {
-    expect(contextSource).toContain("orderCandidates(generation.candidates)");
+    // Degraded-first ordering now travels inside the bounded window, so the
+    // rule and the cut cannot be applied by two different call sites.
+    expect(contextSource).toContain("const ordered = orderCandidates(candidates);");
+    expect(contextSource).toContain("contextCandidateWindow(generation?.candidates ?? [], candidatePages)");
     expect(contextSource).toContain("{renderProvenance(workspaceBaseName(candidate.path), rows)}");
     expect(contextSource).not.toContain('<dl class="context-exact-record">');
     expect(contextSource).not.toContain("exact chunk identifier");
@@ -381,3 +388,69 @@ function cssRule(sourceText: string, selector: string, after?: string): string {
   const bodyStart = sourceText.indexOf("{", start) + 1;
   return sourceText.slice(bodyStart, sourceText.indexOf("}", bodyStart));
 }
+
+/*
+ * A rejected search must not be spoken as three empty corpora.
+ *
+ * Measured: on rejection the state carries `status` and no `result`, so
+ * `settled` is false, the honest `MemoryNoMatchPanel` is skipped, and all three
+ * lanes fall through to "No matches" — telling a reader that their
+ * conversation, their profile memory and their workspace index contain nothing
+ * matching, on a route whose stated contract is "Nothing was hidden, filtered,
+ * or ranked away". No network fault is needed: `searchMemoryForUi` throws "The
+ * active accountable session is not ready." when no session is bound and
+ * "Federated memory search is not installed in this agent runtime." when the
+ * tool is absent.
+ */
+describe("federated memory search failure", () => {
+  const authority = {};
+  const failedState = { authority, query: "ledger", status: "The active accountable session is not ready.", searching: false } as FederatedMemorySearchState;
+
+  it("tells a rejection apart from a settled zero-hit result", () => {
+    expect(memorySearchFailed(failedState)).toBe(true);
+    expect(memorySearchFailed({ authority, query: "ledger", searching: true, status: "Searching three client-owned agent corpora…" } as FederatedMemorySearchState)).toBe(false);
+    expect(memorySearchFailed({ authority, query: "", searching: false } as FederatedMemorySearchState)).toBe(false);
+    // A real zero-hit answer carries a result, so it stays the empty state.
+    expect(memorySearchFailed({ authority, query: "ledger", searching: false, result: { groups: [] } } as unknown as FederatedMemorySearchState)).toBe(false);
+  });
+
+  it("never lets a lane claim a corpus was searched and held nothing", () => {
+    const failed = memoryLaneState({ searching: false, failed: true, count: 0, query: "ledger" });
+    expect(failed).toBe("failed");
+    expect(memoryLaneCountLabel(failed, 0)).toBe("Not searched — the query failed");
+    expect(memoryLaneCountLabel(failed, 0)).not.toBe(memoryLaneCountLabel("empty", 0));
+    expect(memoryLaneCountLabel("empty", 0)).toBe("No matches");
+  });
+
+  it("keeps every other lane state exactly as it was", () => {
+    expect(memoryLaneState({ searching: true, failed: false, count: 0, query: "ledger" })).toBe("searching");
+    expect(memoryLaneState({ searching: false, failed: false, count: 3, query: "ledger" })).toBe("hits");
+    expect(memoryLaneState({ searching: false, failed: false, count: 0, query: "ledger" })).toBe("empty");
+    expect(memoryLaneState({ searching: false, failed: false, count: 0, query: "" })).toBe("idle");
+    // No count slot before a query: "0 results" on an unsearched corpus reads
+    // as "nothing is in there", which is a claim nobody has made yet.
+    expect(memoryLaneCountLabel("idle", 0)).toBeUndefined();
+    expect(memoryLaneCountLabel("hits", 1)).toBe("1 result");
+    expect(memoryLaneCountLabel("hits", 4)).toBe("4 results");
+  });
+
+  it("states the failure once, assertively, beside a control that re-runs it", () => {
+    expect(source).toContain("const failed = memorySearchFailed(state);");
+    expect(source).toContain('role={failed ? "alert" : "status"}');
+    expect(source).toContain('{failed ? <button class="small-button memory-search-retry" type="button" onClick={onRetry}>Retry search</button> : null}');
+    // The nonce is a dependency of the search effect, so the identical query
+    // re-runs — before this the only recovery was to retype a different term.
+    expect(source).toContain("onRetry={() => setSearchAttempt((value) => value + 1)}");
+    expect(source).toContain("}, [attempt, authority, enabled, query, search]);");
+    // The lane words come from one projection, not from a ternary chain that
+    // can grow a fourth answer without a fourth definition.
+    expect(source).toContain("const state = memoryLaneState({ searching, failed, count: lane.count, query });");
+    expect(source).not.toContain('state === "empty" ? "No matches"');
+  });
+
+  it("still renders the honest zero-hit panel for a genuine empty result", () => {
+    expect(source).toContain("const settled = Boolean(state.query) && !state.searching && Boolean(result);");
+    expect(source).toContain("{settled && total === 0\n      ? <MemoryNoMatchPanel");
+    expect(source).toContain("<p>Nothing was hidden, filtered, or ranked away.</p>");
+  });
+});

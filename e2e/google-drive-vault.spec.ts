@@ -117,7 +117,10 @@ test("real browser UI adopts and recovers the encrypted Google Drive vault throu
     await recoveredContext.close();
   }
 
-  await page.getByRole("button", { name: "Disconnect · continue locally" }).click();
+  // Renamed, not moved: one host handler had two button labels, and Drive got
+  // the one in Airship's failure grammar. Both branches now render the Local
+  // Device wording, so this journey clicks the same control by its one name.
+  await page.getByRole("button", { name: "Switch to ephemeral · keep a page copy" }).click();
   await expect(page.getByText("Disconnected", { exact: true })).toBeVisible({ timeout: 60_000 });
   await expect(page.getByRole("heading", { name: "Connect your Google Drive" })).toBeVisible();
   await expect(page.getByText("No endpoint, credential authority, or workspace key is attached.")).toBeVisible();

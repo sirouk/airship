@@ -9,6 +9,7 @@ import {
 } from "../workspace/contracts";
 import { isWorkspaceBinaryEnvelope, workspaceContentByteLength } from "../workspace/content-codec";
 import { ToolRegistry } from "./registry";
+import { objectArguments, rawString, requiredString } from "./schema";
 
 const MAX_SEARCH_FILES = 512;
 const MAX_SEARCH_FILE_BYTES = 512 * 1024;
@@ -18,19 +19,9 @@ const MAX_SEARCH_RESULTS = 200;
 const MAX_SNIPPET_CHARACTERS = 240;
 const MAX_TEXT_EDITOR_EDITS = 32;
 
-function objectArguments(value: JsonValue): Record<string, JsonValue> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Tool arguments must be an object.");
-  return value;
-}
-
-function stringArgument(value: JsonValue | undefined, name: string): string {
-  if (typeof value !== "string") throw new Error(`${name} must be a string.`);
-  return value;
-}
-
 function optionalStringArgument(value: JsonValue | undefined, name: string): string | undefined {
   if (value === undefined) return undefined;
-  return stringArgument(value, name);
+  return requiredString(value, name);
 }
 
 function booleanArgument(value: JsonValue | undefined, name: string, fallback = false): boolean {
@@ -46,7 +37,7 @@ function integerArgument(value: JsonValue | undefined, name: string, fallback: n
 }
 
 function workspacePath(value: JsonValue | undefined, name: string): string {
-  return userWorkspacePath(normalizeWorkspacePath(stringArgument(value, name)));
+  return userWorkspacePath(normalizeWorkspacePath(requiredString(value, name)));
 }
 
 function userWorkspacePath(path: string): string {
@@ -147,7 +138,7 @@ export function createWorkspaceToolRegistry(workspace: WorkspacePort): ToolRegis
     async execute(argumentsValue) {
       const argumentsObject = objectArguments(argumentsValue);
       const path = workspacePath(argumentsObject.path, "path");
-      const content = stringArgument(argumentsObject.content, "content");
+      const content = rawString(argumentsObject.content, "content");
       const expected = argumentsObject.expectedRevision;
       if (expected !== undefined && expected !== null && typeof expected !== "string") {
         throw new Error("expectedRevision must be a string or null.");
@@ -217,8 +208,11 @@ export function createWorkspaceToolRegistry(workspace: WorkspacePort): ToolRegis
       const path = userWorkspacePath(normalizeWorkspacePath(
         typeof argumentsObject.path === "string" ? argumentsObject.path : "/workspace",
       ));
-      const query = stringArgument(argumentsObject.query, "query");
-      if (!query) throw new Error("query must not be empty.");
+      // The blank-query refusal used to live here as a hand-added line, because
+      // this file's local `stringArgument` was the one copy of seven that
+      // accepted "". It is now inside `requiredString`, where the other six
+      // always had it.
+      const query = requiredString(argumentsObject.query, "query");
       const caseSensitive = booleanArgument(argumentsObject.caseSensitive, "caseSensitive");
       const maxResults = integerArgument(argumentsObject.maxResults, "maxResults", DEFAULT_SEARCH_RESULTS);
       if (maxResults < 1 || maxResults > MAX_SEARCH_RESULTS) {
@@ -301,8 +295,8 @@ export function createWorkspaceToolRegistry(workspace: WorkspacePort): ToolRegis
     async execute(argumentsValue): Promise<ToolExecutionResult> {
       const argumentsObject = objectArguments(argumentsValue);
       const path = workspacePath(argumentsObject.path, "path");
-      const oldText = stringArgument(argumentsObject.oldText, "oldText");
-      const newText = stringArgument(argumentsObject.newText, "newText");
+      const oldText = rawString(argumentsObject.oldText, "oldText");
+      const newText = rawString(argumentsObject.newText, "newText");
       const replaceAll = booleanArgument(argumentsObject.replaceAll, "replaceAll");
       const expectedRevision = optionalStringArgument(argumentsObject.expectedRevision, "expectedRevision");
       if (!oldText) throw new Error("oldText must not be empty.");
@@ -447,7 +441,7 @@ export function createWorkspaceToolRegistry(workspace: WorkspacePort): ToolRegis
         const path = workspacePath(edit.path, `edits[${index}].path`);
         if (seen.has(path)) throw new Error(`text_editor accepts at most one operation per path: ${path}`);
         seen.add(path);
-        const newText = stringArgument(edit.newText, `edits[${index}].newText`);
+        const newText = rawString(edit.newText, `edits[${index}].newText`);
         const replaceAll = booleanArgument(edit.replaceAll, `edits[${index}].replaceAll`);
         const declaredRevision = edit.expectedRevision;
         if (declaredRevision !== undefined && declaredRevision !== null && typeof declaredRevision !== "string") {
@@ -462,7 +456,7 @@ export function createWorkspaceToolRegistry(workspace: WorkspacePort): ToolRegis
           planned.push({ path, content: newText, expectedRevision: null, replacements: 0 });
           continue;
         }
-        const oldText = stringArgument(edit.oldText, `edits[${index}].oldText`);
+        const oldText = rawString(edit.oldText, `edits[${index}].oldText`);
         if (!oldText) throw new Error(`edits[${index}].oldText must not be empty.`);
         if (!current) throw new WorkspaceConflictError(`text_editor replacement target is missing: ${path}`);
         if (isWorkspaceBinaryEnvelope(current.content)) {

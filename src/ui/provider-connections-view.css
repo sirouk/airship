@@ -27,17 +27,6 @@
   min-width: 0;
 }
 
-.provider-fabric__heading span,
-.provider-fabric__subheading span,
-.provider-connection header span,
-.provider-setup-card header span {
-  color: var(--ink-faint);
-  font-family: var(--font-mono);
-  font-size: var(--fs-micro);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
 .provider-fabric__heading h2,
 .provider-fabric__subheading h3,
 .provider-connection h3,

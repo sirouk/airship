@@ -1,4 +1,4 @@
-import { useRef, useState } from "preact/hooks";
+import { useId, useRef, useState } from "preact/hooks";
 import { isDeployableGoogleOAuthClientId } from "../storage/google-drive-configuration";
 import { isGoogleDriveConfiguration, type VaultSnapshot } from "../vault/coordinator";
 import type { LocalDeviceVaultStatus } from "../vault/local-device";
@@ -445,11 +445,7 @@ export function VaultView({
             localDevice
             onPublishContext={onPublishContext}
           /> : null}
-          {runtimeAdopted && onDisconnect ? (
-            <div class="vault-view__actions">
-              <button type="button" class="vault-view__button--quiet" onClick={onDisconnect}>Switch to ephemeral · keep a page copy</button>
-            </div>
-          ) : null}
+          {runtimeAdopted && onDisconnect ? <VaultReleaseAction provider={provider} onDisconnect={onDisconnect} /> : null}
         </>
       ) : snapshot.phase === "disconnected" ? null : (
         <>
@@ -549,11 +545,51 @@ export function VaultView({
               // that was closed has mounted before the focus lands in it.
               requestAnimationFrame(() => focusSetupControl([".vault-setup-slot input", ".vault-setup-slot textarea", ".vault-setup-slot button"]));
             }}>Edit configuration</button>}
-            {onDisconnect && <button type="button" class="vault-view__button--quiet" onClick={onDisconnect}>Disconnect · continue locally</button>}
           </div>
+          {onDisconnect ? <VaultReleaseAction provider={provider} onDisconnect={onDisconnect} /> : null}
         </>
       )}
     </section>
+  );
+}
+
+/**
+ * One handler, one name.
+ *
+ * `onDisconnect` is a single host callback — the shell passes exactly one
+ * `disconnectVaultSafely` — and this route printed it as "Switch to ephemeral ·
+ * keep a page copy" on Local Device and, 102 lines later, as "Disconnect ·
+ * continue locally" on every other provider. Someone who learned the first went
+ * looking for it on Drive and found a different verb for the same act, in the
+ * failure grammar `vaultPhaseLabel` below deliberately reserves for a provider
+ * that genuinely dropped. Neither label said what survives, so nobody could
+ * tell whether "keep a page copy" also meant the Drive copy was gone. The
+ * button carries the act; the provider-specific fact is the sentence beside it,
+ * bound to the control by `aria-describedby` so a screen reader gets both.
+ */
+export const VAULT_RELEASE_ACTION_LABEL = "Switch to ephemeral · keep a page copy";
+
+/** What actually survives the release, named per provider rather than per label. */
+export function vaultReleaseNote(provider: VaultBackend): string {
+  const page = "This page keeps working in memory until you close the tab.";
+  const profile = PROVIDER_PROFILES.find((candidate) => candidate.id === provider);
+  // A provider switch can leave the preference on `ephemeral` for a frame while
+  // the old snapshot still renders. "Your encrypted Ephemeral data" would be a
+  // sentence about a store that does not exist.
+  return profile && provider !== "ephemeral"
+    ? `${page} Your encrypted ${profile.title} data is left exactly where it is, and this route re-attaches it whenever you choose that provider again.`
+    : `${page} No durable store is attached to release.`;
+}
+
+function VaultReleaseAction({ provider, onDisconnect }: Readonly<{ provider: VaultBackend; onDisconnect(): void }>) {
+  const noteId = useId();
+  return (
+    <div class="vault-view__actions">
+      <button type="button" class="vault-view__button--quiet" aria-describedby={noteId} onClick={onDisconnect}>
+        {VAULT_RELEASE_ACTION_LABEL}
+      </button>
+      <small id={noteId}>{vaultReleaseNote(provider)}</small>
+    </div>
   );
 }
 

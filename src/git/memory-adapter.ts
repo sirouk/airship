@@ -1,3 +1,4 @@
+import { deepFreeze } from "../core/freeze";
 import { sha256, stableStringify } from "../core/hash";
 import { GitCapabilityError, GitDomainError, GitNotFoundError, GitValidationError, GitVersionConflictError } from "./errors";
 import type {
@@ -909,12 +910,4 @@ function repositoryVersion(repository: MemoryRepository): string {
 
 function worktreeVersion(worktree: MemoryWorktree): string {
   return `worktree-v${worktree.revision}`;
-}
-
-function deepFreeze<T>(value: T): T {
-  if (value && typeof value === "object" && !Object.isFrozen(value)) {
-    Object.freeze(value);
-    for (const child of Object.values(value as Record<string, unknown>)) deepFreeze(child);
-  }
-  return value;
 }

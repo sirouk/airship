@@ -132,7 +132,7 @@ async function json(route: Route, body: unknown): Promise<void> {
 
 async function openConnect(page: Page): Promise<void> {
   await page.goto("http://localhost:4173/#connection");
-  await expect(page.getByRole("heading", { name: "Connect models", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Connection", exact: true, level: 1 })).toBeVisible();
   // The bridge lanes start "checking" and settle on a real handshake deadline;
   // the route header's ⓘ auto-opens on first visit and overlays the lead lane
   // until dismissed, so both are waited out before anything below is clicked.

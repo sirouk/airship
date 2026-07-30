@@ -1,3 +1,4 @@
+import { deepFreeze } from "../core/freeze";
 import * as git from "isomorphic-git";
 import http from "isomorphic-git/http/web";
 import { Buffer as BrowserBuffer } from "buffer";
@@ -1808,10 +1809,3 @@ function validateRemoteCredential(value: WorkspaceGitRemoteCredential): Workspac
 }
 
 function relativePath(root: string, path: string): string { return path === root ? "" : path.slice(root.length + 1); }
-function deepFreeze<T>(value: T): T {
-  if (value && typeof value === "object" && !Object.isFrozen(value)) {
-    Object.freeze(value);
-    for (const child of Object.values(value as Record<string, unknown>)) deepFreeze(child);
-  }
-  return value;
-}

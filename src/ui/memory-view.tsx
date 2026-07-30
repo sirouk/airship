@@ -194,6 +194,16 @@ export function MemoryView({
     initialTab === "index" || restoredPresentation?.indexMounted === true,
   );
   const [contextGeneration, setContextGeneration] = useState<string>();
+  /*
+   * The only way back from a failed search.
+   *
+   * The search effect is keyed on the query, so a rejection left the reader
+   * with no way to re-run the identical term — `searchMemoryForUi` throws
+   * "The active accountable session is not ready." before any network exists,
+   * and recovery meant retyping a different string and coming back. The nonce
+   * is a dependency, so bumping it re-arms the same query.
+   */
+  const [searchAttempt, setSearchAttempt] = useState(0);
   // Held in state, not a ref: the graph surface is loaded lazily, so the zoom
   // controls have to re-render disabled until the engine that answers them exists.
   const [viewportControls, setViewportControls] = useState<MemoryGraphViewportControls>();
@@ -228,7 +238,7 @@ export function MemoryView({
     [messageSignature],
   );
   const memoryAuthority = useMemo(() => ({}), [activeProfile, catalog, settledMessages, sessionId, workspaceAuthority]);
-  const memorySearch = useFederatedMemorySearch(query, searchMemory, memoryAuthority, !indexMounted || Boolean(contextGeneration));
+  const memorySearch = useFederatedMemorySearch(query, searchMemory, memoryAuthority, !indexMounted || Boolean(contextGeneration), searchAttempt);
   const graph = useMemo(() => {
     return deriveMemoryRelationshipGraph({
       sessions: sessionId ? [{
@@ -352,20 +362,25 @@ export function MemoryView({
         }
       }}>
         <label class="sr-only" for="memory-query-input">Search every memory surface</label>
-        <div>
+        <div class="search-field">
           <Icon name="memory" size={18} />
-          <input
-            id="memory-query-input"
-            type="search"
-            value={query}
-            autoComplete="off"
-            spellcheck={false}
-            aria-describedby="memory-query-help"
-            aria-controls="memory-results memory-relationships memory-index"
-            placeholder="Search memory"
-            onInput={(event) => setQuery(event.currentTarget.value)}
-          />
-          {query ? <button type="button" aria-label="Clear memory query" onClick={() => setQuery("")}><span aria-hidden="true">✕</span></button> : null}
+          {/* The field and its one clear affordance are a single grid cell now,
+              so the shared recipe in `search-field.css` reaches every search
+              field without each route sheet growing a track for the button. */}
+          <span class="search-field__entry">
+            <input
+              id="memory-query-input"
+              type="search"
+              value={query}
+              autoComplete="off"
+              spellcheck={false}
+              aria-describedby="memory-query-help"
+              aria-controls="memory-results memory-relationships memory-index"
+              placeholder="Search memory"
+              onInput={(event) => setQuery(event.currentTarget.value)}
+            />
+            {query ? <button class="search-field__clear" type="button" aria-label="Clear memory query" onClick={() => setQuery("")}><span aria-hidden="true">✕</span></button> : null}
+          </span>
         </div>
         {/*
           * The enumeration the placeholder used to carry, which clipped
@@ -391,6 +406,7 @@ export function MemoryView({
         onOpenSource={onOpenSource}
         starters={starters}
         onStart={setQuery}
+        onRetry={() => setSearchAttempt((value) => value + 1)}
       />
 
       <details
@@ -561,7 +577,7 @@ export function MemoryView({
   );
 }
 
-function useFederatedMemorySearch(query: string, search: MemoryViewProps["searchMemory"], authority: object, enabled: boolean): FederatedMemorySearchState {
+function useFederatedMemorySearch(query: string, search: MemoryViewProps["searchMemory"], authority: object, enabled: boolean, attempt: number): FederatedMemorySearchState {
   const [state, setState] = useState<FederatedMemorySearchState>({ authority, query: "", searching: false });
   useEffect(() => {
     const normalized = query.trim();
@@ -590,10 +606,56 @@ function useFederatedMemorySearch(query: string, search: MemoryViewProps["search
       window.clearTimeout(timer);
       controller.abort(new DOMException("Memory query superseded.", "AbortError"));
     };
-  }, [authority, enabled, query, search]);
+  }, [attempt, authority, enabled, query, search]);
   return state.authority === authority && state.query === query.trim()
     ? state
     : { authority, query: query.trim(), searching: Boolean(query.trim()) };
+}
+
+/**
+ * The search rejected, as distinct from the corpora being empty.
+ *
+ * The measured defect: on rejection the state carries `status` and no
+ * `result`, so the honest `MemoryNoMatchPanel` was skipped and all three lanes
+ * fell through to `"No matches"` — telling a reader that their conversation,
+ * their profile memory and their workspace index contain nothing matching, on
+ * the one route that promises "Nothing was hidden, filtered, or ranked away".
+ * This is reachable with no network at all: `searchMemoryForUi` throws when no
+ * accountable session is bound and when the federated tool is not installed.
+ */
+export function memorySearchFailed(state: FederatedMemorySearchState): boolean {
+  return Boolean(state.query) && !state.searching && !state.result && Boolean(state.status);
+}
+
+export type MemoryLaneState = "searching" | "failed" | "hits" | "empty" | "idle";
+
+/**
+ * What one scope card may claim about itself.
+ *
+ * `failed` outranks the hit count because a rejected search produced no
+ * groups, so `count` is zero for a reason that has nothing to do with the
+ * corpus — and zero-because-nothing-ran must never be spoken as
+ * zero-because-nothing-matched.
+ */
+export function memoryLaneState(args: Readonly<{
+  searching: boolean;
+  failed: boolean;
+  count: number;
+  query: string;
+}>): MemoryLaneState {
+  if (args.searching) return "searching";
+  if (args.failed) return "failed";
+  if (args.count > 0) return "hits";
+  return args.query ? "empty" : "idle";
+}
+
+/** The count-slot words for each lane state; `idle` renders no slot at all. */
+export function memoryLaneCountLabel(state: MemoryLaneState, count: number): string | undefined {
+  if (state === "searching") return "Searching…";
+  if (state === "failed") return "Not searched — the query failed";
+  if (state === "empty") return "No matches";
+  if (state === "hits") return `${count} result${count === 1 ? "" : "s"}`;
+  return undefined;
 }
 
 /** Total hits across the three lanes, for the scope rail's honest count. */
@@ -611,13 +673,15 @@ type MemoryLaneView = Readonly<{
   hits: ComponentChildren;
 }>;
 
-function FederatedMemorySearch({ state, graphMatchCount, onShowGraphMatches, onOpenSource, starters, onStart }: Readonly<{
+function FederatedMemorySearch({ state, graphMatchCount, onShowGraphMatches, onOpenSource, starters, onStart, onRetry }: Readonly<{
   state: FederatedMemorySearchState;
   graphMatchCount: number;
   onShowGraphMatches: () => void;
   onOpenSource?: MemoryViewProps["onOpenSource"];
   starters: readonly MemoryStarter[];
   onStart: (query: string) => void;
+  /** Re-arms the identical query; the effect is keyed on a nonce, not the text. */
+  onRetry: () => void;
 }>) {
   const result = state.result;
   const sessionId = result?.authority.sessionId;
@@ -628,6 +692,7 @@ function FederatedMemorySearch({ state, graphMatchCount, onShowGraphMatches, onO
   ];
   const total = lanes.reduce((sum, lane) => sum + lane.count, 0);
   const settled = Boolean(state.query) && !state.searching && Boolean(result);
+  const failed = memorySearchFailed(state);
   return <section id="memory-results" class="memory-federated" aria-labelledby="memory-search-title">
     {/*
       * "Federated client recall" and "Results across private scopes" name a
@@ -635,7 +700,12 @@ function FederatedMemorySearch({ state, graphMatchCount, onShowGraphMatches, onO
       * in the accessibility tree instead of spending 104px restating it.
       */}
     <h2 id="memory-search-title" class="sr-only">Federated client recall · Results across private scopes</h2>
-    <p class="memory-search-status" role={state.status && !state.searching ? "alert" : "status"} aria-live="polite">{state.status ?? (state.query ? "Search complete · results pinned to reported revisions." : "Ready for a private on-device query.")}</p>
+    <p class="memory-search-status" role={failed ? "alert" : "status"} aria-live="polite">{state.status ?? (state.query ? "Search complete · results pinned to reported revisions." : "Ready for a private on-device query.")}</p>
+    {/* The sentence above is the only place the failure is stated, and this is
+        the only way back to it: the effect is keyed on the query, so before
+        this button the sole recovery from a rejected search was to retype a
+        different term and navigate back. */}
+    {failed ? <button class="small-button memory-search-retry" type="button" onClick={onRetry}>Retry search</button> : null}
     {/*
       * The unsearched state used to be three empty boxes and one sentence
       * reporting that nothing had happened. The three scope headers stay —
@@ -647,7 +717,7 @@ function FederatedMemorySearch({ state, graphMatchCount, onShowGraphMatches, onO
     {settled && total === 0
       ? <MemoryNoMatchPanel query={state.query} lanes={lanes} graphMatchCount={graphMatchCount} onShowGraphMatches={onShowGraphMatches} />
       : <div class="memory-result-lanes">
-        {lanes.map((lane) => <MemorySearchLane key={lane.id} lane={lane} query={state.query} searching={state.searching} />)}
+        {lanes.map((lane) => <MemorySearchLane key={lane.id} lane={lane} query={state.query} searching={state.searching} failed={failed} />)}
       </div>}
   </section>;
 }
@@ -964,19 +1034,18 @@ function memoryHitString(hit: Readonly<Record<string, import("../core/contracts"
  * with nothing in it now says so on one row, and still says which corpus it
  * consulted — the collapse removes padding, not the claim.
  */
-function MemorySearchLane({ lane, query, searching }: Readonly<{ lane: MemoryLaneView; query: string; searching: boolean }>) {
-  const state = searching ? "searching" : lane.count > 0 ? "hits" : query ? "empty" : "idle";
+function MemorySearchLane({ lane, query, searching, failed }: Readonly<{ lane: MemoryLaneView; query: string; searching: boolean; failed: boolean }>) {
+  const state = memoryLaneState({ searching, failed, count: lane.count, query });
+  const count = memoryLaneCountLabel(state, lane.count);
   return (
     <section class="memory-result-lane" data-state={state}>
       <header>
         <h3>{lane.title}</h3>
         {/* No count before a query: "0 results" on an unsearched corpus reads
-            as "nothing is in there", which is a claim nobody has made yet. */}
-        {state === "idle" ? null : (
-          <span class="memory-lane-count">
-            {state === "searching" ? "Searching…" : state === "empty" ? "No matches" : `${lane.count} result${lane.count === 1 ? "" : "s"}`}
-          </span>
-        )}
+            as "nothing is in there", which is a claim nobody has made yet. And
+            no "No matches" after a rejection, which is the same claim made
+            about three corpora that were never consulted. */}
+        {count ? <span class="memory-lane-count">{count}</span> : null}
         {/* No digest token on a lane header: the scope name has to win the
             width, and the untruncated values are one tap inside the chip. */}
         <ProvenanceChip subject={lane.title} rows={lane.provenance} summary="" />

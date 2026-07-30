@@ -1,22 +1,133 @@
-import { useEffect, useRef, useState } from "preact/hooks";
+import { useEffect, useState } from "preact/hooks";
 
 const CHANNEL = "airship-page-presence-v1";
 
+/**
+ * How often a tab re-announces itself, and how long silence is tolerated.
+ *
+ * The note latched on forever before this: a tab announced `hello`, every peer
+ * answered `present`, and `setPeer(true)` was the last state change the
+ * component ever made. Close the second tab and the first one kept warning
+ * that page-memory state was not shared with a tab that no longer existed —
+ * for the rest of the session, across every route.
+ *
+ * A departure broadcast is the honest primary signal and it is immediate, but
+ * it cannot survive a crash or a force-quit, so the heartbeat is the backstop.
+ * The expiry is deliberately not short: the *other* tab is by definition the
+ * backgrounded one, and Chrome throttles timers in hidden tabs to roughly once
+ * a minute, so consecutive beats can be 60s apart no matter what interval is
+ * asked for. `EXPIRY_MS` clears that worst case plus a whole beat, so a peer is
+ * only ever declared gone because it is gone — never because the OS slowed it
+ * down. Shortening the window until the warning "goes away on its own" would
+ * make it lie in the other direction; the departure broadcast is what makes
+ * the ordinary case instant.
+ */
+export const PRESENCE_HEARTBEAT_MS = 20_000;
+export const PRESENCE_EXPIRY_MS = 90_000;
+/** How often the roster is re-checked. Cheap, and bounds how stale the note is. */
+export const PRESENCE_SWEEP_MS = 5_000;
+
+export type PresenceMessage = Readonly<{ type: "hello" | "present" | "bye"; id: string }>;
+
+/**
+ * The roster, as a value a test can drive without a browser.
+ *
+ * Kept deliberately free of `BroadcastChannel`, timers and Preact: the defect
+ * this replaces was a state machine with no transition out of `true`, which is
+ * exactly the thing worth asserting directly.
+ */
+export class TabPresenceRoster {
+  readonly #peers = new Map<string, number>();
+
+  constructor(private readonly selfId: string) {}
+
+  /** Peers seen recently enough to still be believed. */
+  count(now: number): number {
+    return [...this.#peers.values()].filter((seen) => now - seen < PRESENCE_EXPIRY_MS).length;
+  }
+
+  occupied(now: number): boolean {
+    return this.count(now) > 0;
+  }
+
+  /**
+   * Fold a message in. Returns the reply this tab owes the sender, if any:
+   * a `hello` is an arrival asking who else is here, so it is answered; a
+   * `present` is already an answer and must not be, or two tabs ping-pong.
+   */
+  receive(message: PresenceMessage, now: number): PresenceMessage | undefined {
+    if (!message || message.id === this.selfId) return undefined;
+    if (message.type === "bye") {
+      this.#peers.delete(message.id);
+      return undefined;
+    }
+    if (message.type !== "hello" && message.type !== "present") return undefined;
+    this.#peers.set(message.id, now);
+    return message.type === "hello" ? { type: "present", id: this.selfId } : undefined;
+  }
+
+  /**
+   * Drop the expired and report whether anyone was dropped, so the caller can
+   * re-probe: a peer that merely missed its window under background throttling
+   * answers the follow-up `hello` and is back inside one round trip.
+   */
+  sweep(now: number): boolean {
+    let dropped = false;
+    for (const [id, seen] of this.#peers) {
+      if (now - seen >= PRESENCE_EXPIRY_MS) {
+        this.#peers.delete(id);
+        dropped = true;
+      }
+    }
+    return dropped;
+  }
+}
+
 export function TabPresenceNote() {
-  const id = useRef(globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`);
   const [peer, setPeer] = useState(false);
   useEffect(() => {
     if (!("BroadcastChannel" in globalThis)) return;
+    const selfId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
+    const roster = new TabPresenceRoster(selfId);
     const channel = new BroadcastChannel(CHANNEL);
+    const announce = (type: PresenceMessage["type"]) => channel.postMessage({ type, id: selfId });
+
     channel.onmessage = (event) => {
-      if (!event.data || event.data.id === id.current) return;
-      if (event.data.type === "hello" || event.data.type === "present") {
-        setPeer(true);
-        if (event.data.type === "hello") channel.postMessage({ type: "present", id: id.current });
-      }
+      const reply = roster.receive(event.data as PresenceMessage, Date.now());
+      if (reply) channel.postMessage(reply);
+      setPeer(roster.occupied(Date.now()));
     };
-    channel.postMessage({ type: "hello", id: id.current });
-    return () => channel.close();
+
+    const heartbeat = setInterval(() => announce("present"), PRESENCE_HEARTBEAT_MS);
+    const sweep = setInterval(() => {
+      const now = Date.now();
+      if (roster.sweep(now)) announce("hello");
+      setPeer(roster.occupied(now));
+    }, PRESENCE_SWEEP_MS);
+
+    /*
+     * `pagehide` rather than `beforeunload`: iOS Safari fires the latter
+     * unreliably and never at all for a bfcache eviction, and this is the
+     * signal that takes the warning down the instant the second tab closes.
+     * A bfcache restore re-announces, because the peers that heard the
+     * departure have already forgotten this tab.
+     */
+    const depart = () => announce("bye");
+    const restore = (event: PageTransitionEvent) => {
+      if (event.persisted) announce("hello");
+    };
+    globalThis.addEventListener("pagehide", depart);
+    globalThis.addEventListener("pageshow", restore);
+
+    announce("hello");
+    return () => {
+      clearInterval(heartbeat);
+      clearInterval(sweep);
+      globalThis.removeEventListener("pagehide", depart);
+      globalThis.removeEventListener("pageshow", restore);
+      announce("bye");
+      channel.close();
+    };
   }, []);
   return peer ? <span class="tab-presence-note" role="status">Open in another tab · page-memory state is not shared</span> : null;
 }

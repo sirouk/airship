@@ -19,18 +19,9 @@ import type {
 
 const GATE_FRESHNESS_MS = 5 * 60_000;
 
-/**
- * Build-time verifier capability, not a provider/model assertion. The shipped
- * browser verifier authenticates NVIDIA device evidence but cannot yet perform
- * the nonce-bound RIM, revocation, and freshness checks needed to promote the
- * GPU claim from `matched` to `verified`. Keep strict mode visibly unavailable
- * until that independent verifier path exists instead of offering a policy
- * that is guaranteed to reject every turn.
- */
-export const CHUTES_STRICT_ENDPOINT_PROOF_CAPABILITY = Object.freeze({
-  available: false,
-  reason: "Independent NVIDIA GPU verification is not yet browser-complete; strict endpoint proof would reject every turn.",
-});
+/* Re-exported from its leaf module so the surfaces that only need the answer
+   do not have to import this file's DCAP verifier to get it. */
+export { CHUTES_STRICT_ENDPOINT_PROOF_CAPABILITY } from "./strict-proof-capability";
 
 function toProofStatus(state: AttestationClaimState): ProofStatus {
   return state === "verified"

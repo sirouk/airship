@@ -3,3 +3,36 @@ export function ownedArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   return Uint8Array.from(bytes).buffer;
 }
 
+/**
+ * The one byte vocabulary this product speaks.
+ *
+ * Eight modules formatted bytes on their own and two of them disagreed about
+ * what the units are called: `navigator.storage.estimate()` returning
+ * 268,435,456 read "Origin storage 256 MB" on #capabilities and "256 MiB" two
+ * taps away on #vault — one number, two names, no way for a reader to know it
+ * was one number. The binary prefix wins because the divisor is 1024: labelling
+ * a 1024-divided figure "MB" is arithmetically a lie, and four of the eight
+ * copies already spelled it MiB.
+ *
+ * The rounding rule (whole numbers at ten and above, one decimal below) is kept
+ * from the vault copy so a reader never sees "256.0 MiB" beside "256 MiB".
+ *
+ * "Unknown" is a formatting fallback, not a measurement claim. A surface that
+ * knows *why* a number is missing must say so itself — see
+ * `measuredBytesLabel` in src/capabilities/runtime-load.ts, which owns the
+ * sentence "Not measurable in this browser" and never reaches this function
+ * with an unmeasured value.
+ */
+export function formatBytes(value: number): string {
+  if (!Number.isFinite(value) || value < 0) return "Unknown";
+  if (value < 1024) return `${Math.floor(value)} B`;
+  const units = ["KiB", "MiB", "GiB", "TiB"] as const;
+  let amount = value / 1024;
+  let unit: (typeof units)[number] = units[0];
+  for (let index = 1; index < units.length && amount >= 1024; index += 1) {
+    amount /= 1024;
+    unit = units[index]!;
+  }
+  return `${amount >= 10 ? amount.toFixed(0) : amount.toFixed(1)} ${unit}`;
+}
+

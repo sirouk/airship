@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
+import { formatBytes } from "../core/bytes";
 import { ClientExecutionRuntime, type ExecutionAdapter, type ExecutionResult } from "../execution/runtime-registry";
 import {
   RUNTIME_LOAD_BOUNDARY,
@@ -141,8 +142,14 @@ describe("runtime load monitor", () => {
       estimateStorage: async () => ({ usage: 1_536, quota: 100_000 }),
     }).measure();
     expect(measured.memory).toMatchObject({ state: "measured", bytes: 41_943_040 });
-    expect(measuredBytesLabel(measured.memory)).toBe("40 MB");
-    expect(measuredBytesLabel(measured.storage)).toBe("1.5 KB");
+    // Asserted against the shared formatter rather than a copied literal: the
+    // defect this replaces was 268,435,456 bytes reading "256 MB" here and
+    // "256 MiB" on #vault, which no pair of copied literals could catch.
+    expect(measuredBytesLabel(measured.memory)).toBe(formatBytes(41_943_040));
+    expect(measuredBytesLabel(measured.memory)).toBe("40 MiB");
+    expect(measuredBytesLabel(measured.storage)).toBe(formatBytes(1_536));
+    expect(measuredBytesLabel(measured.storage)).toBe("1.5 KiB");
+    expect(measuredBytesLabel({ state: "measured", bytes: 268_435_456, detail: "origin usage" })).toBe("256 MiB");
 
     // A rejecting or empty measurement is not a zero.
     const failed = await monitor({

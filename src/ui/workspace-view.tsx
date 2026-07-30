@@ -1,4 +1,8 @@
 import { useEffect, useId, useMemo, useRef, useState } from "preact/hooks";
+// The Explorer's own B/KiB/MiB copy stopped at MiB, so a 2 GB imported file
+// read "1907.3 MiB" here while #vault printed "1.9 GiB" for the same bytes.
+// One vocabulary, one rounding rule, one module — nothing left here to drift.
+import { formatBytes } from "../core/bytes";
 import type { BrowserGitClient } from "../git/client";
 import { describeGitOperation } from "../git/operations";
 import { preferredSourceRepositoryId } from "../git/source-selection";
@@ -7,17 +11,21 @@ import type { GitAuthor, GitCommitDetail, GitCommitFilePatch, GitCommitSummary, 
 import type { WorkspaceEntry, WorkspaceFile, WorkspacePort } from "../workspace/contracts";
 import { isWorkspaceControlPlanePath, normalizeWorkspacePath, workspaceEntryByteLength } from "../workspace/contracts";
 import { decodeWorkspaceBytes, isWorkspaceBinaryEnvelope } from "../workspace/content-codec";
+import { searchWorkspaceContent, workspaceSearchSummary, type WorkspaceContentSearch } from "../workspace/content-search";
 import { moveWorkspaceFile } from "../workspace/mutations";
 import { buildWorkspaceTree, visibleWorkspaceTree, workspaceBaseName, workspaceDirectories, workspaceFilesUnder, workspaceFolderRenamePlan, workspaceParentPath, type WorkspaceMove } from "../workspace/tree";
+import { ConfirmDialog } from "./confirm-dialog";
 import { downloadBytes, downloadFileName } from "./file-download";
-import { trapFocus } from "./focus-trap";
 import { Icon } from "./icons";
 import { MenuSelect, moveMenuSelection } from "./menu-select";
 import { Seal } from "./seal";
 // One conflict predicate for every staging surface: the Advanced controls
 // exclude conflicted paths from bulk staging (`isConflicted`) and the
 // workbench rail must never be able to send what that panel refused.
-import { isConflicted } from "./sources-view";
+// `UnifiedPatch` arrives the same way and for the same reason: this pane used
+// to dump the identical `git.diff` result into a `<pre>` while Source Control,
+// one click away on the same route, numbered and classified every line.
+import { isConflicted, UnifiedPatch } from "./sources-view";
 import { middleTruncate, Tabs, type TabItem } from "./tabs";
 import { WorkspaceFileIcon } from "./workspace-file-icon";
 import {
@@ -65,6 +73,15 @@ import {
 import "./workspace-view.css";
 import "./workspace-file-icon.css";
 
+/** What the Explorer's one search field is searching. */
+export type WorkspaceFilterMode = "path" | "contents";
+/**
+ * How long the field waits before spending a bounded read on what was typed.
+ *
+ * A scan is up to 8 MiB of workspace reads; running one per keystroke would
+ * charge the whole workspace for a word the user has not finished typing.
+ */
+export const WORKSPACE_SEARCH_DEBOUNCE_MS = 180;
 export const WORKSPACE_FILE_ROW_HEIGHT = 34;
 export const WORKSPACE_FILE_OVERSCAN = 7;
 export const WORKSPACE_EDITOR_BYTE_LIMIT = 128 * 1024;
@@ -217,7 +234,6 @@ function ProfileScopedWorkspaceView({
   opensPaneArrival = 0,
   opensActivity = "explorer",
 }: WorkspaceViewProps) {
-  const dialogTitleId = useId();
   const contextHintId = useId();
   // One id per *window slot*, not per path: a workspace path may contain a
   // space, and an `aria-owns` value is a space-separated IDREF list.
@@ -237,7 +253,25 @@ function ProfileScopedWorkspaceView({
   const editorPanelId = `${panelBaseId}-editor-panel`;
   const editorPanelTitleId = `${panelBaseId}-editor-title`;
   const [filter, setFilter] = useState("");
-  const filtered = useMemo(() => workbenchFilterMatches(files, filter), [files, filter]);
+  /**
+   * Which question the one search-shaped box on this route is answering.
+   *
+   * `workbenchFilterMatches` reads `entry.path` and nothing else, so a developer
+   * who imported a repository and typed a symbol name got filename matches and
+   * concluded the product cannot grep — while `search_text`, which does exactly
+   * this over file bodies, had no control anywhere on the route that owns files.
+   * A mode on the existing field rather than a second widget: two search boxes
+   * in a 15% rail is how a person ends up typing into the wrong one.
+   */
+  const [filterMode, setFilterMode] = useState<WorkspaceFilterMode>("path");
+  const [search, setSearch] = useState<WorkspaceContentSearch>();
+  const [searching, setSearching] = useState(false);
+  const query = filter.trim();
+  // Contents mode leaves the tree unfiltered: its rows answer "where is this
+  // path", and the results list answers "where is this text". Path-mode
+  // behaviour is byte-for-byte what it was.
+  const pathFilter = filterMode === "path" ? filter : "";
+  const filtered = useMemo(() => workbenchFilterMatches(files, pathFilter), [files, pathFilter]);
   const filtering = filtered.shown !== filtered.total;
   const fullTree = useMemo(() => buildWorkspaceTree(files), [files]);
   const tree = useMemo(() => filtering ? buildWorkspaceTree(filtered.matches) : fullTree, [filtering, filtered.matches, fullTree]);
@@ -251,6 +285,16 @@ function ProfileScopedWorkspaceView({
     [filtering, tree, expanded],
   );
   const visible = useMemo(() => visibleWorkspaceTree(tree, effectiveExpanded), [tree, effectiveExpanded]);
+  /**
+   * Clearing a filter cannot hand the keyboard back inside the same call.
+   *
+   * `focusTreeIndex` reads the *current* `visible`, which for the case that
+   * needs it most — a filter matching nothing — is empty, so it returned
+   * without focusing anything and the Escape shortcut silently did half its
+   * job. The row to focus only exists after the unfiltered tree renders, so the
+   * request is queued here and spent by the effect below.
+   */
+  const pendingTreeFocus = useRef(false);
   const [scrollTop, setScrollTop] = useState(0);
   const [treeHeight, setTreeHeight] = useState(WORKSPACE_FILE_VIEWPORT_HEIGHT);
   const rowHeight = workspaceRowHeight();
@@ -536,6 +580,46 @@ function ProfileScopedWorkspaceView({
     return () => observer.disconnect();
   }, [mode]);
 
+  // Contents mode reads real bytes, so it is the one filter that costs
+  // something: the request is debounced, abortable, and dropped entirely the
+  // moment the field empties or the mode flips back to Path.
+  useEffect(() => {
+    if (filterMode !== "contents" || !query) {
+      setSearch(undefined);
+      setSearching(false);
+      return;
+    }
+    const controller = new AbortController();
+    setSearching(true);
+    const timer = setTimeout(() => {
+      void searchWorkspaceContent(workspace, files, query, { signal: controller.signal })
+        .then((result) => { if (!controller.signal.aborted) setSearch(result); })
+        .catch((cause: unknown) => {
+          if (controller.signal.aborted) return;
+          setNotice(workbenchNotice("error", cause instanceof Error ? cause.message : "Workspace content could not be searched."));
+        })
+        .finally(() => { if (!controller.signal.aborted) setSearching(false); });
+    }, WORKSPACE_SEARCH_DEBOUNCE_MS);
+    return () => { controller.abort(); clearTimeout(timer); };
+  }, [filterMode, query, files, workspace]);
+
+  /*
+   * Spends the queued focus request the moment the rows it names exist.
+   *
+   * `filter` and `filterMode` are dependencies because `visible` is derived
+   * from `tree` and `effectiveExpanded` alone — clearing a Contents-mode filter
+   * changes neither, so keyed on `[visible]` this effect could not run at all
+   * on the path that queues it most. The request then stayed armed until some
+   * unrelated change (expanding a folder, a refresh adding a file) rebuilt
+   * `visible`, and yanked focus and scroll to row 0 while the reader was
+   * somewhere else entirely.
+   */
+  useEffect(() => {
+    if (!pendingTreeFocus.current || !visible.length) return;
+    pendingTreeFocus.current = false;
+    focusTreeIndex(0);
+  }, [visible, filter, filterMode]);
+
   useEffect(() => {
     if (!revealRequest || mode !== "explorer" || filter) return;
     const index = visible.findIndex((node) => node.path === revealRequest.path);
@@ -566,13 +650,6 @@ function ProfileScopedWorkspaceView({
     );
     return () => window.clearTimeout(timer);
   }, [notice]);
-
-  useEffect(() => {
-    if (!dialog) return;
-    const box = dialogBox.current;
-    const focusable = box?.querySelector<HTMLElement>("input, [role=\"option\"]:not([disabled]), button");
-    (focusable ?? box)?.focus();
-  }, [dialog?.kind, dialog?.path]);
 
   useEffect(() => () => clearHoverExpansion(), []);
 
@@ -1398,6 +1475,24 @@ function ProfileScopedWorkspaceView({
     setContext(undefined);
   }
 
+  /**
+   * The one way out of a filter, wherever it is offered.
+   *
+   * An already-empty filter focuses immediately rather than queueing: setting
+   * state to the value it already holds need not re-render, and a queued
+   * request that nothing re-renders to spend is a request that never runs.
+   * Escape on an empty Path filter used to move the keyboard to row 0 and had
+   * silently stopped doing anything at all.
+   */
+  function clearFilter(): void {
+    if (!filter) {
+      focusTreeIndex(0);
+      return;
+    }
+    setFilter("");
+    pendingTreeFocus.current = true;
+  }
+
   function focusTreeIndex(index: number): void {
     if (!visible.length) return;
     const bounded = Math.max(0, Math.min(index, visible.length - 1));
@@ -1459,6 +1554,23 @@ function ProfileScopedWorkspaceView({
     else if (event.key === "End") { event.preventDefault(); resizeRail(WORKBENCH_RAIL_MAX_PERCENT); }
   }
 
+  // Contents mode replaces the rows in the rail, never the rail itself: the
+  // tree keeps its element (and the ResizeObserver measuring it) and is hidden,
+  // so returning to Path mode restores the same scroll position and window.
+  // An empty Contents field shows the whole tree rather than a blank pane —
+  // there is no query to answer, and a blank rail is the defect being fixed.
+  const contentPane = filterMode !== "contents" || !query ? undefined
+    : searching || !search ? "searching"
+    : search.matches.length ? "results"
+    : "empty";
+  const contentMatches = contentPane === "results" ? search?.matches ?? [] : [];
+  const emptyFilterCopy = contentPane === "empty"
+    ? workspaceFilterEmptyCopy(filter, search?.scannedFiles ?? 0, "contents")
+    : filterMode === "path" && filtering && visible.length === 0
+      ? workspaceFilterEmptyCopy(filter, filtered.total, "path")
+      : undefined;
+  const treeHidden = contentPane !== undefined || emptyFilterCopy !== undefined;
+
   return (
     <section class="work-view workspace-workbench">
       {/*
@@ -1506,16 +1618,24 @@ function ProfileScopedWorkspaceView({
                 ref={filterField}
                 type="search"
                 value={filter}
-                aria-label="Filter workspace files by path"
-                placeholder="Filter files"
+                aria-label={filterMode === "contents" ? "Search workspace file contents" : "Filter workspace files by path"}
+                placeholder={filterMode === "contents" ? "Search in files" : "Filter files"}
                 onInput={(event) => setFilter(event.currentTarget.value)}
                 onKeyDown={(event) => {
                   if (event.key !== "Escape") return;
                   event.preventDefault();
-                  setFilter("");
-                  focusTreeIndex(0);
+                  clearFilter();
                 }}
               />
+              {/*
+                The same segmented control Source Control uses for Tree/Flat, so
+                the two panes of one route do not invent two grammars for "the
+                same list, read a different way".
+              */}
+              <div class="git-view-toggle" role="group" aria-label="Search workspace by">
+                <button type="button" aria-pressed={filterMode === "path"} onClick={() => setFilterMode("path")}>Path</button>
+                <button type="button" aria-pressed={filterMode === "contents"} onClick={() => setFilterMode("contents")}>Contents</button>
+              </div>
             </div>
             {/*
               Creation used to be a 26x26 bare "+" that made files only; a folder
@@ -1524,9 +1644,13 @@ function ProfileScopedWorkspaceView({
               count is not paying for a line of its own.
             */}
             <div class="workspace-actions">
-              {/* A filtered tree must never be mistakable for an empty workspace. */}
+              {/* A filtered tree must never be mistakable for an empty
+                  workspace, and a bounded scan must never read as an exhaustive
+                  one — so the count states which of the three it is. */}
               <p class="workspace-filter-count" role="status">
-                {filtering ? `${String(filtered.shown)} of ${String(filtered.total)} files` : `${String(filtered.total)} files`}
+                {filterMode === "contents"
+                  ? !query ? `${String(filtered.total)} files · type to search their contents` : searching || !search ? `Reading ${String(filtered.total)} files…` : workspaceSearchSummary(search)
+                  : filtering ? `${String(filtered.shown)} of ${String(filtered.total)} files` : `${String(filtered.total)} files`}
               </p>
               <button class="workspace-new" type="button" onClick={() => openDialog("create", "/workspace")}>
                 <span aria-hidden="true">+</span> New file
@@ -1535,7 +1659,11 @@ function ProfileScopedWorkspaceView({
                 <span aria-hidden="true">+</span> New folder
               </button>
             </div>
-            <div ref={treeViewport} class="workspace-tree" role="tree" aria-label="Workspace files" onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) clearHoverExpansion(); }}>
+            {/* `hidden`, not unmounted: the tree owns the scroll box the
+                virtualization window is measured from, and remounting it on
+                every empty filter would strand the ResizeObserver on a detached
+                node and reset the reader's place in a 40,000-row tree. */}
+            <div ref={treeViewport} class="workspace-tree" hidden={treeHidden} role="tree" aria-label="Workspace files" onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) clearHoverExpansion(); }}>
               {/* Presentational, all three of them: a `role="tree"` owns
                   `role="treeitem"` children, and the virtualization scaffolding
                   put two generic boxes and a row wrapper in between. */}
@@ -1605,6 +1733,52 @@ function ProfileScopedWorkspaceView({
                 })}
               </div></div>
             </div>
+            {contentPane === "searching" ? <div class="workbench-empty" role="status">
+              <Icon name="workspace" size={28} />
+              <strong>Searching file contents…</strong>
+              <span>Reading bounded UTF-8 text from this workspace. Binary and oversized files are skipped.</span>
+            </div> : null}
+            {/*
+              A content hit is a place in a file, so the row says which file and
+              which line and opens the same replaceable preview a tree row does.
+              `role="group"`, not a second tree: these rows have no hierarchy,
+              and claiming one would make a screen reader announce a depth that
+              does not exist.
+            */}
+            {contentMatches.length ? <div class="workspace-tree" role="group" aria-label={`Content matches for ${query}`}>
+              {contentMatches.map((match) => <button
+                class="tree-row"
+                type="button"
+                key={`${match.path}:${String(match.line)}:${String(match.column)}`}
+                title={`${match.path}:${String(match.line)} — ${match.snippet.trim()}`}
+                style={{ height: rowHeight }}
+                onClick={() => void openPreviewTab(match.path)}
+              >
+                <span class="tree-chevron" aria-hidden="true">›</span>
+                <WorkspaceFileIcon path={match.path} />
+                <span>{match.path.replace("/workspace/", "")} <small>{match.snippet.trim()}</small></span>
+                <small>line {String(match.line)}</small>
+              </button>)}
+            </div> : null}
+            {/*
+              `.workbench-empty` and not the shared `EmptyState`: this is the
+              same recipe the editor pane on this very route already draws, and
+              it is the only one of the four in the product that flex-fills
+              rather than reserving 330px — which is what a 15%-wide rail on a
+              short viewport can afford. Migrating the whole route to the shared
+              recipe means deleting the loser rules in workspace-view.css.
+            */}
+            {emptyFilterCopy ? <div class="workbench-empty">
+              <Icon name="workspace" size={28} />
+              <strong>{emptyFilterCopy.title}</strong>
+              <span>{emptyFilterCopy.detail}</span>
+              <div class="workbench-empty__actions">
+                <button class="primary" type="button" onClick={clearFilter}>{emptyFilterCopy.action}</button>
+                {filterMode === "path"
+                  ? <button type="button" onClick={() => setFilterMode("contents")}>Search file contents</button>
+                  : <button type="button" onClick={() => setFilterMode("path")}>Filter paths instead</button>}
+              </div>
+            </div> : null}
           </> : <SourceControlRail
             repositories={repositories}
             repositoryId={repositoryId}
@@ -1825,22 +1999,21 @@ function ProfileScopedWorkspaceView({
         */}
         <p class="workbench-context__hint" id={contextHintId} role="presentation">Esc or a tap outside dismisses this menu. Arrow keys move between actions.</p>
       </div> : null}
-      {dialog && dialogCopy ? <div class="workbench-dialog-scrim" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) closeDialog(); }}>
-        <div
-          class="workbench-dialog"
-          ref={dialogBox}
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby={dialogTitleId}
-          tabIndex={-1}
-          onKeyDown={(event) => {
-            // The one modal in Airship that shipped without either. Verified
-            // live: Playwright could not dismiss the Move dialog with Escape.
-            if (event.key === "Escape") { event.preventDefault(); closeDialog(); }
-            else if (event.key === "Tab") trapFocus(event, dialogBox.current);
-          }}
-        >
-          <h2 id={dialogTitleId} title={dialog.path}>{dialogCopy.title}</h2>
+      {/* The Escape/Tab trap, the scrim and the button row live in
+          `ConfirmDialog` now — the same component the terminal tab and the
+          remote controls confirm through, so one gesture means one thing on
+          this route. */}
+      {dialog && dialogCopy ? <ConfirmDialog
+        boxRef={dialogBox}
+        title={dialogCopy.title}
+        titleDetail={dialog.path}
+        confirmLabel={dialogCopy.confirm}
+        destructive={dialogCopy.destructive}
+        confirmDisabled={busy || Boolean(dialogNameError) || (!DIALOG_KINDS_WITHOUT_VALUE.includes(dialog.kind) && !dialogValue.trim())}
+        extraActions={dialog.kind === "discard" && !buffers[dialog.path]?.truncated ? <button class="primary" type="button" disabled={busy} onClick={() => void saveAndClose(dialog.path)}>Save and close</button> : undefined}
+        onCancel={closeDialog}
+        onConfirm={() => void runDialog()}
+      >
           {dialog.kind === "move" ? <>
             <p class="workbench-dialog__where">Currently in {workspaceParentPath(dialog.path).replace("/workspace", "workspace")}.</p>
             <div class="move-targets" role="listbox" aria-label="Destination folder" onKeyDown={handleMoveTargetKey}>{directories.map((directory, index) => {
@@ -1879,13 +2052,7 @@ function ProfileScopedWorkspaceView({
               {dialogNameError ? <small class="workbench-dialog__error" role="alert">{dialogNameError}</small> : null}
             </label>}
           {(dialog.kind === "move" || dialog.kind === "rename") && buffers[dialog.path]?.draft !== buffers[dialog.path]?.content ? <p class="workspace-boundary attention">The unsaved draft will move with this tab; the durable file is not changed until you save.</p> : null}
-          <div>
-            <button type="button" onClick={closeDialog}>Cancel</button>
-            {dialog.kind === "discard" && !buffers[dialog.path]?.truncated ? <button class="primary" type="button" disabled={busy} onClick={() => void saveAndClose(dialog.path)}>Save and close</button> : null}
-            <button class={dialogCopy.destructive ? "danger" : "primary"} type="button" disabled={busy || Boolean(dialogNameError) || (!DIALOG_KINDS_WITHOUT_VALUE.includes(dialog.kind) && !dialogValue.trim())} onClick={() => void runDialog()}>{dialogCopy.confirm}</button>
-          </div>
-        </div>
-      </div> : null}
+      </ConfirmDialog> : null}
     </section>
   );
 }
@@ -1948,7 +2115,15 @@ function DiffDocumentEditor({ document, buffer, preview, wrap, pin, toggleWrap, 
   return <>
     {buffer?.error ? <div class="workspace-diff-state" role="alert">{diffIcon}<strong>Diff unavailable</strong><span>{buffer.error}</span></div>
       : buffer?.loading || !buffer ? <div class="workspace-diff-state" role="status">{diffIcon}<strong>Reading local patch…</strong><span>The editor is reading the browser-owned Git repository.</span></div>
-      : <div class="code-editor-frame"><pre class="code-editor workspace-diff" data-wrap={wrap ? "on" : "off"} role="region" aria-label={label} tabIndex={0}>{buffer.content}</pre></div>}
+      : <div class="code-editor-frame"><UnifiedPatch
+          class="workspace-diff"
+          patch={buffer.content}
+          wrap={wrap}
+          label={label}
+          empty={document.source === "status"
+            ? `No textual change in ${document.path}. The ${document.scope} comparison returned an empty patch.`
+            : "This commit records no bounded file patch."}
+        /></div>}
     <div class="editor-strip">
       <Seal class="editor-strip__verdict" state={state} density="chip" label={stateLabel} detail={stateDetail} acting={state === "checking"} />
       <span class="editor-strip__path" title={path}>{path}</span>
@@ -1991,7 +2166,11 @@ function DiffDocumentEditor({ document, buffer, preview, wrap, pin, toggleWrap, 
 function statusDiffBuffer(document: WorkbenchStatusDiffDocument, result: GitDiff): DiffBuffer {
   return Object.freeze({
     document,
-    content: result.patch || `${result.path}: no ${result.scope} differences.`,
+    // The patch, verbatim, including empty. The sentence for "there is nothing
+    // to draw" belongs to the renderer: folded in here it became a line of the
+    // document, so the patch reader printed it as a file header *and* the
+    // empty-state placeholder printed it again underneath.
+    content: result.patch,
     binary: result.binary,
     truncated: result.truncated,
     byteLength: result.byteLength,
@@ -2606,6 +2785,33 @@ export function workspaceEditorProjection(file: WorkspaceFile) {
 // re-exported here so the cap and the words describing it cannot drift.
 export { WORKSPACE_GUTTER_LINE_LIMIT };
 
+/**
+ * What the Explorer says when the filter matches nothing.
+ *
+ * Filtering to zero used to render literally nothing inside `role="tree"`: the
+ * only signal was the 12px "0 of 412 files" counter above it, and on a phone —
+ * where the Explorer is a full-screen pane of its own — a mistyped filter was a
+ * blank screen. Sessions, the model picker and Index all name the term they
+ * failed to match and offer the way out; the Explorer was the outlier.
+ *
+ * The term is quoted verbatim rather than summarized, because the reader's next
+ * act is to correct a typo they cannot see any other way.
+ */
+export function workspaceFilterEmptyCopy(
+  filter: string,
+  total: number,
+  mode: WorkspaceFilterMode = "path",
+): Readonly<{ title: string; detail: string; action: string }> {
+  const term = filter.trim();
+  return Object.freeze({
+    title: mode === "contents" ? `No file contains “${term}”` : `No path matches “${term}”`,
+    detail: mode === "contents"
+      ? `${String(total)} file${total === 1 ? "" : "s"} were searched in this workspace. Content search reads bounded UTF-8 text only; binary and oversized files are skipped.`
+      : `${String(total)} file${total === 1 ? "" : "s"} ${total === 1 ? "is" : "are"} in this workspace. Search their contents instead, or clear the filter to see them all.`,
+    action: "Clear filter",
+  });
+}
+
 /** The gutter's rendered text, or undefined when no gutter may be shown. */
 export function workspaceGutterLines(draft: string, limit = WORKSPACE_GUTTER_LINE_LIMIT): string | undefined {
   if (!Number.isInteger(limit) || limit < 1) throw new Error("The gutter line limit must be a positive integer.");
@@ -2623,5 +2829,3 @@ export function workspaceGutterLines(draft: string, limit = WORKSPACE_GUTTER_LIN
 }
 
 export function boundedWorkspaceContent(content: string, byteLimit: number, knownTotalBytes?: number) { if (!Number.isInteger(byteLimit) || byteLimit < 1) throw new Error("Workspace byte limit must be a positive integer."); const bytes = new TextEncoder().encode(content); const totalBytes = Math.max(bytes.byteLength, knownTotalBytes ?? 0); if (bytes.byteLength <= byteLimit) return Object.freeze({ content, shownBytes: bytes.byteLength, totalBytes, truncated: totalBytes > bytes.byteLength }); const bounded = new TextDecoder("utf-8", { fatal: false }).decode(bytes.slice(0, byteLimit)); return Object.freeze({ content: bounded, shownBytes: new TextEncoder().encode(bounded).byteLength, totalBytes, truncated: true }); }
-
-function formatBytes(size: number): string { if (size < 1_024) return `${String(size)} B`; if (size < 1_048_576) return `${(size / 1_024).toFixed(1)} KiB`; return `${(size / 1_048_576).toFixed(1)} MiB`; }

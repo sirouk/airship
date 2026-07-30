@@ -101,6 +101,7 @@ describe("EventJournal append queue under a stalled backend", () => {
       getSession: (sessionId) => inner.getSession(sessionId),
       listSessions: () => inner.listSessions(),
       readEvents: (sessionId, afterSequence) => inner.readEvents(sessionId, afterSequence),
+      deleteSession: (sessionId, expectedHead) => inner.deleteSession(sessionId, expectedHead),
       async append(sessionId, expectedHead, events) {
         if (stallNextAppend) {
           stallNextAppend = false;

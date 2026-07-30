@@ -1,3 +1,4 @@
+import { deepFreeze } from "../core/freeze";
 import { GitCapabilityError, GitConcurrencyError, GitDomainError, GitPartialMutationError } from "./errors";
 import { normalizeGitOperation } from "./operations";
 import type {
@@ -382,12 +383,4 @@ function validateCapabilities(capabilities: BrowserGitAdapter["capabilities"]): 
 
 export function cloneAndFreeze<T>(value: T): T {
   return deepFreeze(structuredClone(value));
-}
-
-function deepFreeze<T>(value: T): T {
-  if (value && typeof value === "object" && !Object.isFrozen(value)) {
-    Object.freeze(value);
-    for (const child of Object.values(value as Record<string, unknown>)) deepFreeze(child);
-  }
-  return value;
 }

@@ -1,3 +1,4 @@
+import { deepFreeze } from "../core/freeze";
 import type { JsonValue, SessionManifest, SessionProfileBinding } from "../core/contracts";
 import { enforcedMemoryScope } from "../profiles/domain";
 import type { DurableEvent, EventJournal, SessionRecord } from "../core/journal";
@@ -298,7 +299,16 @@ function browserCapabilityTiersMatch(
   return actualIsBrowser && expectedIsBrowser;
 }
 
-function inferenceBindingsMatch(
+/**
+ * Whether two manifests name the same inference authority, field by field.
+ *
+ * Exported because `app.tsx` had carried a verbatim nine-field copy of this to
+ * gate its external-inference preflight. Nine fields compared in two places is
+ * nine chances for the preflight to consider a binding "the same" that this
+ * resume check considers different — the failure mode being a conversation the
+ * cockpit refuses to resume and the composer happily sends on.
+ */
+export function inferenceBindingsMatch(
   actual: SessionManifest["inferenceBinding"],
   expected: SessionManifest["inferenceBinding"],
 ): boolean {
@@ -351,10 +361,4 @@ function assertProfileId(value: string): void {
 
 function assertSessionId(value: string): void {
   if (!boundedIdentifier(value)) throw new TypeError("Session ID is invalid.");
-}
-
-function deepFreeze<T>(value: T): T {
-  if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
-  for (const child of Object.values(value as Record<string, unknown>)) deepFreeze(child);
-  return Object.freeze(value);
 }

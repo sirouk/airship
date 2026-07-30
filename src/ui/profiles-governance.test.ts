@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { CHUTES_STRICT_ENDPOINT_PROOF_CAPABILITY } from "../inference/chutes/strict-proof-capability";
 import { enforcedMemoryScope } from "../profiles/domain";
 import {
   PROFILE_APPROVAL_LABELS,
@@ -99,8 +100,25 @@ describe("profileGovernanceCellLabel", () => {
 describe("PROFILE_BOUNDARY_NOTE", () => {
   it("no longer points below itself at a control that is above it", () => {
     expect(PROFILE_BOUNDARY_NOTE).not.toContain("below");
-    expect(PROFILE_BOUNDARY_NOTE).toContain("copied into each new session");
+    expect(PROFILE_BOUNDARY_NOTE).toContain("copied into each new conversation");
     expect(PROFILE_BOUNDARY_NOTE).toContain("keep their original pin");
+  });
+
+  it("calls the Chat thread a conversation in both of its two sentences", () => {
+    /*
+     * docs/CANON.md splits the nouns: "Conversation — the user-facing thread
+     * shown under Chat" and "Session — a pinned runtime identity, manifest,
+     * journal, and receipt chain". This note used both for one object in
+     * consecutive sentences, inside the module whose stated purpose is that a
+     * value has one name at rest and the same name while you change it. A
+     * newcomer reading it cannot tell whether a session is a second thing they
+     * also have.
+     */
+    expect(PROFILE_BOUNDARY_NOTE).not.toMatch(/session/iu);
+    for (const cell of profileGovernanceCells(input())) {
+      expect(`${cell.label} ${cell.value} ${cell.detail}`, `${cell.key} names the thread once`)
+        .not.toMatch(/session/iu);
+    }
   });
 });
 
@@ -125,7 +143,12 @@ describe("the editor's own labels", () => {
     expect(control, `the profile editor no longer renders a MenuSelect named "${ariaLabel}"`).toBeGreaterThan(-1);
     const open = app.indexOf("options={[", control);
     const block = app.slice(open, app.indexOf("]}", open));
-    const pairs = [...block.matchAll(/\{ value: "([^"]+)", label: "([^"]+)"/gu)];
+    // Tolerant of an option written across several lines. The first spelling
+    // demanded `{ value: "x", label: "y"` on one line, so the moment an option
+    // grew a computed description it stopped being seen at all — and a parser
+    // that silently skips an option cannot enforce "the editor spells what this
+    // module spells" for the option most likely to have just changed.
+    const pairs = [...block.matchAll(/value:\s*"([^"]+)",\s*label:\s*"([^"]+)"/gu)];
     expect(pairs.length, `no option literals found for "${ariaLabel}"`).toBeGreaterThan(0);
     return Object.fromEntries(pairs.map(([, value, label]) => [value, label]));
   }
@@ -143,6 +166,34 @@ describe("the editor's own labels", () => {
 
   it("spells the postures exactly as this module labels them", () => {
     expect(editorOptions("Profile minimum proof posture")).toEqual({ ...PROFILE_POSTURE_LABELS });
+  });
+
+  /*
+   * A floor nothing can reach may be offered, but not sold.
+   *
+   * `encrypted-attested` needs a transport built with `attestationMode:
+   * "required"`, which only exists behind strict endpoint proof — and this
+   * build freezes that capability `available: false`. The editor still
+   * advertised "Attested — Require verified endpoint evidence" as a live
+   * choice, so picking it committed a profile that threw on every new
+   * conversation, while the Connection route told the same person in the same
+   * session that strict fail-closed is unavailable.
+   *
+   * This asserts the editor asks the shared record rather than restating an
+   * answer, which is what stops the two surfaces drifting apart again. It is
+   * deliberately written against the capability being unavailable *today*: if
+   * the verifier lands and `available` flips, this test is the thing that says
+   * the option's description must go back to describing the policy.
+   */
+  it("does not offer a proof floor this build cannot satisfy", () => {
+    expect(CHUTES_STRICT_ENDPOINT_PROOF_CAPABILITY.available, "strict proof became available — re-word the Attested option and this test").toBe(false);
+    const control = app.indexOf('ariaLabel="Profile minimum proof posture"');
+    const block = app.slice(control, app.indexOf("]}", app.indexOf("options={[", control)));
+    const attested = block.slice(block.indexOf('value: "encrypted-attested"'));
+    expect(attested).toContain("disabled: !strictProofCapability.available");
+    expect(attested).toContain("strictProofCapability.reason");
+    // The reason has to be the verifier's own words, not a second copy of them.
+    expect(attested).not.toContain("Independent NVIDIA GPU verification");
   });
 
   it("names the minimum-proof field once, in the editor, the card and the revision strip", () => {

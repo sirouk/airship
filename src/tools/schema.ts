@@ -502,3 +502,46 @@ function escapePointer(value: string): string {
 function issue(path: string, keyword: string, message: string): ToolArgumentValidationIssue {
   return Object.freeze({ path, keyword, message });
 }
+
+/*
+ * The tools layer's one set of argument coercers.
+ *
+ * `stringArgument` was declared seven times under one name with three different
+ * contracts, so an identical model argument was accepted by one tool and
+ * rejected by another: `{"action": "commit "}` reached git_workspace fine
+ * (git-tools trimmed) while `{"runtime": "node-webcontainer "}` reached
+ * run_program untrimmed, was cast straight to ExecutionRuntimeId, and failed
+ * runtime lookup with an error that never named whitespace as the cause. The
+ * names below state the contract instead of hiding it, so a call site has to
+ * choose rather than inherit whichever copy its file happened to declare.
+ */
+
+/** Tool arguments as an object, or a refusal. Was duplicated in seven tool modules. */
+export function objectArguments(value: JsonValue): Record<string, JsonValue> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Tool arguments must be an object.");
+  return value;
+}
+
+/**
+ * An identifier, path, action, query or command: trimmed, and blank is refused.
+ *
+ * Trimming here rather than at each call site is the point. A model that emits a
+ * trailing space in an enum-shaped argument is making a formatting slip, not a
+ * different request, and five of the seven copies already knew that.
+ */
+export function requiredString(value: JsonValue | undefined, name: string): string {
+  if (typeof value !== "string" || !value.trim()) throw new Error(`${name} must be a non-empty string.`);
+  return value.trim();
+}
+
+/**
+ * File content and edit text: returned byte-for-byte, and the empty string is a
+ * legal value.
+ *
+ * Writing an empty file and replacing a run of trailing whitespace are both real
+ * requests, so this is the one place surrounding whitespace must survive.
+ */
+export function rawString(value: JsonValue | undefined, name: string): string {
+  if (typeof value !== "string") throw new Error(`${name} must be a string.`);
+  return value;
+}

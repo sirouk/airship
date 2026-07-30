@@ -14,7 +14,7 @@ test("a catalog-declared vision model receives an encrypted inline image", async
   test.setTimeout(180_000);
 
   await page.goto("/#access");
-  await expect(page.getByRole("heading", { name: "Connect models" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Connection", exact: true })).toBeVisible();
   await page.getByText("Use a Chutes API key instead", { exact: true }).click();
   await page.getByLabel("Chutes API key").fill(credential!);
   await page.getByRole("button", { name: "Discover models with key" }).click();

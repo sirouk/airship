@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { randomUuid } from "./id";
+import { randomUuid, UUID_V4_PATTERN } from "./id";
 
 describe("randomUuid", () => {
   it("falls back to RFC 4122 UUIDv4 when randomUUID is unavailable", () => {
@@ -7,7 +7,7 @@ describe("randomUuid", () => {
     Object.defineProperty(crypto, "randomUUID", { configurable: true, value: undefined });
     try {
       const value = randomUuid();
-      expect(value).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u);
+      expect(value).toMatch(UUID_V4_PATTERN);
     } finally {
       if (descriptor) Object.defineProperty(crypto, "randomUUID", descriptor);
     }

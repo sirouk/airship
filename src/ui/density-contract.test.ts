@@ -10,14 +10,15 @@ const sheets = await Promise.all((await collectCss(uiDirectory)).map(async (url)
 })));
 
 /*
- * Every rung of the ramp, and the field floor. `--fs-h3` is the retired alias
- * and resolves to `--fs-title`; it is listed so a call site that still uses it
- * is not reported as frozen while it waits to be re-homed by role.
+ * Every rung of the ramp, and the field floor. `--fs-h3` was listed here while
+ * the retired alias still had call sites; it is gone from `tokens.css`, so the
+ * entry goes with it — a name this list permits but the tokens do not define
+ * is an invalid-at-computed-value-time `font-size` that ships green.
  */
 const RAMP = Object.freeze([
   "--fs-micro", "--fs-caption", "--fs-meta", "--fs-body",
   "--fs-lead", "--fs-title", "--fs-display", "--fs-hero",
-  "--fs-h3", "--fs-field",
+  "--fs-field",
 ] as const);
 
 describe("the Type scale preference governs every size", () => {

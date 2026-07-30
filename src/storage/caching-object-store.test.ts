@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { ClientCiphertextCache, MemoryCiphertextPageBackend } from "./client-ciphertext-cache";
 import { CiphertextCachingObjectStore, classifyVaultImmutableCiphertext } from "./caching-object-store";
 import { MemoryObjectStore } from "./memory-object-store";
-import { isReclaimableObjectStore, type ObjectReclamationReceipt, type ReclaimableObjectStore } from "./object-store";
+import { isReclaimableObjectStore, type ObjectReclamationReceipt, type ObjectStore, type ReclaimableObjectStore } from "./object-store";
 
 describe("ciphertext caching ObjectStore", () => {
   it("serves encrypted workspace and Git-file objects locally after provider commit", async () => {
@@ -80,9 +80,18 @@ describe("ciphertext caching ObjectStore", () => {
 
 describe("reclamation forwarding", () => {
   it("reports no reclamation capability when the authority has none", async () => {
-    const store = cached(new CountingObjectStore());
+    /*
+     * A store that genuinely lacks the verb. `MemoryObjectStore` gained a real
+     * `trash` when page memory stopped being the one durability that could not
+     * delete a conversation, so every double inheriting from it is reclaimable
+     * now — and this case, whose whole subject is an authority WITHOUT
+     * reclamation, had silently stopped testing anything.
+     */
+    const bare = Object.create(new CountingObjectStore(), { trash: { value: undefined } }) as ObjectStore;
+    expect(isReclaimableObjectStore(bare)).toBe(false);
+    const store = new CiphertextCachingObjectStore(bare, new ClientCiphertextCache(new MemoryCiphertextPageBackend()));
     expect(isReclaimableObjectStore(store)).toBe(false);
-    expect(store.trash).toBeUndefined();
+    expect((store as Partial<ReclaimableObjectStore>).trash).toBeUndefined();
   });
 
   it("forwards reclamation and drops the cached page for every requested key", async () => {

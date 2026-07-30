@@ -40,10 +40,40 @@
      composites predictably over any surface. 3.48:1 on --surface. */
   --ink-disabled: #6b726f;
   --surface-disabled: #1a1f23;
-  --steel: var(--truth-local);
   --accent: #c19a58;
   --accent-bright: #dfba72;
   --focus: var(--accent-bright);
+  /*
+   * One ring, drawn one way.
+   *
+   * `--focus` exists so the ring can be retargeted, and the product's own
+   * baseline rule 350 lines below used to paint `--brass-bright` instead, so
+   * the token nobody could find by searching for "focus" was the one in force.
+   * Around it twenty-odd sheets each re-declared the ring: measured at 1px,
+   * 2px and 3px, in four colour spellings, at five offsets — a keyboard user
+   * tabbing topbar → rail → workspace tree → vault disclosure watched it change
+   * width, hue and inside/outside placement four times in one traverse, and the
+   * weakest of them (a 1px inset hairline) sat on the densest surface.
+   *
+   * `--focus-ring-inset` is the one sanctioned negative: a control flush to its
+   * container's edge would otherwise draw its ring outside the container and be
+   * clipped. Everything else uses `--focus-ring-offset`.
+   */
+  --focus-ring: 2px solid var(--focus);
+  --focus-ring-offset: 2px;
+  --focus-ring-inset: -2px;
+  /*
+   * The scrim, once, so it knows what mode it is in.
+   *
+   * Three of the four scrims were mode-blind near-black literals
+   * (rgba(5,8,10,.74) behind the approval dock, rgba(4,7,9,.72) behind every
+   * mobile sheet, rgba(4,7,8,.72) behind the workbench dialog) against one
+   * mode-aware `color-mix` in `platform-shell.css`. In Paper mode a user's page
+   * dimmed to a warm parchment wash for Preferences and to 74% black for a
+   * capability approval — the surface that owns the highest-consequence
+   * decision in the product was the one that did not know what mode it was in.
+   */
+  --scrim: color-mix(in srgb, var(--ground) 78%, transparent);
   /* The brand mark is not a verdict. It used to be painted with --copper, the
      token reserved for the asserted seal, so the logo and "this claim is
      asserted, not verified" were the same colour in the same viewport — one
@@ -55,7 +85,31 @@
   --font-body: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
   --type-scale: 1;
-  --density-control: 44px;
+  /*
+   * The 44px touch floor as a name, not as 144 copies of a number.
+   *
+   * `min-height: 44px` was written 144 times across the sheets — and it is the
+   * *fallback* of `--density-control`, never the value that ships: the shell
+   * boots at `comfortable`, so the token resolves to 46px. The Approve and Deny
+   * buttons in the approval dock were 44px while the slash-command rows the
+   * same finger had just touched were 46px, and in Compact they were 44px
+   * beside 36px neighbours — two visibly different control heights side by
+   * side at both settings, and neither one was the token.
+   *
+   * A control height is `--density-control`; a *floor* under a finger is this.
+   */
+  --touch-target: 44px;
+  /*
+   * A tab strip is a navigation band, so its height is designed rather than
+   * density-driven — but it has to be designed *once*. The product shipped
+   * three answers: the shared Tabs primitive at 40px, the Trust hub strip at
+   * 44px, and the Agent-configuration strip (the live route to Skills and
+   * Capabilities) at 39px with no phone floor at all. The floor is
+   * `--touch-target`, applied to every strip under a coarse pointer; this is
+   * the height they share when there is a mouse.
+   */
+  --tab-height: 40px;
+  --density-control: var(--touch-target);
   --density-row: 48px;
   --density-gap: 12px;
   --density-panel-pad: 15px;
@@ -96,10 +150,6 @@
    * raise it — 16px at every scale that would fall short, 19.9px at x-large.
    */
   --fs-field: max(16px, var(--fs-body));
-  /* Deprecated alias, retained for exactly one release so the five remaining
-     call sites are re-homed by role rather than by nearest value. A second
-     22px title step would rebuild the size spread being deleted. */
-  --fs-h3: var(--fs-title);
   --fw-body: 400;
   --fw-strong: 600;
   --fw-title: 700;
@@ -112,6 +162,27 @@
   --sp-7: 48px;
   --lh-tight: 1.2;
   --lh-body: 1.6;
+  /*
+   * The alias ledger: three live names per colour role, being retired to one.
+   *
+   * There was no single answer to "what do I type for the verified green".
+   * `--v-verified` / `--signal` / `--verdigris` were 112 call sites across
+   * three spellings, `--v-failed` / `--danger` / `--signal-red` another 92, and
+   * `docs/DESIGN_LANGUAGE.md` published the *alias* set as the contract — so a
+   * contributor who read the design language wrote `var(--brass)` and joined
+   * the 8-site minority while one who read this file wrote `var(--accent)` and
+   * joined the 142. Reviewing a diff, finding every use of the failed colour,
+   * or retheming all require knowing all three; miss one and a swathe of the UI
+   * keeps the old hue.
+   *
+   * The `--v-*` / `--accent` set is canonical. `--steel` is gone: its last call
+   * site (`routes.css`) now names `--truth-local`. These four survive only
+   * until their remaining sheets are rewritten — chat.css and shell.css for
+   * `--brass`/`--brass-bright`/`--verdigris`/`--signal-red`, and access,
+   * attestations, context, memory, sources, capabilities and workspace for
+   * `--signal`/`--danger`. The list may only shrink, and
+   * `token-vocabulary.test.ts` holds it to the sheets named here.
+   */
   --signal: var(--v-verified);
   --danger: var(--v-failed);
   --brass: var(--accent);
@@ -244,8 +315,24 @@ body {
   --radius-panel: 8px;
 }
 
+/*
+ * The Body font preference, answered by both mechanisms instead of one.
+ *
+ * This block used to set `font-family` alone, so the preference travelled by
+ * inheritance only — and the 28 rules that name `var(--font-body)` explicitly
+ * (the seal labels, the Proof hero verdict, the Memory card titles, the
+ * Capabilities device headings, the model-picker prices, the Vault body) each
+ * opted their element back out of it. A reader who chose System serif got a
+ * page in two typefaces that read as a webfont having failed to load, not as a
+ * preference having been applied, and it is worse on a phone where those
+ * elements are a larger share of what is on screen.
+ *
+ * The literal is written once and the `font-family` line references it, so the
+ * two halves cannot drift apart again.
+ */
 :root[data-body-font="system-serif"] {
-  font-family: Georgia, "Times New Roman", serif;
+  --font-body: Georgia, "Times New Roman", serif;
+  font-family: var(--font-body);
 }
 
 /*
@@ -311,6 +398,30 @@ body {
   --lh-body: 1.68;
 }
 
+/*
+ * What is left of the hand-list, and why a hand-list is the wrong shape.
+ *
+ * This block used to be the *entire* implementation of the Density preference:
+ * fifteen selectors naming six components, all of them chat or profile. Nine of
+ * the ten routes named no density token at all — `grep -c 'var(--density-'`
+ * returned 0 for routes.css, sessions-view.css, workspace-view.css,
+ * memory-view.css, proof-view.css, vault-view.css and terminal-view.css — so
+ * Compact tightened the rail, the composer and the message column and left
+ * Proof, Memory, Vault, Sessions, Workspace, Terminal, Access, Attestations and
+ * Billing frozen to the pixel.
+ *
+ * The replacement is not a longer list here: a component rule that *names the
+ * token itself* needs no entry, because `--density-control` already carries a
+ * `:root` fallback. `routes.css` now does that at the shared primitives every
+ * route renders — the `.route-layout` gutter, `.route-header__bar`, `.metric`,
+ * and every control row — so the preference reaches ten routes without ten
+ * sheets opting in.
+ *
+ * The entries below survive because their component rules live in sheets this
+ * change did not own (`shell.css` for `.nav-item`, `chat.css` for the message
+ * column, the composer, the session bar and the slash menu). Each one should
+ * end up in its own component rule the same way; the list may only shrink.
+ */
 :root[data-density] .nav-item { min-height: var(--density-control); }
 :root[data-density] .panel-heading { min-height: var(--density-control); padding-inline: var(--density-panel-pad); }
 :root[data-density] .profile-card { min-height: var(--density-row); padding: calc(var(--density-panel-pad) * .55); }
@@ -342,7 +453,7 @@ body {
 :root[data-density] .slash-command-menu button { min-height: var(--density-control); }
 
 @media (max-width: 640px), (max-width: 950px) and (max-height: 500px) {
-  :root[data-density="compact"] { --density-control: 44px; --density-row: 44px; }
+  :root[data-density="compact"] { --density-control: var(--touch-target); --density-row: var(--touch-target); }
 
   /* A phone column is roughly half the measure of the desktop chat column, so
      the desktop leading pushes an ordinary answer past the fold. Tighten the
@@ -391,14 +502,23 @@ a {
   color: var(--accent-bright);
 }
 
+/* The ring the whole product draws. It named `--brass-bright` — the alias —
+   while `--focus` sat unused two lines from the top of this file, which is how
+   a token created to retarget the focus ring ended up not drawing it. */
+/* `[tabindex]` is in the list because a scrollable pane a keyboard can reach is
+   a focus stop like any other. The selectors held only the native form
+   elements, so every `tabindex`-bearing region — a terminal's output pane, a
+   transcript, a diff — had to draw its own ring or go without one, which is how
+   a sheet ends up re-deciding the ring this token exists to own. */
 button:focus-visible,
 input:focus-visible,
 select:focus-visible,
 textarea:focus-visible,
 summary:focus-visible,
-a:focus-visible {
-  outline: 2px solid var(--brass-bright);
-  outline-offset: 2px;
+a:focus-visible,
+[tabindex]:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
 }
 
 /* The promise made 270 lines above this, kept. `opacity` multiplies against
@@ -437,4 +557,32 @@ button.primary:disabled {
   color: var(--ink-disabled);
   background: var(--surface-disabled);
   border-color: var(--line-control);
+}
+
+/*
+ * The 44px touch floor, owned by the baseline layer rather than re-derived.
+ *
+ * Routes had been floor-ing their own controls one at a time — popover.css for
+ * disclosures, routes.css for the session bar's chips, access-view.css for one
+ * card summary — and every recipe nobody remembered stayed below the rule.
+ * Measured on this build at 390×844: the brand button 35×51 on EVERY route,
+ * the terminal's full-view button 29×44, the primary Connect actions 40px
+ * tall. Each was individually small; together they were the whole class of
+ * defect, which is what makes it the primitive's job and not the route's.
+ *
+ * Both axes on purpose. A target's smaller dimension is the one a finger has
+ * to find, and floors written as `min-height` alone are exactly how a control
+ * ends up a compliant 44px tall and 9px wide.
+ *
+ * Coarse pointers only: a mouse is precise, and forcing 44px everywhere would
+ * inflate dense desktop toolbars for no one's benefit.
+ */
+@media (pointer: coarse) {
+  button.primary,
+  .small-button,
+  .icon-button,
+  .brand {
+    min-width: var(--touch-target);
+    min-height: var(--touch-target);
+  }
 }

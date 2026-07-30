@@ -219,6 +219,8 @@ test("opt-in live Workspace Terminal accepts an interactive command", async ({ p
   console.log("terminal-live: restart");
 
   await page.getByRole("button", { name: "Close terminal tab" }).click();
+  // Killing a live PTY is gated now; the confirm names the cwd it ends.
+  await page.getByRole("dialog", { name: /^Close / }).getByRole("button", { name: "Close terminal", exact: true }).click();
   await expect(page.getByRole("tablist", { name: "Terminal tabs" }).getByRole("tab")).toHaveCount(0);
   expect(runtimeErrors).toEqual([]);
   console.log("terminal-live: closed");

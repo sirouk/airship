@@ -1,3 +1,4 @@
+import { deepFreeze } from "./freeze";
 import type {
   CanonicalMessage,
   JsonValue,
@@ -381,10 +382,4 @@ function isJsonValue(value: unknown): value is JsonValue {
 
 function canonicalBytes(value: unknown): number {
   return ENCODER.encode(stableStringify(value as JsonValue)).byteLength;
-}
-
-function deepFreeze<T>(value: T): T {
-  if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
-  for (const child of Object.values(value as Record<string, unknown>)) deepFreeze(child);
-  return Object.freeze(value);
 }

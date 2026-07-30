@@ -1,3 +1,4 @@
+import { boundChunkTextToBytes } from "./codec";
 import {
   sealContextSelection,
   type CanonicalContextGeneration,
@@ -83,7 +84,7 @@ export class FederatedTurnContextProvider implements TurnContextProvider {
       if (hits.length >= maxHits) { truncated = true; break; }
       const remaining = maxBytes - selectedBytes;
       if (remaining <= 0) { truncated = true; break; }
-      const text = truncateUtf8(candidate.text, remaining);
+      const text = boundChunkTextToBytes(candidate.text, remaining);
       if (!text) { truncated = true; break; }
       const bytes = new TextEncoder().encode(text).byteLength;
       selectedBytes += bytes;
@@ -164,17 +165,6 @@ export async function memoryLineage(revision: string, content: string): Promise<
     indexFormat: "bounded-bm25-recent-v1",
     persistence: "memory-only",
   });
-}
-
-function truncateUtf8(value: string, maxBytes: number): string {
-  const encoder = new TextEncoder();
-  if (encoder.encode(value).byteLength <= maxBytes) return value;
-  let output = "";
-  for (const character of value) {
-    if (encoder.encode(output + character).byteLength > maxBytes) break;
-    output += character;
-  }
-  return output;
 }
 
 function boundedInteger(value: number, minimum: number, maximum: number, label: string): number {

@@ -40,6 +40,31 @@ export interface JournalBackend {
     events: DurableEvent[],
     signal?: AbortSignal,
   ): Promise<SessionRecord>;
+  /**
+   * Remove a conversation and its events. Absent for a very long time.
+   *
+   * The storage contract had no delete verb at any of its three layers, while
+   * `docs/PRODUCT_SPEC.md` sells "Export, migrate, delete, or self-host all
+   * state without vendor lock-in" and `sessions/library.ts` already shipped the
+   * error string "That conversation was removed while it was being read." for a
+   * state nothing could produce. For a product whose pitch is that your data
+   * stays yours, a person who pasted a password or a client's name into a
+   * conversation had exactly one remedy: destroy the entire Vault.
+   *
+   * Fenced on the head the caller last saw, like every other mutation here. A
+   * turn that landed between the confirmation and the delete means the person
+   * is discarding something they have not read, so the delete is refused with
+   * `JournalConflictError` and they are asked again — the same rule `append`
+   * applies for the same reason.
+   *
+   * Deleting an absent session resolves. Removal is the goal, and a caller who
+   * finds it already gone got what they asked for.
+   */
+  deleteSession(
+    sessionId: string,
+    expectedHead: { sequence: number; digest: string },
+    signal?: AbortSignal,
+  ): Promise<void>;
 }
 
 export class JournalConflictError extends Error {
@@ -122,6 +147,33 @@ export class EventJournal {
 
   getSession(sessionId: string, signal?: AbortSignal) {
     return this.backend.getSession(sessionId, signal);
+  }
+
+  /**
+   * Remove a conversation, fenced to the head the caller last read.
+   *
+   * The in-page append lock is taken for the same reason `append` takes it: a
+   * turn in flight for this session is a writer that has already read the head
+   * this delete is about to invalidate, and letting the two interleave is how
+   * a session gets removed out from under an append that then resurrects part
+   * of it. Queuing behind the lock makes the two orderable rather than racy.
+   */
+  async deleteSession(
+    sessionId: string,
+    expectedHead: { sequence: number; digest: string },
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const previous = this.appendQueue.get(sessionId) ?? Promise.resolve();
+    const link = previous
+      .catch(() => undefined)
+      .then(() => this.backend.deleteSession(sessionId, expectedHead, signal));
+    this.appendQueue.set(sessionId, link.catch(() => undefined));
+    try {
+      await link;
+    } finally {
+      // The session is gone; its queue slot would otherwise outlive it.
+      if (this.appendQueue.get(sessionId) !== undefined) this.appendQueue.delete(sessionId);
+    }
   }
 
   listSessions() {

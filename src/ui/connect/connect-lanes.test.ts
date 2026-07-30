@@ -5,6 +5,7 @@ import {
   connectLaneCountSeal,
   CONNECT_LANE_IDS,
   describeConnectLanes,
+  SIGN_IN_UNAVAILABLE,
   type ConnectLaneId,
   type ConnectLaneInput,
 } from "./connect-lanes";
@@ -309,5 +310,55 @@ describe("connect lanes", () => {
   it("maps every lane state onto the app's one seal family", () => {
     const seals = describeConnectLanes(input()).map((entry) => entry.seal);
     expect(seals.every((seal) => ["none", "checking", "stale", "verified", "asserted", "attention", "failed"].includes(seal))).toBe(true);
+  });
+});
+
+/**
+ * The sentence a cold visitor's only route to a model dies on, counted.
+ *
+ * `SIGN_IN_UNAVAILABLE` was declared in access-view.tsx with a comment saying
+ * two spellings of one fact is the sprawl this package exists to remove, and
+ * the lane row that renders 40px above that panel on a phone held its own
+ * retyped copy. They agreed by coincidence. Counting the literal is the only
+ * assertion that stays true when someone adds a third copy in a file this test
+ * has never heard of.
+ */
+describe("one sentence for a build that cannot exchange a sign-in code", () => {
+  const SENTENCE = "sign-in is not available in this build";
+
+  it("is written exactly once in src, in the module that exports it", async () => {
+    const { readdir, readFile } = await import("node:fs/promises");
+    const holders: string[] = [];
+
+    async function* sources(directory: URL): AsyncGenerator<URL> {
+      for (const entry of await readdir(directory, { withFileTypes: true })) {
+        const child = new URL(`${entry.name}${entry.isDirectory() ? "/" : ""}`, directory);
+        if (entry.isDirectory()) yield* sources(child);
+        // Tests are excluded because a test that pins the sentence has to spell
+        // it, and the guard would then be counting its own assertion.
+        else if (/\.tsx?$/u.test(entry.name) && !/\.test\.tsx?$/u.test(entry.name)) yield child;
+      }
+    }
+
+    for await (const file of sources(new URL("../../", import.meta.url))) {
+      const source = await readFile(file, "utf8");
+      // Every occurrence, not every file: two copies inside one module is the
+      // same defect as two copies across two.
+      const occurrences = source.split(SENTENCE).length - 1;
+      for (let index = 0; index < occurrences; index += 1) {
+        holders.push(file.pathname.replace(/^.*\/src\//u, "src/"));
+      }
+    }
+
+    expect(holders).toEqual(["src/ui/connect/connect-lanes.ts"]);
+    expect(SIGN_IN_UNAVAILABLE).toContain(SENTENCE);
+  });
+
+  it("is the lane row's own fallback rather than a second literal", () => {
+    const status = lane(
+      describeConnectLanes(input({ chutes: { connected: false, signInAvailable: false } })),
+      "chutes",
+    ).status;
+    expect(status.detail).toBe(SIGN_IN_UNAVAILABLE);
   });
 });

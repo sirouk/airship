@@ -59,6 +59,8 @@ export function ContextView({ workspace, entries, dimensions = 384, resultLimit 
   const [localSearchStatus, setLocalSearchStatus] = useState<"idle" | "searching" | "cancelled" | "complete">("idle");
   const [localSearchError, setLocalSearchError] = useState<string>();
   const [fabric, setFabric] = useState<Readonly<{ experts: readonly RoutedExpert[]; warnings: readonly string[]; commitment?: RetrievalCommitment }>>({ experts: [], warnings: [] });
+  /** How many `CONTEXT_CANDIDATE_PAGE_SIZE` pages of sources the reader asked for. */
+  const [candidatePages, setCandidatePages] = useState(1);
   const searchController = useRef<AbortController>();
   const searchSequence = useRef(0);
   const query = searchQuery ?? draftQuery;
@@ -97,6 +99,10 @@ export function ContextView({ workspace, entries, dimensions = 384, resultLimit 
   }, [runtime]);
 
   useEffect(() => onGenerationChange?.(generationDigest), [generationDigest, onGenerationChange]);
+  // A new generation is a different candidate set, so the reader's depth
+  // request does not carry over — otherwise a refresh silently remounts every
+  // row they had expanded into on the previous one.
+  useEffect(() => setCandidatePages(1), [generationDigest]);
   useEffect(() => {
     setLocalSearchResult((current) => current?.generationDigest === generationDigest ? current : undefined);
     if (engineState.phase !== "ready") {
@@ -152,6 +158,10 @@ export function ContextView({ workspace, entries, dimensions = 384, resultLimit 
   }
 
   const generation = engineState.generation;
+  const candidateWindow = useMemo(
+    () => contextCandidateWindow(generation?.candidates ?? [], candidatePages),
+    [candidatePages, generation?.candidates],
+  );
   const stats = generation?.candidateStats;
   const chunks = generation?.chunkStats;
   const indexTone = engineState.phase === "error"
@@ -290,18 +300,44 @@ export function ContextView({ workspace, entries, dimensions = 384, resultLimit 
       {searchQuery !== undefined ? null : (
         <form class="context-search" role="search" onSubmit={(event) => { event.preventDefault(); void search(); }}>
           <label for="client-context-query"><span>Hybrid local search</span><small>72% deterministic dense score · 28% lexical overlap</small></label>
-          <div>
+          <div class="search-field">
             <Icon name="context" size={18} />
-            <input
-              id="client-context-query"
-              type="search"
-              value={query}
-              autoComplete="off"
-              spellcheck={false}
-              placeholder={engineState.phase === "ready" ? "Search this exact workspace generation…" : "Index refresh must complete first…"}
-              disabled={engineState.phase !== "ready" || searchStatus === "searching"}
-              onInput={(event) => setDraftQuery(event.currentTarget.value)}
-            />
+            {/*
+              * The same one-affordance treatment Memory already had. This field
+              * shipped the browser's native `type=search` cross and nothing
+              * else: a ~12px target, absent entirely in Firefox, unreachable
+              * from a keyboard. Clearing takes the settled result and error with
+              * it — leaving hits on screen for a query no longer in the box is
+              * the surface disagreeing with itself — and cancels an in-flight
+              * search, because "clear" that leaves a request running for the
+              * erased query is not what the word says.
+              */}
+            <span class="search-field__entry">
+              <input
+                id="client-context-query"
+                type="search"
+                value={query}
+                autoComplete="off"
+                spellcheck={false}
+                placeholder={engineState.phase === "ready" ? "Search this exact workspace generation…" : "Index refresh must complete first…"}
+                disabled={engineState.phase !== "ready" || searchStatus === "searching"}
+                onInput={(event) => setDraftQuery(event.currentTarget.value)}
+              />
+              {query ? (
+                <button
+                  class="search-field__clear"
+                  type="button"
+                  aria-label="Clear workspace search"
+                  onClick={() => {
+                    if (searchStatus === "searching") cancelSearch();
+                    setDraftQuery("");
+                    setLocalSearchResult(undefined);
+                    setLocalSearchError(undefined);
+                    setLocalSearchStatus("idle");
+                  }}
+                ><span aria-hidden="true">✕</span></button>
+              ) : null}
+            </span>
             {searchStatus === "searching" ? (
               <button type="button" onClick={cancelSearch}><Icon name="stop" size={15} />Cancel</button>
             ) : (
@@ -324,7 +360,7 @@ export function ContextView({ workspace, entries, dimensions = 384, resultLimit 
           </div>
           {generation?.candidates.length ? (
             <div class="context-candidate-list">
-              {orderCandidates(generation.candidates).map((candidate) => (
+              {candidateWindow.shown.map((candidate) => (
                 <ContextCandidateRow
                   key={`${candidate.path}:${candidate.revision}`}
                   candidate={candidate}
@@ -333,6 +369,20 @@ export function ContextView({ workspace, entries, dimensions = 384, resultLimit 
                   renderProvenance={renderProvenance}
                 />
               ))}
+              {/* The bound, stated where the rows stop. The heading's
+                  `candidateSummary` counts every source in the generation, so
+                  without this sentence the panel would silently show 100 of
+                  10,000 beneath a header saying 10,000 are indexed. */}
+              {candidateWindow.bounded ? (
+                <div class="context-candidate-bound" role="status">
+                  <p>{candidateWindow.sentence}</p>
+                  <button
+                    class="context-empty__action"
+                    type="button"
+                    onClick={() => setCandidatePages((value) => value + 1)}
+                  >Show {candidateWindow.next.toLocaleString()} more</button>
+                </div>
+              ) : null}
             </div>
           ) : (
             <ContextEmpty
@@ -454,6 +504,58 @@ export function indexSummaryText(sources: number, chunkCount: number, vectorByte
  */
 export function orderCandidates(candidates: readonly ClientContextCandidate[]): readonly ClientContextCandidate[] {
   return Object.freeze([...candidates].sort((left, right) => candidateRank(left) - candidateRank(right)));
+}
+
+/**
+ * How many candidate rows this panel mounts at once.
+ *
+ * The measured defect: the list mounted one `<article>` per workspace entry
+ * with no ceiling of its own — `repository-import` admits up to 10,000 files
+ * (`boundedInteger(options.maxFiles ?? DEFAULT_MAX_FILES, 1, 10_000)`) and the
+ * engine's only bound is `MAX_SNAPSHOT_ENTRIES = 250_000` — and every row
+ * eagerly mounts a provenance popover, because `Popover` always renders its
+ * children. One ordinary GitHub import therefore built ~10,000 `<dl>`s of 8+
+ * rows with a copy button apiece: a multi-second freeze on a phone. The
+ * upstream cap was deliberately removed on the grounds that "bounding belongs
+ * in the consumers that need it" — this is that bound, in this consumer.
+ */
+export const CONTEXT_CANDIDATE_PAGE_SIZE = 100;
+
+export type ContextCandidateWindow = Readonly<{
+  /** The rows actually mounted, degraded-first. */
+  shown: readonly ClientContextCandidate[];
+  total: number;
+  /** True when sources exist that this panel is not drawing. */
+  bounded: boolean;
+  /** Names both numbers, so the panel never implies it is showing everything. */
+  sentence: string;
+  /** How many rows the next press would add, at most. */
+  next: number;
+}>;
+
+/**
+ * The bounded slice, and the sentence that admits it is one.
+ *
+ * `orderCandidates` is applied here rather than at the call site so the cut and
+ * the degraded-first rule cannot drift apart: the whole reason a bound is safe
+ * is that the rows a person has to act on are the ones that survive it.
+ */
+export function contextCandidateWindow(
+  candidates: readonly ClientContextCandidate[],
+  pages: number,
+  pageSize: number = CONTEXT_CANDIDATE_PAGE_SIZE,
+): ContextCandidateWindow {
+  const ordered = orderCandidates(candidates);
+  const limit = Math.max(pageSize, pageSize * pages);
+  const shown = ordered.slice(0, limit);
+  const remaining = ordered.length - shown.length;
+  return Object.freeze({
+    shown: Object.freeze(shown),
+    total: ordered.length,
+    bounded: remaining > 0,
+    sentence: `Showing ${shown.length.toLocaleString()} of ${ordered.length.toLocaleString()} source${ordered.length === 1 ? "" : "s"}`,
+    next: Math.min(pageSize, Math.max(0, remaining)),
+  });
 }
 
 function candidateRank(candidate: ClientContextCandidate): number {

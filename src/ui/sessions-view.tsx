@@ -17,6 +17,7 @@ import { MenuSelect } from "./menu-select";
 import { useEffect, useId, useMemo, useRef, useState } from "preact/hooks";
 import "./sessions-view.css";
 import { DurabilityIndicator, durabilityLabel, durabilitySeal, type DurabilityState } from "./durability-indicator";
+import { ConfirmDialog } from "./confirm-dialog";
 import { Popover } from "./popover";
 import { RouteHeader } from "./route-header";
 import { Seal } from "./seal";
@@ -85,6 +86,46 @@ function journalAdapterSentence(state: DurabilityState): string {
 /** Stable identity, so a conversation with no branches re-renders unchanged. */
 const EMPTY_BRANCHES: readonly SessionListItem[] = Object.freeze([]);
 
+/**
+ * How many conversations one read of the journal returns.
+ *
+ * Not a preference — a ceiling. `querySessionRecords` clamps the request with
+ * `positiveInteger(query.limit, 100, 200)`, so 200 is the most a single read
+ * can ever answer with, and asking for more silently gets 200 back.
+ */
+export const SESSION_LIBRARY_PAGE_SIZE = 200;
+
+export type SessionListBound = Readonly<{
+  /** True when the journal holds conversations this list has not read. */
+  bounded: boolean;
+  /** The sentence that names both numbers, so neither can be inferred wrong. */
+  sentence: string;
+  /** How many rows the next read would add, at most. */
+  next: number;
+}>;
+
+/**
+ * What the list is allowed to say about its own bound.
+ *
+ * The measured defect: the heading printed `page.total` — "312 conversations" —
+ * above a list hard-capped at one 200-row read, with no pagination, no
+ * load-more and no sentence anywhere saying 112 rows were unreachable. Every
+ * fork, edit and retry mints a peer row, so 200 arrives in ordinary use. The
+ * two numbers are stated together or the bound is not stated at all.
+ */
+export function sessionListBound(
+  shown: number,
+  total: number,
+  pageSize: number = SESSION_LIBRARY_PAGE_SIZE,
+): SessionListBound {
+  const remaining = Math.max(0, total - shown);
+  return Object.freeze({
+    bounded: remaining > 0,
+    sentence: `Showing the first ${shown.toLocaleString()} of ${total.toLocaleString()} conversation${total === 1 ? "" : "s"}`,
+    next: Math.min(pageSize, remaining),
+  });
+}
+
 export function SessionsView({
   library,
   runtime,
@@ -119,6 +160,7 @@ export function SessionsView({
   const [announcement, setAnnouncement] = useState("");
   const [renameTitle, setRenameTitle] = useState("");
   const [renaming, setRenaming] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [favoriteState, setFavoriteState] = useState<Readonly<{
     profileId: string;
     favorites: readonly Readonly<{ sessionId: string; pinnedAt: string; membershipEventId: string }>[];
@@ -134,8 +176,25 @@ export function SessionsView({
    * last unfiltered read — rather than asserting a live count it never saw.
    */
   const [loadedTotal, setLoadedTotal] = useState<number>();
+  /*
+   * How many 200-row reads the reader has asked this list to hold.
+   *
+   * Kept as a request rather than as an appended array so a refresh — starring
+   * a conversation bumps `refresh`, and so does every rename and fork — re-reads
+   * the same depth instead of silently dropping the reader back to row 200.
+   *
+   * Tagged with the query it was made against, and read back through that tag,
+   * so a narrower filter falls to one page *during* the render that changed it.
+   * Resetting it in an effect instead would fire the journal read twice on
+   * every filter change: once at the stale depth, then again at 1.
+   */
+  const [depth, setDepth] = useState<Readonly<{ key: string; pages: number }>>(() => Object.freeze({ key: "", pages: 1 }));
   const [filtersOpen, setFiltersOpen] = useState(false);
   const toolbarId = useId();
+
+  /** The identity of the list being asked for; changing it is a different list. */
+  const queryKey = [scopeProfileId, search, providerId, model, sort].join("\u0000");
+  const requestedPages = depth.key === queryKey ? depth.pages : 1;
 
   const runtimeKey = useMemo(() => runtimeFingerprint(runtime), [runtime]);
   // Never render an async result under a different profile prop. The old
@@ -154,14 +213,36 @@ export function SessionsView({
     const controller = new AbortController();
     setLoadingList(true);
     setError(undefined);
-    void library.list({
+    const query = {
       search,
       ...(providerId ? { providerId } : {}),
       ...(model ? { model } : {}),
       profileId: scopeProfileId,
       sort,
-      limit: 200,
-    }, controller.signal).then(
+    };
+    /*
+     * Depth is reachable only by offset, so this is a loop and not a bigger
+     * `limit`: the journal query clamps every read at
+     * `SESSION_LIBRARY_PAGE_SIZE`, so asking for 400 returns 200 and says
+     * nothing about it. The pages are concatenated into one projection, and
+     * `limit` is set to what this projection actually spans so the page object
+     * cannot describe a window it no longer holds.
+     */
+    void (async (): Promise<SessionListPage> => {
+      const first = await library.list({ ...query, offset: 0, limit: SESSION_LIBRARY_PAGE_SIZE }, controller.signal);
+      const items: SessionListItem[] = [...first.items];
+      for (let read = 1; read < requestedPages && items.length < first.total; read += 1) {
+        const next = await library.list({ ...query, offset: items.length, limit: SESSION_LIBRARY_PAGE_SIZE }, controller.signal);
+        if (next.items.length === 0) break;
+        items.push(...next.items);
+      }
+      return Object.freeze({
+        ...first,
+        items: Object.freeze(items),
+        offset: 0,
+        limit: SESSION_LIBRARY_PAGE_SIZE * requestedPages,
+      });
+    })().then(
       (next) => {
         setPage(next);
         if (!search && !providerId && !model) setLoadedTotal(next.total);
@@ -178,7 +259,7 @@ export function SessionsView({
       if (!controller.signal.aborted) setLoadingList(false);
     });
     return () => controller.abort();
-  }, [activeSessionId, library, model, providerId, refresh, revision, scopeProfileId, search, sort]);
+  }, [activeSessionId, library, model, providerId, refresh, requestedPages, revision, scopeProfileId, search, sort]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -221,7 +302,7 @@ export function SessionsView({
     setDetailError(undefined);
     try {
       await onResume(detail);
-      setAnnouncement(`${detail.session.title} is now the active session.`);
+      setAnnouncement(`${detail.session.title} is now the active conversation.`);
     } catch (caught) {
       setDetailError(errorMessage(caught));
     } finally {
@@ -265,6 +346,36 @@ export function SessionsView({
     }
   }
 
+  /**
+   * Delete the selected conversation, fenced to the head the pane is showing.
+   *
+   * `expectedSourceHead` is the same fence `fork` uses, for a sharper reason:
+   * if a turn landed while the confirmation was open, the person is about to
+   * discard a reply they have never seen. The journal refuses, and the pane
+   * says so rather than destroying it quietly.
+   */
+  async function deleteSelected() {
+    if (!detail) return;
+    setBusy(true);
+    setDetailError(undefined);
+    try {
+      await library.delete(detail.session.id, {
+        expectedHead: { sequence: detail.session.headSequence, digest: detail.session.headDigest },
+      });
+      const removed = detail.session.title;
+      setDeleting(false);
+      setSelectedId(undefined);
+      setDetail(undefined);
+      setRefresh((value) => value + 1);
+      setAnnouncement(`Deleted ${removed}. Its transcript and events were removed from this journal.`);
+    } catch (caught) {
+      setDeleting(false);
+      setDetailError(errorMessage(caught));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function renameSelected() {
     if (!detail || !renameTitle.trim()) return;
     setBusy(true);
@@ -274,7 +385,7 @@ export function SessionsView({
       setRenaming(false);
       setRefresh((value) => value + 1);
       onRenamed?.(renamed);
-      setAnnouncement(`Renamed session to ${renamed.title}.`);
+      setAnnouncement(`Renamed conversation to ${renamed.title}.`);
     } catch (caught) {
       setDetailError(errorMessage(caught));
     } finally {
@@ -380,6 +491,7 @@ export function SessionsView({
    * until the filter that hid the conversation is cleared.
    */
   const outOfResults = Boolean(page && selectedId && filterActive && !page.items.some((item) => item.id === selectedId));
+  const bound = sessionListBound(page?.items.length ?? 0, page?.total ?? 0);
 
   return (
     <section class="session-library-view" aria-labelledby="session-library-title">
@@ -408,7 +520,12 @@ export function SessionsView({
         }
       />
 
-      <div class="session-library-toolbar" role="search" aria-label="Filter sessions" data-filters-open={filtersOpen ? "true" : "false"}>
+      {/* Every accessible name on this route says "conversation", because the
+          route is called "All conversations" and its heading counts
+          conversations. A VoiceOver user used to hear a "Conversations"
+          landmark containing a "Filter sessions" search and a "Refresh session
+          library" button, and had to decide whether those were two things. */}
+      <div class="session-library-toolbar" role="search" aria-label="Filter conversations" data-filters-open={filtersOpen ? "true" : "false"}>
         <span class="session-library-profile-scope" title={`Profile id ${scopeProfileId}`}>Profile · {scopeProfileName}</span>
         <label class="session-library-search">
           <span class="session-library-visually-hidden">{SESSION_SEARCH_PLACEHOLDER}</span>
@@ -467,7 +584,7 @@ export function SessionsView({
         <MenuSelect
           className="session-filter-menu session-library-sort-menu"
           placement="down"
-          ariaLabel="Sort sessions"
+          ariaLabel="Sort conversations"
           value={sort}
           options={[
             { value: "updated-desc", label: "Recently active" },
@@ -478,13 +595,13 @@ export function SessionsView({
         />
         </div>
         {clearable ? <button type="button" onClick={clearFilters}>Clear</button> : null}
-        <button type="button" onClick={() => setRefresh((value) => value + 1)} disabled={loadingList} aria-label="Refresh session library">
+        <button type="button" onClick={() => setRefresh((value) => value + 1)} disabled={loadingList} aria-label="Refresh conversations">
           {loadingList ? "Reading…" : "Refresh"}
         </button>
       </div>
 
       {error ? <div class="session-library-alert error" role="alert"><Icon name="warning" /><span>{error}</span></div> : null}
-      {page?.rejected ? <div class="session-library-alert warning" role="status"><Icon name="warning" /><span>{page.rejected} malformed or out-of-bound session record{page.rejected === 1 ? " was" : "s were"} excluded.</span></div> : null}
+      {page?.rejected ? <div class="session-library-alert warning" role="status"><Icon name="warning" /><span>{page.rejected} malformed or out-of-bound conversation record{page.rejected === 1 ? " was" : "s were"} excluded.</span></div> : null}
       <span class="session-library-visually-hidden" aria-live="polite">{announcement}</span>
 
       <div class="session-library-layout">
@@ -503,7 +620,7 @@ export function SessionsView({
               const favorite = pinned.has(item.id);
               const favoriteIndex = favoriteOrder.indexOf(item.id);
               return (
-                <>{index === groupedSessions.pinned.length && groupedSessions.pinned.length && groupedSessions.other.length ? <div class="session-library-group-label" role="presentation">All sessions</div> : null}
+                <>{index === groupedSessions.pinned.length && groupedSessions.pinned.length && groupedSessions.other.length ? <div class="session-library-group-label" role="presentation">All conversations</div> : null}
                 <div
                   class="session-library-row"
                   role="listitem"
@@ -538,7 +655,7 @@ export function SessionsView({
                     class={`session-library-card${item.id === selectedId ? " selected" : ""}`}
                     type="button"
                     aria-current={item.id === selectedId ? "true" : undefined}
-                    aria-label={`${item.title}. ${relativeSessionTime(item.updatedAt)}. ${sessionEventCount(item.headSequence)}. ${item.providerId} ${item.model}${item.profileId ? `, profile ${item.profileId}` : ""}${lineage ? `, forked from ${lineage.label}` : ""}${active ? ", active session" : ""}`}
+                    aria-label={`${item.title}. ${relativeSessionTime(item.updatedAt)}. ${sessionEventCount(item.headSequence)}. ${item.providerId} ${item.model}${item.profileId ? `, profile ${item.profileId}` : ""}${lineage ? `, forked from ${lineage.label}` : ""}${active ? ", active conversation" : ""}`}
                     title={`${item.title}\n${item.providerId} · ${item.model}\nUpdated ${formatDateTime(item.updatedAt)}`}
                     onClick={() => setSelectedId(item.id)}
                     aria-keyshortcuts={favorite ? "Alt+ArrowUp Alt+ArrowDown" : undefined}
@@ -611,6 +728,27 @@ export function SessionsView({
                 </div></>
               );
             })}
+            {/*
+              * The bound, stated where the list ends.
+              *
+              * The heading has always printed `page.total`; the list has always
+              * held at most one 200-row read. At 312 conversations that is 112
+              * threads a reader could see counted and could not reach by any
+              * gesture on this route. The sentence names both numbers and the
+              * control beside it reads the next page, so the count and the rows
+              * agree or the disagreement is spelled out.
+              */}
+            {bound.bounded ? (
+              <div class="session-library-bound" role="status">
+                <p>{bound.sentence}</p>
+                <button
+                  class="session-library-empty-action"
+                  type="button"
+                  disabled={loadingList}
+                  onClick={() => setDepth(Object.freeze({ key: queryKey, pages: requestedPages + 1 }))}
+                >{loadingList ? "Reading…" : `Load ${bound.next.toLocaleString()} more`}</button>
+              </div>
+            ) : null}
             {!loadingList && page?.items.length === 0 ? (
               <div class="session-library-empty">
                 <Icon name="chat" size={24} />
@@ -670,6 +808,7 @@ export function SessionsView({
               onCommitRename={() => void renameSelected()}
               onForkTitle={setForkTitle}
               onPrepareFork={prepareFork}
+              onRequestDelete={() => setDeleting(true)}
               onCancelFork={() => setForkOpen(false)}
               onCreateFork={() => void createFork()}
               onResume={() => void resumeSelected()}
@@ -679,6 +818,32 @@ export function SessionsView({
           ) : null}
         </main>
       </div>
+      {/*
+        * The same destructive grammar as every other irreversible action in the
+        * product, via the shared dialog rather than a fourth confirmation
+        * dialect. It names the conversation, states plainly what leaves with it
+        * and where from, and does not promise anything about copies a person
+        * exported earlier — which is the only claim about deletion this build
+        * can actually keep.
+        */}
+      {deleting && detail ? (
+        <ConfirmDialog
+          title="Delete this conversation?"
+          titleDetail={detail.session.title}
+          confirmLabel={busy ? "Deleting…" : "Delete conversation"}
+          confirmDisabled={busy}
+          destructive
+          onCancel={() => setDeleting(false)}
+          onConfirm={() => void deleteSelected()}
+        >
+          <p>
+            Its transcript, every recorded step and its journal entries are removed
+            from {durability.state === "ephemeral" ? "this page's memory" : "this journal"}.
+            Forks already made from it keep their own copies.
+          </p>
+          <p>This cannot be undone.</p>
+        </ConfirmDialog>
+      ) : null}
     </section>
   );
 }
@@ -703,6 +868,7 @@ function SessionDetail({
   onCommitRename,
   onForkTitle,
   onPrepareFork,
+  onRequestDelete,
   onCancelFork,
   onCreateFork,
   onResume,
@@ -730,6 +896,7 @@ function SessionDetail({
   onCommitRename: () => void;
   onForkTitle: (value: string) => void;
   onPrepareFork: () => void;
+  onRequestDelete: () => void;
   onCancelFork: () => void;
   onCreateFork: () => void;
   onResume: () => void;
@@ -744,7 +911,7 @@ function SessionDetail({
   const resumeDisabled = mutationBlocked || active || !runtimeAvailable || Boolean(quarantine) || compatibility?.action !== "resume";
   const requirement = forkRequirement(compatibility, detail.history);
   const resumeLabel = active
-    ? "Active session"
+    ? "Active conversation"
     : !runtimeAvailable
       ? "No active runtime"
       // Not "Cannot resume", and emphatically not "Session damaged": the audit
@@ -752,7 +919,7 @@ function SessionDetail({
       // named here.
       : quarantine
         ? "Transcript cannot be replayed"
-        : compatibility?.action === "resume" ? "Resume session" : compatibility?.label ?? "Cannot resume";
+        : compatibility?.action === "resume" ? "Resume conversation" : compatibility?.label ?? "Cannot resume";
   const forkPrimary = requirement.required;
   const lineage = detail.pins.lineage;
   const integrity = sessionIntegrityRow({
@@ -775,7 +942,7 @@ function SessionDetail({
     <article class="session-library-inspector">
       <header class="session-library-detail-heading">
         <div>
-          <span class="session-library-eyebrow">Session {shortSessionId(detail.session.id)}</span>
+          <span class="session-library-eyebrow">Conversation {shortSessionId(detail.session.id)}</span>
           <h2>{detail.session.title}</h2>
           {/* Rename used to open a form *above* the title it renames. It is now
               the title's own adjacent verb, and its field opens beneath the
@@ -860,6 +1027,18 @@ function SessionDetail({
           {onOpenProof ? <button type="button" onClick={onOpenProof}><Icon name="proof" size={16} />Proof</button> : null}
           <button class={forkPrimary ? "primary" : ""} type="button" onClick={onPrepareFork} disabled={mutationBlocked}><Icon name="branch" size={16} />{forkPrimary ? "Fork to continue" : "Fork"}</button>
           <button class={!forkPrimary ? "primary" : ""} type="button" onClick={onResume} disabled={resumeDisabled}>{resumeLabel}</button>
+          {/* Last in the row and styled as the danger it is. The product's spec
+              has always promised "Export, migrate, delete", and this is the
+              first build in which the verb exists — before it, a conversation
+              holding a pasted credential could only be removed by destroying
+              the whole Vault. */}
+          <button class="small-button danger" type="button" onClick={onRequestDelete} disabled={mutationBlocked}>
+            {/* `warning` rather than a bin: the icon set has no bin, and the
+                label already says Delete. A glyph that means "this is the
+                dangerous one" beside the word is honest; inventing a
+                near-miss glyph in a set another author is editing is not. */}
+            <Icon name="warning" size={16} />Delete
+          </button>
           {outOfResults ? <p class="session-library-actions-caption">{SESSION_OUT_OF_RESULTS_CAPTION}</p> : null}
         </div>
       </header>
@@ -886,7 +1065,7 @@ function SessionDetail({
             <span class="session-library-proof-scope">Structural linkage only · digests not recomputed · authenticity not proven</span>
           </div>
 
-          <section class="session-library-continuity" aria-label="Session continuity">
+          <section class="session-library-continuity" aria-label="Conversation continuity">
             <div class={`session-library-lifecycle ${detail.transcript.lifecycle.state}`}>
               <span aria-hidden="true" />
               <strong>{detail.transcript.lifecycle.label}</strong>
@@ -948,7 +1127,7 @@ function SessionDetail({
         <section class="session-library-fork" aria-labelledby="session-fork-title">
           <div>
             <span class="session-library-eyebrow">Explicit fork</span>
-            <h3 id="session-fork-title">Create a new session identity</h3>
+            <h3 id="session-fork-title">Create a new conversation identity</h3>
             {/* This promised a blank slate, from before the seed shipped. The
                 journal is not copied — that is what `historyCopied: false`
                 means — but the branch does start with a bounded, digest-sealed
@@ -971,7 +1150,7 @@ function SessionDetail({
             ) : null}
           </div>
           <label><span>Fork title</span><input value={forkTitle} maxlength={SESSION_TITLE_MAX} onInput={(event) => onForkTitle(event.currentTarget.value)} /></label>
-          <div class="session-library-fork-note"><Icon name="lock" size={16} /><span>{forkUsesActiveManifest ? "The host supplied the active runtime manifest for this fork." : "The fork keeps the source runtime pins; only its session identity and lineage change."}</span></div>
+          <div class="session-library-fork-note"><Icon name="lock" size={16} /><span>{forkUsesActiveManifest ? "The host supplied the active runtime manifest for this fork." : "The fork keeps the source runtime pins; only its conversation identity and lineage change."}</span></div>
           <div class="session-library-fork-actions"><button type="button" onClick={onCancelFork} disabled={busy}>Cancel</button><button class="primary" type="button" onClick={onCreateFork} disabled={busy || !forkTitle.trim()}>{busy ? "Creating…" : "Create fork"}</button></div>
         </section>
       ) : null}
@@ -1127,5 +1306,5 @@ function formatDateTime(value: string): string {
  * release-gate classification change for a string this route is already given.
  */
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : "The session operation could not be completed.";
+  return error instanceof Error ? error.message : "The conversation operation could not be completed.";
 }

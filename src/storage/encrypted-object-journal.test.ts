@@ -59,3 +59,68 @@ async function manifest() {
     workspaceId: "workspace",
   });
 }
+
+/**
+ * Deletion at the tier where it matters most.
+ *
+ * The encrypted Vault is what a person chose when they decided their
+ * conversations were nobody else's business, so "delete" here has to mean the
+ * ciphertext is gone from the store, not that the conversation stopped being
+ * listed. These read the object store directly afterwards rather than trusting
+ * the journal's own view of itself.
+ */
+describe("EncryptedObjectJournalBackend deletion", () => {
+  it("removes the head and every segment from the object store", async () => {
+    const { key } = await WorkspaceRootKey.generate();
+    const store = new MemoryObjectStore();
+    const backend = new EncryptedObjectJournalBackend(store, key);
+    const journal = new EventJournal(backend, () => "2026-07-18T00:00:00.000Z", () => crypto.randomUUID());
+    const session = await journal.createSession("Doomed", await manifest());
+    await journal.append(session.id, [{ type: "message.user", payload: { content: "delete me" } }]);
+    const kept = await journal.createSession("Kept", await manifest());
+    expect((await store.list("airship/v1/")).length).toBeGreaterThan(2);
+
+    const record = (await journal.getSession(session.id))!;
+    await journal.deleteSession(session.id, { sequence: record.headSequence, digest: record.headDigest });
+
+    expect(await journal.getSession(session.id)).toBeUndefined();
+    expect((await journal.listSessions()).map((item) => item.id)).toEqual([kept.id]);
+    // Nothing of the deleted conversation may remain addressable in the store.
+    const remaining = await Promise.all((await store.list("airship/v1/"))
+      .map(async (summary) => new TextDecoder().decode((await store.get(summary.key))!.bytes)));
+    expect(remaining.join("\n")).not.toContain("delete me");
+    // And the conversation that was not deleted is still readable.
+    expect(await journal.getSession(kept.id)).toBeDefined();
+  });
+
+  it("refuses a delete whose head is not the head that was read", async () => {
+    const { key } = await WorkspaceRootKey.generate();
+    const store = new MemoryObjectStore();
+    const backend = new EncryptedObjectJournalBackend(store, key);
+    const journal = new EventJournal(backend, () => "2026-07-18T00:00:00.000Z", () => crypto.randomUUID());
+    const session = await journal.createSession("Racing", await manifest());
+    const read = (await journal.getSession(session.id))!;
+    await journal.append(session.id, [{ type: "message.user", payload: { content: "arrived late" } }]);
+
+    await expect(journal.deleteSession(session.id, { sequence: read.headSequence, digest: read.headDigest }))
+      .rejects.toThrow(JournalConflictError);
+    expect(await journal.getSession(session.id)).toBeDefined();
+  });
+
+  it("says so rather than reporting a deletion a store cannot perform", async () => {
+    const { key } = await WorkspaceRootKey.generate();
+    const store = new MemoryObjectStore();
+    // A store from the base contract, which is deliberately delete-free.
+    const unreclaimable = Object.create(store, { trash: { value: undefined } }) as typeof store;
+    const backend = new EncryptedObjectJournalBackend(unreclaimable, key);
+    const journal = new EventJournal(backend, () => "2026-07-18T00:00:00.000Z", () => crypto.randomUUID());
+    const session = await journal.createSession("Undeletable", await manifest());
+    const record = (await journal.getSession(session.id))!;
+
+    await expect(journal.deleteSession(session.id, { sequence: record.headSequence, digest: record.headDigest }))
+      .rejects.toThrow(/cannot delete objects/u);
+    // Telling someone their conversation is gone while the ciphertext stays is
+    // the one outcome worse than refusing.
+    expect(await journal.getSession(session.id)).toBeDefined();
+  });
+});

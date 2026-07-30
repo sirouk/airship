@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 
 import { credentialReading } from "./access-view";
+import { SIGN_IN_UNAVAILABLE } from "./connect/connect-lanes";
 
 const source = await readFile(new URL("./access-view.tsx", import.meta.url), "utf8");
 const styles = await readFile(new URL("./access-view.css", import.meta.url), "utf8");
@@ -167,14 +168,18 @@ describe("Chutes connection method copy", () => {
   });
 
   it("presents Chutes as one inference connection and mounts additional providers accessibly", () => {
-    // Six levels of page chrome became one `<RouteHeader>`. The eyebrow and the
-    // H1 are the same two strings, passed as props: the eyebrow is the ⓘ
-    // panel's heading and the title is still a real `<h1>` carrying the id the
-    // section's `aria-labelledby` points at. Asserting the props is stronger
-    // than asserting the markup was — it also pins the heading id, which the
-    // old assertion only got for free from the literal tag.
-    expect(source).toContain('eyebrow="Inference connections"');
-    expect(source).toContain('title="Connect models"');
+    /*
+     * Six levels of page chrome became one `<RouteHeader>`. The title is still
+     * a real `<h1>` carrying the id the section's `aria-labelledby` points at —
+     * but it is no longer this file's word to choose. AMENDED: the `<h1>` read
+     * `Connect models` while the rail row, the palette entry, the Trust hub tab
+     * and the More sheet that all lead here read `Connection`, so it now comes
+     * from `destinationLabel`. Not one word is dropped — `Connect models` moved
+     * into the eyebrow, which the ⓘ panel renders as its heading, and the
+     * eyebrow's own two words are still there beside it.
+     */
+    expect(source).toContain('title={destinationLabel("access")}');
+    expect(source).toContain('const CONNECT_ROUTE_EYEBROW = "Connect models · inference connections";');
     expect(source).toContain('headingId="access-connection-title"');
     expect(source).toContain("<span>Chutes connection</span>");
     expect(source).toContain('aria-label="Additional cloud and local inference providers"');
@@ -296,7 +301,16 @@ describe("the Chutes lane says when it cannot work, and why, where a person is s
     expect(blocked).toBeGreaterThan(-1);
     expect(blocked).toBeLessThan(cause);
     expect(cause).toBeLessThan(mechanism);
-    expect(source).toContain('const SIGN_IN_UNAVAILABLE = "Chutes sign-in is not available in this build.";');
+    /*
+     * The sentence itself is asserted through the import, not through a copy of
+     * the literal: it used to be declared here *and* retyped in
+     * connect-lanes.ts, which is the lane row a person reads 40px above this
+     * panel on a phone. The panel now takes the lane's constant, so this test
+     * fails if either the constant or the import is unpicked.
+     */
+    expect(SIGN_IN_UNAVAILABLE).toBe("Chutes sign-in is not available in this build.");
+    expect(source).toContain("  SIGN_IN_UNAVAILABLE,\n");
+    expect(source).not.toContain("const SIGN_IN_UNAVAILABLE =");
     expect(source).toContain("<strong>{SIGN_IN_UNAVAILABLE}</strong> Paste a Chutes API key instead — it works now and stays in page memory.");
     expect(source).toContain("<summary>Why this build cannot sign in</summary>");
     expect(source).toContain("Deployment detail: {signInBlockedReason}");

@@ -170,7 +170,7 @@ test("desktop navigation exposes profile tabs and Account with one active page",
 
   await navigation.getByRole("button", { name: "Account", exact: true }).click();
   await expect(page).toHaveURL(/#account$/);
-  await expect(page.getByRole("heading", { name: "Account standing", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Account", exact: true, level: 1 })).toBeVisible();
   await expect(navigation.getByRole("button", { name: "Account", exact: true })).toHaveAttribute("aria-current", "page");
   await expect(navigation.getByRole("button", { name: "Connection", exact: true })).not.toHaveAttribute("aria-current", "page");
 });
@@ -200,7 +200,7 @@ test("route form menus use the styled accessible listbox contract", async ({ pag
   // The toolbar gate is load-bearing: `isVisible()` does not auto-wait, so
   // probing the trigger before the lazy route mounts always answers "no" and
   // silently skips the disclosure this amendment exists to drive.
-  const sessionToolbar = page.getByRole("search", { name: "Filter sessions" });
+  const sessionToolbar = page.getByRole("search", { name: "Filter conversations" });
   await expect(sessionToolbar).toBeVisible();
   const filterDisclosure = sessionToolbar.getByRole("button", { name: /^Filters(?: · \d+)?$/u });
   if (await filterDisclosure.isVisible()) {

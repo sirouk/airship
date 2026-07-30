@@ -12,7 +12,7 @@
 .workspace-terminal-dock__resize:hover::after,.workspace-terminal-dock__resize:focus-visible::after{background:var(--accent-bright)}
 .workspace-terminal-dock__resize:focus-visible{outline:2px solid var(--accent-bright);outline-offset:-2px}
 .workspace-terminal-dock__collapsed{display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0;height:42px;padding:0 7px}
-.workspace-terminal-dock__collapsed button{display:inline-flex;align-items:center;gap:8px;min-width:0;min-height:34px;padding:3px 9px;border:1px solid transparent;border-radius:var(--radius-control);color:var(--ink);background:transparent;font:inherit;cursor:pointer}
+.workspace-terminal-dock__collapsed button{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-width:0;min-height:34px;padding:3px 9px;border:1px solid transparent;border-radius:var(--radius-control);color:var(--ink);background:transparent;font:inherit;cursor:pointer}
 .workspace-terminal-dock__collapsed button:first-child{flex:1 1 auto;justify-content:flex-start}
 .workspace-terminal-dock__collapsed button:hover,.workspace-terminal-dock__collapsed button:focus-visible{border-color:var(--line-strong);background:var(--surface)}
 .workspace-terminal-dock__collapsed strong{font-size:var(--fs-caption)}
@@ -21,10 +21,45 @@
 .workspace-terminal-dock__loading{display:flex;align-items:center;justify-content:center;gap:9px;min-height:0;padding:10px;color:var(--ink-muted);font-size:var(--fs-caption)}
 .workspace-terminal-dock__loading button{min-height:36px;padding:4px 9px;border:1px solid var(--line-strong);border-radius:var(--radius-control);color:var(--ink);background:var(--surface);font:inherit;cursor:pointer}
 
+/*
+ * The dock's resize, made reachable by a finger.
+ *
+ * `workspace-view.css` states the rule for this exact shape — "a 6px separator
+ * cannot be a 44px touch target and must not pretend to be one" — and answers
+ * it for `.workbench-splitter` by withdrawing the splitter on a coarse pointer
+ * and clamping the column instead. This separator got neither: it stayed 6px,
+ * and its only other paths are arrow keys and a double-click, so on a phone the
+ * dock's height was fixed at whatever it was persisted at. The grabber it
+ * paints stays 2px; the *hit area* grows to 24px, and the grid row grows with
+ * it rather than the handle overhanging — a negative margin here would have put
+ * 9px of drag surface on top of the terminal's own scroll surface, which on
+ * touch is the gesture the reader uses to walk back up their output.
+ */
+@media (pointer: coarse) {
+  .workspace-terminal-dock[data-open=true] { grid-template-rows: 24px minmax(0, 1fr); }
+
+  .workspace-terminal-dock__resize {
+    height: 24px;
+  }
+
+  .workspace-terminal-dock__resize::after {
+    top: 11px;
+  }
+}
+
 @media(max-width:760px){
   .workspace-terminal-dock[data-open=false]{height:48px}
   .workspace-terminal-dock__collapsed{height:48px;padding-inline:4px}
-  .workspace-terminal-dock__collapsed button{min-height:44px;padding-inline:7px}
+  /* `min-width` and not only `min-height`: the "Open full Terminal view" button
+     drops its word on a phone (the rule below), leaving a bare ↗ that rendered
+     29×44 at 390px — correct on the axis nobody was going to miss and 15px
+     short on the axis a fingertip actually has to find. */
+  .workspace-terminal-dock__collapsed button{min-width:var(--touch-target);min-height:var(--touch-target);padding-inline:7px}
   .workspace-terminal-dock__collapsed small{display:none}
   .workspace-terminal-dock__collapsed button:last-child span{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+  /* Same button, same floor, in the branch that renders while the terminal
+     chunk is still arriving or has failed — three controls that must wrap
+     rather than run off a 390px row. */
+  .workspace-terminal-dock__loading{flex-wrap:wrap;gap:7px}
+  .workspace-terminal-dock__loading button{min-width:var(--touch-target);min-height:var(--touch-target)}
 }

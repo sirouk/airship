@@ -1,3 +1,4 @@
+import { objectArguments, requiredString } from "./schema";
 import type { JsonValue, SessionProfileBinding, Tool, ToolContext } from "../core/contracts";
 import { sha256 } from "../core/hash";
 import { randomUuid } from "../core/id";
@@ -139,7 +140,7 @@ export function registerMemoryTools(
     async execute(argumentsValue, context) {
       const profile = await pinnedProfile(journal, context);
       const args = objectArguments(argumentsValue);
-      const action = stringArgument(args.action, "action");
+      const action = requiredString(args.action, "action");
       const current = await workspace.read(MEMORY_PATH);
       const document = current ? parseMemoryDocument(current.content) : emptyDocument();
       const binding = {
@@ -153,8 +154,8 @@ export function registerMemoryTools(
         if (document.records.length >= MAX_MEMORIES) throw new Error(`Memory is at its ${MAX_MEMORIES}-record limit.`);
         const record: MemoryRecord = Object.freeze({
           id: randomUuid(),
-          content: stringArgument(args.content, "content"),
-          source: stringArgument(args.source, "source"),
+          content: requiredString(args.content, "content"),
+          source: requiredString(args.source, "source"),
           createdAt: new Date().toISOString(),
           scope: Object.freeze({
             kind: "profile",
@@ -166,7 +167,7 @@ export function registerMemoryTools(
         next = [...document.records, record];
         message = `Remembered ${record.id} for pinned profile ${profile.profileId}.`;
       } else if (action === "forget") {
-        const id = stringArgument(args.id, "id");
+        const id = requiredString(args.id, "id");
         // Forget is authorised from the same visible set as recall: a silo the
         // session cannot read must not be one it can destroy by guessing an ID.
         const owned = scopedMemories(document.records, binding).some((record) => record.id === id);
@@ -254,16 +255,6 @@ async function pinnedProfile(journal: EventJournal, context: ToolContext): Promi
 
 function emptyDocument(): MemoryDocument {
   return Object.freeze({ records: Object.freeze([]), sourceVersion: 2, legacyCount: 0 });
-}
-
-function objectArguments(value: JsonValue): Record<string, JsonValue> {
-  if (!record(value)) throw new Error("Tool arguments must be an object.");
-  return value as Record<string, JsonValue>;
-}
-
-function stringArgument(value: JsonValue | undefined, name: string): string {
-  if (typeof value !== "string" || !value.trim()) throw new Error(`${name} must be a non-empty string.`);
-  return value.trim();
 }
 
 function stringUnknown(value: unknown, name: string, maximum: number): string {

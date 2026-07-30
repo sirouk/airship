@@ -76,6 +76,47 @@ export class IndexedDbJournalBackend implements JournalBackend {
     return result.map(({ key: _key, ...event }) => event);
   }
 
+  async deleteSession(sessionId: string, expectedHead: { sequence: number; digest: string }): Promise<void> {
+    const database = await this.database();
+    // One transaction over both stores: a record removed without its events, or
+    // events removed without their record, is a corruption this browser would
+    // then carry forever. IndexedDB gives atomicity across stores for free as
+    // long as both are named here.
+    const transaction = database.transaction([SESSIONS, EVENTS], "readwrite");
+    const done = transactionDone(transaction);
+    const sessions = transaction.objectStore(SESSIONS);
+    const stored = (await requestResult(sessions.get(sessionId))) as SessionRecord | undefined;
+    if (!stored) {
+      transaction.abort();
+      return;
+    }
+    if (stored.headSequence !== expectedHead.sequence || stored.headDigest !== expectedHead.digest) {
+      transaction.abort();
+      throw new JournalConflictError("The conversation changed since it was read; it was not deleted.");
+    }
+    // Cursor over the compound index rather than `getAll` then delete-by-key:
+    // the events carry a separate primary key, and reading every event of a
+    // long conversation into memory to delete it is the one shape that gets
+    // slower the more there is to remove.
+    const index = transaction.objectStore(EVENTS).index("by-session-sequence");
+    const range = IDBKeyRange.bound([sessionId, 0], [sessionId, Number.MAX_SAFE_INTEGER]);
+    await new Promise<void>((resolve, reject) => {
+      const cursorRequest = index.openCursor(range);
+      cursorRequest.onsuccess = () => {
+        const cursor = cursorRequest.result;
+        if (!cursor) {
+          resolve();
+          return;
+        }
+        cursor.delete();
+        cursor.continue();
+      };
+      cursorRequest.onerror = () => reject(cursorRequest.error);
+    });
+    sessions.delete(sessionId);
+    await done;
+  }
+
   async append(
     sessionId: string,
     expectedHead: { sequence: number; digest: string },

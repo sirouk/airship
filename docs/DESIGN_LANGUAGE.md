@@ -50,20 +50,31 @@ Color reinforces but never carries meaning. Selecting a seal opens the claim sta
 
 ## Initial tokens
 
+`src/ui/tokens.css` is the contract; this is the vocabulary it uses. The roles
+below are the ones a reader meets by name — the sheet itself carries the full
+set, the mode and profile overrides, and the reasoning for each value.
+
 ```css
 :root {
-  --paper: #f3efe5;
-  --ink: #171a1d;
-  --steel: #34424a;
-  --brass: #9a7136;
-  --copper: #a65332;
-  --verdigris: #36756d;
-  --signal-red: #a13b32;
+  --ground: #101417;          /* the page beneath everything */
+  --surface: #171c20;         /* a panel on the ground */
+  --surface-raised: #1c2226;  /* a panel on a panel */
+  --ink: #ece8de;             /* body text; --ink-muted / --ink-faint below it */
+  --accent: #c19a58;          /* brass: the product's own material */
+  --accent-bright: #dfba72;   /* the pressable brass, and --focus */
+  --copper: #be805f;          /* asserted, not verified */
+  --verdigris: var(--v-verified);
+  --signal-red: var(--v-failed);
   --line: color-mix(in srgb, currentColor 18%, transparent);
   --radius-control: 6px;
   --radius-panel: 10px;
 }
 ```
+
+`--brass` and `--verdigris` are aliases of the roles above rather than separate
+hexes, so a palette moves in one place. `--steel` was retired once its last call
+site was re-homed by role; `token-vocabulary.test.ts` holds that it does not come
+back, and this block used to keep publishing it after the token was gone.
 
 Dark mode uses deep graphite rather than pure black, warm off-white text, and lower-chroma metals. Accessibility contrast, focus visibility, text scaling, touch targets, and keyboard operation are release gates rather than theme polish.
 

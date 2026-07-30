@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   PROVIDER_FACT_ROWS,
   PROVIDER_PROFILES,
+  VAULT_RELEASE_ACTION_LABEL,
   attachedCount,
   attachedRows,
   attachedSummary,
@@ -10,6 +11,7 @@ import {
   readinessTally,
   sealForState,
   vaultPhaseLabel,
+  vaultReleaseNote,
   vaultState,
 } from "./vault-view";
 import { resolveDefaultVaultBackend } from "./platform-shell";
@@ -340,5 +342,50 @@ describe("the runtime's own account of a failed adoption", () => {
     expect(app.slice(app.indexOf("async function changeVaultProvider"), app.indexOf("async function changeVaultProvider") + 2_000))
       .toContain("setVaultAdoptionNotice(undefined)");
     expect(app).toContain("adoptionNotice={vaultAdoptionNotice}");
+  });
+});
+
+describe("releasing the Vault is one act with one name", () => {
+  const view = readFileSync(new URL("./vault-view.tsx", import.meta.url), "utf8");
+
+  it("binds exactly one distinct button text to onDisconnect", () => {
+    /*
+     * Two labels for one host handler: "Switch to ephemeral · keep a page copy"
+     * on Local Device and "Disconnect · continue locally" 102 lines below it on
+     * every other provider. A person who learned the first could not find it
+     * again after switching to Drive, and "Disconnect" is the failure grammar
+     * this route reserves for a provider that genuinely dropped.
+     */
+    const bound = [...view.matchAll(/onClick=\{onDisconnect\}[^>]*>\s*\{?([^<}]*)/gu)]
+      .map((match) => match[1]!.trim())
+      .filter(Boolean);
+    expect(new Set(bound).size).toBe(1);
+    expect(view).not.toContain("Disconnect · continue locally");
+    // Both branches render the same component, so a future edit cannot make the
+    // label depend on which storage backend is attached.
+    expect(view.match(/<VaultReleaseAction /gu) ?? []).toHaveLength(2);
+    expect(view).toContain("{VAULT_RELEASE_ACTION_LABEL}");
+  });
+
+  it("states what survives per provider, in the sentence rather than the label", () => {
+    // The label promises a page copy; only the sentence can answer "and what
+    // about the encrypted copy I already have at the provider?".
+    expect(VAULT_RELEASE_ACTION_LABEL).toContain("Switch to ephemeral");
+    for (const profile of PROVIDER_PROFILES) {
+      const note = vaultReleaseNote(profile.id);
+      expect(note, `${profile.id} states what happens to this page`).toContain("keeps working in memory");
+      expect(note).not.toMatch(/disconnect/iu);
+      if (profile.id === "ephemeral") {
+        // There is no durable store to leave behind, and a sentence about
+        // "your encrypted Ephemeral data" would describe one that never existed.
+        expect(note).toContain("No durable store is attached");
+        continue;
+      }
+      expect(note, `${profile.id} names its own provider`).toContain(profile.title);
+      expect(note).toContain("left exactly where it is");
+    }
+    // Bound to the control, so a screen-reader user gets the consequence with
+    // the button rather than only if they happen to read past it.
+    expect(view).toContain("aria-describedby={noteId}");
   });
 });

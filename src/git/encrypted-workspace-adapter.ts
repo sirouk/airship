@@ -1,3 +1,4 @@
+import { deepFreeze } from "../core/freeze";
 import type { JsonValue } from "../core/contracts";
 import { sha256, stableStringify } from "../core/hash";
 import {
@@ -651,12 +652,4 @@ function checkpointPath(input = DEFAULT_HEAD_PATH): string {
     throw new GitValidationError("Durable Git checkpoint must stay under /workspace/.airship/git/.");
   }
   return path;
-}
-
-function deepFreeze<T>(value: T): T {
-  if (value && typeof value === "object" && !Object.isFrozen(value)) {
-    Object.freeze(value);
-    for (const child of Object.values(value as Record<string, unknown>)) deepFreeze(child);
-  }
-  return value;
 }

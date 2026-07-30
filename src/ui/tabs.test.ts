@@ -181,7 +181,10 @@ describe("one tab grammar", () => {
   it("sets every tab label at the one tab step", () => {
     const button = routeStyles.match(/\.tabs__tab-button \{([^}]+)\}/u)?.[1] ?? "";
     expect(button).toContain("var(--fs-lead)");
-    expect(button).toContain("min-height: 40px");
+    // The height is asserted as the token, not as 40px: the product shipped
+    // three tab heights (40 here, 44 on the Trust hub, 39 on the
+    // Agent-configuration strip) because each strip wrote its own number.
+    expect(button).toContain("min-height: var(--tab-height)");
   });
 
   it("raises every target to the touch floor where there is a finger", () => {
@@ -189,7 +192,12 @@ describe("one tab grammar", () => {
     expect(coarse).toContain(".tabs__tab-button");
     expect(coarse).toContain(".tabs__close");
     expect(coarse).toContain(".tabs__overflow-trigger");
-    expect(coarse).toContain("min-height: 44px");
+    // The Agent-configuration strip — a phone's only route to Skills and
+    // Capabilities — was the one strip with no floor at all and measured 39px
+    // at every width. It is floored here rather than in its own rule so the
+    // next strip inherits the answer instead of having to remember it.
+    expect(coarse).toContain(".profile-hub-tabs > button");
+    expect(coarse).toContain("min-height: var(--touch-target)");
   });
 
   it("keeps a count as text rather than reinstating a filled badge", () => {
@@ -199,9 +207,9 @@ describe("one tab grammar", () => {
     expect(count).not.toContain("border-radius");
   });
 
-  it("gives the overflow rows the full identity at a 44px target", () => {
+  it("gives the overflow rows the full identity at a full control-height target", () => {
     const row = routeStyles.match(/\.tabs__overflow-item \{([^}]+)\}/u)?.[1] ?? "";
-    expect(row).toContain("min-height: 44px");
+    expect(row).toContain("min-height: var(--density-control)");
     // The full path wraps here. Ellipsising it would leave the untruncated
     // name nowhere but a `title`, which a touch user cannot reach.
     const span = routeStyles.match(/\.tabs__overflow-item > \.tabs__overflow-label \{([^}]+)\}/u)?.[1] ?? "";

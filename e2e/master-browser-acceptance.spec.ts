@@ -159,7 +159,7 @@ test("high-value controls remain usable without credentials on every device clas
   await expectContainedLayout(page);
 
   await page.goto("/#connection");
-  await expect(page.getByRole("heading", { name: "Connect models", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Connection", exact: true, level: 1 })).toBeVisible();
   const chutes = page.locator('.connect-lane[data-lane="chutes"]');
   await chutes.getByRole("button", { name: /Chutes/u }).first().click();
   // This acceptance build does not configure Chutes OAuth. It must lead with

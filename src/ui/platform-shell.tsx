@@ -2,7 +2,7 @@ import { Component, type ComponentChildren } from "preact";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import type { SlashCommandDescriptor } from "../commands/types";
 import type { SessionListItem } from "../sessions/domain";
-import { CANONICAL_DESTINATIONS, SETTINGS_OVERLAY_ENTRY, type NavigationView } from "./navigation-model";
+import { CANONICAL_DESTINATIONS, navigationHashForView, SETTINGS_OVERLAY_ENTRY, type NavigationView } from "./navigation-model";
 import { Seal, type SealState } from "./seal";
 import { trapFocus } from "./focus-trap";
 import type { ApprovalMode } from "../approvals/modes";
@@ -45,15 +45,31 @@ export function buildPaletteEntries(args: Readonly<{
     entries.push(Object.freeze({
       id: `view:${destination.id}`,
       label: destination.label,
-      description: `${destination.group} · ${scopeLabel(destination.scope)}`,
+      description: `${destination.group} · ${scopeLabel(destination.scope)}${chordSuffix(destination.id)}`,
       keywords: [destination.id, destination.hash, destination.group, destination.scope],
       group: destination.group === "Trust" ? "Trust" : "Navigate",
       run: () => args.navigate(destination.id),
     }));
+    /*
+     * `g x` is the only route to #context anywhere in the product: the hash is
+     * deliberately outside `CanonicalDestinationId`, so it has no rail row, no
+     * `MOBILE_MORE_ENTRIES` entry and — until this row — no palette entry, i.e.
+     * a destination reachable only by a chord that nothing printed. It is
+     * Memory opened on its index tab, so it takes Memory's name and scope
+     * rather than starting a second table of destination names.
+     */
+    if (destination.id === "memory") entries.push(Object.freeze({
+      id: "view:context",
+      label: `${destination.label} index`,
+      description: `${destination.label} · ${scopeLabel(destination.scope)}${chordSuffix("context")}`,
+      keywords: ["context", navigationHashForView("context"), "index", destination.label],
+      group: "Navigate",
+      run: () => args.navigate("context"),
+    }));
     for (const nested of destination.nested) entries.push(Object.freeze({
       id: `view:${nested.id}`,
       label: nested.label,
-      description: `${destination.label} · ${scopeLabel(nested.scope)}`,
+      description: `${destination.label} · ${scopeLabel(nested.scope)}${chordSuffix(nested.id)}`,
       keywords: [nested.id, nested.hash, destination.label],
       group: destination.group === "Trust" ? "Trust" : "Navigate",
       run: () => args.navigate(nested.id),
@@ -206,6 +222,28 @@ export const NAVIGATION_JUMPS: Readonly<Record<string, NavigationView>> = Object
 
 export function navigationJumpForChord(prefix: string | undefined, key: string): NavigationView | undefined {
   return prefix === "g" ? NAVIGATION_JUMPS[key.toLocaleLowerCase()] : undefined;
+}
+
+/**
+ * The chord that reaches a destination, in the form a person types it.
+ *
+ * Eight `g`-prefixed chords shipped with no discovery surface: the palette
+ * footer printed only `↑↓ choose` and `↵ open`, and the two shortcuts that were
+ * discoverable at all (`⌘K`, `⌘\`) got there through `title` tooltips a touch
+ * user never sees. Read straight out of `NAVIGATION_JUMPS` so the printed chord
+ * and the bound chord cannot drift — a legend maintained by hand is how a
+ * shortcut sheet ends up teaching a key that was rebound two releases ago.
+ */
+export function navigationChordHint(view: NavigationView): string | undefined {
+  for (const [key, destination] of Object.entries(NAVIGATION_JUMPS)) {
+    if (destination === view) return `g ${key}`;
+  }
+  return undefined;
+}
+
+function chordSuffix(view: NavigationView): string {
+  const chord = navigationChordHint(view);
+  return chord ? ` · ${chord}` : "";
 }
 
 export function useGlobalNavigationJumps(navigate: (view: NavigationView) => void, enabled?: () => boolean): void {
@@ -771,10 +809,22 @@ export function TrustPostureSheet({ open, axes, onClose, onNavigate }: Readonly<
   return <div class="platform-scrim trust-sheet-scrim" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><div ref={dialog} class="trust-sheet" role="dialog" aria-modal="true" aria-labelledby="trust-sheet-title" tabIndex={-1} onKeyDown={(event) => { if (event.key === "Escape") onClose(); else if (event.key === "Tab") trapFocus(event, dialog.current); }}><header><div><span class="eyebrow">Four-axis posture</span><h2 id="trust-sheet-title">Runtime trust</h2></div><button type="button" onClick={onClose}>Close</button></header><p>Each axis is independently scoped. The weakest claim in this browser tab is shown in the topbar; the conversation's own claims are shown in its session bar.</p>{groups.map((group) => <section key={group.scope} class="trust-sheet__scope" aria-label={group.band.heading}><h3 class="eyebrow">{group.band.heading}</h3><p class="trust-sheet__where">{group.band.restingHome}</p><ClaimRows rows={group.axes.map((axis) => Object.freeze({ id: axis.id, state: axis.state, label: axis.label, detail: axis.detail, action: Object.freeze({ label: axis.label, onSelect: () => { onClose(); onNavigate(axis.view); } }) }))} /></section>)}</div></div>;
 }
 
-const TRUST_TABS: readonly Readonly<{ view: NavigationView; label: string }>[] = Object.freeze([
-  { view: "proof", label: "Proof" },
-  { view: "vault", label: "Vault" }, { view: "access", label: "Connection" }, { view: "billing", label: "Account" },
-]);
+/**
+ * The Trust hub strip, read out of the navigation table rather than retyped.
+ *
+ * This was a fourth set of destination literals — after the rail, the palette
+ * and the More sheet — for the same four rows, sitting on the phone directly
+ * above the two headings that had already drifted from it ("Connect models",
+ * "Account standing"). A strip built from the table cannot be the surface that
+ * disagrees next. The `Trust` group, with `access`'s nested `billing` folded in
+ * after its parent, is exactly the four in exactly the order they were typed.
+ */
+export const TRUST_TABS: readonly Readonly<{ view: NavigationView; label: string }>[] = Object.freeze(
+  CANONICAL_DESTINATIONS
+    .filter((destination) => destination.group === "Trust")
+    .flatMap((destination) => [destination, ...destination.nested])
+    .map((destination) => Object.freeze({ view: destination.id as NavigationView, label: destination.label })),
+);
 
 export function TrustHubTabs({ view, onNavigate }: Readonly<{ view: NavigationView; onNavigate(view: NavigationView): void }>) {
   const tabs = useRef<HTMLElement>(null);

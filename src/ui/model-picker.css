@@ -31,7 +31,7 @@
 /* Three regions, and only the middle one scrolls. The whole popover used to be
    one `overflow: auto` box, so search, facets, sort and the provenance caveat
    all left the screen at scrollTop 400. */
-.model-picker-popover { position:absolute; z-index:320; top:calc(100% + var(--sp-2)); left:0; display:flex; flex-direction:column; width:max(100%, min(680px, calc(100vw - 28px))); max-height:min(650px, 70dvh); border:1px solid var(--line-strong); border-radius:var(--radius-panel); background:var(--surface-raised); box-shadow:0 18px 60px rgba(0,0,0,.45); }
+.model-picker-popover { position:absolute; z-index:320; top:calc(100% + var(--sp-2)); left:0; display:flex; flex-direction:column; width:max(100%, min(680px, calc(100vw - 28px))); max-height:min(650px, 70dvh); border:1px solid var(--line-strong); border-radius:var(--radius-panel); background:var(--surface-raised); box-shadow:var(--shadow); }
 /* Clipping is off the outer box. `overflow:hidden` was there only to keep the
    last region's square corners inside the panel radius, and it made the popover
    a clip ancestor for the Sort listbox — an absolutely positioned child whose
@@ -65,13 +65,13 @@
 .model-row > .model-row-price { grid-area:1 / 3 / 2 / 4; }
 .model-row > .model-row-capabilities { grid-area:2 / 2 / 3 / 3; }
 .model-row > .model-row-metrics { grid-area:2 / 3 / 3 / 4; }
-.model-row-id { min-width:0; overflow:hidden; color:var(--ink); font:600 var(--fs-caption)/1.35 var(--font-mono); text-overflow:ellipsis; white-space:nowrap; }
+.model-row-id { min-width:0; overflow:hidden; color:var(--ink); font:var(--fw-strong) var(--fs-caption)/1.35 var(--font-mono); text-overflow:ellipsis; white-space:nowrap; }
 /* Price sits at ink weight on line 1: it is the number a person is about to
    commit to, and it used to be the quietest text on the row. */
-.model-row-price { color:var(--ink); font:600 var(--fs-caption)/1.35 var(--font-body); font-variant-numeric:tabular-nums; white-space:nowrap; }
+.model-row-price { color:var(--ink); font:var(--fw-strong) var(--fs-caption)/1.35 var(--font-body); font-variant-numeric:tabular-nums; white-space:nowrap; }
 .model-row-capabilities { display:flex; flex-wrap:wrap; gap:0 var(--sp-1); min-width:0; color:var(--ink-muted); font-size:var(--fs-micro); }
 .model-row-capabilities > * + *::before { content:"· "; color:var(--ink-faint); }
-.model-row-flag { color:var(--accent-bright); font-style:normal; font-weight:700; }
+.model-row-flag { color:var(--accent-bright); font-style:normal; font-weight:var(--fw-title); }
 /* Popularity is unverified provider telemetry. It was painted `--v-verified`,
    which is the colour reserved for a cryptographic verdict. */
 .model-row-metrics { color:var(--ink-faint); font-size:var(--fs-micro); font-variant-numeric:tabular-nums; white-space:nowrap; }
@@ -89,7 +89,7 @@
 .model-picker-provenance { margin:0; color:var(--ink-faint); font-size:var(--fs-micro); line-height:1.45; }
 .model-picker-show-all { width:100%; min-height:40px; }
 
-.model-logo { position:relative; flex:none; align-self:center; display:grid; place-items:center; width:22px; height:22px; overflow:hidden; border:1px solid var(--line); border-radius:var(--radius-control); background:var(--surface-soft); color:var(--ink-muted); font:600 var(--fs-micro)/1 var(--font-body); text-transform:uppercase; }
+.model-logo { position:relative; flex:none; align-self:center; display:grid; place-items:center; width:22px; height:22px; overflow:hidden; border:1px solid var(--line); border-radius:var(--radius-control); background:var(--surface-soft); color:var(--ink-muted); font:var(--fw-strong) var(--fs-micro)/1 var(--font-body); text-transform:uppercase; }
 .model-logo-img { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; background:var(--surface-soft); }
 .model-picker-trigger .model-logo { width:20px; height:20px; }
 

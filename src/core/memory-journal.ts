@@ -27,6 +27,16 @@ export class MemoryJournalBackend implements JournalBackend {
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   }
 
+  async deleteSession(sessionId: string, expectedHead: { sequence: number; digest: string }): Promise<void> {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    if (session.headSequence !== expectedHead.sequence || session.headDigest !== expectedHead.digest) {
+      throw new JournalConflictError("The conversation changed since it was read; it was not deleted.");
+    }
+    this.sessions.delete(sessionId);
+    this.events.delete(sessionId);
+  }
+
   async readEvents(sessionId: string, afterSequence = 0): Promise<DurableEvent[]> {
     return (this.events.get(sessionId) ?? [])
       .filter((event) => event.sequence > afterSequence)

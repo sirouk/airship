@@ -1,3 +1,4 @@
+import { deepFreeze } from "../core/freeze";
 import { CONVERSATION_NAMED_EVENT_TYPE } from "../core/contracts";
 import type {
   SecurityPosture,
@@ -1153,10 +1154,4 @@ function truncateSafely(value: string, maximum: number): string {
   const last = value.charCodeAt(end - 1);
   if (last >= 0xd800 && last <= 0xdbff) end -= 1;
   return `${value.slice(0, Math.max(0, end))}…`;
-}
-
-function deepFreeze<T>(value: T): T {
-  if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
-  for (const child of Object.values(value as Record<string, unknown>)) deepFreeze(child);
-  return Object.freeze(value);
 }

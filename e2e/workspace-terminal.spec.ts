@@ -77,7 +77,13 @@ test("desktop terminal manages page-local tabs without claiming host Bash", asyn
   await page.keyboard.press("Tab");
   await expect(tab.nth(2)).not.toBeFocused();
 
+  // Ending a live process is confirmed the same way deleting a file is, so the
+  // tab count may not move until the modal's own verb is pressed.
   await page.getByRole("button", { name: "Close terminal tab" }).click();
+  const closeConfirm = page.getByRole("dialog", { name: /^Close / });
+  await expect(closeConfirm).toContainText("ends the process running in");
+  await expect(tabs.getByRole("tab")).toHaveCount(3);
+  await closeConfirm.getByRole("button", { name: "Close terminal", exact: true }).click();
   await expect(tabs.getByRole("tab")).toHaveCount(2);
   await expect(page.locator(".terminal-route__footer")).toContainText("bounded lineage remains only for this page/workspace lifetime");
   await page.screenshot({ path: testInfo.outputPath("workspace-terminal-desktop.png"), fullPage: true });

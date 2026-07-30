@@ -17,8 +17,11 @@ import {
 import type { ChutesInvocationTelemetry } from "../inference/chutes";
 import "./billing-view.css";
 import { OFFLINE_INLINE_REASON } from "./connectivity";
-import { Icon } from "./icons";
+import { Icon, type IconName } from "./icons";
+import { formatInstant } from "./instant-format";
 import { Metric, MetricStrip, metricQuantity } from "./metric-strip";
+import { destinationLabel } from "./navigation-model";
+import { formatCompactCount, formatCount, formatUsd } from "./number-format";
 import { Popover } from "./popover";
 import { mapUnknownRequestFailure, observationState } from "./request-state";
 import { RouteHeader } from "./route-header";
@@ -76,6 +79,22 @@ export type BillingProviderDefinition = Readonly<{
   id: BillingProviderId;
   label: "Chutes" | "OpenAI" | "Anthropic" | "xAI";
 }>;
+
+/**
+ * The mark that sits beside a provider's name.
+ *
+ * A four-row tab strip of pure text made a reader parse three similar words to
+ * find the one they wanted; a silhouette is recognised before it is read. The
+ * map is exhaustive over `BillingProviderId`, so adding a provider without
+ * giving it a mark does not compile — which is the only way this stays a
+ * property of the provider list rather than of one component that remembered.
+ */
+export const BILLING_PROVIDER_ICONS: Readonly<Record<BillingProviderId, IconName>> = Object.freeze({
+  chutes: "provider-chutes",
+  openai: "provider-openai",
+  anthropic: "provider-anthropic",
+  xai: "provider-xai",
+});
 
 export const BILLING_PROVIDERS: readonly BillingProviderDefinition[] = Object.freeze([
   Object.freeze({ id: "chutes", label: "Chutes" }),
@@ -160,11 +179,15 @@ export function chutesAccountChip(
 /**
  * The freshness line, worded for what actually happened.
  *
- * `observationState` says "Verified · <time>", which is a claim about the age
- * of an answer. When no source answered there is no answer to be fresh, and the
- * only true word for that timestamp is when the attempt was made — otherwise
- * the popover restates, in its body, the exact conflation the chip above it was
+ * `observationState` says "Read · <time>", which is a claim about the age of an
+ * answer. When no source answered there is no answer to be fresh, and the only
+ * true word for that timestamp is when the attempt was made — otherwise the
+ * popover restates, in its body, the exact conflation the chip above it was
  * changed to stop making.
+ *
+ * "Verified" stays in the alternation. It is no longer produced — the rung word
+ * was removed from `observationState` — but a stored label from a build that
+ * did produce it must still be rewritten to "Attempted" rather than kept.
  */
 export function accountReadingLine(
   acceptance: ChutesAccountAcceptance | undefined,
@@ -172,7 +195,7 @@ export function accountReadingLine(
 ): string | undefined {
   if (observedLabel === undefined) return undefined;
   if (acceptance === undefined || acceptance === "accepted") return observedLabel;
-  return observedLabel.replace(/^(?:Verified|Observed)/u, "Attempted");
+  return observedLabel.replace(/^(?:Verified|Observed|Read)/u, "Attempted");
 }
 
 export function billingProviderDatumLabel(
@@ -236,6 +259,17 @@ export function resolveBillingProviderInventory(
 
 /** The em dash a metric shows when nothing has been read. It is not a zero. */
 const NOT_READ = "—";
+
+/**
+ * The heading's own words, kept — one rung down.
+ *
+ * The `<h1>` read `Account standing` while the rail row, the command palette,
+ * the Trust hub tab and the More sheet that all lead here read `Account`. The
+ * title now comes from `destinationLabel("billing")` and `standing` moves into
+ * the eyebrow, where it still tells a reader which sense of "account" this
+ * route means: the balance and the runway, not the identity.
+ */
+const ACCOUNT_ROUTE_EYEBROW = "Account standing · Chutes telemetry and provider inventory";
 
 /** How long a snapshot reads as fresh before the chip demotes it to an observation. */
 const OBSERVATION_FRESHNESS_BUDGET_MS = 5 * 60_000;
@@ -358,8 +392,8 @@ export function BillingView({
       <RouteHeader
         routeId="account"
         density="tool"
-        title="Account standing"
-        eyebrow="Chutes telemetry and provider inventory"
+        title={destinationLabel("billing")}
+        eyebrow={ACCOUNT_ROUTE_EYEBROW}
         description="Review rich Chutes account telemetry and credential-free observations supplied for other connected providers."
         status={selectedProvider === "chutes" && accountReadable ? (
           /* The 64px `.billing-toolbar` band held one status line and one
@@ -510,12 +544,12 @@ export function BillingView({
         <Metric
           label="Charged this UTC month"
           value={metricQuantity(usageState.value ? formatUsd(usageState.value.totalCost, "headline") : billingDatumLabel(usageState.status))}
-          caption={usageState.value ? `${formatCompact(usageState.value.totalRequests)} charged requests in this range${boundedUsageSuffix(usageState.value)}` : usageState.detail}
+          caption={usageState.value ? `${formatCompactCount(usageState.value.totalRequests)} charged requests in this range${boundedUsageSuffix(usageState.value)}` : usageState.detail}
         />
         <Metric
           label="Tokens this UTC month"
-          value={metricQuantity(usageState.value ? formatCompact(usageState.value.inputTokens + usageState.value.outputTokens) : billingDatumLabel(usageState.status))}
-          caption={usageState.value ? `${formatCompact(usageState.value.inputTokens)} in · ${formatCompact(usageState.value.outputTokens)} out${boundedUsageSuffix(usageState.value)}` : usageState.detail}
+          value={metricQuantity(usageState.value ? formatCompactCount(usageState.value.inputTokens + usageState.value.outputTokens) : billingDatumLabel(usageState.status))}
+          caption={usageState.value ? `${formatCompactCount(usageState.value.inputTokens)} in · ${formatCompactCount(usageState.value.outputTokens)} out${boundedUsageSuffix(usageState.value)}` : usageState.detail}
         />
         {/* Live headroom is not a subscription fact and no longer sits in a grid
             gated on one. It is a figure, so it is a metric. */}
@@ -523,8 +557,8 @@ export function BillingView({
           label="Live headroom"
           value={metricQuantity(quota?.remaining === undefined
             ? NOT_READ
-            : `${formatCompact(quota.remaining)}${quota.total === undefined ? "" : ` / ${formatCompact(quota.total)}`}`)}
-          caption={invocationTelemetry ? `observed ${formatDateTime(invocationTelemetry.capturedAt)}` : "Run a Chutes turn to observe headers"}
+            : `${formatCompactCount(quota.remaining)}${quota.total === undefined ? "" : ` / ${formatCompactCount(quota.total)}`}`)}
+          caption={invocationTelemetry ? `observed ${formatInstant(invocationTelemetry.capturedAt, "minute")}` : "Run a Chutes turn to observe headers"}
         />
       </MetricStrip>
 
@@ -532,13 +566,13 @@ export function BillingView({
           tooltip on the tile above. */}
       <p class="billing-headroom-facts">
         <span>Latest invocation</span>
-        <span>User rate limit {invocationTelemetry?.rateLimit?.user === undefined ? NOT_READ : invocationTelemetry.rateLimit.user === "unlimited" ? "Unlimited" : formatCompact(invocationTelemetry.rateLimit.user)}</span>
+        <span>User rate limit {invocationTelemetry?.rateLimit?.user === undefined ? NOT_READ : invocationTelemetry.rateLimit.user === "unlimited" ? "Unlimited" : formatCompactCount(invocationTelemetry.rateLimit.user)}</span>
         {/* Both limits are absent for the same reason — the header was not on
             the last invocation. "Unavailable" asserted that Chutes has no such
             figure; the em dash states the non-claim the other three cells
             already state. One absence, one word. */}
-        <span>Chute rate limit {invocationTelemetry?.rateLimit?.chute === undefined ? NOT_READ : formatCompact(invocationTelemetry.rateLimit.chute)}</span>
-        <span>Observed {invocationTelemetry ? formatDateTime(invocationTelemetry.capturedAt) : NOT_READ}</span>
+        <span>Chute rate limit {invocationTelemetry?.rateLimit?.chute === undefined ? NOT_READ : formatCompactCount(invocationTelemetry.rateLimit.chute)}</span>
+        <span>Observed {invocationTelemetry ? formatInstant(invocationTelemetry.capturedAt, "minute") : NOT_READ}</span>
       </p>
 
       {balanceState.status === "verified" && balanceState.value !== undefined && balanceState.value <= 0 ? (
@@ -589,7 +623,7 @@ export function BillingView({
         <section class="panel usage-panel">
           <div class="panel-heading">
             <span>Actual charged usage</span>
-            <span>{usageState.value ? `${formatDate(usageState.value.rangeStart)} → ${formatDate(usageState.value.rangeEnd)}` : billingDatumLabel(usageState.status)}</span>
+            <span>{usageState.value ? `${formatInstant(usageState.value.rangeStart, "day", "UTC")} → ${formatInstant(usageState.value.rangeEnd, "day", "UTC")}` : billingDatumLabel(usageState.status)}</span>
           </div>
           {usageEntries.length ? <UsageChart entries={usageEntries} highlight={highlight} onHighlight={setHighlight} /> : <div class="billing-empty"><Icon name="billing" /><strong>{usageEmptyTitle(usageState.status)}</strong><p>{usageState.status === "verified" ? "Chutes returned no usage records for this requested range; activity outside the response is not inferred." : usageState.detail}</p></div>}
           {usageEntries.length ? (
@@ -607,7 +641,7 @@ export function BillingView({
                   they are what carries the Tokens value on a phone, where it is
                   restacked onto its own sub-line rather than deleted. */}
               <div class="usage-ledger-head" role="row"><span role="columnheader">Date</span><span role="columnheader">Requests</span><span role="columnheader">Tokens</span><span role="columnheader">Charged</span></div>
-              {[...usageEntries].reverse().slice(0, 10).map((entry) => (
+              {[...usageEntries].reverse().slice(0, PANEL_ROW_CAP).map((entry) => (
                 <div
                   class="usage-ledger-row"
                   role="row"
@@ -616,9 +650,9 @@ export function BillingView({
                   onPointerEnter={() => setHighlight(entry.bucket)}
                   onPointerLeave={() => setHighlight(undefined)}
                 >
-                  <span role="cell">{formatBucket(entry.bucket)}</span>
-                  <span role="cell">{formatCompact(entry.requests)}</span>
-                  <span role="cell">{formatCompact(entry.inputTokens + entry.outputTokens)}</span>
+                  <span role="cell">{formatInstant(entry.bucket, "minute")}</span>
+                  <span role="cell">{formatCompactCount(entry.requests)}</span>
+                  <span role="cell">{formatCompactCount(entry.inputTokens + entry.outputTokens)}</span>
                   <strong role="cell">{formatUsd(entry.cost, "ledger")}</strong>
                 </div>
               ))}
@@ -630,7 +664,7 @@ export function BillingView({
                 reach — the cap disclosure, deleted by the markup that was added
                 to make the rows real. `aria-describedby` keeps the association
                 the DOM nesting used to imply. */}
-            <p class="usage-ledger-foot" id="usage-ledger-bound">Showing the {Math.min(10, usageEntries.length)} most recent of {usageEntries.length} bucket{usageEntries.length === 1 ? "" : "s"}.</p>
+            <p class="usage-ledger-foot" id="usage-ledger-bound">{boundedRowNote(usageEntries.length, "most recent", "bucket")}</p>
             </>
           ) : null}
         </section>
@@ -638,14 +672,31 @@ export function BillingView({
         <section class="panel quota-panel">
           <div class="panel-heading"><span>Configured quotas</span><span>{quotaState.status === "verified" && quotaState.value ? `${quotaState.value.rawCount} record${quotaState.value.rawCount === 1 ? "" : "s"}` : billingDatumLabel(quotaState.status)}</span></div>
           {quotaState.status === "verified" && quotaState.value?.entries.length ? (
-            <div class="quota-list">
-              {quotaState.value.entries.slice(0, 10).map((quotaEntry, index) => (
+            <>
+            {/* The heading counts every record Chutes returned and the list drew
+                the first ten of them, silently: with 24 configured quotas this
+                panel read "24 records" above exactly 10 rows, and nothing on
+                the route said which 14 spend limits were withheld. The ledger
+                one panel to the left had already been given this sentence; it
+                is the same class and the same grammar, because a second shape
+                for "this list is bounded" is how the two drift.
+                `aria-describedby` only when the sentence exists — a dangling
+                id is a described-by that describes nothing. */}
+            <div
+              class="quota-list"
+              {...(quotaState.value.entries.length > PANEL_ROW_CAP ? { "aria-describedby": "quota-list-bound" } : {})}
+            >
+              {quotaState.value.entries.slice(0, PANEL_ROW_CAP).map((quotaEntry, index) => (
                 <div key={`${quotaEntry.chuteId ?? "default"}:${index}`}>
                   <span>{quotaEntry.chuteId ?? "Default"}</span>
-                  <strong>{quotaEntry.quota === "unlimited" ? "Unlimited" : formatCompact(quotaEntry.quota)}</strong>
+                  <strong>{quotaEntry.quota === "unlimited" ? "Unlimited" : formatCompactCount(quotaEntry.quota)}</strong>
                 </div>
               ))}
             </div>
+            {quotaState.value.entries.length > PANEL_ROW_CAP ? (
+              <p class="usage-ledger-foot" id="quota-list-bound">{boundedRowNote(quotaState.value.entries.length, "first", "quota record")}</p>
+            ) : null}
+            </>
           ) : (
             <div class="billing-empty compact"><Icon name="context" /><strong>{quotaEmptyTitle(quotaState.status)}</strong><p>{quotaState.detail} Per-invocation headers remain a separate live observation.</p></div>
           )}
@@ -722,7 +773,7 @@ function BillingProviderTabs({
             data-state={inventory.state}
             onClick={() => onSelect(provider.id)}
           >
-            <strong>{provider.label}</strong>
+            <strong><Icon name={BILLING_PROVIDER_ICONS[provider.id]} size={16} />{provider.label}</strong>
             <span>{providerConnectionLabel(inventory.state)}</span>
           </button>
         );
@@ -756,7 +807,7 @@ function BillingProviderInventoryPanel({
         ? "Unavailable"
         : inventory.state === "connected" ? "Not provided" : "Unavailable";
   const observedAt = inventory.observedAt
-    ? formatDateTime(inventory.observedAt)
+    ? formatInstant(inventory.observedAt, "minute")
     : inventory.state === "connected" ? "Not provided" : "Unavailable";
 
   return (
@@ -769,7 +820,7 @@ function BillingProviderInventoryPanel({
       <header class="billing-provider-inventory__header">
         <div>
           <span class="eyebrow">Provider account inventory</span>
-          <h2>{provider.label}</h2>
+          <h2><Icon name={BILLING_PROVIDER_ICONS[provider.id]} size={20} />{provider.label}</h2>
         </div>
         <span class="billing-provider-state" data-state={inventory.state}>{providerConnectionLabel(inventory.state)}</span>
       </header>
@@ -812,7 +863,7 @@ function ProviderInventoryDatum({
     ? boundedDisplayText(observation.detail, 512)
     : undefined;
   const observedAt = observation?.status === "observed" && observation.observedAt
-    ? formatDateTime(observation.observedAt)
+    ? formatInstant(observation.observedAt, "minute")
     : undefined;
   return (
     <div>
@@ -855,7 +906,7 @@ function RunwayCard({
               generic, which ARIA forbids naming. Marked as the decoration it is;
               the used/covered line and the remaining line carry the fact. */}
           <span class="runway-track" aria-hidden="true"><span style={{ width: `${percent ?? 0}%` }} /></span>
-          <div class="runway-foot"><span>{window.remaining === undefined ? (uncapped ? "No fixed cycle cap" : "Remaining unavailable") : `${formatUsd(window.remaining, "ledger")} remaining`}</span><span>{window.resetAt ? `Resets ${formatDateTime(window.resetAt)}` : "Reset unavailable"}</span></div>
+          <div class="runway-foot"><span>{window.remaining === undefined ? (uncapped ? "No fixed cycle cap" : "Remaining unavailable") : `${formatUsd(window.remaining, "ledger")} remaining`}</span><span>{window.resetAt ? `Resets ${formatInstant(window.resetAt, "minute")}` : "Reset unavailable"}</span></div>
           {cap !== undefined && usage !== undefined && usage >= cap ? <p>Covered allowance is exhausted. Overflow capability depends on verified balance and provider billing policy.</p> : null}
         </>
       )}
@@ -916,7 +967,9 @@ export function UsageChart({ entries, highlight, onHighlight }: {
           // A one-percent floor keeps a non-zero bucket visible without
           // flattening fourteen different values into the same stub.
           const percent = max > 0 ? Math.max(1, (entry.cost / max) * 100) : 0;
-          const label = `${formatBucket(entry.bucket)} · ${formatUsd(entry.cost, "ledger")} · ${entry.requests} requests`;
+          // `${entry.requests}` was the route's third number grammar: the same
+          // count the table two rows down prints grouped read `12345` here.
+          const label = `${formatInstant(entry.bucket, "minute")} · ${formatUsd(entry.cost, "ledger")} · ${formatCount(entry.requests)} requests`;
           return (
             <button
               class="usage-bar"
@@ -936,9 +989,9 @@ export function UsageChart({ entries, highlight, onHighlight }: {
         })}
       </div>
       <div class="usage-chart__axis" aria-hidden="true">
-        <span>{first ? formatDate(first.bucket) : ""}</span>
-        <span>{middle ? formatDate(middle.bucket) : ""}</span>
-        <span>{last ? formatDate(last.bucket) : ""}</span>
+        <span>{first ? formatInstant(first.bucket, "day") : ""}</span>
+        <span>{middle ? formatInstant(middle.bucket, "day") : ""}</span>
+        <span>{last ? formatInstant(last.bucket, "day") : ""}</span>
       </div>
     </div>
   );
@@ -1008,41 +1061,31 @@ function boundedDisplayText(value: unknown, maxLength: number): string | undefin
 }
 
 /**
- * Two money formats, because a wallet and a ledger are two different reads.
+ * How many rows either detail panel draws before it has to say so.
  *
- * One formatter with `maximumFractionDigits: 4` rendered the balance as
- * `$46.2054` — a token price, not a balance — and produced `$0.2871`, `$0.08`,
- * `$0.0823` in adjacent ledger rows, so nothing aligned on the decimal point.
- * `headline` rounds for reading; `ledger` pads to a fixed width for scanning.
- * The exact figure is never lost: the balance metric prints it in its caption.
+ * The number was typed four times across two panels, and the quota panel typed
+ * only one of the four — the `slice`, with no sentence — so it printed "24
+ * records" over ten rows. One reference cannot drift from itself.
  */
-export function formatUsd(value: number, mode: "headline" | "ledger"): string {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    minimumFractionDigits: mode === "ledger" ? 4 : 2,
-    maximumFractionDigits: mode === "ledger" ? 4 : 2,
-  }).format(value);
+export const PANEL_ROW_CAP = 10;
+
+/**
+ * "This list is bounded", in one grammar for both panels.
+ *
+ * Two panels sit side by side on this route and both cap at `PANEL_ROW_CAP`.
+ * Written twice they were already diverging — one had the sentence, one had
+ * nothing — and the next divergence would have been the wording. `order` is a
+ * real difference, not a variant: the ledger shows the newest buckets and the
+ * quota list shows the response's own order, and a reader who is missing rows
+ * must be told which end they are missing.
+ */
+export function boundedRowNote(total: number, order: "most recent" | "first", noun: string): string {
+  const shown = formatCount(Math.min(PANEL_ROW_CAP, total));
+  // "the first 10" and "the 10 most recent" are where English puts the count
+  // for each ordering; the ledger's existing sentence and All conversations'
+  // "Showing the first N of M conversations" are both preserved word for word —
+  // including its grouping, which this sentence used to drop.
+  const lead = order === "first" ? `first ${shown}` : `${shown} most recent`;
+  return `Showing the ${lead} of ${formatCount(total)} ${noun}${total === 1 ? "" : "s"}.`;
 }
 
-function formatCompact(value: number): string {
-  return new Intl.NumberFormat("en-US", { notation: value >= 10_000 ? "compact" : "standard", maximumFractionDigits: 1 }).format(value);
-}
-
-function formatDateTime(value: string): string {
-  const parsed = Date.parse(value.endsWith("Z") || /[+-]\d\d:\d\d$/u.test(value) ? value : `${value}Z`);
-  if (Number.isNaN(parsed)) return "Unavailable";
-  return new Date(parsed).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" });
-}
-
-function formatDate(value: string): string {
-  const parsed = Date.parse(value.endsWith("Z") ? value : `${value}Z`);
-  if (Number.isNaN(parsed)) return "unknown";
-  return new Date(parsed).toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
-}
-
-function formatBucket(value: string): string {
-  const parsed = Date.parse(value.endsWith("Z") || /[+-]\d\d:\d\d$/u.test(value) ? value : `${value}Z`);
-  if (Number.isNaN(parsed)) return "Unknown bucket";
-  return new Date(parsed).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", timeZoneName: "short" });
-}

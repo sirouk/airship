@@ -1,3 +1,4 @@
+import { requiredString } from "./schema";
 import type { JsonValue, Tool, ToolContext } from "../core/contracts";
 import { sha256 } from "../core/hash";
 import type { DurableEvent, EventJournal } from "../core/journal";
@@ -84,7 +85,7 @@ export function registerFederatedMemoryTool(
     },
     async execute(value, context) {
       const args = argumentsObject(value);
-      const query = stringArgument(args.query, "query");
+      const query = requiredString(args.query, "query");
       const limit = typeof args.limitPerGroup === "number" ? args.limitPerGroup : 6;
       const result = await searchFederatedMemory({ query, limit, context, workspace, journal, runtime });
       return {
@@ -255,11 +256,6 @@ function argumentsObject(value: JsonValue): Record<string, JsonValue> {
   const result = record(value);
   if (!result) throw new Error("Tool arguments must be an object.");
   return result as Record<string, JsonValue>;
-}
-
-function stringArgument(value: JsonValue | undefined, name: string): string {
-  if (typeof value !== "string" || !value.trim()) throw new Error(`${name} must be a non-empty string.`);
-  return value.trim();
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {

@@ -1,3 +1,4 @@
+import { objectArguments } from "./schema";
 import type { JsonValue, Tool } from "../core/contracts";
 import type { DurableEvent, EventJournal } from "../core/journal";
 import type { ToolRegistry } from "./registry";
@@ -113,11 +114,6 @@ function boundedSnippet(text: string, normalizedQuery: string): string {
   const start = Math.max(0, at - 300);
   const end = Math.min(text.length, start + 1_200);
   return `${start ? "…" : ""}${text.slice(start, end)}${end < text.length ? "…" : ""}`;
-}
-
-function objectArguments(value: JsonValue): Record<string, JsonValue> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Tool arguments must be an object.");
-  return value;
 }
 
 function objectValue(value: unknown): Record<string, unknown> | undefined {

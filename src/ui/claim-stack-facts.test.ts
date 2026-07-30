@@ -1,8 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { ChutesEndpointEvidenceRecord } from "../attestation/provider-types";
 import { createLocalReceipt } from "../receipts/types";
-import { claimCeiling, claimQualifierLabel, claimStackPopoverFacts, readClaimQualifier, CLAIM_STATE_LEGEND } from "./claim-stack-facts";
+import { readFile } from "node:fs/promises";
+import { claimCeiling, claimQualifierLabel, claimStackPopoverFacts, readClaimQualifier, CLAIM_STATE_LEGEND, PROOF_STATE_MEANINGS } from "./claim-stack-facts";
+import { EVIDENCE_STATE_MEANINGS } from "./attestations-view";
+import { TRUST_LADDER } from "./trust-label-contract";
+import { proofStatusLabel } from "./trust-language";
 import { composeClaimStack } from "./claim-stack-model";
+
+const proofView = await readFile(new URL("./proof-view.tsx", import.meta.url), "utf8");
 
 const NOW = Date.parse("2026-07-19T12:00:00.000Z");
 const KEY_DIGEST = `sha256:${"a".repeat(64)}`;
@@ -122,3 +128,53 @@ function endpointRecord(): ChutesEndpointEvidenceRecord {
     warnings: [],
   };
 }
+
+/*
+ * One dictionary for the Proof route, not two a tab-switch apart.
+ *
+ * Measured: "Receipt & journal" rendered `CLAIM_STATE_LEGEND` and "Attestation
+ * evidence" rendered `EVIDENCE_STATE_MEANINGS`, and the two disagreed on every
+ * shared state — including "A claim was checked or declared and did not hold."
+ * against "The claim was checked or declared and did not hold." for the very
+ * same word.
+ */
+describe("proof state meanings", () => {
+  const evidenceMeaning = (word: string) =>
+    EVIDENCE_STATE_MEANINGS.find((entry) => entry.label === word)?.meaning;
+
+  it("is the only place the legend's sentences are written", () => {
+    // The reference, not a copy: the legend projects, so a legend entry cannot
+    // be edited without editing the definition every other surface reads.
+    for (const entry of CLAIM_STATE_LEGEND) {
+      expect(entry.meaning).toBe(PROOF_STATE_MEANINGS[entry.status]);
+      expect(entry.word).toBe(proofStatusLabel(entry.status));
+    }
+    expect(proofView).not.toContain("was checked or declared and did not hold.</small>");
+    expect(proofView).toContain("{PROOF_STATE_MEANINGS.failed}");
+    expect(proofView).toContain("{PROOF_STATE_MEANINGS.expired}");
+  });
+
+  it("says the same thing as the Attestation evidence legend for every state it can reach", () => {
+    // `failed` and `expired` are the two states no other module pins, so this
+    // pass could make them agree byte-for-byte across both tabs.
+    expect(PROOF_STATE_MEANINGS.failed).toBe(evidenceMeaning(proofStatusLabel("failed")));
+    expect(PROOF_STATE_MEANINGS.expired).toBe(evidenceMeaning(proofStatusLabel("expired")));
+  });
+
+  /*
+   * The three ladder states are still forked, and this records exactly which
+   * strings are on each side so the residue cannot be mistaken for agreement.
+   * `TRUST_LADDER` pins this side byte-for-byte, so closing the fork is one
+   * edit in `trust-label-contract.ts` and one in `attestations-view.tsx` — both
+   * of which should import `PROOF_STATE_MEANINGS` rather than retype it.
+   */
+  it("names the remaining fork instead of letting it pass silently", () => {
+    const forked = (["verified", "partial", "unavailable"] as const)
+      .filter((status) => PROOF_STATE_MEANINGS[status] !== evidenceMeaning(proofStatusLabel(status)));
+    expect(forked).toEqual(["verified", "partial", "unavailable"]);
+    for (const rung of TRUST_LADDER) {
+      const entry = CLAIM_STATE_LEGEND.find((candidate) => candidate.word === rung.word);
+      expect(entry?.meaning).toBe(rung.meaning);
+    }
+  });
+});

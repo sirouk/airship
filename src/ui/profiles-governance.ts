@@ -82,14 +82,24 @@ export const PROFILE_POSTURE_LABELS: Readonly<Record<SecurityPosture, string>> =
 export const PROFILE_POSTURE_FIELD_LABEL = "Minimum proof";
 
 /**
- * The boundary note, with the false direction removed.
+ * The boundary note, with the false direction removed and one noun for one
+ * thing.
  *
  * It read "including the minimum proof posture below" while the select it
  * pointed at was above it. The clause said nothing the sentence needed, so the
  * fix is a deletion rather than a re-aim.
+ *
+ * It then named the same object twice in two adjacent sentences — "copied into
+ * each new session. Existing conversations keep their original pin." — inside
+ * the one module that exists so a value has one name at rest and the same name
+ * while you change it. docs/CANON.md makes the split explicit: a Conversation is
+ * the user-facing thread under Chat, a Session is the immutable runtime
+ * identity (manifest, journal, receipt chain). What this sentence describes is
+ * the thread a person starts, so it says conversation both times; "session"
+ * survives here only where receipts and pins are the subject.
  */
 export const PROFILE_BOUNDARY_NOTE =
-  "These settings are copied into each new session. Existing conversations keep their original pin.";
+  "These settings are copied into each new conversation. Existing conversations keep their original pin.";
 
 export type ProfileGovernanceInput = Readonly<{
   systemPromptLength: number;
@@ -113,7 +123,9 @@ export function profileGovernanceCells(input: ProfileGovernanceInput): readonly 
       key: "instructions",
       label: "Instructions",
       value: `${input.systemPromptLength.toLocaleString()} ch`,
-      detail: "Edit the system instructions this profile pins into every new session.",
+      // Same object, same noun as the boundary note 25 lines above: this pins
+      // into the thread a person starts, which Chat calls a conversation.
+      detail: "Edit the system instructions this profile pins into every new conversation.",
     }),
     Object.freeze({
       key: "theme",

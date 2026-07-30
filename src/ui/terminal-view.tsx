@@ -3,11 +3,12 @@ import { FitAddon } from "@xterm/addon-fit";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import "@xterm/xterm/css/xterm.css";
 import type { BrowserGitClient } from "../git/client";
-import type { TerminalGitReview } from "../git/terminal-commands";
+import { runTerminalGitCommand, type TerminalGitReview } from "../git/terminal-commands";
 import type { ClientEncryptedWorkspacePort, WorkspacePort } from "../workspace/contracts";
 import { nextTabId, stripViewport, tabBox, tabScrollLeft } from "./tabs";
 import { getBrowserTerminalManager, type BrowserTerminalManager } from "../terminal/manager";
 import { WEB_CONTAINER_TERMINAL_RUNTIME, type TerminalSessionSnapshot } from "../terminal/contracts";
+import { ConfirmDialog } from "./confirm-dialog";
 import { durabilityLabel, type DurabilityState } from "./durability-indicator";
 import { Icon } from "./icons";
 import { RouteHeader } from "./route-header";
@@ -118,7 +119,19 @@ export function terminalPanelAutoStart(status: TerminalSessionSnapshot["status"]
 export type TerminalDurability = Readonly<{ state: DurabilityState; detail?: string; label?: string }>;
 export type TerminalViewProps = Readonly<{
   workspace: WorkspacePort;
-  /** Retained for app compatibility; the terminal never injects browser-Git commands into PTY scrollback. */
+  /**
+   * The shared browser-Git bridge and the approval policy that gates it.
+   *
+   * `runTerminalGitCommand` implements seventeen verb families against the same
+   * revision-fenced repository the Editor, source control and the agent tools
+   * read, and nothing in `src/**` called it: stash, merge, tag, reset, restore,
+   * rev-parse and remote management were implemented, approval-gated and tested
+   * with no human path on any device. The route's Git command row is that
+   * caller. Its answers land in their own region and never in the PTY
+   * scrollback — the WebContainer shell has no git binary and no `.git` in its
+   * mount, and pasting bridge output into the transcript is what made it look
+   * as though it did.
+   */
   git: BrowserGitClient;
   reviewGit: TerminalGitReview;
   onWorkspaceChanged?(): void | Promise<void>;
@@ -164,6 +177,63 @@ export function terminalFooterNotice(notice: string, persistenceFailure?: string
     : notice;
 }
 
+export type TerminalGitOutcome = Readonly<{
+  command: string;
+  cwd: string;
+  output: string;
+  changed: boolean;
+  failed: boolean;
+}>;
+
+/**
+ * The Terminal route's one call into the shared Git bridge.
+ *
+ * `review` is required here although the bridge accepts it optionally: this is
+ * the only human caller, so it is the only place the approval policy could go
+ * missing, and the bridge's own fallback for an absent reviewer is to refuse
+ * every mutating verb rather than to run it.
+ *
+ * A refusal is an answer, not a crash. `runTerminalGitCommand` throws alike for
+ * an unsupported verb, a path outside any browser-owned worktree and a denied
+ * approval, and a thrown denial that never reaches the output region is
+ * indistinguishable from a command that silently did nothing.
+ */
+export async function runTerminalGitBridge(args: Readonly<{
+  command: string;
+  cwd: string;
+  client: BrowserGitClient;
+  review: TerminalGitReview;
+  signal?: AbortSignal;
+}>): Promise<TerminalGitOutcome> {
+  const command = args.command.trim();
+  try {
+    const answer = await runTerminalGitCommand({
+      command,
+      cwd: args.cwd,
+      client: args.client,
+      review: args.review,
+      ...(args.signal ? { signal: args.signal } : {}),
+    });
+    return Object.freeze({ command, cwd: args.cwd, output: answer.output, changed: answer.changed, failed: false });
+  } catch (error) {
+    return Object.freeze({
+      command,
+      cwd: args.cwd,
+      output: error instanceof Error ? error.message : "The shared Git bridge refused this command.",
+      changed: false,
+      failed: true,
+    });
+  }
+}
+
+/** One line for the route footer; the bridge's own text stays in the output region. */
+export function terminalGitNotice(outcome: TerminalGitOutcome): string {
+  if (outcome.failed) return `git was refused at ${outcome.cwd}: ${outcome.output.split("\n")[0] ?? ""}`;
+  return outcome.changed
+    ? `${outcome.command} changed the browser-owned repository at ${outcome.cwd}. Editor, source control and the agent read that same state.`
+    : `${outcome.command} answered from the browser-owned repository at ${outcome.cwd} without changing it.`;
+}
+
 /** Infer only what the workspace port proves. App should pass its richer durability state. */
 export function inferredTerminalDurability(workspace: WorkspacePort): TerminalDurability {
   const encryptionBoundary = (workspace as Partial<ClientEncryptedWorkspacePort>).encryptionBoundary;
@@ -191,7 +261,7 @@ export function TerminalView(props: TerminalViewProps) {
   return <ProfileScopedTerminalView key={scope} {...props} workspaceIdentity={workspaceIdentity} openRequest={scopedOpenRequest} />;
 }
 
-function ProfileScopedTerminalView({ workspace, onWorkspaceChanged, threadId, profileId, profileName, workspaceIdentity = "page-memory", durability, openRequest, onOpenRequestHandled, workspaceRoot = "/workspace", variant = "route", onCollapse, onOpenFullView }: TerminalViewProps) {
+function ProfileScopedTerminalView({ workspace, git, reviewGit, onWorkspaceChanged, threadId, profileId, profileName, workspaceIdentity = "page-memory", durability, openRequest, onOpenRequestHandled, workspaceRoot = "/workspace", variant = "route", onCollapse, onOpenFullView }: TerminalViewProps) {
   const effectiveDurability = durability ?? inferredTerminalDurability(workspace);
   const manager = useMemo(() => getBrowserTerminalManager(workspace, profileId), [workspace]);
   const [sessions, setSessions] = useState<readonly TerminalSessionSnapshot[]>([]);
@@ -203,6 +273,9 @@ function ProfileScopedTerminalView({ workspace, onWorkspaceChanged, threadId, pr
   const [setupOpen, setSetupOpen] = useState(() => readTerminalSetupOpen(globalThis.localStorage));
   const [persistenceFailure, setPersistenceFailure] = useState<string>();
   const [reconcilable, setReconcilable] = useState(false);
+  const [gitCommand, setGitCommand] = useState("");
+  const [gitOutcome, setGitOutcome] = useState<TerminalGitOutcome>();
+  const [gitRunning, setGitRunning] = useState(false);
   const cancelRename = useRef(false);
   const strip = useRef<HTMLDivElement>(null);
   const workspaceChanged = useRef(onWorkspaceChanged);
@@ -285,6 +358,26 @@ function ProfileScopedTerminalView({ workspace, onWorkspaceChanged, threadId, pr
   }, [activeId, sessions.map(({ id }) => id).join(" ")]);
 
   const active = sessions.find(({ id }) => id === activeId);
+  // The selected tab's directory is the bridge's cwd, so the row answers about
+  // the repository the panel below it is standing in rather than needing a
+  // `git -C` the user would have to type on every command.
+  const gitCwd = active?.cwd ?? workspaceRoot;
+  const runGit = async () => {
+    const command = gitCommand.trim();
+    if (!command || gitRunning) return;
+    setGitRunning(true);
+    try {
+      const outcome = await runTerminalGitBridge({ command, cwd: gitCwd, client: git, review: reviewGit });
+      setGitOutcome(outcome);
+      setNotice(terminalGitNotice(outcome));
+      // add, commit, restore, stash, merge and switch all rewrite files the
+      // file tree and the Editor are already showing; without this the two
+      // surfaces disagree until some unrelated refresh happens to land.
+      if (outcome.changed) await workspaceChanged.current?.();
+    } finally {
+      setGitRunning(false);
+    }
+  };
   const createTab = () => {
     const created = manager.create({ ...(profileId ? { profileId } : {}), ...(threadId ? { threadId } : {}), cwd: workspaceRoot, origin: threadId ? { kind: "conversation" } : { kind: "terminal-route" } });
     setActiveId(created.id);
@@ -483,6 +576,40 @@ function ProfileScopedTerminalView({ workspace, onWorkspaceChanged, threadId, pr
       /> : (
         <div class="terminal-empty"><Icon name="terminal" /><h2>No terminal tab</h2><p>Create a tab to cold-start an isolated browser runtime.</p><button type="button" onClick={createTab}>New terminal</button></div>
       )}
+
+      {/* The route's Git command row. `runTerminalGitCommand` had no caller in
+          `src/**` at all, and seven of its verb families — stash, merge, tag,
+          reset, restore, rev-parse, remote management — have no other surface
+          in the product, so they were reachable only from a unit test. Route
+          variant only: the dock is a 220px-floor strip whose job is the PTY,
+          and its "Full view" control is the path to this. */}
+      {variant === "route" ? <form class="terminal-git" onSubmit={(event) => { event.preventDefault(); void runGit(); }}>
+        <label for="terminal-git-command"><Icon name="branch" size={15} /> Browser Git</label>
+        <input
+          id="terminal-git-command"
+          class="terminal-git__command"
+          type="text"
+          value={gitCommand}
+          placeholder="git status"
+          autoComplete="off"
+          autocapitalize="off"
+          spellcheck={false}
+          aria-describedby="terminal-git-scope"
+          onInput={(event) => setGitCommand(event.currentTarget.value)}
+        />
+        <button type="submit" disabled={gitRunning || !gitCommand.trim()}>{gitRunning ? "Running…" : "Run"}</button>
+        <p id="terminal-git-scope">Runs against the browser-owned <code>.git</code> holding <code>{gitCwd}</code>, under Editor's approval policy — not inside the {WEB_CONTAINER_TERMINAL_RUNTIME.shellLabel} process, which has no git binary. The answer lands below, never in the scrollback. <code>git help</code> lists the supported verbs and names what is absent.</p>
+        {/* Live because the answer is the point: the footer announces the
+            one-line verdict, this region carries the bridge's own text. */}
+        <div class="terminal-git__notice" role="status">
+          {gitOutcome ? <pre
+            data-failed={gitOutcome.failed ? "true" : "false"}
+            tabIndex={0}
+            aria-label={`Output of ${gitOutcome.command}`}
+          >{gitOutcome.output}</pre> : null}
+        </div>
+      </form> : null}
+
       <footer class="terminal-route__footer" role="status">
         {persistenceFailure
           ? <Seal state="attention" label="Terminal metadata is not reaching storage" density="dot" size={15} />
@@ -502,6 +629,16 @@ function TerminalPanel({ manager, session: initial, onNotice, durability, profil
   onNewHere(): void;
 }>) {
   const [session, setSession] = useState(initial);
+  /**
+   * Closing a tab ends a live process, and it shipped with no gate at all.
+   *
+   * One tap on "×" killed the shell, its scrollback and its input history while
+   * deleting a 40-byte scratch file two panes away opened a designed modal that
+   * named the revision check. Same product, same finger, two orders of
+   * magnitude between the consequences — so the more careful shape wins here.
+   */
+  const [closing, setClosing] = useState(false);
+  const closeButton = useRef<HTMLButtonElement>(null);
   const host = useRef<HTMLDivElement>(null);
   const terminal = useRef<Terminal>();
   const renderedSequence = useRef<number>();
@@ -611,6 +748,7 @@ function TerminalPanel({ manager, session: initial, onNotice, durability, profil
       onNotice(error instanceof Error ? `Terminal remains open: ${error.message}` : "Terminal remains open because workspace reconciliation failed.");
     }
   };
+  const closeCopy = terminalCloseConfirmation(session, durability);
   const pasteInput = (command: string) => {
     void manager.write(session.id, command).then(() => {
       onNotice("Pasted prior input into the interactive PTY without submitting it.");
@@ -629,9 +767,17 @@ function TerminalPanel({ manager, session: initial, onNotice, durability, profil
         {session.status === "running" ? <button type="button" onClick={() => void manager.interrupt(session.id)} aria-label="Interrupt process">⌃C <span>Interrupt</span></button> : <span class="terminal-panel__starting" aria-live="polite">{statusLabel(session)}</span>}
         <button type="button" onClick={onNewHere} aria-label="New terminal at current directory" title={`New terminal at ${session.cwd}`}><span aria-hidden="true">＋</span> <span>New here</span></button>
         <button type="button" onClick={restart} disabled={session.status === "starting"}><Icon name="branch" size={14} /> Restart</button>
-        <button type="button" onClick={() => void close()} aria-label="Close terminal tab">× <span>Close</span></button>
+        <button ref={closeButton} type="button" onClick={() => setClosing(true)} aria-label="Close terminal tab">× <span>Close</span></button>
       </div>
     </div>
+    {closing ? <ConfirmDialog
+      title={closeCopy.title}
+      titleDetail={session.cwd}
+      confirmLabel={closeCopy.confirm}
+      destructive
+      onCancel={() => { setClosing(false); closeButton.current?.focus(); }}
+      onConfirm={() => { setClosing(false); closeButton.current?.focus(); void close(); }}
+    ><p>{closeCopy.consequence}</p></ConfirmDialog> : null}
     <div
       class="terminal-emulator"
       ref={host}
@@ -670,6 +816,31 @@ function TerminalPanel({ manager, session: initial, onNotice, durability, profil
       </div>
     </div>
   </div>;
+}
+
+/**
+ * What closing a terminal tab costs, said before it happens.
+ *
+ * The words are the ones the post-close notice already used — "Its process
+ * ended; bounded lineage remains…" — moved to where they can still change the
+ * outcome. A confirmation that states a different fact from the receipt is a
+ * second answer to what the product just did.
+ */
+export function terminalCloseConfirmation(
+  session: Pick<TerminalSessionSnapshot, "name" | "status" | "cwd">,
+  durability: TerminalDurability,
+): Readonly<{ title: string; consequence: string; confirm: string }> {
+  const live = session.status === "running" || session.status === "starting";
+  const lineage = durability.state === "ephemeral"
+    ? "bounded lineage remains only for this page and workspace lifetime"
+    : "bounded lineage remains retained by the active encrypted workspace";
+  return Object.freeze({
+    title: `Close ${session.name}?`,
+    consequence: live
+      ? `This ends the process running in ${session.cwd} and closes its shell, scrollback and input history. No workspace file is changed by closing, and ${lineage}.`
+      : `This session's process has already ended. Closing removes the tab, its scrollback and its input history; ${lineage}.`,
+    confirm: "Close terminal",
+  });
 }
 
 function statusLabel(session: TerminalSessionSnapshot): string {

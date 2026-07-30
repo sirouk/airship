@@ -1,3 +1,4 @@
+import { objectArguments, requiredString } from "./schema";
 import type { JsonValue, Tool, ToolContext, ToolExecutionResult } from "../core/contracts";
 import {
   ClientExecutionRuntime,
@@ -83,7 +84,7 @@ export function registerExecutionTools(registry: ToolRegistry, workspace?: Works
     },
     async execute(argumentsValue, context) {
       const args = objectArguments(argumentsValue);
-      const code = stringArgument(args.code, "code");
+      const code = requiredString(args.code, "code");
       const timeoutMs = typeof args.timeoutMs === "number" ? args.timeoutMs : DEFAULT_TIMEOUT_MS;
       const result = await runDisposableWorker(code, timeoutMs, context.signal, context.onOutput);
       return {
@@ -131,7 +132,7 @@ export function registerExecutionTools(registry: ToolRegistry, workspace?: Works
     async execute(argumentsValue, context) {
       if (!hostRegistry) throw new Error("Workspace-program execution has no bound Airship tool registry.");
       const args = objectArguments(argumentsValue);
-      const code = stringArgument(args.code, "code");
+      const code = requiredString(args.code, "code");
       const calls = workspaceProgramCalls(args.calls, hostRegistry);
       const timeoutMs = typeof args.timeoutMs === "number" ? args.timeoutMs : DEFAULT_TIMEOUT_MS;
       const result = await runDisposableWorkspaceProgram(code, calls, hostRegistry, timeoutMs, context);
@@ -165,7 +166,7 @@ export function registerExecutionTools(registry: ToolRegistry, workspace?: Works
     },
     async execute(argumentsValue, context) {
       const args = objectArguments(argumentsValue);
-      const runtime = stringArgument(args.runtime, "runtime");
+      const runtime = requiredString(args.runtime, "runtime");
       const timeoutMs = typeof args.timeoutMs === "number" ? args.timeoutMs : DEFAULT_INSTALL_TIMEOUT_MS;
       if (runtime === "node-webcontainer") {
         const activated = await activateNodeRuntime(context.signal, timeoutMs);
@@ -228,7 +229,7 @@ export function registerExecutionTools(registry: ToolRegistry, workspace?: Works
     },
     async execute(argumentsValue, context) {
       const args = objectArguments(argumentsValue);
-      const runtime = stringArgument(args.runtime, "runtime") as ExecutionRuntimeId;
+      const runtime = requiredString(args.runtime, "runtime") as ExecutionRuntimeId;
       validateExecuteCodeArguments(runtime, args);
       const workspaceRoot = typeof args.workspaceRoot === "string" ? normalizeWorkspacePath(args.workspaceRoot) : undefined;
       const sourcePath = typeof args.sourcePath === "string" ? normalizeWorkspacePath(args.sourcePath) : undefined;
@@ -299,7 +300,7 @@ export function registerExecutionTools(registry: ToolRegistry, workspace?: Works
       },
     },
     execute: (argumentsValue) => deactivateExecutionRuntime(
-      stringArgument(objectArguments(argumentsValue).runtime, "runtime") as ExecutionRuntimeId,
+      requiredString(objectArguments(argumentsValue).runtime, "runtime") as ExecutionRuntimeId,
     ),
   });
   registry.register({
@@ -327,8 +328,8 @@ export function registerExecutionTools(registry: ToolRegistry, workspace?: Works
       const request: ExecutionRequest = {
         runtime: "node-webcontainer",
         workspace,
-        workspaceRoot: normalizeWorkspacePath(stringArgument(args.workspaceRoot, "workspaceRoot")),
-        command: stringArgument(args.command, "command"),
+        workspaceRoot: normalizeWorkspacePath(requiredString(args.workspaceRoot, "workspaceRoot")),
+        command: requiredString(args.command, "command"),
         args: stringArray(args.args, "args"),
         env: stringRecord(args.env, "env"),
         timeoutMs: typeof args.timeoutMs === "number" ? args.timeoutMs : 30_000,
@@ -367,7 +368,7 @@ export async function executeExecutionTool(
   const args = objectArguments(argumentsValue);
   switch (name) {
     case "execute_javascript": {
-      const code = stringArgument(args.code, "code");
+      const code = requiredString(args.code, "code");
       const timeoutMs = typeof args.timeoutMs === "number" ? args.timeoutMs : DEFAULT_TIMEOUT_MS;
       const result = await runDisposableWorker(code, timeoutMs, context.signal, context.onOutput);
       return {
@@ -383,7 +384,7 @@ export async function executeExecutionTool(
     }
     case "execute_workspace_program": {
       if (!hostRegistry) throw new Error("Workspace-program execution has no bound Airship tool registry.");
-      const code = stringArgument(args.code, "code");
+      const code = requiredString(args.code, "code");
       const calls = workspaceProgramCalls(args.calls, hostRegistry);
       const timeoutMs = typeof args.timeoutMs === "number" ? args.timeoutMs : DEFAULT_TIMEOUT_MS;
       const result = await runDisposableWorkspaceProgram(code, calls, hostRegistry, timeoutMs, context);
@@ -400,7 +401,7 @@ export async function executeExecutionTool(
       };
     }
     case "install_execution_runtime": {
-      const runtime = stringArgument(args.runtime, "runtime");
+      const runtime = requiredString(args.runtime, "runtime");
       const timeoutMs = typeof args.timeoutMs === "number" ? args.timeoutMs : DEFAULT_INSTALL_TIMEOUT_MS;
       if (runtime === "node-webcontainer") {
         return activationResultForCurrentPage(await activateNodeRuntime(context.signal, timeoutMs), context);
@@ -430,7 +431,7 @@ export async function executeExecutionTool(
       };
     }
     case "execute_code": {
-      const runtime = stringArgument(args.runtime, "runtime") as ExecutionRuntimeId;
+      const runtime = requiredString(args.runtime, "runtime") as ExecutionRuntimeId;
       validateExecuteCodeArguments(runtime, args);
       const workspaceRoot = typeof args.workspaceRoot === "string" ? normalizeWorkspacePath(args.workspaceRoot) : undefined;
       const sourcePath = typeof args.sourcePath === "string" ? normalizeWorkspacePath(args.sourcePath) : undefined;
@@ -487,7 +488,7 @@ export async function executeExecutionTool(
       return executeShellTool(args, context, workspace);
     }
     case "deactivate_execution_runtime": {
-      return deactivateExecutionRuntime(stringArgument(args.runtime, "runtime") as ExecutionRuntimeId);
+      return deactivateExecutionRuntime(requiredString(args.runtime, "runtime") as ExecutionRuntimeId);
     }
     case "execute_wasix_shell": {
       throw new Error(wasixUnavailableDetail());
@@ -497,8 +498,8 @@ export async function executeExecutionTool(
       const request: ExecutionRequest = {
         runtime: "node-webcontainer",
         workspace,
-        workspaceRoot: normalizeWorkspacePath(stringArgument(args.workspaceRoot, "workspaceRoot")),
-        command: stringArgument(args.command, "command"),
+        workspaceRoot: normalizeWorkspacePath(requiredString(args.workspaceRoot, "workspaceRoot")),
+        command: requiredString(args.command, "command"),
         args: stringArray(args.args, "args"),
         env: stringRecord(args.env, "env"),
         timeoutMs: typeof args.timeoutMs === "number" ? args.timeoutMs : 30_000,
@@ -647,7 +648,7 @@ async function executeShellTool(
   context: ToolContext,
   workspace?: WorkspacePort,
 ): Promise<ToolExecutionResult> {
-  const script = stringArgument(args.script, "script");
+  const script = requiredString(args.script, "script");
   const workspaceRoot = typeof args.workspaceRoot === "string" ? normalizeWorkspacePath(args.workspaceRoot) : undefined;
   if (args.writeBack === true && !workspaceRoot) throw new Error("execute_shell writeBack requires a workspaceRoot.");
   if (workspaceRoot && !workspace) throw new Error("Workspace-mounted execute_shell has no bound Airship workspace.");
@@ -937,8 +938,8 @@ function workspaceProgramCalls(value: JsonValue | undefined, registry: ToolRegis
   const ids = new Set<string>();
   for (const [index, raw] of value.entries()) {
     const record = objectArguments(raw);
-    const id = stringArgument(record.id, `calls[${index}].id`);
-    const toolName = stringArgument(record.tool, `calls[${index}].tool`);
+    const id = requiredString(record.id, `calls[${index}].id`);
+    const toolName = requiredString(record.tool, `calls[${index}].tool`);
     if (!/^[a-z][a-z0-9_-]{0,63}$/u.test(id) || ids.has(id)) throw new Error(`calls[${index}].id must be unique and identifier-safe.`);
     const expectedEffect = WORKSPACE_PROGRAM_TOOL_EFFECTS.get(toolName);
     if (!expectedEffect) throw new Error(`Workspace programs cannot invoke ${toolName}.`);
@@ -1786,16 +1787,6 @@ function parseWorkerJsonValue(value: unknown): JsonValue {
   } catch {
     throw new Error("Execution worker returned malformed JSON value data.");
   }
-}
-
-function objectArguments(value: JsonValue): Record<string, JsonValue> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Tool arguments must be an object.");
-  return value;
-}
-
-function stringArgument(value: JsonValue | undefined, name: string): string {
-  if (typeof value !== "string" || !value.trim()) throw new Error(`${name} must be a non-empty string.`);
-  return value;
 }
 
 function stringArray(value: JsonValue | undefined, name: string): string[] {

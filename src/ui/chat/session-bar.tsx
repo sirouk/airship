@@ -2,6 +2,7 @@ import type { ComponentChildren } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import { Icon } from "../icons";
 import { Popover } from "../popover";
+import { RENAME_START_HINT, renameEditorKeyHandler, renameStartKeyHandler } from "../rename-interaction";
 import { SessionStatusChip, type SessionStatusFact } from "./session-status-chip";
 import { TRANSCRIPT_INTRO_DEMO_LINE } from "./transcript-intro";
 
@@ -121,26 +122,21 @@ export function SessionBar({
               required
               aria-label="Conversation title"
               onBlur={() => void commitRename()}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.isComposing) {
-                  event.preventDefault();
-                  void commitRename();
-                } else if (event.key === "Escape") {
-                  event.preventDefault();
-                  cancelRename();
-                }
-              }}
+              onKeyDown={renameEditorKeyHandler({ commit: () => void commitRename(), cancel: cancelRename })}
             />
           </span>
         ) : (
           <button
             class="session-bar__identity-button"
             type="button"
-            title={`${title} · Double-click to rename`}
+            // The tooltip named the mouse gesture and not the key, so F2 was a
+            // shortcut only its author knew about — and it is the only rename
+            // start a keyboard user has here.
+            title={`${title} · ${RENAME_START_HINT}`}
             disabled={renameDisabled}
             onClick={(event) => { if (event.detail === 0) startRename(); }}
             onDblClick={startRename}
-            onKeyDown={(event) => { if (event.key === "F2") { event.preventDefault(); startRename(); } }}
+            onKeyDown={renameStartKeyHandler(startRename)}
           >
             {/* Carries the retired `ACTIVE SESSION · GENERAL` eyebrow. The words
                 are not lost, they stopped being 15px of band for a fact that

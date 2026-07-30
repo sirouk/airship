@@ -2,14 +2,16 @@ import { sha256 } from "../core/hash";
 import type {
   CompareAndSwapResult,
   ObjectRange,
+  ObjectReclamationOutcome,
+  ObjectReclamationReceipt,
   ObjectRecord,
-  ObjectStore,
   ObjectSummary,
   PutIfAbsentResult,
   ObjectStoreCapabilities,
+  ReclaimableObjectStore,
 } from "./object-store";
 
-export class MemoryObjectStore implements ObjectStore {
+export class MemoryObjectStore implements ReclaimableObjectStore {
   readonly capabilities: ObjectStoreCapabilities = Object.freeze({
     version: 1,
     adapter: "memory",
@@ -75,5 +77,30 @@ export class MemoryObjectStore implements ObjectStore {
       .filter((object) => object.key.startsWith(prefix))
       .map(({ bytes, ...object }) => ({ ...object, size: bytes.byteLength }))
       .sort((left, right) => left.key.localeCompare(right.key));
+  }
+
+  /**
+   * Reclamation, so page-memory durability is not the one tier that cannot
+   * delete a conversation.
+   *
+   * An absent key counts as reclaimed. There is no index here separate from the
+   * bytes, so "not present" is not a state the caller can act on — it is the
+   * outcome they asked for, already true. Reporting it as `retained` made a
+   * fully-swept probe declare leftover litter and downgrade its own cleanup
+   * policy. This matches the S3 adapter, where a delete of a missing key
+   * answers 204 for the same reason.
+   */
+  async trash(keys: readonly string[]): Promise<ObjectReclamationReceipt> {
+    const requested = [...new Set(keys)];
+    const outcomes: ObjectReclamationOutcome[] = requested.map((key) => {
+      this.objects.delete(key);
+      return Object.freeze({ key, reclaimed: true as const });
+    });
+    return Object.freeze({
+      requested: requested.length,
+      reclaimed: Object.freeze(outcomes.filter((outcome) => outcome.reclaimed).map((outcome) => outcome.key)),
+      retained: Object.freeze(outcomes.filter((outcome) => !outcome.reclaimed).map((outcome) => outcome.key)),
+      outcomes: Object.freeze(outcomes),
+    });
   }
 }

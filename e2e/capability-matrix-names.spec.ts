@@ -14,7 +14,7 @@ import { expect, test } from "@playwright/test";
  */
 test("every eligibility mark announces a word, never its glyph", async ({ page }) => {
   await page.goto("/#connection");
-  await expect(page.getByRole("heading", { name: "Connect models", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Connection", exact: true, level: 1 })).toBeVisible();
   await page.keyboard.press("Escape");
 
   // The matrix lives behind a `<details>`; its summary is the disclosure.

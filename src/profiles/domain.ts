@@ -1,3 +1,4 @@
+import { deepFreeze } from "../core/freeze";
 import type { JsonValue, SecurityPosture, ToolDefinition } from "../core/contracts";
 import { sha256 } from "../core/hash";
 import {
@@ -345,6 +346,42 @@ export function enforcedMemoryScope(scope: ProfileMemoryScope): EnforcedProfileM
  */
 export type EnforcedProfileMemoryScope = Exclude<ProfileMemoryScope, "workspace">;
 
+/**
+ * Which skills a profile resolves ON — the one loop, answered synchronously.
+ *
+ * `resolveProfileForSession` below owns this precedence, but it is async and
+ * re-verifies every revision digest, so the three UI surfaces that only need
+ * the boolean restated `on` / `inherit` / global-default inline instead: the
+ * Skills grid, its "effective set" counter, and `effectiveSkillIds`. Two of
+ * those sorted with `localeCompare` where the pin uses `asciiCompare`, so a
+ * catalog whose skill IDs collate differently under the host locale would have
+ * shown an order no manifest was ever composed in. Exported so a display can
+ * ask the same question the pin answers instead of re-deriving it.
+ *
+ * Digest verification stays with the pin: this is a read of already-loaded
+ * catalog state, not an admission path.
+ */
+export function resolveSkillDecisions(args: Readonly<{
+  skillModes: Readonly<Record<string, SkillMode>>;
+  skills: readonly SkillRevision[];
+  globalSkills: GlobalSkillSettings;
+}>): readonly ResolvedSkillDecision[] {
+  return [...args.skills]
+    .sort((left, right) => left.promptOrder - right.promptOrder || asciiCompare(left.skillId, right.skillId))
+    .map((skill): ResolvedSkillDecision => {
+      const mode = args.skillModes[skill.skillId] ?? "inherit";
+      const globallyEnabled = args.globalSkills[skill.skillId] ?? false;
+      return {
+        skillId: skill.skillId,
+        digest: skill.digest,
+        mode,
+        globallyEnabled,
+        enabled: mode === "on" || (mode === "inherit" && globallyEnabled),
+        source: mode === "inherit" ? "global" : "profile",
+      };
+    });
+}
+
 export async function resolveProfileForSession(args: Readonly<{
   profile: ProfileRevision;
   theme: ThemeManifest;
@@ -378,22 +415,13 @@ export async function resolveProfileForSession(args: Readonly<{
   const orderedSkills = [...skillsById.values()].sort(
     (left, right) => left.promptOrder - right.promptOrder || asciiCompare(left.skillId, right.skillId),
   );
-  const decisions: ResolvedSkillDecision[] = [];
-  const enabledSkills: SkillRevision[] = [];
-  for (const skill of orderedSkills) {
-    const mode = args.profile.skillModes[skill.skillId] ?? "inherit";
-    const globallyEnabled = globalSkills[skill.skillId] ?? false;
-    const enabled = mode === "on" || (mode === "inherit" && globallyEnabled);
-    decisions.push({
-      skillId: skill.skillId,
-      digest: skill.digest,
-      mode,
-      globallyEnabled,
-      enabled,
-      source: mode === "inherit" ? "global" : "profile",
-    });
-    if (enabled) enabledSkills.push(skill);
-  }
+  const decisions = resolveSkillDecisions({
+    skillModes: args.profile.skillModes,
+    skills: orderedSkills,
+    globalSkills,
+  });
+  const enabledSkillIds = new Set(decisions.filter((decision) => decision.enabled).map((decision) => decision.skillId));
+  const enabledSkills = orderedSkills.filter((skill) => enabledSkillIds.has(skill.skillId));
 
   const resolvedSkills: ResolvedSkillPin[] = enabledSkills.map((skill) => ({
     skillId: skill.skillId,
@@ -706,12 +734,4 @@ function oneOf<const T extends string>(value: string, choices: readonly T[], lab
 
 function asciiCompare(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
-}
-
-function deepFreeze<T>(value: T): Readonly<T> {
-  if (value !== null && typeof value === "object" && !Object.isFrozen(value)) {
-    for (const child of Object.values(value as Record<string, unknown>)) deepFreeze(child);
-    Object.freeze(value);
-  }
-  return value;
 }

@@ -25,13 +25,10 @@
   font-weight: var(--fw-title);
 }
 
-/* Brass encodes "you are here" or "act here"; a section label is neither. */
+/* Type comes from the shared `.eyebrow` recipe in shell.css; only the box is
+   local. This label was one of 48 copies of that recipe. */
 .local-lab__eyebrow {
   margin: 0;
-  color: var(--ink-muted);
-  font: var(--fw-strong) var(--fs-micro)/1.2 var(--font-mono);
-  letter-spacing: .11em;
-  text-transform: uppercase;
 }
 
 .local-lab__boundary {
@@ -79,16 +76,12 @@
   width: 100%;
   margin-bottom: var(--sp-2);
   padding: 0;
-  color: var(--ink-muted);
-  font: var(--fw-strong) var(--fs-caption)/1.2 var(--font-mono);
-  letter-spacing: .11em;
-  text-transform: uppercase;
 }
 
 .local-lab legend + * { clear: both; }
 
 .local-lab label { display: grid; align-content: start; gap: .4rem; min-width: 0; }
-.local-lab label > span:first-child { font-size: var(--fs-meta); font-weight: 700; }
+.local-lab label > span:first-child { font-size: var(--fs-meta); font-weight: var(--fw-title); }
 .local-lab__wide { grid-column: 1 / -1; }
 
 .local-lab input:not([type="checkbox"]),
@@ -101,7 +94,7 @@
   border-radius: .5rem;
   background: var(--field, #111310);
   color: var(--ink, #e9e8e3);
-  font: 500 1rem/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font: var(--fw-strong) var(--fs-field)/1.4 var(--font-mono);
 }
 
 .local-lab textarea { resize: vertical; user-select: all; overflow-wrap: anywhere; }
@@ -202,7 +195,7 @@
   background: var(--brass, #c7a867);
   color: var(--button-ink, #171713);
   font: inherit;
-  font-weight: 750;
+  font-weight: var(--fw-title);
   cursor: pointer;
 }
 

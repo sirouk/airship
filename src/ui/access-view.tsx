@@ -28,6 +28,7 @@ import {
   type ModelSourceState,
 } from "../models";
 import { Icon } from "./icons";
+import { formatInstant } from "./instant-format";
 import { mapUnknownRequestFailure } from "./request-state";
 import { ModelPicker } from "./model-picker";
 import { OFFLINE_INLINE_REASON } from "./connectivity";
@@ -37,10 +38,14 @@ import {
   connectLaneCountLabel,
   connectLaneCountSeal,
   describeConnectLanes,
+  // The panel below and the lane row state one consequence. It is declared
+  // beside the lane that renders it so the two cannot be reworded apart.
+  SIGN_IN_UNAVAILABLE,
   type ConnectLaneInput,
 } from "./connect/connect-lanes";
 import { observeHostExtensionSupport } from "./connect/extension-bridge-presence";
 import { probeChutesSignInHandler, type ChutesSignInReadiness } from "./connect/chutes-signin-readiness";
+import { destinationLabel } from "./navigation-model";
 import { Popover } from "./popover";
 import { RouteHeader } from "./route-header";
 import { Seal } from "./seal";
@@ -62,6 +67,17 @@ const CHUTES_METHOD_TABS = Object.freeze([
  * exists is not.
  */
 const CONNECT_ROUTE_DESCRIPTION = "Use Chutes for application-encrypted inference, or connect browser-direct cloud and local models here. Credentials remain in page memory.";
+/**
+ * The heading's own words, kept — one rung down.
+ *
+ * The `<h1>` read `Connect models` while the rail row, the command palette and
+ * the More sheet that all lead here read `Connection`: a person tapped a word
+ * and arrived somewhere that did not contain it. The title now comes from
+ * `destinationLabel("access")`, and `Connect models` joins the eyebrow rather
+ * than being deleted — it is the one place on this route that states the task
+ * in a verb, and the eyebrow is where a route's second line already lives.
+ */
+const CONNECT_ROUTE_EYEBROW = "Connect models · inference connections";
 /** The Providers paragraph, verbatim, from the heading block this replaces. */
 const CONNECT_PROVIDERS_NOTE = "Everything else in Airship — workspace, editor, terminal and Git — already works without this. Only chat needs a model, and connecting one never closes the others.";
 /**
@@ -82,16 +98,6 @@ const CONNECT_COUNT_NOTE = "Connect one, or several at once.";
  * package exists to remove.
  */
 const SIGN_IN_CHECKING = "Airship is checking whether this build can exchange a sign-in code";
-
-/**
- * The consequence, said once.
- *
- * The lane row and the panel both state it, and two spellings of one fact is
- * the sprawl this package exists to remove — the lane used to carry
- * "Chutes sign-in isn't available in this build." while the panel said
- * something else entirely.
- */
-const SIGN_IN_UNAVAILABLE = "Chutes sign-in is not available in this build.";
 
 /** Where a Chutes personal key is created. Named on every key surface. */
 export const CHUTES_ACCOUNT_URL = "https://chutes.ai/app";
@@ -892,10 +898,14 @@ export function AccessView({
         ONCE` is the count chip's own sentence, beside a number that proves it.
       */}
       <RouteHeader
-        routeId="access"
+        /* The hash without its `#`, which `RouteHeaderProps` asks for and this
+           route was the one place not giving: the router emits `#connection`,
+           so `access` keyed the ⓘ memory and the `route-…-eyebrow` ids by a
+           third name for a destination that already had two. */
+        routeId="connection"
         density="tool"
-        title="Connect models"
-        eyebrow="Inference connections"
+        title={destinationLabel("access")}
+        eyebrow={CONNECT_ROUTE_EYEBROW}
         description={CONNECT_ROUTE_DESCRIPTION}
         headingId="access-connection-title"
         notes={<p class="access-route-note">{CONNECT_PROVIDERS_NOTE}</p>}
@@ -995,7 +1005,7 @@ export function AccessView({
                   </dd>
                 </div>
                 <div><dt>Proof policy</dt><dd>{connection.posture === "encrypted-attested" ? "Strict · block unless every required endpoint claim verifies" : "Verify and record fresh evidence · keep unverified claims explicit"}</dd></div>
-                <div><dt>Inference authorization</dt><dd>{connection.invokeAuthorization === "verified" ? `Verified by protected request${connection.lastInvokeAt ? ` · ${formatCatalogTime(connection.lastInvokeAt)}` : ""}` : "Not tested yet"}</dd></div>
+                <div><dt>Inference authorization</dt><dd>{connection.invokeAuthorization === "verified" ? `Verified by protected request${connection.lastInvokeAt ? ` · ${formatInstant(connection.lastInvokeAt, "minute")}` : ""}` : "Not tested yet"}</dd></div>
                 <div><dt>Credential lifetime</dt><dd>Not introspected</dd></div>
                 <div><dt>Storage</dt><dd>Page memory only</dd></div>
               </dl>
@@ -1043,9 +1053,9 @@ export function AccessView({
                 <Popover
                   class="catalog-provenance-popover"
                   triggerClass="catalog-provenance-chip"
-                  label={`Catalog read ${formatCatalogTime(candidate.fetchedAt)}. Freshness, optional enrichment${candidate.issues.length > 0 ? `, and ${String(candidate.issues.length)} catalog notice${candidate.issues.length === 1 ? "" : "s"}` : ""}.`}
+                  label={`Catalog read ${formatInstant(candidate.fetchedAt, "minute")}. Freshness, optional enrichment${candidate.issues.length > 0 ? `, and ${String(candidate.issues.length)} catalog notice${candidate.issues.length === 1 ? "" : "s"}` : ""}.`}
                   heading="Catalog read"
-                  trigger={<><Icon name="proof" size={14} />Catalog read {formatCatalogTime(candidate.fetchedAt)}</>}
+                  trigger={<><Icon name="proof" size={14} />Catalog read {formatInstant(candidate.fetchedAt, "minute")}</>}
                 >
                   <p class={candidate.sourceComplete ? "complete" : "partial"}>{candidate.managementState === "fresh" ? "Inference + management metadata loaded" : candidate.sourceComplete ? "Authoritative inference catalog · management enrichment deferred" : "Partial provider metadata"}</p>
                   {/* The retry is offered for every management state that is
@@ -1526,9 +1536,4 @@ function errorMessage(error: unknown): string {
 
 export function oauthOriginState(homepageUrl: string, currentOrigin: string): Readonly<{ available: boolean; reason?: string }> {
   return chutesOAuthLocationState(homepageUrl, currentOrigin);
-}
-
-function formatCatalogTime(value: string): string {
-  const date = new Date(value);
-  return Number.isFinite(date.getTime()) ? date.toLocaleString() : "time unavailable";
 }

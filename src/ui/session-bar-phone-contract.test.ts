@@ -47,7 +47,9 @@ describe("session bar at phone width", () => {
     const targets = phoneBlock.match(
       /\.session-status-chip,\s*\.journal-chip,\s*\.session-model-chip,\s*\.session-skills-chip,\s*\.session-bar__rename-action,\s*\.session-bar__new,\s*\.session-bar \.session-runtime \{([^}]+)\}/u,
     )?.[1] ?? "";
-    expect(targets).toContain("min-height: 44px");
+    // The token, not a copy of the number: `--touch-target` is the one place
+    // the 44px floor is declared, and it was written out longhand 144 times.
+    expect(targets).toContain("min-height: var(--touch-target)");
   });
 
   it("clips shed labels into the accessible tree rather than removing them", () => {

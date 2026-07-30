@@ -1,3 +1,4 @@
+import { objectArguments, requiredString } from "./schema";
 import type { JsonValue, Tool } from "../core/contracts";
 import { sha256, stableStringify } from "../core/hash";
 import type { ClientContextRuntime } from "../retrieval/client-context-runtime";
@@ -22,7 +23,7 @@ export function registerContextTools(registry: ToolRegistry, runtime: ClientCont
     },
     async execute(argumentsValue, context) {
       const argumentsObject = objectArguments(argumentsValue);
-      const query = stringArgument(argumentsObject.query, "query");
+      const query = requiredString(argumentsObject.query, "query");
       const limit = typeof argumentsObject.limit === "number" ? argumentsObject.limit : 8;
       const result = await runtime.search(query, { limit, signal: context.signal });
       const generation = runtime.getState().generation;
@@ -72,14 +73,4 @@ export function registerContextTools(registry: ToolRegistry, runtime: ClientCont
   };
 
   registry.register(searchContext);
-}
-
-function objectArguments(value: JsonValue): Record<string, JsonValue> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Tool arguments must be an object.");
-  return value;
-}
-
-function stringArgument(value: JsonValue | undefined, name: string): string {
-  if (typeof value !== "string" || !value.trim()) throw new Error(`${name} must be a non-empty string.`);
-  return value.trim();
 }

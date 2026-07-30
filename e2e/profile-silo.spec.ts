@@ -179,7 +179,7 @@ test("Profile is the primary A → B → A cockpit silo while global services st
   await openPrimary(page, "Vault");
   await expect(page.getByRole("heading", { name: "Vault", level: 1 })).toBeVisible();
   await openPrimary(page, "Connection");
-  await expect(page.getByRole("heading", { name: "Connect models", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Connection", exact: true, level: 1 })).toBeVisible();
   await openPrimary(page, "Account");
   await expect(page.getByRole("heading", { name: "Account", level: 1 })).toBeVisible();
 

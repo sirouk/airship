@@ -12,7 +12,14 @@ import { ProviderOAuthError } from "./transport";
 export const PKCE_VERIFIER_BYTES = 48;
 /** 32 random bytes → a 43-character state value. */
 export const PKCE_STATE_BYTES = 32;
-const VERIFIER_PATTERN = /^[A-Za-z0-9._~-]{43,128}$/u;
+/**
+ * RFC 7636 §4.1's unreserved-character verifier.
+ *
+ * Exported because src/auth/chutes-oauth.ts — the one sign-in this build ships —
+ * had re-spelled this regex inline, so tightening it here reached every provider
+ * flow except the only one a user can actually run.
+ */
+export const PKCE_VERIFIER_PATTERN = /^[A-Za-z0-9._~-]{43,128}$/u;
 const STATE_PATTERN = /^[A-Za-z0-9._~-]{16,128}$/u;
 
 export type PkceChallenge = Readonly<{
@@ -49,7 +56,7 @@ export function createOAuthState(
 }
 
 export function requirePkceVerifier(value: string, provider: ProviderOAuthId): string {
-  if (!VERIFIER_PATTERN.test(value)) {
+  if (!PKCE_VERIFIER_PATTERN.test(value)) {
     throw new ProviderOAuthError({
       code: "configuration",
       provider,
@@ -97,13 +104,21 @@ function requireCrypto(
   }
 }
 
-function randomBase64Url(length: number, cryptoSource: CryptoSource): string {
+/**
+ * Exported, rather than private, because Chutes sign-in had a byte-identical
+ * copy of both of these and of `constantTimeEqual`. It also hardcoded 48 and 32
+ * where the constants above are declared, so `PKCE_VERIFIER_BYTES` had no
+ * importer at all and raising it would have hardened every flow except the
+ * shipping one. The Chutes flow needs the primitives without the
+ * `ProviderOAuthId`-shaped error type, so the primitives are what is shared.
+ */
+export function randomBase64Url(length: number, cryptoSource: Pick<Crypto, "getRandomValues">): string {
   const bytes = new Uint8Array(length);
   cryptoSource.getRandomValues(bytes);
   return bytesToBase64Url(bytes);
 }
 
-function bytesToBase64Url(bytes: Uint8Array): string {
+export function bytesToBase64Url(bytes: Uint8Array): string {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
   return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/u, "");

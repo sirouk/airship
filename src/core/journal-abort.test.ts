@@ -14,6 +14,7 @@ describe("EventJournal cancellation propagation", () => {
       },
       async listSessions() { return []; },
       async readEvents() { return []; },
+      async deleteSession() {},
       async append(_sessionId, _head, _events): Promise<SessionRecord> { throw new Error("not reached"); },
     };
     const journal = new EventJournal(backend);
@@ -53,6 +54,7 @@ describe("EventJournal cancellation propagation", () => {
       async getSession(_sessionId, signal) { if (signal) seen.push(signal); return session; },
       async listSessions() { return []; },
       async readEvents() { return []; },
+      async deleteSession() {},
       async append(_sessionId, _head, _events: DurableEvent[], signal) {
         if (signal) seen.push(signal);
         return session;

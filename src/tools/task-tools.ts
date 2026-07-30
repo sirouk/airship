@@ -1,3 +1,4 @@
+import { objectArguments, requiredString } from "./schema";
 import type { JsonValue, Tool } from "../core/contracts";
 import type { WorkspacePort } from "../workspace/contracts";
 import type { ToolRegistry } from "./registry";
@@ -92,8 +93,8 @@ function normalizeTasks(values: JsonValue[]): AirshipTask[] {
   let active = 0;
   const tasks = values.map((value): AirshipTask => {
     const item = objectArguments(value);
-    const id = requiredString(item.id, "task id", 80);
-    const content = requiredString(item.content, "task content", 1_000);
+    const id = boundedString(item.id, "task id", 80);
+    const content = boundedString(item.content, "task content", 1_000);
     const status = item.status;
     if (!["pending", "in_progress", "blocked", "completed"].includes(String(status))) {
       throw new Error(`Task ${id} has an invalid status.`);
@@ -107,12 +108,16 @@ function normalizeTasks(values: JsonValue[]): AirshipTask[] {
   return tasks;
 }
 
-function objectArguments(value: JsonValue): Record<string, JsonValue> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Tool arguments must be an object.");
-  return value;
-}
-
-function requiredString(value: JsonValue | undefined, label: string, maximum: number): string {
-  if (typeof value !== "string" || !value.trim() || value.length > maximum) throw new Error(`${label} is invalid.`);
-  return value.trim();
+/**
+ * `requiredString` plus a length ceiling, under a name that says so.
+ *
+ * It was called `requiredString` here while five other tool modules used that
+ * same name for the unbounded contract — the identical-name-different-contract
+ * defect this pass exists to remove. The ceiling itself is real (a work plan is
+ * journalled, so an unbounded task body is a durable-storage cost), so the
+ * function stays; only its name and its shared half move.
+ */
+function boundedString(value: JsonValue | undefined, label: string, maximum: number): string {
+  if (typeof value !== "string" || value.length > maximum) throw new Error(`${label} is invalid.`);
+  return requiredString(value, label);
 }

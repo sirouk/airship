@@ -23,19 +23,13 @@
   max-width: 72ch;
 }
 
-.provider-fabric__heading > div > span,
-.provider-catalog-heading > span {
-  color: var(--accent-bright);
-  font: 600 var(--fs-caption)/1.2 var(--font-mono);
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-}
-
+/* Eyebrow + h2 + supporting sentence: the section-heading anatomy, so it takes
+   the section-heading rung rather than a size of its own. */
 .provider-fabric__heading h2 {
   margin: 0;
   font-family: var(--font-display);
-  font-size: var(--fs-h3);
-  font-weight: 500;
+  font-size: var(--fs-title);
+  font-weight: var(--fw-body);
 }
 
 .provider-fabric__heading p,
@@ -254,7 +248,7 @@
 .provider-catalog-heading strong {
   color: var(--ink-muted);
   font-size: var(--fs-caption);
-  font-weight: 500;
+  font-weight: var(--fw-strong);
   text-align: right;
 }
 

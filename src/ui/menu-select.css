@@ -3,10 +3,10 @@
 .menu-select-trigger:hover, .menu-select-trigger[aria-expanded="true"] { border-color:color-mix(in srgb,var(--accent) 55%,var(--line)); background:var(--surface-raised); }
 .menu-select-value { display:grid; flex:1; gap:2px; min-width:0; }
 .menu-select-value strong, .menu-select-value small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.menu-select-value small, .menu-select-option small { color:var(--ink-faint); font-size:var(--fs-micro); font-weight:400; }
+.menu-select-value small, .menu-select-option small { color:var(--ink-faint); font-size:var(--fs-micro); font-weight:var(--fw-body); }
 .menu-select-caret { margin-left:auto; color:var(--ink-muted); transition:transform 120ms ease; }
 .menu-select-trigger[aria-expanded="true"] .menu-select-caret { transform:rotate(180deg); }
-.menu-select-popover { position:absolute; z-index:320; right:0; bottom:calc(100% + 7px); display:grid; gap:3px; width:max(100%,260px); max-width:min(340px,calc(100vw - 20px)); max-height:min(420px,70dvh); overflow:auto; padding:6px; border:1px solid var(--line-strong); border-radius:var(--radius-panel); background:var(--surface-raised); box-shadow:0 20px 65px rgba(0,0,0,.55); }
+.menu-select-popover { position:absolute; z-index:320; right:0; bottom:calc(100% + 7px); display:grid; gap:3px; width:max(100%,260px); max-width:min(340px,calc(100vw - 20px)); max-height:min(420px,70dvh); overflow:auto; padding:6px; border:1px solid var(--line-strong); border-radius:var(--radius-panel); background:var(--surface-raised); box-shadow:var(--shadow); }
 .menu-select.placement-down .menu-select-popover { top:calc(100% + 7px); right:auto; bottom:auto; left:0; max-height:min(420px,70dvh,var(--menu-select-available-height,70dvh)); }
 .menu-select-option { display:grid; grid-template-columns:auto minmax(0,1fr) auto; gap:9px; align-items:center; width:100%; min-height:44px; padding:7px 9px; border:1px solid transparent; border-radius:var(--radius-control); color:var(--ink); background:transparent; cursor:pointer; text-align:left; }
 .menu-select-option-copy { display:grid; gap:2px; min-width:0; }
@@ -19,13 +19,15 @@
    carries the scope in its accessible name, and the note is additionally the
    listbox's `aria-describedby` target, so nothing here is sighted-only. */
 .menu-select-popover__header, .menu-select-popover__note { margin:0; padding:var(--sp-1) var(--sp-2); color:var(--ink-muted); font-size:var(--fs-micro); }
-.menu-select-popover__header { border-bottom:1px solid var(--line); font-family:var(--font-mono); letter-spacing:.11em; text-transform:uppercase; }
+.menu-select-popover__header { border-bottom:1px solid var(--line); }
 .menu-select-popover__note { border-top:1px solid var(--line); color:var(--ink-faint); }
 .menu-select-option:hover, .menu-select-option:focus-visible { border-color:var(--line); background:color-mix(in srgb,var(--accent) 8%,var(--surface-soft)); }
 .menu-select-option[aria-selected="true"] { border-color:color-mix(in srgb,var(--accent) 38%,var(--line)); background:color-mix(in srgb,var(--accent) 11%,var(--surface-soft)); }
 .menu-select-check { color:var(--accent-bright); }
 .menu-select.compact { width:44px; }
-.menu-select.compact .menu-select-trigger { justify-content:center; width:44px; height:44px; min-height:44px; padding:0; border-radius:50%; color:var(--brass-bright); background:rgba(193,154,88,.065); }
+/* The phone's profile button carried the dark accent hex, so in Paper mode the
+   one round control in the topbar was filled with a dark-build tint. */
+.menu-select.compact .menu-select-trigger { justify-content:center; width:44px; height:44px; min-height:44px; padding:0; border-radius:50%; color:var(--brass-bright); background:color-mix(in srgb,var(--accent) 6.5%,transparent); }
 .menu-select.compact .menu-select-caret { position:absolute; right:-2px; bottom:-2px; display:grid; place-items:center; width:16px; height:16px; border:1.5px solid var(--ground); border-radius:50%; color:var(--ink); background:var(--surface-raised); font-size:var(--fs-micro); }
 .menu-select.compact .menu-select-popover { position:fixed; top:58px; right:8px; bottom:auto; width:min(320px,calc(100vw - 16px)); }
 .compact-profile-menu { display:none; }

@@ -78,3 +78,23 @@ function parseRecord(value: unknown, dimensions: number): StoredContextRecord {
     vector: record.vector,
   };
 }
+
+/**
+ * Bound one retrieved chunk to the bytes still left in a turn's context budget.
+ *
+ * The three turn-context builders — client, vault and federated — each carried a
+ * byte-identical copy of this, all named `truncateUtf8`, which is also the name
+ * src/core/context-summary-projection.ts uses for a *different* contract: that
+ * one appends " …" so a reader can see the text was cut. Retrieved chunk text is
+ * cut without a marker on purpose (the envelope already reports the budget it
+ * spent), so the two must not share a name. This one says what it does.
+ */
+export function boundChunkTextToBytes(value: string, maxBytes: number): string {
+  if (encoder.encode(value).byteLength <= maxBytes) return value;
+  let output = "";
+  for (const character of value) {
+    if (encoder.encode(output + character).byteLength > maxBytes) break;
+    output += character;
+  }
+  return output;
+}

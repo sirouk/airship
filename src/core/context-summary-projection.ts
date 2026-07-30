@@ -338,7 +338,14 @@ function summaryCompactionFloor(chain: readonly CanonicalContextSummary[]): numb
   return floor;
 }
 
-function contextSummaries(events: readonly DurableEvent[]): CanonicalContextSummary[] {
+/**
+ * Exported because context-compressor.ts carried this same filter/canonicalise
+ * pass under the name `canonicalSummaries`, so two functions with different
+ * names decided which journal events count as a summary. The compressor is this
+ * module's declared facade — it already re-exports the public surface — so the
+ * projection owns the answer and the compressor asks for it.
+ */
+export function contextSummaries(events: readonly DurableEvent[]): CanonicalContextSummary[] {
   return events
     .filter((event) => event.type === "context.summary.updated")
     .map((event) => canonicalContextSummary(event.payload))
@@ -528,7 +535,17 @@ function canonicalSummaryAttempt(value: unknown): ContextSummarizerAttempt | und
   });
 }
 
-function truncateUtf8(value: string, maximum: number): string {
+/**
+ * The one byte bound on a summary body.
+ *
+ * context-compressor.ts had this verbatim. The two files apply it to opposite
+ * ends of one pipeline — the compressor bounds the `context.summary.updated`
+ * body it writes, this module bounds the body it renders into the prompt — so a
+ * fix to the surrogate-pair or ellipsis handling in one left the other cutting
+ * at a different character, invisibly, because the copies could be edited
+ * independently.
+ */
+export function truncateUtf8(value: string, maximum: number): string {
   if (encoder.encode(value).byteLength <= maximum) return value;
   let output = "";
   for (const character of value) {

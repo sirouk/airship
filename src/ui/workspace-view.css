@@ -254,8 +254,8 @@
 .code-editor-frame { display: flex; flex: 1 1 auto; min-height: 0; min-width: 0; }
 /* The gutter must share the textarea's exact metrics or the numbers drift out
    of register as the file scrolls. Keep the font/line-height/padding paired. */
-.code-gutter { box-sizing: border-box; flex: 0 0 auto; margin: 0; padding: 1rem .55rem 2rem .8rem; border-right: 1px solid var(--line); color: var(--ink-faint); background: var(--surface-soft); font: var(--fs-caption)/1.72 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; text-align: right; overflow: hidden; user-select: none; -webkit-user-select: none; }
-.code-editor { box-sizing: border-box; width: 100%; min-height: 0; flex: 1 1 auto; resize: none; padding: 1rem 1.15rem 2rem; border: 0; border-radius: 0; outline: 0; color: color-mix(in srgb, var(--ink) 92%, white); background: transparent; caret-color: var(--accent); font: var(--fs-caption)/1.72 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; tab-size: 2; white-space: pre; overflow: auto; }
+.code-gutter { box-sizing: border-box; flex: 0 0 auto; margin: 0; padding: 1rem .55rem 2rem .8rem; border-right: 1px solid var(--line); color: var(--ink-faint); background: var(--surface-soft); font: var(--fs-caption)/1.72 var(--font-mono); text-align: right; overflow: hidden; user-select: none; -webkit-user-select: none; }
+.code-editor { box-sizing: border-box; width: 100%; min-height: 0; flex: 1 1 auto; resize: none; padding: 1rem 1.15rem 2rem; border: 0; border-radius: 0; outline: 0; color: color-mix(in srgb, var(--ink) 92%, white); background: transparent; caret-color: var(--accent); font: var(--fs-caption)/1.72 var(--font-mono); tab-size: 2; white-space: pre; overflow: auto; }
 /* Soft wrap is a mode the user owns, defaulted by width in `defaultEditorWrap`
    and persisted with the open tabs. `anywhere` because the thing that overflows
    a 390px pane is usually one unbroken URL or path. */
@@ -494,7 +494,7 @@
      must never turn the whole toast rectangle into an invisible click shield. */
   pointer-events: none;
   background: var(--surface-raised);
-  box-shadow: 0 12px 30px rgba(0, 0, 0, .38);
+  box-shadow: var(--shadow);
 }
 
 .workbench-notice.notice > button {
@@ -514,7 +514,7 @@
 
 .workspace-boundary { padding: .5rem .75rem; border-bottom: 1px solid var(--line); color: var(--ink-faint); background: var(--surface-soft); font: var(--fs-micro)/1.4 var(--font-mono); }
 .workspace-boundary.attention { color: var(--v-caution); }
-.workbench-context { position: fixed; z-index: 100; display: grid; min-width: 12rem; padding: .35rem; border: 1px solid var(--line-strong); border-radius: var(--radius-control); background: var(--surface-raised); box-shadow: 0 18px 55px rgba(0,0,0,.4); }
+.workbench-context { position: fixed; z-index: 100; display: grid; min-width: 12rem; padding: .35rem; border: 1px solid var(--line-strong); border-radius: var(--radius-control); background: var(--surface-raised); box-shadow: var(--shadow); }
 .workbench-context button { min-height: 34px; border: 0; color: var(--ink); background: transparent; text-align: left; cursor: pointer; }
 .workbench-context button:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
 .workbench-context .danger, .workbench-dialog .danger { color: var(--danger); }
@@ -528,7 +528,7 @@
 }
 
 .workbench-dialog-scrim { position: fixed; z-index: 110; inset: 0; display: grid; place-items: center; padding: 1rem; background: rgba(4,7,8,.72); }
-.workbench-dialog { width: min(28rem, 100%); max-height: min(34rem, 86dvh); overflow: auto; padding: 1rem; border: 1px solid var(--line-strong); border-radius: var(--radius-panel); background: var(--surface-raised); box-shadow: 0 24px 80px rgba(0,0,0,.45); }
+.workbench-dialog { width: min(28rem, 100%); max-height: min(34rem, 86dvh); overflow: auto; padding: 1rem; border: 1px solid var(--line-strong); border-radius: var(--radius-panel); background: var(--surface-raised); box-shadow: var(--shadow); }
 /* The serif has exactly one job in this product and it is `.route-title`. */
 .workbench-dialog h2 { margin: 0 0 var(--sp-2); font-size: var(--fs-title); }
 .workbench-dialog label { display: grid; gap: .45rem; color: var(--ink-muted); font-size: var(--fs-micro); }

@@ -12,6 +12,7 @@ import {
   CLAIM_CEILING_SCOPES,
   CLAIM_CEILING_SENTENCES,
   CLAIM_STATE_LEGEND,
+  PROOF_STATE_MEANINGS,
 } from "./claim-stack-facts";
 import { claimStackEndpointRecord, composeClaimStack, type ClaimStackItem } from "./claim-stack-model";
 import { downloadFileName, downloadText } from "./file-download";
@@ -20,7 +21,7 @@ import { Popover } from "./popover";
 import "./popover.css";
 import type { ProofSection } from "./proof-route";
 import { RouteHeader } from "./route-header";
-import { sealStateForProofStatus, Seal } from "./seal";
+import { sealStateForProofStatus, Seal, type SealState } from "./seal";
 import { sealStateForReceipt } from "./seal-states";
 import { Tabs } from "./tabs";
 import { claimLanguage, postureLabel, proofLevelLabel, proofStatusLabel, relativeEvidenceAge } from "./trust-language";
@@ -63,6 +64,15 @@ export function ProofView({
   const [audit, setAudit] = useState<SessionAuditReport>();
   const [auditError, setAuditError] = useState<string>();
   const [auditLoading, setAuditLoading] = useState(false);
+  /*
+   * The only way back from a journal read that failed.
+   *
+   * The effect is keyed on the session and the event count, so a rejected
+   * `loadAudit` left the reader with no gesture that re-runs it — recovery on
+   * the product's integrity surface meant reloading the page. The nonce is a
+   * dependency, so bumping it re-audits the same session.
+   */
+  const [auditAttempt, setAuditAttempt] = useState(0);
 
   useEffect(() => {
     let current = true;
@@ -81,7 +91,7 @@ export function ProofView({
         if (current) setAuditLoading(false);
       });
     return () => { current = false; };
-  }, [sessionId, eventCount]);
+  }, [sessionId, eventCount, auditAttempt]);
 
   async function copyReceipt() {
     if (!receipt) return;
@@ -144,13 +154,8 @@ export function ProofView({
     }
   }
 
-  const auditLabel = audit?.status === "verified"
-    ? "Journal structure passed"
-    : audit?.status === "incomplete"
-      ? "Consistent but incomplete"
-      : audit?.status === "invalid"
-        ? "Integrity failure"
-        : auditLoading ? "Checking journal" : "Not checked";
+  const auditReading = journalAuditReading(audit, auditLoading, Boolean(auditError));
+  const auditLabel = auditReading.label;
   const claimStack = composeClaimStack(
     receipt,
     // Instance + key digest, like the inspector and the export above: an
@@ -265,7 +270,11 @@ export function ProofView({
                 <small>{entry.meaning}</small>
               </div>
             ))}
-            {verdict.counts.failed > 0 ? <div data-status="failed"><dt><Seal state="failed" density="dot" size={16} />Failed</dt><dd>{verdict.counts.failed}</dd><small>A claim was checked or declared and did not hold.</small></div> : null}
+            {/* The sentence comes from `PROOF_STATE_MEANINGS`, not from a
+                literal here: this row and the Attestation evidence legend one
+                tab away printed "A claim was checked…" and "The claim was
+                checked…" for the identical word. */}
+            {verdict.counts.failed > 0 ? <div data-status="failed"><dt><Seal state="failed" density="dot" size={16} label={proofStatusLabel("failed")} />{proofStatusLabel("failed")}</dt><dd>{verdict.counts.failed}</dd><small>{PROOF_STATE_MEANINGS.failed}</small></div> : null}
             {/* Its own row, beside Failed and never inside it. Expiry used to
                 fall through this tab's `else` and be counted as a failed check,
                 so one expired endpoint observation printed "Failed: 1" here
@@ -274,7 +283,7 @@ export function ProofView({
                 legend's own — and doubles as the dot's label, because the seal
                 for expiry is the failure seal and would otherwise announce
                 "Failed" beside a line that does not say it. */}
-            {verdict.counts.expired > 0 ? <div data-status="expired"><dt><Seal state={sealStateForProofStatus("expired")} density="dot" size={16} label={proofStatusLabel("expired")} />{proofStatusLabel("expired")}</dt><dd>{verdict.counts.expired}</dd><small>A time-bounded endpoint observation expired. The immutable turn receipt did not become stale.</small></div> : null}
+            {verdict.counts.expired > 0 ? <div data-status="expired"><dt><Seal state={sealStateForProofStatus("expired")} density="dot" size={16} label={proofStatusLabel("expired")} />{proofStatusLabel("expired")}</dt><dd>{verdict.counts.expired}</dd><small>{PROOF_STATE_MEANINGS.expired}</small></div> : null}
           </dl>
           {verdict.ceilings.length > 0 ? (
             <section class="proof-ceilings" aria-label="Why declared verifications are shown as assertions">
@@ -300,11 +309,11 @@ export function ProofView({
           ) : null}
         </section>
         {renderInspector(() => onSectionChange("attestations"))}
-        <details class={`proof-journal panel ${audit?.status ?? "pending"}`} open={!audit || audit.findings.length > 0 || audit.status !== "verified"}>
+        <details class={`proof-journal panel ${audit?.status ?? (auditError ? "unreadable" : "pending")}`} open={!audit || audit.findings.length > 0 || audit.status !== "verified"}>
           <summary class="proof-journal__row">
             {/* Same rule as the claim rows: the visible state word is the
                 label, so the seal cannot announce a fifth vocabulary. */}
-            <Seal state={journalSeal(audit, auditLoading)} density="dot" size={16} label={auditLabel} />
+            <Seal state={auditReading.seal} density="dot" size={16} label={auditLabel} />
             <h2 id="journal-audit-title">Session journal integrity</h2>
             <span class="proof-journal__state">{auditLabel}{audit ? ` · ${passedChecks(audit)} of 6 structure checks passed` : ""}{audit && audit.findings.length > 0 ? ` · ${audit.findings.length} finding${audit.findings.length === 1 ? "" : "s"} to read` : ""}</span>
             <span class="proof-journal__facts">{audit ? `${audit.counts.events} event${audit.counts.events === 1 ? "" : "s"} · ${audit.commitment.digest.slice(0, 18)}…` : `${eventCount} observed event${eventCount === 1 ? "" : "s"}`}</span>
@@ -325,7 +334,17 @@ export function ProofView({
               {/* Open whenever findings exist. A warning collapsed under a row
                   announcing that everything passed is the shape of a burial. */}
               {audit.findings.length > 0 ? <details class="audit-findings" open><summary>{audit.findings.length} audit finding{audit.findings.length === 1 ? "" : "s"}</summary><div>{audit.findings.slice(0, 30).map((finding, index) => <article key={`${finding.code}-${finding.sequence ?? index}`} data-severity={finding.severity}><span>{finding.severity}</span><strong>{finding.code}</strong><p>{finding.message}</p></article>)}</div></details> : <p class="audit-clean">No consistency findings were produced for this session prefix.</p>}
-            </> : <p class="audit-loading" role="status">{auditError ?? (auditLoading ? "Recomputing the session commitment…" : "No active session is available to audit.")}</p>}
+            </> : auditError ? (
+              /* The failure gets its own assertive element and its own verb.
+                 It used to share `.audit-loading` with the idle copy, so a
+                 journal that could not be read was announced as politely as
+                 "No active session is available to audit." — and with no
+                 control anywhere that re-runs the check. */
+              <div class="audit-unreadable">
+                <p role="alert"><Icon name="warning" size={16} /> {auditError}</p>
+                <button class="small-button" type="button" onClick={() => setAuditAttempt((value) => value + 1)}><Icon name="proof" size={14} /> Audit again</button>
+              </div>
+            ) : <p class="audit-loading" role="status">{auditLoading ? "Recomputing the session commitment…" : "No active session is available to audit."}</p>}
           </div>
         </details>
         <div class="proof-actions" role="group" aria-label="Portable evidence actions">
@@ -391,15 +410,33 @@ function passedChecks(audit: SessionAuditReport): number {
 }
 
 /**
- * The row's seal reflects the worst thing in the report, not only its status.
+ * The journal's state word and its seal, decided once, from the same facts.
  *
- * A journal whose structure passed while carrying a warning is not the same
- * artifact as one with no findings at all, and the resting row is the only
- * place a reader who never expands it will learn the difference.
+ * Two measured defects, both closed by putting the word and the glyph in one
+ * function. A read that *failed* rendered "Not checked" with a `none` seal —
+ * byte-for-byte the rendering used when there is no session at all — so a
+ * reader whose encrypted journal could not be read was shown a benign,
+ * unalarmed headline on the surface that exists to tell them whether their
+ * record is intact. And the seal reflects the worst thing in the report, not
+ * only its status: a journal whose structure passed while carrying a warning
+ * is not the same artifact as one with no findings, and the resting row is the
+ * only place a reader who never expands it learns the difference.
  */
-function journalSeal(audit: SessionAuditReport | undefined, loading: boolean) {
-  if (!audit) return loading ? "checking" as const : "none" as const;
-  if (audit.status === "invalid") return "failed" as const;
-  if (audit.status === "incomplete" || audit.findings.length > 0) return "attention" as const;
-  return "verified" as const;
+export function journalAuditReading(
+  audit: SessionAuditReport | undefined,
+  loading: boolean,
+  failed: boolean,
+): Readonly<{ label: string; seal: SealState }> {
+  if (!audit) {
+    if (loading) return Object.freeze({ label: "Checking journal", seal: "checking" as const });
+    // A read that was attempted and refused is not a read that never happened.
+    if (failed) return Object.freeze({ label: "Journal could not be read", seal: "attention" as const });
+    return Object.freeze({ label: "Not checked", seal: "none" as const });
+  }
+  if (audit.status === "invalid") return Object.freeze({ label: "Integrity failure", seal: "failed" as const });
+  if (audit.status === "incomplete") return Object.freeze({ label: "Consistent but incomplete", seal: "attention" as const });
+  return Object.freeze({
+    label: "Journal structure passed",
+    seal: audit.findings.length > 0 ? "attention" as const : "verified" as const,
+  });
 }

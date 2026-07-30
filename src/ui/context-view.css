@@ -28,14 +28,6 @@
   align-items: end;
 }
 
-.client-context-heading > div:first-child > span,
-.context-surface-heading > div > span {
-  color: var(--accent-bright);
-  font: 700 0.7rem/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-}
-
 /*
  * The px-literal `clamp()` is gone: it pinned the largest text on the route
  * against the user's type-scale preference (WCAG 1.4.4). The size is now the
@@ -216,18 +208,20 @@
   border-right: 0;
 }
 
+/* The metric's label is an eyebrow and takes its type from `.eyebrow` in
+   shell.css; only its caption keeps a local type. Both used to be declared
+   here, which is how the label ended up at .07em tracking while the identical
+   label on Attestations sat at .11em. */
 .context-metric > span,
 .context-metric small {
   overflow: hidden;
-  color: var(--ink-faint);
-  font: var(--fs-micro)/1.25 ui-monospace, SFMono-Regular, Menlo, monospace;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.context-metric > span {
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
+.context-metric small {
+  color: var(--ink-faint);
+  font: var(--fs-micro)/1.25 var(--font-mono);
 }
 
 .context-metric strong {
@@ -282,7 +276,7 @@
 
 .context-engine-error strong {
   margin-bottom: 3px;
-  font: var(--fs-micro)/1.3 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font: var(--fs-micro)/1.3 var(--font-mono);
 }
 
 .context-search {
@@ -303,7 +297,7 @@
 
 .context-search > label span {
   font-size: var(--fs-meta);
-  font-weight: 700;
+  font-weight: var(--fw-title);
 }
 
 .context-search > label small {
@@ -351,7 +345,7 @@
   background: var(--surface-raised);
   font-family: inherit;
   font-size: var(--fs-caption);
-  font-weight: 700;
+  font-weight: var(--fw-title);
   cursor: pointer;
 }
 
@@ -470,7 +464,7 @@
 
 .context-surface-heading > span {
   color: var(--ink-faint);
-  font: var(--fs-micro)/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font: var(--fs-micro)/1.4 var(--font-mono);
   text-align: right;
 }
 
@@ -604,7 +598,7 @@
   border: 1px solid var(--line-strong);
   border-radius: 999px;
   color: var(--ink-muted);
-  font: 700 var(--fs-micro)/1 var(--font-mono);
+  font: var(--fw-title) var(--fs-micro)/1 var(--font-mono);
   text-align: center;
   text-transform: uppercase;
 }

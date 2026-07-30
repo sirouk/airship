@@ -1,3 +1,4 @@
+import { objectArguments, requiredString } from "./schema";
 import type { JsonValue, Tool } from "../core/contracts";
 import type { WorkspacePort } from "../workspace/contracts";
 import type { BrowserGitClient } from "../git/client";
@@ -31,7 +32,7 @@ export function registerNetworkTools(
     },
     async execute(argumentsValue, context) {
       const args = objectArguments(argumentsValue);
-      const url = safeHttpUrl(stringArgument(args.url, "url"));
+      const url = safeHttpUrl(requiredString(args.url, "url"));
       const maxBytes = typeof args.maxBytes === "number" ? args.maxBytes : DEFAULT_FETCH_LIMIT;
       let response: Response;
       try {
@@ -93,7 +94,7 @@ export function registerNetworkTools(
     async execute(argumentsValue, context) {
       const args = objectArguments(argumentsValue);
       const admission = await importAndAdmitGithubRepository({
-        repository: stringArgument(args.repository, "repository"),
+        repository: requiredString(args.repository, "repository"),
         ...(typeof args.ref === "string" ? { ref: args.ref } : {}),
         ...(typeof args.destination === "string" ? { destination: args.destination } : {}),
         ...(typeof args.maxFiles === "number" ? { maxFiles: args.maxFiles } : {}),
@@ -210,14 +211,4 @@ function safeHttpUrl(value: string): URL {
   }
   if (url.username || url.password) throw new Error("URLs containing credentials are not allowed.");
   return url;
-}
-
-function objectArguments(value: JsonValue): Record<string, JsonValue> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Tool arguments must be an object.");
-  return value;
-}
-
-function stringArgument(value: JsonValue | undefined, name: string): string {
-  if (typeof value !== "string" || !value.trim()) throw new Error(`${name} must be a non-empty string.`);
-  return value.trim();
 }

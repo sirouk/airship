@@ -49,10 +49,23 @@
   cursor: pointer;
 }
 
+/* The mark and the name are one line, so the glyph reads as belonging to the
+   word rather than floating above it. `flex-shrink: 0` because the tab strip
+   is four columns wide on a phone and the name is what may ellipsise. */
 .billing-provider-tab strong {
+  display: flex;
+  gap: var(--sp-1, 4px);
+  align-items: center;
+  min-width: 0;
   color: var(--ink, #ece8df);
   font-size: var(--fs-meta);
-  font-weight: 600;
+  font-weight: var(--fw-strong);
+}
+
+.billing-provider-tab strong > svg,
+.billing-provider-inventory__header h2 > svg {
+  flex-shrink: 0;
+  color: var(--accent-bright);
 }
 
 .billing-provider-tab span {
@@ -111,10 +124,6 @@
 .billing-account-identity dt,
 .billing-provider-data dt {
   margin-bottom: var(--sp-1, 4px);
-  color: var(--ink-faint, #858d8a);
-  font-size: var(--fs-micro);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
 }
 
 .billing-account-identity dd,
@@ -139,9 +148,12 @@
 }
 
 .billing-provider-inventory__header h2 {
+  display: flex;
+  gap: var(--sp-2, 8px);
+  align-items: center;
   margin: var(--sp-1, 4px) 0 0;
   color: var(--ink, #ece8df);
-  font: 500 var(--fs-title) Georgia, serif;
+  font: var(--fw-body) var(--fs-title) var(--font-display);
 }
 
 .billing-provider-state {
@@ -213,7 +225,7 @@
 
 .billing-provider-observed strong {
   color: var(--ink-muted, #9fa5a3);
-  font-weight: 500;
+  font-weight: var(--fw-strong);
 }
 
 /* --- Not connected yet -------------------------------------------------- */
@@ -246,7 +258,7 @@
 .billing-view .billing-gate h2 {
   margin: 0 0 var(--sp-2, 8px);
   font-size: var(--fs-title);
-  font-weight: 600;
+  font-weight: var(--fw-strong);
 }
 
 .billing-view .billing-gate p {
@@ -317,13 +329,6 @@
   margin: 0;
   color: var(--ink-faint, #858d8a);
   font-size: var(--fs-caption);
-}
-
-.billing-headroom-facts > span:first-child {
-  color: var(--ink-muted, #9fa5a3);
-  font: var(--fs-micro)/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
-  letter-spacing: 0.11em;
-  text-transform: uppercase;
 }
 
 /*

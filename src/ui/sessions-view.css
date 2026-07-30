@@ -22,18 +22,11 @@
   line-height: 1.55;
 }
 
-.session-library-eyebrow {
-  color: var(--ink-muted, #9fa5a3);
-  font: var(--fs-micro)/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
-  letter-spacing: 0.11em;
-  text-transform: uppercase;
-}
-
 .session-library-detail-heading h2,
 .session-library-fork h3 {
   margin: 4px 0 7px;
-  font-family: Georgia, "Times New Roman", serif;
-  font-weight: 500;
+  font-family: var(--font-display);
+  font-weight: var(--fw-body);
   letter-spacing: -0.015em;
 }
 
@@ -54,7 +47,7 @@
   border: 1px solid var(--line, rgba(225, 217, 200, 0.105));
   border-radius: var(--radius-panel, 10px);
   background: var(--surface, #171c20);
-  box-shadow: var(--shadow, 0 16px 45px rgba(0, 0, 0, 0.22));
+  box-shadow: var(--shadow);
 }
 
 .session-library-profile-scope {
@@ -160,7 +153,7 @@
   border-color: color-mix(in srgb, var(--accent, #c19a58) 55%, transparent);
   color: #17130d;
   background: var(--accent-bright, #dfba72);
-  font-weight: 700;
+  font-weight: var(--fw-title);
 }
 
 .session-library-layout {
@@ -171,7 +164,7 @@
   border-radius: var(--radius-panel, 10px);
   overflow: hidden;
   background: var(--surface, #171c20);
-  box-shadow: var(--shadow, 0 16px 45px rgba(0, 0, 0, 0.22));
+  box-shadow: var(--shadow);
 }
 
 .session-library-list-panel {
@@ -196,14 +189,6 @@
   font-size: var(--fs-caption);
 }
 
-.session-library-list-heading small,
-.session-library-panel-heading span {
-  color: var(--ink-faint, #858d8a);
-  font: var(--fs-micro)/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
 .session-library-list {
   display: grid;
   gap: 7px;
@@ -213,7 +198,15 @@
   overscroll-behavior: contain;
 }
 
-.session-library-group-label { position: sticky; z-index: 1; top: -9px; margin: 0 -9px; padding: 7px 12px; border-bottom: 1px solid var(--line); color: var(--ink-faint); background: var(--surface-soft); font: var(--fs-micro)/1.2 var(--font-mono); letter-spacing: .08em; text-transform: uppercase; }
+.session-library-group-label {
+  position: sticky;
+  z-index: 1;
+  top: -9px;
+  margin: 0 -9px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-soft);
+}
 
 /*
  * The two-line row.
@@ -301,7 +294,7 @@
   min-width: 0;
   overflow: hidden;
   font-size: var(--fs-meta);
-  font-weight: 600;
+  font-weight: var(--fw-strong);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -359,7 +352,7 @@
   margin-left: auto;
   overflow: hidden;
   color: var(--ink-muted, #9fa5a3);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
   text-overflow: ellipsis;
 }
 
@@ -583,13 +576,6 @@
   gap: 4px;
 }
 
-.session-library-compatibility > div span {
-  color: var(--ink-faint, #858d8a);
-  font: var(--fs-micro)/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
 .session-library-compatibility > div strong {
   font-size: var(--fs-meta);
 }
@@ -619,7 +605,7 @@
 
 .session-library-reason-list li > span {
   color: var(--ink-faint, #858d8a);
-  font: var(--fs-micro)/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font: var(--fs-micro)/1.5 var(--font-mono);
   text-transform: uppercase;
 }
 
@@ -658,7 +644,7 @@
 .session-library-continuity > div > small {
   overflow: hidden;
   color: var(--ink-faint, #858d8a);
-  font: var(--fs-micro)/1.25 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font: var(--fs-micro)/1.25 var(--font-mono);
   text-overflow: ellipsis;
   text-transform: uppercase;
   white-space: nowrap;
@@ -755,13 +741,6 @@
   cursor: pointer;
 }
 
-.session-library-technical > summary span {
-  color: var(--ink-faint, #858d8a);
-  font: var(--fs-micro)/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
-  letter-spacing: .08em;
-  text-transform: uppercase;
-}
-
 .session-library-technical > summary strong { font-size: var(--fs-caption); }
 .session-library-technical[open] > summary { border-bottom: 1px solid var(--line, rgba(225, 217, 200, 0.105)); }
 .session-library-technical .session-library-detail-grid { padding: 12px; }
@@ -790,10 +769,6 @@
 .session-library-pins dt,
 .session-library-digests span {
   margin-bottom: 4px;
-  color: var(--ink-faint, #858d8a);
-  font: var(--fs-micro)/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
 }
 
 .session-library-pins dd {
@@ -835,7 +810,7 @@
   min-width: 0;
   overflow: hidden;
   color: var(--ink-muted, #9fa5a3);
-  font: var(--fs-micro)/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font: var(--fs-micro)/1.2 var(--font-mono);
   text-overflow: ellipsis;
 }
 
@@ -912,7 +887,7 @@
 .session-library-transcript li > div span,
 .session-library-transcript li small {
   color: var(--ink-faint, #858d8a);
-  font: var(--fs-micro)/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font: var(--fs-micro)/1.2 var(--font-mono);
   text-transform: uppercase;
 }
 
@@ -995,7 +970,7 @@
 
 .session-library-issues li strong {
   color: var(--accent-bright, #dfba72);
-  font: var(--fs-micro)/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font: var(--fs-micro)/1.5 var(--font-mono);
 }
 
 .session-library-issues li.error strong {

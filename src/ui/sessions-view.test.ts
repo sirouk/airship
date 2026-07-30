@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
+import { SESSION_LIBRARY_PAGE_SIZE, sessionListBound } from "./sessions-view";
 
 const [source, styles] = await Promise.all([
   readFile(new URL("./sessions-view.tsx", import.meta.url), "utf8"),
@@ -189,5 +190,104 @@ describe("conversation library below the full-width toolbar", () => {
   it("marks the matched run without rewriting the title", () => {
     expect(source).toContain("titleMatchSegments(item.title, search)");
     expect(styles).toContain(".session-library-card-top mark {");
+  });
+});
+
+/*
+ * The list and its own heading must agree about how much is on screen.
+ *
+ * Measured: `limit: 200` with no `offset` anywhere in the file, beneath a
+ * heading printing `page.total`. At 312 conversations — and every fork, edit
+ * and retry mints a peer row — 112 threads were counted in the heading and
+ * unreachable by any gesture on the route.
+ */
+describe("conversation library bound", () => {
+  it("says nothing about a bound when every counted row is rendered", () => {
+    const small = sessionListBound(12, 12);
+    expect(small.bounded).toBe(false);
+    expect(small.next).toBe(0);
+  });
+
+  it("names both the shown count and the true total when rows were withheld", () => {
+    const bounded = sessionListBound(SESSION_LIBRARY_PAGE_SIZE, 312);
+    expect(bounded.bounded).toBe(true);
+    expect(bounded.sentence).toContain("200");
+    expect(bounded.sentence).toContain("312");
+    expect(bounded.next).toBe(112);
+  });
+
+  it("never offers to read more than one journal page at a time", () => {
+    // The ceiling is the journal query's own — `positiveInteger(query.limit,
+    // 100, 200)` — so a "Load 812 more" button would promise a read the
+    // storage layer silently truncates.
+    expect(sessionListBound(SESSION_LIBRARY_PAGE_SIZE, 1_012).next).toBe(SESSION_LIBRARY_PAGE_SIZE);
+    expect(sessionListBound(0, 5).next).toBe(5);
+  });
+
+  it("reads further pages by offset, at the page size the journal actually honours", () => {
+    // The reference, not a copy of the literal: a build that raises the
+    // journal ceiling changes one constant and both the read and the button
+    // follow it.
+    expect(source).toContain("export const SESSION_LIBRARY_PAGE_SIZE = 200;");
+    expect(source).toContain("await library.list({ ...query, offset: 0, limit: SESSION_LIBRARY_PAGE_SIZE }, controller.signal)");
+    expect(source).toContain("await library.list({ ...query, offset: items.length, limit: SESSION_LIBRARY_PAGE_SIZE }, controller.signal)");
+    expect(source).not.toContain("limit: 200,");
+  });
+
+  it("renders the bound statement and the control that lifts it, inside the list", () => {
+    expect(source).toContain("const bound = sessionListBound(page?.items.length ?? 0, page?.total ?? 0);");
+    expect(source).toContain('<div class="session-library-bound" role="status">');
+    expect(source).toContain("<p>{bound.sentence}</p>");
+    expect(source).toContain("onClick={() => setDepth(Object.freeze({ key: queryKey, pages: requestedPages + 1 }))}");
+    expect(source).toContain("`Load ${bound.next.toLocaleString()} more`");
+  });
+
+  it("keeps the reader's depth across a refresh, and resets it when the query changes", () => {
+    // Starring, renaming and forking all bump `refresh`; re-reading only the
+    // first page there would drop a reader who had loaded 400 rows back to 200.
+    expect(source).toContain("refresh, requestedPages, revision");
+    // Read back through the query it was made against, so a narrower filter
+    // falls to one page during the render that changed it. An effect-based
+    // reset would fire the journal read twice on every filter change.
+    expect(source).toContain('const queryKey = [scopeProfileId, search, providerId, model, sort].join("\\u0000");');
+    expect(source).toContain("const requestedPages = depth.key === queryKey ? depth.pages : 1;");
+  });
+});
+
+/*
+ * One noun for one thing.
+ *
+ * The route is titled "All conversations" and its heading counts
+ * "conversations", while the divider one row below it read "All sessions" and
+ * the search landmark inside the "Conversations" panel was named "Filter
+ * sessions". Six user-facing occurrences on one screen, in two dialects.
+ */
+describe("conversation library vocabulary", () => {
+  const ACCESSIBLE_NAMES = [...source.matchAll(/(?:aria-label|ariaLabel)=(?:"([^"]*)"|\{`([^`]*)`\})/gu)]
+    .map((match) => match[1] ?? match[2] ?? "");
+  /** Text nodes between JSX tags, which is what a sighted reader actually sees. */
+  const VISIBLE_TEXT = [...source.matchAll(/>([^<>{}\n]{3,})</gu)].map((match) => match[1]);
+
+  it("finds at least the names and text this guard exists to police", () => {
+    // Without this the two assertions below could pass by matching nothing.
+    expect(ACCESSIBLE_NAMES).toContain("Filter conversations");
+    expect(ACCESSIBLE_NAMES).toContain("Sort conversations");
+    expect(ACCESSIBLE_NAMES).toContain("Refresh conversations");
+    expect(VISIBLE_TEXT).toContain("All conversations");
+  });
+
+  it("never names a control or a landmark after the journal record type", () => {
+    expect(ACCESSIBLE_NAMES.filter((name) => /\bsessions?\b/iu.test(name))).toEqual([]);
+  });
+
+  it("never prints the word to a sighted reader either", () => {
+    expect(VISIBLE_TEXT.filter((text) => /\bsessions?\b/iu.test(text))).toEqual([]);
+  });
+
+  it("speaks the same noun in its announcements and its verbs", () => {
+    expect(source).toContain("is now the active conversation.");
+    expect(source).toContain("`Renamed conversation to ${renamed.title}.`");
+    expect(source).toContain('? "Resume conversation"');
+    expect(source).toContain('conversation record{page.rejected === 1 ? " was" : "s were"} excluded.');
   });
 });

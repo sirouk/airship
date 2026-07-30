@@ -1,3 +1,4 @@
+import { objectArguments, requiredString } from "./schema";
 import type { JsonValue, Tool } from "../core/contracts";
 import type { BrowserGitClient, GitDiffScope } from "../git";
 // Imported from the module rather than the barrel: the barrel re-exports the
@@ -29,16 +30,16 @@ export function registerGitTools(registry: ToolRegistry, client: BrowserGitClien
     },
     async execute(argumentsValue, context) {
       const args = objectArguments(argumentsValue);
-      const action = stringArgument(args.action, "action");
+      const action = requiredString(args.action, "action");
       if (action === "capabilities") return jsonResult(client.capabilities);
       if (action === "repositories") return jsonResult(await client.listRepositories(context.signal));
-      const repositoryId = stringArgument(args.repositoryId, "repositoryId");
+      const repositoryId = requiredString(args.repositoryId, "repositoryId");
       if (action === "tags") return jsonResult(await client.listTags(repositoryId, context.signal));
-      const worktreeId = stringArgument(args.worktreeId, "worktreeId");
+      const worktreeId = requiredString(args.worktreeId, "worktreeId");
       if (action === "status") return jsonResult(await client.status({ repositoryId, worktreeId }, context.signal));
       if (action === "stash") return jsonResult(await client.listStash({ repositoryId, worktreeId }, context.signal));
       if (action === "diff") {
-        const path = stringArgument(args.path, "path");
+        const path = requiredString(args.path, "path");
         const scope = (args.scope ?? "worktree") as GitDiffScope;
         return jsonResult(await client.diff({ repositoryId, worktreeId, path, scope }, context.signal));
       }
@@ -55,7 +56,7 @@ export function registerGitTools(registry: ToolRegistry, client: BrowserGitClien
         return jsonResult(await client.show({
           repositoryId,
           worktreeId,
-          revision: stringArgument(args.revision, "revision"),
+          revision: requiredString(args.revision, "revision"),
         }, context.signal));
       }
       throw new Error(`Unsupported Git inspection action: ${action}.`);
@@ -99,10 +100,10 @@ export function registerGitTools(registry: ToolRegistry, client: BrowserGitClien
     },
     async execute(argumentsValue, context) {
       const args = objectArguments(argumentsValue);
-      const action = stringArgument(args.action, "action");
-      const repositoryId = stringArgument(args.repositoryId, "repositoryId");
-      const worktreeId = stringArgument(args.worktreeId, "worktreeId");
-      const expectedWorktreeVersion = stringArgument(args.expectedWorktreeVersion, "expectedWorktreeVersion");
+      const action = requiredString(args.action, "action");
+      const repositoryId = requiredString(args.repositoryId, "repositoryId");
+      const worktreeId = requiredString(args.worktreeId, "worktreeId");
+      const expectedWorktreeVersion = requiredString(args.expectedWorktreeVersion, "expectedWorktreeVersion");
       const author = {
         name: optionalString(args.authorName) ?? "Airship User",
         email: optionalString(args.authorEmail) ?? "airship@local.invalid",
@@ -119,7 +120,7 @@ export function registerGitTools(registry: ToolRegistry, client: BrowserGitClien
           repositoryId,
           worktreeId,
           expectedWorktreeVersion,
-          theirs: stringArgument(args.branch, "branch"),
+          theirs: requiredString(args.branch, "branch"),
           fastForwardOnly: args.fastForwardOnly === true,
           ...(optionalString(args.message) ? { message: optionalString(args.message) } : {}),
           author,
@@ -151,7 +152,7 @@ export function registerGitTools(registry: ToolRegistry, client: BrowserGitClien
           worktreeId,
           expectedWorktreeVersion,
           mode: (optionalString(args.mode) ?? "mixed") as "mixed",
-          ref: stringArgument(args.revision, "revision"),
+          ref: requiredString(args.revision, "revision"),
         }, context.signal));
       }
       if (action === "commit") {
@@ -159,7 +160,7 @@ export function registerGitTools(registry: ToolRegistry, client: BrowserGitClien
           repositoryId,
           worktreeId,
           expectedWorktreeVersion,
-          message: stringArgument(args.message, "message"),
+          message: requiredString(args.message, "message"),
           author,
         }, context.signal));
       }
@@ -168,7 +169,7 @@ export function registerGitTools(registry: ToolRegistry, client: BrowserGitClien
           repositoryId,
           worktreeId,
           expectedWorktreeVersion,
-          name: stringArgument(args.branch, "branch"),
+          name: requiredString(args.branch, "branch"),
           ...(optionalString(args.startPoint) ? { startPoint: optionalString(args.startPoint) } : {}),
           ...(typeof args.checkout === "boolean" ? { checkout: args.checkout } : {}),
         }, context.signal));
@@ -178,7 +179,7 @@ export function registerGitTools(registry: ToolRegistry, client: BrowserGitClien
           repositoryId,
           worktreeId,
           expectedWorktreeVersion,
-          name: stringArgument(args.branch, "branch"),
+          name: requiredString(args.branch, "branch"),
         }, context.signal));
       }
       throw new Error(`Unsupported Git change action: ${action}.`);
@@ -210,23 +211,23 @@ export function registerGitTools(registry: ToolRegistry, client: BrowserGitClien
     },
     async execute(argumentsValue, context) {
       const args = objectArguments(argumentsValue);
-      const action = stringArgument(args.action, "action");
-      const repositoryId = stringArgument(args.repositoryId, "repositoryId");
+      const action = requiredString(args.action, "action");
+      const repositoryId = requiredString(args.repositoryId, "repositoryId");
       if (action === "clone") {
         return jsonResult(await client.clone({
           repositoryId,
-          name: stringArgument(args.name, "name"),
-          remoteUrl: stringArgument(args.remoteUrl, "remoteUrl"),
+          name: requiredString(args.name, "name"),
+          remoteUrl: requiredString(args.remoteUrl, "remoteUrl"),
           remoteName: optionalString(args.remoteName) ?? "origin",
           ...(optionalString(args.defaultBranch) ? { defaultBranch: optionalString(args.defaultBranch) } : {}),
-          destination: stringArgument(args.destination, "destination"),
+          destination: requiredString(args.destination, "destination"),
         }, context.signal));
       }
       if (action === "fetch") {
         return jsonResult(await client.fetch({
           repositoryId,
           remote: optionalString(args.remote) ?? "origin",
-          expectedRepositoryVersion: stringArgument(args.expectedRepositoryVersion, "expectedRepositoryVersion"),
+          expectedRepositoryVersion: requiredString(args.expectedRepositoryVersion, "expectedRepositoryVersion"),
           prune: args.prune === true,
         }, context.signal));
       }
@@ -261,12 +262,12 @@ export function registerGitTools(registry: ToolRegistry, client: BrowserGitClien
     },
     async execute(argumentsValue, context) {
       const args = objectArguments(argumentsValue);
-      const action = stringArgument(args.action, "action");
-      const repositoryId = stringArgument(args.repositoryId, "repositoryId");
-      const name = stringArgument(args.name, "name");
-      const expectedRepositoryVersion = stringArgument(args.expectedRepositoryVersion, "expectedRepositoryVersion");
+      const action = requiredString(args.action, "action");
+      const repositoryId = requiredString(args.repositoryId, "repositoryId");
+      const name = requiredString(args.name, "name");
+      const expectedRepositoryVersion = requiredString(args.expectedRepositoryVersion, "expectedRepositoryVersion");
       if (action === "add_remote" || action === "set_remote_url") {
-        const request = { repositoryId, name, url: stringArgument(args.remoteUrl, "remoteUrl"), expectedRepositoryVersion };
+        const request = { repositoryId, name, url: requiredString(args.remoteUrl, "remoteUrl"), expectedRepositoryVersion };
         return jsonResult(action === "add_remote"
           ? await client.addRemote(request, context.signal)
           : await client.setRemoteUrl(request, context.signal));
@@ -305,16 +306,6 @@ export function registerGitTools(registry: ToolRegistry, client: BrowserGitClien
 
 function jsonResult(value: unknown) {
   return { content: JSON.stringify(value, null, 2) };
-}
-
-function objectArguments(value: JsonValue): Record<string, JsonValue> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Tool arguments must be an object.");
-  return value;
-}
-
-function stringArgument(value: JsonValue | undefined, name: string): string {
-  if (typeof value !== "string" || !value.trim()) throw new Error(`${name} must be a non-empty string.`);
-  return value.trim();
 }
 
 function optionalString(value: JsonValue | undefined): string | undefined {

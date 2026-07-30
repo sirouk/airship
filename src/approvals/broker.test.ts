@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { JsonValue, ToolContext, ToolDefinition } from "../core/contracts";
-import { ApprovalBroker, createBrokeredApprovalPolicy, redactForDisplay } from "./broker";
+import { ApprovalBroker, approvalOutcomeReason, approvalRequestId, createBrokeredApprovalPolicy, redactForDisplay } from "./broker";
 
 const writeTool: ToolDefinition = {
   name: "write_file",
@@ -59,6 +59,50 @@ describe("ApprovalBroker", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  /**
+   * An expiry entered the journal — the product's evidence chain — as a denial,
+   * so a request the person was never at the screen to answer was recorded, and
+   * replayed, as one they refused. The gate still reads `deny`, because an
+   * unanswered request must not run; only the outcome beside it tells the truth.
+   */
+  it("records an expiry as an expiry while still failing the gate closed", async () => {
+    vi.useFakeTimers();
+    try {
+      const broker = new ApprovalBroker({ decisionTimeoutMs: 10 });
+      const identity = context();
+      const result = broker.request(writeTool, {}, identity);
+      await vi.advanceTimersByTimeAsync(11);
+
+      await expect(result).resolves.toBe("deny");
+      const id = approvalRequestId(identity);
+      expect(broker.takeOutcome(id)).toBe("expired");
+      expect(approvalOutcomeReason("expired")).not.toMatch(/denied/iu);
+      // One-shot, like every other record this codebase hands to a writer.
+      expect(broker.takeOutcome(id)).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a refusal a refusal and never reports an allow as either", async () => {
+    const broker = new ApprovalBroker();
+    const allowed = context();
+    const allow = broker.request(writeTool, {}, allowed);
+    broker.decide(approvalRequestId(allowed), "allow");
+    await expect(allow).resolves.toBe("allow");
+    expect(broker.takeOutcome(approvalRequestId(allowed))).toBe("allow");
+
+    const refused: ToolContext = { ...context(), operationId: "operation-2" };
+    const deny = broker.request(writeTool, {}, refused);
+    broker.decide(approvalRequestId(refused), "deny");
+    await expect(deny).resolves.toBe("deny");
+    expect(broker.takeOutcome(approvalRequestId(refused))).toBe("deny");
+
+    // The dock may state a decision; it may not state the absence of one.
+    expect(broker.decide(approvalRequestId(refused), "expired" as never)).toBe(false);
+    expect(approvalOutcomeReason("allow")).not.toBe(approvalOutcomeReason("deny"));
   });
 
   it("auto-allows configured read effects but brokers mutations", async () => {

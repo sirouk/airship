@@ -22,6 +22,20 @@ import {
  * this build cannot perform, wherever the sentence sits.
  */
 
+/**
+ * The consequence, said once — and now held once.
+ *
+ * access-view.tsx declared this exact sentence as its own constant, with a
+ * comment explaining that two spellings of one fact is the sprawl this package
+ * exists to remove, and the lane row three files away still carried a retyped
+ * copy of the literal. They agreed only by coincidence: the drift the comment
+ * names — one of the two picking up a contraction — was a single edit away, on
+ * the phone where the lane row and the panel that repeats it are stacked 40px
+ * apart. It lives here because the lane is the lower module: access-view
+ * already imports this file, so this direction is the one that has no cycle.
+ */
+export const SIGN_IN_UNAVAILABLE = "Chutes sign-in is not available in this build.";
+
 export const CONNECT_LANE_IDS = Object.freeze([
   "chutes",
   "codex",
@@ -294,7 +308,7 @@ function chutesLane(input: ConnectLaneInput): LaneCopy {
   return copy("Paste an API key to connect.", {
     kind: "ready",
     label: "Use an API key",
-    detail: input.chutes.signInUnavailableReason ?? "Chutes sign-in is not available in this build.",
+    detail: input.chutes.signInUnavailableReason ?? SIGN_IN_UNAVAILABLE,
   });
 }
 

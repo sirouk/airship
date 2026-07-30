@@ -10,6 +10,10 @@ import {
   resolveChutesOAuthRegistration,
   revokeChutesToken,
 } from "./chutes-oauth";
+import { PKCE_STATE_BYTES, PKCE_VERIFIER_BYTES, PKCE_VERIFIER_PATTERN } from "./provider-oauth/pkce";
+
+/** Unpadded base64url characters produced by `length` random bytes. */
+const base64UrlLength = (length: number): number => Math.ceil((length * 4) / 3);
 
 const PUBLIC_REGISTRATION = resolveChutesOAuthRegistration({
   development: false,
@@ -34,7 +38,15 @@ describe("Chutes OAuth PKCE preparation", () => {
     expect(CHUTES_LOCAL_REGISTRATION.public).toBe(true);
     expect(request.url.searchParams.get("code_challenge_method")).toBe("S256");
     expect(request.url.searchParams.get("code_challenge")).toMatch(/^[A-Za-z0-9_-]{43}$/u);
-    expect(request.attempt.verifier).toMatch(/^[A-Za-z0-9_-]{64}$/u);
+    // Asserted against pkce.ts's exported byte counts rather than the literals
+    // 64 and 43. Chutes used to hardcode 48 and 32 of its own, which left
+    // PKCE_VERIFIER_BYTES with no importer anywhere in the repo: raising it in
+    // the module that declares itself the PKCE authority hardened every provider
+    // flow except the only sign-in this build ships.
+    expect(request.attempt.verifier).toHaveLength(base64UrlLength(PKCE_VERIFIER_BYTES));
+    expect(request.attempt.state).toHaveLength(base64UrlLength(PKCE_STATE_BYTES));
+    expect(request.url.searchParams.get("state")).toBe(request.attempt.state);
+    expect(request.attempt.verifier).toMatch(PKCE_VERIFIER_PATTERN);
   });
 
   it("accepts one fresh callback and returns the verifier for the public-client exchanger", () => {

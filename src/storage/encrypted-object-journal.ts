@@ -15,7 +15,7 @@ import {
   openEnvelope,
   sealEnvelope,
 } from "./encrypted-envelope";
-import type { ObjectRecord, ObjectStore } from "./object-store";
+import { isReclaimableObjectStore, type ObjectRecord, type ObjectStore } from "./object-store";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder("utf-8", { fatal: true });
@@ -187,6 +187,49 @@ export class EncryptedObjectJournalBackend implements JournalBackend {
     const swapped = await this.store.compareAndSwap(loaded.record.key, loaded.record.etag, rootBytes, signal);
     if (!swapped.updated) throw new JournalConflictError();
     return structuredClone(updated);
+  }
+
+  /**
+   * Remove a conversation from the encrypted Vault, head first.
+   *
+   * `ObjectStore` is deliberately delete-free so a lost conditional write can
+   * never destroy data, and `ReclaimableObjectStore.trash` is the sanctioned
+   * exception for "objects a caller can prove are unreachable". A session's
+   * head is the only thing that makes its segments reachable — `listSessions`
+   * enumerates `session-heads/`, and `readEvents` can only find a segment
+   * through the head's reference list — so removing the head first is what
+   * turns the segments into exactly that provable case, and it is the order
+   * `object-store.ts` documents for the same reason: a crash between the two
+   * leaks an untracked body a later sweep recovers, while the reverse leaves an
+   * index entry whose `get()` hard-fails.
+   *
+   * A store with no `trash` cannot do this, and says so rather than reporting a
+   * deletion it did not perform. Silently leaving encrypted bodies behind while
+   * telling someone their conversation is gone is the worst available outcome
+   * for the one feature whose entire point is that it really went away.
+   */
+  async deleteSession(
+    sessionId: string,
+    expectedHead: { sequence: number; digest: string },
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const loaded = await this.loadHead(sessionId, signal);
+    if (!loaded) return;
+    const { session, segments } = loaded.head;
+    if (session.headSequence !== expectedHead.sequence || session.headDigest !== expectedHead.digest) {
+      throw new JournalConflictError("The conversation changed since it was read; it was not deleted.");
+    }
+    if (!isReclaimableObjectStore(this.store)) {
+      throw new Error("This Vault cannot delete objects, so the conversation was not removed.");
+    }
+    const headReceipt = await this.store.trash([loaded.record.key], signal);
+    if (!headReceipt.reclaimed.includes(loaded.record.key)) {
+      throw new Error("The Vault refused to remove the conversation; nothing was deleted.");
+    }
+    // The head is gone, so the segments are unreachable whatever happens next.
+    // A refusal here leaks ciphertext nobody holds a reference to rather than
+    // stranding a readable conversation, which is why this does not throw.
+    if (segments.length) await this.store.trash(segments.map((segment) => segment.cloudKey), signal);
   }
 
   private async loadHead(sessionId: string, signal?: AbortSignal): Promise<{ record: ObjectRecord; head: SessionHead } | undefined> {

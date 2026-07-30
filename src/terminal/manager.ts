@@ -1,5 +1,6 @@
 import type { WebContainer, WebContainerProcess } from "@webcontainer/api";
 import type { NodeWebContainerLifecycleEvent } from "../execution/node-webcontainer-pack";
+import { randomUuid } from "../core/id";
 import { normalizeWorkspacePath, WorkspaceConflictError, type WorkspacePort } from "../workspace/contracts";
 import {
   TERMINAL_METADATA_PATH,
@@ -173,7 +174,7 @@ export async function quiesceBrowserTerminalHost(
 export class BrowserTerminalManager {
   private readonly sessions = new Map<string, MutableSession>();
   private readonly removedSessions = new Map<string, StoredSessionTombstone>();
-  private readonly leaseOwnerId = uuid();
+  private readonly leaseOwnerId = randomUuid();
   private readonly sessionLeases = new Map<string, Readonly<{
     revision: string;
     timer?: ReturnType<typeof setTimeout>;
@@ -257,7 +258,7 @@ export class BrowserTerminalManager {
     this.pruneClosedSessions();
     if (this.sessions.size >= MAX_STORED_SESSIONS) throw new Error(`Terminal metadata supports at most ${MAX_STORED_SESSIONS} retained sessions across profiles. Export or clear older terminal lineage before creating another tab.`);
     const now = new Date().toISOString();
-    const id = uuid();
+    const id = randomUuid();
     const session: MutableSession = {
       id,
       name: boundedName(args.name ?? `Terminal ${scoped.length + 1}`),
@@ -1759,12 +1760,6 @@ function boundedOrigin(value: TerminalSessionOrigin): TerminalSessionOrigin {
   if (value.kind === "workspace-path" && !path) throw new Error("A workspace terminal origin requires a path.");
   if (requestId && value.kind !== "workspace-path") throw new Error("Only a workspace terminal origin can carry a request ID.");
   return Object.freeze({ kind: value.kind, ...(path ? { path } : {}), ...(requestId ? { requestId } : {}) });
-}
-
-function uuid(): string {
-  return typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
-    ? crypto.randomUUID()
-    : `terminal-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 function monotonicNow(): number {

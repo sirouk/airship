@@ -1,5 +1,11 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
+import {
+  DEFAULT_LOCAL_MODEL_ORIGINS,
+  LM_STUDIO_DEFAULT_ENDPOINT,
+  OLLAMA_DEFAULT_ENDPOINT,
+  resolveLocalEndpoint,
+} from "../inference/local";
 import type { InferenceModelDescriptor } from "../inference/providers";
 import {
   modelOptionDescription,
@@ -101,6 +107,44 @@ describe("provider connection component contract", () => {
     expect(source).toContain("tabIndex={-1}");
     expect(styles).toContain("@media (max-width: 520px)");
     expect(styles).toContain(":focus-visible");
+  });
+
+  /*
+   * The card printed one origin in a `<code>` and dialled it, so the connection
+   * was hard-pinned to 2 of the 12 loopback origins this build ships and lists
+   * as exact `connect-src` sources. A developer on `OLLAMA_HOST=:11435` — the
+   * configuration `DEFAULT_LOCAL_MODEL_ORIGINS` names as its own reason for
+   * enumerating ports — had no field, no slash command and no preference
+   * anywhere in the product to reach it, under a sentence claiming Airship
+   * checks only the defaults shown.
+   */
+  it("dials the endpoint the person typed, not a literal in this file", () => {
+    expect(source).toContain("options: { endpoint }");
+    expect(source).toContain("browserInferenceFabric.connectLocal({ kind: provider.kind, options: { endpoint }, signal })");
+    expect(source).toContain("const [endpoint, setEndpoint] = useState(defaultEndpoint)");
+    expect(source).toContain("onInput={(event) => setEndpoint(event.currentTarget.value)}");
+    expect(source).toContain("onConnect(endpoint.trim())");
+    // The defaults are the adapters', not retyped here.
+    expect(source).not.toContain("http://127.0.0.1:");
+    expect(source).toContain("defaultEndpoint: OLLAMA_DEFAULT_ENDPOINT");
+    expect(source).toContain("defaultEndpoint: LM_STUDIO_DEFAULT_ENDPOINT");
+    expect(OLLAMA_DEFAULT_ENDPOINT).toBe("http://127.0.0.1:11434");
+    expect(LM_STUDIO_DEFAULT_ENDPOINT).toBe("http://127.0.0.1:1234");
+  });
+
+  it("offers every permitted origin and refuses the rest with the policy's own diagnostic", () => {
+    // The suggestion list and the requirements sentence both render the
+    // allowlist itself. A prose copy of an allowlist is a copy that goes stale
+    // silently, and this one is duplicated into index.html and public/_headers
+    // already.
+    expect(source).toContain("DEFAULT_LOCAL_MODEL_ORIGINS.map((origin) => <option key={origin} value={origin} />)");
+    expect(source).toContain('DEFAULT_LOCAL_MODEL_ORIGINS.join(" · ")');
+    expect(source).not.toContain("Airship checks only the exact loopback defaults shown here");
+    // The moved-instance port the card could not reach is reachable now, and a
+    // private-LAN host still fails closed with the origin it refused named.
+    expect(DEFAULT_LOCAL_MODEL_ORIGINS).toContain("http://127.0.0.1:11435");
+    expect(resolveLocalEndpoint("http://127.0.0.1:11435").url.origin).toBe("http://127.0.0.1:11435");
+    expect(() => resolveLocalEndpoint("http://192.168.1.5:11434")).toThrowError(/192\.168\.1\.5:11434/u);
   });
 
   it("uses the live theme token vocabulary", () => {

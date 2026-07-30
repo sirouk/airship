@@ -139,7 +139,7 @@ describe("the composer footer's stated facts are mounted", () => {
   });
 
   it("keeps the chip a 44px touch target at the phone breakpoint", () => {
-    const phone = routeStyles.match(/\.composer-posture \{[^}]*min-height: 44px;[^}]*\}/u);
+    const phone = routeStyles.match(/\.composer-posture \{[^}]*min-height: var\(--touch-target\);[^}]*\}/u);
     expect(phone, "routes.css must give .composer-posture a 44px phone minimum").not.toBeNull();
   });
 });

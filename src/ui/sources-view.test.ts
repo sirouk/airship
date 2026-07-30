@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   buildStatusTree,
@@ -5,13 +6,13 @@ import {
   commitSubject,
   deltaLetter,
   diffComparisonLabel,
-  diffLineKind,
   diffPlaceholder,
   parseUnifiedPatch,
   cloneBoundaryNote,
   remoteBoundaryParagraphs,
   remoteTransportLabel,
   sourcePostureFacts,
+  sourceRemoteOperation,
 } from "./sources-view";
 import { isRemoteOriginPermitted } from "../git/validation";
 import type { BrowserGitClient } from "../git/client";
@@ -37,11 +38,26 @@ describe("Sources presentation", () => {
   it("uses letters for all five change kinds", () => {
     expect(["added", "modified", "deleted", "renamed", "conflicted"].map((kind) => deltaLetter(kind as never))).toEqual(["A", "M", "D", "R", "C"]);
   });
+  /*
+   * `diffLineKind` was a third answer to "what kind of line is this", living in
+   * the same file as the parser that already answers it from the `@@` counters.
+   * `grep -rn diffLineKind src/` returned its own declaration and these
+   * assertions and nothing else — a dead export kept alive by its own test. The
+   * same four cases are asserted against the renderer that ships.
+   */
   it("does not color diff headers as file additions/removals", () => {
-    expect(diffLineKind("+added")).toBe("added");
-    expect(diffLineKind("-removed")).toBe("removed");
-    expect(diffLineKind("+++ b/file")).toBe("context");
-    expect(diffLineKind("--- a/file")).toBe("context");
+    const parsed = parseUnifiedPatch([
+      "diff --git a/file b/file",
+      "--- a/file",
+      "+++ b/file",
+      "@@ -1,2 +1,2 @@",
+      "-removed",
+      "+added",
+    ].join("\n"));
+    expect(parsed.lines.filter((line) => line.kind === "added").map((line) => line.text)).toEqual(["added"]);
+    expect(parsed.lines.filter((line) => line.kind === "removed").map((line) => line.text)).toEqual(["removed"]);
+    expect(parsed.header).toContain("--- a/file");
+    expect(parsed.header).toContain("+++ b/file");
   });
   it("projects changed paths into a deterministic folder-first tree", () => {
     const entry = (path: string) => ({ path, index: null, worktree: { kind: "modified" as const } });
@@ -115,6 +131,110 @@ describe("unified patch parsing", () => {
 
   it("yields nothing to draw for an empty patch", () => {
     expect(parseUnifiedPatch("").lines).toHaveLength(0);
+  });
+
+  /*
+   * Driven by the shape this product's own adapters emit.
+   *
+   * The first version of this test hand-wrote `diff --git` headers, and the
+   * parser it was proving keyed its file boundary on exactly that string —
+   * which neither `renderPatch` in git/workspace-adapter.ts nor the one in
+   * git/memory-adapter.ts has ever written. Both emit `--- a/<path>` /
+   * `+++ b/<path>` / `@@` and nothing else. So the test passed, and every
+   * commit touching two or more files rendered its second header as a red
+   * deleted line reading `-- a/second.ts` at a fabricated line number.
+   *
+   * A test that asserts an input format the product cannot produce is worse
+   * than no test: it converts an unnoticed bug into a defended one. These two
+   * cases are the adapter shape first, then the git-remote shape.
+   */
+  it("does not number a second file's header as a deleted line of the first", () => {
+    // Exactly what workspace-adapter.ts / memory-adapter.ts concatenate: no
+    // `diff --git` line anywhere in the document.
+    const parsed = parseUnifiedPatch([
+      "--- a/first.ts",
+      "+++ b/first.ts",
+      "@@ -1,1 +1,1 @@",
+      "-old",
+      "+new",
+      "--- a/second.ts",
+      "+++ b/second.ts",
+      "@@ -10,1 +10,1 @@",
+      "-second old",
+      "+second new",
+    ].join("\n"));
+    expect(parsed.header).toEqual(["--- a/first.ts", "+++ b/first.ts"]);
+    expect(parsed.lines.filter((line) => line.kind === "removed").map((line) => [line.text, line.oldLine]))
+      .toEqual([["old", 1], ["second old", 10]]);
+    // The second file's header is a boundary band, not content, and carries no
+    // line number of the file it just ended.
+    expect(parsed.lines.filter((line) => line.kind === "hunk").map((line) => line.raw)).toEqual([
+      "@@ -1,1 +1,1 @@",
+      "--- a/second.ts",
+      "+++ b/second.ts",
+      "@@ -10,1 +10,1 @@",
+    ]);
+  });
+
+  it("also reads the `diff --git` boundary a real git remote sends", () => {
+    const parsed = parseUnifiedPatch([
+      "diff --git a/first.ts b/first.ts",
+      "--- a/first.ts",
+      "+++ b/first.ts",
+      "@@ -1,1 +1,1 @@",
+      "-old",
+      "+new",
+      "diff --git a/second.ts b/second.ts",
+      "--- a/second.ts",
+      "+++ b/second.ts",
+      "@@ -10,1 +10,1 @@",
+      "-second old",
+      "+second new",
+    ].join("\n"));
+    expect(parsed.lines.filter((line) => line.kind === "removed").map((line) => [line.text, line.oldLine]))
+      .toEqual([["old", 1], ["second old", 10]]);
+  });
+
+  /*
+   * The one line a content-shaped `--- ` must NOT be mistaken for. Inside a
+   * hunk every row carries a one-character prefix, so `--- a/x` is a removal of
+   * the text `-- a/x`; it is only a file boundary when a `+++ ` row follows it.
+   */
+  it("does not treat a removed line that looks like a header as a file boundary", () => {
+    const parsed = parseUnifiedPatch([
+      "--- a/doc.md",
+      "+++ b/doc.md",
+      "@@ -1,3 +1,2 @@",
+      "--- a/quoted.ts",
+      "-still removed",
+      "+kept",
+    ].join("\n"));
+    expect(parsed.lines.filter((line) => line.kind === "removed").map((line) => [line.text, line.oldLine]))
+      .toEqual([["-- a/quoted.ts", 1], ["still removed", 2]]);
+  });
+});
+
+describe("one patch renderer for both panes of the Workspace route", () => {
+  /*
+   * Source Control and the Workbench diff tab render on one route, and the
+   * Workbench pane printed the same `git.diff` result as undifferentiated text:
+   * no line numbers, no added/removed colour, the `diff --git`/`index` preamble
+   * left inline. The fix is only real if the second renderer is *gone*, so this
+   * asserts the source rather than a rendered copy of it.
+   */
+  const workspaceView = readFileSync(new URL("./workspace-view.tsx", import.meta.url), "utf8");
+  const sourcesView = readFileSync(new URL("./sources-view.tsx", import.meta.url), "utf8");
+
+  it("leaves no second diff renderer in the workbench pane", () => {
+    expect(workspaceView).not.toMatch(/<pre[^>]*workspace-diff/u);
+    expect(workspaceView).toMatch(/import \{ isConflicted, UnifiedPatch \} from "\.\/sources-view"/u);
+    expect(workspaceView).toMatch(/<UnifiedPatch\b/u);
+  });
+
+  it("keeps exactly one classifier for a diff line", () => {
+    // `diffLineKind` was the third answer, dead except for its own test.
+    expect(sourcesView).not.toMatch(/function diffLineKind/u);
+    expect([...sourcesView.matchAll(/class=\{`git-diff-lines /gu)]).toHaveLength(1);
   });
 });
 
@@ -281,5 +401,60 @@ describe("remote reachability", () => {
     expect(cloneBoundaryNote(capabilities({
       features: { clone: { available: false, reason: "no adapter" } } as Capabilities["features"],
     }))).toBe("Full-history clone unavailable: no adapter.");
+  });
+});
+
+/*
+ * Source Control could never add, repoint or remove a remote, so its own Fetch
+ * and Push were permanently inert on every imported repository: the snapshot
+ * importer — the only repository a first-time user can obtain — writes files
+ * and configures no remote, and the panel answered "No upstream configured."
+ * beside two buttons that could not do anything about it.
+ */
+describe("configuring the remote the panel reports on", () => {
+  const repository = (remotes: readonly Readonly<{ name: string; url: string }>[]) => ({
+    id: "snapshot-repo",
+    version: "7",
+    remotes,
+  });
+
+  it("adds origin when the repository has none", () => {
+    const operation = sourceRemoteOperation(repository([]), " https://github.com/owner/repo.git ");
+    expect(operation).toEqual({
+      kind: "remote-add",
+      request: {
+        repositoryId: "snapshot-repo",
+        name: "origin",
+        url: "https://github.com/owner/repo.git",
+        expectedRepositoryVersion: "7",
+      },
+    });
+  });
+
+  it("repoints the existing remote rather than adding a second one", () => {
+    const operation = sourceRemoteOperation(repository([{ name: "origin", url: "https://github.com/owner/old.git" }]), "https://github.com/owner/new.git");
+    expect(operation?.kind).toBe("remote-set-url");
+    expect(operation?.request.url).toBe("https://github.com/owner/new.git");
+  });
+
+  it("asks for no review when nothing would change", () => {
+    expect(sourceRemoteOperation(repository([]), "   ")).toBeUndefined();
+    expect(sourceRemoteOperation(repository([{ name: "origin", url: "https://github.com/owner/repo.git" }]), " https://github.com/owner/repo.git "))
+      .toBeUndefined();
+  });
+
+  it("carries the compare-and-swap version every other mutation carries", () => {
+    expect(sourceRemoteOperation(repository([]), "https://example.invalid/x.git")?.request.expectedRepositoryVersion).toBe("7");
+  });
+
+  it("routes all three remote verbs to the client that has always implemented them", () => {
+    const source = readFileSync(new URL("./sources-view.tsx", import.meta.url), "utf8");
+    const dispatch = source.match(/async function execute\([\s\S]*?\n\}/u)?.[0] ?? "";
+    expect(dispatch).toContain('case "remote-add": return client.addRemote');
+    expect(dispatch).toContain('case "remote-set-url": return client.setRemoteUrl');
+    expect(dispatch).toContain('case "remote-remove": return client.removeRemote');
+    // The control exists on the panel, not only in the dispatcher.
+    expect(source).toContain("onClick={configureRemote}");
+    expect(source).toContain("setRemoteDraft(event.currentTarget.value)");
   });
 });

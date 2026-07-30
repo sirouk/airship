@@ -2,9 +2,11 @@ import { ownedArrayBuffer } from "../core/bytes";
 import type {
   CompareAndSwapResult,
   ObjectRange,
+  ObjectReclamationOutcome,
+  ObjectReclamationReceipt,
   ObjectRecord,
-  ObjectStore,
   ObjectSummary,
+  ReclaimableObjectStore,
   PutIfAbsentResult,
   ObjectStoreCapabilities,
 } from "./object-store";
@@ -65,7 +67,7 @@ export class S3StorageError extends Error {
 }
 
 /** A real S3 REST adapter: SigV4, exact ranges, conditional creates/CAS, and ListObjectsV2. */
-export class S3ObjectStore implements ObjectStore {
+export class S3ObjectStore implements ReclaimableObjectStore {
   readonly capabilities: ObjectStoreCapabilities = Object.freeze({
     version: 1,
     adapter: "s3",
@@ -270,6 +272,48 @@ export class S3ObjectStore implements ObjectStore {
     throw new Error("S3 list exceeds the client page limit.");
   }
 
+  /**
+   * Reclamation over `DeleteObject`, one key at a time.
+   *
+   * Without this the S3/MinIO tier — the durability most Airship users select —
+   * was the one that could not delete a conversation, so "Export, migrate,
+   * delete, or self-host all state" was false for them specifically. The bucket
+   * has always been able to do it; nothing here asked.
+   *
+   * Deliberately not `DeleteObjects` (the batch POST): that endpoint reports
+   * per-key errors inside a 200 body, and a receipt whose whole job is to
+   * separate confirmed removals from retained ones must not have to parse a
+   * success to discover a failure. One request per key is slower and cannot lie.
+   *
+   * S3 delete is idempotent — a missing key answers 204 — so an absent object
+   * is reported as `not-indexed` only when the caller can be told nothing more
+   * useful, and any non-2xx is `refused` rather than thrown: a receipt that
+   * removed nine of ten objects is more useful than an exception that loses the
+   * nine.
+   */
+  async trash(keys: readonly string[], signal?: AbortSignal): Promise<ObjectReclamationReceipt> {
+    const requested = [...new Set(keys)];
+    const outcomes: ObjectReclamationOutcome[] = [];
+    for (const key of requested) {
+      try {
+        const response = await this.request("DELETE", this.objectUrl(key), { signal });
+        await discardBody(response);
+        outcomes.push(Object.freeze(response.ok || response.status === 404
+          ? { key, reclaimed: true as const }
+          : { key, reclaimed: false as const, reason: "refused" as const }));
+      } catch (error) {
+        if (signal?.aborted) throw error;
+        outcomes.push(Object.freeze({ key, reclaimed: false as const, reason: "unconfirmed" as const }));
+      }
+    }
+    return Object.freeze({
+      requested: requested.length,
+      reclaimed: Object.freeze(outcomes.filter((outcome) => outcome.reclaimed).map((outcome) => outcome.key)),
+      retained: Object.freeze(outcomes.filter((outcome) => !outcome.reclaimed).map((outcome) => outcome.key)),
+      outcomes: Object.freeze(outcomes),
+    });
+  }
+
   private objectUrl(key: string): URL {
     const remoteKey = `${this.prefix}${objectKey(key)}`;
     checkS3KeyLength(remoteKey, "S3 object key");
@@ -303,7 +347,7 @@ export class S3ObjectStore implements ObjectStore {
   }
 
   private async request(
-    method: "GET" | "PUT",
+    method: "GET" | "PUT" | "DELETE",
     url: URL,
     options: { headers?: Record<string, string>; body?: Uint8Array; signal?: AbortSignal },
   ): Promise<Response> {

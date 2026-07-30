@@ -81,15 +81,24 @@ describe("the first-visit ledger", () => {
 });
 
 describe("route header geometry", () => {
-  it("is a 44px bar", () => {
+  /*
+   * The literal these two rules used to carry was 44px — which is the `:root`
+   * *fallback* of `--density-control`, never the value that ships: the shell
+   * boots at `comfortable`, where the token is 46px. So the one bar every route
+   * renders sat 2px shorter than the controls beside it at the default setting,
+   * and stayed 44px in Compact while its neighbours went to 36px. The token is
+   * asserted rather than a copy of a number, so a change to the ramp cannot
+   * leave this bar behind again.
+   */
+  it("is one density-control row, not a frozen 44px bar", () => {
     const bar = routeStyles.match(/\.route-header__bar \{([^}]+)\}/u)?.[1] ?? "";
-    expect(bar).toContain("min-height: 44px");
+    expect(bar).toContain("min-height: var(--density-control)");
   });
 
-  it("gives the ⓘ a 44px target around its 24px mark", () => {
+  it("gives the ⓘ a full control-height target around its 24px mark", () => {
     const trigger = routeStyles.match(/\.route-header__about-trigger \{([^}]+)\}/u)?.[1] ?? "";
-    expect(trigger).toContain("min-width: 44px");
-    expect(trigger).toContain("min-height: 44px");
+    expect(trigger).toContain("min-width: var(--density-control)");
+    expect(trigger).toContain("min-height: var(--density-control)");
   });
 
   it("sets the one route title at the one route-title step, in the serif's one job", () => {

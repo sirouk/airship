@@ -1,3 +1,4 @@
+import { deepFreeze } from "../../core/freeze";
 import {
   CONNECTION_CAPABILITIES,
   type ConnectionCapability,
@@ -14,7 +15,6 @@ import {
   boundedText,
   canonicalTimestamp,
   credential,
-  deepFreeze,
   identifier,
   nonNegativeFinite,
   optionalCode,

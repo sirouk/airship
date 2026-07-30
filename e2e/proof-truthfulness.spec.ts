@@ -27,7 +27,7 @@ test("disconnected Proof navigation and empty evidence state describe the real a
   await expect(connect).toBeVisible();
   await connect.click();
   await expect(page).toHaveURL(/#connection$/u);
-  await expect(page.getByRole("heading", { name: "Connect models" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Connection", exact: true })).toBeVisible();
 });
 
 test("mobile Proof keeps the complete record, claim, detail, and raw-fact path", async ({ page }, testInfo) => {

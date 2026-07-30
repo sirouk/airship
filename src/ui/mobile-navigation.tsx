@@ -71,14 +71,22 @@ export function MobileNavigation({
   const moreButton = useRef<HTMLButtonElement>(null);
   const dialog = useRef<HTMLDivElement>(null);
   const activeControl = mobilePrimaryControlForView(view);
-  const overflowHintId = useId();
+  const destinationHintId = useId();
   /**
-   * Which overflow route is live, when one is. This is a *description*, not part
-   * of the trigger's name: "More" is the name every caller and test knows the
-   * control by, and appending a destination to it would rename a control that
-   * has not changed. `aria-describedby` states the fact without moving it.
+   * Which route is live, whenever the current control's own label is not its
+   * name. This is a *description*, not part of the control's name: "More" and
+   * "Trust" are the names every caller and test knows those controls by, and
+   * appending a destination would rename a control that has not changed.
+   *
+   * The gate used to be `activeControl === "more"`, which left the three views
+   * that map to `trust` — vault, billing, access — announcing "Trust, current
+   * page" on a phone: a name that is no route, on a tab whose tap navigates to
+   * Proof and away from the page it claims to be. Three more routes — sessions
+   * under Chat, editor and terminal under Workspace — were as silent. The
+   * control's own `view` is the test, so this can never again be true for one
+   * family of routes and false for another.
    */
-  const overflowDestination = activeControl === "more" ? overflowDestinationLabel(view) : undefined;
+  const currentDestination = destinationHintForControl(activeControl, view);
   const proofNoticeCount = pendingCount(proofPending);
   const attestationNoticeCount = pendingCount(attestationPending);
   const chatNoticeCount = pendingCount(chatPending);
@@ -171,7 +179,7 @@ export function MobileNavigation({
                 aria-controls="airship-mobile-more"
                 aria-expanded={moreOpen}
                 aria-haspopup="dialog"
-                aria-describedby={overflowDestination ? overflowHintId : undefined}
+                aria-describedby={current && currentDestination ? destinationHintId : undefined}
                 onClick={() => moreOpen ? closeMore() : onOpenMore()}
               >
                 <Icon name={primaryIcons[control.id]} size={20} />
@@ -187,6 +195,7 @@ export function MobileNavigation({
               class={navClass(current, false)}
               type="button"
               aria-current={current ? "page" : undefined}
+              aria-describedby={current && currentDestination ? destinationHintId : undefined}
               onClick={() => onNavigate(control.view)}
             >
               <Icon name={primaryIcons[control.id]} size={20} />
@@ -197,7 +206,7 @@ export function MobileNavigation({
         })}
         {/* Out of flow (`.sr-only` is absolutely positioned), so it consumes
             none of the nav's five grid tracks. */}
-        {overflowDestination ? <span id={overflowHintId} class="sr-only">{`Current page: ${overflowDestination}`}</span> : null}
+        {currentDestination ? <span id={destinationHintId} class="sr-only">{`Current page: ${currentDestination}`}</span> : null}
       </nav>
 
       {moreOpen ? (
@@ -314,19 +323,36 @@ export function evidenceRecordLabel(count: number): string | undefined {
 }
 
 /**
- * What the active overflow route is called, in the words the sheet uses.
+ * What the live route is called, in the words the rest of the product uses.
  *
- * Read out of `MOBILE_MORE_ENTRIES` first, so the trigger and the entry it
+ * Read out of `MOBILE_MORE_ENTRIES` first, so the band and the sheet entry it
  * highlights can never disagree about a route's name. `context` has no entry of
  * its own — it is Memory's index tab — so it falls back to the canonical
  * parent's label rather than inventing a name only this file knows.
  */
-export function overflowDestinationLabel(view: NavigationView): string | undefined {
+export function currentDestinationLabel(view: NavigationView): string | undefined {
   for (const entry of MOBILE_MORE_ENTRIES) {
     if (entry.kind === "route" && entry.view === view) return entry.label;
   }
   const parent = canonicalParentForView(view);
   return CANONICAL_DESTINATIONS.find((destination) => destination.id === parent)?.label;
+}
+
+/**
+ * The description a current control needs, or nothing when its label is already
+ * the route's name.
+ *
+ * `Chat` on #chat needs no hint; `Trust` on #vault, `Chat` on #sessions and
+ * `More` on #memory all do, and the rule that decides is the same one for all
+ * four families: does the control's own destination equal the live view.
+ */
+export function destinationHintForControl(
+  controlId: MobilePrimaryControlId,
+  view: NavigationView,
+): string | undefined {
+  const control = MOBILE_PRIMARY_CONTROLS.find((candidate) => candidate.id === controlId);
+  if (control?.kind === "route" && control.view === view) return undefined;
+  return currentDestinationLabel(view);
 }
 
 function navClass(current: boolean, open: boolean): string {

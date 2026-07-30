@@ -1,3 +1,4 @@
+import type { ProofStatus } from "../receipts/types";
 import type { ClaimCeiling, ClaimStackFact, ClaimStackItem } from "./claim-stack-model";
 import { claimCeiling, claimQualifierCeiling, declaredClaimStatus } from "./turn-evidence";
 import { proofStatusLabel } from "./trust-language";
@@ -122,17 +123,48 @@ export const CLAIM_CEILING_SCOPES: Readonly<Record<ClaimCeiling, string>> = Obje
 });
 
 /**
+ * What each state word means, once, for every surface on the Proof route.
+ *
+ * The measured defect: the Proof route shipped two dictionaries one tab-switch
+ * apart. "Receipt & journal" rendered `CLAIM_STATE_LEGEND` while "Attestation
+ * evidence" rendered `EVIDENCE_STATE_MEANINGS`, and the two disagreed on every
+ * shared state — down to "A claim was checked or declared and did not hold."
+ * against "The claim was checked or declared and did not hold." for the same
+ * word. On a phone the two panels are full-screen and cannot be compared side
+ * by side, so a reader auditing a receipt had to decide whether "this claim"
+ * and "this exact claim" were the same promise. On the one route whose job is
+ * precision about evidence, two dictionaries is the defect.
+ *
+ * `failed` and `expired` are quoted verbatim from `EVIDENCE_STATE_MEANINGS`
+ * (`attestations-view.tsx:72-78`), so those two states are now byte-identical
+ * across both tabs. The three ladder states keep their wording because
+ * `TRUST_LADDER` in `trust-label-contract.ts` pins them byte-for-byte and
+ * `trust-language.test.ts` asserts the pin; unifying those three is one edit in
+ * that module plus one in `attestations-view.tsx`, and both of those files
+ * should import this record rather than retype it.
+ */
+export const PROOF_STATE_MEANINGS: Readonly<Record<ProofStatus, string>> = Object.freeze({
+  verified: "A named authority checked this claim and it held.",
+  partial: "A party stated this claim. Nothing independent checked it.",
+  unavailable: "No record of this claim exists for this turn.",
+  failed: "The claim was checked or declared and did not hold.",
+  expired: "A time-bounded endpoint observation expired. The immutable turn receipt did not become stale.",
+});
+
+/**
  * The legend, containing exactly the state words the surfaces emit.
  *
  * Persistent, never behind a disclosure. Three words with three definitions is
  * the whole vocabulary; a reader who learns it here can read every seal in the
  * product, which is the point of having one status family.
+ *
+ * Projected from `PROOF_STATE_MEANINGS` and `proofStatusLabel` rather than
+ * retyped: a legend that carries its own copy of the word and the sentence is
+ * a legend that can come to disagree with the seals it is teaching.
  */
-export const CLAIM_STATE_LEGEND = Object.freeze([
-  Object.freeze({ status: "verified", word: "Verified", meaning: "A named authority checked this claim and it held." }),
-  Object.freeze({ status: "partial", word: "Asserted", meaning: "A party stated this claim. Nothing independent checked it." }),
-  Object.freeze({ status: "unavailable", word: "No evidence", meaning: "No record of this claim exists for this turn." }),
-] as const);
+export const CLAIM_STATE_LEGEND = Object.freeze((["verified", "partial", "unavailable"] as const).map((status) =>
+  Object.freeze({ status, word: proofStatusLabel(status), meaning: PROOF_STATE_MEANINGS[status] }),
+));
 
 /**
  * The delta a qualifier adds, with the status word removed.

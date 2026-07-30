@@ -11,10 +11,14 @@
 .capability-load p { margin: 0; color: var(--ink-faint); font-size: var(--fs-micro); line-height: 1.45; }
 .capability-load p:first-of-type { color: var(--ink-muted); font-family: var(--font-mono); }
 .capability-section-heading { margin: calc(var(--density-gap) * 1.15) 0 .65rem; }
-.capability-section-heading h2 { margin: .12rem 0 0; font: 600 var(--fs-h3)/1.15 var(--font-display); }
+.capability-section-heading h2 { margin: .12rem 0 0; font: var(--fw-strong) var(--fs-title)/1.15 var(--font-display); }
 .capability-device { display: grid; gap: .75rem; padding: var(--density-panel-pad); border: 1px solid var(--line); border-radius: var(--radius-panel); background: linear-gradient(145deg, color-mix(in srgb, var(--accent) 4%, var(--surface)), var(--surface)); }
 .capability-device > header { display: flex; align-items: start; justify-content: space-between; gap: 1rem; }
-.capability-device > header h2 { margin: .12rem 0; font: 600 var(--fs-h3)/1.15 var(--font-display); }
+/* "Device acceleration" is a sibling of "Language runtimes" and "Airship
+   Companion" in the route's flow, not a level below them, so it takes the same
+   section-heading rung. The retired --fs-h3 alias resolved here anyway; naming
+   the rung is what stops the next edit re-deriving it from the pixel value. */
+.capability-device > header h2 { margin: .12rem 0; font: var(--fw-strong) var(--fs-title)/1.15 var(--font-display); }
 .capability-device > header p { max-width: 62ch; margin: 0; color: var(--ink-muted); font-size: var(--fs-caption); }
 .capability-signal-strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--surface-soft); }
 .capability-signal-strip > div { min-width: 0; padding: .55rem .65rem; border-inline-end: 1px solid var(--line); }
@@ -26,7 +30,7 @@
 .capability-device-card.available { border-color: color-mix(in srgb, var(--v-verified) 24%, var(--line)); }
 .capability-device-card.failed { border-color: color-mix(in srgb, var(--danger) 30%, var(--line)); }
 .capability-device-card > header { display: flex; align-items: start; justify-content: space-between; gap: .45rem; }
-.capability-device-card h3 { margin: 0; font: 650 var(--fs-body)/1.2 var(--font-body); }
+.capability-device-card h3 { margin: 0; font: var(--fw-title) var(--fs-body)/1.2 var(--font-body); }
 .capability-device-card header small { display: block; margin-top: .12rem; color: var(--ink-faint); font-size: var(--fs-micro); }
 .capability-device-card > p { margin: .55rem 0 0; color: var(--ink-muted); font-size: var(--fs-micro); line-height: 1.45; }
 /* Only an observation whose probe reported a refusal renders this, so it is
@@ -47,7 +51,7 @@
 .capability-policy-row strong, .capability-policy-row small { display: block; }
 .capability-policy-row strong { margin-top: .2rem; font-size: var(--fs-caption); }
 .capability-policy-row small { margin-top: .18rem; color: var(--ink-faint); font-size: var(--fs-micro); }
-.capability-policy-row details summary { color: var(--ink-muted); cursor: pointer; font-size: var(--fs-caption); font-weight: 650; }
+.capability-policy-row details summary { color: var(--ink-muted); cursor: pointer; font-size: var(--fs-caption); font-weight: var(--fw-title); }
 .capability-policy-row details ul { display: grid; gap: .35rem; margin: .55rem 0; padding: 0; list-style: none; }
 .capability-policy-row .capability-policy-inert { color: var(--ink-faint); font-style: italic; line-height: 1.45; }
 /* The per-primitive detail carries the probe's evidence wording (controlling
@@ -64,10 +68,10 @@
 .capability-runtime.failed { border-color: color-mix(in srgb, var(--danger) 34%, var(--line)); }
 .capability-runtime > header { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; gap: .6rem; align-items: center; }
 .capability-runtime__icon { display: grid; width: 34px; height: 34px; place-items: center; border: 1px solid var(--line-strong); border-radius: var(--radius-control); color: var(--accent-bright); background: var(--surface-soft); }
-.capability-runtime h2 { margin: 0; font: 600 var(--fs-body)/1.2 var(--font-body); }
+.capability-runtime h2 { margin: 0; font: var(--fw-strong) var(--fs-body)/1.2 var(--font-body); }
 .capability-runtime header small { color: var(--ink-faint); font: var(--fs-micro)/1.4 var(--font-mono); }
 .capability-runtime__details { border-top: 1px solid var(--line); }
-.capability-runtime__details > summary { min-height: 36px; padding: .6rem 0 0; color: var(--ink-muted); cursor: pointer; font-size: var(--fs-caption); font-weight: 650; }
+.capability-runtime__details > summary { min-height: 36px; padding: .6rem 0 0; color: var(--ink-muted); cursor: pointer; font-size: var(--fs-caption); font-weight: var(--fw-title); }
 .capability-runtime__details > p { margin: .25rem 0 .7rem; color: var(--ink-muted); font-size: var(--fs-caption); line-height: var(--lh-body); }
 .capability-runtime dl { display: grid; grid-template-columns: 1fr 1fr; gap: .45rem; margin: 0; }
 .capability-runtime dl > div { display: grid; gap: .2rem; padding: .5rem; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--surface-soft); }

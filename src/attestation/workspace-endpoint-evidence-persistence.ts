@@ -1,3 +1,4 @@
+import { deepFreeze } from "../core/freeze";
 import { sha256, stableStringify } from "../core/hash";
 import { WorkspaceConflictError, type WorkspacePort } from "../workspace/contracts";
 import { decodeCanonicalBase64, sha256Hex } from "./encoding";
@@ -871,10 +872,4 @@ function pageOnly(
 
 function authorityAbort(): DOMException {
   return new DOMException("The endpoint-evidence storage authority changed.", "AbortError");
-}
-
-function deepFreeze<T>(value: T): T {
-  if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
-  for (const child of Object.values(value as Record<string, unknown>)) deepFreeze(child);
-  return Object.freeze(value);
 }

@@ -24,3 +24,10 @@
    into one of these, so it belongs in the always-loaded barrel rather than
    being pulled in by whichever lazy route happened to need it first. */
 @import "./popover.css";
+/* The shared search-field recipe, for the same reason and after a live
+   demonstration of it: imported directly by both Memory and Context, two lazy
+   routes, it created a shared CSS chunk that pulled `memory-graph/kind-visual`
+   into the same chunk group and merged it away — the exact failure the comment
+   at the head of context-view.tsx warns about, and a release-gate error rather
+   than a subtle one. A recipe more than one route uses belongs here. */
+@import "./search-field.css";

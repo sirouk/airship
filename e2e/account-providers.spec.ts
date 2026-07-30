@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 
 test("Account keeps every provider reachable without inventing telemetry", async ({ page }) => {
   await page.goto("/#account");
-  await expect(page.getByRole("heading", { name: "Account standing", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Account", exact: true, level: 1 })).toBeVisible();
 
   const tabs = page.getByRole("tablist", { name: "Account providers" });
   await expect(tabs.getByRole("tab")).toHaveCount(4);

@@ -1,3 +1,4 @@
+import { deepFreeze } from "../core/freeze";
 import type { JsonValue } from "../core/contracts";
 import { fromBase64Url, sha256, stableStringify, toBase64Url } from "../core/hash";
 import type { ExecutionRuntimeId } from "./runtime-registry";
@@ -737,12 +738,4 @@ function assertRuntime(value: string): asserts value is ContinuumRuntimeId {
 
 function assertLimit(value: number, label: string, minimum: number, maximum: number): void {
   if (!Number.isSafeInteger(value) || value < minimum || value > maximum) throw new Error(`${label} is invalid.`);
-}
-
-function deepFreeze<T>(value: T): T {
-  if (value && typeof value === "object" && !Object.isFrozen(value)) {
-    Object.freeze(value);
-    for (const nested of Object.values(value as Record<string, unknown>)) deepFreeze(nested);
-  }
-  return value;
 }

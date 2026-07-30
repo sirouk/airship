@@ -1,3 +1,4 @@
+import { deepFreeze } from "./freeze";
 import { CONVERSATION_NAMED_EVENT_TYPE, HUMAN_INTENT_EVENT_TYPE, TERMINAL_ACTIVITY_EVENT_TYPE } from "./contracts";
 import type {
   CanonicalMessage,
@@ -2008,10 +2009,4 @@ function eventLocation(value: Partial<DurableEvent> | Record<string, unknown>): 
     ...(typeof value.turnId === "string" ? { turnId: value.turnId } : {}),
     ...(typeof value.operationId === "string" ? { operationId: value.operationId } : {}),
   };
-}
-
-function deepFreeze<T>(value: T): T {
-  if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
-  for (const child of Object.values(value as Record<string, unknown>)) deepFreeze(child);
-  return Object.freeze(value);
 }

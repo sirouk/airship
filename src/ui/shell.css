@@ -88,7 +88,7 @@
 }
 
 .brand-name {
-  font-family: Georgia, "Times New Roman", serif;
+  font-family: var(--font-display);
   font-size: var(--fs-title);
   letter-spacing: 0.01em;
 }
@@ -96,10 +96,6 @@
 .edition {
   align-self: flex-end;
   margin: 0 0 13px 8px;
-  color: var(--ink-faint);
-  font: var(--fs-micro)/1 ui-monospace, SFMono-Regular, Menlo, monospace;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
 }
 
 /*
@@ -541,6 +537,9 @@
   white-space: nowrap;
 }
 
+/* The dot asked for its colour by name and then hand-wrote the same colour's
+   dark hex for its halo, so in Paper mode the halo stayed a dark-build teal
+   around a dot that had already changed. */
 .pulse-dot {
   display: inline-block;
   flex: 0 0 auto;
@@ -548,7 +547,7 @@
   height: 6px;
   border-radius: 50%;
   background: var(--verdigris);
-  box-shadow: 0 0 0 3px rgba(103, 163, 154, 0.09);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--v-verified) 9%, transparent);
 }
 
 .icon-button {
@@ -737,10 +736,6 @@
 
 .rail-conversation-group {
   padding: var(--sp-2) var(--sp-2) var(--sp-1);
-  color: var(--ink-faint);
-  font: var(--fs-micro)/1 ui-monospace, SFMono-Regular, Menlo, monospace;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
 }
 
 .recent-conversation-row {
@@ -861,10 +856,6 @@
 
 .nav-group-label {
   padding: 3px 10px 4px;
-  color: var(--ink-faint);
-  font: var(--fs-micro)/1 ui-monospace, SFMono-Regular, Menlo, monospace;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
 }
 
 .nav-item {
@@ -920,6 +911,23 @@
   font-size: var(--fs-caption);
 }
 
+/*
+ * Setting the variable was not enough, and the comment on `.nav-item` above
+ * said it was.
+ *
+ * `--rail-item-height: 36px` is only read by `.nav-item`'s own `min-height`,
+ * which is (0,1,0); `:root[data-density] .nav-item` in tokens.css is (0,3,0)
+ * and wins at every setting, so the nested rows measured 46px — exactly the
+ * height of the primary destinations they are supposed to read as subordinate
+ * to. Measured on a laptop at the shipped Comfortable default: the indent and
+ * the 1px rule were carrying the whole hierarchy alone. The extra class makes
+ * this (0,4,0), so it does not depend on shell.css happening to follow
+ * tokens.css in the barrel.
+ */
+:root[data-density] .nav-item.nav-item--nested {
+  min-height: var(--rail-item-height);
+}
+
 .nav-item.active {
   color: var(--ink);
   border-color: color-mix(in srgb, var(--accent) 19%, transparent);
@@ -954,7 +962,7 @@
   border: 1px solid color-mix(in srgb, var(--v-caution) 45%, var(--line));
   border-radius: 999px;
   color: var(--v-caution);
-  font: var(--fs-micro)/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font: var(--fs-micro)/1 var(--font-mono);
 }
 
 .sidebar-spacer {
@@ -985,10 +993,97 @@
   background: transparent;
 }
 
-.eyebrow {
-  display: block;
-  color: var(--brass);
-  font: var(--fs-micro)/1.3 ui-monospace, SFMono-Regular, Menlo, monospace;
+/*
+ * The section label, once.
+ *
+ * `.eyebrow` existed and was then re-implemented 47 more times: five trackings
+ * (.06/.07/.08/.1/.12em), four colours (--brass here, --accent-bright on
+ * Attestations and Client context, --ink-faint in Sessions and Billing,
+ * --ink-muted in Sources), three weights and two sizes. Measured on one pass
+ * through the product: the same kind of word — PROFILE SCOPE, EFFECTIVE SET,
+ * RECORDS, SOURCE POSTURE — arrived in three different type treatments on
+ * three consecutive routes, and `sources-view.css` consumed this very class
+ * and then overrode four of its five properties.
+ *
+ * The recipe is the one docs/DESIGN_DIRECTION.md §4.1 fixes for --fs-micro
+ * ("Mono uppercase, .11em tracking") and §4.3 forbids brass on ("a section
+ * label is neither 'you are here' nor 'act here'"). Every re-implementation
+ * now shares this declaration block instead of copying it: a grouped selector
+ * is how CSS says "import". The classes' own boxes — margin, grid placement,
+ * stickiness — stay in their own sheets, because those are not the label.
+ *
+ * `display: block` is deliberately not in the shared block: `.eyebrow` is
+ * applied to inline <span>s that must break onto their own line, while the
+ * <dt>, <legend> and ::before members are already block-level and some sit in
+ * flex/grid parents that a forced `display: block` would re-lay-out.
+ */
+.eyebrow { display: block; }
+
+.eyebrow,
+.access-section-heading > div > span,
+.candidate-model > span,
+.proof-policy__legend,
+.proof-policy-consent legend,
+.attestations-heading > div:first-child > span,
+.attestations-rail-heading > span,
+.attestations-section-heading > span,
+.attestation-inspection > span,
+.attestation-record-heading > div > span,
+.attestations-warnings > span,
+.attestations-boundary dt,
+.attestation-record-counts dt,
+.attestations-stage-heading > span,
+.billing-account-identity dt,
+.billing-provider-data dt,
+.billing-headroom-facts > span:first-child,
+.message-part.reference header > span,
+.message-part.reasoning-summary summary small,
+.client-context-heading > div:first-child > span,
+.context-surface-heading > div > span,
+.context-metric > span,
+.google-drive-setup__eyebrow,
+.local-device-vault__eyebrow,
+.local-device-vault__restore legend,
+.local-lab__eyebrow,
+.local-lab legend,
+.memory-disclosure > summary small,
+.memory-view .memory-metrics .metric > span,
+.memory-overview h3,
+.menu-select-popover__header,
+.preferences-dialog__divider,
+.popover__header > strong,
+.profile-governs__cell small,
+.proof-counts dt,
+.proof-ceilings__rule small,
+.proof-posture dt,
+.provenance-rows__row > dt,
+.provider-fabric__heading span,
+.provider-fabric__subheading span,
+.provider-connection header span,
+.provider-setup-card header span,
+.provider-fabric__heading > div > span,
+.provider-catalog-heading > span,
+.session-library-eyebrow,
+.session-library-list-heading small,
+.session-library-panel-heading span,
+.session-library-group-label,
+.session-library-compatibility > div span,
+.session-library-technical > summary span,
+.session-library-pins dt,
+.session-library-digests span,
+.edition,
+.rail-conversation-group,
+.nav-group-label,
+.git-section-label,
+.git-sources-trust-disclosure > summary > .eyebrow,
+.git-repository-controls > summary .eyebrow,
+.git-remote-boundary > summary .eyebrow,
+.vault-view__scope,
+.vault-view__outcomes li > span:first-child,
+.vault-view__configuration dt,
+.vault-provider-compare td::before {
+  color: var(--ink-muted);
+  font: var(--fw-strong) var(--fs-micro)/1.2 var(--font-mono);
   letter-spacing: 0.11em;
   text-transform: uppercase;
 }
@@ -1070,7 +1165,7 @@
   .sidebar[data-rail-state="rail"]:hover .rail {
     z-index: 30;
     width: 268px;
-    box-shadow: 0 18px 44px rgba(0, 0, 0, 0.46);
+    box-shadow: var(--shadow);
     transition-delay: 180ms;
   }
 
@@ -1117,7 +1212,7 @@
 .sidebar[data-rail-state="rail"]:focus-within .rail {
   z-index: 30;
   width: 268px;
-  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.46);
+  box-shadow: var(--shadow);
   transition-delay: 0ms;
 }
 
@@ -1231,6 +1326,11 @@
 }
 
 .profile-switcher .profile-manage-link.active { color: var(--ink); background: color-mix(in srgb, var(--accent) 11%, transparent); }
+/* Skills and Capabilities are filed under Profiles and draw no rail row, so
+   this control stands in for them — the same weight `.nav-item.has-active-child`
+   gives Memory while you are on its index, and deliberately not `.active`,
+   which would claim you are on Profiles. */
+.profile-switcher .profile-manage-link.has-active-child { color: var(--ink); }
 .profile-switcher .profile-manage-link svg { flex: 0 0 auto; width: 16px; height: 16px; }
 
 @media (pointer: coarse) {
@@ -1247,7 +1347,7 @@
   border-radius: 50%;
   color: var(--brass-bright);
   background: color-mix(in srgb, var(--accent) 7%, transparent);
-  font: var(--fs-micro) ui-monospace, monospace;
+  font: var(--fs-micro) var(--font-mono);
 }
 
 .profile-switcher > small {

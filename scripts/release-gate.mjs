@@ -104,16 +104,31 @@ export const RELEASE_BUDGETS = Object.freeze({
   // environment capture, OAuth, evidence scheduling, terminal audit lineage,
   // and the complete responsive capability presentation are each charged to a
   // named lazy surface. Their ownership splits remove cross-chunk compression
-  // opportunities without adding first-paint weight. Measured 1881.86 KiB raw /
-  // 587.72 KiB gzip; these are the smallest whole-KiB backstops retaining
-  // roughly 0.5% clearance.
-  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 1894 * 1024, gzip: 593 * 1024 }),
+  // opportunities without adding first-paint weight.
+  //
+  // Pass 2 moved this by 28.67 KiB raw / 11.43 KiB gzip, and every kilobyte of
+  // it is a capability that could not be reached before: deleting a
+  // conversation (absent at all three storage layers while PRODUCT_SPEC.md
+  // promised it), the browser-Git bridge's entry point (17 verb families with
+  // no caller), workspace content search, retry on a failed route chunk (the
+  // affordance existed on one route and was dead code for the two that needed
+  // it most), and the empty/error states nine panels were missing. The
+  // consolidation in the same pass paid part of it back — seven `stringArgument`
+  // declarations, twenty `deepFreeze`s, nine timestamp formatters and seven byte
+  // formatters became one each. Measured 1910.53 KiB raw / 599.15 KiB gzip;
+  // these are the smallest whole-KiB backstops that clear it.
+  //
+  // First paint is governed separately by the 768/160 KiB raw/gzip ceiling
+  // above and is unchanged by any of it.
+  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 1911 * 1024, gzip: 600 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
-  // own per-pack caps. The pair now measures 652.23 KiB raw / 180.61 KiB gzip:
+  // own per-pack caps. The pair now measures 672.33 KiB raw / 186.61 KiB gzip:
   // the browser-Git pack grew (see optionalBrowserGit) and the Terminal pack
-  // carries the enlarged in-terminal Git command surface. Both vendor pins are
-  // unchanged, so all of the growth is first-party and separately reviewable.
-  optionalVendorRuntimeAggregate: Object.freeze({ raw: 656 * 1024, gzip: 182 * 1024 }),
+  // carries the in-terminal Git command surface, which Pass 2 reconnected to a
+  // control after finding its 17 verb families had no caller at all. Both
+  // vendor pins are unchanged, so all of the growth is first-party and
+  // separately reviewable.
+  optionalVendorRuntimeAggregate: Object.freeze({ raw: 673 * 1024, gzip: 187 * 1024 }),
   // Absolute installed bundle backstop. It includes first-party/routes, both
   // vendor engines, model catalog chunks, and the service worker. Static
   // Pyodide assets remain governed by their separate pack cap below.
@@ -149,12 +164,14 @@ export const RELEASE_BUDGETS = Object.freeze({
   // moves, to the lowest whole KiB keeping ~0.5% clearance; the gzip ceiling is
   // not raised because the build is still inside it. First paint is untouched
   // and is governed separately by the 768/160 KiB raw/gzip ceiling below.
-  // The current installed graph measures 2531.57 KiB raw / 767.26 KiB gzip.
+  // The current installed graph measures 2582.86 KiB raw / 785.76 KiB gzip.
   // Every capability is separately owned and capped; the aggregate delta is
-  // the sum of those reviewed lazy owners, not eager preload. The backstops
-  // below retain roughly 0.5% clearance while the startup ceiling remains
-  // independently fixed.
-  totalJavaScriptAndWorkers: Object.freeze({ raw: 2545 * 1024, gzip: 772 * 1024 }),
+  // the sum of those reviewed lazy owners, not eager preload — see
+  // `firstPartyJavaScriptAndWorkers` above for what Pass 2 spent it on and what
+  // the same pass gave back by deleting duplicate implementations. The
+  // backstops below are the smallest whole KiB that clear the reading, while
+  // the startup ceiling remains independently fixed.
+  totalJavaScriptAndWorkers: Object.freeze({ raw: 2583 * 1024, gzip: 786 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. Keep it visible under a dedicated, deliberately small cap.
   serviceWorker: Object.freeze({ raw: 12 * 1024, gzip: 4 * 1024 }),
@@ -175,9 +192,16 @@ export const RELEASE_BUDGETS = Object.freeze({
   optionalExecutionSupport: Object.freeze({ raw: 10 * 1024, gzip: 4 * 1024 }),
   // Shared implementation behind the lazy agent tool bundle and the
   // second-level execution-engine facade. Vite splits it because both import
-  // the same worker/WASI/workspace dispatcher. Measured 48,694 B raw / 13,755
-  // B gzip; it is never part of first paint.
-  optionalExecutionTools: Object.freeze({ raw: 50 * 1024, gzip: 15 * 1024 }),
+  // the same worker/WASI/workspace dispatcher. It is never part of first paint.
+  //
+  // Re-measured at 60,087 B raw / 17,208 B gzip after the Pass 2 dedup work.
+  // The pack grew because consolidation moved bytes INTO it: the helpers that
+  // had been declared once per tool module (`stringArgument` in seven places,
+  // `deepFreeze` in twenty, two byte formatters, the UUID source) now live in
+  // one place, and this is the chunk that both importers share. Total shipped
+  // JavaScript did not grow — the copies elsewhere went away — so the honest
+  // budget is the new shape rather than the old number.
+  optionalExecutionTools: Object.freeze({ raw: 59 * 1024, gzip: 17 * 1024 }),
   // Pinned browser_wasi_shim plus Airship's bounded virtual-filesystem Worker.
   // It is fetched only when the precompiled WASI adapter executes a command.
   optionalWasiPreview1Worker: Object.freeze({ raw: 32 * 1024, gzip: 8 * 1024 }),
@@ -247,13 +271,18 @@ export const RELEASE_BUDGETS = Object.freeze({
   // deleted the line-number gutter below 760px with nothing said.
   // Preview/persistent tabs, file-type identity, editor-hosted diffs and commit
   // history, and contextual Terminal/Source Control handoffs now make this a
-  // real workbench rather than a file textarea. Measured 73,436 B raw / 23,042
-  // B gzip — 7.54 KiB raw / 2.51 KiB gzip above the previous reading, all of it
-  // that behaviour. The 23 KiB gzip ceiling genuinely does not move: the new
-  // measurement still clears it by 510 bytes. Raw does, 70 → 73 KiB, because
-  // 72 KiB raw would have left 292 bytes. The route is still fetched only when
-  // Workspace opens, so the fixed first-paint ceiling is untouched too.
-  optionalWorkspaceWorkbench: Object.freeze({ raw: 73 * 1024, gzip: 23 * 1024 }),
+  // real workbench rather than a file textarea. That work took the reading from
+  // 65,918 B to 73,436 B raw.
+  //
+  // Pass 2 bought three more behaviours here: a real content search over
+  // workspace files (`workspace/content-search.ts`, bounded and abortable — the
+  // path filter structurally could not answer "which file says this"), an
+  // empty-after-filter state that quotes the term and offers a way out, and the
+  // shared destructive confirmation replacing this route's private copy.
+  // Measured 77,789 B raw / 24,561 B gzip; both ceilings are the tightest
+  // whole-KiB step that clears that reading. The route is still fetched only
+  // when Workspace opens, so the fixed first-paint ceiling is untouched.
+  optionalWorkspaceWorkbench: Object.freeze({ raw: 76 * 1024, gzip: 24 * 1024 }),
   optionalWorkspaceBinding: Object.freeze({ raw: 2 * 1024, gzip: 1 * 1024 }),
   optionalWorkspaceCodec: Object.freeze({ raw: 2 * 1024, gzip: 1 * 1024 }),
   optionalSourceControl: Object.freeze({ raw: 48 * 1024, gzip: 14 * 1024 }),
@@ -274,8 +303,14 @@ export const RELEASE_BUDGETS = Object.freeze({
   optionalBrowserGit: Object.freeze({ raw: 276 * 1024, gzip: 83 * 1024 }),
   // Profile-local thread expansion, durable favorite order, coherent resume,
   // branch and true-fork affordances remain behind the Chat/session route.
-  // Measured 50,315 B raw / 14,738 B gzip; none is in first paint.
-  optionalSessionLibrary: Object.freeze({ raw: 52 * 1024, gzip: 16 * 1024 }),
+  //
+  // Pass 2 added the verb this product had promised and never had: deleting a
+  // conversation, with the shared destructive confirmation and an announcement
+  // that states what left and from where. It also lifted the list's silent
+  // 200-row cap into a stated bound with a load-more control. Measured
+  // 54,296 B raw / 15,964 B gzip, the tightest whole-KiB step above each; none
+  // is in first paint.
+  optionalSessionLibrary: Object.freeze({ raw: 54 * 1024, gzip: 16 * 1024 }),
   // Session pin/digest construction runs during profile-session activation,
   // after the shell can paint. Shared policy/mode code now owns its own lazy
   // chunk, leaving this one at 1,037 B raw / 546 B gzip.
@@ -322,6 +357,20 @@ export const RELEASE_BUDGETS = Object.freeze({
   // Small shared node-shape vocabulary split out by Vite because both the
   // Memory route and deferred graph renderer consume it.
   optionalMemorySupport: Object.freeze({ raw: 2 * 1024, gzip: 1 * 1024 }),
+  /*
+   * The one destructive-confirmation dialog, shared rather than re-implemented.
+   *
+   * Workspace, Terminal and the conversation library each had their own scrim,
+   * Escape handler, focus trap and button row; promoting them to one component
+   * turned it into a chunk with more than one importer, which is exactly the
+   * shape a shared primitive should have. It is budgeted here so the shape is
+   * declared rather than merely tolerated by the classifier.
+   *
+   * Measured 1,010 B raw / 594 B gzip — one component, no dependencies of
+   * its own beyond preact. Fetched with whichever of the three routes opens
+   * first, never at first paint.
+   */
+  optionalConfirmDialog: Object.freeze({ raw: 1 * 1024, gzip: 1 * 1024 }),
   // Proof presentation and privacy-safe receipt serialization are fetched only
   // when the user opens the comprehensive Proof surface.
   // The claim rail (`proof-inspector`) and the one fail-closed receipt rule it
@@ -345,9 +394,16 @@ export const RELEASE_BUDGETS = Object.freeze({
   optionalEvidenceAcquisition: Object.freeze({ raw: 44 * 1024, gzip: 14 * 1024 }),
   // Official xterm.js is isolated behind the Terminal route and is never part
   // of initial navigation or a background capability probe. The dock state and
-  // the Profile-owned manager travel with it. Measured 385.96 KiB raw /
-  // 99.36 KiB gzip; the vendor runtime dominates and gzip still has room.
-  optionalTerminal: Object.freeze({ raw: 400 * 1024, gzip: 104 * 1024 }),
+  // the Profile-owned manager travel with it; the vendor runtime dominates.
+  //
+  // Pass 2 gave the browser-Git bridge back its entry point. `runTerminalGitCommand`
+  // — 17 git verb families with their own `git help`, approval-gated and unit
+  // tested — had zero callers outside its own test, so stash, merge, tag, reset,
+  // restore, rev-parse and remote management existed with no human path on any
+  // device while docs/BROWSER_GIT.md still described them as reachable. It is
+  // now wired to a command field on the route. Measured 425,324 B raw /
+  // 111,475 B gzip, the tightest whole-KiB step above each.
+  optionalTerminal: Object.freeze({ raw: 416 * 1024, gzip: 109 * 1024 }),
   // Protocol host only. The reviewed Transformers/ORT/model artifacts remain
   // a separately mounted same-origin semantic pack and are never preloaded.
   optionalSemanticWorker: Object.freeze({ raw: 16 * 1024, gzip: 6 * 1024 }),
@@ -371,9 +427,13 @@ export const RELEASE_BUDGETS = Object.freeze({
   // live Providers observation and the opt-in ciphertext cache backend.
   optionalInferenceProviders: Object.freeze({ raw: 124 * 1024, gzip: 38 * 1024 }),
   // Chutes registration metadata plus PKCE/token operations load for Connect,
-  // an OAuth callback, or a scheduled refresh—never for first paint. Measured
-  // together at 13,134 B raw / 4,965 B gzip.
-  optionalChutesOAuth: Object.freeze({ raw: 14 * 1024, gzip: 5 * 1024 }),
+  // an OAuth callback, or a scheduled refresh—never for first paint.
+  //
+  // Pass 2 separated the two opposite meanings of `invalid_client`: a localhost
+  // bridge has process credentials to repair, a public PKCE client has a
+  // registration to re-check, and the remedy for one is wrong for the other.
+  // Measured together at 13,530 B raw / 5,125 B gzip.
+  optionalChutesOAuth: Object.freeze({ raw: 14 * 1024, gzip: 6 * 1024 }),
   // Live companion observation shared by per-turn environment awareness and
   // deferred provider surfaces. Measured 3,179 B raw / 1,204 B gzip.
   optionalExtensionObservation: Object.freeze({ raw: 3 * 1024 + 512, gzip: 1 * 1024 + 512 }),
@@ -386,9 +446,25 @@ export const RELEASE_BUDGETS = Object.freeze({
   // First-paint weight: CSS blocks render, so this is deliberately tighter than
   // the JavaScript ceilings. The Pass 1 audit added per-claim capability copy,
   // the runtime-load indicator, a keyboard-operable workbench splitter and the
-  // phone pane rules. Measured 160.86 KiB raw / 25.8 KiB gzip — the raw figure
-  // moved, the transferred figure did not, and gzip keeps its original ceiling.
-  entryCss: Object.freeze({ raw: 164 * 1024, gzip: 32 * 1024 }),
+  // phone pane rules.
+  //
+  // Pass 2 added the missing empty/error states, the coarse-pointer touch floor
+  // at the primitive layer, and one shared search-field recipe (2,043 B) that
+  // is in the always-loaded barrel on purpose: imported directly by Memory and
+  // Context — two lazy routes — it formed a shared CSS chunk that pulled
+  // `memory-graph/kind-visual` into the same chunk group and merged it away.
+  // Duplicating the recipe per route was the alternative and is worse on both
+  // counts.
+  //
+  // It also keeps the session bar to one row under 400px wide and on short
+  // landscape screens, where wrapping cost 46px of a 375px-tall viewport and
+  // left 93px of transcript.
+  //
+  // Measured 171,150 B raw / 29,523 B gzip. Only the raw ceiling moves. The
+  // transferred figure — the one that actually blocks render — still clears its
+  // unchanged 32 KiB ceiling by 3.2 KiB, and the JS startup ceiling is
+  // separately fixed and untouched.
+  entryCss: Object.freeze({ raw: 168 * 1024, gzip: 32 * 1024 }),
   eachWasm: Object.freeze({ raw: 1024 * 1024, gzip: 350 * 1024 }),
   allWasm: Object.freeze({ raw: 1024 * 1024, gzip: 350 * 1024 }),
 });
@@ -985,6 +1061,11 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
     throw new Error(`Production must contain exactly one optional Memory support chunk; found ${optionalMemorySupportPacks.length}.`);
   }
   const optionalMemorySupportMeasurement = measure(optionalMemorySupportPacks[0].payload);
+  const optionalConfirmDialogPacks = javaScriptFiles.filter((file) => isOptionalConfirmDialogPath(file.path));
+  if (optionalConfirmDialogPacks.length !== 1) {
+    throw new Error(`Production must contain exactly one shared confirm-dialog chunk; found ${optionalConfirmDialogPacks.length}.`);
+  }
+  const optionalConfirmDialogMeasurement = measure(optionalConfirmDialogPacks[0].payload);
   const optionalProofSurfacePacks = javaScriptFiles.filter((file) => isOptionalProofSurfacePath(file.path));
   if (optionalProofSurfacePacks.length !== 6) {
     throw new Error(`Production must contain exactly six optional Proof-surface chunks; found ${optionalProofSurfacePacks.length}.`);
@@ -1165,6 +1246,7 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
       { name: "browser-capabilities", paths: optionalBrowserCapabilityPacks.map((file) => file.path) },
       { name: "memory-view", paths: optionalMemoryViewPacks.map((file) => file.path) },
       { name: "memory-support", paths: optionalMemorySupportPacks.map((file) => file.path) },
+      { name: "confirm-dialog", paths: optionalConfirmDialogPacks.map((file) => file.path) },
       { name: "proof-surface", paths: optionalProofSurfacePacks.map((file) => file.path) },
       { name: "evidence-acquisition", paths: optionalEvidenceAcquisitionPacks.map((file) => file.path) },
       { name: "terminal-vendor", paths: optionalTerminalPacks.map((file) => file.path) },
@@ -1271,6 +1353,7 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
   );
   assertWithinBudget("Optional Memory view", optionalMemoryViewMeasurement, RELEASE_BUDGETS.optionalMemoryView);
   assertWithinBudget("Optional Memory support", optionalMemorySupportMeasurement, RELEASE_BUDGETS.optionalMemorySupport);
+  assertWithinBudget("Shared confirm dialog", optionalConfirmDialogMeasurement, RELEASE_BUDGETS.optionalConfirmDialog);
   assertWithinBudget("Optional Proof surface", optionalProofSurfaceMeasurement, RELEASE_BUDGETS.optionalProofSurface);
   assertWithinBudget(
     "Optional evidence acquisition",
@@ -1463,6 +1546,10 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
       optionalMemorySupport: Object.freeze({
         path: optionalMemorySupportPacks[0].path,
         ...optionalMemorySupportMeasurement,
+      }),
+      optionalConfirmDialog: Object.freeze({
+        path: optionalConfirmDialogPacks[0].path,
+        ...optionalConfirmDialogMeasurement,
       }),
       optionalProofSurface: Object.freeze({
         paths: Object.freeze(optionalProofSurfacePacks.map((file) => file.path)),
@@ -1712,6 +1799,11 @@ export function isOptionalMemoryViewPath(path) {
 
 export function isOptionalMemorySupportPath(path) {
   return /^assets\/kind-visual-[A-Za-z0-9_-]+\.js$/u.test(path);
+}
+
+/** The shared destructive-confirmation dialog; see `optionalConfirmDialog`. */
+export function isOptionalConfirmDialogPath(path) {
+  return /^assets\/confirm-dialog-[A-Za-z0-9_-]+\.js$/u.test(path);
 }
 
 export function isOptionalProofSurfacePath(path) {

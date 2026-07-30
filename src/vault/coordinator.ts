@@ -595,8 +595,18 @@ export class VaultCoordinator {
       });
     }
     const retained = Object.freeze([...receipt.retained].sort());
+    /*
+     * Having the verb is not the same as being allowed to use it.
+     *
+     * This reported `true` for any store carrying a `trash` method, which is a
+     * claim about the adapter rather than about the deployment. Measured
+     * against the local MinIO lab, whose credential policy grants Get/Put/List
+     * and not Delete: every key came back refused with a 403 and the runtime
+     * still declared deletion available. A sweep that reclaimed nothing is the
+     * answer to "can this runtime delete", so it is reported as the answer.
+     */
     return Object.freeze({
-      deletionAvailableInRuntime: true,
+      deletionAvailableInRuntime: receipt.reclaimed.length > 0,
       policy: retained.length ? "provider-lifecycle-or-out-of-band" : "runtime-reclaimed",
       warning: retained.length
         ? `${retained.length} of ${receipt.requested} probe object(s) were not confirmed removed. ${retainedWarning}`

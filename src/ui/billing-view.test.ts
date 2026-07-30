@@ -8,6 +8,8 @@ import {
   chutesAccountAcceptance,
   chutesAccountChip,
   chutesAccountIdentityPresentation,
+  boundedRowNote,
+  PANEL_ROW_CAP,
   resolveBillingProviderInventory,
   safeBillingProviderAccountLink,
   type BillingProviderInventoryEntry,
@@ -288,6 +290,52 @@ describe("the usage ledger's table structure holds every sentence it contains", 
     expect((between.match(/<div\b/gu) ?? []).length).toBe((between.match(/<\/div>/gu) ?? []).length);
     expect(source).toContain('aria-describedby="usage-ledger-bound"');
     expect(source).toContain('id="usage-ledger-bound"');
+  });
+
+  /*
+   * The panel next door made the same cap and disclosed nothing. `rawCount` is
+   * literally `entries.length` in the client, so with 24 configured quotas the
+   * heading read "24 records" over exactly 10 rows and a person auditing spend
+   * limits could not tell which 14 were withheld — on the one route whose whole
+   * claim is that no figure states more than it read.
+   */
+  it("discloses the quota cap in the ledger's own grammar, and only when it bites", () => {
+    expect(boundedRowNote(24, "first", "quota record")).toBe("Showing the first 10 of 24 quota records.");
+    expect(boundedRowNote(24, "most recent", "bucket")).toBe("Showing the 10 most recent of 24 buckets.");
+    expect(boundedRowNote(1, "most recent", "bucket")).toBe("Showing the 1 most recent of 1 bucket.");
+    // The sentence is rendered only past the cap, and the description points at
+    // it only when it exists: a dangling aria-describedby describes nothing.
+    expect(source).toContain('id="quota-list-bound"');
+    expect(source).toContain('quotaState.value.entries.length > PANEL_ROW_CAP ? { "aria-describedby": "quota-list-bound" } : {}');
+    expect(source).toContain("{quotaState.value.entries.length > PANEL_ROW_CAP ? (");
+    // Same class as the ledger's, because "this list is bounded" is one idea.
+    expect((source.match(/class="usage-ledger-foot"/gu) ?? []).length).toBe(2);
+  });
+
+  it("caps both panels by one reference rather than by four typed tens", () => {
+    // The quota panel typed only one of the four tens — the `slice` — which is
+    // exactly how it ended up capping without saying so.
+    expect(PANEL_ROW_CAP).toBe(10);
+    expect(source).toContain("slice(0, PANEL_ROW_CAP)");
+    expect((source.match(/slice\(0, PANEL_ROW_CAP\)/gu) ?? []).length).toBe(2);
+    expect(source).not.toMatch(/slice\(0, 10\)/u);
+    expect(source).not.toMatch(/Math\.min\(10,/u);
+  });
+
+  /*
+   * The chart axis formatted a bucket in UTC while the ledger row two inches
+   * below formatted the same bucket locally, so the same instant was labelled
+   * two different calendar days on one panel. The range header keeps UTC on
+   * purpose: it labels the `start_date`/`end_date` Chutes was queried with.
+   */
+  it("draws every Account timestamp through the one shared formatter", () => {
+    expect(source).toContain('import { formatInstant } from "./instant-format";');
+    expect(source).not.toContain("function formatDateTime");
+    expect(source).not.toContain("function formatBucket");
+    expect(source).toContain('formatInstant(usageState.value.rangeStart, "day", "UTC")');
+    expect(source).toContain('formatInstant(entry.bucket, "minute")');
+    expect(source).toContain('formatInstant(first.bucket, "day")');
+    expect(source).not.toMatch(/formatInstant\((?:first|middle|last)\.bucket, "day", "UTC"\)/u);
   });
 });
 

@@ -1,9 +1,9 @@
+import { deepFreeze } from "../../core/freeze";
 import { OPENAI_CODEX_OAUTH } from "../../auth/provider-oauth/registrations";
 import type {
   InferenceProviderDescriptor,
   PublicPkceAuthMethod,
 } from "./contracts";
-import { deepFreeze } from "./validation";
 
 export type BuiltinLocalProviderId = "ollama" | "lm-studio";
 

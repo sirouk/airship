@@ -900,12 +900,31 @@ function boundedFileName(value: string): string {
   return name.slice(0, 240).replace(/[\u0000-\u001f\u007f]/gu, "\uFFFD");
 }
 
-function publicError(error: unknown, fallback: string): string {
-  if (!(error instanceof Error)) return fallback;
-  const message = error.message.trim();
-  return message && message.length <= 500 && !/airship-wrk-v1\./iu.test(message)
-    ? message
-    : fallback;
+/**
+ * The written sentence is the notice. The engine's words ride behind it.
+ *
+ * This preferred `error.message` and used the caller's sentence only when the
+ * throw was not an `Error` or ran past 500 characters — so on the path where
+ * the sentence carries the safety fact, it was the path that never printed it.
+ * Every failure the restore anticipates is a `LocalDeviceVaultCorruptionError`
+ * with short internal prose ("Stored object authentication failed.", "Backup
+ * contains a duplicate object identifier."), far under that bound, so a person
+ * restoring a backup onto a new laptop read a symptom and never "The existing
+ * Vault was not replaced." — they could not tell whether they had just
+ * destroyed their data. A lower layer may add detail to the remedy; it may not
+ * replace it.
+ */
+export function publicError(error: unknown, fallback: string): string {
+  const detail = technicalDetail(error);
+  return detail && detail !== fallback ? `${fallback} Technical detail: ${detail}` : fallback;
+}
+
+function technicalDetail(error: unknown): string | undefined {
+  if (!(error instanceof Error)) return undefined;
+  // One line, bounded, and never a recovery key that reached a thrown message.
+  const message = error.message.trim().replace(/\s+/gu, " ");
+  if (!message || message.length > 240 || /airship-wrk-v1\./iu.test(message)) return undefined;
+  return /[.!?]$/u.test(message) ? message : `${message}.`;
 }
 
 async function equivalentWorkspaceKeys(

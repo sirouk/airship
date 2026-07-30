@@ -3,6 +3,23 @@ import {
   chutesOAuthExchangeMode,
   type ChutesOAuthRegistration,
 } from "./chutes-oauth-registration";
+/*
+ * src/auth/provider-oauth/pkce.ts declares itself "S256 PKCE primitives shared
+ * by every provider flow", and Chutes — the one sign-in this build actually
+ * ships — was the flow that did not use it. It carried character-identical
+ * copies of `bytesToBase64Url`, `randomBase64Url` and `constantTimeEqual`, and
+ * hardcoded 48 and 32 where that module exports the byte counts, so
+ * `PKCE_VERIFIER_BYTES` had no importer anywhere in the repo and raising it
+ * would have hardened every flow a user cannot reach and none that they can.
+ */
+import {
+  PKCE_STATE_BYTES,
+  PKCE_VERIFIER_BYTES,
+  PKCE_VERIFIER_PATTERN,
+  bytesToBase64Url,
+  constantTimeEqual,
+  randomBase64Url,
+} from "./provider-oauth/pkce";
 
 export {
   CHUTES_ACTIVE_REGISTRATION,
@@ -47,8 +64,14 @@ export function parseChutesPkceAttempt(value: string): ChutesPkceAttempt {
   const candidate = parsed as Record<string, unknown>;
   if (
     Object.keys(candidate).some((key) => !["state", "verifier", "redirectUri", "createdAt"].includes(key)) ||
+    // The state pattern stays local and deliberately does not use pkce.ts's
+    // STATE_PATTERN: that one accepts 16 characters, and a state Airship itself
+    // wrote is always 43 base64url characters from PKCE_STATE_BYTES. Adopting
+    // the shared pattern here would loosen a check on Airship's own storage
+    // format, which is not what sharing is for. The verifier pattern was
+    // character-identical to the shared one and is now the shared one.
     typeof candidate.state !== "string" || !/^[A-Za-z0-9_-]{32,128}$/u.test(candidate.state) ||
-    typeof candidate.verifier !== "string" || !/^[A-Za-z0-9._~-]{43,128}$/u.test(candidate.verifier) ||
+    typeof candidate.verifier !== "string" || !PKCE_VERIFIER_PATTERN.test(candidate.verifier) ||
     typeof candidate.redirectUri !== "string" ||
     candidate.redirectUri.length > 2_048 ||
     !Number.isSafeInteger(candidate.createdAt) ||
@@ -145,8 +168,8 @@ export async function createChutesAuthorizationRequest(args: {
     throw new Error("Web Crypto is required to start Sign in with Chutes.");
   }
 
-  const verifier = randomBase64Url(48, cryptoSource);
-  const state = randomBase64Url(32, cryptoSource);
+  const verifier = randomBase64Url(PKCE_VERIFIER_BYTES, cryptoSource);
+  const state = randomBase64Url(PKCE_STATE_BYTES, cryptoSource);
   const challengeBytes = await cryptoSource.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
   const challenge = bytesToBase64Url(new Uint8Array(challengeBytes));
   const url = new URL(CHUTES_AUTHORIZE_ENDPOINT);
@@ -568,25 +591,4 @@ function validateToken(value: unknown, prefix: "cak_" | "crt_", label: string): 
     throw new Error(`Chutes OAuth returned an invalid ${label}.`);
   }
   return value;
-}
-
-function randomBase64Url(length: number, cryptoSource: Pick<Crypto, "getRandomValues">): string {
-  const bytes = new Uint8Array(length);
-  cryptoSource.getRandomValues(bytes);
-  return bytesToBase64Url(bytes);
-}
-
-function bytesToBase64Url(bytes: Uint8Array): string {
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/u, "");
-}
-
-function constantTimeEqual(left: string, right: string): boolean {
-  const length = Math.max(left.length, right.length);
-  let difference = left.length ^ right.length;
-  for (let index = 0; index < length; index += 1) {
-    difference |= (left.charCodeAt(index) || 0) ^ (right.charCodeAt(index) || 0);
-  }
-  return difference === 0;
 }

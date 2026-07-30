@@ -1,3 +1,4 @@
+import { deepFreeze } from "../core/freeze";
 import type { JsonValue, SessionForkContextSeed, SessionManifest } from "../core/contracts";
 import {
   FORK_CONTEXT_EVENT_TYPE,
@@ -265,10 +266,4 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
   const error = new Error("The operation was cancelled.");
   error.name = "AbortError";
   throw error;
-}
-
-function deepFreeze<T>(value: T): T {
-  if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
-  for (const child of Object.values(value as Record<string, unknown>)) deepFreeze(child);
-  return Object.freeze(value);
 }

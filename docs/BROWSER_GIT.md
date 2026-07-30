@@ -94,15 +94,26 @@ from `user.name`/`user.email` in the repository config, exactly as Git does. The
 adapter therefore publishes the reviewed request author into `.git/config`
 before writing the stash commit.
 
-The Terminal route exposes a Shared Git command row for status, diff, log, show,
-add, restore/reset, commit, branch/switch, merge, stash, tag, worktree
+The Terminal route exposes a **Browser Git** command row for status, diff, log,
+show, add, restore/reset, commit, branch/switch, merge, stash, tag, worktree
 management, remote inspection and management, fetch, push, clone, and selected
 rev-parse queries; `git help` lists the exact set, including what is absent.
 Local mutations and remote effects go through the same approval policy as
-Editor. The adjacent interactive WebContainer remains a real Node/jsh runtime,
-but its arbitrary process filesystem excludes `.git`: this prevents unreviewed
-native mutations from bypassing Workspace CAS while still giving terminal users
-authoritative Git operations and output.
+Editor: `runTerminalGitBridge` (`src/ui/terminal-view.tsx`) requires the review
+callback the bridge itself accepts optionally, so the one human caller cannot be
+the place the policy goes missing.
+
+The row runs against the repository containing the *selected tab's* working
+directory, and its answers render in the row's own output region — never in the
+PTY scrollback. That separation is load-bearing rather than cosmetic: the
+adjacent interactive WebContainer is a real Node/jsh runtime with no `git`
+binary, and its mount excludes `.git`, which is what prevents unreviewed native
+mutations from bypassing Workspace CAS. Writing bridge output into the
+transcript would claim a capability that shell does not have.
+
+The Workspace terminal dock is the same component in its `dock` variant and
+deliberately does not carry the row: it is a 220px-floor strip whose job is the
+PTY, and its "Full view" control is the path to the route that does.
 
 ### Ignore rules
 

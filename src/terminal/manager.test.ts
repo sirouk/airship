@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { UUID_V4_PATTERN } from "../core/id";
 import { MemoryWorkspace } from "../workspace/memory";
 import type { WorkspacePort } from "../workspace/contracts";
 import { TERMINAL_METADATA_PATH, TERMINAL_WORKSPACE_MOUNT, WEB_CONTAINER_TERMINAL_RUNTIME } from "./contracts";
@@ -945,6 +946,29 @@ describe("BrowserTerminalManager metadata", () => {
     // elsewhere in the container is page-shared and survives the switch — the
     // Terminal route says so, and changing this line is a decision.
     expect(removed).toEqual([TERMINAL_WORKSPACE_MOUNT]);
+  });
+
+  /*
+   * `npm run dev:lan` and `npm run preview:lan` serve on 0.0.0.0, and a
+   * non-secure origin is exactly where browsers expose getRandomValues but
+   * intentionally omit randomUUID. This manager used to answer that case with
+   * `terminal-<epoch>-<Math.random>` for both the tab ID and the compare-and-swap
+   * lease owner — a Math.random identity where every other subsystem's is
+   * crypto-random, and the lease is what stops two tabs writing the same
+   * metadata file.
+   */
+  it("mints crypto-random session identities on a LAN origin with no randomUUID", async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(crypto, "randomUUID");
+    Object.defineProperty(crypto, "randomUUID", { configurable: true, value: undefined });
+    try {
+      const manager = new BrowserTerminalManager(new MemoryWorkspace());
+      await manager.ready;
+      // The same reference src/core/id.test.ts asserts, not a copy of it.
+      expect(manager.create({ name: "LAN" }).id).toMatch(UUID_V4_PATTERN);
+      await manager.quiesce("test cleanup");
+    } finally {
+      if (descriptor) Object.defineProperty(crypto, "randomUUID", descriptor);
+    }
   });
 });
 

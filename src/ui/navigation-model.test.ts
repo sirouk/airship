@@ -1,3 +1,4 @@
+import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   CANONICAL_DESTINATIONS,
@@ -6,12 +7,14 @@ import {
   RAIL_SECTIONS,
   SETTINGS_OVERLAY_ENTRY,
   canonicalParentForView,
+  destinationLabel,
   mobilePrimaryControlForView,
   navigationHashForView,
   navigationViewFromHash,
   railTraversal,
   type NavigationView,
 } from "./navigation-model";
+import { workbenchIdentity } from "./workbench-model";
 
 const allViews: readonly NavigationView[] = [
   "chat",
@@ -174,6 +177,113 @@ describe("canonical navigation model", () => {
       }
       expect(navigationViewFromHash(entry.hash), `${entry.hash} round-trips`).toBe(entry.view);
     }
+  });
+});
+
+/**
+ * The attribute block of every `<RouteHeader>` and `<RouteBar>` in a file.
+ *
+ * Quote- and brace-aware rather than "up to the next `>`", because these
+ * headers put whole elements in their props — `status={<Popover …>}`,
+ * `notes={<p …>}` — and a regex stops at the first of those.
+ */
+function headerProps(source: string): readonly string[] {
+  const found: string[] = [];
+  for (const match of source.matchAll(/<Route(?:Header|Bar)(?=[\s/>])/gu)) {
+    let depth = 0;
+    let quote = "";
+    const start = match.index + match[0].length;
+    for (let index = start; index < source.length; index += 1) {
+      const char = source[index];
+      if (quote) {
+        if (char === quote) quote = "";
+        continue;
+      }
+      if (char === '"' || char === "'" || char === "`") quote = char;
+      else if (char === "{") depth += 1;
+      else if (char === "}") depth -= 1;
+      else if (char === ">" && depth === 0) { found.push(source.slice(start, index)); break; }
+    }
+  }
+  return found;
+}
+
+type RouteHeading = Readonly<{ file: string; view: NavigationView; title: string | undefined }>;
+
+/**
+ * Every route heading in `src/ui` whose `routeId` names a real destination.
+ *
+ * `routeId` is the route's hash without its `#`, so it round-trips through the
+ * navigation model. The round-trip is asserted rather than assumed, which is
+ * what excludes `sources-view.tsx`: `#sources` is a retained legacy alias that
+ * resolves to Editor, and its panel header is not that route's `<h1>`.
+ */
+function routeHeadings(): readonly RouteHeading[] {
+  const directory = new URL("./", import.meta.url);
+  const found: RouteHeading[] = [];
+  for (const file of readdirSync(directory).filter((name) => name.endsWith(".tsx"))) {
+    const source = readFileSync(new URL(file, directory), "utf8");
+    for (const props of headerProps(source)) {
+      const routeId = /\brouteId="([^"]+)"/u.exec(props)?.[1];
+      if (routeId === undefined) continue;
+      const view = navigationViewFromHash(`#${routeId}`);
+      if (navigationHashForView(view) !== `#${routeId}`) continue;
+      // Either spelling resolves: the literal a route still types, or the
+      // lookup this contract exists to make routes use. Anything else stays
+      // `undefined` and is reported — a title this cannot read is a title
+      // nothing is checking.
+      const literal = /\btitle="([^"]+)"/u.exec(props)?.[1];
+      const lookup = /\btitle=\{destinationLabel\("([^"]+)"\)\}/u.exec(props)?.[1];
+      found.push(Object.freeze({
+        file,
+        view,
+        title: literal ?? (lookup === undefined ? undefined : destinationLabel(lookup as NavigationView)),
+      }));
+    }
+  }
+  return Object.freeze(found);
+}
+
+describe("a destination is called one thing, on the way in and after arrival", () => {
+  const headings = routeHeadings();
+
+  it("finds the route headings it is meant to police", () => {
+    // Without this the assertion below passes on an empty scan, which is how a
+    // naming contract quietly stops being one.
+    expect(headings.length).toBeGreaterThanOrEqual(10);
+    expect(headings.map((heading) => heading.view)).toContain("access");
+    expect(headings.map((heading) => heading.view)).toContain("billing");
+  });
+
+  it("titles every route with its canonical destination label", () => {
+    /*
+     * The two that renamed themselves on arrival: the rail row, the command
+     * palette, the Trust hub tab and the More sheet all read "Connection" and
+     * "Account" from `CANONICAL_DESTINATIONS`, and the pages under them read
+     * "Connect models" and "Account standing". A person taps a word and has to
+     * land on a screen that contains it. Both extra phrases survive — in the
+     * eyebrow, which is the rung that exists for a route's second line.
+     */
+    const disagreements = headings
+      .filter((heading) => heading.title !== destinationLabel(heading.view))
+      .map((heading) => `${heading.file}: ${String(heading.title)} ≠ ${destinationLabel(heading.view)}`);
+    expect(disagreements).toEqual([]);
+  });
+
+  it("names the workbench's two routes out of the same table", () => {
+    // One component serves `#workspace` and `#editor` and titles itself from
+    // the hash, so its two answers are asserted rather than scanned.
+    expect(workbenchIdentity("#workspace").title).toBe(destinationLabel("workspace"));
+    expect(workbenchIdentity("#editor").title).toBe(destinationLabel("editor"));
+  });
+
+  it("leaves only the views that draw no route heading at all uncovered", () => {
+    const covered = new Set<NavigationView>([...headings.map((heading) => heading.view), "workspace", "editor"]);
+    const uncovered = allViews.filter((view) => !covered.has(view));
+    // Chat is the conversation itself and carries no route heading; Vault still
+    // hand-rolls its `<h1>`. A bound rather than a list: the next route to
+    // adopt the shared header must not turn this test red.
+    expect(uncovered.length, `uncovered: ${uncovered.join(", ")}`).toBeLessThanOrEqual(2);
   });
 });
 

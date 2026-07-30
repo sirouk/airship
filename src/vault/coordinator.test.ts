@@ -81,9 +81,13 @@ describe("VaultCoordinator", () => {
     });
     expect(snapshot.message).toContain("synchronization has not been evaluated");
     expect(snapshot.evidence.createdKeys.length).toBeGreaterThan(8);
+    // The probe now clears its own litter. `MemoryObjectStore` gained a real
+    // `trash` when page memory stopped being a durability that could not delete
+    // a conversation, so a probe run against it reclaims the objects it created
+    // instead of declaring them someone else's problem.
     expect(snapshot.evidence.cleanup).toMatchObject({
-      deletionAvailableInRuntime: false,
-      policy: "provider-lifecycle-or-out-of-band",
+      deletionAvailableInRuntime: true,
+      policy: "runtime-reclaimed",
     });
     expect(snapshot.evidence.checks.map((check) => check.name)).toContain("encrypted workspace write/read/list/remove");
     expect(phases).toEqual(["disconnected", "configured", "probing", "ready"]);
@@ -129,13 +133,15 @@ describe("VaultCoordinator", () => {
       config: { provider: "google-drive", workspaceName: "Airship Workspace" },
       requirements: { credentialContract: { productionRequiresSessionToken: false, persistence: "memory-only" } },
     });
-    // The store handed in here cannot reclaim, so the declaration must not
-    // promise a runtime sweep just because the provider is Drive.
+    // The declaration reports what the store handed in can actually do, not
+    // what the provider is called. This one reclaims, so it says so — the
+    // inverse case is still pinned by the denied-probe test below, where no
+    // probe ran and the inventory is unknown.
     expect(snapshot).toMatchObject({
       requirements: {
         probeLifecycle: {
-          deletionAvailableInRuntime: false,
-          cleanup: "provider-lifecycle-or-out-of-band",
+          deletionAvailableInRuntime: true,
+          cleanup: "runtime-reclaimed-then-out-of-band",
         },
       },
     });
@@ -598,6 +604,18 @@ class S3Emulator {
       const etag = `etag-${++this.etag}`;
       this.objects.set(key, { bytes: bytes.slice(), etag, updatedAt: "2026-07-18T12:00:00.000Z" });
       return new Response(null, { status: 200, headers: { ETag: `"${etag}"` } });
+    }
+    /*
+     * `DeleteObject`, which real S3 and MinIO have always had and this
+     * emulator did not — so a probe sweep against it reported every key as
+     * refused, and the coordinator declared litter it had in fact been able to
+     * clear. Idempotent by specification: deleting a key that is not there
+     * answers 204, which is what lets the reclamation receipt treat "already
+     * gone" as reclaimed rather than retained.
+     */
+    if (method === "DELETE") {
+      this.objects.delete(key);
+      return new Response(null, { status: 204 });
     }
     if (method !== "GET") return new Response(null, { status: 405 });
     const current = this.objects.get(key);

@@ -1,3 +1,4 @@
+import { deepFreeze } from "../core/freeze";
 import type { JsonValue } from "../core/contracts";
 import { sha256, stableStringify } from "../core/hash";
 import {
@@ -1997,14 +1998,6 @@ function endpointUrlWithoutQuery(value: string): string {
   } catch {
     return "omitted-by-default";
   }
-}
-
-function deepFreeze<T>(value: T): T {
-  if (value && typeof value === "object" && !Object.isFrozen(value)) {
-    Object.freeze(value);
-    for (const nested of Object.values(value as Record<string, unknown>)) deepFreeze(nested);
-  }
-  return value;
 }
 
 export type {

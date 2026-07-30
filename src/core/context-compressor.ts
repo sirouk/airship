@@ -17,9 +17,11 @@ import {
 import {
   canonicalContextSummary,
   canonicalContextSummaryProvenance,
+  contextSummaries,
   contextSummaryChain,
   materializeContextSummary,
   planSummaryCompaction,
+  truncateUtf8,
   type CanonicalContextSummary,
   type ContextSummarizerAttempt,
   type ContextSummaryCompaction,
@@ -307,7 +309,7 @@ export async function planContextCompression(args: Readonly<{
   if (args.events.some((event) => event.type === "context.summary.updated") && !priorProjection) {
     throw new Error("The context summary reference chain is malformed.");
   }
-  const prior = canonicalSummaries(args.events).at(-1);
+  const prior = contextSummaries(args.events).at(-1);
   const coveredThrough = prior?.sourceEndSequence ?? 0;
   const completed = args.events.filter((event) =>
     event.type === "turn.completed" && event.sequence > coveredThrough,
@@ -433,7 +435,7 @@ export async function verifyContextSummary(
   const last = events.find((event) => event.sequence === summary.sourceEndSequence);
   if (!first || !last) return false;
   if (first.previousDigest !== summary.sourceStartPreviousDigest || last.digest !== summary.sourceEndDigest) return false;
-  const priors = canonicalSummaries(events)
+  const priors = contextSummaries(events)
     .filter((candidate) => candidate.sourceEndSequence < summary.sourceStartSequence);
   if (summary.compaction && !await verifySummaryCompaction(summary.compaction, priors)) return false;
   const previous = priors.at(-1);
@@ -616,13 +618,6 @@ function summarizeRange(events: readonly DurableEvent[], maximumBytes: number): 
   return truncateUtf8(lines.filter(Boolean).join("\n"), maximumBytes).trim();
 }
 
-function canonicalSummaries(events: readonly DurableEvent[]): CanonicalContextSummary[] {
-  return events
-    .filter((event) => event.type === "context.summary.updated")
-    .map((event) => canonicalContextSummary(event.payload))
-    .filter((summary): summary is CanonicalContextSummary => Boolean(summary));
-}
-
 function summarySource(events: readonly DurableEvent[]): ContextSummaryRequest["source"] {
   const source: Array<ContextSummaryRequest["source"][number]> = [];
   for (const event of events) {
@@ -741,16 +736,6 @@ function estimateRangeTokens(events: readonly DurableEvent[], bytesPerToken: num
     return [];
   }).join("\n");
   return Math.max(1, Math.ceil(encoder.encode(text).byteLength / boundedBytesPerToken(bytesPerToken)));
-}
-
-function truncateUtf8(value: string, maximum: number): string {
-  if (encoder.encode(value).byteLength <= maximum) return value;
-  let output = "";
-  for (const character of value) {
-    if (encoder.encode(`${output}${character} …`).byteLength > maximum) break;
-    output += character;
-  }
-  return `${output.trimEnd()} …`;
 }
 
 function boundedString(value: unknown, maximum: number): boolean {

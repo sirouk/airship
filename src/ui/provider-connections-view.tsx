@@ -6,14 +6,26 @@ import {
   type BrowserCloudProviderId,
   type BrowserInferenceConnection,
 } from "../inference/fabric";
+import {
+  DEFAULT_LOCAL_MODEL_ORIGINS,
+  LM_STUDIO_DEFAULT_ENDPOINT,
+  OLLAMA_DEFAULT_ENDPOINT,
+  type LocalModelProviderKind,
+} from "../inference/local";
 import type {
   InferenceModelDescriptor,
   InferenceProviderDescriptor,
   ModelCapability,
 } from "../inference/providers";
+import { providerBoundaryLabel } from "../inference/transport-boundary-label";
 import { Icon } from "./icons";
 import { MenuSelect } from "./menu-select";
 import "./provider-connections-view.css";
+
+/* This route's boundary sentence moved to a leaf module so the top bar — which
+   must not import a deferred route chunk — states the same one. Re-exported at
+   its original address so nothing that already asks here has to move. */
+export { providerBoundaryLabel };
 
 export type ProviderConnectionsViewProps = Readonly<{
   online: boolean;
@@ -27,6 +39,25 @@ const CLOUD_PROVIDER_IDS = Object.freeze([
   "anthropic",
   "xai",
 ] as const satisfies readonly BrowserCloudProviderId[]);
+
+/**
+ * The two loopback services, each with the port its own installer uses.
+ *
+ * The endpoints were retyped here as string literals beside the modules that
+ * already export them, and the detail sentence was retyped twice, character for
+ * character. The defaults now come from the adapters, so moving a default port
+ * cannot leave this card pointing at the old one.
+ */
+const LOCAL_PROVIDERS: readonly Readonly<{
+  kind: LocalModelProviderKind;
+  label: string;
+  defaultEndpoint: string;
+}>[] = Object.freeze([
+  Object.freeze({ kind: "ollama" as const, label: "Ollama", defaultEndpoint: OLLAMA_DEFAULT_ENDPOINT }),
+  Object.freeze({ kind: "lm-studio" as const, label: "LM Studio", defaultEndpoint: LM_STUDIO_DEFAULT_ENDPOINT }),
+]);
+
+const LOCAL_PROVIDER_DETAIL = "Reads the service's live model catalog and only displays capabilities supported by returned evidence.";
 
 const MODEL_CAPABILITY_LABELS: Readonly<Record<ModelCapability, string>> = Object.freeze({
   "text-input": "Text input",
@@ -197,38 +228,37 @@ export function ProviderConnectionsView({
             <small>No remote account</small>
           </div>
           <div class="provider-fabric__local-grid">
-            <LocalProviderCard
-              id="ollama"
-              label="Ollama"
-              endpoint="http://127.0.0.1:11434"
-              detail="Reads the service's live model catalog and only displays capabilities supported by returned evidence."
-              connected={connections.some((entry) => entry.provider.id === "ollama")}
-              busy={busyConnection === "ollama"}
-              disabled={Boolean(busyConnection)}
-              onConnect={() => run("ollama", async (signal) => {
-                setNotice("Checking Ollama and reading its installed-model evidence…");
-                await browserInferenceFabric.connectLocal({ kind: "ollama", signal });
-                setNotice("Ollama is connected directly over this machine's loopback interface.");
-              }, false)}
-            />
-            <LocalProviderCard
-              id="lm-studio"
-              label="LM Studio"
-              endpoint="http://127.0.0.1:1234"
-              detail="Reads the service's live model catalog and only displays capabilities supported by returned evidence."
-              connected={connections.some((entry) => entry.provider.id === "lm-studio")}
-              busy={busyConnection === "lm-studio"}
-              disabled={Boolean(busyConnection)}
-              onConnect={() => run("lm-studio", async (signal) => {
-                setNotice("Checking LM Studio and reading its installed-model evidence…");
-                await browserInferenceFabric.connectLocal({ kind: "lm-studio", signal });
-                setNotice("LM Studio is connected directly over this machine's loopback interface.");
-              }, false)}
-            />
+            {LOCAL_PROVIDERS.map((provider) => (
+              <LocalProviderCard
+                key={provider.kind}
+                id={provider.kind}
+                label={provider.label}
+                defaultEndpoint={provider.defaultEndpoint}
+                detail={LOCAL_PROVIDER_DETAIL}
+                connected={connections.some((entry) => entry.provider.id === provider.kind)}
+                busy={busyConnection === provider.kind}
+                disabled={Boolean(busyConnection)}
+                onConnect={(endpoint) => run(provider.kind, async (signal) => {
+                  setNotice(`Checking ${provider.label} at ${endpoint} and reading its installed-model evidence…`);
+                  await browserInferenceFabric.connectLocal({ kind: provider.kind, options: { endpoint }, signal });
+                  setNotice(`${provider.label} is connected directly over this machine's loopback interface at ${endpoint}.`);
+                }, false)}
+              />
+            ))}
           </div>
           <details class="provider-fabric__local-requirements">
             <summary>Local connection requirements</summary>
-            <p><Icon name="lock" size={15} />Airship checks only the exact loopback defaults shown here. Your browser and local service must allow this Airship origin through CORS and browser local-network access. Private-LAN hosts are not enabled in this build.</p>
+            {/* This said "Airship checks only the exact loopback defaults shown
+                here", and the card offered no way to change them — so the one
+                configuration `DEFAULT_LOCAL_MODEL_ORIGINS` went out of its way
+                to permit, a second Ollama on `OLLAMA_HOST=:11435`, was
+                unreachable from the product that ships its origin in the CSP.
+                The list is rendered from that constant rather than retyped:
+                twelve origins also appear as exact `connect-src` sources in
+                index.html and public/_headers, and a prose copy of an
+                allowlist is a copy that goes stale silently. */}
+            <p><Icon name="lock" size={15} />Airship connects only to the loopback origins in its shipped allowlist. Any other host, including a private-LAN address, is refused before a request leaves the page. Your browser and local service must still allow this Airship origin through CORS and browser local-network access.</p>
+            <p>{DEFAULT_LOCAL_MODEL_ORIGINS.join(" · ")}</p>
           </details>
         </section>
       </div>
@@ -427,10 +457,25 @@ function CloudProviderCard({
   );
 }
 
+/**
+ * The endpoint is a field, not a printed constant.
+ *
+ * This card rendered the default origin in a `<code>` and dialled it, so the
+ * connection was hard-pinned to 2 of the 12 loopback origins this build ships
+ * and permits in its CSP. A developer running a second Ollama on
+ * `OLLAMA_HOST=:11435` — the single configuration `DEFAULT_LOCAL_MODEL_ORIGINS`
+ * names as the reason it enumerates ports at all — had no field, no slash
+ * command and no preference anywhere in the product to reach it.
+ *
+ * The value is free text with the allowlist offered as suggestions rather than
+ * a picker of twelve: `resolveLocalEndpoint` already fails closed and names the
+ * origin it refused, so a typed private-LAN host produces that diagnostic,
+ * which teaches the boundary. A picker could only hide it.
+ */
 function LocalProviderCard({
   id,
   label,
-  endpoint,
+  defaultEndpoint,
   detail,
   connected,
   busy,
@@ -439,18 +484,48 @@ function LocalProviderCard({
 }: Readonly<{
   id: string;
   label: string;
-  endpoint: string;
+  defaultEndpoint: string;
   detail: string;
   connected: boolean;
   busy: boolean;
   disabled: boolean;
-  onConnect(): Promise<void>;
+  onConnect(endpoint: string): Promise<void>;
 }>) {
+  const endpointId = useId();
+  const originsId = useId();
+  const [endpoint, setEndpoint] = useState(defaultEndpoint);
+
   return (
     <article class="provider-setup-card local" data-provider={id}>
-      <header><Icon name="terminal" size={18} /><div><h4>{label}</h4><code>{endpoint}</code></div></header>
+      <header><Icon name="terminal" size={18} /><div><h4>{label}</h4></div></header>
       <p>{detail}</p>
-      <button type="button" disabled={connected || disabled} onClick={() => void onConnect()}>
+      {/* `.provider-key-field` is the cloud card's field layout: one caption
+          over one full-width control at `--density-control` height. Reused
+          rather than reinvented so the two setup cards do not grow two answers
+          to "how tall is a field on a phone". */}
+      <label class="provider-key-field" for={endpointId}>
+        <span>Endpoint · loopback allowlist only</span>
+        <input
+          id={endpointId}
+          type="url"
+          list={originsId}
+          inputMode="url"
+          autoComplete="off"
+          autoCapitalize="none"
+          spellcheck={false}
+          value={endpoint}
+          disabled={connected || disabled}
+          onInput={(event) => setEndpoint(event.currentTarget.value)}
+        />
+      </label>
+      <datalist id={originsId}>
+        {DEFAULT_LOCAL_MODEL_ORIGINS.map((origin) => <option key={origin} value={origin} />)}
+      </datalist>
+      <button
+        type="button"
+        disabled={connected || disabled || !endpoint.trim()}
+        onClick={() => void onConnect(endpoint.trim())}
+      >
         {connected ? "Connected above" : busy ? "Checking…" : `Check ${label}`}
       </button>
     </article>
@@ -483,16 +558,6 @@ export function modelOptionDescription(
   return capabilities.length
     ? `${evidence} · ${availability} · ${capabilities.join(" · ")}`
     : `${evidence} · ${availability} · no capabilities confirmed by source evidence`;
-}
-
-export function providerBoundaryLabel(
-  boundary: BrowserInferenceConnection["provider"]["transportBoundary"],
-): string {
-  switch (boundary) {
-    case "e2ee-attestable": return "Application E2EE · evidence evaluated separately";
-    case "provider-tls": return "Provider TLS · browser direct";
-    case "loopback-local": return "This machine · loopback";
-  }
 }
 
 export function safeProviderErrorMessage(error: unknown, online: boolean): string {

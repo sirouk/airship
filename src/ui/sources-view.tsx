@@ -1,4 +1,8 @@
+import type { ComponentChildren } from "preact";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
+// The import receipt used to carry its own B/KiB/MiB copy, so the same payload
+// read "11.4 MiB" here and "11 MiB" on #vault. One module owns the vocabulary.
+import { formatBytes } from "../core/bytes";
 import { GitDomainError } from "../git/errors";
 import { describeGitOperation } from "../git/operations";
 import type {
@@ -21,6 +25,7 @@ import { isRemoteOriginPermitted, remoteOrigin } from "../git/validation";
 import type { RepositoryImportProgress, RepositoryImportResult } from "../tools/repository-import";
 import { importAndAdmitGithubRepository } from "../tools/repository-admission";
 import type { WorkspacePort } from "../workspace/contracts";
+import { ConfirmDialog } from "./confirm-dialog";
 import { Icon } from "./icons";
 import { MenuSelect } from "./menu-select";
 import { RouteHeader } from "./route-header";
@@ -76,6 +81,9 @@ export function SourcesView({ client, author, review, workspace, reviewImport, o
   const [commitMessage, setCommitMessage] = useState("");
   const [newWorktreePath, setNewWorktreePath] = useState("");
   const [newWorktreeBranch, setNewWorktreeBranch] = useState("");
+  /** Undefined until the reader types: the recorded URL is what the field shows. */
+  const [remoteDraft, setRemoteDraft] = useState<string>();
+  const [removingRemote, setRemovingRemote] = useState<string>();
   const [busy, setBusy] = useState<string>();
   const [notice, setNotice] = useState<string>();
   const [error, setError] = useState<string>();
@@ -131,6 +139,17 @@ export function SourcesView({ client, author, review, workspace, reviewImport, o
   // decision that actually governs a fetch or push is per-remote
   // (`assertRemoteOriginPermitted`), so the controls follow the remote in hand.
   const remoteReachable = remote ? isRemoteOriginPermitted(remote.url, client.capabilities.remote.permittedOrigins) : false;
+  // The field shows what is configured until the reader types; a repository
+  // switch therefore never leaves the previous repository's URL in the box.
+  const remoteUrlValue = remoteDraft ?? remote?.url ?? "";
+  const remoteOperation = repository ? sourceRemoteOperation(repository, remoteUrlValue, remote?.name ?? DEFAULT_REMOTE_NAME) : undefined;
+  // Only once what was typed is a URL at all: a half-typed "htt" has no origin,
+  // and answering it with "this build's CSP does not permit htt" would blame
+  // the policy for a string the reader has not finished writing.
+  const typedRemoteOrigin = remoteOrigin(remoteUrlValue.trim());
+  const remoteUrlUnreachable = typedRemoteOrigin !== undefined
+    && client.capabilities.remote.transport !== "none"
+    && !isRemoteOriginPermitted(remoteUrlValue.trim(), client.capabilities.remote.permittedOrigins);
   const hasConflict = selectedStatus.some(isConflicted);
   const posture = useMemo(
     () => sourcePostureFacts(client.capabilities, workspaceDurability),
@@ -143,6 +162,8 @@ export function SourcesView({ client, author, review, workspace, reviewImport, o
     rememberSourceRepository(nextId);
     setRepositoryId(nextId);
     setWorktreeId(next?.worktrees[0]?.id ?? "");
+    // A half-typed URL belongs to the repository it was typed for.
+    setRemoteDraft(undefined);
     clearSelection();
   }
 
@@ -293,6 +314,18 @@ export function SourcesView({ client, author, review, workspace, reviewImport, o
   async function switchBranch() {
     if (!repository || !worktree || !branchTarget || branchTarget === worktree.branch) return;
     await runMutation({ kind: "branch-switch", request: { repositoryId: repository.id, worktreeId: worktree.id, name: branchTarget, expectedWorktreeVersion: worktree.version } }, `Switched worktree to ${branchTarget}.`);
+  }
+
+  async function configureRemote() {
+    if (!repository || !remoteOperation) return;
+    const naming = remoteOperation.kind === "remote-add" ? "Added" : "Repointed";
+    if (await runMutation(remoteOperation, `${naming} ${remoteOperation.request.name} → ${remoteOperation.request.url}. Nothing was fetched.`)) setRemoteDraft(undefined);
+  }
+
+  async function removeRemote(name: string) {
+    if (!repository) return;
+    setRemovingRemote(undefined);
+    if (await runMutation({ kind: "remote-remove", request: { repositoryId: repository.id, name, expectedRepositoryVersion: repository.version } }, `Removed remote ${name}. Local commits and worktrees are untouched.`)) setRemoteDraft(undefined);
   }
 
   async function fetchRemote() {
@@ -604,7 +637,15 @@ export function SourcesView({ client, author, review, workspace, reviewImport, o
                   1,030-character remote essay was permanently on screen while
                   both of its buttons were disabled; the live claim
                   (`upstreamStatus`) stays visible either way. */}
-              <details class="git-remote-boundary" open={remoteReachable && (client.capabilities.features.fetch.available || client.capabilities.features.push.available)}>
+              {/* Open when there is no remote yet, because that is when the
+                  controls inside it are the whole point. `remoteReachable` is
+                  false precisely when `remote` is undefined, so gating on it
+                  alone closed the disclosure on exactly the journey that needs
+                  it — and this summary draws no marker (`list-style: none`,
+                  `::-webkit-details-marker { display: none }`), so a freshly
+                  imported snapshot offered its only "add a remote" control
+                  behind an affordance nothing indicated was there. */}
+              <details class="git-remote-boundary" open={!remote || (remoteReachable && (client.capabilities.features.fetch.available || client.capabilities.features.push.available))}>
                 <summary>
                   <span class="eyebrow">Remote boundary</span>
                   <strong>{remote ? `${remote.name} · ${remote.transport}` : "No remote configured"}</strong>
@@ -612,6 +653,26 @@ export function SourcesView({ client, author, review, workspace, reviewImport, o
                 </summary>
                 <div class="git-remote-boundary__body">
                   {remote ? <small class="git-remote-url">{remote.url}</small> : null}
+                  {/*
+                    The field the panel never had. Recording a remote is a local
+                    config write, so it stays available even for an origin this
+                    build's CSP cannot reach — the refusal belongs to fetch and
+                    push, which say so themselves, and hiding the control would
+                    leave the repository permanently unable to name its upstream.
+                  */}
+                  <label>{remote ? `Repoint ${remote.name}` : "Add an upstream remote"}
+                    <input
+                      aria-label={remote ? `Remote URL for ${remote.name}` : "Remote URL for a new origin"}
+                      value={remoteUrlValue}
+                      placeholder="https://github.com/owner/repository.git"
+                      autoCapitalize="none"
+                      spellcheck={false}
+                      onInput={(event) => setRemoteDraft(event.currentTarget.value)}
+                    />
+                  </label>
+                  {remoteUrlUnreachable ? <p class="git-push-warning" role="status">This build&rsquo;s Content-Security-Policy does not permit {typedRemoteOrigin}. The remote can still be recorded; fetch and push against it are refused before any request is sent.</p> : null}
+                  <button type="button" disabled={Boolean(busy) || !remoteOperation} onClick={configureRemote}><Icon name="branch" /> {remote ? "Save remote URL" : "Add remote"}</button>
+                  {remote ? <button type="button" disabled={Boolean(busy)} onClick={() => setRemovingRemote(remote.name)}>Remove {remote.name}</button> : null}
                   <button type="button" disabled={Boolean(busy) || !remoteReachable || !client.capabilities.features.fetch.available} onClick={fetchRemote}><Icon name="cloud" /> Fetch direct</button>
                   <button type="button" disabled={Boolean(busy) || !remoteReachable || !client.capabilities.features.push.available} onClick={pushRemote}><Icon name="source" /> Push {worktree.branch}</button>
                   <p class="git-push-warning">Push is always reviewed. A non-fast-forward update is blocked unless the remote is fetched and reconciled first.</p>
@@ -638,6 +699,20 @@ export function SourcesView({ client, author, review, workspace, reviewImport, o
           />
         </div>
       )}
+      {/* Removing a remote is the one control here that takes something away,
+          so it wears the same shape as deleting a workspace file rather than a
+          bare button that acts on the first press. */}
+      {removingRemote && repository ? <ConfirmDialog
+        title={`Remove remote ${removingRemote}?`}
+        titleDetail={remote?.url}
+        confirmLabel="Remove remote"
+        destructive
+        confirmDisabled={Boolean(busy)}
+        onCancel={() => setRemovingRemote(undefined)}
+        onConfirm={() => void removeRemote(removingRemote)}
+      >
+        <p>Fetch and Push lose their target until another remote is configured. Local commits, branches and worktrees are untouched, and nothing is sent to {remote?.url ?? "the remote"} by removing it.</p>
+      </ConfirmDialog> : null}
     </section>
   );
 }
@@ -823,7 +898,6 @@ function DiffPanel({ diff, commit, commitPath, onSelectCommitPath, wrap, onWrapC
 }>) {
   const file = commit?.files.find((item) => item.path === commitPath) ?? commit?.files[0];
   const patch = commit ? file?.patch : diff?.patch;
-  const parsed = useMemo(() => parseUnifiedPatch(patch ?? ""), [patch]);
   const title = commit
     ? `${file?.path ?? commitSubject(commit.commit.message)}`
     : diff?.path ?? "Diff inspector";
@@ -852,13 +926,47 @@ function DiffPanel({ diff, commit, commitPath, onSelectCommitPath, wrap, onWrapC
         ><b class="git-delta outlined">{deltaLetter(item.kind)}</b>{item.path}</button>)}
       </div>
     ) : null}
+    <UnifiedPatch patch={patch ?? ""} wrap={wrap} empty={diffPlaceholder({ diff, commit, file, busy })}>
+      {commit?.truncated ? <p class="git-diff-notice" role="status">This commit touched more paths than the per-commit patch bound; the paths above are the bounded set.</p> : null}
+      {file?.binary || diff?.binary ? <p class="git-diff-notice" role="status">Binary file. Airship does not render a byte diff.</p> : null}
+    </UnifiedPatch>
+  </section>;
+}
+
+/**
+ * One Git patch, rendered one way.
+ *
+ * The Workbench's diff tab printed the very same `git.diff` result into a bare
+ * `<pre>` — no line numbers, no added/removed colour, the `diff --git`/`index`
+ * preamble left inline — while this pane, on the same route, projected it onto
+ * real file line numbers. A user comparing a working diff saw two products
+ * depending on which pane they clicked, and the pane the Workspace destination
+ * lands on was the worse one. The parser that reads the `@@` counters is the
+ * only implementation that can number anything, so it wins and the `<pre>`
+ * is gone; `children` is the slot for whatever notices a caller must place
+ * between the file header and the code.
+ */
+export function UnifiedPatch({ patch, wrap, empty, label, class: className, children }: Readonly<{
+  patch: string;
+  wrap: boolean;
+  /** What to say when the patch carries no lines. */
+  empty: string;
+  /** Names the scroll region when no labelled section already contains it. */
+  label?: string;
+  class?: string;
+  children?: ComponentChildren;
+}>) {
+  const parsed = useMemo(() => parseUnifiedPatch(patch), [patch]);
+  const body = <>
     {/* `---`/`+++`/`diff --git` are headers about the file, not lines of it.
         They kept the gutter's first three numbers and pushed real code out of
         a 91px box; here they render verbatim, once, above the code. */}
     {parsed.header.length ? <p class="git-diff-header">{parsed.header.map((line) => <code key={line}>{line}</code>)}</p> : null}
-    {commit?.truncated ? <p class="git-diff-notice" role="status">This commit touched more paths than the per-commit patch bound; the paths above are the bounded set.</p> : null}
-    {file?.binary || diff?.binary ? <p class="git-diff-notice" role="status">Binary file. Airship does not render a byte diff.</p> : null}
-    <div class={`git-diff-lines ${wrap ? "wrap" : ""}`}>
+    {children}
+    {/* The scroll box is the focusable one, not its named ancestor: a long
+        patch has to be readable with the keyboard alone, and the element the
+        arrow keys scroll is this one. */}
+    <div class={`git-diff-lines ${wrap ? "wrap" : ""}`} tabIndex={label ? 0 : undefined}>
       {parsed.lines.length ? parsed.lines.map((line, index) => (
         line.kind === "hunk"
           ? <div class="hunk" key={`${index}:${line.raw}`}><code>{line.raw}</code></div>
@@ -868,9 +976,16 @@ function DiffPanel({ diff, commit, commitPath, onSelectCommitPath, wrap, onWrapC
             <b>{line.sign}</b>
             <code>{line.text}</code>
           </div>
-      )) : <p>{diffPlaceholder({ diff, commit, file, busy })}</p>}
+      )) : <p>{empty}</p>}
     </div>
-  </section>;
+  </>;
+  // The region names the whole document — a commit's metadata is part of what
+  // "Commit abc123 diff" means, and it is header text, so a name that covered
+  // only the code rows would leave it unannounced. Callers that already sit
+  // inside a labelled section pass no label and get the rows alone.
+  return label
+    ? <div class={className} role="region" aria-label={label} style={{ display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0, flex: "1 1 auto" }}>{body}</div>
+    : body;
 }
 
 /** What the diff box says when it has no patch to draw. */
@@ -931,8 +1046,34 @@ export function parseUnifiedPatch(patch: string): ParsedPatch {
   // string. Rendering it produced a numbered row of nothing at the end of
   // every file.
   if (rows.at(-1) === "") rows.pop();
-  for (const raw of rows) {
+  for (const [index, raw] of rows.entries()) {
     if (raw === "" && lines.length === 0 && header.length === 0) continue;
+    /*
+     * A concatenated multi-file patch — which is exactly what a commit document
+     * is — starts its next file after the first hunk has already been read.
+     * `--- a/second.ts` begins with `-`, so it was numbered and coloured as a
+     * deleted line of the *previous* file: the same class of bug the `@@`
+     * reader exists to end.
+     *
+     * The boundary has to be the one this product actually emits. Keying it on
+     * `diff --git ` alone read plausibly and matched nothing: both patch
+     * producers here — `renderPatch` in git/workspace-adapter.ts and
+     * git/memory-adapter.ts — write `--- a/<path>` / `+++ b/<path>` / `@@` with
+     * no `diff --git` line anywhere, so every commit touching two or more files
+     * rendered its second file's header as a red deleted line with the sign
+     * chewed off (`-- a/second.ts`) at a fabricated line number. That is worse
+     * than the `<pre>` this renderer replaced, which at least printed it
+     * verbatim.
+     *
+     * `--- ` immediately followed by `+++ ` is unambiguous: inside a hunk every
+     * line carries a one-character prefix, so a content line beginning `--- `
+     * is a removal of the text `-- `, and it cannot be followed by a row that
+     * is itself a `+++ ` header of the same shape. `diff --git ` stays
+     * recognised for patches that arrive from a real git remote.
+     */
+    const startsNextFile = raw.startsWith("diff --git ")
+      || (raw.startsWith("--- ") && (rows[index + 1]?.startsWith("+++ ") ?? false));
+    if (startsNextFile) inHunk = false;
     const hunk = HUNK_HEADER.exec(raw);
     if (hunk) {
       oldLine = Number(hunk[1]);
@@ -942,8 +1083,13 @@ export function parseUnifiedPatch(patch: string): ParsedPatch {
       continue;
     }
     if (!inHunk) {
-      // Everything before the first hunk is file-level header text.
-      if (raw.length) header.push(raw);
+      if (!raw.length) continue;
+      // Before the first hunk this is the document's own header, lifted out
+      // above the code. After it, the same lines are a boundary *inside* the
+      // document and have to stay in place, so they render as the unnumbered
+      // full-width band a hunk header already renders as.
+      if (lines.length) lines.push(Object.freeze({ kind: "hunk", sign: "", text: raw, raw }));
+      else header.push(raw);
       continue;
     }
     if (raw.startsWith("\\")) {
@@ -1095,12 +1241,6 @@ function progressLabel(phase: RepositoryImportProgress["phase"]): string {
   return ({ resolving: "Resolving source", tree: "Reading tree", fetching: "Fetching pinned files", writing: "Writing workspace", complete: "Import complete" })[phase];
 }
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1_024) return `${bytes} B`;
-  if (bytes < 1_024 * 1_024) return `${(bytes / 1_024).toFixed(1)} KiB`;
-  return `${(bytes / (1_024 * 1_024)).toFixed(1)} MiB`;
-}
-
 function defaultImportDestination(repository: string): string {
   const normalized = repository.trim().replace(/\.git$/u, "").replace(/\/+$/u, "");
   const name = normalized.split("/").filter(Boolean).at(-1)?.replace(/[^A-Za-z0-9._-]/gu, "-") || "repository";
@@ -1119,6 +1259,13 @@ async function execute(client: BrowserGitClient, operation: GitOperation, signal
     case "clone": return client.clone(operation.request, signal);
     case "fetch": return client.fetch(operation.request, signal);
     case "push": return client.push(operation.request, signal);
+    // The three verbs that make Fetch and Push mean anything. The client has
+    // implemented them since the adapter shipped (src/git/client.ts:257-269)
+    // and `git_configure` offered them to the model, while the panel that owns
+    // remotes could only report their absence.
+    case "remote-add": return client.addRemote(operation.request, signal);
+    case "remote-set-url": return client.setRemoteUrl(operation.request, signal);
+    case "remote-remove": return client.removeRemote(operation.request, signal);
     // Source Control drives one reviewed mutation per button. Read-only kinds
     // and the verbs this panel does not surface fail closed here rather than
     // being routed to an approximate neighbour. The History pane reads through
@@ -1229,12 +1376,6 @@ function gitStatusLabel(entry: GitStatusEntry): string {
   return [entry.index && `Staged ${entry.index.kind}`, entry.worktree && `Working ${entry.worktree.kind}`].filter(Boolean).join("; ");
 }
 
-export function diffLineKind(line: string): string {
-  if (line.startsWith("+") && !line.startsWith("+++")) return "added";
-  if (line.startsWith("-") && !line.startsWith("---")) return "removed";
-  return "context";
-}
-
 function relativeTime(value: string): string {
   const delta = Date.now() - Date.parse(value);
   if (!Number.isFinite(delta)) return "at an unknown time";
@@ -1243,6 +1384,50 @@ function relativeTime(value: string): string {
   if (minutes < 60) return `${minutes}m ago`;
   const hours = Math.floor(minutes / 60);
   return hours < 24 ? `${hours}h ago` : `${Math.floor(hours / 24)}d ago`;
+}
+
+/** The remote name this panel configures when a repository has none. */
+export const DEFAULT_REMOTE_NAME = "origin";
+
+export type SourceRemoteOperation = Extract<GitOperation, Readonly<{ kind: "remote-add" | "remote-set-url" }>>;
+
+/**
+ * The mutation that turns an inert Fetch/Push pair into working controls.
+ *
+ * The only repository a first-time user can obtain is the GitHub snapshot
+ * import, which writes files and configures no remote — so this panel read "No
+ * upstream configured. Ahead/behind unavailable." beside a Fetch and a Push
+ * button that could never do anything, on desktop and phone alike. The only
+ * escape was typing `/git-configure --action add_remote --repository-id <id>
+ * --expected-repository-version <version> …` into chat after first running
+ * `/git-inspect repositories` to learn two opaque identifiers.
+ *
+ * One field and one button cover both verbs: which it is depends only on
+ * whether a remote of that name already exists, which is a fact the snapshot in
+ * hand already carries. `undefined` means there is nothing to do — an empty
+ * field, or a URL identical to the one recorded — so the caller never sends a
+ * mutation for review that would change nothing.
+ */
+export function sourceRemoteOperation(
+  // The three facts the mutation needs, and no more: a caller does not have to
+  // hold a whole snapshot to ask what configuring a URL would mean.
+  repository: Readonly<{ id: string; version: string; remotes: readonly Readonly<{ name: string; url: string }>[] }>,
+  url: string,
+  name: string = DEFAULT_REMOTE_NAME,
+): SourceRemoteOperation | undefined {
+  const trimmed = url.trim();
+  if (!trimmed) return undefined;
+  const existing = repository.remotes.find((item) => item.name === name);
+  if (existing && existing.url === trimmed) return undefined;
+  const request = Object.freeze({
+    repositoryId: repository.id,
+    name,
+    url: trimmed,
+    expectedRepositoryVersion: repository.version,
+  });
+  return existing
+    ? Object.freeze({ kind: "remote-set-url" as const, request })
+    : Object.freeze({ kind: "remote-add" as const, request });
 }
 
 export function upstreamStatus(repository: GitRepositorySnapshot, worktree: GitRepositorySnapshot["worktrees"][number]): string {

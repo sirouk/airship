@@ -1,3 +1,9 @@
+/** The shape every identity in this build must have. Exported so tests assert this
+ * reference rather than re-typing the regex: three subsystems had drifted to
+ * `terminal-<epoch>-<Math.random>` and `<epoch>-<Math.random>` ID shapes that no
+ * copied-literal test could have caught. */
+export const UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+
 /** RFC 4122 UUIDv4 from Web Crypto, including non-secure LAN contexts where
  * browsers expose getRandomValues but intentionally omit randomUUID. */
 export function randomUuid(): string {

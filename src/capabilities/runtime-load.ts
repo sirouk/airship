@@ -12,6 +12,8 @@
  * otherwise.
  */
 
+import { formatBytes } from "../core/bytes";
+
 export type RuntimeLoadLane = Readonly<{
   /** Execution runtime id. Kept as a string so this module owes nothing to the execution registry. */
   id: string;
@@ -145,7 +147,16 @@ export class RuntimeLoadMonitor {
   }
 }
 
-/** The one sentence a surface may print when nothing was measured. */
+/**
+ * The one sentence a surface may print when nothing was measured.
+ *
+ * The number itself is formatted by src/core/bytes.ts, not here: this module
+ * divided by 1024 and printed "MB" while #vault printed "MiB" for the very same
+ * `navigator.storage.estimate()` reading, so 268,435,456 bytes appeared as
+ * "256 MB" on Capabilities and "256 MiB" on Vault. The truthfulness claim — that
+ * an unmeasured figure is stated as absent rather than as zero — stays here,
+ * because it is a fact about measurement rather than about format.
+ */
 export function measuredBytesLabel(value: MeasuredBytes): string {
   return value.state === "measured" ? formatBytes(value.bytes) : "Not measurable in this browser";
 }
@@ -199,18 +210,6 @@ export function runtimeLoadIndicatorLabel(report: RuntimeLoadReport): Readonly<{
       ? `No execution run is in flight. Peak ${report.peak} this page.`
       : `${report.current} execution ${report.current === 1 ? "run" : "runs"} in flight. Peak ${report.peak} this page.`,
   });
-}
-
-export function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes < 0) return "Not measurable in this browser";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  let value = bytes;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit += 1;
-  }
-  return `${value >= 10 || unit === 0 ? Math.round(value).toString() : value.toFixed(1)} ${units[unit]}`;
 }
 
 let pageMonitor: RuntimeLoadMonitor | undefined;

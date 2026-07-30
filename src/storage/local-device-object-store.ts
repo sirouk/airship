@@ -6,11 +6,13 @@ import type { WorkspaceRootKey } from "./encrypted-envelope";
 import type {
   CompareAndSwapResult,
   ObjectRange,
+  ObjectReclamationOutcome,
+  ObjectReclamationReceipt,
   ObjectRecord,
-  ObjectStore,
   ObjectStoreCapabilities,
   ObjectSummary,
   PutIfAbsentResult,
+  ReclaimableObjectStore,
 } from "./object-store";
 
 const DATABASE_VERSION = 2;
@@ -125,7 +127,7 @@ export type LocalDeviceObjectStoreOptions = Readonly<{
  * timestamps, and sizes. Corruption is an error, never a cache miss or an
  * inferred empty vault.
  */
-export class LocalDeviceObjectStore implements ObjectStore {
+export class LocalDeviceObjectStore implements ReclaimableObjectStore {
   readonly capabilities: ObjectStoreCapabilities = Object.freeze({
     version: 1,
     adapter: "local-device",
@@ -391,6 +393,70 @@ export class LocalDeviceObjectStore implements ObjectStore {
     // replaceAll is the commit point. Do not report a late abort as failure
     // after the new generation/transaction is already authoritative.
     return { restored: records.length - identityRecords };
+  }
+
+  /**
+   * Reclamation, so the Local Device Vault can honour a delete.
+   *
+   * Without it this tier was one of two that could not remove a conversation,
+   * and it is the tier chosen by exactly the person most likely to want to:
+   * someone keeping everything on their own machine. `deleteSession` refuses
+   * rather than lying when a store cannot reclaim, so before this the honest
+   * answer here was "no".
+   *
+   * Built on `replaceAll` rather than a new backend verb because `replaceAll`
+   * is already the atomic one: OPFS writes a staging generation and swaps the
+   * authority pointer, IndexedDB uses a single transaction, memory swaps a Map.
+   * A removal that half-happens on the tier with no server to re-sync from is
+   * the failure worth paying for, and the price is rewriting the inventory —
+   * acceptable for a rare, deliberate act, and stated here so nobody reaches
+   * for it in a loop.
+   *
+   * The identity anchor is never reclaimable. Removing it would make an
+   * otherwise healthy vault indistinguishable from a corrupt one on next open.
+   */
+  async trash(keys: readonly string[], signal?: AbortSignal): Promise<ObjectReclamationReceipt> {
+    signal?.throwIfAborted();
+    const requested = [...new Set(keys)];
+    if (!requested.length) {
+      return Object.freeze({ requested: 0, reclaimed: Object.freeze([]), retained: Object.freeze([]), outcomes: Object.freeze([]) });
+    }
+    const identityId = await this.identityId();
+    const doomed = new Map<string, string>();
+    const refused = new Set<string>();
+    for (const key of requested) {
+      validateKey(key);
+      const id = await this.storageId(key);
+      // The identity anchor is never reclaimable: without it an otherwise
+      // healthy vault is indistinguishable from a corrupt one on next open.
+      if (id === identityId) refused.add(key);
+      else doomed.set(id, key);
+    }
+
+    const records = await this.backend.list();
+    const survivors = records.filter((record) => !doomed.has(record.id));
+    if (survivors.length !== records.length) {
+      signal?.throwIfAborted();
+      await this.backend.replaceAll(survivors);
+    }
+
+    /*
+     * An absent key is reclaimed, not retained: it is already the state the
+     * caller asked for, and nothing they could do would change it. Only the
+     * anchor is reported as refused, so a caller is told the one thing that did
+     * not happen rather than having it silently reported as done.
+     */
+    const outcomes: ObjectReclamationOutcome[] = requested.map((key) => Object.freeze(
+      refused.has(key)
+        ? { key, reclaimed: false as const, reason: "refused" as const }
+        : { key, reclaimed: true as const },
+    ));
+    return Object.freeze({
+      requested: requested.length,
+      reclaimed: Object.freeze(outcomes.filter((outcome) => outcome.reclaimed).map((outcome) => outcome.key)),
+      retained: Object.freeze(outcomes.filter((outcome) => !outcome.reclaimed).map((outcome) => outcome.key)),
+      outcomes: Object.freeze(outcomes),
+    });
   }
 
   close(): void {
@@ -1237,7 +1303,11 @@ async function fileBytes(blob: Blob): Promise<Uint8Array> {
 }
 
 function newOpfsGeneration(): string {
-  return `g-${crypto.randomUUID().replaceAll("-", "")}`;
+  // This file already imported randomUuid and used it for object IDs, then
+  // called the platform UUID API directly here — one file, two answers to one
+  // question. The direct call also throws on LAN origins (npm run dev:lan),
+  // where browsers expose getRandomValues but omit that API by design.
+  return `g-${randomUuid().replaceAll("-", "")}`;
 }
 
 async function removeUnreferencedOpfsGenerations(

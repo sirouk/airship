@@ -3,8 +3,10 @@ import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { Icon } from "./icons";
 import { MenuSelect } from "./menu-select";
 import {
+  MOBILE_MORE_ENTRIES,
   RAIL_SECTIONS,
   canonicalParentForView,
+  destinationLabel,
   railTraversal,
   type NavigationView,
   type RailNestedDestination,
@@ -124,6 +126,61 @@ export function railRowFor(id: string): RailRow | undefined {
 }
 
 /**
+ * The rail control that carries "you are here" for a view, which is not always
+ * a row the rail draws.
+ *
+ * Measured: three of the fourteen views left the desktop rail with no
+ * current-page state at all — `#context`, `#skills` and `#capabilities` are
+ * legal hashes with no rail row, so a person who arrived at one by deep link,
+ * by the command palette or by Memory's own Index tab saw a rail with nothing
+ * marked anywhere. The phone's bottom bar has always marked all three through
+ * `More`; this is the same signal, not a replacement for it.
+ *
+ * The stand-in is the canonical parent, which is the rule the mobile band's
+ * `currentDestinationLabel` already uses. A view the rail *does* draw resolves
+ * to its own row or to the row it is nested under, so this never re-parents a
+ * real row: `Account` is its own row rather than a child of `Connection`, and
+ * standing on it must not light `Connection` up.
+ */
+export function railStandInFor(view: NavigationView): NavigationView {
+  return railRowFor(view)?.id ?? canonicalParentForView(view);
+}
+
+/**
+ * Whether a view is a destination in its own right, or a tab of its parent's
+ * route wearing a hash.
+ *
+ * The product lists every destination it will send a person *to* in
+ * `MOBILE_MORE_ENTRIES`, and `#context` is deliberately absent: the shell
+ * renders the Memory route with its Index tab selected for that hash, same
+ * component and same `<h1>`. So Memory reads `active` on `#context` exactly as
+ * it does on `#memory` — marking it as merely *containing* the current page,
+ * while the page's own heading says `Memory`, would be a third answer — and no
+ * hint is owed, because naming it `Context` would name something the screen
+ * does not say. Read from the table rather than listed here: a view that gains
+ * a destination entry gains the stronger treatment with it.
+ */
+function rendersOwnRoute(view: NavigationView): boolean {
+  return MOBILE_MORE_ENTRIES.some((entry) => entry.kind === "route" && entry.view === view);
+}
+
+/**
+ * The route's real name, for the rail control standing in for it — or nothing
+ * when that control's own label already says it.
+ *
+ * Same test the phone band makes before describing its current control: a hint
+ * is owed exactly when the stand-in's destination is not the live view.
+ * `Profiles` on `#profiles` needs none; `Profiles` on `#skills` does.
+ */
+export function railCurrentHint(view: NavigationView): string | undefined {
+  if (railRowFor(view) || canonicalParentForView(view) === view || !rendersOwnRoute(view)) return undefined;
+  return destinationLabel(view);
+}
+
+/** Names the sr-only line the stand-in row points at. One per rail. */
+const CURRENT_HINT_ID = "rail-current-destination";
+
+/**
  * How many conversations the disclosure lists.
  *
  * Unchanged from the rail list it replaces — the ledger is `All conversations`,
@@ -192,6 +249,9 @@ export function Rail({
     rovingKey(view, railTraversal({ workspace: railRowFor(view)?.id === "workspace" })));
   const items = useRef(new Map<string, HTMLButtonElement>());
   const recentsTrigger = useRef<HTMLButtonElement>(null);
+  // The rail's half of the phone band's "Current page: …" line. Undefined on
+  // the eleven views that have a row of their own to be marked.
+  const currentHint = railCurrentHint(view);
 
   // Props can retain the previous async read for one render while a profile
   // switches. Filtering by the row's bound profile makes that frame empty
@@ -347,8 +407,13 @@ export function Rail({
   }
 
   function destinationRow(row: RailRow) {
-    const active = view === row.id;
-    const childActive = row.nested.some((nested) => nested.id === view);
+    // `#context` is not a route of its own: it renders this row's route, so it
+    // marks this row the way `#memory` does rather than one rung weaker.
+    const active = view === row.id || (railStandInFor(view) === row.id && !rendersOwnRoute(view));
+    // Also true for the views the rail draws no row for, which is the point of
+    // `railStandInFor`: an expanded `Editor` marks `Workspace` exactly as
+    // before, and `#skills` now marks something at all.
+    const childActive = !active && railStandInFor(view) === row.id;
     const open = Boolean(expanded[row.id]);
     return [
       <div class="rail-row" key={row.id}>
@@ -356,6 +421,7 @@ export function Rail({
           class={active ? "nav-item active" : childActive ? "nav-item has-active-child" : "nav-item"}
           type="button"
           aria-current={active ? "page" : undefined}
+          aria-describedby={childActive && currentHint ? CURRENT_HINT_ID : undefined}
           data-scope={row.scope}
           title={`${row.label} · ${row.scope} scope`}
           onClick={() => { if (row.id === "chat") setRecentsOpen(true); onNavigate(row.id); }}
@@ -593,12 +659,18 @@ export function Rail({
           leading={(option) => <span class="profile-monogram" aria-hidden="true">{monogram(option.label)}</span>}
           onChange={onChangeProfile}
         />
+        {/* Skills and Capabilities are filed under Profiles and have no rail
+            row, so this control is their stand-in the way a rail row is
+            Context's — see `railStandInFor`. */}
         <button
           type="button"
-          class={view === "profiles" ? "profile-manage-link active" : "profile-manage-link"}
+          class={view === "profiles"
+            ? "profile-manage-link active"
+            : railStandInFor(view) === "profiles" ? "profile-manage-link has-active-child" : "profile-manage-link"}
           title="Manage profiles · profile scope"
           aria-label="Manage profiles"
           aria-current={view === "profiles" ? "page" : undefined}
+          aria-describedby={view !== "profiles" && railStandInFor(view) === "profiles" && currentHint ? CURRENT_HINT_ID : undefined}
           onClick={onManageProfiles}
         >
           <Icon name="profiles" />
@@ -611,6 +683,11 @@ export function Rail({
   return (
     <aside class="sidebar" data-rail-state={state} inert={inert} aria-hidden={inert || undefined}>
       <div class="rail">
+        {/* The visible stand-in highlight says "a page under this row"; this
+            says which one, in the same words the phone band uses. Without it a
+            screen-reader user on #skills hears "Manage profiles" and nothing
+            that names where they actually are. */}
+        {currentHint ? <span id={CURRENT_HINT_ID} class="sr-only">{`Current page: ${currentHint}`}</span> : null}
         {profileSwitcher()}
         <nav
           ref={navRef}

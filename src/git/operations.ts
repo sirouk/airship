@@ -1,3 +1,4 @@
+import { deepFreeze } from "../core/freeze";
 import type { JsonValue } from "../core/contracts";
 import { GitValidationError } from "./errors";
 import type { GitOperation, GitOperationDescriptor, GitStashRequest } from "./types";
@@ -292,14 +293,6 @@ function descriptor(
     dataLeavesDevice,
     arguments: deepFreeze(structuredClone(args)) as JsonValue,
   });
-}
-
-function deepFreeze<T>(value: T): T {
-  if (value && typeof value === "object" && !Object.isFrozen(value)) {
-    Object.freeze(value);
-    for (const child of Object.values(value as Record<string, unknown>)) deepFreeze(child);
-  }
-  return value;
 }
 
 function invalid(message: string): never {

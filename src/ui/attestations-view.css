@@ -12,18 +12,6 @@
   justify-content: space-between;
 }
 
-.attestations-heading > div:first-child > span,
-.attestations-rail-heading > span,
-.attestations-section-heading > span,
-.attestation-inspection > span,
-.attestation-record-heading > div > span,
-.attestations-warnings > span {
-  color: var(--accent-bright);
-  font: 700 0.7rem/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
-  letter-spacing: 0.11em;
-  text-transform: uppercase;
-}
-
 .attestations-heading h1 {
   margin: 6px 0 8px;
   font-family: var(--font-display);
@@ -84,7 +72,7 @@
   background: var(--surface-raised);
   font-family: inherit;
   font-size: var(--fs-caption);
-  font-weight: 700;
+  font-weight: var(--fw-title);
   line-height: 1.2;
   cursor: pointer;
 }
@@ -156,7 +144,6 @@
   background: var(--surface-soft);
 }
 
-.attestations-boundary dt { font: var(--fw-strong) var(--fs-micro) / 1.25 var(--font-mono); text-transform: uppercase; letter-spacing: .07em; }
 .attestations-boundary dd { margin: 3px 0 0; color: var(--ink-faint); font-size: var(--fs-micro); line-height: 1.4; }
 
 .attestations-alert {
@@ -220,7 +207,7 @@
   border-radius: 999px;
   color: var(--accent-bright);
   background: var(--surface-raised);
-  font: 0.7rem/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font: var(--fs-micro)/1 var(--font-mono);
   text-align: center;
 }
 
@@ -294,7 +281,7 @@
   overflow: hidden;
 }
 
-.attestation-record-list b { color: var(--ink-faint); font: 700 var(--fs-micro)/1.2 var(--font-mono); letter-spacing: 0.08em; align-self: start; }
+.attestation-record-list b { color: var(--ink-faint); font: var(--fw-title) var(--fs-micro)/1.2 var(--font-mono); letter-spacing: 0.08em; align-self: start; }
 
 .attestations-ledger-note {
   display: grid;
@@ -349,8 +336,8 @@
 }
 
 .attestation-record-counts > div { display: flex; gap: 5px; align-items: baseline; }
-.attestation-record-counts dt { color: var(--ink-muted); font-size: var(--fs-micro); text-transform: uppercase; letter-spacing: .08em; white-space: nowrap; }
-.attestation-record-counts dd { margin: 0; font: 700 0.82rem/1 var(--font-body); font-variant-numeric: tabular-nums; }
+.attestation-record-counts dt { white-space: nowrap; }
+.attestation-record-counts dd { margin: 0; font: var(--fw-title) var(--fs-meta)/1 var(--font-body); font-variant-numeric: tabular-nums; }
 
 .attestation-record-reading {
   grid-column: 1 / -1;
@@ -384,13 +371,6 @@
 .attestations-stage-heading {
   display: grid;
   gap: 3px;
-}
-
-.attestations-stage-heading > span {
-  color: var(--accent-bright);
-  font: 700 var(--fs-micro) / 1.2 var(--font-mono);
-  letter-spacing: .11em;
-  text-transform: uppercase;
 }
 
 .attestations-stage-heading > small { color: var(--ink-faint); font-size: var(--fs-micro); line-height: 1.4; }
@@ -429,7 +409,7 @@
 
 .attestation-status-mark {
   flex: 0 0 auto;
-  font: 700 var(--fs-micro)/1 var(--font-mono);
+  font: var(--fw-title) var(--fs-micro)/1 var(--font-mono);
 }
 
 .attestations-authorities,
@@ -521,7 +501,7 @@
 .attestation-facts dt { color: var(--ink-faint); font-size: var(--fs-micro); text-transform: uppercase; }
 .attestation-facts dd { margin: 4px 0 0; overflow-wrap: anywhere; color: var(--ink-muted); font-size: var(--fs-micro); line-height: 1.4; }
 .attestation-facts dd.mono,
-.attestation-inspection dd.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; }
+.attestation-inspection dd.mono { font-family: var(--font-mono); word-break: break-all; }
 
 .attestation-inspection {
   display: grid;
@@ -536,7 +516,7 @@
    endpoint-key bindingASSERTED" — a claim name welded to a status word with
    no separator, on the surface whose entire job is precision. */
 .attestation-inspection-title small { display: block; color: var(--ink-muted); font-size: var(--fs-micro); line-height: 1.35; }
-.attestation-inspection-title strong { display: block; font: 700 var(--fs-micro)/1.35 var(--font-mono); text-transform: uppercase; overflow-wrap: anywhere; }
+.attestation-inspection-title strong { display: block; font: var(--fw-title) var(--fs-micro)/1.35 var(--font-mono); text-transform: uppercase; overflow-wrap: anywhere; }
 .attestation-inspection-title strong.verified { color: var(--signal); }
 .attestation-inspection-title strong.partial { color: var(--accent-bright); }
 .attestation-inspection-title strong.failed,

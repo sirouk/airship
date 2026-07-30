@@ -143,14 +143,6 @@ export function credential(value: string, label: string): string {
   return value;
 }
 
-export function deepFreeze<T>(value: T): Readonly<T> {
-  if (value && typeof value === "object" && !Object.isFrozen(value)) {
-    for (const child of Object.values(value as Record<string, unknown>)) deepFreeze(child);
-    Object.freeze(value);
-  }
-  return value as Readonly<T>;
-}
-
 function reviewedUrl(value: string, label: string, allowLoopbackHttp: boolean): string {
   let url: URL;
   try {

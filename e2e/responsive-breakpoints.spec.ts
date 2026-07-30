@@ -5,7 +5,8 @@ const routes = [
   ["editor", /^Editor$/i], ["terminal", /^Terminal$/i], ["memory", /^Memory$/i], ["context", /^Memory$/i],
   ["profiles", /^Profiles$/i], ["capabilities", /^Capabilities$/i], ["skills", /^Skills$/i],
   ["proof", /^Proof$/i], ["vault", /^Vault$/i],
-  ["connection", /^Connect models$/i], ["account", /^Account standing$/i],
+  // The two headings that used to rename their destination on arrival.
+  ["connection", /^Connection$/iu], ["account", /^Account$/iu],
 ] as const;
 
 const widths = [768, 820, 1024] as const;

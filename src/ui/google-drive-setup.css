@@ -25,14 +25,6 @@
   color: var(--ink-muted);
   line-height: 1.5;
 }
-/* Brass is reserved for "you are here" and "act here"; a category label is
-   neither, so the eyebrow reads in muted ink like every other route's. */
-.google-drive-setup__eyebrow {
-  color: var(--ink-muted);
-  font: var(--fw-strong) var(--fs-micro)/1.2 var(--font-mono);
-  letter-spacing: .11em;
-  text-transform: uppercase;
-}
 .google-drive-setup header > span {
   margin-inline-start: auto;
   padding: 5px 9px;
