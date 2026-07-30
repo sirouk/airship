@@ -9,11 +9,23 @@
  * elements said is still on the page; only one of them is a verdict.
  */
 
+/*
+ * Centre under the wide measure.
+ *
+ * `data-route-measure="wide"` gives the attestation ledger the desktop width,
+ * but it also put the header's first glyph 26px from the window edge while
+ * everything else in the shell sits on a centered measure — the "crashed into
+ * the left edge" look. The route keeps the width for its dense panels and
+ * centres its own column, so the header, tab strip and panels share one left
+ * line with the rest of the product.
+ */
 .proof-view {
   display: grid;
   gap: var(--sp-3);
   align-content: start;
   min-width: 0;
+  width: min(1400px, 100%);
+  margin-inline: auto;
 }
 
 .proof-surface-switch {

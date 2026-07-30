@@ -103,19 +103,23 @@ describe("Airship Instrument design contract", () => {
   it("locks the canonical truth palette independently of profile accents", () => {
     expect(property("--v-verified")).toBe("#67a39a");
     expect(property("--v-caution")).toBe("#d9a441");
-    // Raised from #c86758 (4.53:1 on --surface, 4.24:1 on --surface-raised):
-    // sixteen rules paint words with it, so it is held to 1.4.3's 4.5:1 on both
-    // beds in every theme by `css-variable-contract.test.ts`.
-    expect(property("--v-failed")).toBe("#ce7769");
+    // Raised from #c86758 (4.53:1 on --surface, 4.24:1 on --surface-raised) and
+    // stepped again from #ce7769 when the curated palettes arrived: the house
+    // rule has always been that the lightest shipped raised surface decides
+    // this hex, and One Dark's #282d36 is that bed now. Sixteen rules paint
+    // words with it, so it is held to 1.4.3's 4.5:1 on both beds in every
+    // theme by `css-variable-contract.test.ts`.
+    expect(property("--v-failed")).toBe("#d68172");
     expect(property("--v-info")).toBe("#7fa8c9");
     expect(property("--truth-local")).toBe("#8ba0a6");
     expect(property("--truth-remote")).toBe("#bd6f4c");
   });
 
   it("uses copper only as the asserted working metal and keeps a responsive profile switcher pair", () => {
-    // Raised from #b8734f for the same reason: the asserted seal's label and
-    // both asserted chips are words, not glyphs.
-    expect(property("--copper")).toBe("#be805f");
+    // Raised from #b8734f for the same reason — the asserted seal's label and
+    // both asserted chips are words, not glyphs — and stepped from #be805f
+    // against the same lightest raised surface as --v-failed above.
+    expect(property("--copper")).toBe("#c78a66");
     expect(styles).toContain('.seal[data-state="asserted"]');
     expect(styles).toMatch(/\.seal\[data-state="asserted"\]\s*\{[^}]*color:\s*var\(--copper\)/u);
     expect(styles).not.toContain("--copper: var(--accent)");

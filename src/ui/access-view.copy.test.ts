@@ -383,7 +383,7 @@ describe("a refused key is reported as a refused key", () => {
     // The shipped banner said "Endpoint discovery denied. Reconnect with
     // chutes:invoke or an API key." to a person who had just pasted an API key,
     // naming an OAuth scope that appears nowhere else in the product.
-    expect(source).toContain("<strong>Chutes did not accept this key.</strong> The catalog is readable without a key, so listing models succeeded; authorization is checked when you connect, and it failed. Check the key at chutes.ai → API keys, or paste a different one.");
+    expect(source).toContain("<strong>Chutes did not accept this key.</strong> The catalog is readable without a key, so listing models succeeded; authorization is checked when you connect, and it failed. Check the key at <a href={CHUTES_API_KEYS_URL} target=\"_blank\" rel=\"noreferrer\">chutes.ai → API keys ↗</a>, or paste a different one.");
     expect(source).toContain('failure.kind === "credential" && credential.kind === "inference-api-key"');
   });
 

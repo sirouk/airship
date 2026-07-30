@@ -66,7 +66,8 @@ async function openThemeLibrary(page: Page, mode: "dark" | "light"): Promise<voi
   }, { ...PINNED, mode });
   await page.goto("/#profiles");
   await expect(page.getByRole("heading", { name: "Profiles", level: 1 })).toBeVisible();
-  await page.locator('summary:has-text("Interface theme")').click();
+  // The Interface theme disclosure opens by default: the library was the one
+  // section nobody could preview without a click, which is exactly backward.
   await expect(page.locator(".theme-options")).toBeVisible();
 }
 
@@ -87,7 +88,7 @@ test("previewing a theme leaves every display preference exactly where the user 
    */
   await themeOption(page, "Verdigris").click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "verdigris");
-  expect(await inlineSurface(page)).toBe("#142022");
+  expect(await inlineSurface(page)).toBe("#131a15");
   expect(await readPresentation(page), "first preview").toEqual({ ...PINNED });
 
   /*

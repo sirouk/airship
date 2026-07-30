@@ -23,19 +23,29 @@ const phoneBlock =
     /@media \(max-width: 640px\), \(max-width: 950px\) and \(max-height: 500px\) \{([\s\S]*?)\n@media \(min-width: 641px\)/u,
   )?.[1] ?? "";
 
-const landscapeBlock =
-  styles.match(
-    /@media \(min-width: 641px\) and \(max-width: 950px\) and \(max-height: 500px\) \{([\s\S]*?)\n@media /u,
-  )?.[1] ?? "";
 
 describe("session bar at phone width", () => {
-  it("takes a full second row for the chips cluster and wraps instead of scrolling", () => {
+  /*
+   * The one-row header.
+   *
+   * The previous contract pinned a full second row for the chips cluster (a
+   * measured 103px of session bar at 390×844, two decks of chrome above every
+   * conversation). The design is now one 48px row: the title takes what is
+   * left after the indicators price themselves, the indicators never shrink
+   * below their own words, and when arithmetic cannot hide the surplus the
+   * cluster scrolls inside itself rather than buying a second deck. What the
+   * chips may never do is compress mid-text, which is the defect both
+   * versions of this contract exist against.
+   */
+  it("keeps the indicators on the title's single row", () => {
     const chips = phoneBlock.match(/\.session-bar__chips \{([^}]+)\}/u)?.[1] ?? "";
 
-    expect(chips).toContain("grid-column: 1 / -1");
-    expect(chips).toContain("flex-wrap: wrap");
-    // The scroll restyle is the defect; it may not come back to this row.
-    expect(chips).not.toContain("overflow-x");
+    expect(chips).toContain("grid-column: 2");
+    expect(chips).toContain("grid-row: 1");
+    expect(chips).toContain("flex-wrap: nowrap");
+    // In-row overflow is what keeps a 320px bar from spending a second deck:
+    // the cluster scrolls its own strip rather than compressing a chip.
+    expect(chips).toContain("overflow-x: auto");
   });
 
   it("never shrinks a chip below its own words", () => {
@@ -69,38 +79,35 @@ describe("session bar at phone width", () => {
   });
 
   /*
-   * The narrowest phones get one more shed step, because the wrap valve is
-   * only free while the shell has height to pay it with. The cluster costs
-   * 378px at rest and the bar's insets take 24px, so under ~402px the valve
-   * fires and buys a third 44px row: 153px of session bar on a 320×700 phone,
-   * with the transcript under half the screen. The two secondary counts yield
-   * first, whole (a bare number beside a bare number is what their units were
-   * added to prevent), and only below 400px — a 430px phone still renders
-   * both, which is where the shed order above was measured.
+   * The shed ladder that keeps one row possible.
+   *
+   * Below 480px the status chip's word and count step behind the seal, and
+   * below 400px both secondary counts follow: a bare number beside a bare
+   * number is what the units were added to prevent, so each goes whole. Every
+   * shed is a clip into the accessibility tree — the complete claim stays in
+   * the trigger's accessible name and the popover a tap opens — and the row
+   * may not buy its width back by shrinking a chip or a target.
    */
-  const narrowBlock = phoneBlock.match(/@media \(max-width: 400px\) \{([\s\S]*?)\n  \}/u)?.[1] ?? "";
+  const narrowBlock = phoneBlock.match(/@media \(max-width: 480px\), \(max-height: 500px\) \{([\s\S]*?)\n  \}/u)?.[1] ?? "";
+  const narrowestBlock = phoneBlock.match(/@media \(max-width: 400px\), \(max-height: 500px\) \{([\s\S]*?)\n  \}/u)?.[1] ?? "";
 
-  it("sheds both chip counts, and nothing else, on sub-400px phones", () => {
+  it("sheds the status chip's texts below 480px, whole and clipped", () => {
     const rule = narrowBlock.match(
-      /\.session-status-chip__count,\s*\.journal-chip__count \{([^}]+)\}/u,
+      /\.session-status-chip__word,\s*\.session-status-chip__count \{([^}]+)\}/u,
     )?.[1] ?? "";
     expect(rule).toContain("clip-path: inset(50%)");
     expect(rule).not.toContain("display: none");
-    // The verdict word is the one string in this cluster that may never be
-    // shed: a seal glyph alone stands for a trust claim it cannot state.
-    expect(narrowBlock).not.toContain("session-status-chip__word");
-    // A count sheds as a count. Shedding the unit alone would leave the two
-    // adjacent chips reading as two numbers of unstated kind.
-    expect(narrowBlock).not.toContain("__unit");
-    // The row may not buy its width back by shrinking a chip or a target.
-    expect(narrowBlock).not.toContain("min-height");
-    expect(narrowBlock).not.toContain("flex-shrink");
   });
 
-  it("keeps landscape phones on one line beside the folded title", () => {
-    const chips = landscapeBlock.match(/\.session-bar__chips \{([^}]+)\}/u)?.[1] ?? "";
-    // A ≤500px-tall landscape has no height to pay a second row with, so the
-    // cluster stays in its column.
-    expect(chips).toContain("grid-column: auto");
+  it("below 400px sheds nothing a target could be measured against", () => {
+    // A count sheds as a count. Shedding the unit alone would leave the two
+    // adjacent chips reading as two numbers of unstated kind.
+    expect(narrowestBlock).not.toContain("__unit");
+    // The row may not buy its width back by shrinking a chip or a target.
+    expect(narrowestBlock).not.toContain("min-height");
+    expect(narrowestBlock).not.toContain("flex-shrink");
+    // Every chip stays mounted at every width: clipping carries the shed,
+    // `display: none` on a chip would take it out of the accessibility tree.
+    expect(narrowestBlock).not.toMatch(/\.session-[a-z-]+ \{ display: none/u);
   });
 });

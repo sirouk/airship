@@ -1,7 +1,7 @@
 import type { JsonValue } from "../core/contracts";
 import { stableStringify } from "../core/hash";
 import type { EventJournal, JournalBackend, SessionRecord } from "../core/journal";
-import { createBuiltInProfileCatalog, reconcileBuiltInSkills } from "../profiles/catalog";
+import { createBuiltInProfileCatalog, reconcileBuiltInSkills, reconcileBuiltInThemes } from "../profiles/catalog";
 import {
   ProfileCatalogConflictError,
   type ProfileCatalogCheckpoint,
@@ -182,7 +182,8 @@ export async function reconcileAdoptedProfileCatalog(
   checkpoint: ProfileCatalogCheckpoint,
   signal?: AbortSignal,
 ): Promise<ProfileCatalogCheckpoint> {
-  const reconciled = reconcileBuiltInSkills(checkpoint.catalog, await createBuiltInProfileCatalog());
+  const builtIn = await createBuiltInProfileCatalog();
+  const reconciled = reconcileBuiltInThemes(reconcileBuiltInSkills(checkpoint.catalog, builtIn), builtIn);
   if (reconciled === checkpoint.catalog) return checkpoint;
   try {
     return await target.commit(checkpoint, reconciled, signal);

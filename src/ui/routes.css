@@ -837,7 +837,8 @@
 .profile-editor-disclosure > summary,
 .profile-danger-disclosure > summary {
   display: flex;
-  gap: var(--sp-3);
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-3);
   align-items: center;
   justify-content: space-between;
   min-height: var(--density-control);
@@ -853,6 +854,40 @@
   font: var(--fs-micro) var(--font-mono);
   font-weight: 400;
 }
+
+/* The two-line instruction preview the summary carries while the panel is
+   shut: flex-wrapped below the title/count row, clamped with an ellipsis so a
+   reader knows both what the profile is and that there is more behind one
+   click. It withdraws the moment the disclosure opens. */
+.profile-prompt-preview {
+  flex-basis: 100%;
+  order: 3;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin: calc(var(--sp-1) * -1) 0 var(--sp-2);
+  color: var(--ink-muted);
+  font: var(--fw-body) var(--fs-micro)/1.5 var(--font-body);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.profile-editor-disclosure[open] .profile-prompt-preview { display: none; }
+
+/* The marker was inherited from nowhere in particular; name the affordance:
+   a disclosure opens, and its summary should look like it. */
+.profile-editor-disclosure > summary::after,
+.profile-danger-disclosure > summary::after {
+  content: "›";
+  flex: none;
+  color: var(--ink-faint);
+  font: var(--fs-meta)/1 var(--font-mono);
+  transition: transform 120ms ease;
+}
+
+.profile-editor-disclosure[open] > summary::after,
+.profile-danger-disclosure[open] > summary::after { transform: rotate(90deg); }
 
 .profile-editor-disclosure > label,
 .profile-editor-disclosure > .theme-manager {
@@ -1018,7 +1053,12 @@
 }
 
 .profile-hub-tabs { display: grid; grid-template-columns: repeat(3, minmax(100px, 1fr)); gap: 3px; align-items: center; width: min(1320px, 100%); margin: 0 auto; padding: 3px; border: 1px solid var(--line); border-radius: var(--radius-panel); background: var(--surface-soft); }
-.profile-hub-tabs.with-scope { grid-template-columns: repeat(3, minmax(100px, auto)) minmax(210px, 1fr); }
+/* One persistent tab geometry. The scope control used to take the flexible
+   `1fr` track and demote the three tabs to `auto`, so activating Skills — the
+   route the filter belongs to — physically collapsed the strip to text width
+   and snapped the whole row left. The tabs keep their `1fr` share here
+   exactly as without a filter; the filter takes what is left. */
+.profile-hub-tabs.with-scope { grid-template-columns: repeat(3, minmax(100px, 1fr)) minmax(210px, auto); }
 /* 39px was a fourth answer to a question the Tabs primitive already answers. */
 .profile-hub-tabs > button { min-height: var(--tab-height); border: 0; background: transparent; }
 .profile-hub-tabs > button[aria-current="page"] { color: var(--ground); background: var(--accent-bright); }
@@ -2761,8 +2801,21 @@
      padded the bar away from the notch on the wrong side. Naming the side in
      the property is what stops the pair being written in the wrong order, and
      it matches how `platform-shell.css` states the same insets. */
+  /*
+   * One row for the whole header.
+   *
+   * This used to gift the identity 45% of the track and the chips the rest,
+   * then let the chips wrap onto a second 44px line — 103px measured at
+   * 390×844, a double deck of chrome above every conversation. The design
+   * changed, not the information: the title takes what is left AFTER the
+   * indicators price themselves, so the package lends the transcript its
+   * second deck back. A chip's whole claim still lives a tap away in its
+   * popover, the way every compressed surface in this product has always
+   * worked.
+   */
   .session-bar {
-    grid-template-columns: minmax(6.5rem, .45fr) minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
     gap: var(--sp-1) var(--sp-2);
     padding-block: var(--sp-1);
     padding-inline-start: max(var(--sp-3), env(safe-area-inset-left));
@@ -2773,8 +2826,21 @@
     min-height: 48px;
   }
 
-  .session-bar__identity-button { min-height: var(--touch-target); }
+  /* Both axes: with the indicators priced first, the title's column is the
+     one that yields, and a 0×44 control is where the yield used to end — an
+     opaque title-units-after-price floor keeps it a target a thumb can find. */
+  .session-bar__identity-button {
+    min-width: var(--touch-target);
+    min-height: var(--touch-target);
+  }
 
+  /*
+   * Both axes, still — and now for the icon-only rest states too. The shed
+   * ladder compresses the status chip's and model chip's labels to their
+   * glyphs, which dropped their triggers to ~16px wide on a 390 bar: every
+   * shed label is already safe in the accessible name, but the control behind
+   * it must stay findable by a thumb, so each trigger keeps the floor.
+   */
   .session-status-chip,
   .journal-chip,
   .session-model-chip,
@@ -2782,7 +2848,9 @@
   .session-bar__rename-action,
   .session-bar__new,
   .session-bar .session-runtime {
+    min-width: var(--touch-target);
     min-height: var(--touch-target);
+    justify-content: center;
   }
 
   .session-bar__new { width: var(--touch-target); }
@@ -2816,26 +2884,29 @@
   }
 
   /*
-   * The right cluster takes a full row of its own under the title, and wraps
-   * rather than sheds, and rather than scrolls — the same relief valve the
-   * sessions toolbar chose between 861px and 1180px, chosen for the same
-   * measured defect. `overflow-x: auto` never scrolled here: every child
-   * carries `min-width: 0` under the default `flex-shrink: 1`, so during a
-   * 430px render the browser compressed each chip mid-text ("2 ev…", "3…")
-   * and still left nothing to scroll to, and the resting scroll position hid
-   * rename and `+` behind a row-wide title for less. `flex: 0 0 auto` makes a
-   * chip cost exactly what it costs, `flex-wrap: wrap` pays for an overflow
-   * in height rather than in reachability, and the title keeps its column and
-   * ellipsises, the whole string still in `title` and in the conversation
-   * list.
+   * The indicators stay on the title's line.
+   *
+   * They used to take a full wrapped row of their own beneath it — the second
+   * deck this redesign retires. Now they share the one 48px row: each keeps
+   * its exact size so nothing compresses mid-word, the title yields first,
+   * and when arithmetic cannot hide the surplus (a 320px bar with every chip
+   * mounted) the cluster scrolls inside itself rather than spending another
+   * 44px of skyline. The `+` is rightmost and starts visible, which is the
+   * one order this route never disturbs.
    */
   .session-bar__chips {
-    grid-column: 1 / -1;
-    flex-wrap: wrap;
-    width: 100%;
+    grid-column: 2;
+    grid-row: 1;
     max-width: 100%;
-    justify-self: stretch;
+    min-width: 0;
+    justify-self: end;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+    scrollbar-width: none;
   }
+
+  .session-bar__chips::-webkit-scrollbar { display: none; }
 
   .session-bar__chips > * {
     flex: 0 0 auto;
@@ -2952,17 +3023,30 @@
    * wrapping is a height cost. The ≤640px relief valve keeps wrapping between
    * 400px and 640px, where there is room to pay for it.
    */
+  /*
+   * The verdict steps behind its seal before the row steps behind chrome.
+   *
+   * With the indicators on one line, the status chip's word is the widest
+   * single text in the header. Past ~480px (or the width any landscape phone
+   * has at 500px tall) both secondary texts clip: the seal dot keeps the
+   * state colour — the one thing a reader scans the bar for — and the
+   * complete claim stays exactly where the rest of this design already put
+   * it, in the chip's accessible name and the popover a tap opens. Two words
+   * less of chrome is ~70px of the bar given back to the conversation.
+   */
+  @media (max-width: 480px), (max-height: 500px) {
+    .session-status-chip__word,
+    .session-status-chip__count {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+    }
+  }
+
   @media (max-width: 400px), (max-height: 500px) {
     .session-bar__chips {
-      /*
-       * `nowrap` is what makes the shrink below reachable at all. With
-       * `flex-wrap: wrap` inherited from the ≤640px relief valve, the browser
-       * wraps before it shrinks — so every yield rule on the status chip was
-       * inert and `+` still dropped to a second line. The valve is right at
-       * 400–640px, where a chip has room to cost what it costs; under 400px
-       * there is no second line to spare and one chip has to give instead.
-       */
-      flex-wrap: nowrap;
       gap: var(--sp-1);
     }
 
@@ -2974,7 +3058,10 @@
     }
 
     .session-bar__chips > .session-status-popover .session-status-chip {
-      min-width: 0;
+      /* Not 0: the word and count are shed at this width, and a glyph-plus-
+         seal trigger with no floor renders 16×44 — a control a thumb cannot
+         find. The popover carries everything the texts ever said. */
+      min-width: var(--touch-target);
     }
 
     .session-status-chip__word {
@@ -2986,11 +3073,21 @@
       text-overflow: ellipsis;
       white-space: nowrap;
     }
+
   }
 
   .session-bar .session-runtime {
     min-width: 0;
     max-width: 14ch;
+  }
+
+  /* A model id may never price the `+` out of the bar: ellipsise the label
+     before the cluster scrolls its newest-conversation button off the right
+     edge. The whole id survives in the control's name and its menu. */
+  .session-bar .session-runtime .menu-select-value {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .session-bar .runtime-posture { display: none; }
@@ -3058,17 +3155,18 @@
    */
   .composer-wrap {
     padding:
-      7px
+      5px
       max(9px, env(safe-area-inset-right))
-      9px
+      6px
       max(9px, env(safe-area-inset-left));
   }
 
   /* `--fs-field` is the iOS zoom guard: anything smaller and focusing the
      composer zooms the whole page. The 24px leading is shared with desktop so
-     the resting box is one line at both. */
+     the resting box is one line at both; the padding sheds the two blocks a
+     resting single line cannot tell apart. */
   .composer textarea {
-    padding: 10px 14px var(--sp-2);
+    padding: var(--sp-2) 13px 7px;
     font-size: var(--fs-field);
     line-height: 24px;
   }
@@ -3172,16 +3270,25 @@
     max-height: min(420px, 60dvh);
   }
 
+  /*
+   * One whisper line, not a paragraph.
+   *
+   * The postures under the composer were two 19px lines plus margins — the
+   * "text jacked under the input" — on screens where the same claim is
+   * already the footer's posture chip four centimetres above it. A single
+   * ellipsised line keeps the live region audible and the offline sentence
+   * visible without charging the transcript ~40px for a fact stated twice.
+   */
   .composer-wrap > p {
-    display: -webkit-box;
-    max-height: 2.9em;
-    margin: 5px var(--sp-1) 0;
+    display: block;
+    max-height: 1.5em;
+    margin: 3px var(--sp-1) 0;
     overflow: hidden;
     color: var(--ink-faint);
     font-size: var(--fs-micro);
-    line-height: 1.4;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
+    line-height: 1.5;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .route-layout {

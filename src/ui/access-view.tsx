@@ -102,6 +102,9 @@ const SIGN_IN_CHECKING = "Airship is checking whether this build can exchange a 
 /** Where a Chutes personal key is created. Named on every key surface. */
 export const CHUTES_ACCOUNT_URL = "https://chutes.ai/app";
 
+/** The account page that lists and issues personal API keys. */
+export const CHUTES_API_KEYS_URL = "https://chutes.ai/app/settings/api-keys";
+
 /** Loopback providers whose fabric ids the connect surface names in plain words. */
 const LOCAL_PROVIDER_LABELS: readonly (readonly [string, string])[] = Object.freeze([
   Object.freeze(["ollama", "Ollama"] as const),
@@ -1274,7 +1277,7 @@ export function AccessView({
                         <div class="key-refusal" role="alert">
                           <p>
                             <Icon name="warning" size={16} />
-                            <span><strong>Chutes did not accept this key.</strong> The catalog is readable without a key, so listing models succeeded; authorization is checked when you connect, and it failed. Check the key at chutes.ai → API keys, or paste a different one.</span>
+                            <span><strong>Chutes did not accept this key.</strong> The catalog is readable without a key, so listing models succeeded; authorization is checked when you connect, and it failed. Check the key at <a href={CHUTES_API_KEYS_URL} target="_blank" rel="noreferrer">chutes.ai → API keys ↗</a>, or paste a different one.</span>
                           </p>
                           {/*
                             The provider's own words, verbatim and including the
@@ -1330,7 +1333,7 @@ export function AccessView({
                       )}
                       <p id="chutes-credential-help">
                         Held only in page memory. Don’t have one?{" "}
-                        <a href={CHUTES_ACCOUNT_URL} target="_blank" rel="noreferrer">Create a key at chutes.ai → API keys ↗</a>{" "}
+                        <a href={CHUTES_API_KEYS_URL} target="_blank" rel="noreferrer">Create a key at chutes.ai → API keys ↗</a>{" "}
                         Never paste a client secret or administrator credential.
                       </p>
                       <button type="submit" disabled={busy || !online}>Discover models with key</button>

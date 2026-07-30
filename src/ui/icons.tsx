@@ -29,20 +29,9 @@ export type IconName =
   | "terminal"
   | "plus"
   | "trash"
-  /*
-   * Provider marks.
-   *
-   * Original glyphs drawn in this set's own stroke language, not the vendors'
-   * logo artwork: `references/` keeps this repo clean-room about other people's
-   * assets, and a trademarked mark pasted into a source file is exactly the
-   * thing that policy is about. Each is a distinct silhouette at 18px, which is
-   * what the row actually needs — something the eye can tell apart before it
-   * reads the word next to it.
-   */
-  | "provider-chutes"
-  | "provider-openai"
-  | "provider-anthropic"
-  | "provider-xai";
+  | "storage-device"
+  | "storage-s3"
+  | "storage-ephemeral";
 
 const paths: Record<IconName, JSX.Element> = {
   chat: <path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v7a2.5 2.5 0 0 1-2.5 2.5H10l-5 4v-4.7A2.5 2.5 0 0 1 4 12.5z" />,
@@ -78,14 +67,13 @@ const paths: Record<IconName, JSX.Element> = {
   /* `sessions-view.tsx` renders this for its destructive row action; the map had
      no destructive glyph at all, so the name did not typecheck. */
   trash: <path d="M4 6.5h16M9.5 6.5V4h5v2.5M6 6.5l1 14.5h10l1-14.5M10 11v5.5m4-5.5v5.5" />,
-  /* A chute: canopy, rigging, load. The name is the picture. */
-  "provider-chutes": <path d="M3 10.5a9 9 0 0 1 18 0M3 10.5c2.7 0 4.5-2.6 4.5-6M21 10.5c-2.7 0-4.5-2.6-4.5-6M12 4.5v6M3 10.5l8 5.5m10-5.5-8 5.5m-2 0h4l-.7 4h-2.6z" />,
-  /* Six-fold rotational symmetry — a hexagonal knot, not their knot. */
-  "provider-openai": <path d="M12 3.2 19.6 7.6v8.8L12 20.8 4.4 16.4V7.6zM12 8.4l4.4 2.5v2.6L12 16l-4.4-2.5v-2.6zM12 3.2v5.2m7.6-.8-4.4 2.5m4.4 6.3-4.4-2.5M12 20.8v-4.8m-7.6.4 4.4-2.5M4.4 7.6l4.4 2.5" />,
-  /* A raised chevron over a level rule: an ascent with a floor under it. */
-  "provider-anthropic": <path d="M4 19 12 5l8 14M8.4 14.4h7.2M3 21h18" />,
-  /* Two strokes crossing, kept off the diagonal so it is not the close glyph. */
-  "provider-xai": <path d="M4.5 4.5 19.5 19.5M19.5 4.5 4.5 19.5M12 2v3m0 14v3" />,
+  /* Vendor brand marks live in `brand-icons.tsx` as filled artwork; these are
+     the storage destinations, kept in this set's stroke language. */
+  "storage-device": <><path d="M3.5 8h17v8h-17zM3.5 8c0-2 1.6-3.5 3.5-3.5h10C18.9 4.5 20.5 6 20.5 8M3.5 16v2a2 2 0 0 0 2 2h13a2 2 0 0 0 2-2v-2" /><path d="M16.5 12h.2" /></>,
+  "storage-s3": <><path d="M5 8.5h14l-1.5 10a2 2 0 0 1-2 1.8h-7a2 2 0 0 1-2-1.8z" /><path d="M3.5 8.5c0-2.2 3.8-4 8.5-4s8.5 1.8 8.5 4-3.8 4-8.5 4-8.5-1.8-8.5-4z" /></>,
+  /* Ephemeral: a dashed ring — present while you look at it, gone when you
+     let it go. Nothing else in the set is dashed, and nothing should be. */
+  "storage-ephemeral": <circle cx="12" cy="12" r="7" stroke-dasharray="3.2 2.4" />,
 };
 
 export function Icon({ name, size = 18, class: className }: { name: IconName; size?: number; class?: string }) {

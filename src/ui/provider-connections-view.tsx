@@ -18,6 +18,7 @@ import type {
   ModelCapability,
 } from "../inference/providers";
 import { providerBoundaryLabel } from "../inference/transport-boundary-label";
+import { BrandLogo, type BrandLogoName } from "./brand-icons";
 import { Icon } from "./icons";
 import { MenuSelect } from "./menu-select";
 import "./provider-connections-view.css";
@@ -58,6 +59,14 @@ const LOCAL_PROVIDERS: readonly Readonly<{
 ]);
 
 const LOCAL_PROVIDER_DETAIL = "Reads the service's live model catalog and only displays capabilities supported by returned evidence.";
+
+/* Cloud setup cards carry the vendor's own mark, the same one the connect
+   lanes and the Account tab show, so a person meets one picture per company. */
+const CLOUD_PROVIDER_BRANDS: Readonly<Record<(typeof CLOUD_PROVIDER_IDS)[number], BrandLogoName>> = Object.freeze({
+  openai: "openai",
+  anthropic: "anthropic",
+  xai: "xai",
+});
 
 const MODEL_CAPABILITY_LABELS: Readonly<Record<ModelCapability, string>> = Object.freeze({
   "text-input": "Text input",
@@ -259,6 +268,7 @@ export function ProviderConnectionsView({
                 allowlist is a copy that goes stale silently. */}
             <p><Icon name="lock" size={15} />Airship connects only to the loopback origins in its shipped allowlist. Any other host, including a private-LAN address, is refused before a request leaves the page. Your browser and local service must still allow this Airship origin through CORS and browser local-network access.</p>
             <p>{DEFAULT_LOCAL_MODEL_ORIGINS.join(" · ")}</p>
+            <p><strong>LM Studio Local Server:</strong> load a model (Developer tab), start the Local Server on port <code>1234</code>, and in Server Settings turn on <strong>Serve on Local Network</strong> and <strong>Enable CORS</strong>. The model then answers on the loopback origin listed above.</p>
           </details>
         </section>
       </div>
@@ -408,7 +418,9 @@ function CloudProviderCard({
   return (
     <article id={cardId} class="provider-setup-card" tabIndex={-1}>
       <header>
-        <Icon name="model" size={18} />
+        {provider.id in CLOUD_PROVIDER_BRANDS
+          ? <BrandLogo name={CLOUD_PROVIDER_BRANDS[provider.id as (typeof CLOUD_PROVIDER_IDS)[number]]} size={18} />
+          : <Icon name="model" size={18} />}
         <div><h4>{provider.label}</h4><span>API key · page memory</span></div>
       </header>
       <details class="provider-auth-contract">

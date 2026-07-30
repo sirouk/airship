@@ -3,13 +3,39 @@ import { isDeployableGoogleOAuthClientId } from "../storage/google-drive-configu
 import { isGoogleDriveConfiguration, type VaultSnapshot } from "../vault/coordinator";
 import type { LocalDeviceVaultStatus } from "../vault/local-device";
 import { vaultBackendUnavailableReason, type VaultBackend } from "./platform-shell";
+import { BrandLogo } from "./brand-icons";
+import { Icon } from "./icons";
 import { MenuSelect } from "./menu-select";
 import { Seal, type SealState } from "./seal";
 import "./vault-view.css";
 
+/**
+ * What the connected Vault is holding, in facts the store itself reported.
+ *
+ * Every field is optional because honesty here is per-adapter: a page-memory
+ * runtime cannot price its own heap, and an encrypted cloud store can be
+ * listed. A missing field renders as absent, never as zero.
+ */
+export type VaultUsageFacts = Readonly<{
+  /** Objects under the Vault's namespace, when the store can enumerate them. */
+  objects?: number;
+  /** Bytes those objects occupy — ciphertext for encrypted stores. */
+  bytes?: number;
+  /** Quota the environment grants, when the browser reports one. */
+  quotaBytes?: number;
+  /** Provider-specific measured facts, e.g. which backend the browser chose. */
+  notes?: readonly string[];
+}>;
+
 export type VaultViewProps = {
   snapshot: VaultSnapshot;
   runtimeAdopted?: boolean;
+  /**
+   * Live usage facts for the attached destination. The route renders them at
+   * the top only while something is actually connected — a selector on a
+   * disconnected route has nothing to count.
+   */
+  usage?: VaultUsageFacts;
   /**
    * The runtime's own account of a failed or pending adoption.
    *
@@ -143,6 +169,21 @@ export function googleDriveAvailableInBuild(clientId: string | undefined): boole
   return isDeployableGoogleOAuthClientId(clientId);
 }
 
+/**
+ * One mark per destination, recognisable before its name is read.
+ *
+ * Google Drive is a vendor's own product, so it carries the vendor's mark
+ * from `brand-icons`; the other three are destinations, not brands, and stay
+ * in the stroke set. Ephemeral is a dashed ring — present while you look at
+ * it, nothing when you let it go.
+ */
+function VaultBackendMark({ backend, size = 16 }: Readonly<{ backend: VaultBackend; size?: number }>) {
+  if (backend === "google-drive") return <BrandLogo name="google-drive" size={size} />;
+  if (backend === "local-device") return <Icon name="storage-device" size={size} />;
+  if (backend === "ephemeral") return <Icon name="storage-ephemeral" size={size} />;
+  return <Icon name="storage-s3" size={size} />;
+}
+
 /** Evidence-first vault status surface. It intentionally has no secret inputs. */
 export function VaultView({
   snapshot,
@@ -162,6 +203,7 @@ export function VaultView({
   providerSwitching = false,
   onProviderChange,
   localDeviceStatus,
+  usage,
 }: VaultViewProps) {
   const status = phaseCopy(snapshot);
   const localDevice = provider === "local-device";
@@ -253,6 +295,28 @@ export function VaultView({
           />
         </span>
       </div>
+
+      {usage ? (
+        <dl class="vault-usage" data-connected="true" aria-label={`${PROVIDER_PROFILES.find((profile) => profile.id === provider)?.title ?? provider} usage`}>
+          <div class="vault-usage__cell">
+            <dt><VaultBackendMark backend={provider} size={16} /> Stored</dt>
+            <dd>{usage.bytes !== undefined
+              ? usage.quotaBytes !== undefined
+                ? `${formatVaultBytes(usage.bytes)} of ${formatVaultBytes(usage.quotaBytes)}`
+                : formatVaultBytes(usage.bytes)
+              : usage.quotaBytes !== undefined
+                ? `Of ${formatVaultBytes(usage.quotaBytes)}`
+                : "Not measurable"}</dd>
+          </div>
+          <div class="vault-usage__cell">
+            <dt>Objects</dt>
+            <dd>{usage.objects !== undefined ? usage.objects.toLocaleString() : "Not enumerable"}</dd>
+          </div>
+          {(usage.notes ?? []).map((note) => (
+            <div class="vault-usage__cell" key={note}><dt>State</dt><dd>{note}</dd></div>
+          ))}
+        </dl>
+      ) : null}
 
       <div class="vault-view__state" data-state={state}>
         <Seal state={sealForState(state)} label={SEAL_WORD[state]} density="dot" size={24} />
@@ -361,6 +425,7 @@ export function VaultView({
           ariaLabel="Vault storage provider"
           value={provider}
           disabled={providerSwitching}
+          leading={(option) => <span class="vault-provider-selector__mark" aria-hidden="true"><VaultBackendMark backend={option.value as VaultBackend} size={16} /></span>}
           options={PROVIDER_PROFILES.map((profile) => {
             // Availability is a selectability fact, not a description suffix.
             // Rendered as prose only, Drive stayed choosable on a build with no
@@ -386,7 +451,7 @@ export function VaultView({
                 <th scope="col">Question</th>
                 {PROVIDER_PROFILES.map((profile) => (
                   <th key={profile.id} scope="col" data-current={profile.id === provider ? "true" : "false"}>
-                    {profile.title}
+                    <span class="vault-provider-compare__heading"><VaultBackendMark backend={profile.id} size={15} />{profile.title}</span>
                     {profile.id === provider ? <small>Selected</small> : null}
                     {providerUnopenableReason(profile.id) ? <small>Unavailable here</small> : null}
                   </th>

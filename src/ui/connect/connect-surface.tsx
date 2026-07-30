@@ -1,5 +1,6 @@
 import type { ComponentChildren } from "preact";
 import { useId, useRef, useState } from "preact/hooks";
+import { BrandLogo, type BrandLogoName } from "../brand-icons";
 import { Icon } from "../icons";
 import { Seal } from "../seal";
 import { nextTabId } from "../tabs";
@@ -62,11 +63,19 @@ export type ConnectSurfaceProps = Readonly<{
   onCheckLocalProviders?: () => Promise<readonly LocalProviderProbeResult[]>;
 }>;
 
-const LANE_ICONS: Readonly<Record<ConnectLaneId, "lock" | "model" | "attestation" | "terminal">> = Object.freeze({
-  chutes: "lock",
-  codex: "model",
-  claude: "model",
-  grok: "model",
+/*
+ * Vendors carry their real brand marks here; the lanes that have no vendor
+ * logo keep the stroke set. A mark is recognised before it is read, and a
+ * padlock next to "Chutes" taught the reading of one company for the look of
+ * four.
+ */
+const LANE_BRANDS: Partial<Readonly<Record<ConnectLaneId, BrandLogoName>>> = Object.freeze({
+  chutes: "chutes",
+  codex: "openai",
+  claude: "anthropic",
+  grok: "xai",
+});
+const LANE_ICONS: Partial<Readonly<Record<ConnectLaneId, "lock" | "model" | "attestation" | "terminal">>> = Object.freeze({
   local: "terminal",
   companion: "attestation",
 });
@@ -380,7 +389,9 @@ function ConnectLaneCard({
         aria-controls={panelId}
         onClick={onToggle}
       >
-        <Icon name={LANE_ICONS[lane.id]} size={20} />
+        {LANE_BRANDS[lane.id]
+          ? <BrandLogo name={LANE_BRANDS[lane.id]!} size={20} />
+          : <Icon name={LANE_ICONS[lane.id]!} size={20} />}
         {/* One row, one baseline. The qualifier is a different fact from the
             title, never the title again, so the pair earns its 44px. */}
         <span class="connect-lane__identity">
@@ -648,6 +659,16 @@ function LocalPanel({
         {" "}<code>127.0.0.1:1234</code> for LM Studio, and connects anything
         that answers — only when you press Check. Your browser and the local
         service both have to allow this page.</p>
+      <details class="connect-local__requirements">
+        <summary>LM Studio Local Server requirements — the four settings the check needs</summary>
+        <ol>
+          <li>Open LM Studio and load a model (Developer tab), so it is ready to serve.</li>
+          <li>Start the Local Server on port <code>1234</code> (Developer → Local Server → Start Server).</li>
+          <li>Under Server Settings, turn <strong>Serve on Local Network</strong> on.</li>
+          <li>Under Server Settings, turn <strong>Enable CORS</strong> on — without it the browser refuses the page’s requests.</li>
+        </ol>
+        <p>The loaded model then answers locally at <code>http://127.0.0.1:1234</code>. Ollama needs only its server running at <code>127.0.0.1:11434</code>.</p>
+      </details>
       {onCheck ? (
         <button
           type="button"
@@ -683,6 +704,9 @@ function LocalPanel({
               </li>
             ))}
           </ul>
+        ) : null}
+        {results?.some((result) => result.outcome === "answered") ? (
+          <p class="connect-local__next-step">The models are named below under <strong>Provider fabric</strong> — pick one there and press <strong>Use in new conversation</strong> to chat with it.</p>
         ) : null}
       </div>
       {failure ? <p class="connect-lane__failure" role="alert"><Icon name="warning" size={16} />{failure}</p> : null}

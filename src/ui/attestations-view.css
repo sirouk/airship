@@ -564,7 +564,12 @@
 
 .attestations-empty h2 { margin: 0; color: var(--ink); font-size: var(--fs-lead); }
 .attestations-empty p { max-width: 58ch; margin: 0; font-size: var(--fs-caption); line-height: 1.5; }
-.attestations-empty__intro { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 14px; align-items: start; max-width: 700px; margin-inline: auto; }
+/* Same box as the lifecycle strip beneath it: the headline and "01 Acquire"
+   share one left edge — the intro measured 60px narrower than the flow and
+   centred on its own, so the two rows the eye is meant to compare hung 30px
+   apart on opposite measures. */
+.attestations-empty__intro { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 14px; align-items: start; width: min(760px, 100%); margin-inline: auto; }
+.attestations-empty__intro > div { max-width: 700px; }
 .attestations-empty__intro p { margin-top: 5px; }
 .attestations-empty__connection { margin-top: 14px; }
 .attestations-empty__flow { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; width: min(760px, 100%); margin-inline: auto; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--line); }

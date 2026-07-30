@@ -16,8 +16,9 @@ import {
 } from "../billing/honesty";
 import type { ChutesInvocationTelemetry } from "../inference/chutes";
 import "./billing-view.css";
+import { BrandLogo, type BrandLogoName } from "./brand-icons";
 import { OFFLINE_INLINE_REASON } from "./connectivity";
-import { Icon, type IconName } from "./icons";
+import { Icon } from "./icons";
 import { formatInstant } from "./instant-format";
 import { Metric, MetricStrip, metricQuantity } from "./metric-strip";
 import { destinationLabel } from "./navigation-model";
@@ -89,11 +90,11 @@ export type BillingProviderDefinition = Readonly<{
  * giving it a mark does not compile — which is the only way this stays a
  * property of the provider list rather than of one component that remembered.
  */
-export const BILLING_PROVIDER_ICONS: Readonly<Record<BillingProviderId, IconName>> = Object.freeze({
-  chutes: "provider-chutes",
-  openai: "provider-openai",
-  anthropic: "provider-anthropic",
-  xai: "provider-xai",
+export const BILLING_PROVIDER_ICONS: Readonly<Record<BillingProviderId, BrandLogoName>> = Object.freeze({
+  chutes: "chutes",
+  openai: "openai",
+  anthropic: "anthropic",
+  xai: "xai",
 });
 
 export const BILLING_PROVIDERS: readonly BillingProviderDefinition[] = Object.freeze([
@@ -773,7 +774,7 @@ function BillingProviderTabs({
             data-state={inventory.state}
             onClick={() => onSelect(provider.id)}
           >
-            <strong><Icon name={BILLING_PROVIDER_ICONS[provider.id]} size={16} />{provider.label}</strong>
+            <strong><BrandLogo name={BILLING_PROVIDER_ICONS[provider.id]} size={16} />{provider.label}</strong>
             <span>{providerConnectionLabel(inventory.state)}</span>
           </button>
         );
@@ -820,7 +821,7 @@ function BillingProviderInventoryPanel({
       <header class="billing-provider-inventory__header">
         <div>
           <span class="eyebrow">Provider account inventory</span>
-          <h2><Icon name={BILLING_PROVIDER_ICONS[provider.id]} size={20} />{provider.label}</h2>
+          <h2><BrandLogo name={BILLING_PROVIDER_ICONS[provider.id]} size={20} />{provider.label}</h2>
         </div>
         <span class="billing-provider-state" data-state={inventory.state}>{providerConnectionLabel(inventory.state)}</span>
       </header>

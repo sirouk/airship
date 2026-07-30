@@ -108,7 +108,7 @@ export type VaultSnapshot =
       evidence: VaultProbeEvidence;
       message: "Vault contract verified for this browser origin; synchronization has not been evaluated.";
     }>)
-  | (ConfiguredFields & Readonly<{
+    | (ConfiguredFields & Readonly<{
       phase: "degraded";
       revision: number;
       diagnostic: VaultDiagnostic;
@@ -116,6 +116,19 @@ export type VaultSnapshot =
       probeResidue?: VaultProbeResidueNotice;
       message: "Vault is not ready for strict cloud state.";
     }>);
+
+/**
+ * A read-only inventory of the connected store.
+ *
+ * `totalBytes` is the sum of provider object sizes under the configuration's
+ * namespace — ciphertext for every encrypted write, so this is the storage the
+ * provider bill sees, not the decrypted working set.
+ */
+export type VaultStorageStats = Readonly<{
+  objectCount: number;
+  totalBytes: number;
+  collectedAt: string;
+}>;
 
 export type DurableStateRuntime = Readonly<{
   store: ObjectStore;
@@ -213,6 +226,33 @@ export class VaultCoordinator {
 
   get snapshot(): VaultSnapshot {
     return this.current;
+  }
+
+  /**
+   * Count what the connected store actually holds.
+   *
+   * Sizes are the provider's object sizes — ciphertext for every encrypted
+   * write, which is everything the Vault claims to hold — summed from one
+   * prefix listing under the configuration's namespace. Reading this is a
+   * read-only list call against the already-verified store: it cannot mutate
+   * anything, and a refusal returns `undefined` rather than a guessed number.
+   */
+  async collectStorageStats(signal?: AbortSignal): Promise<VaultStorageStats | undefined> {
+    const store = this.store;
+    const config = this.config;
+    if (!store || !config || this.current.phase !== "ready") return undefined;
+    try {
+      const objects = await store.list(`${config.namespace}/`, signal);
+      let totalBytes = 0;
+      for (const object of objects) totalBytes += object.size;
+      return Object.freeze({
+        objectCount: objects.length,
+        totalBytes,
+        collectedAt: new Date().toISOString(),
+      });
+    } catch {
+      return undefined;
+    }
   }
 
   subscribe(listener: Listener): () => void {

@@ -21,6 +21,7 @@ import {
 } from "../auth/connection";
 import type { ChutesOAuthRegistration } from "../auth/chutes-oauth-registration";
 import type { ChutesOAuthTokenSet } from "../auth/chutes-oauth";
+import type { VaultUsageFacts } from "./vault-view";
 import type { BrowserRuntimeCapabilityReport } from "../capabilities/browser-runtime";
 import type { ExtensionBridgeObservation } from "../capabilities/extension-bridge";
 import {
@@ -1471,6 +1472,7 @@ export function App() {
   const activeDurableAuthority = useRef<DurableAdoptionDescriptor>();
   const localDeviceHandle = useRef<LocalDeviceVaultHandle>();
   const [localDeviceStatus, setLocalDeviceStatus] = useState<LocalDeviceVaultStatus>();
+  const [vaultUsageFacts, setVaultUsageFacts] = useState<VaultUsageFacts>();
   const [localDeviceBusy, setLocalDeviceBusy] = useState(false);
   const localDeviceAutoOpenOwner = useRef(0);
   const [localDeviceError, setLocalDeviceError] = useState<string>();
@@ -2718,6 +2720,45 @@ export function App() {
       .finally(() => { ephemeralAdoptionBusy.current = false; });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [preferences.vaultBackend, catalog, activeProfile, gitClient]);
+
+  /*
+   * The Vault route's usage strip.
+   *
+   * Every provider answers "what are you holding" from its own evidence: the
+   * cloud store lists its namespace, the device Vault reports the browser's
+   * own storage estimate, and page memory honestly has no enumerable bytes —
+   * what it can count is the work recorded in it this session. A provider
+   * that cannot answer renders nothing rather than a guessed zero.
+   */
+  useEffect(() => {
+    if (view !== "vault") { setVaultUsageFacts(undefined); return; }
+    const backend = preferences.vaultBackend;
+    let cancelled = false;
+    const publish = (facts: VaultUsageFacts | undefined) => { if (!cancelled) setVaultUsageFacts(facts); };
+    const detach = () => { cancelled = true; };
+    if (backend === "ephemeral") {
+      publish({ notes: [
+        `${sessionRevision.toLocaleString()} durable event${sessionRevision === 1 ? "" : "s"} recorded this page session`,
+        "Page memory — nothing survives closing this tab",
+      ] });
+      return detach;
+    }
+    if (backend === "local-device") {
+      if (!localDeviceStatus) { publish(undefined); return detach; }
+      publish({
+        bytes: localDeviceStatus.readiness.usageBytes,
+        quotaBytes: localDeviceStatus.readiness.quotaBytes,
+        notes: [localDeviceStatus.readiness.backend === "opfs" ? "Origin Private File System" : "IndexedDB fallback"],
+      });
+      return detach;
+    }
+    if (vaultSnapshot.phase !== "ready") { publish(undefined); return detach; }
+    void vault.collectStorageStats().then((stats) => publish(stats
+      ? { objects: stats.objectCount, bytes: stats.totalBytes }
+      : undefined));
+    return detach;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, preferences.vaultBackend, vaultSnapshot, localDeviceStatus, sessionRevision]);
 
   /*
    * The queue's own recovery channel, keyed on the fault and nothing else.
@@ -7652,7 +7693,7 @@ export function App() {
             id: server.kind,
             label: server.label,
             outcome: "answered" as const,
-            detail: `Already connected in this tab · ${modelCountLabel(held.models.length)}.`,
+            detail: `Already connected in this tab · ${modelCountLabel(held.models.length)}${modelNameList(held.models)}.`,
           }));
           continue;
         }
@@ -7662,7 +7703,7 @@ export function App() {
             id: server.kind,
             label: server.label,
             outcome: "answered" as const,
-            detail: `Answered on ${server.endpoint} · ${modelCountLabel(connected.models.length)}.`,
+            detail: `Answered on ${server.endpoint} · ${modelCountLabel(connected.models.length)}${modelNameList(connected.models)}.`,
           }));
         } catch (caught) {
           // A refusal by one server says nothing about the other, so the loop
@@ -8978,6 +9019,7 @@ export function App() {
             {VaultScreen ? <VaultScreen
               snapshot={vaultSnapshot}
               runtimeAdopted={vaultRuntimeAdopted}
+              usage={vaultUsageFacts}
               adoptionNotice={vaultAdoptionNotice}
               contextMode={runtime.current?.contextMode}
               contextPublishing={vaultContextPublishing}
@@ -10674,6 +10716,20 @@ function modelCountLabel(count: number): string {
 }
 
 /**
+ * The names behind the count.
+ *
+ * "3 models" answers how many; nobody can pick one from a number. The check's
+ * result sentence names the first few the server returned so the row points at
+ * what was actually found, with the remainder counted.
+ */
+function modelNameList(models: readonly Readonly<{ id: string }>[]): string {
+  if (models.length === 0) return "";
+  const shown = models.slice(0, 4).map((model) => model.id);
+  const rest = models.length - shown.length;
+  return rest > 0 ? ` — ${shown.join(", ")}, +${rest} more` : ` — ${shown.join(", ")}`;
+}
+
+/**
  * One bounded sentence for why a loopback server did not answer.
  *
  * Local connections carry no credential, but the message is still redacted and
@@ -11071,11 +11127,33 @@ function ProfileManagerView({
               <label><span>Name</span><input value={draft.name} maxLength={120} onInput={(event) => setDraft({ ...draft, name: event.currentTarget.value })} /></label>
               <label><span>Role</span><input value={draft.description} maxLength={4096} onInput={(event) => setDraft({ ...draft, description: event.currentTarget.value })} /></label>
             </div>
+            {/*
+             * Instructions speak before they are opened.
+             *
+             * A closed disclosure with a character count answered "how long"
+             * and concealed "what" — the profile's whole personality hid behind
+             * one tap. The prompt previews through a fade and expands the same
+             * disclosure on click, so the read happens in place; the editor
+             * still lives one tap away inside the panel the summary names.
+             */}
             <details class="profile-editor-disclosure">
-              <summary><span>System instructions</span><small>{draft.systemPrompt.length.toLocaleString()} characters</small></summary>
+              <summary>
+                <span>System instructions</span>
+                <small>{draft.systemPrompt.length.toLocaleString()} characters</small>
+                {/* Two clamped lines with an ellipsis: enough of the prompt to
+                    recognise the personality, never enough to mistake this for
+                    the editor. The disclosure it previews folds away the moment
+                    it opens (`.profile-editor-disclosure[open]` hides it). */}
+                <span class="profile-prompt-preview" aria-hidden="true">{draft.systemPrompt.trim() || "No instructions set"}</span>
+              </summary>
               <label><span>Prompt</span><textarea rows={7} value={draft.systemPrompt} onInput={(event) => setDraft({ ...draft, systemPrompt: event.currentTarget.value })} /></label>
             </details>
-            <details class="profile-editor-disclosure">
+            {/* Interface theme and Profile boundaries open by default: a theme
+                is a picture and a boundary is four words, both legible at a
+                glance, and a collapsed section that only repeats its own title
+                earns nothing. The summary smalls keep carrying the state for a
+                reader who has already skimmed past it. */}
+            <details class="profile-editor-disclosure" open>
               <summary><span>Interface theme</span><small>{catalog.themes.find((theme) => theme.themeId === draft.themeId)?.name ?? "Selected theme"}</small></summary>
               <div class="theme-manager">
                 <div><span class="field-label">Theme library</span><small>Semantic tokens only</small></div>
@@ -11099,7 +11177,7 @@ function ProfileManagerView({
                 </div>
               </div>
             </details>
-            <details class="profile-editor-disclosure">
+            <details class="profile-editor-disclosure" open>
               <summary><span>Profile boundaries</span><small>{PROFILE_MEMORY_SCOPE_LABELS[enforcedMemoryScope(draft.memoryScope)]} · {approvalModeLabel(draft.approvalMode)}</small></summary>
               <div class="profile-boundary-grid">
                 <label><span>Workspace</span><MenuSelect ariaLabel="Profile workspace binding" value={draft.workspaceBinding} options={[

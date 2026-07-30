@@ -58,6 +58,57 @@
 .vault-view__state[data-state="adopted"] { border-left-color: var(--v-verified); }
 .vault-view__state[data-state="verified"],
 .vault-view__state[data-state="unset"] { border-left-color: var(--v-caution); }
+
+/*
+ * Usage strip. Rendered only while a destination is attached — the route owns
+ * the honest per-provider facts (objects, bytes, quota) so they are read at a
+ * glance rather than excavated from the configuration rows below. Cells share
+ * one row while they fit and fold under 640px, like the rest of the route.
+ */
+.vault-usage {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 1px;
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  background: var(--line);
+}
+
+.vault-usage__cell {
+  display: grid;
+  gap: 3px;
+  align-content: start;
+  min-width: 0;
+  padding: var(--sp-3);
+  background: var(--surface-soft);
+}
+
+.vault-usage__cell dt {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink-faint);
+  font: var(--fs-micro)/1.2 var(--font-mono);
+  text-transform: uppercase;
+}
+
+.vault-usage__cell dd {
+  margin: 0;
+  overflow: hidden;
+  font-size: var(--fs-meta);
+  text-overflow: ellipsis;
+}
+
+.vault-provider-selector__mark { display: inline-flex; flex: none; align-items: center; }
+.menu-select-option-copy { min-width: 0; }
+
+.vault-provider-compare__heading {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
 .vault-view__state[data-state="blocked"] { border-left-color: var(--v-failed); }
 .vault-view__state[data-state="probing"] { border-left-color: var(--v-info); }
 

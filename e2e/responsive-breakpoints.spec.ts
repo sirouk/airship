@@ -635,8 +635,12 @@ test("profile approval picker exposes all three policies at a constrained viewpo
   test.skip(testInfo.project.name !== "desktop-chromium", "desktop profile policy contract");
   await page.setViewportSize({ width: 768, height: 620 });
   await page.goto("/#profiles");
+  // Profile boundaries open by default — the editor's disclosures used to all
+  // arrive shut, and the picker behind this one needed a summary click to be
+  // seen at all. The click stayed as a fixture step and began closing the
+  // section it was meant to open.
   const boundaries = page.locator("details.profile-editor-disclosure").filter({ hasText: "Profile boundaries" });
-  await boundaries.locator("summary").click();
+  await expect(boundaries.getByRole("button", { name: "Profile approval policy" })).toBeVisible();
   const picker = boundaries.getByRole("button", { name: "Profile approval policy" });
   for (const option of ["Auto Approve", "Full Access", "Ask First"] as const) {
     await picker.click();

@@ -424,7 +424,25 @@ export function Rail({
           aria-describedby={childActive && currentHint ? CURRENT_HINT_ID : undefined}
           data-scope={row.scope}
           title={`${row.label} · ${row.scope} scope`}
-          onClick={() => { if (row.id === "chat") setRecentsOpen(true); onNavigate(row.id); }}
+          /*
+           * One click goes somewhere AND shows what is inside: Chat opens its
+           * conversation list, a row with children expands them. The reader
+           * asked for the destination; the disclosure is how they see what the
+           * destination contains. Double-click is the inverse gesture — it
+           * toggles the disclosure back shut, matching the caret's own verb.
+           * Because click fires twice before dblclick, the toggle reads the
+           * state at dispatch time, so the pair lands on the same answer the
+           * caret would give from there.
+           */
+          onClick={() => {
+            if (row.id === "chat") setRecentsOpen(true);
+            if (row.nested.length > 0) setRowExpanded(row.id, true);
+            onNavigate(row.id);
+          }}
+          onDblClick={() => {
+            if (row.id === "chat") setRecentsOpen((value) => !value);
+            if (row.nested.length > 0) setRowExpanded(row.id, !open);
+          }}
           {...itemProps(row.id)}
         >
           <Icon name={row.icon} />

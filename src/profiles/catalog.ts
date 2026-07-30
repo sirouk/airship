@@ -78,6 +78,36 @@ export function reconcileBuiltInSkills(persisted: ProfileCatalog, builtIn: Profi
   return Object.freeze({ ...persisted, skills: Object.freeze(skills) });
 }
 
+/**
+ * The theme-half of the same policy as `reconcileBuiltInSkills`.
+ *
+ * A Vault written by an older release froze the shipped theme set, so a
+ * palette repaired after adoption (the Verdigris refresh) never reached the
+ * route that previews it, and a scheme added later could never be chosen.
+ * Shipped themes own their ids: the same digest is position-stable, a drifted
+ * one reads as "older release" and is replaced, a new one is inserted.
+ * Themes whose ids this build did not ship are user work and survive in place
+ * after the shipped run, in the order they were saved.
+ */
+export function reconcileBuiltInThemes(persisted: ProfileCatalog, builtIn: ProfileCatalog): ProfileCatalog {
+  const persistedById = new Map(persisted.themes.map((theme) => [theme.themeId, theme]));
+  const shippedIds = new Set(builtIn.themes.map((theme) => theme.themeId));
+  let changed = false;
+  const themes = builtIn.themes.map((shipped) => {
+    const held = persistedById.get(shipped.themeId);
+    if (held && held.digest === shipped.digest) return held;
+    changed = true;
+    return shipped;
+  });
+  for (const held of persisted.themes) {
+    if (shippedIds.has(held.themeId)) continue;
+    themes.push(held);
+    changed = true;
+  }
+  if (!changed) return persisted;
+  return Object.freeze({ ...persisted, themes: Object.freeze(themes) });
+}
+
 export async function createBuiltInProfileCatalog(): Promise<ProfileCatalog> {
   const themes = await Promise.all(themeDrafts.map(createThemeManifest));
   const themeById = new Map(themes.map((theme) => [theme.themeId, theme]));
@@ -218,7 +248,133 @@ export async function createBuiltInProfileCatalog(): Promise<ProfileCatalog> {
  *    its `inkMuted` 7:1 on its own `surface`; a caption is where provenance
  *    lives. `ui/css-variable-contract.test.ts` enforces both, per theme.
  */
+/*
+ * Curated first, in-house second.
+ *
+ * The top six are well-known dark schemes, translated into this product's
+ * nine roles rather than re-typed from their dotfiles: each keeps its own
+ * accent pair and surface ladder but answers the same questions (ground,
+ * surface, raised, soft, ink, muted, faint, accent, bright) with the same
+ * constraints the house themes answer — inkFaint clears AA on surfaceRaised,
+ * inkMuted clears 7:1 on surface, verified by `css-variable-contract.test.ts`
+ * like everything else. They lead the library because a person choosing a look
+ * deserves proven options before house experiments.
+ */
 const themeDrafts: readonly ThemeManifestDraft[] = [
+  {
+    themeId: "nord",
+    name: "Nord",
+    description: "Curated · arctic blues on a calm polar-night grey.",
+    colorScheme: "dark",
+    colors: {
+      ground: "#1f232c",
+      surface: "#232937",
+      surfaceRaised: "#272d39",
+      surfaceSoft: "#20242e",
+      ink: "#d8dee9",
+      inkMuted: "#bfcad8",
+      inkFaint: "#a6b4c4",
+      accent: "#81a1c1",
+      accentBright: "#8fbcbb",
+    },
+    typography: { body: "system-sans", scale: "standard" },
+    layout: { density: "comfortable", corners: "subtle" },
+  },
+  {
+    themeId: "tokyo-night",
+    name: "Tokyo Night",
+    description: "Curated · midnight violet inks with electric blue signals.",
+    colorScheme: "dark",
+    colors: {
+      ground: "#16161e",
+      surface: "#191a25",
+      surfaceRaised: "#20232f",
+      surfaceSoft: "#171723",
+      ink: "#c0caf5",
+      inkMuted: "#a9b2da",
+      inkFaint: "#929ac2",
+      accent: "#7aa2f7",
+      accentBright: "#9cbeff",
+    },
+    typography: { body: "system-sans", scale: "standard" },
+    layout: { density: "comfortable", corners: "subtle" },
+  },
+  {
+    themeId: "catppuccin-mocha",
+    name: "Catppuccin Mocha",
+    description: "Curated · warm cocoa surfaces with a soft mauve accent.",
+    colorScheme: "dark",
+    colors: {
+      ground: "#171724",
+      surface: "#1c1c29",
+      surfaceRaised: "#242433",
+      surfaceSoft: "#181826",
+      ink: "#cdd6f4",
+      inkMuted: "#b6c1e6",
+      inkFaint: "#a0a8cf",
+      accent: "#cba6f7",
+      accentBright: "#d3bdfa",
+    },
+    typography: { body: "system-sans", scale: "standard" },
+    layout: { density: "comfortable", corners: "rounded" },
+  },
+  {
+    themeId: "gruvbox-dark",
+    name: "Gruvbox Dark",
+    description: "Curated · warm amber paper tones on deep retro brown.",
+    colorScheme: "dark",
+    colors: {
+      ground: "#1d2021",
+      surface: "#252626",
+      surfaceRaised: "#282726",
+      surfaceSoft: "#202324",
+      ink: "#ebdbb2",
+      inkMuted: "#d5c4a1",
+      inkFaint: "#b3a190",
+      accent: "#8ec07c",
+      accentBright: "#b8bb26",
+    },
+    typography: { body: "system-sans", scale: "standard" },
+    layout: { density: "comfortable", corners: "subtle" },
+  },
+  {
+    themeId: "solarized-dark",
+    name: "Solarized Dark",
+    description: "Curated · deep cyan slate with measured blue-green accents.",
+    colorScheme: "dark",
+    colors: {
+      ground: "#00232c",
+      surface: "#00252f",
+      surfaceRaised: "#062e39",
+      surfaceSoft: "#002631",
+      ink: "#eee8d5",
+      inkMuted: "#b9c4ba",
+      inkFaint: "#93a8a4",
+      accent: "#268bd2",
+      accentBright: "#2fae9f",
+    },
+    typography: { body: "system-sans", scale: "standard" },
+    layout: { density: "comfortable", corners: "subtle" },
+  },
+  {
+    themeId: "one-dark",
+    name: "One Dark",
+    description: "Curated · graphite greys with clear sky-blue signals.",
+    colorScheme: "dark",
+    colors: {
+      ground: "#1c2026",
+      surface: "#232831",
+      surfaceRaised: "#282d36",
+      surfaceSoft: "#1f232a",
+      ink: "#d7dae0",
+      inkMuted: "#b5bdc9",
+      inkFaint: "#9aa1ad",
+      accent: "#61afef",
+      accentBright: "#8fc6f2",
+    },
+    typography: { body: "system-sans", scale: "standard" },
+    layout: { density: "comfortable", corners: "square" },
+  },
   {
     themeId: "foundry",
     name: "Foundry",
@@ -241,18 +397,18 @@ const themeDrafts: readonly ThemeManifestDraft[] = [
   {
     themeId: "verdigris",
     name: "Verdigris",
-    description: "Deep mineral green with pale copper oxidation and warm status metal.",
+    description: "Deep spruce green with sage accents and warm paper ink.",
     colorScheme: "dark",
     colors: {
-      ground: "#0d1617",
-      surface: "#142022",
-      surfaceRaised: "#1b292a",
-      surfaceSoft: "#101b1c",
-      ink: "#edf1eb",
-      inkMuted: "#a6b4af",
-      inkFaint: "#8ba49e",
-      accent: "#73a69c",
-      accentBright: "#a4cec3",
+      ground: "#0c110f",
+      surface: "#131a15",
+      surfaceRaised: "#1b251e",
+      surfaceSoft: "#101711",
+      ink: "#e9ede3",
+      inkMuted: "#adbba9",
+      inkFaint: "#91a58b",
+      accent: "#68a37b",
+      accentBright: "#95d1a6",
     },
     typography: { body: "system-sans", scale: "standard" },
     layout: { density: "comfortable", corners: "rounded" },

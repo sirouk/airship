@@ -187,10 +187,11 @@
   --danger: var(--v-failed);
   --brass: var(--accent);
   --brass-bright: var(--accent-bright);
-  /* 5.27:1 on --surface / 4.93:1 on --surface-raised, up from 4.58/4.29, and
-     4.61:1 on the lightest raised surface any shipped palette declares
-     (Verdigris #1b292a). Both this token and --v-failed below used to sit
-     between 4.0 and 4.6 on the beds they land on, which was defended as "they
+  /* Stepped from #be805f for the same lightest-bed rule: the curated palettes
+     that joined the library declare raised surfaces lighter than Verdigris'
+     #1b292a — the previous lightest bed — and this is the bed that decides
+     the hex. It used to sit between 4.0 and 4.6 on the beds it lands on,
+     defended as "they
      only paint glyphs, borders and fills" — but twenty rules across ten sheets
      spend them on `color`, and sixteen of those land on a *word* at caption
      size (the failed status chip, both attestation chips, both topbar posture
@@ -200,7 +201,7 @@
      and lifting it here fixes the aliases (--danger, --signal-red) too.
      `css-variable-contract.test.ts` now holds both tokens to AA on both
      surfaces across every theme x mode. */
-  --copper: #be805f;
+  --copper: #c78a66;
   --verdigris: var(--v-verified);
   --signal-red: var(--v-failed);
   --line: rgba(225, 217, 200, 0.105);
@@ -221,12 +222,15 @@
   --v-info: #7fa8c9;
   --v-verified: #67a39a;
   --v-caution: #d9a441;
-  /* 5.29:1 on --surface / 4.95:1 on --surface-raised, up from 4.53/4.24, and
-     4.63:1 on the lightest palette-declared raised surface. Same reason as
-     --copper above: this is the colour of the word "failed" in the session
-     status chip, the error part, the claim-group header and the removed-line
-     emphasis, so 1.4.11's 3:1 was never the applicable rule for it. */
-  --v-failed: #ce7769;
+  /* Stepped from #ce7769 against the same bed: the curated palettes moved the
+     lightest declared raised surface from Verdigris #1b292a to One Dark
+     #282d36, and the token moves before the bed ever breaches 4.5:1. Same
+     reason as --copper above: this is the colour of the word "failed" in the
+     session status chip, the error part, the claim-group header and the
+     removed-line emphasis, so 1.4.11's 3:1 was never the applicable rule for
+     it. `css-variable-contract.test.ts` holds it to AA on both beds in every
+     theme. */
+  --v-failed: #d68172;
   --truth-local: #8ba0a6;
   --truth-remote: #bd6f4c;
   /* Code tokens are a two-hue family of their own — one violet for syntax,
