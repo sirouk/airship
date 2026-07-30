@@ -171,7 +171,19 @@ export function ProofView({
       : "production remote mode must fail closed";
 
   return (
-    <section class="work-view proof-view">
+    <section
+      class="work-view proof-view"
+      // VIS-02. The shell caps every route child at a 1160px *prose* measure
+      // (`routes.css`), and this route's evidence surface is not prose: the
+      // attestation ledger is a list-plus-inspector grid printing 64-hex
+      // measurements, so the cap left the inspector ~830px and wrapped every
+      // digest while the desktop had the width to spare. The route declares its
+      // kind here rather than growing another `:has()` one-off; the receipt
+      // panel below opts *back* into the measure in this route's own sheet,
+      // because the half of this page that is a verdict and a paragraph does
+      // get harder to read the wider it is.
+      data-route-measure="wide"
+    >
       {/* `document` density, deliberately, on the one route where §3.7's move
           into the ⓘ cannot be taken. Two reasons, both measured: this route's
           sentence is one of the two the ledger names as must-be-verbatim, and a
@@ -201,7 +213,7 @@ export function ProofView({
         />
       </div>
       <div id="proof-panel-attestations" class="proof-surface-panel" role="tabpanel" aria-labelledby="attestations-title" hidden={section !== "attestations"}>{evidenceLedger}</div>
-      <div id="proof-panel-summary" class="proof-surface-panel" role="tabpanel" aria-labelledby="proof-summary-title" hidden={section !== "summary"}>
+      <div id="proof-panel-summary" class="proof-surface-panel proof-surface-panel--prose" role="tabpanel" aria-labelledby="proof-summary-title" hidden={section !== "summary"}>
         <h2 class="sr-only" id="proof-summary-title">Receipt &amp; journal</h2>
         <section class="proof-verdict" data-state={verdict.state} aria-label={`Turn evidence. ${verdict.chip}. ${verdict.line}`}>
           {/* The route's one hero seal, and the one place a seal renders its
@@ -300,7 +312,13 @@ export function ProofView({
             {audit ? <>
               <div class="audit-boundary"><Icon name={audit.status === "invalid" ? "warning" : "proof"} size={18} /><p><strong>A valid hash chain is not proof of authorship.</strong> This report checks schema, ordering, manifest bindings, turn/tool protocol, and receipt bindings. No separately trusted author identity was verified.</p></div>
               <div class="audit-check-grid" role="group" aria-label="Journal audit checks">{auditChecks(audit).map(([label, passed]) => <div key={label} class={passed ? "pass" : "fail"}><Seal state={passed ? "verified" : "failed"} label={passed ? "Passed" : "Failed"} size={16} compact /><strong>{label}</strong><small>{passed ? "consistent" : "attention required"}</small></div>)}</div>
-              <dl class="audit-commitment"><div><dt>Session</dt><dd>{audit.sessionId}</dd></div><div><dt>Journal events</dt><dd>{audit.commitment.sequence}</dd></div><div><dt>Checked</dt><dd><time dateTime={audit.checkedAt} title={new Date(audit.checkedAt).toLocaleString()}>{relativeEvidenceAge(audit.checkedAt)}</time></dd></div><div><dt>External anchor</dt><dd>{audit.anchor.status === "not-supplied" ? "Not supplied" : audit.anchor.status === "matched" ? "Matched" : "Did not match"}</dd></div></dl>
+              {/* "Shell records" is here because until this pass the terminal
+                  was the one effectful surface with no representation on this
+                  screen at all: a `jsh` command that rewrote the workspace was
+                  audited by nothing, so a reader could not tell a session where
+                  no shell ran from one whose shell work was simply not
+                  recorded. A zero is a fact; an absence was not. */}
+              <dl class="audit-commitment"><div><dt>Session</dt><dd>{audit.sessionId}</dd></div><div><dt>Journal events</dt><dd>{audit.commitment.sequence}</dd></div><div><dt>Shell records</dt><dd>{audit.counts.shellRecords}</dd></div><div><dt>Checked</dt><dd><time dateTime={audit.checkedAt} title={new Date(audit.checkedAt).toLocaleString()}>{relativeEvidenceAge(audit.checkedAt)}</time></dd></div><div><dt>External anchor</dt><dd>{audit.anchor.status === "not-supplied" ? "Not supplied" : audit.anchor.status === "matched" ? "Matched" : "Did not match"}</dd></div></dl>
               <details><summary>Technical journal details</summary><code>{audit.commitment.digest}</code></details>
               {/* Open whenever findings exist. A warning collapsed under a row
                   announcing that everything passed is the shape of a burial. */}

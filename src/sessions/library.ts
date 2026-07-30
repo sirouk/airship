@@ -71,6 +71,14 @@ export type SessionLibraryOptions = Readonly<{
 }>;
 
 /**
+ * How far back `list()` reads to find a conversation's last real activity.
+ *
+ * Exported so a test can build a journal on either side of the bound rather
+ * than transcribing the number.
+ */
+export const PREFERENCE_TAIL_DEPTH = 8;
+
+/**
  * The conversation is not in this journal — which is not the same fault as a
  * conversation this runtime cannot currently open.
  *
@@ -121,8 +129,22 @@ export class SessionLibrary {
     // reordering a thread is not conversation activity. Present a derived
     // activity time to recency surfaces so those operations never reshuffle
     // the Recent group. `inspect()` still returns the exact record timestamp.
+    //
+    // The tail, never the whole journal. This scan wants exactly one event —
+    // the newest that is not a preference write — and every recents refresh
+    // ran it, so listing N conversations decrypted every event of all of them
+    // to read N timestamps. `PREFERENCE_TAIL_DEPTH` events is the whole
+    // reachable run: only starring and favourite reordering are skipped, both
+    // are single deliberate gestures, and a head with more than that many in a
+    // row falls through to `record.updatedAt` — the same value this method
+    // returned before any derivation existed, so the fallback under-claims
+    // rather than inventing an activity time.
     const activityRecords = await Promise.all(records.map(async (record) => {
-      const events = await this.journal.readEvents(record.id, 0, signal);
+      const events = await this.journal.readEvents(
+        record.id,
+        Math.max(0, record.headSequence - PREFERENCE_TAIL_DEPTH),
+        signal,
+      );
       throwIfAborted(signal);
       const activity = [...events].reverse().find((event) =>
         event.type !== "session.favorite.changed"

@@ -498,6 +498,71 @@ describe("auditSessionHistory", () => {
   });
 
   /*
+   * A naming request that came back with a refusal or an essay was still made,
+   * still billed and still attested; only the rename is skipped. Requiring a
+   * title here would have meant the one audit-clean option was to journal
+   * nothing — which is the unaudited paid request this record exists to end.
+   * The title is the outcome; the verbatim answer is the evidence.
+   */
+  it("accepts a naming record whose answer yielded no title, and still refuses one that states neither", async () => {
+    const fixture = await createFixture([writeTool]);
+    const refusal = "I'm sorry, but I can't help with naming this conversation.";
+    const receipt = createLocalReceipt({
+      sessionId: fixture.session.id,
+      turnId: "naming-4",
+      provider: fixture.session.manifest.providerId,
+      model: fixture.session.manifest.model,
+      requestDigest: await sha256("naming-request"),
+      responseDigest: await sha256(refusal),
+      now: "2026-07-18T00:00:06.000Z",
+    });
+    await fixture.journal.append(fixture.session.id, [
+      {
+        type: "conversation.named",
+        turnId: "naming-4",
+        operationId: "naming-request-4",
+        payload: {
+          answer: refusal,
+          model: fixture.session.manifest.model,
+          receipt: receipt as unknown as JsonValue,
+        },
+      },
+      {
+        type: "inference.usage",
+        turnId: "naming-4",
+        operationId: "naming-request-4",
+        payload: { inputTokens: 88, outputTokens: 14, source: "conversation-naming" },
+      },
+    ]);
+
+    expect((await auditFixture(fixture)).status).toBe("verified");
+
+    // Absent is allowed; empty and malformed are not. A record that names
+    // neither a title nor the answer it was rejected from is a charge with no
+    // content at all, and a 4 KiB "title" must not be excused by an answer.
+    const empty = await createFixture([writeTool]);
+    await empty.journal.append(empty.session.id, [
+      {
+        type: "conversation.named",
+        turnId: "naming-5",
+        operationId: "naming-request-5",
+        payload: { model: empty.session.manifest.model },
+      },
+      {
+        type: "conversation.named",
+        turnId: "naming-6",
+        operationId: "naming-request-6",
+        payload: { title: "x".repeat(400), answer: refusal, model: empty.session.manifest.model },
+      },
+    ]);
+    const emptyReport = await auditFixture(empty);
+    expect(emptyReport.status).toBe("invalid");
+    expect(
+      emptyReport.findings.filter((finding) => finding.code === "CONVERSATION_NAMING_INVALID"),
+    ).toHaveLength(2);
+  });
+
+  /*
    * The interface's own effects — a stage or commit, a repository import, a
    * vault probe that writes immutable objects — were adjudicated and then
    * forgotten. They are not turn events and never become them, so they are

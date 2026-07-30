@@ -76,7 +76,13 @@
    which is the colour reserved for a cryptographic verdict. */
 .model-row-metrics { color:var(--ink-faint); font-size:var(--fs-micro); font-variant-numeric:tabular-nums; white-space:nowrap; }
 .model-picker-list > button[aria-selected="true"] { border-color:var(--accent-bright); }
-.model-picker-list > button[data-active="true"] { border-color:var(--line-strong); background:var(--surface-soft); outline:none; }
+/* `data-active` is the activedescendant highlight the search field drives, not
+   focus. The options are real `<button>`s and stay in the tab order, so the
+   `outline:none` this rule used to carry never suppressed anything but the
+   focus ring — and at (0,2,1) it beat the global `button:focus-visible` ring,
+   so the one option a keyboard reader was standing on was the one option with
+   no ring. The highlight is the border and fill; the ring is the browser's. */
+.model-picker-list > button[data-active="true"] { border-color:var(--line-strong); background:var(--surface-soft); }
 .model-picker-empty { margin:0; padding:var(--sp-3); color:var(--ink-muted); font-size:var(--fs-caption); }
 
 .model-picker-footer { flex:0 0 auto; display:grid; gap:var(--sp-2); padding:var(--sp-2); border-top:1px solid var(--line); border-radius:0 0 var(--radius-panel) var(--radius-panel); background:var(--surface-raised); }

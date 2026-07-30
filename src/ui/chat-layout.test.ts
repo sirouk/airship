@@ -54,7 +54,7 @@ describe("chat role layout", () => {
     // cluster wraps; wrapping is what turned one row into three.
     expect(styles).toMatch(/\.session-bar__title \{[^}]*text-overflow: ellipsis/u);
     expect(styles).toContain(".session-bar__chips {");
-    expect(styles).toMatch(/\.session-status-chip,\n\.journal-chip,\n\.session-model-chip,\n\.session-bar__new,/u);
+    expect(styles).toMatch(/\.session-status-chip,\n\.journal-chip,\n\.session-model-chip,\n\.session-skills-chip,\n\.session-bar__new,/u);
     // The old two-column header may not come back under any breakpoint.
     expect(styles).not.toContain(".stage-header");
     expect(styles).not.toContain(".session-meta");

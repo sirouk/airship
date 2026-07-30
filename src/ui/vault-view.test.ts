@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   PROVIDER_FACT_ROWS,
@@ -246,5 +247,36 @@ describe("Drive availability", () => {
     expect(googleDriveAvailableInBuild(` ${canonical} `)).toBe(true);
     expect(googleDriveAvailableInBuild("not-a-client-id")).toBe(false);
     expect(googleDriveAvailableInBuild(undefined)).toBe(false);
+  });
+});
+
+/*
+ * `adoptionNotice` was designed, documented and rendered, and no caller ever
+ * passed it: the reason a verified vault refused to be adopted was written
+ * straight into `runtimeStatus`, one mixed-purpose line that the next event
+ * overwrites and that this route deliberately does not read. The row could
+ * therefore only ever print its generic "still page-memory" sentence, on the
+ * one screen a person goes to when adoption has not happened.
+ */
+describe("the runtime's own account of a failed adoption", () => {
+  const view = readFileSync(new URL("./vault-view.tsx", import.meta.url), "utf8");
+  const app = readFileSync(new URL("./app.tsx", import.meta.url), "utf8");
+
+  it("renders the caller's exact sentence as an alert, and only while unadopted", () => {
+    expect(view).toContain('{!runtimeAdopted && adoptionNotice ? <p class="vault-view__warning" role="alert">{adoptionNotice}</p> : null}');
+  });
+
+  it("is fed by a state the adoption failure actually sets", () => {
+    expect(app).toContain("const [vaultAdoptionNotice, setVaultAdoptionNotice] = useState<string>();");
+    const adoption = app.slice(
+      app.indexOf("void adoptReadyVaultRuntime(vaultSnapshot, vault.readyRuntime())"),
+    ).slice(0, 800);
+    expect(adoption).toContain("setVaultAdoptionNotice(message)");
+    // Cleared on a later success and on a destination change, so the row cannot
+    // carry a reason that no longer describes anything.
+    expect(adoption).toContain(".then(() => setVaultAdoptionNotice(undefined))");
+    expect(app.slice(app.indexOf("async function changeVaultProvider"), app.indexOf("async function changeVaultProvider") + 2_000))
+      .toContain("setVaultAdoptionNotice(undefined)");
+    expect(app).toContain("adoptionNotice={vaultAdoptionNotice}");
   });
 });

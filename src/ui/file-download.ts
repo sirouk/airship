@@ -2,11 +2,16 @@
  * The one way bytes Airship already holds leave the browser.
  *
  * Every download in this product is the same three lines — a Blob, an object
- * URL, a synthetic anchor — and the two places that had already written them
- * (`proof-view`, `attestations-view`) each got the revoke and the cleanup
- * slightly differently. Both now call in here, so there is one revoke, one
- * cleanup and one place to fix either. Naming the operation once also names its
- * bound: this hands the caller's exact bytes to the browser and nothing else.
+ * URL, a synthetic anchor — and each place that had written them got the
+ * revoke and the cleanup slightly differently: `proof-view` and
+ * `attestations-view` had one shape, `local-device-vault-setup` a second that
+ * never attached the anchor to the document (which Firefox requires) and put
+ * its availability check in a third place again. Every call site in the tree
+ * is now here — `proof-view`, `attestations-view`, `workspace-view` and the
+ * two in `local-device-vault-setup` — so there is one revoke, one cleanup, one
+ * precondition and one place to fix any of them. Naming the operation once
+ * also names its bound: this hands the caller's exact bytes to the browser and
+ * nothing else.
  * It never re-reads, re-encodes or truncates them, because a download that
  * quietly shipped a bounded preview would be indistinguishable from the real
  * file.
@@ -38,12 +43,20 @@ export function downloadFileName(path: string, fallback = "workspace-file"): str
  * `application/octet-stream` on purpose: the workspace stores a file's bytes,
  * not its media type, and guessing one from an extension would let a download
  * assert a type the stored object never claimed.
+ *
+ * Throws rather than returning when the platform cannot download at all. Every
+ * caller reports the failure to the user, and the one that matters — the Vault
+ * export — must never let "the browser has no object URLs" pass as a backup
+ * the user now believes they hold.
  */
 export function downloadBytes(
   bytes: Uint8Array,
   filename: string,
   type = "application/octet-stream",
 ): void {
+  if (typeof document === "undefined" || typeof URL.createObjectURL !== "function") {
+    throw new Error("Browser download is unavailable.");
+  }
   // A fresh buffer, so a view onto a larger array cannot leak its neighbours
   // into the downloaded file.
   const blob = new Blob([bytes.slice().buffer as ArrayBuffer], { type });

@@ -65,10 +65,21 @@ export const DEVELOPMENT_WATCH_IGNORES = Object.freeze([
   "**/.wrangler/**",
 ]);
 
+/**
+ * Vite's dependency scanner otherwise treats every HTML file below the project
+ * root as an application entry. This repository also contains a separately
+ * packaged extension and reference checkouts, neither of which belongs to the
+ * web application's development dependency graph.
+ */
+export const DEVELOPMENT_OPTIMIZE_ENTRIES = Object.freeze(["index.html"]);
+
 const PUBLIC_BASE_PATH = resolvePublicBasePath(process.env.AIRSHIP_PUBLIC_BASE_PATH);
 
 export default defineConfig({
   base: PUBLIC_BASE_PATH,
+  optimizeDeps: {
+    entries: [...DEVELOPMENT_OPTIMIZE_ENTRIES],
+  },
   resolve: {
     // isomorphic-git's standard fallback drags a Node Buffer-inspection graph
     // into the otherwise browser-native Git pack. Airship keeps the same

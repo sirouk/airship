@@ -9,20 +9,24 @@ import {
   modelDescription,
   providerConnectionCount,
 } from "./provider-fabric-panel";
-import {
-  inferenceModelRoutes,
-  inferenceRouteValue,
-  providerRoutePosture,
-} from "./provider-model-control";
 
-const [panelSource, controlSource, styles] = await Promise.all([
+/*
+ * `provider-model-control.tsx` used to be read here too.
+ *
+ * It was a fourth session-model control with a fourth capability vocabulary,
+ * imported by no production module — this test file was its only importer, so
+ * every assertion about its copy, its `aria-label` and its popover width was a
+ * test proving a test. Deleting it removes the vocabulary rather than
+ * documenting it. The one control Chat renders is `ModelControl`, and the
+ * shared model vocabulary is asserted where it is actually used.
+ */
+const [panelSource, styles] = await Promise.all([
   readFile(new URL("./provider-fabric-panel.tsx", import.meta.url), "utf8"),
-  readFile(new URL("./provider-model-control.tsx", import.meta.url), "utf8"),
   readFile(new URL("./provider-fabric-panel.css", import.meta.url), "utf8"),
 ]);
 
 describe("provider fabric presentation contract", () => {
-  it("keeps same-provider authorities distinct and model routes connection-scoped", () => {
+  it("keeps same-provider authorities distinct", () => {
     const snapshot = availability([
       connection("openai-work", "openai", "OpenAI", "Work", "gpt-5", ["tool-calling"]),
       connection("openai-lab", "openai", "OpenAI", "Lab", "gpt-5", ["reasoning"]),
@@ -30,17 +34,6 @@ describe("provider fabric presentation contract", () => {
     ]);
 
     expect(providerConnectionCount(snapshot, "openai")).toBe(2);
-    expect(inferenceModelRoutes(snapshot).map((route) => [
-      route.connectionId,
-      route.modelId,
-      route.supportedCapabilities,
-    ])).toEqual([
-      ["openai-work", "gpt-5", ["tool-calling"]],
-      ["openai-lab", "gpt-5", ["reasoning"]],
-      ["ollama-local", "qwen", ["image-input"]],
-    ]);
-    expect(inferenceRouteValue("openai-work", "gpt-5"))
-      .not.toBe(inferenceRouteValue("openai-lab", "gpt-5"));
   });
 
   it("renders only discovered capabilities and honest route health", () => {
@@ -55,18 +48,21 @@ describe("provider fabric presentation contract", () => {
     expect(modelDescription(model)).toBe("Available · Vision · Tools");
     expect(capabilityLabel("billing:read")).toBe("Billing");
     expect(capabilityLabel("unknown-capability")).toBe("unknown capability");
+  });
 
-    const unchecked = {
-      ...connection("c", "openai", "OpenAI", "Work", "gpt", []),
-      health: "unchecked",
-      canInvoke: false,
-    } satisfies InferenceAvailabilityConnection;
-    expect(providerRoutePosture(unchecked, undefined)).toBe("Invoke not proved");
-    expect(providerRoutePosture({ ...unchecked, health: "ready", canInvoke: true }, "ready")).toBe("Ready");
-    expect(providerRoutePosture({ ...unchecked, health: "degraded", canInvoke: true }, "ready")).toBe("Ready · degraded");
-    expect(providerRoutePosture({ ...unchecked, health: "ready", canInvoke: true }, "connection-replaced"))
-      .toBe("Route needs attention");
-    expect(providerRoutePosture(undefined, undefined, true)).toBe("Opening pinned thread…");
+  /*
+   * The fourth session-model control is gone, not merely unimported.
+   *
+   * `ProviderModelControl` shipped a parallel `Session model` menu with its own
+   * route vocabulary and its own posture strings, reachable from nowhere. A
+   * dead control is not neutral: the next reader wiring a model picker finds
+   * two candidates and no statement of which one is the product's, which is how
+   * this surface came to have three live vocabularies in the first place.
+   */
+  it("leaves no second session-model control behind", async () => {
+    await expect(readFile(new URL("./provider-model-control.tsx", import.meta.url), "utf8"))
+      .rejects.toThrow();
+    expect(styles).not.toContain(".provider-model-control");
   });
 
   it("offers real Chutes navigation without inventing OAuth for other providers", () => {
@@ -80,7 +76,7 @@ describe("provider fabric presentation contract", () => {
   });
 
   it("does not add a persistence path for provider credentials", () => {
-    expect(`${panelSource}\n${controlSource}`).not.toMatch(
+    expect(panelSource).not.toMatch(
       /localStorage|sessionStorage|indexedDB|StorageManager|persistCredential/u,
     );
     expect(panelSource).toContain("const secrets = useRef");
@@ -92,18 +88,13 @@ describe("provider fabric presentation contract", () => {
   it("makes route adoption explicit and preserves the existing pin on failure", () => {
     expect(panelSource).toContain("Use in new thread");
     expect(panelSource).toContain("Airship never retargets a");
-    expect(controlSource).toContain("newly pinned conversation");
-    expect(controlSource).toContain("existing conversation pin was preserved");
-    expect(controlSource).toContain("inferenceRouteValue");
   });
 
   it("uses the accessible menu contract and collapses cleanly on small screens", () => {
-    expect(`${panelSource}\n${controlSource}`).not.toMatch(/<select(?:\\s|>)/u);
+    expect(panelSource).not.toMatch(/<select(?:\\s|>)/u);
     expect(panelSource).toContain("<MenuSelect");
-    expect(controlSource).toContain('ariaLabel="Session inference provider and model"');
     expect(styles).toContain("@media (max-width: 820px)");
     expect(styles).toContain("@media (max-width: 520px)");
-    expect(styles).toContain(".provider-model-control .menu-select-popover");
   });
 });
 

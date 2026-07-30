@@ -626,11 +626,13 @@ export function Rail({
           ))}
         </nav>
         <div class="sidebar-spacer" />
-        {/* The one live-utilisation reading the shell carries. It lives here
-            rather than on the Capabilities route alone because "what is this
-            running right now" is a question asked while doing something else,
-            and the rail is the only band every route renders. */}
-        <RuntimeLoadIndicator />
+        {/* The live-utilisation reading the shell carries on desktop. It lives
+            here rather than on the Capabilities route alone because "what is
+            this running right now" is a question asked while doing something
+            else, and the rail is the band every route renders at this width.
+            Below the phone breakpoint the rail is `display: none` and the same
+            component rides the mobile tab bar instead. */}
+        <RuntimeLoadIndicator placement="rail" />
         <button
           class="rail-collapse"
           type="button"

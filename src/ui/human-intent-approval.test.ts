@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { ApprovalBroker } from "../approvals/broker";
-import { decideHumanIntent } from "../approvals/modes";
+import { createApprovalModePolicy, createHumanIntentPolicy, decideHumanIntent } from "../approvals/modes";
+import { ToolRegistry } from "../tools/registry";
 import type { ToolContext, ToolDefinition } from "../core/contracts";
 
 const source = readFileSync(new URL("./app.tsx", import.meta.url), "utf8");
@@ -86,5 +87,164 @@ describe("human-initiated approvals", () => {
     // The controller outlived every decision it was made for.
     expect(helper).toContain("} finally {");
     expect(helper).toContain("controller.abort();");
+  });
+});
+
+/*
+ * A pending human decision has an abort controller, and the obvious worry is
+ * that navigating away strands it: the promise never settles, so `finally`
+ * never fires and the controller never aborts.
+ *
+ * It cannot happen, and this pins the three facts that make it so rather than
+ * leaving them as an assumption in a review note. If any of them is ever
+ * loosened — the dock moved inside the routed region, `approvalPending`
+ * dropped from the inert set, `denyAll` removed from teardown — a route-change
+ * abort becomes necessary and these assertions are where that is discovered.
+ */
+describe("a pending decision cannot be navigated away from", () => {
+  const dock = "<ApprovalDock broker={approvalBroker} />";
+
+  it("renders the dock outside the routed region, so a view change cannot unmount it", () => {
+    expect(source).toContain(dock);
+    // After `</main>`: the dock is a sibling of the routed region, not a child,
+    // so every route renders the same live decision rather than discarding one.
+    expect(source.indexOf(dock)).toBeGreaterThan(source.indexOf("</main>"));
+  });
+
+  it("makes the shell chrome inert while a decision is pending, so there is nothing to navigate with", () => {
+    // The broker's own pending count is what drives it — not a flag some call
+    // site remembers to set.
+    expect(source).toContain("approvalBroker.subscribe((state) => setApprovalPending(state.pending.length > 0))");
+    expect(source).toContain("|| approvalPending || Boolean(profileCockpitTransition)");
+    // Topbar, rail, main and the mobile bar: every control that changes route.
+    expect(source.match(/inert=\{platformOverlayOpen\}/gu)?.length).toBeGreaterThanOrEqual(4);
+    expect(source).toContain("chromeInert={platformOverlayOpen}");
+  });
+
+  it("fails the decision closed if the page goes away under it", () => {
+    // The one exit that is not navigation. Teardown denies rather than
+    // abandoning, so no awaited decision outlives the surface that asked for it.
+    expect(source).toContain("approvalBroker.denyAll();");
+  });
+});
+
+/*
+ * The fourth surface. `/write`, `/execute-shell` and their peers are typed by
+ * the person, but were adjudicated by `createApprovalModePolicy` — so under Auto
+ * Approve the operator's own command body went to a review model, and an
+ * `unsafe` verdict denied it outright with no human fallback. They cannot use
+ * `decideHumanIntent` directly, because `ToolRegistry.review` is what mints the
+ * approval ticket `executeApproved` consumes; the decision is injected as the
+ * policy so the ticket seam survives intact.
+ */
+describe("local slash commands", () => {
+  const writeTool: ToolDefinition = {
+    name: "write_file",
+    description: "Write a file into the profile workspace.",
+    effect: "write",
+    inputSchema: { type: "object" },
+  };
+
+  function localContext(): ToolContext {
+    return { sessionId: "session", turnId: "local-1", operationId: "op-1", signal: new AbortController().signal };
+  }
+
+  it("asks the person under Auto Approve instead of asking a model about them", async () => {
+    const broker = new ApprovalBroker();
+    const policy = createHumanIntentPolicy({ mode: "auto-approve", broker });
+    const context = localContext();
+    const pending = policy.review(writeTool, { path: "notes.txt", content: "hi" }, context);
+
+    await vi.waitFor(() => expect(broker.snapshot().pending).toHaveLength(1));
+    broker.decide(broker.snapshot().pending[0]!.id, "allow");
+
+    expect(await pending).toBe("allow");
+    // The mode in force is still the session's pinned mode — the audit rejects
+    // provenance naming a mode the manifest never pinned.
+    expect(policy.takeProvenance?.(context)).toMatchObject({ mode: "auto-approve", source: "human" });
+  });
+
+  it("still runs through the registry, so the approval ticket is what authorizes execution", async () => {
+    const registry = new ToolRegistry();
+    let wrote = "";
+    registry.register({
+      definition: writeTool,
+      async execute(argumentsValue) {
+        wrote = String((argumentsValue as { content?: unknown }).content ?? "");
+        return { content: "written" };
+      },
+    });
+    const broker = new ApprovalBroker();
+    const policy = createHumanIntentPolicy({ mode: "auto-approve", broker });
+    const context = localContext();
+
+    async function allowOnce(target: ToolContext): Promise<void> {
+      const reviewing = registry.review("write_file", { content: "hi" }, target, policy);
+      await vi.waitFor(() => expect(broker.snapshot().pending).toHaveLength(1));
+      broker.decide(broker.snapshot().pending[0]!.id, "allow");
+      expect(await reviewing).toBe("allow");
+    }
+
+    // The ticket binds the exact arguments that were shown at the dock, so an
+    // allowed command cannot be executed with different ones — and the attempt
+    // spends the ticket, so it cannot be retried with the right ones either.
+    await allowOnce(context);
+    await expect(registry.executeApproved("write_file", { content: "swapped" }, context))
+      .rejects.toThrow("Approved tool arguments changed");
+    await expect(registry.executeApproved("write_file", { content: "hi" }, context))
+      .rejects.toThrow("not bound to a live approval");
+    expect(wrote).toBe("");
+
+    const second = { ...localContext(), operationId: "op-2" };
+    await allowOnce(second);
+    expect((await registry.executeApproved("write_file", { content: "hi" }, second)).content).toBe("written");
+    expect(wrote).toBe("hi");
+  });
+
+  it("cannot be vetoed by a model verdict the operator never gets to answer", async () => {
+    const unsafe = { verdict: "unsafe" as const, reason: "The model judged this command dangerous." };
+
+    // What the composer did before: an `unsafe` verdict is a terminal denial in
+    // `createApprovalModePolicy` — no dock prompt, no fallback — so a command
+    // the person typed themselves was refused by a model on their behalf.
+    const vetoBroker = new ApprovalBroker();
+    const vetoed = createApprovalModePolicy({
+      mode: "auto-approve",
+      broker: vetoBroker,
+      safetyReview: async () => unsafe,
+    });
+    expect(await vetoed.review(writeTool, { path: "notes.txt" }, localContext())).toBe("deny");
+    expect(vetoBroker.snapshot().pending).toHaveLength(0);
+
+    // What it does now: the person is asked, and there is no reviewer to ask.
+    const broker = new ApprovalBroker();
+    const context = localContext();
+    const pending = createHumanIntentPolicy({ mode: "auto-approve", broker })
+      .review(writeTool, { path: "notes.txt" }, context);
+    await vi.waitFor(() => expect(broker.snapshot().pending).toHaveLength(1));
+    broker.decide(broker.snapshot().pending[0]!.id, "allow");
+    expect(await pending).toBe("allow");
+  });
+
+  it("keeps reads automatic, so asking is reserved for effects worth adjudicating", async () => {
+    const broker = new ApprovalBroker();
+    const policy = createHumanIntentPolicy({ mode: "ask-first", broker });
+    const context = localContext();
+
+    expect(await policy.review({ ...writeTool, effect: "read" }, {}, context)).toBe("allow");
+    expect(broker.snapshot().pending).toHaveLength(0);
+    expect(policy.takeProvenance?.(context)).toMatchObject({ mode: "ask-first", source: "automatic-read" });
+  });
+
+  it("reviews the composer's local command under the human-intent policy", () => {
+    // Source-shape, because the local-command runner is a 200-line closure over
+    // the app's session authority and cannot be lifted out of app.tsx.
+    expect(source).toContain("createHumanIntentPolicy({ mode: activeApprovalMode, broker: approvalBroker })");
+    expect(source).toContain("commandRuntime.tools.review(plan.toolName, plan.arguments, context, localCommandPolicy)");
+    expect(source).toContain("approvalProvenance(localCommandPolicy, context)");
+    expect(source).not.toContain("commandRuntime.tools.review(plan.toolName, plan.arguments, context, approvalPolicy)");
+    // The two lines that described a provider request that no longer happens.
+    expect(source).not.toContain("the safety review model received this action's parameters");
+    expect(source).not.toContain("Local command complete after a separate safety review");
   });
 });

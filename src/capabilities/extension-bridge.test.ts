@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   extensionBridgeObservation,
-  extensionBridgePromptEntries,
   probeExtensionBridge,
 } from "./extension-bridge";
 
@@ -56,22 +55,6 @@ describe("extension bridge capability observation", () => {
       .toMatchObject({ state: "failed", evidence: "probe-failed" });
     expect(extensionBridgeObservation({ kind: "unsupported", detail: "no page window" }))
       .toMatchObject({ state: "unavailable", evidence: "not-observed" });
-  });
-
-  it("never claims a capability the probe did not observe", async () => {
-    const silent = await probeExtensionBridge(async () => ({ kind: "silent", deadlineMs: 1_500 }));
-    expect(extensionBridgePromptEntries(silent)).toEqual([]);
-    const present = await probeExtensionBridge(async () => ({
-      kind: "answered",
-      version: "0.4.1",
-      providers: ["xai"],
-      unavailable: [],
-      elapsedMs: 3,
-    }));
-    const entries = extensionBridgePromptEntries(present);
-    expect(entries).toHaveLength(1);
-    expect(entries[0]).toMatchObject({ id: "extension-bridge", evidence: "probe-passed" });
-    expect(entries[0]!.detail).toContain("0.4.1");
   });
 
   it("reports a throwing probe as failed rather than assuming either answer", async () => {

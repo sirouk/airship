@@ -22,7 +22,6 @@ import type {
 } from "../inference/bridge/protocol";
 import type {
   BrowserCapabilityObservation,
-  BrowserCapabilityPromptEntry,
 } from "./browser-runtime";
 import type {
   CompanionCapabilities,
@@ -126,23 +125,6 @@ export async function probeExtensionBridge(
       unavailable: Object.freeze([]),
     });
   }
-}
-
-/**
- * Session-prompt entries, following the browser-runtime convention that only
- * observed capabilities are stated. An absent bridge adds nothing here; the
- * providers it would have carried report their own unavailability at the point
- * of use, where the cause can be named.
- */
-export function extensionBridgePromptEntries(
-  observation: ExtensionBridgeObservation,
-): readonly BrowserCapabilityPromptEntry[] {
-  if (observation.state !== "available") return Object.freeze([]);
-  return Object.freeze([Object.freeze({
-    id: "extension-bridge",
-    evidence: "probe-passed" as const,
-    detail: observation.detail,
-  })]);
 }
 
 async function defaultHandshake(): Promise<BridgeHandshakeResult> {

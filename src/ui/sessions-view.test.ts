@@ -97,6 +97,27 @@ describe("fork legibility", () => {
     expect(source).toContain("The branch inherits a bounded, digest-sealed copy of the ancestor context");
     expect(source).toContain('{busy ? "Creating…" : "Create fork"}');
   });
+
+  /*
+   * The downward half of lineage has to say the same thing the upward half
+   * does.
+   *
+   * "Forked from X at head 12" told a branch where it came from; the
+   * "Alternates (N)" list under the *source* named only titles and branch
+   * times, so three retries of one turn and three branches of three different
+   * turns rendered as the same list. The sequence is read from each branch's
+   * own `sourceHeadSequence`, which is the manifest commitment the upward line
+   * reads, so the two directions cannot disagree.
+   */
+  it("states the fork point on every alternate, in the branch's own words", () => {
+    expect(source).toContain("`branched at head ${branch.sourceHeadSequence}`");
+    // Both the visible caption and the link's accessible name carry it: the
+    // list is navigated by name from a screen reader, where the caption that
+    // follows the button is not part of the choice being made.
+    expect(source).toContain("aria-label={`Open the branch ${branch.title}${branch.sourceHeadSequence === undefined ? \"\" : `, branched at head ${branch.sourceHeadSequence}`}`}");
+    // No invented sequence when the commitment is missing.
+    expect(source).toContain('branch.sourceHeadSequence === undefined ? "fork point unrecorded"');
+  });
 });
 
 describe("conversation library keyboard focus", () => {

@@ -1,9 +1,10 @@
 import { useRef } from "preact/hooks";
 import type { SessionManifest } from "../../core/contracts";
 import { Icon } from "../icons";
+import { PROFILE_APPROVAL_LABELS } from "../profiles-governance";
 import { Seal, type SealState } from "../seal";
 import { capabilityTierDetail, capabilityTierLabel } from "./capability-tier";
-import type { MessagePart, TextPart, ToolCallPart, ToolResultPart } from "./message-parts";
+import type { MessagePart, TextPart, ToolCallAuthority, ToolCallPart, ToolResultPart } from "./message-parts";
 import { MarkdownView } from "./markdown";
 import { useTranscriptOperations, type TranscriptOperationsMode } from "./transcript-operations";
 import "./message-parts-view.css";
@@ -17,10 +18,13 @@ export function MessagePartsView({
   parts,
   streamedContent,
   streaming = false,
+  live = false,
 }: {
   parts: readonly MessagePart[];
   streamedContent?: string;
   streaming?: boolean;
+  /** True only while this row belongs to the currently running turn. */
+  live?: boolean;
 }) {
   const tail = streamedMessageTail(parts, streamedContent ?? "", streaming);
   const nodes = pairOperations(parts);
@@ -30,7 +34,7 @@ export function MessagePartsView({
     <div class="message-parts" role="group" aria-label="Message contents">
       {nodes.map((node) => node.kind === "operations"
         ? <OperationStrip key={node.id} node={node} mode={mode} />
-        : <MessagePartView key={node.part.id} part={node.part} answer={node.part.id === answerId} />)}
+        : <MessagePartView key={node.part.id} part={node.part} answer={node.part.id === answerId} live={live} />)}
       {tail ? <div class="message-part text text--answer streaming" aria-live="polite"><MarkdownView source={tail} streaming /></div> : null}
     </div>
   );
@@ -89,6 +93,8 @@ export type PairedOperation = Readonly<{
   resultDigest: string;
   metadataSummary?: string;
   capabilityTier?: SessionManifest["capabilityTier"];
+  /** Who authorised this call, when its approval recorded readable provenance. */
+  authority?: ToolCallAuthority;
   /** A result whose originating call is absent renders with the half marked. */
   hasCall: boolean;
   hasResult: boolean;
@@ -312,9 +318,37 @@ function pairedOperation(
     resultDigest: result ? resultDigest(result) : "",
     ...(result?.metadataSummary ? { metadataSummary: result.metadataSummary } : {}),
     ...(result?.capabilityTier ? { capabilityTier: result.capabilityTier } : {}),
+    ...(call?.authority ? { authority: call.authority } : {}),
     hasCall: call !== undefined,
     hasResult: result !== undefined,
   });
+}
+
+/**
+ * The authority a resting row shows, and the sentence it shows it with.
+ *
+ * Read effects are auto-allowed in every mode, so "Read-only, automatic" on a
+ * `read_file` row states the rule rather than a decision — it would print on
+ * nearly every row and teach a reader to stop reading the column that matters.
+ * The rows that carry an accountability claim are the ones where somebody or
+ * something let an *effect* through, so those are the ones the resting row
+ * names; the sheet still states the authority of every approved call, read
+ * effects included, because "nothing shown" must never be how the transcript
+ * says "allowed automatically".
+ */
+export function operationAuthorityChip(operation: PairedOperation): Readonly<{
+  source: ToolCallAuthority["source"];
+  label: string;
+  title: string;
+}> | undefined {
+  const authority = operation.authority;
+  if (!authority || authority.source === "automatic-read") return undefined;
+  return Object.freeze({ source: authority.source, label: authority.label, title: authorityTitle(authority) });
+}
+
+/** The mode name is the governance vocabulary verbatim, never a fourth wording. */
+function authorityTitle(authority: ToolCallAuthority): string {
+  return `${authority.label} · recorded under ${PROFILE_APPROVAL_LABELS[authority.mode]}`;
 }
 
 /**
@@ -502,6 +536,7 @@ function OperationRow({ operation, onCapture, onSettle }: {
   onSettle(details: HTMLDetailsElement): void;
 }) {
   const tier = operation.capabilityTier;
+  const chip = operationAuthorityChip(operation);
   return (
     <details class="op" data-outcome={operation.outcome} onToggle={(event) => onSettle(event.currentTarget as unknown as HTMLDetailsElement)}>
       <summary class="op__summary" onClick={onCapture}>
@@ -514,12 +549,24 @@ function OperationRow({ operation, onCapture, onSettle }: {
             acting={operation.outcome === "running"}
           />
           <span aria-hidden="true">{OUTCOME_COPY[operation.outcome].word}</span>
+          {/* Inside the outcome cell, not a sixth grid column: the constant
+              five-column height is what keeps a completing step from jumping
+              the rows beneath it. */}
+          {chip
+            ? <span class="op__authority" data-source={chip.source} title={chip.title}>{chip.label}</span>
+            : null}
         </span>
         <span class="op__name">{operation.name}</span>
         <span class="op__arguments">{operation.argumentDigest}</span>
         <span class="op__result">{operation.resultDigest}</span>
       </summary>
       <div class="op__body">
+        {operation.authority ? (
+          <p class="op__sheet-head">
+            <span class="op__label">Authority</span>
+            <span class="op__authority-detail">{authorityTitle(operation.authority)}</span>
+          </p>
+        ) : null}
         <p class="op__sheet-head">
           <span class="op__label">Arguments · bounded display</span>
           <code class="op__call-id" title={`Tool call ${operation.callId}`}>{operation.callId}</code>
@@ -575,7 +622,11 @@ function isSettledOperation(part: MessagePart): boolean {
     || part.status === "denied";
 }
 
-function MessagePartView({ part, answer }: { part: NarrativePart; answer: boolean }) {
+export function errorPartRole(live: boolean): "alert" | undefined {
+  return live ? "alert" : undefined;
+}
+
+function MessagePartView({ part, answer, live }: { part: NarrativePart; answer: boolean; live: boolean }) {
   if (part.kind === "text") {
     return <div class={answer ? "message-part text text--answer" : "message-part text"}><MarkdownView source={part.content} /></div>;
   }
@@ -616,7 +667,7 @@ function MessagePartView({ part, answer }: { part: NarrativePart; answer: boolea
 
   if (part.kind === "error") {
     return (
-      <div class="message-part part-error" role="alert" {...(part.code ? { "data-code": part.code } : {})}>
+      <div class="message-part part-error" role={errorPartRole(live)} {...(part.code ? { "data-code": part.code } : {})}>
         <Icon name="warning" size={15} />
         <div>
           <strong {...(part.code ? { title: part.code } : {})}>{errorHeading(part.code)}</strong>

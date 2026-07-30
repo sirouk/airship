@@ -2,10 +2,13 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { readAirshipStyles } from "./style-sheets.test-helper";
 
-const [app, styles, sessions, featureStyles] = await Promise.all([
+const [app, styles, sessions, proofSource, proofStyles, terminalSource, featureStyles] = await Promise.all([
   readFile(new URL("./app.tsx", import.meta.url), "utf8"),
   readAirshipStyles(),
   readFile(new URL("./sessions-view.css", import.meta.url), "utf8"),
+  readFile(new URL("./proof-view.tsx", import.meta.url), "utf8"),
+  readFile(new URL("./proof-view.css", import.meta.url), "utf8"),
+  readFile(new URL("./terminal-view.tsx", import.meta.url), "utf8"),
   Promise.all([
     ["access-connection-view", "./access-view.css"],
     ["attestations-view", "./attestations-view.css"],
@@ -51,6 +54,40 @@ describe("route layout contract", () => {
     expect(tabs).toContain("calc(-1 * var(--route-gutter-inline-start))");
     expect(tabs).toContain("calc(-1 * var(--route-gutter-inline-end))");
     expect(cssRule(styles, ".trust-route-layout > :not(.trust-hub-tabs)")).toContain("margin-top: var(--route-gutter-block)");
+  });
+
+  /*
+   * VIS-02: dense surfaces expand, prose stays bounded.
+   *
+   * The mechanism is one attribute, and it only works from a route *root* —
+   * `.route-layout > [data-route-measure="wide"]` is a child combinator, so the
+   * same attribute on a panel two levels down is silently inert and the route
+   * quietly keeps the 1160px prose cap. That is the failure this pins: the
+   * opt-out has to be on the element `app.tsx` mounts directly in `<main>`, and
+   * a route that is half grid and half prose has to re-enter the measure from
+   * the inside rather than leave the cap on and squeeze its grid.
+   */
+  it("lets a dense route escape the prose measure only from its own root", () => {
+    const wide = cssRule(styles, '.route-layout > [data-route-measure="wide"]');
+    expect(wide).toContain("width: 100%");
+    expect(wide).toContain("max-width: none");
+    // The rule has to outrank the default measure, which it can only do on
+    // source order: both selectors weigh (0,2,0).
+    expect(styles.indexOf('.route-layout > [data-route-measure="wide"]'))
+      .toBeGreaterThan(styles.indexOf(".route-layout > :not(.trust-hub-tabs)"));
+
+    // On the opening tag of each route root, not on something inside it.
+    expect(terminalSource).toMatch(/<section\s+class=\{`terminal-route[^>]*?data-route-measure="wide"/su);
+    expect(proofSource).toMatch(/<section\s+class="work-view proof-view"[^>]*?data-route-measure="wide"/su);
+    // …and each of those roots is what `app.tsx` renders straight into `<main>`.
+    expect(app).toMatch(/<main\b[\s\S]*<ProofScreen\b/u);
+
+    // The attestation ledger is the grid that wanted the width; the receipt
+    // panel is prose and re-enters the same measure one level down.
+    expect(cssRule(proofStyles, ".proof-surface-panel--prose")).toContain("width: min(1160px, 100%)");
+    expect(proofSource).toContain('class="proof-surface-panel proof-surface-panel--prose"');
+    expect(proofSource, "the evidence ledger keeps the width the route opted into")
+      .toContain('id="proof-panel-attestations" class="proof-surface-panel"');
   });
 
   it("keeps profile navigation inside the route-owned gutter without nesting another inset", () => {

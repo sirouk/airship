@@ -5,4 +5,5 @@
 export {
   executeExecutionTool,
   getCurrentBrowserExecutionTier,
+  inspectCurrentBrowserExecutionCapabilities,
 } from "../tools/execution-tools";

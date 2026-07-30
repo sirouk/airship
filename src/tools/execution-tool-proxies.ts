@@ -128,7 +128,7 @@ const EXECUTION_TOOL_DEFINITIONS = Object.freeze([
     },
     {
       name: "deactivate_execution_runtime",
-      description: "Terminate an optional runtime and release its in-tab processes and memory.",
+      description: "Terminate an optional runtime and release its in-tab processes and memory. The Workspace Terminal shares this runtime: any live terminal session is reconciled into the workspace and then stopped, and the reconciled paths are named in the result.",
       effect: "execute",
       inputSchema: {
         type: "object",

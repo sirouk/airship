@@ -5,6 +5,7 @@ import { ClientExecutionRuntime, type ExecutionCapability } from "../execution/r
 import {
   formatObservedAt,
   probeAction,
+  probeNeedsAction,
   probePresentation,
   runtimeAction,
   runtimeBoundary,
@@ -14,6 +15,7 @@ import {
 
 const source = await readFile(new URL("./capabilities-view.tsx", import.meta.url), "utf8");
 const styles = await readFile(new URL("./capabilities-view.css", import.meta.url), "utf8");
+const appSource = await readFile(new URL("./app.tsx", import.meta.url), "utf8");
 
 function capability(overrides: Partial<ExecutionCapability> = {}): ExecutionCapability {
   return {
@@ -42,6 +44,12 @@ function observation(
 }
 
 describe("capability summary evidence", () => {
+  it("inspects page capabilities before a conversation exists", () => {
+    expect(appSource).toContain('import("../execution/execution-runtime-pack")');
+    expect(appSource).toContain("inspectBrowserExecutionCapabilities()");
+    expect(appSource).not.toContain('if (!active || !sessionId) throw new Error("The active browser runtime is not ready.")');
+  });
+
   it("does not verify a completed inspection unless every reported runtime is ready", () => {
     expect(sealStateForCapabilitySummary([])).toBe("checking");
     expect(sealStateForCapabilitySummary([{ state: "ready" }, { state: "ready" }])).toBe("verified");
@@ -215,7 +223,17 @@ describe("live load surface", () => {
     const declarations = rule.slice(0, rule.indexOf("}"));
     expect(declarations).not.toContain("display:");
     // The card's own remediation control is a button and is sized with them.
-    expect(mobile).toContain(".capability-device-card__action { min-height: 44px; }");
+    expect(mobile).toContain(".capability-probe-action { min-height: 44px; }");
+  });
+});
+
+describe("extension capability surface", () => {
+  it("uses the same live bridge observer as the rest of the app and renders cache and compute facts", () => {
+    expect(source).toContain("inspectExtension(): Promise<ExtensionBridgeObservation>");
+    expect(source).toContain("inspectExtension()]);");
+    expect(source).toContain("Airship Companion");
+    expect(source).toContain("Ciphertext cache");
+    expect(source).toContain("Background compute");
   });
 });
 
@@ -253,6 +271,35 @@ describe("probe evidence a reader can act on", () => {
       expect(probeAction(observation(evidence), reprobe)).toBeUndefined();
     }
     expect(reprobes).toBe(1);
+  });
+
+  it("offers the control on the primitives that actually report a refusal, not only on the cards", () => {
+    // `refusalEvidence` in browser-runtime maps NotAllowedError and
+    // SecurityError, and the two probe paths that raise them are the service
+    // worker and Cache Storage probes — both of which render in the browser
+    // primitives list, not in the four DeviceCards. A remediation slot that
+    // exists only on the cards is therefore a slot nothing in this build can
+    // ever fill, which is the defect the evidence variants were added to close.
+    const list = source.slice(source.indexOf("<summary>Browser primitives</summary>"), source.indexOf("</details>", source.indexOf("<summary>Browser primitives</summary>")));
+    expect(list).toContain("probeAction(observation, onReprobe)");
+    expect(list).toContain("capability-probe-action");
+    // …and the row is not hidden behind a closed disclosure while it asks for
+    // something. The predicate is the same evidence test the button uses.
+    const disclosure = source.slice(source.indexOf("<details open="), source.indexOf("<summary>Browser primitives</summary>"));
+    expect(disclosure).toContain("primitives.some(([, observation]) => probeNeedsAction(observation))");
+  });
+
+  it("agrees with the control about which evidences a reader can clear", () => {
+    // One predicate behind the button and the disclosure: if these two ever
+    // disagree, a list opens with no control in it or hides one that exists.
+    for (const evidence of ["permission-needed", "disabled"] as const) {
+      expect(probeNeedsAction(observation(evidence))).toBe(true);
+      expect(probeAction(observation(evidence), () => undefined)).toBeDefined();
+    }
+    for (const evidence of ["probe-passed", "api-exposed", "not-observed", "probe-failed"] as const) {
+      expect(probeNeedsAction(observation(evidence))).toBe(false);
+      expect(probeAction(observation(evidence), () => undefined)).toBeUndefined();
+    }
   });
 
   it("wires the card's control to this route's own probe rather than a second one", () => {

@@ -129,9 +129,11 @@ describe("colour contract", () => {
         ["--ground", tokens["--accent-bright"]!, AA_TEXT],
       ];
       const glyph: readonly [string, string, number][] = [
-        // --v-failed and --copper are 4.2–4.6:1 by design; shell.css lifts their
-        // chip *label* to --ink and keeps the colour for glyph, border and fill,
-        // where 1.4.11's 3:1 is the applicable rule.
+        // --v-failed and --copper are 4.2–4.6:1 by design, and 1.4.11's 3:1 is
+        // the applicable rule only where they paint a glyph, a border or a
+        // fill. That premise is not free: `VERDICT_TOKEN_TEXT_LEDGER` below
+        // holds every rule that spends them on `color`, so the exemption is
+        // bounded by an enumerated list rather than by a claim in a comment.
         ["--v-failed", surface, NON_TEXT],
         ["--copper", raised, NON_TEXT],
         ["--brand-mark", ground, NON_TEXT],
@@ -186,9 +188,9 @@ describe("colour contract", () => {
         ["--v-verified", surface, AA_TEXT],
         ["--v-caution", surface, AA_TEXT],
         ["--v-info", surface, AA_TEXT],
-        // Same split as the single-layer test above: --v-failed and --copper
-        // are glyph, border and fill colours whose chip label is lifted to
-        // --ink by shell.css, so 1.4.11's 3:1 is the applicable rule for them.
+        // Same split, and the same bound: 3:1 is 1.4.11's rule for a glyph, a
+        // border or a fill, and `VERDICT_TOKEN_TEXT_LEDGER` names every rule
+        // that currently spends these two on `color` instead.
         ["--v-failed", surface, NON_TEXT],
         ["--copper", raised, NON_TEXT],
         ["--ink-faint", raised, AA_TEXT],
@@ -230,6 +232,41 @@ describe("colour contract", () => {
       .toContain("applyPreferenceOverrides(preferences, document.documentElement, themePresentation(theme))");
   });
 
+  /*
+   * The premise the 3:1 exemption above rests on, held as a fact.
+   *
+   * Both contrast assertions grant `--v-failed` and `--copper` WCAG 1.4.11's
+   * 3:1 instead of 1.4.3's 4.5:1, and the reason given is that they are glyph,
+   * border and fill colours whose chip *label* shell.css lifts to `--ink`. On
+   * the shipped dark palette they measure 4.24:1 and 4.29:1, so that premise is
+   * the whole difference between a documented design rule and a self-granted
+   * exemption — and it is currently kept in exactly one sheet. Every other rule
+   * below paints `color` with one of the two, and a `color` that lands on a
+   * word rather than a glyph is sub-AA text.
+   *
+   * Raising the tokens is not this file's to do — it repaints `tokens.css`
+   * for the whole product — so the debt is enumerated instead of asserted away.
+   * `toEqual`, like the disabled-opacity ledger below: a new offender fails
+   * here, and a fixed one fails until it is struck off, so the list can only
+   * shrink. Each entry is either a glyph-only use (legitimate under 1.4.11) or
+   * a word that still has to be lifted to `--ink`; the ledger does not claim to
+   * know which, only that nothing may be added without saying so.
+   */
+  it("names every rule that spends the 3:1 verdict tokens on `color`", () => {
+    const spent = cssSources.flatMap(({ file, text }) => (
+      [...withoutComments(text).matchAll(/([^{}]+)\{([^}]*)\}/gu)].flatMap((rule) => (
+        (["--v-failed", "--copper"] as const).flatMap((token) => (
+          new RegExp(String.raw`(?:^|[;{\s])color\s*:\s*[^;]*var\(\s*${token}\s*\)`, "u").test(rule[2] ?? "")
+            ? (rule[1] ?? "").split(",").map((selector) => (
+              `${relative(sourceRoot, file)} ${selector.trim()} ${token}`
+            ))
+            : []
+        ))
+      ))
+    )).sort();
+    expect(spent).toEqual(VERDICT_TOKEN_TEXT_LEDGER);
+  });
+
   it("never carries a disabled state on transparency", () => {
     const violations = cssSources.flatMap(({ file, text }) => (
       [...withoutComments(text).matchAll(/([^{}]*:disabled[^{}]*)\{([^}]*)\}/gu)]
@@ -244,6 +281,42 @@ describe("colour contract", () => {
     expect(violations).toEqual(DISABLED_OPACITY_LEDGER);
   });
 });
+
+/**
+ * Every `color` declaration in the product that spends a 3:1 verdict token.
+ *
+ * Ordered `file selector token`. Sixteen of these carry a word, not a glyph:
+ * the session status word, the error part, the claim-group header, the connect
+ * lane's failure line, three provider-health lines, the approval diff's
+ * deletions, both topbar posture chips, both attestation chips, the Git
+ * conflict note and the removed-line emphasis are all text at caption size on
+ * a 4.24:1 red. `.seal` rules paint a glyph and a label together, and only the
+ * `[data-density="chip"]` variant lifts the label. Lifting the rest to `--ink`
+ * — the fix `message-parts-view.css` already applies — is the work this ledger
+ * exists to keep visible.
+ */
+const VERDICT_TOKEN_TEXT_LEDGER = Object.freeze([
+  "ui/chat.css .claim-group--failed > header --v-failed",
+  "ui/chat.css .message-part.part-error --v-failed",
+  "ui/chat.css .session-status-chip__word[data-state=\"failed\"] --v-failed",
+  "ui/connect/connect-surface.css .connect-lane__failure --v-failed",
+  "ui/provider-connections-view.css .provider-fabric__error --v-failed",
+  "ui/provider-connections-view.css .provider-health.expired --v-failed",
+  "ui/provider-connections-view.css .provider-health.offline --v-failed",
+  "ui/provider-fabric-panel.css .provider-fabric__error --v-failed",
+  "ui/routes.css .approval-diff del --v-failed",
+  "ui/routes.css .audit-check-grid .fail > .seal --v-failed",
+  "ui/shell.css .attestation-chip.asserted --copper",
+  "ui/shell.css .attestation-chip.failed --v-failed",
+  "ui/shell.css .seal[data-state=\"asserted\"] --copper",
+  "ui/shell.css .seal[data-state=\"failed\"] --v-failed",
+  "ui/shell.css .topbar-posture-chip[data-state=\"failed\"] --v-failed",
+  "ui/shell.css .topbar-posture-chip__elsewhere[data-state=\"failed\"] --v-failed",
+  "ui/sources-view.css .conflicted .git-delta --v-failed",
+  "ui/sources-view.css .git-conflict-note --v-failed",
+  "ui/sources-view.css .git-diff-lines .removed b --v-failed",
+  "ui/terminal-view.css .terminal-panel__bar .seal[data-state=failed] --v-failed",
+]);
 
 /**
  * The five `:disabled { opacity }` rules still outside this package's files.

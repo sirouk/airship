@@ -155,7 +155,10 @@ describe("runtime load monitor", () => {
 });
 
 const indicator = await readFile(new URL("../ui/runtime-load-indicator.tsx", import.meta.url), "utf8");
+const indicatorStyles = await readFile(new URL("../ui/runtime-load-indicator.css", import.meta.url), "utf8");
 const rail = await readFile(new URL("../ui/rail.tsx", import.meta.url), "utf8");
+const mobileNav = await readFile(new URL("../ui/mobile-navigation.tsx", import.meta.url), "utf8");
+const routeStyles = await readFile(new URL("../ui/routes.css", import.meta.url), "utf8");
 const app = await readFile(new URL("../ui/app.tsx", import.meta.url), "utf8");
 
 describe("shell load indicator", () => {
@@ -169,29 +172,61 @@ describe("shell load indicator", () => {
     second();
     finish();
     expect(runtimeLoadIndicatorLabel(load.snapshot()).text).toBe("Idle");
-    // Peak survives the runs that set it, and the boundary travels with the
+    // Peak survives the runs that set it, and it travels with the spoken
     // reading: a bare number in a rail is exactly what a reader mistakes for a
-    // CPU meter, so the accessible name says what was and was not counted.
-    const spoken = runtimeLoadIndicatorLabel(load.snapshot()).spoken;
-    expect(spoken).toContain("Peak 2 this page");
-    expect(spoken).toContain(RUNTIME_LOAD_BOUNDARY);
+    // CPU meter, so the announced sentence says what was counted.
+    expect(runtimeLoadIndicatorLabel(load.snapshot()).reading).toContain("Peak 2 this page");
+  });
+
+  it("keeps the caveat out of the announced reading and in the region beside it", () => {
+    // The reading is re-announced on every start and finish; the boundary is
+    // not, because a live region that replays its own caveat on every count
+    // change is a region readers learn to talk over. The component renders the
+    // boundary as a static sibling inside the same `role="status"` container,
+    // so it is read when the region is read and never announced twice.
+    const load = monitor();
+    expect(runtimeLoadIndicatorLabel(load.snapshot()).reading).not.toContain(RUNTIME_LOAD_BOUNDARY);
+    expect(indicator).toContain("<span class=\"sr-only\">{reading}</span>");
+    expect(indicator).toContain("<span class=\"sr-only\">{RUNTIME_LOAD_BOUNDARY}</span>");
+    // Splitting the strings only helps if the region is not atomic: `status`
+    // implies `aria-atomic="true"`, which would announce the caveat again on
+    // every count change and undo the split.
+    expect(indicator).toContain("aria-atomic=\"false\"");
+  });
+
+  it("puts real text in the live region instead of an aria-label over hidden children", () => {
+    // A live region is announced from its accessible contents, and `aria-hidden`
+    // descendants are not in the accessibility tree. The earlier shape — an
+    // `aria-label` over two `aria-hidden` spans — therefore announced nothing on
+    // change and left a browse-mode reader on an empty status container. The
+    // visible glyphs stay hidden (so the count is not read twice); the two
+    // `sr-only` spans are the region's content.
+    expect(indicator).toContain("role=\"status\"");
+    // Sliced from the rendered element rather than the file: the docblock above
+    // it names the defect, and naming it is not committing it.
+    const region = indicator.slice(indicator.indexOf("role=\"status\""));
+    expect(region).not.toContain("aria-label");
+    const hidden = region.match(/aria-hidden="true"/gu) ?? [];
+    const spoken = region.match(/class="sr-only"/gu) ?? [];
+    expect(hidden).toHaveLength(2);
+    expect(spoken.length).toBeGreaterThanOrEqual(hidden.length);
   });
 
   it("uses the singular only for a single run", () => {
     const load = monitor();
     load.begin("airship-sh");
-    expect(runtimeLoadIndicatorLabel(load.snapshot()).spoken).toContain("1 execution run in flight");
+    expect(runtimeLoadIndicatorLabel(load.snapshot()).reading).toContain("1 execution run in flight");
     load.begin("airship-sh");
-    expect(runtimeLoadIndicatorLabel(load.snapshot()).spoken).toContain("2 execution runs in flight");
+    expect(runtimeLoadIndicatorLabel(load.snapshot()).reading).toContain("2 execution runs in flight");
   });
 
   it("rides the rail, so it is in the DOM on every route rather than on #capabilities alone", () => {
     // The finding this closes was that the only live reading lived on the route
-    // a reader has to navigate to. The rail is the one band every route
-    // renders, and the shell renders it unconditionally — no `view ===` guard,
-    // no route list — which is what makes the indicator global rather than a
-    // second copy of the Capabilities panel.
-    expect(rail).toContain("<RuntimeLoadIndicator />");
+    // a reader has to navigate to. The rail is the band every route renders at
+    // desktop width, and the shell renders it unconditionally — no `view ===`
+    // guard, no route list — which is what makes the indicator global rather
+    // than a second copy of the Capabilities panel.
+    expect(rail).toContain("<RuntimeLoadIndicator placement=\"rail\" />");
     // One rail, mounted as a sibling of the route outlet rather than inside it,
     // so every destination the outlet can show has the indicator beside it.
     // `<Rail\b` rather than `indexOf("<Rail")`: the shell also declares a
@@ -203,6 +238,24 @@ describe("shell load indicator", () => {
     const mount = app.slice(mounted, outlet);
     expect(mount).not.toContain("view ===");
     expect(mount).not.toContain("view !==");
+  });
+
+  it("rides the phone tab bar too, where the rail is display:none", () => {
+    // Below the phone breakpoint `routes.css` sets `.sidebar { display: none }`,
+    // which takes the rail's copy out of the render tree *and* the accessibility
+    // tree — leaving a phone reader with the original finding: navigate to
+    // #capabilities to learn what is running. The mobile nav is the band a phone
+    // renders on every route, so the same component mounts there.
+    expect(mobileNav).toContain("<RuntimeLoadIndicator placement=\"nav\" />");
+    const phone = routeStyles.slice(routeStyles.indexOf("@media (max-width: 640px)"));
+    expect(phone).toContain(".sidebar {");
+    const navRule = phone.slice(phone.indexOf("  .mobile-nav {"));
+    // The four destinations keep equal shares; the reading gets its own track
+    // rather than being auto-placed onto a second, clipped row.
+    expect(navRule.slice(0, navRule.indexOf("}"))).toContain("grid-template-columns: auto repeat(4, minmax(0, 1fr));");
+    // The reading sizes itself, so a count change never resizes a tap target.
+    expect(indicatorStyles).toContain("[data-placement=\"nav\"]");
+    expect(indicatorStyles.slice(indicatorStyles.indexOf("[data-placement=\"nav\"]"))).toContain("width: 58px;");
   });
 
   it("renders counts, not a meter, and reads its words from the monitor", () => {

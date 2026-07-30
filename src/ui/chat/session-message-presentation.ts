@@ -7,8 +7,11 @@ import type { ConversationReceipt } from "../../receipts/types";
 import {
   messagePartsFromFacts,
   messagePartsFromDurableEvents,
+  toolCallAuthorityFrom,
+  TOOL_AUTHORITY_LABELS,
   type MessagePart,
   type MessagePartFact,
+  type ToolCallAuthority,
 } from "./message-parts";
 
 export type SessionPresentationTurnStatus = "completed" | "failed" | "cancelled" | "incomplete";
@@ -17,24 +20,20 @@ export type SessionPresentationProviderContext = "included" | "excluded";
 /**
  * Who let one tool call run, projected from the approval's journaled provenance.
  *
- * The journal has recorded this since approval modes shipped and no view read
- * it, so every approved tool card in the transcript looked identical whether a
- * person clicked Allow, a review model judged it safe, or Full Access let it
- * through unasked. Those are three different claims about who is accountable
- * for the effect, and a transcript that renders them the same way is not a
- * record of what happened.
+ * The journal recorded this from the day approval modes shipped and nothing
+ * read it, so every approved tool card in the transcript looked identical
+ * whether a person clicked Allow, a review model judged it safe, or Full Access
+ * let it through unasked. Those are three different claims about who is
+ * accountable for the effect, and a transcript that renders them the same way
+ * is not a record of what happened.
  *
- * It is keyed by `callId` and carried beside the row's parts rather than inside
- * them: the part shapes are the message-parts contract, and the durable
- * authority of a decision is a fact about the turn, not about a card's layout.
+ * The authority also rides on each `ToolCallPart` so the transcript can render
+ * it without a second channel; this list is the turn-level index of the same
+ * facts, keyed by `callId`, for a surface that wants a turn's approvals without
+ * walking its parts. One reader (`toolCallAuthorityFrom`) produces both, so the
+ * two can never disagree about the label or about what a readable record is.
  */
-export type SessionPresentationToolAuthority = Readonly<{
-  callId: string;
-  mode: "ask-first" | "auto-approve" | "full-access";
-  source: "automatic-read" | "human" | "model-review" | "human-fallback" | "bounded-browser-sandbox";
-  /** One short, already-presentable phrase; see AUTHORITY_LABELS. */
-  label: string;
-}>;
+export type SessionPresentationToolAuthority = ToolCallAuthority & Readonly<{ callId: string }>;
 
 export type SessionPresentationRow = Readonly<{
   id: string;
@@ -94,6 +93,24 @@ export type SessionPresentationMarker = Readonly<{
   recordedAt?: string;
   /** One plain sentence, already presentable. */
   detail: string;
+  /**
+   * The fresh identity an out-of-turn *inference* record owns, when it has one.
+   *
+   * Only the records that made a provider request carry this; a rename or a
+   * favourite change has no turn identity at all. It exists so the receipt
+   * below can be indexed by the same key turn receipts use.
+   */
+  turnId?: string;
+  /**
+   * The receipt for the billed request this marker records.
+   *
+   * A naming call is a real, paid, attestation-producing request, and its
+   * receipt was being minted, validated and journaled while no surface could
+   * open it — which is exactly the state a receipt exists to prevent. It is
+   * carried here so the transcript row that reports the request can also hand
+   * Proof the identity that resolves it.
+   */
+  receipt?: Readonly<ConversationReceipt>;
   /**
    * Whether this marker's own content could be read.
    *
@@ -329,9 +346,21 @@ export function presentSessionMessages(
   validateEventPage(input.session, input.events);
   if (input.events.length === 0) return emptyPresentation(input);
 
-  const { groups, markers } = groupTurns(input.events, limits.maxTurns);
+  const { groups, markers: ungroupedMarkers } = groupTurns(input.events, limits.maxTurns);
   const receipts = receiptIndex(input.receipts ?? [], input.session.id);
   const history = historyIndex(input.history ?? []);
+  /*
+   * Bind the ancillary-inference markers to their receipts from the same index
+   * the turn rows use, so there is exactly one rule for "which receipt belongs
+   * to which identity" and a naming receipt cannot be shown against a turn.
+   * Only the record that declares a provider request may claim one; every other
+   * session-scoped marker is a local bookkeeping fact with nothing to prove.
+   */
+  const markers = ungroupedMarkers.map((marker) => {
+    if (marker.kind !== CONVERSATION_NAMED_EVENT_TYPE || !marker.turnId) return marker;
+    const receipt = receipts.get(marker.turnId);
+    return receipt ? Object.freeze({ ...marker, receipt }) : marker;
+  });
   const rows: SessionPresentationRow[] = [];
   let partCount = 0;
 
@@ -632,6 +661,9 @@ function sessionMarker(event: DurableEvent): SessionPresentationMarker {
     sequence: event.sequence,
     digest: event.digest,
     ...(event.recordedAt ? { recordedAt: event.recordedAt } : {}),
+    // Kept only where the record actually owns one; `session.renamed` and the
+    // profile pointers carry no turn identity and must not appear to.
+    ...(validIdentifier(event.turnId) ? { turnId: event.turnId } : {}),
   };
   const title = event.type === "session.renamed" && typeof payload?.title === "string"
     ? presentableTitle(payload.title)
@@ -707,6 +739,20 @@ function sessionMarker(event: DurableEvent): SessionPresentationMarker {
         detail: `Named “${named}” by ${model ?? "an inference request"} made for this conversation, beside the turn rather than in it.`,
       });
     }
+    /*
+     * The request completed and returned something this build would not accept
+     * as a name — a refusal, a preamble, an essay. That is not a failure to
+     * record: it was billed, it produced a receipt, and the only visible effect
+     * is that the local name stayed. Saying so is the difference between a
+     * charge the user can account for and one that appears nowhere.
+     */
+    if (typeof payload?.answer === "string") {
+      return Object.freeze({
+        ...base,
+        presentable: true,
+        detail: `${model ?? "An inference request"} was asked to name this conversation and returned no usable name; the local name stands.`,
+      });
+    }
   }
   if (event.type === "inference.usage") {
     return Object.freeze({
@@ -757,8 +803,10 @@ function humanIntentDetail(payload: Readonly<Record<string, unknown>> | undefine
   const toolName = typeof payload.toolName === "string" ? presentableTitle(payload.toolName) : undefined;
   if (!decision || !toolName) return undefined;
   const effect = typeof payload.effect === "string" ? presentableTitle(payload.effect) : undefined;
+  // Source alone, not the full authority: a human-intent record is the decision
+  // itself and carries no approval mode to state alongside it.
   const source = record(payload.approval)?.source as SessionPresentationToolAuthority["source"] | undefined;
-  const authority = source && source in AUTHORITY_LABELS ? ` ${AUTHORITY_LABELS[source]}.` : "";
+  const authority = source && source in TOOL_AUTHORITY_LABELS ? ` ${TOOL_AUTHORITY_LABELS[source]}.` : "";
   return `${decision} ${toolName}${effect ? ` (${effect} effect)` : ""} — requested from the interface, outside any turn.${authority}`;
 }
 
@@ -836,35 +884,22 @@ function userPartsForGroup(group: TurnGroup): readonly MessagePart[] {
 }
 
 /**
- * The label a person reads instead of the vocabulary the policy engine speaks.
+ * The turn-level index of the same authorities the call parts now carry.
  *
- * "You approved" and "Model review" are different accountability claims, and
- * Full Access is a standing grant rather than a decision about this call. The
- * mapping lives here so every surface says the same three things.
+ * Both projections read one journaled record through `toolCallAuthorityFrom`,
+ * so a surface that walks parts and a surface that wants the turn's approvals
+ * without walking them cannot drift into two different vocabularies or two
+ * different notions of a well-formed provenance record.
  */
-const AUTHORITY_LABELS: Readonly<Record<SessionPresentationToolAuthority["source"], string>> = Object.freeze({
-  human: "You approved",
-  "human-fallback": "You approved",
-  "model-review": "Model review",
-  "bounded-browser-sandbox": "Full Access",
-  "automatic-read": "Read-only, automatic",
-});
-const AUTHORITY_MODES = new Set(["ask-first", "auto-approve", "full-access"]);
-
 function toolAuthoritiesForGroup(group: TurnGroup): SessionPresentationToolAuthority[] {
   const authorities: SessionPresentationToolAuthority[] = [];
   for (const event of group.events) {
     if (event.type !== "tool.approved" && event.type !== "local.command.approved") continue;
     const payload = record(event.payload);
-    const approval = record(payload?.approval);
     const callId = event.type === "tool.approved" ? payload?.callId : requiredOperationId(event);
-    if (!approval || typeof callId !== "string" || callId.length === 0) continue;
-    const source = approval.source as SessionPresentationToolAuthority["source"];
-    const mode = approval.mode as SessionPresentationToolAuthority["mode"];
-    // An unreadable provenance record yields no row rather than a default: a
-    // wrong authority label is a false claim about who is accountable.
-    if (!(source in AUTHORITY_LABELS) || !AUTHORITY_MODES.has(mode)) continue;
-    authorities.push(Object.freeze({ callId, mode, source, label: AUTHORITY_LABELS[source] }));
+    const authority = toolCallAuthorityFrom(payload?.approval);
+    if (!authority || typeof callId !== "string" || callId.length === 0) continue;
+    authorities.push(Object.freeze({ callId, ...authority }));
   }
   return authorities;
 }
@@ -887,12 +922,16 @@ function assistantPartsForGroup(group: TurnGroup): readonly MessagePart[] {
   for (const event of group.events.slice(1)) {
     const payload = record(event.payload)!;
     if (event.type === "local.command.approved") {
+      // A command the *person* proposed still records who authorised the
+      // effect, and the card renders the same authority line as a model's call.
+      const authority = toolCallAuthorityFrom(payload.approval);
       facts.push({
         kind: "tool-status",
         factId: `${event.eventId}:local-approved`,
         sequence: event.sequence,
         callId: group.operationId,
         status: "approved",
+        ...(authority ? { authority } : {}),
       });
       continue;
     }

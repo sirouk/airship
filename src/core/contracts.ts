@@ -291,6 +291,25 @@ export const HUMAN_INTENT_EVENT_TYPE = "human.intent.reviewed";
  */
 export const CONVERSATION_NAMED_EVENT_TYPE = "conversation.named";
 
+/**
+ * The journal record of one thing a shell session did.
+ *
+ * Terminal lineage shipped as a bounded record set living only inside
+ * `BrowserTerminalManager`, readable from one `<summary>` popover and from
+ * nowhere else: a command that rewrote the workspace left no trace in the
+ * journal that Proof audits, so the one timeline the product claims —
+ * intent → effect → workspace head → receipt — had a hole exactly where the
+ * shell is. This is the type that closes it, and it lives here for the same
+ * reason `HUMAN_INTENT_EVENT_TYPE` does: the producer (the terminal manager's
+ * sink) and the validator (the session audit) must agree on the string without
+ * either importing the other.
+ *
+ * It is deliberately outside the turn protocol. A shell runs beside turns, not
+ * inside them, so these events carry no turn or operation identity — the same
+ * shape `session.renamed` has.
+ */
+export const TERMINAL_ACTIVITY_EVENT_TYPE = "terminal.activity.recorded";
+
 export interface ApprovalPolicy {
   review(tool: ToolDefinition, argumentsValue: JsonValue, context: ToolContext): Promise<ApprovalDecision>;
   /** One-shot provenance for the immediately completed decision. */

@@ -29,10 +29,12 @@
 .capability-device-card h3 { margin: 0; font: 650 var(--fs-body)/1.2 var(--font-body); }
 .capability-device-card header small { display: block; margin-top: .12rem; color: var(--ink-faint); font-size: var(--fs-micro); }
 .capability-device-card > p { margin: .55rem 0 0; color: var(--ink-muted); font-size: var(--fs-micro); line-height: 1.45; }
-/* Only a card whose probe reported a refusal renders this, so it is the card's
-   one verb rather than a fourth copy of Refresh on every tile. */
-.capability-device-card__action { display: inline-flex; align-items: center; justify-content: center; min-height: var(--density-control); margin-top: .55rem; padding: 0 .7rem; border: 1px solid var(--line-strong); border-radius: var(--radius-control); color: var(--ink); background: var(--surface-soft); font-size: var(--fs-micro); }
-.capability-device-card__action:hover { border-color: var(--accent); }
+/* Only an observation whose probe reported a refusal renders this, so it is
+   that row's one verb rather than another copy of Refresh on every tile. Shared
+   by the device cards and the browser-primitives list because the refusals the
+   probes actually raise (NotAllowedError, SecurityError) land in both. */
+.capability-probe-action { display: inline-flex; align-items: center; justify-content: center; min-height: var(--density-control); margin-top: .55rem; padding: 0 .7rem; border: 1px solid var(--line-strong); border-radius: var(--radius-control); color: var(--ink); background: var(--surface-soft); font-size: var(--fs-micro); }
+.capability-probe-action:hover { border-color: var(--accent); }
 .capability-device-card details { margin-top: .55rem; border-top: 1px solid var(--line); }
 .capability-device-card details summary { padding-top: .45rem; color: var(--ink-muted); cursor: pointer; font-size: var(--fs-micro); }
 .capability-device-card details dl { display: grid; gap: .28rem; margin: .45rem 0 0; }
@@ -52,6 +54,9 @@
    vs merely registered), so it wraps onto its own row instead of being clipped. */
 .capability-policy-row details li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: .5rem .5rem; color: var(--ink-muted); font-size: var(--fs-micro); }
 .capability-policy-row details li small { flex: 1 0 100%; margin-top: 0; color: var(--ink-faint); line-height: 1.4; }
+/* The refusal's own verb wraps below the detail it answers, sized like the
+   card control it shares a recipe with rather than stretched across the row. */
+.capability-policy-row details li .capability-probe-action { flex: 0 0 auto; margin-top: .3rem; }
 .capability-policy-row details p { margin: .55rem 0 0; color: var(--ink-faint); font-size: var(--fs-micro); line-height: 1.45; }
 .capability-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--density-gap); }
 .capability-runtime { display: grid; align-content: start; gap: .7rem; min-width: 0; padding: var(--density-panel-pad); border: 1px solid var(--line); border-radius: var(--radius-panel); background: var(--surface); }
@@ -93,7 +98,7 @@
   .capability-runtime > button { min-height: 44px; }
   .capability-extension > div:last-child { display: grid; grid-template-columns: 1fr 1fr; }
   .capability-extension button { min-height: 44px; }
-  .capability-device-card__action { min-height: 44px; }
+  .capability-probe-action { min-height: 44px; }
   /* A disclosure summary is a control a finger has to hit, and no shared token
      sizes it: the route's own mobile block enumerated buttons only, so every
      `summary` here sat under the 44px target while its sibling buttons were

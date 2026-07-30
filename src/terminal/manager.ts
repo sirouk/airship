@@ -11,6 +11,7 @@ import {
   type TerminalSessionSnapshot,
   type TerminalSessionStatus,
 } from "./contracts";
+import { publishTerminalAuditRecord } from "./audit-sink";
 import {
   mountTerminalWorkspace,
   reconcileTerminalWorkspace,
@@ -127,6 +128,19 @@ export async function quiesceBrowserTerminalWorkspace(
 }
 
 /**
+ * Whether a terminal currently holds the page-global WebContainer.
+ *
+ * Read this *before* quiescing — the quiesce is what clears it. It exists so a
+ * caller about to destroy the shared instance can tell "the terminal booted it"
+ * from "this module booted it": a module-local handle on the runtime pack
+ * answers only the second question, and mistaking the two means stopping a
+ * terminal for a teardown that then never happens.
+ */
+export function browserTerminalHoldsSharedRuntime(): boolean {
+  return activeHostManager !== undefined;
+}
+
+/**
  * Stop and reconcile whichever terminal currently holds the shared WebContainer,
  * before that instance is destroyed.
  *
@@ -179,6 +193,8 @@ export class BrowserTerminalManager {
   private persistenceTail: Promise<void> = Promise.resolve();
   private lastPersistenceFailure?: string;
   private readonly persistenceListeners = new Set<(failure: string | undefined) => void>();
+  private readonly reconcileListeners = new Set<(canReconcile: boolean) => void>();
+  private reconcileAvailable = false;
   private transcriptPersistTimer?: ReturnType<typeof setTimeout>;
   readonly ready: Promise<void>;
 
@@ -515,6 +531,49 @@ export class BrowserTerminalManager {
   }
 
   /**
+   * The predicate above, as a signal a view can hold.
+   *
+   * `canReconcile()` is a function of page-global host authority and this
+   * manager's own mount — neither of which is session state — so a surface
+   * that reads it during render is betting that every flip happens to coincide
+   * with a session or list emission. It does not. `start` acquires the mount
+   * inside `ensureHost` and does not emit again until the PTY has spawned, so
+   * a cold WebContainer boot leaves a Reconcile control disabled for the whole
+   * boot after the mount became reconcilable; a start abandoned by a
+   * generation bump between those two points never emits at all.
+   */
+  subscribeReconcile(listener: (canReconcile: boolean) => void): () => void {
+    this.reconcileListeners.add(listener);
+    listener(this.canReconcile());
+    return () => this.reconcileListeners.delete(listener);
+  }
+
+  /** Deduplicated so the mount's steady state costs subscribers nothing. */
+  private publishReconcileAvailability(): void {
+    const available = this.canReconcile();
+    if (available === this.reconcileAvailable) return;
+    this.reconcileAvailable = available;
+    for (const listener of this.reconcileListeners) listener(available);
+  }
+
+  /**
+   * The one place page-global host authority changes hands.
+   *
+   * Authority is half of `canReconcile()`, and it moves *between* managers:
+   * the manager losing it is not the one running this code, so routing every
+   * assignment through here is what keeps the loser's subscribers from holding
+   * a stale "yes". Private-static, because it reaches into another instance's
+   * publication path.
+   */
+  private static setActiveHostManager(next: BrowserTerminalManager | undefined): void {
+    const previous = activeHostManager;
+    if (previous === next) return;
+    activeHostManager = next;
+    previous?.publishReconcileAvailability();
+    next?.publishReconcileAvailability();
+  }
+
+  /**
    * A lifecycle-driven sync, which may not rebuild the mount under another
    * tab's live process. See the quiescence note in `start`.
    */
@@ -587,7 +646,7 @@ export class BrowserTerminalManager {
           true,
         );
       }
-      activeHostManager = this;
+      BrowserTerminalManager.setActiveHostManager(this);
       let lifecycle = this.options.hostLifecycle;
       try {
         let host: WebContainer;
@@ -605,9 +664,13 @@ export class BrowserTerminalManager {
         this.host = host;
         this.baseline = baseline;
         if (lifecycle) this.bindHostLifecycle(lifecycle);
+        // The mount is reconcilable from here, and `start` says nothing more
+        // until its PTY has spawned — seconds later on a cold boot, and never
+        // at all if the start is abandoned by a generation bump in between.
+        this.publishReconcileAvailability();
         return host;
       } catch (error) {
-        if (activeHostManager === this) activeHostManager = undefined;
+        if (activeHostManager === this) BrowserTerminalManager.setActiveHostManager(undefined);
         this.clearHostBinding();
         throw error;
       }
@@ -625,7 +688,7 @@ export class BrowserTerminalManager {
   }
 
   private invalidateHost(event: NodeWebContainerLifecycleEvent): void {
-    if (activeHostManager === this) activeHostManager = undefined;
+    if (activeHostManager === this) BrowserTerminalManager.setActiveHostManager(undefined);
     this.clearHostBinding();
     // This path only ever runs *after* the host is gone, so nothing can be
     // reconciled from here. Airship's own deactivation quiesces first; an
@@ -659,7 +722,7 @@ export class BrowserTerminalManager {
           failure ??= error;
         }
       }
-      if (activeHostManager === this) activeHostManager = undefined;
+      if (activeHostManager === this) BrowserTerminalManager.setActiveHostManager(undefined);
       this.clearHostBinding();
       this.flushTranscriptPersist();
       // Handled, not awaited bare: a rejection here runs inside `finally` and
@@ -705,9 +768,10 @@ export class BrowserTerminalManager {
     this.hostGeneration = undefined;
     // Dropping the binding is what makes `canReconcile()` false, and a manager
     // whose tabs are all idle or failed loses it without any session changing
-    // state — `stopLiveSessions` has nothing to emit. Publishing here is the
-    // only signal a view gets, and without it a Reconcile control stays enabled
-    // for a mount this manager can no longer reconcile at all.
+    // state — `stopLiveSessions` has nothing to emit. Publishing the predicate
+    // itself is what a Reconcile control holds; the session and list emissions
+    // below stay because the rest of the chrome is reading session state.
+    this.publishReconcileAvailability();
     if (hadBinding) {
       for (const session of this.sessions.values()) this.emitSession(session);
       this.emitList();
@@ -815,6 +879,13 @@ export class BrowserTerminalManager {
     });
     session.audit.push(record);
     session.audit = session.audit.slice(-MAX_AUDIT_RECORDS);
+    // The manager's own record set is bounded to 64 and is page-local, so it is
+    // a live view, not a ledger. Publishing here — the one place a record is
+    // ever made — is what lets the shell put the same fact somewhere durable
+    // before the ring buffer forgets it. Nothing about the terminal depends on
+    // a subscriber existing; with none, this is a no-op and the manager behaves
+    // exactly as it did before the seam existed.
+    publishTerminalAuditRecord(record, snapshot(session));
   }
 
   private pruneClosedSessions(): void {

@@ -3,8 +3,14 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <!-- The pre-script defaults only. Static HTML cannot read a stored display
+         preference, so it must not assert one: `applyPreferenceOverrides` in
+         src/main.tsx rewrites `theme-color` from the resolved `--ground` and
+         puts the real `color-scheme` on `<html>` before the first render, and
+         `light dark` leaves the one frame before that to the reader's OS
+         rather than painting a dark canvas around a paper document. -->
     <meta name="theme-color" content="#101417" />
-    <meta name="color-scheme" content="dark" />
+    <meta name="color-scheme" content="light dark" />
     <!-- WebContainer's hidden StackBlitz frame needs the embedding origin to
          establish its page-local runtime channel. Paths and queries stay private. -->
     <meta name="referrer" content="origin" />

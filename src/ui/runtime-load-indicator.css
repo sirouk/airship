@@ -1,9 +1,11 @@
 /*
- * The rail's live-load row. Its own file rather than a block in shell.css so
+ * The shell's live-load row. Its own file rather than a block in shell.css so
  * the indicator ships with the component that owns it, the way the route views
- * already carry their own sheets.
+ * already carry their own sheets. Two placements, one recipe: the rail band on
+ * desktop and the mobile tab bar below the phone breakpoint, because those are
+ * the two bands every route renders and the rail is `display: none` on a phone.
  */
-.rail-load {
+.load-indicator {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   gap: var(--sp-1);
@@ -18,7 +20,7 @@
 
 /* Idle is stated in the same ink as everything else at rest. Only a live run
    earns the accent, because a colour that is always on stops being a signal. */
-.rail-load__count {
+.load-indicator__count {
   min-width: 1.4em;
   padding: 0 .3em;
   border: 1px solid var(--line);
@@ -28,27 +30,45 @@
   text-align: center;
 }
 
-.rail-load[data-running="true"] .rail-load__count {
+.load-indicator[data-running="true"] .load-indicator__count {
   border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
   color: var(--accent-bright);
 }
 
-.rail-load__label {
+.load-indicator__label {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 /* The icon rail clips words out of the layout rather than removing them, the
-   same rule the destination labels follow: the count and the row's accessible
-   name still state the reading at 60px. */
-.sidebar[data-rail-state="rail"] .rail-load { grid-template-columns: minmax(0, 1fr); justify-items: center; padding: 0; }
+   same rule the destination labels follow: the count and the region's own text
+   still state the reading at 60px. */
+.sidebar[data-rail-state="rail"] .load-indicator { grid-template-columns: minmax(0, 1fr); justify-items: center; padding: 0; }
 
-.sidebar[data-rail-state="rail"] .rail-load__label {
+.sidebar[data-rail-state="rail"] .load-indicator__label {
   position: absolute;
   width: 1px;
   height: 1px;
   overflow: hidden;
   clip-path: inset(50%);
   white-space: nowrap;
+}
+
+/*
+ * In the phone tab bar the reading stacks into one fixed-width column beside
+ * the four destinations. The width is fixed rather than `auto` because the
+ * label changes with the count, and an auto column would resize all four tap
+ * targets underneath a finger the moment a run starts.
+ */
+.load-indicator[data-placement="nav"] {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 2px;
+  justify-items: center;
+  align-content: center;
+  width: 58px;
+  padding: 4px 2px;
+  border-top: 0;
+  border-inline-end: 1px solid var(--line);
+  text-align: center;
 }

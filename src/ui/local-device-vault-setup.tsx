@@ -11,6 +11,7 @@ import {
 import { requestPersistentLocalDeviceStorage } from "../storage/local-device-object-store";
 import type { LocalDeviceVaultStatus } from "../vault/local-device";
 import { importWorkspaceRecoveryKey } from "../vault/recovery";
+import { downloadBytes } from "./file-download";
 import { Seal, type SealState } from "./seal";
 import "./local-device-vault-setup.css";
 
@@ -367,10 +368,7 @@ export function LocalDeviceVaultSetup({
       if (!(bytes instanceof Uint8Array) || bytes.byteLength === 0) {
         throw new Error("The active Vault returned an empty encrypted backup.");
       }
-      triggerDownload(
-        new Blob([bytes.slice().buffer], { type: "application/vnd.airship.vault-backup+json" }),
-        safeBackupFileName(backupFileName),
-      );
+      downloadBytes(bytes, safeBackupFileName(backupFileName), "application/vnd.airship.vault-backup+json");
       if (mounted.current) {
         setNotice({
           kind: "success",
@@ -390,10 +388,7 @@ export function LocalDeviceVaultSetup({
     if (!prepared || ceremony !== "revealed" || busy) return;
     const bytes = new TextEncoder().encode(`${prepared.recoveryKey}\n`);
     try {
-      triggerDownload(
-        new Blob([bytes.slice().buffer], { type: "text/plain;charset=utf-8" }),
-        "airship-local-device-recovery-key.txt",
-      );
+      downloadBytes(bytes, "airship-local-device-recovery-key.txt", "text/plain;charset=utf-8");
       setCustody("downloaded");
       setNotice({
         kind: "info",
@@ -877,22 +872,6 @@ function persistenceCopy(result: "granted" | "not-granted" | "unsupported"): str
 function clearSecretInput(input: HTMLTextAreaElement | null): void {
   if (!input) return;
   input.value = "";
-}
-
-function triggerDownload(blob: Blob, fileName: string): void {
-  if (typeof document === "undefined" || typeof URL.createObjectURL !== "function") {
-    throw new Error("Browser download is unavailable.");
-  }
-  const url = URL.createObjectURL(blob);
-  try {
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = fileName;
-    anchor.rel = "noopener";
-    anchor.click();
-  } finally {
-    setTimeout(() => URL.revokeObjectURL(url), 0);
-  }
 }
 
 function safeBackupFileName(value: string | undefined): string {

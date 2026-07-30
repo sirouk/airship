@@ -816,7 +816,16 @@ function SessionDetail({
           {/* The other direction of the same fact. Without it, a conversation
               retried three times looked identical to one never branched, and
               the three alternatives were peers in a flat list with nothing
-              saying they answered the same question. */}
+              saying they answered the same question.
+
+              Each entry states its fork point, because the branch time alone
+              does not answer the only question this list exists to answer:
+              three branches cut from event 12 are alternative answers to one
+              turn, while branches at 4, 12 and 30 are three different
+              questions that happen to share an ancestor. The sequence is the
+              branch's own `lineage.sourceHeadSequence` — the same commitment
+              the upward "Forked from … at head N" line reads — so the two
+              directions cannot disagree. */}
           {alternates.length ? (
             <div class="session-library-alternates">
               <p class="session-library-alternates__heading">
@@ -829,10 +838,17 @@ function SessionDetail({
                     <button
                       type="button"
                       class="session-library-lineage-link"
-                      aria-label={`Open the branch ${branch.title}`}
+                      aria-label={`Open the branch ${branch.title}${branch.sourceHeadSequence === undefined ? "" : `, branched at head ${branch.sourceHeadSequence}`}`}
                       onClick={() => onSelectSession(branch.id)}
                     >{branch.title}</button>
-                    {" "}<small>branched <time dateTime={branch.createdAt}>{formatDateTime(branch.createdAt)}</time></small>
+                    {" "}<small>
+                      {/* Absent only for a summary whose manifest carried no
+                          lineage — which cannot reach this list, since the
+                          index is keyed on it — so the fallback states the
+                          gap rather than printing a sequence of its own. */}
+                      {branch.sourceHeadSequence === undefined ? "fork point unrecorded" : `branched at head ${branch.sourceHeadSequence}`}
+                      {" · "}<time dateTime={branch.createdAt}>{formatDateTime(branch.createdAt)}</time>
+                    </small>
                   </li>
                 ))}
               </ul>

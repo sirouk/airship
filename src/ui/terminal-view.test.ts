@@ -124,6 +124,45 @@ describe("terminal profile boundary", () => {
   });
 });
 
+describe("the terminal tab strip", () => {
+  it("takes tabs.tsx's rules rather than growing a second copy of them", () => {
+    // The strip cannot adopt `Tabs` itself — a tab being renamed is replaced by
+    // a text input and `TabItem` has no shape for that, while its one secondary
+    // action hard-renders a close `×`. What it must not do is reimplement the
+    // behaviour: movement and active-tab-into-view are one rule each, and they
+    // live in `tabs.tsx` where they are measured and tested.
+    const source = terminalViewCode();
+    expect(source).toMatch(/import \{[^}]*nextTabId[^}]*\} from "\.\/tabs";/u);
+    expect(source).toMatch(/import \{[^}]*tabScrollLeft[^}]*\} from "\.\/tabs";/u);
+    // `scrollIntoView` is the tempting shortcut that also scrolls every
+    // scrollable ancestor, so a strip below the fold takes the page with it.
+    expect(source).not.toContain("scrollIntoView");
+  });
+
+  it("holds the reconcile predicate from the manager's signal, never a render-time read", () => {
+    // Host authority and the mount are not session state; a render-time
+    // `canReconcile()` is only ever right when some other emission happens to
+    // land at the same moment, and on a cold boot it does not.
+    const source = terminalViewCode();
+    expect(source).toContain("manager.subscribeReconcile(setReconcilable)");
+    expect(source).not.toMatch(/disabled=\{[^}]*manager\.canReconcile\(\)/u);
+  });
+});
+
+/**
+ * The view's code without its prose.
+ *
+ * This repo explains itself in comments, and the comments here name the very
+ * API the checks above forbid — `scrollIntoView` is banned in the code and
+ * quoted in the reason. Reading the file raw would make the explanation the
+ * violation.
+ */
+function terminalViewCode(): string {
+  return readFileSync(new URL("./terminal-view.tsx", import.meta.url), "utf8")
+    .replace(/\/\*[\s\S]*?\*\//gu, "")
+    .replace(/(^|\s)\/\/[^\n]*/gu, "$1");
+}
+
 describe("terminal panel bar at phone width", () => {
   it("sheds the labels without shedding the glyph that stands in for them", () => {
     // `button span` also hid the `＋` of "New here", whose mark happens to live

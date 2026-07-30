@@ -1,6 +1,20 @@
 import { render } from "preact";
 import { App } from "./ui/app";
+import { applyPreferenceOverrides, loadPreferenceOverrides } from "./ui/platform-shell";
 import "./ui/styles.css";
+
+/*
+ * Presentation before the first frame, not after the runtime boots.
+ *
+ * These preferences are a synchronous localStorage read, but they used to be
+ * applied by an effect gated on a resolved profile theme — the end of a
+ * multi-await runtime boot. So `<html>` carried no mode or density attribute
+ * for the entire boot window, and a reader who chose Paper got a full-screen
+ * dark boot screen off the default type and density ramp before the app
+ * corrected itself. Applied here, the very first render already sits on the
+ * right sheet; `app.tsx` keeps it true for every later change.
+ */
+applyPreferenceOverrides(loadPreferenceOverrides());
 
 render(<App />, document.getElementById("app")!);
 

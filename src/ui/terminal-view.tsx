@@ -5,7 +5,7 @@ import "@xterm/xterm/css/xterm.css";
 import type { BrowserGitClient } from "../git/client";
 import type { TerminalGitReview } from "../git/terminal-commands";
 import type { ClientEncryptedWorkspacePort, WorkspacePort } from "../workspace/contracts";
-import { nextTabId } from "./tabs";
+import { nextTabId, stripViewport, tabBox, tabScrollLeft } from "./tabs";
 import { getBrowserTerminalManager, type BrowserTerminalManager } from "../terminal/manager";
 import { WEB_CONTAINER_TERMINAL_RUNTIME, type TerminalSessionSnapshot } from "../terminal/contracts";
 import { durabilityLabel, type DurabilityState } from "./durability-indicator";
@@ -183,6 +183,7 @@ function ProfileScopedTerminalView({ workspace, onWorkspaceChanged, threadId, pr
   const [renameValue, setRenameValue] = useState("");
   const [setupOpen, setSetupOpen] = useState(() => readTerminalSetupOpen(globalThis.localStorage));
   const [persistenceFailure, setPersistenceFailure] = useState<string>();
+  const [reconcilable, setReconcilable] = useState(false);
   const cancelRename = useRef(false);
   const strip = useRef<HTMLDivElement>(null);
   const workspaceChanged = useRef(onWorkspaceChanged);
@@ -236,6 +237,33 @@ function ProfileScopedTerminalView({ workspace, onWorkspaceChanged, threadId, pr
   // metadata is failing to persist, the footer says so instead of repeating the
   // declared durability tier back at the user.
   useEffect(() => manager.subscribePersistence(setPersistenceFailure), [manager]);
+
+  // Host authority and the mount are not session state, so reading
+  // `canReconcile()` during render only ever happened to be right when a
+  // session emission chanced to accompany the flip. It is a subscription of its
+  // own now: acquiring the mount publishes before the PTY spawns, and losing it
+  // publishes even when every tab is idle and nothing else changes.
+  useEffect(() => manager.subscribeReconcile(setReconcilable), [manager]);
+
+  // Eight tabs at a 9rem floor is ~1.2kpx of strip in a 390px phone, so a tab
+  // created by "New here" or by the dock's ＋ is selected off-screen while the
+  // panel below already shows it. Keyboard movement scrolls itself because it
+  // moves focus; selection by click or by creation does not, which is exactly
+  // the case `Tabs` fixes and this strip was rebuilding without. The rule is
+  // `tabs.tsx`'s measured one — deliberately not `scrollIntoView`, which also
+  // scrolls every scrollable ancestor and takes the page with it.
+  useEffect(() => {
+    const box = strip.current;
+    if (!box) return;
+    for (const child of box.children) {
+      if (!(child instanceof HTMLElement) || child.dataset.tabId !== activeId) continue;
+      const next = tabScrollLeft(tabBox(box, child), stripViewport(box));
+      if (next !== box.scrollLeft) box.scrollLeft = next;
+    }
+    // Keyed on the id list, as `Tabs` is: a name edit changes tab widths but
+    // not which tab has to be reachable, and re-measuring on every keystroke of
+    // a rename would fight the input for the strip's scroll position.
+  }, [activeId, sessions.map(({ id }) => id).join(" ")]);
 
   const active = sessions.find(({ id }) => id === activeId);
   const createTab = () => {
@@ -320,8 +348,9 @@ function ProfileScopedTerminalView({ workspace, onWorkspaceChanged, threadId, pr
         actions={<div class="terminal-route__actions">
           {/* Enabled by the fact the manager actually holds — a mounted host
               with a baseline — not by a session-status proxy for it. A failed
-              tab's mount is still reconcilable, and that was the work at risk. */}
-          <button type="button" onClick={() => void sync()} disabled={syncing || !manager.canReconcile()}><Icon name="cloud" size={16} />{syncing ? "Reconciling…" : "Reconcile workspace"}</button>
+              tab's mount is still reconcilable, and that was the work at risk.
+              Read from the manager's own signal, never re-derived here. */}
+          <button type="button" onClick={() => void sync()} disabled={syncing || !reconcilable}><Icon name="cloud" size={16} />{syncing ? "Reconciling…" : "Reconcile workspace"}</button>
           <button type="button" onClick={createTab} disabled={sessions.length >= 8}><span aria-hidden="true">＋</span> New terminal</button>
         </div>}
       /> : <header class="terminal-dock__toolbar">
@@ -332,7 +361,7 @@ function ProfileScopedTerminalView({ workspace, onWorkspaceChanged, threadId, pr
           <span>{profileId ? `Profile ${profileName ?? compactId(profileId)}` : "Legacy unscoped"}</span>
         </div>
         <div class="terminal-dock__actions">
-          <button type="button" onClick={() => void sync()} disabled={syncing || !manager.canReconcile()} aria-label="Reconcile terminal workspace"><Icon name="cloud" size={15} /><span>{syncing ? "Reconciling…" : "Reconcile"}</span></button>
+          <button type="button" onClick={() => void sync()} disabled={syncing || !reconcilable} aria-label="Reconcile terminal workspace"><Icon name="cloud" size={15} /><span>{syncing ? "Reconciling…" : "Reconcile"}</span></button>
           <button type="button" onClick={createTab} disabled={sessions.length >= 8} aria-label="New terminal"><span aria-hidden="true">＋</span><span>New</span></button>
           {onOpenFullView ? <button type="button" onClick={onOpenFullView} aria-label="Open full Terminal view"><span aria-hidden="true">↗</span><span>Full view</span></button> : null}
           {onCollapse ? <button type="button" onClick={onCollapse} aria-label="Collapse terminal dock"><span aria-hidden="true">⌄</span><span>Collapse</span></button> : null}

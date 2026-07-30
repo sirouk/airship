@@ -36,11 +36,13 @@ function toolFacade(workspace: MemoryWorkspace): WorkspacePort {
 }
 
 let mounted: FileSystemTree = {};
+const deactivated = vi.fn(async () => undefined);
 
 vi.mock("../execution/node-webcontainer-pack", () => ({
   activateNodeWebContainerHost: async () => host,
   getNodeWebContainerHostGeneration: () => 1,
   subscribeNodeWebContainerLifecycle: () => () => undefined,
+  deactivateNodeWebContainer: () => deactivated(),
 }));
 
 const host = {
@@ -100,6 +102,14 @@ describe("deactivate_execution_runtime and the shared terminal mount", () => {
     expect(result.content).toContain("/workspace/notes.txt");
     expect((result.metadata as Record<string, unknown> | undefined)?.reconciledTerminalPaths).toEqual(["/workspace/notes.txt"]);
     expect(manager.list()[0]).toMatchObject({ status: "restart-required" });
+    /*
+     * And it really is torn down. The tool module holds its own handle on the
+     * runtime pack and only sets it when *it* runs a job; the terminal boots
+     * the same instance through a separate import. Gated on that handle alone,
+     * this call did the destructive half — stop the terminal, drop the mount —
+     * and then released nothing, while reporting the runtime deactivated.
+     */
+    expect(deactivated).toHaveBeenCalledTimes(1);
   });
 
   // Nothing holds the shared instance here, so the quiesce must cost nothing

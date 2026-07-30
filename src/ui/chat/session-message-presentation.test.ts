@@ -659,6 +659,59 @@ describe("presentSessionMessages agrees with auditSessionHistory", () => {
     ]))), "TURN_PROTOCOL_INVALID");
   });
 
+  /*
+   * The naming receipt was being minted, validated and journaled while nothing
+   * on any surface could open it: turn receipts ride assistant rows, and a
+   * record with no row had no carrier at all. Proof resolves against the
+   * receipts the transcript items hand it, so the marker has to carry its own.
+   */
+  it("binds an out-of-turn inference marker to its receipt, and leaves every other marker without one", () => {
+    const turnReceipt = localReceipt("session-1", "turn-1");
+    const namingReceipt = localReceipt("session-1", "naming-turn-1");
+    const view = presentSessionMessages(input(sequence([
+      draft("session.created", undefined, {}),
+      ...agentTurn("turn-1", "Say ok", "ok"),
+      localDraft(CONVERSATION_NAMED_EVENT_TYPE, "naming-turn-1", "naming-operation-1", {
+        title: "Saying ok",
+        answer: "Saying ok",
+        model: "airship/demo-v1",
+      }),
+      draft("session.renamed", undefined, { title: "Saying ok" }),
+    ]), { receipts: [turnReceipt, namingReceipt] }));
+
+    const naming = view.markers.find((marker) => marker.kind === CONVERSATION_NAMED_EVENT_TYPE)!;
+    expect(naming.turnId).toBe("naming-turn-1");
+    expect(naming.receipt?.receiptId).toBe(namingReceipt.receiptId);
+    // The turn's own receipt still belongs to the turn, and a bookkeeping
+    // record that made no provider request must not appear to have evidence.
+    expect(view.rows[1]!.receipt?.receiptId).toBe(turnReceipt.receiptId);
+    const renamed = view.markers.find((marker) => marker.kind === "session.renamed")!;
+    expect(renamed.receipt).toBeUndefined();
+    expect(renamed.turnId).toBeUndefined();
+  });
+
+  /*
+   * A completed naming call whose answer is a refusal or an essay is still a
+   * billed, attested request. Recording it and then rendering "this build
+   * cannot replay" would be the same erasure in a new place.
+   */
+  it("reports a naming request that returned no usable name, rather than calling the record unreadable", () => {
+    const view = presentSessionMessages(input(sequence([
+      draft("session.created", undefined, {}),
+      ...agentTurn("turn-1", "Say ok", "ok"),
+      localDraft(CONVERSATION_NAMED_EVENT_TYPE, "naming-turn-1", "naming-operation-1", {
+        answer: "I'm sorry, but I can't help with naming this conversation.",
+        model: "airship/demo-v1",
+      }),
+    ])));
+
+    const naming = view.markers.find((marker) => marker.kind === CONVERSATION_NAMED_EVENT_TYPE)!;
+    expect(naming.presentable).toBe(true);
+    expect(naming.detail).toContain("no usable name");
+    expect(naming.detail).toContain("airship/demo-v1");
+    expect(naming.detail).not.toContain("cannot replay");
+  });
+
   it("still refuses a turn event that lost its turn identity, and says which one", () => {
     // The permissiveness above is scoped to types that are not turn-scoped. An
     // `assistant.completed` with no turn is a real protocol violation and stays

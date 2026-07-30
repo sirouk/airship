@@ -1,4 +1,5 @@
 import type { SecurityPosture } from "../core/contracts";
+import type { ProfileMemoryScope } from "../profiles/domain";
 
 /**
  * What a profile actually governs, in one vocabulary.
@@ -40,12 +41,27 @@ export type ProfileGovernanceCell = Readonly<{
   link?: string;
 }>;
 
-/** The memory scope names, taken verbatim from the select that sets them. */
+/**
+ * The memory scope names, taken verbatim from the select that sets them.
+ *
+ * Two, not three. `workspace` carried the label "Shared workspace", which named
+ * a widening no reader implements: every read of memory.json narrows on the
+ * pinned profile ID, so `enforcedMemoryScope` resolves a stored `workspace` to
+ * the `profile` it has always behaved as, and the editor no longer offers it.
+ * A label for it could therefore only print a boundary the runtime does not
+ * enforce — the same defect as printing a raw enum, from the other side.
+ *
+ * Keying `ProfileGovernanceInput["memoryScope"]` off this map is the guard: the
+ * withdrawn member is not merely unrendered, it is untypeable, so a caller
+ * holding a stored revision has to pass it through `enforcedMemoryScope` before
+ * this module will label it. `Exclude` is stated against the domain enum so
+ * that widening the silo for real fails to compile here rather than silently
+ * shipping an unlabelled scope.
+ */
 export const PROFILE_MEMORY_SCOPE_LABELS = Object.freeze({
   session: "This conversation",
   profile: "This profile",
-  workspace: "Shared workspace",
-} as const);
+} as const satisfies Readonly<Record<Exclude<ProfileMemoryScope, "workspace">, string>>);
 
 /** Title Case verbatim: eight shipped e2e assertions pin these three strings. */
 export const PROFILE_APPROVAL_LABELS = Object.freeze({

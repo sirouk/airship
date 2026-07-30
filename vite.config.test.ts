@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   applyLocalDevelopmentPolicy,
+  DEVELOPMENT_OPTIMIZE_ENTRIES,
   DEVELOPMENT_WATCH_IGNORES,
   resolveAirshipModulePreloadDependencies,
   rewriteLocalExtensionHubRequest,
@@ -28,6 +29,11 @@ describe("local development CSP", () => {
     ]));
     expect(DEVELOPMENT_WATCH_IGNORES).not.toContain("**/src/**");
     expect(Object.isFrozen(DEVELOPMENT_WATCH_IGNORES)).toBe(true);
+  });
+
+  it("scans only the web application HTML entry for development dependencies", () => {
+    expect(DEVELOPMENT_OPTIMIZE_ENTRIES).toEqual(["index.html"]);
+    expect(Object.isFrozen(DEVELOPMENT_OPTIMIZE_ENTRIES)).toBe(true);
   });
 
   it("serves the Companion installer at the natural development hub path", () => {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  FORK_RETRY_TOOLTIP,
   forkBranchNotice,
   forkContextClause,
   forkLibraryAnnouncement,
@@ -67,6 +68,24 @@ describe("every branch kind carries the reach of its seed", () => {
       expect(notice, kind).toContain("40 ancestor messages");
       expect(notice, kind).toContain("13 earlier messages");
     }
+  });
+
+  /*
+   * The pre-click sentence has to survive the click.
+   *
+   * Retry's tooltip is the only branch claim a reader gets *before* anything
+   * exists, and it was a button-local literal saying "clean fork". The retry
+   * path forks at the pre-turn boundary and seeds bounded ancestor context, so
+   * the tooltip promised a blank slate that the very next sentence — the
+   * post-fork notice, which names a carried ancestor count — contradicts.
+   */
+  it("promises the same seeded branch before the click that the notice reports after it", () => {
+    expect(FORK_RETRY_TOOLTIP).not.toMatch(/clean fork|empty transcript|blank/iu);
+    expect(FORK_RETRY_TOOLTIP).toContain("bounded, digest-sealed copy");
+    expect(FORK_RETRY_TOOLTIP).toContain("up to just before this turn");
+    // It may not quote a reach: the counts do not exist until the fork does,
+    // and this module's whole point is refusing unbacked completeness claims.
+    expect(FORK_RETRY_TOOLTIP).not.toMatch(/\d/u);
   });
 
   it("gives the library route the same clause it gives the composer", () => {

@@ -198,6 +198,62 @@ export async function decideHumanIntent(options: Readonly<{
   });
 }
 
+/**
+ * `decideHumanIntent` as an `ApprovalPolicy`, for the one human-proposed effect
+ * that must keep the tool registry's ticket seam.
+ *
+ * Git, GitHub import and the vault probe call `decideHumanIntent` directly
+ * because they execute their own effect. A local slash command does not: it
+ * runs through `ToolRegistry.review` → `executeApproved`, where the review call
+ * is what mints the approval ticket that binds the exact argument digest and
+ * abort signal to the execution. Deciding outside that seam and then executing
+ * would mean issuing a ticket no policy granted, so the decision is injected as
+ * the policy instead and every registry guard stays in force.
+ *
+ * What this changes for `/write`, `/execute-shell` and their peers under Auto
+ * Approve: the person's own typed command is no longer shipped to a review
+ * model, no longer bills them for a provider request they never asked for, and
+ * — the reason this is a defect rather than a preference — can no longer be
+ * *denied outright* by an `unsafe` verdict. That branch of
+ * `createApprovalModePolicy` returns `deny` with no human fallback, which is a
+ * model vetoing the operator who typed the command. Ask First and Full Access
+ * are unchanged; Auto Approve now asks, which is strictly more human control,
+ * never less.
+ */
+export function createHumanIntentPolicy(options: Readonly<{
+  mode: ApprovalMode;
+  broker: ApprovalBroker;
+}>): ApprovalPolicy {
+  const provenance = new Map<string, ApprovalProvenance>();
+  return {
+    async review(tool, argumentsValue, context) {
+      // Reads stay automatic here exactly as they are in the mode policy. A
+      // human-proposed effect is the thing worth adjudicating; prompting for a
+      // read the person just asked for would be noise, and the provenance
+      // vocabulary already has the word for why it ran.
+      const reviewed: HumanIntentReview = tool.effect === "read"
+        ? {
+            decision: "allow",
+            provenance: {
+              mode: options.mode,
+              source: "automatic-read",
+              reason: "Read-only browser tool effects are allowed automatically.",
+            },
+          }
+        : await decideHumanIntent({ ...options, tool, argumentsValue, context });
+      if (provenance.size >= MAX_PROVENANCE) provenance.delete(provenance.keys().next().value as string);
+      provenance.set(contextKey(context), Object.freeze(reviewed.provenance));
+      return reviewed.decision;
+    },
+    takeProvenance(context) {
+      const key = contextKey(context);
+      const value = provenance.get(key);
+      provenance.delete(key);
+      return value;
+    },
+  };
+}
+
 export function approvalProvenance(
   policy: ApprovalPolicy,
   context: ToolContext,

@@ -31,8 +31,15 @@ const routes: readonly Route[] = Object.freeze([
   { hash: "memory", label: "Memory", heading: /^Memory$/i },
   { hash: "context", label: "Context index", heading: /^Memory$/i, deepLinkOnly: true },
   { hash: "profiles", label: "Profiles", heading: /^Profiles$/i },
-  { hash: "capabilities", label: "Capabilities", heading: /^Capabilities$/i, deepLinkOnly: true },
-  { hash: "skills", label: "Skills", heading: /^Skills$/i, deepLinkOnly: true },
+  // AMENDED: neither is deep-link-only. Both are `profiles`' siblings in the
+  // profile hub's tab strip on desktop and their own rows in the mobile More
+  // sheet, so `deepLinkOnly` exempted the two routes most likely to be reached
+  // only by pointer from the one thing this audit exists to check — that a
+  // person can get there without typing a URL. The exemption also hid a real
+  // difference: a deep link boots the route cold, while the tab strip renders
+  // it inside an already-mounted hub, which is the path a person takes.
+  { hash: "capabilities", label: "Capabilities", heading: /^Capabilities$/i },
+  { hash: "skills", label: "Skills", heading: /^Skills$/i },
   { hash: "proof", label: "Proof", heading: /^Proof$/i, primaryMobile: true },
   { hash: "vault", label: "Vault", heading: /^Vault$/i },
   // AMENDED AGAIN: `--connect-measure` now starts *below* the route bar. It
@@ -253,7 +260,18 @@ async function navigate(page: Page, route: Route, mobile: boolean, labUrl: (hash
       const expander = primary.getByRole("button", { name: "Expand Workspace" });
       if (await expander.count()) await expander.click();
     } else if (route.hash === "profiles") {
-      await page.locator(".sidebar .profile-switcher").getByRole("button", { name: "Manage profiles" }).click();
+      await openProfileHub(page);
+      return;
+    } else if (route.hash === "skills" || route.hash === "capabilities") {
+      // The rail has no `profiles` row, so it has no nested rows under one
+      // either: these two are tabs of the profile hub, and the pointer path is
+      // the pinned profile row's `Manage profiles` followed by the strip. Enter
+      // through the hub only when it is not already mounted — the audit visits
+      // Profiles immediately before these, and re-entering would assert a
+      // gesture nobody makes.
+      const hub = page.getByRole("navigation", { name: "Agent configuration" });
+      if (!(await hub.count())) await openProfileHub(page);
+      await hub.getByRole("button", { name: route.label, exact: true }).click();
       return;
     }
     await primary.getByRole("button", { name: route.label, exact: true }).click();
@@ -269,4 +287,9 @@ async function navigate(page: Page, route: Route, mobile: boolean, labUrl: (hash
   const mobileNavigation = page.getByRole("navigation", { name: "Mobile navigation" });
   await mobileNavigation.getByRole("button", { name: "More", exact: true }).click();
   await page.getByRole("dialog", { name: "More" }).getByRole("button").filter({ hasText: route.label }).first().click();
+}
+
+/** The one pointer entrance to the profile hub: the rail's pinned profile row. */
+async function openProfileHub(page: Page): Promise<void> {
+  await page.locator(".sidebar .profile-switcher").getByRole("button", { name: "Manage profiles" }).click();
 }

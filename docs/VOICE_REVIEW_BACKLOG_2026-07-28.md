@@ -6,6 +6,13 @@
 
 This is a directive register, not a summary that prunes inconvenient details. It records the requested product behavior, what Airship currently does, direct contradictions, reported bugs that still need reproduction, external dependencies, and an ordered delivery path. Existing capability and technical information must remain available; progressive disclosure may reorganize it but must not erase it. Mobile is the same product, not a reduced edition.
 
+> **Working-tree reconciliation:** Status prose and line numbers below are the
+> voice-review baseline, not a live implementation ledger. The whole-system
+> defect pass and its two explicitly retained feature-sized items are reconciled
+> in [Pass 1 findings](audit/PASS1_FINDINGS.md#working-tree-closeout). Keep this
+> register as the complete product directive map; use the Pass 1 closeout, Git
+> diff, and current test output for claims about what the working tree now does.
+
 ## Status legend
 
 | Status | Meaning |

@@ -4,8 +4,31 @@ Baseline `d161491` on `audit/whole-system-pass-1`. Produced by 20 parallel read-
 discovery scouts, each claim then re-checked against the code by an independent
 reviewer who did not write it. 139 claims survived validation.
 
-`verdict` is the reviewer's, not the scout's. `smallestFix` and `acceptanceCriteria`
-are the reviewer's proposal and have NOT been implemented unless this file says so.
+## Working-tree closeout
+
+This ledger is the immutable discovery record: the table's `open` values describe
+the baseline, not the current working tree. The implementation pass addressed 117
+of the first 119 findings, then a recovered review of the crashed final workflow
+verified and regression-pinned all 20 findings from app batches 6–8. Two findings
+remain deliberately open because neither has a safe defect-sized implementation:
+
+- **#33 / CAP-02 — skill authoring and import.** The catalog safely reconciles new
+  built-ins and the UI manages global/profile policy, but create/import/update/
+  archive needs a source, permission, digest-history, and required-tool ceremony.
+- **#139 / WKS-03 — language-aware editing.** The current bounded textarea remains
+  honest. A synchronized syntax layer or editor engine is separate high-risk
+  feature work with selection, IME, wrap, large-file, accessibility, and theme
+  acceptance gates.
+
+The other 137 findings have working-tree implementations and focused regression
+coverage. Temporary workflow ledgers are not canonical; this file plus Git diff
+and test output are the closeout authority. Nothing here changes the external
+gates called out by a finding, such as provider registrations or production
+hardware evidence.
+
+`verdict` is the reviewer's, not the scout's. `smallestFix` and
+`acceptanceCriteria` preserve the baseline proposal; the implementation may use a
+smaller or safer mechanism where the detailed finding includes a correction.
 
 | # | Sev | Cluster | Finding | Status |
 | --- | --- | --- | --- | --- |
@@ -418,6 +441,8 @@ are the reviewer's proposal and have NOT been implemented unless this file says 
 **Root cause:** The WebContainer instance is shared between the agent's execution runtime and the terminal, but the deactivation entry point owns only the runtime half: it tears the instance down with no pre-teardown hook for the terminal's mount, and the lifecycle event that would notify the terminal is published after the instance is gone.
 
 **Smallest fix:** At both src/tools/execution-tools.ts:304 and :503, call `quiesceBrowserTerminalWorkspace(workspace, "The shared browser runtime is being deactivated; terminal work was reconciled first.")` (already exported at src/terminal/manager.ts:114) before `deactivateNodeWebContainer()`, and surface the returned changed paths in the tool result. As a defence in depth, change the `invalidateHost` detail at manager.ts:533 to state that any writes made since the last reconciliation were discarded with the runtime.
+
+**Correction (as built):** The workspace-keyed call above is wrong and must not be reinstated. `managers` is a WeakMap over object identity, and the workspace a tool holds is the context runtime's observation facade — wrapped again in `GitSynchronizedWorkspace` when Git is bound — never the raw provider the Terminal route keys its manager by, so `quiesceBrowserTerminalWorkspace(workspace, …)` always misses and silently reconciles nothing: the exact data loss this finding is about, now wearing a passing test. What shipped is `quiesceBrowserTerminalHost(reason)` (src/terminal/manager.ts), addressed by page-global *host authority* — the one manager that can have mount work to save — with the tool test deliberately handing the tool a facade rather than the provider so a workspace-keyed regression fails. Two consequences the original prescription also missed: the teardown must not be gated on execution-tools' module-local `nodePack` handle, because a terminal boots the same instance through its own import and that gate would stop the terminal for a teardown that never happened (`browserTerminalHoldsSharedRuntime()` answers the right question); and the tool's own description now discloses that a live terminal is reconciled and stopped, since a model choosing to free memory was otherwise choosing that without being told.
 
 **Acceptance:** A test where the terminal has an unreconciled mount file and the `deactivate_execution_runtime` tool is invoked: after the tool returns, the workspace contains that file, and the tool result names the reconciled paths. A second test: when `invalidateHost` fires without a prior quiesce (e.g. an external teardown), the session detail explicitly states that unreconciled terminal writes were dropped.
 

@@ -218,6 +218,10 @@ function ProfileScopedWorkspaceView({
   // One id per *window slot*, not per path: a workspace path may contain a
   // space, and an `aria-owns` value is a space-separated IDREF list.
   const rowActionBaseId = useId();
+  // Same slot-indexed scheme for the label the row points its name at, kept
+  // separate from the action id so neither can be derived from the other by
+  // accident once one of them moves.
+  const rowLabelBaseId = useId();
   // Both tab strips in the rail switch the same region, so they name the same
   // panel; the document strip names the editor's. Each panel is named by an
   // `sr-only` heading inside it, which is the pattern `proof-view` already uses
@@ -1412,7 +1416,16 @@ function ProfileScopedWorkspaceView({
                   `role="treeitem"` children, and the virtualization scaffolding
                   put two generic boxes and a row wrapper in between. */}
               <div role="presentation" style={{ height: visible.length * rowHeight, position: "relative" }}><div role="presentation" style={{ position: "absolute", top: rowWindow.start * rowHeight, left: 0, right: 0 }}>
-                {visible.slice(rowWindow.start, rowWindow.end).map((node, offset) => <div class="tree-row-wrap" role="presentation" style={{ height: rowHeight }} key={node.path}>
+                {visible.slice(rowWindow.start, rowWindow.end).map((node, offset) => {
+                  // The absolute row index, not the window offset: every id and
+                  // every position below has to be stated in the coordinates of
+                  // the whole tree, because the window is a rendering detail no
+                  // assistive technology can see.
+                  const index = rowWindow.start + offset;
+                  const actionId = `${rowActionBaseId}-${String(index)}`;
+                  const nameId = `${rowLabelBaseId}-${String(index)}`;
+                  const sizeId = `${nameId}-size`;
+                  return <div class="tree-row-wrap" role="presentation" style={{ height: rowHeight }} key={node.path}>
                   {/* `aria-posinset`/`aria-setsize` are the window's restatement
                       of the truth virtualization deleted: without them every
                       row reports its position within the ~24 rendered rows, so
@@ -1424,18 +1437,26 @@ function ProfileScopedWorkspaceView({
                       else. Adoption, not `aria-hidden`, because that button is
                       the only way a touch screen-reader user reaches Rename,
                       Move, Delete or Download — hiding it would trade a
-                      structural violation for a lost capability. */}
+                      structural violation for a lost capability.
+                      `aria-labelledby` is the price of that adoption. `treeitem`
+                      takes its name from content, and accname walks *owned*
+                      children too, so the bare adoption made every row announce
+                      its own name twice — "README.md 1.2 KB Actions for
+                      README.md". Pointing the name at the row's own two spans
+                      says what the row is exactly once, and drops the `›`/`⌄`
+                      glyph that `aria-expanded` already carries. */}
                   <button
-                    aria-owns={`${rowActionBaseId}-${String(rowWindow.start + offset)}`}
+                    aria-owns={actionId}
+                    aria-labelledby={node.entry ? `${nameId} ${sizeId}` : nameId}
                     class={`tree-row ${treeSelectedPath === node.path ? "active" : ""} ${dropTarget === (node.kind === "directory" ? node.path : workspaceParentPath(node.path)) ? "drop-target" : ""}`}
                     type="button" role="treeitem" aria-level={node.depth} aria-expanded={node.kind === "directory" ? Boolean(node.expanded) : undefined}
                     aria-selected={treeSelectedPath === node.path}
-                    aria-posinset={rowWindow.start + offset + 1}
+                    aria-posinset={index + 1}
                     aria-setsize={visible.length}
                     aria-keyshortcuts={node.kind === "file" ? "Enter Shift+Enter Control+Enter Shift+F10" : "Control+Enter Shift+F10"}
                     title={node.kind === "file" ? `${node.path} · Enter/click previews · Shift+Enter/double-click keeps open · Ctrl+Enter opens actions` : `${node.path} · Ctrl+Enter opens actions`}
-                    data-workspace-tree-index={rowWindow.start + offset}
-                    tabIndex={treeFocusPath === node.path || (!treeFocusPath && rowWindow.start + offset === 0) ? 0 : -1}
+                    data-workspace-tree-index={index}
+                    tabIndex={treeFocusPath === node.path || (!treeFocusPath && index === 0) ? 0 : -1}
                     onFocus={() => setTreeFocusPath(node.path)}
                     onKeyDown={(event) => handleTreeKey(event, node.path)}
                     style={{ height: rowHeight, paddingLeft: `${String(7 + Math.max(0, node.depth - 1) * 15)}px` }}
@@ -1448,15 +1469,16 @@ function ProfileScopedWorkspaceView({
                     onContextMenu={(event) => { event.preventDefault(); openContextMenu(node.path, event.clientX, event.clientY, event.currentTarget); }}
                     onClick={() => node.kind === "directory" ? toggleDirectory(node.path) : void openPreviewTab(node.path)}
                     onDblClick={() => { if (node.kind === "file") void openPinnedTab(node.path); }}
-                  ><span class="tree-chevron">{node.kind === "directory" ? node.expanded ? "⌄" : "›" : ""}</span>{node.kind === "directory" ? <Icon name="workspace" size={15} /> : <WorkspaceFileIcon path={node.path} />}<span>{node.name}</span>{node.entry ? <small>{formatBytes(workspaceEntryByteLength(node.entry))}</small> : null}</button>
+                  ><span class="tree-chevron">{node.kind === "directory" ? node.expanded ? "⌄" : "›" : ""}</span>{node.kind === "directory" ? <Icon name="workspace" size={15} /> : <WorkspaceFileIcon path={node.path} />}<span id={nameId}>{node.name}</span>{node.entry ? <small id={sizeId}>{formatBytes(workspaceEntryByteLength(node.entry))}</small> : null}</button>
                   {/* Not in the tab order: the tree's contract is that Tab
                       leaves it in one press, and the same menu is on the row
                       itself via ContextMenu, Shift+F10 and — for the Macs where
                       neither of those keys exists — Ctrl+Enter. It keeps its
                       name and its pointer/touch reachability, and the row above
                       `aria-owns` it so the tree still owns treeitems only. */}
-                  <button id={`${rowActionBaseId}-${String(rowWindow.start + offset)}`} class="tree-overflow" type="button" tabIndex={-1} aria-label={`Actions for ${node.name}`} onClick={(event) => { const box = event.currentTarget.getBoundingClientRect(); openContextMenu(node.path, box.right, box.bottom, event.currentTarget); }}>•••</button>
-                </div>)}
+                  <button id={actionId} class="tree-overflow" type="button" tabIndex={-1} aria-label={`Actions for ${node.name}`} onClick={(event) => { const box = event.currentTarget.getBoundingClientRect(); openContextMenu(node.path, box.right, box.bottom, event.currentTarget); }}>•••</button>
+                </div>;
+                })}
               </div></div>
             </div>
           </> : <SourceControlRail

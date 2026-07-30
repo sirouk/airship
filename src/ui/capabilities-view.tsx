@@ -1,6 +1,7 @@
 import { useEffect, useState } from "preact/hooks";
 import type { ComponentChildren } from "preact";
 import { semanticWasmThreadCount, type BrowserCapabilityObservation, type BrowserRuntimeCapabilityReport } from "../capabilities/browser-runtime";
+import type { ExtensionBridgeObservation } from "../capabilities/extension-bridge";
 import {
   RUNTIME_LOAD_BOUNDARY,
   getRuntimeLoadMonitor,
@@ -19,6 +20,7 @@ import "./capabilities-view.css";
 export type CapabilitiesViewProps = Readonly<{
   inspect(): Promise<readonly ExecutionCapability[]>;
   inspectBrowser(): Promise<BrowserRuntimeCapabilityReport>;
+  inspectExtension(): Promise<ExtensionBridgeObservation>;
   /**
    * The registry's publish side. `inspectBrowser` is a pull, and a pull cannot
    * hear the registry re-probe when a device changes — the route kept a private
@@ -49,9 +51,10 @@ export function sealStateForCapabilitySummary(
   return ready === runtimes.length ? "verified" : "asserted";
 }
 
-export function CapabilitiesView({ inspect, inspectBrowser, subscribeBrowser, onCommand, onOpenSkills, loadMonitor }: CapabilitiesViewProps) {
+export function CapabilitiesView({ inspect, inspectBrowser, inspectExtension, subscribeBrowser, onCommand, onOpenSkills, loadMonitor }: CapabilitiesViewProps) {
   const [runtimes, setRuntimes] = useState<readonly ExecutionCapability[]>([]);
   const [browser, setBrowser] = useState<BrowserRuntimeCapabilityReport>();
+  const [extension, setExtension] = useState<ExtensionBridgeObservation>();
   const [load, setLoad] = useState<RuntimeLoadReport>();
   const [status, setStatus] = useState("Inspecting this browser…");
   const [error, setError] = useState<string>();
@@ -60,9 +63,10 @@ export function CapabilitiesView({ inspect, inspectBrowser, subscribeBrowser, on
     setError(undefined);
     setStatus("Inspecting this browser…");
     try {
-      const [next, report] = await Promise.all([inspect(), inspectBrowser()]);
+      const [next, report, extensionObservation] = await Promise.all([inspect(), inspectBrowser(), inspectExtension()]);
       setRuntimes(next);
       setBrowser(report);
+      setExtension(extensionObservation);
       // The count is what this line owns. When the browser report was observed
       // is the report's own fact, read at render from whichever generation is
       // on screen — a status string baked at probe time could only ever say
@@ -120,6 +124,22 @@ export function CapabilitiesView({ inspect, inspectBrowser, subscribeBrowser, on
           re-run, and two spellings of one action is how a surface ends up with
           two answers on screen. */}
       {browser ? <BrowserCapabilityPanel report={browser} onReprobe={() => void refresh()} /> : null}
+
+      {extension ? <section class="capability-extension-surface" aria-labelledby="extension-capability-title">
+        <div class="capability-section-heading"><span class="eyebrow">Extension-enhanced device</span><h2 id="extension-capability-title">Airship Companion</h2></div>
+        <DeviceCard
+          title={extension.extensionVersion ? `Airship Companion ${extension.extensionVersion}` : "Airship Companion"}
+          observation={extension}
+          detail="Live bridge handshake · this page"
+          onReprobe={() => void refresh()}
+        >
+          {extension.state === "available" ? <dl class="capability-signal-strip">
+            <div><dt>Provider relay</dt><dd>{extension.providers.length ? extension.providers.join(", ") : "No provider routes"}</dd></div>
+            <div><dt>Ciphertext cache</dt><dd>{extension.companion?.storage.state === "available" ? extension.companion.storage.enabled ? "Enabled" : "Available" : "Unavailable"}</dd></div>
+            <div><dt>Background compute</dt><dd>{extension.companion?.compute.state === "available" ? extension.companion.compute.operations.join(", ") : "Unavailable"}</dd></div>
+          </dl> : <p>Open Connection to install, enable, or reconnect the Airship Companion, then refresh this probe.</p>}
+        </DeviceCard>
+      </section> : null}
 
       <div class="capability-section-heading"><span class="eyebrow">Executable now or on activation</span><h2>Language runtimes</h2></div>
       <div class="capability-grid" role="group" aria-label="Browser execution runtimes">
@@ -214,7 +234,26 @@ function BrowserCapabilityPanel({ report, onReprobe }: Readonly<{ report: Browse
             promised something a workload has not reported. */}
         <small class="capability-policy-inert">{humanize(report.scheduling.heavyPackLoading)} heavy-pack posture · {humanize(report.scheduling.preferredWorkspaceStorage)} workspace-storage preference — observations, not activations.</small>
       </div>
-      <details><summary>Browser primitives</summary><ul>{primitives.map(([label, observation]) => <li><span>{label}</span><strong>{probePresentation(observation)[1]}</strong><small>{observation.detail}</small></li>)}</ul><p>{report.signals.thermal.detail}</p></details>
+      {/* The two probes that actually report a refusal in practice are in this
+          list, not on the cards above: `refusalEvidence` maps NotAllowedError
+          and SecurityError, and the paths that raise them are the service
+          worker and Cache Storage probes. So the list renders the same control
+          the cards do — a refusal the reader can clear is worth nothing behind
+          a label — and the disclosure opens itself when one is present, because
+          an action nobody can see is the collapsed twin of no action at all. */}
+      <details open={primitives.some(([, observation]) => probeNeedsAction(observation))}>
+        <summary>Browser primitives</summary>
+        <ul>{primitives.map(([label, observation]) => {
+          const action = probeAction(observation, onReprobe);
+          return <li>
+            <span>{label}</span>
+            <strong>{probePresentation(observation)[1]}</strong>
+            <small>{observation.detail}</small>
+            {action ? <button class="capability-probe-action" type="button" onClick={action.onSelect}>{action.label}</button> : null}
+          </li>;
+        })}</ul>
+        <p>{report.signals.thermal.detail}</p>
+      </details>
     </div>
   </section>;
 }
@@ -233,7 +272,7 @@ function DeviceCard({ title, observation, detail, onReprobe, children }: Readonl
     <header><div><h3>{title}</h3>{detail ? <small>{detail}</small> : null}</div><Seal state={state} label={label} detail={observation.detail} compact /></header>
     {children}
     <p>{observation.detail}</p>
-    {action ? <button class="capability-device-card__action" type="button" onClick={action.onSelect}>{action.label}</button> : null}
+    {action ? <button class="capability-probe-action" type="button" onClick={action.onSelect}>{action.label}</button> : null}
   </article>;
 }
 
@@ -291,6 +330,18 @@ export function probePresentation(observation: BrowserCapabilityObservation): re
  * the "Refresh" verb duplicated four times. Only `permission-needed` and
  * `disabled` name something the reader owns, so only they earn a control.
  */
+/**
+ * Whether acting could change this observation's answer.
+ *
+ * Split out of `probeAction` because a container also has to know: the
+ * browser-primitives disclosure opens itself when one of its rows carries a
+ * refusal, and asking that question by constructing four throwaway actions
+ * would make the predicate depend on a re-probe callback it never calls.
+ */
+export function probeNeedsAction(observation: BrowserCapabilityObservation): boolean {
+  return observation.evidence === "permission-needed" || observation.evidence === "disabled";
+}
+
 export function probeAction(
   observation: BrowserCapabilityObservation,
   onReprobe: () => void,

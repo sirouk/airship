@@ -45,6 +45,15 @@ export type SlashBuiltinAction =
   | Readonly<{ type: "sessions.create"; title?: string }>
   | Readonly<{ type: "sessions.activate"; sessionId: string }>
   | Readonly<{ type: "sessions.fork"; sessionId?: string }>
+  /**
+   * The skill set pinned into the open conversation.
+   *
+   * Listing only. Skills are prompt-composition artifacts with no descriptor,
+   * schema or effect class, so they cannot enter the registry as invocable
+   * commands the way a tool does; what was missing was any way at all to see,
+   * from the composer, which ones this conversation is actually running.
+   */
+  | Readonly<{ type: "skills.list" }>
   | Readonly<{ type: "models.list"; query?: string }>
   | Readonly<{ type: "models.select"; modelId: string }>;
 

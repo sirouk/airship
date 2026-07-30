@@ -716,13 +716,56 @@ describe("BrowserTerminalManager metadata", () => {
     // a view that reads `canReconcile()` during render has nothing else to go on.
     let publications = 0;
     const unsubscribe = holder.subscribeList(() => { publications += 1; });
+    // Authority moves *between* managers, so the one losing it is not the one
+    // running that code. The loser's own subscribers still have to hear it.
+    const authority: boolean[] = [];
+    const stopAuthority = holder.subscribeReconcile((available) => authority.push(available));
 
     await taker.start(taker.list()[0]!.id);
 
     expect(holder.canReconcile()).toBe(false);
     expect(publications).toBeGreaterThan(1);
+    expect(authority).toEqual([true, false]);
+    stopAuthority();
     unsubscribe();
     await taker.quiesce("test cleanup");
+  });
+
+  it("publishes the moment its mount becomes reconcilable, not once a PTY finally spawns", async () => {
+    const workspace = new MemoryWorkspace();
+    const { host } = recordingHost();
+    let releaseSpawn!: () => void;
+    const spawnGate = new Promise<void>((resolve) => { releaseSpawn = resolve; });
+    // A cold WebContainer boot is seconds of `spawn`, and the mount is already
+    // reconcilable throughout it. The gate makes that window a fixed point.
+    const slowHost = {
+      ...(host as unknown as Record<string, unknown>),
+      async spawn(...args: readonly unknown[]) {
+        await spawnGate;
+        return (host as unknown as { spawn(...args: readonly unknown[]): unknown }).spawn(...args);
+      },
+    } as unknown as WebContainer;
+    const manager = new BrowserTerminalManager(workspace, { activateHost: async () => slowHost });
+    await manager.ready;
+    const tab = manager.list()[0]!;
+
+    const events: string[] = [];
+    const stopList = manager.subscribeList((sessions) => events.push(`list:${sessions[0]?.status ?? "gone"}`));
+    const stopReconcile = manager.subscribeReconcile((available) => events.push(`reconcile:${available}`));
+    const started = manager.start(tab.id);
+    await vi.waitFor(() => expect(manager.canReconcile()).toBe(true));
+
+    // The session is still "starting", and the only thing that said the mount
+    // had arrived is the signal: a Reconcile control derived from session state
+    // would stay disabled for the whole boot it could already have served.
+    expect(manager.list()[0]?.status).toBe("starting");
+    expect(events).toEqual(["list:idle", "reconcile:false", "list:starting", "reconcile:true"]);
+
+    releaseSpawn();
+    await started;
+    stopList();
+    stopReconcile();
+    await manager.quiesce("test cleanup");
   });
 
   it("stops a live process from the input path once another page owns the lease", async () => {

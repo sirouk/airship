@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
-import { applyPreferenceOverrides, approvalModeDescription, buildPaletteEntries, DEFAULT_PREFERENCES, filterPaletteEntries, loadPreferenceOverrides, loadRecentSessionPaletteSources, durabilityOptionLabel, durabilityOptions, durabilityRowNote, navigationJumpForChord, publishVisualViewportOffset, recentSessionPaletteSources, resolveDefaultVaultBackend, VAULT_BACKENDS, savePreferenceOverrides, trustAxesInScope, TRUST_SCOPE_BANDS, worstTrustAxis } from "./platform-shell";
+import { describe, expect, it, vi } from "vitest";
+import { applyPreferenceOverrides, approvalModeDescription, armBeforeUnloadGuard, scheduleTrailingValue, unloadWouldLoseWork, buildPaletteEntries, DEFAULT_PREFERENCES, filterPaletteEntries, loadPreferenceOverrides, loadRecentSessionPaletteSources, durabilityOptionLabel, durabilityOptions, durabilityRowNote, navigationJumpForChord, publishVisualViewportOffset, recentSessionPaletteSources, resolveDefaultVaultBackend, VAULT_BACKENDS, savePreferenceOverrides, trustAxesInScope, TRUST_SCOPE_BANDS, worstTrustAxis } from "./platform-shell";
 import { CANONICAL_DESTINATIONS } from "./navigation-model";
 
 describe("platform shell contracts", () => {
@@ -281,22 +281,208 @@ describe("the Durability row states a destination and its state, never one as th
     expect(readFileSync(new URL("./platform-shell.css", import.meta.url), "utf8"))
       .not.toMatch(/\.preference-menu \.menu-select-popover \{ top:/u);
   });
+
+  /*
+   * The component was given an honest three-state contract and a safe default,
+   * and the host was never wired to supply the state — so "Vault states what is
+   * attached" was the only reachable branch of the three, on every build. The
+   * unit tests above all pass the prop themselves, which is exactly why none of
+   * them noticed. This asserts the integration point.
+   */
+  it("is told the adoption state at the one place the host renders it", () => {
+    const app = readFileSync(new URL("./app.tsx", import.meta.url), "utf8");
+    const mounts = elementsNamed(app, "PreferencesDialog");
+    expect(mounts).toHaveLength(1);
+    expect(mounts[0]).toContain("vaultAdopted={vaultRuntimeAdopted}");
+    // The same value the Vault route's own adoption seal reads, so the two
+    // surfaces cannot disagree about whether anything is attached.
+    expect(elementsNamed(app, "VaultScreen")[0]).toContain("runtimeAdopted={vaultRuntimeAdopted}");
+  });
 });
 
 /**
- * A phone shell whose geometry answers the way a real one does. Publishing the
- * obscured height is itself what lifts the composer and widens the transcript's
- * bottom padding, so the container's floor rises at exactly that moment, and
- * scrolling the container moves the last card with it.
+ * One JSX element's source per occurrence of `<Name`, brace- and quote-aware so
+ * an arrow function in a handler and a `>` inside a string are ordinary
+ * characters. The same scan `aria-name-contract.test.ts` uses.
  */
-function fakePhoneShell(cardBottom: number, scrollTop = 1_000) {
+function elementsNamed(source: string, name: string): readonly string[] {
+  const found: string[] = [];
+  for (const match of source.matchAll(new RegExp(`<${name}(?=[\\s/>])`, "gu"))) {
+    const start = match.index + match[0].length;
+    let depth = 0;
+    let quote = "";
+    for (let index = start; index < source.length; index += 1) {
+      const char = source[index];
+      if (quote) {
+        if (char === quote) quote = "";
+        continue;
+      }
+      if (char === '"' || char === "'" || char === "`") quote = char;
+      else if (char === "{") depth += 1;
+      else if (char === "}") depth -= 1;
+      else if (char === ">" && depth === 0) { found.push(source.slice(start, index)); break; }
+    }
+  }
+  return found;
+}
+
+describe("the confirmation shown for leaving the page", () => {
+  /*
+   * The shipped predicate was `busy || Boolean(sessionId)` — true from the
+   * first frame of every visit, so the browser's "leave site?" dialog fired on
+   * every reload, including on an adopted Vault whose journal survives one
+   * intact and on a conversation with nothing in it. A prompt that is always
+   * shown is a prompt that is always dismissed.
+   */
+  it("asks only when leaving would destroy something nothing can rebuild", () => {
+    expect(unloadWouldLoseWork({ busy: false, eventCount: 0, vaultAdopted: false })).toBe(false);
+    expect(unloadWouldLoseWork({ busy: false, eventCount: 12, vaultAdopted: true })).toBe(false);
+    expect(unloadWouldLoseWork({ busy: false, eventCount: 12, vaultAdopted: false })).toBe(true);
+    // A turn in flight can be lost mid-write wherever it is being written.
+    expect(unloadWouldLoseWork({ busy: true, eventCount: 0, vaultAdopted: true })).toBe(true);
+  });
+
+  it("stays out of the way of a navigation Airship performs itself", () => {
+    expect(unloadWouldLoseWork({ busy: true, eventCount: 12, vaultAdopted: false, reloading: true })).toBe(false);
+  });
+
+  it("releases the listener synchronously, because the reload does not wait for a render", () => {
+    const listeners: Array<readonly [string, unknown]> = [];
+    const target = {
+      addEventListener: (type: string, listener: unknown) => { listeners.push([type, listener]); },
+      removeEventListener: (type: string, listener: unknown) => {
+        const index = listeners.findIndex(([candidate, held]) => candidate === type && held === listener);
+        if (index >= 0) listeners.splice(index, 1);
+      },
+    };
+
+    const release = armBeforeUnloadGuard(target as unknown as Window);
+    expect(listeners.map(([type]) => type)).toEqual(["beforeunload"]);
+    release();
+    expect(listeners).toEqual([]);
+    // Idempotent: the hook's own cleanup runs after the caller's release when
+    // the reload is cancelled or the state settles first.
+    release();
+    expect(listeners).toEqual([]);
+  });
+
+  it("is armed from adoption and released by the update banner", () => {
+    const app = readFileSync(new URL("./app.tsx", import.meta.url), "utf8");
+    expect(app).toContain("useBeforeUnloadGuard(unloadWouldLoseWork({");
+    expect(app).not.toContain("useBeforeUnloadGuard(busy || Boolean(sessionId))");
+    expect(elementsNamed(app, "PwaUpdateBanner")[0]).toContain("releaseUnloadGuard(); pwaUpdate.reload();");
+  });
+});
+
+describe("the recents shortcuts refresh once per burst, not once per durable event", () => {
+  /*
+   * `sessionRevision` counts durable events, and one tool-calling turn writes a
+   * dozen. Each one re-listed and re-decrypted the whole library twice — once
+   * for the palette, once for the rail — for a sidebar that is unreadable
+   * mid-stream anyway. Only the trailing value was ever going to be rendered.
+   *
+   * Driven through `scheduleTrailingValue` directly because the suite has no
+   * DOM: `useEffect`'s contract is exactly "previous cleanup, then this
+   * effect", which is the loop below.
+   */
+  it("collapses ten increments inside the window into one refresh", () => {
+    vi.useFakeTimers();
+    try {
+      const listed: number[] = [];
+      let cancel = () => {};
+      for (let revision = 1; revision <= 10; revision += 1) {
+        cancel();
+        cancel = scheduleTrailingValue(revision, 250, (value) => listed.push(value));
+        vi.advanceTimersByTime(20);
+      }
+      expect(listed).toEqual([]);
+      vi.advanceTimersByTime(250);
+      expect(listed).toEqual([10]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("wires both recents effects to the settled revision rather than the raw counter", () => {
+    const app = readFileSync(new URL("./app.tsx", import.meta.url), "utf8");
+    expect(app).toContain("const settledSessionRevision = useDebouncedValue(sessionRevision, RECENTS_REFRESH_DEBOUNCE_MS);");
+    expect(app).toContain("}, [sessionLibrary, settledSessionRevision, profileId]);");
+    expect(app).toContain("}, [sessionLibrary, settledSessionRevision, profileId, sessionId]);");
+    expect(app).not.toMatch(/\}, \[sessionLibrary, sessionRevision, profileId/u);
+  });
+});
+
+describe("the frame the boot screen renders on", () => {
+  /*
+   * Display preferences are a synchronous localStorage read that used to be
+   * applied by an effect gated on a resolved profile theme — the end of a
+   * multi-await runtime boot. A Paper reader therefore got a full-screen dark
+   * boot screen, off the stylesheet's default density and type ramp, for the
+   * whole boot window.
+   */
+  it("applies the stored preference layer before the first render, ungated", () => {
+    const main = readFileSync(new URL("../main.tsx", import.meta.url), "utf8");
+    const apply = main.indexOf("applyPreferenceOverrides(loadPreferenceOverrides())");
+    expect(apply).toBeGreaterThan(-1);
+    expect(apply).toBeLessThan(main.indexOf("render(<App />"));
+
+    const app = readFileSync(new URL("./app.tsx", import.meta.url), "utf8");
+    // Saving is no longer gated on a theme either, and the preference layer
+    // runs before the theme effect so the theme effect — which re-asserts these
+    // same preferences over the theme's base — still commits last.
+    expect(app).toContain("useEffect(() => {\n    savePreferenceOverrides(preferences);\n  }, [preferences]);");
+    expect(app.indexOf("applyPreferenceOverrides(preferences);"))
+      .toBeLessThan(app.indexOf("applyThemeWithPreferences(activeTheme, preferences);"));
+  });
+
+  it("stops the static document asserting a colour mode it cannot know", () => {
+    const html = readFileSync(new URL("../../index.html", import.meta.url), "utf8");
+    expect(html).toContain('<meta name="color-scheme" content="light dark" />');
+    expect(html).not.toContain('<meta name="color-scheme" content="dark" />');
+    // `theme-color` keeps a pre-script default, but the applied layer rewrites
+    // it from the ground the document actually resolved.
+    expect(readFileSync(new URL("./platform-shell.tsx", import.meta.url), "utf8"))
+      .toContain('document.querySelector<HTMLMetaElement>(\'meta[name="theme-color"]\')?.setAttribute("content", ground)');
+  });
+});
+
+/** The transcript's resting floor: the foot of a 700px-tall `#app`. */
+const RESTING_FLOOR = 700;
+/** `.mobile-nav`'s `.app-shell` row, reclaimed by the 1fr track when it collapses. */
+const NAV_TRACK = 56;
+
+/**
+ * A phone shell whose floor moves for the reasons the stylesheet moves it, and
+ * for no others.
+ *
+ * Both terms are transcribed from `routes.css`'s phone block rather than
+ * invented, because the previous fake asserted its own arithmetic: it shrank
+ * the container by the published offset, which no rule did — the shipped
+ * compensation was `position: relative; bottom` on `.composer-wrap`, a repaint
+ * that moved no sibling box. It also omitted the nav track, which collapses on
+ * `data-keyboard-open` and pushes the floor back *down*, so the fake could not
+ * have caught a fix that scrolled the wrong way.
+ *
+ *   floor = #app height (100dvh − obscured) + the nav row the keyboard reclaims
+ *
+ * `respondsToKeyboard: false` is the same shell at a width where no rule
+ * consumes the variable — a desktop layout — and it must produce no scroll.
+ * The source-level counterpart (that a rule consuming it exists at all) is in
+ * `composer-shell-contract.test.ts`; the pixel counterpart is
+ * `e2e/composer-layout.spec.ts`.
+ */
+function fakePhoneShell(cardBottom: number, scrollTop = 1_000, respondsToKeyboard = true) {
   const scrolls: number[] = [];
   const values = new Map<string, string>();
   const dataset: Record<string, string> = {};
-  let floor = 700;
+  const floor = () => {
+    if (!respondsToKeyboard) return RESTING_FLOOR;
+    const obscured = Number.parseFloat(values.get("--visual-viewport-bottom") ?? "0") || 0;
+    return RESTING_FLOOR - obscured + (dataset.keyboardOpen === "true" ? NAV_TRACK : 0);
+  };
   const transcript = {
     scrollTop,
-    getBoundingClientRect: () => ({ top: 120, bottom: floor }),
+    getBoundingClientRect: () => ({ top: 120, bottom: floor() }),
     querySelectorAll: () => ({
       length: 1,
       item: (index: number) => (index === 0 ? card : null),
@@ -316,28 +502,29 @@ function fakePhoneShell(cardBottom: number, scrollTop = 1_000) {
     dataset,
     style: {
       getPropertyValue: (name: string) => values.get(name) ?? "",
-      setProperty(name: string, value: string) {
-        values.set(name, value);
-        if (name === "--visual-viewport-bottom") floor = 700 - Number.parseFloat(value);
-      },
+      setProperty: (name: string, value: string) => { values.set(name, value); },
     },
     querySelector: () => transcript,
   };
-  return { root: root as unknown as HTMLElement, dataset, scrolls, floor: () => floor, transcript };
+  return { root: root as unknown as HTMLElement, dataset, scrolls, floor, transcript };
 }
 
 describe("the soft keyboard's effect on a pinned transcript", () => {
   it("re-anchors the last card after the keyboard takes the bottom of the transcript", () => {
     // The regression this pins: the keyboard moves the layout through CSS only
     // — no Preact state changes — so the transcript's own re-pin effect never
-    // re-runs, and the reply the person just asked for ends up under the lifted
-    // composer.
+    // re-runs, and the reply the person just asked for scrolls out of the
+    // shortened box.
     const shell = fakePhoneShell(690);
     publishVisualViewportOffset(shell.root, 336);
     expect(shell.dataset.keyboardOpen).toBe("true");
-    expect(shell.scrolls).toEqual([1_326]);
+    // 700 − 336 obscured + 56 reclaimed from the nav track = a 420px floor, so
+    // a card resting at 690 has to travel 270. Anything that reads the nav
+    // collapse as the *only* change scrolls 56px the wrong way instead.
+    expect(shell.floor()).toBe(420);
+    expect(shell.scrolls).toEqual([1_270]);
     // The card is back on the floor of the shortened container, not below it.
-    expect(shell.transcript.getBoundingClientRect().bottom).toBe(364);
+    expect(shell.transcript.getBoundingClientRect().bottom).toBe(420);
   });
 
   it("leaves a transcript the reader scrolled away from exactly where they left it", () => {
@@ -352,7 +539,18 @@ describe("the soft keyboard's effect on a pinned transcript", () => {
     publishVisualViewportOffset(shell.root, 336);
     publishVisualViewportOffset(shell.root, 0);
     expect(shell.dataset.keyboardOpen).toBe("false");
-    expect(shell.scrolls).toEqual([1_326, 990]);
+    expect(shell.scrolls).toEqual([1_270, 990]);
+  });
+
+  it("does not scroll a layout whose floor the variable does not move", () => {
+    // Every desktop width: `#app` is only sized to the visual viewport inside
+    // the phone query, so the card is still on the floor and a re-anchor would
+    // be the thing that moves it off — up to the 64px `isNearLastRealCard`
+    // threshold, under a reader who never opened a keyboard.
+    const shell = fakePhoneShell(690, 1_000, false);
+    publishVisualViewportOffset(shell.root, 336);
+    expect(shell.dataset.keyboardOpen).toBe("true");
+    expect(shell.scrolls).toEqual([]);
   });
 
   it("ignores a pinch-pan that republishes the offset it already published", () => {
@@ -362,6 +560,24 @@ describe("the soft keyboard's effect on a pinned transcript", () => {
     publishVisualViewportOffset(shell.root, 336);
     publishVisualViewportOffset(shell.root, 336.4);
     publishVisualViewportOffset(shell.root, 336);
-    expect(shell.scrolls).toEqual([1_326]);
+    expect(shell.scrolls).toEqual([1_270]);
+  });
+
+  it("compensates for nothing while the page is pinch-zoomed", () => {
+    // The unchanged-offset guard above cannot cover this: panning a zoomed page
+    // changes `offsetTop` every frame, so `innerHeight − height − offsetTop`
+    // genuinely moves and the guard passes. Zoom is a reader's gesture, not an
+    // obscuring widget — publishing here would shrink the shell around them and
+    // scroll the transcript under their finger, on desktop as well as phone.
+    const shell = fakePhoneShell(690);
+    publishVisualViewportOffset(shell.root, 336, 2);
+    publishVisualViewportOffset(shell.root, 402, 2);
+    expect(shell.scrolls).toEqual([]);
+    expect(shell.dataset.keyboardOpen).toBeUndefined();
+    expect(shell.root.style.getPropertyValue("--visual-viewport-bottom")).toBe("");
+
+    // …and a real keyboard, once the reader pinches back out, still lands.
+    publishVisualViewportOffset(shell.root, 336, 1);
+    expect(shell.scrolls).toEqual([1_270]);
   });
 });

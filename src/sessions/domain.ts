@@ -1,3 +1,4 @@
+import { CONVERSATION_NAMED_EVENT_TYPE } from "../core/contracts";
 import type {
   SecurityPosture,
   SessionManifest,
@@ -213,6 +214,18 @@ export type SessionListItem = Readonly<{
   profileRevision?: string;
   profileResolutionDigest?: string;
   sourceSessionId?: string;
+  /**
+   * Where in the source conversation this branch was cut — the selected fork
+   * boundary, not the source's later head.
+   *
+   * The summary carried only `sourceSessionId`, so the branch could name its
+   * parent but not the question it diverged at. That made the downward
+   * "Alternates" list unreadable: three retries of one turn and three
+   * unrelated branches of three different turns rendered identically. Both
+   * lineage fields come from the same manifest commitment and are validated
+   * together, so a row that states one can always state the other.
+   */
+  sourceHeadSequence?: number;
 }>;
 
 export type SessionListPage = Readonly<{
@@ -295,6 +308,21 @@ export function materializeSessionMessages(
         providerContext: providerContextDisposition(turnStatus),
         ...(receipt ? { receipt } : {}),
       });
+      continue;
+    }
+    if (event.type === CONVERSATION_NAMED_EVENT_TYPE) {
+      /*
+       * The naming inference is a second billed provider request made *for*
+       * this conversation, so its receipt belongs in the same recovered chain
+       * as every turn receipt — a receipt that no surface can resolve proves
+       * nothing, and this is the only place receipts reach Proof from a
+       * reloaded journal. It contributes no transcript row because nobody said
+       * anything; it is counted as an ignored event for message purposes, and
+       * the transcript renders it as a marker instead.
+       */
+      const receipt = boundedConversationReceipt(payload?.receipt, event);
+      if (receipt) receiptCandidates.push(receipt);
+      ignoredEvents += 1;
       continue;
     }
     if (event.type === "turn.completed") {
@@ -969,7 +997,16 @@ function summarizeSession(session: SessionRecord): SessionListItem | undefined {
     !CAPABILITY_TIERS.has(String(session.manifest.capabilityTier)) ||
     (session.manifest.securityPosture !== undefined && !POSTURES.has(session.manifest.securityPosture)) ||
     (session.manifest.profile !== undefined && !safeIdentifier(session.manifest.profile.profileId)) ||
-    (session.manifest.lineage !== undefined && !safeIdentifier(session.manifest.lineage.sourceSessionId))
+    // Lineage is validated as one commitment, on the same terms as
+    // FORK_LINEAGE_INVALID in `inspectSession`: a fork boundary is a positive
+    // journal sequence. Accepting a row whose parent id is sound but whose
+    // fork point is not would let the library print a branch point no audit
+    // would agree with; the row is counted in `rejected` instead, which the
+    // Sessions surface already states out loud.
+    (session.manifest.lineage !== undefined && (
+      !safeIdentifier(session.manifest.lineage.sourceSessionId) ||
+      !Number.isSafeInteger(session.manifest.lineage.sourceHeadSequence) ||
+      session.manifest.lineage.sourceHeadSequence <= 0))
   ) return undefined;
   return Object.freeze({
     id: session.id,
@@ -988,7 +1025,10 @@ function summarizeSession(session: SessionRecord): SessionListItem | undefined {
       profileRevision: session.manifest.profile.profileRevision,
       profileResolutionDigest: session.manifest.profile.resolutionDigest,
     } : {}),
-    ...(session.manifest.lineage ? { sourceSessionId: session.manifest.lineage.sourceSessionId } : {}),
+    ...(session.manifest.lineage ? {
+      sourceSessionId: session.manifest.lineage.sourceSessionId,
+      sourceHeadSequence: session.manifest.lineage.sourceHeadSequence,
+    } : {}),
   });
 }
 

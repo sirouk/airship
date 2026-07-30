@@ -1,3 +1,4 @@
+import type { ConversationReceipt } from "../../receipts/types";
 import { capabilityTierDetail, capabilityTierLabel, type CapabilityTier } from "./capability-tier";
 import type { SessionPresentationMarker } from "./session-message-presentation";
 
@@ -96,6 +97,12 @@ export function TranscriptIntro({ note, demo, tier, onOpenCapabilities }: Transc
 
 export type TranscriptMarkerProps = Readonly<{
   marker: SessionPresentationMarker;
+  /**
+   * Opens Proof at this marker's receipt. Only markers that record a billed
+   * provider request have one, so the control appears only where there is
+   * something to open.
+   */
+  onOpenProof?: (receipt: ConversationReceipt) => void;
 }>;
 
 /**
@@ -111,8 +118,14 @@ export type TranscriptMarkerProps = Readonly<{
  * The provenance line is not decoration. It states the durable sequence and the
  * event type, so a marker on screen can be found in the journal it came from,
  * and so a record this build cannot read still says exactly where it is.
+ *
+ * Where the record is an out-of-turn *inference* — today, the naming call — it
+ * also carries a receipt, and this is the only surface that can hand that
+ * receipt to Proof: turn receipts arrive on assistant rows, and a record with no
+ * row had no route at all. A receipt nothing can open is not evidence.
  */
-export function TranscriptMarker({ marker }: TranscriptMarkerProps) {
+export function TranscriptMarker({ marker, onOpenProof }: TranscriptMarkerProps) {
+  const receipt = marker.receipt;
   return (
     <div
       class="transcript-marker"
@@ -124,6 +137,19 @@ export function TranscriptMarker({ marker }: TranscriptMarkerProps) {
       <p class="transcript-marker__provenance">
         {`Event ${String(marker.sequence)} · ${marker.kind} · ${marker.digest.slice(0, 15)}…`}
       </p>
+      {receipt && onOpenProof ? (
+        <button
+          type="button"
+          class="transcript-marker__proof"
+          // The receipt id is in the name because a conversation can hold more
+          // than one of these records, and "Open proof" alone would give a
+          // screen-reader user several identically named controls.
+          aria-label={`Open proof for receipt ${receipt.receiptId}`}
+          onClick={() => onOpenProof(receipt)}
+        >
+          Open proof
+        </button>
+      ) : null}
     </div>
   );
 }

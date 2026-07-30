@@ -144,7 +144,10 @@ export function AttestationsView({
   const activeRefresh = useRef<Readonly<{ controller: AbortController; sourceId: string }>>();
 
   const requestedId = selectedRecordId ?? localRecordId;
-  const selected = records.find((record) => record.id === requestedId) ?? records[0];
+  const requestedRecordMissing = Boolean(selectedRecordId && !records.some((record) => record.id === selectedRecordId));
+  const selected = requestedRecordMissing
+    ? undefined
+    : records.find((record) => record.id === requestedId) ?? records[0];
 
   useEffect(() => {
     if (!selected) return;
@@ -284,18 +287,20 @@ export function AttestationsView({
         <div class="attestations-empty">
           <div class="attestations-empty__intro">
             <Icon name="proof" size={30} />
-            <div><h2>{inputOverflow ? "Evidence page rejected" : "No evidence records yet"}</h2>
+            <div><h2>{inputOverflow ? "Evidence page rejected" : requestedRecordMissing ? "Named evidence record is not present" : "No evidence records yet"}</h2>
               <p>{inputOverflow
                 ? "Load a bounded evidence page before opening the ledger. No records from the oversized input were interpreted."
+                : requestedRecordMissing
+                  ? "The record named by this link is not present in this page runtime. No newer record was selected in its place."
                 : onOpenConnection
                   ? "No Chutes inference provider is connected. Endpoint evidence cannot be acquired until you connect one; existing records remain inspectable."
                   : "Run a protected Chutes invocation or acquire endpoint evidence. Nothing is inferred while the ledger is empty."}</p>
-              {!inputOverflow && onOpenConnection
+              {!inputOverflow && !requestedRecordMissing && onOpenConnection
                 ? <button class="attestations-empty__connection primary" type="button" onClick={onOpenConnection}>Connect inference</button>
                 : null}
             </div>
           </div>
-          {!inputOverflow ? <div class="attestations-empty__flow" role="group" aria-label="Evidence lifecycle">
+          {!inputOverflow && !requestedRecordMissing ? <div class="attestations-empty__flow" role="group" aria-label="Evidence lifecycle">
             <div><span>01</span><strong>Acquire</strong><small>{onOpenConnection
               ? "Connect Chutes inference, then fetch fresh endpoint evidence for that runtime."
               : "Fetch fresh endpoint evidence for the selected Chutes runtime."}</small></div>

@@ -7,6 +7,8 @@
  * wide may the rail get, and when does a progress message stop being true.
  */
 
+import { workspaceEntryByteLength } from "../workspace/contracts";
+
 export type WorkbenchRoute = "workspace" | "editor";
 
 export type WorkbenchPane = "navigation" | "editor";
@@ -598,12 +600,19 @@ export function workbenchBufferState(input: Readonly<{
  * Metadata only, from the `files` array the route already holds — opening the
  * pane must not fetch a byte, because "Nothing is downloaded until you select
  * it" is printed 30px above these rows.
+ *
+ * Ranked by the same length the row prints. `size` is the storage envelope, so
+ * ordering by it put a binary above a larger text file and then printed the
+ * two decoded sizes underneath in the wrong order — a list that contradicts
+ * itself on screen is worse than one that is merely mis-ranked.
  */
-export function workbenchSuggestedFiles<Entry extends Readonly<{ path: string; size: number }>>(
+export function workbenchSuggestedFiles<Entry extends Readonly<{ path: string; size: number; contentByteLength?: number }>>(
   files: readonly Entry[],
   limit = 3,
 ): readonly Entry[] {
-  return Object.freeze([...files].sort((left, right) => right.size - left.size || left.path.localeCompare(right.path)).slice(0, limit));
+  return Object.freeze([...files]
+    .sort((left, right) => workspaceEntryByteLength(right) - workspaceEntryByteLength(left) || left.path.localeCompare(right.path))
+    .slice(0, limit));
 }
 
 /**

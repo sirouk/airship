@@ -264,6 +264,18 @@ describe("empty-pane suggestions", () => {
       .toEqual(["/workspace/b.md", "/workspace/c.md", "/workspace/d.md"]);
   });
 
+  it("ranks by the length the row prints, not the storage envelope", () => {
+    // A binary is stored as its ~4/3 base64 envelope, so ranking on `size` put
+    // this image first and then printed "96.0 KiB" above the text file's
+    // "100.0 KiB" — the list disagreeing with itself in one glance.
+    const files = [
+      { path: "/workspace/image.png", size: 131_094, contentByteLength: 98_304 },
+      { path: "/workspace/notes.md", size: 102_400, contentByteLength: 102_400 },
+    ];
+    expect(workbenchSuggestedFiles(files).map((entry) => entry.path))
+      .toEqual(["/workspace/notes.md", "/workspace/image.png"]);
+  });
+
   it("does not mutate the caller's list", () => {
     const files = [{ path: "/workspace/a.md", size: 1 }, { path: "/workspace/b.md", size: 2 }];
     workbenchSuggestedFiles(files);

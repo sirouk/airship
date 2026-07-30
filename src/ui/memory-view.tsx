@@ -46,7 +46,7 @@ export type MemoryViewMessage = Readonly<{
  * them. A destination is never labelled before it is bound.
  */
 export type MemorySourceTarget =
-  | Readonly<{ kind: "message"; sessionId: string; eventId: string }>
+  | Readonly<{ kind: "message"; sessionId: string }>
   | Readonly<{ kind: "memory"; recordId: string; path: string }>
   | Readonly<{ kind: "file"; path: string }>;
 
@@ -708,7 +708,7 @@ function conversationLane(result: FederatedMemoryResult | undefined, sessionId: 
         recordedAt={recordedAt}
         text={text}
         subject="this journal event"
-        open={sessionId && eventId ? { label: "Open this conversation", target: { kind: "message", sessionId, eventId } } : undefined}
+        open={sessionId && eventId ? { label: "Open this conversation", target: { kind: "message", sessionId } } : undefined}
         onOpenSource={onOpenSource}
         provenance={Object.freeze([
           provenanceFact("Event type", memoryHitString(hit, "eventType")),

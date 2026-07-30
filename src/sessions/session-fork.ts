@@ -160,17 +160,44 @@ function resolveForkBoundary(
   events: readonly DurableEvent[],
   requested: ForkSessionRequest["sourcePoint"],
 ): Readonly<{ sequence: number; digest: string }> {
+  const pointIndex = requested
+    ? events.findIndex((event) => event.sequence === requested.sequence)
+    : -1;
   const point = requested
-    ? events.find((event) => event.sequence === requested.sequence)
+    ? events[pointIndex]
     : [...events].reverse().find((event) => isForkBoundary(event.type));
   if (
     !point ||
-    !(isForkBoundary(point.type) || (requested && isSessionScopedBoundary(point))) ||
+    !(
+      isForkBoundary(point.type)
+      || (requested && isSessionScopedBoundary(point))
+      || (requested && isImmediatePreTurnBoundary(events, pointIndex, point))
+    ) ||
     (requested && point.digest !== requested.digest)
   ) {
     throw new SessionForkConflictError("The requested historical fork point is not an audited quiescent conversation boundary.");
   }
   return Object.freeze({ sequence: point.sequence, digest: point.digest });
+}
+
+/**
+ * A turn's `previousDigest` is its exact pre-turn boundary even when the event
+ * before it is an audited ancillary inference record carrying its own IDs.
+ * Requiring that event itself to be session-scoped rejected Edit/Retry after a
+ * completed conversation-naming call. The following request plus the prefix
+ * audit below are the stronger proof: this exact digest ended the quiescent
+ * prefix from which the next turn began.
+ */
+function isImmediatePreTurnBoundary(
+  events: readonly DurableEvent[],
+  pointIndex: number,
+  point: DurableEvent,
+): boolean {
+  const next = events[pointIndex + 1];
+  return pointIndex >= 0
+    && next?.type === "turn.requested"
+    && next.sequence === point.sequence + 1
+    && next.previousDigest === point.digest;
 }
 
 function isSessionScopedBoundary(event: DurableEvent): boolean {

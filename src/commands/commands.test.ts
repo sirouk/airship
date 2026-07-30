@@ -65,6 +65,7 @@ describe("browser-native slash commands", () => {
       "models",
       "network-probe",
       "sessions",
+      "skills",
       "write-file",
     ]);
   });
@@ -196,6 +197,39 @@ describe("browser-native slash commands", () => {
     });
   });
 
+  /*
+   * Skills governed every reply and were reachable from nothing the composer
+   * offers: `/help` listed sessions, models and every workspace tool, and never
+   * named one of the artifacts actually composing the prompt. A skill is not a
+   * tool — no schema, no effect class, nothing to invoke — so it cannot enter
+   * the registry through the tool channel; listing needs no new channel at all.
+   */
+  it("puts the pinned skill set on the same registry the composer and palette read", () => {
+    const registry = workspaceRegistry();
+    const descriptor = registry.resolve("skills");
+    expect(descriptor?.category).toBe("system");
+    expect(descriptor?.source).toEqual({ kind: "builtin" });
+    expect(descriptor?.availability).toEqual({ enabled: true });
+    // Listing only: no permission block, because nothing is invoked.
+    expect(descriptor?.permission).toBeUndefined();
+    expect(registry.resolve("skill")?.name).toBe("skills");
+
+    expect(registry.parse("skills", [])).toEqual({ kind: "builtin", action: { type: "skills.list" } });
+    expect(registry.parse("skills", ["list"])).toEqual({ kind: "builtin", action: { type: "skills.list" } });
+    expect(planSlashCommand("/skills", registry)).toMatchObject({
+      kind: "builtin",
+      action: { type: "skills.list" },
+    });
+    expect(planSlashCommand("/skills enable research", registry)).toMatchObject({
+      kind: "invalid",
+      code: "invalid-arguments",
+    });
+
+    // Discoverable, not merely resolvable: `/help` is where a newcomer finds it.
+    expect(registry.descriptors().map((command) => command.name)).toContain("skills");
+    expect(completeSlashCommand("/sk", registry).map((item) => item.insertText)).toEqual(["/skills"]);
+  });
+
   it("surfaces disabled reasons and keeps unauthorized commands out of autocomplete", () => {
     const registry = createSlashCommandRegistry({
       tools: workspaceTools(),
@@ -258,7 +292,7 @@ describe("browser-native slash commands", () => {
     ]));
     expect(menu.completions).toHaveLength(10);
     // The menu can only show ten, so it has to be able to say how many it hid.
-    expect(menu.total).toBe(21);
+    expect(menu.total).toBe(22);
     expect(completeSlashCommand("/", registry, { limit: 10 }).map((item) => item.label)).toEqual(
       menu.completions.map((item) => item.label),
     );

@@ -8,6 +8,7 @@ import {
 } from "./navigation-model";
 import { Icon, type IconName } from "./icons";
 import { trapFocus } from "./focus-trap";
+import { RuntimeLoadIndicator } from "./runtime-load-indicator";
 
 export type MobileNavigationProps = Readonly<{
   view: NavigationView;
@@ -106,23 +107,30 @@ export function MobileNavigation({
   return (
     <>
       <nav class="mobile-nav fixed-mobile-nav" aria-label="Mobile navigation" inert={moreOpen || chromeInert} aria-hidden={moreOpen || chromeInert || undefined}>
+        {/* The live-load reading rides this band for the same reason it rides
+            the rail on desktop: below the phone breakpoint `.sidebar` is
+            `display: none`, so a rail-only indicator is removed from the render
+            tree *and* the accessibility tree exactly where the reader has the
+            least room to go looking for it. This bar is the only band a phone
+            renders on every route. It is not a destination and takes no tap
+            target — it gets the nav grid's leading track and sizes itself, so
+            the four destinations keep equal shares and do not resize under a
+            finger when the count changes. */}
+        <RuntimeLoadIndicator placement="nav" />
         {MOBILE_PRIMARY_CONTROLS.map((control) => {
           const current = activeControl === control.id;
           const open = control.id === "more" && moreOpen;
           const notice = control.id === "chat"
             ? chatNoticeCount
             : control.id === "trust"
-            ? proofNoticeCount
-            : control.id === "more"
               ? attestationNoticeCount
               : 0;
           const noticeLabel = control.id === "chat"
-            ? pendingLabel(chatNoticeCount, "completed turn")
+            ? completedTurnLabel(chatNoticeCount)
             : control.id === "trust"
-            ? pendingLabel(proofNoticeCount, "proof item")
-            : control.id === "more"
-              ? pendingLabel(attestationNoticeCount, "attestation item")
+              ? evidenceRecordLabel(attestationNoticeCount)
               : undefined;
+          const proofPresence = control.id === "trust" && proofNoticeCount > 0 && notice === 0;
 
           if (control.kind === "overlay") {
             return (
@@ -139,7 +147,7 @@ export function MobileNavigation({
               >
                 <Icon name={primaryIcons[control.id]} size={20} />
                 <span>{control.label}</span>
-                <PendingBadge count={notice} label={noticeLabel} />
+                <NavigationBadge count={notice} label={noticeLabel} presence={proofPresence} />
               </button>
             );
           }
@@ -154,7 +162,7 @@ export function MobileNavigation({
             >
               <Icon name={primaryIcons[control.id]} size={20} />
               <span>{control.label}</span>
-              <PendingBadge count={notice} label={noticeLabel} />
+              <NavigationBadge count={notice} label={noticeLabel} presence={proofPresence} />
             </button>
           );
         })}
@@ -224,7 +232,6 @@ export function MobileNavigation({
                 }
 
                 const current = entry.view === view;
-                const notice = entry.view === "proof" ? attestationNoticeCount : 0;
                 return (
                   <button
                     key={entry.id}
@@ -236,10 +243,6 @@ export function MobileNavigation({
                     <Icon name={routeIcons[entry.view]} size={21} />
                     <span>{entry.label}</span>
                     <small>{entry.description}</small>
-                    <PendingBadge
-                      count={notice}
-                      label={pendingLabel(notice, "attestation item")}
-                    />
                   </button>
                 );
               })}
@@ -251,7 +254,8 @@ export function MobileNavigation({
   );
 }
 
-function PendingBadge({ count, label }: { count: number; label?: string }) {
+function NavigationBadge({ count, label, presence = false }: { count: number; label?: string; presence?: boolean }) {
+  if (presence) return <><span class="mobile-nav__badge mobile-nav__badge--presence" aria-hidden="true" /><span class="sr-only">Proof available</span></>;
   if (count === 0 || !label) return null;
   return (
     <>
@@ -267,9 +271,14 @@ function pendingCount(value: boolean | number): number {
   return Math.min(99, Math.floor(value));
 }
 
-function pendingLabel(count: number, noun: string): string | undefined {
+export function completedTurnLabel(count: number): string | undefined {
   if (count === 0) return undefined;
-  return `${count} pending ${noun}${count === 1 ? "" : "s"}`;
+  return `${count} completed turn${count === 1 ? "" : "s"}`;
+}
+
+export function evidenceRecordLabel(count: number): string | undefined {
+  if (count === 0) return undefined;
+  return `${count} evidence record${count === 1 ? "" : "s"}`;
 }
 
 function navClass(current: boolean, open: boolean): string {

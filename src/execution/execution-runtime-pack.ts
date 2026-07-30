@@ -1,5 +1,5 @@
 import type { JsonValue, ToolContext, ToolExecutionResult } from "../core/contracts";
-import type { BrowserExecutionTier } from "./runtime-registry";
+import type { BrowserExecutionTier, ExecutionCapability } from "./runtime-registry";
 import type { WorkspacePort } from "../workspace/contracts";
 import type { ToolRegistry } from "../tools/registry";
 
@@ -24,6 +24,19 @@ export async function executeExecutionTool(
 
 export async function getCurrentBrowserExecutionTier(): Promise<BrowserExecutionTier> {
   return (await loadImplementation()).getCurrentBrowserExecutionTier();
+}
+
+/**
+ * Inspecting the browser is not a conversation turn.
+ *
+ * The Capabilities route can mount before profile/session bootstrap completes,
+ * so making this read travel through an active profile tool produced a false
+ * "runtime is not ready" state on cold deep links. The same deferred runtime
+ * singleton remains authoritative; this seam merely reads it without inventing
+ * session identity or an unaudited tool call.
+ */
+export async function inspectBrowserExecutionCapabilities(): Promise<readonly ExecutionCapability[]> {
+  return (await loadImplementation()).inspectCurrentBrowserExecutionCapabilities();
 }
 
 function loadImplementation(): Promise<ExecutionImplementation> {

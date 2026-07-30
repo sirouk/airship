@@ -181,6 +181,41 @@ describe("a rejected credential is not a fresh reading", () => {
     expect(source.match(/accountReadingLine\(acceptance, observed\?\.label\)/gu)).toHaveLength(2);
   });
 
+  /*
+   * The chip fix stopped one element lying. The tab strip is the element that
+   * keeps talking after the chip is gone: both the chip and the refusal alert
+   * are gated on `selectedProvider === "chutes"`, so on the OpenAI tab the
+   * Chutes tab label is the only surviving statement about the Chutes
+   * connection — and it was reading "Connected" over four 401s.
+   */
+  it("does not leave the Chutes tab reading Connected while the credential is refused", () => {
+    expect(resolveBillingProviderInventory(undefined, true, "rejected")[0])
+      .toMatchObject({ providerId: "chutes", state: "rejected" });
+    // A held credential is still held: `not-connected` would be a second false
+    // sentence, so the state is its own.
+    expect(resolveBillingProviderInventory(undefined, false, "rejected")[0])
+      .toMatchObject({ providerId: "chutes", state: "not-connected" });
+    // 5xx everywhere is the provider being down, not a verdict on the
+    // credential, so the tab must not accuse it.
+    expect(resolveBillingProviderInventory(undefined, true, "refused")[0])
+      .toMatchObject({ providerId: "chutes", state: "connected" });
+    expect(resolveBillingProviderInventory(undefined, true, "accepted")[0])
+      .toMatchObject({ providerId: "chutes", state: "connected" });
+    // Not observed yet keeps the pre-existing behaviour.
+    expect(resolveBillingProviderInventory(undefined, true)[0])
+      .toMatchObject({ providerId: "chutes", state: "connected" });
+    // Nothing was read, so every datum on a refused provider is Unavailable —
+    // never the "Not provided" a connected provider earns.
+    expect(billingProviderDatumLabel(undefined, "rejected")).toBe("Unavailable");
+
+    // The rendered label, and the wiring that gets acceptance to it.
+    expect(source).toContain('if (state === "rejected") return "Not accepted";');
+    expect(source).toContain("resolveBillingProviderInventory(providerInventory, accountReadable, acceptance)");
+    // The premise of this case: the chip really is gated on the Chutes panel.
+    expect(source).toContain('status={selectedProvider === "chutes" && accountReadable ?');
+    expect(styles).toContain('.billing-provider-tab[data-state="rejected"] span');
+  });
+
   it("renders the refusal as an alert with a route back to Connection", () => {
     // "Partial" is reserved for the state it describes; the refusal rung is an
     // alert, names the credential, and carries the Connection action.
@@ -209,6 +244,29 @@ describe("a usage total names the bound it was read over", () => {
     expect(source).toContain("function boundedUsageSuffix(usage: ChutesUsageSummary): string {");
     expect(source).toContain('return usage.truncated ? ` · ${USAGE_BOUNDED_READ_NOTE}` : "";');
     expect(source.match(/\$\{boundedUsageSuffix\(usageState\.value\)\}/gu)).toHaveLength(2);
+  });
+});
+
+describe("the usage ledger's table structure holds every sentence it contains", () => {
+  /*
+   * `role="table"` defines a content model: a child that is not a row, row
+   * group or caption is not exposed. Making the rows and cells real therefore
+   * *removed* the one plain paragraph inside the container — the sentence
+   * disclosing that only ten of N buckets are shown, which is the disclosure
+   * the ledger exists to make honest. It lives outside the table now and is
+   * bound back to it by description.
+   */
+  it("keeps the ten-row cap disclosure outside role=table and still attached to it", () => {
+    const start = source.search(/<div\s+class="usage-ledger"/u);
+    const foot = source.indexOf('class="usage-ledger-foot"');
+    expect(start).toBeGreaterThan(-1);
+    expect(foot).toBeGreaterThan(start);
+    const between = source.slice(start, foot);
+    // Every div opened after the container is closed, including the container
+    // itself: the footnote is a sibling of the table, not an orphan inside it.
+    expect((between.match(/<div\b/gu) ?? []).length).toBe((between.match(/<\/div>/gu) ?? []).length);
+    expect(source).toContain('aria-describedby="usage-ledger-bound"');
+    expect(source).toContain('id="usage-ledger-bound"');
   });
 });
 

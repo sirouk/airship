@@ -13,8 +13,10 @@ type DOMRectSnapshot = Readonly<{
   y: number;
   width: number;
   height: number;
+  top: number;
   right: number;
   bottom: number;
+  left: number;
 }>;
 
 async function readComposerGeometry(page: Page): Promise<ComposerGeometry> {
@@ -62,8 +64,10 @@ async function readComposerGeometry(page: Page): Promise<ComposerGeometry> {
         y: rect.y,
         width: rect.width,
         height: rect.height,
+        top: rect.top,
         right: rect.right,
         bottom: rect.bottom,
+        left: rect.left,
       };
     };
     return {
@@ -179,6 +183,10 @@ test("composer growth is content-driven, bounded, and keeps approval disclosure 
 
   await page.keyboard.press("Escape");
   await textarea.fill("");
+  // Preact reconciles the controlled value after the browser's input event.
+  // Establish that boundary before measuring its layout; otherwise a loaded
+  // suite can sample the previous twelve-line value while the fill is settling.
+  await expect(textarea).toHaveValue("");
   const cleared = await readComposerGeometry(page);
   expectNear(cleared.composer.height, oneLine.composer.height, "cleared input: composer height");
   expectApprovalAnchored(cleared, oneLine, "cleared input");
@@ -299,4 +307,274 @@ test("the approval policy opens inside the phone viewport, reads whole, and take
     await expect(trigger, `${at}: the selected policy`).toContainText("Full Access");
     await expect(page.getByRole("listbox", { name: "Conversation approval policy" })).toHaveCount(0);
   }
+});
+
+/**
+ * A `visualViewport` the test can move, installed before the app boots.
+ *
+ * Chromium has no soft keyboard to open, so the alternative was to write the
+ * offset onto `:root` by hand — which asserts the stylesheet against a value
+ * the test itself invented and skips the code that decides whether to publish
+ * at all. Substituting the *source* keeps the whole path real: the app's own
+ * `useVisualViewport` reads these numbers, computes the obscured height, writes
+ * the variable and re-anchors the transcript, and every box measured below is
+ * one the browser laid out.
+ *
+ * `innerHeight` stays the browser's, because that is exactly the fact the
+ * layout has to cope with: a keyboard does not shrink the layout viewport, and
+ * pretending otherwise is the bug this file exists to catch.
+ */
+async function installMovableVisualViewport(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    class MovableVisualViewport extends EventTarget {
+      obscured = 0;
+      zoom = 1;
+      get width() { return window.innerWidth; }
+      get height() { return window.innerHeight - this.obscured; }
+      get offsetTop() { return 0; }
+      get offsetLeft() { return 0; }
+      get pageTop() { return 0; }
+      get pageLeft() { return 0; }
+      get scale() { return this.zoom; }
+    }
+    const viewport = new MovableVisualViewport();
+    Object.defineProperty(window, "visualViewport", { configurable: true, get: () => viewport });
+    Object.defineProperty(window, "__airshipViewport", { configurable: true, get: () => viewport });
+  });
+}
+
+/** Moves the fake viewport and waits out the publisher's `requestAnimationFrame`. */
+async function setObscuredHeight(page: Page, obscured: number, scale = 1): Promise<void> {
+  await page.evaluate(async ([pixels, zoom]) => {
+    const viewport = (window as unknown as { __airshipViewport: { obscured: number; zoom: number } & EventTarget }).__airshipViewport;
+    viewport.obscured = pixels!;
+    viewport.zoom = zoom!;
+    viewport.dispatchEvent(new Event("resize"));
+    const frame = () => new Promise((resolve) => requestAnimationFrame(resolve));
+    // One frame for the publisher's own rAF, one for the layout it triggers.
+    await frame();
+    await frame();
+  }, [obscured, scale]);
+}
+
+type ShellGeometry = Readonly<{
+  innerHeight: number;
+  overflow: number;
+  published: string;
+  keyboardOpen: string;
+  app: DOMRectSnapshot;
+  transcript: DOMRectSnapshot;
+  composerWrap: DOMRectSnapshot;
+  lastCard: DOMRectSnapshot;
+  navVisible: boolean;
+}>;
+
+async function readShellGeometry(page: Page): Promise<ShellGeometry> {
+  return page.evaluate(() => {
+    const snapshot = (element: Element): DOMRectSnapshot => {
+      const rect = element.getBoundingClientRect();
+      return { x: rect.x, y: rect.y, width: rect.width, height: rect.height, top: rect.top, right: rect.right, bottom: rect.bottom, left: rect.left };
+    };
+    const cards = document.querySelectorAll("[data-transcript-card]");
+    const nav = document.querySelector<HTMLElement>(".mobile-nav");
+    return {
+      innerHeight: window.innerHeight,
+      overflow: document.documentElement.scrollWidth - window.innerWidth,
+      published: document.documentElement.style.getPropertyValue("--visual-viewport-bottom"),
+      keyboardOpen: document.documentElement.dataset.keyboardOpen ?? "",
+      app: snapshot(document.querySelector("#app")!),
+      transcript: snapshot(document.querySelector(".transcript")!),
+      composerWrap: snapshot(document.querySelector(".composer-wrap")!),
+      lastCard: snapshot(cards.item(cards.length - 1)!),
+      navVisible: nav !== null && nav.getBoundingClientRect().height > 0,
+    };
+  });
+}
+
+/*
+ * The defect, stated as geometry.
+ *
+ * The compensation that shipped was `position: relative; bottom: <obscured>` on
+ * `.composer-wrap` plus a matching `padding-bottom` on `.transcript`. Both are
+ * paint-only: a relative inset moves a painted box without vacating the track
+ * it came from, and padding only buys scrollable extent *below* a card that is
+ * still hidden. So the composer appeared to rise while the transcript's
+ * border-box floor stayed at the foot of the layout viewport — behind the
+ * keyboard — and every anchor that measures against that floor
+ * (`scrollToLastRealCard`, `isNearLastRealCard`, the responsive geometry specs)
+ * was measuring a line the reader cannot see. Worse, collapsing the nav's grid
+ * track pushed that floor a further 56px *down*, so re-anchoring against it
+ * moved the newest card deeper under the composer than doing nothing.
+ *
+ * Only a browser can answer whether a box moved, which is why this is here and
+ * not in `platform-shell.test.ts`: that file pins the publisher's decisions
+ * against a modelled floor, and `composer-shell-contract.test.ts` pins the rule
+ * that moves it. This measures the pixels.
+ */
+test("the soft keyboard shortens the shell and keeps the last card on a floor the reader can see", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile-chromium", "phone soft-keyboard contract");
+  await installMovableVisualViewport(page);
+  await page.goto("/#chat");
+  await page.getByRole("combobox", { name: "Message Airship" }).fill("Explain the runtime posture in one sentence.");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(page.locator("[data-transcript-card]").last()).toBeVisible({ timeout: 30_000 });
+
+  const resting = await readShellGeometry(page);
+  expect(resting.keyboardOpen, "no keyboard at rest").toBe("false");
+  expect(resting.navVisible, "the nav band is on screen at rest").toBe(true);
+  expectNear(resting.app.height, resting.innerHeight, "resting shell height");
+
+  const obscured = 290;
+  await setObscuredHeight(page, obscured);
+  const open = await readShellGeometry(page);
+
+  expect(open.published, "the obscured height is published").toBe(`${obscured}px`);
+  expect(open.keyboardOpen).toBe("true");
+  expect(open.navVisible, "the nav band leaves the layout, not just the paint").toBe(false);
+  // The shell — not the composer's paint — is what shrank.
+  expectNear(open.app.height, resting.innerHeight - obscured, "shell shortened to the visual viewport");
+  expect(open.composerWrap.bottom, "the composer is above the keyboard").toBeLessThanOrEqual(resting.innerHeight - obscured + 1);
+  // The assertion the paint-only compensation could never satisfy: the
+  // transcript's own floor is above the composer, so a card resting on it is
+  // a card in front of the keyboard rather than behind it.
+  expect(open.transcript.bottom, "transcript floor sits above the composer").toBeLessThanOrEqual(open.composerWrap.top + 1);
+  expect(open.transcript.height, "the transcript keeps usable height").toBeGreaterThanOrEqual(80);
+  expect(open.overflow, "opening the keyboard introduces no horizontal overflow").toBeLessThanOrEqual(1);
+
+  // Re-anchored, and re-anchored the right way: the newest card is on the
+  // shortened floor and inside the box, not pushed further down it.
+  expect(open.lastCard.bottom).toBeLessThanOrEqual(open.transcript.bottom + 1);
+  expect(open.lastCard.bottom).toBeGreaterThan(open.transcript.top);
+
+  // Pinch zoom moves `height` and `offsetTop` the same way a keyboard does.
+  // Compensating for it would shrink the shell around a reader mid-gesture and
+  // scroll the transcript under their finger, so nothing may change.
+  await setObscuredHeight(page, obscured + 120, 2);
+  const zoomed = await readShellGeometry(page);
+  expect(zoomed.published, "a pinch publishes nothing").toBe(`${obscured}px`);
+  expectNear(zoomed.app.height, open.app.height, "pinch: shell height unchanged");
+  expectNear(zoomed.transcript.bottom, open.transcript.bottom, "pinch: transcript floor unchanged");
+
+  await setObscuredHeight(page, 0);
+  const closed = await readShellGeometry(page);
+  expect(closed.keyboardOpen).toBe("false");
+  expect(closed.navVisible, "the nav band comes back").toBe(true);
+  // Resting geometry is restored exactly, not approximately: the compensation
+  // is a variable that returns to 0, never a layout the shell has to undo.
+  expectNear(closed.app.height, resting.app.height, "shell height restored");
+  expectNear(closed.transcript.bottom, resting.transcript.bottom, "transcript floor restored");
+  expectNear(closed.composerWrap.bottom, resting.composerWrap.bottom, "composer restored");
+  expect(closed.lastCard.bottom).toBeLessThanOrEqual(closed.transcript.bottom + 1);
+});
+
+/*
+ * The fade over a scrolled draft.
+ *
+ * `.composer-input-row[data-scrolled] textarea` is a two-file contract — the
+ * dataset is written by the composer's scroll listener in `app.tsx`, the mask
+ * by `chat.css` — and it shipped with a `.composer` step in the selector that
+ * inverted the real nesting, so the mask never applied and a scrolled draft
+ * showed a half-sliced line with no indication it was scrolled.
+ * `composer-shell-contract.test.ts` pins the selector against the markup;
+ * only a browser can say whether the mask is actually painted, which is what
+ * this reads out of the computed style.
+ */
+test("a draft scrolled past the composer's growth cap is faded at the edge it runs past", async ({ page }) => {
+  await page.goto("/#chat");
+  const textarea = page.getByRole("combobox", { name: "Message Airship" });
+  await expect(textarea).toBeVisible();
+  await textarea.fill(Array.from({ length: 24 }, (_, line) => `Bounded draft line ${line + 1}`).join("\n"));
+  // `fill()` leaves the caret at the end, and browsers legitimately scroll a
+  // textarea to keep that caret visible. This phase is explicitly the top
+  // edge, so put the field there and emit the same event a user scroll emits.
+  await textarea.evaluate((field) => {
+    field.scrollTop = 0;
+    field.dispatchEvent(new Event("scroll"));
+  });
+
+  const read = async () => page.evaluate(() => {
+    const field = document.querySelector<HTMLTextAreaElement>('[aria-label="Message Airship"]')!;
+    const row = document.querySelector<HTMLElement>(".composer-input-row")!;
+    const style = getComputedStyle(field);
+    return {
+      state: row.dataset.scrolled ?? "",
+      // Chromium reports the standard property; the prefixed one is what the
+      // sheet would have to fall back to, and a silent "none" is the failure.
+      mask: style.maskImage === "none" || style.maskImage === ""
+        ? (style as CSSStyleDeclaration & { webkitMaskImage?: string }).webkitMaskImage ?? "none"
+        : style.maskImage,
+      overflowing: field.scrollHeight > field.clientHeight + 1,
+      scrollTop: field.scrollTop,
+      maxScroll: field.scrollHeight - field.clientHeight,
+    };
+  });
+
+  const atTop = await read();
+  expect(atTop.overflowing, "24 lines overflow the growth cap").toBe(true);
+  expect(atTop.state, "content below the fold").toBe("bottom");
+  expect(atTop.mask, "the bottom edge is faded").toContain("gradient");
+
+  await page.locator('[aria-label="Message Airship"]').evaluate((field) => {
+    const box = field as HTMLTextAreaElement;
+    box.scrollTop = Math.round((box.scrollHeight - box.clientHeight) / 2);
+    box.dispatchEvent(new Event("scroll"));
+  });
+  const middle = await read();
+  expect(middle.state, "content above and below the fold").toBe("both");
+  expect(middle.mask, "both edges are faded").toContain("gradient");
+
+  await page.locator('[aria-label="Message Airship"]').evaluate((field) => {
+    const box = field as HTMLTextAreaElement;
+    box.scrollTop = box.scrollHeight;
+    box.dispatchEvent(new Event("scroll"));
+  });
+  const bottom = await read();
+  expect(bottom.state, "content above the fold only").toBe("top");
+  expect(bottom.mask, "the top edge is faded").toContain("gradient");
+
+  // Unscrolled again: no mask, so a one-line draft is never dimmed.
+  await textarea.fill("Plan");
+  const cleared = await read();
+  expect(cleared.state).toBe("");
+  expect(cleared.mask).toBe("none");
+});
+
+/*
+ * Attachment chips mount conditionally, so they were absent from every screen
+ * the phone touch-floor pass was captured against and kept a 28px destructive
+ * control — remove this attachment — in a row of 44px siblings. The rule exists
+ * in `routes.css`; nothing rendered the markup it selects, which is why this
+ * mounts a real attachment rather than reading the sheet.
+ */
+test("a mounted attachment chip meets the phone touch floor", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile-chromium", "phone touch-target contract");
+  await page.goto("/#chat");
+  await expect(page.getByRole("combobox", { name: "Message Airship" })).toBeVisible();
+
+  await page.locator('input[type="file"][accept="image/*"]').setInputFiles({
+    name: "airship-touch-floor.png",
+    mimeType: "image/png",
+    // A valid 96×96 opaque PNG, shared with the vision smoke test: a 1×1 input
+    // is a legal PNG but is below the preview pipeline's useful floor.
+    buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAGAAAABgCAIAAABt+uBvAAAAjUlEQVR42u3QMQEAAAQAMCTRP5MwEnhdW4TldAe3UiBIkCBBggQJEoQgQYIECRIkSBCCBAkSJEiQIEEIEiRIkCBBggQJQpAgQYIECRIkCEGCBAkSJEiQIAQJEiRIkCBBggQhSJAgQYIECRKEIEGCBAkSJEgQggQJEiRIkCBBghAkSJAgQYIECUKQIEF/FlLTAdyKtVlSAAAAAElFTkSuQmCC", "base64"),
+  });
+
+  const chip = page.locator(".composer-attachments > span");
+  await expect(chip).toHaveCount(1);
+  const remove = chip.getByRole("button", { name: /^Remove / });
+  const box = await remove.boundingBox();
+  expect(box, "the remove control is laid out").not.toBeNull();
+  expect(box!.height, "removing an attachment is destructive and must be a full touch target").toBeGreaterThanOrEqual(44);
+  expect(box!.width, "remove control width").toBeGreaterThanOrEqual(44);
+
+  // A target that is 44px and covered is still unreachable, so the pixel at
+  // its centre has to belong to it — and the tap has to actually remove.
+  const hittable = await remove.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    const centre = document.elementFromPoint(Math.round(bounds.left + bounds.width / 2), Math.round(bounds.top + bounds.height / 2));
+    return centre instanceof Element && (centre === element || element.contains(centre));
+  });
+  expect(hittable, "the remove control receives the pixel at its own centre").toBe(true);
+  await remove.click();
+  await expect(page.locator(".composer-attachments")).toHaveCount(0);
 });

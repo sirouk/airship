@@ -8,7 +8,7 @@ import type {
   ChutesEndpointEvidenceRecord,
 } from "../attestation/provider-types";
 import { ApprovalBroker, redactForDisplay } from "../approvals/broker";
-import { approvalProvenance, createApprovalModePolicy, decideHumanIntent, type ApprovalMode } from "../approvals/modes";
+import { approvalProvenance, createApprovalModePolicy, createHumanIntentPolicy, decideHumanIntent, type ApprovalMode } from "../approvals/modes";
 import { SwitchableApprovalPolicy } from "../approvals/switchable-policy";
 import {
   DISCONNECTED_CHUTES_CONNECTION,
@@ -107,6 +107,10 @@ import {
   type LiveEnvironmentSupplementSource,
 } from "../tools/airship-tools";
 import type { FederatedMemoryResult } from "../tools/federated-memory";
+// Deliberately a static import of a dependency-free module, not of the terminal
+// manager: the journal must be bound before the first shell record exists, and
+// the manager itself stays behind its lazy chunk.
+import { subscribeTerminalAuditRecords, terminalActivityEvent } from "../terminal/audit-sink";
 import {
   VaultCoordinator,
   isGoogleDriveConfiguration,
@@ -123,6 +127,7 @@ import { isWorkspaceControlPlanePath, type WorkspaceEntry, type WorkspaceFile, t
 import { MemoryWorkspace } from "../workspace/memory";
 import { ProfileWorkspacePort, adoptLegacyRootWorkspace, isProfileWorkspacePath, profileWorkspaceIdentity } from "../workspace/profile-scope";
 import { WorkspaceRefreshCoordinator, type WorkspaceRefreshAuthority } from "./workspace-refresh";
+import { nextEditorSelection, type EditorSelection } from "./editor-selection";
 import { composeClaimStack, type ClaimStackFact, type ClaimStackItem } from "./claim-stack-model";
 import { TURN_EVIDENCE_COPY, turnEvidenceVerdict } from "./turn-evidence";
 // The two per-message rung words, taken from the one dictionary rather than
@@ -160,7 +165,9 @@ import {
   loadPreferenceOverrides,
   loadRecentSessionPaletteSources,
   savePreferenceOverrides,
+  unloadWouldLoseWork,
   useBeforeUnloadGuard,
+  useDebouncedValue,
   useGlobalNavigationJumps,
   useGlobalPaletteShortcut,
   usePwaUpdate,
@@ -688,6 +695,14 @@ const PROFILE_DRAFT_DISCARD_PROMPT = "Discard unsaved profile edits?";
  */
 const SESSION_BAR_COLLAPSE_SCROLL = 48;
 
+/**
+ * How long the recents shortcuts wait for a turn's durable events to stop
+ * arriving. Long enough to collapse a whole tool-calling turn's writes into one
+ * refresh, short enough that a rename or a new conversation lands before the
+ * eye reaches the sidebar.
+ */
+const RECENTS_REFRESH_DEBOUNCE_MS = 250;
+
 const SESSION_LIFECYCLE_SHORT: Readonly<Record<SessionLifecycle["state"], string>> = Object.freeze({
   ready: "Ready",
   running: "Working",
@@ -826,6 +841,61 @@ function lastPresentationRowReceipt(presentation: SessionMessagePresentation): C
  * and a divider floating at the end of a transcript is a record whose position
  * has quietly been lost.
  */
+/**
+ * Every receipt the Proof route can resolve for the conversation on screen.
+ *
+ * Proof addresses receipts only through this list, so a receipt missing from it
+ * is unreachable no matter how well it was minted, finalized and journaled —
+ * which is exactly what happened to the conversation-naming receipt, which
+ * rides no transcript row until a reload replays its record as a marker.
+ *
+ * Two rules do the work. Ancillary receipts are filtered to this conversation,
+ * because the page keeps them across conversation switches and one
+ * conversation's evidence must never answer for another's. And they come
+ * *first*, because `resolveProofReceipt` walks this list backwards when the
+ * selection names no receipt: the conversation's most recent turn stays the
+ * default hero, exactly as it did before anything beside a turn was listed.
+ */
+export function proofResolvableReceipts(
+  ancillary: readonly ConversationReceipt[],
+  messages: readonly Readonly<{ receipt?: ConversationReceipt }>[],
+  sessionId: string | undefined,
+): ConversationReceipt[] {
+  return [
+    ...ancillary.filter((receipt) => receipt.sessionId === sessionId),
+    ...messages.flatMap((message) => message.receipt ? [message.receipt] : []),
+  ];
+}
+
+function markComposerScroll(element: HTMLTextAreaElement): void {
+  const inputRow = element.closest<HTMLElement>(".composer-input-row");
+  if (!inputRow) return;
+  const top = element.scrollTop > 0;
+  const bottom = element.scrollHeight - element.scrollTop - element.clientHeight > 1;
+  const state = top && bottom ? "both" : top ? "top" : bottom ? "bottom" : undefined;
+  if (state) inputRow.dataset.scrolled = state;
+  else delete inputRow.dataset.scrolled;
+}
+
+/** Reconcile the composer's box with the value currently in its DOM authority. */
+function fitComposerTextarea(element: HTMLTextAreaElement): void {
+  const style = getComputedStyle(element);
+  const minimum = parseFloat(style.minHeight) || 44;
+  // The cap is a share of what is *visible*, not of the document: with a
+  // soft keyboard up, the flat 180px ceiling left the transcript 24px.
+  const maximum = composerGrowthCap(
+    parseFloat(style.maxHeight),
+    window.visualViewport?.height ?? window.innerHeight,
+    minimum,
+  );
+  element.style.height = `${minimum}px`;
+  element.style.maxHeight = `${maximum}px`;
+  const natural = element.scrollHeight;
+  element.style.height = `${Math.min(maximum, Math.max(minimum, natural))}px`;
+  element.style.overflowY = natural > maximum ? "auto" : "hidden";
+  markComposerScroll(element);
+}
+
 function transcriptMessagesFromPresentation(presentation: SessionMessagePresentation): UiMessage[] {
   const rows = presentation.rows.map((row, index) => {
     const originatingPrompt = originatingPromptForRow(presentation.rows, index);
@@ -856,6 +926,11 @@ function transcriptMessagesFromPresentation(presentation: SessionMessagePresenta
       role: "assistant",
       content: marker.detail,
       marker,
+      // A marker that records a billed request carries its receipt onto the
+      // transcript item so `inPageReceipts` — the only list Proof resolves
+      // against — contains it. Without this the naming receipt was minted,
+      // validated and journaled, and then addressable by nothing.
+      ...(marker.receipt ? { receipt: marker.receipt } : {}),
       sourcePoint: { sequence: marker.sequence, digest: marker.digest },
     });
   }
@@ -1077,10 +1152,7 @@ export function App() {
   const [slashMenuDismissedFor, setSlashMenuDismissedFor] = useState<string>();
   const [files, setFiles] = useState<WorkspaceEntry[]>([]);
   const [workspaceFiles, setWorkspaceFiles] = useState<WorkspaceEntry[]>([]);
-  const [selectedFileSelection, setSelectedFileSelection] = useState<Readonly<{
-    profileId: string;
-    file: WorkspaceFile;
-  }>>();
+  const [selectedFileSelection, setSelectedFileSelection] = useState<EditorSelection>();
   const selectedFile = selectedFileSelection?.profileId === profileId
     ? selectedFileSelection.file
     : undefined;
@@ -1091,6 +1163,16 @@ export function App() {
   const [availableModels, setAvailableModels] = useState<readonly AirshipModel[]>([]);
   const [modelSwitching, setModelSwitching] = useState(false);
   const [lastReceipt, setLastReceipt] = useState<ConversationReceipt>();
+  /**
+   * Receipts for requests made beside a turn rather than in one.
+   *
+   * A turn receipt reaches Proof on the assistant row that carries it; a naming
+   * receipt has no row until a reload replays it as a marker, so this is what
+   * keeps it addressable in the meantime. Bounded and filtered by session at
+   * the point of use: it outlives a conversation switch, and one conversation's
+   * evidence must never be able to answer for another's.
+   */
+  const [ancillaryReceipts, setAncillaryReceipts] = useState<readonly ConversationReceipt[]>([]);
   const [sessionLifecycle, setSessionLifecycle] = useState<SessionLifecycle>(READY_SESSION_LIFECYCLE);
   const [transcriptBoundary, setTranscriptBoundary] = useState<Readonly<{
     omittedMessages: number;
@@ -1108,6 +1190,8 @@ export function App() {
   const [attestationPresentation, setAttestationPresentation] = useState<AttestationPresentationState>();
   const [evidenceAcquisitionSnapshot, setEvidenceAcquisitionSnapshot] = useState<EvidenceAcquisitionQueueSnapshot>();
   const [attestationNow, setAttestationNow] = useState(() => Date.now());
+  /** One automatic refresh request per expired observation record. */
+  const automaticEvidenceRefreshes = useRef(new Set<string>());
   const [AttestationsScreen, setAttestationsScreen] = useState<AttestationsScreenComponent>();
   const [attestationsViewError, setAttestationsViewError] = useState<string>();
   const [EditorScreen, setEditorScreen] = useState<EditorScreenComponent>();
@@ -1231,11 +1315,41 @@ export function App() {
   const approvalPolicyController = useMemo(() => new SwitchableApprovalPolicy(approvalModePolicy), []);
   approvalPolicyController.replace(approvalModePolicy);
   const approvalPolicy = approvalPolicyController;
+  /*
+   * The policy a local slash command is reviewed under. Same `SwitchableApprovalPolicy`
+   * indirection, because a local command is a long-running turn of its own and
+   * the mode can be re-pinned while its dock prompt is up; the delegate that
+   * decided is the one that owns the provenance.
+   *
+   * Separate from `approvalPolicy` because the proposer is different, not
+   * because the seam is: `/write` still goes through `tools.review` →
+   * `executeApproved`, so it still mints and consumes a registry ticket bound
+   * to its argument digest. Only the adjudicator changes — the person who typed
+   * the command is asked, instead of a model being asked about them.
+   */
+  const humanIntentModePolicy = useMemo(
+    () => createHumanIntentPolicy({ mode: activeApprovalMode, broker: approvalBroker }),
+    [approvalBroker, activeApprovalMode],
+  );
+  const humanIntentPolicyController = useMemo(() => new SwitchableApprovalPolicy(humanIntentModePolicy), []);
+  humanIntentPolicyController.replace(humanIntentModePolicy);
+  const localCommandPolicy = humanIntentPolicyController;
   const previousApprovalMode = useRef(activeApprovalMode);
   const vault = useMemo(() => new VaultCoordinator(), []);
   const [vaultSnapshot, setVaultSnapshot] = useState<VaultSnapshot>(() => vault.snapshot);
   const [vaultSetupOpen, setVaultSetupOpen] = useState(false);
   const [vaultProviderSwitching, setVaultProviderSwitching] = useState(false);
+  /**
+   * The last adoption failure, in the runtime's own words.
+   *
+   * `runtimeStatus` is one mixed-purpose line that the shell overwrites with
+   * the next thing that happens anywhere, and the Vault route deliberately does
+   * not read it. Without a state of its own, the route's "Runtime adoption"
+   * row could only ever print the generic "still page-memory" sentence, and the
+   * reason a verified vault refused to be adopted was visible for a moment on a
+   * different screen.
+   */
+  const [vaultAdoptionNotice, setVaultAdoptionNotice] = useState<string>();
   const vaultProviderSwitchingRef = useRef(false);
   const activeDurableAuthority = useRef<DurableAdoptionDescriptor>();
   const localDeviceHandle = useRef<LocalDeviceVaultHandle>();
@@ -1332,10 +1446,13 @@ export function App() {
   const profileDraftDirty = useRef(false);
   const currentView = useRef<View>(view);
   currentView.current = view;
+  const observeExtensionBridge = useCallback(async (): Promise<ExtensionBridgeObservation> => {
+    const { probeExtensionBridge } = await import("../capabilities/extension-bridge");
+    return probeExtensionBridge();
+  }, []);
   const liveEnvironmentSource = useMemo<LiveEnvironmentSupplementSource>(() => async ({ signal }) => {
     signal.throwIfAborted();
-    const { probeExtensionBridge } = await import("../capabilities/extension-bridge");
-    const extension = await probeExtensionBridge();
+    const extension = await observeExtensionBridge();
     signal.throwIfAborted();
     const providers = combinedInferenceAvailability(
       inferenceFabric.current?.availability(activeExternalRouteRef.current?.pin)
@@ -1383,7 +1500,6 @@ export function App() {
 
   useGlobalPaletteShortcut(() => setPaletteOpen((open) => !open));
   useGlobalNavigationJumps(navigatePrimary);
-  useBeforeUnloadGuard(busy || Boolean(sessionId));
   useVisualViewport();
   useEffect(() => () => {
     for (const url of attachmentPreviewUrls.current) URL.revokeObjectURL(url);
@@ -1632,50 +1748,26 @@ export function App() {
     leadingOffset: transcriptLeadingHeight,
   });
   const inPageReceipts = useMemo(
-    () => messages.flatMap((message) => message.receipt ? [message.receipt] : []),
-    [messages],
+    () => proofResolvableReceipts(ancillaryReceipts, messages, sessionId),
+    [ancillaryReceipts, messages, sessionId],
   );
 
   useLayoutEffect(() => {
     const element = textarea.current;
     if (!element) return;
-    const inputRow = element.closest<HTMLElement>(".composer-input-row");
     // The measure/toggle/re-measure branch this replaces existed only to damp
     // an oscillation between a one-row and a two-row composer. The composer is
     // two rows at every width now, so the textarea's width is constant while it
     // grows and the oscillation is not reachable — which also means a 23-char
     // prompt can no longer be forced onto two lines by a footer stealing 450px.
-    const fit = () => {
-      const style = getComputedStyle(element);
-      const minimum = parseFloat(style.minHeight) || 44;
-      // The cap is a share of what is *visible*, not of the document: with a
-      // soft keyboard up, the flat 180px ceiling left the transcript 24px.
-      const maximum = composerGrowthCap(
-        parseFloat(style.maxHeight),
-        window.visualViewport?.height ?? window.innerHeight,
-        minimum,
-      );
-      element.style.height = `${minimum}px`;
-      element.style.maxHeight = `${maximum}px`;
-      const natural = element.scrollHeight;
-      element.style.height = `${Math.min(maximum, Math.max(minimum, natural))}px`;
-      element.style.overflowY = natural > maximum ? "auto" : "hidden";
-      markComposerScroll();
-    };
+    const fit = () => fitComposerTextarea(element);
     // Text scrolled above the cap has to read as scrolled rather than as a
     // half-sliced rendering fault, so the fade is driven by real scroll state.
-    const markComposerScroll = () => {
-      if (!inputRow) return;
-      const top = element.scrollTop > 0;
-      const bottom = element.scrollHeight - element.scrollTop - element.clientHeight > 1;
-      const state = top && bottom ? "both" : top ? "top" : bottom ? "bottom" : undefined;
-      if (state) inputRow.dataset.scrolled = state;
-      else delete inputRow.dataset.scrolled;
-    };
+    const markScroll = () => markComposerScroll(element);
     fit();
     const resizeTargets = [window, window.visualViewport];
     resizeTargets.forEach((target) => target?.addEventListener("resize", fit));
-    element.addEventListener("scroll", markComposerScroll, { passive: true });
+    element.addEventListener("scroll", markScroll, { passive: true });
     /*
      * The element's own `input` event, not only the `[input]` state dep.
      *
@@ -1689,13 +1781,28 @@ export function App() {
     element.addEventListener("input", fit);
     return () => {
       resizeTargets.forEach((target) => target?.removeEventListener("resize", fit));
-      element.removeEventListener("scroll", markComposerScroll);
+      element.removeEventListener("scroll", markScroll);
       element.removeEventListener("input", fit);
     };
   }, [input]);
 
   useEffect(() => setSlashSelection(Math.max(0, firstEnabledSlashIndex(slashCompletions))), [input, slashCompletions]);
   useEffect(() => observeConnectivity(window, navigator, setOnline), []);
+  useEffect(() => {
+    if (!catalog || profileHubScope === "global") return;
+    if (!managedProfiles(catalog).some((profile) => profile.profileId === profileHubScope)) {
+      setProfileHubScope("global");
+    }
+  }, [catalog, profileHubScope]);
+  /*
+   * The recents shortcuts want a turn boundary; `sessionRevision` is a durable
+   * *event* counter. A single turn bumps it once per request, per tool call and
+   * per completion, and each bump re-listed and re-decrypted the whole library
+   * twice — once for the palette and once for the rail — for a sidebar nobody
+   * can read mid-stream anyway. The trailing edge of the burst is the only
+   * value that was ever going to be rendered.
+   */
+  const settledSessionRevision = useDebouncedValue(sessionRevision, RECENTS_REFRESH_DEBOUNCE_MS);
   useEffect(() => {
     if (!sessionLibrary) {
       setRecentPaletteState(Object.freeze({ profileId: "", sessions: Object.freeze([]) }));
@@ -1713,7 +1820,7 @@ export function App() {
       if (!controller.signal.aborted) setRuntimeStatus(error instanceof Error ? error.message : "Recent sessions are unavailable.");
     });
     return () => controller.abort();
-  }, [sessionLibrary, sessionRevision, profileId]);
+  }, [sessionLibrary, settledSessionRevision, profileId]);
   useEffect(() => {
     if (
       view !== "chat"
@@ -1813,7 +1920,7 @@ export function App() {
     // `sessionId` is a real input now, not incidental state: the lineage
     // collapse pins the active conversation's row, so switching branches has
     // to recompute which member of a lineage the shortcut is showing.
-  }, [sessionLibrary, sessionRevision, profileId, sessionId]);
+  }, [sessionLibrary, settledSessionRevision, profileId, sessionId]);
   useEffect(() => {
     if (!slashMenuOpen) return;
     const frame = requestAnimationFrame(() => {
@@ -1850,6 +1957,41 @@ export function App() {
       if (frame !== undefined) cancelAnimationFrame(frame);
     };
   }, [transcriptBoundary]);
+  /*
+   * Shell work joins the one timeline.
+   *
+   * Terminal lineage was complete and durable and reachable from exactly one
+   * `<summary>` popover: a command that rewrote the workspace produced no
+   * journal event, so Proof audited a chain with a hole where the shell is, and
+   * the product's claim — intent → effect → workspace head → receipt — was true
+   * of tools and false of `jsh`.
+   *
+   * The binding is the terminal's own `threadId`, not the conversation that
+   * happens to be on screen. A terminal opened from a conversation keeps
+   * writing to that conversation after the reader navigates away, and a
+   * terminal with no thread writes nowhere rather than borrowing someone
+   * else's journal — its record still lives in the manager's own bounded set,
+   * and claiming the journal has it would be the worse of the two failures.
+   *
+   * Appends are chained rather than fired in parallel because the journal is a
+   * hash chain: two concurrent appends race the head digest, and the loser is a
+   * conflict, not a queued write.
+   */
+  const terminalAuditTail = useRef<Promise<void>>(Promise.resolve());
+  useEffect(() => subscribeTerminalAuditRecords((record, terminalSession) => {
+    const threadId = terminalSession.threadId;
+    const active = runtime.current;
+    if (!threadId || !active) return;
+    const draft = terminalActivityEvent(record, terminalSession);
+    terminalAuditTail.current = terminalAuditTail.current
+      .then(() => active.journal.append(threadId, [{ type: draft.type, payload: draft.payload }]))
+      .then(() => undefined)
+      // Stated, never swallowed: an unrecorded shell action is exactly the gap
+      // this closes, and a silent catch would reproduce it one layer up.
+      .catch((error) => {
+        setRuntimeStatus(`A ${record.kind} record from terminal ${terminalSession.name} could not be journaled: ${error instanceof Error ? error.message : "the session journal refused the append"}`);
+      });
+  }), [observeExtensionBridge]);
   useEffect(() => {
     if (
       !sessionId
@@ -2023,6 +2165,14 @@ export function App() {
     && !isGoogleDriveConfiguration(vaultSnapshot.config)
     && vaultSnapshot.config.mode === "local-development";
   const vaultRuntimeAdopted = localDeviceRuntimeAdopted || cloudVaultRuntimeAdopted;
+  // Declared here rather than beside the other global hooks because adoption is
+  // one of its three terms, and adoption is what decides whether closing the tab
+  // costs anything at all.
+  const releaseUnloadGuard = useBeforeUnloadGuard(unloadWouldLoseWork({
+    busy,
+    eventCount,
+    vaultAdopted: vaultRuntimeAdopted,
+  }));
   const trustAxes: readonly TrustAxis[] = Object.freeze([
     { id: "local", scope: "tab", label: online ? "Browser / Edge runtime" : OFFLINE_RUNTIME_LABEL, state: online ? "none" : "attention", detail: online ? "The agent kernel executes in this browser." : OFFLINE_RUNTIME_DETAIL, view: "proof" },
     {
@@ -2090,6 +2240,10 @@ export function App() {
   const proofScoped = proofTargetId === sessionId;
   const proofEndpointRecords = proofScoped ? attestationRecords : EMPTY_ENDPOINT_EVIDENCE;
   const proofLedgerReceipts = proofScoped ? attestationReceipts : EMPTY_CONVERSATION_RECEIPTS;
+  const ledgerSelectedRecordId = proofScoped
+    ? selectedAttestationRecordId
+      ?? (effectiveProofSelection?.receiptId ? `receipt:${effectiveProofSelection.receiptId}` : undefined)
+    : undefined;
   /*
    * One turn, one verdict — including its modifier.
    *
@@ -2316,9 +2470,16 @@ export function App() {
     ) return;
     vaultAdoptionBusy.current = true;
     void adoptReadyVaultRuntime(vaultSnapshot, vault.readyRuntime())
-      .catch((error) => setRuntimeStatus(error instanceof Error
-        ? `Local vault adoption failed: ${error.message}`
-        : "Local vault adoption failed safely"))
+      // Cleared on success so a later retry cannot leave a stale reason under
+      // an adoption that has since worked.
+      .then(() => setVaultAdoptionNotice(undefined))
+      .catch((error) => {
+        const message = error instanceof Error
+          ? `Local vault adoption failed: ${error.message}`
+          : "Local vault adoption failed safely";
+        setRuntimeStatus(message);
+        setVaultAdoptionNotice(message);
+      })
       .finally(() => { vaultAdoptionBusy.current = false; });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [preferences.vaultBackend, vaultSnapshot, catalog, activeProfile, gitClient]);
@@ -2343,10 +2504,28 @@ export function App() {
 
   useEffect(() => {
     if (attestationRecords.length === 0) return;
-    setAttestationNow(Date.now());
-    const timer = window.setInterval(() => setAttestationNow(Date.now()), 30_000);
+    const tick = () => {
+      const now = Date.now();
+      setAttestationNow(now);
+      if (!online || !chutesConnected || !attestationClient.current || !lastReceipt || !sessionId) return;
+      const record = attestationRecords.find((candidate) => attestationRecordMatchesReceipt(candidate, lastReceipt));
+      if (!record) return;
+      if (isDisplayFreshAttestation(record, now)) {
+        automaticEvidenceRefreshes.current.delete(record.recordId);
+        return;
+      }
+      if (automaticEvidenceRefreshes.current.has(record.recordId)) return;
+      automaticEvidenceRefreshes.current.add(record.recordId);
+      void enqueueAutomaticReceiptEvidence(lastReceipt, sessionId, profileId).catch(() => {
+        // The durable queue owns retries and its failure projection. Releasing
+        // this record here would enqueue the same expired observation every
+        // thirty seconds and turn a bounded retry into a polling storm.
+      });
+    };
+    tick();
+    const timer = window.setInterval(tick, 30_000);
     return () => window.clearInterval(timer);
-  }, [attestationRecords.length]);
+  }, [attestationRecords, chutesConnected, lastReceipt, online, profileId, sessionId]);
 
   useEffect(() => {
     const binding = endpointEvidenceAuthority.current?.current();
@@ -2923,6 +3102,31 @@ export function App() {
     };
   }, []);
 
+  /*
+   * The preference layer is its own layer, and it is never gated on a theme.
+   *
+   * Riding the profile-theme effect made a synchronous localStorage value wait
+   * on the end of a multi-await runtime boot, so a light-mode reader got the
+   * dark sheet — full-screen — for the entire boot window, and the boot screen
+   * rendered off whatever density and type ramp the stylesheet defaults to.
+   * `src/main.tsx` applies the same call before the first render so the first
+   * frame is already right; this keeps it true for every later change, whether
+   * or not a theme has resolved.
+   *
+   * Declared before the theme effect so the theme effect commits last: it is
+   * the one that re-asserts these same preferences over the theme's own
+   * presentation base, and running it second is what keeps the layering
+   * theme-under-preference rather than the reverse.
+   */
+  useEffect(() => {
+    if (activeTheme) return;
+    applyPreferenceOverrides(preferences);
+  }, [activeTheme, preferences]);
+
+  useEffect(() => {
+    savePreferenceOverrides(preferences);
+  }, [preferences]);
+
   useEffect(() => {
     if (!activeTheme) return;
     // Profile themes establish defaults; global Preferences are the final,
@@ -2930,7 +3134,6 @@ export function App() {
     // The mode is also an input to the theme, not just a layer over it: the
     // inline palette has to be diffed against the sheet the mode selects.
     applyThemeWithPreferences(activeTheme, preferences);
-    savePreferenceOverrides(preferences);
   }, [activeTheme, preferences]);
 
   useEffect(() => {
@@ -3501,6 +3704,32 @@ export function App() {
     }
   }
 
+  /**
+   * The only way the product asks for a profile switch.
+   *
+   * `changeProfile` restores the outgoing cockpit and names the reason for
+   * everything that fails inside its transaction, but the one refusal it raises
+   * *before* that boundary — a switch asked for while a session or inference
+   * route change is still in flight — is a throw, and every call site is
+   * `void`-invoked. That refusal was therefore an unhandled rejection: the
+   * switch did not happen, nothing was rolled back because nothing had been
+   * committed, and the user was told nothing at all. One wrapper that cannot
+   * reject, so no caller can drop a refusal on the floor and every refusal
+   * reaches the same status line as every other failed switch.
+   *
+   * `deleteProfile` deliberately still calls `changeProfile` directly: it has
+   * to distinguish "did not activate" from "activated", and it converts the
+   * refusal into its own error so archiving the active profile fails loudly.
+   */
+  async function requestProfileChange(nextId: string, force = false): Promise<boolean> {
+    try {
+      return await changeProfile(nextId, force);
+    } catch (error) {
+      setRuntimeStatus(`Profile switch failed: ${error instanceof Error ? error.message : String(error)}`);
+      return false;
+    }
+  }
+
   async function createConversation(title?: string) {
     if (
       busy
@@ -3651,6 +3880,13 @@ export function App() {
       }
       return;
     }
+    if (action.type === "skills.list") {
+      const pin = activeSessionRecord.manifest.profile;
+      appendLocalExchangeForAuthority(authority, source, pin
+        ? pinnedSkillListing({ pin, profile: commandProfile, catalogSkills: catalog?.skills ?? [] })
+        : "This conversation is not pinned to a Profile, so no skills compose its prompt.");
+      return;
+    }
     if (action.type === "models.list") {
       const query = action.query?.toLowerCase();
       const activeModels = activeChutesConnection
@@ -3738,17 +3974,21 @@ export function App() {
             : message));
         },
       };
-      const decision = await commandRuntime.tools.review(plan.toolName, plan.arguments, context, approvalPolicy);
-      const provenance = approvalProvenance(approvalPolicy, context);
+      /*
+       * `localCommandPolicy`, not `approvalPolicy`: the proposer of a slash
+       * command is the person at the keyboard, so it is adjudicated the way
+       * every other human-proposed effect is. Under Auto Approve this used to
+       * send the typed command body to a review model and honour an `unsafe`
+       * verdict as an outright denial — a model vetoing its own operator, with
+       * no human fallback on that branch. The registry seam is untouched: this
+       * call still mints the ticket that `executeApproved` below consumes.
+       */
+      const decision = await commandRuntime.tools.review(plan.toolName, plan.arguments, context, localCommandPolicy);
+      const provenance = approvalProvenance(localCommandPolicy, context);
       if (decision !== "allow") {
-        // "Only bounded metadata" was a stronger privacy claim than the
-        // redaction makes: the reviewer is withheld file-content payloads, but
-        // it is deliberately shown the action body — the script, command or URL
-        // — because without it there is nothing to judge. The claim is the half
-        // that was wrong, not the redaction.
-        const denied = activeApprovalMode === "auto-approve"
-          ? `Permission denied for local /${plan.command.name}. No tool effect ran; the safety review model received this action's parameters, including any script, command or URL, with file-content payloads withheld and values bounded.`
-          : `Permission denied for local /${plan.command.name}. No tool effect ran, and nothing was sent to the model.`;
+        // One sentence for all three modes now, because it is true in all
+        // three: no local command's parameters reach a model before it runs.
+        const denied = `Permission denied for local /${plan.command.name}. No tool effect ran, and nothing was sent to the model.`;
         await append([{ type: "local.command.denied", turnId, operationId, payload: { content: denied, toolName: plan.toolName, approval: provenance ?? null } }]);
         setMessages((current) => current.map((message) => message.id === assistantId
           ? { ...message, content: denied, status: undefined, error: true, history: { turnStatus: "completed", providerContext: "excluded" } }
@@ -3769,9 +4009,11 @@ export function App() {
           ? { ...message, content: boundedTranscriptContent(result.content), status: "Local result · excluded from model context", error: result.isError, history: { turnStatus: "completed", providerContext: "excluded" } }
           : message));
         await refreshWorkspacePresentation(commandRuntime, commandProfileId);
-        setRuntimeStatus(activeApprovalMode === "auto-approve"
-          ? "Local command complete after a separate safety review of its parameters"
-          : "Local command complete; no model request made");
+        // No longer mode-dependent: a local command makes no provider request
+        // under any approval mode, so the line that used to name a "separate
+        // safety review" under Auto Approve would now be describing a request
+        // that does not happen.
+        setRuntimeStatus("Local command complete; no model request made");
       }
     } catch (error) {
       const cancelled = controller.signal.aborted;
@@ -4225,7 +4467,9 @@ export function App() {
       /*
        * Then ask the model for a real name, off the turn's critical path. This
        * is not awaited: the answer arrives when it arrives, the turn never
-       * waits on it, and a failed or unusable answer leaves the heuristic.
+       * waits on it, and a failed or unusable answer leaves the heuristic in
+       * place — but an unusable answer is still recorded, because the request
+       * that produced it was still made.
        */
       const namingTurnId = `naming-${randomUuid()}`;
       const namingOperationId = `naming-request-${randomUuid()}`;
@@ -4237,14 +4481,19 @@ export function App() {
       )
         .then(async (named) => {
           if (!named) return;
-          if (activeSessionIdentity.current !== turnSessionId) return;
           /*
            * The record lands before the rename, and lands even when the model's
-           * answer matches the heuristic: a request that was made and paid for
-           * is a fact about this conversation whether or not it changed the
-           * title. The usage rides in its own `inference.usage` event so that
-           * every provider request this session caused is counted the same way,
-           * and the naming event carries the receipt that proves it happened.
+           * answer matches the heuristic, and even when the answer is no name at
+           * all: a request that was made and paid for is a fact about this
+           * conversation whether or not it changed the title. The usage rides in
+           * its own `inference.usage` event so that every provider request this
+           * session caused is counted the same way, and the naming event carries
+           * the receipt that proves it happened.
+           *
+           * It is also written whether or not the user is still looking at this
+           * conversation. The append is addressed by session id, so leaving the
+           * thread cannot be what decides whether a charge is recorded; only the
+           * counter and the rename below are gated on still being here.
            */
           try {
             await turnRuntime.journal.append(turnSessionId, [
@@ -4253,7 +4502,10 @@ export function App() {
                 turnId: namingTurnId,
                 operationId: namingOperationId,
                 payload: {
-                  title: named.title,
+                  // Absent when the answer was a refusal or an essay: the record
+                  // then states what came back and that no name was adopted,
+                  // rather than inventing one or vanishing.
+                  ...(named.title ? { title: named.title } : {}),
                   answer: named.answer,
                   model: turnRuntime.model,
                   ...(named.receipt ? { receipt: named.receipt as unknown as JsonValue } : {}),
@@ -4270,13 +4522,23 @@ export function App() {
                 },
               }] : []),
             ]);
-            setEventCount((count) => count + (named.usage ? 2 : 1));
+            if (activeSessionIdentity.current === turnSessionId) {
+              setEventCount((count) => count + (named.usage ? 2 : 1));
+            }
+            // Committed, so it can be shown. Bounded because this survives
+            // conversation switches for the life of the page.
+            const committed = named.receipt;
+            if (committed) setAncillaryReceipts((current) => [...current, committed].slice(-32));
           } catch {
             // Presentational titling must not be able to fail a turn, and a
             // journal that refuses the record has already failed louder
             // elsewhere; the heuristic title stands either way.
           }
-          if (named.title === conversationTitleFromPrompt(content)) return;
+          if (activeSessionIdentity.current !== turnSessionId) return;
+          // No usable name, or the same name the heuristic already applied:
+          // either way there is nothing left to rename, and the record above
+          // already accounts for the request.
+          if (!named.title || named.title === conversationTitleFromPrompt(content)) return;
           await applyTitle(named.title);
         })
         .catch(() => undefined);
@@ -4660,6 +4922,15 @@ export function App() {
    * Callers that announce an outcome need the outcome, and the two failures are
    * not the same thing: `missing` is about the file, `superseded` is about this
    * request losing its runtime or profile and is nobody's business to report.
+   *
+   * A failed open closes nothing it did not open. Blanking the selection on any
+   * unresolved path made the callers' own words false — `openMemorySource` says
+   * "No document was opened" while the document you were reading vanished from
+   * under you — and destroyed editor state to report a failure about a
+   * different file. The one path that must still be dropped is the open one:
+   * if the document on screen is the path that just failed to resolve, it no
+   * longer has a file behind it, and leaving it up would present deleted
+   * content as live and let a save silently recreate the file.
    */
   async function openFile(path: string): Promise<"opened" | "missing" | "superseded"> {
     const request = ++workspaceOpenRequest.current;
@@ -4674,7 +4945,10 @@ export function App() {
       || !ownerProfileId
       || activeProfileRef.current?.profileId !== ownerProfileId
     ) return "superseded";
-    setSelectedFileSelection(file ? Object.freeze({ profileId: ownerProfileId, file }) : undefined);
+    // Through the updater rather than the captured render value: the read above
+    // is awaited, so a selection set while it was in flight is the one this
+    // decision has to be made against.
+    setSelectedFileSelection((current) => nextEditorSelection(current, { path, ownerProfileId, file }));
     return file ? "opened" : "missing";
   }
 
@@ -4703,21 +4977,8 @@ export function App() {
   }
 
   async function inspectExecutionCapabilities(): Promise<readonly ExecutionCapability[]> {
-    const active = runtime.current;
-    if (!active || !sessionId) throw new Error("The active browser runtime is not ready.");
-    const tool = active.tools.get("inspect_execution_runtimes");
-    if (!tool || tool.definition.effect !== "read") throw new Error("Runtime inspection is not installed in this agent profile.");
-    const controller = new AbortController();
-    const result = await tool.execute({}, {
-      sessionId,
-      turnId: `human-capabilities-${randomUuid()}`,
-      operationId: `runtime-inspect-${randomUuid()}`,
-      signal: controller.signal,
-    });
-    if (result.isError) throw new Error(result.content || "Runtime inspection failed safely.");
-    const parsed = JSON.parse(result.content) as unknown;
-    if (!Array.isArray(parsed)) throw new Error("Runtime inspection returned an invalid capability list.");
-    return Object.freeze(parsed as ExecutionCapability[]);
+    const { inspectBrowserExecutionCapabilities } = await import("../execution/execution-runtime-pack");
+    return inspectBrowserExecutionCapabilities();
   }
 
   async function inspectBrowserCapabilities(): Promise<BrowserRuntimeCapabilityReport> {
@@ -5513,6 +5774,9 @@ export function App() {
     vaultProviderSwitchingRef.current = true;
     setVaultProviderSwitching(true);
     setVaultSetupOpen(false);
+    // The previous destination's adoption failure says nothing about the one
+    // being selected, and the row it prints under is about to describe that one.
+    setVaultAdoptionNotice(undefined);
     setRuntimeStatus("Safely releasing the current vault provider");
     try {
       await transitionVaultProvider({
@@ -7114,18 +7378,60 @@ export function App() {
   }
 
   async function setProfileSkill(profileIdToEdit: string, skillId: string, mode: SkillMode) {
-    await mutateProfileCatalog(async (current) => {
-      const profile = current.profiles.find((candidate) => candidate.profileId === profileIdToEdit);
-      if (!profile) throw new Error("The selected profile no longer exists.");
-      const revision = await createProfileRevision({
-        ...profile,
-        parentRevision: profile.revision,
-        skillModes: { ...profile.skillModes, [skillId]: mode },
-        createdAt: new Date().toISOString(),
+    const editingActiveProfile = profileIdToEdit === profileId;
+    const active = runtime.current;
+    if (editingActiveProfile && (
+      busy
+      || !active
+      || !activeSessionRecord
+      || inferenceRouteChanging.current
+      || sessionNavigationChanging.current
+    )) {
+      throw new Error("Stop the active turn and wait for model or storage changes before changing this Profile's skill policy.");
+    }
+    if (editingActiveProfile) sessionNavigationChanging.current = true;
+    try {
+      let revisedProfile: ProfileRevision | undefined;
+      const committed = await mutateProfileCatalog(async (current) => {
+        const profile = current.profiles.find((candidate) => candidate.profileId === profileIdToEdit);
+        if (!profile) throw new Error("The selected profile no longer exists.");
+        revisedProfile = await createProfileRevision({
+          ...profile,
+          parentRevision: profile.revision,
+          skillModes: { ...profile.skillModes, [skillId]: mode },
+          createdAt: new Date().toISOString(),
+        });
+        return replaceProfile(current, revisedProfile);
       });
-      return replaceProfile(current, revision);
-    });
-    setRuntimeStatus("Profile skill policy revised; existing sessions remain pinned");
+      if (!revisedProfile) throw new Error("The skill-policy Profile revision was not created.");
+      if (!editingActiveProfile) {
+        setRuntimeStatus(`${revisedProfile.name} skill policy revised · its next switch starts a new pinned conversation · the current conversation remains in All Conversations`);
+        return;
+      }
+      const nextSession = await createProfileSession(
+        active!,
+        revisedProfile,
+        committed.catalog,
+        `${activeSessionRecord!.title} · skills revised`.slice(0, 240),
+      );
+      if (runtime.current !== active) throw new Error("The runtime changed before the skill policy could become active.");
+      const activated = await activateSession(nextSession);
+      setMessages([{
+        ...welcomeMessage,
+        id: randomUuid(),
+        content: `Skill policy changed in this new pinned conversation for ${revisedProfile.name}. The previous conversation remains unchanged and addressable from its URL and All Conversations.`,
+      }]);
+      setEventCount(activated.headSequence);
+      setLastReceipt(undefined);
+      setSessionLifecycle(READY_SESSION_LIFECYCLE);
+      setTranscriptBoundary(undefined);
+      setSessionRevision((value) => value + 1);
+      setComposerNotice(undefined);
+      setRuntimeStatus(`${revisedProfile.name} skill policy active · new pinned conversation`);
+      navigate("chat", chatHash(nextSession.id));
+    } finally {
+      if (editingActiveProfile) sessionNavigationChanging.current = false;
+    }
   }
 
   async function loadBillingSnapshot(signal: AbortSignal) {
@@ -7507,7 +7813,7 @@ export function App() {
             (398px, the fourth truncated) and the phone-only `.mobile-trust-chip`
             were two components rendering one fact at two sizes; the sheet they
             both open still renders all four axes verbatim. */}
-        <div class="topbar-center" aria-label="Runtime state">
+        <div class="topbar-center" role="group" aria-label="Runtime state">
           <TopbarPostureChip axes={trustAxes} onOpen={() => setTrustSheetOpen(true)} />
         </div>
         <div class="topbar-actions">
@@ -7529,7 +7835,7 @@ export function App() {
             disabled={busy}
             options={managedProfiles(catalog).map((profile) => ({ value: profile.profileId, label: profile.name }))}
             leading={(option) => <span class="profile-monogram" aria-hidden="true">{profileMonogram(option.label)}</span>}
-            onChange={(nextId) => void changeProfile(nextId).catch((error) => setRuntimeStatus(`Profile switch failed: ${error instanceof Error ? error.message : String(error)}`))}
+            onChange={(nextId) => void requestProfileChange(nextId)}
           />
           <span class="runtime-line" title={runtimeStatus}><span class="pulse-dot" /><span class="runtime-line__text">{runtimeStatus}</span></span>
           <span class="sr-only" role="status" aria-live="polite">{runtimeStatus}</span>
@@ -7562,7 +7868,7 @@ export function App() {
         onNavigate={(next) => navigatePrimary(next)}
         onManageProfiles={() => { openProfileManager(profileId); }}
         onNewConversation={() => void createConversation()}
-        onChangeProfile={(nextId) => void changeProfile(nextId).catch((error) => setRuntimeStatus(`Profile switch failed: ${error instanceof Error ? error.message : String(error)}`))}
+        onChangeProfile={(nextId) => void requestProfileChange(nextId)}
         onToggleState={toggleRailState}
         onInteractionError={setRuntimeStatus}
       />
@@ -7587,6 +7893,15 @@ export function App() {
                 title={activeSessionRecord?.title ?? activeProfile.name}
                 profileName={activeProfile.name}
                 monogram={profileMonogram(activeProfile.name)}
+                pinnedSkills={activeSessionRecord?.manifest.profile ? {
+                  skillSetDigest: activeSessionRecord.manifest.profile.skillSetDigest,
+                  skills: activeSessionRecord.manifest.profile.resolvedSkills.map((resolved) => ({
+                    skillId: resolved.skillId,
+                    digest: resolved.digest,
+                    name: catalog.skills.find((candidate) => candidate.skillId === resolved.skillId && candidate.digest === resolved.digest)?.name
+                      ?? resolved.skillId,
+                  })),
+                } : undefined}
                 statusFacts={sessionStatusFacts}
                 durabilityLabel={durabilityLabel(sessionDurability.state)}
                 journal={{
@@ -7713,7 +8028,7 @@ export function App() {
                     key={entry.key}
                     ref={(element) => windowedTranscript.observeElement(entry.key, entry.revision, element)}
                   >
-                    {entry.item.marker ? <TranscriptMarker marker={entry.item.marker} /> : <MessageCard
+                    {entry.item.marker ? <TranscriptMarker marker={entry.item.marker} onOpenProof={openReceiptProof} /> : <MessageCard
                       message={entry.item}
                       capabilityTier={activeSessionRecord?.manifest.capabilityTier}
                       onProof={() => entry.item.receipt && openReceiptProof(entry.item.receipt)}
@@ -7820,7 +8135,7 @@ export function App() {
                     </div>
                   ) : null}
                   {messageQueue.length ? (
-                    <div class="composer-queue" aria-label="Queued messages" aria-live="polite">
+                    <div class="composer-queue" role="group" aria-label="Queued messages" aria-live="polite">
                       <header>
                         <strong>Up next</strong>
                         {/* A paused queue that looks identical to a running one
@@ -7842,7 +8157,7 @@ export function App() {
                       ))}
                     </div>
                   ) : null}
-                  {attachments.length ? <div class="composer-attachments" aria-label="Pending attachments">
+                  {attachments.length ? <div class="composer-attachments" role="group" aria-label="Pending attachments">
                     {attachments.map((attachment) => <span key={attachment.id}>{attachment.previewUrl ? <img src={attachment.previewUrl} alt="" /> : <Icon name="file" size={14} />}<span>{attachment.name}</span><small>{imageInputCapability === "supported" ? "encrypted vision ready" : "vision model required"}</small><button type="button" aria-label={`Remove ${attachment.name}`} onClick={() => { if (attachment.previewUrl) { URL.revokeObjectURL(attachment.previewUrl); attachmentPreviewUrls.current.delete(attachment.previewUrl); } setAttachments((current) => current.filter((item) => item.id !== attachment.id)); }}>×</button></span>)}
                   </div> : null}
                   <div class="composer-input-row">
@@ -7859,7 +8174,14 @@ export function App() {
                       value={input}
                       placeholder={composerPlaceholder(narrowComposer)}
                       title={COMPOSER_PLACEHOLDER_TITLE}
-                      onInput={(event) => setInput(event.currentTarget.value)}
+                      onInput={(event) => {
+                        // Size against the DOM value before React schedules its
+                        // controlled-state reconciliation. The layout effect
+                        // remains the second path for restored drafts and other
+                        // programmatic value changes that emit no input event.
+                        fitComposerTextarea(event.currentTarget);
+                        setInput(event.currentTarget.value);
+                      }}
                       onPaste={(event) => {
                         const pasted = Array.from(event.clipboardData?.files ?? []);
                         if (pasted.length) addComposerFiles(pasted);
@@ -8103,7 +8425,11 @@ export function App() {
             catalog={catalog}
             catalogDurability={runtime.current?.profiles.durability ?? "ephemeral"}
             activeProfileId={profileId}
-            onActivate={async (id) => { await changeProfile(id, true); navigate("chat"); }}
+            /* Only a switch that actually committed opens Chat. A refused one
+               used to throw past this line, which is what kept the editor on
+               screen; now that the refusal is reported instead of thrown, the
+               boolean is what has to hold the editor open. */
+            onActivate={async (id) => { if (await requestProfileChange(id, true)) navigate("chat"); }}
             onSave={saveProfileRevision}
             onFork={forkProfile}
             onDelete={deleteProfile}
@@ -8113,7 +8439,7 @@ export function App() {
           />
         ) : null}
         {view === "capabilities" ? CapabilitiesScreen ? (
-          <CapabilitiesScreen inspect={inspectExecutionCapabilities} inspectBrowser={inspectBrowserCapabilities} subscribeBrowser={subscribeBrowserCapabilities} onCommand={openCapabilityCommand} onOpenSkills={() => navigate("skills")} />
+          <CapabilitiesScreen inspect={inspectExecutionCapabilities} inspectBrowser={inspectBrowserCapabilities} inspectExtension={observeExtensionBridge} subscribeBrowser={subscribeBrowserCapabilities} onCommand={openCapabilityCommand} onOpenSkills={() => navigate("skills")} />
         ) : capabilitiesViewError ? <section class="work-view panel" role="alert"><h1>Capabilities</h1><p>{capabilitiesViewError}</p></section> : <RouteSkeleton label="Inspecting browser capabilities" /> : null}
         {view === "skills" ? (
           <SkillsManagerView
@@ -8122,7 +8448,7 @@ export function App() {
             activeProfileId={profileId}
             onSetGlobal={setGlobalSkill}
             onSetProfile={setProfileSkill}
-            onApply={async (id) => { await changeProfile(id, true); navigate("chat"); }}
+            onApply={async (id) => { if (await requestProfileChange(id, true)) navigate("chat"); }}
             scope={profileHubScope}
           />
         ) : null}
@@ -8131,6 +8457,7 @@ export function App() {
             {VaultScreen ? <VaultScreen
               snapshot={vaultSnapshot}
               runtimeAdopted={vaultRuntimeAdopted}
+              adoptionNotice={vaultAdoptionNotice}
               contextMode={runtime.current?.contextMode}
               contextPublishing={vaultContextPublishing}
               contextPublicationMessage={vaultContextPublicationMessage}
@@ -8222,7 +8549,7 @@ export function App() {
             evidenceLedger={AttestationsScreen ? <AttestationsScreen
               endpointRecords={proofEndpointRecords}
               receipts={proofLedgerReceipts}
-              selectedRecordId={proofScoped ? selectedAttestationRecordId : undefined}
+              selectedRecordId={ledgerSelectedRecordId}
               onSelectRecord={selectEndpointEvidenceRecord}
               acquisitionNotice={!proofScoped
                 ? PROOF_UNSCOPED_EVIDENCE_NOTICE
@@ -8277,6 +8604,7 @@ export function App() {
               readCredential: readPendingOAuthCredential,
               getBearerToken: currentOAuthBearer,
             }}
+            observeExtensionBridge={observeExtensionBridge}
             connectedProviderIds={connectedInferenceProviderIds}
             onCheckLocalProviders={checkLocalModelServers}
             additionalProviders={ProviderConnectionsScreen ? (
@@ -8313,14 +8641,19 @@ export function App() {
           void changeVaultProvider(next.vaultBackend);
         }
         else setPreferences(next);
-      }} onClose={() => setPreferencesOpen(false)} vaultProviderSwitching={vaultProviderSwitching} profileApproval={{
+      }} onClose={() => setPreferencesOpen(false)} vaultProviderSwitching={vaultProviderSwitching} vaultAdopted={vaultRuntimeAdopted} profileApproval={{
         mode: activeApprovalMode,
         onManage: () => {
           if (openProfileManager(profileId)) setPreferencesOpen(false);
         },
       }} />
       <TrustPostureSheet open={trustSheetOpen} axes={trustAxes} onClose={() => setTrustSheetOpen(false)} onNavigate={navigatePrimary} />
-      <PwaUpdateBanner updateReady={pwaUpdate.updateReady} onReload={pwaUpdate.reload} />
+      {/*
+        The reload the person just pressed is not the departure the guard
+        exists for. Released synchronously, because `reload()` navigates in this
+        same tick and no re-render could unregister the listener in time.
+      */}
+      <PwaUpdateBanner updateReady={pwaUpdate.updateReady} onReload={() => { releaseUnloadGuard(); pwaUpdate.reload(); }} />
       {profileCockpitTransition ? (
         <div class="platform-scrim profile-cockpit-transition" data-target-profile={profileCockpitTransition.profileId}>
           <section role="status" aria-live="assertive" aria-atomic="true">
@@ -9210,10 +9543,26 @@ function conversationTitleFromPrompt(prompt: string): string {
 const CONVERSATION_NAMING_PROMPT =
   "You name conversations. Reply with a title of at most six words for the message that follows. "
   + "Describe what it is about. No quotation marks, no trailing punctuation, no preamble.";
+/**
+ * How much of a naming answer is kept, well under `session-audit`'s 4 KiB bound.
+ *
+ * A title is at most 64 characters; anything past this is already an essay the
+ * record exists only to account for. Keeping the whole of an unbounded stream
+ * would let one bad answer make the naming record permanently unauditable.
+ */
+const MAX_CONVERSATION_NAMING_ANSWER = 1_024;
 
 /** What the naming inference produced, including what it cost and what proves it. */
 type ConversationNaming = Readonly<{
-  title: string;
+  /**
+   * Absent when the request completed but its answer is not a usable name.
+   *
+   * That outcome is a *result*, not a failure: the request was made, billed and
+   * attested, and only the rename is skipped. Collapsing it into `undefined`
+   * alongside a network failure is what left a completed paid call recorded
+   * nowhere — the same defect one layer down from the one this whole path fixes.
+   */
+  title?: string;
   /** The provider's exact answer, so the receipt's response digest is checkable. */
   answer: string;
   usage?: Readonly<{ inputTokens?: number; outputTokens?: number }>;
@@ -9232,14 +9581,21 @@ type ConversationNaming = Readonly<{
  * ever improves that title, and any failure, abort, or unusable answer leaves
  * the heuristic in place. Returning `undefined` is an ordinary outcome.
  *
+ * `undefined` means "no request is known to have happened" — it threw, it was
+ * aborted, or the stream produced nothing at all. It does not mean "no title":
+ * a request that came back with a refusal or an essay returns a record with no
+ * `title`, because it was billed either way and the caller has to say so.
+ *
  * It is issued against the conversation's own identity. It used to invent a
  * `naming-<uuid>` session id, which meant the one thing a receipt exists to do
  * — bind a request to the conversation that made it — was impossible, and the
  * usage and receipt the transport handed back were dropped on the floor. The
  * caller journals them; this returns them.
  */
-async function conversationTitleFromModel(
-  runtime: Runtime,
+export async function conversationTitleFromModel(
+  // Only the two fields it actually uses, so this can be exercised against a
+  // transport alone rather than against a whole storage/journal/profile runtime.
+  runtime: Pick<Runtime, "transport" | "model">,
   prompt: string,
   identity: Readonly<{ sessionId: string; turnId: string; operationId: string }>,
   signal: AbortSignal,
@@ -9260,16 +9616,23 @@ async function conversationTitleFromModel(
     let usage: ConversationNaming["usage"];
     let receipt: ConversationReceipt | undefined;
     for await (const event of events) {
-      if (event.type === "text-delta") text += event.text;
+      // Clamped as it accumulates, not after: a single delta can be arbitrarily
+      // large, the audit bounds a naming record's answer at 4 KiB, and the
+      // response digest below is taken over exactly this string — so what the
+      // journal stores stays recomputable from the journal rather than from a
+      // longer answer nobody kept. The stream is abandoned here anyway.
+      if (event.type === "text-delta") text = `${text}${event.text}`.slice(0, MAX_CONVERSATION_NAMING_ANSWER);
       if (event.type === "usage") usage = { inputTokens: event.inputTokens, outputTokens: event.outputTokens };
       if (event.type === "completed") receipt = event.receipt;
       // A naming call that starts producing an essay is not naming anything.
       if (text.length > 240 || event.type === "completed") break;
     }
+    // Nothing observable came back, so there is no request to attest to. Any
+    // one of these three is evidence the provider was reached and charged.
+    if (!text && !usage && !receipt) return undefined;
     const title = usableConversationTitle(text);
-    if (!title) return undefined;
     return Object.freeze({
-      title,
+      ...(title ? { title } : {}),
       answer: text,
       ...(usage && (usage.inputTokens !== undefined || usage.outputTokens !== undefined) ? { usage } : {}),
       // Normalized exactly as a turn receipt is, and bound to the request that
@@ -9341,6 +9704,58 @@ function BootScreen({ status }: { status: string }) {
       <p role="status" aria-live="polite">{status}</p>
     </main>
   );
+}
+
+/**
+ * A digest short enough to read in a monospace transcript line and long enough
+ * to compare against the one the Skills route and the session manifest print.
+ */
+function slashDigest(value: string): string {
+  return value.length <= 22 ? value : `${value.slice(0, 14)}…${value.slice(-7)}`;
+}
+
+/**
+ * What `/skills` prints: the set pinned into the open conversation.
+ *
+ * The pin, never the catalog's current state. A skill enabled or edited after
+ * this conversation was opened belongs to the next one — the pin is what
+ * composed the immutable system prompt this transcript was answered against,
+ * and printing today's catalog would describe a conversation that does not
+ * exist. The catalog is consulted for display names only.
+ *
+ * The source column comes from the Profile's `skillModes`, which is a property
+ * of a *revision*. If the active revision has moved past the pinned one those
+ * modes are no longer this conversation's answer, so the row names the pinned
+ * revision instead of guessing global-versus-override from a later one.
+ */
+export function pinnedSkillListing(input: Readonly<{
+  pin: Readonly<{
+    profileRevision: string;
+    skillSetDigest: string;
+    resolvedSkills: readonly Readonly<{ skillId: string; digest: string; promptOrder: number }>[];
+  }>;
+  profile: Readonly<{ name: string; revision: string; skillModes: Readonly<Record<string, SkillMode>> }>;
+  catalogSkills: readonly Readonly<{ skillId: string; name: string }>[];
+}>): string {
+  const { pin, profile } = input;
+  const modesArePinned = profile.revision === pin.profileRevision;
+  const rows = [...pin.resolvedSkills]
+    .sort((left, right) => left.promptOrder - right.promptOrder || left.skillId.localeCompare(right.skillId))
+    .map((resolved) => {
+      const named = input.catalogSkills.find((candidate) => candidate.skillId === resolved.skillId);
+      const mode = modesArePinned ? profile.skillModes[resolved.skillId] ?? "inherit" : undefined;
+      const origin = mode === undefined
+        ? `pinned at ${profile.name} revision ${slashDigest(pin.profileRevision)}`
+        : mode === "inherit" ? "global" : `${profile.name} override`;
+      return `• ${named?.name ?? resolved.skillId} · ${origin} · ${slashDigest(resolved.digest)}`;
+    });
+  return [
+    rows.length
+      ? `${rows.length} skill${rows.length === 1 ? "" : "s"} compose this conversation's prompt · set ${slashDigest(pin.skillSetDigest)}`
+      : `No skill composes this conversation's prompt · set ${slashDigest(pin.skillSetDigest)}`,
+    ...rows,
+    "Manage them in Skills. A change applies to the next conversation, never this one.",
+  ].join("\n");
 }
 
 function receiptSealState(receipt?: ConversationReceipt): SealState {
@@ -9729,7 +10144,7 @@ function MessageCard({
           {message.status ? <span class="message-status"><span class="pulse-dot" />{message.status}</span> : null}
         </div>
         {message.parts?.length ? (
-          <MessagePartsView parts={message.parts} />
+          <MessagePartsView parts={message.parts} live={message.status !== undefined} />
         ) : <p>{message.content || " "}</p>}
         <StreamingMessageSlot store={streamStore} messageId={message.id} active={message.status !== undefined} />
         {message.liveToolOutput ? (
@@ -9739,7 +10154,7 @@ function MessageCard({
           </section>
         ) : null}
         {message.history ? (
-          <div class="message-history" aria-label="Durable turn disposition">
+          <div class="message-history" role="group" aria-label="Durable turn disposition">
             <span class={message.history.turnStatus}>{message.history.turnStatus} turn</span>
             <span class={message.history.providerContext}>
               {message.history.providerContext === "included" ? "In provider context" : "Excluded from provider context"}
@@ -9788,7 +10203,7 @@ function MessageCard({
             {message.role === "assistant" && message.originatingPrompt ? (
               <button
                 type="button"
-                title="Regenerate in a clean fork. The prior answer remains inspectable only in the source conversation."
+                title="Regenerate in a bounded-context fork. The prior answer remains inspectable in the source conversation and its sealed ancestor context is carried into the branch."
                 onClick={onRetry}
                 disabled={branchDisabled}
               >Retry</button>
@@ -9808,14 +10223,14 @@ function MessageCard({
           </div>
         </div>
         <details class="message-actions-touch">
-          <summary role="button" aria-label="Message actions">•••</summary>
-          <div role="menu" aria-label="Message actions">
-            <button role="menuitem" type="button" onClick={onCopy}>Copy</button>
+          <summary aria-label="Message actions">•••</summary>
+          <div role="group" aria-label="Message actions">
+            <button type="button" onClick={onCopy}>Copy</button>
             {message.role === "assistant" && message.originatingPrompt ? (
-              <button role="menuitem" type="button" onClick={onRetry} disabled={branchDisabled}>Retry</button>
+              <button type="button" onClick={onRetry} disabled={branchDisabled}>Retry</button>
             ) : null}
-            {message.role === "user" ? <button role="menuitem" type="button" onClick={onEdit} disabled={branchDisabled}>Edit &amp; branch</button> : null}
-            <button role="menuitem" type="button" onClick={onBranch} disabled={branchDisabled}><Icon name="branch" size={14} /> Fork from here</button>
+            {message.role === "user" ? <button type="button" onClick={onEdit} disabled={branchDisabled}>Edit &amp; branch</button> : null}
+            <button type="button" onClick={onBranch} disabled={branchDisabled}><Icon name="branch" size={14} /> Fork from here</button>
           </div>
         </details>
       </div>
@@ -10120,13 +10535,22 @@ function SkillsManagerView({
     }
   }
 
+  async function applyProfile(): Promise<void> {
+    setStatus(undefined);
+    try {
+      await onApply(profile.profileId);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error));
+    }
+  }
+
   return (
     <section class="work-view">
       <RouteBar routeId="skills" title="Skills" eyebrow="Resolved instruction modules" description={scope === "global" ? "Set global skill defaults. Enabled instructions are pinned into the next conversation manifest." : `Set inherit/on/off overrides for ${profile.name}. Existing conversations remain pinned.`} />
       <div class="skills-toolbar panel">
         {scope === "global" ? <div class="skill-select-field"><span>Preview resolution for</span><MenuSelect placement="down" ariaLabel="Preview profile resolution" value={profile.profileId} options={profiles.map((candidate) => ({ value: candidate.profileId, label: candidate.name }))} onChange={setSelectedProfileId} /></div> : <div><span class="eyebrow">Profile scope</span><strong>{profile.name}</strong></div>}
         <div><span class="eyebrow">Effective set</span><strong>{effectiveSkillIds(profile, catalog).length} of {catalog.skills.length}</strong></div>
-        <button class="small-button" type="button" onClick={() => void onApply(profile.profileId)}>Switch to this profile</button>
+        <button class="small-button" type="button" onClick={() => void applyProfile()}>Apply {profile.name} in a new conversation</button>
       </div>
       <div class="skill-grid">
         {catalog.skills.map((skill) => {
@@ -10138,7 +10562,7 @@ function SkillsManagerView({
               <header><span class="skill-glyph"><Icon name="skills" /></span><div><h2>{skill.name}</h2><code>{skill.skillId}</code></div><span class={enabled ? "skill-state on" : "skill-state"}>{enabled ? "resolved on" : "resolved off"}</span></header>
               <p>{skill.description}</p>
               <div class="skill-controls">
-                {scope === "global" ? <button class={globalEnabled ? "toggle-control on" : "toggle-control"} role="switch" aria-checked={globalEnabled} type="button" onClick={() => void updateGlobal(skill.skillId, !globalEnabled)}><span /> Global default</button> : <div class="skill-select-field"><span>{profile.name}</span><MenuSelect placement="down" ariaLabel={`${profile.name} mode for ${skill.name}`} value={mode} options={[{ value: "inherit", label: "Inherit global" }, { value: "on", label: "Always on" }, { value: "off", label: "Always off" }]} onChange={(next) => void updateProfileSkill(skill.skillId, next as SkillMode)} /></div>}
+                {scope === "global" ? <button class={globalEnabled ? "toggle-control on" : "toggle-control"} role="switch" aria-label={`Global default for ${skill.name}`} aria-checked={globalEnabled} type="button" onClick={() => void updateGlobal(skill.skillId, !globalEnabled)}><span /> Global default</button> : <div class="skill-select-field"><span>{profile.name}</span><MenuSelect placement="down" ariaLabel={`${profile.name} mode for ${skill.name}`} value={mode} options={[{ value: "inherit", label: "Inherit global" }, { value: "on", label: "Always on" }, { value: "off", label: "Always off" }]} onChange={(next) => void updateProfileSkill(skill.skillId, next as SkillMode)} /></div>}
               </div>
               <details class="skill-details"><summary>Instruction boundary</summary><footer><span>{skill.requiredTools.length ? `References ${skill.requiredTools.join(" · ")}` : "Instruction-only"}<br />Tools remain approval-gated.</span><code>{skill.digest.slice(-9)}</code></footer></details>
             </article>

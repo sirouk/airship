@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { createSessionManifest, materializeMessages } from "../core/agent";
-import type { CanonicalMessage, JsonValue, SessionManifest, ToolDefinition } from "../core/contracts";
+import { CONVERSATION_NAMED_EVENT_TYPE, type CanonicalMessage, type JsonValue, type SessionManifest, type ToolDefinition } from "../core/contracts";
 import { FORK_CONTEXT_EVENT_TYPE, canonicalForkContextSeed } from "../core/fork-context";
 import { sha256, stableStringify } from "../core/hash";
 import { EventJournal, type SessionRecord } from "../core/journal";
@@ -16,7 +16,7 @@ import {
   querySessionRecords,
   type ActiveSessionRuntime,
 } from "./domain";
-import { SessionForkConflictError, SessionLibrary, UnknownSessionError } from "./library";
+import { PREFERENCE_TAIL_DEPTH, SessionForkConflictError, SessionLibrary, UnknownSessionError } from "./library";
 import { SessionsView } from "../ui/sessions-view";
 
 const DIGEST = `sha256:${"A".repeat(43)}`;
@@ -48,6 +48,46 @@ describe("browser-native session domain", () => {
     expect(filtered.total).toBe(1);
     expect(filtered.items[0]?.id).toBe("s-3");
     expect(Object.isFrozen(filtered)).toBe(true);
+  });
+
+  /*
+   * A branch summary must carry where it was cut, not only what it was cut
+   * from.
+   *
+   * The summary shipped with `sourceSessionId` alone, so the downward
+   * "Alternates" list on the Sessions detail pane could name three branches
+   * and not say whether they were three answers to one turn or three
+   * different questions. The fork boundary is part of the same manifest
+   * commitment as the parent id, so it is validated on the same terms the
+   * session audit uses (FORK_LINEAGE_INVALID: a positive journal sequence) and
+   * a row that fails is counted as rejected rather than printed with a fork
+   * point no audit would agree with.
+   */
+  it("carries the fork boundary on branch summaries and rejects a lineage that has none", async () => {
+    const forkedAt = "2026-07-18T04:00:00.000Z";
+    const branchManifest = async (sourceHeadSequence: number) => {
+      const base = await manifest({ now: forkedAt });
+      return {
+        ...base,
+        lineage: { version: 1, kind: "fork", sourceSessionId: "s-source", sourceHeadSequence, sourceHeadDigest: DIGEST, forkedAt },
+      } as SessionManifest;
+    };
+    const records = [
+      record("s-source", "Original question", await manifest(), "2026-07-18T01:00:00.000Z"),
+      record("s-retry-a", "First alternative", await branchManifest(12), "2026-07-18T02:00:00.000Z"),
+      record("s-retry-b", "Second alternative", await branchManifest(30), "2026-07-18T03:00:00.000Z"),
+      // A fork point of 0 is not a fork point: the genesis boundary has no
+      // audited prefix to have branched at.
+      record("s-broken", "Malformed lineage", await branchManifest(0), "2026-07-18T04:00:00.000Z"),
+    ];
+
+    const page = querySessionRecords(records, { sort: "updated-desc" });
+    expect(page.items.map((item) => [item.id, item.sourceSessionId, item.sourceHeadSequence])).toEqual([
+      ["s-retry-b", "s-source", 30],
+      ["s-retry-a", "s-source", 12],
+      ["s-source", undefined, undefined],
+    ]);
+    expect(page.rejected).toBe(1);
   });
 
   /*
@@ -112,6 +152,64 @@ describe("browser-native session domain", () => {
     expect(transcript.omittedMessages).toBe(2);
     expect(transcript.truncated).toBe(true);
     expect(Object.isFrozen(transcript.messages)).toBe(true);
+  });
+
+  /*
+   * The naming call is a second billed provider request, and this materializer
+   * is the only path by which a reloaded journal's receipts reach Proof. Its
+   * receipt was being minted, validated and journaled, and then recovered by
+   * nothing — a receipt no surface can resolve proves nothing at all.
+   */
+  it("recovers the naming inference's receipt into the chain without giving it a transcript row", async () => {
+    const fixture = createJournal();
+    const session = await fixture.journal.createSession("Named", await manifest());
+    const namingReceipt = createLocalReceipt({
+      sessionId: session.id,
+      turnId: "naming-turn-1",
+      provider: "demo",
+      model: "model-a",
+      requestDigest: DIGEST,
+      responseDigest: DIGEST,
+      now: "2026-07-18T00:01:00.000Z",
+    });
+    const strayReceipt = createLocalReceipt({
+      sessionId: "some-other-session",
+      turnId: "naming-turn-2",
+      provider: "demo",
+      model: "model-a",
+      now: "2026-07-18T00:01:01.000Z",
+    });
+    await fixture.journal.append(session.id, [
+      { type: "turn.requested", turnId: "turn-1", payload: { content: "first request" } },
+      {
+        type: "conversation.named",
+        turnId: "naming-turn-1",
+        operationId: "naming-operation-1",
+        payload: {
+          title: "First request",
+          answer: "First request",
+          model: "model-a",
+          receipt: JSON.parse(JSON.stringify(namingReceipt)),
+        },
+      },
+      {
+        type: "conversation.named",
+        turnId: "naming-turn-2",
+        operationId: "naming-operation-2",
+        // Bound to another session, so the same rule that rejects a borrowed
+        // turn receipt has to reject this one: nothing is recovered from it.
+        payload: { title: "Elsewhere", model: "model-a", receipt: JSON.parse(JSON.stringify(strayReceipt)) },
+      },
+    ]);
+    const events = await fixture.journal.readEvents(session.id);
+    const transcript = materializeSessionMessages(events, {}, session.id);
+
+    expect(transcript.receipts.map((receipt) => receipt.receiptId)).toEqual([namingReceipt.receiptId]);
+    expect(transcript.receipts[0]?.turnId).toBe("naming-turn-1");
+    // It said nothing, so it is not a message; the transcript still reports it
+    // as an event it chose not to render rather than pretending it is absent.
+    expect(transcript.messages.map((message) => message.content)).toEqual(["first request"]);
+    expect(Object.isFrozen(transcript.receipts[0])).toBe(true);
   });
 
   it("keeps transcript, model pin, receipt chain, and lifecycle isolated across session switches", async () => {
@@ -584,6 +682,38 @@ describe("SessionLibrary", () => {
     expect(seeded.some((message) => message.content === "second answer")).toBe(false);
   });
 
+  it("recognizes the exact pre-turn boundary after an audited ancillary naming call", async () => {
+    const fixture = createJournal();
+    const created = await fixture.journal.createSession("Named source", await manifest());
+    await fixture.journal.append(created.id, [
+      {
+        type: CONVERSATION_NAMED_EVENT_TYPE,
+        turnId: "naming-one",
+        operationId: "naming-request-one",
+        payload: { title: "Useful name", answer: "Useful name", model: "demo-v1" },
+      },
+      {
+        type: "inference.usage",
+        turnId: "naming-one",
+        operationId: "naming-request-one",
+        payload: { inputTokens: 4, outputTokens: 2, source: "conversation-naming" },
+      },
+      { type: "turn.requested", turnId: "two", payload: { content: "edit this" } },
+      { type: "turn.cancelled", turnId: "two", payload: { error: "test boundary" } },
+    ]);
+    const events = await fixture.journal.readEvents(created.id);
+    const request = events.find((event) => event.type === "turn.requested" && event.turnId === "two")!;
+    const source = (await fixture.journal.getSession(created.id))!;
+
+    const result = await new SessionLibrary(fixture.journal).fork(created.id, {
+      expectedSourceHead: { sequence: source.headSequence, digest: source.headDigest },
+      sourcePoint: { sequence: request.sequence - 1, digest: request.previousDigest },
+    });
+
+    expect(result.sourceBoundarySequence).toBe(request.sequence - 1);
+    expect(result.sourceBoundaryDigest).toBe(request.previousDigest);
+  });
+
   /*
    * Quiescence is about nothing being in flight, not about the last thing
    * having gone well.
@@ -752,6 +882,75 @@ describe("SessionLibrary", () => {
       sourcePoint: { sequence: rename.sequence, digest: rename.digest },
     })).rejects.toThrow(/selected source boundary did not pass/u);
     expect(await fixture.journal.listSessions()).toHaveLength(1);
+  });
+
+  /*
+   * `list()` dates the Recent group from the newest event that is not a
+   * preference write. It used to find that event by reading — and, on an
+   * adopted vault, decrypting — every event of every conversation, on every
+   * refresh. The sidebar refreshes once per durable event, so a long
+   * conversation made each of its own turns quadratically more expensive to
+   * display. The answer only ever lives in the last few events, so that is all
+   * that is read.
+   */
+  it("dates the Recent group from a bounded tail rather than every event of every conversation", async () => {
+    const fixture = createJournal();
+    const sessions = await Promise.all(["First", "Second", "Third"].map(async (title) =>
+      fixture.journal.createSession(title, await manifest({ profile: profileBinding() }))));
+    for (const session of sessions) {
+      await fixture.journal.append(session.id, Array.from({ length: 12 }, (_, index) => ({
+        type: "turn.requested",
+        turnId: `turn-${index}`,
+        payload: { content: `message ${index}` },
+      })));
+    }
+    const heads = new Map(
+      (await fixture.journal.listSessions()).map((session) => [session.id, session.headSequence] as const),
+    );
+
+    const reads: Array<readonly [string, number | undefined]> = [];
+    const underlying = fixture.journal.readEvents.bind(fixture.journal);
+    fixture.journal.readEvents = (sessionId, afterSequence, signal) => {
+      reads.push([sessionId, afterSequence]);
+      return underlying(sessionId, afterSequence, signal);
+    };
+
+    const library = new SessionLibrary(fixture.journal);
+    const page = await library.list({ profileId: "profile-1" });
+
+    expect(page.items).toHaveLength(sessions.length);
+    // One read per conversation, and every one of them skips past the head
+    // minus the tail depth instead of starting from sequence zero.
+    expect(reads).toHaveLength(sessions.length);
+    for (const [sessionId, afterSequence] of reads) {
+      expect(heads.get(sessionId)).toBeGreaterThan(PREFERENCE_TAIL_DEPTH);
+      expect(afterSequence).toBe(heads.get(sessionId)! - PREFERENCE_TAIL_DEPTH);
+      expect(afterSequence).toBeGreaterThan(0);
+    }
+  });
+
+  it("keeps starring out of the derived activity time, and under-claims past the tail", async () => {
+    const fixture = createJournal();
+    const created = await fixture.journal.createSession("Starred", await manifest({ profile: profileBinding() }));
+    await fixture.journal.append(created.id, [
+      { type: "turn.requested", turnId: "turn-1", payload: { content: "real activity" } },
+    ]);
+    const library = new SessionLibrary(fixture.journal);
+    const activity = (await library.list({ profileId: "profile-1" })).items[0]!.updatedAt;
+
+    await library.setFavorite(created.id, "profile-1", true);
+    expect((await library.list({ profileId: "profile-1" })).items[0]!.updatedAt).toBe(activity);
+
+    // Past `PREFERENCE_TAIL_DEPTH` consecutive preference writes the tail holds
+    // no conversation activity at all. The record's own timestamp is then the
+    // answer — the value this method returned before any derivation existed —
+    // so the row can drift later, never earlier, and never onto invented time.
+    for (let toggle = 0; toggle < PREFERENCE_TAIL_DEPTH; toggle += 1) {
+      await library.setFavorite(created.id, "profile-1", toggle % 2 === 0);
+    }
+    const record = (await fixture.journal.getSession(created.id))!;
+    expect((await library.list({ profileId: "profile-1" })).items[0]!.updatedAt).toBe(record.updatedAt);
+    expect(record.updatedAt).not.toBe(activity);
   });
 });
 

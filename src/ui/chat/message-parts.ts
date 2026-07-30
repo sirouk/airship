@@ -1,4 +1,4 @@
-import type { JsonValue, SessionManifest } from "../../core/contracts";
+import type { ApprovalProvenance, JsonValue, SessionManifest } from "../../core/contracts";
 import type { DurableEvent } from "../../core/journal";
 import { canonicalImageInputs } from "../../core/multimodal";
 import { parseCapabilityTier } from "./capability-tier";
@@ -60,12 +60,70 @@ export type ToolCallStatus =
   | "failed"
   | "denied";
 
+/**
+ * Who let one tool call run, projected from the approval's journaled provenance.
+ *
+ * "You approved", "Model review" and Full Access are three different claims
+ * about who is accountable for an effect, and the journal has recorded which
+ * one applied since approval modes shipped. It rides on the call part rather
+ * than in a parallel channel because a renderer that has to re-join authority
+ * to calls by `callId` is a renderer that needs the join plumbed through every
+ * caller — which is exactly why the label went unrendered: the transcript is
+ * handed `parts` and nothing else.
+ */
+export type ToolCallAuthority = Readonly<{
+  source: ApprovalProvenance["source"];
+  mode: ApprovalProvenance["mode"];
+  /** One short, already-presentable phrase; see TOOL_AUTHORITY_LABELS. */
+  label: string;
+}>;
+
+/**
+ * The whole authority vocabulary, in one table, so every surface makes the
+ * same three distinctions with the same words. `human-fallback` reads as human
+ * approval because that is what it is: a review lane that could not reach its
+ * model and asked the person instead.
+ */
+export const TOOL_AUTHORITY_LABELS: Readonly<Record<ApprovalProvenance["source"], string>> = Object.freeze({
+  human: "You approved",
+  "human-fallback": "You approved",
+  "model-review": "Model review",
+  "bounded-browser-sandbox": "Full Access",
+  "automatic-read": "Read-only, automatic",
+});
+
+const TOOL_AUTHORITY_MODES: ReadonlySet<string> = new Set<ApprovalProvenance["mode"]>([
+  "ask-first",
+  "auto-approve",
+  "full-access",
+]);
+
+/**
+ * Read one journaled `approval` provenance record into a presentable authority.
+ *
+ * An unreadable record yields nothing rather than a default: "we do not know
+ * who approved this" and "you approved this" must never render alike, and a
+ * reassuring fallback is the failure mode that matters here.
+ */
+export function toolCallAuthorityFrom(value: unknown): ToolCallAuthority | undefined {
+  const approval = record(value);
+  if (!approval) return undefined;
+  const source = approval.source as ApprovalProvenance["source"];
+  const mode = approval.mode as ApprovalProvenance["mode"];
+  if (typeof source !== "string" || !(source in TOOL_AUTHORITY_LABELS) || !TOOL_AUTHORITY_MODES.has(mode)) {
+    return undefined;
+  }
+  return Object.freeze({ source, mode, label: TOOL_AUTHORITY_LABELS[source] });
+}
+
 export type ToolCallPart = MessagePartBase<"tool-call"> & Readonly<{
   callId: string;
   name: string;
   /** A bounded display projection. Raw arguments are never retained here. */
   argumentsSummary: string;
   status: ToolCallStatus;
+  /** Absent until an approval with well-formed provenance lands for this call. */
+  authority?: ToolCallAuthority;
 }>;
 
 export type ToolResultStatus = "success" | "error" | "denied";
@@ -157,6 +215,8 @@ export type ToolCallMessagePartFact = MessagePartFactBase<"tool-call"> & Readonl
 export type ToolStatusMessagePartFact = MessagePartFactBase<"tool-status"> & Readonly<{
   callId: string;
   status: ToolCallStatus;
+  /** Only an approval carries one, and only when its provenance is readable. */
+  authority?: ToolCallAuthority;
 }>;
 
 export type ToolResultMessagePartFact = MessagePartFactBase<"tool-result"> & Readonly<{
@@ -393,12 +453,14 @@ export function messagePartFactsFromDurableEvents(
     }
 
     if (event.type === "tool.approved" && typeof payload?.callId === "string") {
+      const authority = toolCallAuthorityFrom(payload.approval);
       facts.push({
         kind: "tool-status",
         factId: eventFactId(event, "approved"),
         sequence: event.sequence,
         callId: payload.callId,
         status: "approved",
+        ...(authority ? { authority } : {}),
       });
       continue;
     }
@@ -567,7 +629,7 @@ function applyFact(parts: MessagePart[], fact: MessagePartFact): boolean {
   }
 
   if (fact.kind === "tool-status") {
-    return updateToolCall(parts, fact.callId, fact.factId, fact.sequence, fact.status);
+    return updateToolCall(parts, fact.callId, fact.factId, fact.sequence, fact.status, fact.authority);
   }
 
   if (fact.kind === "tool-result") {
@@ -677,6 +739,7 @@ function updateToolCall(
   factId: string,
   sequence: number,
   status: ToolCallStatus,
+  authority?: ToolCallAuthority,
 ): boolean {
   const index = parts.findIndex(
     (part): part is ToolCallPart => part.kind === "tool-call" && part.callId === callId,
@@ -688,6 +751,10 @@ function updateToolCall(
     endSequence: Math.max(call.endSequence, sequence),
     sourceFactIds: appendSource(call.sourceFactIds, factId),
     status,
+    // A later status never erases the authority an earlier approval recorded:
+    // the call still ran on that authority whether it went on to succeed, fail
+    // or be replayed from a journal that no longer streams the approval first.
+    ...(authority ? { authority } : {}),
   });
   return true;
 }

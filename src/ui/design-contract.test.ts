@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { readAirshipStyles } from "./style-sheets.test-helper";
 
-const [appSource, attestationSource, sealSource, sessionsSource, sourcesSource, styles, vaultStyles, localLabStyles, menuStyles, routeStyles, durabilityStyles] = await Promise.all([
+const [appSource, attestationSource, sealSource, sessionsSource, sourcesSource, styles, vaultStyles, localLabStyles, menuStyles, mobileNavSource, routeStyles, durabilityStyles] = await Promise.all([
   // The shell is two files since the rail was extracted: the compact topbar
   // picker still lives in `app.tsx`, the pinned rail picker in `rail.tsx`.
   // The contract is about the *pair* existing, so it reads the pair.
@@ -18,6 +18,7 @@ const [appSource, attestationSource, sealSource, sessionsSource, sourcesSource, 
   readFile(new URL("./vault-view.css", import.meta.url), "utf8"),
   readFile(new URL("./local-lab-setup.css", import.meta.url), "utf8"),
   readFile(new URL("./menu-select.css", import.meta.url), "utf8"),
+  readFile(new URL("./mobile-navigation.tsx", import.meta.url), "utf8"),
   Promise.all([
     readFile(new URL("./access-view.css", import.meta.url), "utf8"),
     readFile(new URL("./attestations-view.css", import.meta.url), "utf8"),
@@ -139,7 +140,24 @@ describe("Airship Instrument design contract", () => {
   it("renders the mobile shell as four fixed primary controls without horizontal scrolling", () => {
     const mobileNavRules = [...styles.matchAll(/\.mobile-nav\s*\{([^}]+)\}/gu)].map((match) => match[1] ?? "");
     const mobileRule = mobileNavRules.find((rule) => rule.includes("repeat(4")) ?? "";
-    expect(mobileRule).toContain("grid-template-columns: repeat(4, minmax(0, 1fr))");
+    /*
+     * AMENDED — the track list may carry one leading `auto` column, and only
+     * that. It holds the shell's live-load reading, which is a `role="status"`
+     * region rather than a fifth destination: below this breakpoint `.sidebar`
+     * is `display: none`, so the rail's copy leaves the render tree and the
+     * accessibility tree, and a phone reader was left navigating to
+     * #capabilities to learn what was running.
+     *
+     * The claim this test makes is unchanged and is now stated as a suffix
+     * rather than as the whole value: four primary controls, equal shares of
+     * whatever width remains, no scroll, no auto flow. A fifth *destination*
+     * still fails it, because `repeat(4, …)` is still the tail of the list.
+     */
+    expect(mobileRule).toMatch(/grid-template-columns:\s*(?:auto )?repeat\(4, minmax\(0, 1fr\)\);/u);
+    expect(mobileNavSource).toContain("<RuntimeLoadIndicator placement=\"nav\" />");
+    // Nothing else may claim the track: the reading is the one non-destination
+    // child, so the tabs cannot be pushed off the row by a second occupant.
+    expect(mobileNavSource.match(/<RuntimeLoadIndicator/gu)).toHaveLength(1);
     expect(mobileRule).toContain("overflow: hidden");
     expect(mobileRule).not.toContain("overflow-x: auto");
     expect(mobileRule).not.toContain("grid-auto-flow");

@@ -64,6 +64,22 @@ button.status-seal:hover { border-color: var(--line-strong); background: var(--s
   border-bottom: 1px solid var(--line);
 }
 
+/*
+ * The other half of the borderless-input-in-a-bordered-shell pattern.
+ *
+ * The field below suppresses its own outline so the header reads as one
+ * control, and nothing put the ring back. The global `input:focus-visible`
+ * ring in tokens.css cannot cover for it: both selectors weigh (0,1,1) and
+ * this file loads after the token sheet, so the suppression wins on source
+ * order. The palette autofocuses on open, which hid the loss — it only shows
+ * when a keyboard reader walks back up from the results list or the footer.
+ */
+.command-palette__search:focus-within {
+  border-bottom-color: var(--accent-bright);
+  outline: 2px solid var(--accent-bright);
+  outline-offset: -2px;
+}
+
 .command-palette input {
   width: 100%;
   border: 0;
@@ -180,7 +196,7 @@ button.status-seal:hover { border-color: var(--line-strong); background: var(--s
 :root[data-density="comfortable"] .nav-item { min-height: 40px; }
 
 /*
- * Soft-keyboard compensation, and the two halves it needs to have any effect.
+ * Soft-keyboard compensation: the nav's half.
  *
  * `visibility: hidden` stood here, which suppresses the nav's paint but not
  * the 56px `.app-shell` grid track it is assigned to — the band stayed, empty,
@@ -188,12 +204,14 @@ button.status-seal:hover { border-color: var(--line-strong); background: var(--s
  * beside the mobile grid that declares it (`routes.css`), and the element
  * leaves the layout here so it cannot contribute overflow inside a 0 track.
  *
- * The `bottom` offset is only meaningful because `.composer-wrap` is given a
- * positioning scheme in the same phone block; on a static element an inset is
- * discarded silently, which is how this shipped inert.
+ * The composer's half is not here and is not an inset. `#app` shrinks to the
+ * visual viewport (`routes.css`, phone block); a `bottom` offset on
+ * `.composer-wrap` used to stand beside this line and was strictly worse than
+ * nothing, because it moved the composer's *paint* while leaving the
+ * transcript's floor — the box every scroll anchor measures against — beneath
+ * the keyboard.
  */
 :root[data-keyboard-open="true"] .fixed-mobile-nav { display: none; }
-:root[data-keyboard-open="true"] .composer-wrap { bottom: var(--visual-viewport-bottom, 0); }
 
 @media (max-width: 640px), (max-width: 950px) and (max-height: 500px) {
   .trust-hub-tabs { box-sizing: border-box; min-height: 45px; padding-block: 0; padding-inline-start: max(8px, env(safe-area-inset-left)); padding-inline-end: max(8px, env(safe-area-inset-right)); background: var(--ground); box-shadow: none; scrollbar-width: none; overscroll-behavior-inline: contain; }

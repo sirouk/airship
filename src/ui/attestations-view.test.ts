@@ -14,6 +14,7 @@ import { proofStatusLabel } from "./trust-language";
 
 const source = readFileSync(new URL("./attestations-view.tsx", import.meta.url), "utf8");
 const styles = readFileSync(new URL("./attestations-view.css", import.meta.url), "utf8");
+const appSource = readFileSync(new URL("./app.tsx", import.meta.url), "utf8");
 
 describe("attestation refresh failure copy", () => {
   it("renders an unreadable cross-origin response without inventing a CORS or TEE result", () => {
@@ -33,6 +34,22 @@ describe("attestation refresh failure copy", () => {
     const message = attestationRefreshError(new Error("raw provider body csc_never-show-this-value"));
     expect(message).toBe("Evidence refresh failed safely. Evidence was not pulled, and no verification state was inferred from the failure.");
     expect(message).not.toContain("csc_");
+  });
+});
+
+describe("route-owned evidence selection", () => {
+  it("does not fall through to the newest record when a named record is absent", () => {
+    expect(source).toContain("const requestedRecordMissing = Boolean(selectedRecordId");
+    expect(source).toContain("No newer record was selected in its place.");
+    expect(source).toContain("const selected = requestedRecordMissing");
+    expect(appSource).toContain("const ledgerSelectedRecordId = proofScoped");
+    expect(appSource).toContain("`receipt:${effectiveProofSelection.receiptId}`");
+  });
+
+  it("re-enqueues the active receipt once when its endpoint observation expires", () => {
+    expect(appSource).toContain("automaticEvidenceRefreshes.current.has(record.recordId)");
+    expect(appSource).toContain("enqueueAutomaticReceiptEvidence(lastReceipt, sessionId, profileId)");
+    expect(appSource).toContain("window.setInterval(tick, 30_000)");
   });
 });
 

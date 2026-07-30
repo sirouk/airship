@@ -47,6 +47,7 @@ import {
   isOptionalTerminalPath,
   isOptionalSemanticWorkerPath,
   isDeferredCapabilityPackPath,
+  assertForkContractDocumented,
   serializeReleaseManifest,
 } from "./release-gate.mjs";
 
@@ -370,6 +371,43 @@ describe("release gate", () => {
     expect(() => assertOptionalPacksAreNotPreloaded(
       '<link rel="modulepreload" href="/assets/encrypted-envelope-Ab12.js">',
     )).toThrow(/must not preload/iu);
+  });
+
+  /*
+   * The doc and the code have to describe the same fork.
+   *
+   * `fork()` seals a bounded ancestor-context seed and returns
+   * `contextSeeded: true` on every call, while the doc still described
+   * branching as unbuilt. Both halves are gated: the vocabulary that asserts a
+   * blank slate must be gone, and the four names that make "bounded" checkable
+   * must be present — a doc can drop the false claim and still leave the reader
+   * with no way to know what the seed carries.
+   */
+  it("rejects the pre-seed fork contract in the shipped session-library doc", () => {
+    const doc = readFileSync(new URL("../docs/SESSION_LIBRARY.md", import.meta.url), "utf8");
+    expect(() => assertForkContractDocumented(doc)).not.toThrow();
+
+    expect(() => assertForkContractDocumented(`${doc}\nFork = new identity · empty transcript.`))
+      .toThrow(/empty transcript/u);
+    expect(() => assertForkContractDocumented(`${doc}\nPress Create clean fork to branch.`))
+      .toThrow(/clean fork/u);
+    // The exact paragraph the finding was filed against.
+    expect(() => assertForkContractDocumented(
+      "The source transcript is not copied, summarized, or rewritten. A future protocol can resolve ancestor transcripts for conversational branching.",
+    )).toThrow(/transcript that is not copied[\s\S]*future work[\s\S]*never names FORK_CONTEXT_EVENT_TYPE/u);
+    // …while the true statement it was a corruption of stays sayable.
+    expect(() => assertForkContractDocumented(doc.replace("The source journal is not copied", "The source journal is never copied")))
+      .not.toThrow();
+    for (const term of [
+      "FORK_CONTEXT_EVENT_TYPE",
+      "contextSeeded",
+      "historyCopied",
+      "MAX_FORK_CONTEXT_MESSAGES",
+      "MAX_FORK_CONTEXT_BYTES",
+    ]) {
+      expect(() => assertForkContractDocumented(doc.split(term).join("«redacted»")), term)
+        .toThrow(new RegExp(`never names ${term}`, "u"));
+    }
   });
 });
 

@@ -34,11 +34,12 @@ export const RELEASE_BUDGETS = Object.freeze({
   // 132.58 KiB gzip.
   allJavaScriptAndWorkers: Object.freeze({ raw: 768 * 1024, gzip: 160 * 1024 }),
   // Provider routes, capability activation, and the stable lazy broker remain
-  // absent from first paint. The broker became a separate shared chunk when
-  // Vault coordination and App activation both stopped importing the full
-  // capability graph eagerly. Measured together at 398,729 B raw / 116,773 B
-  // gzip; the fixed 640/132 KiB first-paint cap does not move.
-  deferredCapabilities: Object.freeze({ raw: 396 * 1024, gzip: 117 * 1024 }),
+  // absent from first paint. The broker now also exposes the canonical runtime
+  // capability read used by a cold Capabilities deep link before any session
+  // exists. Measured together at 397.69 KiB raw / 116.44 KiB gzip, so only the
+  // raw ceiling takes the next whole-KiB step; the fixed first-paint cap and
+  // the existing gzip ceiling do not move.
+  deferredCapabilities: Object.freeze({ raw: 398 * 1024, gzip: 117 * 1024 }),
   // Core plus every optional route except the two independently delivered
   // vendor engines. The former 384 KiB "all routes" meaning became impossible
   // once full isomorphic-git and xterm engines were deliberately installed:
@@ -89,14 +90,13 @@ export const RELEASE_BUDGETS = Object.freeze({
   // First paint is governed separately by the 768/160 KiB raw/gzip ceiling
   // above and is untouched by this number.
   // Profile-local conversations, VS Code-style workbench behavior, live agent
-  // environment capture, OAuth, and evidence scheduling are each charged to a
-  // named lazy surface above. Their intentional ownership splits also remove
-  // cross-chunk compression opportunities, so the installed gzip delta is not
-  // hidden first-paint weight. Per-Profile workspace authority adds the
-  // namespace port and the legacy adoption it needs. Measured 1810.90 KiB raw /
-  // 563.66 KiB gzip; these are the smallest whole-KiB backstops retaining
+  // environment capture, OAuth, evidence scheduling, terminal audit lineage,
+  // and the complete responsive capability presentation are each charged to a
+  // named lazy surface. Their ownership splits remove cross-chunk compression
+  // opportunities without adding first-paint weight. Measured 1881.86 KiB raw /
+  // 587.72 KiB gzip; these are the smallest whole-KiB backstops retaining
   // roughly 0.5% clearance.
-  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 1870 * 1024, gzip: 585 * 1024 }),
+  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 1892 * 1024, gzip: 591 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now measures 652.23 KiB raw / 180.61 KiB gzip:
   // the browser-Git pack grew (see optionalBrowserGit) and the Terminal pack
@@ -138,12 +138,12 @@ export const RELEASE_BUDGETS = Object.freeze({
   // moves, to the lowest whole KiB keeping ~0.5% clearance; the gzip ceiling is
   // not raised because the build is still inside it. First paint is untouched
   // and is governed separately by the 768/160 KiB raw/gzip ceiling below.
-  // The current installed graph measures 2453.92 KiB raw / 741.05 KiB gzip.
-  // Every capability is separately owned and capped; the extra aggregate gzip
-  // is the compression cost of keeping those owners independently lazy and
-  // cacheable, not an eager preload. The even-KiB backstops below are the
-  // smallest steps retaining roughly 0.5% clearance.
-  totalJavaScriptAndWorkers: Object.freeze({ raw: 2518 * 1024, gzip: 764 * 1024 }),
+  // The current installed graph measures 2531.57 KiB raw / 767.26 KiB gzip.
+  // Every capability is separately owned and capped; the aggregate delta is
+  // the sum of those reviewed lazy owners, not eager preload. The backstops
+  // below retain roughly 0.5% clearance while the startup ceiling remains
+  // independently fixed.
+  totalJavaScriptAndWorkers: Object.freeze({ raw: 2545 * 1024, gzip: 772 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. Keep it visible under a dedicated, deliberately small cap.
   serviceWorker: Object.freeze({ raw: 12 * 1024, gzip: 4 * 1024 }),
@@ -269,13 +269,13 @@ export const RELEASE_BUDGETS = Object.freeze({
   // are fetched only when a fork is requested (or the lazy agent validates a
   // fork lineage). Measured together at 12,672 B raw / 4,620 B gzip.
   optionalSessionFork: Object.freeze({ raw: 13 * 1024, gzip: 5 * 1024 }),
-  // The route now renders the per-primitive probe detail and states the
-  // adaptive policy in terms of what each number actually sizes, which is why
-  // it crossed 3 KiB gzip at all: measured 8,884 B raw / 3,115 B gzip. Both
-  // ceilings step in half-KiB rather than whole-KiB units, because rounding a
-  // 3 KiB presentation route up to 4 KiB would hand it a third more room than
-  // its growth ever asked for.
-  optionalCapabilitiesView: Object.freeze({ raw: 11 * 1024, gzip: 5 * 1024 }),
+  // The lazy route now includes the live current/peak execution reading,
+  // actionable primitive remediation, and the Companion relay/cache/compute
+  // observation instead of making those capabilities settings-only facts.
+  // Measured 12.40 KiB raw / 4.25 KiB gzip; only the raw ceiling moves to the
+  // next whole-KiB step. The unchanged gzip ceiling keeps shipped transfer
+  // growth bounded and none of this enters first paint.
+  optionalCapabilitiesView: Object.freeze({ raw: 13 * 1024, gzip: 5 * 1024 }),
   // Hardware/browser feature detection is requested after the shell starts so
   // it can select the strongest runtime without inflating the HTML preload set.
   // The Service Worker and Cache Storage probes push the raw pack to a measured
@@ -483,6 +483,53 @@ export function assertNoSimulatedGitRuntime(files) {
   }
 }
 
+/**
+ * The fork contract, as the shipped documentation states it.
+ *
+ * `SessionLibrary.fork` seals a bounded ancestor-context seed on every fork and
+ * always returns `contextSeeded: true`. The doc described the pre-seed world —
+ * "the source transcript is not copied" plus branching filed as future work —
+ * so a reader who trusted it believed a fork begins blank. `historyCopied:
+ * false` is true of the *journal* and was being read as a claim about the
+ * model's context; the two facts have to appear together or the true one reads
+ * as the false one.
+ *
+ * Gated at release rather than left to a unit test because this is a promise
+ * made to whoever ships and operates the build, and prose drifts back silently
+ * the moment the code that contradicts it is the only thing under test.
+ */
+export function assertForkContractDocumented(source) {
+  const failures = [];
+  // The blank-slate vocabulary, in the one doc that defines the operation.
+  for (const claim of ["empty transcript", "clean fork"]) {
+    if (source.includes(claim)) failures.push(`states the pre-seed claim "${claim}"`);
+  }
+  // "The source *journal* is not copied" is true and worth saying. "The source
+  // *transcript* is not copied" is the same sentence aimed at the thing the
+  // fork does carry, and it is the exact substitution that made a seeded
+  // branch read as a blank one.
+  if (/source transcript is not\s+copied/iu.test(source)) {
+    failures.push("calls the seeded ancestor context a transcript that is not copied");
+  }
+  if (/future protocol[\s\S]{0,120}branching/iu.test(source)) {
+    failures.push("still files conversational branching as future work");
+  }
+  // Naming the seed is not enough: a reader needs the event that carries it and
+  // the two bounds that decide what it leaves behind, or "bounded" is a word.
+  for (const term of [
+    "FORK_CONTEXT_EVENT_TYPE",
+    "contextSeeded",
+    "historyCopied",
+    "MAX_FORK_CONTEXT_MESSAGES",
+    "MAX_FORK_CONTEXT_BYTES",
+  ]) {
+    if (!source.includes(term)) failures.push(`never names ${term}`);
+  }
+  if (failures.length > 0) {
+    throw new Error(`docs/SESSION_LIBRARY.md misdescribes the fork contract: it ${failures.join("; ")}.`);
+  }
+}
+
 export async function runReleaseGate(outputDirectory = defaultOutput) {
   const output = resolve(outputDirectory);
   const files = await collectFiles(output);
@@ -524,6 +571,7 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
   }
 
   await validatePublicCopies(output, required.filter((path) => path !== "index.html"));
+  assertForkContractDocumented(await readFile(resolve(root, "docs", "SESSION_LIBRARY.md"), "utf8"));
   const headers = fileMap.get("_headers").payload.toString("utf8");
   const index = fileMap.get("index.html").payload.toString("utf8");
   validateHeaders(headers);

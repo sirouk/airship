@@ -24,20 +24,31 @@ import { describe, expect, it } from "vitest";
 const NAMEABLE_BY_ROLE_ONLY = /<(?:div|span|p)(?=[\s/>])/gu;
 const CARRIES_A_NAME = /(?:^|\s)aria-label(?:ledby)?\s*=/u;
 const CARRIES_A_ROLE = /(?:^|\s)role\s*=/u;
+/**
+ * The three roles that do not rescue a name. `presentation`/`none` remove the
+ * element from the tree outright and `generic` is the computed role the whole
+ * prohibition is about, so spelling one of them next to an `aria-label` is the
+ * same defect wearing a role attribute — and skipping every element that
+ * carries any `role=` was a hole in the scan, not a rule. A computed
+ * `role={expression}` is taken at its word: this is a source scan and it cannot
+ * evaluate one, but an author writing a dynamic role is choosing a real role.
+ */
+const ROLE_THAT_STILL_FORBIDS_A_NAME = /(?:^|\s)role\s*=\s*(["'])(?:presentation|none|generic)\1/u;
 
 /**
  * `src/ui/app.tsx` is being edited concurrently in this same audit pass, so its
  * four containers are recorded here instead of touched. None of them is a lost
  * fact — each wraps text that is announced on its own — and each is one
- * `role="group"` away from clean. Delete an entry as it is fixed; a fifth
- * unnamed container in that file still fails this test.
+ * `role="group"` away from clean.
+ *
+ * The count is load-bearing in both directions. An entry excuses exactly that
+ * many occurrences, so a *second* container that happens to carry the same
+ * label string is not admitted by the first one's pardon; and an entry that
+ * excuses nothing fails the test, so fixing a container without deleting its
+ * line here is caught rather than leaving a pardon behind for the next
+ * offender to inherit. Delete the entry in the same commit as the `role`.
  */
-const AWAITING_A_CONCURRENT_EDIT: ReadonlySet<string> = new Set([
-  'src/ui/app.tsx :: aria-label="Runtime state"',
-  'src/ui/app.tsx :: aria-label="Queued messages"',
-  'src/ui/app.tsx :: aria-label="Pending attachments"',
-  'src/ui/app.tsx :: aria-label="Durable turn disposition"',
-]);
+const AWAITING_A_CONCURRENT_EDIT: ReadonlyMap<string, number> = new Map();
 
 /**
  * The opening tag's attributes, brace- and quote-aware: an arrow function in an
@@ -77,24 +88,37 @@ async function* componentFiles(directory: URL): AsyncGenerator<URL> {
   }
 }
 
+/** A name on this tag reaches nobody: no role at all, or a role that forbids one. */
+function dropsItsName(attributes: string): boolean {
+  if (!CARRIES_A_NAME.test(attributes)) return false;
+  return !CARRIES_A_ROLE.test(attributes) || ROLE_THAT_STILL_FORBIDS_A_NAME.test(attributes);
+}
+
 describe("every ARIA name lands on an element allowed to have one", () => {
   it("finds no div, span or p named without a role", async () => {
     const root = new URL("../../", import.meta.url);
     const offenders: string[] = [];
+    const unspent = new Map(AWAITING_A_CONCURRENT_EDIT);
     for await (const file of componentFiles(new URL("src/", root))) {
       const relative = file.pathname.slice(root.pathname.length);
       const source = await readFile(file, "utf8");
       for (const match of source.matchAll(NAMEABLE_BY_ROLE_ONLY)) {
         const start = match.index + match[0].length;
         const attributes = attributesOfTag(source, start);
-        if (!CARRIES_A_NAME.test(attributes) || CARRIES_A_ROLE.test(attributes)) continue;
+        if (!dropsItsName(attributes)) continue;
         const record = `${relative} :: ${nameAttribute(attributes)}`;
-        if (AWAITING_A_CONCURRENT_EDIT.has(record)) continue;
+        const excused = unspent.get(record) ?? 0;
+        if (excused > 0) {
+          unspent.set(record, excused - 1);
+          continue;
+        }
         const line = source.slice(0, match.index).split("\n").length;
         offenders.push(`${relative}:${line}: ${record}`);
       }
     }
     expect(offenders).toEqual([]);
+    const rotted = [...unspent].flatMap(([record, left]) => (left > 0 ? [record] : []));
+    expect(rotted, "fixed containers still pardoned — delete these from AWAITING_A_CONCURRENT_EDIT").toEqual([]);
   });
 
   it("sees a name on a bare container that a role would hide from it", () => {
@@ -105,19 +129,49 @@ describe("every ARIA name lands on an element allowed to have one", () => {
       '<span class="a" aria-label="dropped">✓</span>',
       '<div title="a > b" aria-label="also dropped"><span>x</span></div>',
       '<div onClick={() => close()} aria-label="dropped too" />',
+      // A role that removes the element cannot also name it; skipping anything
+      // with a `role=` at all let this shape through.
+      '<div role="presentation" aria-label="dropped by presentation" />',
+      '<span role="none" aria-label="dropped by none">✓</span>',
+      '<span role="generic" aria-label="dropped by generic">✓</span>',
       '<span role="img" aria-label="kept">✓</span>',
+      '<div role={rowRole} aria-label="kept, role unevaluated" />',
       '<div class="plain">text</div>',
       '<p aria-labelledby="heading">text</p>',
     ].join("\n");
     const found = [...decoy.matchAll(NAMEABLE_BY_ROLE_ONLY)]
       .map((match) => attributesOfTag(decoy, match.index + match[0].length))
-      .filter((attributes) => CARRIES_A_NAME.test(attributes) && !CARRIES_A_ROLE.test(attributes))
+      .filter(dropsItsName)
       .map((attributes) => nameAttribute(attributes));
     expect(found).toEqual([
       'aria-label="dropped"',
       'aria-label="also dropped"',
       'aria-label="dropped too"',
+      'aria-label="dropped by presentation"',
+      'aria-label="dropped by none"',
+      'aria-label="dropped by generic"',
       'aria-label="heading"',
     ]);
+  });
+
+  /*
+   * The pardon list is a mechanism, and an unexercised mechanism is where the
+   * next silent admission hides. Both halves are checked here rather than by
+   * waiting for a real second offender: a repeated label is not covered by one
+   * entry, and an entry nobody spends is a failure, not a no-op.
+   */
+  it("spends each pardon once and fails on one that has nothing left to pardon", () => {
+    const pardons = new Map([["f.tsx :: a", 1], ["f.tsx :: gone", 1]]);
+    const unspent = new Map(pardons);
+    const offenders: string[] = [];
+    for (const record of ["f.tsx :: a", "f.tsx :: a", "f.tsx :: b"]) {
+      const excused = unspent.get(record) ?? 0;
+      if (excused > 0) unspent.set(record, excused - 1);
+      else offenders.push(record);
+    }
+    // The second identical label is not covered by the first one's entry.
+    expect(offenders).toEqual(["f.tsx :: a", "f.tsx :: b"]);
+    // And the entry for a container that has since been fixed is reported.
+    expect([...unspent].flatMap(([record, left]) => (left > 0 ? [record] : []))).toEqual(["f.tsx :: gone"]);
   });
 });

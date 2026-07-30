@@ -52,7 +52,7 @@ test("touch messages expose one calm action trigger and tappable actions", async
   test.skip(!testInfo.project.name.includes("mobile"), "touch layout contract");
   await seedOneTurn(page);
   const message = page.locator("[data-transcript-card]").first();
-  const trigger = message.getByRole("button", { name: "Message actions" });
+  const trigger = message.locator('summary[aria-label="Message actions"]');
 
   await expect(message).toBeVisible();
   await expect(message.locator(".message-actions")).toBeHidden();
@@ -60,7 +60,7 @@ test("touch messages expose one calm action trigger and tappable actions", async
   const triggerBox = await trigger.boundingBox();
   expect(triggerBox?.height, "touch disclosure stays at the 44px minimum").toBeGreaterThanOrEqual(44);
   await trigger.click();
-  const copy = message.getByRole("menuitem", { name: "Copy" });
+  const copy = message.getByRole("group", { name: "Message actions" }).getByRole("button", { name: "Copy" });
   await expect(copy).toBeVisible();
   const box = await copy.boundingBox();
   expect(box?.height, "touch targets stay at the 44px minimum").toBeGreaterThanOrEqual(44);

@@ -124,6 +124,7 @@
 .session-status-chip,
 .journal-chip,
 .session-model-chip,
+.session-skills-chip,
 .session-bar__new,
 .session-bar .session-runtime {
   min-height: 28px;
@@ -134,7 +135,8 @@
 }
 
 .session-status-chip,
-.session-model-chip {
+.session-model-chip,
+.session-skills-chip {
   display: inline-flex;
   gap: var(--sp-1);
   align-items: center;
@@ -237,6 +239,27 @@
   white-space: nowrap;
 }
 
+.session-skills-chip__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-skills-popover ul {
+  display: grid;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.session-skills-popover li {
+  display: flex;
+  gap: var(--sp-3);
+  align-items: baseline;
+  justify-content: space-between;
+}
+
 /*
  * The connected model control, resized to the bar it now sits in.
  *
@@ -303,6 +326,7 @@
   .chat-stage[data-scrolled="true"] .journal-chip__id,
   .chat-stage[data-scrolled="true"] .journal-chip__unit,
   .chat-stage[data-scrolled="true"] .session-model-chip__label,
+  .chat-stage[data-scrolled="true"] .session-skills-chip__label,
   .chat-stage[data-scrolled="true"] .session-bar .runtime-posture {
     position: absolute;
     width: 1px;
@@ -383,6 +407,30 @@
    rule is a second, non-colour carrier for that fact; the sentence in
    `__detail` is the primary one and is never hidden. */
 .transcript-marker[data-presentable="false"] { border-top-style: dashed; }
+
+/* Only markers that record a billed provider request get this, so it stays a
+   text link rather than a button: the marker is still not a participant, and
+   a filled control here would read as an action the conversation took. It is
+   sized like every other thumb target where the pointer is coarse. */
+.transcript-marker__proof {
+  justify-self: start;
+  margin-top: 2px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ink-muted);
+  font-size: var(--fs-meta);
+  line-height: 1.45;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.transcript-marker__proof:hover { color: var(--ink); }
+
+@media (pointer: coarse) {
+  .transcript-marker__proof { min-height: 44px; padding-block: var(--sp-1); }
+}
 
 .proof-hero h2,
 .inspector-heading h2 {
@@ -1273,11 +1321,13 @@ button.runtime-posture {
   font-size: var(--fs-micro);
 }
 
-.composer-tools > span {
-  display: inline-flex;
-  gap: var(--sp-1);
-  align-items: center;
-}
+/* `.composer-tools > span` used to live here. It styled the credential-posture
+   caption when that caption was a bare `<span>`; the caption is a
+   `ComposerPostureChip` now, whose Popover root is a `<div>`, and every other
+   child of the row is a `<div>` too (`MenuSelect`) or a `<label>` whose own
+   span is a grandchild (`.composer-attach`). A rule matching nothing reads as
+   a decision about a row that has none, which is how the phone `display: none`
+   on this row's second child survived three waves. */
 
 /* What holds the credential for the keystroke about to be made. This shipped
    as a caption that was `display: none` on phones; it is a chip at every

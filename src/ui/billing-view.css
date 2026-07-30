@@ -79,6 +79,13 @@
   color: var(--signal, #8fb59a);
 }
 
+/* A refused credential is not a neutral absence — it is the one tab state that
+   needs an action from the reader, and the tab is the only Chutes state visible
+   while another provider's panel is open. */
+.billing-provider-tab[data-state="rejected"] span {
+  color: var(--danger, #c86758);
+}
+
 .billing-provider-panel {
   display: flex;
   flex-direction: column;
@@ -148,6 +155,11 @@
 
 .billing-provider-state[data-state="connected"] {
   color: var(--signal, #8fb59a);
+}
+
+.billing-provider-state[data-state="rejected"] {
+  border-color: color-mix(in srgb, var(--danger, #c86758) 45%, transparent);
+  color: var(--danger, #c86758);
 }
 
 .billing-provider-inventory__detail {

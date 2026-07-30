@@ -182,16 +182,22 @@ export const RUNTIME_LOAD_BOUNDARY =
  *
  * Derived here, beside the counts, for the reason the panel's figures are: a
  * surface that composes its own sentence is a surface that can start implying
- * device load it never measured. `spoken` carries the boundary in full because
- * a chip showing "2" in the corner of a rail is exactly the object a reader
- * would otherwise read as a CPU meter.
+ * device load it never measured.
+ *
+ * `reading` and the boundary are deliberately two strings rather than one. The
+ * indicator is a live region, so `reading` is re-announced every time a run
+ * starts or ends; concatenating the boundary onto it would replay the same
+ * caveat on every announcement, which is how a reader learns to talk over the
+ * region entirely. The boundary is rendered as a static sibling inside the same
+ * region instead — read whenever the region itself is read, never re-announced,
+ * because its text never changes.
  */
-export function runtimeLoadIndicatorLabel(report: RuntimeLoadReport): Readonly<{ text: string; spoken: string }> {
+export function runtimeLoadIndicatorLabel(report: RuntimeLoadReport): Readonly<{ text: string; reading: string }> {
   return Object.freeze({
     text: report.current === 0 ? "Idle" : `${report.current} running`,
-    spoken: report.current === 0
-      ? `No execution run is in flight. Peak ${report.peak} this page. ${RUNTIME_LOAD_BOUNDARY}`
-      : `${report.current} execution ${report.current === 1 ? "run" : "runs"} in flight. Peak ${report.peak} this page. ${RUNTIME_LOAD_BOUNDARY}`,
+    reading: report.current === 0
+      ? `No execution run is in flight. Peak ${report.peak} this page.`
+      : `${report.current} execution ${report.current === 1 ? "run" : "runs"} in flight. Peak ${report.peak} this page.`,
   });
 }
 

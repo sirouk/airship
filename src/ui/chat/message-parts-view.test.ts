@@ -11,7 +11,9 @@ import { recoverPartialTurn } from "./turn-recovery";
 import {
   boundedMessageParts,
   DEFAULT_OPERATION_RENDER_LIMIT,
+  errorPartRole,
   errorHeading,
+  operationAuthorityChip,
   operationHeadline,
   operationStripState,
   pairOperations,
@@ -21,6 +23,13 @@ import {
   type OperationsNode,
   type PairedOperation,
 } from "./message-parts-view";
+
+describe("historical error announcements", () => {
+  it("announces only an error owned by the currently running turn", () => {
+    expect(errorPartRole(false)).toBeUndefined();
+    expect(errorPartRole(true)).toBe("alert");
+  });
+});
 
 describe("streamed message tail", () => {
   it("renders the separate, non-durable stream segment beside durable facts", () => {
@@ -280,6 +289,77 @@ describe("terminal-aware operations", () => {
 
   it("claims nothing it cannot know about an unrecognised code", () => {
     expect(errorHeading("some.future.code")).toBe("Something went wrong");
+  });
+});
+
+/*
+ * Until this landed, an effect a person clicked Allow on and an effect Full
+ * Access let through unasked rendered as the same card. The journal knew the
+ * difference the whole time; only the transcript did not say it.
+ */
+describe("the authority a tool row states", () => {
+  const approved = (source: string, mode: string): readonly PairedOperation[] => operations(pairOperations(
+    messagePartsFromDurableEvents(durableEvents([
+      draft("tool.requested", { call: { id: "call-1", name: "write_file", arguments: { path: "a" } } }),
+      draft("tool.approved", { callId: "call-1", approval: { mode, source, reason: "…" } }),
+      draft("tool.resulted", { callId: "call-1", name: "write_file", content: "ok" }),
+    ])),
+  )[0]!);
+
+  it("carries the journaled approval onto the call the reader sees", () => {
+    expect(approved("human", "ask-first")[0]?.authority)
+      .toEqual({ source: "human", mode: "ask-first", label: "You approved" });
+    expect(approved("model-review", "auto-approve")[0]?.authority)
+      .toEqual({ source: "model-review", mode: "auto-approve", label: "Model review" });
+    expect(approved("bounded-browser-sandbox", "full-access")[0]?.authority)
+      .toEqual({ source: "bounded-browser-sandbox", mode: "full-access", label: "Full Access" });
+  });
+
+  it("keeps the authority after the result settles the call", () => {
+    // The status update that follows the approval must not blank the record of
+    // who allowed it; a completed step is exactly where the question is asked.
+    expect(approved("bounded-browser-sandbox", "full-access")[0]).toMatchObject({
+      outcome: "ran",
+      authority: { label: "Full Access" },
+    });
+  });
+
+  it("names the three accountable authorities on the resting row, and the mode with them", () => {
+    expect(operationAuthorityChip(approved("human", "ask-first")[0]!))
+      .toEqual({ source: "human", label: "You approved", title: "You approved · recorded under Ask First" });
+    expect(operationAuthorityChip(approved("model-review", "auto-approve")[0]!))
+      .toEqual({ source: "model-review", label: "Model review", title: "Model review · recorded under Auto Approve" });
+    expect(operationAuthorityChip(approved("bounded-browser-sandbox", "full-access")[0]!))
+      .toEqual({ source: "bounded-browser-sandbox", label: "Full Access", title: "Full Access · recorded under Full Access" });
+  });
+
+  it("leaves the automatic read-only allowance off the resting row but not out of the record", () => {
+    const [step] = approved("automatic-read", "ask-first");
+    // Every mode auto-allows read effects, so the label would print on nearly
+    // every row while stating a rule rather than a decision. The sheet still
+    // has it: `authority` is present, only the scanning chip is not.
+    expect(operationAuthorityChip(step!)).toBeUndefined();
+    expect(step?.authority).toEqual({ source: "automatic-read", mode: "ask-first", label: "Read-only, automatic" });
+  });
+
+  it("shows nothing at all when the provenance is unreadable", () => {
+    const [step] = operations(pairOperations(messagePartsFromDurableEvents(durableEvents([
+      draft("tool.requested", { call: { id: "call-1", name: "write_file", arguments: { path: "a" } } }),
+      draft("tool.approved", { callId: "call-1", approval: { mode: "ask-first", source: "who-knows" } }),
+    ])))[0]!);
+    // A wrong authority label is a false claim about who is accountable, and an
+    // absent one is the only honest alternative.
+    expect(step?.authority).toBeUndefined();
+    expect(operationAuthorityChip(step!)).toBeUndefined();
+  });
+
+  it("styles the standing grant without borrowing an outcome colour", async () => {
+    const css = await readFile(new URL("./message-parts-view.css", import.meta.url), "utf8");
+    const rule = css.split("\n").find((line) => line.startsWith('.op__authority[data-source="bounded-browser-sandbox"]'));
+    expect(rule).toBeDefined();
+    for (const state of ["--v-verified", "--v-failed", "--state-acting"]) {
+      expect(rule, "authority must not read as an outcome").not.toContain(state);
+    }
   });
 });
 

@@ -31,7 +31,7 @@ export type SlashRegistryOptions = Readonly<{
   tools: ToolRegistry;
   exposeTool?: (tool: ToolDefinition) => ToolSlashExposure;
   includeBuiltins?: boolean;
-  builtinAvailability?: Partial<Record<"help" | "sessions" | "models", SlashCommandAvailability>>;
+  builtinAvailability?: Partial<Record<"help" | "sessions" | "models" | "skills", SlashCommandAvailability>>;
 }>;
 
 const ENABLED = Object.freeze({ enabled: true }) as SlashCommandAvailability;
@@ -156,6 +156,24 @@ function registerBuiltins(
     subcommands: ["list", "new", "open", "fork"],
     parse: parseSessions,
   });
+  /*
+   * Skills were reachable from nothing the composer offers. The registry has
+   * one channel — the tool registry — and a skill is not a tool: no schema, no
+   * effect class, nothing to invoke. So the whole set silently governed every
+   * reply while `/help` listed sessions, models and every workspace tool and
+   * never named one of them. Listing needs no new channel, and a person cannot
+   * reason about a set they cannot see.
+   */
+  registerBuiltin(registry, {
+    name: "skills",
+    aliases: ["skill"],
+    summary: "List the skills pinned into this conversation, with each one's source and digest.",
+    category: "system",
+    usage: "/skills [list]",
+    availability: normalizeAvailability(availability.skills),
+    subcommands: ["list"],
+    parse: parseSkills,
+  });
   registerBuiltin(registry, {
     name: "models",
     aliases: ["model"],
@@ -192,6 +210,13 @@ function registerBuiltin(registry: SlashCommandRegistry, args: Readonly<{
     },
     parse: args.parse,
   });
+}
+
+/** `list` is accepted so the one subcommand the completion offers parses. */
+function parseSkills(tokens: readonly string[]): SlashInvocation {
+  const [subcommand = "list", ...rest] = tokens;
+  if (subcommand !== "list" || rest.length) invalid("Usage: /skills list.");
+  return builtin({ type: "skills.list" });
 }
 
 function parseSessions(tokens: readonly string[]): SlashInvocation {

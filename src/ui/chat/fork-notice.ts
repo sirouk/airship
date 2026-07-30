@@ -34,6 +34,25 @@ const FORK_BRANCH_HEADLINES: Readonly<Record<ForkBranchKind, string>> = Object.f
 });
 
 /**
+ * The same claim, made *before* the click.
+ *
+ * Every headline above is post-hoc: it is read after a branch exists, when the
+ * real counts are in hand. The Retry button's `title` is the one place the
+ * product describes a branch in advance, and because it lived as a literal on
+ * the button it drifted — it promised a "clean fork", i.e. a blank slate, while
+ * the retry path forks at `turnStartPoint` and seals a bounded ancestor-context
+ * seed exactly like every other branch. A pre-click sentence that contradicts
+ * the post-click one is worse than no sentence, so it lives here, beside the
+ * headlines it has to agree with, rather than in the view that renders it.
+ *
+ * No counts: the boundary is known before the click, the reach is not, and
+ * inventing a reach here is precisely the completeness claim this module
+ * exists to refuse.
+ */
+export const FORK_RETRY_TOOLTIP =
+  "Regenerate on a new branch seeded with a bounded, digest-sealed copy of the conversation up to just before this turn. The prior answer is not carried into it and remains inspectable in the source conversation.";
+
+/**
  * The reach of the bounded seed, as one clause.
  *
  * "none omitted" rather than "0 omitted": a fully carried branch is a

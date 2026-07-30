@@ -4,6 +4,7 @@ import {
   deriveBrowserExecutionTier,
   emitExecutionOutput,
   type ExecutionAdapter,
+  type ExecutionCapability,
   type ExecutionRequest,
   type ExecutionResult,
   type ExecutionRuntimeId,
@@ -288,7 +289,7 @@ export function registerExecutionTools(registry: ToolRegistry, workspace?: Works
   registry.register({
     definition: {
       name: "deactivate_execution_runtime",
-      description: "Terminate an optional runtime and release its in-tab processes and memory.",
+      description: "Terminate an optional runtime and release its in-tab processes and memory. The Workspace Terminal shares this runtime: any live terminal session is reconciled into the workspace and then stopped, and the reconciled paths are named in the result.",
       effect: "execute",
       inputSchema: {
         type: "object",
@@ -556,15 +557,27 @@ async function deactivateExecutionRuntime(runtimeId: ExecutionRuntimeId): Promis
   if (runtimeId !== "node-webcontainer") throw new Error(`${runtimeId} cannot be deactivated by this Airship release.`);
   let reconciledPaths: readonly string[] = [];
   let reconcileError: string | undefined;
+  let terminalHeldRuntime = false;
   try {
-    const { quiesceBrowserTerminalHost } = await import("../terminal/manager");
-    reconciledPaths = await quiesceBrowserTerminalHost(
+    const manager = await import("../terminal/manager");
+    // Asked before the quiesce, because the quiesce is what makes it false.
+    terminalHeldRuntime = manager.browserTerminalHoldsSharedRuntime();
+    reconciledPaths = await manager.quiesceBrowserTerminalHost(
       "The shared browser runtime is being deactivated; terminal work was reconciled first.",
     );
   } catch (error) {
     reconcileError = error instanceof Error ? error.message : String(error);
   }
-  if (nodePack) await (await nodePack).deactivateNodeWebContainer();
+  // `nodePack` records only whether *this* module ever ran a job; the Terminal
+  // route boots the very same instance through its own dynamic import. Gating
+  // the teardown on it alone meant a deactivation requested while only a
+  // terminal held the container stopped and reconciled that terminal, tore
+  // nothing down, and still reported the runtime released — the destructive
+  // half of the operation without the half that was asked for.
+  if (nodePack || terminalHeldRuntime) {
+    nodePack ??= import("../execution/node-webcontainer-pack");
+    await (await nodePack).deactivateNodeWebContainer();
+  }
   getClientExecutionRuntime().unregister(runtimeId);
   getClientExecutionRuntime().clearOptionalState(runtimeId);
   return {
@@ -791,6 +804,11 @@ export function getClientExecutionRuntime(): ClientExecutionRuntime {
 /** Exact page-lifetime tier used when a new session pins its runtime manifest. */
 export function getCurrentBrowserExecutionTier() {
   return deriveBrowserExecutionTier(getClientExecutionRuntime().capabilities());
+}
+
+/** Exact page-lifetime capability records for non-agent presentation surfaces. */
+export function inspectCurrentBrowserExecutionCapabilities(): readonly ExecutionCapability[] {
+  return Object.freeze(getClientExecutionRuntime().capabilities());
 }
 
 /**

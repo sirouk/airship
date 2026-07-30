@@ -362,14 +362,27 @@ test("profile-owned approval policy clearly switches new pinned conversations", 
   await expect(page).toHaveURL(/#profiles$/);
   await setActiveProfileApproval(page, "Auto Approve");
 
-  // The local demo model cannot issue the strict structured safety verdict,
-  // so Auto Approve must fail closed to a visible one-time human decision.
+  /*
+   * The same visible decision, for a better reason than it used to be. This
+   * once passed because the demo model could not produce the strict structured
+   * verdict, so Auto Approve fell back to a human — which meant a real reviewer
+   * model would have taken this decision instead, and an `unsafe` verdict would
+   * have denied the operator's own typed command outright.
+   *
+   * A slash command is proposed by the person, so it is now adjudicated by
+   * `createHumanIntentPolicy`: Auto Approve asks, unconditionally and without a
+   * reviewer. The dialog below is therefore the contract, not an artefact of
+   * which model happens to be loaded.
+   */
   await page.getByRole("combobox", { name: "Message Airship" }).fill("/write approvals/auto.txt reviewed");
   await page.getByRole("button", { name: "Send message" }).click();
-  const autoFallback = page.getByRole("dialog", { name: /Allow write_file once/ });
-  await expect(autoFallback).toBeVisible();
-  await autoFallback.getByRole("button", { name: "Deny" }).click();
+  const autoDecision = page.getByRole("dialog", { name: /Allow write_file once/ });
+  await expect(autoDecision).toBeVisible();
+  await autoDecision.getByRole("button", { name: "Deny" }).click();
   await expect(page.getByText(/Permission denied for local \/write/u).last()).toBeVisible();
+  // No local command's parameters reach a model before it runs, in any mode, so
+  // the denial no longer names a safety review that happened.
+  await expect(page.getByText(/nothing was sent to the model/u).last()).toBeVisible();
 
   await setActiveProfileApproval(page, "Full Access");
 

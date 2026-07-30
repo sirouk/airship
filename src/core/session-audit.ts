@@ -1,4 +1,4 @@
-import { CONVERSATION_NAMED_EVENT_TYPE, HUMAN_INTENT_EVENT_TYPE } from "./contracts";
+import { CONVERSATION_NAMED_EVENT_TYPE, HUMAN_INTENT_EVENT_TYPE, TERMINAL_ACTIVITY_EVENT_TYPE } from "./contracts";
 import type {
   CanonicalMessage,
   JsonValue,
@@ -94,7 +94,22 @@ const KNOWN_EVENT_TYPES = new Set([
    * than to the throwaway identity it used to be issued under.
    */
   CONVERSATION_NAMED_EVENT_TYPE,
+  /*
+   * One thing a shell session did. Terminal lineage used to live only in the
+   * manager's 64-record ring buffer, so a command that rewrote the workspace
+   * was absent from the artifact Proof audits — and an event type this set does
+   * not name raises EVENT_TYPE_UNKNOWN, which would have made recording shell
+   * work *degrade* the completeness of the journal it was recorded in.
+   */
+  TERMINAL_ACTIVITY_EVENT_TYPE,
 ]);
+const TERMINAL_RECORD_KINDS = new Set(["interactive-input", "process-start", "process-exit", "workspace-reconcile"]);
+const TERMINAL_RECORD_OUTCOMES = new Set(["submitted", "completed", "failed"]);
+const TERMINAL_SESSION_ORIGINS = new Set(["terminal-route", "workspace-path", "conversation"]);
+/** The manager's own `MAX_AUDIT_CHANGED_PATHS`; a journal copy may not exceed the record it copies. */
+const TERMINAL_MAX_CHANGED_PATHS = 64;
+const TERMINAL_MAX_COMMAND_CHARS = 1_024;
+const TERMINAL_MAX_SUMMARY_CHARS = 512;
 const DIGEST_PATTERN = /^sha256:[A-Za-z0-9_-]{43}$/u;
 const EFFECTS = new Set(["read", "write", "network", "execute", "identity"]);
 const POSTURES = new Set(["local", "plaintext-remote", "encrypted-unattested", "encrypted-attested"]);
@@ -177,6 +192,16 @@ export type SessionAuditReport = Readonly<{
     /** Client-only slash-tool operations; never part of canonical provider context. */
     localCommands: number;
     terminalLocalCommands: number;
+    /*
+     * Shell records — deliberately not `terminalRecords`.
+     *
+     * Every other `terminal` in this file means "reached a terminal state" of a
+     * turn, which is why shell lineage was reported as absent from a file that
+     * appeared to mention terminals a dozen times. A second meaning for the
+     * same word on the same object is how that reading happened; this one says
+     * what it counts.
+     */
+    shellRecords: number;
     unknownEvents: number;
   }>;
   findings: readonly SessionAuditFinding[];
@@ -641,6 +666,15 @@ async function validateProtocol(
    * only identity they have.
    */
   const ancillaryInferences = new Map<string, string>();
+  /**
+   * Shell records already admitted, keyed by terminal + writer + sequence.
+   *
+   * The terminal manager's sequence is monotonic per writer, so that triple is
+   * the record's identity. A repeat means the same shell action was appended
+   * twice — a retried sink or a second page writing the same lineage — and a
+   * ledger that counts one command as two is worse than one that missed it.
+   */
+  const seenTerminalRecords = new Set<string>();
   let sawCreation = false;
   let sawForkContext = false;
   let verifiedForkContextDigest: string | undefined;
@@ -966,15 +1000,28 @@ async function validateProtocol(
        * The answer is length-bounded rather than character-bounded: it is a
        * verbatim provider string, and a model that emits an odd control
        * character must not make an otherwise honest record permanently invalid.
+       *
+       * The title is the *outcome*, not the evidence, so it may be absent: a
+       * request that came back with a refusal or an essay was still billed and
+       * still attested, and requiring a title here would have meant the only
+       * way to stay audit-clean was to journal nothing — which is precisely the
+       * unaudited paid request this record exists to end. A titleless record
+       * must therefore carry the verbatim answer instead, so it still states
+       * what was paid for and still lets the receipt's response digest be
+       * recomputed. Neither field absent is an empty claim, and stays refused.
        */
       const turnId = boundedString(event.turnId, 512);
       const operationId = boundedString(event.operationId, 512);
       const title = boundedString(payload?.title, 240);
+      const answer = typeof payload?.answer === "string" && payload.answer.length <= 4_096;
+      // Absent is allowed; malformed never is. A 4 KiB "title" must still be
+      // refused rather than excused by the answer standing in for it.
+      const titleAcceptable = payload?.title === undefined ? answer : Boolean(title);
       if (
         !payload ||
         !turnId ||
         !operationId ||
-        !title ||
+        !titleAcceptable ||
         seenTurns.has(turnId) ||
         seenOperations.has(operationId) ||
         boundedString(payload.model, 256) === undefined ||
@@ -985,7 +1032,7 @@ async function validateProtocol(
           ...eventLocation(event),
           code: "CONVERSATION_NAMING_INVALID",
           category: "protocol",
-          message: "A conversation naming record must have new turn/operation IDs, a bounded title and model, and any receipt must name this session and operation.",
+          message: "A conversation naming record must have new turn/operation IDs, a bounded model, either a bounded title or the verbatim answer it was rejected from, and any receipt must name this session and operation.",
         });
         continue;
       }
@@ -1033,6 +1080,78 @@ async function validateProtocol(
       if (issue) {
         add({ ...eventLocation(event), code: "HUMAN_INTENT_PROVENANCE_INVALID", category: "protocol", message: issue });
       }
+      continue;
+    }
+
+    if (event.type === TERMINAL_ACTIVITY_EVENT_TYPE) {
+      /*
+       * A shell action, validated entirely on its own terms.
+       *
+       * Like a rename, it happens beside turns rather than inside one, so it
+       * must carry no turn or operation identity — a shell record wearing a
+       * turn ID would make this session's turn accounting describe work no
+       * model did. What it must carry is the binding an auditor traverses:
+       * which terminal, which writer, which process epoch, and — for a
+       * reconciliation — which workspace paths moved.
+       *
+       * `outputTail` is rejected outright rather than truncated. The manager
+       * retains a tail of raw PTY bytes for its own transcript; those bytes
+       * have passed no redaction and the journal is the artifact that gets
+       * exported, so a payload carrying them is malformed, not merely large.
+       */
+      const terminalSessionId = boundedString(payload?.terminalSessionId, 512);
+      const recordId = boundedString(payload?.recordId, 512);
+      const sequence = payload?.sequence;
+      const processEpoch = payload?.processEpoch;
+      const changedPaths = payload?.changedPaths;
+      const writerId = payload?.writerId === undefined ? undefined : boundedString(payload.writerId, 512);
+      if (
+        !payload ||
+        event.turnId ||
+        event.operationId ||
+        payload.version !== 1 ||
+        payload.outputTail !== undefined ||
+        !terminalSessionId ||
+        !recordId ||
+        !Number.isSafeInteger(sequence) ||
+        (sequence as number) <= 0 ||
+        !Number.isSafeInteger(processEpoch) ||
+        (processEpoch as number) < 0 ||
+        !TERMINAL_RECORD_KINDS.has(String(payload.kind)) ||
+        !TERMINAL_RECORD_OUTCOMES.has(String(payload.outcome)) ||
+        !TERMINAL_SESSION_ORIGINS.has(String(payload.origin)) ||
+        !boundedString(payload.cwd, 4_096) ||
+        !boundedString(payload.summary, TERMINAL_MAX_SUMMARY_CHARS) ||
+        !Number.isFinite(Date.parse(String(payload.recordedAt))) ||
+        (payload.writerId !== undefined && !writerId) ||
+        (payload.profileId !== undefined && !boundedString(payload.profileId, 512)) ||
+        (payload.command !== undefined && !boundedString(payload.command, TERMINAL_MAX_COMMAND_CHARS)) ||
+        (payload.exitCode !== undefined && !Number.isSafeInteger(payload.exitCode)) ||
+        (changedPaths !== undefined && (
+          !Array.isArray(changedPaths) ||
+          changedPaths.length > TERMINAL_MAX_CHANGED_PATHS ||
+          changedPaths.some((path) => !boundedString(path, 4_096))))
+      ) {
+        add({
+          ...eventLocation(event),
+          code: "TERMINAL_RECORD_INVALID",
+          category: "protocol",
+          message: "A terminal record must sit outside any turn and carry a bounded terminal id, record id, positive sequence, process epoch, known kind/outcome/origin, cwd, summary and timestamp — and no retained process output.",
+        });
+        continue;
+      }
+      const identity = `${terminalSessionId}:${writerId ?? ""}:${String(sequence)}`;
+      if (seenTerminalRecords.has(identity)) {
+        add({
+          ...eventLocation(event),
+          code: "TERMINAL_RECORD_DUPLICATE",
+          category: "protocol",
+          message: "The same terminal record sequence was appended twice for this terminal and writer.",
+        });
+        continue;
+      }
+      seenTerminalRecords.add(identity);
+      counts.shellRecords += 1;
       continue;
     }
 
@@ -1751,6 +1870,7 @@ function emptyCounts(): {
   terminalToolOperations: number;
   localCommands: number;
   terminalLocalCommands: number;
+  shellRecords: number;
   unknownEvents: number;
 } {
   return {
@@ -1763,6 +1883,7 @@ function emptyCounts(): {
     terminalToolOperations: 0,
     localCommands: 0,
     terminalLocalCommands: 0,
+    shellRecords: 0,
     unknownEvents: 0,
   };
 }

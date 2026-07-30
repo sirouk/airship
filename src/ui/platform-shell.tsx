@@ -487,9 +487,27 @@ export function applyPreferenceOverrides(
   root.dataset.corners = value.corners === DEFAULT_PREFERENCES.corners ? base.corners : value.corners;
   root.dataset.bodyFont = value.bodyFont === DEFAULT_PREFERENCES.bodyFont ? base.bodyFont : value.bodyFont;
   root.style.colorScheme = value.mode;
+  syncDocumentThemeColor(root);
   // The transcript renderer sits below the prop tree that carries preferences,
   // so applying one is also how it becomes live there.
   setTranscriptOperationsMode(value.transcriptOperations);
+}
+
+/**
+ * Puts the browser's own chrome on the palette the document actually resolved.
+ *
+ * `index.html` can only hard-code one colour, and it hard-coded the dark one:
+ * a light-mode reader got a dark address bar and a dark overscroll gutter
+ * around a paper document for the whole session. `--ground` is read back rather
+ * than passed in so this is right for both callers — a theme has already
+ * written its inline palette by the time it reaches here, and with no theme the
+ * value is the mode's own stylesheet ground.
+ */
+function syncDocumentThemeColor(root: HTMLElement): void {
+  if (typeof document === "undefined" || root !== document.documentElement) return;
+  const ground = getComputedStyle(root).getPropertyValue("--ground").trim();
+  if (!ground) return;
+  document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')?.setAttribute("content", ground);
 }
 
 export function PreferencesDialog({ open, value, onChange, onClose, profileApproval, vaultProviderSwitching = false, vaultAdopted }: Readonly<{
@@ -747,13 +765,102 @@ export class ViewErrorBoundary extends Component<ViewBoundaryProps, ViewBoundary
   }
 }
 
-export function useBeforeUnloadGuard(active: boolean): void {
+/**
+ * Whether leaving this page would destroy work nothing can rebuild.
+ *
+ * The predicate used to be "a conversation exists", which is true from the
+ * first frame of every visit: the dialog fired on every reload, on every
+ * adopted-Vault runtime whose journal survives a reload intact, and on a
+ * brand-new empty conversation. A confirmation that is always shown is a
+ * confirmation nobody reads, so the one time it guards real loss it is
+ * dismissed by reflex.
+ *
+ * The three real terms: a turn in flight can be lost mid-write; page-memory
+ * events die with the tab; an adopted Vault has already written them down.
+ * Unsent composer text is deliberately absent — it is mirrored into
+ * `sessionStorage` per thread and rehydrates after a reload.
+ */
+export function unloadWouldLoseWork(input: Readonly<{
+  /** A turn or storage transition is mid-flight. */
+  busy: boolean;
+  /** Durable events in the open conversation. */
+  eventCount: number;
+  /** The runtime writes through verified encrypted adapters. */
+  vaultAdopted: boolean;
+  /** Airship is performing this navigation itself; see `useBeforeUnloadGuard`. */
+  reloading?: boolean;
+}>): boolean {
+  if (input.reloading) return false;
+  if (input.busy) return true;
+  return !input.vaultAdopted && input.eventCount > 0;
+}
+
+/**
+ * Registers the guard and hands back the synchronous release.
+ *
+ * Separated from the hook because the suite runs without a DOM: this is the
+ * whole behaviour, and the hook below is the three lines of lifecycle over it.
+ */
+export function armBeforeUnloadGuard(
+  target: Pick<Window, "addEventListener" | "removeEventListener">,
+): () => void {
+  const guard = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+  target.addEventListener("beforeunload", guard);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    target.removeEventListener("beforeunload", guard);
+  };
+}
+
+/**
+ * Returns a release the caller invokes before navigating on purpose.
+ *
+ * A state flag cannot do this job: `window.location.reload()` runs in the same
+ * tick as the click, long before a re-render could unregister the listener, so
+ * pressing "Reload Airship" would still raise the browser's own "leave site?"
+ * over a reload the person just asked for.
+ */
+export function useBeforeUnloadGuard(active: boolean): () => void {
+  const release = useRef<() => void>();
   useEffect(() => {
     if (!active) return;
-    const guard = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
-    window.addEventListener("beforeunload", guard);
-    return () => window.removeEventListener("beforeunload", guard);
+    const releaseGuard = armBeforeUnloadGuard(window);
+    release.current = releaseGuard;
+    return () => { release.current = undefined; releaseGuard(); };
   }, [active]);
+  return () => { release.current?.(); release.current = undefined; };
+}
+
+/**
+ * The trailing edge of a burst of values.
+ *
+ * Exported as a scheduler rather than buried in the hook for the same reason as
+ * `armBeforeUnloadGuard`: this *is* the debounce, and `useEffect`'s contract is
+ * exactly "run the previous cleanup, then this effect", so driving it directly
+ * exercises the hook's semantics rather than a transcription of them.
+ */
+export function scheduleTrailingValue<T>(
+  value: T,
+  delayMs: number,
+  commit: (value: T) => void,
+  timers: Pick<typeof globalThis, "setTimeout" | "clearTimeout"> = globalThis,
+): () => void {
+  const handle = timers.setTimeout(() => commit(value), delayMs);
+  return () => timers.clearTimeout(handle);
+}
+
+/**
+ * `value` once it has stopped moving for `delayMs`.
+ *
+ * The initial value is adopted synchronously, so a first render is never
+ * delayed by the window — only a *change* pays it.
+ */
+export function useDebouncedValue<T>(value: T, delayMs: number): T {
+  const [settled, setSettled] = useState(value);
+  useEffect(() => scheduleTrailingValue(value, delayMs, setSettled), [value, delayMs]);
+  return settled;
 }
 
 /**
@@ -761,27 +868,40 @@ export function useBeforeUnloadGuard(active: boolean): void {
  * riding its last card.
  *
  * The re-anchor belongs here because the soft keyboard moves the layout through
- * CSS alone: `--visual-viewport-bottom` widens the transcript's bottom padding
- * and lifts the composer, and no Preact state changes, so the transcript's own
- * re-pin effect — which is keyed on messages and measured heights — never
- * re-runs. Without this, opening the keyboard slides the newest card under the
- * lifted composer and the person has to scroll to read the reply they just
- * asked for.
+ * CSS alone: `--visual-viewport-bottom` shrinks `#app` to the visual viewport,
+ * which raises the transcript's floor, and no Preact state changes — so the
+ * transcript's own re-pin effect, which is keyed on messages and measured
+ * heights, never re-runs. Without this, opening the keyboard leaves the reader
+ * looking at the same pixels while the reply they just asked for scrolls out
+ * of the shortened box.
  */
-export function publishVisualViewportOffset(root: HTMLElement, obscured: number): void {
+export function publishVisualViewportOffset(root: HTMLElement, obscured: number, scale = 1): void {
+  // `visualViewport` reports pinch zoom through the same two numbers as a
+  // keyboard: a shorter `height` and a moving `offsetTop`. So `obscured`
+  // changes on every frame of a pinch-pan, and the "did the value move" test
+  // below cannot tell the two apart — a zoomed reader got the transcript
+  // scrolled under their own finger, and the shell shrunk around them. The
+  // arithmetic is only a keyboard measurement at scale 1; above it, hold
+  // whatever was last published rather than compensate for a gesture.
+  if (Math.abs(scale - 1) > 0.01) return;
   const published = `${Math.round(obscured)}px`;
-  // A visualViewport `scroll` fires for every pinch-pan, not just a keyboard
-  // change. Re-anchoring on those would yank the transcript up to the 64px
-  // threshold under the reader's own finger, so only an offset that actually
-  // moved is allowed to move the transcript.
   if (root.style.getPropertyValue("--visual-viewport-bottom") === published) return;
   const transcript = root.querySelector<HTMLElement>(".transcript");
-  // Ask before the offset lands. Once the padding grows, the container has
+  // Ask before the offset lands. Once the shell shrinks, the container has
   // already drifted away from the last card and the answer is always "no".
   const anchored = transcript !== null && isNearLastRealCard(transcript);
+  const floorBefore = transcript?.getBoundingClientRect().bottom;
   root.style.setProperty("--visual-viewport-bottom", published);
   root.dataset.keyboardOpen = obscured > 80 ? "true" : "false";
-  if (transcript && anchored) scrollToLastRealCard(transcript, "auto");
+  if (!transcript || !anchored) return;
+  // Follow the stylesheet instead of assuming it. Re-anchoring is only ever
+  // correct as compensation for a floor that moved; when nothing in the
+  // cascade consumes the variable at this width — every desktop layout, and
+  // any future breakpoint that opts out — the card is still on the floor and
+  // scrolling would move it off. This read is also what flushes the layout the
+  // scroll target is then computed from.
+  if (transcript.getBoundingClientRect().bottom === floorBefore) return;
+  scrollToLastRealCard(transcript, "auto");
 }
 
 /** Publishes the obscured keyboard height without guessing on unsupported browsers. */
@@ -793,7 +913,7 @@ export function useVisualViewport(root = typeof document === "undefined" ? undef
     const update = () => {
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => {
-        publishVisualViewportOffset(root, Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop));
+        publishVisualViewportOffset(root, Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop), viewport.scale);
       });
     };
     viewport.addEventListener("resize", update);

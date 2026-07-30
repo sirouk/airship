@@ -42,8 +42,9 @@ adapter are in
 - framework-independent TypeScript agent runtime;
 - append-only sessions with a byte-stable prompt/tool snapshot;
 - a bounded browser-native session library with search, filter, sort, exact-pin
-  resume, immutable clean forks, and full digest/protocol auditing before
-  resume;
+  resume, forks that seal an immutable lineage commitment and inherit a
+  bounded, digest-sealed copy of the ancestor context, and full digest/protocol
+  auditing before resume;
 - capability-gated workspace tools;
 - a fail-closed approval dock with a bounded concurrent queue, recursively
   redacted arguments, timeout/abort denial, and session/turn/operation identity;
@@ -92,7 +93,8 @@ adapter are in
 - a browser-direct Chutes evidence engine with exact receipt-instance E2E key
   discovery, fresh nonces, strict bounded quote/GPU/certificate parsing,
   published-measurement comparison, account-partitioned byte-bounded caches,
-  cancellation, and conservative `evidence-only` records; current live
+  cancellation, conservative `evidence-only` records, and automatic bounded
+  reacquisition when a still-addressed endpoint observation ages; current live
   evidence and measurement endpoints are directly browser-readable, while any
   future CORS/scope/network failure remains visibly fail-closed;
 - a unified, lazy-loaded Proof ledger with claim-scoped status icons,
@@ -148,8 +150,13 @@ adapter are in
   digest-linked remote process records without claiming peer authorship; no
   remote executor is registered or advertised yet;
 - immutable profile revisions, semantic whole-interface themes, globally or
-  per-profile resolved skills, and a lazy WebGL relationship graph derived from
-  real page-memory lineage;
+  per-profile resolved skills whose exact revisions remain visible on the
+  conversation, Profile-local workspace/session/terminal/index authorities,
+  and a lazy WebGL relationship graph derived from real page-memory lineage;
+- proactive browser capability observation shared by the agent and UI, including
+  WebGPU, WebNN, WebAssembly, OPFS, extension-companion state, executable runtime
+  activation paths, and honest current/peak in-page execution-load readings on
+  desktop and mobile;
 - a direct Chutes Account view for effective balance, actual charged usage,
   subscription-cycle and fixed four-hour runway, quota records, and live
   invocation telemetry, with `cak_` and `cpk_` capabilities kept distinct.

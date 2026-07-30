@@ -51,6 +51,32 @@ test("desktop terminal manages page-local tabs without claiming host Bash", asyn
   await expect(page.getByText(/Input history · \d+/)).toBeVisible();
   await expect(page.getByText(/Audit lineage · \d+/)).toBeVisible();
 
+  // `role="tab"` obliges the widget contract, not just the styling: ←/→ and
+  // Home/End move selection *and* focus, and exactly one tab is in the tab
+  // order. Without it a keyboard user reaches this strip and cannot leave the
+  // tab they landed on, which is the whole defect the role was hiding.
+  const tab = tabs.getByRole("tab");
+  await tab.nth(2).focus();
+  await expect(tab.nth(2)).toBeFocused();
+  await page.keyboard.press("ArrowLeft");
+  await expect(tab.nth(1)).toBeFocused();
+  await expect(tab.nth(1)).toHaveAttribute("aria-selected", "true");
+  await expect(tab.nth(2)).toHaveAttribute("aria-selected", "false");
+  await page.keyboard.press("Home");
+  await expect(tab.nth(0)).toBeFocused();
+  await expect(tab.nth(0)).toHaveAttribute("aria-selected", "true");
+  // One entry point, not one stop per tab: the roving tabindex the role means.
+  await expect(tab.nth(0)).toHaveAttribute("tabindex", "0");
+  await expect(tab.nth(1)).toHaveAttribute("tabindex", "-1");
+  await expect(tab.nth(2)).toHaveAttribute("tabindex", "-1");
+  await page.keyboard.press("End");
+  await expect(tab.nth(2)).toBeFocused();
+  await expect(tab.nth(2)).toHaveAttribute("aria-selected", "true");
+  // A key the strip does not own is left alone rather than swallowed, so the
+  // strip is not a keyboard trap.
+  await page.keyboard.press("Tab");
+  await expect(tab.nth(2)).not.toBeFocused();
+
   await page.getByRole("button", { name: "Close terminal tab" }).click();
   await expect(tabs.getByRole("tab")).toHaveCount(2);
   await expect(page.locator(".terminal-route__footer")).toContainText("bounded lineage remains only for this page/workspace lifetime");
@@ -69,6 +95,24 @@ test("mobile terminal keeps process controls and horizontal tabs usable", async 
   const newHere = page.getByRole("button", { name: "New terminal at current directory" });
   await expect(newHere).toBeVisible();
   expect((await newHere.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+  // The phone rule sheds the words, not the glyphs. Written against
+  // `button span` it also hid the `＋`, whose mark happens to live in a span —
+  // a 44px box with nothing in it. Height alone cannot see that, so the mark
+  // is measured: `toBeVisible` is false for a `display:none` span, and the
+  // width proves the box is not merely present but painted.
+  const newHereGlyph = newHere.locator('span[aria-hidden="true"]');
+  await expect(newHereGlyph).toBeVisible();
+  await expect(newHereGlyph).toHaveText("＋");
+  expect((await newHereGlyph.boundingBox())?.width ?? 0).toBeGreaterThan(0);
+  // And the word is what the rule is allowed to take.
+  await expect(newHere.locator('span:not([aria-hidden="true"])')).toBeHidden();
+  // The same rule governs the whole bar. `useInnerText` is the point: rendered
+  // text is what a phone user has, and `textContent` would happily report the
+  // very word the rule just hid.
+  const close = page.getByRole("button", { name: "Close terminal tab" });
+  expect((await close.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+  await expect(close).toContainText("×", { useInnerText: true });
+  await expect(close).not.toContainText("Close", { useInnerText: true });
   await expect(page.getByText(/Input history · \d+/)).toBeVisible();
   await expect(page.getByText(/Audit lineage · \d+/)).toBeVisible();
   await expect(page.locator(".terminal-panel")).toBeInViewport();

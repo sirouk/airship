@@ -395,13 +395,22 @@ export function Tabs({
  * while it is plainly on screen. Measured doing exactly that on a two-tab
  * strip, which claimed one tab was hidden.
  */
-function tabBox(strip: HTMLElement, tab: HTMLElement): TabBox {
+export function tabBox(strip: HTMLElement, tab: HTMLElement): TabBox {
   const origin = strip.getBoundingClientRect().left - strip.scrollLeft;
   const rect = tab.getBoundingClientRect();
   return { id: tab.dataset.tabId ?? "", start: rect.left - origin, end: rect.right - origin };
 }
 
-function stripViewport(strip: HTMLElement): TabViewport {
+/**
+ * The strip's own visible window, in the same coordinates as `tabBox`.
+ *
+ * Exported alongside `tabBox` for the one strip that cannot adopt `Tabs`:
+ * Terminal replaces a tab with a text input while it is being renamed, and
+ * `TabItem` has no shape for that. It takes the measured rule rather than a
+ * second copy of it, which is the part of "one tab strip" that is actually
+ * about behaviour rather than markup.
+ */
+export function stripViewport(strip: HTMLElement): TabViewport {
   return { start: strip.scrollLeft, end: strip.scrollLeft + strip.clientWidth };
 }
 

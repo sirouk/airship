@@ -27,7 +27,13 @@ import { Seal, type SealState } from "./seal";
 export type BillingCredentialKind = "oauth" | "api-key" | "unknown";
 
 export type BillingProviderId = "chutes" | "openai" | "anthropic" | "xai";
-export type BillingProviderConnectionState = "connected" | "not-connected" | "unavailable";
+/**
+ * `rejected` is a fourth state because "a credential is held" and "the provider
+ * took it" are two facts, and the tab strip is the only place the second one is
+ * readable from another provider's panel. Collapsing it into `not-connected`
+ * would deny the held credential; collapsing it into `connected` is the defect.
+ */
+export type BillingProviderConnectionState = "connected" | "not-connected" | "rejected" | "unavailable";
 
 export type BillingProviderObservation = Readonly<
   | { status: "observed"; value: string; detail?: string; observedAt?: string }
@@ -180,9 +186,27 @@ export function billingProviderDatumLabel(
   return connectionState === "connected" ? "Not provided" : "Unavailable";
 }
 
+/**
+ * The tab strip, which outlives every other statement about Chutes on this
+ * route.
+ *
+ * The header chip and the refusal alert are both rendered only while the Chutes
+ * panel is selected (`selectedProvider === "chutes"` gates the `status` slot and
+ * the whole panel). Select OpenAI and the tab label is the *only* thing left on
+ * screen saying anything about the Chutes connection — so if it reads
+ * "Connected" over four 401s, the fix that landed on the chip has simply moved
+ * the false sentence one element to the left. `chutesConnected` answers "is a
+ * credential held in page memory", which stays true of a rejected one; the tab
+ * has to state acceptance too, and it is the only surface that can.
+ *
+ * Only `rejected` demotes the tab. A `refused` reading (every source 5xx) is a
+ * transient fault, not a verdict on the credential, and calling it "Not
+ * accepted" would blame the credential for the provider being down.
+ */
 export function resolveBillingProviderInventory(
   entries: readonly BillingProviderInventoryEntry[] | undefined,
   chutesConnected: boolean,
+  chutesAcceptance?: ChutesAccountAcceptance,
 ): readonly BillingProviderInventoryEntry[] {
   const supplied = new Map<BillingProviderId, BillingProviderInventoryEntry>();
   for (const entry of entries ?? []) {
@@ -194,7 +218,9 @@ export function resolveBillingProviderInventory(
     return Object.freeze({
       providerId: provider.id,
       state: provider.id === "chutes"
-        ? chutesConnected ? "connected" as const : "not-connected" as const
+        ? !chutesConnected
+          ? "not-connected" as const
+          : chutesAcceptance === "rejected" ? "rejected" as const : "connected" as const
         : entry?.state ?? "unavailable" as const,
       ...(entry?.connectionDetail ? { connectionDetail: entry.connectionDetail } : {}),
       ...(entry?.identity ? { identity: entry.identity } : {}),
@@ -297,8 +323,8 @@ export function BillingView({
   const subscriptionInactive = subscriptionState.status === "verified" && subscriptionState.value?.active === false;
   const quota = invocationTelemetry?.quota;
   const providers = useMemo(
-    () => resolveBillingProviderInventory(providerInventory, accountReadable),
-    [providerInventory, accountReadable],
+    () => resolveBillingProviderInventory(providerInventory, accountReadable, acceptance),
+    [providerInventory, accountReadable, acceptance],
   );
   const selectedInventory = providers.find((provider) => provider.providerId === selectedProvider)!;
   const selectedDefinition = BILLING_PROVIDERS.find((provider) => provider.id === selectedProvider)!;
@@ -544,7 +570,13 @@ export function BillingView({
           </div>
           {usageEntries.length ? <UsageChart entries={usageEntries} highlight={highlight} onHighlight={setHighlight} /> : <div class="billing-empty"><Icon name="billing" /><strong>{usageEmptyTitle(usageState.status)}</strong><p>{usageState.status === "verified" ? "Chutes returned no usage records for this requested range; activity outside the response is not inferred." : usageState.detail}</p></div>}
           {usageEntries.length ? (
-            <div class="usage-ledger" role="table" aria-label="Recent account usage">
+            <>
+            <div
+              class="usage-ledger"
+              role="table"
+              aria-label="Recent account usage"
+              aria-describedby="usage-ledger-bound"
+            >
               {/* `role="table"` on the container declared a table whose rows had
                   no cells in them: the generic spans stayed generic, so the
                   ledger reached the accessibility tree as four rows of nothing.
@@ -567,9 +599,16 @@ export function BillingView({
                   <strong role="cell">{formatUsd(entry.cost, "ledger")}</strong>
                 </div>
               ))}
-              {/* The table capped at ten rows and said so nowhere. */}
-              <p class="usage-ledger-foot">Showing the {Math.min(10, usageEntries.length)} most recent of {usageEntries.length} bucket{usageEntries.length === 1 ? "" : "s"}.</p>
             </div>
+            {/* The table capped at ten rows and said so nowhere. The sentence
+                stays visually attached but sits outside `role="table"`: a
+                non-row child of a table is not in the table's content model, so
+                inside the container this was the one line AT would never
+                reach — the cap disclosure, deleted by the markup that was added
+                to make the rows real. `aria-describedby` keeps the association
+                the DOM nesting used to imply. */}
+            <p class="usage-ledger-foot" id="usage-ledger-bound">Showing the {Math.min(10, usageEntries.length)} most recent of {usageEntries.length} bucket{usageEntries.length === 1 ? "" : "s"}.</p>
+            </>
           ) : null}
         </section>
 
@@ -673,7 +712,9 @@ function BillingProviderInventoryPanel({
       ? "Connected state was supplied by the host. This view did not call the provider API."
       : inventory.state === "not-connected"
         ? "No connected account is currently represented in this inventory."
-        : "Connection state was not supplied to this view."
+        : inventory.state === "rejected"
+          ? "A credential is held for this provider and the provider refused it. Nothing below was read."
+          : "Connection state was not supplied to this view."
   );
   const accountLinkStatus = inventory.accountLink?.status === "not-provided"
     ? "Not provided"
@@ -905,6 +946,7 @@ function quotaEmptyTitle(status: BillingDatumStatus): string {
 function providerConnectionLabel(state: BillingProviderConnectionState): string {
   if (state === "connected") return "Connected";
   if (state === "not-connected") return "Not connected";
+  if (state === "rejected") return "Not accepted";
   return "Unavailable";
 }
 

@@ -66,6 +66,24 @@
   min-width: 0;
 }
 
+/*
+ * The other half of this route's `data-route-measure="wide"`.
+ *
+ * VIS-02 asks dense surfaces to use the desktop width *and* prose to stay
+ * bounded, and this route is one of each: the attestation ledger is a two-pane
+ * grid of digests that wants every pixel, while the receipt panel is a verdict,
+ * three counts and several paragraphs, which a 1920px line length only makes
+ * harder to read. Widening the route and re-capping this panel keeps both
+ * halves true; widening nothing kept the ledger squeezed, and widening
+ * everything would have traded one defect for the other.
+ *
+ * The literal matches `routes.css`'s default measure deliberately — this is the
+ * same measure, re-entered one level down, not a second opinion about it.
+ */
+.proof-surface-panel--prose {
+  width: min(1160px, 100%);
+}
+
 /* ── The one verdict ─────────────────────────────────────────────────── */
 
 .proof-verdict {

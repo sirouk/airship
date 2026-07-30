@@ -28,12 +28,19 @@ export type SessionJournal = Readonly<{
   lineage?: Readonly<{ sourceSessionId: string; onOpen(): void }>;
 }>;
 
+export type PinnedSessionSkills = Readonly<{
+  skillSetDigest: string;
+  skills: readonly Readonly<{ skillId: string; name: string; digest: string }>[];
+}>;
+
 export type SessionBarProps = Readonly<{
   title: string;
   profileName: string;
   monogram: string;
   /** The model chip. A slot: this package places it, the model package fills it. */
   model: ComponentChildren;
+  /** The immutable skill set that composed this conversation's prompt. */
+  pinnedSkills?: PinnedSessionSkills;
   statusFacts: readonly SessionStatusFact[];
   durabilityLabel: string;
   journal: SessionJournal;
@@ -49,6 +56,7 @@ export function SessionBar({
   profileName,
   monogram,
   model,
+  pinnedSkills,
   statusFacts,
   durabilityLabel,
   journal,
@@ -144,6 +152,7 @@ export function SessionBar({
       </h1>
       <div class="session-bar__chips">
         {model}
+        {pinnedSkills ? <PinnedSkillsChip pin={pinnedSkills} /> : null}
         <SessionStatusChip facts={statusFacts} durabilityLabel={durabilityLabel} />
         <JournalChip journal={journal} onOpenSession={onOpenSession} />
         <button
@@ -168,6 +177,27 @@ export function SessionBar({
         </button>
       </div>
     </div>
+  );
+}
+
+export function pinnedSkillsLabel(count: number): string {
+  return `${count} skill${count === 1 ? "" : "s"} pinned to this conversation`;
+}
+
+function PinnedSkillsChip({ pin }: Readonly<{ pin: PinnedSessionSkills }>) {
+  const label = pinnedSkillsLabel(pin.skills.length);
+  return (
+    <Popover
+      class="session-skills-popover"
+      triggerClass="session-skills-chip"
+      label={`${label}. Skill-set digest ${pin.skillSetDigest}.`}
+      heading="Pinned conversation skills"
+      trigger={<><Icon name="skills" size={14} /><span class="session-skills-chip__label">{pin.skills.length} skills</span></>}
+    >
+      <p>This immutable set composed the conversation prompt. Later Skill changes apply only to a new conversation.</p>
+      {pin.skills.length ? <ul>{pin.skills.map((skill) => <li key={`${skill.skillId}:${skill.digest}`}><strong>{skill.name}</strong><code>{skill.digest.slice(-9)}</code></li>)}</ul> : <p>No Skill instructions were pinned.</p>}
+      <code>{pin.skillSetDigest}</code>
+    </Popover>
   );
 }
 

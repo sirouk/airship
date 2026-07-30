@@ -450,6 +450,10 @@ for (const density of densities) {
         await page.goto(`/#${hash}`);
         const main = page.getByRole("main");
         await expect(main.getByRole("heading", { name: headingName }).first()).toBeVisible({ timeout: 10_000 });
+        // `/.+/` also matches the Boot screen's Airship heading. Wait for the
+        // routed landmark before measuring Chat so cold bootstrap cannot make
+        // a missing `.main` look like responsive geometry.
+        await expect(page.locator("main.main")).toBeVisible();
         await expect(page.locator("html")).toHaveAttribute("data-density", density);
 
         const geometry = await page.evaluate((routeHash) => {

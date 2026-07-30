@@ -1,9 +1,13 @@
 import { expect, test, type Page, type TestInfo } from "@playwright/test";
 
-async function openIsolatedWorkspace(page: Page): Promise<void> {
+async function seedDisplayPreferences(page: Page): Promise<void> {
   await page.addInitScript(() => localStorage.setItem("airship.display-preferences.v1", JSON.stringify({
     mode: "dark", typeScale: "default", density: "comfortable", corners: "subtle", bodyFont: "system-sans", vaultBackend: "ephemeral", approvalMode: "full-access",
   })));
+}
+
+async function openIsolatedWorkspace(page: Page): Promise<void> {
+  await seedDisplayPreferences(page);
   await page.goto("/#workspace");
   // AMENDED: this asserted `heading "Editor"` on `#workspace`. That assertion
   // pinned the defect — one component served two destinations and hard-coded
@@ -488,6 +492,19 @@ test("the virtualised tree states its real size and owns nothing but treeitems",
   expect(structure.unadopted).toBe(0);
   expect(structure.tabbable).toBe(0);
 
+  // What the adoption costs if it is left bare. `treeitem` names itself from
+  // content, and accname walks *owned* children too, so `aria-owns` alone made
+  // every row announce "README.md 184 B Actions for README.md" — its own name
+  // twice. These are the only assertions in the suite that read a computed
+  // accessible name; the row locators elsewhere are unanchored regexes that
+  // match the doubled name just as happily as the correct one.
+  await expect(page.getByRole("treeitem", { name: /Actions for/u })).toHaveCount(0);
+  await expect(page.getByRole("treeitem", { name: "docs", exact: true })).toBeVisible();
+  await expect(page.getByRole("treeitem", { name: /^README\.md \d+(?:\.\d)? [KMGT]?B$/u })).toBeVisible();
+  // And the button keeps the name that makes it reachable — the point of
+  // adopting it rather than hiding it.
+  await expect(page.getByRole("button", { name: "Actions for README.md" })).toHaveCount(1);
+
   // The tree's own contract: Tab leaves it in one press.
   await page.getByRole("treeitem", { name: /README\.md/u }).focus();
   await page.keyboard.press("Tab");
@@ -551,4 +568,33 @@ test("phone destinations keep switching panes after the first one", async ({ pag
   await page.goto("/#editor");
   await expect(page.locator(".workbench-activity")).toHaveClass(/mobile-active/u);
   await expect(page.getByRole("tree", { name: "Workspace files" })).toBeVisible();
+});
+
+test("a first paint at #editor with nothing open lands on the tree, not the dead pane", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile-chromium", "mobile pane contract");
+  // The other direction of the same rule, and the half no in-session journey
+  // can reach: the arrival *effect* never runs on the first paint, so the pane
+  // a cold load starts in is decided by the `useState` seed alone. Seeded as a
+  // bare `useState(opensPane)` this landed on the editor pane with no document
+  // and a disabled Editor tab — a screen whose only way out was the browser's
+  // back button. So this test must not visit #workspace first; going through
+  // `openIsolatedWorkspace` would mount the component on the good route and
+  // prove nothing.
+  await seedDisplayPreferences(page);
+  await page.goto("/#editor");
+
+  await expect(page.getByRole("heading", { name: "Editor", level: 1 })).toBeVisible();
+  await expect(page.locator(".workbench-activity")).toHaveClass(/mobile-active/u);
+  await expect(page.getByRole("tree", { name: "Workspace files" })).toBeVisible();
+  // The pane it declined to open is genuinely unreachable, which is why
+  // declining was the right answer rather than a cosmetic one.
+  await expect(page.getByRole("tab", { name: "Editor", exact: true })).toBeDisabled();
+
+  // And the rule is only about the empty case: open one document and #editor
+  // means what it says.
+  await page.getByRole("treeitem", { name: /README\.md/u }).click();
+  await page.goto("/#workspace");
+  await expect(page.locator(".workbench-activity")).toHaveClass(/mobile-active/u);
+  await page.goto("/#editor");
+  await expect(page.locator(".workbench-editor")).toHaveClass(/mobile-active/u);
 });
