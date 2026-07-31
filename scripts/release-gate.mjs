@@ -141,7 +141,13 @@ export const RELEASE_BUDGETS = Object.freeze({
   // rail recents reclamation re-measured the partition at 1924.54 KiB raw /
   // 603.6 KiB gzip — roughly four KiB of reviewed route work, still none of it
   // first-paint.
-  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 1925 * 1024, gzip: 604 * 1024 }),
+  //
+  // The journey pass added roughly half a KiB: a tab-scoped record of the
+  // conversation addresses this page wrote itself, so the first screen a person
+  // ever sees stops reporting a conversation lost to Airship's own boot reload.
+  // Measured 1925.16 KiB raw; raw takes the next whole KiB and gzip is
+  // unchanged well inside its ceiling.
+  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 1926 * 1024, gzip: 604 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now measures 672.33 KiB raw / 186.61 KiB gzip:
   // the browser-Git pack grew (see optionalBrowserGit) and the Terminal pack
@@ -195,10 +201,11 @@ export const RELEASE_BUDGETS = Object.freeze({
   // The vendor-logo/theme/vault/rail pass carries the aggregate to
   // 2593.02 KiB raw / 789.33 KiB gzip — the sum of the lazy-route deltas
   // reviewed in `firstPartyJavaScriptAndWorkers` above, still nothing eager.
-  // The local-device reclaim and vault danger-zone pass carries the aggregate
+  // The local-device reclaim and vault danger-zone pass carried the aggregate
   // to 2596.87 KiB raw / 790.35 KiB gzip: the sum of the lazy-route deltas
   // reviewed in the same comment chain as `firstPartyJavaScriptAndWorkers`.
-  totalJavaScriptAndWorkers: Object.freeze({ raw: 2597 * 1024, gzip: 791 * 1024 }),
+  // The journey pass takes it to 2597.49 KiB raw, one whole KiB above.
+  totalJavaScriptAndWorkers: Object.freeze({ raw: 2598 * 1024, gzip: 791 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. Keep it visible under a dedicated, deliberately small cap.
   serviceWorker: Object.freeze({ raw: 12 * 1024, gzip: 4 * 1024 }),

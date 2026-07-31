@@ -44,13 +44,42 @@ describe("session bar at phone width", () => {
     expect(chips).toContain("grid-row: 1");
     expect(chips).toContain("flex-wrap: nowrap");
     // In-row overflow is what keeps a 320px bar from spending a second deck:
-    // the cluster scrolls its own strip rather than compressing a chip.
-    expect(chips).toContain("overflow-x: auto");
+    // the strip scrolls rather than compressing a chip. It moved onto the
+    // instruments, so the two verbs beside them cannot be carried off by it.
+    const instruments = phoneBlock.match(/\.session-bar__instruments \{([^}]+)\}/u)?.[1] ?? "";
+    expect(instruments).toContain("overflow-x: auto");
   });
 
   it("never shrinks a chip below its own words", () => {
-    const children = phoneBlock.match(/\.session-bar__chips > \* \{([^}]+)\}/u)?.[1] ?? "";
+    const children = phoneBlock.match(/\.session-bar__instruments > \* \{([^}]+)\}/u)?.[1] ?? "";
     expect(children).toContain("flex: 0 0 auto");
+  });
+
+  /*
+   * Two guarantees the one-row design was missing, both measured on this build
+   * before they were added.
+   *
+   * "The title takes what is left" had no floor, and the arithmetic took all of
+   * it: the conversation name rendered 38px wide at 390px and the identity
+   * block 2px at 320px, so the H1 read "Ge…" beside six fully legible chips.
+   * The element that answers "which conversation is this" was the only thing
+   * on the bar that had been priced at zero.
+   *
+   * And when the surplus scrolled, it carried the verbs with it: `+` left the
+   * strip at 390px and Rename followed at 320px. A reading you scroll to is
+   * still a reading; a verb you scroll to is a verb nobody finds. So the
+   * readings scroll and the actions are pinned.
+   */
+  it("gives the conversation's own name a floor", () => {
+    const bar = phoneBlock.match(/\.session-bar \{([^}]+)\}/u)?.[1] ?? "";
+    expect(bar).toMatch(/grid-template-columns:\s*minmax\(\s*7rem/u);
+  });
+
+  it("pins the two verbs outside the strip that scrolls", () => {
+    const pinned = phoneBlock.match(/\.session-bar__rename-action,\s*\n\s*\.session-bar__new \{([^}]+)\}/u)?.[1] ?? "";
+    expect(pinned, "rename and new conversation must not be carried off by the instrument scroll").toContain("flex: 0 0 auto");
+    const shrinkable = phoneBlock.match(/\.session-bar__chips > \.session-bar__instruments \{([^}]+)\}/u)?.[1] ?? "";
+    expect(shrinkable, "the readings are the row's one shrinkable child").toContain("flex: 0 1 auto");
   });
 
   it("keeps 44px hit targets for every phone chip and action", () => {

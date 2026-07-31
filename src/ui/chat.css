@@ -115,6 +115,14 @@
   justify-self: end;
 }
 
+/* The readings. Scrolls when the row is tight; the verbs beside it never do. */
+.session-bar__instruments {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+  min-width: 0;
+}
+
 /*
  * The one chip recipe the whole right cluster is an instance of.
  *
@@ -1711,6 +1719,25 @@ button.runtime-posture {
   border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
   background: var(--surface-raised);
 }
+
+/*
+ * The lead card wears the brass edge the topbar's Connect action already
+ * wears, so the same errand reads the same weight wherever a newcomer meets
+ * it. An outline rather than a fill: this sits inside the transcript, and a
+ * solid brass slab there would out-shout the sentence above it that explains
+ * why the other two cards work with no account at all.
+ */
+.starter-chip--lead {
+  border-color: color-mix(in srgb, var(--accent-bright) 62%, var(--line));
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface-soft));
+}
+
+.starter-chip--lead:hover {
+  border-color: var(--accent-bright);
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface-raised));
+}
+
+.starter-chip--lead strong { color: var(--accent-bright); }
 
 .starter-chip strong {
   color: var(--ink);

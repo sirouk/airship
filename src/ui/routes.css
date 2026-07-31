@@ -2812,9 +2812,18 @@
    * second deck back. A chip's whole claim still lives a tap away in its
    * popover, the way every compressed surface in this product has always
    * worked.
+   *
+   * `minmax(7rem, …)` because "what is left" turned out to be nothing:
+   * measured on this build, the conversation name rendered 38px wide at 390px
+   * and the identity block 2px at 320px, so the H1 read "Ge…" beside six fully
+   * legible chips. The element that answers "which conversation is this" was
+   * the only thing on the bar priced at zero. Seven rem is about sixteen
+   * characters of the title face — enough to tell two conversations apart,
+   * which is the job — and the surplus it costs is taken from the instrument
+   * strip, which scrolls, instead of from the title, which cannot.
    */
   .session-bar {
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: minmax(7rem, 1fr) auto;
     align-items: center;
     gap: var(--sp-1) var(--sp-2);
     padding-block: var(--sp-1);
@@ -2901,9 +2910,35 @@
     min-width: 0;
     justify-self: end;
     flex-wrap: nowrap;
+  }
+
+  /* The surplus is absorbed here, by the readings, and not by the two verbs
+     pinned to the right of them. */
+  .session-bar__instruments {
+    min-width: 0;
+    flex-wrap: nowrap;
     overflow-x: auto;
     overscroll-behavior-inline: contain;
     scrollbar-width: none;
+  }
+
+  .session-bar__instruments::-webkit-scrollbar { display: none; }
+
+  .session-bar__instruments > * {
+    flex: 0 0 auto;
+  }
+
+  /* The one shrinkable child of the row: the readings give up width so the
+     title keeps its floor and the two verbs keep their place. `> *` above
+     pins everything at its natural size, which is right for chips and wrong
+     for the container that has to absorb the surplus. */
+  .session-bar__chips > .session-bar__instruments {
+    flex: 0 1 auto;
+  }
+
+  .session-bar__rename-action,
+  .session-bar__new {
+    flex: 0 0 auto;
   }
 
   .session-bar__chips::-webkit-scrollbar { display: none; }

@@ -147,10 +147,26 @@ export function SessionBar({
         )}
       </h1>
       <div class="session-bar__chips">
-        {model}
-        {pinnedSkills ? <PinnedSkillsChip pin={pinnedSkills} /> : null}
-        <SessionStatusChip facts={statusFacts} durabilityLabel={durabilityLabel} />
-        <JournalChip journal={journal} onOpenSession={onOpenSession} />
+        {/*
+          * Instruments scroll; actions do not.
+          *
+          * The cluster absorbs surplus width by scrolling inside itself, which
+          * is right for the four status chips — they are readings, and a
+          * reading you have to scroll to is still a reading. It is wrong for
+          * Rename and New conversation, which are the bar's two verbs: measured
+          * at 390px, `+` scrolled out of sight, and at 320px so did Rename. A
+          * verb that scrolls away is a verb nobody finds.
+          *
+          * Splitting them lets the title keep its floor, the chips keep their
+          * exact sizes, and the two actions stay pinned to the right edge at
+          * every width — the three constraints this row has to satisfy at once.
+          */}
+        <div class="session-bar__instruments">
+          {model}
+          {pinnedSkills ? <PinnedSkillsChip pin={pinnedSkills} /> : null}
+          <SessionStatusChip facts={statusFacts} durabilityLabel={durabilityLabel} />
+          <JournalChip journal={journal} onOpenSession={onOpenSession} />
+        </div>
         <button
           class="session-bar__rename-action"
           type="button"

@@ -787,6 +787,14 @@ const SESSION_LIFECYCLE_SHORT: Readonly<Record<SessionLifecycle["state"], string
 type StarterCard = Readonly<{
   title: string;
   hint: string;
+  /**
+   * The one card that carries the weight of the screen.
+   *
+   * Only set where a starter is the thing the person almost certainly came to
+   * do. Three cards of equal weight is a menu, and a menu asks a newcomer to
+   * decide something before they know anything.
+   */
+  lead?: true;
   action:
     | Readonly<{ kind: "prompt"; prompt: string }>
     | Readonly<{ kind: "route"; view: NavigationView }>;
@@ -819,7 +827,28 @@ const CONNECTED_STARTERS: readonly StarterCard[] = Object.freeze([
   }),
 ]);
 
+/*
+ * Connect leads, and it says what it gives rather than what it is only for.
+ *
+ * The topbar already renders "Connect a model" as the one filled brass action
+ * on the screen, and the empty state disagreed with it: the same act was the
+ * third of three equal cards, subtitled "Only chat needs this" — a true
+ * sentence that reads, to someone who came here to chat, as a reason to skip
+ * it. Two surfaces, one act, opposite weights, and the newcomer's own errand
+ * ranked last.
+ *
+ * The other two stay exactly where they are. That a terminal and a real
+ * workspace work in this tab with no account is Airship's most surprising
+ * claim, it is already the headline above these cards, and burying it to make
+ * Connect louder would trade one misplaced emphasis for another.
+ */
 const DISCONNECTED_STARTERS: readonly StarterCard[] = Object.freeze([
+  Object.freeze({
+    title: "Connect a model",
+    hint: "Chutes, another cloud provider, or a model on this machine",
+    lead: true as const,
+    action: Object.freeze({ kind: "route" as const, view: "access" as const }),
+  }),
   Object.freeze({
     title: "Open a terminal",
     hint: "Real processes in this tab, no account",
@@ -829,11 +858,6 @@ const DISCONNECTED_STARTERS: readonly StarterCard[] = Object.freeze([
     title: "Browse the workspace",
     hint: "Files, the editor and browser-owned Git",
     action: Object.freeze({ kind: "route" as const, view: "workspace" as const }),
-  }),
-  Object.freeze({
-    title: "Connect a model",
-    hint: "Only chat needs this",
-    action: Object.freeze({ kind: "route" as const, view: "access" as const }),
   }),
 ]);
 
@@ -1134,6 +1158,14 @@ function formatConversationTime(value: string): string {
     : { month: "short", day: "numeric" },
   ).format(date);
 }
+
+/**
+ * Tab-scoped marker for a conversation address this page wrote into the URL.
+ *
+ * Namespaced so it cannot collide with the draft keys that share this storage,
+ * and short-lived by nature: session storage dies with the tab.
+ */
+const MINTED_ADDRESS_PREFIX = "airship.minted-chat-address.v1:";
 
 export function App() {
   const [view, setView] = useState<View>(() => readViewHash());
@@ -1548,6 +1580,69 @@ export function App() {
     attachments: readonly ComposerAttachment[];
   }>>();
   const chatRouteOpening = useRef<string>();
+  /*
+   * Conversation addresses this page wrote into the URL itself.
+   *
+   * The first visit to a static host loads the document twice: the service
+   * worker takes control, `controllerchange` fires, and the shell reloads so
+   * COOP/COEP are established before anyone starts working. That reload is
+   * deliberate and only ever happens before a person has interacted.
+   *
+   * The composer canonicalises `#chat/<id>` as soon as a conversation exists,
+   * so the pre-reload address survives in the URL while the page-memory
+   * conversation it names does not. The reader then met, on the first screen
+   * they had ever seen, "That conversation existed only in page memory and did
+   * not survive the reload." — a report of lost work addressed to someone who
+   * had not yet done any. Measured on a never-visited namespace: five
+   * main-frame navigations, two distinct session ids, and that sentence.
+   *
+   * The sentence is right for the case it was written for — a bookmark, a link,
+   * a back button reaching a conversation that page memory could not keep. It
+   * is wrong for an address this page minted seconds earlier. So the addresses
+   * are remembered, and only the ones that came from somewhere else are
+   * reported as lost.
+   *
+   * Tab storage, not a ref: the reload replaces the document, so a ref is empty
+   * in exactly the case this exists for. Tab scope is also the right boundary —
+   * the same bookmark opened in a NEW tab did come from somewhere else, and
+   * still gets told.
+   *
+   * And the markers are dropped the moment a person touches the page. The boot
+   * reload only ever fires before an interaction (`platform-shell` holds a page
+   * that observed a gesture and offers it the reload instead), so an address
+   * minted before anyone typed cannot have carried work — while an address in a
+   * tab someone HAS worked in can, and that reader is owed the sentence. This
+   * is the difference between "Airship reloaded itself during boot" and "your
+   * draft was in a conversation page memory could not keep".
+   */
+  const rememberMintedAddress = (id: string): void => {
+    try {
+      sessionStorage.setItem(`${MINTED_ADDRESS_PREFIX}${id}`, "1");
+    } catch {
+      // A private mode without session storage keeps the previous behaviour.
+    }
+  };
+  const addressWasMintedHere = (id: string): boolean => {
+    try {
+      return sessionStorage.getItem(`${MINTED_ADDRESS_PREFIX}${id}`) !== null;
+    } catch {
+      return false;
+    }
+  };
+  const forgetMintedAddresses = (): void => {
+    try {
+      for (const key of Object.keys(sessionStorage)) {
+        if (key.startsWith(MINTED_ADDRESS_PREFIX)) sessionStorage.removeItem(key);
+      }
+    } catch {
+      // Nothing to forget without session storage.
+    }
+  };
+  useEffect(() => {
+    const events = ["pointerdown", "keydown"] as const;
+    events.forEach((type) => window.addEventListener(type, forgetMintedAddresses, { capture: true, once: true }));
+    return () => events.forEach((type) => window.removeEventListener(type, forgetMintedAddresses, { capture: true }));
+  }, []);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const transcriptElement = useRef<HTMLDivElement>(null);
   const transcriptBoundaryElement = useRef<HTMLDivElement>(null);
@@ -2022,7 +2117,11 @@ export function App() {
           // text that was typed a moment before the reload, and destroys it.
           adoptDraftFromUnresolvableAddress(requestedSessionId);
           setChatRouteRequest((current) => current === requestedSessionId ? undefined : current);
-          setComposerNotice("That conversation existed only in page memory and did not survive the reload. This is a new conversation.");
+          // Nothing to mourn if this page wrote the address itself: see
+          // `rememberMintedAddress`. Anything else came from a person.
+          if (!addressWasMintedHere(requestedSessionId)) {
+            setComposerNotice("That conversation existed only in page memory and did not survive the reload. This is a new conversation.");
+          }
           return;
         }
         // Keep the URL intact: a durable conversation can become available
@@ -2047,6 +2146,7 @@ export function App() {
     if (navigationViewFromHash(window.location.hash) !== "chat") return;
     const target = chatHash(sessionId);
     if (window.location.hash !== target) {
+      rememberMintedAddress(sessionId);
       window.history.replaceState({ view: "chat", sessionId }, "", target);
     }
   }, [chatRouteRequest, sessionId, view]);
@@ -2262,6 +2362,10 @@ export function App() {
     const timer = window.setTimeout(() => {
       try {
         writeThreadDraft(draftSessionId, input, sessionStorage);
+        // Text in the composer is the plainest evidence that this tab has been
+        // worked in, so from here on a lost address is a lost conversation and
+        // is reported as one. See `rememberMintedAddress`.
+        if (input) forgetMintedAddresses();
       } catch {
         // Draft persistence is optional; the live composer remains authoritative.
       }
@@ -8639,7 +8743,7 @@ export function App() {
                       <button
                         type="button"
                         key={starter.title}
-                        class="starter-chip"
+                        class={starter.lead ? "starter-chip starter-chip--lead" : "starter-chip"}
                         onClick={() => {
                           if (starter.action.kind === "route") {
                             navigate(starter.action.view);

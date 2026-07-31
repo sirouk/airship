@@ -124,10 +124,10 @@ describe("connect lanes", () => {
   });
 
   it("counts what is true, from the same lanes the list renders", () => {
-    expect(connectLaneCountLabel(describeConnectLanes(input()))).toMatch(/^No model connected · \d+ ready$/u);
+    expect(connectLaneCountLabel(describeConnectLanes(input()))).toMatch(/^No model connected · \d+ ready to connect$/u);
     expect(connectLaneCountSeal(describeConnectLanes(input()))).toBe("none");
     const connected = describeConnectLanes(input({ chutes: { connected: true, signInAvailable: true } }));
-    expect(connectLaneCountLabel(connected)).toMatch(/^Chutes connected · \d+ more ready$/u);
+    expect(connectLaneCountLabel(connected)).toMatch(/^Chutes connected · \d+ more ready to connect$/u);
     expect(connectLaneCountSeal(connected)).toBe("verified");
   });
 
