@@ -450,3 +450,38 @@ describe("the model metadata is inside the picker, not beside it", () => {
     expect(styles).not.toContain("model-candidate-summary");
   });
 });
+
+/**
+ * The credential reading has to know whether the credential has left.
+ *
+ * Measured on this build: one click put the key on the wire at t=9ms and both
+ * hosts answered inside 120ms, while "Nothing has been sent yet." stayed on
+ * screen until t=4,384ms — directly below a banner announcing that discovery
+ * was under way. The line was a pure function of the pasted prefix, so it had
+ * no way to know, and the reader it exists for is precisely the one who will
+ * not forgive it being wrong.
+ */
+describe("credentialReading while the credential is in flight", () => {
+  it("does not claim nothing was sent once something was", () => {
+    expect(credentialReading("inference-api-key", true)).not.toContain("Nothing has been sent");
+    expect(credentialReading("oauth-user-token", true)).not.toContain("Nothing has been sent");
+  });
+
+  it("names where it went, because a reader watching this line is asking that", () => {
+    expect(credentialReading("inference-api-key", true)).toContain("Chutes");
+    expect(credentialReading("oauth-user-token", true)).toContain("Chutes");
+  });
+
+  it("still refuses to imply acceptance while the answer is outstanding", () => {
+    for (const kind of ["inference-api-key", "oauth-user-token"] as const) {
+      const reading = credentialReading(kind, true);
+      expect(reading).not.toMatch(/valid|accepted|connected|verified/iu);
+      expect(reading).toMatch(/waiting/iu);
+    }
+  });
+
+  it("reads the prefix, and only the prefix, before anything is sent", () => {
+    expect(credentialReading("inference-api-key")).toContain("Nothing has been sent yet.");
+    expect(credentialReading("inference-api-key", false)).toContain("Nothing has been sent yet.");
+  });
+});

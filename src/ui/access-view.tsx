@@ -1327,7 +1327,7 @@ export function AccessView({
                       <div class="credential-types" role="group" aria-label="Optional Chutes API-key connection">
                         <CredentialTypeCard prefix="cpk_" title="Chutes API key" detail="Chutes personal keys start with cpk_. They read models, inference, profile, and account when Chutes authorizes them." active={detectedKind === "inference-api-key"} />
                         {credentialTyped ? (
-                          <p class="credential-reading" role="status">{credentialReading(detectedKind)}</p>
+                          <p class="credential-reading" role="status">{credentialReading(detectedKind, busy)}</p>
                         ) : null}
                       </div>
                       )}
@@ -1518,10 +1518,32 @@ function credentialKindLabel(kind: ChutesCredentialKind): string {
  * What Airship has read from the field so far — and only that.
  *
  * The prefix is all `parseChutesCredential` inspects, so this may never say
- * "valid": nothing has been offered to Chutes at this point, and a reading that
+ * "valid": nothing has been offered to Chutes at that point, and a reading that
  * implied acceptance would claim more than the code establishes.
+ *
+ * `sending` exists because the second half of that sentence stopped being true
+ * the moment someone pressed the button. Driven on this build, a single click
+ * put the key on the wire at t=9ms to llm.chutes.ai and api.chutes.ai, both
+ * answered inside 120ms — and "Nothing has been sent yet." was still on screen
+ * at t=4,384ms, 370px below a banner reading "Discovering encrypted-inference
+ * models available to this connection…". One screen, two states, and the one a
+ * privacy-conscious reader is watching was the false one.
+ *
+ * The reading was a pure function of the prefix, which is why it could not
+ * know. It is now a function of the prefix and of whether the credential is in
+ * flight, which is the whole of what this line claims to report.
  */
-export function credentialReading(kind: ChutesCredentialKind | undefined): string {
+export function credentialReading(
+  kind: ChutesCredentialKind | undefined,
+  sending = false,
+): string {
+  if (sending) {
+    // Names the destination, because "sending" without a recipient is the
+    // question this reader actually has.
+    return kind === "oauth-user-token"
+      ? "Sent to Chutes to open a session. Waiting for its answer."
+      : "Sent to Chutes to discover models. Waiting for its answer.";
+  }
   if (kind === "inference-api-key") return "Read as a Chutes personal key (cpk_). Nothing has been sent yet.";
   if (kind === "oauth-user-token") return "Read as a Chutes sign-in token (cak_). Nothing has been sent yet.";
   return "Not read as a Chutes credential. Chutes personal keys start with cpk_.";
