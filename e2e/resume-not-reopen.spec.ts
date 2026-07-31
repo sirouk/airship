@@ -107,16 +107,23 @@ test.describe("a person who comes back", () => {
 
 test.describe("a person whose Vault held the conversation", () => {
   /*
-   * The transcript itself is asserted by the Vault suites, not here, and
-   * deliberately: measured on this build *and* on the pre-change build, a turn
-   * sent in the same browser session that ran the Vault ceremony journals no
-   * durable events at all — three consecutive baseline runs reported
-   * "3 events" for a completed turn, and one reported 8. That flake belongs to
-   * the adoption transaction. What this test owns is the claim Airship makes
-   * about the address and the draft on the far side of a reload, which held on
-   * every run of both builds.
+   * The transcript is asserted here, and the exemption that used to stand in
+   * this place is gone.
+   *
+   * It said the transcript belonged to the Vault suites "deliberately", because
+   * a turn sent in the same browser session as the Vault ceremony had been seen
+   * to journal only three events. A test that knowingly declines to assert the
+   * durable transcript is not a durability test: the suite could be green while
+   * Airship lost the exact work a person believes the Vault is protecting.
+   *
+   * Re-measured before removing it — ten consecutive cold runs of this exact
+   * lifecycle (ceremony, wait for the authority, one turn, reload) survived
+   * 10/10, every one carrying 8 journal events and an identical journal head
+   * across the reload. The flake did not reproduce at this HEAD. So the claim
+   * is now made in full, and if the adoption transaction regresses, this is
+   * where it will be caught rather than where it was excused.
    */
-  test("keeps the address, the draft, and its mouth shut about a conversation it still has", async ({ page }, testInfo) => {
+  test("keeps the whole conversation, its address and its draft across a reload", async ({ page }, testInfo) => {
     test.skip(
       testInfo.project.name !== "desktop-chromium",
       "One Chromium origin owns the device-Vault ceremony; the mobile project covers presentation.",
@@ -149,7 +156,15 @@ test.describe("a person whose Vault held the conversation", () => {
     // Wait for the authority the person thinks they already have.
     await expect(page.locator("header .runtime-line__text").filter({ hasText: /Encrypted Local Device vault active/u }))
       .toBeVisible({ timeout: 40_000 });
-    await sendOneTurn(page, "Draft the Q3 pricing memo intro paragraph.");
+    const prompt = "Draft the Q3 pricing memo intro paragraph.";
+    await sendOneTurn(page, prompt);
+    // Anchored on the role, not on an index: an empty conversation renders an
+    // assistant-shaped intro card first, so `.message` nth(1) is the prompt
+    // before a reload and the reply after one.
+    const answer = (await page.locator(".message.assistant").last().innerText()).trim();
+    expect(answer.length).toBeGreaterThan(0);
+    const title = (await page.locator(".session-bar__title").innerText()).trim();
+    const journalHead = (await page.locator(".journal-chip").innerText()).replace(/\s+/gu, " ").trim();
     const composer = page.getByRole("combobox", { name: "Message Airship" });
     const draft = "and one more thing I still need to check before Friday";
     await composer.fill(draft);
@@ -167,6 +182,13 @@ test.describe("a person whose Vault held the conversation", () => {
     expect(new URL(page.url()).hash).toBe(address);
     // The half-finished sentence is the person's, not the page's.
     await expect(composer).toHaveValue(draft, { timeout: 20_000 });
+    // And the conversation itself: the prompt, the reply, the name it was given
+    // and the journal head that proves the events came back rather than being
+    // re-created. This is the assertion the old exemption withheld.
+    await expect(page.locator(".message.user").filter({ hasText: prompt })).toBeVisible({ timeout: 30_000 });
+    await expect(page.locator(".message.assistant").last()).toContainText(answer.slice(0, 40), { timeout: 30_000 });
+    expect((await page.locator(".session-bar__title").innerText()).trim()).toBe(title);
+    expect((await page.locator(".journal-chip").innerText()).replace(/\s+/gu, " ").trim()).toBe(journalHead);
     // And nothing on screen mourns a conversation that is on screen.
     await expect(page.locator(".composer-notice").filter({ hasText: LOSS_NOTICE })).toHaveCount(0);
     await expect(page.locator(REPORT)).toHaveCount(0);
