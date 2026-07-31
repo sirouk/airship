@@ -45,6 +45,9 @@ import {
 } from "./connect/connect-lanes";
 import { observeHostExtensionSupport } from "./connect/extension-bridge-presence";
 import { probeChutesSignInHandler, type ChutesSignInReadiness } from "./connect/chutes-signin-readiness";
+import { EgressPanel } from "./connect/egress-panel";
+import { egressRecorder, lastCredentialEgress } from "./connect/egress-record";
+import { CHUTES_DISCOVERY_PREFLIGHT } from "./connect/egress-preflight";
 import { destinationLabel } from "./navigation-model";
 import { Popover } from "./popover";
 import { RouteHeader } from "./route-header";
@@ -264,6 +267,18 @@ export function AccessView({
   // retyped. See `activate()`.
   const [keyRefusal, setKeyRefusal] = useState<Readonly<{ providerResponse: string }>>();
   /*
+   * What the last attempt did with the key that is still in the field.
+   *
+   * Driven on this build with chutes.ai unreachable, the field caption read
+   * "Not read as a Chutes credential. Chutes personal keys start with cpk_."
+   * about `cpk_myrealkeypastedcarefully000000000` — because the failure path
+   * emptied the input and cleared `detectedKind`, so the caption was reading an
+   * empty field and reporting it as a malformed key. The key now survives the
+   * request and this says what actually happened to it, including whether it
+   * left the device at all, read from the egress record rather than assumed.
+   */
+  const [lastAttempt, setLastAttempt] = useState<CredentialAttempt>(NO_CREDENTIAL_ATTEMPT);
+  /*
    * Set by a failed OAuth-kind connect leg: the completed exchange survived
    * (the host holds the pending credential read-only), so the failure gets a
    * retry control instead of a dead end whose only exit was a second full
@@ -384,8 +399,10 @@ export function AccessView({
     const value = credentialInput.current?.value ?? "";
     // The refusal was about the key that was in this field. Editing it makes
     // the verdict stale, so it stops being shown before it can be read as a
-    // verdict about the new one.
+    // verdict about the new one. The same is true of what the last attempt did
+    // with the old value.
     setKeyRefusal(undefined);
+    setLastAttempt(NO_CREDENTIAL_ATTEMPT);
     setCredentialTyped(Boolean(value.trim()));
     if (!value.trim()) {
       setDetectedKind(undefined);
@@ -396,6 +413,30 @@ export function AccessView({
     } catch {
       setDetectedKind(undefined);
     }
+  }
+
+  /**
+   * Give a pasted secret back to the person who pasted it.
+   *
+   * Written once because two failure branches need it and one of them used to
+   * do it by hand while the other silently dropped the key. The tab has to move
+   * before the frame in which the field is focused — the entry field only
+   * mounts on the API-key tab, and focusing an unmounted input drops focus to
+   * the document body, which is the ordering `clearConnection` also documents.
+   */
+  function returnCredentialToField(credential: EphemeralChutesCredential) {
+    setDetectedKind(credential.kind);
+    setCredentialTyped(true);
+    setChutesMethod("api-key");
+    requestAnimationFrame(() => {
+      const field = credentialInput.current;
+      if (!field) return;
+      // Left masked and filled: a key that was one character wrong is
+      // corrected, not retyped — on a phone, retyping means an app switch.
+      field.value = credential.value;
+      field.focus();
+      field.setSelectionRange(field.value.length, field.value.length);
+    });
   }
 
   async function discoverCredential(
@@ -412,9 +453,13 @@ export function AccessView({
     setStatus("Discovering encrypted-inference models available to this connection…");
     setError(undefined);
     setKeyRefusal(undefined);
+    setLastAttempt(NO_CREDENTIAL_ATTEMPT);
     setOauthConnectRetry(false);
     setCandidate(undefined);
     clearEphemeral();
+    // Where this attempt starts in the egress record, so a failure can report
+    // what *this* press sent rather than what some earlier press did.
+    const attemptFrom = Date.now();
     const controller = new AbortController();
     discoveryAbort.current = controller;
     try {
@@ -449,7 +494,16 @@ export function AccessView({
       ephemeralCredential.current = credential;
       ephemeralTokenSource.current = tokenSource;
       candidateTransport.current = transport;
+      // Cleared only now that the value is held elsewhere and the form is about
+      // to be replaced by the chooser. Every failure path below returns it to
+      // the field instead — see `returnCredentialToField`.
+      //
+      // `credentialTyped` moves with it: it is the reason the reading renders
+      // at all, and leaving it set made "Use a different credential" remount an
+      // empty field under "Not read as a Chutes credential." — the same verdict
+      // about nothing that the failure path used to produce.
       if (input) input.value = "";
+      setCredentialTyped(false);
       setCandidate(Object.freeze({
         credentialKind: credential.kind,
         models: compatibleModels,
@@ -472,8 +526,17 @@ export function AccessView({
       // A discovery that produced no candidate can never be auto-connected, and
       // a stale flag would silently connect the next credential someone typed.
       autoConnectAfterDiscovery.current = false;
-      if (input) input.value = "";
-      setDetectedKind(undefined);
+      /*
+       * The field keeps its value and the reading keeps its verdict.
+       *
+       * Both were destroyed here: the input was emptied 500 ms into a request
+       * that had produced nothing, and `setDetectedKind(undefined)` then made
+       * the caption diagnose the (now empty) field as "Not read as a Chutes
+       * credential" — about a well-formed cpk_ the user had just pasted. On a
+       * phone that costs an app switch to a password manager for every dropout,
+       * and the banner beside it was meanwhile claiming "Local state was kept".
+       */
+      setLastAttempt(attemptOutcome(attemptFrom));
       setStatus(undefined);
       setError(mapUnknownRequestFailure(caught, online).message);
       if (input) requestAnimationFrame(() => input.focus());
@@ -528,6 +591,9 @@ export function AccessView({
     setBusy(true);
     const controller = new AbortController();
     discoveryAbort.current = controller;
+    // This leg is the one that actually puts the credential on the wire, as a
+    // bearer token to api.chutes.ai. The mark scopes the reading below to it.
+    const attemptFrom = Date.now();
     setStatus("Verifying chutes:invoke access and encrypted endpoint availability…");
     setError(undefined);
     try {
@@ -599,37 +665,36 @@ export function AccessView({
       if (failure.kind === "credential" && credential.kind === "inference-api-key") {
         setKeyRefusal(Object.freeze({ providerResponse: failure.message }));
         setError(undefined);
-        setDetectedKind(credential.kind);
-        setChutesMethod("api-key");
-        // Left masked and filled. The value came from this field and goes back
-        // to it, because a key that was one character wrong is corrected, not
-        // retyped.
-        requestAnimationFrame(() => {
-          const field = credentialInput.current;
-          if (!field) return;
-          field.value = credential.value;
-          field.focus();
-          field.setSelectionRange(field.value.length, field.value.length);
-        });
+        returnCredentialToField(credential);
       } else {
-        setDetectedKind(undefined);
         setError(failure.message);
-        if (credential.kind === "oauth-user-token" && oauthBootstrap) {
-          /*
-           * An OAuth-kind candidate can only have come from the bootstrap
-           * leg, and that exchange is not consumed by failing here — the
-           * host holds the pending credential read-only until commit or
-           * release. Offer the leg again instead of stranding a completed
-           * sign-in behind a full re-authorization.
-           */
-          setOauthConnectRetry(true);
-          requestAnimationFrame(() => oauthRetryButton.current?.focus());
-        } else if (credentialInput.current) {
-          // The entry field only mounts on the API-key tab; focus it only
-          // when it is actually there.
-          requestAnimationFrame(() => credentialInput.current?.focus());
+        if (credential.kind === "inference-api-key") {
+          // A verification that failed on the network is not a verdict about
+          // the key, so the key comes back to the field it was typed into and
+          // the caption says whether it left — the same custody rule the
+          // refused-key branch above proves, applied to the branch that used to
+          // drop it. `returnCredentialToField` also owns the focus.
+          returnCredentialToField(credential);
+          setLastAttempt(attemptOutcome(attemptFrom));
         } else {
-          focusConnectSurface();
+          setDetectedKind(undefined);
+          if (credential.kind === "oauth-user-token" && oauthBootstrap) {
+            /*
+             * An OAuth-kind candidate can only have come from the bootstrap
+             * leg, and that exchange is not consumed by failing here — the
+             * host holds the pending credential read-only until commit or
+             * release. Offer the leg again instead of stranding a completed
+             * sign-in behind a full re-authorization.
+             */
+            setOauthConnectRetry(true);
+            requestAnimationFrame(() => oauthRetryButton.current?.focus());
+          } else if (credentialInput.current) {
+            // The entry field only mounts on the API-key tab; focus it only
+            // when it is actually there.
+            requestAnimationFrame(() => credentialInput.current?.focus());
+          } else {
+            focusConnectSurface();
+          }
         }
       }
     } finally {
@@ -1040,9 +1105,20 @@ export function AccessView({
                 58px provenance band are one gesture away, verbatim.
               */}
               <div class="candidate-identity">
+                {/*
+                  A padlock and the words "direct session" for a credential
+                  nothing has checked.
+
+                  Driven with `cpk_notarealkey…`: the catalog reads are
+                  unauthenticated, so a fabricated key reached this row, and the
+                  row wore the same lock and the same sentence the *connected*
+                  summary uses — while the key itself was refused ten seconds
+                  later at Finish with a 401. The candidate says what the
+                  candidate is: a credential class read from a prefix, with a
+                  seal in the product's own register for asserted-not-verified.
+                */}
                 <p class="credential-kind-result" role="status">
-                  <Icon name={candidate.credentialKind === "oauth-user-token" ? "access" : "lock"} size={18} />
-                  <strong>{credentialKindLabel(candidate.credentialKind)}</strong>
+                  <Seal state="asserted" density="chip" label={candidateCredentialLabel(candidate.credentialKind)} />
                 </p>
                 <Popover
                   class="candidate-help"
@@ -1327,7 +1403,7 @@ export function AccessView({
                       <div class="credential-types" role="group" aria-label="Optional Chutes API-key connection">
                         <CredentialTypeCard prefix="cpk_" title="Chutes API key" detail="Chutes personal keys start with cpk_. They read models, inference, profile, and account when Chutes authorizes them." active={detectedKind === "inference-api-key"} />
                         {credentialTyped ? (
-                          <p class="credential-reading" role="status">{credentialReading(detectedKind, busy)}</p>
+                          <p class="credential-reading" role="status">{credentialReading(detectedKind, busy, lastAttempt)}</p>
                         ) : null}
                       </div>
                       )}
@@ -1336,7 +1412,19 @@ export function AccessView({
                         <a href={CHUTES_API_KEYS_URL} target="_blank" rel="noreferrer">Create a key at chutes.ai → API keys ↗</a>{" "}
                         Never paste a client secret or administrator credential.
                       </p>
-                      <button type="submit" disabled={busy || !online}>Discover models with key</button>
+                      {/*
+                        The hosts this button reaches, named before it is
+                        pressed. Measured from one press on this build: three
+                        unauthenticated catalog reads at t=28ms and one logo
+                        image per model card at t=4.8s — and the page named none
+                        of them anywhere. It is the button's own description, so
+                        a screen reader hears it before activating rather than
+                        after.
+                      */}
+                      <p class="credential-preflight" id="chutes-discovery-preflight">
+                        <Icon name="cloud" size={16} />{CHUTES_DISCOVERY_PREFLIGHT}
+                      </p>
+                      <button type="submit" aria-describedby="chutes-discovery-preflight" disabled={busy || !online}>Discover models with key</button>
                     </form>
                   </section>
                   ) : null}
@@ -1371,6 +1459,14 @@ export function AccessView({
           </div>
           <p class="capability-caveat"><Icon name="proof" size={16} />These are credential-class eligibility rules, not observed grants. Protected invocation and account reads report their own provider-authoritative result.</p>
         </details>
+
+        {/*
+          The answer to "what left this device?", which nothing in Airship could
+          give. It sits on this route because this is where a person decides
+          what to trust with a credential — and because it is the route that
+          causes most of the egress it reports.
+        */}
+        <EgressPanel />
       </div>
 
       {additionalProviders ? (
@@ -1515,38 +1611,93 @@ function credentialKindLabel(kind: ChutesCredentialKind): string {
 }
 
 /**
- * What Airship has read from the field so far — and only that.
+ * The same credential class, at the altitude where nothing has been proven.
+ *
+ * `credentialKindLabel` is the *connected* summary's sentence and stays exactly
+ * that. A pasted key reaches the chooser without Chutes having been asked about
+ * it even once — the catalog is readable unauthenticated — so the chooser may
+ * name what was read and must not name a session.
+ *
+ * The sign-in arm keeps its wording: that exchange did complete, and its own
+ * banner says so. What neither arm has yet is invoke authorization, which is
+ * why both wear the `asserted` seal until Finish returns.
+ */
+function candidateCredentialLabel(kind: ChutesCredentialKind): string {
+  return kind === "oauth-user-token"
+    ? credentialKindLabel(kind)
+    : "Chutes API key · not authorized yet";
+}
+
+/**
+ * What the last attempt did with the key that is still in the field.
+ *
+ * `sentTo` is read from the egress record — the host a request actually carried
+ * this credential to — rather than inferred from which function failed, because
+ * "did my key leave?" is the one question this line may not guess at.
+ */
+export type CredentialAttempt =
+  | Readonly<{ state: "none" }>
+  | Readonly<{ state: "failed"; sentTo?: string }>;
+
+export const NO_CREDENTIAL_ATTEMPT: CredentialAttempt = Object.freeze({ state: "none" });
+
+/** A failed leg, described by what the egress record says it sent. */
+function attemptOutcome(since: number): CredentialAttempt {
+  const sent = lastCredentialEgress(egressRecorder()?.read() ?? [], since);
+  return Object.freeze(sent ? { state: "failed", sentTo: sent.host } : { state: "failed" });
+}
+
+/** The prefix verdict alone: the whole of what `parseChutesCredential` reads. */
+function credentialPrefixReading(kind: ChutesCredentialKind | undefined): string {
+  if (kind === "inference-api-key") return "Read as a Chutes personal key (cpk_).";
+  if (kind === "oauth-user-token") return "Read as a Chutes sign-in token (cak_).";
+  return "Not read as a Chutes credential. Chutes personal keys start with cpk_.";
+}
+
+/**
+ * What Airship has read from the field, and what has happened to it since.
  *
  * The prefix is all `parseChutesCredential` inspects, so this may never say
  * "valid": nothing has been offered to Chutes at that point, and a reading that
  * implied acceptance would claim more than the code establishes.
  *
  * `sending` exists because the second half of that sentence stopped being true
- * the moment someone pressed the button. Driven on this build, a single click
- * put the key on the wire at t=9ms to llm.chutes.ai and api.chutes.ai, both
- * answered inside 120ms — and "Nothing has been sent yet." was still on screen
- * at t=4,384ms, 370px below a banner reading "Discovering encrypted-inference
- * models available to this connection…". One screen, two states, and the one a
- * privacy-conscious reader is watching was the false one.
+ * the moment someone pressed the button: a single click put three requests on
+ * the wire at t=28ms to llm.chutes.ai and api.chutes.ai while "Nothing has been
+ * sent yet." was still on screen at t=4,384ms. But the requests it names carry
+ * `auth=no` — measured on this build, the whole discovery leg is unauthenticated
+ * catalog reads and the key goes nowhere until "Finish: verify & connect". So
+ * the in-flight arm states both halves: something left, and it was not the key.
+ * Under-claiming egress and over-claiming it are the same defect.
  *
- * The reading was a pure function of the prefix, which is why it could not
- * know. It is now a function of the prefix and of whether the credential is in
- * flight, which is the whole of what this line claims to report.
+ * `attempt` is the third state, and the one the failure path used to lie in.
+ * With chutes.ai unreachable this line read "Not read as a Chutes credential.
+ * Chutes personal keys start with cpk_." about `cpk_myrealkeypastedcarefully…`,
+ * because the failure had emptied the field the line was describing. The field
+ * now keeps its value, so the verdict keeps its subject, and the attempt clause
+ * names where the key went from the egress record rather than from assumption.
  */
 export function credentialReading(
   kind: ChutesCredentialKind | undefined,
   sending = false,
+  attempt: CredentialAttempt = NO_CREDENTIAL_ATTEMPT,
 ): string {
   if (sending) {
-    // Names the destination, because "sending" without a recipient is the
-    // question this reader actually has.
+    // Names what left and what did not, because a reader watching this line is
+    // asking about their secret, not about the catalog.
     return kind === "oauth-user-token"
-      ? "Sent to Chutes to open a session. Waiting for its answer."
-      : "Sent to Chutes to discover models. Waiting for its answer.";
+      ? "Reading the Chutes catalog now; your sign-in token is not attached to that request. Waiting for Chutes to answer."
+      : "Reading the Chutes catalog now; your key is not attached to that request. Waiting for Chutes to answer.";
   }
-  if (kind === "inference-api-key") return "Read as a Chutes personal key (cpk_). Nothing has been sent yet.";
-  if (kind === "oauth-user-token") return "Read as a Chutes sign-in token (cak_). Nothing has been sent yet.";
-  return "Not read as a Chutes credential. Chutes personal keys start with cpk_.";
+  const prefix = credentialPrefixReading(kind);
+  // A key that never parsed has no custody story to tell, and the negative arm
+  // is already the whole verdict.
+  if (attempt.state === "failed" && kind !== undefined) {
+    return attempt.sentTo
+      ? `${prefix} It was sent to ${attempt.sentTo} and that attempt failed. It is still in this field.`
+      : `${prefix} The last attempt failed before your key was used — it has not left this device, and it is still in this field.`;
+  }
+  return kind === undefined ? prefix : `${prefix} Nothing has been sent yet.`;
 }
 
 function credentialKindDetail(kind: ChutesCredentialKind): string {

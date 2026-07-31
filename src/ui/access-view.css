@@ -310,7 +310,35 @@
   border-radius: var(--radius-control);
   color: var(--ink);
   background: var(--surface-soft);
-  font: var(--fs-body)/1.3 var(--font-mono);
+  /* `--fs-field` is the iOS zoom guard the composer already uses: this field
+     measured 15.9375px, and anything under 16px makes Safari zoom the layout
+     viewport on focus and never zoom back — on the one control in the product
+     a phone user has to paste a long secret into. */
+  font: var(--fs-field)/1.3 var(--font-mono);
+}
+
+/*
+ * The hosts a press will reach, stated before it is pressed.
+ *
+ * It sits directly above the button it describes and is that button's
+ * `aria-describedby`, so the disclosure and the control cannot be separated by
+ * a later layout change.
+ */
+.credential-preflight {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: start;
+  max-width: 74ch;
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: var(--fs-caption);
+  line-height: 1.5;
+}
+
+.credential-preflight > svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--v-info);
 }
 
 .credential-entry input:focus-visible,

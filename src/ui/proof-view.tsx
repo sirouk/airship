@@ -145,6 +145,13 @@ export function ProofView({
           "Verify Intel TDX quote signatures and collateral independently, then check report_data against SHA-256(nonce + E2E public key).",
           "Verify NVIDIA evidence with NVIDIA's verifier, including nonce binding, certificate/revocation state, firmware RIM policy, and freshness.",
           "A journal audit commitment can be recomputed only with the corresponding immutable session journal.",
+          // The artifact an auditor reads away from the screen has to carry the
+          // boundary the screen now states. Measured: an audit exported right
+          // after two human-approved Git commits read "toolOperations": 0 and
+          // "complete": true, and nothing in the file said that its counts have
+          // no field for a human-initiated effect — so the export both
+          // under-reported and looked authoritative about it.
+          "journalAudit.counts covers turns, tool operations, local commands and shell records. Human-approved effects journaled as human.intent.reviewed are validated by the audit but counted by no field, and checks.complete reports only that no completeness finding was raised for the events present.",
         ],
       };
       const suffix = receipt?.receiptId.slice(-8) ?? sessionId?.slice(0, 8) ?? "evidence";
@@ -156,6 +163,7 @@ export function ProofView({
 
   const auditReading = journalAuditReading(audit, auditLoading, Boolean(auditError));
   const auditLabel = auditReading.label;
+  const recordedActivity = recordedActivityFacts(audit?.counts);
   const claimStack = composeClaimStack(
     receipt,
     // Instance + key digest, like the inspector and the export above: an
@@ -249,14 +257,32 @@ export function ProofView({
               `chip` and `line` here would reopen the defect this package
               closes — one turn, several phrasings, in one viewport. */}
           <div class="proof-verdict__body">
+            {/* The hero's word is about one turn's claim stack, and it was read
+                as a verdict on the whole session: after two human-approved Git
+                effects this panel led with "No evidence", and a person who had
+                just committed concluded Airship had recorded nothing. The scope
+                line is the same device the journal panel below already uses —
+                the verdict keeps its one word, and the word stops covering more
+                than it checked. */}
+            <p class="proof-verdict__context"><span class="eyebrow">Turn evidence</span></p>
             {/* An acquisition failure is a modifier on the verdict, never a
                 second verdict: the fetch that did not happen is not a
                 verification that failed. */}
             {verdict.modifier ? <p class="proof-verdict__modifier"><Icon name="warning" size={14} />{verdict.modifier}</p> : null}
             {receipt ? <p class="proof-verdict__summary">{summarizeReceipt(receipt)}</p> : null}
-            {receipt ? null : <p class="proof-verdict__context">{requestedReceiptId
-              ? "The selected receipt is not available in this page runtime. Airship will not substitute a different turn receipt."
-              : "Complete a turn to create the first local receipt."}</p>}
+            {receipt ? null : <p class="proof-verdict__context">{missingReceiptReading(audit, requestedReceiptId)}</p>}
+            {/* Inside the body, under its own scope line, because it is the one
+                block here that is not about the turn: an unlabelled ledger sat
+                under "Turn evidence" and claimed the wrong subject at 390px,
+                where the two columns become one. Present exactly when there is
+                an audited journal to speak for — an unread or unreadable
+                journal must not render four zeros as if it had counted them. */}
+            {recordedActivity.length > 0 ? <>
+              <p class="proof-verdict__context"><span class="eyebrow">Recorded in this session’s journal</span></p>
+              <dl class="proof-posture" aria-label="Work recorded in this session’s journal">
+                {recordedActivity.map((fact) => <div key={fact.label}><dt>{fact.label}</dt><dd>{fact.value}</dd></div>)}
+              </dl>
+            </> : null}
           </div>
           <dl class="proof-counts" aria-label="Claim states in this turn">
             {CLAIM_STATE_LEGEND.map((entry) => (
@@ -305,6 +331,17 @@ export function ProofView({
               <div><dt>Declared proof level</dt><dd>{proofLevelLabel(receipt.proofLevel)}</dd></div>
               <div><dt>Transport</dt><dd>{postureLabel(receipt.posture)}</dd></div>
               <div><dt>Endpoint attestation</dt><dd>{attestationNote}</dd></div>
+              {/* The researcher's question, answered by its absence rather than
+                  by silence: a reader who opened a receipt looking for what the
+                  answer was grounded in found a request digest, a response
+                  digest and eight attestation claims, and no statement anywhere
+                  that provenance is not among them. No receipt shape carries it
+                  — `createLocalReceipt` mints bindings only, and a provider
+                  receipt arrives with claims — so this row is a constant until
+                  the turn seam (`src/core/agent.ts`) passes the selection it
+                  already journals as `turn.context.selected` into the receipt
+                  it mints two hundred lines later. */}
+              <div><dt>Answer provenance</dt><dd>Not bound to this receipt. A turn's selected sources are journal records.</dd></div>
             </dl>
           ) : null}
         </section>
@@ -321,15 +358,25 @@ export function ProofView({
           <div class="proof-journal__body">
             <p class="proof-journal__scope"><span class="eyebrow">Independent local consistency check</span></p>
             {audit ? <>
-              <div class="audit-boundary"><Icon name={audit.status === "invalid" ? "warning" : "proof"} size={18} /><p><strong>A valid hash chain is not proof of authorship.</strong> This report checks schema, ordering, manifest bindings, turn/tool protocol, and receipt bindings. No separately trusted author identity was verified.</p></div>
+              {/* The second sentence exists because the first check grid below
+                  prints "Complete history · consistent" and the exported audit
+                  prints `"complete": true` — read, verbatim, as "everything
+                  that happened is in here" by a reader who had just committed
+                  under two approvals. `complete` is the absence of a
+                  completeness *finding* about the events that are present; it
+                  is silent by construction about an effect that was never
+                  journaled. The word stays; what it means is now beside it. */}
+              <div class="audit-boundary"><Icon name={audit.status === "invalid" ? "warning" : "proof"} size={18} /><p><strong>A valid hash chain is not proof of authorship.</strong> This report checks schema, ordering, manifest bindings, turn/tool protocol, and receipt bindings. No separately trusted author identity was verified. “Complete history” means no gap was found among the events that are present; it cannot show that an effect which was never recorded is missing.</p></div>
               <div class="audit-check-grid" role="group" aria-label="Journal audit checks">{auditChecks(audit).map(([label, passed]) => <div key={label} class={passed ? "pass" : "fail"}><Seal state={passed ? "verified" : "failed"} label={passed ? "Passed" : "Failed"} size={16} compact /><strong>{label}</strong><small>{passed ? "consistent" : "attention required"}</small></div>)}</div>
-              {/* "Shell records" is here because until this pass the terminal
-                  was the one effectful surface with no representation on this
-                  screen at all: a `jsh` command that rewrote the workspace was
-                  audited by nothing, so a reader could not tell a session where
-                  no shell ran from one whose shell work was simply not
-                  recorded. A zero is a fact; an absence was not. */}
-              <dl class="audit-commitment"><div><dt>Session</dt><dd>{audit.sessionId}</dd></div><div><dt>Journal events</dt><dd>{audit.commitment.sequence}</dd></div><div><dt>Shell records</dt><dd>{audit.counts.shellRecords}</dd></div><div><dt>Checked</dt><dd><time dateTime={audit.checkedAt} title={new Date(audit.checkedAt).toLocaleString()}>{relativeEvidenceAge(audit.checkedAt)}</time></dd></div><div><dt>External anchor</dt><dd>{audit.anchor.status === "not-supplied" ? "Not supplied" : audit.anchor.status === "matched" ? "Matched" : "Did not match"}</dd></div></dl>
+              {/* "Shell records" used to be the one recorded-work count on this
+                  screen, and it sat here — inside a disclosure that is closed
+                  whenever the structure passes, which is exactly the session
+                  where a reader is asking what was recorded. It now rides with
+                  the rest of the recorded work in `recordedActivityFacts`,
+                  above the fold and beside the verdict; this list keeps the
+                  facts that are about the *check* rather than about the
+                  session. */}
+              <dl class="audit-commitment"><div><dt>Session</dt><dd>{audit.sessionId}</dd></div><div><dt>Journal events</dt><dd>{audit.commitment.sequence}</dd></div><div><dt>Checked</dt><dd><time dateTime={audit.checkedAt} title={new Date(audit.checkedAt).toLocaleString()}>{relativeEvidenceAge(audit.checkedAt)}</time></dd></div><div><dt>External anchor</dt><dd>{audit.anchor.status === "not-supplied" ? "Not supplied" : audit.anchor.status === "matched" ? "Matched" : "Did not match"}</dd></div></dl>
               <details><summary>Technical journal details</summary><code>{audit.commitment.digest}</code></details>
               {/* Open whenever findings exist. A warning collapsed under a row
                   announcing that everything passed is the shape of a burial. */}
@@ -396,6 +443,100 @@ function ClaimPopoverRow({ item }: Readonly<{ item: ClaimStackItem }>) {
       </dl>
     </section>
   );
+}
+
+/** One label/value pair in a Proof `<dl>`. */
+export type ProofFact = Readonly<{ label: string; value: string }>;
+
+/**
+ * What this session's journal recorded, taken from the report already in hand.
+ *
+ * The measured defect, in two journeys with one cause. After two
+ * human-approved Git effects this route rendered "No evidence · Evidence is
+ * recorded when a turn completes · Complete a turn to create the first local
+ * receipt" at 1440×900 and 390×844 alike; after a local `/read` turn the
+ * transcript printed "COMPLETED TURN" twice while this route said no turn had
+ * completed. Both readings came from treating *provider turn receipt* as a
+ * synonym for *evidence*, while `loadAudit` had already returned counts of the
+ * local commands, tool operations, shell records and turns the journal holds.
+ * Nothing is computed here that the report does not already carry; it is
+ * rendered, which is the whole of the fix this function is.
+ *
+ * Every row renders, zeros included — the rule the shell-record row was added
+ * under (TRM-06: "a count of zero is a fact; the absence was not"), now applied
+ * to all four kinds of recorded work instead of only the one. A reader can tell
+ * a session that ran no tools from one whose tool work went unreported, and on
+ * a session whose journal holds events that every count reports as zero, the
+ * gap between the sentence above and this list is itself the finding.
+ * `terminal*` companions are folded into their row's value because "1 local
+ * command · 1 finished" is one fact about one thing.
+ *
+ * What it cannot say, and why: two approved Git commits are journaled as
+ * `human.intent.reviewed` and validated by the audit, but `counts` has no
+ * field for them, so they are countable by nothing this route can read. That
+ * field belongs in `SessionAuditReport["counts"]` (`src/core/session-audit.ts`)
+ * — until it exists, the sentence beside this list reports the event total
+ * rather than inventing a category.
+ */
+export function recordedActivityFacts(counts?: SessionAuditReport["counts"]): readonly ProofFact[] {
+  if (!counts) return Object.freeze([]);
+  // A started turn with no terminal record is a real state (it is running, or
+  // the tab died holding it), so an outcome is named only once one is written
+  // rather than padded to a zero that would imply a record exists.
+  const outcomes = [
+    counts.completedTurns > 0 ? `${counts.completedTurns} completed` : "",
+    counts.failedTurns > 0 ? `${counts.failedTurns} failed` : "",
+    counts.cancelledTurns > 0 ? `${counts.cancelledTurns} cancelled` : "",
+  ].filter(Boolean);
+  // At zero the breakdown is dropped, not spelled: "0 requested · 0 finished"
+  // says nothing "0" does not, and four such rows read as a form rather than a
+  // ledger on the session this route is most often opened for — one that has
+  // recorded work no count classifies.
+  return Object.freeze([
+    { label: "Provider turns", value: counts.turns === 0 ? "0" : [`${counts.turns} started`, ...outcomes].join(" · ") },
+    { label: "Tool operations", value: counts.toolOperations === 0 ? "0" : `${counts.toolOperations} requested · ${counts.terminalToolOperations} finished` },
+    { label: "Local commands", value: counts.localCommands === 0 ? "0" : `${counts.localCommands} run on this device · ${counts.terminalLocalCommands} finished` },
+    { label: "Shell records", value: `${counts.shellRecords}` },
+  ]);
+}
+
+/**
+ * What the route says when it is holding no turn receipt.
+ *
+ * "Complete a turn to create the first local receipt." is true of a session
+ * that has done nothing and false of one that has done work through any path
+ * but a provider turn — and it was the sentence a person met immediately after
+ * committing under two approvals. It survives here for the case it describes
+ * (no audited journal to speak for the session) and is replaced by the count
+ * everywhere else, because the journal event total is a fact this route can
+ * stand behind on any session, including one whose recorded events its counts
+ * do not classify.
+ */
+export function missingReceiptReading(
+  audit: SessionAuditReport | undefined,
+  requestedReceiptId: string | undefined,
+): string {
+  if (requestedReceiptId) {
+    return "The selected receipt is not available in this page runtime. Airship will not substitute a different turn receipt.";
+  }
+  if (!audit || audit.counts.events === 0) return "Complete a turn to create the first local receipt.";
+  const { completedTurns, events: total, localCommands } = audit.counts;
+  const events = `${total} recorded event${total === 1 ? "" : "s"}`;
+  // A completed turn with no receipt in hand is a different fact from a session
+  // that never ran one, and saying the first as the second is how this sentence
+  // became wrong in the first place.
+  if (completedTurns > 0) {
+    return `This session's journal holds ${events}, including ${completedTurns} completed turn${completedTurns === 1 ? "" : "s"}, but no turn receipt is loaded for this view.`;
+  }
+  // The transcript prints "COMPLETED TURN" on a `/read` and this route replied
+  // "Complete a turn to create the first local receipt" about the same session.
+  // Both were true of different things and neither said which, so a local
+  // command turn now gets named as what it is: a completion that never reached
+  // a provider, and therefore never had a receipt to mint.
+  if (localCommands > 0) {
+    return `${localCommands} local command${localCommands === 1 ? "" : "s"} ran on this device and called no provider, so no turn receipt was minted. This session's journal holds ${events}, audited below.`;
+  }
+  return `No provider turn has completed, so this session has no turn receipt yet. Its journal holds ${events}, audited below.`;
 }
 
 function auditChecks(audit: SessionAuditReport): readonly (readonly [string, boolean])[] {

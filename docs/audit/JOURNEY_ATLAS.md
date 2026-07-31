@@ -597,3 +597,57 @@ completion → persistence → proof → recovery → continuation. Gap counts p
 | misleading-state | response | The explanation for why the work did not come back is delivered as a 470-character single-line topbar chip containing raw internal identifiers, truncated to about 60 characters on screen. | Full chip text: "Encrypted Local Device vault active · “Set up the competitor file.” (session 7c63c91e) could not be replayed: The latest encrypted session no longer matches the adopted runtime. Structural history issues must be reviewed before this session can resume. LOCAL_COMMAND_INCOMPLETE: Clie |
 | misleading-state | discovery | Blocked and healthy conversations are visually identical in the recents rail — same title, same timestamp, no status marker — so the person cannot see which one holds the work that will not open. | Rail rows on return: "General · encrypted vault / No messages yet / 2:01 PM" and "General · encrypted vault / Airship: Airship is r... / 2:01 PM"; screenshot /Users/chrisk/airship/.ui-capture/journeys/ret-45-rail-after-interrupt.png. The "Needs review / Resume blocked" badges exist only inside the # |
 | lost-work | proof | A quarantined conversation's own content is unreadable anywhere in the product; it can be renamed, proved and deleted, but never read. | Detail panel actions for session 7C63C91E: "Rename \| Proof \| Fork to continue \| Transcript cannot be replayed (disabled) \| Delete"; content appears only as "RUNTIME RECORD  Manifest pins and transcript · 2 messages" with no transcript view. |
+
+---
+
+## long-session — driven directly, 24 turns
+
+> No leak and no jank, but the transcript is unbounded: nothing is windowed, so
+> DOM nodes and listeners grow strictly linearly with the length of the
+> conversation.
+
+Measured at 1440x900 against the production build, sending 24 turns and probing
+every sixth:
+
+| turn | heap | DOM nodes | JS listeners | cards |
+|---|---|---|---|---|
+| 6 | 12.8 MB | 1,542 | 237 | 13 |
+| 12 | 12.8 MB | 2,171 | 306 | 25 |
+| 18 | 12.8 MB | 2,826 | 393 | 37 |
+| 24 | 12.8 MB | 3,468 | 471 | 49 |
+
+- **Heap is flat** across the whole run, and after a 4s idle nodes fall 3,468 →
+  3,464 and listeners 471 → 462. Nothing accumulates that is not on screen.
+- **Zero long tasks** in a 3s observation window at depth — interaction stays
+  responsive with 49 cards mounted.
+- **But growth is linear and unbounded**: ~54 DOM nodes and ~9.7 listeners per
+  turn. A 500-turn conversation projects to roughly 27,000 nodes and 4,900
+  listeners, all live. There is no windowing or recycling in the transcript.
+
+| severity | link | gap | evidence |
+|---|---|---|---|
+| friction | continuation | The transcript mounts every turn for the life of the conversation, so cost grows without bound with session length | 1,542 → 3,468 DOM nodes and 237 → 471 listeners between turn 6 and turn 24; ~54 nodes and ~9.7 listeners per turn, no windowing observed |
+
+## failure-recovery — driven directly, offline mid-turn
+
+> Offline is handled unusually well — the prompt is preserved and the product
+> names what still works — but the recovery edge is missing: coming back online
+> does not retract the offline claim.
+
+Driven by taking the browser context offline, typing, pressing send, then
+restoring connectivity:
+
+- **Typed while offline** — text preserved; live region reads "Offline · remote
+  services are paused. Local commands, workspace, memory, and cached…". This is
+  the right sentence: it names what is lost and what is not.
+- **Pressed send while offline** — text still preserved; "Offline · remote
+  inference paused; prompt preserved". Precise, and it tells a person the thing
+  they most want to know.
+- **Back online** — the composer still holds the text, and the general offline
+  banner clears correctly. But the send notice still reads "Offline · remote
+  inference paused; prompt preserved", in the present tense, with the connection
+  restored.
+
+| severity | link | gap | evidence |
+|---|---|---|---|
+| misleading-state | recovery | The send-failure notice does not retract when connectivity returns, so a reconnected person is still told remote inference is paused | Live-region text at the "BACK ONLINE" step: "Offline · remote inference paused; prompt preserved", while the separate connectivity banner had already cleared |

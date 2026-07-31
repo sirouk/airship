@@ -1,0 +1,193 @@
+/*
+ * The egress record's own sheet, beside its own component.
+ *
+ * It carries no card chrome of its own: the panel wears `.access-connection-card`
+ * so it is the same object as the lane card and the capability matrix above it,
+ * which is what keeps a third card from reading as a fourth kind of thing.
+ */
+.egress-panel {
+  display: grid;
+  gap: var(--sp-3);
+}
+
+/*
+ * Measured at 390×844 once the request list had rows: `main.scrollWidth` 514
+ * against a 390 client width, clipping "…the page's own requ" and
+ * "No credential on the 3 Airship s". A grid item's automatic minimum is its
+ * *content's* min-content, and the longest row here is a 62-character
+ * monospace URL, so every ancestor track inherited that width — including the
+ * closed `<details>`, whose contents are still measured. Nothing in this panel
+ * may push a track wider than the card: it is a disclosure surface, and a
+ * disclosure that runs off the side of a phone is not one.
+ */
+.egress-panel > *,
+.egress-panel__hosts > li > *,
+.egress-panel__detail ol,
+.egress-panel__detail li,
+.egress-panel__detail li > * {
+  min-width: 0;
+}
+
+.egress-panel__head {
+  display: flex;
+  gap: var(--sp-3);
+  align-items: start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.egress-panel__head h2 {
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--fs-meta);
+  font-weight: var(--fw-title);
+}
+
+.egress-panel__lede,
+.egress-panel__scope,
+.egress-panel__dropped {
+  max-width: 74ch;
+  margin: var(--sp-1) 0 0;
+  color: var(--ink-muted);
+  font-size: var(--fs-caption);
+  line-height: 1.5;
+}
+
+.egress-panel__scope {
+  margin: 0;
+  color: var(--ink-faint);
+}
+
+.egress-panel__empty {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: var(--fs-caption);
+}
+
+.egress-panel__empty > svg {
+  flex: none;
+  color: var(--v-verified);
+}
+
+.egress-panel__hosts {
+  display: grid;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/*
+ * One host, one row: name, count, credential verdict, last seen. The credential
+ * column is the reason this list exists, so it keeps its own column at every
+ * width rather than being the first thing a narrow viewport drops.
+ */
+.egress-panel__hosts > li {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1.1fr) auto;
+  gap: var(--sp-1) var(--sp-3);
+  align-items: baseline;
+  padding: var(--sp-2) 0;
+  border-top: 1px solid var(--line);
+}
+
+.egress-panel__hosts > li > strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  font: var(--fs-caption)/1.4 var(--font-mono);
+}
+
+.egress-panel__count,
+.egress-panel__when {
+  color: var(--ink-faint);
+  font-size: var(--fs-caption);
+}
+
+/*
+ * The panel's headline claim, and the one a 306px chip was clipping at 390px.
+ * It shares its three tones with the per-host clause because it is the same
+ * verdict at a different altitude.
+ */
+.egress-panel__verdict {
+  max-width: 74ch;
+  margin: 0;
+  font-size: var(--fs-meta);
+  font-weight: var(--fw-title);
+  line-height: 1.45;
+}
+
+/* A credential the browser will not disclose is not a clean row and may not
+   wear the colour of one; a credential that went is not an alarm either. */
+.egress-panel__verdict.is-clean,
+.egress-panel__credential.is-clean {
+  color: var(--v-verified);
+}
+
+.egress-panel__verdict.is-undisclosed,
+.egress-panel__credential.is-undisclosed {
+  color: var(--v-neutral);
+}
+
+.egress-panel__verdict.is-attached,
+.egress-panel__credential.is-attached {
+  color: var(--v-caution);
+}
+
+.egress-panel__credential {
+  font-size: var(--fs-caption);
+}
+
+.egress-panel__detail > summary {
+  color: var(--ink-muted);
+  font-size: var(--fs-caption);
+  cursor: pointer;
+}
+
+.egress-panel__detail ol {
+  display: grid;
+  gap: var(--sp-2);
+  margin: var(--sp-2) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.egress-panel__detail li {
+  display: grid;
+  gap: 2px;
+  padding: var(--sp-2) 0;
+  border-top: 1px solid var(--line);
+}
+
+.egress-panel__detail code {
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  font: var(--fs-caption)/1.45 var(--font-mono);
+}
+
+/* The named cause reads in the same register as the rest of the row: the row
+   already prints the word "Failed", and a second, redder statement of the same
+   verdict is emphasis rather than information. */
+.egress-panel__row-facts,
+.egress-panel__witness,
+.egress-panel__row-detail {
+  color: var(--ink-faint);
+  font-size: var(--fs-micro);
+  line-height: 1.5;
+}
+
+/*
+ * Phone: the four-column host row becomes four stacked lines. Reorganisation,
+ * not reduction — the credential verdict is the one line that must survive a
+ * 390px viewport, because on a phone this panel is the only place the fact is
+ * available at all.
+ */
+@media (max-width: 720px) {
+  .egress-panel__hosts > li {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
+}

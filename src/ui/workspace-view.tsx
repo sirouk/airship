@@ -13,8 +13,19 @@ import { isWorkspaceControlPlanePath, normalizeWorkspacePath, workspaceEntryByte
 import { decodeWorkspaceBytes, isWorkspaceBinaryEnvelope } from "../workspace/content-codec";
 import { searchWorkspaceContent, workspaceSearchSummary, type WorkspaceContentSearch } from "../workspace/content-search";
 import { moveWorkspaceFile } from "../workspace/mutations";
+import {
+  adoptWorkspaceWitness,
+  clearWorkspaceWitness,
+  dismissWorkspaceLoss,
+  lostWorkspaceWorkNotice,
+  readWorkspaceWitness,
+  recordWorkspaceWork,
+  WORKSPACE_PAGE_LOAD_ID,
+  writeWorkspaceWitness,
+} from "../workspace/page-witness";
 import { buildWorkspaceTree, visibleWorkspaceTree, workspaceBaseName, workspaceDirectories, workspaceFilesUnder, workspaceFolderRenamePlan, workspaceParentPath, type WorkspaceMove } from "../workspace/tree";
 import { ConfirmDialog } from "./confirm-dialog";
+import type { DurabilityState } from "./durability-indicator";
 import { downloadBytes, downloadFileName } from "./file-download";
 import { Icon } from "./icons";
 import { MenuSelect, moveMenuSelection } from "./menu-select";
@@ -198,6 +209,15 @@ export type WorkspaceViewProps = Readonly<{
   /** Opens one profile-scoped terminal tab at this exact workspace directory. */
   onOpenTerminalAt?: (cwd: string) => void;
   workspaceIdentity?: string;
+  /**
+   * What this workspace's storage authority can actually keep.
+   *
+   * Only `ephemeral` licenses the page witness below to record, and only it
+   * licenses the lost-work sentence: on any durable tier the commits and saves
+   * are still there after a reload, and a notice claiming otherwise would be
+   * the same kind of untruth in the opposite direction.
+   */
+  durability?: Readonly<{ state: DurabilityState }>;
   onOpenRepositoryManager?: () => void;
   /** Which pane the destination that opened this workbench asks for. */
   opensPane?: WorkbenchPane;
@@ -229,6 +249,7 @@ function ProfileScopedWorkspaceView({
   onWorkspaceChanged,
   onOpenTerminalAt,
   workspaceIdentity = "page-memory",
+  durability,
   onOpenRepositoryManager,
   opensPane = "navigation",
   opensPaneArrival = 0,
@@ -343,6 +364,32 @@ function ProfileScopedWorkspaceView({
   const [historyMessage, setHistoryMessage] = useState("");
   const [scmLoading, setScmLoading] = useState(false);
   const [commitMessage, setCommitMessage] = useState("");
+  /*
+   * Adopted once per mount, before this load records anything of its own: the
+   * comparison is between this page load and the one that wrote the witness.
+   * `lost` is what the reload destroyed, held in state so dismissing it is a
+   * decision and not a re-render away from coming back.
+   */
+  const witnessScope = workspaceWorkbenchScope(workspaceIdentity, profileId);
+  const [lostWork, setLostWork] = useState(() => {
+    const adopted = adoptWorkspaceWitness(readWorkspaceWitness(browserSessionStorage(), witnessScope), WORKSPACE_PAGE_LOAD_ID);
+    // Written back at adoption, so the previous load's record is retired
+    // exactly once and the loss survives leaving the route and coming back.
+    writeWorkspaceWitness(browserSessionStorage(), witnessScope, adopted);
+    return adopted.lost;
+  });
+  const ephemeral = durability?.state === "ephemeral";
+  const lostWorkMessage = lostWorkspaceWorkNotice(lostWork);
+  // Adopting a Vault copies this page's workspace and Git state into it, so the
+  // record of work at risk is not merely stale, it is wrong: drop it the moment
+  // the durability claim stops being page memory.
+  useEffect(() => {
+    if (!ephemeral) clearWorkspaceWitness(browserSessionStorage(), witnessScope);
+  }, [ephemeral, witnessScope]);
+  /** Only page-memory work is at risk, so only page-memory work is witnessed. */
+  function witness(work: Readonly<{ commit?: string; savedPath?: string }>): void {
+    if (ephemeral) recordWorkspaceWork(browserSessionStorage(), witnessScope, work);
+  }
   const hoverTimer = useRef<number>();
   const hoverDirectory = useRef("");
   const treeViewport = useRef<HTMLDivElement>(null);
@@ -1017,6 +1064,9 @@ function ProfileScopedWorkspaceView({
       else await workspace.remove(path, { expectedRevision: written.revision });
       throw cause;
     }
+    // The one chokepoint every workbench write passes through, so the witness
+    // cannot miss a save that a new caller forgets to report.
+    witness({ savedPath: written.path });
     return written;
   }
 
@@ -1335,7 +1385,13 @@ function ProfileScopedWorkspaceView({
       // The clear is a consequence of the adapter *accepting* the commit, never
       // of the click: a throw propagates out of `runSourceMutation` and the
       // typed message survives, which is the user's only copy of it.
-      if (await runSourceMutation(git, operation)) setCommitMessage("");
+      if (await runSourceMutation(git, operation)) {
+        // Recorded on acceptance for the same reason, and by subject rather
+        // than by oid: after the reload the oid names nothing, and the subject
+        // is what the person typed and will look for.
+        if (operation.kind === "commit") witness({ commit: commitSubject(operation.request.message) });
+        setCommitMessage("");
+      }
       await refreshSourceControl();
     });
   }
@@ -1573,6 +1629,24 @@ function ProfileScopedWorkspaceView({
 
   return (
     <section class="work-view workspace-workbench">
+      {/*
+        The sentence the route owed the person who committed here.
+
+        Measured: commit, reload, and History is back to a freshly-seeded
+        "Initial browser workspace" under a new hash with nothing said. It is a
+        row in the grid, above the panes and before the tab strip, because a
+        loss is the first thing to read on arrival — not a toast that expires
+        while the reader is still looking for the commit. `role="alert"`: this
+        is not the status of an action the reader just took.
+      */}
+      {lostWorkMessage ? <div class="notice workbench-lost-work" data-state="attention" role="alert">
+        <Seal state="attention" density="dot" size={16} label="Work did not survive the reload" />
+        <p>{lostWorkMessage}</p>
+        <button type="button" onClick={() => {
+          dismissWorkspaceLoss(browserSessionStorage(), witnessScope);
+          setLostWork(undefined);
+        }}>Dismiss</button>
+      </div> : null}
       {/*
         One phone control instead of two. Three identically-weighted strips
         stacked to y=424 on a 932px phone; the route strip is now inside the
@@ -2513,6 +2587,12 @@ function readTabState(
       ...(worktreeId ? { worktreeId } : {}),
     };
   } catch { return empty; }
+}
+
+/** A partitioned or blocked session storage costs the durability notice, nothing else. */
+function browserSessionStorage(): Storage | undefined {
+  try { return typeof sessionStorage === "undefined" ? undefined : sessionStorage; }
+  catch { return undefined; }
 }
 
 function boundedSourceSelectionId(value: unknown): string | undefined {

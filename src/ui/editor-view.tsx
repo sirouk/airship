@@ -151,6 +151,7 @@ export function EditorView(props: EditorViewProps) {
         onOpen={props.onOpen}
         workspace={props.workspace}
         workspaceIdentity={props.workspaceIdentity}
+        durability={props.durability}
         git={props.git}
         review={props.review}
         onWorkspaceChanged={props.onWorkspaceChanged}
@@ -198,6 +199,7 @@ export function EditorView(props: EditorViewProps) {
             reviewImport={props.reviewImport}
             onWorkspaceChanged={props.onWorkspaceChanged}
             workspaceDurability={props.durability}
+            witnessScope={sourceToolsAuthority}
           /> : <div class="editor-route__loading" role={loadError ? "alert" : "status"}>{loadError ?? "Loading advanced browser source controls…"}</div>}
         </div>
       </div> : null}

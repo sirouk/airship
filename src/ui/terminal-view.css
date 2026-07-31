@@ -40,11 +40,21 @@
 .terminal-tab__name-input{width:9rem;min-height:var(--touch-target);padding:5px 8px;border:0;outline:0;background:var(--surface-raised);color:var(--ink);font:inherit}
 .terminal-tab__name-input:focus{box-shadow:inset 0 0 0 1px var(--accent)}
 
-.terminal-panel{display:grid;grid-template-rows:auto minmax(14rem,1fr) auto;min-height:0;border:1px solid var(--line-strong);border-radius:var(--radius-panel);overflow:hidden;background:#0b0e0f;box-shadow:var(--shadow)}
+/* The single column is declared, not implied. Left implicit it sized to the
+   xterm screen's max-content, so at 390px the panel box was 364px while its
+   own rows were 693px: the status bar's directory ran off the edge, and
+   Interrupt/New here/Restart/Close ran off with it, inside `overflow:hidden`
+   where nothing could scroll them back. Measured at 390x844. */
+.terminal-panel{display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(14rem,1fr) auto;min-height:0;border:1px solid var(--line-strong);border-radius:var(--radius-panel);overflow:hidden;background:#0b0e0f;box-shadow:var(--shadow)}
 .terminal-panel__bar{display:flex;justify-content:space-between;gap:12px;align-items:center;min-height:var(--touch-target);padding:4px 10px;border-bottom:1px solid #32383b;background:#15191b;color:#d9d3c7;font-size:var(--fs-caption)}
 .terminal-panel__bar>div:first-child{min-width:0}
 .terminal-panel__bar>div:last-child{flex:0 1 auto;min-width:0;overflow-x:auto;scrollbar-width:thin}
 .terminal-panel__bar code{overflow:hidden;color:#9ba6aa;text-overflow:ellipsis;white-space:nowrap}
+/* The workspace spelling of the shell's directory. It never shrinks: the long
+   shell path may ellipsize (its full text is the code's title and the row's
+   accessible sentence), but dropping "= /workspace" would restore exactly the
+   contradiction this pair was added to end. */
+.terminal-panel__mirror{flex:0 0 auto;color:#9ba6aa}
 .terminal-panel__bar .seal{color:#9ba6aa}
 .terminal-panel__bar .seal[data-state=verified]{color:var(--v-verified)}
 .terminal-panel__bar .seal[data-state=checking]{color:var(--v-info)}
@@ -90,6 +100,22 @@
 .terminal-git>button{padding:0 14px;font-size:var(--fs-caption)}
 .terminal-git>p{grid-column:1 / -1;max-width:92ch;margin:0;color:var(--ink-muted);font-size:var(--fs-micro);line-height:1.45}
 .terminal-git__notice{grid-column:1 / -1}
+/* The `git`-in-jsh handoff spans the row so its sentence and its two controls
+   stay on one line above the field they fill; it wraps rather than clipping the
+   action, which is the whole point of the row. */
+/* Selector matches `.terminal-git>p`'s specificity deliberately: the row-wide
+   prose rule caps at 92ch, and a notice carrying two controls must reach the
+   edge of the field it is offering to fill. */
+.terminal-git>.terminal-git__handoff{grid-column:1 / -1;max-width:none;flex-wrap:wrap}
+/* `Seal` renders a `<span class="seal">`, so an unqualified `>span` handed the
+   16px mark the growth meant for the sentence and pushed the words 450px right. */
+.terminal-git__handoff>.seal{flex:0 0 auto}
+/* A narrow basis on purpose: the route grid is height-locked, so every row this
+   notice adds is taken out of the tab strip and the runtime band above it.
+   Wrapping the sentence into the space the two controls leave costs 114px→~60px
+   at 390x844, which the panel's own 1fr row can absorb. */
+.terminal-git__handoff>span:not(.seal){flex:1 1 10ch;min-width:0}
+.terminal-git__handoff>button{flex:0 0 auto;padding:0 12px;font-size:var(--fs-micro)}
 .terminal-git__notice>pre{max-height:14rem;margin:0;overflow:auto;padding:9px 11px;border:1px solid var(--line-strong);border-radius:var(--radius-control);background:#0b0e0f;color:#d9d3c7;font-size:var(--fs-micro);line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere}
 .terminal-git__notice>pre[data-failed=true]{border-color:var(--v-failed);color:#f0d9d3}
 
@@ -102,7 +128,11 @@
  * sessions, not a second terminal implementation. It deliberately omits the
  * route explainer while keeping the runtime boundary on its toolbar.
  */
-.terminal-route--dock{grid-template-rows:auto auto minmax(0,1fr) auto;gap:5px;height:100%;min-height:0;padding:0 7px 6px;background:var(--ground)}
+/* Five rows, and the PTY keeps a floor. The `git`-in-jsh handoff is a fifth
+   child; against `minmax(0,1fr)` the panel row collapsed to zero and the dock
+   showed a notice about a shell that was no longer on screen. Measured at
+   390x844. */
+.terminal-route--dock{grid-template-rows:auto auto minmax(5.5rem,1fr) auto auto;gap:5px;height:100%;min-height:0;padding:0 7px 6px;background:var(--ground)}
 .terminal-dock__toolbar{display:flex;align-items:center;justify-content:space-between;gap:10px;min-width:0;min-height:42px;border-bottom:1px solid var(--line)}
 .terminal-dock__identity,.terminal-dock__actions{display:flex;align-items:center;gap:8px;min-width:0}
 .terminal-dock__identity>strong{font-size:var(--fs-caption)}
@@ -152,11 +182,16 @@
   .terminal-git>label{grid-column:1 / -1}
   .terminal-git>button{min-width:var(--touch-target)}
   .terminal-git__notice>pre{max-height:11rem}
+  /* Full measure, controls beneath. Sharing the row with two 44px buttons left
+     the sentence a 166px column and eight lines of it at 390px — taller than
+     the same words wrapped across the whole card. */
+  .terminal-git__handoff>span:not(.seal){flex:1 1 100%}
+  .terminal-git__handoff>button{flex:1 1 auto}
   .terminal-panel__meta summary{min-height:var(--touch-target);display:flex;align-items:center}
   .terminal-panel__meta{display:grid;gap:4px}
   .terminal-panel__meta-actions{justify-content:flex-end;gap:12px}
   .terminal-panel__popover{width:min(34rem,calc(100vw - 2rem))}
-  .terminal-route--dock{grid-template-rows:auto auto minmax(0,1fr) auto;gap:4px;padding-inline:4px}
+  .terminal-route--dock{grid-template-rows:auto auto minmax(5.5rem,1fr) auto auto;gap:4px;padding-inline:4px}
   .terminal-dock__toolbar{align-items:stretch;min-height:84px;padding:4px 0}
   .terminal-dock__identity{display:grid;grid-template-columns:auto minmax(0,1fr);align-content:center;gap:2px 6px}
   .terminal-dock__identity>small{grid-column:1 / -1;max-width:13rem}

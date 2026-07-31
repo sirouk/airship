@@ -136,7 +136,11 @@ test("Workspace opens, resizes, collapses, and promotes one profile-scoped termi
 
   await expect(page).toHaveURL(/#workspace$/);
   await expect(dock).toHaveAttribute("data-open", "true");
-  await expect(dock.locator(".terminal-panel__bar code")).toHaveText("/workspace/docs");
+  // The shell's own chrome leads with the path `pwd` prints, and names the
+  // workspace spelling beside it rather than printing a `/workspace` the
+  // WebContainer cannot resolve.
+  await expect(dock.locator(".terminal-panel__bar code")).toHaveText("/home/airship-node/airship-workspace/docs");
+  await expect(dock.locator(".terminal-panel__mirror")).toHaveText("= /workspace/docs");
   await expect(dock.getByText("Profile General", { exact: true })).toBeVisible();
   await expect(dock.getByText(/WebContainer · jsh · page-local, not Bash\/Linux/u)).toBeVisible();
 
@@ -165,11 +169,12 @@ test("Workspace opens, resizes, collapses, and promotes one profile-scoped termi
   await dock.locator(".workspace-terminal-dock__collapsed button").first().click();
   await expect(dock).toHaveAttribute("data-open", "true");
   await expect(dock.getByRole("tablist", { name: "Terminal tabs" }).getByRole("tab")).toHaveCount(tabCount);
-  await expect(dock.locator(".terminal-panel__bar code")).toHaveText("/workspace/docs");
+  await expect(dock.locator(".terminal-panel__bar code")).toHaveText("/home/airship-node/airship-workspace/docs");
 
   await dock.getByRole("button", { name: "Open full Terminal view" }).click();
   await expect(page).toHaveURL(/#terminal$/);
   await expect(page.getByRole("heading", { name: "Terminal", level: 1 })).toBeVisible();
-  await expect(page.locator(".terminal-panel__bar code")).toHaveText("/workspace/docs");
+  await expect(page.locator(".terminal-panel__bar code")).toHaveText("/home/airship-node/airship-workspace/docs");
+  await expect(page.locator(".terminal-panel__mirror")).toHaveText("= /workspace/docs");
   await expect(page.getByText("Profile general", { exact: true })).toBeVisible();
 });

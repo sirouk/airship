@@ -17,6 +17,7 @@ import {
 import type { ChutesInvocationTelemetry } from "../inference/chutes";
 import "./billing-view.css";
 import { BrandLogo, type BrandLogoName } from "./brand-icons";
+import { installEgressRecorder } from "./connect/egress-record";
 import { OFFLINE_INLINE_REASON } from "./connectivity";
 import { Icon } from "./icons";
 import { formatInstant } from "./instant-format";
@@ -329,6 +330,17 @@ export function BillingView({
    * replaces the old one, which re-arms this effect.
    */
   const [observedNow, setObservedNow] = useState(() => Date.now());
+
+  /*
+   * Declared before the loader below so the account read is recorded as
+   * Airship sends it — with its method and whether it carried the credential —
+   * rather than only as an anonymous line in the browser's resource timeline.
+   * The record is read on Connection; this route is one of the two that fills
+   * it, and installing is idempotent.
+   */
+  useEffect(() => {
+    installEgressRecorder();
+  }, []);
 
   useEffect(() => {
     if (!snapshot) return;

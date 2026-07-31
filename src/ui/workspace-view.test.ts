@@ -848,3 +848,47 @@ describe("one byte vocabulary", () => {
     expect(formatBytes(12_000_000)).toBe("11 MiB");
   });
 });
+
+/*
+ * A reload destroyed committed Git history and the route that lost it said
+ * nothing, while Chat and Memory have had a sentence for exactly this event for
+ * as long as they have had page-memory state. Measured: commit "docs: persist
+ * marker", confirm it in History, reload — History is back to a freshly-seeded
+ * "Initial browser workspace" under a new hash, README.md is 845 B again, and a
+ * scan for any line containing "did not survive" returned nothing.
+ */
+describe("work that did not survive the reload", () => {
+  const source = readFileSync(new URL("./workspace-view.tsx", import.meta.url), "utf8");
+
+  it("witnesses a commit when the adapter accepts it, and a save at the one write chokepoint", () => {
+    expect(source).toContain('if (operation.kind === "commit") witness({ commit: commitSubject(operation.request.message) });');
+    expect(source).toContain("witness({ savedPath: written.path });");
+  });
+
+  it("records only what page memory can actually lose, and stops the moment a Vault is adopted", () => {
+    expect(source).toContain('const ephemeral = durability?.state === "ephemeral";');
+    expect(source).toContain("if (ephemeral) recordWorkspaceWork(browserSessionStorage(), witnessScope, work);");
+    expect(source).toContain("if (!ephemeral) clearWorkspaceWitness(browserSessionStorage(), witnessScope);");
+  });
+
+  it("states the loss in a row of the workbench, not in the expiring toast", () => {
+    // `.workbench-notice` is an absolutely-positioned overlay because it
+    // expires. A sentence about destroyed history is the first thing to read on
+    // arrival and must never sit on top of the state it describes.
+    expect(source).toContain('<div class="notice workbench-lost-work" data-state="attention" role="alert">');
+    expect(source).not.toContain('class="notice workbench-lost-work workbench-notice"');
+    const styles = readFileSync(new URL("./workspace-view.css", import.meta.url), "utf8");
+    expect(styles).toMatch(/\.workbench-lost-work\.notice \{[^}]*flex: 0 0 auto;/u);
+    expect(styles).not.toMatch(/\.workbench-lost-work\.notice \{[^}]*position: absolute/u);
+  });
+
+  it("feeds the advanced dialog's second commit surface into the same witness", () => {
+    // "Commit locally" writes the same repository the rail's "Commit staged"
+    // writes; a commit made there and dropped by a reload has to be named too.
+    const advanced = readFileSync(new URL("./sources-view.tsx", import.meta.url), "utf8");
+    expect(advanced).toContain("recordWorkspaceWork(browserSessionStorage(), witnessScope, { commit:");
+    const host = readFileSync(new URL("./editor-view.tsx", import.meta.url), "utf8");
+    expect(host).toContain("witnessScope={sourceToolsAuthority}");
+    expect(host).toContain("durability={props.durability}");
+  });
+});

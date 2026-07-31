@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import "@xterm/xterm/css/xterm.css";
 import type { BrowserGitClient } from "../git/client";
 import { runTerminalGitCommand, type TerminalGitReview } from "../git/terminal-commands";
+import { terminalShellPath, workspaceAddressNote } from "../workspace/addressing";
 import type { ClientEncryptedWorkspacePort, WorkspacePort } from "../workspace/contracts";
 import { nextTabId, stripViewport, tabBox, tabScrollLeft } from "./tabs";
 import { getBrowserTerminalManager, type BrowserTerminalManager } from "../terminal/manager";
@@ -226,6 +227,35 @@ export async function runTerminalGitBridge(args: Readonly<{
   }
 }
 
+/**
+ * The `git` line the shell cannot run, lifted so the bridge can answer it.
+ *
+ * `git status` is the likeliest first command in a product whose Source Control
+ * tab is two clicks away, and jsh answers it with `jsh: command not found: git`
+ * and no pointer to the bridge 200px below — whose placeholder is literally
+ * `git status`. Submitted input is the honest trigger: the mount carries no
+ * `.git` and the container has no git binary, so every such line has already
+ * failed by the time it is in `history`. Only the most recent line counts; an
+ * older `git` buried under real shell work is not a live intention.
+ */
+export function terminalShellGitHandoff(history: readonly string[] | undefined): string | undefined {
+  const last = history?.at(-1)?.trim();
+  return last && /^git(?:\s|$)/u.test(last) ? last : undefined;
+}
+
+/**
+ * One sentence for the offer, in both places it is made.
+ *
+ * Deliberately short. The route's first draft explained the target and the
+ * approval policy too, and at 390px that wrapped to four lines — squeezing the
+ * tab strip above it to a 12px sliver and, in the dock, the shell it was
+ * describing off the screen entirely. Both facts are already stated by the
+ * scope paragraph directly below the field this offer fills.
+ */
+export function terminalGitHandoffSentence(command: string): string {
+  return `${command} needs Browser Git: this ${WEB_CONTAINER_TERMINAL_RUNTIME.shellLabel} process has no git binary.`;
+}
+
 /** One line for the route footer; the bridge's own text stays in the output region. */
 export function terminalGitNotice(outcome: TerminalGitOutcome): string {
   if (outcome.failed) return `git was refused at ${outcome.cwd}: ${outcome.output.split("\n")[0] ?? ""}`;
@@ -276,6 +306,8 @@ function ProfileScopedTerminalView({ workspace, git, reviewGit, onWorkspaceChang
   const [gitCommand, setGitCommand] = useState("");
   const [gitOutcome, setGitOutcome] = useState<TerminalGitOutcome>();
   const [gitRunning, setGitRunning] = useState(false);
+  /** The lifted `git` line already answered or waved off, so the offer is made once. */
+  const [gitHandoffSettled, setGitHandoffSettled] = useState<string>();
   const cancelRename = useRef(false);
   const strip = useRef<HTMLDivElement>(null);
   const workspaceChanged = useRef(onWorkspaceChanged);
@@ -309,7 +341,7 @@ function ProfileScopedTerminalView({ workspace, git, reviewGit, onWorkspaceChang
         : manager.ensureProfileSession({ ...(profileId ? { profileId } : {}), ...(threadId ? { threadId } : {}), cwd: workspaceRoot });
       if (openRequest) {
         setActiveId(ensured.id);
-        setNotice(`Opened a terminal at ${ensured.cwd}.`);
+        setNotice(`Opened a terminal at ${ensured.cwd} — ${terminalShellPath(ensured.cwd)} in the shell.`);
         openRequestHandled.current?.(openRequest.id);
       } else {
         setActiveId((selected) => selected ?? ensured.id);
@@ -362,8 +394,11 @@ function ProfileScopedTerminalView({ workspace, git, reviewGit, onWorkspaceChang
   // the repository the panel below it is standing in rather than needing a
   // `git -C` the user would have to type on every command.
   const gitCwd = active?.cwd ?? workspaceRoot;
-  const runGit = async () => {
-    const command = gitCommand.trim();
+  // A `git` the shell just refused, offered to the bridge that can answer it.
+  const liftedGit = terminalShellGitHandoff(active?.history);
+  const gitHandoff = liftedGit && liftedGit !== gitHandoffSettled ? liftedGit : undefined;
+  const runGit = async (requested = gitCommand) => {
+    const command = requested.trim();
     if (!command || gitRunning) return;
     setGitRunning(true);
     try {
@@ -568,7 +603,7 @@ function ProfileScopedTerminalView({ workspace, git, reviewGit, onWorkspaceChang
               origin: { kind: "workspace-path", path: active.cwd },
             });
             setActiveId(created.id);
-            setNotice(`Started a new terminal at ${active.cwd}.`);
+            setNotice(`Started a new terminal at ${active.cwd} — ${terminalShellPath(active.cwd)} in the shell.`);
           } catch (error) {
             setNotice(error instanceof Error ? error.message : "A terminal could not be opened at this path.");
           }
@@ -576,6 +611,16 @@ function ProfileScopedTerminalView({ workspace, git, reviewGit, onWorkspaceChang
       /> : (
         <div class="terminal-empty"><Icon name="terminal" /><h2>No terminal tab</h2><p>Create a tab to cold-start an isolated browser runtime.</p><button type="button" onClick={createTab}>New terminal</button></div>
       )}
+
+      {/* The dock has no command row of its own — it is a 220px PTY strip — so
+          the same refusal routes to the route that does own one, rather than
+          leaving the dock the one place where `git` still dead-ends. */}
+      {variant === "dock" && gitHandoff ? <p class="notice terminal-git__handoff" data-state="attention" role="status">
+        <Seal state="attention" label="Not runnable in this shell" density="dot" size={15} />
+        <span>{terminalGitHandoffSentence(gitHandoff)}</span>
+        {onOpenFullView ? <button type="button" class="primary" onClick={() => { setGitHandoffSettled(gitHandoff); onOpenFullView(); }}>Open Browser Git</button> : null}
+        <button type="button" onClick={() => setGitHandoffSettled(gitHandoff)}>Dismiss</button>
+      </p> : null}
 
       {/* The route's Git command row. `runTerminalGitCommand` had no caller in
           `src/**` at all, and seven of its verb families — stash, merge, tag,
@@ -598,7 +643,29 @@ function ProfileScopedTerminalView({ workspace, git, reviewGit, onWorkspaceChang
           onInput={(event) => setGitCommand(event.currentTarget.value)}
         />
         <button type="submit" disabled={gitRunning || !gitCommand.trim()}>{gitRunning ? "Running…" : "Run"}</button>
-        <p id="terminal-git-scope">Runs against the browser-owned <code>.git</code> holding <code>{gitCwd}</code>, under Editor's approval policy — not inside the {WEB_CONTAINER_TERMINAL_RUNTIME.shellLabel} process, which has no git binary. The answer lands below, never in the scrollback. <code>git help</code> lists the supported verbs and names what is absent.</p>
+        {/*
+          The seam, not a second dead end. `git status` in the PTY answers "jsh:
+          command not found: git" and pointed at nothing; the bridge that can
+          answer it is on the same screen, so the typed line is offered to it
+          verbatim instead of being retyped.
+
+          It stands *in place of* the scope paragraph, carrying that paragraph's
+          id so the field keeps its description. Added as an extra row it cost
+          114px, and this route's grid is height-locked: at 390x844 the browser
+          took every one of those pixels out of the tab strip and the runtime
+          band, crushing a 44px tab to 23px. The actionable form of a sentence
+          belongs where the sentence was.
+        */}
+        {gitHandoff ? <p class="notice terminal-git__handoff" id="terminal-git-scope" data-state="attention" role="status">
+          <Seal state="attention" label="Not runnable in this shell" density="dot" size={15} />
+          <span>{terminalGitHandoffSentence(gitHandoff)} Browser Git runs it against the browser-owned <code>.git</code> holding <code>{gitCwd}</code>, under Editor's approval policy.</span>
+          <button type="button" class="primary" onClick={() => {
+            setGitCommand(gitHandoff);
+            setGitHandoffSettled(gitHandoff);
+            void runGit(gitHandoff);
+          }}>Run it here</button>
+          <button type="button" onClick={() => setGitHandoffSettled(gitHandoff)}>Dismiss</button>
+        </p> : <p id="terminal-git-scope">Runs against the browser-owned <code>.git</code> holding <code>{gitCwd}</code> — the same directory the {WEB_CONTAINER_TERMINAL_RUNTIME.shellLabel} process calls <code>{terminalShellPath(gitCwd)}</code> — under Editor's approval policy. The shell has no git binary, so the answer lands below, never in the scrollback. <code>git help</code> lists the supported verbs and names what is absent.</p>}
         {/* Live because the answer is the point: the footer announces the
             one-line verdict, this region carries the bridge's own text. */}
         <div class="terminal-git__notice" role="status">
@@ -762,17 +829,30 @@ function TerminalPanel({ manager, session: initial, onNotice, durability, profil
       {/* The seal is hidden from the accessible tree because the word it
           carries is the `<strong>` immediately beside it — shape and word are
           both present visually, and the name is said once. */}
-      <div><span aria-hidden="true"><Seal state={terminalSealState(session.status)} label={statusLabel(session)} density="dot" size={16} /></span><strong>{statusLabel(session)}</strong><code title={session.cwd}>{session.cwd}</code>{session.threadId ? <span title={session.threadId}>thread {compactId(session.threadId)}</span> : null}</div>
+      <div>
+        <span aria-hidden="true"><Seal state={terminalSealState(session.status)} label={statusLabel(session)} density="dot" size={16} /></span>
+        <strong>{statusLabel(session)}</strong>
+        {/* The measured defect: this chip printed the *workspace* path, so one
+            frame carried "/workspace" here, "~/airship-node/airship-workspace"
+            at the prompt and "/workspace" again in the Git note, and `ls
+            /workspace` in that shell failed. The shell's own chrome now leads
+            with the path `pwd` prints and names the workspace spelling beside
+            it; the sentence both come from is read once by assistive tech. */}
+        <code aria-hidden="true" title={workspaceAddressNote(session.cwd)}>{terminalShellPath(session.cwd)}</code>
+        <span class="terminal-panel__mirror" aria-hidden="true">= {session.cwd}</span>
+        <span class="sr-only">{workspaceAddressNote(session.cwd)}</span>
+        {session.threadId ? <span title={session.threadId}>thread {compactId(session.threadId)}</span> : null}
+      </div>
       <div>
         {session.status === "running" ? <button type="button" onClick={() => void manager.interrupt(session.id)} aria-label="Interrupt process">⌃C <span>Interrupt</span></button> : <span class="terminal-panel__starting" aria-live="polite">{statusLabel(session)}</span>}
-        <button type="button" onClick={onNewHere} aria-label="New terminal at current directory" title={`New terminal at ${session.cwd}`}><span aria-hidden="true">＋</span> <span>New here</span></button>
+        <button type="button" onClick={onNewHere} aria-label="New terminal at current directory" title={`New terminal at ${terminalShellPath(session.cwd)}`}><span aria-hidden="true">＋</span> <span>New here</span></button>
         <button type="button" onClick={restart} disabled={session.status === "starting"}><Icon name="branch" size={14} /> Restart</button>
         <button ref={closeButton} type="button" onClick={() => setClosing(true)} aria-label="Close terminal tab">× <span>Close</span></button>
       </div>
     </div>
     {closing ? <ConfirmDialog
       title={closeCopy.title}
-      titleDetail={session.cwd}
+      titleDetail={terminalShellPath(session.cwd)}
       confirmLabel={closeCopy.confirm}
       destructive
       onCancel={() => { setClosing(false); closeButton.current?.focus(); }}
@@ -837,7 +917,9 @@ export function terminalCloseConfirmation(
   return Object.freeze({
     title: `Close ${session.name}?`,
     consequence: live
-      ? `This ends the process running in ${session.cwd} and closes its shell, scrollback and input history. No workspace file is changed by closing, and ${lineage}.`
+      // Both spellings, because the sentence is about a process (shell path)
+      // and about files the reader will look for afterwards (workspace path).
+      ? `This ends the process running in ${terminalShellPath(session.cwd)} — ${session.cwd} in Explorer — and closes its shell, scrollback and input history. No workspace file is changed by closing, and ${lineage}.`
       : `This session's process has already ended. Closing removes the tab, its scrollback and its input history; ${lineage}.`,
     confirm: "Close terminal",
   });

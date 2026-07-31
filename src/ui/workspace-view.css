@@ -512,6 +512,35 @@
 
 .workbench-notice.error { color: var(--ink); }
 
+/*
+ * Lost work gets a row, not a toast.
+ *
+ * The completion notice above is an absolutely-positioned overlay because it
+ * expires; this one states that committed history is gone, which is the first
+ * thing to read on arrival and the last thing that may be allowed to sit on top
+ * of the state it describes. It participates in the column flow, so the panes
+ * below it move down by exactly its height.
+ */
+.workbench-lost-work.notice {
+  flex: 0 0 auto;
+  margin-bottom: var(--sp-2);
+  background: var(--surface-raised);
+}
+
+.workbench-lost-work.notice > p { flex: 1 1 auto; min-width: 0; }
+
+.workbench-lost-work.notice > button {
+  flex: 0 0 auto;
+  min-height: 30px;
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--line-control);
+  border-radius: var(--radius-control);
+  color: var(--ink-muted);
+  background: transparent;
+  cursor: pointer;
+  font-size: var(--fs-caption);
+}
+
 .workspace-boundary { padding: .5rem .75rem; border-bottom: 1px solid var(--line); color: var(--ink-faint); background: var(--surface-soft); font: var(--fs-micro)/1.4 var(--font-mono); }
 .workspace-boundary.attention { color: var(--v-caution); }
 .workbench-context { position: fixed; z-index: 100; display: grid; min-width: 12rem; padding: .35rem; border: 1px solid var(--line-strong); border-radius: var(--radius-control); background: var(--surface-raised); box-shadow: var(--shadow); }

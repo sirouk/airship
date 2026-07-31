@@ -1,0 +1,85 @@
+/*
+ * The return report sits at the head of the transcript, in the same 780px
+ * measure as `.transcript-boundary` and the messages, because a person who has
+ * just lost work reads it before anything else on the page — not beside the
+ * composer at `--fs-micro` where the Atlas found the only durability sentence
+ * in the product going unread.
+ *
+ * Caution, not failure: nothing is broken. A posture the person chose behaved
+ * exactly as documented, and the tone has to leave the failed register free for
+ * the states that really are faults.
+ */
+.resume-report {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: flex-start;
+  width: min(100%, 780px);
+  /*
+   * Clear of `.transcript::before`, the sticky 24px scrim that fades whatever
+   * sits at the top of the scroller under the session bar. Measured at
+   * 390x844 with `scrollTop: 0`: "Your last visit was not kept" rendered
+   * greyed out beneath it while the sentence underneath read cleanly. The
+   * scrim is the transcript's, so the offset names the transcript's token
+   * rather than a number that would drift from it.
+   */
+  margin: var(--transcript-scrim, 24px) auto var(--sp-4);
+  padding: var(--sp-3);
+  border: 1px solid color-mix(in srgb, var(--v-caution) 40%, var(--line));
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--v-caution) 7%, var(--surface-soft));
+}
+
+.resume-report > svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--v-caution);
+}
+
+.resume-report__body { flex: 1 1 auto; min-width: 0; }
+
+.resume-report__body strong {
+  display: block;
+  margin-bottom: var(--sp-1);
+  color: var(--ink);
+  font-size: var(--fs-meta);
+  font-weight: var(--fw-strong);
+}
+
+.resume-report__body p {
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: var(--fs-meta);
+  line-height: 1.5;
+}
+
+.resume-report__scope {
+  margin-top: var(--sp-1) !important;
+  color: var(--ink-faint) !important;
+  font-size: var(--fs-micro) !important;
+}
+
+.resume-report__actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: var(--sp-2);
+  align-items: center;
+}
+
+/*
+ * The phone reorganises rather than reduces: the actions drop under the
+ * sentence instead of squeezing it, and both meet the 44px floor a fingertip
+ * needs. `touch-target-floor.spec.ts` measures the rendered box, so the floor
+ * is declared on the control and not on a wrapper it might not fill.
+ */
+@media (max-width: 640px) {
+  .resume-report { flex-wrap: wrap; }
+  .resume-report__actions { width: 100%; }
+}
+
+@media (pointer: coarse) {
+  .resume-report__actions .small-button {
+    min-width: 44px;
+    min-height: 44px;
+    padding-inline: var(--sp-3);
+  }
+}

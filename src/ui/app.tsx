@@ -80,6 +80,8 @@ import { postureFloorRefusal } from "./posture-floor";
 /* The leaf record, not `attestation-gate` — that module carries the DCAP
    verifier's WASM and this file paints first. */
 import { CHUTES_STRICT_ENDPOINT_PROOF_CAPABILITY as strictProofCapability } from "../inference/chutes/strict-proof-capability";
+import type { VNode } from "preact";
+import type { ResumeReportProps } from "./chat/resume-report";
 import { providerBoundaryLabel } from "../inference/transport-boundary-label";
 import {
   createGlobalSkillSettings,
@@ -153,7 +155,6 @@ import { TRUST_LABEL_MESSAGE_ASSERTED_NO_ENDPOINT, TRUST_LABEL_MESSAGE_NO_EVIDEN
 // they fed their shared reducer from two different predicates the route would
 // print two verdicts for one turn, which is the defect this package closes.
 import { sealStateForReceipt } from "./seal-states";
-import { ApprovalDock } from "./approval-dock";
 import { attestationRecordIdForReceipt, sessionAttestationReceipts } from "./attestation-history";
 import type { AttestationRefreshTarget } from "./attestations-view";
 import { Icon } from "./icons";
@@ -265,6 +266,8 @@ import type {
 } from "./chat/session-message-presentation";
 import { recoverPartialTurn } from "./chat/turn-recovery";
 import { claimThreadDraftHydration, readThreadDraft, writeThreadDraft } from "./chat/thread-draft";
+import { readDurableDraft, writeDurableDraft } from "./chat/durable-draft";
+import type { ReturnLedgerStorage, UnrecoveredWork } from "./chat/return-ledger";
 import { browserThreadViewportStorage, readThreadViewport, writeThreadViewport } from "./chat/thread-viewport";
 import { appendThreadQueueItem, removeThreadQueueItem } from "./chat/thread-queue";
 import {
@@ -661,6 +664,34 @@ type ProfileEditorDraft = {
 
 const CHUTES_OAUTH_ATTEMPT_KEY = "airship.chutes.oauth-attempt.v1";
 
+/**
+ * The return ledger, fetched rather than shipped at first paint.
+ *
+ * Every one of its callers is already asynchronous — recording an entry, and
+ * reconciling the ledger against a journal read — so deferring the module costs
+ * nothing at the call site. Statically imported it put 9.9 KiB of source into
+ * the entry chunk and helped push first paint to 114.73 KiB gzip against a
+ * 112.00 KiB ceiling, which is the one budget in this file that does not move:
+ * it is what a person waits for before anything at all is on screen.
+ */
+/**
+ * The approval dock, fetched when something first asks permission.
+ *
+ * A request can only exist once a model is connected and a turn is running, so
+ * none of this is first-paint content — and the pass that gave the dock its
+ * accessible write description and its outcome announcement also gave it 425
+ * lines, which the entry chunk was paying for on every cold open. The person
+ * waiting on the dock is already waiting on the agent, and the chunk resolves
+ * from cache on every request after the first.
+ */
+function loadApprovalDock() {
+  return import("./approval-dock");
+}
+
+function loadReturnLedger() {
+  return import("./chat/return-ledger");
+}
+
 async function loadDeferredCapabilities() {
   const broker = await import("../load-deferred-capabilities");
   return broker.loadDeferredCapabilities();
@@ -1027,6 +1058,39 @@ function transcriptMessagesFromPresentation(presentation: SessionMessagePresenta
   return merged;
 }
 
+/**
+ * Which of these conversations the journal still holds.
+ *
+ * Paged rather than capped: an absence from this set is what gets reported to a
+ * returning person as lost work, and a 200-item page boundary is not evidence
+ * of absence. The walk stops as soon as every wanted id is accounted for.
+ */
+async function findPresentSessions(
+  library: SessionLibrary,
+  wanted: ReadonlySet<string>,
+  signal: AbortSignal,
+): Promise<ReadonlySet<string>> {
+  const present = new Set<string>();
+  if (wanted.size === 0) return present;
+  let page = await library.list({ sort: "updated-desc", limit: 200 }, signal);
+  for (;;) {
+    for (const item of page.items) if (wanted.has(item.id)) present.add(item.id);
+    const next = page.offset + page.items.length;
+    if (signal.aborted || present.size === wanted.size || page.items.length === 0 || next >= page.total) break;
+    page = await library.list({ sort: "updated-desc", limit: page.limit, offset: next }, signal);
+  }
+  return present;
+}
+
+/** `localStorage`, or nothing where a private mode refuses it. */
+function browserReturnLedgerStorage(): ReturnLedgerStorage | undefined {
+  try {
+    return typeof localStorage === "undefined" ? undefined : localStorage;
+  } catch {
+    return undefined;
+  }
+}
+
 async function loadRecentConversations(
   library: SessionLibrary,
   open: (sessionId: string) => void,
@@ -1166,6 +1230,24 @@ function formatConversationTime(value: string): string {
  * and short-lived by nature: session storage dies with the tab.
  */
 const MINTED_ADDRESS_PREFIX = "airship.minted-chat-address.v1:";
+
+/**
+ * How long the resume verdict may stay undecided before the address is answered
+ * on whatever evidence exists. Measured Local Device adoption on this build
+ * completes in 1.1–2.4 s from first paint; this is the ceiling that keeps a
+ * backend which never reports from holding a bookmark open forever.
+ */
+const RESUME_SETTLE_CEILING_MS = 8_000;
+
+/** Keystroke-rate persistence into tab storage; cheap enough to run this often. */
+const DRAFT_TAB_PERSIST_MS = 160;
+
+/**
+ * The encrypted copy costs an authenticated envelope write, so it settles on a
+ * slower clock than the tab copy. A composer left mid-sentence is idle for far
+ * longer than this before a tab is closed.
+ */
+const DRAFT_DURABLE_PERSIST_MS = 700;
 
 export function App() {
   const [view, setView] = useState<View>(() => readViewHash());
@@ -1510,6 +1592,119 @@ export function App() {
   const [localDeviceBusy, setLocalDeviceBusy] = useState(false);
   const localDeviceAutoOpenOwner = useRef(0);
   const [localDeviceError, setLocalDeviceError] = useState<string>();
+  /**
+   * Whether the durability posture this browser profile is configured for has
+   * finished trying to load.
+   *
+   * The Atlas measured Airship reopening instead of resuming: on a reload with
+   * the Local Device Vault active, the page-memory runtime boots first, the
+   * `#chat/<id>` in the address bar resolves against a journal the Vault has not
+   * been adopted into yet, and the shell declares the conversation destroyed —
+   * "That conversation existed only in page memory and did not survive the
+   * reload" — one second before it restores that exact conversation and calls it
+   * "audited session resumed". The same race is what destroys the composer
+   * draft: the verdict re-keys the composer to the throwaway conversation the
+   * boot minted, and the real conversation then arrives and hydrates its empty
+   * draft over the text.
+   *
+   * So the route resolution waits for one declared answer. Every automatic
+   * adoption path settles this exactly once — adopted, refused, or not
+   * configured — and until then Airship says nothing about any address.
+   */
+  const [durableAuthoritySettled, setDurableAuthoritySettled] = useState(false);
+  /**
+   * The one resume verdict, read by the route resolver and the return report.
+   *
+   * Declared here rather than beside the other vault derivations further down
+   * because the effect that resolves `#chat/<id>` runs before them, and the
+   * whole point is that no surface may answer for an address before this does.
+   * `vaultRuntimeAdopted` below asks the same question of the *presented* trust
+   * state and is what every visible claim reads; this one asks it of the
+   * runtime this render is actually writing through, which is the fact the
+   * draft store and the ledger posture need.
+   */
+  const durableAuthorityAdopted = runtime.current?.storageId.startsWith("vault+") === true;
+  /*
+   * Deliberately not `durableAuthorityAdopted`. Adoption publishes the runtime
+   * ref several awaits before it publishes the journal, and Preact flushes a
+   * render inside those awaits — so there is a window in which the storage is
+   * the Vault's and `sessionLibrary` is still the page-memory one that cannot
+   * possibly hold the address. Resolving in that window is what moved an unsent
+   * draft onto a throwaway conversation on one reload in two. The explicit flag
+   * is set after the adoption has published everything.
+   */
+  const resumeAuthoritySettled = durableAuthoritySettled
+    // Ephemeral is a decision, not a wait: nothing durable is coming.
+    || preferences.vaultBackend === "ephemeral"
+    // A cloud backend that is not configured in this tab is waiting on a person
+    // (Drive's consent gesture) or on a service that answered "not here"
+    // (the loopback lab). Neither arrives on its own, so the address may be
+    // answered now rather than held open forever.
+    || ((preferences.vaultBackend === "google-drive" || preferences.vaultBackend === "local-lab")
+      && (vaultSnapshot.phase === "disconnected" || vaultSnapshot.phase === "degraded"));
+  /**
+   * Work this browser profile held that the journal did not give back.
+   *
+   * Held in state rather than read from storage at render time so a dismissal
+   * is felt immediately and the reconciliation runs exactly once per boot.
+   */
+  const [unrecoveredWork, setUnrecoveredWork] = useState<UnrecoveredWork>();
+  /*
+   * The lost-work report is fetched when there is lost work to report.
+   *
+   * It renders for a returning person whose previous session did not survive —
+   * the rarest state this surface has — and importing it statically put it, and
+   * its stylesheet, in the entry chunk. That chunk is first paint, it had
+   * 0.53 KiB of gzip headroom, and this cost 1.82 KiB of it: the release gate
+   * refused the build at 115.00 KiB against a 112.00 KiB ceiling. Every other
+   * rare surface in this file is already fetched on demand; this is the same
+   * pattern, applied to the one that pays the highest rent.
+   */
+  const [ResumeReportView, setResumeReportView] = useState<(props: ResumeReportProps) => VNode>();
+  /* Mounted as soon as a broker exists, so the dock is resident before the
+     first request rather than fetched while someone waits on a decision. */
+  const [ApprovalDockView, setApprovalDockView] = useState<(props: { broker: typeof approvalBroker }) => VNode>();
+  useEffect(() => {
+    let live = true;
+    void loadApprovalDock().then((module) => {
+      if (live) setApprovalDockView(() => module.ApprovalDock);
+    });
+    return () => { live = false; };
+  }, []);
+  useEffect(() => {
+    if (!unrecoveredWork || ResumeReportView) return;
+    let live = true;
+    void import("./chat/resume-report").then((module) => {
+      if (live) setResumeReportView(() => module.ResumeReport);
+    });
+    return () => { live = false; };
+  }, [ResumeReportView, unrecoveredWork]);
+  /** The journal the ledger has already been reconciled against. */
+  const returnLedgerReconciled = useRef<SessionLibrary>();
+  /**
+   * Identifies this page session in the return ledger.
+   *
+   * A conversation that leaves the journal while its own page is still open was
+   * deleted; only an absence that outlived the page that wrote it is a
+   * returning person's lost work, and this is how the two are told apart.
+   */
+  const pageSessionToken = useRef(randomUuid());
+  /** Addresses the reconciliation has already accounted for, so the composer
+   *  notice does not restate a loss the report states better. */
+  const reportedLostAddresses = useRef(new Set<string>());
+  /** The address the loss notice was raised about, so it can be withdrawn if
+   *  that conversation turns up after all. */
+  const lossNoticeAddress = useRef<string>();
+  /**
+   * Turns, not rows: the conversation seed and the journal markers are chrome
+   * and records, not work. A conversation whose count is zero has nothing to
+   * mourn and never enters the ledger, which is what keeps a first-ever visit
+   * from being told it lost something.
+   */
+  const recordedTranscriptSize = useMemo(
+    () => messages.reduce((total, message) => total + (message.seed || message.marker ? 0 : 1), 0),
+    [messages],
+  );
   const [driveReauthorizing, setDriveReauthorizing] = useState(false);
   const driveReauthorizingRef = useRef(false);
   const [vaultContextPublishing, setVaultContextPublishing] = useState(false);
@@ -1571,6 +1766,9 @@ export function App() {
   const queuedMessagesBySession = useRef(new Map<string, readonly QueuedComposerItem[]>());
   const queuedDispatch = useRef(false);
   const draftHydrationIdentity = useRef<string>();
+  /** The conversation whose encrypted draft has been read back, and is therefore
+   *  safe to write over. See the durable hydration effect. */
+  const durableDraftIdentity = useRef<string>();
   const preserveComposerForDraftIdentity = useRef<string>();
   const pendingForkRetry = useRef<Readonly<{
     sessionId: string;
@@ -1642,6 +1840,21 @@ export function App() {
     const events = ["pointerdown", "keydown"] as const;
     events.forEach((type) => window.addEventListener(type, forgetMintedAddresses, { capture: true, once: true }));
     return () => events.forEach((type) => window.removeEventListener(type, forgetMintedAddresses, { capture: true }));
+  }, []);
+  /*
+   * A liveness floor under the resume verdict, not a source of it.
+   *
+   * Every automatic adoption path settles the verdict itself, in a `finally` or
+   * on each terminal branch. This exists for the case none of them reach — a
+   * backend whose preconditions never assemble — because the failure mode of
+   * waiting forever is a bookmark that never opens and a person with no
+   * explanation at all. It can only ever release a wait; it never claims a
+   * conversation was lost, which remains the resolver's decision on the
+   * evidence it has by then.
+   */
+  useEffect(() => {
+    const ceiling = window.setTimeout(() => setDurableAuthoritySettled(true), RESUME_SETTLE_CEILING_MS);
+    return () => window.clearTimeout(ceiling);
   }, []);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const transcriptElement = useRef<HTMLDivElement>(null);
@@ -2089,6 +2302,13 @@ export function App() {
       || !sessionRuntime
       || !catalog
       || busy
+      // A journal that is still being adopted has not yet failed to hold the
+      // address; asking it now is what produced "did not survive the reload"
+      // about a conversation restored a second later. See
+      // `durableAuthoritySettled`. The latch is the same one every storage
+      // transition already sets, so a later Vault change is covered too.
+      || !resumeAuthoritySettled
+      || catalogAuthorityChanging.current
       || chatRouteOpening.current === chatRouteRequest
     ) return;
     if (sessionId === chatRouteRequest) {
@@ -2101,6 +2321,7 @@ export function App() {
       .then((detail) => resumeLibrarySession(detail))
       .then(() => {
         setChatRouteRequest((current) => current === requestedSessionId ? undefined : current);
+        lossNoticeAddress.current = undefined;
         setComposerNotice(undefined);
       })
       .catch((error) => {
@@ -2119,7 +2340,17 @@ export function App() {
           setChatRouteRequest((current) => current === requestedSessionId ? undefined : current);
           // Nothing to mourn if this page wrote the address itself: see
           // `rememberMintedAddress`. Anything else came from a person.
-          if (!addressWasMintedHere(requestedSessionId)) {
+          //
+          // Nor if the return report already names this conversation among the
+          // work that was not kept. One loss, one statement — the report has
+          // the count, the clock and the remedy, and two surfaces narrating the
+          // same event in different words is the "three independent surfaces
+          // guessing" the Atlas measured on the resume path.
+          if (
+            !addressWasMintedHere(requestedSessionId)
+            && !reportedLostAddresses.current.has(requestedSessionId)
+          ) {
+            lossNoticeAddress.current = requestedSessionId;
             setComposerNotice("That conversation existed only in page memory and did not survive the reload. This is a new conversation.");
           }
           return;
@@ -2137,7 +2368,23 @@ export function App() {
       .finally(() => {
         if (chatRouteOpening.current === requestedSessionId) chatRouteOpening.current = undefined;
       });
-  }, [busy, catalog, chatRouteRequest, sessionId, sessionLibrary, sessionRuntime, view]);
+  }, [busy, catalog, chatRouteRequest, resumeAuthoritySettled, sessionId, sessionLibrary, sessionRuntime, view]);
+  /*
+   * A loss notice is withdrawn the moment the conversation it mourns is open.
+   *
+   * The gate above removes the race that raised the notice early, and this
+   * removes the claim itself if any other path — a Vault adopting and resuming
+   * its own latest session, a fork landing, a person picking the row out of the
+   * rail — puts that conversation back on screen. The measured failure was a
+   * cold open at `#chat/45b72a63` rendering "did not survive the reload" beside
+   * a fully restored transcript and a topbar reading "audited session resumed":
+   * whichever a reader believed, they had to distrust the other.
+   */
+  useEffect(() => {
+    if (!sessionId || lossNoticeAddress.current !== sessionId) return;
+    lossNoticeAddress.current = undefined;
+    setComposerNotice(undefined);
+  }, [sessionId]);
   useEffect(() => {
     if (view !== "chat" || chatRouteRequest || !sessionId) return;
     // A hash navigation can land between this effect being scheduled and
@@ -2309,6 +2556,37 @@ export function App() {
     }
     setAttachments([]);
   }, [chatRouteRequest, sessionId]);
+  /*
+   * The durable half of draft hydration.
+   *
+   * A browser restart empties `sessionStorage`, so the tab-scoped copy above is
+   * exactly as durable as page memory — right for a page-memory session, wrong
+   * for one whose journal the person has paid to keep. Measured with the Vault
+   * active: "and one more thing I still need to check before Friday" before the
+   * restart, `""` after, same URL, same conversation restored, no notice.
+   *
+   * It is a second effect rather than a branch of the first because the two
+   * hydrations arrive on different clocks: the tab copy is there at first paint
+   * and the Vault is adopted a second or two later, so a single fence keyed on
+   * the conversation would claim hydration before the durable store existed and
+   * never look again.
+   */
+  useEffect(() => {
+    const draftSessionId = chatRouteRequest ?? sessionId;
+    const durablePort = durableAuthorityAdopted ? runtime.current?.workspace : undefined;
+    if (!draftSessionId || !durablePort || durableDraftIdentity.current === draftSessionId) return;
+    // Until the read lands this conversation has no established durable draft,
+    // and the writer below must not persist an empty composer over one.
+    durableDraftIdentity.current = undefined;
+    let cancelled = false;
+    void readDurableDraft(durablePort, draftSessionId).then((carried) => {
+      if (cancelled) return;
+      durableDraftIdentity.current = draftSessionId;
+      // Never over anything typed while the read was in flight.
+      if (carried) setInput((current) => current || carried);
+    });
+    return () => { cancelled = true; };
+  }, [chatRouteRequest, durableAuthorityAdopted, sessionId]);
   /**
    * Moves an unsent draft off a conversation address that can never resolve.
    *
@@ -2369,9 +2647,95 @@ export function App() {
       } catch {
         // Draft persistence is optional; the live composer remains authoritative.
       }
-    }, 160);
-    return () => window.clearTimeout(timer);
-  }, [chatRouteRequest, input, sessionId]);
+    }, DRAFT_TAB_PERSIST_MS);
+    /*
+     * The encrypted copy runs on its own, slower clock: the tab write is a
+     * `sessionStorage.setItem`, this one is an authenticated envelope through
+     * the Vault's workspace port, and a keystroke is not worth one of those.
+     * It is fenced on the durable read having already answered for this
+     * conversation, or the empty composer of the frame after a restart would
+     * erase the very text it is one tick away from restoring.
+     */
+    const durablePort = durableAuthorityAdopted ? runtime.current?.workspace : undefined;
+    const durableTimer = durablePort ? window.setTimeout(() => {
+      if (durableDraftIdentity.current !== draftSessionId) return;
+      void writeDurableDraft(durablePort, draftSessionId, input);
+    }, DRAFT_DURABLE_PERSIST_MS) : undefined;
+    return () => {
+      window.clearTimeout(timer);
+      if (durableTimer !== undefined) window.clearTimeout(durableTimer);
+    };
+  }, [chatRouteRequest, durableAuthorityAdopted, input, sessionId]);
+  /*
+   * Remember that work existed, so a return can be told what happened to it.
+   *
+   * The Atlas measured a person who had sent two turns close the browser and
+   * reopen to a screen byte-identical to a first-ever visit — no notice, no
+   * tombstone, "All conversations" reporting the empty conversation this boot
+   * had just minted. Airship could not say what was lost because nothing in the
+   * browser profile remembered that anything had been written.
+   *
+   * Only conversations that hold a real turn are recorded, which is what keeps
+   * a first-ever visit silent: a boot-minted empty shell never enters the
+   * ledger and can never be reported as lost. What is stored is a count, a
+   * clock and the posture — never a title or a word of the conversation, so a
+   * page-memory session's "What can lose it: Closing the page" stays true.
+   */
+  useEffect(() => {
+    const storage = browserReturnLedgerStorage();
+    if (!storage || !sessionId || !profileId || recordedTranscriptSize === 0) return;
+    const lastActiveAt = new Date().toISOString();
+    void loadReturnLedger().then(({ recordReturnLedgerEntry }) => {
+      recordReturnLedgerEntry(storage, {
+        sessionId,
+        profileId,
+        messageCount: recordedTranscriptSize,
+        lastActiveAt,
+        posture: durableAuthorityAdopted ? "durable" : "page-memory",
+        pageSession: pageSessionToken.current,
+      });
+    });
+  }, [durableAuthorityAdopted, profileId, recordedTranscriptSize, sessionId]);
+  /*
+   * Reconcile that memory with the journal that actually loaded, once.
+   *
+   * It waits for the same verdict the route resolver waits for: asking a
+   * page-memory journal what a Vault holds is how the product came to announce
+   * losses it was about to restore. The fence is the journal itself rather than
+   * a boolean, so if a Vault is adopted after a verdict has been reached — the
+   * liveness ceiling firing early on a slow machine is the way that happens —
+   * the new journal re-answers and a wrong report is withdrawn rather than left
+   * standing.
+   */
+  useEffect(() => {
+    const storage = browserReturnLedgerStorage();
+    if (!storage || !sessionLibrary || !resumeAuthoritySettled || returnLedgerReconciled.current === sessionLibrary) return;
+    returnLedgerReconciled.current = sessionLibrary;
+    const controller = new AbortController();
+    // Tombstones are re-tested too: a journal that produces the conversation is
+    // the only thing that can withdraw a verdict already written down.
+    void loadReturnLedger().then(async ({ readReturnLedger, reconcileReturnLedger, summarizeUnrecoveredWork }) => {
+      const wanted = new Set(readReturnLedger(storage).map((entry) => entry.sessionId));
+      const present = await findPresentSessions(sessionLibrary, wanted, controller.signal);
+        if (controller.signal.aborted) return;
+        const lost = reconcileReturnLedger(storage, { present, pageSession: pageSessionToken.current });
+        reportedLostAddresses.current = new Set(lost.map((entry) => entry.sessionId));
+        // Whichever of the two resolutions finished first, one loss gets one
+        // statement: the report carries the count, the clock and the remedy, so
+        // the address-scoped notice withdraws rather than repeating it.
+        if (lossNoticeAddress.current && reportedLostAddresses.current.has(lossNoticeAddress.current)) {
+          lossNoticeAddress.current = undefined;
+          setComposerNotice(undefined);
+        }
+        setUnrecoveredWork(summarizeUnrecoveredWork(lost));
+    })
+      .catch(() => {
+        // A journal that could not be listed has proved nothing about what it
+        // holds. Re-arm rather than report an absence nobody established.
+        returnLedgerReconciled.current = undefined;
+      });
+    return () => controller.abort();
+  }, [resumeAuthoritySettled, sessionLibrary]);
   useEffect(() => {
     if (
       !sessionId
@@ -2401,6 +2765,14 @@ export function App() {
   }, [view]);
   useEffect(() => {
     if (view !== "chat" || !transcriptPinned.current) return;
+    /*
+     * A conversation with no turns and a loss to report has one thing worth
+     * reading, and it is at the top. Measured at 390x844: the pin-to-latest
+     * scroll put "Your last visit was not kept" behind the sticky session bar
+     * while the starter cards it scrolled to were the least urgent thing on the
+     * surface. The pin resumes the moment a turn exists to be pinned to.
+     */
+    if (unrecoveredWork && recordedTranscriptSize === 0) return;
     const frame = requestAnimationFrame(() => {
       const element = transcriptElement.current;
       if (element) {
@@ -2409,7 +2781,22 @@ export function App() {
       }
     });
     return () => cancelAnimationFrame(frame);
-  }, [messages, transcriptLeadingHeight, view, windowedTranscript.totalHeight]);
+  }, [messages, recordedTranscriptSize, transcriptLeadingHeight, unrecoveredWork, view, windowedTranscript.totalHeight]);
+  /*
+   * The report arrives after first paint — it waits for the journal — so the
+   * pin above has already run and left the transcript scrolled to the starter
+   * cards. Measured at 390x844: "Your last visit was not kept" sat behind the
+   * sticky session bar while the least urgent thing on the surface was in view.
+   * Returning to the top is the only correction that survives the report
+   * appearing late.
+   */
+  useEffect(() => {
+    if (!unrecoveredWork || recordedTranscriptSize > 0) return;
+    const frame = requestAnimationFrame(() => {
+      if (transcriptElement.current) transcriptElement.current.scrollTop = 0;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [recordedTranscriptSize, unrecoveredWork]);
   const proofSelectionAuthorized = !proofSelection
     || proofSelection.sessionId === sessionId
     || (
@@ -2764,7 +3151,19 @@ export function App() {
         setRuntimeStatus(`Local Device Vault blocked: ${message}`);
       })
       .finally(() => {
+        // Only the live attempt may answer. Boot re-runs this effect as the
+        // catalog, profile and Git client arrive, and settling from a cancelled
+        // attempt declared "no Vault is coming" while the real adoption was
+        // still two seconds out — which reproduced the whole defect: the route
+        // resolver condemned the address, moved the unsent draft onto the
+        // throwaway conversation the boot had minted, and the Vault then
+        // restored the real one over an empty composer.
         if (localDeviceAutoOpenOwner.current !== owner) return;
+        // The verdict settles on *conclusion*, not on success: an enrolment
+        // that needs its recovery ceremony and a keyring that refused are both
+        // definitive answers to "will a durable journal arrive", and the route
+        // resolver is waiting for either one.
+        setDurableAuthoritySettled(true);
         setLocalDeviceBusy(false);
         vaultAdoptionBusy.current = false;
       });
@@ -2805,7 +3204,9 @@ export function App() {
         setRuntimeStatus(message);
         setVaultAdoptionNotice(message);
       })
-      .finally(() => { vaultAdoptionBusy.current = false; });
+      // Adopted or refused, the resume verdict has its answer; see
+      // `durableAuthoritySettled`.
+      .finally(() => { setDurableAuthoritySettled(true); vaultAdoptionBusy.current = false; });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [preferences.vaultBackend, vaultSnapshot, catalog, activeProfile, gitClient, cockpitSettleRetry]);
 
@@ -8662,7 +9063,16 @@ export function App() {
               />
               <div
                 ref={transcriptElement}
-                class={messages.length <= 1 ? "transcript no-turns" : "transcript"}
+                /*
+                 * `no-turns` centres a short first-run column so the intro is
+                 * not floating in 500px of void. A return report above that
+                 * intro makes the column taller than the scroller, and
+                 * `align-content: center` then overflows it *upwards*: measured
+                 * at 390x844, the card's top was 96px while the transcript's own
+                 * top was 107px, so "Your last visit was not kept" rendered
+                 * above the scrollport with no way to scroll up to it.
+                 */
+                class={messages.length <= 1 && !unrecoveredWork ? "transcript no-turns" : "transcript"}
                 onScroll={(event) => {
                   const element = event.currentTarget;
                   const pinned = isNearLastRealCard(element, 64);
@@ -8685,6 +9095,24 @@ export function App() {
                   setStageScrolled(element.scrollTop > SESSION_BAR_COLLAPSE_SCROLL);
                 }}
               >
+                {/* Before anything else on the surface, because a person who
+                    lost work is looking for it and every other row on screen is
+                    about work they still have. */}
+                {unrecoveredWork && ResumeReportView ? (
+                  <ResumeReportView
+                    work={unrecoveredWork}
+                    durableAuthorityAdopted={vaultRuntimeAdopted}
+                    onOpenVault={() => navigate("vault")}
+                    onDismiss={() => {
+                      const storage = browserReturnLedgerStorage();
+                      if (storage) {
+                        const ids = unrecoveredWork.sessionIds;
+                        void loadReturnLedger().then(({ forgetReturnLedgerEntries }) => forgetReturnLedgerEntries(storage, ids));
+                      }
+                      setUnrecoveredWork(undefined);
+                    }}
+                  />
+                ) : null}
                 {transcriptBoundary ? (
                   <div ref={transcriptBoundaryElement} class="transcript-boundary" role="status">
                     <Icon name="warning" size={16} />
@@ -9362,7 +9790,7 @@ export function App() {
         onOpenCommandPalette={() => { setMobileMoreOpen(false); setPaletteOpen(true); }}
         onOpenSettings={() => setPreferencesOpen(true)}
       />
-      <ApprovalDock broker={approvalBroker} />
+      {ApprovalDockView ? <ApprovalDockView broker={approvalBroker} /> : null}
       <CommandPalette open={paletteOpen} entries={paletteEntriesWithRail} onClose={() => setPaletteOpen(false)} />
       <PreferencesDialog open={preferencesOpen} value={preferences} onChange={(next) => {
         if (next.vaultBackend !== preferences.vaultBackend) {
