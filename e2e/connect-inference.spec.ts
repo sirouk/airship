@@ -355,6 +355,7 @@ test("the Chutes key panel is already open when this build has no sign-in", asyn
 test("Check this machine issues a real loopback probe and keeps every other lane", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium", "One real loopback transport journey is sufficient.");
   await mockOllama(page);
+  await blockLmStudio(page);
   await openConnect(page);
   const local = await openLane(page, "local");
 
@@ -533,6 +534,23 @@ async function mockOllama(page: Page): Promise<void> {
       return;
     }
     await cors(route, 404, "not found");
+  });
+}
+
+/*
+ * The refusal half of the same boundary, symmetric with mockOllama. Nothing on
+ * this machine's real 1234 may answer for the probe below: a real LM Studio on
+ * the developer's box used to turn "did not answer" into a rostered connection
+ * and fail the spec for a reason that has nothing to do with the code under
+ * test. Refused is the environment the sentence asserts, so it is the
+ * environment this supplies.
+ */
+async function blockLmStudio(page: Page): Promise<void> {
+  await page.route(/127\.0\.0\.1:1234/u, async (route) => {
+    await route.abort("connectionrefused");
+  });
+  await page.route(/localhost:1234/u, async (route) => {
+    await route.abort("connectionrefused");
   });
 }
 

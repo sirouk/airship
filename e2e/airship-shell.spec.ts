@@ -14,7 +14,14 @@ async function capture(page: Page, testInfo: TestInfo, name: string): Promise<vo
 async function setActiveProfileApproval(page: Page, option: "Ask First" | "Auto Approve" | "Full Access"): Promise<void> {
   await page.goto("/#profiles");
   const boundaries = page.locator("details.profile-editor-disclosure").filter({ hasText: "Profile boundaries" });
-  if (!(await boundaries.getAttribute("open"))) await boundaries.locator("summary").click();
+  // The boolean property, not the attribute: `getAttribute("open")` is "" for
+  // a present boolean attr — which is falsy — so the gate here used to "open"
+  // the disclosure it had just asked to open by toggling it shut. Profile
+  // boundaries arrive open by default now, which is exactly the delta the
+  // fixture tripped over.
+  if (!(await boundaries.evaluate((element: HTMLDetailsElement) => element.open))) {
+    await boundaries.locator("summary").click();
+  }
   const picker = boundaries.getByRole("button", { name: "Profile approval policy" });
   await picker.click();
   await page.getByRole("listbox", { name: "Profile approval policy" }).getByRole("option", { name: option, exact: true }).click();

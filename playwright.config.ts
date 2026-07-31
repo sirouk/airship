@@ -32,10 +32,13 @@ export default defineConfig({
     video: "retain-on-failure",
   },
   webServer: {
-    // A syntactically valid browser-test registration unlocks the Google
-    // setup surface; acceptance tests replace GIS and Drive with explicit
-    // browser HTTP boundaries and never contact a real user account.
-    command: "VITE_GOOGLE_CLIENT_ID=123456789012-airship-browser-acceptance.apps.googleusercontent.com npm run dev",
+    // The main matrix deliberately carries no client ID: `vault-provider-switch`
+    // asserts that a provider that cannot be opened cannot be chosen (the
+    // "unavailable here" selectability contract), which is only testable where
+    // the Google surface has no registration. Every dedicated config that does
+    // exercise a Google flow (master, google-drive, portability) sets its own
+    // synthetic registration in its own env, on its own port.
+    command: "npm run dev",
     url: "http://127.0.0.1:4173",
     reuseExistingServer: true,
     timeout: 30_000,
