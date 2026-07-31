@@ -8365,6 +8365,7 @@ export function App() {
           <MenuSelect
             className="compact-profile-menu"
             compact
+            placement="down"
             ariaLabel="Agent profile"
             value={profileId}
             disabled={busy}

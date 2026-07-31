@@ -731,7 +731,16 @@
   background: var(--surface-soft);
 }
 
-.rail-recents__header strong { font-size: var(--fs-caption); font-weight: var(--fw-strong); }
+.rail-recents__header strong {
+  overflow: hidden;
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-strong);
+  text-overflow: ellipsis;
+  /* "General conversations" used to wrap onto two rows and double the header;
+     one line, cut with an ellipsis if it must shorten, keeps the deck the
+     disclosure was priced at. */
+  white-space: nowrap;
+}
 .rail-recents__header small { color: var(--ink-faint); font-size: var(--fs-micro); font-variant-numeric: tabular-nums; }
 
 .rail-conversation-group {
@@ -826,7 +835,7 @@
 .recent-conversation > span:first-child { color: var(--verdigris); font-size: var(--fs-micro); }
 .recent-conversation > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .recent-conversation--thread {
-  grid-template-columns: 12px minmax(0, 1fr) auto;
+  grid-template-columns: 12px minmax(0, 1fr);
   gap: 6px;
   min-height: 46px;
   padding-block: 5px;
@@ -834,14 +843,34 @@
 .recent-conversation--thread .recent-conversation__mark { align-self: start; margin-top: 3px; }
 .recent-conversation--thread .recent-conversation__copy { display: grid; gap: 2px; min-width: 0; }
 .recent-conversation--thread .recent-conversation__copy strong,
-.recent-conversation--thread .recent-conversation__copy small {
+.recent-conversation--thread .recent-conversation__copy small,
+.recent-conversation--thread time {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .recent-conversation--thread .recent-conversation__copy strong { color: inherit; font-size: var(--fs-caption); font-weight: var(--fw-strong); }
-.recent-conversation--thread .recent-conversation__copy small { color: var(--ink-faint); font-size: var(--fs-micro); }
-.recent-conversation--thread time { align-self: start; padding-top: 1px; color: var(--ink-faint); font-size: var(--fs-micro); white-space: nowrap; }
+
+/* Preview and time share one line: the preview takes what it needs first and
+   the timestamp stays readable; on the narrowest rails the preview — the
+   weaker of the two — is the one that yields to the ellipsis. */
+.recent-conversation--thread .recent-conversation__meta {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  min-width: 0;
+}
+.recent-conversation--thread .recent-conversation__meta small {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--ink-faint);
+  font-size: var(--fs-micro);
+}
+.recent-conversation--thread .recent-conversation__meta time {
+  flex: none;
+  color: var(--ink-faint);
+  font-size: var(--fs-micro);
+}
 .recent-conversation--thread.active .recent-conversation__copy small,
 .recent-conversation--thread:hover .recent-conversation__copy small { color: var(--ink-muted); }
 /* The ledger link, pinned as the panel's last row rather than the sixth row of
@@ -853,6 +882,11 @@
   border-top: 1px solid var(--line);
   border-radius: 0;
 }
+
+/* This row carries no icon span, and `.nav-item`'s first track is the 25px
+   reserved for one: without this its whole label owns exactly those 25px and
+   "All conversations" prints as "Al…". */
+.recent-conversations .nav-item--nested .nav-item__label { grid-column: 1 / -1; }
 
 .nav-group-label {
   padding: 3px 10px 4px;

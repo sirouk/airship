@@ -560,8 +560,15 @@ export function Rail({
         >
           <span class="recent-conversation__mark" aria-hidden="true">{session.id === activeConversationId ? "●" : "○"}</span>
           <span class="recent-conversation__copy">
-            <strong>{session.title}</strong>
-            <small>{session.preview}</small>
+            <strong title={session.title}>{session.title}</strong>
+            <span class="recent-conversation__meta">
+              <small>{session.preview}</small>
+              {/* The timestamp used to own a grid track of the title's row,
+                  which is why a desktop rail rendered 'Gener…' beside a roomy
+                  "11:32 AM": facts of recency are secondary, so it travels
+                  with the preview now and the title grows into the space. */}
+              <time dateTime={session.updatedAt} title={session.updatedAt}>{formatTime(session.updatedAt)}</time>
+            </span>
             {/* The rows this one stands for. The shortcut shows one row per
                 lineage so three retries cannot evict three unrelated threads,
                 and this line is what stops that from being a silent deletion:
@@ -570,7 +577,6 @@ export function Rail({
               {session.hiddenBranchCount} more branch{session.hiddenBranchCount === 1 ? "" : "es"} in All conversations
             </small> : null}
           </span>
-          <time dateTime={session.updatedAt}>{formatTime(session.updatedAt)}</time>
         </button>
         {/* `tabIndex -1` on the secondary actions is what makes the row one
             stop rather than four. They keep their accessible names and their
