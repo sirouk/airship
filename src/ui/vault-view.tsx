@@ -4,6 +4,7 @@ import { isGoogleDriveConfiguration, type VaultSnapshot } from "../vault/coordin
 import type { LocalDeviceVaultStatus } from "../vault/local-device";
 import { vaultBackendUnavailableReason, type VaultBackend } from "./platform-shell";
 import { BrandLogo } from "./brand-icons";
+import { ConfirmDialog } from "./confirm-dialog";
 import { Icon } from "./icons";
 import { MenuSelect } from "./menu-select";
 import { Seal, type SealState } from "./seal";
@@ -59,6 +60,14 @@ export type VaultViewProps = {
   providerSwitching?: boolean;
   onProviderChange(provider: VaultBackend): void;
   localDeviceStatus?: LocalDeviceVaultStatus;
+  /**
+   * The danger zone. Renderable only when something is actually held to
+   * wipe — the route decides, per provider, whether "purge everything this
+   * destination holds" is a promise this build can keep.
+   */
+  wipeAvailable?: boolean;
+  wipeBusy?: boolean;
+  onWipeStorage?: () => void;
 };
 
 export type ProviderFactKey = "survives" | "offline" | "reach" | "supply" | "keep" | "lose";
@@ -204,7 +213,11 @@ export function VaultView({
   onProviderChange,
   localDeviceStatus,
   usage,
+  wipeAvailable = false,
+  wipeBusy = false,
+  onWipeStorage,
 }: VaultViewProps) {
+  const [wipeConfirmOpen, setWipeConfirmOpen] = useState(false);
   const status = phaseCopy(snapshot);
   const localDevice = provider === "local-device";
   const ephemeral = provider === "ephemeral";
@@ -614,6 +627,36 @@ export function VaultView({
           {onDisconnect ? <VaultReleaseAction provider={provider} onDisconnect={onDisconnect} /> : null}
         </>
       )}
+
+      {wipeAvailable && onWipeStorage ? (
+        <section class="vault-danger" aria-label="Storage danger zone">
+          <div class="vault-danger__copy">
+            <strong>Wipe {PROVIDER_PROFILES.find((profile) => profile.id === provider)?.title ?? provider}</strong>
+            <span>{wipeStorageNote(provider)}</span>
+          </div>
+          <button
+            class="vault-danger__action"
+            type="button"
+            disabled={wipeBusy}
+            aria-busy={wipeBusy || undefined}
+            onClick={() => setWipeConfirmOpen(true)}
+          >{wipeBusy ? "Wiping…" : "Wipe storage"}</button>
+          {wipeConfirmOpen ? (
+            <ConfirmDialog
+              title={`Wipe ${PROVIDER_PROFILES.find((profile) => profile.id === provider)?.title ?? provider}?`}
+              titleDetail={PROVIDER_PROFILES.find((profile) => profile.id === provider)?.description ?? ""}
+              confirmLabel="Yes, wipe it"
+              confirmDisabled={wipeBusy}
+              destructive
+              onCancel={() => setWipeConfirmOpen(false)}
+              onConfirm={() => { setWipeConfirmOpen(false); onWipeStorage(); }}
+            >
+              <p>{wipeStorageConfirmNote(provider)}</p>
+              <p>This cannot be undone.</p>
+            </ConfirmDialog>
+          ) : null}
+        </section>
+      ) : null}
     </section>
   );
 }
@@ -644,6 +687,33 @@ export function vaultReleaseNote(provider: VaultBackend): string {
   return profile && provider !== "ephemeral"
     ? `${page} Your encrypted ${profile.title} data is left exactly where it is, and this route re-attaches it whenever you choose that provider again.`
     : `${page} No durable store is attached to release.`;
+}
+
+/*
+ * The danger zone's language, one answer per destination, in the same order
+ * this route always names things: what leaves, where from, what survives.
+ */
+function wipeStorageNote(provider: VaultBackend): string {
+  if (provider === "ephemeral") {
+    return "Forget everything held in this page's memory and reload it. Nothing is stored anywhere else — the page itself is the whole vault.";
+  }
+  if (provider === "local-device") {
+    return "Delete every object in this device vault — conversations, workspace files, memories and profile state — from this browser only. Recovery key and re-enrollment stay with you.";
+  }
+  if (provider === "google-drive") {
+    return "Empty the Airship namespace in the Google Drive folder that this vault profile owns — the Drive folder and permission stay, the vault contents go.";
+  }
+  return "Empty the Airship namespace in the bucket or store this vault profile owns — the endpoint and credentials stay, the vault contents go.";
+}
+
+function wipeStorageConfirmNote(provider: VaultBackend): string {
+  if (provider === "ephemeral") {
+    return "Reloading this page forgets every conversation, draft and intermediate state held in page memory right now. The page keeps no copy anywhere to come back to.";
+  }
+  if (provider === "local-device" || provider === "google-drive") {
+    return "Every vault object is deleted for good. Airship keeps no recovery copies and this destination never exposed one either — the recovery you earlier exported is the only way any of this could come back.";
+  }
+  return "Every vault object is deleted for good. Nothing on this provider restores it afterwards, and Airship keeps no recovery copies.";
 }
 
 function VaultReleaseAction({ provider, onDisconnect }: Readonly<{ provider: VaultBackend; onDisconnect(): void }>) {

@@ -250,6 +250,12 @@ function objectStoreFacade(store: LocalDeviceObjectStore): ObjectStore {
     putIfAbsent: store.putIfAbsent.bind(store),
     compareAndSwap: store.compareAndSwap.bind(store),
     list: store.list.bind(store),
+    // `trash` is optional on ObjectStore and required for conversation
+    // deletion, which is exactly why it must travel the facade rather than be
+    // rediscovered downstream: this tier shipped the verb in pass 2, and the
+    // junction that forgot to fuse it meant a "delete" answered "This Vault
+    // cannot delete objects" on the one tier that can.
+    trash: store.trash.bind(store),
   });
 }
 

@@ -7,6 +7,7 @@ import type {
   ChutesEndpointAttestationSnapshot,
   ChutesEndpointEvidenceRecord,
 } from "../attestation/provider-types";
+import { isReclaimableObjectStore } from "../storage/object-store";
 import { ApprovalBroker, redactForDisplay } from "../approvals/broker";
 import { approvalProvenance, createApprovalModePolicy, createHumanIntentPolicy, decideHumanIntent, type ApprovalMode } from "../approvals/modes";
 import { SwitchableApprovalPolicy } from "../approvals/switchable-policy";
@@ -1473,6 +1474,7 @@ export function App() {
   const localDeviceHandle = useRef<LocalDeviceVaultHandle>();
   const [localDeviceStatus, setLocalDeviceStatus] = useState<LocalDeviceVaultStatus>();
   const [vaultUsageFacts, setVaultUsageFacts] = useState<VaultUsageFacts>();
+  const [vaultWipeBusy, setVaultWipeBusy] = useState(false);
   const [localDeviceBusy, setLocalDeviceBusy] = useState(false);
   const localDeviceAutoOpenOwner = useRef(0);
   const [localDeviceError, setLocalDeviceError] = useState<string>();
@@ -6226,6 +6228,54 @@ export function App() {
     return profile.profileId;
   }
 
+  /*
+   * The vault danger zone, in one action.
+   *
+   * "Wipe" means exactly what the route says per provider: page memory
+   * reloads (that IS the wipe — ephemeral state exists no place else), the
+   * device vault's whole store is trashed (the identity anchor survives by
+   * design, so the vault reopens empty rather than "corrupt"), and an S3 or
+   * Drive vault purges its namespace through the coordinator's own sited
+   * listing. A reload ends either way: an adopted runtime pointing at an
+   * emptied store is a contradiction nobody should be asked to live in.
+   */
+  async function wipeVaultStorage(): Promise<void> {
+    const backend = preferences.vaultBackend;
+    setVaultWipeBusy(true);
+    try {
+      if (backend === "ephemeral") {
+        location.reload();
+        return;
+      }
+      if (backend === "local-device") {
+        const handle = localDeviceHandle.current;
+        if (!handle) throw new Error("Open the Local Device Vault before wiping it.");
+        const store = handle.runtime.store;
+        if (!isReclaimableObjectStore(store)) {
+          throw new Error("This Vault cannot reclaim objects, so nothing was wiped.");
+        }
+        const objects = await store.list("");
+        const receipt = await store.trash(objects.map((object) => object.key));
+        // The identity anchor refuses by design, which is the vault staying
+        // well-formed rather than corrupt: the wipe is complete, the
+        // re-enrollment path survives.
+        setRuntimeStatus(`Wiped the Local Device Vault (${receipt.reclaimed.length.toLocaleString()} objects).`);
+        location.reload();
+        return;
+      }
+      const wiped = await vault.purgeStoredObjects();
+      if (!wiped) {
+        throw new Error("This Vault cannot reclaim its objects, so nothing was wiped.");
+      }
+      setRuntimeStatus(`Wiped ${wiped.objectCount.toLocaleString()} vault objects.`);
+      location.reload();
+    } catch (error) {
+      setRuntimeStatus(error instanceof Error ? `Wipe stopped: ${error.message}` : "Wipe stopped safely.");
+    } finally {
+      setVaultWipeBusy(false);
+    }
+  }
+
   async function changeVaultProvider(next: VaultBackend): Promise<void> {
     if (vaultProviderSwitchingRef.current || next === preferences.vaultBackend) return;
     if (inferenceRouteChanging.current) {
@@ -8343,12 +8393,16 @@ export function App() {
           <span class="brand-name">Airship</span>
           <span class="edition">edge runtime</span>
         </button>
-        <TabPresenceNote />
-        {/* One chip, every width, every connection state. The four axis pills
-            (398px, the fourth truncated) and the phone-only `.mobile-trust-chip`
-            were two components rendering one fact at two sizes; the sheet they
-            both open still renders all four axes verbatim. */}
+        {/* Center is a flex group, so the tab note rides it when it exists:
+            the note used to be a fourth child of a three-column topbar grid,
+            and every second-tab session paid for it as a wrapped full-width
+            second row of the shell header. */}
         <div class="topbar-center" role="group" aria-label="Runtime state">
+          <TabPresenceNote />
+          {/* One chip, every width, every connection state. The four axis pills
+              (398px, the fourth truncated) and the phone-only `.mobile-trust-chip`
+              were two components rendering one fact at two sizes; the sheet they
+              both open still renders all four axes verbatim. */}
           <TopbarPostureChip axes={trustAxes} onOpen={() => setTrustSheetOpen(true)} />
         </div>
         <div class="topbar-actions">
@@ -8365,7 +8419,6 @@ export function App() {
           <MenuSelect
             className="compact-profile-menu"
             compact
-            placement="down"
             ariaLabel="Agent profile"
             value={profileId}
             disabled={busy}
@@ -9021,6 +9074,11 @@ export function App() {
               snapshot={vaultSnapshot}
               runtimeAdopted={vaultRuntimeAdopted}
               usage={vaultUsageFacts}
+              wipeAvailable={preferences.vaultBackend === "ephemeral"
+                || (preferences.vaultBackend === "local-device" && Boolean(localDeviceHandle.current))
+                || vaultSnapshot.phase === "ready"}
+              wipeBusy={vaultWipeBusy}
+              onWipeStorage={() => void wipeVaultStorage()}
               adoptionNotice={vaultAdoptionNotice}
               contextMode={runtime.current?.contextMode}
               contextPublishing={vaultContextPublishing}

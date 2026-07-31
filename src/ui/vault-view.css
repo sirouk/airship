@@ -109,6 +109,59 @@
   align-items: center;
   gap: 6px;
 }
+
+/*
+ * The danger zone is the only red-edged card on the route, and it is on
+ * purpose out of step with release actions above: "detach and keep a page
+ * copy" and "wipe everything the destination holds" cannot share a button's
+ * silhouette, or the reflex one learns for the first lands on the second.
+ */
+.vault-danger {
+  display: flex;
+  gap: var(--sp-3);
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--sp-3);
+  border: 1px solid color-mix(in srgb, var(--v-failed) 34%, var(--line));
+  border-left: 3px solid var(--v-failed);
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--v-failed) 3%, var(--surface-soft));
+}
+
+.vault-danger__copy {
+  display: grid;
+  flex: 1 1 auto;
+  gap: 4px;
+  min-width: 0;
+}
+
+.vault-danger__copy strong { font-size: var(--fs-caption); font-weight: var(--fw-strong); }
+
+.vault-danger__copy span {
+  color: var(--ink-muted);
+  font-size: var(--fs-micro);
+  line-height: 1.45;
+}
+
+.vault-danger__action {
+  flex: none;
+  min-height: var(--touch-target);
+  padding: 0 var(--sp-4);
+  border: 1px solid color-mix(in srgb, var(--v-failed) 55%, var(--line));
+  border-radius: var(--radius-control);
+  color: var(--v-failed);
+  background: transparent;
+  cursor: pointer;
+  font-weight: var(--fw-strong);
+}
+
+.vault-danger__action:hover:not(:disabled) { background: color-mix(in srgb, var(--v-failed) 10%, transparent); }
+.vault-danger__action:disabled { border-color: var(--line); color: var(--ink-faint); cursor: default; }
+
+@media (max-width: 640px) {
+  .vault-danger { flex-direction: column; align-items: stretch; }
+  .vault-danger__action { width: 100%; }
+}
 .vault-view__state[data-state="blocked"] { border-left-color: var(--v-failed); }
 .vault-view__state[data-state="probing"] { border-left-color: var(--v-info); }
 

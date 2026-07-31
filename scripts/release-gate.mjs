@@ -16,7 +16,12 @@ export const RELEASE_BUDGETS = Object.freeze({
   // and started reading them from `profiles-governance`, which was already in
   // this graph. Measured 110.16 KiB gzip; one whole-KiB step, and the deferral
   // habit documented below is still the first tool to reach for.
-  entryJavaScript: Object.freeze({ raw: 384 * 1024, gzip: 111 * 1024 }),
+  // The vault danger-zone work (the wipe action in app.tsx) and the vendor
+  // brand marks it shipped with added 0.26 KiB to this measure: 111.26 KiB
+  // gzip. It is still the strictest ceiling here, so it moves one whole-KiB
+  // step with a named cause, and the deferral habit documented below is still
+  // the first tool to reach for when the next few hundred bytes are asked for.
+  entryJavaScript: Object.freeze({ raw: 384 * 1024, gzip: 112 * 1024 }),
   // Trust composition adds ~1.8 KiB gzip to the baseline while the actual
   // entry remains below its stricter 110 KiB limit. Heavy QVL stays deferred.
   //
@@ -132,7 +137,11 @@ export const RELEASE_BUDGETS = Object.freeze({
   //
   // First paint is governed separately by the 768/160 KiB raw/gzip ceiling
   // above and is unchanged by any of it.
-  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 1922 * 1024, gzip: 604 * 1024 }),
+  // The local-device reclaim fix, vault danger zone, durable-delete e2e and
+  // rail recents reclamation re-measured the partition at 1924.54 KiB raw /
+  // 603.6 KiB gzip — roughly four KiB of reviewed route work, still none of it
+  // first-paint.
+  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 1925 * 1024, gzip: 604 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now measures 672.33 KiB raw / 186.61 KiB gzip:
   // the browser-Git pack grew (see optionalBrowserGit) and the Terminal pack
@@ -186,7 +195,10 @@ export const RELEASE_BUDGETS = Object.freeze({
   // The vendor-logo/theme/vault/rail pass carries the aggregate to
   // 2593.02 KiB raw / 789.33 KiB gzip — the sum of the lazy-route deltas
   // reviewed in `firstPartyJavaScriptAndWorkers` above, still nothing eager.
-  totalJavaScriptAndWorkers: Object.freeze({ raw: 2594 * 1024, gzip: 790 * 1024 }),
+  // The local-device reclaim and vault danger-zone pass carries the aggregate
+  // to 2596.87 KiB raw / 790.35 KiB gzip: the sum of the lazy-route deltas
+  // reviewed in the same comment chain as `firstPartyJavaScriptAndWorkers`.
+  totalJavaScriptAndWorkers: Object.freeze({ raw: 2597 * 1024, gzip: 791 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. Keep it visible under a dedicated, deliberately small cap.
   serviceWorker: Object.freeze({ raw: 12 * 1024, gzip: 4 * 1024 }),
@@ -331,7 +343,12 @@ export const RELEASE_BUDGETS = Object.freeze({
   // changed shifted roughly a KiB of shared code into this bundle. The
   // transferred figure still clears its prior gzip step; only the raw figure
   // moves, one whole KiB above the new measurement.
-  optionalSessionLibrary: Object.freeze({ raw: 56 * 1024, gzip: 16 * 1024 }),
+  //
+  // The local-device facade and vault danger-zone pass re-measured at 57,465 B
+  // raw / 16,919 B gzip: the facade now carries the reclaim verb it was written
+  // before, and the route packs the delete path end-to-end. Both steps move one
+  // whole KiB above the new figures.
+  optionalSessionLibrary: Object.freeze({ raw: 58 * 1024, gzip: 17 * 1024 }),
   // Session pin/digest construction runs during profile-session activation,
   // after the shell can paint. Shared policy/mode code now owns its own lazy
   // chunk, leaving this one at 1,037 B raw / 546 B gzip.

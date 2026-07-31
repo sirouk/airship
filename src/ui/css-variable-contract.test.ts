@@ -346,6 +346,10 @@ const VERDICT_TOKEN_TEXT_LEDGER = Object.freeze([
   "ui/sources-view.css .git-conflict-note --v-failed",
   "ui/sources-view.css .git-diff-lines .removed b --v-failed",
   "ui/terminal-view.css .terminal-panel__bar .seal[data-state=failed] --v-failed",
+  // The vault danger zone's one destructive verb. It carries words in the
+  // failed hue, so it is held to the same 4.5:1 word floor as every other
+  // site named above.
+  "ui/vault-view.css .vault-danger__action --v-failed",
 ]);
 
 /**

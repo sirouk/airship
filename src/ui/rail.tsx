@@ -543,6 +543,30 @@ export function Rail({
           }).catch(reportFavoriteLoadFailure);
         }}
       >
+        {/*
+         * The favorite action lives in the mark, not in a 30px tail column.
+         *
+         * A trailing star used to be the price of the title — ~30px of the
+         * rail's 230px was spent on a button you press at most twice per
+         * conversation, which is why 'Gener…' was the desktop default. The
+         * mark was already right there telling the active story; the favorite
+         * toggle now rides it: a star means the row is pinned, a ring means
+         * plain recent, and hovering the mark of an unstarred row offers the
+         * star it would set. Both states keep their accessible names, which
+         * is the ledger every e2e reading of this surface ever used.
+         */}
+        <button
+          class="recent-conversation__mark"
+          type="button"
+          tabIndex={-1}
+          aria-pressed={session.favorite}
+          aria-label={`${session.favorite ? "Remove from favorites" : "Add to favorites"} ${session.title}`}
+          title={session.favorite ? `Remove from favorites: ${session.title}` : `Add to favorites: ${session.title}`}
+          onClick={session.toggleFavorite}
+        >
+          <span class={session.id === activeConversationId ? "recent-conversation__mark-ring recent-conversation__mark-ring--active" : "recent-conversation__mark-ring"} aria-hidden="true">{session.id === activeConversationId ? "●" : "○"}</span>
+          <span class="recent-conversation__mark-star" aria-hidden="true">★</span>
+        </button>
         <button
           class={session.id === activeConversationId ? "recent-conversation recent-conversation--thread active" : "recent-conversation recent-conversation--thread"}
           type="button"
@@ -558,7 +582,6 @@ export function Rail({
             moveFavorite(session, event.key === "ArrowUp" ? -1 : 1);
           }}
         >
-          <span class="recent-conversation__mark" aria-hidden="true">{session.id === activeConversationId ? "●" : "○"}</span>
           <span class="recent-conversation__copy">
             <strong title={session.title}>{session.title}</strong>
             <span class="recent-conversation__meta">
@@ -599,14 +622,6 @@ export function Rail({
             >↓</button>
           </span>
         ) : null}
-        <button
-          class="recent-conversation__favorite"
-          type="button"
-          tabIndex={-1}
-          aria-pressed={session.favorite}
-          aria-label={`${session.favorite ? "Remove from favorites" : "Add to favorites"} ${session.title}`}
-          onClick={session.toggleFavorite}
-        >★</button>
       </div>
     );
     return (

@@ -255,6 +255,32 @@ export class VaultCoordinator {
     }
   }
 
+  /**
+   * Purge every object under the configuration's namespace.
+   *
+   * The walks of a `trash([], signal)` are what this is a composition of: the
+   * namespace prefix lists what the Vault holds, and reclamation runs through
+   * the one sanctioned exception to the store's usual delete-free design. A
+   * store that cannot reclaim is answered honestly (`undefined`) rather than
+   * partially, because "a purge that forgets half the cells" is precisely the
+   * falsehood the Vault's whole overlay was written against. The caller owns
+   * every follow-on obligation — detaching the adopted runtime, resetting
+   * caches, reloading the page — this verb stays where it belongs: the
+   * storage boundary.
+   */
+  async purgeStoredObjects(signal?: AbortSignal): Promise<Readonly<{ objectCount: number }> | undefined> {
+    const store = this.store;
+    const config = this.config;
+    if (!store || !config || this.current.phase !== "ready") return undefined;
+    if (!isReclaimableObjectStore(store)) return undefined;
+    const objects = await store.list(`${config.namespace}/`, signal);
+    const keys = objects.map((object) => object.key);
+    const receipt = await store.trash(keys, signal);
+    if (receipt.retained.length > 0) return undefined;
+    return Object.freeze({ objectCount: keys.length });
+  }
+
+
   subscribe(listener: Listener): () => void {
     this.listeners.add(listener);
     listener(this.current);

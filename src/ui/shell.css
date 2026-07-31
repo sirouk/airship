@@ -749,7 +749,8 @@
 
 .recent-conversation-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto 30px;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  gap: 2px;
   align-items: center;
   min-width: 0;
 }
@@ -796,19 +797,45 @@
 
 .recent-conversation-row .recent-conversation { width: 100%; min-width: 0; }
 
-.recent-conversation__favorite {
-  min-width: 28px;
-  min-height: 36px;
+/*
+ * The favorite toggle as the row's mark.
+ *
+ * It owns no column a title would envy — the whole affordance is the existing
+ * 18px leading gutter, starring in place of the ring it sits under. Rest is
+ * state alone: a ring for a plain recent, filled by the ring's active tint
+ * for the open conversation, a star for a pinned one. Hovering an unstarred
+ * mark shows the star it would set, so the read is never "what will happen";
+ * the name it leaves for assistive reading always carries the whole title.
+ */
+.recent-conversation__mark {
+  display: grid;
+  place-items: center;
+  align-self: stretch;
+  width: 18px;
   padding: 0;
   border: 0;
   border-radius: var(--radius-control);
   color: var(--ink-faint);
   background: transparent;
   cursor: pointer;
+  font-size: var(--fs-micro);
 }
 
-.recent-conversation__favorite[aria-pressed="true"] { color: var(--accent-bright); }
-.recent-conversation__favorite:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 2.6%, transparent); }
+.recent-conversation__mark > span { display: inline-block; transform: translateY(1px); }
+
+/* Two glyphs, one state, read through the pressed attribute: unstarred rest
+   shows the ring, starring swaps in the star, and hovering an unstarred mark
+   previews the star it would set before a touch is spent. Both glyphs are
+   aria-hidden — the button's name always says the whole thing. */
+.recent-conversation__mark[aria-pressed="false"] .recent-conversation__mark-star { display: none; }
+.recent-conversation__mark[aria-pressed="false"] .recent-conversation__mark-ring { display: inline-block; }
+.recent-conversation__mark[aria-pressed="true"] .recent-conversation__mark-ring { display: none; }
+.recent-conversation__mark[aria-pressed="true"] .recent-conversation__mark-star { display: inline-block; color: var(--accent-bright); }
+.recent-conversation__mark[aria-pressed="true"] { color: var(--accent-bright); }
+.recent-conversation__mark[aria-pressed="false"]:hover .recent-conversation__mark-ring { display: none; }
+.recent-conversation__mark[aria-pressed="false"]:hover .recent-conversation__mark-star { display: inline-block; color: var(--accent-bright); }
+
+.recent-conversation__mark-ring--active { color: var(--v-verified); }
 
 @media (pointer: coarse) {
   .recent-conversation__order { opacity: 1; }
@@ -835,12 +862,11 @@
 .recent-conversation > span:first-child { color: var(--verdigris); font-size: var(--fs-micro); }
 .recent-conversation > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .recent-conversation--thread {
-  grid-template-columns: 12px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 6px;
   min-height: 46px;
   padding-block: 5px;
 }
-.recent-conversation--thread .recent-conversation__mark { align-self: start; margin-top: 3px; }
 .recent-conversation--thread .recent-conversation__copy { display: grid; gap: 2px; min-width: 0; }
 .recent-conversation--thread .recent-conversation__copy strong,
 .recent-conversation--thread .recent-conversation__copy small,
