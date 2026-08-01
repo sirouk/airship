@@ -214,6 +214,15 @@ const PROFILE_SCOPED_ROUTES: readonly Readonly<{ id: NavigationView; label: stri
  * and this is the shortcut. A larger number here would recreate the scroller
  * that was the defect.
  */
+/**
+ * How much rail a self-opening recents list has to have before it opens itself.
+ *
+ * The list costs about 200px. Below this the rail cannot show it and the Global
+ * group at the same time, and a navigation rail that hides its destinations to
+ * advertise a shortcut has made the wrong trade.
+ */
+const RAIL_RECENTS_AUTO_OPEN_MIN_HEIGHT = 560;
+
 export const RAIL_RECENT_LIMIT = 10;
 
 /**
@@ -313,9 +322,25 @@ export function Rail({
    */
   useEffect(() => {
     if (recentsChoice.current !== undefined || visibleConversations.length === 0) return;
+    /*
+     * …and only where the rail can afford it.
+     *
+     * Opening the list adds about 200px. Measured on this build, the rail's
+     * content is 559px with it open, which fits only at a window height of
+     * roughly 900px and above: at 1440x800 — a 13" laptop — Vault, Connection
+     * and Account went below the fold and the overflow fade was the only thing
+     * saying so. Coming forward is worth doing where there is room and is not
+     * worth pushing the global destinations off the screen for.
+     *
+     * The person's own choice still wins in both directions: this only ever
+     * runs while nobody has expressed one.
+     */
+    const nav = typeof navRef === "object" && navRef !== null ? navRef.current : undefined;
+    const room = nav?.clientHeight ?? 0;
+    if (room > 0 && room < RAIL_RECENTS_AUTO_OPEN_MIN_HEIGHT) return;
     recentsChoice.current = true;
     setRecentsOpen(true);
-  }, [conversationKeys]);
+  }, [conversationKeys, navRef]);
 
   const order = useMemo(() => {
     const destinations = railTraversal(expanded);

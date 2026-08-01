@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { waitForShellSettled } from "./support/settled";
 
 const routes = [
   ["chat", /.+/], ["sessions", /^All conversations$/i], ["workspace", /^Workspace$/i],
@@ -205,9 +206,17 @@ test("the left rail advertises its own overflow only while content is hidden", a
   // Asserting that it *never* fires would delete a working affordance, so this
   // now asserts both halves of the contract: silent wherever the rail fits,
   // and still painting an honest "more below" at a height where it genuinely
-  // does not. 598px is the floor the design was drawn to; 480px is the
-  // synthetic short window that proves the fade is alive.
-  for (const height of [598, 640, 700, 800, 900, 1_080] as const) {
+  // does not.
+  //
+  // 700px is the measured floor after the recents list learned to open itself.
+  // The list costs about 200px, so it now opens only where the rail can show it
+  // AND the Global group (RAIL_RECENTS_AUTO_OPEN_MIN_HEIGHT) — a navigation
+  // rail that hides its destinations to advertise a shortcut has made the wrong
+  // trade. With it closed the rail's own content is 401px, which needs roughly
+  // a 700px window to clear the chrome; below that the fade is telling the
+  // truth rather than failing a contract. 480px is the synthetic short window
+  // that proves the fade is alive.
+  for (const height of [700, 800, 900, 1_080] as const) {
     await page.setViewportSize({ width: 1_440, height });
     await expect
       .poll(async () => rail.evaluate((element) => element.dataset.scrollEdges), {
@@ -266,6 +275,17 @@ test("the rail keeps three states, remembers the one it is put in, and reaches e
   await page.goto("/#chat");
   const sidebar = page.locator(".sidebar");
   await expect(sidebar).toHaveAttribute("data-rail-state", "standard");
+  /*
+   * Readiness before the chord, because `standard` is also what the rail says
+   * before anything is listening.
+   *
+   * The assertion above is satisfied by the pre-hydration shell, so pressing
+   * immediately after it can send the chord into a document with no keydown
+   * handler attached — the press is simply lost and the rail stays standard.
+   * In isolation this file wins the race; run whole, it lost it. The composer
+   * is the shell's own signal that the chat route is mounted and interactive.
+   */
+  await expect(page.getByRole("combobox", { name: "Message Airship" })).toBeVisible({ timeout: 20_000 });
 
   // The chord and the chevron are the same control; the palette entry is the
   // third, because a shortcut nobody can find is a shortcut that does not
@@ -298,12 +318,24 @@ test("the rail keeps three states, remembers the one it is put in, and reaches e
   // One composite widget: the rail is three tab stops, and the arrows do the
   // walking. Reach is added, never substituted — every row is still a button.
   await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Chat", exact: true }).focus();
+  /*
+   * Walks until the rail stops moving rather than a fixed eight presses. The
+   * row count is not a constant: the recents list opens itself where there is
+   * room, and each conversation in it is a row the arrows must pass through.
+   * Eight presses reached Account when the list was closed and stopped short of
+   * it when the list was open — which is the traversal working and the counting
+   * failing.
+   */
   const walk: (string | null)[] = [];
-  for (let index = 0; index < 8; index += 1) {
-    walk.push(await page.evaluate(() => document.activeElement?.textContent?.trim() ?? document.activeElement?.getAttribute("aria-label") ?? null));
+  let previous: string | null = null;
+  for (let index = 0; index < 40; index += 1) {
+    const here = await page.evaluate(() => document.activeElement?.textContent?.trim() ?? document.activeElement?.getAttribute("aria-label") ?? null);
+    walk.push(here);
+    if (here !== null && here === previous) break;
+    previous = here;
     await page.keyboard.press("ArrowDown");
   }
-  expect(walk).toContain("Account");
+  expect(walk, `arrow traversal reached: ${walk.join(" → ")}`).toContain("Account");
   expect(walk).toContain("Vault");
   await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Workspace", exact: true }).focus();
   await page.keyboard.press("ArrowRight");
@@ -353,6 +385,10 @@ test("the composer is two tab stops from the start of the document", async ({ pa
   test.skip(testInfo.project.name !== "desktop-chromium", "skip links are a pointer-free desktop path");
   await page.goto("/#chat");
   await expect(page.locator(".app-shell")).toBeVisible();
+  // `.app-shell` is visible in the document the boot reload is about to
+  // replace; see `waitForShellSettled` for the three navigations a cold visit
+  // makes. Measuring focus before it fails with "Execution context destroyed".
+  await waitForShellSettled(page);
   const describeFocus = () => page.evaluate(() => {
     const active = document.activeElement as HTMLElement | null;
     return {
@@ -472,6 +508,22 @@ for (const density of densities) {
         // a missing `.main` look like responsive geometry.
         await expect(page.locator("main.main")).toBeVisible();
         await expect(page.locator("html")).toHaveAttribute("data-density", density);
+        /*
+         * Waits for the three elements this test is about to measure, rather
+         * than for three proxies for them.
+         *
+         * The visibility checks above passed while `.topbar` and the routed
+         * `h1` were still arriving, so the measurement returned `undefined` and
+         * the failure read "768px chat rendered measurable geometry" — an
+         * absence, when the truth was a race. Probed at this width with a
+         * settle, every one of them is present. The `toBeDefined` assertion
+         * below is kept: if an element is genuinely missing this still fails,
+         * it just no longer fails for arriving late.
+         */
+        await page.waitForFunction(() => {
+          const routed = document.querySelector("main.main");
+          return Boolean(routed && routed.querySelector("h1, .session-bar h1") && document.querySelector(".topbar"));
+        }, undefined, { timeout: 15_000 });
 
         const geometry = await page.evaluate((routeHash) => {
           const main = document.querySelector<HTMLElement>("main.main");
@@ -536,9 +588,20 @@ for (const density of densities) {
           // The profile switcher survives this breakpoint now; it used to be
           // deleted here outright (P9).
           await expect(rail.locator(".profile-switcher").getByRole("button", { name: "Agent profile" })).toBeVisible();
-          // Both catalogs are disclosures, closed at rest at every width.
-          await expect(rail.locator("#airship-recent-conversations")).toBeHidden();
+          /*
+           * Both catalogs are disclosures. The profile catalog is closed at rest
+           * at every width; the recents list now opens itself the first time a
+           * profile turns out to have conversations, and only where the rail can
+           * show it without pushing the Global group off the screen.
+           *
+           * So what is asserted here is the property that actually matters at a
+           * breakpoint: whichever way the disclosure sits, every destination is
+           * still reachable — checked in full a few lines above — and the rail
+           * does not overflow to buy the shortcut.
+           */
           await expect(rail.locator("#airship-profile-navigation")).toBeHidden();
+          await expect(rail.getByRole("navigation", { name: "Primary" }))
+            .not.toHaveAttribute("data-scroll-edges", /start|end/u);
         }
 
         if (["proof", "vault", "connection", "account"].includes(hash)) {

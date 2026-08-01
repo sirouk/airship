@@ -299,7 +299,12 @@ export const RELEASE_BUDGETS = Object.freeze({
   // the aggregate — loopback classified out of the egress claim, a key checked
   // before a priced picker is drawn for it — and nothing eager moved.
   // Measured 2642.62 KiB raw / 806.96 KiB gzip.
-  totalJavaScriptAndWorkers: Object.freeze({ raw: 2698 * 1024, gzip: 828 * 1024 }),
+  // The human-journey pass carries the lazy graph past the old whole-KiB step
+  // by bytes, not by a feature: a height gate on the rail's auto-open recents
+  // (Global destinations must not be pushed off a short viewport) and a bounded
+  // claim rail on the Proof route. Nothing eager moved and the entry ceiling is
+  // untouched. Measured 2698.00 KiB raw / 827.54 KiB gzip.
+  totalJavaScriptAndWorkers: Object.freeze({ raw: 2699 * 1024, gzip: 828 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. Keep it visible under a dedicated, deliberately small cap.
   serviceWorker: Object.freeze({ raw: 12 * 1024, gzip: 4 * 1024 }),
