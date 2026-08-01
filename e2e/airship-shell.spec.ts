@@ -1,5 +1,20 @@
 import { expect, test, type Page, type TestInfo } from "@playwright/test";
 
+/*
+ * The rail's recents disclosure now opens itself the first time a profile turns
+ * out to have conversations in it — capability coming forward rather than
+ * waiting to be found. These specs were written when it always started closed,
+ * so an unconditional "Expand" click had become a coin flip: when the effect
+ * had already fired, the affordance said Collapse and the click either missed
+ * or shut the list the test was about to read.
+ *
+ * So they state what they need instead of assuming it.
+ */
+async function openRailRecents(scope: import("@playwright/test").Locator): Promise<void> {
+  const expand = scope.getByRole("button", { name: "Expand recent conversations" });
+  if (await expand.count()) await expand.click();
+}
+
 async function openReadyApp(page: Page): Promise<void> {
   await page.goto("/#chat");
   await expect(page.locator(".app-shell")).toBeVisible();
@@ -60,7 +75,7 @@ test("desktop shell navigates real routes and presents a coherent session header
   // conversation disclosure rather than the sixth row of a 250px scroller, in
   // which it was measured *invisible* at six or more threads. It is opened
   // before it is clicked; the destination and the hash are unchanged.
-  await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Expand recent conversations" }).click();
+  await openRailRecents(page.getByRole("navigation", { name: "Primary" }));
   await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "All conversations" }).click();
   await expect(page).toHaveURL(/#sessions$/);
   await expect(page.getByRole("heading", { name: "All conversations", level: 1 })).toBeVisible();
@@ -122,7 +137,7 @@ test("the first user turn gives a new conversation a useful thread title", async
   // AMENDED: the list is a disclosure now. The auto-titled thread still has to
   // be in it, and it is read at 320px instead of ~105px.
   const navigation = page.getByRole("navigation", { name: "Primary" });
-  await navigation.getByRole("button", { name: "Expand recent conversations" }).click();
+  await openRailRecents(navigation);
   const recent = navigation.locator("#airship-recent-conversations");
   await expect(recent.getByRole("button", { name: new RegExp(`^${prompt}`, "u") })).toBeVisible();
 });
@@ -193,7 +208,7 @@ test("route form menus use the styled accessible listbox contract", async ({ pag
     await page.getByRole("dialog", { name: "More" }).getByRole("button").filter({ hasText: "All conversations" }).click();
   } else {
     // AMENDED: opened through the conversation disclosure (see above).
-    await primary.getByRole("button", { name: "Expand recent conversations" }).click();
+    await openRailRecents(primary);
     await primary.getByRole("button", { name: "All conversations", exact: true }).click();
   }
   // AMENDED: below 640px the four session filters are a counted disclosure
@@ -472,7 +487,7 @@ test("route gutter and density preferences apply consistently to the whole layou
   const primaryNav = page.getByRole("navigation", { name: "Primary" });
   const openRoute: Readonly<Record<string, () => Promise<void>>> = {
     "All conversations": async () => {
-      await primaryNav.getByRole("button", { name: "Expand recent conversations" }).click();
+      await openRailRecents(primaryNav);
       await primaryNav.getByRole("button", { name: "All conversations", exact: true }).click();
     },
     Workspace: async () => { await primaryNav.getByRole("button", { name: "Workspace", exact: true }).click(); },

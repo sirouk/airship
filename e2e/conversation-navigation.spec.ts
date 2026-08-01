@@ -1,5 +1,20 @@
 import { expect, test, type Page } from "@playwright/test";
 
+/*
+ * The rail's recents disclosure now opens itself the first time a profile turns
+ * out to have conversations in it — capability coming forward rather than
+ * waiting to be found. These specs were written when it always started closed,
+ * so an unconditional "Expand" click had become a coin flip: when the effect
+ * had already fired, the affordance said Collapse and the click either missed
+ * or shut the list the test was about to read.
+ *
+ * So they state what they need instead of assuming it.
+ */
+async function openRailRecents(scope: import("@playwright/test").Locator): Promise<void> {
+  const expand = scope.getByRole("button", { name: "Expand recent conversations" });
+  if (await expand.count()) await expand.click();
+}
+
 test("every conversation has a stable addressed URL and new conversations do not overwrite it", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium", "desktop addressed conversation contract");
   await page.goto("/#chat");
@@ -36,7 +51,7 @@ test("desktop chat title supports durable inline rename", async ({ page }, testI
 
   await expect(page.locator(".session-bar__title")).toHaveText("Inline rename survives navigation");
   const navigation = page.getByRole("navigation", { name: "Primary" });
-  await navigation.getByRole("button", { name: "Expand recent conversations" }).click();
+  await openRailRecents(navigation);
   await expect(navigation.getByRole("group", { name: "Profile conversations" }))
     .toContainText("Inline rename survives navigation");
 });
@@ -76,7 +91,7 @@ test("a rename from All conversations reaches the chat title and the rail recent
   // In-app navigation, not a reload: a reload would restart the runtime and
   // hide the propagation this test is about.
   const navigation = page.getByRole("navigation", { name: "Primary" });
-  await navigation.getByRole("button", { name: "Expand recent conversations" }).click();
+  await openRailRecents(navigation);
   await navigation.locator("#airship-recent-conversations").getByRole("button", { name: "All conversations", exact: true }).click();
   await expect(page).toHaveURL(/#sessions$/);
 
@@ -179,7 +194,7 @@ test("each addressed conversation restores its own unsent draft", async ({ page 
   // AMENDED: the conversation list is a disclosure now, so it is opened before
   // it is read. The rows, their order and their targets are unchanged.
   const navigation = page.getByRole("navigation", { name: "Primary" });
-  await navigation.getByRole("button", { name: "Expand recent conversations" }).click();
+  await openRailRecents(navigation);
   const source = navigation
     .locator("#airship-recent-conversations .recent-conversation:not(.active)")
     .first();
@@ -267,7 +282,7 @@ test("desktop favorites remain journal-backed and isolated to the active profile
   test.skip(testInfo.project.name !== "desktop-chromium", "desktop profile favorite contract");
   await page.goto("/#chat");
   const navigation = page.getByRole("navigation", { name: "Primary" });
-  await navigation.getByRole("button", { name: "Expand recent conversations" }).click();
+  await openRailRecents(navigation);
   const tree = navigation.getByRole("group", { name: "Profile conversations" });
   const active = tree.locator(".recent-conversation.active");
   await expect(active).toBeVisible();
