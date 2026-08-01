@@ -226,7 +226,7 @@ button.status-seal:hover { border-color: var(--line-strong); background: var(--s
 .trust-sheet__scope > h3 { margin: 0; }
 .trust-sheet__where { margin: .25rem 0 .5rem; color: var(--ink-muted); font-size: var(--fs-caption); line-height: 1.45; }
 
-.pwa-update { position: fixed; z-index: 90; right: max(1rem, env(safe-area-inset-right)); bottom: max(1rem, env(safe-area-inset-bottom)); display: flex; gap: 1rem; align-items: center; max-width: min(30rem, calc(100vw - 2rem)); padding: .75rem; border: 1px solid var(--v-caution); border-radius: var(--radius-panel); background: var(--surface-raised); box-shadow: var(--shadow); transition: opacity 120ms ease, transform 120ms ease; }
+.pwa-update { position: fixed; z-index: 90; right: max(1rem, env(safe-area-inset-right)); bottom: calc(var(--pwa-update-floor, 0px) + max(1rem, env(safe-area-inset-bottom))); display: flex; gap: 1rem; align-items: center; max-width: min(30rem, calc(100vw - 2rem)); padding: .75rem; border: 1px solid var(--v-caution); border-radius: var(--radius-panel); background: var(--surface-raised); box-shadow: var(--shadow); transition: opacity 120ms ease, transform 120ms ease; }
 .pwa-update span, .pwa-update small { display: block; }
 .pwa-update small { margin-top: .2rem; color: var(--ink-muted); font-size: var(--fs-micro); }
 
@@ -345,7 +345,9 @@ button.status-seal:hover { border-color: var(--line-strong); background: var(--s
   .preference-row { grid-template-columns: 1fr; gap: .35rem; padding: .55rem 0; }
   .profile-approval-preference { grid-template-columns: 1fr; }
   .profile-approval-preference > button { justify-self: stretch; }
-  .pwa-update { right: .5rem; bottom: calc(4.5rem + env(safe-area-inset-bottom)); left: .5rem; }
+  /* J152: the phone constant was 4.5rem for the mobile nav, which is right
+     until the composer grows past it. `--pwa-update-floor` measures both. */
+  .pwa-update { right: .5rem; bottom: calc(var(--pwa-update-floor, 4.5rem) + env(safe-area-inset-bottom) + .5rem); left: .5rem; }
 }
 
 @media (prefers-reduced-motion: reduce) {

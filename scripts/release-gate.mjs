@@ -233,7 +233,11 @@ export const RELEASE_BUDGETS = Object.freeze({
   // 111.59 KiB against its unchanged 112 KiB ceiling, because the message-part
   // renderer, the approval dock, the resume report and its ledger were all
   // pushed out of the entry chunk instead.
-  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2022 * 1024, gzip: 640 * 1024 }),
+  // J151/J152 add the reload-risk publisher and one shared bottom-floor
+  // measurement the update banner and the capability dock now both read
+  // (`bottom-floor.ts` replaces the dock's private copy, so this is smaller
+  // than two fixes). Measured 2022.05 KiB raw / 639.74 KiB gzip.
+  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2023 * 1024, gzip: 640 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now measures 672.33 KiB raw / 186.61 KiB gzip:
   // the browser-Git pack grew (see optionalBrowserGit) and the Terminal pack

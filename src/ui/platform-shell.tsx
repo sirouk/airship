@@ -16,6 +16,8 @@ import {
   type TranscriptOperationsMode,
 } from "./chat/transcript-operations";
 import { isNearLastRealCard, scrollToLastRealCard } from "./chat/transcript-anchor";
+import { readReloadRisk, reloadWouldDiscardWork } from "./reload-risk";
+import { useBottomFloor } from "./bottom-floor";
 
 export type PaletteEntry = Readonly<{
   id: string;
@@ -1240,10 +1242,22 @@ export function usePwaUpdate(): Readonly<{ updateReady: boolean; reload(): void 
     };
     void navigator.serviceWorker.getRegistration().then((candidate) => candidate && watch(candidate));
     const controllerChange = () => {
-      // The first static-host takeover must establish COOP/COEP, but never
-      // interrupt work a person has already started. A page that observed a
-      // trusted input gesture keeps running and offers the explicit reload.
-      if (!reloadRequested.current && userInteracted.current) setUpdateReady(true);
+      /*
+       * The first static-host takeover must establish COOP/COEP, but never
+       * interrupt work a person has already started.
+       *
+       * "Started" used to mean a trusted input gesture, and that fence was too
+       * narrow — J151. A conversation is minted before anyone types, and under
+       * page memory it does not cross a reload, so the takeover could discard
+       * a whole turn that had been rendered and reported complete. The gesture
+       * is still honoured; `reloadWouldDiscardWork` adds the case where there
+       * is state on this page that no authority could give back. Under an
+       * adopted Vault it answers no however much has been said, because the
+       * journal is on the far side of the reload — so the fast path a first
+       * visit needs is untouched.
+       */
+      if (reloadRequested.current) { window.location.reload(); return; }
+      if (userInteracted.current || reloadWouldDiscardWork(readReloadRisk())) setUpdateReady(true);
       else window.location.reload();
     };
     navigator.serviceWorker.addEventListener("controllerchange", controllerChange);
@@ -1257,8 +1271,15 @@ export function usePwaUpdate(): Readonly<{ updateReady: boolean; reload(): void 
 }
 
 export function PwaUpdateBanner({ updateReady, onReload }: Readonly<{ updateReady: boolean; onReload(): void }>) {
+  // Hooks run unconditionally; the measurement idles until the banner is up.
+  const floor = useBottomFloor(updateReady);
   if (!updateReady) return null;
-  return <div class="pwa-update" role="status"><span><strong>Runtime update ready</strong><small>Your current work stays active until you choose to reload.</small></span><button type="button" onClick={onReload}>Reload Airship</button></div>;
+  // J152: this banner used a constant bottom offset and landed on top of the
+  // composer's send button — a `role="status"` div eating the click, measured
+  // as 58 refused Playwright retries. `--pwa-update-floor` is the live height
+  // of whatever holds the bottom edge, the same measurement the capability
+  // dock has always used.
+  return <div class="pwa-update" role="status" style={{ "--pwa-update-floor": `${floor}px` }}><span><strong>Runtime update ready</strong><small>Your current work stays active until you choose to reload.</small></span><button type="button" onClick={onReload}>Reload Airship</button></div>;
 }
 
 /**

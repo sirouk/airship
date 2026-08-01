@@ -14,6 +14,7 @@ import { trapFocus } from "./focus-trap";
 // Kept beside the component that renders it rather than appended to a 110 KB
 // sheet another pass held open.
 import "./approval-dock.css";
+import { useBottomFloor } from "./bottom-floor";
 
 /**
  * How close to the deadline the assertive warning fires.
@@ -50,7 +51,6 @@ const ANNOUNCEMENT_GAP_MS = 60;
  * size or some route by construction. These are read, not written: they belong
  * to `chat.css` and `platform-shell.css`.
  */
-const DEFERRED_BAR_BLOCKERS = Object.freeze([".composer", ".mobile-nav"]);
 
 /**
  * What the request actually does, as one sentence.
@@ -122,10 +122,11 @@ export function ApprovalDock({ broker }: { broker: ApprovalBroker }) {
   // same five-minute timer, and its deadline matters more, not less, once the
   // modal is no longer in front of the person.
   const live = current ?? waiting;
+  // Shared with the runtime-update banner; see `bottom-floor.ts`.
+  const floor = useBottomFloor(Boolean(waiting));
   const [clock, setClock] = useState(() => Date.now());
   const [notice, setNotice] = useState("");
   const [warning, setWarning] = useState("");
-  const [floor, setFloor] = useState(0);
   const warnedFor = useRef<string>();
   const timers = useRef<number[]>([]);
 
@@ -210,22 +211,6 @@ export function ApprovalDock({ broker }: { broker: ApprovalBroker }) {
     setWarning("");
     warnedFor.current = undefined;
   }, [live?.id]);
-
-  useEffect(() => {
-    if (!waiting) return;
-    const measure = () => setFloor(Math.max(0, ...DEFERRED_BAR_BLOCKERS.map(blockerHeight)));
-    measure();
-    const observer = new ResizeObserver(measure);
-    for (const selector of DEFERRED_BAR_BLOCKERS) {
-      const element = document.querySelector(selector);
-      if (element) observer.observe(element);
-    }
-    window.addEventListener("resize", measure);
-    return () => {
-      observer.disconnect();
-      window.removeEventListener("resize", measure);
-    };
-  }, [waiting?.id]);
 
   useEffect(() => {
     if (!live || warnedFor.current === live.id) return;
@@ -371,11 +356,6 @@ function factsFor(request: PendingApproval): WriteApprovalFacts {
 }
 
 /** How much of the viewport's bottom edge one blocker occupies, 0 when absent. */
-function blockerHeight(selector: string): number {
-  const rect = document.querySelector(selector)?.getBoundingClientRect();
-  return rect && rect.height > 0 ? Math.max(0, window.innerHeight - rect.top) : 0;
-}
-
 function spokenDuration(ms: number): string {
   const seconds = Math.max(1, Math.round(ms / 1_000));
   if (seconds < 90) return `${seconds} seconds`;

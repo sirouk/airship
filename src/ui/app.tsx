@@ -296,6 +296,7 @@ import {
 } from "./chat/turn-narration";
 import { claimThreadDraftHydration, readThreadDraft, writeThreadDraft } from "./chat/thread-draft";
 import { readDurableDraft, writeDurableDraft } from "./chat/durable-draft";
+import { publishReloadRisk } from "./reload-risk";
 import type { ReturnLedgerStorage, UnrecoveredWork } from "./chat/return-ledger";
 import { browserThreadViewportStorage, readThreadViewport, writeThreadViewport } from "./chat/thread-viewport";
 import { appendThreadQueueItem, removeThreadQueueItem } from "./chat/thread-queue";
@@ -4567,6 +4568,28 @@ export function App() {
   // `data-rail` is on the document element, not the shell, because the topbar
   // and the app grid both size their first column from `--rail-width`.
   useEffect(() => { document.documentElement.dataset.rail = railState; }, [railState]);
+
+  /*
+   * J151: tell the service-worker listener what a reload would cost.
+   *
+   * The takeover reloads the page so COOP/COEP are established before anyone
+   * starts working, and its fence was "has a trusted input gesture been seen".
+   * A conversation exists before anyone types. Measured on a fresh context
+   * against the production build — which is what a first visit is — the reload
+   * landed after the conversation had been minted, and page memory does not
+   * cross it: the work was rendered, reported complete, and gone.
+   *
+   * `messages` starts as the welcome card, so the count subtracts it: an
+   * untouched zero state has nothing to lose and should still take the reload
+   * immediately, which is the whole point of doing it early.
+   */
+  useEffect(() => {
+    publishReloadRisk({
+      durableAuthority: durableAuthorityAdopted,
+      recordedTurns: messages.filter((message) => message.id !== welcomeMessage.id).length,
+      unsentDraft: input.trim().length > 0,
+    });
+  }, [durableAuthorityAdopted, messages, input]);
 
   useEffect(() => {
     const onResize = () => setRailViewport(readRailViewport());
