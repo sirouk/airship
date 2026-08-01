@@ -726,6 +726,25 @@ function loadMessageParts() {
   return import("./chat/message-parts-view");
 }
 
+/**
+ * Warms the message-part chunk once the shell is up.
+ *
+ * Deferring it keeps 32 KiB of source out of first paint, and fetching it only
+ * when a message first has parts made that fetch a network dependency at the
+ * worst possible moment: this product is local-first, and the offline-reload
+ * journey failed with "Failed to fetch dynamically imported module" — a
+ * restored conversation that could not render its own tool calls because the
+ * renderer was still on the far side of a connection that had gone away.
+ *
+ * So the split stays and the fetch moves: after the first paint, while nothing
+ * is waiting on it, and long before anyone goes offline.
+ */
+function warmMessageParts(): void {
+  const warm = () => { void loadMessageParts(); };
+  if (typeof requestIdleCallback === "function") requestIdleCallback(warm, { timeout: 2_000 });
+  else setTimeout(warm, 0);
+}
+
 let messagePartsView: ((props: MessagePartsViewProps) => VNode) | undefined;
 
 function DeferredMessageParts(props: MessagePartsViewProps) {
@@ -1802,6 +1821,7 @@ export function App() {
     void loadApprovalDock().then((module) => {
       if (live) setApprovalDockView(() => module.ApprovalDock);
     });
+    warmMessageParts();
     return () => { live = false; };
   }, []);
   /* Same deferral, same reason: a sheet nobody has asked for yet is not

@@ -28,7 +28,15 @@ test.describe("Local Device Vault actual-app journey", () => {
       await openActualVault(page);
       await selectVaultProvider(page, "Local Device");
       await expect(page.getByRole("heading", { name: "Local Device Vault", level: 2 })).toBeVisible();
-      await expect(page.getByText("Local Device setup required", { exact: true })).toBeVisible();
+      /*
+       * The panel answers the intent that sends a person here rather than
+       * stating the requirement that blocks them. It used to read "Attention ·
+       * Local Device setup required" — a requirement in the failure register,
+       * offered as the remedy for work that in many cases had not been lost at
+       * all. Pinned as removed in vault-view.test.ts; asserted here as what a
+       * person now actually reads.
+       */
+      await expect(page.getByText("Keep this browser’s work on this device", { exact: false })).toBeVisible();
 
       await page.getByRole("button", { name: "Create new" }).click();
       const recoveryOutput = page.locator(".local-device-vault__ceremony output");
@@ -39,6 +47,11 @@ test.describe("Local Device Vault actual-app journey", () => {
         sessionStorage: false,
       });
 
+      // Saving the key is what unlocks the claim about having saved it: the
+      // acknowledgement is disabled until the key has been copied, downloaded
+      // or written down, because the whole point of a one-time recovery key is
+      // that the claim is true. "By hand" needs no clipboard permission.
+      await page.getByRole("button", { name: "I wrote it down by hand" }).click();
       // Acknowledgement intentionally removes the checkbox and secret in the
       // same event, so click rather than waiting for a post-click checked state.
       await page.getByLabel(/I saved this recovery key outside Airship/u).click();
@@ -67,7 +80,9 @@ test.describe("Local Device Vault actual-app journey", () => {
       );
 
       const downloadPromise = page.waitForEvent("download");
-      await page.getByRole("button", { name: "Download backup" }).click();
+      // Renamed with the recovery kit: the control says what the file is, and
+      // says it differently once one has been taken ("Download a fresh backup").
+      await page.getByRole("button", { name: /Download (encrypted backup|a fresh backup)/u }).click();
       const download = await downloadPromise;
       expect(download.suggestedFilename()).toMatch(/\.airship-vault$/u);
       const backup = await downloadBytes(download);
