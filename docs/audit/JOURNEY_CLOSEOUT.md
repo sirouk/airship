@@ -58,6 +58,30 @@ is what an unowned finding costs, and it is the argument for the gate above.
   under assertion rather than a proxy for it. Where a change traded one durability
   failure for another it was reverted whole.
 
+## Where the browser suite finished
+
+Desktop project, Playwright owning its own web server: **138 passed, 4 failed,
+38 skipped, of 180.** It was 11 failed when this pass started measuring properly.
+
+Two measurement lessons are worth more than the number:
+
+- A run taken while `dist` was being rebuilt underneath it reported "89 passed,
+  0 failed" and accounted for only 127 of 180 tests. It looked like the best
+  result of the session and was worthless. Arithmetic on the totals is what
+  caught it.
+- A run taken against a hand-started `npm run preview` reported 44 failures,
+  including whole worker and OAuth suites. Playwright's own web server supplies
+  the cross-origin isolation headers those suites need. A green-looking server
+  on the right port is not the right server.
+
+The four that remain:
+
+| Spec | Status |
+|---|---|
+| `airship-shell:110` | Passes alone, fails in the full run. The chip asserts the weakest claim, and under full-suite conditions a different axis is weakest. Ordering, not a product defect — but not diagnosed, so not claimed as one. |
+| `catalog-enrichment-retry:71` | Untouched by this pass. |
+| `vault-auto-adoption:96`, `:174` | Pre-existing. Measured at `ba7020d~1` for comparison: **five** of these seven failed before the J151 reload fix, two after. The fix improved this file rather than regressing it; these two are a separate cause. |
+
 ## Open
 
 - **`app.tsx` is 620 KB in one file.** Splitting it is architectural and was not
