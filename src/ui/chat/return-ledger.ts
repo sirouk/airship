@@ -51,7 +51,9 @@ export const RETURN_LEDGER_FIELDS = Object.freeze([
 ] as const);
 
 /** Storage the ledger needs; narrowed so a test can hand it a plain map. */
-export type ReturnLedgerStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
+import type { ReturnLedgerStorage } from "./ledger-storage";
+
+export type { ReturnLedgerStorage };
 
 /**
  * Where the conversation's journal lived while it was being written.
@@ -84,6 +86,8 @@ export type ReturnLedgerEntry = Readonly<{
    */
   lost?: true;
 }>;
+
+export { browserReturnLedgerStorage } from "./ledger-storage";
 
 export const RETURN_LEDGER_KEY = "airship.return-ledger.v1";
 

@@ -297,7 +297,8 @@ import {
 import { claimThreadDraftHydration, readThreadDraft, writeThreadDraft } from "./chat/thread-draft";
 import { readDurableDraft, writeDurableDraft } from "./chat/durable-draft";
 import { publishReloadRisk } from "./reload-risk";
-import type { ReturnLedgerStorage, UnrecoveredWork } from "./chat/return-ledger";
+import type { UnrecoveredWork } from "./chat/return-ledger";
+import { browserReturnLedgerStorage } from "./chat/ledger-storage";
 import { browserThreadViewportStorage, readThreadViewport, writeThreadViewport } from "./chat/thread-viewport";
 import { appendThreadQueueItem, removeThreadQueueItem } from "./chat/thread-queue";
 import {
@@ -1161,14 +1162,6 @@ async function findPresentSessions(
 }
 
 /** `localStorage`, or nothing where a private mode refuses it. */
-function browserReturnLedgerStorage(): ReturnLedgerStorage | undefined {
-  try {
-    return typeof localStorage === "undefined" ? undefined : localStorage;
-  } catch {
-    return undefined;
-  }
-}
-
 async function loadRecentConversations(
   library: SessionLibrary,
   open: (sessionId: string) => void,

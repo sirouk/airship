@@ -37,6 +37,32 @@ function entry(overrides: Partial<ReturnLedgerEntry> = {}): ReturnLedgerEntry {
 
 describe("the return ledger", () => {
   /*
+   * Deliberate removal is not lost work.
+   *
+   * The ledger learns a conversation is gone by finding its entry absent from
+   * the journal, and a conversation the person deleted is absent in exactly the
+   * same way as one that was never durable. Before `deleteSelected` forgot the
+   * entry, deleting a thread and coming back the next day was reported as loss:
+   * a count, a timestamp, and an offer to set up a Vault to protect work that
+   * had been thrown away on purpose.
+   */
+  it("does not mourn a conversation the person deleted in an earlier page session", () => {
+    const storage = memoryStorage();
+    recordReturnLedgerEntry(storage, entry({ sessionId: "deleted-on-purpose" }));
+    recordReturnLedgerEntry(storage, entry({ sessionId: "genuinely-lost" }));
+
+    // The deletion path forgets the entry at the moment of the decision, which
+    // is the only moment anything knows it was a decision.
+    forgetReturnLedgerEntries(storage, ["deleted-on-purpose"]);
+
+    // A later visit: a different page session, and the journal produces neither.
+    const reconciled = reconcileReturnLedger(storage, { present: new Set(), pageSession: "page-2" });
+    const work = summarizeUnrecoveredWork(reconciled);
+    expect(work?.sessionIds).toEqual(["genuinely-lost"]);
+    expect(work?.conversations).toBe(1);
+  });
+
+  /*
    * The measured defect: two turns on Tuesday, browser closed, browser
    * reopened, and the return screen was byte-identical to a first-ever visit
    * because `localStorage` held only `airship.display-preferences.v1`. The

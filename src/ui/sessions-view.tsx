@@ -423,6 +423,29 @@ export function SessionsView({
         expectedHead: { sequence: detail.session.headSequence, digest: detail.session.headDigest },
       });
       const removed = detail.session.title;
+      /*
+       * Deliberate removal is not lost work, and the ledger has to be told.
+       *
+       * The return ledger records every conversation this browser has seen so a
+       * later visit can report what did not come back. It learns that a
+       * conversation is gone by finding its entry absent from the journal — and
+       * a conversation the person deleted on purpose is absent in exactly the
+       * same way. Delete a thread, close the browser, come back, and Airship
+       * mourned it: "1 conversation · N messages · last active …", offering to
+       * set up a Vault to protect work that was thrown away on purpose. A
+       * product that cannot tell a decision from an accident is not telling the
+       * truth about either.
+       *
+       * Forgotten here rather than in reconciliation because this is the only
+       * place that knows the difference. Failure is swallowed: the deletion
+       * itself has already succeeded, and a ledger write that cannot happen
+       * must not be reported as a deletion that did not.
+       */
+      const deletedId = detail.session.id;
+      void import("./chat/return-ledger").then(({ browserReturnLedgerStorage, forgetReturnLedgerEntries }) => {
+        const storage = browserReturnLedgerStorage();
+        if (storage) forgetReturnLedgerEntries(storage, [deletedId]);
+      }).catch(() => {});
       setDeleting(false);
       setSelectedId(undefined);
       setDetail(undefined);

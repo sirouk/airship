@@ -236,8 +236,10 @@ export const RELEASE_BUDGETS = Object.freeze({
   // J151/J152 add the reload-risk publisher and one shared bottom-floor
   // measurement the update banner and the capability dock now both read
   // (`bottom-floor.ts` replaces the dock's private copy, so this is smaller
-  // than two fixes). Measured 2022.05 KiB raw / 639.74 KiB gzip.
-  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2023 * 1024, gzip: 640 * 1024 }),
+  // than two fixes), and deletion forgets its return-ledger entry so a deliberate
+  // removal is no longer mourned as loss. Measured 2024.00 KiB raw / 640.54 KiB
+  // gzip.
+  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2025 * 1024, gzip: 641 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now measures 672.33 KiB raw / 186.61 KiB gzip:
   // the browser-Git pack grew (see optionalBrowserGit) and the Terminal pack
@@ -308,7 +310,9 @@ export const RELEASE_BUDGETS = Object.freeze({
   // (Global destinations must not be pushed off a short viewport) and a bounded
   // claim rail on the Proof route. Nothing eager moved and the entry ceiling is
   // untouched. Measured 2698.00 KiB raw / 827.54 KiB gzip.
-  totalJavaScriptAndWorkers: Object.freeze({ raw: 2699 * 1024, gzip: 828 * 1024 }),
+  // J151/J152 and the deletion-vs-loss fix carry the aggregate with them.
+  // Measured 2700.42 KiB raw / 828.47 KiB gzip.
+  totalJavaScriptAndWorkers: Object.freeze({ raw: 2701 * 1024, gzip: 829 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. Keep it visible under a dedicated, deliberately small cap.
   serviceWorker: Object.freeze({ raw: 12 * 1024, gzip: 4 * 1024 }),
@@ -468,7 +472,12 @@ export const RELEASE_BUDGETS = Object.freeze({
   // raw / 16,919 B gzip: the facade now carries the reclaim verb it was written
   // before, and the route packs the delete path end-to-end. Both steps move one
   // whole KiB above the new figures.
-  optionalSessionLibrary: Object.freeze({ raw: 58 * 1024, gzip: 17 * 1024 }),
+  // Deletion now forgets the return-ledger entry in the same breath, which is
+  // what separates a decision from an accident: before it, deleting a thread and
+  // returning the next day was reported as lost work. The route carries the
+  // ledger's storage accessor and the forget call. Measured 59.58 KiB raw /
+  // 17.78 KiB gzip; both steps move one whole KiB above the new figures.
+  optionalSessionLibrary: Object.freeze({ raw: 60 * 1024, gzip: 18 * 1024 }),
   // Session pin/digest construction runs during profile-session activation,
   // after the shell can paint. Shared policy/mode code now owns its own lazy
   // chunk, leaving this one at 1,037 B raw / 546 B gzip.
