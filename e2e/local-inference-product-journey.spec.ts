@@ -30,7 +30,16 @@ test("connects, pins, invokes, and disconnects an Ollama model through the mount
   await connected.getByRole("button", { name: "Use in new conversation" }).click();
 
   await expect(page).toHaveURL(/#chat\/[^/?#]+$/u, { timeout: 20_000 });
-  await expect(page.getByRole("button", { name: /Ollama · gemma3:latest/u })).toBeVisible();
+  /*
+   * The control is named by the field it sets and describes its value, which is
+   * the naming contract the whole product follows: a voice user says "Ollama
+   * session model", and the pinned model is read out after it rather than
+   * welded into the name. So the provider is asserted on the name and the model
+   * id on what the chip actually shows.
+   */
+  const modelChip = page.getByRole("button", { name: /Ollama session model/u });
+  await expect(modelChip).toBeVisible();
+  await expect(modelChip).toContainText("gemma3");
 
   // AMENDED: the composer placeholder reads "Message Airship — / for commands"
   // now; it stopped being "Ask Airship…" when the composer started advertising
@@ -70,7 +79,14 @@ test("connects, pins, invokes, and disconnects an Ollama model through the mount
  */
 async function expectConversationTrustAxis(page: Page, label: RegExp): Promise<void> {
   const chip = page.getByRole("button", { name: /^Runtime trust for this browser tab\./u });
-  await expect(chip).toHaveAccessibleName(/\s\d+ axes\./u);
+  /*
+   * "4 axes." became "4 runtime claims. 2 of them are scoped to this
+   * conversation and are stated in the session bar." — the noun a person can
+   * act on instead of the one the code uses, and it now says which of them
+   * belong to the conversation rather than to the tab. Asserted as the count
+   * and its noun, so the sentence around it can keep improving.
+   */
+  await expect(chip).toHaveAccessibleName(/\s\d+ runtime claims\./u);
   await chip.click();
   const sheet = page.getByRole("dialog", { name: "Runtime trust" });
   await expect(sheet).toBeVisible();
