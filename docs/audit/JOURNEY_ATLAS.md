@@ -651,3 +651,58 @@ restoring connectivity:
 | severity | link | gap | evidence |
 |---|---|---|---|
 | misleading-state | recovery | The send-failure notice does not retract when connectivity returns, so a reconnected person is still told remote inference is paused | Live-region text at the "BACK ONLINE" step: "Offline · remote inference paused; prompt preserved", while the separate connectivity banner had already cleared |
+
+---
+
+## P0 root cause — the service worker reloads the page mid-journey
+
+Driven directly against the production build with a fresh browser context, which
+is what a first visit actually is.
+
+**Mechanism.** The service worker installs, takes control, and `controllerchange`
+fires. `platform-shell.tsx` reloads the document when that happens and the person
+has not yet interacted — deliberately, so COOP/COEP are established before anyone
+starts working. On a fresh context that takeover lands *during* the Vault → chat
+transition rather than at first paint.
+
+**Measured**, one run, fresh context, Local Device Vault preselected:
+
+| step | main-frame navigations | notes |
+|---|---|---|
+| after the Vault ceremony reports Ready | 1 | |
+| after `goto #chat` and the vault-active chip appears | **3** | two extra: the document reloaded |
+| at that moment | — | `.pwa-update` banner present, `role="status"` |
+
+**What it costs a person.** The conversation that existed before the reload was
+page-memory, so it does not survive it. Everything downstream follows from that
+one fact:
+
+- the first screen reporting "That conversation existed only in page memory and
+  did not survive the reload" to someone who had done nothing (fixed separately
+  by scoping the notice — the reload itself was not addressed);
+- a turn sent in that window rendered, reported complete, and lost;
+- the address afterwards resolving to a journal that cannot hold it, so the
+  composer says "This conversation link is not available in the current runtime:
+  Fork required" beside a topbar reading "Encrypted Local Device vault active";
+- the update banner intercepting pointer events over the composer — measured as
+  `<div role="status" class="pwa-update"> intercepts pointer events` while
+  clicking Send.
+
+**Why it hid.** A warm service worker has no update pending, so a second run in
+the same profile passes. Ten consecutive runs outside Playwright survived 10/10
+for exactly this reason. The gating harness uses a fresh context every time,
+which is the honest case and the one that fails.
+
+**The repair.** Two separable parts:
+
+1. The takeover must not discard work. Either hold the reload until the page has
+   nothing unsaved (the existing `userInteracted` fence is too narrow — a
+   conversation exists before anyone types), or commit the page-memory session to
+   the adopted authority before reloading.
+2. A `role="status"` banner may not cover the composer. It is an announcement,
+   and it is currently a pointer-event surface over the primary control.
+
+| severity | link | gap | evidence |
+|---|---|---|---|
+| lost-work | persistence | The service-worker takeover reloads the document mid-journey and the page-memory conversation does not survive it | 1 navigation after the ceremony, 3 after loading #chat, `.pwa-update` present; a turn sent in that window is rendered and reported complete but absent after the reload |
+| inaccessible | action | The update banner intercepts pointer events over the composer | Playwright: `<div role="status" class="pwa-update">…</div> intercepts pointer events` while clicking Send, 58 retries |
