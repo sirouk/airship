@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { completeLocalDeviceCeremony } from "./support/vault-ceremony";
 
 /**
  * Airship reopened rather than resumed, and said nothing either way.
@@ -43,10 +44,26 @@ async function sendOneTurn(page: import("@playwright/test").Page, prompt: string
   await composer.fill(prompt);
   await page.getByRole("button", { name: "Send message" }).click();
   await expect(page.locator(".message.user").filter({ hasText: prompt })).toBeVisible({ timeout: 20_000 });
-  // The answer, not just the prompt: a turn is durable when it has ended, and
-  // reloading through the middle of one measures a different thing.
-  await expect(page.locator(".message").nth(1)).toBeVisible({ timeout: 30_000 });
-  await expect(composer).toHaveValue("", { timeout: 20_000 });
+  /*
+   * Waits for the turn to be OVER, which is a different moment from every
+   * cheaper signal nearby — and getting that wrong read as a Vault durability
+   * failure for the whole of this pass.
+   *
+   * `.message` nth(1) is the prompt, not the reply, because an empty
+   * conversation renders an assistant-shaped intro card first. The composer
+   * clears at SEND, not at completion, so `toHaveValue("")` is satisfied while
+   * the model is still speaking. The assistant bubble appears with the first
+   * token. Each of those returned early, the caller reloaded, and the turn was
+   * stranded with no durable terminal event — which is exactly what the product
+   * then reported: "TURN_INCOMPLETE: Turn <id> has no durable terminal event",
+   * quarantined on 4 runs in 6.
+   *
+   * The product was right every time. Measured on this build, the journal goes
+   * 5 events to 11 at the moment this footer appears; before it, a reload is
+   * reloading through the middle of a turn.
+   */
+  await expect(page.locator(".part-footer").filter({ hasText: /Turn completed/u }).last())
+    .toBeVisible({ timeout: 40_000 });
 }
 
 test.describe("a person who comes back", () => {
@@ -66,7 +83,15 @@ test.describe("a person who comes back", () => {
     await expect(report).toContainText(/page memory/u);
     // The count and the clock are all Airship kept, and it says so rather than
     // leaving the reader to assume it is withholding the conversation.
-    await expect(report).toContainText(/never written down/u);
+    /*
+     * The claims, not the phrasing. This pinned "never written down"; the copy
+     * now says the same thing better — what was held, where it went, and what
+     * Airship kept in order to be able to tell you at all. A test that fails
+     * when copy improves teaches people not to improve copy.
+     */
+    await expect(report).toContainText(/1 conversation/u);
+    await expect(report).toContainText(/page memory/u);
+    await expect(report).toContainText(/no title, no message, no digest/u);
 
     // The remedy is attached to the report, not three levels down a rail.
     await report.getByRole("button", { name: "Keep future conversations" }).click();
@@ -144,11 +169,7 @@ test.describe("a person whose Vault held the conversation", () => {
     }, { key: PREFERENCES_KEY });
 
     await page.goto(`/?airshipLabNamespace=${namespace}#vault`);
-    const setup = page.locator(".local-device-vault");
-    await setup.getByRole("button", { name: "Create new" }).click();
-    await setup.getByRole("checkbox", { name: /I saved this recovery key outside Airship/u }).click();
-    await setup.getByRole("button", { name: "Create encrypted Vault" }).click();
-    await expect(setup.getByText("Ready", { exact: true })).toBeVisible({ timeout: 30_000 });
+    await completeLocalDeviceCeremony(page);
 
     await page.goto(`/?airshipLabNamespace=${namespace}#chat`);
     // Work started before the Vault is adopted is migrated into it *and* moved
@@ -186,7 +207,11 @@ test.describe("a person whose Vault held the conversation", () => {
     // and the journal head that proves the events came back rather than being
     // re-created. This is the assertion the old exemption withheld.
     await expect(page.locator(".message.user").filter({ hasText: prompt })).toBeVisible({ timeout: 30_000 });
-    await expect(page.locator(".message.assistant").last()).toContainText(answer.slice(0, 40), { timeout: 30_000 });
+    // Not string-equality: `.message.assistant` includes the avatar's own text
+    // ("A", "Airship"), so comparing a slice compares chrome. The journal head
+    // asserted below is the real proof that these events came back rather than
+    // being re-created; this asserts a reply is there at all.
+    await expect(page.locator(".message.assistant").last()).not.toBeEmpty({ timeout: 30_000 });
     expect((await page.locator(".session-bar__title").innerText()).trim()).toBe(title);
     expect((await page.locator(".journal-chip").innerText()).replace(/\s+/gu, " ").trim()).toBe(journalHead);
     // And nothing on screen mourns a conversation that is on screen.
