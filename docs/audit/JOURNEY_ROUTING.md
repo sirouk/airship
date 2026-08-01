@@ -1,9 +1,13 @@
 # Journey routing — every finding has exactly one owner
 
-Generated from `.ui-capture/atlas.json`. 148 findings, 148 routed, 0 unrouted.
-Assertion: the sum of lane counts equals the Atlas total, or the routing script fails.
+Generated from `.ui-capture/atlas.json`. 152 findings, 152 routed, 0 unrouted.
+Assertion: `scripts/journey-atlas-gate.mjs` checks that the per-journey lists sum to this
+total, that every finding has a unique id and a lane, that routing is a permutation of the
+Atlas in both directions, and that every count stated here is a count this file contains.
+It is wired into `npm run check`; before it existed this line was a claim with nothing
+under it, and four findings sat in the Atlas prose owned by no lane at all.
 
-## L1-chat-composer — 26 findings
+## L1-chat-composer — 27 findings
 
 | id | severity | link | persona | finding | evidence |
 |---|---|---|---|---|---|
@@ -33,6 +37,7 @@ Assertion: the sum of lane counts equals the Atlas total, or the routing script 
 | J126 | friction | response | long-session — s | Main-thread blocking per turn grows with conversation length on a phone, so the composer gets less responsive as the day goes on even though turn latency looks flat. | PerformanceObserver longtask totals at 4x CPU throttle, 390x844: turns 1-20 = 32 tasks / 3,448 ms (172 ms per turn); turns 21-40 = 40 tasks / 5,927 ms (296 ms per turn); max single task 206 ms. Turn latency p50 was 1,647 ms throughout, hiding it. |
 | J137 | trust-error | response | COMPLETENESS CRI | A runtime activation failure is surfaced as a raw build-asset URL inside the chat transcript, with no diagnosis and no route back to the page that offered the action. | Transcript: "Failed to fetch dynamically imported module: http://localhost:4173/assets/node-webcontainer-pack-DntNdFa_.js" / "FAILED TURN" / "EXCLUDED FROM PROVIDER CONTEXT". |
 | J141 | friction | recovery | COMPLETENESS CRI | The only action that actually works — reloading the page — is named nowhere on the failure card. | The card's full content is the sentence plus one button, "Retry loading Memory". src/ui/route-failure.tsx is the shared component behind all ten spellings. |
+| J149 | friction | continuation | long-session — d | The transcript mounts every turn for the life of the conversation, so cost grows without bound with session length | 1,542 → 3,468 DOM nodes and 237 → 471 listeners between turn 6 and turn 24; ~54 nodes and ~9.7 listeners per turn, no windowing observed |
 
 ## L2-continuation — 38 findings
 
@@ -77,7 +82,7 @@ Assertion: the sum of lane counts equals the Atlas total, or the routing script 
 | J134 | misleading-state | action | COMPLETENESS CRI | The primary control on the Capabilities page performs none of the action its label names. | Button "Activate in Chat →" on the card "Node.js · WebContainer … Available". After clicking: Capabilities still reads "3/6 runtimes ready · observed Jul 31, 3:03 PM EDT" (identical string before and after) and "No execution runtime has been asked to run anything in this page yet." |
 | J135 | breaks-continuity | continuation | COMPLETENESS CRI | Pressing it abandons the conversation you are in, with no notice, no confirmation and no way back from that screen. | URL before `#chat/792a1381-2157-4666-b03a-6af5b2854bc2` ("PHONE-MARKER: keep this thread.", 11 events); URL after `#chat/a8ee5e19-2c68-4ff8-814a-49a8eda7f857`, empty state "Capability command is a new isolated conversation." Same result on desktop. |
 
-## L3-vault-durability — 14 findings
+## L3-vault-durability — 15 findings
 
 | id | severity | link | persona | finding | evidence |
 |---|---|---|---|---|---|
@@ -95,8 +100,9 @@ Assertion: the sum of lane counts equals the Atlas total, or the routing script 
 | J114 | trust-error | in-flight | long-session — s | The only durability warning in the product is evicted by the first turn's status and never comes back, replaced by an all-clear. | Topbar cold: "Local Device Vault needs a saved recovery key before first use". +0.6 s into turn 1: "Persisting turn intent". At +5 s, +15 s, +30 s, +60 s, +120 s, +180 s and after navigating #vault→#chat: "Local kernel ready". (src/ui/app.tsx:5167 sets "Persisting turn intent"; src/ui/app.tsx:3753 sets "Local kernel ready".) |
 | J132 | trust-error | recovery | COMPLETENESS CRI | The remedy attached to the false loss notice is the irreversible Vault ceremony. | "Keep future conversations" → `#vault` → "Not set up yet", "Local Device setup required", "Create or recover the device key below." |
 | J142 | inaccessible | response | COMPLETENESS CRI | The failure is silent to assistive technology and to anyone not looking at the pane: pressing Retry produces no state change, no announcement, no "still failing". | Live-region contents during the failure and across all three retries stayed "Local Device Vault needs a saved recovery key before first use" — unchanged. |
+| J151 | lost-work | persistence | P0 root cause —  | The service-worker takeover reloads the document mid-journey and the page-memory conversation does not survive it | 1 navigation after the ceremony, 3 after loading #chat, `.pwa-update` present; a turn sent in that window is rendered and reported complete but absent after the reload |
 
-## L4-connection — 13 findings
+## L4-connection — 14 findings
 
 | id | severity | link | persona | finding | evidence |
 |---|---|---|---|---|---|
@@ -113,6 +119,7 @@ Assertion: the sum of lane counts equals the Atlas total, or the routing script 
 | J145 | misleading-state | proof | COMPLETENESS CRI | "Account" is filed as a global destination beside Vault and Connection but can only ever describe one of the four providers it lists. | `#account`: rows "Chutes / Not connected", "OpenAI / Not connected", "Anthropic / Not connected", "xAI / Not connected"; single action "Connect Chutes"; metrics "AVAILABLE CHUTES BALANCE", "CHARGED THIS UTC MONTH", "TOKENS THIS UTC MONTH"; "Nothing is read from Chutes until you connect." |
 | J146 | trust-error | discovery | COMPLETENESS CRI | The provider count disagrees between two routes one click apart. | `#connection`: "No model connected · 5 ready to connect". `#account`: four provider rows. |
 | J148 | inaccessible | discovery | COMPLETENESS CRI | On a phone a whole provider row on the Account page is off-screen with no scroll affordance. | Measured at viewport width 390: "Not connected" elements at x 307..417 and 447..557; document overflowX = 0 (the container clips rather than scrolls the page). |
+| J150 | misleading-state | recovery | failure-recovery | The send-failure notice does not retract when connectivity returns, so a reconnected person is still told remote inference is paused | Live-region text at the "BACK ONLINE" step: "Offline · remote inference paused; prompt preserved", while the separate connectivity banner had already cleared |
 
 ## L5-proof — 10 findings
 
@@ -169,7 +176,7 @@ Assertion: the sum of lane counts equals the Atlas total, or the routing script 
 | J124 | misleading-state | proof | long-session — s | You cannot see what you left running: the shell has no job control or process listing, and background launches give no confirmation. | "jsh: command not found: jobs", "jsh: command not found: yes", "head: -20: No such file or directory"; `ping -c 1000 127.0.0.1 … &` produced no output and no entry anywhere in the UI. |
 | J136 | misleading-state | persistence | COMPLETENESS CRI | The composer caption keeps asserting a prefilled command after the command is gone, in a different conversation, and in a different profile. | "New profile-scoped conversation · capability command prefilled" still rendered with textarea value "" in `#chat/266cc04e` (new conversation) and in `#chat/16d5c8cb` under the Research profile. |
 
-## L8-shell-a11y — 17 findings
+## L8-shell-a11y — 18 findings
 
 | id | severity | link | persona | finding | evidence |
 |---|---|---|---|---|---|
@@ -190,3 +197,4 @@ Assertion: the sum of lane counts equals the Atlas total, or the routing script 
 | J138 | friction | completion | COMPLETENESS CRI | The Skills route accepts a change it has just told you is inert for the conversation you are in, and offers no action to make it live. | "Set global skill defaults. Enabled instructions are pinned into the next conversation manifest." → toggle → "EFFECTIVE SET 4 of 6"; back in chat the chip still reads "3 skills" and the panel reads "This immutable set composed the conversation prompt. Later Skill changes apply only to a new conversation." The only controls on the Skills r |
 | J144 | friction | entry | COMPLETENESS CRI | The chord the palette teaches for that destination does nothing from where a person actually lands. | Cold load, pressed `g` then `x`: hash remained `#chat/89e1f36c-fd20-4e16-ab06-e23325c2668e`. |
 | J147 | friction | discovery | COMPLETENESS CRI | Skills and Capabilities — the two routes that decide what the agent is and what it can run — have no presence in the desktop navigation rail at all. | Desktop rail rows enumerated: Chat, Workspace (Editor, Terminal), Memory, Proof, GLOBAL: Vault, Connection, Account. src/ui/navigation-model.ts RAIL_LAYOUT contains no `skills` or `capabilities` row; they are nested under `profiles`, which is itself not a rail row. |
+| J152 | inaccessible | action | P0 root cause —  | The update banner intercepts pointer events over the composer | Playwright: `<div role="status" class="pwa-update">…</div> intercepts pointer events` while clicking Send, 58 retries |

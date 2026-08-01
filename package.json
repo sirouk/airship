@@ -33,6 +33,7 @@
     "lab:stop": "node scripts/local-lab.mjs stop",
     "check:security": "node scripts/check-static-security.mjs",
     "check:references": "node scripts/check-reference-library.mjs",
+    "check:journey-atlas": "node scripts/journey-atlas-gate.mjs",
     "check:references:strict": "node scripts/check-reference-library.mjs --require-checkouts",
     "test:references": "node scripts/check-reference-library.mjs --self-test",
     "check:release": "node scripts/release-gate.mjs",
@@ -42,7 +43,7 @@
     "build:dcap-wasm": "bash scripts/build-dcap-qvl-wasm.sh",
     "semantic:prepare": "node scripts/prepare-semantic-pack.mjs",
     "build": "npm run typecheck && npm run check:security && npm run build:extension && npm run build:static && npm run check:release",
-    "check": "npm run typecheck && npm run typecheck:extension && npm run check:security && npm run check:references && npm run test:references && npm run test && npm run build:extension && npm run build:static && npm run check:release"
+    "check": "npm run typecheck && npm run typecheck:extension && npm run check:security && npm run check:references && npm run check:journey-atlas && npm run test:references && npm run test && npm run build:extension && npm run build:static && npm run check:release"
   },
   "dependencies": {
     "@bjorn3/browser_wasi_shim": "0.4.2",
