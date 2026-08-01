@@ -90,4 +90,39 @@ describe("offline vault trust axis contract", () => {
     expect(app).toContain("const sessionDurabilitySeal: SealState = durabilitySeal(sessionDurability.state);");
     expect(app).not.toContain('sessionDurability.state === "syncing"');
   });
+
+  it("keeps the standing durability state out of the transient status line", () => {
+    /*
+     * `runtimeStatus` is the one mixed-purpose line the shell overwrites with
+     * the next thing that happens anywhere. It used to carry "Local Device
+     * Vault needs a saved recovery key before first use", and the Atlas
+     * measured the whole category error: inert text with no action (J002),
+     * 0×0px on a phone (J003), evicted 0.6s into the first turn by "Persisting
+     * turn intent" and replaced by "Local kernel ready" for the next three
+     * hours (J114), and on its way past it overwrote the completion signal for
+     * a profile switch (J020). The claim belongs to the vault trust axis, which
+     * is derived from state and cannot be overwritten.
+     */
+    expect(app).not.toContain("Local Device Vault needs a saved recovery key");
+    expect(app).toContain('"Not saved · Vault not set up"');
+    // And the axis is alarming rather than neutral while a durable destination
+    // is selected and nothing has been adopted — `none` is the rung that let
+    // the whole state be carried by a status string in the first place.
+    expect(app).toContain(': preferences.vaultBackend === "ephemeral" ? "none" : "attention"');
+  });
+
+  it("states a failed resume in one line and leaves the forensics where they render", () => {
+    /*
+     * Measured (J098): 470 characters of quarantine narrative — title, short
+     * id, verbatim reason, history verdict and a raw
+     * `LOCAL_COMMAND_INCOMPLETE: Client-only local command local-command-70aa…`
+     * — in a single-line chip that draws about sixty of them before ellipsis,
+     * with roughly two words of room on a phone. Every one of those strings
+     * already renders in full in the `#sessions` quarantine panel that
+     * `setQuarantinedSession` feeds.
+     */
+    expect(app).toContain("could not be replayed — open All conversations for the reason");
+    expect(app).not.toContain("${quarantined.reason}");
+    expect(app).not.toContain("Its history is intact — open Sessions to inspect it");
+  });
 });

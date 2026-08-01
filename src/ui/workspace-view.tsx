@@ -63,6 +63,7 @@ import {
   workbenchArrivalPane,
   workbenchBufferState,
   workbenchDialogCopy,
+  workbenchDiscardConfirmation,
   workbenchDocumentId,
   workbenchFilterMatches,
   workbenchNotice,
@@ -1392,7 +1393,15 @@ function ProfileScopedWorkspaceView({
         if (operation.kind === "commit") witness({ commit: commitSubject(operation.request.message) });
         setCommitMessage("");
       }
+      // A restore rewrites workspace bytes, which staging and committing never
+      // do — so the tree, the open buffer and the byte counts beside them are
+      // stale the instant it lands. Refreshing only Source Control would leave
+      // the Editor showing the text the user just threw away.
+      if (operation.kind === "restore") await onWorkspaceChanged();
       await refreshSourceControl();
+      if (operation.kind === "restore") {
+        setNotice(workbenchNotice("done", `Discarded worktree changes in ${operation.request.paths.map((path) => path.replace("/workspace/", "")).join(", ")}. ${operation.request.source === "head" ? "The file is back at HEAD." : "The file is back at the staged copy."}`));
+      }
     });
   }
 
@@ -2398,6 +2407,16 @@ function SourceControlRail({ repositories, repositoryId, selectRepository, workt
   const { staged, unstaged } = lanes;
   const truncation = workbenchSourceTruncationNote(lanes);
   const operation = (kind: "stage" | "unstage", paths: readonly string[]): GitOperation | undefined => repository && worktree ? { kind, request: { repositoryId: repository.id, worktreeId: worktree.id, paths, expectedWorktreeVersion: worktree.version } } : undefined;
+  /**
+   * The path whose worktree changes are one confirmation from being destroyed.
+   *
+   * Gated the same way deleting a workspace file is, and for the same reason:
+   * the approval dialog behind this decides *permission*, and a profile in
+   * `full-access` mode never shows one. The row's own consequence sentence is
+   * the only thing between a mis-tap and unrecoverable bytes.
+   */
+  const [discarding, setDiscarding] = useState<string>();
+  const discardCopy = discarding ? workbenchDiscardConfirmation(discarding) : undefined;
   return <div class="workspace-scm">
     <label>Repository<MenuSelect placement="down" ariaLabel="Workspace repository" value={repository?.id ?? ""} options={repositories.map((item) => ({ value: item.id, label: item.name }))} onChange={selectRepository} /></label>
     {repository && repository.worktrees.length > 1 ? <label>Worktree<MenuSelect placement="down" ariaLabel="Workspace worktree" value={worktree?.id ?? ""} options={repository.worktrees.map((item) => ({ value: item.id, label: `${item.branch} · ${item.path}` }))} onChange={selectWorktree} /></label> : null}
@@ -2406,8 +2425,19 @@ function SourceControlRail({ repositories, repositoryId, selectRepository, workt
     {!loading && !repository ? <div class="workspace-boundary">No Git repositories are connected to this workspace.</div> : null}
     {staged.length ? <ScmGroup title="Staged" entries={staged} lane="staged" repository={repository} worktree={worktree} openDiff={openDiff} mutate={mutate} /> : null}
     {staged.length > 1 ? <button type="button" onClick={() => { const next = operation("unstage", staged.map((entry) => entry.path)); if (next) void mutate(next); }}>Unstage all visible</button> : null}
-    {unstaged.length ? <ScmGroup title="Changes" entries={unstaged} lane="unstaged" repository={repository} worktree={worktree} openDiff={openDiff} mutate={mutate} /> : null}
+    {unstaged.length ? <ScmGroup title="Changes" entries={unstaged} lane="unstaged" repository={repository} worktree={worktree} openDiff={openDiff} mutate={mutate} discard={setDiscarding} /> : null}
     {unstaged.length > 1 ? <button type="button" onClick={() => { const next = operation("stage", workbenchVisibleStagePaths(unstaged)); if (next) void mutate(next); }}>Stage all visible</button> : null}
+    {discarding && discardCopy && repository && worktree ? <ConfirmDialog
+      title={discardCopy.title}
+      titleDetail={discarding}
+      confirmLabel={discardCopy.confirm}
+      destructive
+      onCancel={() => setDiscarding(undefined)}
+      onConfirm={() => {
+        setDiscarding(undefined);
+        void mutate({ kind: "restore", request: { repositoryId: repository.id, worktreeId: worktree.id, paths: [discarding], source: "head", expectedWorktreeVersion: worktree.version } });
+      }}
+    ><p>{discardCopy.consequence}</p></ConfirmDialog> : null}
     {truncation ? <div class="workspace-boundary attention">{truncation}</div> : null}
     {worktree?.status.some((entry) => entry.index) ? <div class="scm-commit"><textarea aria-label="Commit message" value={commitMessage} onInput={(event) => setCommitMessage(event.currentTarget.value)} placeholder="Commit message" /><button class="primary" type="button" disabled={!commitMessage.trim()} onClick={() => repository && mutate({ kind: "commit", request: { repositoryId: repository.id, worktreeId: worktree.id, message: commitMessage, author: DEFAULT_AUTHOR, expectedWorktreeVersion: worktree.version } })}>Commit staged</button></div> : null}
     {/*
@@ -2439,7 +2469,7 @@ function SourceControlRail({ repositories, repositoryId, selectRepository, workt
   </div>;
 }
 
-function ScmGroup({ title, entries, lane, repository, worktree, openDiff, mutate }: { title: string; entries: readonly GitStatusEntry[]; lane: "staged" | "unstaged"; repository?: GitRepositorySnapshot; worktree?: GitWorktreeSnapshot; openDiff(document: WorkbenchStatusDiffDocument, mode: WorkbenchDocumentOpenMode): void; mutate(operation: GitOperation): void | Promise<void> }) {
+function ScmGroup({ title, entries, lane, repository, worktree, openDiff, mutate, discard }: { title: string; entries: readonly GitStatusEntry[]; lane: "staged" | "unstaged"; repository?: GitRepositorySnapshot; worktree?: GitWorktreeSnapshot; openDiff(document: WorkbenchStatusDiffDocument, mode: WorkbenchDocumentOpenMode): void; mutate(operation: GitOperation): void | Promise<void>; discard?(path: string): void }) {
   return <section class="scm-group"><header><strong>{title}</strong><span>{entries.length}</span></header>{entries.map((entry) => {
     const delta = lane === "staged" ? entry.index : entry.worktree;
     const conflicted = delta?.kind === "conflicted";
@@ -2464,6 +2494,22 @@ function ScmGroup({ title, entries, lane, repository, worktree, openDiff, mutate
       ><span>{entry.path}</span><b>{conflicted ? "C" : delta?.kind === "added" ? "A" : delta?.kind === "deleted" ? "D" : delta?.kind === "renamed" ? "R" : "M"}</b></button>
       <div>
         <button type="button" aria-label={`Open and keep ${lane} diff ${entry.path}`} title="Open and keep" disabled={!document} onClick={() => { if (document) openDiff(document, "pinned"); }}>↗</button>
+        {/*
+          The way back from a bad save, on the row that is showing you the
+          damage. `git restore` was implemented and approved and reachable only
+          by typing it into a text field on another route, so the Workspace
+          surface had every verb that makes a change and none that takes one
+          back. A conflicted path is fenced out for the same reason staging is:
+          restoring one half of an unresolved merge is not a recovery.
+        */}
+        {lane === "unstaged" && discard ? <button
+          class="danger"
+          type="button"
+          aria-label={`Discard changes in ${entry.path}`}
+          title={conflicted ? "Merge conflict — resolve it in Advanced source controls before discarding." : `Discard changes in ${entry.path} and return it to HEAD`}
+          disabled={!repository || !worktree || conflicted}
+          onClick={() => discard(entry.path)}
+        >↺</button> : null}
         {/*
           Staging a conflicted path cannot resolve the conflict — only mark it
           resolved verbatim — so the Advanced controls fence it out of every
@@ -2747,6 +2793,7 @@ export type WorkbenchSourceMutations = Readonly<{
   stage(request: Extract<GitOperation, { kind: "stage" }>["request"]): Promise<unknown>;
   unstage(request: Extract<GitOperation, { kind: "unstage" }>["request"]): Promise<unknown>;
   commit(request: Extract<GitOperation, { kind: "commit" }>["request"]): Promise<unknown>;
+  restore(request: Extract<GitOperation, { kind: "restore" }>["request"]): Promise<unknown>;
 }>;
 
 /**
@@ -2763,7 +2810,14 @@ export async function runSourceMutation(git: WorkbenchSourceMutations, operation
   if (operation.kind === "stage") { await git.stage(operation.request); return false; }
   if (operation.kind === "unstage") { await git.unstage(operation.request); return false; }
   if (operation.kind === "commit") { await git.commit(operation.request); return true; }
-  // The rail issues exactly the three verbs above; anything else reaching here
+  // The way back from a bad save. `restore` was implemented, approved and
+  // reachable only by typing `git restore <path>` into the Terminal route's
+  // Browser Git field: a scan of every button, summary and menu item in
+  // Explorer, the Editor and Source Control for discard/revert/undo returned
+  // nothing at all, so the one surface that shows you the damage had no verb
+  // for it.
+  if (operation.kind === "restore") { await git.restore(operation.request); return false; }
+  // The rail issues exactly the four verbs above; anything else reaching here
   // is a caller bug, and refreshing the pane is the honest response to it.
   return false;
 }

@@ -40,10 +40,13 @@ export function hostPhrase(hosts: readonly string[]): string {
 /**
  * The sentence above "Discover models with key".
  *
- * Measured, in this order, from one press: three unauthenticated catalog reads
- * at t=28ms, then one logo image per model card. The key is not attached to any
- * of them — it goes on the wire only at "Finish: verify & connect", as a Bearer
- * token to api.chutes.ai/e2e/instances/… — so the pre-flight says exactly that
- * rather than the vaguer, scarier truth-adjacent "this contacts Chutes".
+ * It named the catalog hosts and the logo host, which nothing on the page had
+ * named before — and promised the key stayed put until Finish. That promise is
+ * gone because the flow it described was the defect: an unchecked key reached a
+ * priced model picker, since the catalog answers anyone. The key is now offered
+ * to Chutes first, so the pre-flight says that first, in the order the requests
+ * actually happen. Naming the credentialed host up front is the stronger
+ * disclosure anyway: the reader decides about the one request that carries
+ * their secret before pressing, not after.
  */
-export const CHUTES_DISCOVERY_PREFLIGHT = `Pressing this reads the public Chutes catalog from ${hostPhrase(CHUTES_CATALOG_HOSTS)}, and model cards then load logos from ${CHUTES_LOGO_HOST}. Your key is not attached to any of those requests: it leaves this device only at “Finish: verify & connect”, as a bearer token to ${CHUTES_AUTHORIZATION_HOST}.`;
+export const CHUTES_DISCOVERY_PREFLIGHT = `Pressing this sends your key to ${CHUTES_AUTHORIZATION_HOST} as a bearer token, to ask whether Chutes accepts it. If it does, Airship then reads the public Chutes catalog from ${hostPhrase(CHUTES_CATALOG_HOSTS)} without your key attached, and model cards load logos from ${CHUTES_LOGO_HOST}. If Chutes refuses the key, nothing else is contacted.`;

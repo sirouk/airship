@@ -7,6 +7,9 @@ test("disconnected Proof navigation and empty evidence state describe the real a
   await page.getByRole("button", { name: "Send message" }).click();
 
   const inspector = page.locator(".inspector");
+  // One gesture, not none: the claim stack rests as a single verdict line and
+  // opens into the full rail. Nothing was removed — see claim-stack-layout.
+  await inspector.locator(".claim-rail-summary").click();
   const inspectEvidence = inspector.getByRole("button", { name: "Inspect evidence" });
   await expect(inspectEvidence).toBeVisible();
   await expect(inspector.getByRole("button", { name: /Acquire endpoint evidence/u })).toHaveCount(0);

@@ -1,6 +1,7 @@
 import type { ComponentChildren } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import { Icon } from "../icons";
+import { MenuSelect } from "../menu-select";
 import { Popover } from "../popover";
 import { RENAME_START_HINT, renameEditorKeyHandler, renameStartKeyHandler } from "../rename-interaction";
 import { SessionStatusChip, type SessionStatusFact } from "./session-status-chip";
@@ -34,6 +35,21 @@ export type PinnedSessionSkills = Readonly<{
   skills: readonly Readonly<{ skillId: string; name: string; digest: string }>[];
 }>;
 
+/**
+ * A conversation the switcher can move to. The rail's row shape, minus the
+ * gestures only a rail row has.
+ */
+export type SwitchableConversation = Readonly<{
+  id: string;
+  title: string;
+  preview: string;
+  updatedAt: string;
+  open(): void;
+}>;
+
+/** Sentinel option value; no session id can collide with it. */
+export const SESSION_SWITCH_ALL = "airship:all-conversations";
+
 export type SessionBarProps = Readonly<{
   title: string;
   profileName: string;
@@ -50,6 +66,17 @@ export type SessionBarProps = Readonly<{
   renameDisabled?: boolean;
   onNewConversation(): void;
   newConversationDisabled: boolean;
+  /** The profile's recent threads, newest first. Empty is a valid state. */
+  conversations: readonly SwitchableConversation[];
+  activeConversationId: string;
+  formatTime(value: string): string;
+  onOpenAllConversations(): void;
+  /**
+   * Bumped by the shell to start the rename editor from somewhere else — the
+   * command palette's "Rename conversation" row. A counter rather than a flag
+   * so the same request can be made twice.
+   */
+  renameRequest?: number;
 }>;
 
 export function SessionBar({
@@ -66,6 +93,11 @@ export function SessionBar({
   renameDisabled = false,
   onNewConversation,
   newConversationDisabled,
+  conversations,
+  activeConversationId,
+  formatTime,
+  onOpenAllConversations,
+  renameRequest = 0,
 }: SessionBarProps) {
   const [renaming, setRenaming] = useState(false);
   const renameInput = useRef<HTMLInputElement>(null);
@@ -74,6 +106,10 @@ export function SessionBar({
   useEffect(() => {
     if (renaming) renameInput.current?.select();
   }, [renaming]);
+
+  useEffect(() => {
+    if (renameRequest > 0 && !renameDisabled) setRenaming(true);
+  }, [renameRequest]);
 
   function startRename() {
     if (renameDisabled) return;
@@ -165,8 +201,43 @@ export function SessionBar({
           {model}
           {pinnedSkills ? <PinnedSkillsChip pin={pinnedSkills} /> : null}
           <SessionStatusChip facts={statusFacts} durabilityLabel={durabilityLabel} />
-          <JournalChip journal={journal} onOpenSession={onOpenSession} />
+          <JournalChip journal={journal} durabilityLabel={durabilityLabel} onOpenSession={onOpenSession} />
         </div>
+        {/*
+          * The conversation switcher, in the primary chrome at every width.
+          *
+          * On a phone the profile's conversation list existed only behind
+          * More → "All conversations", and the bar's own H1 rendered 85px of a
+          * 557px title — measured at hour eight of a session named after its
+          * first message, so a person could neither read which conversation
+          * they were in nor reach another one from the surface they were
+          * working on. Both facts are one tap from here: the list carries every
+          * title in full, and the current one is the checked row.
+          *
+          * It sits with Rename and `+` outside the instrument strip because it
+          * is a verb, and the strip scrolls.
+          */}
+        <MenuSelect
+          className="session-bar__switch"
+          ariaLabel="Switch conversation"
+          compact
+          placement="down"
+          value={activeConversationId}
+          disabled={conversations.length === 0}
+          options={[
+            ...conversations.map((conversation) => ({
+              value: conversation.id,
+              label: conversation.title,
+              description: `${conversation.preview} · ${formatTime(conversation.updatedAt)}`,
+            })),
+            { value: SESSION_SWITCH_ALL, label: "All conversations", description: "Search, filter and inspect every conversation" },
+          ]}
+          leading={() => <Icon name="chat" size={15} />}
+          onChange={(value) => {
+            if (value === SESSION_SWITCH_ALL) { onOpenAllConversations(); return; }
+            conversations.find((conversation) => conversation.id === value)?.open();
+          }}
+        />
         <button
           class="session-bar__rename-action"
           type="button"
@@ -231,7 +302,12 @@ export function DemoModelChip({ onConnect }: Readonly<{ onConnect(): void }>) {
       heading="Session model"
       trigger={<>
         <span class="session-model-chip__glyph" aria-hidden="true">⬡</span>
-        <span class="session-model-chip__label">Demo · local</span>
+        {/* The word survives the shed; the qualifier does not. Measured at
+            390×844 the whole label was clipped, so the only two chips carrying
+            "you are talking to a demo" were both bare glyphs — and once the
+            empty state scrolled away nothing visible on the phone said it at
+            all. Four characters is what that fact costs. */}
+        <span class="session-model-chip__label">Demo<span class="session-model-chip__qualifier"> · local</span></span>
       </>}
     >
       <p>{TRANSCRIPT_INTRO_DEMO_LINE}</p>
@@ -243,8 +319,23 @@ export function DemoModelChip({ onConnect }: Readonly<{ onConnect(): void }>) {
   );
 }
 
-function JournalChip({ journal, onOpenSession }: Readonly<{ journal: SessionJournal; onOpenSession(): void }>) {
+function JournalChip({ journal, durabilityLabel, onOpenSession }: Readonly<{
+  journal: SessionJournal;
+  /** The active posture, so the count cannot out-claim the store holding it. */
+  durabilityLabel: string;
+  onOpenSession(): void;
+}>) {
   const shortId = journal.sessionId ? journal.sessionId.slice(0, 8) : "starting";
+  /*
+   * The count says where it is kept.
+   *
+   * Measured after 180 turns: the chip read "⌗ 1079", its accessible name read
+   * "1079 recorded steps in conversation #5b583f0d", and
+   * `navigator.storage.estimate().usage` was byte-identical before turn 1 and
+   * after turn 180 — nothing had been written to disk at all. "Recorded" and a
+   * chained-looking counter is a durability claim, and this was the one place
+   * in the product making it without the posture attached.
+   */
   const steps = `${String(journal.eventCount)} recorded step${journal.eventCount === 1 ? "" : "s"}`;
   return (
     <span class="journal-chip">
@@ -268,8 +359,8 @@ function JournalChip({ journal, onOpenSession }: Readonly<{ journal: SessionJour
         // P11: the number leads, the plain-language count is the accessible
         // name, and `page-journal event` — the internal record name — stays on
         // hover. The count is no longer a fact that lives only in a tooltip.
-        title={`${String(journal.eventCount)} page-journal event${journal.eventCount === 1 ? "" : "s"}`}
-        aria-label={`${steps} in conversation #${shortId}. Open conversation details.`}
+        title={`${String(journal.eventCount)} page-journal event${journal.eventCount === 1 ? "" : "s"} · ${durabilityLabel}`}
+        aria-label={`${steps} in conversation #${shortId}, held as ${durabilityLabel}. Open conversation details.`}
         onClick={onOpenSession}
       >
         <span class="journal-chip__glyph" aria-hidden="true">⌗</span>

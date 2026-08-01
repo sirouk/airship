@@ -90,7 +90,7 @@ test("compact runtime indicators disclose scoped detail without expanding the to
   // stronger disclosure than the one this test was written to protect.
   const runtime = page.locator(".topbar-posture-chip");
   await expect(runtime).toContainText("Browser / Edge runtime");
-  await expect(runtime).toContainText("4 axes");
+  await expect(runtime).toContainText("4 runtime claims");
   const initialTopbar = await page.locator(".topbar").boundingBox();
   expect(initialTopbar).not.toBeNull();
   await runtime.click();

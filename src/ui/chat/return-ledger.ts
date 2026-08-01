@@ -23,6 +23,33 @@
  * the work.
  */
 
+/**
+ * The declared meaning of "ephemeral", in the words every surface must use.
+ *
+ * The lane's open question was whether this ledger contradicts the Vault
+ * route's "Survives closing the tab: No · released with the page". The policy,
+ * decided here because this module is the only thing that implements it:
+ *
+ *   **Ephemeral is a promise about content, not about the existence of a
+ *   record.** Nothing a person wrote — no title, prompt, reply, digest or file
+ *   path — is written outside page memory. What survives the page is a count,
+ *   a clock, an opaque id and which storage posture was in force, kept per
+ *   browser profile so a returning person can be told that something was not
+ *   kept. Nothing here can reconstruct a word of it.
+ *
+ * `normalizeEntry` is what makes that a boundary rather than an intention: it
+ * is applied on the write path as well as the read path, so a caller cannot
+ * persist a field this policy does not name, whatever it hands in.
+ * `return-ledger.test.ts` pins both halves.
+ */
+export const EPHEMERAL_RETENTION_DISCLOSURE =
+  "Nothing you write leaves page memory: no title, no message, no digest. Airship keeps one line per conversation in this browser — how many messages it held and when it was last open — so a return can tell you something was not kept. Dismissing that report deletes it.";
+
+/** Every field this ledger is permitted to persist. The disclosure above names them. */
+export const RETURN_LEDGER_FIELDS = Object.freeze([
+  "sessionId", "profileId", "messageCount", "lastActiveAt", "posture", "pageSession", "lost",
+] as const);
+
 /** Storage the ledger needs; narrowed so a test can hand it a plain map. */
 export type ReturnLedgerStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 
@@ -120,8 +147,21 @@ export function recordReturnLedgerEntry(
   // A conversation that has already been mourned is not brought back to life by
   // a late write from the page that lost it.
   if (existing?.lost) return;
+  /*
+   * Normalized on the way in, not only on the way out.
+   *
+   * The read path already dropped undeclared fields, which made the boundary
+   * true for this build and only this build: `writeLedger` serialized whatever
+   * object the caller handed over, so one future call site passing the session
+   * record — with its title in it — would have written a conversation's name
+   * into `localStorage` under a policy that promises it never leaves page
+   * memory, and nothing would have failed. The declared shape is enforced at
+   * the only point where bytes are produced.
+   */
+  const declared = normalizeEntry(entry);
+  if (!declared) return;
   writeLedger(storage, [
-    entry,
+    declared,
     ...current.filter((candidate) => candidate.sessionId !== entry.sessionId),
   ]);
 }

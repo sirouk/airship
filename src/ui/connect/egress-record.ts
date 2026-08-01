@@ -30,6 +30,25 @@
 /** Which observer saw this request, and therefore which fields can be true. */
 export type EgressWitness = "request" | "resource-timing";
 
+/**
+ * Whether the request left the machine.
+ *
+ * The boundary used to be the browser's origin comparison and nothing else, so
+ * "Check Ollama" — a request to `http://127.0.0.1:11434/api/version` from a page
+ * served on `http://127.0.0.1:4173` — was filed under "What has left this
+ * device". Nothing left. The lane it belongs to advertises itself as
+ * `Endpoint · loopback allowlist only` and is the one provider route in the
+ * product that involves no third party at all, and the egress panel was calling
+ * it egress on the strength of a port number.
+ *
+ * `remote` is everything a packet actually leaves for, and that deliberately
+ * includes the LAN: `192.168.1.20:11434` is another machine, and a person
+ * asking what left this device is asking about exactly that hop. Only the
+ * loopback interface — `localhost`, `*.localhost`, `127.0.0.0/8`, `[::1]` — is
+ * on-device.
+ */
+export type EgressScope = "loopback" | "remote";
+
 /** Whether a credential rode along — never which one, and never its value. */
 export type EgressCredential = "attached" | "not-attached" | "unknown";
 
@@ -37,7 +56,9 @@ export type EgressOutcome = "in-flight" | "answered" | "refused" | "failed";
 
 export type EgressRecord = Readonly<{
   id: string;
-  /** Host only. The origin's scheme is always https for off-origin egress here. */
+  /** Whether this request left the machine, or stayed on the loopback interface. */
+  scope: EgressScope;
+  /** Host and port, as the browser resolved them. */
   host: string;
   /** Path without its query: a query string is where an api_key= would be. */
   path: string;
@@ -65,6 +86,7 @@ export type EgressRecord = Readonly<{
 
 export type EgressHostSummary = Readonly<{
   host: string;
+  scope: EgressScope;
   requests: number;
   /** How many rows on this host carried a credential. */
   credentialed: number;
@@ -83,13 +105,69 @@ export type EgressHostSummary = Readonly<{
  * A record of egress that does not say what it cannot see is the same class of
  * defect it exists to fix.
  */
-export const EGRESS_SCOPE_NOTE = "Requests to Airship's own origin are not listed — including the same-origin localhost token handler where a build has one. Everything below went to a different host. Credential values are never read or stored: a row records only that a header carrying one was present.";
+export const EGRESS_SCOPE_NOTE = "Three classes, one of them egress. Airship's own origin is not listed at all, including the same-origin localhost token handler where a build has one. Another port on this machine is recorded as on-device and counted separately. The count at the top is only what reached another machine, including one on your own network. Credential values are never read or stored: a row records only that a header carrying one was present.";
 
 /** Said once, by the zero state and by the summary chip's accessible name. */
-export const EGRESS_NONE_OBSERVED = "No off-origin request has been observed in this tab.";
+export const EGRESS_NONE_OBSERVED = "Nothing has left this device in this tab.";
+
+/** The heading over the loopback rows, and the sentence that qualifies them. */
+export const EGRESS_LOOPBACK_NOTE = "A server on this machine. The browser treats it as another origin, so it is recorded — but the bytes never reached a network interface, and the count above does not include them.";
 
 /** Beyond this the oldest rows are dropped, and the panel says so. */
 const RECORD_LIMIT = 250;
+
+/**
+ * Where a URL goes, before any of it is recorded.
+ *
+ * `not-network` covers `data:`, `blob:` and every other scheme that resolves
+ * inside the page: those are not requests to anywhere and are dropped rather
+ * than filed under either heading, because a ledger that listed a blob URL as
+ * "activity" would be padding the answer to a question about the wire.
+ */
+export type EgressClass = "same-origin" | "loopback" | "remote" | "not-network";
+
+export function classifyEgressUrl(url: string, origin: string): EgressClass {
+  let parsed: URL;
+  try {
+    parsed = new URL(url, origin || undefined);
+  } catch {
+    return "not-network";
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return "not-network";
+  if (origin && parsed.origin === origin) return "same-origin";
+  return isLoopbackHostname(parsed.hostname) ? "loopback" : "remote";
+}
+
+/**
+ * Whether a hostname resolves to this machine's loopback interface.
+ *
+ * Deliberately the same rule as `isLoopbackHost` in
+ * `src/inference/local/endpoint-policy.ts`, which decides what the local-model
+ * fabric is even allowed to contact — the two answers have to agree or the
+ * panel will describe an allowed local probe as egress. It is restated rather
+ * than imported: the local-inference pack and this route are separate chunks,
+ * and importing across that seam makes Rollup emit a shared chunk the release
+ * gate refuses, the same pack-boundary hazard `egress-preflight.ts` documents.
+ * `egress-record.test.ts` imports both and fails if they ever disagree.
+ */
+export function isLoopbackHostname(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/gu, "").replace(/\.$/u, "");
+  // RFC 6761 reserves `localhost` and every name under it for the loopback
+  // interface; a browser that resolved `ollama.localhost` sent it nowhere.
+  if (host === "localhost" || host.endsWith(".localhost")) return true;
+  if (host === "::1" || host === "0:0:0:0:0:0:0:1") return true;
+  // IPv4-mapped loopback, which `[::ffff:127.0.0.1]` is a legal spelling of.
+  const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/u.exec(host);
+  const octets = parseIpv4(mapped ? mapped[1]! : host);
+  return octets !== undefined && octets[0] === 127;
+}
+
+function parseIpv4(hostname: string): number[] | undefined {
+  const parts = hostname.split(".");
+  if (parts.length !== 4) return undefined;
+  const values = parts.map((part) => part === "" ? Number.NaN : Number(part));
+  return values.every((part) => Number.isInteger(part) && part >= 0 && part <= 255) ? values : undefined;
+}
 
 type Entry = {
   record: EgressRecord;
@@ -182,6 +260,7 @@ export class EgressRecorder {
     if (!target) return undefined;
     const credential = readCredential(target.parsed, detail.headers, detail.credentialsMode);
     return this.push(target.url, {
+      scope: target.scope,
       host: target.parsed.host,
       path: target.parsed.pathname,
       method: (detail.method ?? "GET").toUpperCase(),
@@ -234,6 +313,7 @@ export class EgressRecorder {
       return match.record.id;
     }
     return this.push(target.url, {
+      scope: target.scope,
       host: target.parsed.host,
       path: target.parsed.pathname,
       kind: resourceKind(entry.initiatorType),
@@ -264,17 +344,20 @@ export class EgressRecorder {
   }
 }
 
-function parseTarget(url: string, origin: string): { url: string; parsed: URL } | undefined {
+function parseTarget(
+  url: string,
+  origin: string,
+): { url: string; parsed: URL; scope: EgressScope } | undefined {
   let parsed: URL;
   try {
-    parsed = new URL(url, origin);
+    parsed = new URL(url, origin || undefined);
   } catch {
     return undefined;
   }
-  // `data:` and `blob:` never leave the device; same-origin is the page itself.
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return undefined;
-  if (parsed.origin === origin) return undefined;
-  return { url: parsed.href, parsed };
+  const scope = classifyEgressUrl(parsed.href, origin);
+  // `data:` and `blob:` never touch a socket; same-origin is the page itself.
+  if (scope === "not-network" || scope === "same-origin") return undefined;
+  return { url: parsed.href, parsed, scope };
 }
 
 /**
@@ -327,6 +410,16 @@ function resourceKind(initiatorType: string): string {
   return initiatorType || "other";
 }
 
+/** The rows that actually left the machine — the answer to the panel's title. */
+export function remoteEgress(records: readonly EgressRecord[]): readonly EgressRecord[] {
+  return records.filter((record) => record.scope === "remote");
+}
+
+/** The rows that stayed on it. Shown, counted separately, never called egress. */
+export function loopbackEgress(records: readonly EgressRecord[]): readonly EgressRecord[] {
+  return records.filter((record) => record.scope === "loopback");
+}
+
 export function summarizeEgressHosts(records: readonly EgressRecord[]): readonly EgressHostSummary[] {
   const byHost = new Map<string, EgressHostSummary>();
   for (const record of records) {
@@ -334,6 +427,7 @@ export function summarizeEgressHosts(records: readonly EgressRecord[]): readonly
     const kinds = prior?.kinds.includes(record.kind) ? prior.kinds : [...(prior?.kinds ?? []), record.kind];
     byHost.set(record.host, Object.freeze({
       host: record.host,
+      scope: record.scope,
       requests: (prior?.requests ?? 0) + 1,
       credentialed: (prior?.credentialed ?? 0) + (record.credential === "attached" ? 1 : 0),
       unknownCredential: (prior?.unknownCredential ?? 0) + (record.credential === "unknown" ? 1 : 0),
@@ -407,8 +501,23 @@ export function egressSummarySeal(records: readonly EgressRecord[]): "none" | "a
 }
 
 /**
+ * The loopback tally, in the same grammar as the chip above it — and never in
+ * the chip, because these requests are not what that chip counts.
+ */
+export function loopbackCountLabel(records: readonly EgressRecord[]): string {
+  const rows = loopbackEgress(records);
+  if (rows.length === 0) return "";
+  const hosts = summarizeEgressHosts(rows);
+  return `${String(rows.length)} ${rows.length === 1 ? "request" : "requests"} to ${String(hosts.length)} ${hosts.length === 1 ? "port" : "ports"} on this device`;
+}
+
+/**
  * The last host a credential actually reached, for the field caption that has
  * to say whether the user's secret left. Absent means it did not.
+ *
+ * Remote rows only: a key handed to a model server on `127.0.0.1` has not left
+ * the device, and this function is the sole evidence behind a sentence that
+ * says it has.
  */
 export function lastCredentialEgress(
   records: readonly EgressRecord[],
@@ -416,7 +525,7 @@ export function lastCredentialEgress(
 ): EgressRecord | undefined {
   let latest: EgressRecord | undefined;
   for (const record of records) {
-    if (record.credential !== "attached" || record.startedAt < since) continue;
+    if (record.scope !== "remote" || record.credential !== "attached" || record.startedAt < since) continue;
     if (!latest || record.startedAt >= latest.startedAt) latest = record;
   }
   return latest;

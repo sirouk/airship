@@ -27,6 +27,24 @@
   scroll-margin-top: 76px;
 }
 
+/*
+ * The header may not be wider than the route that contains it.
+ *
+ * Measured at 390 with a local model connected: the count chip's label grows to
+ * "Ollama & LM Studio connected · 4 more ready to connect" — 354px of nowrap
+ * text — and `.route-header`'s automatic minimum (`min-width: auto`) carried it
+ * to 420px inside a 364px column, pushing `main.scrollWidth` to 433 with no
+ * pan and no scrollbar. The seal already declares `overflow: hidden;
+ * text-overflow: ellipsis`; it simply never got the chance, because nothing in
+ * the chain would shrink. Nothing is lost to the ellipsis: the chip is a
+ * Popover trigger and the full sentence is one press away. Scoped to this route
+ * rather than fixed in the shared header, which every other route shares.
+ */
+.access-connection-view .route-header,
+.access-connection-view .route-header__bar {
+  min-width: 0;
+}
+
 /* The route bar's count chip: the number is the claim, and its own sentence is
    one gesture away rather than in a `title` a thumb cannot reach. */
 .access-count-chip {

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { recoverPartialTurn, turnRecoverySummary } from "./turn-recovery";
+import { readableLocalFailure, recoverPartialTurn, turnRecoverySummary } from "./turn-recovery";
 import { messagePartsFromFacts } from "./message-parts";
 import { mapRequestFailure } from "../request-state";
 
@@ -47,6 +47,55 @@ describe("turn recovery", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  /**
+   * A runtime activation failure reached the transcript as
+   * "Failed to fetch dynamically imported module: …/node-webcontainer-pack-
+   * DntNdFa_.js" under a FAILED TURN badge: a hashed build asset as the whole
+   * diagnosis.
+   */
+  it("translates a chunk-load failure and leaves every other sentence alone", () => {
+    const translated = readableLocalFailure(
+      "Failed to fetch dynamically imported module: http://localhost:4173/assets/node-webcontainer-pack-DntNdFa_.js",
+    );
+    expect(translated).not.toContain("node-webcontainer-pack");
+    expect(translated).not.toContain("http://");
+    expect(translated).toContain("nothing was installed");
+    expect(translated).toContain("reload the page");
+    // Sentences the product wrote for a person are not rewritten.
+    const own = "Permission denied for local /write-file. No tool effect ran, and nothing was sent to the model.";
+    expect(readableLocalFailure(own)).toBe(own);
+  });
+
+  /**
+   * "TURN FAILED — PARTIAL RESPONSE KEPT." was printed over an empty region on
+   * three separate failure causes (stream-end, provider-unreachable, offline),
+   * because the text part was pushed only `if (partial)` and the footer was
+   * appended unconditionally. The footer may only claim what is above it.
+   */
+  it("does not claim a partial was kept when nothing arrived", () => {
+    const nothing = recoverPartialTurn([], "", "", false, "unreachable");
+    expect(nothing.filter((part) => part.kind === "text")).toHaveLength(0);
+    expect(nothing.at(-1)).toMatchObject({ kind: "footer", summary: "Provider unreachable — nothing had arrived yet." });
+
+    // Text the durable record already put in the card counts as kept, even
+    // though this call carries no partial of its own.
+    const durable = messagePartsFromFacts([{ kind: "text", factId: "answer", sequence: 1, text: "Half an answer" }]);
+    expect(recoverPartialTurn(durable, "", "", false, "provider").at(-1))
+      .toMatchObject({ kind: "footer", summary: "Provider failed — partial response kept." });
+  });
+
+  /**
+   * "Retry is available." rendered on every failed turn while the controls it
+   * referred to were disabled, because only the success path stamped the
+   * pre-turn boundary a retry forks at.
+   */
+  it("only claims retryability when the caller has a way to act on it", () => {
+    const withoutWay = recoverPartialTurn([], "", "", false, "provider", false);
+    expect(withoutWay.find((part) => part.kind === "error")).toMatchObject({ retryable: false });
+    expect(recoverPartialTurn([], "", "", false, "provider").find((part) => part.kind === "error"))
+      .toMatchObject({ retryable: true });
   });
 
   /**

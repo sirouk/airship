@@ -45,6 +45,7 @@
 
 .egress-panel__lede,
 .egress-panel__scope,
+.egress-panel__loopback-note,
 .egress-panel__dropped {
   max-width: 74ch;
   margin: var(--sp-1) 0 0;
@@ -55,6 +56,49 @@
 
 .egress-panel__scope {
   margin: 0;
+  color: var(--ink-faint);
+}
+
+/*
+ * On-device requests, in the same row shape as the egress list but under their
+ * own heading and their own count — the two must never be read as one tally,
+ * which is exactly what a single undifferentiated list was doing when it filed
+ * `127.0.0.1:11434` under "What has left this device".
+ */
+.egress-panel__loopback {
+  display: grid;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-panel);
+  background: var(--surface-soft);
+}
+
+.egress-panel__loopback > * {
+  min-width: 0;
+}
+
+.egress-panel__loopback-head {
+  display: flex;
+  gap: var(--sp-2) var(--sp-3);
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.egress-panel__loopback-head h3 {
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-title);
+}
+
+.egress-panel__loopback-count {
+  color: var(--v-verified);
+  font-size: var(--fs-caption);
+}
+
+.egress-panel__loopback-note {
   color: var(--ink-faint);
 }
 

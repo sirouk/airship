@@ -73,9 +73,21 @@ describe("composer credential posture", () => {
   });
 
   it("states page memory in plain words wherever a credential is held", () => {
-    expect(composerPosture(base).detail).toContain("page memory");
     expect(composerPosture({ ...base, inferenceConnected: true, authMethod: "api-key" }).detail)
       .toContain("page memory");
+    /*
+     * And nowhere a credential is not.
+     *
+     * The local-demo arm held no credential and still ended "…and this
+     * conversation's journal is page memory only" — a durability claim this
+     * function has no input for. The Atlas measured it contradicting the chip
+     * 40px away: with the Local Device Vault adopted, the session chip read
+     * "Session. Encrypted · this device." while this one still said page
+     * memory. Durability comes from `describeSessionDurability`; this states
+     * what holds the credential.
+     */
+    expect(composerPosture(base).detail).not.toContain("page memory");
+    expect(composerPosture(base).detail).not.toContain("journal");
   });
 
   it("keeps every resting label short enough that the chip cannot truncate it", () => {

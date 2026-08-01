@@ -25,6 +25,8 @@ export function ProofInspector({
   endpointRecord,
   now = Date.now(),
   compact = false,
+  collapsed = false,
+  onExpand,
   acquisitionFailure,
   onOpenAttestations,
 }: {
@@ -32,6 +34,20 @@ export function ProofInspector({
   endpointRecord?: ChutesEndpointEvidenceRecord;
   now?: number;
   compact?: boolean;
+  /**
+   * Render the verdict only, as one line that opens the stack.
+   *
+   * Two measured readings, one cause: the rail had exactly one presentation —
+   * a 310px column that mounted itself the moment a receipt existed and was
+   * `display:none` below 1050px. On a first ordinary question the novice got
+   * 22% of a 1440px viewport and thirteen extra controls of cryptographic
+   * claim stack they had not asked for (J005); on a phone the same turn showed
+   * the confident "N events" chip with the rail that qualifies it absent from
+   * the page entirely (J127). One line, at both sizes, is the same object at
+   * the altitude each reader is actually at.
+   */
+  collapsed?: boolean;
+  onExpand?: () => void;
   /**
    * `attestationFailureLabel()`'s string, verbatim, when endpoint evidence
    * could not be fetched. Absent means "not asked", which is a different fact
@@ -69,6 +85,30 @@ export function ProofInspector({
         : model.evidence === "stale-same-endpoint"
           ? "Endpoint comparison expired"
           : "Turn receipt only";
+  if (collapsed) {
+    return (
+      <button
+        class="claim-rail-summary"
+        type="button"
+        data-state={verdict.state}
+        aria-expanded="false"
+        /* Explicit, because the seal carries the verdict word for assistive
+           technology and the row prints it again for the eye — left to its text
+           content this control announced the verdict twice before saying what
+           it opens. */
+        aria-label={`Turn evidence: ${verdict.chip}. ${verdict.line}${verdict.modifier ? ` ${verdict.modifier}.` : ""} ${model.items.length} turn claims. Open the claim stack.`}
+        onClick={onExpand}
+      >
+        <Seal state={verdict.seal} density="dot" size={16} label={verdict.chip} />
+        <strong>{verdict.chip}</strong>
+        {/* The verdict's own sentence, not a shorter paraphrase of it: this is
+            the only qualification of the turn a phone reader ever sees, and the
+            chip beside it counts events with no caveat at all. */}
+        <span class="claim-rail-summary__line">{verdict.line}{verdict.modifier ? ` · ${verdict.modifier}` : ""}</span>
+        <small>{model.items.length} turn claims</small>
+      </button>
+    );
+  }
   return (
     <div class={compact ? "proof-inspector compact" : "proof-inspector panel"}>
       {/* No chip here. The heading used to carry a `.proof-level` pill reading
@@ -79,7 +119,10 @@ export function ProofInspector({
           the technical record below under the label that names its author,
           beside the posture and provider it belongs with, and the Proof route
           also states it as "Declared proof level" in `.proof-posture`. */}
-      <div class="inspector-heading"><div><span class="eyebrow">Claim stack</span><h2>Verification</h2></div></div>
+      <div class="inspector-heading">
+        <div><span class="eyebrow">Claim stack</span><h2>Verification</h2></div>
+        {onExpand ? <button class="claim-rail-hide" type="button" aria-expanded="true" onClick={onExpand}>Hide</button> : null}
+      </div>
       {/* The modifier is a trailing clause on the one verdict, never a second
           one: a fetch that did not happen is not a verification that failed.
           Dropping it here is what let the transcript chip say "evidence not

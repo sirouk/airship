@@ -22,6 +22,12 @@
 .terminal-route__setup-body>p{max-width:78ch;margin:0;color:var(--ink-muted);font-size:var(--fs-caption);line-height:1.5}
 .terminal-assurance{display:flex;flex-wrap:wrap;gap:4px 14px;align-items:center;min-width:0;color:var(--ink-muted);font-size:var(--fs-micro)}
 .terminal-assurance>span{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+/* The drift chip is a caveat, so it carries the caution tone the rest of the
+   band does not — and it wraps, because the whole sentence is the point. */
+.terminal-assurance>span[data-state=attention]{color:var(--v-caution);white-space:normal}
+/* A count on the control that clears it. `b` rather than a badge component:
+   it is one number beside its own verb, and it inherits the button's ink. */
+.terminal-route__drift{min-width:18px;padding:0 5px;border-radius:var(--radius-chip);background:color-mix(in srgb,var(--v-caution) 26%,transparent);color:var(--ink);font-size:var(--fs-micro);font-weight:var(--fw-strong)}
 
 .terminal-tabs{display:flex;gap:5px;overflow-x:auto;padding:0 2px 2px}
 .terminal-tab{position:relative;display:grid;grid-template-columns:minmax(0,1fr) auto;flex:0 0 auto;min-width:9rem;border:1px solid var(--line-strong);border-radius:var(--radius-control);background:var(--surface);overflow:hidden}
@@ -53,7 +59,9 @@
 /* The workspace spelling of the shell's directory. It never shrinks: the long
    shell path may ellipsize (its full text is the code's title and the row's
    accessible sentence), but dropping "= /workspace" would restore exactly the
-   contradiction this pair was added to end. */
+   contradiction this pair was added to end — everywhere the row has the width
+   for it. The phone block below is the one exception, and states its own
+   reason. */
 .terminal-panel__mirror{flex:0 0 auto;color:#9ba6aa}
 .terminal-panel__bar .seal{color:#9ba6aa}
 .terminal-panel__bar .seal[data-state=verified]{color:var(--v-verified)}
@@ -158,12 +166,35 @@
   .terminal-route__setup>summary::after{position:absolute;right:11px;margin:0}
   .terminal-route__setup{position:relative}
   .terminal-route__setup>summary>small{overflow:hidden;color:var(--ink-muted);text-overflow:ellipsis;white-space:nowrap}
-  .terminal-assurance{flex-wrap:nowrap;gap:7px;overflow-x:auto;scrollbar-width:none}
-  .terminal-assurance::-webkit-scrollbar{display:none}
-  .terminal-assurance>span{flex:0 0 auto;min-height:26px;padding:2px 8px;border:1px solid var(--line);border-radius:999px}
+  /* Wrapped, not scrolled. As a hidden-scrollbar strip the durability chip
+     rendered "Metadata · Ephemeral · th" against a 390px screen (measured
+     right=442) and "Profile general" 157px off it — so the caveat that makes
+     "Ephemeral" honest was the half that fell off, and nothing on screen said
+     more existed. Three chips over two lines cost 26px; a truncated durability
+     claim costs the reader the truth. */
+  .terminal-assurance{flex-wrap:wrap;gap:6px}
+  .terminal-assurance>span{flex:0 1 auto;min-height:26px;padding:2px 8px;border:1px solid var(--line);border-radius:999px}
   .terminal-panel{grid-template-rows:auto minmax(9rem,1fr) auto}
-  .terminal-panel__bar>div:first-child{display:flex;min-width:0}
-  .terminal-panel__bar>div:last-child{gap:4px}
+  /* The controls stop being the thing that gets clipped. The action group was
+     `flex:0 1 auto` over an `overflow-x:auto` viewport, so on a 390px screen it
+     collapsed to 110px for four 44px controls: "Restart" sat at 352..396 and
+     "Close terminal tab" at 400..444 — ending a live process was a gesture you
+     had to find by scrubbing a strip with no scrollbar. Four squares and their
+     gaps are 188px, which fits; the path beside them already ellipsises, so the
+     shrink belongs there and the buttons keep their size. */
+  .terminal-panel__bar>div:first-child{display:flex;flex:1 1 auto;min-width:0}
+  .terminal-panel__bar>div:last-child{flex:0 0 auto;gap:4px;overflow-x:visible}
+  /* 362px of bar cannot hold four 44px controls, the shell path and the
+     `= /workspace` mirror on one line, and the route's grid is height-locked
+     so a second line is taken out of the emulator rather than added (measured:
+     the bar collapsed to 13px of a 55px content height). The controls stay,
+     because they were the half that fell off the screen. The mirror goes,
+     because it is `aria-hidden` decoration whose fact is still printed twice in
+     the same frame — in this row's sr-only address sentence, and verbatim in
+     the Browser Git scope paragraph below the emulator, which names both
+     spellings of the one directory. Nothing is clipped and no claim is lost. */
+  .terminal-panel__mirror{display:none}
+  .terminal-panel__bar code{flex:1 1 auto;min-width:2.5rem}
   /* Sheds the words, not the glyphs. Written against `button span` this also
      hid the `＋` of "New here", whose mark happens to live in a span, leaving
      an empty 44px box on every phone. The decorative marks are already
@@ -181,6 +212,11 @@
   .terminal-git{grid-template-columns:minmax(0,1fr) auto;padding:6px 8px}
   .terminal-git>label{grid-column:1 / -1}
   .terminal-git>button{min-width:var(--touch-target)}
+  /* `--fs-field` is `max(16px, var(--fs-body))`: 16px is the iOS focus-zoom
+     threshold, and the max keeps the reader's Type scale able to raise it.
+     Measured at 12.75px, so tapping the one field that runs Git on a phone
+     scaled the whole route up and left the reader panning back to find "Run". */
+  .terminal-git__command{font-size:var(--fs-field)}
   .terminal-git__notice>pre{max-height:11rem}
   /* Full measure, controls beneath. Sharing the row with two 44px buttons left
      the sentence a 166px column and eight lines of it at 390px — taller than

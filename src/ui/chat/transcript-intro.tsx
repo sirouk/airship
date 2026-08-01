@@ -56,6 +56,20 @@ export function transcriptIntroNote(content: string | undefined): string | undef
   return trimmed.length > 0 && trimmed !== TRANSCRIPT_SEED_BODY ? trimmed : undefined;
 }
 
+/**
+ * What a conversation that is not being written down says about itself, before
+ * anything has been typed into it.
+ *
+ * The Atlas scanned every leaf text node on the chat view for durability
+ * language and got `[]`. The only statement of the fact lived inside a popover
+ * behind an unlabelled 44px chip, and the persona who lost four messages to a
+ * refresh had never seen it. This is the same fact at the moment it can still
+ * be acted on — the Vault route's comparison table is good enough to carry the
+ * decision, it was simply only ever reachable after the loss.
+ */
+export const TRANSCRIPT_INTRO_UNSAVED_LINE =
+  "This conversation is not being saved. It lives in this tab's memory, and closing or reloading the page releases it.";
+
 export type TranscriptIntroProps = Readonly<{
   /**
    * The seeded conversation's own context sentence — "Resumed X from the
@@ -65,15 +79,36 @@ export type TranscriptIntroProps = Readonly<{
   note?: string;
   /** True only while the composer really is answering from the local demo. */
   demo: boolean;
+  /** True while this conversation's journal is page memory only. */
+  unsaved?: boolean;
+  /** Present with `unsaved`; the one gesture from the fact to the remedy. */
+  onKeepConversations?(): void;
   tier?: CapabilityTier;
   onOpenCapabilities(): void;
 }>;
 
-export function TranscriptIntro({ note, demo, tier, onOpenCapabilities }: TranscriptIntroProps) {
+export function TranscriptIntro({
+  note,
+  demo,
+  unsaved = false,
+  onKeepConversations,
+  tier,
+  onOpenCapabilities,
+}: TranscriptIntroProps) {
   return (
     <section class="transcript-intro" aria-label="About this conversation">
       <div class="transcript-intro__copy">
         {note ? <p class="transcript-intro__note">{note}</p> : null}
+        {unsaved ? (
+          <p class="transcript-intro__unsaved">
+            {TRANSCRIPT_INTRO_UNSAVED_LINE}
+            {onKeepConversations ? (
+              <button type="button" class="transcript-intro__keep" onClick={onKeepConversations}>
+                Keep it on this device<span aria-hidden="true"> →</span>
+              </button>
+            ) : null}
+          </p>
+        ) : null}
         <p class="transcript-intro__lead">
           <strong>{TRANSCRIPT_INTRO_CAPABILITY_LINE}</strong>
           {demo ? ` ${TRANSCRIPT_INTRO_DEMO_LINE}` : null}
@@ -134,6 +169,25 @@ export function TranscriptMarker({ marker, onOpenProof }: TranscriptMarkerProps)
       aria-label={`Session record. ${marker.detail}`}
     >
       <p class="transcript-marker__detail">{marker.detail}</p>
+      {/* The inherited turns, readable. The count in the sentence above was the
+          only evidence a branch carried anything, and it sat over an empty
+          transcript showing the newcomer empty state — so the person was asked
+          to believe a number while the model answered from messages they could
+          not see. Collapsed, because these are ancestors rather than this
+          conversation's own turns. */}
+      {marker.carriedContext?.length ? (
+        <details class="transcript-marker__carried">
+          <summary>{`Read the ${String(marker.carriedContext.length)} carried ${marker.carriedContext.length === 1 ? "message" : "messages"}`}</summary>
+          <ol>
+            {marker.carriedContext.map((message, index) => (
+              <li key={`${String(index)}-${message.role}`}>
+                <strong>{message.role === "user" ? "You" : message.role === "assistant" ? "Airship" : message.role}</strong>
+                <p>{message.content}</p>
+              </li>
+            ))}
+          </ol>
+        </details>
+      ) : null}
       <p class="transcript-marker__provenance">
         {`Event ${String(marker.sequence)} · ${marker.kind} · ${marker.digest.slice(0, 15)}…`}
       </p>

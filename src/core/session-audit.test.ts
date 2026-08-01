@@ -587,6 +587,33 @@ describe("auditSessionHistory", () => {
     const report = await auditFixture(fixture);
     expect(report.status).toBe("verified");
     expect(report.findings).toEqual([]);
+    // The measured failure this closes: an export taken immediately after two
+    // approved, write-effect Git operations reported `"toolOperations": 0`
+    // beside `"complete": true`, because no field in `counts` had a place for
+    // an effect a person authorised themselves.
+    expect(report.counts.humanIntentDecisions).toBe(1);
+    expect(report.counts.humanIntentAllowed).toBe(1);
+  });
+
+  it("counts a denial as evidence and separates it from what was permitted", async () => {
+    const fixture = await createFixture([writeTool], await askFirstProfile());
+    await fixture.journal.append(fixture.session.id, [{
+      type: "human.intent.reviewed",
+      turnId: "human-git-2",
+      operationId: "git-2",
+      payload: {
+        toolName: "git_stage",
+        effect: "write",
+        decision: "deny",
+        summary: "Stage 1 path(s).",
+        arguments: { paths: ["README.md"] },
+        approval: HUMAN_APPROVAL,
+      },
+    }]);
+
+    const report = await auditFixture(fixture);
+    expect(report.counts.humanIntentDecisions).toBe(1);
+    expect(report.counts.humanIntentAllowed).toBe(0);
   });
 
   it("refuses a human-initiated decision that names no authority or no outcome", async () => {

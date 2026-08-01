@@ -17,23 +17,45 @@ import "./local-device-vault-setup.css";
 
 export const LOCAL_DEVICE_BACKUP_MAX_FILE_BYTES = 256 * 1024 * 1024;
 
-/** Whether the one-time key has left Airship, by the only two routes that exist. */
-export type RecoveryCustody = "none" | "copied" | "downloaded";
+/**
+ * Whether the one-time key has left Airship.
+ *
+ * `transcribed` is the person's own word, not an observation: copying by hand
+ * is a real and common way to save a recovery key, and the alternative to
+ * admitting it is a gate that a determined reader routes around by clicking
+ * Copy and never pasting. It is `asserted`, never `verified` — Airship watched
+ * nothing happen.
+ */
+export type RecoveryCustody = "none" | "copied" | "downloaded" | "transcribed";
 
 /**
  * The custody line, in the one status family.
  *
- * Same three sentences as before. What changes is their weight: "Not copied or
- * downloaded yet." was `--ink-faint` micro text sitting directly above the one
- * control on this route that destroys a value permanently, which made the
- * quietest thing on screen the most consequential. `attention` is the honest
- * state for a one-time secret that has not left the page yet, and the seal puts
- * a mark and a colour behind the words rather than replacing them.
+ * "Not copied or downloaded yet." was `--ink-faint` micro text sitting directly
+ * above the one control on this route that destroys a value permanently, which
+ * made the quietest thing on screen the most consequential. `attention` is the
+ * honest state for a one-time secret that has not left the page yet, and the
+ * seal puts a mark and a colour behind the words rather than replacing them.
  */
 export function recoveryCustodyStatus(custody: RecoveryCustody): Readonly<{ state: SealState; label: string }> {
   if (custody === "copied") return Object.freeze({ state: "verified" as SealState, label: "Copied to your clipboard." });
   if (custody === "downloaded") return Object.freeze({ state: "verified" as SealState, label: "Download requested." });
+  if (custody === "transcribed") return Object.freeze({ state: "asserted" as SealState, label: "You said you wrote it down. Airship did not observe that." });
   return Object.freeze({ state: "attention" as SealState, label: "Not copied or downloaded yet." });
+}
+
+/**
+ * Whether the ceremony may let the one-time key be blanked.
+ *
+ * Measured (J058): with the Seal reading verbatim "Not copied or downloaded
+ * yet.", the acknowledgement checkbox was `disabled: false`, one click advanced
+ * the ceremony to `acknowledged`, and "The recovery value is no longer
+ * rendered." A screen that knows the fact which makes the next click dangerous
+ * and permits it anyway is warning nobody. The seal already computes that fact;
+ * this reads it rather than restating the rule.
+ */
+export function recoveryAcknowledgementAllowed(custody: RecoveryCustody): boolean {
+  return recoveryCustodyStatus(custody).state !== "attention";
 }
 
 export type LocalDeviceActivationReason =
@@ -152,6 +174,14 @@ export function LocalDeviceVaultSetup({
    * one-time secret should never sit on screen next to a silent checkbox.
    */
   const [custody, setCustody] = useState<RecoveryCustody>("none");
+  /**
+   * Whether the second half of the recovery kit has been taken in this visit.
+   *
+   * A page cannot confirm that a download landed, so this is the same class of
+   * claim as the ceremony's custody seal: it records that Airship handed the
+   * bytes over, and the copy says exactly that rather than "backed up".
+   */
+  const [backupExported, setBackupExported] = useState(false);
   const [recoveryInputReady, setRecoveryInputReady] = useState(false);
   const [restoreFile, setRestoreFile] = useState<File>();
   const [restoreRecoveryReady, setRestoreRecoveryReady] = useState(false);
@@ -274,6 +304,9 @@ export function LocalDeviceVaultSetup({
 
   function acknowledgeGeneratedRecovery(): void {
     if (!enrollment.current || ceremony !== "revealed") return;
+    // The checkbox is disabled in this state, but the handler is the boundary a
+    // programmatic click reaches; the gate belongs on both sides of it.
+    if (!recoveryAcknowledgementAllowed(custody)) return;
     // Clear the live node before updating view state. There is no UI path that
     // reveals this material again.
     if (recoveryOutput.current) recoveryOutput.current.textContent = "";
@@ -378,9 +411,10 @@ export function LocalDeviceVaultSetup({
       }
       downloadBytes(bytes, safeBackupFileName(backupFileName), "application/vnd.airship.vault-backup+json");
       if (mounted.current) {
+        setBackupExported(true);
         setNotice({
           kind: "success",
-          message: `Encrypted backup prepared (${formatLocalDeviceBytes(bytes.byteLength)}). The recovery key is not inside it.`,
+          message: `Encrypted backup prepared (${formatLocalDeviceBytes(bytes.byteLength)}). The recovery key is not inside it. Keep the two together: this file plus that key is what restores this Vault on another browser profile.`,
         });
       }
     } catch (error) {
@@ -568,8 +602,24 @@ export function LocalDeviceVaultSetup({
                   >
                     <RecoveryKeyGroups value={enrollment.current.recoveryKey} />
                   </output>
+                  {/*
+                    * What the key is, and what it is not.
+                    *
+                    * It shipped saying that losing *both* the key and this
+                    * browser profile means losing the Vault — and that "both"
+                    * states that losing only the profile is survivable. It is
+                    * not: the
+                    * Atlas drove it, and a fresh browser profile plus the
+                    * correct key answered "The recovery key did not
+                    * authenticate this Local Device Vault. No existing local
+                    * device Vault was found for this partition." The key
+                    * authenticates a Vault; the ciphertext lives in this
+                    * browser profile's storage and nowhere else, so the second
+                    * artifact is named here, at the moment the operator is
+                    * deciding what to write down (J056, J057).
+                    */}
                   <p id="local-device-recovery-warning">
-                    Airship does not upload or persist this value. Losing both it and this browser profile means losing the Vault.
+                    Airship does not upload or persist this value, and it does not contain your data — it authenticates the Vault. Your encrypted objects live in this browser profile’s storage. If that profile is cleared, evicted or lost, restoring needs this key <em>and</em> an encrypted backup file, which you can download from this page the moment the Vault exists.
                   </p>
                   <div class="local-device-vault__actions">
                     <button type="button" onClick={() => void copyGeneratedRecovery()}>
@@ -585,10 +635,34 @@ export function LocalDeviceVaultSetup({
                   <p class="local-device-vault__custody" data-custody={custody}>
                     <Seal {...recoveryCustodyStatus(custody)} density="chip" />
                   </p>
+                  {/*
+                    * The seal is load-bearing now.
+                    *
+                    * While it reads "Not copied or downloaded yet." the
+                    * acknowledgement is refused and the escape is an explicit
+                    * second gesture that repeats the consequence — because
+                    * ticking the box is what blanks the only copy of the key
+                    * that will ever exist, and the screen already knew nothing
+                    * had left it.
+                    */}
+                  {recoveryAcknowledgementAllowed(custody) ? null : (
+                    <p class="local-device-vault__transcribe">
+                      <span>Use Copy or Download above. If you wrote the key down by hand instead, say so — Airship cannot see that you did, and the next step blanks it permanently.</span>
+                      <button
+                        type="button"
+                        class="local-device-vault__quiet"
+                        onClick={() => setCustody("transcribed")}
+                      >I wrote it down by hand</button>
+                    </p>
+                  )}
                   <label class="local-device-vault__check">
-                    <input type="checkbox" onChange={(event) => {
-                      if (event.currentTarget.checked) acknowledgeGeneratedRecovery();
-                    }} />
+                    <input
+                      type="checkbox"
+                      disabled={!recoveryAcknowledgementAllowed(custody)}
+                      onChange={(event) => {
+                        if (event.currentTarget.checked) acknowledgeGeneratedRecovery();
+                      }}
+                    />
                     <span>I saved this recovery key outside Airship and understand it cannot be shown again.</span>
                   </label>
                 </>
@@ -645,6 +719,34 @@ export function LocalDeviceVaultSetup({
 
       {status ? (
         <div class="local-device-vault__durability">
+          {/*
+            * The second half of the recovery kit, stated as such.
+            *
+            * The ceremony hands over a recovery key and stops, and the artifact
+            * that can actually restore after this browser profile is gone was
+            * discovered afterwards, below the fold, in a card whose eyebrow read
+            * "PORTABLE CIPHERTEXT" (J057). The operator who wrote the key down
+            * and stopped there had, measurably, nothing. So the kit is one
+            * object with two parts and an unfinished state, and it stays
+            * unfinished — visibly — until the backup has been taken.
+            */}
+          {onExportEncryptedBackup ? (
+            <article class="local-device-vault__kit" data-complete={backupExported ? "true" : "false"}>
+              <div>
+                <p class="local-device-vault__eyebrow">Recovery kit · part 2 of 2</p>
+                <strong>{backupExported ? "Encrypted backup taken" : "Finish the recovery kit"}</strong>
+                <span>
+                  {backupExported
+                    ? "Keep this file with the recovery key. Take a fresh one whenever the work in this Vault matters more than the last copy."
+                    : "The recovery key authenticates this Vault; it does not contain your data. Restoring on another browser profile or after this one is cleared needs an encrypted backup file too. It never contains the recovery key."}
+                </span>
+              </div>
+              <button type="button" class="local-device-vault__secondary" onClick={() => void exportBackup()} disabled={busy}>
+                {operation === "exporting" ? "Preparing…" : backupExported ? "Download a fresh backup" : "Download encrypted backup"}
+              </button>
+            </article>
+          ) : null}
+
           <article>
             <div>
               <p class="local-device-vault__eyebrow">Browser retention</p>
@@ -655,19 +757,6 @@ export function LocalDeviceVaultSetup({
               {operation === "persisting" ? "Requesting…" : "Request persistent storage"}
             </button>
           </article>
-
-          {onExportEncryptedBackup ? (
-            <article>
-              <div>
-                <p class="local-device-vault__eyebrow">Portable ciphertext</p>
-                <strong>Download encrypted backup</strong>
-                <span>Includes the encrypted object inventory, never the recovery key.</span>
-              </div>
-              <button type="button" class="local-device-vault__secondary" onClick={() => void exportBackup()} disabled={busy}>
-                {operation === "exporting" ? "Preparing…" : "Download backup"}
-              </button>
-            </article>
-          ) : null}
         </div>
       ) : null}
 

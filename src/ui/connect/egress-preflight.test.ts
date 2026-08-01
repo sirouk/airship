@@ -33,14 +33,16 @@ describe("the hosts named before the button is pressed", () => {
     expect(picker).toContain(`https://${CHUTES_LOGO_HOST}/logos/`);
   });
 
-  it("names every one of them in the sentence, and says the key is not among them", () => {
+  it("names every one of them in the sentence, in the order the requests happen", () => {
     for (const host of [...CHUTES_CATALOG_HOSTS, CHUTES_LOGO_HOST, CHUTES_AUTHORIZATION_HOST]) {
       expect(CHUTES_DISCOVERY_PREFLIGHT, host).toContain(host);
     }
-    // Measured: the whole discovery leg is unauthenticated (`auth=no` on all
-    // three requests); the key rides only on the Finish leg.
-    expect(CHUTES_DISCOVERY_PREFLIGHT).toContain("not attached");
-    expect(CHUTES_DISCOVERY_PREFLIGHT).toContain("Finish: verify & connect");
+    // The credentialed request is now first and is disclosed first; the catalog
+    // reads that follow it are still unauthenticated and still say so.
+    expect(CHUTES_DISCOVERY_PREFLIGHT).toContain("sends your key");
+    expect(CHUTES_DISCOVERY_PREFLIGHT).toContain("without your key attached");
+    expect(CHUTES_DISCOVERY_PREFLIGHT.indexOf(CHUTES_AUTHORIZATION_HOST))
+      .toBeLessThan(CHUTES_DISCOVERY_PREFLIGHT.indexOf(CHUTES_LOGO_HOST));
   });
 
   it("reads as a sentence for one, two or many hosts", () => {

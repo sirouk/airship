@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { FORK_RETRY_TOOLTIP } from "./chat/fork-notice";
 import { postureFloorRefusal } from "./posture-floor";
 import { PROFILE_POSTURE_FIELD_LABEL, PROFILE_POSTURE_LABELS } from "./profiles-governance";
-import { routeRetryLabel } from "./route-failure";
+import { ROUTE_FAILURE_RELOAD_LABEL, ROUTE_FAILURE_RELOAD_REASON, routeRetryLabel } from "./route-failure";
 import { postureLabel } from "./trust-language";
 
 const app = await readFile(new URL("./app.tsx", import.meta.url), "utf8");
@@ -83,6 +83,25 @@ describe("a failed route chunk is a stated fact with a way out", () => {
   it("keeps both arms of the shared component an alert", () => {
     expect([...routeFailure.matchAll(/role="alert"/gu)]).toHaveLength(2);
   });
+
+  /**
+   * The card's whole content was the sentence plus "Retry loading Memory", and
+   * a route chunk whose fetch already failed is memoised by the browser's
+   * module map — so a person pressed the one verb on screen, nothing happened,
+   * and the only action that does work was named nowhere on the card.
+   */
+  it("names the action that works once its own verb has been tried", () => {
+    expect(ROUTE_FAILURE_RELOAD_LABEL).toBe("Reload Airship");
+    expect(ROUTE_FAILURE_RELOAD_REASON).toMatch(/newer version of Airship was deployed/u);
+    // It says what a reload does not cost, because "reload" reads as "lose it"
+    // in a product whose default durability is page memory.
+    expect(ROUTE_FAILURE_RELOAD_REASON).toMatch(/conversations and Vault are unaffected/u);
+    // Only after a retry: offering it first would teach people to reload past
+    // a transient fetch failure that the retry genuinely fixes.
+    expect(routeFailure).toContain("const [retried, setRetried] = useState(false);");
+    expect(routeFailure).toContain("{retried ? (");
+    expect(routeFailure).toContain("setRetried(true);");
+  });
 });
 
 describe("All conversations reports its own chunk failure", () => {
@@ -106,7 +125,10 @@ describe("the claim stack says when it did not load", () => {
   });
 
   it("states the same fact in the chat rail instead of rendering nothing", () => {
-    const rail = app.slice(app.indexOf("<aside class=\"inspector\">"));
+    // Matched on the element rather than on one spelling of its class list:
+    // the rail's class became conditional when the claim stack learned to open
+    // collapsed, and a literal slice silently stopped finding the rail at all.
+    const rail = app.slice(app.search(/<aside class=(?:"inspector|\{)/u));
     expect(rail.slice(0, rail.indexOf("{view === \"sessions\""))).toContain("proofInspectorError");
   });
 });

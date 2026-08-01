@@ -125,6 +125,17 @@ export type SessionIntegrityInput = Readonly<{
    * hold is the replay, and only the replay is restated here.
    */
   transcriptReplayFailed?: boolean;
+  /**
+   * How many user/assistant messages the record actually holds.
+   *
+   * A conversation nobody has spoken in passes every check by having nothing to
+   * check, and the pane read that as achievement: measured on a returning
+   * person's first screen, a 0-message conversation minted seconds earlier
+   * rendered "Structure passed · Ready to resume · 0 receipts" over "Manifest
+   * pins and transcript · 0 messages" — a green completion claim on an empty
+   * shell, on the exact screen where the previous day's work should have been.
+   */
+  messageCount?: number;
 }>;
 
 /**
@@ -137,23 +148,34 @@ export type SessionIntegrityInput = Readonly<{
  * everything agrees.
  */
 export function sessionIntegrityRow(input: SessionIntegrityInput): SessionIntegrityRow {
-  const structureState: SealState = input.history.status === "consistent"
-    ? "verified"
-    : input.history.status === "suspect" ? "failed" : "attention";
+  // Nothing was said here, so nothing about it was proved. See `messageCount`.
+  const unused = input.messageCount === 0 && input.history.turnCount === 0;
+  const structureState: SealState = unused
+    ? "none"
+    : input.history.status === "consistent"
+      ? "verified"
+      : input.history.status === "suspect" ? "failed" : "attention";
   const structure: SessionIntegrityPill = Object.freeze({
     key: "structure",
     state: structureState,
-    label: input.history.status === "consistent" ? "Structure passed" : input.history.label,
+    label: unused
+      ? "Nothing recorded yet"
+      : input.history.status === "consistent" ? "Structure passed" : input.history.label,
     detail: `${input.history.checkedEvents} of ${input.history.totalEvents} events inspected · ${input.history.turnCount} turn${input.history.turnCount === 1 ? "" : "s"}`,
   });
 
   const resumeState: SealState = input.transcriptReplayFailed
     ? "attention"
-    : !input.compatibility
+    : unused
+      // Openable, but there is nothing in it to bring back, and a green
+      // "Ready to resume" over a 0-message record is a durability claim about
+      // work that does not exist.
       ? "none"
-      : input.compatibility.action === "resume"
-        ? "verified"
-        : input.compatibility.action === "blocked" ? "failed" : "attention";
+      : !input.compatibility
+        ? "none"
+        : input.compatibility.action === "resume"
+          ? "verified"
+          : input.compatibility.action === "blocked" ? "failed" : "attention";
   const resume: SessionIntegrityPill = Object.freeze({
     key: "resume",
     state: resumeState,
@@ -163,7 +185,9 @@ export function sessionIntegrityRow(input: SessionIntegrityInput): SessionIntegr
     // enough to tell the truth on this row.
     label: input.transcriptReplayFailed
       ? "Transcript cannot be replayed"
-      : input.compatibility?.label ?? "No active runtime",
+      : unused
+        ? "Empty conversation"
+        : input.compatibility?.label ?? "No active runtime",
     detail: input.transcriptReplayFailed
       ? `History verified · ${input.lifecycle.label}`
       : input.lifecycle.label,
@@ -182,7 +206,9 @@ export function sessionIntegrityRow(input: SessionIntegrityInput): SessionIntegr
   return Object.freeze({
     pills: Object.freeze([structure, resume, receipts]),
     state,
-    autoExpanded: state !== "verified",
+    // Collapse may only ever hide agreement — and an empty conversation has
+    // nothing to disagree about, so it is not an exception to that rule.
+    autoExpanded: !unused && state !== "verified",
     label: `Session integrity. ${structure.label}. ${resume.label}. ${receipts.label}. Opens the inspected event counts, the runtime decision and its reasons, and the proof scope.`,
   });
 }

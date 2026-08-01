@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  EPHEMERAL_RETENTION_DISCLOSURE,
+  RETURN_LEDGER_FIELDS,
   RETURN_LEDGER_KEY,
   forgetReturnLedgerEntries,
   readReturnLedger,
@@ -143,6 +145,55 @@ describe("the return ledger", () => {
     expect(Object.keys(JSON.parse(written)[0] as object).sort()).toEqual([
       "lastActiveAt", "messageCount", "pageSession", "posture", "profileId", "sessionId",
     ]);
+  });
+
+  /*
+   * The same boundary, under the pressure that would actually break it.
+   *
+   * The shape assertion above passes on a well-formed entry, and the read path
+   * drops undeclared fields — but `writeLedger` serialized the caller's own
+   * object, so the guarantee held only for as long as every call site happened
+   * to construct a clean literal. One future call passing the `SessionRecord`
+   * it already has in hand would have put a conversation's title into
+   * `localStorage` under a route that promises "released with the page", and
+   * nothing in the suite would have noticed. This drives that case.
+   */
+  it("refuses to persist a field the ephemeral policy does not name", () => {
+    const storage = memoryStorage();
+    const contraband = {
+      ...entry(),
+      title: "My dog is named Biscuit and my flight is Tuesday.",
+      preview: "Airship is running this turn entirely on your device",
+      headDigest: "sha256:VUd6Uqu7",
+      messages: ["Draft the Q3 pricing memo intro paragraph."],
+    } as unknown as ReturnLedgerEntry;
+
+    recordReturnLedgerEntry(storage, contraband);
+
+    const written = storage.values.get(RETURN_LEDGER_KEY) ?? "";
+    expect(Object.keys(JSON.parse(written)[0] as object).sort())
+      .toEqual([...RETURN_LEDGER_FIELDS].filter((field) => field !== "lost").sort());
+    for (const secret of ["Biscuit", "pricing memo", "entirely on your device", "VUd6Uqu7"]) {
+      expect(written, secret).not.toContain(secret);
+    }
+    // Reconciliation rewrites every surviving row; a tombstone must not be the
+    // hole the write gate just closed.
+    reconcileReturnLedger(storage, { present: new Set(), pageSession: "page-2" });
+    expect(storage.values.get(RETURN_LEDGER_KEY) ?? "").not.toContain("Biscuit");
+  });
+
+  it("states the policy in words the routes can render, and names every field it keeps", () => {
+    // The Vault route and the resume report both render this sentence, so the
+    // claim a person reads at the moment of choosing cannot drift from the
+    // module that implements it.
+    expect(EPHEMERAL_RETENTION_DISCLOSURE).toContain("no title");
+    expect(EPHEMERAL_RETENTION_DISCLOSURE).toContain("how many messages");
+    expect(RETURN_LEDGER_FIELDS).toContain("messageCount");
+    expect(RETURN_LEDGER_FIELDS).toContain("lastActiveAt");
+    // Nothing content-shaped may enter the declared set without this failing.
+    for (const field of RETURN_LEDGER_FIELDS) {
+      expect(/title|preview|content|message$|digest|prompt|reply/iu.test(field), field).toBe(false);
+    }
   });
 
   it("lets a tombstone expire rather than standing forever", () => {

@@ -20,6 +20,8 @@ import {
   terminalSealState,
   terminalShellGitHandoff,
   terminalTypography,
+  terminalUnreconciledInputs,
+  TERMINAL_KEYBOARD_OWNERSHIP,
 } from "./terminal-view";
 
 describe("terminal runtime band", () => {
@@ -498,5 +500,46 @@ describe("a git the shell cannot run", () => {
     // Dock: it owns no command row, so the refusal routes to the view that does
     // instead of dead-ending a second time.
     expect(source).toContain('{variant === "dock" && gitHandoff ?');
+  });
+});
+
+describe("the drift a sync button used to ask the reader to guess at", () => {
+  const record = (kind: "interactive-input" | "workspace-reconcile", recordedAt: string) => ({
+    id: `${kind}-${recordedAt}`, sequence: 1, kind, outcome: "completed" as const, recordedAt, processEpoch: 1, summary: kind,
+  });
+  const session = (audit: readonly ReturnType<typeof record>[]) => ({ audit } as never);
+
+  it("counts only the lines no reconciliation has followed", () => {
+    // Measured: `echo 'from the terminal' > from-terminal.txt` left Explorer at
+    // three files with nothing on screen saying the two copies had diverged.
+    expect(terminalUnreconciledInputs([session([
+      record("interactive-input", "2026-07-31T10:00:00.000Z"),
+      record("workspace-reconcile", "2026-07-31T10:00:01.000Z"),
+      record("interactive-input", "2026-07-31T10:00:02.000Z"),
+      record("interactive-input", "2026-07-31T10:00:03.000Z"),
+    ])])).toBe(2);
+  });
+
+  it("is zero the moment a reconciliation lands, across every tab", () => {
+    expect(terminalUnreconciledInputs([
+      session([record("interactive-input", "2026-07-31T10:00:00.000Z")]),
+      session([record("workspace-reconcile", "2026-07-31T10:00:05.000Z")]),
+    ])).toBe(0);
+  });
+
+  it("counts everything before the first reconciliation, because the mount was never pushed back", () => {
+    expect(terminalUnreconciledInputs([session([
+      record("interactive-input", "2026-07-31T10:00:00.000Z"),
+      record("interactive-input", "2026-07-31T10:00:01.000Z"),
+    ])])).toBe(2);
+  });
+});
+
+describe("who owns the keyboard inside a terminal", () => {
+  it("names the chords that stop firing and the key that leaves", () => {
+    // Measured: after clicking the xterm, `g` then `s` left the hash at
+    // `#terminal`, and no text anywhere on the route mentioned focus.
+    expect(TERMINAL_KEYBOARD_OWNERSHIP).toContain("g-chords do not fire");
+    expect(TERMINAL_KEYBOARD_OWNERSHIP).toContain("Shift+Tab");
   });
 });

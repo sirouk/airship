@@ -13,6 +13,7 @@ import {
   requireProfileOwnedSession,
   resolveProfileActiveConversation,
   resolveResumableProfileConversation,
+  resumableProfileConversationCandidates,
   resumableProfileManifestMatches,
   selectProfileActiveConversation,
 } from "./profile-cockpit";
@@ -155,6 +156,33 @@ describe("durable profile active-conversation pointer", () => {
     const before = (await secondAuthority.listSessions()).length;
     expect(await resolveResumableProfileConversation(secondAuthority, "research", pinned)).toBeDefined();
     expect((await secondAuthority.listSessions()).length).toBe(before);
+  });
+
+  /*
+   * The shelf, not only its top row.
+   *
+   * A person who closed the tab on an unanswered approval came back to a
+   * brand-new empty conversation while a fully resumable 14-event sibling sat
+   * in the same list: adoption asked for exactly one candidate, and when that
+   * one refused to replay there was nothing else to try.
+   */
+  it("offers every resumable conversation in order, pointer first then recency", async () => {
+    let tick = 0;
+    const journal = new EventJournal(
+      new MemoryJournalBackend(),
+      () => new Date(Date.UTC(2026, 6, 28, 0, 0, tick++)).toISOString(),
+    );
+    const pinned = await manifest("Ordered candidates");
+    const oldest = await journal.createSession("Oldest", pinned);
+    const middle = await journal.createSession("Middle", pinned);
+    const newest = await journal.createSession("Newest", pinned);
+    await selectProfileActiveConversation(journal, "research", middle.id);
+
+    const candidates = await resumableProfileConversationCandidates(journal, "research", pinned);
+    expect(candidates.map((session) => session.id)).toEqual([middle.id, newest.id, oldest.id]);
+    // The single-answer form is this list's head and nothing else, so the two
+    // can never disagree about which conversation comes back.
+    expect((await resolveResumableProfileConversation(journal, "research", pinned))?.id).toBe(candidates[0]?.id);
   });
 
   it("prefers the explicit selection over a more recently edited compatible conversation", async () => {

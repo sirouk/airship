@@ -273,6 +273,19 @@ const NOT_READ = "—";
  */
 const ACCOUNT_ROUTE_EYEBROW = "Account standing · Chutes telemetry and provider inventory";
 
+/**
+ * Why this route lists four providers while Connection offers more ways in.
+ *
+ * Measured one click apart: `#connection` reads "No model connected · 5 ready
+ * to connect" and `#account` shows four provider rows. Neither number is wrong
+ * — Connection counts ways to connect, and a model server running on this
+ * machine is one of them and has no account at all — but nothing said so, so
+ * the two surfaces read as disagreeing about how many providers exist. The rule
+ * is stated instead of a second number being printed, because two numbers in
+ * two files is how they came to disagree in the first place.
+ */
+const ACCOUNT_PROVIDER_SCOPE_NOTE = "These are the providers that have an account to read. Connection offers more ways to connect than appear here — a model server running on this machine has no account, and nothing about it is billed or read.";
+
 /** How long a snapshot reads as fresh before the chip demotes it to an observation. */
 const OBSERVATION_FRESHNESS_BUDGET_MS = 5 * 60_000;
 
@@ -439,6 +452,11 @@ export function BillingView({
         selected={selectedProvider}
         onSelect={setSelectedProvider}
       />
+
+      <p class="billing-provider-scope">
+        {ACCOUNT_PROVIDER_SCOPE_NOTE}{" "}
+        <button class="small-button" type="button" onClick={onOpenAccess}>Open Connection</button>
+      </p>
 
       {selectedProvider === "chutes" ? <div
         class="billing-provider-panel"
@@ -803,14 +821,28 @@ function BillingProviderInventoryPanel({
   inventory: BillingProviderInventoryEntry;
 }) {
   const accountLink = safeBillingProviderAccountLink(inventory.accountLink);
+  /*
+   * Why this panel is empty, rather than the fact that it is.
+   *
+   * Account is a global destination beside Vault and Connection and lists four
+   * providers, and only the Chutes panel could ever hold anything: the other
+   * three said "Connection state was not supplied to this view" and "Unavailable"
+   * four times, which reads as a feature that has not loaded. It is not. Airship
+   * reads account telemetry from Chutes and calls no other provider's account
+   * API from the browser, so the honest panel states the rule and stops the
+   * reader waiting for numbers that are never coming.
+   */
+  const telemetryRule = provider.id === "chutes"
+    ? ""
+    : ` Airship reads account telemetry from Chutes only: it made no ${provider.label} account request from this browser, so the rows below are unread rather than empty.`;
   const connectionDetail = boundedDisplayText(inventory.connectionDetail, 768) ?? (
     inventory.state === "connected"
-      ? "Connected state was supplied by the host. This view did not call the provider API."
+      ? `Connected state was supplied by the host. This view did not call the provider API.${telemetryRule}`
       : inventory.state === "not-connected"
-        ? "No connected account is currently represented in this inventory."
+        ? `No connected account is currently represented in this inventory.${telemetryRule}`
         : inventory.state === "rejected"
           ? "A credential is held for this provider and the provider refused it. Nothing below was read."
-          : "Connection state was not supplied to this view."
+          : `Connection state was not supplied to this view.${telemetryRule}`
   );
   const accountLinkStatus = inventory.accountLink?.status === "not-provided"
     ? "Not provided"

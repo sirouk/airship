@@ -3,19 +3,24 @@ import { describe, expect, it } from "vitest";
 import type { FederatedMemorySearchState } from "../tools/federated-memory";
 import {
   MEMORY_CITATION_QUOTE_CHARACTERS,
+  MEMORY_RECENT_KEY_PREFIX,
   RETRIEVAL_FLOOR_HEADING,
   MEMORY_WITNESS_KEY_PREFIX,
   adoptMemoryWitness,
   droppedMemoryNotice,
+  forgetMemoryWitness,
   formatMemoryCitation,
   inferredMemoryDurability,
   isLiveMemoryMessage,
   memoryLaneCountLabel,
   memoryLaneState,
   memoryNodeDestination,
+  memoryOutcomeSentence,
   memorySearchFailed,
   mergeMemoryWitness,
   readMemoryWitness,
+  readRecentSearches,
+  rememberRecentSearch,
   stableMemoryAuthoritySignature,
   type MemoryPageWitness,
   type MemoryViewMessage,
@@ -48,12 +53,15 @@ describe("unified Memory surface", () => {
   });
 
   it("keeps relationship and index potency behind native progressive disclosure", () => {
-    // The two route sections, the hidden-node restore list, and the below-floor
-    // rows — each a disclosure for the same reason: it exists only when it has
-    // something to say, and it is the control that lifts what it reports.
-    expect(source.match(/<details/gu)).toHaveLength(4);
+    // The three route sections, the hidden-node restore list, and the
+    // below-floor rows — each a disclosure for the same reason: it exists only
+    // when it has something to say, and it is the control that lifts what it
+    // reports. The corpus itself is the third section, open by default: a list
+    // of what a profile remembers is the route's subject, not a detail.
+    expect(source.match(/<details/gu)).toHaveLength(5);
     expect(source).toContain('id="memory-relationships"');
     expect(source).toContain('id="memory-index"');
+    expect(source).toContain('<details id="memory-records" class="memory-disclosure" open={expanded}');
     expect(source).toContain('<details class="memory-hidden-nodes">');
     expect(source).toContain("setHiddenMemoryNodeIds(new Set())}>Restore all");
     expect(source).toContain("graph.stats.componentCount");
@@ -371,11 +379,20 @@ describe("embedded index surface", () => {
     expect(source).toContain("Drag to pan, pinch or use Zoom in · Zoom out · Fit above the graph, search, or select a node to inspect relationships and source metadata.");
     expect(source).toContain('<div class="memory-graph-controls" role="group" aria-label="Graph viewport">');
 
-    // The unsearched recall state offers terms this page can prove it holds.
-    expect(source).toContain("{!state.query && starters.length ? <MemoryStarters");
-    expect(source).toContain("no search history is kept");
+    // The unsearched recall state offers terms this page can prove a lane
+    // holds, and this tab's own recent queries — the state a researcher returns
+    // to after a reload, which used to be a blank field and no history at all.
+    expect(source).toContain("{!state.query && (starters.length || recent.length)");
     expect(source).toContain('push(dot > 0 ? base.slice(0, dot) : base, "workspace source")');
-    expect(source).toContain('push(profileName, "active profile")');
+    expect(source).toContain('push(record.source, "active profile memory")');
+    // The profile's *name* is in no corpus, so it may not be offered as a term:
+    // that starter returned "No memory matched “General”" every time.
+    expect(source).not.toContain('push(profileName, "active profile")');
+    // The history exists now, so the sentence states its lifetime instead of
+    // denying it, and the reader can delete it.
+    expect(source).not.toContain("no search history is kept");
+    expect(source).toContain("Recent searches, kept in this tab for this profile only.");
+    expect(source).toContain("Clear</strong><small>recent searches");
 
     // The Index panels reach the field they are describing rather than naming it.
     expect(contextSource).toContain('action={{ label: embedded ? "Search memory" : "Search the active generation"');
@@ -654,5 +671,111 @@ describe("federated memory search failure", () => {
     expect(source).toContain("const settled = Boolean(state.query) && !state.searching && Boolean(result);");
     expect(source).toContain("{settled && total === 0\n      ? <MemoryNoMatchPanel");
     expect(source).toContain("<p>Nothing was hidden, filtered, or ranked away.</p>");
+  });
+});
+
+/*
+ * "Memory is a beautifully instrumented read-only inspector."
+ *
+ * The route could be interrogated one guess at a time and nothing else: no
+ * list of what a profile remembers, no way to add to it except a hand-written
+ * JSON slash command, no way to forget without first digging a record id out
+ * of a per-hit provenance popover, and no record of what had already been
+ * asked once the tab reloaded. These are the four halves of that verdict.
+ */
+describe("memory as a corpus a person can act on", () => {
+  it("lists the profile's own records through the same read the agent's recall uses", () => {
+    expect(appSource).toContain('const tool = active.tools.get("recall_memory");');
+    expect(appSource).toContain("recallRecords={recallMemoryRecords}");
+    expect(source).toContain("recallRecords(controller.signal)");
+    // A read that did not complete has not proved the corpus is empty.
+    expect(source).toContain("The remembered records could not be read.");
+    expect(source).toContain("has remembered nothing yet.");
+    // The page states its own bound rather than implying it is the whole corpus.
+    expect(source).toContain("`Newest ${records.length} of ${total} records`");
+  });
+
+  it("writes and deletes through the approval-gated tool, never around it", () => {
+    expect(appSource).toContain("async function commitMemoryChange(change: MemoryChange): Promise<MemoryCommitOutcome> {");
+    // The live definition, not a synthesised one: the dock derives its
+    // consequence panel from the real schema and the decision is journaled by
+    // the one path every human-proposed effect takes.
+    expect(appSource).toContain("const decision = await reviewHumanIntent(tool.definition, argumentsValue, { turnId, operationId });");
+    expect(appSource).toContain('if (decision === "deny") return Object.freeze({ status: "denied" });');
+    expect(source).toContain('void run({ action: "remember", content, source: source.trim() || MEMORY_MANUAL_SOURCE }, "remember")');
+    expect(source).toContain('void run({ action: "forget", id: record.id }, record.id)');
+  });
+
+  it("never reports a record its owner deleted as one the reload destroyed", () => {
+    const witness: MemoryPageWitness = { loadId: "load-1", recordIds: ["rec-a", "rec-b"], dropped: 0 };
+    expect(forgetMemoryWitness(witness, "rec-a").recordIds).toEqual(["rec-b"]);
+    // Identity is stable when the id was never observed here.
+    expect(forgetMemoryWitness(witness, "rec-z")).toBe(witness);
+    expect(forgetMemoryWitness(witness, "")).toBe(witness);
+    expect(source).toContain('if (change.action === "forget") setWitness((current) => forgetMemoryWitness(current, change.id));');
+  });
+
+  it("keeps the note when the decision is no", () => {
+    // The measured lost-work defect: the approval focuses Deny, and Enter or
+    // Escape — both chat reflexes — threw the typed note away with no retry.
+    expect(source).toContain('if (outcome.status !== "committed") return;');
+    expect(source).toContain('if (change.action === "remember") setDraft("");');
+    expect(source).toContain("your note is still in the box");
+    expect(memoryOutcomeSentence("denied", "forget")).toContain("The record is unchanged.");
+    expect(memoryOutcomeSentence("unbound", "remember")).toContain("No accountable session is bound");
+    expect(memoryOutcomeSentence("failed", "forget")).toContain("Nothing changed in this profile's memory.");
+  });
+
+  it("keeps this tab's queries, states their lifetime, and lets a person delete them", () => {
+    const store = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => void store.set(key, value),
+      removeItem: (key: string) => void store.delete(key),
+    } as unknown as Storage;
+    expect(readRecentSearches(undefined, "general")).toEqual([]);
+    expect(readRecentSearches(storage, "general")).toEqual([]);
+    store.set(`${MEMORY_RECENT_KEY_PREFIX}7-67-65-6e-65-72-61-6c`, "{not json");
+    expect(readRecentSearches(storage, "general")).toEqual([]);
+    store.set(
+      `${MEMORY_RECENT_KEY_PREFIX}7-67-65-6e-65-72-61-6c`,
+      JSON.stringify([{ query: "kyoto", at: "2026-07-31T10:00:00.000Z", generation: "g1" }, { at: "x" }, 4]),
+    );
+    expect(readRecentSearches(storage, "general")).toEqual([{ query: "kyoto", at: "2026-07-31T10:00:00.000Z", generation: "g1" }]);
+    // The silo is in the key, exactly as it is for the witness.
+    expect(readRecentSearches(storage, "research")).toEqual([]);
+
+    const first = rememberRecentSearch([], { query: " kyoto ", at: "t1" });
+    expect(first).toEqual([{ query: "kyoto", at: "t1" }]);
+    // Re-running the query already at the head against the same generation
+    // must not re-write storage on every settled search.
+    expect(rememberRecentSearch(first, { query: "kyoto", at: "t2" })).toBe(first);
+    const second = rememberRecentSearch(first, { query: "retrieval", at: "t3" });
+    expect(second.map((entry) => entry.query)).toEqual(["retrieval", "kyoto"]);
+    // One entry per distinct query, most recent first.
+    expect(rememberRecentSearch(second, { query: "KYOTO", at: "t4" }).map((entry) => entry.query)).toEqual(["KYOTO", "retrieval"]);
+    expect(rememberRecentSearch(second, { query: "   ", at: "t5" })).toBe(second);
+
+    expect(source).toContain("onForgetSearches={() => setRecent(Object.freeze([]))}");
+    expect(source).toContain("never written to the workspace and never leave the device");
+  });
+
+  it("brings the evidence layer forward the moment a query settles, and stops when the reader closes it", () => {
+    // Measured: the Index disclosure was closed on arrival and stayed closed
+    // while a query ran, so generation-pinned hits, content digests and index
+    // lineage were reachable only through a deep link the route never names.
+    expect(source).toContain("autoOpenedFor.current = settled;");
+    expect(source).toContain("if (!settled || indexDismissed || autoOpenedFor.current === settled) return;");
+    expect(source).toContain("else setIndexDismissed(true);");
+  });
+
+  it("says which section a deep link landed on, instead of re-rendering the page you were on", () => {
+    expect(source).toContain('eyebrow={initialTab === "index" ? "Memory index · revision-bound local materialization"');
+    expect(source).toContain("Opened at the on-device index:");
+    // At `tool` density the eyebrow and description are the ⓘ panel's, so the
+    // arrival also states itself where the link actually lands, and the
+    // section's own control takes focus so the move is visible.
+    expect(source).toContain('<p class="memory-index-arrival" role="status">Opened from the Memory index destination.');
+    expect(source).toContain('indexRef.current?.querySelector("summary")?.focus({ preventScroll: true })');
   });
 });

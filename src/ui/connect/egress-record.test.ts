@@ -1,15 +1,22 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { DEFAULT_LOCAL_MODEL_ORIGINS, resolveLocalEndpoint } from "../../inference/local/endpoint-policy";
 import {
+  classifyEgressUrl,
   credentialClause,
+  EGRESS_LOOPBACK_NOTE,
   EGRESS_NONE_OBSERVED,
   EGRESS_SCOPE_NOTE,
   EgressRecorder,
   egressCountLabel,
   egressSummarySeal,
   egressTotals,
+  isLoopbackHostname,
   lastCredentialEgress,
+  loopbackCountLabel,
+  loopbackEgress,
   readCredential,
+  remoteEgress,
   summarizeEgressHosts,
 } from "./egress-record";
 
@@ -44,6 +51,82 @@ describe("what counts as egress", () => {
     expect(record?.method).toBe("GET");
     expect(record?.witness).toBe("request");
     expect(record?.outcome).toBe("in-flight");
+    expect(record?.scope).toBe("remote");
+  });
+});
+
+/*
+ * The measured defect: "Check Ollama" issues one request to
+ * http://127.0.0.1:11434/api/version from a page served on 127.0.0.1:4173, and
+ * the panel filed it under "What has left this device". A different port is not
+ * a different machine.
+ */
+describe("what left the device, and what only left the page", () => {
+  it("classifies the page's own origin, the loopback interface and everything else", () => {
+    expect(classifyEgressUrl(`${ORIGIN}/assets/index.js`, ORIGIN)).toBe("same-origin");
+    expect(classifyEgressUrl("http://localhost:11434/api/version", ORIGIN)).toBe("loopback");
+    expect(classifyEgressUrl("http://127.0.0.1:11434/api/version", ORIGIN)).toBe("loopback");
+    expect(classifyEgressUrl("http://127.2.3.4:1234/v1/models", ORIGIN)).toBe("loopback");
+    expect(classifyEgressUrl("http://[::1]:1234/v1/models", ORIGIN)).toBe("loopback");
+    expect(classifyEgressUrl("http://ollama.localhost:11434/api/tags", ORIGIN)).toBe("loopback");
+    expect(classifyEgressUrl("data:text/plain,hello", ORIGIN)).toBe("not-network");
+    expect(classifyEgressUrl("blob:http://localhost:4173/abc", ORIGIN)).toBe("not-network");
+    // Another machine on your own network is still another machine.
+    expect(classifyEgressUrl("http://192.168.1.20:11434/api/version", ORIGIN)).toBe("remote");
+    expect(classifyEgressUrl("http://10.0.0.5:1234/v1/models", ORIGIN)).toBe("remote");
+    expect(classifyEgressUrl("https://llm.chutes.ai/v1/models", ORIGIN)).toBe("remote");
+    // The name is not the address: nothing resolves this to 127.0.0.1.
+    expect(classifyEgressUrl("https://localhost.attacker.example/x", ORIGIN)).toBe("remote");
+    expect(classifyEgressUrl("https://127.0.0.1.attacker.example/x", ORIGIN)).toBe("remote");
+  });
+
+  it("agrees with the rule that decides what a local model may be contacted at", () => {
+    /*
+     * `resolveLocalEndpoint` is the fabric's own loopback gate. If it accepts an
+     * origin and this panel calls that origin egress, the product contradicts
+     * itself about the same request — so the two rules are checked against each
+     * other rather than trusted to stay in step.
+     */
+    for (const origin of DEFAULT_LOCAL_MODEL_ORIGINS) {
+      expect(() => resolveLocalEndpoint(origin), origin).not.toThrow();
+      expect(isLoopbackHostname(new URL(origin).hostname), origin).toBe(true);
+    }
+    // The fabric refuses a private-LAN model server in the same words this
+    // panel uses about it: another machine.
+    for (const origin of ["http://192.168.1.20:11434", "https://llm.chutes.ai"]) {
+      expect(() => resolveLocalEndpoint(origin), origin).toThrow();
+      expect(isLoopbackHostname(new URL(origin).hostname), origin).toBe(false);
+    }
+  });
+
+  it("records a loopback request, and keeps it out of what left the device", () => {
+    const ledger = recorder();
+    ledger.noteRequest("http://127.0.0.1:11434/api/version", { method: "GET" });
+    ledger.noteRequest("https://llm.chutes.ai/v1/models", { method: "GET" });
+    expect(ledger.read()).toHaveLength(2);
+    expect(loopbackEgress(ledger.read()).map((row) => row.host)).toEqual(["127.0.0.1:11434"]);
+    expect(remoteEgress(ledger.read()).map((row) => row.host)).toEqual(["llm.chutes.ai"]);
+    // The headline count is the egress count, and the loopback row is neither
+    // dropped from the page nor added to it.
+    expect(egressCountLabel(remoteEgress(ledger.read()))).toBe("1 request · 1 host");
+    expect(loopbackCountLabel(ledger.read())).toBe("1 request to 1 port on this device");
+  });
+
+  it("says the zero state as 'nothing left', not as 'no off-origin request'", () => {
+    const ledger = recorder();
+    ledger.noteRequest("http://localhost:11434/api/version", { method: "GET" });
+    expect(egressCountLabel(remoteEgress(ledger.read()))).toBe(EGRESS_NONE_OBSERVED);
+    expect(EGRESS_NONE_OBSERVED).toContain("left this device");
+  });
+
+  it("never reports a key handed to a local model as having left the device", () => {
+    const ledger = recorder();
+    ledger.noteRequest("http://127.0.0.1:1234/v1/chat/completions", {
+      method: "POST",
+      headers: new Headers({ authorization: "Bearer lm-studio-local" }),
+    });
+    expect(lastCredentialEgress(ledger.read())).toBeUndefined();
+    expect(loopbackEgress(ledger.read())[0]?.credential).toBe("attached");
   });
 });
 
@@ -251,9 +334,11 @@ describe("the summary a reader gets without opening anything", () => {
     expect(egressSummarySeal(ledger.read())).toBe("attention");
   });
 
-  it("says what it does not list", () => {
+  it("says what it does not list, and what it lists without calling it egress", () => {
     expect(EGRESS_SCOPE_NOTE).toContain("Airship's own origin");
     expect(EGRESS_SCOPE_NOTE).toContain("Credential values are never read or stored");
+    expect(EGRESS_SCOPE_NOTE).toContain("Another port on this machine is recorded as on-device");
+    expect(EGRESS_LOOPBACK_NOTE).toContain("never reached a network interface");
   });
 });
 

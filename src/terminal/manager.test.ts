@@ -3,7 +3,7 @@ import { UUID_V4_PATTERN } from "../core/id";
 import { MemoryWorkspace } from "../workspace/memory";
 import type { WorkspacePort } from "../workspace/contracts";
 import { TERMINAL_METADATA_PATH, TERMINAL_WORKSPACE_MOUNT, WEB_CONTAINER_TERMINAL_RUNTIME } from "./contracts";
-import { BrowserTerminalManager, TERMINAL_LEASE_RENEW_MS } from "./manager";
+import { BrowserTerminalManager, TERMINAL_LEASE_RENEW_MS, terminalProcessBanner } from "./manager";
 import type { FileSystemTree, WebContainer } from "@webcontainer/api";
 
 describe("BrowserTerminalManager metadata", () => {
@@ -1048,3 +1048,33 @@ function treeText(tree: FileSystemTree, name: string): string | undefined {
     ? node.file.contents
     : new TextDecoder().decode(node.file.contents);
 }
+
+describe("the line that dates a process", () => {
+  /*
+   * Measured: after a General → Research → General round trip the buffer read
+   * "Airship changed terminal workspace authority; this terminal requires
+   * restart." and the next line, typed after it, was `echo STILL-ALIVE`
+   * answering "STILL-ALIVE" — because showing a `restart-required` tab
+   * auto-starts it and the new process inherits the old scrollback.
+   */
+  it("closes the restart warning the auto-start silently answered", () => {
+    const banner = terminalProcessBanner({ processEpoch: 2, priorStatus: "restart-required", reconstructed: false, startedAt: "20:57:03" });
+    expect(banner).toContain("jsh run 2 started 20:57:03");
+    expect(banner).toContain("has ended and is not running");
+  });
+
+  /*
+   * Measured: after a reload the tab still read "Terminal 1" with a green
+   * check and "Running", over an empty scrollback and "Input history · 0".
+   */
+  it("dates a cold process so a restart cannot read as the session you left", () => {
+    const banner = terminalProcessBanner({ processEpoch: 1, priorStatus: "idle", reconstructed: false, startedAt: "20:57:03" });
+    expect(banner).toContain("jsh run 1 started 20:57:03");
+    expect(banner).toContain("a reload ends the process");
+  });
+
+  it("names the rebuild when the transcript above it outlived its process", () => {
+    const banner = terminalProcessBanner({ processEpoch: 1, priorStatus: "restart-required", reconstructed: true, startedAt: "20:57:03" });
+    expect(banner).toContain("rebuilt from saved metadata");
+  });
+});

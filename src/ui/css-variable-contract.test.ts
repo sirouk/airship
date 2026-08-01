@@ -312,6 +312,10 @@ const VERDICT_TOKEN_TEXT_LEDGER = Object.freeze([
   "ui/chat.css .claim-group--failed > header --v-failed",
   "ui/chat.css .message-part.part-error --v-failed",
   "ui/chat.css .session-status-chip__word[data-state=\"failed\"] --v-failed",
+  // The quarantine card's glyph, and the rail row's "Needs review" line: a
+  // conversation that will not reopen is marked in the list a person scans,
+  // in words rather than in colour alone.
+  "ui/chat/resume-report.css .resume-report--quarantine > svg --v-failed",
   "ui/connect/connect-surface.css .connect-lane__failure --v-failed",
   "ui/provider-connections-view.css .provider-fabric__error --v-failed",
   "ui/provider-connections-view.css .provider-health.expired --v-failed",
@@ -338,6 +342,7 @@ const VERDICT_TOKEN_TEXT_LEDGER = Object.freeze([
   "ui/routes.css .runway-card > p --v-failed",
   "ui/shell.css .attestation-chip.asserted --copper",
   "ui/shell.css .attestation-chip.failed --v-failed",
+  "ui/shell.css .recent-conversation--thread .recent-conversation__blocked --v-failed",
   "ui/shell.css .seal[data-state=\"asserted\"] --copper",
   "ui/shell.css .seal[data-state=\"failed\"] --v-failed",
   "ui/shell.css .topbar-posture-chip[data-state=\"failed\"] --v-failed",

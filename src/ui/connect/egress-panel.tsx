@@ -4,6 +4,7 @@ import { formatInstant } from "../instant-format";
 import { Seal } from "../seal";
 import {
   credentialClause,
+  EGRESS_LOOPBACK_NOTE,
   EGRESS_NONE_OBSERVED,
   EGRESS_SCOPE_NOTE,
   egressCountLabel,
@@ -11,6 +12,9 @@ import {
   egressSummarySeal,
   egressTotals,
   installEgressRecorder,
+  loopbackCountLabel,
+  loopbackEgress,
+  remoteEgress,
   summarizeEgressHosts,
   type EgressCounts,
   type EgressRecord,
@@ -48,8 +52,20 @@ export function EgressPanel() {
     return recorder.subscribe(read);
   }, []);
 
-  const hosts = summarizeEgressHosts(records);
-  const totals = egressTotals(records);
+  /*
+   * The split this panel exists to make honestly.
+   *
+   * Every row used to be filed under the title, so pressing "Check Ollama" —
+   * one request to another port on the same machine — printed
+   * `127.0.0.1:11434` under "What has left this device". The loopback rows are
+   * not dropped, because they are network activity a reader is entitled to see;
+   * they are counted and titled as what they are.
+   */
+  const remote = remoteEgress(records);
+  const loopback = loopbackEgress(records);
+  const hosts = summarizeEgressHosts(remote);
+  const loopbackHosts = summarizeEgressHosts(loopback);
+  const totals = egressTotals(remote);
 
   return (
     <section class="access-connection-card egress-panel" aria-labelledby="egress-panel-title">
@@ -68,14 +84,14 @@ export function EgressPanel() {
               : "Observed in this tab since it opened — the page's own requests and every resource the browser loaded from another host."}
           </p>
         </div>
-        <Seal state={egressSummarySeal(records)} density="chip" label={egressCountLabel(records)} />
+        <Seal state={egressSummarySeal(remote)} density="chip" label={egressCountLabel(remote)} />
       </div>
 
       {/*
         The verdict, as a sentence rather than as the tail of a chip: it is the
         claim this panel exists to make, and the one a phone was clipping.
       */}
-      {records.length > 0 ? (
+      {remote.length > 0 ? (
         <p class={`egress-panel__verdict ${credentialTone(totals)}`}>{credentialClause(totals)}</p>
       ) : null}
 
@@ -104,6 +120,30 @@ export function EgressPanel() {
         </ul>
       )}
 
+      {/*
+        On-device traffic, kept in sight and kept out of the count above. The
+        heading is the claim; the note is what makes the heading checkable.
+      */}
+      {loopbackHosts.length > 0 ? (
+        <section class="egress-panel__loopback" aria-labelledby="egress-loopback-title">
+          <div class="egress-panel__loopback-head">
+            <h3 id="egress-loopback-title">Stayed on this device</h3>
+            <span class="egress-panel__loopback-count">{loopbackCountLabel(loopback)}</span>
+          </div>
+          <ul class="egress-panel__hosts">
+            {loopbackHosts.map((host) => (
+              <li key={host.host}>
+                <strong>{host.host}</strong>
+                <span class="egress-panel__count">{host.requests} request{host.requests === 1 ? "" : "s"} · {host.kinds.join(", ")}</span>
+                <span class={`egress-panel__credential ${credentialTone(host)}`}>{credentialClause(host)}</span>
+                <span class="egress-panel__when">Last {formatInstant(new Date(host.lastAt).toISOString(), "minute")}</span>
+              </li>
+            ))}
+          </ul>
+          <p class="egress-panel__loopback-note">{EGRESS_LOOPBACK_NOTE}</p>
+        </section>
+      ) : null}
+
       <p class="egress-panel__scope">{EGRESS_SCOPE_NOTE}</p>
 
       {records.length > 0 ? (
@@ -117,6 +157,10 @@ export function EgressPanel() {
               <li key={record.id}>
                 <code>{record.method ?? "—"} {record.host}{record.path}</code>
                 <span class="egress-panel__row-facts">
+                  {/* The class first, because it is the only fact on this row
+                      that answers the panel's own title. */}
+                  {record.scope === "loopback" ? "On this device" : "Left this device"}
+                  {" · "}
                   {outcomeLabel(record)}
                   {" · "}
                   {record.kind}

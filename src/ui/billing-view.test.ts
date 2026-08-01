@@ -350,10 +350,17 @@ describe("no state is carried only by an aria-label ARIA discards", () => {
 });
 
 describe("billing provider responsive contract", () => {
-  it("shows four desktop tabs and keeps the provider strip reachable on narrow screens", () => {
+  it("shows four desktop tabs and all four on a phone, with nothing off-screen", () => {
     expect(styles).toMatch(/\.billing-provider-tabs\s*\{[\s\S]*?grid-template-columns:\s*repeat\(4, minmax\(0, 1fr\)\)/u);
-    expect(styles).toMatch(/@media \(max-width: 640px\)[\s\S]*?\.billing-provider-tabs\s*\{[\s\S]*?repeat\(4, minmax\(136px, 1fr\)\)/u);
-    expect(styles).toContain("scroll-snap-type: x proximity");
+    /*
+     * Measured at 390: `minmax(136px, 1fr)` made the strip 560px, putting the
+     * Anthropic tab at x=430 and xAI at x=570 — off-screen, scrollable, and
+     * with no affordance saying so. Two rows of two show all four, so the
+     * scroll and its snap have nothing left to do and are gone rather than
+     * layered under a second rule.
+     */
+    expect(styles).toMatch(/@media \(max-width: 640px\)[\s\S]*?\.billing-provider-tabs\s*\{[\s\S]*?repeat\(2, minmax\(0, 1fr\)\)/u);
+    expect(styles).not.toContain("scroll-snap-type: x proximity");
     expect(styles).not.toMatch(/\.billing-provider-(?:tabs|tab)\s*\{[^}]*display:\s*none/gu);
   });
 

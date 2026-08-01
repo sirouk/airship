@@ -201,12 +201,12 @@ describe("release gate", () => {
     for (const name of MEASUREMENT_JUSTIFIED_BUDGETS) expect(RELEASE_BUDGETS[name]).toBeDefined();
 
     // A figure the ceiling beside it would reject describes a build nobody shipped.
-    expect(() => assertDocumentedBudgetMeasurements(source.replace("15,976 B gzip", "18,976 B gzip")))
-      .toThrow(/optionalMemoryView: its comment records 18,976 B gzip, above the 18\.00 KiB gzip ceiling/u);
+    expect(() => assertDocumentedBudgetMeasurements(source.replace("20,591 B gzip", "23,591 B gzip")))
+      .toThrow(/optionalMemoryView: its comment records 23,591 B gzip, above the 21\.00 KiB gzip ceiling/u);
     expect(() => assertDocumentedBudgetMeasurements(source.replace("74,690 B\n  // raw", "94,690 B\n  // raw")))
-      .toThrow(/optionalProofSurface: its comment records 94,690 B raw, above the 76\.00 KiB raw ceiling/u);
+      .toThrow(/optionalProofSurface: its comment records 94,690 B raw, above the 88\.00 KiB raw ceiling/u);
     // …and a raise cannot be laundered by deleting the number it contradicts.
-    expect(() => assertDocumentedBudgetMeasurements(source.replace("Measured 78,714 B raw / 24,913 B gzip", "Weighed at 78,714 B and 24,913 B")))
+    expect(() => assertDocumentedBudgetMeasurements(source.replace("Measured 80,247 B raw / 25,486 B gzip", "Weighed at 80,247 B and 25,486 B")))
       .toThrow(/optionalWorkspaceWorkbench: its comment no longer records a measured raw\/gzip pair/u);
 
     /*
@@ -218,10 +218,10 @@ describe("release gate", () => {
      * would have left — which is why the raw ceilings beside these pass untouched.
      */
     for (const [name, ceiling, granted] of [
-      ["optionalMemoryView", "gzip: 18 * 1024", "gzip: 19 * 1024"],
-      ["optionalProofSurface", "gzip: 24 * 1024", "gzip: 25 * 1024"],
+      ["optionalMemoryView", "gzip: 21 * 1024", "gzip: 22 * 1024"],
+      ["optionalProofSurface", "gzip: 28 * 1024", "gzip: 29 * 1024"],
       ["optionalWorkspaceWorkbench", "gzip: 25 * 1024", "gzip: 26 * 1024"],
-      ["deferredCapabilities", "gzip: 122 * 1024", "gzip: 124 * 1024"],
+      ["deferredCapabilities", "gzip: 124 * 1024", "gzip: 126 * 1024"],
     ]) {
       const raised = source.replace(new RegExp(`^  ${name}: .*$`, "mu"), (line) => line.replace(ceiling, granted));
       expect(raised, name).not.toBe(source);

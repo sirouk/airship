@@ -419,6 +419,7 @@ describe("composed commit message", () => {
       stage: async (request: { paths: readonly string[] }) => { calls.push(`stage ${request.paths.join(",")}`); },
       unstage: async (request: { paths: readonly string[] }) => { calls.push(`unstage ${request.paths.join(",")}`); },
       commit: async (request: { message: string }) => { calls.push(`commit ${request.message}`); return commit(); },
+      restore: async (request: { paths: readonly string[]; source: string }) => { calls.push(`restore ${request.paths.join(",")} from ${request.source}`); },
     };
   }
 
@@ -450,6 +451,18 @@ describe("composed commit message", () => {
     await expect(runSourceMutation(git, { kind: "stage", request })).resolves.toBe(false);
     await expect(runSourceMutation(git, { kind: "unstage", request })).resolves.toBe(false);
     expect(git.calls).toEqual(["stage docs/a.md", "unstage docs/a.md"]);
+  });
+
+  it("dispatches the discard verb the Workspace surface had no control for", async () => {
+    // Measured before this: a scan of every button, summary and menu item in
+    // Explorer, the Editor, Source Control and the file `•••` menu for
+    // /discard|revert|restore|undo|reset|checkout|clean/ returned [] — while
+    // `git restore README.md` typed into the Terminal route's Browser Git field
+    // answered "Discarded changes in 1 path."
+    const git = recordingGit(() => Promise.resolve(undefined));
+    const request = { repositoryId: "repo", worktreeId: "main", paths: ["docs/a.md"], source: "head", expectedWorktreeVersion: "2" } as const;
+    await expect(runSourceMutation(git, { kind: "restore", request })).resolves.toBe(false);
+    expect(git.calls).toEqual(["restore docs/a.md from head"]);
   });
 });
 
@@ -872,14 +885,24 @@ describe("work that did not survive the reload", () => {
   });
 
   it("states the loss in a row of the workbench, not in the expiring toast", () => {
-    // `.workbench-notice` is an absolutely-positioned overlay because it
-    // expires. A sentence about destroyed history is the first thing to read on
-    // arrival and must never sit on top of the state it describes.
+    // A sentence about destroyed history is the first thing to read on arrival
+    // and belongs above the panes, not in the notice slot that expires.
     expect(source).toContain('<div class="notice workbench-lost-work" data-state="attention" role="alert">');
     expect(source).not.toContain('class="notice workbench-lost-work workbench-notice"');
     const styles = readFileSync(new URL("./workspace-view.css", import.meta.url), "utf8");
     expect(styles).toMatch(/\.workbench-lost-work\.notice \{[^}]*flex: 0 0 auto;/u);
     expect(styles).not.toMatch(/\.workbench-lost-work\.notice \{[^}]*position: absolute/u);
+  });
+
+  it("keeps the completion notice out of the strip whose verdict it repeats", () => {
+    // Measured overlap before this rule: 3,632px² over `.editor-strip` at
+    // 1440×900 and 21,279px² at 390×844 — the toast covered the "Saved" chip,
+    // the revision hash and the Save/Wrap/Reveal controls it was announcing.
+    const styles = readFileSync(new URL("./workspace-view.css", import.meta.url), "utf8");
+    const notice = styles.match(/\.workbench-notice\.notice \{([^}]+)\}/u)?.[1] ?? "";
+    expect(notice).toContain("flex: 0 0 auto;");
+    expect(notice).not.toContain("position: absolute");
+    expect(notice).not.toContain("pointer-events: none");
   });
 
   it("feeds the advanced dialog's second commit surface into the same witness", () => {

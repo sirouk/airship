@@ -97,7 +97,10 @@ describe("session bar at phone width", () => {
     // is a layout instruction — `display: none` would take it out of the
     // accessibility tree, which is the one theft `clip-path` refuses to do.
     for (const selector of [
-      ".session-model-chip--demo .session-model-chip__label",
+      // The demo chip sheds its qualifier, not its word: measured at 390×844
+      // the whole-label shed left the phone with no visible statement anywhere
+      // that a deterministic demo was answering.
+      ".session-model-chip--demo .session-model-chip__qualifier",
       ".session-skills-chip__label",
     ]) {
       const escaped = selector.replaceAll(".", "\\.").replaceAll(" ", "\\s");

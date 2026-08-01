@@ -187,6 +187,25 @@ describe("conversation library below the full-width toolbar", () => {
     expect(source).toContain("const filterActive = Boolean(search || providerId || model);");
   });
 
+  /*
+   * The row is an opener, not only a selector.
+   *
+   * Measured: single click, double click and Enter on a conversation row all
+   * left `location.hash` at "#sessions". The only opener was "Resume
+   * conversation" in the detail pane, which on a 390x844 phone rendered at
+   * y=791 — under the bottom tab bar.
+   */
+  it("gives every row a one-press opener and the gestures a list of documents binds", () => {
+    expect(source).toContain('class="session-library-open"');
+    expect(source).toContain("onClick={() => void openSession(item.id)}");
+    expect(source).toContain("onDblClick={() => void openSession(item.id)}");
+    expect(source).toContain('if (event.key === "Enter" && item.id === selectedId && item.id !== activeSessionId) {');
+    // A refusal selects the row so the pane that explains it is what appears,
+    // rather than failing silently at the button that was pressed.
+    expect(source).toContain('setDetailError(fresh.compatibility?.label ?? "This conversation cannot be resumed in the current runtime.");');
+    expect(styles).toContain(".session-library-open {");
+  });
+
   it("marks the matched run without rewriting the title", () => {
     expect(source).toContain("titleMatchSegments(item.title, search)");
     expect(styles).toContain(".session-library-card-top mark {");

@@ -14,18 +14,31 @@ export const DEFAULT_OPERATION_RENDER_LIMIT = 12;
 /** The count below which a summary header would hide more than it saves. */
 export const OPERATION_COLLAPSE_THRESHOLD = 4;
 
-export function MessagePartsView({
-  parts,
-  streamedContent,
-  streaming = false,
-  live = false,
-}: {
+export type MessagePartsViewProps = Readonly<{
   parts: readonly MessagePart[];
   streamedContent?: string;
   streaming?: boolean;
   /** True only while this row belongs to the currently running turn. */
   live?: boolean;
-}) {
+  /**
+   * The failed turn's own way forward, when one exists.
+   *
+   * The error card said "Retry is available." and pointed at nothing: on a
+   * desktop the controls it referred to were a hover-revealed toolbar with
+   * Retry greyed out, and on a phone they were behind an unlabelled "•••"
+   * disclosure with two of three disabled. A recovery verb belongs in the card
+   * that reports the failure, at every width, without a gesture.
+   */
+  onRetry?: () => void;
+}>;
+
+export function MessagePartsView({
+  parts,
+  streamedContent,
+  streaming = false,
+  live = false,
+  onRetry,
+}: MessagePartsViewProps) {
   const tail = streamedMessageTail(parts, streamedContent ?? "", streaming);
   const nodes = pairOperations(parts);
   const answerId = streaming ? undefined : answerPartId(parts);
@@ -34,12 +47,11 @@ export function MessagePartsView({
     <div class="message-parts" role="group" aria-label="Message contents">
       {nodes.map((node) => node.kind === "operations"
         ? <OperationStrip key={node.id} node={node} mode={mode} />
-        : <MessagePartView key={node.part.id} part={node.part} answer={node.part.id === answerId} live={live} />)}
+        : <MessagePartView key={node.part.id} part={node.part} answer={node.part.id === answerId} live={live} onRetry={onRetry} />)}
       {/* No `aria-live` on the streaming tail: every delta mutating a polite
           region is a screen-reader backlog, one queued utterance per token.
-          Both ends of the turn are announced elsewhere and exactly once each —
-          `streaming-slot.tsx` owns the composing `role="status"` at the start
-          and the settle-time arrival region that quotes what landed. */}
+          Both ends of the turn are announced by `chat/turn-narration.ts`, which
+          owns the one region the whole lifecycle speaks through. */}
       {tail ? <div class="message-part text text--answer streaming"><MarkdownView source={tail} streaming /></div> : null}
     </div>
   );
@@ -631,7 +643,12 @@ export function errorPartRole(live: boolean): "alert" | undefined {
   return live ? "alert" : undefined;
 }
 
-function MessagePartView({ part, answer, live }: { part: NarrativePart; answer: boolean; live: boolean }) {
+function MessagePartView({ part, answer, live, onRetry }: {
+  part: NarrativePart;
+  answer: boolean;
+  live: boolean;
+  onRetry?: () => void;
+}) {
   if (part.kind === "text") {
     return <div class={answer ? "message-part text text--answer" : "message-part text"}><MarkdownView source={part.content} /></div>;
   }
@@ -677,7 +694,13 @@ function MessagePartView({ part, answer, live }: { part: NarrativePart; answer: 
         <div>
           <strong {...(part.code ? { title: part.code } : {})}>{errorHeading(part.code)}</strong>
           <p>{part.summary}</p>
-          {part.retryable ? <small>Retry is available.</small> : null}
+          {/* The claim only survives while something can act on it. With a
+              handler the card carries the verb itself; without one it says
+              nothing, because "Retry is available." over a disabled control is
+              the failure this whole card is supposed to be honest about. */}
+          {part.retryable && onRetry
+            ? <button class="small-button part-error__retry" type="button" onClick={onRetry}>Send this prompt again</button>
+            : null}
         </div>
       </div>
     );

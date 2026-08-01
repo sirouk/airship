@@ -45,6 +45,7 @@ import {
 } from "./connect/connect-lanes";
 import { observeHostExtensionSupport } from "./connect/extension-bridge-presence";
 import { probeChutesSignInHandler, type ChutesSignInReadiness } from "./connect/chutes-signin-readiness";
+import { verifyChutesKey } from "./connect/chutes-key-authorization";
 import { EgressPanel } from "./connect/egress-panel";
 import { egressRecorder, lastCredentialEgress } from "./connect/egress-record";
 import { CHUTES_DISCOVERY_PREFLIGHT } from "./connect/egress-preflight";
@@ -265,7 +266,17 @@ export function AccessView({
   const [handlerReadiness, setHandlerReadiness] = useState<ChutesSignInReadiness>();
   // The key that was refused, held open so it can be corrected rather than
   // retyped. See `activate()`.
-  const [keyRefusal, setKeyRefusal] = useState<Readonly<{ providerResponse: string }>>();
+  /*
+   * `stage` because the two refusals are different facts. The key check runs
+   * before the catalog is read; the model authorization runs after a model is
+   * chosen. One sentence for both told a person whose key was rejected at the
+   * first step that "listing models succeeded" — about a listing that never
+   * happened.
+   */
+  const [keyRefusal, setKeyRefusal] = useState<Readonly<{
+    stage: "key-check" | "model-authorization";
+    providerResponse: string;
+  }>>();
   /*
    * What the last attempt did with the key that is still in the field.
    *
@@ -450,7 +461,7 @@ export function AccessView({
     }
     const input = credentialInput.current;
     setBusy(true);
-    setStatus("Discovering encrypted-inference models available to this connection…");
+    setStatus("Checking the key with Chutes, then reading the catalog…");
     setError(undefined);
     setKeyRefusal(undefined);
     setLastAttempt(NO_CREDENTIAL_ATTEMPT);
@@ -467,6 +478,34 @@ export function AccessView({
       if (credential.kind === "oauth-user-token" && !tokenSource) {
         throw new Error("Use Chutes sign-in for a scoped user session. The advanced field accepts only an optional cpk_ inference key.");
       }
+      /*
+       * The key is offered to Chutes before anything that implies Chutes took
+       * it. `cpk_notarealkey000000` used to reach a priced model card with an
+       * availability reading and a recommendation badge, because the catalog
+       * that produced them is readable by anyone — the credential was not
+       * checked until Finish, ten seconds later. A rejected key now stops here,
+       * in the field it was typed into, at ~100ms.
+       *
+       * Only the pasted-key lane. A token from the sign-in exchange is already
+       * a completed authorization, and its scopes need not include the account
+       * read this endpoint answers — failing it would invent a refusal.
+       */
+      if (credential.kind === "inference-api-key" && !tokenSource) {
+        const verdict = await verifyChutesKey(credential.value, controller.signal);
+        if (verdict.state === "refused") {
+          setStatus(undefined);
+          setKeyRefusal(Object.freeze({ stage: "key-check", providerResponse: verdict.providerResponse }));
+          setLastAttempt(attemptOutcome(attemptFrom));
+          returnCredentialToField(credential);
+          return;
+        }
+        if (verdict.state === "unreachable") {
+          // Unchecked is not accepted. The picker is a claim about the key, so
+          // a check that never answered may not produce one.
+          throw new Error(`The key could not be checked with Chutes, so nothing below it is shown. ${verdict.detail}`);
+        }
+      }
+      setStatus("Chutes accepted the key. Discovering encrypted-inference models available to this connection…");
       const catalogClient = new ModelCatalogClient({ includeManagement: true, timeoutMs: 20_000 });
       const snapshot = await catalogClient.load({ signal: controller.signal, forceRefresh: true });
       const compatibleModels = filterModels(snapshot.models, {
@@ -663,7 +702,7 @@ export function AccessView({
        */
       const failure = mapUnknownRequestFailure(caught, online);
       if (failure.kind === "credential" && credential.kind === "inference-api-key") {
-        setKeyRefusal(Object.freeze({ providerResponse: failure.message }));
+        setKeyRefusal(Object.freeze({ stage: "model-authorization", providerResponse: failure.message }));
         setError(undefined);
         returnCredentialToField(credential);
       } else {
@@ -1353,7 +1392,11 @@ export function AccessView({
                         <div class="key-refusal" role="alert">
                           <p>
                             <Icon name="warning" size={16} />
-                            <span><strong>Chutes did not accept this key.</strong> The catalog is readable without a key, so listing models succeeded; authorization is checked when you connect, and it failed. Check the key at <a href={CHUTES_API_KEYS_URL} target="_blank" rel="noreferrer">chutes.ai → API keys ↗</a>, or paste a different one.</span>
+                            <span><strong>Chutes did not accept this key.</strong>{" "}
+                              {keyRefusal.stage === "key-check"
+                                ? "Nothing was listed and no model was shown: the key was offered to Chutes first, and Chutes refused it."
+                                : "The catalog is readable without a key, so listing models succeeded; access to the selected model is checked when you connect, and it failed."}{" "}
+                              Check the key at <a href={CHUTES_API_KEYS_URL} target="_blank" rel="noreferrer">chutes.ai → API keys ↗</a>, or paste a different one.</span>
                           </p>
                           {/*
                             The provider's own words, verbatim and including the
@@ -1407,8 +1450,25 @@ export function AccessView({
                         ) : null}
                       </div>
                       )}
+                      {/*
+                        The consequence of "page memory", beside the link that
+                        sends someone away to obtain a key.
+
+                        "Held only in page memory" was accurate and was read as
+                        a security reassurance rather than as the thing it also
+                        is: you will paste this again every time. A novice
+                        arrives having been told no account is needed, leaves to
+                        make one, comes back, and only discovers the lifetime on
+                        the second visit. There is no durable alternative to
+                        offer — the Vault deliberately never stores a provider
+                        credential — so the honest move is to say so here rather
+                        than let the absence read as an oversight.
+                      */}
                       <p id="chutes-credential-help">
-                        Held only in page memory. Don’t have one?{" "}
+                        Held only in page memory: a reload or a new tab starts with an empty field
+                        and you paste it again. The Vault stores your work and never a provider
+                        credential, so there is no durable alternative to choose.{" "}
+                        Don’t have one?{" "}
                         <a href={CHUTES_API_KEYS_URL} target="_blank" rel="noreferrer">Create a key at chutes.ai → API keys ↗</a>{" "}
                         Never paste a client secret or administrator credential.
                       </p>
@@ -1683,11 +1743,13 @@ export function credentialReading(
   attempt: CredentialAttempt = NO_CREDENTIAL_ATTEMPT,
 ): string {
   if (sending) {
-    // Names what left and what did not, because a reader watching this line is
-    // asking about their secret, not about the catalog.
+    // Names what left, because a reader watching this line is asking about
+    // their secret. The key leg now goes first, so this says so: the earlier
+    // wording ("your key is not attached to that request") was true of the
+    // catalog read and would be false of the request that precedes it.
     return kind === "oauth-user-token"
       ? "Reading the Chutes catalog now; your sign-in token is not attached to that request. Waiting for Chutes to answer."
-      : "Reading the Chutes catalog now; your key is not attached to that request. Waiting for Chutes to answer.";
+      : "Your key is on its way to api.chutes.ai now, to ask whether Chutes accepts it. Waiting for Chutes to answer.";
   }
   const prefix = credentialPrefixReading(kind);
   // A key that never parsed has no custody story to tell, and the negative arm

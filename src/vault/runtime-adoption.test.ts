@@ -8,7 +8,64 @@ import { createGlobalSkillSettings } from "../profiles/domain";
 import { EncryptedProfileCatalogStore, MemoryProfileCatalogStore } from "../profiles/persistence";
 import { WorkspaceRootKey } from "../storage/encrypted-envelope";
 import { MemoryObjectStore } from "../storage/memory-object-store";
-import { migrateJournalState, migrateProfileCatalogState, migrateWorkspaceState } from "./runtime-adoption";
+import {
+  adoptionCarriedNote,
+  migrateJournalState,
+  migrateProfileCatalogState,
+  migrateWorkspaceState,
+  readAdoptionCarriedWork,
+} from "./runtime-adoption";
+
+describe("what adoption tells the person it just moved", () => {
+  /*
+   * The measured defect (J110): a completed turn in `#chat/7ec47231…`, then
+   * Vault → "Create encrypted Vault" → Chat, and the person is in
+   * `#chat/40ec5b12…` with a rail reading "General · encrypted vault — No
+   * messages yet". The work was not destroyed — this migration had copied it —
+   * but nothing on any screen said so, and the conversation they were in is
+   * fork-required from that moment because its manifest pins the page-memory
+   * workspace. Silence turned a structural consequence into a disappearance.
+   */
+  it("names the count and the thread, and does not promise continuity it cannot deliver", () => {
+    const note = adoptionCarriedNote({ conversations: 2, activeTitle: "Draft the Q3 pricing memo" });
+    expect(note).toContain("2 conversations");
+    expect(note).toContain("Draft the Q3 pricing memo");
+    expect(note).toContain("All conversations");
+    // The half that must never be dropped: a count with no route forward reads
+    // as "we kept it somewhere" and sends a person hunting for a resume that
+    // the workspace pin will refuse.
+    expect(note).toContain("Fork to continue");
+    expect(adoptionCarriedNote({ conversations: 1 })).toContain("1 conversation from page memory");
+  });
+
+  it("says nothing when nothing was carried", () => {
+    // A first-ever visit adopting a Vault has no story to tell, and inventing
+    // one is how a welcome screen starts reporting losses that never happened.
+    expect(adoptionCarriedNote(undefined)).toBe("");
+    expect(adoptionCarriedNote({ conversations: 0 })).toBe("");
+  });
+
+  it("reads the count and the active thread out of the journal it is about to copy", async () => {
+    const backend = new MemoryJournalBackend();
+    const journal = new EventJournal(backend);
+    const manifest = await createSessionManifest({
+      systemPrompt: "stable prompt",
+      providerId: "test-provider",
+      model: "test-model",
+      tools: [],
+      workspaceId: "memory://page",
+      now: "2026-07-19T00:00:00.000Z",
+    });
+    const first = await journal.createSession("Draft the Q3 pricing memo", manifest);
+    await journal.createSession("quick unrelated question about timezones", manifest);
+
+    expect(await readAdoptionCarriedWork(journal, "general")).toMatchObject({ conversations: 2 });
+    // With no profile pointer the count still stands and the name is simply
+    // absent, rather than the sentence naming the wrong conversation.
+    expect((await readAdoptionCarriedWork(journal, "general")).activeTitle).toBeUndefined();
+    expect(first.title).toBe("Draft the Q3 pricing memo");
+  });
+});
 
 describe("vault runtime adoption", () => {
   it("creates, recovers, and conflict-fences the provider-neutral profile catalog", async () => {

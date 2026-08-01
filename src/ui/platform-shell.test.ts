@@ -103,6 +103,42 @@ describe("platform shell contracts", () => {
     expect(dialog).toContain("if (entry.disabled) return;");
   });
 
+  /*
+   * With nothing typed, the palette's question is "take me back to what I was
+   * doing" — and it answered with 15 destinations then ~36 slash commands, with
+   * the session rows it already builds below all of them. `⌘K ↵` could not
+   * return a person to their own thread, and the verbs the live shell rendered
+   * as buttons ("New conversation", "Retry", "Rename conversation") answered
+   * "No matching destination or command."
+   */
+  it("leads the unfiltered list with conversations, then verbs, and never reorders a search", () => {
+    const entries = buildPaletteEntries({
+      navigate() {},
+      openPreferences() {},
+      sessions: [
+        { id: "s-1", title: "Thursday pricing memo", open() {} },
+        { id: "s-2", title: "Timezones", open() {} },
+      ],
+      actions: [
+        { id: "new-conversation", label: "New conversation", description: "Start a fresh conversation in this profile", keywords: ["new"], run() {} },
+        { id: "retry-turn", label: "Retry", description: "Branch before the last answer", keywords: ["retry"], reason: "No answer to retry yet.", run() {} },
+      ],
+    });
+
+    const unfiltered = filterPaletteEntries(entries, "");
+    expect(unfiltered.slice(0, 2).map((entry) => entry.label)).toEqual(["Thursday pricing memo", "Timezones"]);
+    expect(unfiltered.slice(2, 4).map((entry) => entry.label)).toEqual(["New conversation", "Retry"]);
+    expect(unfiltered.findIndex((entry) => entry.group === "Navigate"))
+      .toBeGreaterThan(unfiltered.findIndex((entry) => entry.group === "Actions"));
+
+    // A verb that cannot run says why and refuses, rather than being withheld:
+    // a person searching "retry" after a failure needs the reason, not silence.
+    const retry = entries.find((entry) => entry.id === "action:retry-turn");
+    expect(retry).toMatchObject({ disabled: true, description: "No answer to retry yet." });
+    expect(filterPaletteEntries(entries, "new conversation").map((entry) => entry.label)).toContain("New conversation");
+    expect(filterPaletteEntries(entries, "rename").map((entry) => entry.label)).not.toContain("Thursday pricing memo");
+  });
+
   it("describes All conversations with the scope the route enforces", () => {
     // The palette derives this line mechanically from the destination's scope
     // tag, so a wrong tag is wrong user-facing copy: the route lists the active

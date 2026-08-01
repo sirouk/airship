@@ -40,7 +40,9 @@ describe("a pasted secret survives the request it was pasted for", () => {
     // hand the value back. The refusal branch used to do it by hand while the
     // other silently dropped it.
     expect(source).toContain("function returnCredentialToField(credential: EphemeralChutesCredential)");
-    expect(source.match(/returnCredentialToField\(credential\)/gu)).toHaveLength(2);
+    // Three now: the key check that runs before discovery refuses in the same
+    // custody grammar, rather than emptying the field the way discovery did.
+    expect(source.match(/returnCredentialToField\(credential\)/gu)).toHaveLength(3);
     expect(source).toContain("field.value = credential.value;");
   });
 
@@ -77,18 +79,23 @@ describe("the reading under the field says what happened to the key", () => {
      *   +28ms GET llm.chutes.ai/v1/models        auth=no
      *   +28ms GET api.chutes.ai/chutes/          auth=no
      *   +28ms GET api.chutes.ai/chutes/utilization auth=no
-     * The key rides only on the Finish leg (auth=YES to api.chutes.ai). So the
-     * in-flight arm may not say "Nothing has been sent yet." and may not say
-     * the key was sent either — under-claiming and over-claiming egress are the
-     * same defect.
+     * The key used to ride only on the Finish leg, which is exactly why an
+     * unchecked key reached a priced picker; it is now offered to
+     * api.chutes.ai first. Either way this line may not say "Nothing has been
+     * sent yet.", and it may not describe a leg that is not the one running —
+     * under-claiming and over-claiming egress are the same defect.
      */
-    for (const kind of ["inference-api-key", "oauth-user-token"] as const) {
-      const reading = credentialReading(kind, true);
-      expect(reading, kind).not.toContain("Nothing has been sent");
-      expect(reading, kind).toContain("not attached");
-      expect(reading, kind).toMatch(/waiting/iu);
-      expect(reading, kind).not.toMatch(/valid|accepted|connected|verified/iu);
-    }
+    const pasted = credentialReading("inference-api-key", true);
+    expect(pasted).not.toContain("Nothing has been sent");
+    expect(pasted).toContain("api.chutes.ai");
+    expect(pasted).toMatch(/waiting/iu);
+    expect(pasted).not.toMatch(/valid|accepted by|connected|verified/iu);
+    // The sign-in lane still opens with an unauthenticated catalog read: its
+    // token is not offered again, because the exchange already authorized it.
+    const signedIn = credentialReading("oauth-user-token", true);
+    expect(signedIn).not.toContain("Nothing has been sent");
+    expect(signedIn).toContain("not attached");
+    expect(signedIn).toMatch(/waiting/iu);
   });
 
   it("never diagnoses a well-formed key as the wrong kind of credential after a failure", () => {

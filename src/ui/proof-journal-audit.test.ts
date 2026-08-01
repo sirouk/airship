@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import type { SessionAuditReport } from "../core/session-audit";
-import { journalAuditReading, missingReceiptReading, recordedActivityFacts } from "./proof-view";
+import { answerProvenanceReading, journalAuditReading, missingReceiptReading, recordedActivityFacts } from "./proof-view";
 
 const source = await readFile(new URL("./proof-view.tsx", import.meta.url), "utf8");
 
@@ -75,6 +75,12 @@ function counted(counts: Partial<SessionAuditReport["counts"]>): SessionAuditRep
       localCommands: 0,
       terminalLocalCommands: 0,
       shellRecords: 0,
+      // The fixture is cast to the report type, so a field added to `counts`
+      // that is missing here reaches the renderer as `undefined` and prints
+      // "undefined decided" rather than failing the cast. Every field the
+      // ledger reads has a zero here for that reason.
+      humanIntentDecisions: 0,
+      humanIntentAllowed: 0,
       unknownEvents: 0,
       ...counts,
     },
@@ -133,11 +139,12 @@ describe("what Proof says about a session with no turn receipt", () => {
 
 describe("the recorded-work ledger", () => {
   it("reports every kind of recorded work, zeros included", () => {
-    // TRM-06's rule, now applied to all four: a count of zero is a fact, and a
+    // TRM-06's rule, now applied to all five: a count of zero is a fact, and a
     // missing row is what let a session with unreported work look like a
-    // session with none.
+    // session with none. "Approved by you" is the fifth because a session whose
+    // only work was two approved Git commits used to render four zeros.
     expect(recordedActivityFacts(counted({ events: 4 }).counts).map((fact) => fact.label))
-      .toEqual(["Provider turns", "Tool operations", "Local commands", "Shell records"]);
+      .toEqual(["Provider turns", "Tool operations", "Local commands", "Shell records", "Approved by you"]);
   });
 
   it("says nothing at all when there is no audited journal to count", () => {
@@ -171,7 +178,7 @@ describe("the recorded-work ledger", () => {
 
   it("drops the breakdown at zero, where it adds no fact", () => {
     expect(recordedActivityFacts(counted({ events: 4 }).counts).map((fact) => fact.value))
-      .toEqual(["0", "0", "0", "0"]);
+      .toEqual(["0", "0", "0", "0", "0"]);
   });
 
   it("stands beside the verdict, not inside a panel that collapses when the structure passes", () => {
@@ -189,7 +196,31 @@ describe("the recorded-work ledger", () => {
     expect(source).toContain("“Complete history” means no gap was found among the events that are present; it cannot show that an effect which was never recorded is missing.");
   });
 
-  it("states that a receipt does not bind the sources behind the answer", () => {
-    expect(source).toContain("<dt>Answer provenance</dt><dd>Not bound to this receipt. A turn's selected sources are journal records.</dd>");
+  /*
+   * The row used to be a constant: "Not bound to this receipt. A turn's
+   * selected sources are journal records." True, and useless — it named an
+   * absence without naming where the thing actually is, and nothing in the
+   * product rendered the selection it pointed at. It now reads the sealed
+   * `turn.context.selected` record, and the three states it distinguishes are
+   * three different facts.
+   */
+  it("names what the answer was selected from, or says which absence it is", () => {
+    expect(source).toContain("<dt>Answer provenance</dt><dd>{answerProvenanceReading(scopedTurn, Boolean(journal))}</dd>");
+  });
+
+  it("distinguishes 'not read yet' from 'no sources' from 'these sources'", () => {
+    const row = (grounding: readonly { path: string }[], bytes?: number) => ({
+      id: "t", kind: "provider-turn" as const, sequence: 1, recordedAt: "2026-07-31T00:00:00.000Z",
+      turnId: "t", title: "q", outcome: "completed" as const, outcomeLabel: "Completed",
+      ...(bytes === undefined ? {} : { groundingBytes: bytes }),
+      grounding: grounding as never, facts: [],
+    });
+    expect(answerProvenanceReading(undefined, false)).toMatch(/Reading this session's journal/u);
+    expect(answerProvenanceReading(undefined, true)).toMatch(/not in the journal read for this view/u);
+    expect(answerProvenanceReading(row([]), true)).toMatch(/No sources were selected for this turn/u);
+    const named = answerProvenanceReading(row([{ path: "notes/retrieval.md" }, { path: "README.md" }], 1_132), true);
+    expect(named).toContain("2 sources selected and journaled");
+    expect(named).toContain("1,132 bytes");
+    expect(named).toMatch(/Path, revision, chunk and content digest/u);
   });
 });

@@ -290,6 +290,10 @@
   width: 100%;
   min-width: 0;
   min-height: var(--density-control);
+  /* Measured at 13.33px on the three "Paste credential" fields. Anything under
+     16px makes iOS Safari zoom the layout viewport on focus and never zoom
+     back, which is the whole reason `--fs-field` exists. */
+  font-size: var(--fs-field);
 }
 
 .provider-risk-check {

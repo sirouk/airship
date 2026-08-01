@@ -57,11 +57,14 @@ export {
   importWorkspaceRecoveryKey,
 } from "./vault/recovery";
 export {
+  adoptionCarriedNote,
   migrateJournalState,
   migrateProfileCatalogState,
   migrateWorkspaceState,
+  readAdoptionCarriedWork,
   reconcileAdoptedProfileCatalog,
 } from "./vault/runtime-adoption";
+export type { AdoptionCarriedWork } from "./vault/runtime-adoption";
 export { EncryptedObjectWorkspace } from "./vault/encrypted-workspace";
 export { VaultContextFabricPort } from "./vault/context-fabric-port";
 export {

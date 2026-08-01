@@ -29,6 +29,43 @@
   background: color-mix(in srgb, var(--v-caution) 7%, var(--surface-soft));
 }
 
+/*
+ * Same card, different claim: a conversation that could not be replayed is a
+ * fault, not a documented posture, so it takes the failed register the return
+ * report deliberately leaves free.
+ *
+ * And it is pinned, which the return report is not. The return report heads an
+ * empty transcript; this one heads a *resumed* one — the fall-through lands the
+ * person inside the healthy sibling, whose transcript scrolls to its last card
+ * on arrival, so an unpinned notice about the conversation that did not come
+ * back would be scrolled off the top of the screen at the moment it was needed.
+ * It stays until it is dismissed.
+ */
+.resume-report--quarantine {
+  position: sticky;
+  z-index: 2;
+  top: 0;
+  border-color: color-mix(in srgb, var(--v-failed) 40%, var(--line));
+  /* Opaque, not the soft-surface mix the unpinned card uses: a sticky card
+     with a translucent bed shows the rows sliding underneath it. */
+  background: color-mix(in srgb, var(--v-failed) 7%, var(--ground));
+}
+
+.resume-report--quarantine > svg { color: var(--v-failed); }
+
+.resume-report__reason { margin-top: var(--sp-1); }
+
+.resume-report__reason > summary {
+  min-height: 24px;
+  color: var(--ink-muted);
+  cursor: pointer;
+  font-size: var(--fs-micro);
+}
+
+/* The verbatim reason is one long unbreakable machine token more often than
+   not, so it wraps rather than setting the card's width. */
+.resume-report__reason p { overflow-wrap: anywhere; }
+
 .resume-report > svg {
   flex: 0 0 auto;
   margin-top: 2px;

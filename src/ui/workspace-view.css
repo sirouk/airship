@@ -411,6 +411,16 @@
 
   .workbench-section-heading { min-height: 52px; }
   .scm-row > div button { width: 44px; height: 44px; }
+
+  /*
+   * `--fs-field` is `max(16px, var(--fs-body))`: 16px is the iOS focus-zoom
+   * threshold and the max keeps the Type scale preference able to raise it.
+   * Measured at 12.75px, so tapping "Filter workspace files by path" scaled the
+   * whole workbench up and left the reader panning back — on the one control
+   * whose entire job is to get you to a file quickly. The Browser Git field
+   * carries the same rule in `terminal-view.css` for the same reason.
+   */
+  .workspace-filter { font-size: var(--fs-field); }
 }
 
 /*
@@ -479,23 +489,27 @@
 }
 
 /*
- * A completion sentence is worth reading; it is not worth 40px of permanent
- * layout that pushes the workbench down and never gives the space back. The
- * notice is a toast over the workbench — no shift — and it keeps the shared
- * `.notice` recipe's seven states.
+ * The completion sentence sits under the evidence, never on top of it.
+ *
+ * It was an absolutely-positioned toast, on the argument that a sentence is not
+ * worth 40px of permanent layout. Measured at 1440×900 it landed at
+ * x248→710 / y794→842 across an `.editor-strip` at x552→1440 / y819→858 — a
+ * 3,632px² overlap directly over the "Saved" verdict chip and the revision hash
+ * it was announcing — and at 390×844 it covered 21,279px² of the same strip,
+ * burying "Reveal in Explorer", "Wrap" and "Save". A claim printed on top of
+ * the state that proves it is the one thing this product may not do, so it is
+ * a row in the workbench column, immediately beneath the strip whose verdict it
+ * repeats. It still expires; the space it takes is the reader's for as long as
+ * there is something to read.
  */
 .workbench-notice.notice {
-  position: absolute;
-  z-index: 5;
-  bottom: var(--sp-4);
-  left: var(--sp-4);
-  max-width: min(34rem, calc(100% - 2 * var(--sp-4)));
-  /* Completion/error prose may visually overlap dense mobile controls, but it
-     must never turn the whole toast rectangle into an invisible click shield. */
-  pointer-events: none;
+  flex: 0 0 auto;
+  margin-top: var(--sp-2);
+  max-width: min(34rem, 100%);
   background: var(--surface-raised);
-  box-shadow: var(--shadow);
 }
+
+.workbench-notice.notice > p { flex: 1 1 auto; min-width: 0; }
 
 .workbench-notice.notice > button {
   min-height: 30px;
@@ -505,7 +519,6 @@
   border-radius: var(--radius-control);
   color: var(--ink-muted);
   background: transparent;
-  pointer-events: auto;
   cursor: pointer;
   font-size: var(--fs-caption);
 }

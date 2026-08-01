@@ -3,6 +3,34 @@ import { describe, expect, it } from "vitest";
 import { RAIL_RECENT_LIMIT, railCurrentHint, railRowFor, railStandInFor, rovingKey } from "./rail";
 import { destinationLabel, railTraversal, type NavigationView } from "./navigation-model";
 
+/*
+ * The returning person's most important object may not need a click to exist.
+ *
+ * Measured on every cold open: `button[aria-label="Expand recent conversations"]`
+ * present on a profile that already held conversations, because the disclosure
+ * was seeded `useState(false)` and the list arrives asynchronously — so mount
+ * was always empty and the seed always said "closed".
+ */
+describe("the conversation disclosure's default", () => {
+  const source = readFileSync(new URL("./rail.tsx", import.meta.url), "utf8");
+
+  it("opens itself the first time the profile turns out to have conversations", () => {
+    expect(source).toContain("if (recentsChoice.current !== undefined || visibleConversations.length === 0) return;");
+    expect(source).toContain("setRecentsOpen(true);");
+  });
+
+  it("lets a stated choice outrank the default, and remembers it", () => {
+    expect(source).toContain("const recentsChoice = useRef<boolean | undefined>(loadRecentsPreference());");
+    expect(source).toContain("saveRecentsPreference(open);");
+    expect(source).toContain("onClick={() => chooseRecentsOpen(!recentsOpen)}");
+  });
+
+  it("marks the conversation that will not reopen, in words and not only in colour", () => {
+    expect(source).toContain("Needs review · could not be reopened");
+    expect(source).toContain("— needs review; this conversation could not be reopened.");
+  });
+});
+
 describe("the shortcut's size", () => {
   it("lists the same ten conversations the rail list did", () => {
     // The ledger is `All conversations`; this is the shortcut. A larger number

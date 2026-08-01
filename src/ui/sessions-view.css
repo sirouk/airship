@@ -225,10 +225,39 @@
  */
 .session-library-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  grid-template-columns: minmax(0, 1fr) auto auto auto auto;
   align-items: center;
   border: 1px solid transparent;
   border-radius: var(--radius-control, 6px);
+}
+
+/* The row's own resume verb. It is quiet at rest and states itself on hover,
+   focus and selection — but it is never hidden, because the measured failure
+   was a list that could not be opened at all on a touch device, where there is
+   no hover to reveal anything. */
+.session-library-open {
+  min-width: 56px;
+  min-height: var(--touch-target, 44px);
+  padding: 0 var(--sp-2, 8px);
+  border: 1px solid transparent;
+  border-radius: var(--radius-control, 6px);
+  color: var(--ink-faint, #858d8a);
+  background: transparent;
+  cursor: pointer;
+  font: var(--fw-body) var(--fs-meta)/1 var(--font-body);
+}
+
+.session-library-row:hover .session-library-open,
+.session-library-row:has(.session-library-card.selected) .session-library-open,
+.session-library-open:focus-visible {
+  border-color: var(--line-control, rgba(225, 217, 200, 0.24));
+  color: var(--accent-bright, #d8b273);
+}
+
+.session-library-open:disabled {
+  border-color: transparent;
+  color: var(--ink-faint, #858d8a);
+  cursor: default;
 }
 
 .session-library-row[draggable="true"] { cursor: grab; }
@@ -989,6 +1018,16 @@
   font-size: var(--fs-caption);
 }
 
+/* Inside the fork panel, in the panel's own reading order: a refusal at the
+   top of a scrolled pane is a refusal nobody sees. */
+.session-library-fork-error {
+  align-items: flex-start;
+  line-height: 1.45;
+}
+
+.session-library-fork-error > svg { flex: 0 0 auto; margin-top: 2px; }
+.session-library-fork-error strong { color: var(--danger, #ce7769); }
+
 .session-library-alert.error {
   border-color: color-mix(in srgb, var(--danger, #ce7769) 45%, transparent);
   color: var(--danger, #ce7769);
@@ -1470,6 +1509,22 @@
    beside a 430px column that was 90% empty. */
 .session-library-technical .session-library-detail-grid {
   grid-template-columns: minmax(340px, 1.15fr) minmax(270px, 0.85fr);
+}
+
+/*
+ * …but only where both columns fit.
+ *
+ * The 1180px rule that folds `.session-library-detail-grid` to one column is
+ * two selectors weaker than the rule above and could never reach it, so at
+ * 390×844 the runtime record kept its 340px + 270px tracks inside a 336px box
+ * with `overflow: hidden`: measured, the transcript panel rendered at x=391…661
+ * — entirely off-screen, with no scroller and no pan that could reach it. The
+ * transcript half of a conversation's own record was unreadable on a phone.
+ */
+@media (max-width: 1180px) {
+  .session-library-technical .session-library-detail-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 /*

@@ -42,7 +42,7 @@ describe("the verdict survives a phone", () => {
      * shell.css. The half that got clipped was the credential clause — the
      * claim the panel exists to make.
      */
-    expect(source).toContain("label={egressCountLabel(records)}");
+    expect(source).toContain("label={egressCountLabel(remote)}");
     expect(source).toContain('<p class={`egress-panel__verdict ${credentialTone(totals)}`}>');
   });
 

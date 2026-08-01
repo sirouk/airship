@@ -37,15 +37,26 @@ export function DurabilityIndicator({ state, detail }: { state: DurabilityState;
 /**
  * The one durability→seal mapping, for every surface that renders the claim.
  *
- * Page memory is `none`, not `failed`: nothing has gone wrong, no durability
- * evidence has been requested. A local device journal is verified evidence of
- * encryption at rest; a synced one is the same claim with the round-trip
- * completed. A sync that is *running* is `checking`; a sync that has stopped is
- * `attention`, because it is a state that needs the reader to do something —
- * the same rung the vault trust axis gives an unreachable adopted vault.
+ * Page memory is `attention`. It shipped as `none` — "nothing has gone wrong,
+ * no durability evidence has been requested" — and the Journey Atlas measured
+ * what that costs: 180 turns accumulated a chained-looking journal while the
+ * only durability warning in the product was a transient status string that the
+ * first turn overwrote and never restored, and a reload destroyed all of it.
+ * `attention` is this vocabulary's own definition of the state a reader has to
+ * do something about, and doing nothing about page memory destroys the work.
+ * The rung is not a verdict on the person's choice: the Vault route offers
+ * Ephemeral deliberately, and nothing here blocks it — the chip states the
+ * consequence the route's own comparison table states ("What can lose it:
+ * Closing the page") instead of rendering it as the neutral resting state.
+ *
+ * A local device journal is verified evidence of encryption at rest; a synced
+ * one is the same claim with the round-trip completed. A sync that is *running*
+ * is `checking`; a sync that has stopped is `attention`, because it is a state
+ * that needs the reader to do something — the same rung the vault trust axis
+ * gives an unreachable adopted vault.
  */
 export function durabilitySeal(state: DurabilityState): SealState {
-  if (state === "ephemeral") return "none";
+  if (state === "ephemeral") return "attention";
   if (state === "syncing") return "checking";
   return state === "sync-paused" ? "attention" : "verified";
 }
@@ -57,4 +68,21 @@ export function durabilityLabel(state: DurabilityState): string {
   // No present-progressive verb: nothing is synchronizing, and the reason is the
   // words a reader can act on.
   return state === "sync-paused" ? "Encrypted · sync paused offline" : "Encrypted state synced";
+}
+
+/**
+ * The resting word for a chip too narrow to render the whole label.
+ *
+ * `sessionStatusShort` derives one by taking the head before " · ", which turns
+ * this vocabulary's page-memory claim into the bare word "Ephemeral" — a term
+ * the Atlas found novices could not read: the persona who lost a conversation
+ * to a refresh had met "Ephemeral · this page only" four times and still could
+ * not tell that their work was not being kept. The abbreviation belongs to the
+ * vocabulary rather than to the chip, and it says the consequence.
+ */
+export function durabilityShort(state: DurabilityState): string {
+  if (state === "ephemeral") return "Not saved";
+  if (state === "syncing") return "Syncing";
+  if (state === "sync-paused") return "Sync paused";
+  return "Encrypted";
 }

@@ -5,7 +5,7 @@ import type {
   SecurityPosture,
 } from "../../core/contracts";
 import { buildOpenAiPayload, OpenAiStreamAssembler } from "../chutes/openai";
-import { BoundedSseParser } from "../chutes/sse";
+import { BoundedSseParser, type SseMessage } from "../chutes/sse";
 import type { MemoryCredential } from "./contracts";
 import {
   LocalProviderError,
@@ -81,7 +81,12 @@ export class LocalOpenAiTransport implements InferenceTransport {
     request: InferenceRequest,
     externalSignal: AbortSignal,
   ): AsyncGenerator<InferenceEvent> {
-    const lifetime = timeoutSignal(externalSignal, this.totalTimeoutMs);
+    const lifetime = timeoutSignal(
+      externalSignal,
+      this.totalTimeoutMs,
+      `The local model did not finish this answer within its ${describeBudget(this.totalTimeoutMs)} limit.`
+      + " Anything already shown is what arrived; nothing was cancelled by you.",
+    );
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
     let responseStarted = false;
     try {
@@ -149,7 +154,7 @@ export class LocalOpenAiTransport implements InferenceTransport {
 
       for (;;) {
         if (lifetime.signal.aborted) throw lifetime.signal.reason;
-        const { value, done } = await streamReader.read();
+        const { value, done } = await readChunk(streamReader);
         if (done) break;
         totalBytes += value.byteLength;
         if (totalBytes > this.maxStreamBytes) {
@@ -211,8 +216,48 @@ export class LocalOpenAiTransport implements InferenceTransport {
 
 const DONE = Symbol("local-openai-done");
 
+/** Minutes where the budget is minutes, so the sentence reads as a limit. */
+function describeBudget(totalTimeoutMs: number): string {
+  const minutes = Math.round(totalTimeoutMs / 60_000);
+  return minutes >= 1
+    ? `${minutes}-minute`
+    : `${Math.max(1, Math.round(totalTimeoutMs / 1_000))}-second`;
+}
+
+/**
+ * Read one chunk, and keep a transport failure from being reported as a payload
+ * verdict.
+ *
+ * Measured: a connection dropped mid-body raises `net::ERR_INCOMPLETE_CHUNKED_
+ * ENCODING` in the console and rejects this read with a bare `TypeError`. That
+ * landed in the `responseStarted && error instanceof TypeError` branch below,
+ * whose sentence — "returned malformed UTF-8 or stream framing" — accuses the
+ * provider of sending corrupt data and sends the person to debug the model
+ * server instead of the connection. That branch is still the right answer for
+ * the fatal `TextDecoder`, which is the other thing that raises `TypeError`
+ * here; the two are separated by *where* the throw happened, because the error
+ * itself carries nothing that tells them apart.
+ *
+ * `DOMException` passes straight through: an abort — the caller's Stop, or this
+ * transport's own total-timeout — already has a truthful verdict downstream, and
+ * naming it a dropped connection would be the same class of mistake in reverse.
+ */
+async function readChunk(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  try {
+    return await reader.read();
+  } catch (caught) {
+    if (caught instanceof DOMException) throw caught;
+    throw new LocalProviderError(providerDiagnostic(
+      "stream-interrupted",
+      "The connection to the local inference endpoint dropped before the reply finished. The endpoint answered and started streaming; the stream stopped mid-response. Anything already shown is what arrived.",
+    ), { cause: caught });
+  }
+}
+
 function consumeSse(
-  messages: readonly { data: string }[],
+  messages: readonly SseMessage[],
   assembler: OpenAiStreamAssembler,
   alreadyDone: boolean,
 ): Array<InferenceEvent | typeof DONE> {
@@ -220,6 +265,8 @@ function consumeSse(
   let done = alreadyDone;
   for (const message of messages) {
     if (done) throw invalidStream("The local inference endpoint sent data after its completion marker.");
+    const reported = providerReportedFailure(message);
+    if (reported) throw new LocalProviderError(providerDiagnostic("provider-reported", reported));
     if (message.data.trim() === "[DONE]") {
       done = true;
       events.push(DONE);
@@ -228,6 +275,53 @@ function consumeSse(
     }
   }
   return events;
+}
+
+/**
+ * The provider's own diagnosis, which was arriving and being thrown away.
+ *
+ * Measured against LM Studio: HTTP 200, then one frame reading `event: error` /
+ * `data: {"error":{"message":"Engine protocol predict request returned 400: …
+ * Failed to initialize samplers: failed to parse grammar"}}`, and the stream
+ * ends. `consumeSse` only ever read `message.data` and only ever compared it to
+ * `[DONE]`, so the frame fell through the assembler and the turn died on "The
+ * local inference stream ended before a completion marker." — a complaint about
+ * framing, in front of a person whose model server had just said exactly what
+ * was wrong. The parser has carried `event` since it was written
+ * (`chutes/sse.ts`); nothing inspected it.
+ *
+ * The text is untrusted: it is another program's output being placed in this
+ * person's transcript, so control characters go and the length is bounded, the
+ * same discipline every other passed-through provider string gets here.
+ */
+function providerReportedFailure(message: SseMessage): string | undefined {
+  const payload = message.data.trim();
+  if (payload === "[DONE]" || !payload.startsWith("{")) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(payload);
+  } catch {
+    // Not JSON: the assembler owns the verdict on it.
+    return undefined;
+  }
+  const error = (parsed as { error?: unknown } | null)?.error;
+  const raw = typeof error === "string"
+    ? error
+    : typeof (error as { message?: unknown } | undefined)?.message === "string"
+      ? (error as { message: string }).message
+      : undefined;
+  // An `event: error` frame with no readable message still has to stop the
+  // turn: it is the endpoint saying it failed, and continuing would end on the
+  // framing complaint this exists to replace.
+  if (raw === undefined) {
+    return message.event === "error"
+      ? "The local inference endpoint reported an error and gave no reason."
+      : undefined;
+  }
+  const clean = raw.replace(/[\u0000-\u001F\u007F]+/gu, " ").replace(/\s+/gu, " ").trim();
+  if (!clean) return "The local inference endpoint reported an error and gave no reason.";
+  const bounded = clean.length > 400 ? `${clean.slice(0, 397)}…` : clean;
+  return `The local model server reported: ${bounded}`;
 }
 
 function invalidStream(message: string): LocalProviderError {

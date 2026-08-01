@@ -1,5 +1,6 @@
 import { useId, useRef, useState } from "preact/hooks";
 import { isDeployableGoogleOAuthClientId } from "../storage/google-drive-configuration";
+import { EPHEMERAL_RETENTION_DISCLOSURE } from "./chat/return-ledger";
 import { isGoogleDriveConfiguration, type VaultSnapshot } from "../vault/coordinator";
 import type { LocalDeviceVaultStatus } from "../vault/local-device";
 import { vaultBackendUnavailableReason, type VaultBackend } from "./platform-shell";
@@ -111,7 +112,17 @@ export const PROVIDER_PROFILES: readonly ProviderProfile[] = Object.freeze([
       offline: "Yes",
       reach: "No",
       supply: "Nothing",
-      keep: "A recovery key",
+      /*
+       * The row has to answer the row below it.
+       *
+       * "A recovery key" read as the antidote to "Browser eviction · clearing
+       * site data", and the Atlas drove that reading to its end: a fresh
+       * browser profile plus the correct key returns "The recovery key did not
+       * authenticate this Local Device Vault. No existing local device Vault
+       * was found for this partition." The key authenticates a Vault; the
+       * ciphertext is in this profile's storage. Both artifacts, or neither.
+       */
+      keep: "A recovery key and an encrypted backup file — the key alone cannot rebuild an evicted store",
       lose: "Browser eviction · clearing site data",
     }),
   }),
@@ -153,7 +164,18 @@ export const PROVIDER_PROFILES: readonly ProviderProfile[] = Object.freeze([
     id: "ephemeral",
     title: "Ephemeral",
     description: "Page memory only; nothing synced",
-    note: "Workspace and journal state remain only in this page-memory runtime. Nothing is synchronized, and closing the page releases it.",
+    /*
+     * The retention sentence is appended from the module that implements it.
+     *
+     * "Closing the page releases it" is true of everything a person writes and
+     * was not true of everything Airship keeps: the return ledger persists an
+     * opaque id, a message count and a clock in `localStorage` so a returning
+     * person can be told that something was not kept. Stating that here, at the
+     * moment this option is chosen, is what makes the row honest — and reading
+     * it from `EPHEMERAL_RETENTION_DISCLOSURE` is what stops the claim and the
+     * implementation drifting apart.
+     */
+    note: `Workspace and journal state remain only in this page-memory runtime. Nothing is synchronized, and closing the page releases it. ${EPHEMERAL_RETENTION_DISCLOSURE}`,
     facts: Object.freeze({
       survives: "No · released with the page",
       offline: "Yes, until you close it",
@@ -334,8 +356,13 @@ export function VaultView({
       <div class="vault-view__state" data-state={state}>
         <Seal state={sealForState(state)} label={SEAL_WORD[state]} density="dot" size={24} />
         <div class="vault-view__state-copy">
+          {/* A requirement in the failure register was the first thing a person read
+              after pressing "Keep future conversations" on the loss report —
+              a requirement, in the failure register, in answer to an intent
+              (J132). The heading answers the intent instead, and the sentence
+              below states what the step costs and what it does not do. */}
           <strong>{localDevice
-            ? localDeviceStatus ? "Local Device · encrypted and offline" : "Local Device setup required"
+            ? localDeviceStatus ? "Local Device · encrypted and offline" : "Keep this browser’s work on this device"
             : ephemeral ? "Ephemeral · page memory only"
             : adoptedDrive ? "Google Drive · encrypted"
             : runtimeAdopted ? "Encrypted object store · runtime adopted"
@@ -346,7 +373,7 @@ export function VaultView({
               the cell that owns it. */}
           {localDevice || ephemeral || runtimeAdopted || snapshot.phase !== "ready" ? (
             <p>{localDevice
-              ? localDeviceStatus?.message ?? "Create or recover the device key below. No storage authority is created before the recovery value is acknowledged. Complete the crash-safe recovery ceremony below to activate encrypted offline persistence."
+              ? localDeviceStatus?.message ?? "Creating it takes one step: Airship generates a recovery key, you save it, and the encrypted store opens. Nothing is enrolled until you save that key, and cancelling changes nothing. Conversations already in this tab are copied into the Vault when it opens; each one stays pinned to the storage it was started on, so they are continued from All conversations with Fork to continue rather than in place."
               : ephemeral
                 ? "No cloud or device Vault is attached. Use this mode for disposable work, or select a durable provider before closing the page."
               : runtimeAdopted

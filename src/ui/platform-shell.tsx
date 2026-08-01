@@ -2,7 +2,7 @@ import { Component, type ComponentChildren } from "preact";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import type { SlashCommandDescriptor } from "../commands/types";
 import type { SessionListItem } from "../sessions/domain";
-import { CANONICAL_DESTINATIONS, navigationHashForView, SETTINGS_OVERLAY_ENTRY, type NavigationView } from "./navigation-model";
+import { CANONICAL_DESTINATIONS, destinationLabel, navigationHashForView, SETTINGS_OVERLAY_ENTRY, type NavigationView } from "./navigation-model";
 import { Seal, type SealState } from "./seal";
 import { trapFocus } from "./focus-trap";
 import type { ApprovalMode } from "../approvals/modes";
@@ -22,7 +22,7 @@ export type PaletteEntry = Readonly<{
   label: string;
   description: string;
   keywords?: readonly string[];
-  group: "Navigate" | "Commands" | "Sessions" | "Trust" | "Preferences";
+  group: "Navigate" | "Commands" | "Sessions" | "Trust" | "Preferences" | "Actions";
   /**
    * Set for entries the runtime has declared unavailable right now. The row
    * stays listed with its reason as the description — the same contract
@@ -36,9 +36,45 @@ export type PaletteEntry = Readonly<{
 export function buildPaletteEntries(args: Readonly<{
   navigate(view: NavigationView): void;
   openPreferences(): void;
+  /**
+   * The shortcut sheet, as a palette row.
+   *
+   * Measured: palette queries "shortcut", "keyboard" and "chord" each returned
+   * "No matching destination or command." on a product that binds eleven of
+   * them, so the one surface that could have taught the keyboard layer could
+   * not even find the word for it.
+   */
+  openShortcuts?(): void;
   commands?: readonly SlashCommandDescriptor[];
   runCommand?(command: string): void;
   sessions?: readonly Readonly<{ id: string; title: string; open(): void }>[];
+  /**
+   * Every managed profile, as a verb.
+   *
+   * The palette held no verbs at all, so the thing a multi-profile person does
+   * most had no keyboard path: the "Agent profile" control was the 24th tab
+   * stop and `NAVIGATION_JUMPS` bound no chord to it. `g 1`…`g 9` reach the
+   * same rows from the transcript in three keystrokes.
+   */
+  profiles?: readonly Readonly<{ profileId: string; name: string; description?: string; active: boolean; switchTo(): void }>[];
+  /**
+   * The shell's own verbs, as palette rows.
+   *
+   * Measured: "new conversation", "retry" and "rename" each returned "No
+   * matching destination or command." while the live shell rendered buttons of
+   * exactly those names — so every action still cost menu archaeology, on the
+   * one surface a keyboard-first person reaches for first. A verb states its
+   * own refusal here rather than being withheld: `reason` fills the row's
+   * description and disables it, the contract disabled commands already keep.
+   */
+  actions?: readonly Readonly<{
+    id: string;
+    label: string;
+    description: string;
+    keywords?: readonly string[];
+    reason?: string;
+    run(): void;
+  }>[];
 }>): readonly PaletteEntry[] {
   const entries: PaletteEntry[] = [];
   for (const destination of CANONICAL_DESTINATIONS) {
@@ -75,6 +111,24 @@ export function buildPaletteEntries(args: Readonly<{
       run: () => args.navigate(nested.id),
     }));
   }
+  (args.profiles ?? []).forEach((profile, index) => entries.push(Object.freeze({
+    id: `profile:${profile.profileId}`,
+    label: profile.active ? `${profile.name} · active profile` : `Switch to ${profile.name}`,
+    description: `Agent profile${profileChordHint(index) ? ` · ${profileChordHint(index)}` : ""}${profile.description ? ` · ${profile.description}` : ""}`,
+    keywords: ["profile", "switch", "change profile", "agent", profile.profileId, profile.name],
+    group: "Navigate",
+    ...(profile.active ? { disabled: true } : {}),
+    run: profile.switchTo,
+  })));
+  for (const action of args.actions ?? []) entries.push(Object.freeze({
+    id: `action:${action.id}`,
+    label: action.label,
+    description: action.reason ?? action.description,
+    keywords: action.keywords ?? [],
+    group: "Actions",
+    ...(action.reason ? { disabled: true } : {}),
+    run: action.run,
+  }));
   entries.push(Object.freeze({
     id: SETTINGS_OVERLAY_ENTRY.id,
     label: "Preferences",
@@ -82,6 +136,14 @@ export function buildPaletteEntries(args: Readonly<{
     keywords: ["settings", "theme", "mode", "paper", "dark", "approval", "full access", "auto approve"],
     group: "Preferences",
     run: args.openPreferences,
+  }));
+  if (args.openShortcuts) entries.push(Object.freeze({
+    id: "shortcuts",
+    label: "Keyboard shortcuts",
+    description: `Every chord this shell binds · ${SHORTCUT_SHEET_CHORD}`,
+    keywords: ["keyboard", "shortcut", "shortcuts", "chord", "chords", "keys", "hotkey", "accelerator", "?"],
+    group: "Preferences",
+    run: args.openShortcuts,
   }));
   for (const command of args.commands ?? []) entries.push(Object.freeze({
     id: `command:${command.name}`,
@@ -128,28 +190,82 @@ export async function loadRecentSessionPaletteSources(
   return recentSessionPaletteSources(page.items, open);
 }
 
-export function CommandPalette({ open, entries, onClose }: Readonly<{
+/**
+ * Anything an overlay draws. A control inside one of these is never the control
+ * that opened it, so it can never become the thing focus is handed back to.
+ */
+const OVERLAY_ROOTS = "[role='dialog'], .platform-scrim, .approval-scrim, .mobile-sheet";
+
+/**
+ * Who gets the keyboard back when an overlay closes.
+ *
+ * Measured: Escape from the command palette or from Preferences dropped focus
+ * on `<body>`, from where the composer's autofocus claimed it — 21 Shift+Tab
+ * presses from the control the person had opened the overlay with. The cause
+ * was that both dialogs captured `document.activeElement` inside a post-commit
+ * effect, and the commit that opens an overlay is the same one that marks the
+ * shell `inert`: the opener has already been blurred by the time the effect
+ * runs, so the capture could only ever read `<body>`.
+ *
+ * `mobile-navigation.tsx` holds the other half of this contract with an
+ * explicit `moreButton` ref, which is why the phone's More sheet always
+ * restored correctly. These two overlays have many openers — a topbar button,
+ * ⌘K from anywhere, a More-sheet row — so instead of a ref per call site the
+ * shell remembers the last focus *outside* any overlay, captured from the
+ * `focusout` the inerting itself fires, one commit before the effect.
+ */
+export function useOpenerRestore(open: boolean): void {
+  const opener = useRef<HTMLElement>();
+  const lastOutside = useRef<HTMLElement>();
+  useEffect(() => {
+    const remember = (event: FocusEvent) => {
+      const target = event.target;
+      if (target instanceof HTMLElement && target !== document.body && !target.closest(OVERLAY_ROOTS)) {
+        lastOutside.current = target;
+      }
+    };
+    document.addEventListener("focusout", remember, true);
+    return () => document.removeEventListener("focusout", remember, true);
+  }, []);
+  useEffect(() => {
+    if (!open) return;
+    const active = document.activeElement;
+    opener.current = active instanceof HTMLElement && active !== document.body && !active.closest(OVERLAY_ROOTS)
+      ? active
+      : lastOutside.current;
+    return () => {
+      const target = opener.current;
+      if (!target?.isConnected) return;
+      target.focus({ preventScroll: true });
+      // The shell lifts `inert` on the commit that closes the overlay, and
+      // focusing an element still inside an inert subtree silently does
+      // nothing — the same one-frame race `approval-dock.tsx` documents.
+      if (document.activeElement === target) return;
+      requestAnimationFrame(() => { if (target.isConnected) target.focus({ preventScroll: true }); });
+    };
+  }, [open]);
+}
+
+export function CommandPalette({ open, entries, onClose, onOpenShortcuts }: Readonly<{
   open: boolean;
   entries: readonly PaletteEntry[];
   onClose(): void;
+  /** The palette's footer teaches the sheet; without it the footer says nothing about it. */
+  onOpenShortcuts?(): void;
 }>) {
   const dialog = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLInputElement>(null);
-  const restore = useRef<HTMLElement>();
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const filtered = useMemo(() => filterPaletteEntries(entries, query), [entries, query]);
 
+  useOpenerRestore(open);
   useEffect(() => {
     if (!open) return;
-    restore.current = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
     setQuery("");
     setActive(0);
     const frame = requestAnimationFrame(() => input.current?.focus({ preventScroll: true }));
-    return () => {
-      cancelAnimationFrame(frame);
-      restore.current?.focus({ preventScroll: true });
-    };
+    return () => cancelAnimationFrame(frame);
   }, [open]);
 
   if (!open) return null;
@@ -195,7 +311,17 @@ export function CommandPalette({ open, entries, onClose }: Readonly<{
             </button>
           )) : <p class="command-palette__empty">No matching destination or command.</p>}
         </div>
-        <footer><span><kbd>↑</kbd><kbd>↓</kbd> choose</span><span><kbd>↵</kbd> open</span></footer>
+        {/* The footer printed only how to drive the palette, on the one surface
+            in the product that could have taught the eleven chords outside it. */}
+        <footer>
+          <span><kbd>↑</kbd><kbd>↓</kbd> choose</span>
+          <span><kbd>↵</kbd> open</span>
+          {onOpenShortcuts ? (
+            <button class="command-palette__shortcuts" type="button" onClick={() => { onClose(); onOpenShortcuts(); }}>
+              <kbd>{SHORTCUT_SHEET_CHORD}</kbd> all shortcuts
+            </button>
+          ) : null}
+        </footer>
       </div>
     </div>
   );
@@ -224,6 +350,29 @@ export function navigationJumpForChord(prefix: string | undefined, key: string):
   return prefix === "g" ? NAVIGATION_JUMPS[key.toLocaleLowerCase()] : undefined;
 }
 
+/** How many profiles the `g <digit>` chord can reach. Nine keys, nine profiles. */
+export const PROFILE_CHORD_LIMIT = 9;
+
+/**
+ * The profile a `g <digit>` chord names, as a zero-based index into the managed
+ * profiles in the order the shell lists them.
+ *
+ * Switching profile is the thing a multi-profile person does several times an
+ * hour and it had no keyboard path at all: the control was the 24th tab stop,
+ * `NAVIGATION_JUMPS` bound nothing to it, and the palette answered "switch"
+ * with "No matching destination or command." A profile is a place in this
+ * product — its own conversations, drafts, terminal and workspace — so it takes
+ * the `g` prefix the other destinations use.
+ */
+export function profileJumpForChord(prefix: string | undefined, key: string): number | undefined {
+  if (prefix !== "g" || !/^[1-9]$/u.test(key)) return undefined;
+  return Number(key) - 1;
+}
+
+export function profileChordHint(index: number): string | undefined {
+  return index >= 0 && index < PROFILE_CHORD_LIMIT ? `g ${index + 1}` : undefined;
+}
+
 /**
  * The chord that reaches a destination, in the form a person types it.
  *
@@ -246,11 +395,18 @@ function chordSuffix(view: NavigationView): string {
   return chord ? ` · ${chord}` : "";
 }
 
-export function useGlobalNavigationJumps(navigate: (view: NavigationView) => void, enabled?: () => boolean): void {
+export function useGlobalNavigationJumps(
+  navigate: (view: NavigationView) => void,
+  enabled?: () => boolean,
+  /** `g 1`…`g 9`. Kept in this handler so one `g` prefix serves every chord. */
+  switchProfile?: (index: number) => void,
+): void {
   const navigateRef = useRef(navigate);
   navigateRef.current = navigate;
   const enabledRef = useRef(enabled);
   enabledRef.current = enabled;
+  const switchProfileRef = useRef(switchProfile);
+  switchProfileRef.current = switchProfile;
   useEffect(() => {
     let prefix: string | undefined;
     let timeout = 0;
@@ -272,13 +428,54 @@ export function useGlobalNavigationJumps(navigate: (view: NavigationView) => voi
         return;
       }
       const destination = navigationJumpForChord(prefix, event.key);
+      const profileIndex = destination ? undefined : profileJumpForChord(prefix, event.key);
       clear();
-      if (!destination) return;
+      if (destination) {
+        event.preventDefault();
+        navigateRef.current(destination);
+        return;
+      }
+      if (profileIndex === undefined || !switchProfileRef.current) return;
       event.preventDefault();
-      navigateRef.current(destination);
+      switchProfileRef.current(profileIndex);
     };
     window.addEventListener("keydown", onKeyDown);
     return () => { clear(); window.removeEventListener("keydown", onKeyDown); };
+  }, []);
+}
+
+/**
+ * The key that opens the sheet, printed everywhere the sheet is offered.
+ *
+ * `?`, `F1` and `Shift+/` all produced `[]` dialogs on the shipped build, and
+ * Preferences had no keyboard section, so eleven bound chords had no printed
+ * form anywhere in the product.
+ */
+export const SHORTCUT_SHEET_CHORD = "?";
+
+/**
+ * `?` from anywhere that is not a text field.
+ *
+ * Separate from `useGlobalPaletteShortcut` because it must not fire while the
+ * person is typing a question mark, and separate from the chord handler because
+ * it takes no prefix.
+ */
+export function useGlobalShortcutSheet(open: () => void, enabled?: () => boolean): void {
+  const openRef = useRef(open);
+  openRef.current = open;
+  const enabledRef = useRef(enabled);
+  enabledRef.current = enabled;
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (enabledRef.current && !enabledRef.current()) return;
+      if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;
+      if (event.key !== SHORTCUT_SHEET_CHORD && event.key !== "F1") return;
+      if (isTypingTarget(event.target)) return;
+      event.preventDefault();
+      openRef.current();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 }
 
@@ -594,12 +791,13 @@ export function PreferencesDialog({ open, value, onChange, onClose, profileAppro
   }>;
 }>) {
   const dialog = useRef<HTMLDivElement>(null);
-  const restore = useRef<HTMLElement>();
+  // Same defect and the same fix as the palette: the `document.activeElement`
+  // capture here ran a commit too late and could only ever read `<body>`.
+  useOpenerRestore(open);
   useEffect(() => {
     if (!open) return;
-    restore.current = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
     const frame = requestAnimationFrame(() => dialog.current?.focus({ preventScroll: true }));
-    return () => { cancelAnimationFrame(frame); restore.current?.focus({ preventScroll: true }); };
+    return () => cancelAnimationFrame(frame);
   }, [open]);
   if (!open) return null;
   const update = <K extends keyof PreferenceOverrides>(key: K, next: PreferenceOverrides[K]) => onChange(Object.freeze({ ...value, [key]: next }));
@@ -1063,9 +1261,32 @@ export function PwaUpdateBanner({ updateReady, onReload }: Readonly<{ updateRead
   return <div class="pwa-update" role="status"><span><strong>Runtime update ready</strong><small>Your current work stays active until you choose to reload.</small></span><button type="button" onClick={onReload}>Reload Airship</button></div>;
 }
 
+/**
+ * Rank for the *unfiltered* list only. A typed query is answered by relevance
+ * to what was typed, and this must not reorder it.
+ */
+const PALETTE_RECALL_RANK: Readonly<Record<PaletteEntry["group"], number>> = Object.freeze({
+  Sessions: 0, Actions: 1, Navigate: 2, Trust: 2, Preferences: 3, Commands: 4,
+});
+
 export function filterPaletteEntries(entries: readonly PaletteEntry[], query: string): readonly PaletteEntry[] {
   const terms = query.toLocaleLowerCase().trim().split(/\s+/u).filter(Boolean);
-  if (!terms.length) return entries.slice(0, 40);
+  /*
+   * With nothing typed, the palette's question is "take me back to what I was
+   * doing" — so the conversations answer it.
+   *
+   * Measured: the placeholder said "Go to a view, session, or command…" and the
+   * unfiltered list was 15 destinations then ~36 slash commands, with the
+   * session rows the palette already builds below all of them. `⌘K ↵` could not
+   * return a person to their own thread, and finding one at all was gated
+   * behind guessing its title. Sort is stable, so within a group the order the
+   * builder chose — recency for sessions — survives.
+   */
+  if (!terms.length) {
+    return [...entries]
+      .sort((left, right) => PALETTE_RECALL_RANK[left.group] - PALETTE_RECALL_RANK[right.group])
+      .slice(0, 40);
+  }
   return entries.filter((entry) => {
     const haystack = [entry.label, entry.description, entry.group, ...(entry.keywords ?? [])].join(" ").toLocaleLowerCase();
     return terms.every((term) => haystack.includes(term));

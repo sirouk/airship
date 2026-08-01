@@ -96,9 +96,15 @@ describe("runtime card presentation", () => {
       .toEqual({ label: "Inspect runtime", command: "/inspect-execution-runtimes" });
   });
 
-  it("keeps the activation verbs for a runtime that has one", () => {
-    expect(runtimeAction(capability({ state: "installable" }))?.label).toBe("Activate in Chat");
-    expect(runtimeAction(capability({ state: "failed" }))?.label).toBe("Review and retry in Chat");
+  /*
+   * The ellipsis is asserted, not incidental. The button prepares the command
+   * and does not run it — measured, the page read "3/6 runtimes ready" verbatim
+   * before and after a press — so a label that promises activation outright is
+   * the defect this pins.
+   */
+  it("keeps the activation verbs for a runtime that has one, and says they open rather than act", () => {
+    expect(runtimeAction(capability({ state: "installable" }))?.label).toBe("Activate in Chat…");
+    expect(runtimeAction(capability({ state: "failed" }))?.label).toBe("Review and retry in Chat…");
     expect(runtimeAction(capability({ state: "activating" }))).toBeUndefined();
     expect(runtimeAction(capability({ state: "unavailable" }))).toBeUndefined();
   });

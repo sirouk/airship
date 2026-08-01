@@ -552,6 +552,13 @@ describe("presentSessionMessages agrees with auditSessionHistory", () => {
     // The raw event type belongs to the provenance line under the sentence,
     // never inside the sentence a reader is meant to understand.
     expect(marker.detail).not.toContain("session.fork.context.seeded");
+    // And the messages themselves, so the count is a disclosure the reader can
+    // open rather than a claim they have to take on faith over an empty screen.
+    expect(marker.carriedContext).toHaveLength(fork.contextMessageCount);
+    expect(marker.carriedContext).toEqual([
+      { role: "user", content: "First" },
+      { role: "assistant", content: "One" },
+    ]);
   });
 
   /*

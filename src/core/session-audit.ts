@@ -203,6 +203,19 @@ export type SessionAuditReport = Readonly<{
      * what it counts.
      */
     shellRecords: number;
+    /*
+     * Effects a person authorised directly, outside the turn protocol.
+     *
+     * Every other field here counts something a turn did. Staging and
+     * committing from Source Control, or probing a vault, are journaled as
+     * `human.intent.reviewed`, validated by this audit — and were counted by
+     * nothing: an export taken immediately after two approved, write-effect
+     * Git operations that changed the repository read `"toolOperations": 0`
+     * beside `"complete": true`. Two numbers, because "1 decision" and
+     * "1 effect permitted" are different facts and a denial is evidence too.
+     */
+    humanIntentDecisions: number;
+    humanIntentAllowed: number;
     unknownEvents: number;
   }>;
   findings: readonly SessionAuditFinding[];
@@ -1077,6 +1090,12 @@ async function validateProtocol(
       }
       seenTurns.add(turnId);
       seenOperations.add(operationId);
+      // Counted here, past the shape gate and beside the identities it just
+      // claimed, so the number means "records this audit accepted" — the same
+      // bar `shellRecords` is held to. A provenance complaint below is a
+      // finding about a record that exists, not a reason to stop counting it.
+      counts.humanIntentDecisions += 1;
+      if (decision === "allow") counts.humanIntentAllowed += 1;
       const issue = approvalProvenanceIssue(payload.approval, session.manifest);
       if (issue) {
         add({ ...eventLocation(event), code: "HUMAN_INTENT_PROVENANCE_INVALID", category: "protocol", message: issue });
@@ -1872,6 +1891,8 @@ function emptyCounts(): {
   localCommands: number;
   terminalLocalCommands: number;
   shellRecords: number;
+  humanIntentDecisions: number;
+  humanIntentAllowed: number;
   unknownEvents: number;
 } {
   return {
@@ -1885,6 +1906,8 @@ function emptyCounts(): {
     localCommands: 0,
     terminalLocalCommands: 0,
     shellRecords: 0,
+    humanIntentDecisions: 0,
+    humanIntentAllowed: 0,
     unknownEvents: 0,
   };
 }

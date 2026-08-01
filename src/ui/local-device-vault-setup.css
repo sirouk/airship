@@ -189,6 +189,32 @@
   line-height: 1.45;
 }
 
+/* The override that stands between an unsaved key and the click that blanks it.
+   It is caution ink for the same reason the escape below it is: acting on it is
+   an assertion Airship cannot check. */
+.local-device-vault__transcribe {
+  display: grid;
+  gap: var(--sp-1);
+  margin: 0;
+  color: var(--v-caution);
+  font-size: var(--fs-meta);
+  line-height: 1.45;
+}
+
+.local-device-vault__transcribe button {
+  justify-self: start;
+}
+
+/* The kit is one object with two parts; the unfinished half says so in the
+   caution family rather than sitting below the fold as a spare feature. */
+.local-device-vault__kit[data-complete="false"] {
+  border-color: color-mix(in srgb, var(--v-caution) 45%, var(--line));
+}
+
+.local-device-vault__kit[data-complete="false"] strong {
+  color: var(--v-caution);
+}
+
 /* A 44px hit row: the acknowledgement is the highest-consequence control on
    the route and it was an 18px box in a 25px line. */
 .local-device-vault__check {
