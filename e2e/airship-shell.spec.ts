@@ -1,4 +1,5 @@
 import { expect, test, type Page, type TestInfo } from "@playwright/test";
+import { waitForShellSettled } from "./support/settled";
 
 /*
  * The rail's recents disclosure now opens itself the first time a profile turns
@@ -20,6 +21,18 @@ async function openReadyApp(page: Page): Promise<void> {
   await expect(page.locator(".app-shell")).toBeVisible();
   await expect(page.getByRole("main")).toBeVisible();
   await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+  /*
+   * "Ready" has to mean past the boot reload, or it means nothing.
+   *
+   * All three checks above are satisfied by the document the service-worker
+   * takeover is about to replace — a cold visit mints an address, reloads, and
+   * mints a second, different one; see `waitForShellSettled`. Every symptom of
+   * reading too early looked like a different bug: a URL round trip returning
+   * the "wrong" conversation, a keystroke lost to a document with no handlers,
+   * an evaluate against a destroyed context. One wait, at the one place every
+   * test in this file enters.
+   */
+  await waitForShellSettled(page);
 }
 
 async function capture(page: Page, testInfo: TestInfo, name: string): Promise<void> {
@@ -104,7 +117,18 @@ test("compact runtime indicators disclose scoped detail without expanding the to
   // never open; it is now a row in the sheet the chip opens, which is a
   // stronger disclosure than the one this test was written to protect.
   const runtime = page.locator(".topbar-posture-chip");
-  await expect(runtime).toContainText("Browser / Edge runtime");
+  /*
+   * The weakest claim, which is not the one this test used to pin.
+   *
+   * It asserted "Browser / Edge runtime", and that passed only because it read
+   * the chip before the boot reload settled — at which point the durability
+   * axis had not been evaluated and the runtime axis was the worst thing known.
+   * Settled, nothing is saved and no Vault is set up, and that is genuinely
+   * weaker than "the kernel runs in this browser". The chip is right; the test
+   * was reading a half-booted page. The runtime axis is still asserted, in the
+   * sheet, where the chip promises the rest of the claims live.
+   */
+  await expect(runtime).toContainText("Not saved · Vault not set up");
   await expect(runtime).toContainText("4 runtime claims");
   const initialTopbar = await page.locator(".topbar").boundingBox();
   expect(initialTopbar).not.toBeNull();
@@ -120,7 +144,12 @@ test("compact runtime indicators disclose scoped detail without expanding the to
 
   // The sheet is the disclosure, so it must be dismissible and re-openable by
   // keyboard alone — the tooltip it replaces was hover-only and unreachable.
-  await sheet.getByRole("button", { name: "Close" }).click();
+  // `exact: true`, because accessible-name matching is a case-insensitive
+  // substring by default and the Vault claim row now ends "…until this tab
+  // closes". A loose "Close" matched both the dismiss button and a row that
+  // tells the truth about ephemerality — the test failed because the product
+  // got more honest, which is the wrong way round.
+  await sheet.getByRole("button", { name: "Close", exact: true }).click();
   await expect(sheet).toBeHidden();
   await runtime.focus();
   await expect(runtime).toBeFocused();

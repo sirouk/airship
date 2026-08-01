@@ -23,8 +23,13 @@ export async function waitForShellSettled(
 ): Promise<void> {
   const timeout = options.timeout ?? 30_000;
   await page.waitForLoadState("networkidle", { timeout });
-  if (options.composer === false) return;
   // The composer is the chat shell's own statement that it is mounted and
-  // listening; routes without one pass `composer: false`.
+  // listening, and it is the strongest available signal — but only the chat
+  // route has one. Waiting for it unconditionally turned this helper into a
+  // 30-second timeout on #workspace, #sources and #editor, which is a worse
+  // failure than the race it was added to remove. Callers can still force
+  // either answer; by default the route decides.
+  const wantsComposer = options.composer ?? new URL(page.url()).hash.startsWith("#chat");
+  if (!wantsComposer) return;
   await expect(page.getByRole("combobox", { name: "Message Airship" })).toBeVisible({ timeout });
 }

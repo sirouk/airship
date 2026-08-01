@@ -51,7 +51,12 @@ test("a Local Device conversation actually leaves when its delete is confirmed",
   await expect(page.getByText("encrypted Local Device Vault is active")).toBeVisible({ timeout: 30_000 });
   await page.getByRole("combobox", { name: "Message Airship" }).fill("delete this line");
   await page.getByRole("button", { name: "Send message" }).click();
-  await expect(page.getByText("delete this line")).toBeVisible();
+  // Scoped to the transcript, not to the page: the conversation now takes its
+  // title from the first message, so this text is legitimately on screen twice
+  // — once as the session-bar title and once as the message. A bare text lookup
+  // resolved to both and failed strict mode, which reads as a missing message
+  // when what actually happened is that titling got better.
+  await expect(page.locator(".message.user").filter({ hasText: "delete this line" })).toBeVisible();
 
   await page.goto("/#sessions");
   const row = page.getByRole("button", { name: /delete this line|General · encrypted/u }).first();
