@@ -286,6 +286,17 @@ test("the rail keeps three states, remembers the one it is put in, and reaches e
    * is the shell's own signal that the chat route is mounted and interactive.
    */
   await expect(page.getByRole("combobox", { name: "Message Airship" })).toBeVisible({ timeout: 20_000 });
+  /*
+   * And the shell's effects have actually run.
+   *
+   * The composer being on screen is a render; the chord needs a `keydown`
+   * listener, which a sibling effect registers. `data-rail` on the document
+   * element is written by one of those effects, so its presence is the shell
+   * saying its effect pass is done — and a chord sent before that is simply
+   * discarded, which is how this test failed intermittently with the rail
+   * still 232px wide.
+   */
+  await expect(page.locator("html")).toHaveAttribute("data-rail", /.+/u, { timeout: 20_000 });
 
   // The chord and the chevron are the same control; the palette entry is the
   // third, because a shortcut nobody can find is a shortcut that does not
@@ -399,7 +410,10 @@ test("the composer is two tab stops from the start of the document", async ({ pa
   });
 
   // The shell claims the composer at mount, so the common case is zero stops.
-  expect((await describeFocus()).label).toBe("Message Airship");
+  // Polled: the claim happens in an effect after the chat stage mounts, so
+  // sampling once could catch `<body>` still holding focus — which is what it
+  // did, intermittently, reporting the whole page's text as the focused label.
+  await expect.poll(async () => (await describeFocus()).label, { timeout: 20_000 }).toBe("Message Airship");
 
   // Reset to a document with no prior focus. `blur()` alone is not enough:
   // Chromium keeps the sequential-navigation starting point at the element

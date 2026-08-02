@@ -68,6 +68,19 @@ test("a Local Device conversation actually leaves when its delete is confirmed",
   // resolved to both and failed strict mode, which reads as a missing message
   // when what actually happened is that titling got better.
   await expect(page.locator(".message.user").filter({ hasText: "delete this line" })).toBeVisible();
+  /*
+   * Wait for the turn to be OVER before deleting it.
+   *
+   * The delete is fenced on the head the pane is showing, so a turn that lands
+   * while the confirmation is open makes the journal refuse rather than destroy
+   * a reply nobody has seen — which is the behaviour worth having. The user
+   * bubble appears at send, not at completion, so this test could reach the
+   * confirmation while the demo turn was still appending events, and the
+   * refusal it then got read as "the conversation did not leave". Same fence
+   * and the same mistake `resume-not-reopen.spec.ts` documents.
+   */
+  await expect(page.locator(".part-footer").filter({ hasText: /Turn completed/u }).last())
+    .toBeVisible({ timeout: 40_000 });
 
   await page.goto(`/?airshipLabNamespace=${namespace}#sessions`);
   const row = page.getByRole("button", { name: /delete this line|General · encrypted/u }).first();
@@ -79,7 +92,20 @@ test("a Local Device conversation actually leaves when its delete is confirmed",
   await confirm.click();
 
   await expect(page.getByText("Deleted", { exact: false })).toBeVisible({ timeout: 15_000 });
-  // The ledger lists zero remaining conversations rather than lying about the
-  // pointer it just cleared.
-  await expect(page.getByText(/0 conversations/u)).toBeVisible({ timeout: 15_000 });
+  /*
+   * The list itself, not the sentence above it.
+   *
+   * The claim is that the conversation actually leaves and the pointer it was
+   * behind is not left lying about it, and `.session-library-card` is that
+   * claim directly. Matching the rendered text "0 conversations" was a proxy
+   * that also depends on which string the empty state chooses and on the
+   * heading having re-rendered, and it failed intermittently across full-suite
+   * runs while the list underneath was already empty.
+   */
+  await expect(page.locator(".session-library-card")).toHaveCount(0, { timeout: 15_000 });
+  // And the list says so in words rather than rendering an empty region. A
+  // page-wide text search is deliberately not used here: the title survives in
+  // the session bar and the composer's own history, which is correct, and
+  // matching it anywhere reports those as a failed deletion.
+  await expect(page.getByText("No conversations yet")).toBeVisible({ timeout: 15_000 });
 });
