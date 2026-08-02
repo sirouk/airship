@@ -12,20 +12,23 @@ and nothing noticed because nothing was generating them.
 
 ## Chain-link weakness
 
-The twelve-link chain is intent → discovery → entry → action → response → in-flight → permission →
-completion → persistence → proof → recovery → continuation. Gap counts per link:
+The twelve-link chain is intent → discovery → entry → action → response → in-flight → permission → completion → persistence → proof → recovery → continuation.
+Findings per link, generated — every link is listed, including those with none:
 
-- **proof** — 17
-- **discovery** — 15
-- **continuation** — 13
-- **response** — 12
-- **entry** — 8
-- **persistence** — 8
-- **recovery** — 8
+- **intent** — 0
+- **discovery** — 22
+- **entry** — 9
+- **action** — 6
+- **response** — 18
+- **in-flight** — 8
 - **permission** — 6
-- **completion** — 5
-- **action** — 4
-- **in-flight** — 4
+- **completion** — 6
+- **persistence** — 16
+- **proof** — 23
+- **recovery** — 16
+- **continuation** — 22
+
+Total 152 of 152 findings.
 
 ## Personas
 

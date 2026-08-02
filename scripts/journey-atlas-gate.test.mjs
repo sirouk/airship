@@ -1,10 +1,13 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
+  CHAIN_LINKS,
   loadFindings,
   regenerate,
   renderRouting,
+  renderChainLinks,
   verifyAtlasTables,
+  verifyChainLinks,
   verifyRouting,
   verifySource,
 } from "./journey-atlas-gate.mjs";
@@ -149,7 +152,9 @@ describe("the journey atlas gate", () => {
 
   it("collapses any number of stacked id columns back to exactly one", () => {
     const source = sourceOf([finding()]);
-    const damaged = "\n## Chain-link weakness\n\n| id | id | id | severity | link | gap | evidence |\n"
+    // `## Personas` is where the generated header ends and the hand-written
+    // narrative begins; the chain-link block above it is generated now too.
+    const damaged = "\n## Personas\n\n| id | id | id | severity | link | gap | evidence |\n"
       + "|---|---|---|---|---|---|---|\n| J001 | J001 | J001 | friction | entry | A thing that is wrong | measured |\n";
     const built = regenerate(source, damaged);
     expect(built.atlas).toContain("| id | severity | link | gap | evidence |");
@@ -162,10 +167,41 @@ describe("the journey atlas gate", () => {
     expect(verifyRouting(source, renderRouting(source))).toEqual([]);
   });
 
+  it("prints every chain link, including the ones with no findings", () => {
+    /*
+     * The hand-written block omitted `intent` entirely, which reads as "not part
+     * of the model" rather than "nothing was found here". On an audit page a
+     * link with no findings is a result, not an absence.
+     */
+    const block = renderChainLinks(sourceOf([finding({ chainLink: "proof" })])).join("\n");
+    for (const link of CHAIN_LINKS) expect(block).toContain(`**${link}**`);
+    expect(block).toContain("**intent** — 0");
+    expect(block).toContain("**proof** — 1");
+  });
+
+  it("catches a chain-link breakdown that does not total the findings", () => {
+    // The exact defect: a headline of 152 above a hand-written breakdown of 100.
+    const source = sourceOf([finding(), finding({ id: "J002" })]);
+    const stale = "# Atlas\n\n- **proof** — 17\n- **discovery** — 15\n";
+    expect(verifyChainLinks(source, stale).join("\n")).toMatch(/totals 32; the Atlas has 2 findings/u);
+  });
+
+  it("catches a chain-link block that is not the one the source generates", () => {
+    const source = sourceOf([finding()]);
+    expect(verifyChainLinks(source, "# Atlas\n\nno block here\n").join("\n"))
+      .toMatch(/not the one the source generates/u);
+  });
+
+  it("accepts the block it generates", () => {
+    const source = sourceOf([finding()]);
+    expect(verifyChainLinks(source, renderChainLinks(source).join("\n"))).toEqual([]);
+  });
+
   it("holds the shipped documents to all of the above", () => {
     const source = loadFindings(readFileSync(SOURCE, "utf8"));
     expect(verifySource(source)).toEqual([]);
     expect(verifyRouting(source, readFileSync("docs/audit/JOURNEY_ROUTING.md", "utf8"))).toEqual([]);
     expect(verifyAtlasTables(readFileSync("docs/audit/JOURNEY_ATLAS.md", "utf8"))).toEqual([]);
+    expect(verifyChainLinks(source, readFileSync("docs/audit/JOURNEY_ATLAS.md", "utf8"))).toEqual([]);
   });
 });

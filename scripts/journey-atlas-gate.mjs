@@ -33,7 +33,7 @@ const ATLAS_MD = "docs/audit/JOURNEY_ATLAS.md";
 const ROUTING_MD = "docs/audit/JOURNEY_ROUTING.md";
 
 const NARRATIVE_END = "\n## Complete findings index\n";
-const ATLAS_HEADER_END = "\n## Chain-link weakness\n";
+const ATLAS_HEADER_END = "\n## Personas\n";
 const ROUTING_PREAMBLE_END = "\n## L";
 
 const TABLE_HEADER = "| id | severity | link | gap | evidence |";
@@ -154,6 +154,27 @@ export function verifyAtlasTables(whole) {
   return failures;
 }
 
+/**
+ * The headline may not disagree with the breakdown beneath it.
+ *
+ * The whole reason this gate exists is a page that said one number in its
+ * header and another in its body. Checking the rendered block against the
+ * source closes that for the chain-link table too.
+ */
+export function verifyChainLinks(source, atlas) {
+  const failures = [];
+  const expected = renderChainLinks(source).join("\n");
+  if (!atlas.includes(expected)) {
+    failures.push("The chain-link block is not the one the source generates. Run `npm run check:journey-atlas -- --fix`.");
+  }
+  const printed = [...atlas.matchAll(/^- \*\*([a-z-]+)\*\* — (\d+)$/gmu)];
+  const sum = printed.reduce((total, row) => total + Number(row[2]), 0);
+  if (printed.length > 0 && sum !== source.findings.length) {
+    failures.push(`The chain-link breakdown totals ${sum}; the Atlas has ${source.findings.length} findings.`);
+  }
+  return failures;
+}
+
 /** The Atlas's generated header — totals a human never retypes. */
 export function renderAtlasHeader(source) {
   const total = source.findings.length;
@@ -174,7 +195,45 @@ export function renderAtlasHeader(source) {
     '"Ten personas" and "8 personas · 100 gaps" on the same page as a 152-finding index,',
     "and nothing noticed because nothing was generating them.",
     "",
+    ...renderChainLinks(source),
   ].join("\n");
+}
+
+/**
+ * Every link in the chain, including the ones nothing was found on.
+ *
+ * This block was hand-written and still totalled 100 while the headline above
+ * it said 152 — the same drift, on the same page, one section down. It also
+ * silently omitted `intent`, which reads as "not part of the model" rather than
+ * "nothing was found here"; a link with no findings is a result, not an
+ * absence, and on an audit page the difference matters.
+ */
+export const CHAIN_LINKS = Object.freeze([
+  "intent", "discovery", "entry", "action", "response", "in-flight",
+  "permission", "completion", "persistence", "proof", "recovery", "continuation",
+]);
+
+export function renderChainLinks(source) {
+  const counts = new Map(CHAIN_LINKS.map((link) => [link, 0]));
+  for (const finding of source.findings) {
+    counts.set(finding.chainLink, (counts.get(finding.chainLink) ?? 0) + 1);
+  }
+  // A link the findings use that the model does not name is a data error, not a
+  // row to quietly append: the gate reports it rather than printing it.
+  const unknown = [...counts.keys()].filter((link) => !CHAIN_LINKS.includes(link));
+  const total = source.findings.length;
+  return [
+    "## Chain-link weakness",
+    "",
+    `The twelve-link chain is ${CHAIN_LINKS.join(" → ")}.`,
+    "Findings per link, generated — every link is listed, including those with none:",
+    "",
+    ...CHAIN_LINKS.map((link) => `- **${link}** — ${counts.get(link) ?? 0}`),
+    ...unknown.map((link) => `- **${link}** — ${counts.get(link)} (NOT A CHAIN LINK)`),
+    "",
+    `Total ${[...counts.values()].reduce((sum, n) => sum + n, 0)} of ${total} findings.`,
+    "",
+  ];
 }
 
 /** The complete index: every finding, its lane, and whether prose tells its story. */
@@ -315,6 +374,7 @@ function main() {
     }
     failures.push(...verifyRouting(source, readFileSync(ROUTING_MD, "utf8")));
     failures.push(...verifyAtlasTables(readFileSync(ATLAS_MD, "utf8")));
+    failures.push(...verifyChainLinks(source, readFileSync(ATLAS_MD, "utf8")));
   }
 
   if (failures.length > 0) {

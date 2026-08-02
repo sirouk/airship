@@ -145,10 +145,13 @@ export default defineConfig({
            * passing on the machine it was tuned on.
            *
            * A budget that depends on which directory you built in is not a
-           * budget. Naming the chunk fixes the split, which is the same reason
-           * `chunkFileNames` below names the shell and bridge packs rather than
-           * letting the classifier match on whatever Rollup happened to call
-           * them.
+           * budget. The chunk is named here for ATTRIBUTION — the same reason
+           * `chunkFileNames` below names the shell and bridge packs, so the
+           * release gate's classifier is exact rather than matching on whatever
+           * Rollup happened to call it. Naming it did NOT remove the
+           * cross-checkout split: both forms are still observed, and the gate's
+           * ceilings cover both, pending a dedicated deterministic-build
+           * repair.
            */
           if (id.includes("/src/ui/chat/transcript-operations")) return "transcript-operations";
           return id.includes("/src/inference/bridge/")

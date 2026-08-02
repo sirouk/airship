@@ -168,23 +168,27 @@ Two measurement lessons are worth more than the number:
   the cross-origin isolation headers those suites need. A green-looking server
   on the right port is not the right server.
 
-The four that remain:
-
-| Spec | Status |
-|---|---|
-| `airship-shell:110` | Passes alone, fails in the full run. The chip asserts the weakest claim, and under full-suite conditions a different axis is weakest. Ordering, not a product defect — but not diagnosed, so not claimed as one. |
-| `catalog-enrichment-retry:71` | Untouched by this pass. |
-| `vault-auto-adoption:96`, `:174` | Pre-existing. Measured at `ba7020d~1` for comparison: **five** of these seven failed before the J151 reload fix, two after. The fix improved this file rather than regressing it; these two are a separate cause. |
+*Historical note.* Four failures remained at an earlier checkpoint in this pass
+and were listed here as open. All were subsequently diagnosed and closed, along
+with the ones that surfaced behind them; several turned out to be product
+defects rather than test problems. **The zero-failure matrix above is
+authoritative.**
 
 ## Open
 
 - **`app.tsx` is 620 KB in one file.** Splitting it is architectural and was not
   attempted here. It is the single largest obstacle to reviewing shell changes.
-- **52 findings are owned and evidenced but not narrated.** The complete index in
-  `JOURNEY_ATLAS.md` marks them `prose: no`. They are findings, not gaps in the
-  audit, but a reader working from the narrative alone will not meet them.
-- **Ephemerality of the return ledger is settled at 14 days** with a documented
-  reason and a test, not at a value anyone has validated against real returning
-  behaviour.
+- **48 of 152 findings are owned and evidenced but not narrated.** The complete
+  index in `JOURNEY_ATLAS.md` marks them `prose: no`. They are findings, not gaps
+  in the audit, but a reader working from the narrative alone will not meet them.
+  Both figures are generated, so this line cannot drift from the index again.
+- **The return ledger's 14-day witness is provisional, not settled.** It has a
+  documented reason and a test; it has never been checked against how people
+  actually return. See the posture section above — the Erase control is what
+  makes the interim defensible, and strict ephemeral remains open.
+- **The build is not deterministic across checkouts.** Recorded above. This is
+  the first architectural follow-up, ahead of `app.tsx`: every bundle
+  measurement, release manifest and artifact digest depends on reproducible
+  output, so nondeterminism undermines the measurement system itself.
 - **Touch-floor sweep** covered the controls this pass added; it is not a
   whole-product sweep.

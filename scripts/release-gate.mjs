@@ -63,13 +63,15 @@ export const RELEASE_BUDGETS = Object.freeze({
   // unchanged 112 KiB ceiling — the message-part renderer, the approval dock,
   // the resume report and its ledger were all pushed out of it rather than the
   // number being moved.
-  // Re-measured after the build was made deterministic. `transcript-operations`
-  // is shared between the boot path and a deferred route, and Rollup was free to
-  // resolve it either way: two checkouts of the identical tree emitted a 350 B
-  // stub in one and a 10.5 KiB chunk in the other. This ceiling had been tuned
-  // to the lucky split and failed in a clean clone. The chunk is named in
-  // `vite.config.ts` now, so both agree, and the honest figure is the larger
-  // one. Measured 519.79 KiB raw / 175.56 KiB gzip.
+  // Sized for both observed chunk layouts, because the build is NOT
+  // deterministic across checkouts. `transcript-operations` is shared between
+  // the boot path and a deferred route, and Rollup resolves it either way: two
+  // clones of the identical tree — same sources, config and lockfile — emitted a
+  // 350 B stub in one and a 10.5 KiB chunk in the other. This ceiling had been
+  // tuned to the smaller split and failed in a clean clone. Naming the chunk in
+  // `vite.config.ts` gave it a stable name for attribution but did not remove
+  // the split, so this covers both forms pending a dedicated deterministic-build
+  // repair. Measured 171.49 KiB gzip here, 175.56 KiB gzip from a clean clone.
   allJavaScriptAndWorkers: Object.freeze({ raw: 768 * 1024, gzip: 176 * 1024 }),
   // Provider routes, capability activation, and the stable lazy broker remain
   // absent from first paint. The broker now also exposes the canonical runtime
@@ -261,8 +263,9 @@ export const RELEASE_BUDGETS = Object.freeze({
    * which is the same class of defect as a gate that reads an untracked file:
    * it passes where it was written and nowhere else.
    *
-   * Naming the chunk did not pin it, so the ceilings now cover both splits and
-   * record both figures rather than pretending one of them is the number.
+   * Naming the chunk gave it a stable name for attribution and did not pin the
+   * split, so the ceilings cover both forms and record both figures rather than
+   * pretending one of them is the number.
    * Measured 2026.03 raw / 642.03 gzip here, 2035.75 raw / 645.87 gzip from a
    * clean clone. Making the split itself deterministic is worth doing and is
    * not this pass's job.
