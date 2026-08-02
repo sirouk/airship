@@ -281,8 +281,14 @@ export function Rail({
   // nobody has made one: a returning person's conversations must not need a
   // disclosure click before they exist. See `loadRecentsPreference`.
   const recentsChoice = useRef<boolean | undefined>(loadRecentsPreference());
+  /** True while the open state is the rail's own doing rather than a person's. */
+  const autoOpened = useRef(false);
   const [recentsOpen, setRecentsOpen] = useState(recentsChoice.current ?? false);
   const chooseRecentsOpen = (open: boolean) => {
+    // The moment a person touches the disclosure it stops being the rail's to
+    // close: `autoOpened` is what the height gate is allowed to reverse, and a
+    // deliberate choice is never that.
+    autoOpened.current = false;
     recentsChoice.current = open;
     saveRecentsPreference(open);
     setRecentsOpen(open);
@@ -338,9 +344,35 @@ export function Rail({
     const nav = typeof navRef === "object" && navRef !== null ? navRef.current : undefined;
     const room = nav?.clientHeight ?? 0;
     if (room > 0 && room < RAIL_RECENTS_AUTO_OPEN_MIN_HEIGHT) return;
+    autoOpened.current = true;
     recentsChoice.current = true;
     setRecentsOpen(true);
   }, [conversationKeys, navRef]);
+
+  /*
+   * What it opened on its own, it gives back on its own.
+   *
+   * The height gate above only ran once, at the moment the list decided to
+   * open, so a rail that auto-opened on a tall window and was then resized
+   * smaller kept the list and pushed Vault, Connection and Account below the
+   * fold — the overflow fade was the only thing saying so, which is exactly the
+   * trade the gate exists to refuse. Measured across a resize from 1080 to 700.
+   *
+   * Only what the rail opened by itself is closed by itself: `autoOpened` is
+   * cleared the moment a person touches the disclosure, and after that the rail
+   * never fights them in either direction.
+   */
+  useEffect(() => {
+    if (!autoOpened.current || !recentsOpen) return;
+    const nav = typeof navRef === "object" && navRef !== null ? navRef.current : undefined;
+    const measure = () => {
+      const room = nav?.clientHeight ?? 0;
+      if (room > 0 && room < RAIL_RECENTS_AUTO_OPEN_MIN_HEIGHT) setRecentsOpen(false);
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [navRef, recentsOpen]);
 
   const order = useMemo(() => {
     const destinations = railTraversal(expanded);

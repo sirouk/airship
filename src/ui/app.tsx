@@ -4638,16 +4638,32 @@ export function App() {
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
+  /*
+   * Registered once, and read through a ref, because re-registering drops keys.
+   *
+   * This effect depended on `[railState, railViewport, railPreference]`, so
+   * every state change tore the listener down and put a new one up — and
+   * `railPreference` is loaded from storage after mount, and `railViewport`
+   * changes on every resize. A chord pressed inside one of those windows hit no
+   * listener at all and was silently discarded. Measured as an intermittent
+   * failure of the rail's own contract test across full-suite runs: the rail
+   * stayed 232px wide because Cmd+\ had landed in the gap. A person resizing
+   * the window, or pressing it early in boot, gets the same nothing.
+   *
+   * The handler is a ref updated on every render, so the listener registered at
+   * mount always calls the current one and never has to be replaced.
+   */
+  const railToggle = useRef(toggleRailState);
+  railToggle.current = toggleRailState;
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (!isRailToggleChord(event)) return;
       event.preventDefault();
-      toggleRailState();
+      railToggle.current();
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [railState, railViewport, railPreference]);
+  }, []);
 
   // The composer is 35 tab stops from <body> and is the most-used control in
   // the product. Claim it once the chat stage is actually mounted — the boot

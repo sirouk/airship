@@ -58,6 +58,79 @@ is what an unowned finding costs, and it is the argument for the gate above.
   under assertion rather than a proxy for it. Where a change traded one durability
   failure for another it was reverted whole.
 
+## Review round two — what changed
+
+Every item review raised was confirmed before it was fixed, including the two
+about this document's own machinery.
+
+**1. The gate was not reproducible.** It read `.ui-capture/atlas.json`, which is
+gitignored, so `npm run check` passed on one workstation and could not run from
+a clean clone. The sanitized findings now live at
+`docs/audit/JOURNEY_FINDINGS.json`, tracked. Proved by cloning the repo to a
+fresh directory with no `.ui-capture/` present and running the gate there.
+
+**2. The gate passed states it existed to reject.** `--fix` was not idempotent:
+the header rewrite searched for `|---|---|---|---|`, which is a *prefix* of the
+`|---|---|---|---|---|` it writes, so it matched its own output and five runs
+stacked five `id` columns. The "idempotence check" that missed it compared exit
+codes rather than bytes. The Atlas also said "Ten personas" and "8 personas ·
+100 gaps" on the same page as a 152-finding index, because nothing generated
+those numbers.
+
+Now: every derived number and table is generated from the tracked source;
+verification parses lane tables and proves ownership per row (exactly one lane,
+the declared lane, each lane opened once, counts equal to rows present);
+`--fix` re-runs over its own output and compares text; and
+`scripts/journey-atlas-gate.test.mjs` has 18 tests, one per failure mode —
+missing source, duplicate ids, unlaned findings, drifted persona totals, a
+finding in two lanes, a finding in the wrong lane, a lane opened twice, count
+drift, a finding in no lane, a stale header, malformed headers, stacked id
+columns, and non-idempotent generation.
+
+**3. Deletion is now atomic in the way that matters.** The ledger module is
+loaded before the delete begins so the write after it is a synchronous
+`setItem`, and it is awaited before "Deleted …" is announced. A Vault wipe
+retires its continuity records too, in every backend branch. Four browser
+journeys cross the browser-session boundary, carrying `storageState` forward —
+without which "delete, close, reopen, assert no loss" asserts that an empty
+ledger reports nothing.
+
+**4. All browser failures were diagnosed, never excused.** Every one had a
+cause. Several were product defects: the trust sheet losing keyboard focus on
+close, a rename discarded by an unrelated background write, a bare `import()`
+with one attempt on the transcript renderer. Two were the product being right
+and the test being early — the delete refused by its own head fence while a
+turn was still appending, exactly as designed.
+
+**5. Entry headroom restored by deferral, not by a raise.** Entry breached the
+ceiling at 112.01 KiB gzip during this work, which settled the question: 20
+bytes is not a margin. The command palette and preferences dialog left the entry
+chunk for `platform-overlays.tsx`, warmed on idle after first paint.
+
+  Entry JS: 112.01 (breach) → **110.68 KiB gzip**, ceiling 112, headroom 1.32 KiB.
+
+**6. Ephemerality is now a decision, not an implementation.** See the posture
+section below.
+
+**7. `app.tsx` was not touched structurally.** Decomposition stays the first
+dedicated architectural follow-up after merge.
+
+## The ephemeral posture
+
+Keeping the continuity witness, and dropping the claim it contradicted.
+
+| was | is |
+|---|---|
+| "Page memory only / Nothing survives closing this tab." | "Ephemeral content / Your writing dies with the tab. One line per conversation stays, so a return can tell you." |
+| "Ephemeral · this page only" | "Ephemeral · content not saved" |
+
+The disclosure names every retained field and all three ways the record ends.
+**Erase continuity record** sits on the Vault route under this posture and
+clears the witness alone — no journal, no drafts, no preferences. The 14 days is
+marked PROVISIONAL in source: a guess never checked against real return
+behaviour. Strict ephemeral, with no cross-tab metadata at all, remains open as
+a future posture rather than being silently foreclosed.
+
 ## Where the browser suite finished
 
 Desktop project, Playwright owning its own web server: **138 passed, 4 failed,
