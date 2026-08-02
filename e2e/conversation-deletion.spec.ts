@@ -45,9 +45,20 @@ test("a Local Device conversation actually leaves when its delete is confirmed",
     testInfo.project.name !== "desktop-chromium",
     "One Chromium origin covers the real OPFS enrollment journal path.",
   );
+  /*
+   * Its own journal, because "0 conversations" is a claim about the whole list.
+   *
+   * This spec carried no `airshipLabNamespace`, so it shared the default
+   * journal with every other spec that does the same. Run alone it was right;
+   * run in parallel, another worker's conversation was in the list and the
+   * count it asserts could never reach zero. Diagnosed rather than retried:
+   * probed directly, the delete empties the list within 500ms and the header
+   * reads "0 conversations", so what was shared was the journal, not a defect.
+   */
+  const namespace = `deletion-${testInfo.project.name}-${testInfo.workerIndex}-${testInfo.repeatEachIndex}-${Date.now().toString(36)}`;
   await enrollLocalDevice(page);
 
-  await page.goto("/#chat");
+  await page.goto(`/?airshipLabNamespace=${namespace}#chat`);
   await expect(page.getByText("encrypted Local Device Vault is active")).toBeVisible({ timeout: 30_000 });
   await page.getByRole("combobox", { name: "Message Airship" }).fill("delete this line");
   await page.getByRole("button", { name: "Send message" }).click();
@@ -58,7 +69,7 @@ test("a Local Device conversation actually leaves when its delete is confirmed",
   // when what actually happened is that titling got better.
   await expect(page.locator(".message.user").filter({ hasText: "delete this line" })).toBeVisible();
 
-  await page.goto("/#sessions");
+  await page.goto(`/?airshipLabNamespace=${namespace}#sessions`);
   const row = page.getByRole("button", { name: /delete this line|General · encrypted/u }).first();
   await expect(row).toBeVisible({ timeout: 30_000 });
   await row.click();

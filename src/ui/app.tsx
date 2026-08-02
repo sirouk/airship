@@ -765,8 +765,28 @@ function loadApprovalDock() {
   return import("./approval-dock");
 }
 
+/**
+ * The return ledger, deferred — and remembered once it has arrived.
+ *
+ * Dismissing the resume report has to retire the records it reported, and doing
+ * that through a fresh `import()` leaves the same close/reload race the delete
+ * path was just fixed for: the report is gone from the screen and still on
+ * disk, so the next visit mourns work the person has already been told about
+ * and dismissed. By the time a dismiss is possible the module is loaded (the
+ * report is rendered from it), so this hands it back synchronously and the
+ * write cannot be outrun.
+ */
+let loadedReturnLedger: typeof import("./chat/return-ledger") | undefined;
+
 function loadReturnLedger() {
-  return import("./chat/return-ledger");
+  return import("./chat/return-ledger").then((module) => {
+    loadedReturnLedger = module;
+    return module;
+  });
+}
+
+function readyReturnLedger(): typeof import("./chat/return-ledger") | undefined {
+  return loadedReturnLedger;
 }
 
 async function loadDeferredCapabilities() {
@@ -9797,7 +9817,14 @@ export function App() {
                       const storage = browserReturnLedgerStorage();
                       if (storage) {
                         const ids = unrecoveredWork.sessionIds;
-                        void loadReturnLedger().then(({ forgetReturnLedgerEntries }) => forgetReturnLedgerEntries(storage, ids));
+                        // Synchronously where the module is already in hand,
+                        // which is every real dismiss: the report the person
+                        // is dismissing was rendered from it. The fallback
+                        // covers nothing a person can reach, and is kept so a
+                        // future caller cannot silently lose the write.
+                        const ledger = readyReturnLedger();
+                        if (ledger) ledger.forgetReturnLedgerEntries(storage, ids);
+                        else void loadReturnLedger().then(({ forgetReturnLedgerEntries }) => forgetReturnLedgerEntries(storage, ids));
                       }
                       setUnrecoveredWork(undefined);
                     }}

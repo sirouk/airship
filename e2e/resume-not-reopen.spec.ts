@@ -68,7 +68,7 @@ async function sendOneTurn(page: import("@playwright/test").Page, prompt: string
 
 test.describe("a person who comes back", () => {
   test("is told what was not kept, with a count, a time and the remedy", async ({ page }, testInfo) => {
-    const namespace = `resume-report-${testInfo.project.name}-${Date.now().toString(36)}`;
+    const namespace = `resume-report-${testInfo.project.name}-${testInfo.workerIndex}-${testInfo.repeatEachIndex}-${Date.now().toString(36)}`;
     await usePageMemory(page);
     await page.goto(`/?airshipLabNamespace=${namespace}`);
     await sendOneTurn(page, "Draft the Q3 pricing memo intro paragraph.");
@@ -99,7 +99,7 @@ test.describe("a person who comes back", () => {
   });
 
   test("sees nothing of the kind on a first-ever visit", async ({ page }, testInfo) => {
-    const namespace = `resume-first-${testInfo.project.name}-${Date.now().toString(36)}`;
+    const namespace = `resume-first-${testInfo.project.name}-${testInfo.workerIndex}-${testInfo.repeatEachIndex}-${Date.now().toString(36)}`;
     await usePageMemory(page);
     await page.goto(`/?airshipLabNamespace=${namespace}`);
     await expect(page.getByRole("combobox", { name: "Message Airship" })).toBeVisible({ timeout: 20_000 });
@@ -109,7 +109,7 @@ test.describe("a person who comes back", () => {
   });
 
   test("keeps the report until it is dismissed, and then for good", async ({ page }, testInfo) => {
-    const namespace = `resume-dismiss-${testInfo.project.name}-${Date.now().toString(36)}`;
+    const namespace = `resume-dismiss-${testInfo.project.name}-${testInfo.workerIndex}-${testInfo.repeatEachIndex}-${Date.now().toString(36)}`;
     await usePageMemory(page);
     await page.goto(`/?airshipLabNamespace=${namespace}`);
     await sendOneTurn(page, "Something worth keeping.");
