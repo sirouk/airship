@@ -131,10 +131,31 @@ marked PROVISIONAL in source: a guess never checked against real return
 behaviour. Strict ephemeral, with no cross-tab metadata at all, remains open as
 a future posture rather than being silently foreclosed.
 
+## The build is not deterministic across checkouts
+
+Found while proving the clean-checkout gate, and worth stating plainly because
+it invalidates a class of measurement this pass relied on.
+
+`src/ui/chat/transcript-operations.ts` is imported by `platform-shell.tsx` (boot
+path) and by `message-parts-view.tsx` (deferred). Rollup is free to resolve that
+shared module either way, and it does: two clones of the identical tree — same
+sources, same config, same lockfile, verified byte-identical — emitted a **350 B
+stub in one and a 10.5 KiB chunk in the other**, moving the baseline budget by
+4 KiB gzip.
+
+The release-gate ceilings had been tuned to the smaller split, so `npm run
+check` passed on the machine it was written on and failed in a clean clone. That
+is the same class of defect as a gate reading an untracked file, one level down.
+
+Naming the chunk in `vite.config.ts` did not pin it. The ceilings now cover both
+splits and record both figures rather than pretending one of them is the number.
+**Making the split itself deterministic is a real piece of work and is not this
+pass's job** — it is the second architectural follow-up after `app.tsx`.
+
 ## Where the browser suite finished
 
-Desktop project, Playwright owning its own web server: **138 passed, 4 failed,
-38 skipped, of 180.** It was 11 failed when this pass started measuring properly.
+Desktop **146 passed, 0 failed, 38 skipped of 184**. Mobile **92 passed, 0 failed,
+92 skipped of 184**. Playwright owning its own web server, both projects.
 
 Two measurement lessons are worth more than the number:
 
