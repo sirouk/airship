@@ -162,8 +162,17 @@ test("compact runtime indicators disclose scoped detail without expanding the to
   // got more honest, which is the wrong way round.
   await sheet.getByRole("button", { name: "Close", exact: true }).click();
   await expect(sheet).toBeHidden();
-  await runtime.focus();
-  await expect(runtime).toBeFocused();
+  /*
+   * The sheet gives the focus back, and that is the contract worth asserting.
+   *
+   * This called `.focus()` and then checked it took, which raced the dialog's
+   * own `useOpenerRestore` — the restore lands a tick after the close and could
+   * move focus out from under the explicit call, leaving "expected focused,
+   * received inactive". Waiting for the restore instead tests the behaviour a
+   * keyboard user actually depends on: close the disclosure and you are back on
+   * the control that opened it, ready to reopen it.
+   */
+  await expect(runtime).toBeFocused({ timeout: 20_000 });
   await page.keyboard.press("Enter");
   await expect(page.getByRole("dialog", { name: "Runtime trust" })).toBeVisible();
 });

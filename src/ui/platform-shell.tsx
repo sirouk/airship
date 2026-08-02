@@ -802,18 +802,28 @@ export function ClaimRows({ rows }: Readonly<{ rows: readonly ClaimRow[] }>) {
 
 export function TrustPostureSheet({ open, axes, onClose, onNavigate }: Readonly<{ open: boolean; axes: readonly TrustAxis[]; onClose(): void; onNavigate(view: NavigationView): void }>) {
   const dialog = useRef<HTMLDivElement>(null);
-  const restore = useRef<HTMLElement>();
   /*
    * The same capture/restore contract `CommandPalette` and `PreferencesDialog`
-   * keep: a modal that takes focus on open owes it back on close. Without the
-   * restore, dismissing the sheet dropped keyboard focus on `<body>`, and the
-   * reader who opened it from the topbar chip lost their place entirely.
+   * keep: a modal that takes focus on open owes it back on close. Without it,
+   * dismissing the sheet dropped keyboard focus on `<body>` and the reader who
+   * opened it from the topbar chip lost their place entirely.
+   *
+   * It kept a private copy of that contract, and the copy was the weaker one:
+   * it captured `document.activeElement` at open and focused it again at close,
+   * with no guard for `document.activeElement` being `<body>` — which it is
+   * whenever the chip is opened by pointer. Closing then "restored" focus to
+   * the body, measured as the chip reading `inactive` right after being
+   * dismissed. `useOpenerRestore` is the version the other overlays use: it
+   * ignores `<body>`, ignores anything inside an overlay, and remembers the
+   * last element focused outside one. Third time a private copy of a shared
+   * fix has been found in this pass, after the bottom-bar floor and the return
+   * ledger's storage accessor.
    */
+  useOpenerRestore(open);
   useEffect(() => {
     if (!open) return;
-    restore.current = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
     const frame = requestAnimationFrame(() => dialog.current?.focus({ preventScroll: true }));
-    return () => { cancelAnimationFrame(frame); restore.current?.focus({ preventScroll: true }); };
+    return () => cancelAnimationFrame(frame);
   }, [open]);
   if (!open) return null;
   /*

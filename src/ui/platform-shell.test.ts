@@ -488,12 +488,26 @@ describe("modal focus and key ownership", () => {
   };
 
   it("restores the focus Runtime trust took, the same way its sibling modals do", () => {
-    // `CommandPalette` and `PreferencesDialog` captured `document.activeElement`
-    // on open and repaid it on close; `TrustPostureSheet` focused itself and
-    // left the repayer out, so Escape left keyboard focus on `<body>`.
+    /*
+     * "The same way" now means the same code, which is what it should always
+     * have meant.
+     *
+     * The sheet kept a private capture/restore: `document.activeElement` at
+     * open, focused again at close. That has no guard for the active element
+     * being `<body>` — which it is whenever the chip is opened by pointer — so
+     * closing "restored" focus to the body and the chip measured as `inactive`
+     * immediately after being dismissed. `useOpenerRestore` is what the other
+     * overlays use: it ignores `<body>`, ignores anything inside an overlay,
+     * and remembers the last element focused outside one.
+     */
     const sheet = trustSheetSource();
-    expect(sheet).toContain("restore.current = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;");
-    expect(sheet).toContain("return () => { cancelAnimationFrame(frame); restore.current?.focus({ preventScroll: true }); };");
+    expect(sheet).toContain("useOpenerRestore(open);");
+    expect(sheet, "a private copy is how this drifted the first time")
+      .not.toContain("restore.current");
+    // And the siblings must be on the same hook, or "the same way" is a claim
+    // about two implementations again.
+    const overlays = readFileSync(new URL("./platform-overlays.tsx", import.meta.url), "utf8");
+    expect([...overlays.matchAll(/useOpenerRestore\(open\);/gu)]).toHaveLength(2);
   });
 
   it("does not close Preferences over an Escape a control inside it already handled", () => {
