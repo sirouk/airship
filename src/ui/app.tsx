@@ -174,8 +174,6 @@ import { activeConnectionProofLabel, ModelControl } from "./model-control";
 import { MODEL_CAPABILITY_WORDS } from "./model-vocabulary";
 import { CANONICAL_DESTINATIONS, navigationHashForView, navigationViewFromHash, type NavigationView } from "./navigation-model";
 import {
-  CommandPalette,
-  PreferencesDialog,
   PwaUpdateBanner,
   SHORTCUT_SHEET_CHORD,
   TrustPostureSheet,
@@ -1797,6 +1795,18 @@ export function App() {
    * pattern, applied to the one that pays the highest rent.
    */
   const [ResumeReportView, setResumeReportView] = useState<(props: ResumeReportProps) => VNode>();
+  /*
+   * The two overlays that are never on screen at first paint.
+   *
+   * They lived in `platform-shell.tsx`, which the boot path imports for its
+   * hooks, so 195 lines of dialog JSX shipped in the entry chunk to be rendered
+   * by nobody. Entry gzip had 20 bytes under its 112 KiB ceiling and then
+   * breached it at 112.01 — and a budget a symbol rename can breach is not a
+   * budget. Split out, then warmed on idle after first paint, so the chunk is
+   * in cache long before anyone presses Cmd+K and the ceiling gets a real
+   * margin back instead of a raise.
+   */
+  const [Overlays, setOverlays] = useState<typeof import("./platform-overlays")>();
   /* The same deferred chunk carries the quarantine card, so the two return
      states of this surface cost one fetch and one stylesheet between them. */
   const [QuarantineReportView, setQuarantineReportView] = useState<(props: QuarantineReportProps) => VNode>();
@@ -4562,6 +4572,13 @@ export function App() {
   // and the app grid both size their first column from `--rail-width`.
   useEffect(() => { document.documentElement.dataset.rail = railState; }, [railState]);
 
+  useEffect(() => {
+    if (Overlays) return;
+    const warm = () => { void import("./platform-overlays").then(setOverlays).catch(() => {}); };
+    if (typeof requestIdleCallback === "function") requestIdleCallback(warm, { timeout: 2_000 });
+    else setTimeout(warm, 0);
+  }, [Overlays]);
+
   /*
    * J151: tell the service-worker listener what a reload would cost.
    *
@@ -7299,7 +7316,29 @@ export function App() {
   async function wipeVaultStorage(): Promise<void> {
     const backend = preferences.vaultBackend;
     setVaultWipeBusy(true);
+    /*
+     * The continuity records go with the objects they describe.
+     *
+     * Every branch below ends in a reload, and the return ledger learns that a
+     * conversation is gone by finding it absent from the journal — so before
+     * this, the reload at the end of a wipe came back and mourned every
+     * conversation the person had just chosen to destroy. Retired here, ahead
+     * of the reload and ahead of the wipe itself, because a wipe that half
+     * fails must not leave records claiming work is missing when it is not:
+     * an empty ledger reports nothing, which is the honest answer either way
+     * once a person has asked for a wipe.
+     */
+    const retireContinuityRecords = async (): Promise<void> => {
+      try {
+        const { clearReturnLedger } = await loadReturnLedger();
+        const storage = browserReturnLedgerStorage();
+        if (storage) clearReturnLedger(storage);
+      } catch {
+        // Same rule as deletion: a record that cannot be retired stays.
+      }
+    };
     try {
+      await retireContinuityRecords();
       if (backend === "ephemeral") {
         location.reload();
         return;
@@ -10527,7 +10566,7 @@ export function App() {
         onOpenSettings={() => setPreferencesOpen(true)}
       />
       {ApprovalDockView ? <ApprovalDockView broker={approvalBroker} /> : null}
-      <CommandPalette open={paletteOpen} entries={paletteEntriesWithRail} onClose={() => setPaletteOpen(false)} onOpenShortcuts={() => setShortcutsOpen(true)} />
+      {Overlays ? <Overlays.CommandPalette open={paletteOpen} entries={paletteEntriesWithRail} onClose={() => setPaletteOpen(false)} onOpenShortcuts={() => setShortcutsOpen(true)} /> : null}
       {/* The keyboard layer's only printed form. Eleven chords shipped taught
           nowhere: `?`, `F1` and `Shift+/` all opened nothing, Preferences had no
           keyboard section, and the palette could not find the word "shortcut".
@@ -10540,7 +10579,7 @@ export function App() {
           onClose={() => setShortcutsOpen(false)}
         />
       ) : null}
-      <PreferencesDialog open={preferencesOpen} value={preferences} onChange={(next) => {
+      {Overlays ? <Overlays.PreferencesDialog open={preferencesOpen} value={preferences} onChange={(next: PreferenceOverrides) => {
         if (next.vaultBackend !== preferences.vaultBackend) {
           setPreferences((current) => Object.freeze({ ...next, vaultBackend: current.vaultBackend }));
           void changeVaultProvider(next.vaultBackend);
@@ -10551,7 +10590,7 @@ export function App() {
         onManage: () => {
           if (openProfileManager(profileId)) setPreferencesOpen(false);
         },
-      }} />
+      }} /> : null}
       <TrustPostureSheet open={trustSheetOpen} axes={trustAxes} onClose={() => setTrustSheetOpen(false)} onNavigate={navigatePrimary} />
       {/*
         The reload the person just pressed is not the departure the guard

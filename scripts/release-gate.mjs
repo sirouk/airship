@@ -239,7 +239,11 @@ export const RELEASE_BUDGETS = Object.freeze({
   // than two fixes), and deletion forgets its return-ledger entry so a deliberate
   // removal is no longer mourned as loss. Measured 2024.00 KiB raw / 640.54 KiB
   // gzip.
-  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2025 * 1024, gzip: 641 * 1024 }),
+  // Splitting the command palette and preferences dialog out of the entry chunk
+  // adds a chunk boundary and its shared imports here while removing them from
+  // first paint, which is the trade the entry ceiling exists to force.
+  // Measured below.
+  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2026 * 1024, gzip: 642 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now measures 672.33 KiB raw / 186.61 KiB gzip:
   // the browser-Git pack grew (see optionalBrowserGit) and the Terminal pack
@@ -312,7 +316,10 @@ export const RELEASE_BUDGETS = Object.freeze({
   // untouched. Measured 2698.00 KiB raw / 827.54 KiB gzip.
   // J151/J152 and the deletion-vs-loss fix carry the aggregate with them.
   // Measured 2700.42 KiB raw / 828.47 KiB gzip.
-  totalJavaScriptAndWorkers: Object.freeze({ raw: 2701 * 1024, gzip: 829 * 1024 }),
+  // The shell-overlay split carries the aggregate with it: the palette and the
+  // preferences dialog now cost a chunk boundary in the lazy graph and nothing
+  // at first paint. Measured 2701.21 KiB raw / 829.51 KiB gzip.
+  totalJavaScriptAndWorkers: Object.freeze({ raw: 2702 * 1024, gzip: 830 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. Keep it visible under a dedicated, deliberately small cap.
   serviceWorker: Object.freeze({ raw: 12 * 1024, gzip: 4 * 1024 }),
@@ -566,6 +573,17 @@ export const RELEASE_BUDGETS = Object.freeze({
    * Measured 2,993 B raw / 1,352 B gzip.
    */
   optionalShortcutSheet: Object.freeze({ raw: 4 * 1024, gzip: 2 * 1024 }),
+  /*
+   * The command palette and preferences dialog, out of the entry chunk.
+   *
+   * Entry gzip breached its 112 KiB ceiling at 112.01 KiB, and review was right
+   * that a budget a symbol rename can breach is not a budget. These two are
+   * never on screen at first paint, so they left rather than the ceiling moving.
+   * Entry came back to 110.54 KiB gzip — 1.46 KiB of headroom instead of 20
+   * bytes. The shell warms this chunk on idle after first paint, so the first
+   * Cmd+K is not slower for it. Measured 6.23 KiB raw / 2.46 KiB gzip.
+   */
+  optionalShellOverlays: Object.freeze({ raw: 7 * 1024, gzip: 3 * 1024 }),
   /*
    * The command palette's conversation verbs.
    *
@@ -1329,6 +1347,11 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
     throw new Error(`Production must contain exactly one shared confirm-dialog chunk; found ${optionalConfirmDialogPacks.length}.`);
   }
   const optionalConfirmDialogMeasurement = measure(optionalConfirmDialogPacks[0].payload);
+  const optionalShellOverlayPacks = javaScriptFiles.filter((file) => isOptionalShellOverlayPath(file.path));
+  if (optionalShellOverlayPacks.length !== 1) {
+    throw new Error(`Production must contain exactly one deferred shell-overlay chunk; found ${optionalShellOverlayPacks.length}.`);
+  }
+  const optionalShellOverlayMeasurement = measure(optionalShellOverlayPacks[0].payload);
   const optionalShortcutSheetPacks = javaScriptFiles.filter((file) => isOptionalShortcutSheetPath(file.path));
   if (optionalShortcutSheetPacks.length !== 1) {
     throw new Error(`Production must contain exactly one keyboard-shortcut-sheet chunk; found ${optionalShortcutSheetPacks.length}.`);
@@ -1420,6 +1443,7 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
       && !isOptionalWasiPreview1WorkerPath(file.path)
       && !isOptionalNodeExecutionPackPath(file.path)
       && !isOptionalShellPackPath(file.path)
+      && !isOptionalShellOverlayPath(file.path)
       && !isOptionalWasixJavaScriptPath(file.path)
       && !isOptionalAgentRuntimePath(file.path)
       && !isOptionalMultimodalPath(file.path)
@@ -1521,6 +1545,7 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
       { name: "memory-support", paths: optionalMemorySupportPacks.map((file) => file.path) },
       { name: "confirm-dialog", paths: optionalConfirmDialogPacks.map((file) => file.path) },
       { name: "shortcut-sheet", paths: optionalShortcutSheetPacks.map((file) => file.path) },
+      { name: "shell-overlays", paths: optionalShellOverlayPacks.map((file) => file.path) },
       { name: "palette-actions", paths: optionalPaletteActionPacks.map((file) => file.path) },
       { name: "resume-report", paths: optionalResumeReportPacks.map((file) => file.path) },
       { name: "approval-dock", paths: optionalApprovalDockPacks.map((file) => file.path) },
@@ -1633,6 +1658,7 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
   assertWithinBudget("Optional Memory support", optionalMemorySupportMeasurement, RELEASE_BUDGETS.optionalMemorySupport);
   assertWithinBudget("Shared confirm dialog", optionalConfirmDialogMeasurement, RELEASE_BUDGETS.optionalConfirmDialog);
   assertWithinBudget("Optional shortcut sheet", optionalShortcutSheetMeasurement, RELEASE_BUDGETS.optionalShortcutSheet);
+  assertWithinBudget("Optional shell overlays", optionalShellOverlayMeasurement, RELEASE_BUDGETS.optionalShellOverlays);
   assertWithinBudget("Optional palette actions", optionalPaletteActionsMeasurement, RELEASE_BUDGETS.optionalPaletteActions);
   assertWithinBudget("Optional resume report", optionalResumeReportMeasurement, RELEASE_BUDGETS.optionalResumeReport);
   assertWithinBudget("Optional approval dock", optionalApprovalDockMeasurement, RELEASE_BUDGETS.optionalApprovalDock);
@@ -2127,6 +2153,20 @@ export function isOptionalApprovalDockPath(path) {
  */
 export function isOptionalShortcutSheetPath(path) {
   return /^assets\/keyboard-shortcuts-sheet-[A-Za-z0-9_-]+\.js$/u.test(path);
+}
+
+/**
+ * The command palette and the preferences dialog.
+ *
+ * They lived in `platform-shell.tsx`, which the boot path imports for its
+ * hooks, so their JSX shipped in the entry chunk to be rendered by nobody:
+ * neither is ever on screen at first paint, and the entry ceiling had been
+ * squeezed to 20 bytes before this moved. Classified with the shortcut sheet
+ * because it is the same category — a deferred shell overlay, fetched on idle
+ * after first paint so the first press is warm.
+ */
+export function isOptionalShellOverlayPath(path) {
+  return /^assets\/platform-overlays-[A-Za-z0-9_-]+\.js$/u.test(path);
 }
 
 /**

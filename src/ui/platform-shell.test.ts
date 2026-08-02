@@ -4,6 +4,23 @@ import { applyPreferenceOverrides, approvalModeDescription, armBeforeUnloadGuard
 import type { SlashCommandDescriptor } from "../commands/types";
 import { CANONICAL_DESTINATIONS } from "./navigation-model";
 
+/**
+ * The shell's source, wherever the shell keeps it.
+ *
+ * The command palette and the preferences dialog moved to
+ * `platform-overlays.tsx` when they left the entry chunk, and five assertions
+ * here broke on the move even though nothing they assert had changed. These
+ * tests are about what the shell renders, not about which file holds the JSX,
+ * so they read both and the next split costs nothing.
+ */
+function shellSource(): string {
+  return [
+    readFileSync(new URL("./platform-shell.tsx", import.meta.url), "utf8"),
+    readFileSync(new URL("./platform-overlays.tsx", import.meta.url), "utf8"),
+  ].join("\n");
+}
+
+
 describe("platform shell contracts", () => {
   it("defaults to Drive only when this build can open Google authorization", () => {
     const configuredClientId = "123456789012-airship.apps.googleusercontent.com";
@@ -98,7 +115,7 @@ describe("platform shell contracts", () => {
 
     // Choosing a disabled row must refuse without dismissing the palette —
     // the silent close-and-no-op read as "ran, and nothing happened".
-    const dialog = readFileSync(new URL("./platform-shell.tsx", import.meta.url), "utf8");
+    const dialog = shellSource();
     expect(dialog).toContain("aria-disabled={entry.disabled || undefined}");
     expect(dialog).toContain("if (entry.disabled) return;");
   });
@@ -222,7 +239,7 @@ describe("platform shell contracts", () => {
   });
 
   it("makes appearance choices visual and requires confirmation before a broad reset", () => {
-    const dialog = readFileSync(new URL("./platform-shell.tsx", import.meta.url), "utf8");
+    const dialog = shellSource();
     expect(dialog).toContain('mode === "dark" ? "moon" : "sun"');
     expect(dialog).toContain('window.confirm("Reset display, durability, and legacy approval preferences to their defaults?")');
   });
@@ -394,7 +411,7 @@ describe("the Durability row states a destination and its state, never one as th
   });
 
   it("carries the consequence of each destination beside it", () => {
-    const dialog = readFileSync(new URL("./platform-shell.tsx", import.meta.url), "utf8");
+    const dialog = shellSource();
     expect(dialog).toContain("Nothing survives closing this tab.");
     expect(dialog).toContain("DURABILITY[backend][1]");
     // The row's own divider, so a claim about the world is not read as the
@@ -419,7 +436,10 @@ describe("the Durability row states a destination and its state, never one as th
    */
   it("is told the adoption state at the one place the host renders it", () => {
     const app = readFileSync(new URL("./app.tsx", import.meta.url), "utf8");
-    const mounts = elementsNamed(app, "PreferencesDialog");
+    // `Overlays.` prefixed: the dialog is fetched as a module and rendered from
+    // it, because it left the entry chunk. Still exactly one mount — the claim
+    // this test makes is about the integration point, not the import style.
+    const mounts = elementsNamed(app, "Overlays.PreferencesDialog");
     expect(mounts).toHaveLength(1);
     expect(mounts[0]).toContain("vaultAdopted={vaultRuntimeAdopted}");
     // The same value the Vault route's own adoption seal reads, so the two
@@ -435,7 +455,7 @@ describe("the Durability row states a destination and its state, never one as th
  */
 function elementsNamed(source: string, name: string): readonly string[] {
   const found: string[] = [];
-  for (const match of source.matchAll(new RegExp(`<${name}(?=[\\s/>])`, "gu"))) {
+  for (const match of source.matchAll(new RegExp(`<${name.replace(/\./gu, "\\.")}(?=[\\s/>])`, "gu"))) {
     const start = match.index + match[0].length;
     let depth = 0;
     let quote = "";
@@ -455,7 +475,7 @@ function elementsNamed(source: string, name: string): readonly string[] {
 }
 
 describe("modal focus and key ownership", () => {
-  const dialog = () => readFileSync(new URL("./platform-shell.tsx", import.meta.url), "utf8");
+  const dialog = () => shellSource();
 
   /** The body of `TrustPostureSheet`, from its declaration to the next top-level symbol. */
   const trustSheetSource = () => {
@@ -606,7 +626,7 @@ describe("the frame the boot screen renders on", () => {
     expect(html).not.toContain('<meta name="color-scheme" content="dark" />');
     // `theme-color` keeps a pre-script default, but the applied layer rewrites
     // it from the ground the document actually resolved.
-    expect(readFileSync(new URL("./platform-shell.tsx", import.meta.url), "utf8"))
+    expect(shellSource())
       .toContain('document.querySelector<HTMLMetaElement>(\'meta[name="theme-color"]\')?.setAttribute("content", ground)');
   });
 });

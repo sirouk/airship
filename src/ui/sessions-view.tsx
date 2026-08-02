@@ -418,6 +418,17 @@ export function SessionsView({
     if (!detail) return;
     setBusy(true);
     setDetailError(undefined);
+    /*
+     * Started before the delete so the write after it is synchronous.
+     *
+     * The continuity record has to be retired in the same breath as the
+     * deletion, and a dynamic import in that breath is a window a closing tab
+     * can fit through. Loading the module first turns the post-delete step into
+     * a `localStorage.setItem`, which is synchronous and cannot be half-done.
+     * Loaded, not used, until the journal has actually accepted the delete —
+     * a failed deletion must discard neither the conversation nor its record.
+     */
+    const ledgerModule = import("./chat/return-ledger").catch(() => undefined);
     try {
       await library.delete(detail.session.id, {
         expectedHead: { sequence: detail.session.headSequence, digest: detail.session.headDigest },
@@ -437,15 +448,18 @@ export function SessionsView({
        * truth about either.
        *
        * Forgotten here rather than in reconciliation because this is the only
-       * place that knows the difference. Failure is swallowed: the deletion
-       * itself has already succeeded, and a ledger write that cannot happen
-       * must not be reported as a deletion that did not.
+       * place that knows the difference, and awaited before the success
+       * announcement rather than fired and forgotten: review pointed out that
+       * "deleted" spoken ahead of the record leaves a close/reload race in
+       * which the row is gone and the tombstone is not. Nothing claims the
+       * deletion is complete until the intent is durably recorded. A module
+       * that could not load leaves the record in place, which errs toward
+       * reporting a deletion as loss rather than losing work silently.
        */
       const deletedId = detail.session.id;
-      void import("./chat/return-ledger").then(({ browserReturnLedgerStorage, forgetReturnLedgerEntries }) => {
-        const storage = browserReturnLedgerStorage();
-        if (storage) forgetReturnLedgerEntries(storage, [deletedId]);
-      }).catch(() => {});
+      const ledger = await ledgerModule;
+      const storage = ledger?.browserReturnLedgerStorage();
+      if (ledger && storage) ledger.forgetReturnLedgerEntries(storage, [deletedId]);
       setDeleting(false);
       setSelectedId(undefined);
       setDetail(undefined);

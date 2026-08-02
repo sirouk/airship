@@ -203,6 +203,25 @@ export function reconcileReturnLedger(
 }
 
 /** Drops entries the person has acknowledged, or that a report no longer covers. */
+/**
+ * Retire every continuity record at once, for a deliberate wipe.
+ *
+ * A Vault wipe empties the journal on purpose, and the ledger learns a
+ * conversation is gone by finding it absent from the journal. Without this, the
+ * reload at the end of a wipe came back and mourned every conversation the
+ * person had just chosen to destroy — a loss report, a count, and an offer to
+ * set up durability, for work deliberately thrown away. Same rule as a single
+ * deletion: the only moment that knows it was a decision has to say so.
+ */
+export function clearReturnLedger(storage: ReturnLedgerStorage): void {
+  try {
+    storage.removeItem(RETURN_LEDGER_KEY);
+  } catch {
+    // A storage that refuses leaves the records in place, which errs toward
+    // reporting a deliberate wipe as loss rather than losing work in silence.
+  }
+}
+
 export function forgetReturnLedgerEntries(
   storage: ReturnLedgerStorage,
   sessionIds: readonly string[],
