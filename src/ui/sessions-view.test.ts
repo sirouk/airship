@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { SESSION_LIBRARY_PAGE_SIZE, sessionListBound } from "./sessions-view";
@@ -17,6 +18,49 @@ const [source, styles] = await Promise.all([
  * a fork writes a new session identity and manifest.
  */
 describe("conversation library scope", () => {
+  /*
+   * A background write must not throw away what someone is typing.
+   *
+   * The detail effect re-runs on `refresh` and on the host's `revision`, and it
+   * closed the rename field and the fork panel on every one of those — so a
+   * turn completing, or a vault appending, discarded a half-typed title. It is
+   * also what made the rename journey flaky: Playwright reported "element is
+   * not stable ... element was detached from the DOM" on the Save button in
+   * roughly two runs of five, which is the same event a person gets as a click
+   * that does nothing.
+   *
+   * Asserted against the source because the reset is a control-flow property of
+   * one effect, and the browser journey that proves the behaviour end to end is
+   * `e2e/vault-auto-adoption.spec.ts` ("a renamed conversation still adopts its
+   * vault"), green 6/6 after this.
+   */
+  it("closes open editors only when the conversation changes, not on every refresh", () => {
+    const source = readFileSync(new URL("./sessions-view.tsx", import.meta.url), "utf8");
+    const GUARD = "if (openEditorsFor.current !== selectedId) {";
+    expect(source).toContain(GUARD);
+    // The guard has to hold both editors; guarding one and not the other is the
+    // half-fix that would look right and still lose a fork panel.
+    const body = source.slice(source.indexOf(GUARD) + GUARD.length);
+    const guarded = body.slice(0, body.indexOf("\n    }"));
+    expect(guarded).toContain("setRenaming(false)");
+    expect(guarded).toContain("setForkOpen(false)");
+    /*
+     * And the detail effect may not reset them anywhere else. Resets elsewhere
+     * are legitimate — after a rename or fork succeeds, and the two explicit
+     * Cancel handlers — so this is scoped to the effect that re-runs on every
+     * background write rather than counting the whole file.
+     */
+    const effect = source.slice(
+      source.indexOf("const controller = new AbortController();"),
+      source.indexOf("}, [library, refresh, revision, runtimeKey, selectedId]);"),
+    );
+    expect(effect).toContain(GUARD);
+    expect([...effect.matchAll(/setRenaming\(false\)/gu)],
+      "an ungated reset in this effect reintroduces the defect").toHaveLength(1);
+    expect([...effect.matchAll(/setForkOpen\(false\)/gu)],
+      "an ungated reset in this effect reintroduces the defect").toHaveLength(1);
+  });
+
   it("detects the out-of-scope selection from the page it actually rendered", () => {
     expect(source).toContain("const outOfResults = Boolean(page && selectedId && filterActive && !page.items.some((item) => item.id === selectedId))");
     expect(source).toContain("outOfResults={outOfResults}");

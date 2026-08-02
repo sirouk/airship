@@ -164,6 +164,8 @@ export function SessionsView({
   const [error, setError] = useState<string>();
   const [detailError, setDetailError] = useState<string>();
   const [refresh, setRefresh] = useState(0);
+  /** The conversation whose open editors (rename, fork) belong to the person. */
+  const openEditorsFor = useRef<string>();
   const [forkOpen, setForkOpen] = useState(false);
   /*
    * The fork's own refusal, kept out of the pane-wide alert.
@@ -305,8 +307,27 @@ export function SessionsView({
     const controller = new AbortController();
     setLoadingDetail(true);
     setDetailError(undefined);
-    setForkOpen(false);
-    setRenaming(false);
+    /*
+     * Only a change of conversation closes what is open on it.
+     *
+     * This effect re-runs on `refresh` and on the host's `revision` too, and it
+     * used to close the rename field and the fork panel every time — so any
+     * unrelated background write, a turn completing or a vault appending, threw
+     * away a title someone was in the middle of typing. It is also why the
+     * rename spec was flaky: the Save button was detached from the DOM
+     * mid-click, "element is not stable ... element was detached", on roughly
+     * two runs in five. A person gets the same event as a click that does
+     * nothing.
+     *
+     * The re-fetch below still runs on every trigger, because the record really
+     * may have changed. It is only the person's own open editors that now
+     * survive it.
+     */
+    if (openEditorsFor.current !== selectedId) {
+      openEditorsFor.current = selectedId;
+      setForkOpen(false);
+      setRenaming(false);
+    }
     void library.inspect(selectedId, runtime, controller.signal).then(
       setDetail,
       (caught: unknown) => {

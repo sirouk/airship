@@ -319,7 +319,9 @@ export const RELEASE_BUDGETS = Object.freeze({
   // The shell-overlay split carries the aggregate with it: the palette and the
   // preferences dialog now cost a chunk boundary in the lazy graph and nothing
   // at first paint. Measured 2701.21 KiB raw / 829.51 KiB gzip.
-  totalJavaScriptAndWorkers: Object.freeze({ raw: 2702 * 1024, gzip: 830 * 1024 }),
+  // The rename/fork guard on the session detail effect adds its ref and its
+  // condition. Measured 2702.03 KiB raw / 829.66 KiB gzip.
+  totalJavaScriptAndWorkers: Object.freeze({ raw: 2703 * 1024, gzip: 830 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. Keep it visible under a dedicated, deliberately small cap.
   serviceWorker: Object.freeze({ raw: 12 * 1024, gzip: 4 * 1024 }),

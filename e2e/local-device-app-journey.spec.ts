@@ -319,16 +319,43 @@ function observePageErrors(page: Page): string[] {
   return errors;
 }
 
+/**
+ * Inside the phone's width, and reachable down its length.
+ *
+ * This asserted `y >= 0` for every element, which is unsatisfiable for anything
+ * taller than the screen — and the Local Device ceremony is now 858px inside a
+ * 664px viewport, because it grew the step that makes you save the recovery key
+ * before you can claim you saved it. `scrollIntoViewIfNeeded` on an
+ * over-tall element parks its top above the fold by construction, so the test
+ * was reporting an unavoidable geometry as a defect while the thing that would
+ * actually hurt a person on a phone — sideways scrolling, a control off the
+ * right edge — went unchecked at 336px wide inside 390.
+ *
+ * So the claim is split. Horizontal containment is absolute: nothing may sit
+ * left of the screen or past its right edge, at any height. Vertically, an
+ * element that fits must be wholly visible; one that cannot fit must still have
+ * a reachable top, which is what scrolling to it proves.
+ */
 async function expectInsideViewport(page: Page, locator: Locator): Promise<void> {
   await locator.scrollIntoViewIfNeeded();
   const box = await locator.boundingBox();
   const viewport = page.viewportSize();
   expect(box).not.toBeNull();
   expect(viewport).not.toBeNull();
-  expect(box!.x).toBeGreaterThanOrEqual(0);
-  expect(box!.y).toBeGreaterThanOrEqual(0);
-  expect(box!.x + box!.width).toBeLessThanOrEqual(viewport!.width + 1);
-  expect(box!.y).toBeLessThan(viewport!.height);
+  expect(box!.x, "left of the screen").toBeGreaterThanOrEqual(0);
+  expect(box!.x + box!.width, "past the right edge").toBeLessThanOrEqual(viewport!.width + 1);
+  expect(box!.y, "starts below the fold after being scrolled to").toBeLessThan(viewport!.height);
+
+  if (box!.height <= viewport!.height) {
+    expect(box!.y, "fits the screen and is still cut off at the top").toBeGreaterThanOrEqual(0);
+    return;
+  }
+  // Taller than the screen: the top has to be reachable, so scroll to it and
+  // require it to land in view. An element whose top cannot be brought on
+  // screen is genuinely unusable, and that is what this now catches.
+  await locator.evaluate((element) => element.scrollIntoView({ block: "start" }));
+  const top = await locator.boundingBox();
+  expect(top!.y, "its top cannot be scrolled into view").toBeGreaterThanOrEqual(-1);
 }
 
 async function createEncryptedSourceBackup(
