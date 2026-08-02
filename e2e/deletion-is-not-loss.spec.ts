@@ -82,13 +82,26 @@ async function seedLedger(
   }, { key: LEDGER_KEY, seeded: entries.map((entry) => ({ ...entry })) });
 }
 
-async function readLedgerIds(page: Page): Promise<readonly string[]> {
-  return page.evaluate((key) => {
-    try {
-      const raw = localStorage.getItem(key);
-      return raw ? (JSON.parse(raw) as { sessionId: string }[]).map((entry) => entry.sessionId) : [];
-    } catch { return []; }
-  }, LEDGER_KEY);
+/**
+ * The ledger's ids, tolerating the navigation this test is waiting for.
+ *
+ * The wipe ends in `location.reload()`, and polling `page.evaluate` across that
+ * reload throws "Execution context was destroyed, most likely because of a
+ * navigation" — which is not an answer about the ledger, it is the reload
+ * happening. Returning `undefined` lets the poll ask again on the far side
+ * instead of failing on the event it exists to observe.
+ */
+async function readLedgerIds(page: Page): Promise<readonly string[] | undefined> {
+  try {
+    return await page.evaluate((key) => {
+      try {
+        const raw = localStorage.getItem(key);
+        return raw ? (JSON.parse(raw) as { sessionId: string }[]).map((entry) => entry.sessionId) : [];
+      } catch { return []; }
+    }, LEDGER_KEY);
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -256,8 +269,12 @@ test.describe("a conversation you deleted is not a conversation you lost", () =>
      * a working product. Probed directly against this build, the wipe does
      * retire them; what needed fixing was the moment the test looked.
      */
-    await expect.poll(async () => (await readLedgerIds(page)).filter((id) => seeded.includes(id)).length,
-      { timeout: 30_000, message: "a wipe retires the records it just destroyed the objects for" }).toBe(0);
+    await expect.poll(async () => {
+      const ids = await readLedgerIds(page);
+      // `undefined` means the reload was mid-flight; ask again rather than
+      // calling a navigation a surviving record.
+      return ids === undefined ? -1 : ids.filter((id) => seeded.includes(id)).length;
+    }, { timeout: 30_000, message: "a wipe retires the records it just destroyed the objects for" }).toBe(0);
 
     const carried = await page.context().storageState();
     const after = await ephemeralPage(browser, namespace, carried);
