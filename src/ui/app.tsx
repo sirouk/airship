@@ -723,7 +723,18 @@ const CHUTES_OAUTH_ATTEMPT_KEY = "airship.chutes.oauth-attempt.v1";
  * had given anything to draw yet.
  */
 function loadMessageParts() {
-  return import("./chat/message-parts-view");
+  /*
+   * Through the chunk recovery every other deferred route already uses.
+   *
+   * A bare `import()` has exactly one attempt, and this one is on the path that
+   * draws tool calls, attachments and receipts — so a single failed fetch left a
+   * restored conversation unable to render its own contents. Observed under a
+   * loaded dev server: three consecutive "Failed to fetch dynamically imported
+   * module: .../message-parts-view.tsx" in one journey. A person on a bad
+   * connection gets the same event, and the warm below cannot help if the one
+   * attempt it makes is the one that fails.
+   */
+  return loadRetryableChunk("message-parts-view", () => import("./chat/message-parts-view"));
 }
 
 /**
