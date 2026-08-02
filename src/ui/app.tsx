@@ -10384,6 +10384,18 @@ export function App() {
                 || vaultSnapshot.phase === "ready"}
               wipeBusy={vaultWipeBusy}
               onWipeStorage={() => void wipeVaultStorage()}
+              onEraseContinuityRecord={() => {
+                // Erases the witness alone: no journal, no drafts, no
+                // preferences. A person who chose ephemeral for privacy gets to
+                // remove the one thing that outlives the tab without giving up
+                // the posture that keeps everything else out of storage.
+                void loadReturnLedger().then(({ clearReturnLedger }) => {
+                  const storage = browserReturnLedgerStorage();
+                  if (storage) clearReturnLedger(storage);
+                  setUnrecoveredWork(undefined);
+                  setRuntimeStatus("Continuity record erased. A return will look like a first visit.");
+                }).catch(() => setRuntimeStatus("The continuity record could not be erased."));
+              }}
               adoptionNotice={vaultAdoptionNotice}
               contextMode={runtime.current?.contextMode}
               contextPublishing={vaultContextPublishing}

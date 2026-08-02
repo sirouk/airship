@@ -33,7 +33,7 @@ test("desktop terminal manages page-local tabs without claiming host Bash", asyn
   await expect(tabs.getByRole("tab")).toHaveCount(1);
   await expect(tabs.getByRole("tab").first()).toHaveAttribute("aria-selected", "true");
   await expect(page.getByText("Interactive process · this page")).toBeVisible();
-  await expect(page.getByText("Metadata · Ephemeral · this page only")).toBeVisible();
+  await expect(page.getByText("Metadata · Ephemeral · content not saved")).toBeVisible();
   await expect(page.getByText("Shared Git", { exact: true })).toHaveCount(0);
 
   await tabs.getByRole("button", { name: /Rename Terminal 1/ }).click();

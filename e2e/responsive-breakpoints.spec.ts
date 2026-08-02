@@ -124,7 +124,7 @@ test("short phone landscapes keep a bounded transcript and never autofocus or ov
     await expect(textarea).toBeVisible();
     await expect(page.getByRole("navigation", { name: "Mobile navigation" })).toBeVisible();
     await expect(page.getByRole("navigation", { name: "Primary" })).toBeHidden();
-    await expect(page.getByRole("button", { name: /Session\. Ephemeral · this page only\./u })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Session\. Ephemeral · content not saved\./u })).toBeVisible();
     await expect(textarea).not.toBeFocused();
 
     const geometry = await page.evaluate(() => {

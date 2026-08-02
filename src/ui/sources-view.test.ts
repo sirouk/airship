@@ -260,7 +260,10 @@ describe("source posture", () => {
     expect(durability).toHaveLength(1);
     // Scoped even when merged, so it can never read byte-identically to the
     // workspace-only durability chip the route header above it already shows.
-    expect(durability[0]?.label).toBe("Workspace & Git index · Ephemeral · this page only");
+    // Copy corrected: the posture keeps one continuity line per conversation,
+    // so an unqualified "page memory only" / "nothing survives" was a claim the
+    // product does not honour. See `EPHEMERAL_RETENTION_DISCLOSURE`.
+    expect(durability[0]?.label).toBe("Workspace & Git index · Ephemeral · content not saved");
     // Both original sentences survive inside the merged fact.
     expect(durability[0]?.detail).toContain("Workspace files exist only in this page runtime.");
     expect(durability[0]?.detail).toContain("A genuine .git object database");

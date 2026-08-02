@@ -494,7 +494,23 @@ const DURABILITY: Readonly<Record<VaultBackend, readonly [destination: string, c
   "local-device": Object.freeze(["This device", "Encrypted here. Not on your other devices."] as const),
   "google-drive": Object.freeze(["Google Drive", "Encrypted in your own Drive, on every device."] as const),
   "local-lab": Object.freeze(["Local MinIO lab", "A development adapter, not a place to keep anything."] as const),
-  ephemeral: Object.freeze(["Page memory only", "Nothing survives closing this tab."] as const),
+  /*
+   * "Nothing survives closing this tab" was not true, and this is the whole of
+   * the correction.
+   *
+   * Content really does die with the tab: no title, no message, no digest ever
+   * leaves page memory. But Airship keeps one line per conversation in this
+   * browser — id, profile, message count, last-active time, posture — so a
+   * return can say "something was not kept" instead of showing a blank screen
+   * that looks like a first visit. That witness is a real change to the
+   * contract, and stating "nothing survives" beside it made the product lie
+   * about itself in the one place a privacy-first reader looks hardest.
+   *
+   * The posture is named for what it actually promises. The full disclosure is
+   * `EPHEMERAL_RETENTION_DISCLOSURE`, and the Vault route carries an Erase
+   * control so the witness is a choice rather than a condition.
+   */
+  ephemeral: Object.freeze(["Ephemeral content", "Your writing dies with the tab. One line per conversation stays, so a return can tell you."] as const),
 });
 
 /** Every destination, in the order the row offers them. */

@@ -3,7 +3,10 @@ import { DURABILITY_STATES, durabilityLabel, durabilitySeal, durabilityShort } f
 
 describe("DurabilityIndicator", () => {
   it("states page-only durability without implying sync", () => {
-    expect(durabilityLabel("ephemeral")).toBe("Ephemeral · this page only");
+    // Copy corrected: the posture keeps one continuity line per conversation,
+    // so an unqualified "page memory only" / "nothing survives" was a claim the
+    // product does not honour. See `EPHEMERAL_RETENTION_DISCLOSURE`.
+    expect(durabilityLabel("ephemeral")).toBe("Ephemeral · content not saved");
     expect(durabilityLabel("local")).toBe("Encrypted · this device");
     expect(durabilityLabel("syncing")).not.toContain("synced");
   });

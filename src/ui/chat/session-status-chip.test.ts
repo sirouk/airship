@@ -23,7 +23,7 @@ function fact(over: Partial<SessionStatusFact> & Pick<SessionStatusFact, "id" | 
 describe("sessionStatusShort", () => {
   it("keeps the leading clause of a claim when it fits the chip", () => {
     expect(sessionStatusShort("E2EE · evidence recorded", "Asserted")).toBe("E2EE");
-    expect(sessionStatusShort("Ephemeral · this page only", "Not checked")).toBe("Ephemeral");
+    expect(sessionStatusShort("Ephemeral · content not saved", "Not checked")).toBe("Ephemeral");
     expect(sessionStatusShort("Ready", "Ready")).toBe("Ready");
   });
 
@@ -240,7 +240,7 @@ describe("the vault axis and the session durability claim", () => {
   });
 
   it("leaves the session's own durability claim untouched", () => {
-    expect(durabilityLabel("ephemeral")).toBe("Ephemeral · this page only");
+    expect(durabilityLabel("ephemeral")).toBe("Ephemeral · content not saved");
     expect(app).toContain("durabilityLabel(sessionDurability.state)");
   });
 });

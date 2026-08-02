@@ -589,11 +589,11 @@ test("mobile session header groups wrap without overlap and profile switching re
   const details = await page.locator(".session-bar__chips").boundingBox();
   expect(stage).not.toBeNull();
   expect(details).not.toBeNull();
-  await expect(sessionDetails).toHaveAccessibleName(/Session\. Ephemeral · this page only\./u);
+  await expect(sessionDetails).toHaveAccessibleName(/Session\. Ephemeral · content not saved\./u);
   await expect(sessionDetails.locator(".seal")).toHaveCount(1);
   await sessionDetails.click();
   const sessionState = page.locator(".session-status-popover .popover__panel");
-  await expect(sessionState).toContainText("Ephemeral · this page only");
+  await expect(sessionState).toContainText("Ephemeral · content not saved");
   await expect(sessionState).toContainText("This session journal exists only in page memory. Nothing is synced.");
   await page.keyboard.press("Escape");
   expect(details!.x).toBeGreaterThanOrEqual(stage!.x);

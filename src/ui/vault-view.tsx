@@ -69,6 +69,8 @@ export type VaultViewProps = {
   wipeAvailable?: boolean;
   wipeBusy?: boolean;
   onWipeStorage?: () => void;
+  /** Erases the ephemeral posture's return-ledger witness, and nothing else. */
+  onEraseContinuityRecord?: () => void;
 };
 
 export type ProviderFactKey = "survives" | "offline" | "reach" | "supply" | "keep" | "lose";
@@ -238,8 +240,10 @@ export function VaultView({
   wipeAvailable = false,
   wipeBusy = false,
   onWipeStorage,
+  onEraseContinuityRecord,
 }: VaultViewProps) {
   const [wipeConfirmOpen, setWipeConfirmOpen] = useState(false);
+  const [continuityErased, setContinuityErased] = useState(false);
   const status = phaseCopy(snapshot);
   const localDevice = provider === "local-device";
   const ephemeral = provider === "ephemeral";
@@ -654,6 +658,30 @@ export function VaultView({
           {onDisconnect ? <VaultReleaseAction provider={provider} onDisconnect={onDisconnect} /> : null}
         </>
       )}
+
+      {provider === "ephemeral" && onEraseContinuityRecord ? (
+        /*
+         * The witness is a choice, not a condition.
+         *
+         * Ephemeral keeps one line per conversation in this browser so a return
+         * can say "something was not kept" rather than showing a blank screen
+         * that looks like a first visit. That is a real change to the contract a
+         * privacy-first reader chose this posture for, so it is disclosed in
+         * full above and erasable here, on the route where the posture lives,
+         * without wiping anything else.
+         */
+        <section class="vault-danger" aria-label="Continuity record">
+          <div class="vault-danger__copy">
+            <strong>Continuity record</strong>
+            <span>{EPHEMERAL_RETENTION_DISCLOSURE}</span>
+          </div>
+          <button
+            class="vault-danger__action"
+            type="button"
+            onClick={() => { onEraseContinuityRecord(); setContinuityErased(true); }}
+          >{continuityErased ? "Erased" : "Erase continuity record"}</button>
+        </section>
+      ) : null}
 
       {wipeAvailable && onWipeStorage ? (
         <section class="vault-danger" aria-label="Storage danger zone">

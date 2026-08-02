@@ -60,7 +60,10 @@ test("durability preference moves safely between encrypted S3 and ephemeral page
 
   await openPreferences(page);
   await page.getByRole("button", { name: "Durability" }).click();
-  await page.getByRole("option", { name: "Page memory only" }).click();
+  // "Ephemeral content", not "Page memory only": the posture keeps one
+  // continuity line per conversation, so the old label claimed more than the
+  // product honours. See `EPHEMERAL_RETENTION_DISCLOSURE`.
+  await page.getByRole("option", { name: "Ephemeral content" }).click();
   await page.getByRole("button", { name: "Done" }).click();
   await expect(page.locator(".runtime-line")).toHaveAttribute("title", /Ephemeral mode/u, { timeout: 20_000 });
   await expect(page.getByText("Ephemeral mode is active.", { exact: false })).toBeVisible();

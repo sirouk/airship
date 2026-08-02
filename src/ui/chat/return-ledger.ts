@@ -43,7 +43,7 @@
  * `return-ledger.test.ts` pins both halves.
  */
 export const EPHEMERAL_RETENTION_DISCLOSURE =
-  "Nothing you write leaves page memory: no title, no message, no digest. Airship keeps one line per conversation in this browser — how many messages it held and when it was last open — so a return can tell you something was not kept. Dismissing that report deletes it.";
+  "Nothing you write leaves page memory: no title, no message, no digest. Airship keeps one line per conversation in this browser — an internal id, the profile, how many messages it held, when it was last open, and which posture it was under — so a return can tell you something was not kept. It is erased after 14 days, when you dismiss the report, or whenever you press Erase continuity record.";
 
 /** Every field this ledger is permitted to persist. The disclosure above names them. */
 export const RETURN_LEDGER_FIELDS = Object.freeze([
@@ -102,6 +102,15 @@ const MAX_ENTRIES = 40;
  * looking for it. After a fortnight nobody is, and an undismissed notice that
  * outlives its own usefulness is the kind of standing alarm the Atlas measured
  * teaching people to ignore warnings.
+ */
+/*
+ * PROVISIONAL. Fourteen days is a guess that has never been checked against how
+ * people actually return, and review was right that "implemented and tested" is
+ * not the same as "decided". It is short enough that a witness cannot quietly
+ * become a history, and long enough to cover a working fortnight away. Revisit
+ * it against real return behaviour rather than treating this constant as
+ * settled; the Erase control on the Vault route is what makes the interim
+ * defensible.
  */
 const TOMBSTONE_LIFETIME_MS = 14 * 24 * 60 * 60 * 1000;
 

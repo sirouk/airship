@@ -62,7 +62,14 @@ export function durabilitySeal(state: DurabilityState): SealState {
 }
 
 export function durabilityLabel(state: DurabilityState): string {
-  if (state === "ephemeral") return "Ephemeral · this page only";
+  // "this page only" claimed more than the product does: the content is
+  // page-only, and one continuity line per conversation is not. "content" is
+  // the whole correction and it has to sit after the leading clause, because
+  // `sessionStatusShort` shows only that clause and caps it at 14 characters —
+  // "Ephemeral content" is 17 and fell back to an unrelated word, which is a
+  // worse chip than the one being fixed. The popover beside it carries the full
+  // disclosure and the control that erases the witness.
+  if (state === "ephemeral") return "Ephemeral · content not saved";
   if (state === "local") return "Encrypted · this device";
   if (state === "syncing") return "Syncing encrypted state";
   // No present-progressive verb: nothing is synchronizing, and the reason is the

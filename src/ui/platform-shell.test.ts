@@ -350,7 +350,7 @@ describe("the Durability row states a destination and its state, never one as th
     // `vaultPhaseLabel` fixed on the Vault route by refusing to say
     // "Disconnected" for a vault that was never created.
     for (const adoption of ["connected", "not-connected", undefined] as const) {
-      expect(durabilityOptionLabel("ephemeral", adoption)).toBe("Page memory only");
+      expect(durabilityOptionLabel("ephemeral", adoption)).toBe("Ephemeral content");
     }
   });
 
@@ -412,7 +412,10 @@ describe("the Durability row states a destination and its state, never one as th
 
   it("carries the consequence of each destination beside it", () => {
     const dialog = shellSource();
-    expect(dialog).toContain("Nothing survives closing this tab.");
+    // Copy corrected: the posture keeps one continuity line per conversation,
+    // so an unqualified "page memory only" / "nothing survives" was a claim the
+    // product does not honour. See `EPHEMERAL_RETENTION_DISCLOSURE`.
+    expect(dialog).toContain("Your writing dies with the tab. One line per conversation stays, so a return can tell you.");
     expect(dialog).toContain("DURABILITY[backend][1]");
     // The row's own divider, so a claim about the world is not read as the
     // ninth in a run of presentation rows.
