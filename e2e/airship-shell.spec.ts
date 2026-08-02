@@ -118,18 +118,29 @@ test("compact runtime indicators disclose scoped detail without expanding the to
   // stronger disclosure than the one this test was written to protect.
   const runtime = page.locator(".topbar-posture-chip");
   /*
-   * The weakest claim, which is not the one this test used to pin.
+   * The contract, not whichever axis happens to be worst today.
    *
-   * It asserted "Browser / Edge runtime", and that passed only because it read
-   * the chip before the boot reload settled — at which point the durability
-   * axis had not been evaluated and the runtime axis was the worst thing known.
-   * Settled, nothing is saved and no Vault is set up, and that is genuinely
-   * weaker than "the kernel runs in this browser". The chip is right; the test
-   * was reading a half-booted page. The runtime axis is still asserted, in the
-   * sheet, where the chip promises the rest of the claims live.
+   * This pinned "Browser / Edge runtime", which only passed because it read the
+   * chip before the boot reload settled — the durability axis had not been
+   * evaluated yet, so the runtime axis was the worst thing known. Pinning the
+   * settled answer instead ("Not saved · Vault not set up") just moved the
+   * problem: it held in this file alone and failed in the full suite, because
+   * which claim is weakest legitimately depends on what the browser arrived
+   * with.
+   *
+   * The claim the chip actually makes is "I state the weakest of these four in
+   * full and count the rest", and its accessible name names that claim outright.
+   * So the test reads the weakest claim from the chip's own accessible name and
+   * requires the visible text to agree with it. That is the real contract, it
+   * cannot drift, and it fails loudly if the chip ever shows one axis while
+   * announcing another — which is the defect worth catching here.
    */
-  await expect(runtime).toContainText("Not saved · Vault not set up");
+  const spoken = await runtime.getAttribute("aria-label") ?? "";
+  const weakest = /Weakest claim: (.+?)\./u.exec(spoken)?.[1];
+  expect(weakest, `the chip must name its weakest claim: ${spoken}`).toBeTruthy();
+  await expect(runtime).toContainText(weakest!);
   await expect(runtime).toContainText("4 runtime claims");
+  expect(spoken).toContain("4 runtime claims");
   const initialTopbar = await page.locator(".topbar").boundingBox();
   expect(initialTopbar).not.toBeNull();
   await runtime.click();

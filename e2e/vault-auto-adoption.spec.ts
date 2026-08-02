@@ -117,7 +117,19 @@ test("fresh browser contexts resume one audited Vault session without creating r
         .getByText("Airship is running this turn entirely on your device", { exact: false })
         .first()).toBeVisible({ timeout: 15_000 });
     } else {
-      await expect(page.getByText(marker, { exact: true })).toBeVisible({ timeout: 15_000 });
+      /*
+       * Scoped to the transcript card, for the same reason the branch above is.
+       *
+       * The conversation now takes its title from the first message, so the
+       * marker is legitimately on screen four times — the session-bar title, the
+       * rail's recents row, the conversation switcher, and the message itself.
+       * A bare exact-text lookup matched all four and failed strict mode, which
+       * reads as "the resumed conversation is missing" when what happened is
+       * that three more surfaces started naming it correctly. The claim here is
+       * that the message came back, so this asserts the message.
+       */
+      await expect(page.locator("[data-transcript-card]").getByText(marker, { exact: true }).first())
+        .toBeVisible({ timeout: 15_000 });
     }
 
     await page.goto(`/?airshipLabNamespace=${encodeURIComponent(namespace)}#sessions`);
