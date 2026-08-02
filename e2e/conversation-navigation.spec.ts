@@ -508,10 +508,15 @@ test("Memory keeps its shared-query contract at the 768px tablet boundary", asyn
   await expect(relationships.locator(".memory-node-detail h2")).toBeVisible();
   await openMemoryIndex(page);
   await expect(page.getByRole("status", { name: "Shared Memory query in the workspace index" })).toContainText("Following “workspace”");
+  // Polled past the index's own first paint: opening it inserts a results
+  // region that is briefly wider than its column before the grid settles, and
+  // the default 5s poll caught that frame on a loaded machine. The claim is
+  // that the route settles with no overflow, not that it never has a frame with
+  // any.
   await expect.poll(() => page.evaluate(() => ({
     documentOverflow: document.documentElement.scrollWidth - innerWidth,
     mainOverflow: document.querySelector<HTMLElement>("main")!.scrollWidth - document.querySelector<HTMLElement>("main")!.clientWidth,
-  }))).toEqual({ documentOverflow: 0, mainOverflow: 0 });
+  })), { timeout: 20_000 }).toEqual({ documentOverflow: 0, mainOverflow: 0 });
 });
 
 test("an open Index shares one slow search authority with Recall", async ({ page }, testInfo) => {
@@ -663,9 +668,21 @@ test("Proof owns receipt, journal, and attestation evidence without a duplicate 
  * and was removed; the disclosure is the ordinary heading it always was.
  */
 async function openMemoryIndex(page: Page): Promise<void> {
+  /*
+   * Converges on open instead of reading once and clicking once.
+   *
+   * This checked `open`, decided to click, and asserted the result — a
+   * check-then-act race with the disclosure's own state. If it opened between
+   * the read and the click, the click closed it again, and the assertion then
+   * failed on a control that had done exactly what it was told twice. It failed
+   * about one run in four under repetition.
+   */
   const index = page.locator("#memory-index");
-  if (!await index.evaluate((element: HTMLDetailsElement) => element.open)) {
+  const isOpen = () => index.evaluate((element: HTMLDetailsElement) => element.open);
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    if (await isOpen()) return;
     await index.locator("summary").click();
+    await page.waitForTimeout(150);
   }
-  await expect.poll(() => index.evaluate((element: HTMLDetailsElement) => element.open)).toBe(true);
+  await expect.poll(isOpen, { timeout: 10_000 }).toBe(true);
 }

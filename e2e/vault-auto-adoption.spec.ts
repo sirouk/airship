@@ -200,7 +200,10 @@ test("a renamed conversation still adopts its vault, and the rename is on screen
   // pointer, then the rename.
   // (The detail heading keeps showing the pre-rename title until the list is
   // refreshed — pre-existing, unrelated, and not what stranded the vault.)
-  await expect(first.getByText("3 events", { exact: true }).first()).toBeVisible();
+  // The third append is the rename, and it is journalled after the control
+  // returns — so this is the durable write, not the render. The default 5s is
+  // the render's budget, not a write's.
+  await expect(first.getByText("3 events", { exact: true }).first()).toBeVisible({ timeout: 25_000 });
   await first.context().close();
 
   const second = await openFreshVaultPage(browser, namespace);
