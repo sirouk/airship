@@ -190,5 +190,11 @@ authoritative.**
   the first architectural follow-up, ahead of `app.tsx`: every bundle
   measurement, release manifest and artifact digest depends on reproducible
   output, so nondeterminism undermines the measurement system itself.
+- **Retrieval is three implementations, not one.** `docs/architecture/ADR-001-hybrid-retrieval.md`
+  records hybrid BM25 + dense retrieval as Airship's default and supersedes the
+  per-route scorers. Measured during this pass: the lane that assembles turn
+  context scores lexical evidence with `matches / |query|` — no IDF, no term
+  frequency, no length normalization — while a proper BM25 sits unused in a
+  sibling directory. Third follow-up, behind determinism and `app.tsx`.
 - **Touch-floor sweep** covered the controls this pass added; it is not a
   whole-product sweep.
