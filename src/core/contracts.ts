@@ -315,3 +315,26 @@ export interface ApprovalPolicy {
   /** One-shot provenance for the immediately completed decision. */
   takeProvenance?(context: ToolContext): ApprovalProvenance | undefined;
 }
+
+/**
+ * Where a corpus's vectors were computed. This is a privacy claim, so it is
+ * declared once and imported: it was previously written out in five places, and
+ * adding a posture updated the provider while leaving lineage, selection, the
+ * live environment and the publisher describing the old world.
+ *
+ * `confidential-remote` may only name a provider whose compute is attested. An
+ * ordinary remote embedder puts the corpus in someone else's plaintext and does
+ * not belong in this union.
+ */
+export const EMBEDDING_POSTURES = Object.freeze([
+  "deterministic-bootstrap",
+  "local-semantic",
+  "confidential-remote",
+] as const);
+
+export type EmbeddingPosture = (typeof EMBEDDING_POSTURES)[number];
+
+/** Boundary check. The type and the runtime list are the same declaration. */
+export function isEmbeddingPosture(value: unknown): value is EmbeddingPosture {
+  return typeof value === "string" && (EMBEDDING_POSTURES as readonly string[]).includes(value);
+}

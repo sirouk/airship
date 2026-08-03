@@ -2,6 +2,7 @@ import type { EmbeddingProvider, SearchHit } from "../indexing/contracts";
 import type { SegmentedObjectDescriptor } from "../storage/encrypted-segments";
 import type { ObjectStore } from "../storage/object-store";
 import type { WorkspaceRootKey } from "../storage/encrypted-envelope";
+import type { EmbeddingPosture } from "../core/contracts";
 
 export type ContextExpertKind = "directory" | "profile" | "source" | "task" | "recent" | "global";
 
@@ -41,7 +42,7 @@ export type ContextRoutingMirror = {
     sourceDigest: string;
     extractor: string;
     chunker: string;
-    embeddingPosture: "deterministic-bootstrap" | "local-semantic";
+    embeddingPosture: EmbeddingPosture;
     indexFormat: string;
   }>;
   createdAt: string;

@@ -137,7 +137,13 @@ export type ClientContextLineage = Readonly<{
   workspaceSnapshotDigest: string;
   embeddingProvider: string;
   embeddingDimensions: number;
-  embeddingPosture: "deterministic-bootstrap" | "local-semantic";
+  /*
+   * Taken from the provider contract rather than restated. This union was
+   * written out a second time here, so adding a posture to `EmbeddingProvider`
+   * broke lineage typing instead of flowing into it — and lineage is where a
+   * reader learns whether their vectors left the device.
+   */
+  embeddingPosture: NonNullable<EmbeddingProvider["posture"]>;
   extractor: "airship-extension-text-v1";
   chunker: "airship-character-window-v1";
   maxFileBytes: number;
