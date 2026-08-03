@@ -2,7 +2,7 @@ import { Component, type ComponentChildren } from "preact";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import type { SlashCommandDescriptor } from "../commands/types";
 import type { SessionListItem } from "../sessions/domain";
-import { CANONICAL_DESTINATIONS, navigationHashForView, SETTINGS_OVERLAY_ENTRY, type NavigationView } from "./navigation-model";
+import { CANONICAL_DESTINATIONS, destinationLabel, navigationHashForView, SETTINGS_OVERLAY_ENTRY, type NavigationView } from "./navigation-model";
 import { Seal, type SealState } from "./seal";
 import { trapFocus } from "./focus-trap";
 import type { ApprovalMode } from "../approvals/modes";
@@ -16,13 +16,15 @@ import {
   type TranscriptOperationsMode,
 } from "./chat/transcript-operations";
 import { isNearLastRealCard, scrollToLastRealCard } from "./chat/transcript-anchor";
+import { readReloadRisk, reloadWouldDiscardWork } from "./reload-risk";
+import { useBottomFloor } from "./bottom-floor";
 
 export type PaletteEntry = Readonly<{
   id: string;
   label: string;
   description: string;
   keywords?: readonly string[];
-  group: "Navigate" | "Commands" | "Sessions" | "Trust" | "Preferences";
+  group: "Navigate" | "Commands" | "Sessions" | "Trust" | "Preferences" | "Actions";
   /**
    * Set for entries the runtime has declared unavailable right now. The row
    * stays listed with its reason as the description — the same contract
@@ -36,9 +38,45 @@ export type PaletteEntry = Readonly<{
 export function buildPaletteEntries(args: Readonly<{
   navigate(view: NavigationView): void;
   openPreferences(): void;
+  /**
+   * The shortcut sheet, as a palette row.
+   *
+   * Measured: palette queries "shortcut", "keyboard" and "chord" each returned
+   * "No matching destination or command." on a product that binds eleven of
+   * them, so the one surface that could have taught the keyboard layer could
+   * not even find the word for it.
+   */
+  openShortcuts?(): void;
   commands?: readonly SlashCommandDescriptor[];
   runCommand?(command: string): void;
   sessions?: readonly Readonly<{ id: string; title: string; open(): void }>[];
+  /**
+   * Every managed profile, as a verb.
+   *
+   * The palette held no verbs at all, so the thing a multi-profile person does
+   * most had no keyboard path: the "Agent profile" control was the 24th tab
+   * stop and `NAVIGATION_JUMPS` bound no chord to it. `g 1`…`g 9` reach the
+   * same rows from the transcript in three keystrokes.
+   */
+  profiles?: readonly Readonly<{ profileId: string; name: string; description?: string; active: boolean; switchTo(): void }>[];
+  /**
+   * The shell's own verbs, as palette rows.
+   *
+   * Measured: "new conversation", "retry" and "rename" each returned "No
+   * matching destination or command." while the live shell rendered buttons of
+   * exactly those names — so every action still cost menu archaeology, on the
+   * one surface a keyboard-first person reaches for first. A verb states its
+   * own refusal here rather than being withheld: `reason` fills the row's
+   * description and disables it, the contract disabled commands already keep.
+   */
+  actions?: readonly Readonly<{
+    id: string;
+    label: string;
+    description: string;
+    keywords?: readonly string[];
+    reason?: string;
+    run(): void;
+  }>[];
 }>): readonly PaletteEntry[] {
   const entries: PaletteEntry[] = [];
   for (const destination of CANONICAL_DESTINATIONS) {
@@ -75,6 +113,24 @@ export function buildPaletteEntries(args: Readonly<{
       run: () => args.navigate(nested.id),
     }));
   }
+  (args.profiles ?? []).forEach((profile, index) => entries.push(Object.freeze({
+    id: `profile:${profile.profileId}`,
+    label: profile.active ? `${profile.name} · active profile` : `Switch to ${profile.name}`,
+    description: `Agent profile${profileChordHint(index) ? ` · ${profileChordHint(index)}` : ""}${profile.description ? ` · ${profile.description}` : ""}`,
+    keywords: ["profile", "switch", "change profile", "agent", profile.profileId, profile.name],
+    group: "Navigate",
+    ...(profile.active ? { disabled: true } : {}),
+    run: profile.switchTo,
+  })));
+  for (const action of args.actions ?? []) entries.push(Object.freeze({
+    id: `action:${action.id}`,
+    label: action.label,
+    description: action.reason ?? action.description,
+    keywords: action.keywords ?? [],
+    group: "Actions",
+    ...(action.reason ? { disabled: true } : {}),
+    run: action.run,
+  }));
   entries.push(Object.freeze({
     id: SETTINGS_OVERLAY_ENTRY.id,
     label: "Preferences",
@@ -82,6 +138,14 @@ export function buildPaletteEntries(args: Readonly<{
     keywords: ["settings", "theme", "mode", "paper", "dark", "approval", "full access", "auto approve"],
     group: "Preferences",
     run: args.openPreferences,
+  }));
+  if (args.openShortcuts) entries.push(Object.freeze({
+    id: "shortcuts",
+    label: "Keyboard shortcuts",
+    description: `Every chord this shell binds · ${SHORTCUT_SHEET_CHORD}`,
+    keywords: ["keyboard", "shortcut", "shortcuts", "chord", "chords", "keys", "hotkey", "accelerator", "?"],
+    group: "Preferences",
+    run: args.openShortcuts,
   }));
   for (const command of args.commands ?? []) entries.push(Object.freeze({
     id: `command:${command.name}`,
@@ -128,78 +192,62 @@ export async function loadRecentSessionPaletteSources(
   return recentSessionPaletteSources(page.items, open);
 }
 
-export function CommandPalette({ open, entries, onClose }: Readonly<{
-  open: boolean;
-  entries: readonly PaletteEntry[];
-  onClose(): void;
-}>) {
-  const dialog = useRef<HTMLDivElement>(null);
-  const input = useRef<HTMLInputElement>(null);
-  const restore = useRef<HTMLElement>();
-  const [query, setQuery] = useState("");
-  const [active, setActive] = useState(0);
-  const filtered = useMemo(() => filterPaletteEntries(entries, query), [entries, query]);
+/**
+ * Anything an overlay draws. A control inside one of these is never the control
+ * that opened it, so it can never become the thing focus is handed back to.
+ */
+const OVERLAY_ROOTS = "[role='dialog'], .platform-scrim, .approval-scrim, .mobile-sheet";
 
+/**
+ * Who gets the keyboard back when an overlay closes.
+ *
+ * Measured: Escape from the command palette or from Preferences dropped focus
+ * on `<body>`, from where the composer's autofocus claimed it — 21 Shift+Tab
+ * presses from the control the person had opened the overlay with. The cause
+ * was that both dialogs captured `document.activeElement` inside a post-commit
+ * effect, and the commit that opens an overlay is the same one that marks the
+ * shell `inert`: the opener has already been blurred by the time the effect
+ * runs, so the capture could only ever read `<body>`.
+ *
+ * `mobile-navigation.tsx` holds the other half of this contract with an
+ * explicit `moreButton` ref, which is why the phone's More sheet always
+ * restored correctly. These two overlays have many openers — a topbar button,
+ * ⌘K from anywhere, a More-sheet row — so instead of a ref per call site the
+ * shell remembers the last focus *outside* any overlay, captured from the
+ * `focusout` the inerting itself fires, one commit before the effect.
+ */
+export function useOpenerRestore(open: boolean): void {
+  const opener = useRef<HTMLElement>();
+  const lastOutside = useRef<HTMLElement>();
+  useEffect(() => {
+    const remember = (event: FocusEvent) => {
+      const target = event.target;
+      if (target instanceof HTMLElement && target !== document.body && !target.closest(OVERLAY_ROOTS)) {
+        lastOutside.current = target;
+      }
+    };
+    document.addEventListener("focusout", remember, true);
+    return () => document.removeEventListener("focusout", remember, true);
+  }, []);
   useEffect(() => {
     if (!open) return;
-    restore.current = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
-    setQuery("");
-    setActive(0);
-    const frame = requestAnimationFrame(() => input.current?.focus({ preventScroll: true }));
+    const active = document.activeElement;
+    opener.current = active instanceof HTMLElement && active !== document.body && !active.closest(OVERLAY_ROOTS)
+      ? active
+      : lastOutside.current;
     return () => {
-      cancelAnimationFrame(frame);
-      restore.current?.focus({ preventScroll: true });
+      const target = opener.current;
+      if (!target?.isConnected) return;
+      target.focus({ preventScroll: true });
+      // The shell lifts `inert` on the commit that closes the overlay, and
+      // focusing an element still inside an inert subtree silently does
+      // nothing — the same one-frame race `approval-dock.tsx` documents.
+      if (document.activeElement === target) return;
+      requestAnimationFrame(() => { if (target.isConnected) target.focus({ preventScroll: true }); });
     };
   }, [open]);
-
-  if (!open) return null;
-  const choose = (entry: PaletteEntry | undefined) => {
-    if (!entry) return;
-    /*
-     * An unavailable entry is announced, not enacted: the palette used to
-     * close on activation and do nothing, which read as "ran, and nothing
-     * happened". Keep it open with the row's reason still in view — the same
-     * refusal `MenuSelect` gives a disabled option, where the control stays
-     * up and the description carries the why.
-     */
-    if (entry.disabled) return;
-    onClose();
-    entry.run();
-  };
-  return (
-    <div class="platform-scrim" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <div
-        ref={dialog}
-        class="command-palette"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="command-palette-title"
-        onKeyDown={(event) => {
-          if (event.key === "Escape") { event.preventDefault(); onClose(); }
-          else if (event.key === "ArrowDown") { event.preventDefault(); setActive((value) => Math.min(filtered.length - 1, value + 1)); }
-          else if (event.key === "ArrowUp") { event.preventDefault(); setActive((value) => Math.max(0, value - 1)); }
-          else if (event.key === "Enter") { event.preventDefault(); choose(filtered[active]); }
-          else if (event.key === "Tab") trapFocus(event, dialog.current);
-        }}
-      >
-        <h2 id="command-palette-title" class="sr-only">Airship command palette</h2>
-        <div class="command-palette__search">
-          <span aria-hidden="true">⌘</span>
-          <input ref={input} value={query} role="combobox" aria-controls="command-palette-results" aria-expanded="true" aria-activedescendant={filtered[active] ? `palette-${safeId(filtered[active]!.id)}` : undefined} placeholder="Go to a view, session, or command…" onInput={(event) => { setQuery(event.currentTarget.value); setActive(0); }} />
-          <kbd>Esc</kbd>
-        </div>
-        <div id="command-palette-results" class="command-palette__results" role="listbox">
-          {filtered.length ? filtered.map((entry, index) => (
-            <button id={`palette-${safeId(entry.id)}`} key={entry.id} type="button" role="option" aria-selected={index === active} aria-disabled={entry.disabled || undefined} class={index === active ? "is-active" : ""} onMouseEnter={() => setActive(index)} onClick={() => choose(entry)}>
-              <span><strong>{entry.label}</strong><small>{entry.description}</small></span><em>{entry.group}</em>
-            </button>
-          )) : <p class="command-palette__empty">No matching destination or command.</p>}
-        </div>
-        <footer><span><kbd>↑</kbd><kbd>↓</kbd> choose</span><span><kbd>↵</kbd> open</span></footer>
-      </div>
-    </div>
-  );
 }
+
 
 export function useGlobalPaletteShortcut(toggle: () => void): void {
   const toggleRef = useRef(toggle);
@@ -224,6 +272,29 @@ export function navigationJumpForChord(prefix: string | undefined, key: string):
   return prefix === "g" ? NAVIGATION_JUMPS[key.toLocaleLowerCase()] : undefined;
 }
 
+/** How many profiles the `g <digit>` chord can reach. Nine keys, nine profiles. */
+export const PROFILE_CHORD_LIMIT = 9;
+
+/**
+ * The profile a `g <digit>` chord names, as a zero-based index into the managed
+ * profiles in the order the shell lists them.
+ *
+ * Switching profile is the thing a multi-profile person does several times an
+ * hour and it had no keyboard path at all: the control was the 24th tab stop,
+ * `NAVIGATION_JUMPS` bound nothing to it, and the palette answered "switch"
+ * with "No matching destination or command." A profile is a place in this
+ * product — its own conversations, drafts, terminal and workspace — so it takes
+ * the `g` prefix the other destinations use.
+ */
+export function profileJumpForChord(prefix: string | undefined, key: string): number | undefined {
+  if (prefix !== "g" || !/^[1-9]$/u.test(key)) return undefined;
+  return Number(key) - 1;
+}
+
+export function profileChordHint(index: number): string | undefined {
+  return index >= 0 && index < PROFILE_CHORD_LIMIT ? `g ${index + 1}` : undefined;
+}
+
 /**
  * The chord that reaches a destination, in the form a person types it.
  *
@@ -246,11 +317,18 @@ function chordSuffix(view: NavigationView): string {
   return chord ? ` · ${chord}` : "";
 }
 
-export function useGlobalNavigationJumps(navigate: (view: NavigationView) => void, enabled?: () => boolean): void {
+export function useGlobalNavigationJumps(
+  navigate: (view: NavigationView) => void,
+  enabled?: () => boolean,
+  /** `g 1`…`g 9`. Kept in this handler so one `g` prefix serves every chord. */
+  switchProfile?: (index: number) => void,
+): void {
   const navigateRef = useRef(navigate);
   navigateRef.current = navigate;
   const enabledRef = useRef(enabled);
   enabledRef.current = enabled;
+  const switchProfileRef = useRef(switchProfile);
+  switchProfileRef.current = switchProfile;
   useEffect(() => {
     let prefix: string | undefined;
     let timeout = 0;
@@ -272,13 +350,54 @@ export function useGlobalNavigationJumps(navigate: (view: NavigationView) => voi
         return;
       }
       const destination = navigationJumpForChord(prefix, event.key);
+      const profileIndex = destination ? undefined : profileJumpForChord(prefix, event.key);
       clear();
-      if (!destination) return;
+      if (destination) {
+        event.preventDefault();
+        navigateRef.current(destination);
+        return;
+      }
+      if (profileIndex === undefined || !switchProfileRef.current) return;
       event.preventDefault();
-      navigateRef.current(destination);
+      switchProfileRef.current(profileIndex);
     };
     window.addEventListener("keydown", onKeyDown);
     return () => { clear(); window.removeEventListener("keydown", onKeyDown); };
+  }, []);
+}
+
+/**
+ * The key that opens the sheet, printed everywhere the sheet is offered.
+ *
+ * `?`, `F1` and `Shift+/` all produced `[]` dialogs on the shipped build, and
+ * Preferences had no keyboard section, so eleven bound chords had no printed
+ * form anywhere in the product.
+ */
+export const SHORTCUT_SHEET_CHORD = "?";
+
+/**
+ * `?` from anywhere that is not a text field.
+ *
+ * Separate from `useGlobalPaletteShortcut` because it must not fire while the
+ * person is typing a question mark, and separate from the chord handler because
+ * it takes no prefix.
+ */
+export function useGlobalShortcutSheet(open: () => void, enabled?: () => boolean): void {
+  const openRef = useRef(open);
+  openRef.current = open;
+  const enabledRef = useRef(enabled);
+  enabledRef.current = enabled;
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (enabledRef.current && !enabledRef.current()) return;
+      if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;
+      if (event.key !== SHORTCUT_SHEET_CHORD && event.key !== "F1") return;
+      if (isTypingTarget(event.target)) return;
+      event.preventDefault();
+      openRef.current();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 }
 
@@ -375,7 +494,23 @@ const DURABILITY: Readonly<Record<VaultBackend, readonly [destination: string, c
   "local-device": Object.freeze(["This device", "Encrypted here. Not on your other devices."] as const),
   "google-drive": Object.freeze(["Google Drive", "Encrypted in your own Drive, on every device."] as const),
   "local-lab": Object.freeze(["Local MinIO lab", "A development adapter, not a place to keep anything."] as const),
-  ephemeral: Object.freeze(["Page memory only", "Nothing survives closing this tab."] as const),
+  /*
+   * "Nothing survives closing this tab" was not true, and this is the whole of
+   * the correction.
+   *
+   * Content really does die with the tab: no title, no message, no digest ever
+   * leaves page memory. But Airship keeps one line per conversation in this
+   * browser — id, profile, message count, last-active time, posture — so a
+   * return can say "something was not kept" instead of showing a blank screen
+   * that looks like a first visit. That witness is a real change to the
+   * contract, and stating "nothing survives" beside it made the product lie
+   * about itself in the one place a privacy-first reader looks hardest.
+   *
+   * The posture is named for what it actually promises. The full disclosure is
+   * `EPHEMERAL_RETENTION_DISCLOSURE`, and the Vault route carries an Erase
+   * control so the witness is a choice rather than a condition.
+   */
+  ephemeral: Object.freeze(["Ephemeral content", "Your writing dies with the tab. One line per conversation stays, so a return can tell you."] as const),
 });
 
 /** Every destination, in the order the row offers them. */
@@ -575,101 +710,6 @@ function syncDocumentThemeColor(root: HTMLElement): void {
   document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')?.setAttribute("content", ground);
 }
 
-export function PreferencesDialog({ open, value, onChange, onClose, profileApproval, vaultProviderSwitching = false, vaultAdopted }: Readonly<{
-  open: boolean;
-  value: PreferenceOverrides;
-  onChange(value: PreferenceOverrides): void;
-  onClose(): void;
-  vaultProviderSwitching?: boolean;
-  /**
-   * Whether the selected backend is holding anything right now, read from the
-   * same vault snapshot `#vault` renders from. Optional because absence is the
-   * one safe default: without it the Durability row states the destination and
-   * asserts nothing about adoption.
-   */
-  vaultAdopted?: boolean;
-  profileApproval?: Readonly<{
-    mode: ApprovalMode;
-    onManage(): void;
-  }>;
-}>) {
-  const dialog = useRef<HTMLDivElement>(null);
-  const restore = useRef<HTMLElement>();
-  useEffect(() => {
-    if (!open) return;
-    restore.current = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
-    const frame = requestAnimationFrame(() => dialog.current?.focus({ preventScroll: true }));
-    return () => { cancelAnimationFrame(frame); restore.current?.focus({ preventScroll: true }); };
-  }, [open]);
-  if (!open) return null;
-  const update = <K extends keyof PreferenceOverrides>(key: K, next: PreferenceOverrides[K]) => onChange(Object.freeze({ ...value, [key]: next }));
-  /*
-   * Page memory is not an adoption question: choosing it *is* the state, and
-   * a host that reports no vault state leaves this `undefined` so the row can
-   * only under-claim.
-   */
-  const adoption: DurabilityAdoption = value.vaultBackend === "ephemeral" || vaultAdopted === undefined
-    ? undefined
-    : vaultAdopted ? "connected" : "not-connected";
-  return (
-    <div class="platform-scrim" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <div ref={dialog} class="preferences-dialog" role="dialog" aria-modal="true" aria-labelledby="preferences-title" tabIndex={-1} onKeyDown={(event) => { if (event.key === "Escape") { if (!event.defaultPrevented) onClose(); } else if (event.key === "Tab") trapFocus(event, dialog.current); }}>
-        <header><div><span class="eyebrow">Runtime controls</span><h2 id="preferences-title">Preferences</h2><p>Change presentation and durability. Agent behavior remains pinned to its profile.</p></div><button type="button" onClick={onClose}>Done</button></header>
-        {profileApproval ? <div class="profile-approval-preference">
-          <div><span>Active profile approvals</span><strong>{approvalModeLabel(profileApproval.mode)}</strong></div>
-          <button type="button" onClick={profileApproval.onManage}>Manage in Profiles</button>
-          <p>{approvalModeDescription(profileApproval.mode)} A saved change creates a new profile revision and takes effect in a new pinned conversation.</p>
-        </div> : <>
-          <PreferenceSelect label="Legacy session approvals" value={value.approvalMode} options={[["ask-first","Ask First · prompt before effects"],["auto-approve","Auto Approve · model safety review"],["full-access","Full Access · no prompts, any HTTPS origin"]]} onChange={(next) => update("approvalMode", next as PreferenceOverrides["approvalMode"])} />
-          <p><strong>{approvalModeLabel(value.approvalMode)}.</strong> {approvalModeDescription(value.approvalMode)}</p>
-        </>}
-        <PreferenceSelect
-          label="Color mode"
-          value={value.mode}
-          options={[["dark", "Dark instrument"], ["light", "Paper"]]}
-          leading={(mode) => <Icon name={mode === "dark" ? "moon" : "sun"} size={17} />}
-          onChange={(next) => update("mode", next as PreferenceOverrides["mode"])}
-        />
-        <PreferenceSelect label="Type scale" value={value.typeScale} options={[['default','Default'],['large','Large'],['x-large','Extra large']]} onChange={(next) => update("typeScale", next as PreferenceOverrides["typeScale"])} />
-        <PreferenceSelect label="Density" value={value.density} options={[['comfortable','Comfortable'],['compact','Compact']]} onChange={(next) => update("density", next as PreferenceOverrides["density"])} />
-        <PreferenceSelect label="Corners" value={value.corners} options={[['subtle','Subtle'],['square','Square'],['rounded','Rounded']]} onChange={(next) => update("corners", next as PreferenceOverrides["corners"])} />
-        <PreferenceSelect label="Tool steps" value={value.transcriptOperations} options={[['summary','Summary'],['rows','Every step']]} onChange={(next) => update("transcriptOperations", next as PreferenceOverrides["transcriptOperations"])} />
-        <p>A folded run still states how many steps ran, which tools ran them and how they ended. A failed or denied step is never folded.</p>
-        <PreferenceSelect label="Body font" value={value.bodyFont} options={[['system-sans','System sans'],['system-serif','System serif']]} onChange={(next) => update("bodyFont", next as PreferenceOverrides["bodyFont"])} />
-        {/*
-          Under its own divider, so a claim about where a person's data lives is
-          not read as the ninth in a run of presentation rows.
-        */}
-        <p class="preferences-dialog__divider">Storage</p>
-        <PreferenceSelect
-          label="Durability"
-          // The last row in a scrolling dialog. Down is where the room is not.
-          placement="up"
-          value={value.vaultBackend}
-          disabled={vaultProviderSwitching}
-          options={durabilityOptions({
-            selected: value.vaultBackend,
-            adoption,
-            ...(vaultAdopted === undefined ? {} : { vaultAdopted }),
-            googleClientId: import.meta.env.VITE_GOOGLE_CLIENT_ID,
-            ...(typeof window === "undefined" ? {} : { location: window.location }),
-          }).map((option) => [option.value, option.label, option.description, option.disabled ?? false] as const)}
-          onChange={(next) => update("vaultBackend", next as PreferenceOverrides["vaultBackend"])}
-        />
-        <p>{durabilityRowNote(adoption)}</p>
-        <button
-          class="preferences-dialog__reset"
-          type="button"
-          onClick={() => {
-            if (window.confirm("Reset display, durability, and legacy approval preferences to their defaults?")) {
-              onChange(DEFAULT_PREFERENCES);
-            }
-          }}
-        >Reset preferences</button>
-      </div>
-    </div>
-  );
-}
 
 export function approvalModeLabel(mode: ApprovalMode): string {
   if (mode === "auto-approve") return "Auto Approve";
@@ -683,24 +723,6 @@ export function approvalModeDescription(mode: ApprovalMode): string {
   return "Read-only actions proceed automatically; write, network, execute, and identity actions require one-time approval.";
 }
 
-/**
- * Placement is a prop, and it is not cosmetic.
- *
- * The sheet used to be forced downward by a stylesheet override while
- * `MenuSelect` still believed it was placed upward, so neither the component's
- * fit measurement nor its own geometry applied: the last row in a scrolling
- * dialog opened a list that ran 25px past the bottom of the window and was
- * clipped by the dialog's own scroll box 78px before that. `down` is right for
- * a row with the whole dialog beneath it and measures the room it has; a row in
- * the lower third opens upward instead, where the room actually is.
- */
-function PreferenceSelect({ label, value, options, onChange, disabled = false, placement = "down", leading }: Readonly<{ label: string; value: string; options: readonly (readonly [string, string] | readonly [string, string, string] | readonly [string, string, string, boolean])[]; onChange(value: string): void; disabled?: boolean; placement?: "up" | "down"; leading?(value: string): ComponentChildren }>) {
-  // The fourth member is per-option availability, passed straight through:
-  // `MenuSelect` already refuses to choose a disabled option and already skips
-  // it in arrow/Home/End traversal, so a row that can state "unreachable, and
-  // here is why" needs no new interaction contract.
-  return <div class="preference-row"><span>{label}</span><MenuSelect className="preference-menu" ariaLabel={label} value={value} disabled={disabled} placement={placement} options={options.map(([id, name, description, optionDisabled]) => ({ value: id, label: name, ...(description ? { description } : {}), ...(optionDisabled ? { disabled: true } : {}) }))} leading={leading ? (option) => leading(option.value) : undefined} onChange={onChange} /></div>;
-}
 
 /**
  * Which band owns a claim, and therefore which band may state it as text.
@@ -780,18 +802,28 @@ export function ClaimRows({ rows }: Readonly<{ rows: readonly ClaimRow[] }>) {
 
 export function TrustPostureSheet({ open, axes, onClose, onNavigate }: Readonly<{ open: boolean; axes: readonly TrustAxis[]; onClose(): void; onNavigate(view: NavigationView): void }>) {
   const dialog = useRef<HTMLDivElement>(null);
-  const restore = useRef<HTMLElement>();
   /*
    * The same capture/restore contract `CommandPalette` and `PreferencesDialog`
-   * keep: a modal that takes focus on open owes it back on close. Without the
-   * restore, dismissing the sheet dropped keyboard focus on `<body>`, and the
-   * reader who opened it from the topbar chip lost their place entirely.
+   * keep: a modal that takes focus on open owes it back on close. Without it,
+   * dismissing the sheet dropped keyboard focus on `<body>` and the reader who
+   * opened it from the topbar chip lost their place entirely.
+   *
+   * It kept a private copy of that contract, and the copy was the weaker one:
+   * it captured `document.activeElement` at open and focused it again at close,
+   * with no guard for `document.activeElement` being `<body>` — which it is
+   * whenever the chip is opened by pointer. Closing then "restored" focus to
+   * the body, measured as the chip reading `inactive` right after being
+   * dismissed. `useOpenerRestore` is the version the other overlays use: it
+   * ignores `<body>`, ignores anything inside an overlay, and remembers the
+   * last element focused outside one. Third time a private copy of a shared
+   * fix has been found in this pass, after the bottom-bar floor and the return
+   * ledger's storage accessor.
    */
+  useOpenerRestore(open);
   useEffect(() => {
     if (!open) return;
-    restore.current = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
     const frame = requestAnimationFrame(() => dialog.current?.focus({ preventScroll: true }));
-    return () => { cancelAnimationFrame(frame); restore.current?.focus({ preventScroll: true }); };
+    return () => cancelAnimationFrame(frame);
   }, [open]);
   if (!open) return null;
   /*
@@ -1042,10 +1074,22 @@ export function usePwaUpdate(): Readonly<{ updateReady: boolean; reload(): void 
     };
     void navigator.serviceWorker.getRegistration().then((candidate) => candidate && watch(candidate));
     const controllerChange = () => {
-      // The first static-host takeover must establish COOP/COEP, but never
-      // interrupt work a person has already started. A page that observed a
-      // trusted input gesture keeps running and offers the explicit reload.
-      if (!reloadRequested.current && userInteracted.current) setUpdateReady(true);
+      /*
+       * The first static-host takeover must establish COOP/COEP, but never
+       * interrupt work a person has already started.
+       *
+       * "Started" used to mean a trusted input gesture, and that fence was too
+       * narrow — J151. A conversation is minted before anyone types, and under
+       * page memory it does not cross a reload, so the takeover could discard
+       * a whole turn that had been rendered and reported complete. The gesture
+       * is still honoured; `reloadWouldDiscardWork` adds the case where there
+       * is state on this page that no authority could give back. Under an
+       * adopted Vault it answers no however much has been said, because the
+       * journal is on the far side of the reload — so the fast path a first
+       * visit needs is untouched.
+       */
+      if (reloadRequested.current) { window.location.reload(); return; }
+      if (userInteracted.current || reloadWouldDiscardWork(readReloadRisk())) setUpdateReady(true);
       else window.location.reload();
     };
     navigator.serviceWorker.addEventListener("controllerchange", controllerChange);
@@ -1059,13 +1103,43 @@ export function usePwaUpdate(): Readonly<{ updateReady: boolean; reload(): void 
 }
 
 export function PwaUpdateBanner({ updateReady, onReload }: Readonly<{ updateReady: boolean; onReload(): void }>) {
+  // Hooks run unconditionally; the measurement idles until the banner is up.
+  const floor = useBottomFloor(updateReady);
   if (!updateReady) return null;
-  return <div class="pwa-update" role="status"><span><strong>Runtime update ready</strong><small>Your current work stays active until you choose to reload.</small></span><button type="button" onClick={onReload}>Reload Airship</button></div>;
+  // J152: this banner used a constant bottom offset and landed on top of the
+  // composer's send button — a `role="status"` div eating the click, measured
+  // as 58 refused Playwright retries. `--pwa-update-floor` is the live height
+  // of whatever holds the bottom edge, the same measurement the capability
+  // dock has always used.
+  return <div class="pwa-update" role="status" style={{ "--pwa-update-floor": `${floor}px` }}><span><strong>Runtime update ready</strong><small>Your current work stays active until you choose to reload.</small></span><button type="button" onClick={onReload}>Reload Airship</button></div>;
 }
+
+/**
+ * Rank for the *unfiltered* list only. A typed query is answered by relevance
+ * to what was typed, and this must not reorder it.
+ */
+const PALETTE_RECALL_RANK: Readonly<Record<PaletteEntry["group"], number>> = Object.freeze({
+  Sessions: 0, Actions: 1, Navigate: 2, Trust: 2, Preferences: 3, Commands: 4,
+});
 
 export function filterPaletteEntries(entries: readonly PaletteEntry[], query: string): readonly PaletteEntry[] {
   const terms = query.toLocaleLowerCase().trim().split(/\s+/u).filter(Boolean);
-  if (!terms.length) return entries.slice(0, 40);
+  /*
+   * With nothing typed, the palette's question is "take me back to what I was
+   * doing" — so the conversations answer it.
+   *
+   * Measured: the placeholder said "Go to a view, session, or command…" and the
+   * unfiltered list was 15 destinations then ~36 slash commands, with the
+   * session rows the palette already builds below all of them. `⌘K ↵` could not
+   * return a person to their own thread, and finding one at all was gated
+   * behind guessing its title. Sort is stable, so within a group the order the
+   * builder chose — recency for sessions — survives.
+   */
+  if (!terms.length) {
+    return [...entries]
+      .sort((left, right) => PALETTE_RECALL_RANK[left.group] - PALETTE_RECALL_RANK[right.group])
+      .slice(0, 40);
+  }
   return entries.filter((entry) => {
     const haystack = [entry.label, entry.description, entry.group, ...(entry.keywords ?? [])].join(" ").toLocaleLowerCase();
     return terms.every((term) => haystack.includes(term));
@@ -1074,7 +1148,7 @@ export function filterPaletteEntries(entries: readonly PaletteEntry[], query: st
 
 function scopeLabel(scope: string): string { return `${scope[0]?.toUpperCase()}${scope.slice(1)} scope`; }
 function shortId(id: string): string { return id.length > 12 ? `${id.slice(0, 8)}…` : id; }
-function safeId(id: string): string { return id.replace(/[^a-z0-9_-]/giu, "-"); }
+export function safeId(id: string): string { return id.replace(/[^a-z0-9_-]/giu, "-"); }
 function isTypingTarget(target: EventTarget | null): boolean {
   return target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/u.test(target.tagName));
 }

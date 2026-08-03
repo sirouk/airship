@@ -4,6 +4,7 @@ import {
   formatLocalDeviceBytes,
   publicError,
   readBoundedLocalDeviceBackup,
+  recoveryAcknowledgementAllowed,
   recoveryCustodyStatus,
 } from "./local-device-vault-setup";
 import { LocalDeviceVaultCorruptionError } from "../storage/local-device-object-store";
@@ -48,6 +49,53 @@ describe("local device Vault setup boundaries", () => {
       state: "verified",
       label: "Download requested.",
     });
+  });
+
+  it("refuses the acknowledgement while its own seal says nothing has left the page", () => {
+    /*
+     * Measured (J058): with the Seal reading verbatim "Not copied or downloaded
+     * yet.", the checkbox below it was `disabled: false`; one click advanced
+     * the ceremony to `acknowledged` and "The recovery value is no longer
+     * rendered." A screen that knows the fact which makes the next click
+     * dangerous and permits it anyway is warning nobody.
+     */
+    expect(recoveryAcknowledgementAllowed("none")).toBe(false);
+    expect(recoveryAcknowledgementAllowed("copied")).toBe(true);
+    expect(recoveryAcknowledgementAllowed("downloaded")).toBe(true);
+    /*
+     * The escape is explicit and honest about its own class. Without it the
+     * gate is routed around by clicking Copy and never pasting — writing a
+     * recovery key on paper is a real thing people do, and Airship watched
+     * none of it happen.
+     */
+    expect(recoveryAcknowledgementAllowed("transcribed")).toBe(true);
+    expect(recoveryCustodyStatus("transcribed").state).toBe("asserted");
+    expect(recoveryCustodyStatus("transcribed").state).not.toBe("verified");
+
+    const view = readFileSync(new URL("./local-device-vault-setup.tsx", import.meta.url), "utf8");
+    // Both sides of the boundary: the control is disabled, and the handler the
+    // disabled control guards refuses a programmatic click too.
+    expect(view).toContain("disabled={!recoveryAcknowledgementAllowed(custody)}");
+    expect(view).toContain("if (!recoveryAcknowledgementAllowed(custody)) return;");
+  });
+
+  it("says what the recovery key can and cannot restore, and names the second artifact", () => {
+    const view = readFileSync(new URL("./local-device-vault-setup.tsx", import.meta.url), "utf8");
+    /*
+     * Measured (J056): "Losing both it and this browser profile means losing
+     * the Vault." The word "both" states that losing only the profile is
+     * survivable, and it is not — a fresh browser profile plus the correct key
+     * answered "No existing local device Vault was found for this partition."
+     *
+     * And (J057): the artifact that can actually restore after profile loss —
+     * the encrypted backup — was only discoverable after the ceremony ended,
+     * below the fold, under the eyebrow "PORTABLE CIPHERTEXT".
+     */
+    expect(view).not.toContain("Losing both it and this browser profile");
+    expect(view).toContain("it does not contain your data — it authenticates the Vault");
+    expect(view).toContain("an encrypted backup file");
+    expect(view).toContain("Recovery kit · part 2 of 2");
+    expect(view).toContain("Finish the recovery kit");
   });
 
   it("keeps the safety sentence when the storage engine states only a symptom", () => {

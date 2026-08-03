@@ -21,6 +21,27 @@ export default defineConfig({
   workers: 1,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 2 : 0,
+  expect: {
+    /*
+     * Five seconds was never a decision — it is Playwright's default, chosen for
+     * pages far lighter than this one, and it has been deciding outcomes.
+     *
+     * `profile-silo` waits for a transcript to become taller than its own
+     * viewport before the journey it actually tests begins. On a workstation
+     * that happens immediately; on a shared runner it exceeded 5s and the gate
+     * reported `Expected: true, Received: false` — an assertion about layout
+     * failing because of a clock. It failed all three attempts on one gate and
+     * passed on retry on the other, from the same tree, which is the signature
+     * of a budget rather than a defect. Six of that file's polls carry no
+     * explicit timeout, and 19 of `conversation-navigation`'s 20 do not either.
+     *
+     * A longer budget weakens nothing: an assertion that would pass still passes
+     * at the same speed, and only a genuinely failing one waits longer before
+     * saying so. The alternative — sprinkling per-call timeouts wherever a flake
+     * has been noticed — tunes the clock to whichever machine last complained.
+     */
+    timeout: 15_000,
+  },
   reporter: [
     ["list"],
     ["html", { outputFolder: "playwright-report", open: "never" }],

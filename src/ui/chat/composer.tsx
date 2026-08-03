@@ -108,7 +108,20 @@ const COMPOSER_POSTURE_CLAIMS: Readonly<Record<ComposerPostureKind, ComposerPost
     kind: "local-demo",
     state: "none",
     label: "Local demo",
-    detail: "No provider credential is held. Replies come from a deterministic local demo and this conversation's journal is page memory only.",
+    /*
+     * A credential claim, and only a credential claim.
+     *
+     * It used to end "…and this conversation's journal is page memory only",
+     * which is a durability claim this chip has no input for. The Atlas caught
+     * it stating the opposite of the truth 40px from the chip that owns the
+     * fact: with the Local Device Vault adopted, the session chip's accessible
+     * name read "Session. Encrypted · this device." while this one read
+     * "…journal is page memory only" — two chips, one composer row, opposite
+     * answers about the same conversation. Durability is derived from the
+     * adopted runtime by `describeSessionDurability` and rendered by the
+     * session status chip; this one speaks for the credential.
+     */
+    detail: "No provider credential is held. Replies come from a deterministic local demo running in this tab.",
   }),
   "local-endpoint": Object.freeze({
     kind: "local-endpoint",

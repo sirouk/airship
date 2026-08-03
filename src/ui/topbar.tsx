@@ -46,7 +46,7 @@ export function TopbarPostureChip({
       // The count is honest about its own cost: a chip standing in front of
       // four claims says four, so the affordance never understates what it
       // hides — including the two it defers to another band rather than states.
-      aria-label={`Runtime trust for this browser tab. Weakest claim: ${worst.label}. ${worst.detail} ${String(axes.length)} axes.${elsewhere ? ` ${elsewhere.spoken}` : ""}`}
+      aria-label={`Runtime trust for this browser tab. Weakest claim: ${worst.label}. ${worst.detail} ${String(axes.length)} runtime claims.${elsewhere ? ` ${elsewhere.spoken}` : ""}`}
       onClick={onOpen}
     >
       {/* The label is never shortened here. §5.1 sketches a 14-character cap,
@@ -54,7 +54,15 @@ export function TopbarPostureChip({
           disconnected tab — clipping it would reintroduce the exact defect the
           band collapse exists to remove. The count is what buys the width back. */}
       <Seal state={worst.state} acting={worst.state === "checking"} label={worst.label} detail={worst.detail} size={16} />
-      <small class="topbar-posture-chip__count">{axes.length} axes</small>
+      {/* "runtime claims", with its subject. Measured (J055): a reader met
+          "4 axes" here, "4 claims" in the session chip and "8" on Proof within
+          two clicks, and nothing said the three counts were about three
+          different things — while this control's own accessible name said
+          "claim" one clause earlier. One noun, and each count names what it
+          counts, so three numbers reconcile instead of competing. The count
+          itself is unchanged: it is still every axis this chip stands in front
+          of, including the two it defers to the session bar. */}
+      <small class="topbar-posture-chip__count">{axes.length} runtime claims</small>
       {elsewhere?.text ? (
         // Never a second verdict, always a pointer with a count — and only when
         // a deferred claim is actually alarming. A reference that stays silent

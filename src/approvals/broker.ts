@@ -40,7 +40,35 @@ export type PendingApproval = Readonly<{
 }>;
 
 export type ApprovalBrokerSnapshot = Readonly<{
+  /** Requests still demanding an answer. The shell goes inert for exactly these. */
   pending: readonly PendingApproval[];
+  /**
+   * Requests the person put down without answering.
+   *
+   * Escape used to file a denial, so the two reflexes a chat surface trains —
+   * Escape to dismiss, Enter on the focused control — destroyed a typed command
+   * and its arguments with no way back. Escape now leaves the request exactly
+   * where it was: still live, still counted against `maxPending`, still on the
+   * same clock. It is only removed from `pending`, which is what makes the
+   * shell behind it usable again — a person who needs to re-read the file
+   * before authorising a write to it cannot do that inside a modal.
+   */
+  deferred: readonly PendingApproval[];
+}>;
+
+/**
+ * One settled request, published to whatever has to *say* what happened.
+ *
+ * Separate from `takeOutcome`, which is a one-shot record for a single writer:
+ * an announcement is not a record, and consuming the record to speak it would
+ * leave the journal with nothing to file. Carries the request itself because
+ * the request is gone from every snapshot by the time this fires, and an
+ * outcome sentence that cannot name the tool or its target is the defect this
+ * exists to fix.
+ */
+export type ApprovalSettlement = Readonly<{
+  request: PendingApproval;
+  outcome: ApprovalOutcome;
 }>;
 
 export type ApprovalBrokerOptions = Readonly<{
@@ -92,7 +120,9 @@ export function approvalRequestId(context: Readonly<Pick<ToolContext, "sessionId
 export class ApprovalBroker {
   private readonly entries = new Map<string, PendingEntry>();
   private readonly outcomes = new Map<string, ApprovalOutcome>();
+  private readonly postponed = new Set<string>();
   private readonly listeners = new Set<(snapshot: ApprovalBrokerSnapshot) => void>();
+  private readonly settleListeners = new Set<(settlement: ApprovalSettlement) => void>();
   private readonly maxPending: number;
   private readonly decisionTimeoutMs: number;
   private readonly now: () => string;
@@ -109,15 +139,46 @@ export class ApprovalBroker {
   }
 
   snapshot(): ApprovalBrokerSnapshot {
-    return Object.freeze({
-      pending: Object.freeze([...this.entries.values()].map((entry) => entry.request)),
-    });
+    const pending: PendingApproval[] = [];
+    const deferred: PendingApproval[] = [];
+    for (const entry of this.entries.values()) {
+      (this.postponed.has(entry.request.id) ? deferred : pending).push(entry.request);
+    }
+    return Object.freeze({ pending: Object.freeze(pending), deferred: Object.freeze(deferred) });
   }
 
   subscribe(listener: (snapshot: ApprovalBrokerSnapshot) => void): () => void {
     this.listeners.add(listener);
     listener(this.snapshot());
     return () => this.listeners.delete(listener);
+  }
+
+  /** Fires once per settled request, for surfaces that must speak the outcome. */
+  subscribeSettled(listener: (settlement: ApprovalSettlement) => void): () => void {
+    this.settleListeners.add(listener);
+    return () => this.settleListeners.delete(listener);
+  }
+
+  /**
+   * Put a request down without answering it.
+   *
+   * Not a decision, and deliberately not reachable from `decide`: nothing is
+   * resolved, the expiry clock is untouched, and the gate is exactly as closed
+   * as it was. The only thing that changes is that the request stops being
+   * modal, so the person can go and find out what they are being asked before
+   * they answer it.
+   */
+  defer(id: string): boolean {
+    if (!this.entries.has(id) || this.postponed.has(id)) return false;
+    this.postponed.add(id);
+    this.emit();
+    return true;
+  }
+
+  resume(id: string): boolean {
+    if (!this.postponed.delete(id)) return false;
+    this.emit();
+    return true;
   }
 
   /**
@@ -188,6 +249,7 @@ export class ApprovalBroker {
     const entry = this.entries.get(id);
     if (!entry) return false;
     this.entries.delete(id);
+    this.postponed.delete(id);
     clearTimeout(entry.timer);
     entry.signal.removeEventListener("abort", entry.abort);
     this.remember(id, outcome);
@@ -195,6 +257,8 @@ export class ApprovalBroker {
     // behind distinguishes it from a refusal.
     entry.resolve(outcome === "expired" ? "deny" : outcome);
     this.emit();
+    const settlement = Object.freeze({ request: entry.request, outcome });
+    for (const listener of this.settleListeners) listener(settlement);
     return true;
   }
 

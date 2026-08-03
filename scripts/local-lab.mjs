@@ -110,6 +110,7 @@ export function labCorsAllows(input) {
 async function main() {
   const command = process.argv[2] ?? "help";
   if (command === "start") return start();
+  if (command === "storage") return storage();
   if (command === "status") return status();
   if (command === "test") return test();
   if (command === "logs") return logs();
@@ -142,6 +143,39 @@ async function start() {
   printSnapshot(snapshot);
   printVaultSetup();
   console.log("\nThe deterministic demo agent is local. Chutes remains a real optional external service; no fake TEE evidence is generated.");
+}
+
+async function storage() {
+  // The storage plane on its own, with no lab-owned Vite.
+  //
+  // `start` exists for a person doing Vault work by hand, and the web server it
+  // owns carries `labEnvironment()` — which always sets `VITE_GOOGLE_CLIENT_ID`,
+  // synthesising a Google registration. The generic Playwright matrix requires
+  // the opposite: `vault-provider-switch` asserts that a provider which cannot be
+  // opened cannot be chosen, which is only true where no registration exists.
+  // Because `playwright.config.ts` reuses an existing server on 4173, a lab-owned
+  // Vite silently becomes the matrix's server and that spec fails on a premise
+  // the harness itself broke.
+  //
+  // So an automated caller provisions storage and owns its own web server.
+  await mkdir(stateDirectory, { recursive: true, mode: 0o700 });
+  console.log("Starting the isolated Airship S3 lab storage plane…");
+  await compose(["up", "-d", "minio"]);
+  await waitFor("MinIO", inspectMinio, (result) => result.ready, 45_000);
+  await compose(["run", "--rm", "minio-init"]);
+
+  const s3 = await inspectMinio();
+  const s3Cors = await inspectMinioCors();
+  if (!s3.ready || !s3Cors.ready) {
+    throw new Error("The lab storage plane started but MinIO health or its CORS contract did not become ready. Run `npm run lab:logs`.");
+  }
+
+  console.log("\nAirship local lab storage plane");
+  console.log(`  MinIO        ready  ${LOCAL_LAB.s3Endpoint}`);
+  console.log(`  S3 preflight ready  Origins ${LOCAL_LAB_UI_ORIGINS.join(", ")}`);
+  console.log(`  Console      ${LOCAL_LAB.s3Console}`);
+  printVaultSetup();
+  console.log("\nNo lab-owned Vite was started: the caller owns the web server, and with it the environment the suite is measured against.");
 }
 
 async function status() {
@@ -459,6 +493,7 @@ function help() {
   console.log(`Airship local full-system lab
 
   npm run lab:start   Start lab-owned loopback Airship and isolated MinIO
+  npm run lab:storage Start isolated MinIO only; the caller owns the web server
   npm run lab:status  Show authoritative UI/S3 readiness and Vault fields
   npm run lab:test    Run web, Rust, live S3, and Chutes integration gates
   npm run lab:logs    Show lab-owned Vite and MinIO logs

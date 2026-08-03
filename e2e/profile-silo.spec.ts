@@ -112,7 +112,17 @@ test("Profile is the primary A → B → A cockpit silo while global services st
   // confused-deputy source or activate a General-manifest child under B.
   await composer.fill(`/sessions fork ${alphaSessionId}`);
   await composer.press("Enter");
-  await expect(page.getByText(/belongs to another Profile.*fork/u)).toBeVisible();
+  /*
+   * Scoped to the card a person reads. A failed local command is now also
+   * announced once through a polite `sr-only` region — the Atlas found screen
+   * readers heard nothing at exactly the moments that mattered — so the same
+   * sentence legitimately exists twice, seen and heard. Both are asserted:
+   * dropping the announcement to satisfy a locator would take the fix away.
+   */
+  await expect(page.getByLabel("Airship message — failed turn").getByText(/belongs to another Profile.*fork/u))
+    .toBeVisible();
+  await expect(page.locator("[role=status].sr-only").filter({ hasText: /belongs to another Profile/u }))
+    .toHaveCount(1);
   await expect(page).toHaveURL(betaUrl);
   await expect(shell).toHaveAttribute("data-active-profile", "research");
   await expect(shell).toHaveAttribute("data-session-profile", "research");

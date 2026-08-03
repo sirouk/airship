@@ -76,6 +76,64 @@ export async function migrateWorkspaceState(
   }
 }
 
+/** What a page-memory journal handed to a Vault, in facts read before the copy. */
+export type AdoptionCarriedWork = Readonly<{
+  conversations: number;
+  /** The conversation the person was in, when the profile pointer named one. */
+  activeTitle?: string;
+}>;
+
+/**
+ * Read what this migration is about to carry, so the landing screen can say it.
+ *
+ * Lives beside the copy rather than in the shell for two reasons: it is a fact
+ * about the migration, and the shell's first-paint chunk is a fixed budget that
+ * a sentence only an adoption can produce has no business spending.
+ */
+export async function readAdoptionCarriedWork(
+  source: EventJournal,
+  profileId: string,
+): Promise<AdoptionCarriedWork> {
+  const conversations = (await source.listSessions()).length;
+  try {
+    const { resolveProfileActiveConversation } = await import("../sessions/profile-cockpit");
+    const pointer = await resolveProfileActiveConversation(source, profileId);
+    const activeTitle = pointer.state === "selected" ? pointer.session?.title : undefined;
+    return Object.freeze({ conversations, ...(activeTitle ? { activeTitle } : {}) });
+  } catch {
+    // Naming the thread is a courtesy on the adoption path; failing to read the
+    // pointer must never be what stops a Vault from being adopted.
+    return Object.freeze({ conversations });
+  }
+}
+
+/**
+ * What adoption says about the work it just carried, and about the thread it
+ * could not continue.
+ *
+ * Measured (J110): a person with a completed turn in `#chat/7ec47231…` turned
+ * durability on and arrived at `#chat/40ec5b12…` — a different, empty
+ * conversation titled "General · encrypted vault" — with the rail reading "No
+ * messages yet" and no sentence anywhere about where the work had gone. It had
+ * gone into the Vault: `migrateJournalState` copies every session verbatim, ids
+ * and all. What it cannot carry is *continuity*, because a session manifest
+ * pins the workspace it was composed against and adoption is precisely a change
+ * of workspace authority — so every pre-Vault conversation reads "WORKSPACE
+ * MISMATCH · Fork required" afterwards. That is a real consequence of the
+ * choice; the silence around it was the defect.
+ *
+ * The two halves are one string because they must never come apart: "your
+ * conversations came with you" is only honest beside "this is a new one, and
+ * here is how to continue the old one".
+ */
+export function adoptionCarriedNote(carried: AdoptionCarriedWork | undefined): string {
+  if (!carried || carried.conversations < 1) return "";
+  const count = `${String(carried.conversations)} conversation${carried.conversations === 1 ? "" : "s"}`;
+  const named = carried.activeTitle ? ` — including “${carried.activeTitle}”` : "";
+  return ` ${count} from page memory${named} came with it and are listed in All conversations.`
+    + " They continue with Fork to continue rather than in place: a conversation stays pinned to the storage it was started on, and this Vault is a different one.";
+}
+
 /** Preserve exact session IDs, event bytes, sequence numbers, and digest heads. */
 export async function migrateJournalState(source: EventJournal, target: JournalBackend): Promise<void> {
   const sessions = await source.listSessions();

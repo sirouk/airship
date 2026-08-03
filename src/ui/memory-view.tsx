@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks"
 import {
   MemoryGraphRenderer,
   deriveMemoryRelationshipGraph,
+  type MemoryGraphNode,
   type MemoryGraphViewportControls,
   type MemoryNodeKind,
   type MemoryRelationshipGraph,
@@ -10,9 +11,10 @@ import {
 import { stableMemoryContentHash } from "../memory-graph/derive";
 import type { ProfileCatalog } from "../profiles/catalog";
 import type { ProfileRevision } from "../profiles/domain";
-import type { WorkspaceEntry, WorkspacePort } from "../workspace/contracts";
+import type { ClientEncryptedWorkspacePort, WorkspaceEntry, WorkspacePort } from "../workspace/contracts";
 import type { FederatedMemoryResult, FederatedMemorySearchState } from "../tools/federated-memory";
 import { ContextView } from "./context-route";
+import { durabilityLabel, durabilitySeal, type DurabilityState } from "./durability-indicator";
 import { Icon } from "./icons";
 import { MemoryKindLegend } from "./memory-controls";
 import { groupMemoryRelationships } from "./memory-relationships";
@@ -64,6 +66,51 @@ export type MemorySourceTarget =
   | Readonly<{ kind: "memory"; recordId: string; path: string }>
   | Readonly<{ kind: "file"; path: string }>;
 
+/** Where this profile's remembered records actually live, and for how long. */
+export type MemoryDurability = Readonly<{ state: DurabilityState; label?: string; detail: string }>;
+
+/** One explicit memory record, as `recall_memory` and `search_memory` report it. */
+export type MemoryRecordEntry = Readonly<{
+  id: string;
+  content: string;
+  source: string;
+  createdAt: string;
+  contentDigest?: string;
+  profileRevisionAtCreation?: string;
+  createdInSessionId?: string;
+}>;
+
+export type MemoryRecordPage = Readonly<{
+  records: readonly MemoryRecordEntry[];
+  /** Everything the pinned scope holds, whether or not this page lists it. */
+  total: number;
+  legacyQuarantined: number;
+}>;
+
+/**
+ * A change to the corpus, in the two verbs `update_memory` actually has.
+ *
+ * The measured defect: remembering anything required typing
+ * `/update-memory --json '{…}'` into the composer, and the product's own help
+ * documented an argument order its parser rejects. The route that displays the
+ * corpus is where a person expects to add to it, so it asks for the same
+ * approval-gated tool call the command would have made — the audit trail is
+ * unchanged, only the archaeology is gone.
+ */
+export type MemoryChange =
+  | Readonly<{ action: "remember"; content: string; source: string }>
+  | Readonly<{ action: "forget"; id: string }>;
+
+export type MemoryCommitOutcome = Readonly<{
+  /**
+   * `denied` is not a failure: a person declined, and the draft is kept.
+   * `unbound` is neither — no accountable session exists to write through.
+   */
+  status: "committed" | "denied" | "failed" | "unbound";
+  /** What the tool itself said. The route writes every other sentence. */
+  message?: string;
+}>;
+
 export type MemoryViewProps = Readonly<{
   sessionId?: string;
   messages: readonly MemoryViewMessage[];
@@ -75,6 +122,24 @@ export type MemoryViewProps = Readonly<{
   initialTab: "search" | "index";
   /** Opens a hit's source. Unwired hosts get no button rather than a dead one. */
   onOpenSource?: (target: MemorySourceTarget) => void;
+  /**
+   * The shell's richer reading of where this session's state is written. Absent
+   * hosts fall back to what the workspace port itself proves — never to
+   * silence, because silence is what let "Private · on-device" stand alone
+   * beside records a reload had already destroyed.
+   */
+  durability?: MemoryDurability;
+  /**
+   * Browses the pinned profile's records — no query, no ranking.
+   *
+   * Search answers "is this in here"; a researcher auditing what they are
+   * relying on needs "what is in here", and the route had no answer at all.
+   * Absent hosts get the search surface only, never an empty list implying an
+   * empty corpus.
+   */
+  recallRecords?: (signal: AbortSignal) => Promise<MemoryRecordPage>;
+  /** Approval-gated remember/forget. Unwired hosts get no write controls. */
+  commitMemory?: (change: MemoryChange) => Promise<MemoryCommitOutcome>;
 }>;
 
 export type MemoryPresentationState = Readonly<{
@@ -142,6 +207,247 @@ export function stableMemoryAuthoritySignature(messages: readonly MemoryViewMess
 const PROFILE_MEMORY_PATH = "/workspace/.airship/memory.json";
 
 /**
+ * The words this route uses for the rows the retrieval floor disqualified.
+ *
+ * The canonical string is `RETRIEVAL_FLOOR_HEADING` in
+ * `indexing/client-context-engine`, beside the rule that produces the
+ * classification — and it is copied rather than imported because that module
+ * lives in the deferred-capabilities pack with the context runtime, while this
+ * one is the Memory route's own chunk. A runtime import would split the engine
+ * into a third chunk the release gate cannot attribute to an owner (measured:
+ * "unclassified: assets/client-context-engine-*.js"). `memory-view.test.ts`
+ * imports both and fails if they ever differ, so one vocabulary is enforced by
+ * the tests rather than by the bundler.
+ */
+export const RETRIEVAL_FLOOR_HEADING = "Closest, below the confidence floor";
+
+/**
+ * What the workspace port itself proves about durability.
+ *
+ * The measured defect: a record written with `/update-memory` was verified
+ * present in the Active profile memory lane, and after one `reload()` the same
+ * query returned "No matches" while the route's only status chip still read
+ * "Private · on-device" — a privacy claim a researcher reads as a durability
+ * one. Memory now states both claims, and this is the floor under the second:
+ * a host that passes nothing still cannot leave the route silent.
+ *
+ * Twin of `inferredTerminalDurability` in `terminal-view.tsx`, deliberately not
+ * imported from it: Terminal is its own lazily loaded route chunk, and a
+ * runtime import would merge it into Memory's. The shared vocabulary — the
+ * state names, `durabilityLabel`, `durabilitySeal` — does come from the one
+ * owner, so only this four-line inference is stated twice.
+ */
+export function inferredMemoryDurability(workspace?: WorkspacePort): MemoryDurability {
+  if (!workspace) {
+    return Object.freeze({
+      state: "ephemeral" as const,
+      detail: "No workspace is bound to this route, so nothing it finds is written anywhere durable.",
+    });
+  }
+  if ((workspace as Partial<ClientEncryptedWorkspacePort>).encryptionBoundary === "airship-client-envelope-v1") {
+    return Object.freeze({
+      state: "local" as const,
+      label: "Client-encrypted · tier unknown",
+      detail: `The active workspace proves Airship's client-encryption boundary, so ${PROFILE_MEMORY_PATH} is written through it. Its backing tier was not supplied to Memory, so this route claims neither device nor cloud synchronization.`,
+    });
+  }
+  return Object.freeze({
+    state: "ephemeral" as const,
+    detail: `Remembered records are written to ${PROFILE_MEMORY_PATH} in page memory. Nothing here survives a reload or a new tab.`,
+  });
+}
+
+/**
+ * The one witness that outlives a reload of this tab.
+ *
+ * Everything else the route reads — the journal, the workspace, the profile
+ * memory file — is page memory when the Vault is Ephemeral, so after a reload
+ * there is nothing left to compare against and the loss reads as an empty
+ * corpus. `sessionStorage` has exactly the right lifetime: it survives the
+ * reload and dies with the tab, which is the same lifetime as the claim
+ * "records you found *here* are gone". Chat makes the equivalent statement from
+ * the equivalent evidence — a session id in the hash that no longer resolves.
+ *
+ * Profile-scoped by key, because memory is a real silo: a record dropped from
+ * General is not a fact about Research.
+ */
+export const MEMORY_WITNESS_KEY_PREFIX = "airship.memory.page-witness.";
+
+/** As many ids as make a count trustworthy without turning storage into a log. */
+const MEMORY_WITNESS_LIMIT = 64;
+
+export type MemoryPageWitness = Readonly<{
+  /** The page load that observed these records. */
+  loadId: string;
+  recordIds: readonly string[];
+  /** Records a previous load of this tab observed and this one cannot reach. */
+  dropped: number;
+}>;
+
+/**
+ * This page load's identity. Module scope: a reload makes a new module.
+ */
+const MEMORY_PAGE_LOAD_ID = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+
+export function readMemoryWitness(storage: Storage | undefined, profileId: string): MemoryPageWitness | undefined {
+  try {
+    const raw = storage?.getItem(`${MEMORY_WITNESS_KEY_PREFIX}${profileId}`);
+    if (!raw) return undefined;
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return undefined;
+    const value = parsed as Partial<MemoryPageWitness>;
+    if (typeof value.loadId !== "string") return undefined;
+    const recordIds = Array.isArray(value.recordIds) ? value.recordIds.filter((id): id is string => typeof id === "string") : [];
+    return Object.freeze({
+      loadId: value.loadId,
+      recordIds: Object.freeze(recordIds.slice(0, MEMORY_WITNESS_LIMIT)),
+      dropped: typeof value.dropped === "number" && Number.isFinite(value.dropped) ? Math.max(0, Math.floor(value.dropped)) : 0,
+    });
+  } catch {
+    return undefined;
+  }
+}
+
+function writeMemoryWitness(storage: Storage | undefined, profileId: string, witness: MemoryPageWitness): void {
+  try {
+    storage?.setItem(`${MEMORY_WITNESS_KEY_PREFIX}${profileId}`, JSON.stringify(witness));
+  } catch {
+    // A witness that cannot be stored simply produces no notice. It must never
+    // take the route down: this is a claim about durability, not a dependency.
+  }
+}
+
+/**
+ * The witness this load starts from, and what the previous one lost.
+ *
+ * A stored witness whose `loadId` is not this page's belongs to the load before
+ * the reload. When records are written to page memory, that load's records are
+ * provably unreachable — the workspace they lived in was rebuilt empty — so the
+ * count is carried forward as `dropped` and the id list is retired. A durable
+ * workspace keeps its records, so the same witness is simply re-adopted.
+ */
+export function adoptMemoryWitness(
+  stored: MemoryPageWitness | undefined,
+  loadId: string,
+  durability: DurabilityState,
+): MemoryPageWitness {
+  if (!stored) return Object.freeze({ loadId, recordIds: Object.freeze([]), dropped: 0 });
+  if (stored.loadId === loadId) return stored;
+  if (durability !== "ephemeral") return Object.freeze({ ...stored, loadId });
+  return Object.freeze({
+    loadId,
+    recordIds: Object.freeze([]),
+    dropped: stored.dropped + stored.recordIds.length,
+  });
+}
+
+/** Records this load has actually seen, folded into the witness it will leave. */
+export function mergeMemoryWitness(witness: MemoryPageWitness, observedIds: readonly string[]): MemoryPageWitness {
+  const merged = new Set(witness.recordIds);
+  for (const id of observedIds) {
+    if (!id || merged.size >= MEMORY_WITNESS_LIMIT) continue;
+    merged.add(id);
+  }
+  // Identity is the signal the persistence effect reads: an observation that
+  // adds nothing must not re-write storage on every render.
+  return merged.size === witness.recordIds.length ? witness : Object.freeze({ ...witness, recordIds: Object.freeze([...merged]) });
+}
+
+/**
+ * The queries this tab has run, so an investigation can be retraced.
+ *
+ * Measured defect: the route's standing promise that it kept no history of a
+ * search was literally true, and it cost a long investigation its thread —
+ * after a reload the field was empty, nothing recorded what had already been
+ * asked, and Memory could only be interrogated one guess at a time. The
+ * lifetime is the honest one: `sessionStorage` survives
+ * the reload the query state does not and dies with the tab, which is exactly
+ * the claim the route now makes on screen. Profile-scoped by key, because
+ * memory is a real silo — what General was asked is not a fact about Research.
+ */
+export const MEMORY_RECENT_KEY_PREFIX = "airship.memory.recent.";
+
+/** As many as fit one strip without the unsearched state becoming a log. */
+const MEMORY_RECENT_LIMIT = 6;
+
+export type MemoryRecentSearch = Readonly<{
+  query: string;
+  /** ISO instant of the most recent run of this query. */
+  at: string;
+  /** The workspace index generation the run was pinned to, where reported. */
+  generation?: string;
+}>;
+
+export function readRecentSearches(storage: Storage | undefined, profileId: string): readonly MemoryRecentSearch[] {
+  try {
+    const raw = storage?.getItem(`${MEMORY_RECENT_KEY_PREFIX}${memoryIdentitySegment(profileId, "profile")}`);
+    if (!raw) return Object.freeze([]);
+    const value: unknown = JSON.parse(raw);
+    if (!Array.isArray(value)) return Object.freeze([]);
+    return Object.freeze(value
+      .filter((item): item is { query: string; at: string; generation?: unknown } =>
+        Boolean(item) && typeof item === "object" && typeof (item as { query?: unknown }).query === "string"
+        && typeof (item as { at?: unknown }).at === "string")
+      .slice(0, MEMORY_RECENT_LIMIT)
+      .map((item) => Object.freeze({
+        query: item.query.slice(0, 200),
+        at: item.at,
+        ...(typeof item.generation === "string" ? { generation: item.generation } : {}),
+      })));
+  } catch {
+    // Same rule as the witness: a hostile or full store costs the history, never
+    // the route.
+    return Object.freeze([]);
+  }
+}
+
+/** Most recent first, one entry per distinct query. Pure, so it is testable. */
+export function rememberRecentSearch(
+  current: readonly MemoryRecentSearch[],
+  entry: MemoryRecentSearch,
+): readonly MemoryRecentSearch[] {
+  const query = entry.query.trim();
+  if (!query) return current;
+  // Identity is what the persistence effect reads: re-running the query already
+  // at the head against the same generation changes nothing a reader can see,
+  // and must not re-write storage on every settled search.
+  const head = current[0];
+  if (head && head.query === query && head.generation === entry.generation) return current;
+  const rest = current.filter((item) => item.query.toLowerCase() !== query.toLowerCase());
+  return Object.freeze([Object.freeze({ ...entry, query }), ...rest].slice(0, MEMORY_RECENT_LIMIT));
+}
+
+function writeRecentSearches(storage: Storage | undefined, profileId: string, entries: readonly MemoryRecentSearch[]): void {
+  try {
+    const key = `${MEMORY_RECENT_KEY_PREFIX}${memoryIdentitySegment(profileId, "profile")}`;
+    if (!entries.length) storage?.removeItem(key);
+    else storage?.setItem(key, JSON.stringify(entries));
+  } catch {
+    // A history that cannot be stored is not worth taking the route down for.
+  }
+}
+
+/**
+ * A record the reader deliberately removed is not a record the reload lost.
+ *
+ * Measured after the route grew a Forget button: remember, forget, reload —
+ * and Memory led with "1 remembered record this tab held … did not survive the
+ * reload. It is not recoverable." about a record its owner had just chosen to
+ * destroy. The witness is a claim about loss, so a deliberate deletion has to
+ * leave it.
+ */
+export function forgetMemoryWitness(witness: MemoryPageWitness, id: string): MemoryPageWitness {
+  if (!id || !witness.recordIds.includes(id)) return witness;
+  return Object.freeze({ ...witness, recordIds: Object.freeze(witness.recordIds.filter((item) => item !== id)) });
+}
+
+/** The loss, in the words chat already uses for the same event. */
+export function droppedMemoryNotice(dropped: number): string | undefined {
+  if (dropped <= 0) return undefined;
+  return `${dropped} remembered record${dropped === 1 ? "" : "s"} this tab held existed only in page memory and did not survive the reload. ${dropped === 1 ? "It is" : "They are"} not recoverable.`;
+}
+
+/**
  * Derived `term` nodes start hidden.
  *
  * Measured after one real turn: 189 nodes of which 173 (92%) were derived
@@ -175,6 +481,9 @@ export function MemoryView({
   searchMemory,
   initialTab,
   onOpenSource,
+  durability,
+  recallRecords,
+  commitMemory,
 }: MemoryViewProps) {
   const restoredPresentation = workspace
     ? MEMORY_PRESENTATIONS.read(workspace, activeProfile.profileId, sessionId)
@@ -194,6 +503,17 @@ export function MemoryView({
     initialTab === "index" || restoredPresentation?.indexMounted === true,
   );
   const [contextGeneration, setContextGeneration] = useState<string>();
+  const recallDurability = durability ?? inferredMemoryDurability(workspace);
+  /*
+   * Adopted once per mount, before anything is rendered: the comparison is
+   * between this page load and the one that wrote the witness, so it has to
+   * happen before this load records anything of its own.
+   */
+  const [witness, setWitness] = useState<MemoryPageWitness>(() => adoptMemoryWitness(
+    readMemoryWitness(browserSessionStorage(), activeProfile.profileId),
+    MEMORY_PAGE_LOAD_ID,
+    recallDurability.state,
+  ));
   /*
    * The only way back from a failed search.
    *
@@ -204,6 +524,23 @@ export function MemoryView({
    * is a dependency, so bumping it re-arms the same query.
    */
   const [searchAttempt, setSearchAttempt] = useState(0);
+  const [recent, setRecent] = useState<readonly MemoryRecentSearch[]>(
+    () => readRecentSearches(browserSessionStorage(), activeProfile.profileId),
+  );
+  /*
+   * The Index is the evidence layer — generation-pinned hits, content digests,
+   * lineage — and it was closed on arrival and stayed closed while a query ran,
+   * so the one reader who needs it had to know a deep link existed. It opens
+   * itself the first time a query settles, and stops doing that for the rest of
+   * the visit the moment the reader closes it: an auto-open that fights a
+   * deliberate collapse is worse than one that never happened.
+   */
+  const [indexDismissed, setIndexDismissed] = useState(false);
+  const autoOpenedFor = useRef<string>();
+  const [recordPage, setRecordPage] = useState<MemoryRecordPage>();
+  const [recordsError, setRecordsError] = useState<string>();
+  /** Bumped by a committed change, so the list is read back rather than guessed. */
+  const [recordsAttempt, setRecordsAttempt] = useState(0);
   // Held in state, not a ref: the graph surface is loaded lazily, so the zoom
   // controls have to re-render disabled until the engine that answers them exists.
   const [viewportControls, setViewportControls] = useState<MemoryGraphViewportControls>();
@@ -216,7 +553,17 @@ export function MemoryView({
   const priorInitialTab = useRef(initialTab);
   presentationRef.current = { query, relationshipsExpanded, indexExpanded, indexMounted };
   const indexRef = useRef<HTMLDetailsElement>(null);
-  const alignIndex = useCallback(() => indexRef.current?.scrollIntoView({ block: "start" }), []);
+  /*
+   * A deep link has to land somewhere a person can see it landed. The palette's
+   * "Memory index" destination scrolled this section into view and changed
+   * nothing else, on a page whose every visible word above was identical — so
+   * the arrival read as a no-op. The section's own control takes focus, which
+   * draws the ring, and is where a keyboard or screen-reader arrival belongs.
+   */
+  const alignIndex = useCallback(() => {
+    indexRef.current?.scrollIntoView({ block: "start" });
+    indexRef.current?.querySelector("summary")?.focus({ preventScroll: true });
+  }, []);
   const workspaceAuthority = indexMounted ? contextGeneration : files;
   /*
    * `messages` gets a fresh identity per stream delta, so neither derivation
@@ -291,6 +638,62 @@ export function MemoryView({
       setRelationshipsExpanded(true);
     }
   }, [alignIndex, initialTab]);
+  /*
+   * The witness is written on every mount, not only when it changes: a second
+   * reload must inherit the first reload's count rather than recompute it from
+   * a stale id list and silently forget the earlier loss.
+   */
+  useEffect(() => {
+    writeMemoryWitness(browserSessionStorage(), activeProfile.profileId, witness);
+  }, [activeProfile.profileId, witness]);
+  useEffect(() => {
+    const observed = (memorySearch.result?.groups[1].hits ?? []).map((hit) => memoryHitString(hit, "id"));
+    if (observed.length) setWitness((current) => mergeMemoryWitness(current, observed));
+  }, [memorySearch.result]);
+  /*
+   * The browse observes the same corpus the witness is a claim about, and it
+   * sees all of it rather than one query's hits — so the count a reload reports
+   * as lost is now taken from everything this tab actually held.
+   */
+  useEffect(() => {
+    const observed = recordPage?.records.map((record) => record.id) ?? [];
+    if (observed.length) setWitness((current) => mergeMemoryWitness(current, observed));
+  }, [recordPage]);
+  useEffect(() => {
+    if (!recallRecords) return;
+    const controller = new AbortController();
+    setRecordsError(undefined);
+    void recallRecords(controller.signal).then(
+      (page) => { if (!controller.signal.aborted) setRecordPage(page); },
+      (error: unknown) => {
+        if (controller.signal.aborted) return;
+        // Never an empty list on a failed read: "this profile remembers
+        // nothing" is a claim about the corpus, and a read that did not
+        // complete has not made it.
+        setRecordsError(error instanceof Error ? error.message : "The remembered records could not be read.");
+      },
+    );
+    return () => controller.abort();
+  }, [recallRecords, recordsAttempt]);
+  useEffect(() => {
+    const settled = memorySearch.result;
+    if (!settled) return;
+    setRecent((current) => rememberRecentSearch(current, {
+      query: settled.query,
+      at: new Date().toISOString(),
+      ...(settled.groups[2].generationDigest ? { generation: settled.groups[2].generationDigest } : {}),
+    }));
+  }, [memorySearch.result]);
+  useEffect(() => {
+    writeRecentSearches(browserSessionStorage(), activeProfile.profileId, recent);
+  }, [activeProfile.profileId, recent]);
+  useEffect(() => {
+    const settled = memorySearch.result?.query;
+    if (!settled || indexDismissed || autoOpenedFor.current === settled) return;
+    autoOpenedFor.current = settled;
+    setIndexExpanded(true);
+    setIndexMounted(true);
+  }, [indexDismissed, memorySearch.result]);
   useEffect(() => () => {
     if (!workspace) return;
     MEMORY_PRESENTATIONS.write(
@@ -302,9 +705,14 @@ export function MemoryView({
   }, [workspace, activeProfile.profileId, sessionId]);
   useEffect(() => setRelationshipLimit(18), [selectedNodeId]);
   const normalizedQuery = query.trim();
-  const starters = useMemo(() => memoryStarters(files, activeProfile.name, graph), [activeProfile.name, files, graph]);
+  const droppedNotice = droppedMemoryNotice(witness.dropped);
+  const starters = useMemo(
+    () => memoryStarters(files, recordPage?.records ?? [], graph),
+    [files, graph, recordPage],
+  );
   const graphResults = normalizedQuery ? graph.search(normalizedQuery, { limit: 12 }) : [];
   const selectedNode = selectedNodeId ? graph.getNode(selectedNodeId) : undefined;
+  const selectedNodeDestination = selectedNode ? memoryNodeDestination(selectedNode, onOpenSource) : undefined;
   const selectedEdges = selectedNodeId ? graph.getIncidentEdges(selectedNodeId) : [];
   const relationshipGroups = groupMemoryRelationships(selectedEdges, relationshipLimit);
   const truncationCount = Object.values(graph.stats.truncated).reduce((total, value) => total + value, 0);
@@ -321,6 +729,7 @@ export function MemoryView({
   const openIndex = (open: boolean) => {
     setIndexExpanded(open);
     if (open) setIndexMounted(true);
+    else setIndexDismissed(true);
   };
   const revealGraphMatches = () => {
     setRelationshipsExpanded(true);
@@ -344,15 +753,60 @@ export function MemoryView({
         density="tool"
         title="Memory"
         headingId="memory-title"
-        eyebrow={"Private recall & on-device retrieval"}
-        description="One private query across conversation, profile memory, workspace index, and typed relationships."
-        status={<Seal state="none" density="chip" label="Private · on-device" detail="Recall, ranking and graph derivation all run inside this browser tab." />}
+        /*
+         * A deep link has to say where it landed. The palette offers "Memory
+         * index" with its own name, scope and chord, and it opened a page whose
+         * every visible word was identical to the one the reader was already
+         * on — the requested section is below the fold, so the arrival read as
+         * a no-op. The header states the section it was sent to; the disclosure
+         * below it is already opened and scrolled to.
+         */
+        eyebrow={initialTab === "index" ? "Memory index · revision-bound local materialization" : "Private recall & on-device retrieval"}
+        description={initialTab === "index"
+          ? "Opened at the on-device index: health, candidates, generation-pinned hits and lineage for this workspace. Search, records and relationships are on this page above it."
+          : "One private query across conversation, profile memory, workspace index, and typed relationships."}
+        /*
+         * Two claims, because they are two claims. "Private · on-device" is
+         * where recall *runs*; a reader takes it for where memory *lives*, and
+         * took it for that while a reload was destroying explicitly remembered
+         * records. The second chip is the durability claim, in the same
+         * vocabulary Workspace and Terminal already use for it.
+         */
+        status={<>
+          <Seal state="none" density="chip" label="Private · on-device" detail="Recall, ranking and graph derivation all run inside this browser tab." />
+          <Seal
+            state={durabilitySeal(recallDurability.state)}
+            density="chip"
+            label={recallDurability.label ?? durabilityLabel(recallDurability.state)}
+            detail={recallDurability.detail}
+          />
+        </>}
         notes={<>
           <p>Updates every loaded scope. Each corpus keeps its own scores.</p>
           <p>The agent and interface share one revision-checked service; each corpus keeps independent scores.</p>
           <p>Recall follows the selected storage mode. Remote Vaults can serve encrypted ranges; Local Device and Ephemeral keep recall on-device. Routing and ranking stay in-browser, and this graph derives only from current page inputs.</p>
         </>}
       />
+
+      {/*
+        * The notice chat has printed for a lost conversation since before this
+        * route existed, for the loss this route was silent about. It leads the
+        * page because it is the one thing on it that is no longer true: the
+        * corpus below the search box is missing records the reader put there.
+        */}
+      {droppedNotice ? (
+        <div class="memory-dropped" role="alert">
+          <Icon name="warning" size={18} />
+          <div>
+            <strong>Remembered records did not survive the reload</strong>
+            <p>{droppedNotice}</p>
+          </div>
+          <div class="memory-dropped__actions">
+            <button class="small-button" type="button" onClick={() => { window.location.hash = "#vault"; }}>Choose a durable Vault</button>
+            <button class="small-button" type="button" onClick={() => setWitness((current) => Object.freeze({ ...current, dropped: 0 }))}>Dismiss</button>
+          </div>
+        </div>
+      ) : null}
 
       <form class="memory-query" role="search" onSubmit={(event) => {
         event.preventDefault();
@@ -407,7 +861,37 @@ export function MemoryView({
         starters={starters}
         onStart={setQuery}
         onRetry={() => setSearchAttempt((value) => value + 1)}
+        durability={recallDurability}
+        recent={recent}
+        onForgetSearches={() => setRecent(Object.freeze([]))}
       />
+
+      {/*
+        * The corpus itself, which the route never showed.
+        *
+        * Memory could be interrogated one guess at a time and nothing else: no
+        * list of what is remembered, no way to add to it except a hand-written
+        * JSON slash command, and forgetting needed a record id the UI only
+        * exposed inside a per-hit provenance popover. A researcher cannot audit
+        * or prune what they are relying on through a search box.
+        */}
+      {recallRecords ? (
+        <MemoryRecords
+          page={recordPage}
+          error={recordsError}
+          commit={commitMemory}
+          durability={recallDurability}
+          profileName={activeProfile.name}
+          onCommitted={(change) => {
+            // A deliberate deletion leaves the page-loss witness: without this
+            // the next reload announced a record the reader had just chosen to
+            // destroy as one the reload had destroyed.
+            if (change.action === "forget") setWitness((current) => forgetMemoryWitness(current, change.id));
+            setRecordsAttempt((value) => value + 1);
+          }}
+          onSearch={setQuery}
+        />
+      ) : null}
 
       <details
         id="memory-relationships"
@@ -515,7 +999,17 @@ export function MemoryView({
                   <span class="eyebrow">{selectedNode.kind}</span>
                   <h2>{selectedNode.label}</h2>
                   <p>{selectedNode.summary || "This node has no additional summary."}</p>
-                  <button class="small-button" type="button" onClick={() => { setHiddenMemoryNodeIds((current) => new Set(current).add(selectedNode.id)); setSelectedNodeId(undefined); }}>Hide from view</button>
+                  <div class="memory-node-actions">
+                    {/* The graph knew which conversation or file a node came
+                        from and offered only "Hide from view": selecting the
+                        message that mentions a term was a dead end. It routes
+                        through the same destination contract the result lanes
+                        use, so a node and a hit reach the same place. */}
+                    {selectedNodeDestination ? (
+                      <button class="small-button" type="button" onClick={() => onOpenSource?.(selectedNodeDestination.target)}>{selectedNodeDestination.label}</button>
+                    ) : null}
+                    <button class="small-button" type="button" onClick={() => { setHiddenMemoryNodeIds((current) => new Set(current).add(selectedNode.id)); setSelectedNodeId(undefined); }}>Hide from view</button>
+                  </div>
                   <dl>{Object.entries(selectedNode.metadata).slice(0, 8).map(([key, value]) => <div key={key}><dt>{key}</dt><dd>{String(value)}</dd></div>)}</dl>
                   <h3>{selectedEdges.length} relationships</h3>
                   <div class="relationship-groups">{relationshipGroups.map((group) => <section key={group.kind} aria-labelledby={`relationship-${group.kind}`}><h4 id={`relationship-${group.kind}`}>{group.label}<small>{group.edges.length} shown · {group.total} total</small></h4><div class="relationship-list">{group.edges.map((edge) => {
@@ -567,6 +1061,13 @@ export function MemoryView({
           <span class="memory-summary-meta">{workspace ? <><b>{files.length}</b><small>workspace source{files.length === 1 ? "" : "s"}</small></> : <small>Workspace unavailable</small>}<i aria-hidden="true" /></span>
         </summary>
         <div class="memory-disclosure-body">
+          {/* Visible at rest, where the deep link actually lands. The route's
+              own sentence lives in the ⓘ at this density, so a destination that
+              re-renders the page you were already on has to say so here or it
+              says so nowhere a person will read. */}
+          {initialTab === "index" ? (
+            <p class="memory-index-arrival" role="status">Opened from the Memory index destination. Search, this profile's records and the relationship graph are on this same page, above.</p>
+          ) : null}
           {indexMounted ? workspace
             ? <ContextView workspace={workspace} entries={files} embedded searchQuery={query} sharedSearch={memorySearch} renderProvenance={(subject, rows) => <ProvenanceChip subject={subject} rows={rows} />} onGenerationChange={setContextGeneration} onReady={initialTab === "index" ? alignIndex : undefined} detailExpanded={initialTab === "index"} onOpenFile={onOpenSource ? (path) => onOpenSource({ kind: "file", path }) : undefined} />
             : <section class="empty-state"><Icon name="context" /><h2>Index unavailable</h2><p>The browser workspace is not ready, so indexing did not start.</p></section>
@@ -649,11 +1150,18 @@ export function memoryLaneState(args: Readonly<{
   return args.query ? "empty" : "idle";
 }
 
-/** The count-slot words for each lane state; `idle` renders no slot at all. */
-export function memoryLaneCountLabel(state: MemoryLaneState, count: number): string | undefined {
+/**
+ * The count-slot words for each lane state; `idle` renders no slot at all.
+ *
+ * `hasClosest` separates the two zeros. A scope that returned nothing at all
+ * says "No matches"; a scope that returned rows its own contract disqualified
+ * says so, because "No matches" beside a visible nearest row is the surface
+ * disagreeing with itself.
+ */
+export function memoryLaneCountLabel(state: MemoryLaneState, count: number, hasClosest = false): string | undefined {
   if (state === "searching") return "Searching…";
   if (state === "failed") return "Not searched — the query failed";
-  if (state === "empty") return "No matches";
+  if (state === "empty") return hasClosest ? "No confident match" : "No matches";
   if (state === "hits") return `${count} result${count === 1 ? "" : "s"}`;
   return undefined;
 }
@@ -671,9 +1179,17 @@ type MemoryLaneView = Readonly<{
   searched: string;
   provenance: readonly ProvenanceRow[];
   hits: ComponentChildren;
+  /**
+   * Rows the lane found and its own contract disqualified. Rendered whether or
+   * not the lane has results — a scope with nothing confident still owes the
+   * reader its nearest row and the reason it does not count.
+   */
+  belowFloor?: ComponentChildren;
+  /** The nearest disqualified row, for the zero-result panel's one line. */
+  closest?: string;
 }>;
 
-function FederatedMemorySearch({ state, graphMatchCount, onShowGraphMatches, onOpenSource, starters, onStart, onRetry }: Readonly<{
+function FederatedMemorySearch({ state, graphMatchCount, onShowGraphMatches, onOpenSource, starters, onStart, onRetry, durability, recent, onForgetSearches }: Readonly<{
   state: FederatedMemorySearchState;
   graphMatchCount: number;
   onShowGraphMatches: () => void;
@@ -682,12 +1198,16 @@ function FederatedMemorySearch({ state, graphMatchCount, onShowGraphMatches, onO
   onStart: (query: string) => void;
   /** Re-arms the identical query; the effect is keyed on a nonce, not the text. */
   onRetry: () => void;
+  durability: MemoryDurability;
+  /** This tab's own queries, newest first. Never another tab's, never another profile's. */
+  recent: readonly MemoryRecentSearch[];
+  onForgetSearches: () => void;
 }>) {
   const result = state.result;
   const sessionId = result?.authority.sessionId;
   const lanes: readonly MemoryLaneView[] = [
     conversationLane(result, sessionId, onOpenSource),
-    profileLane(result, onOpenSource),
+    profileLane(result, onOpenSource, durability),
     workspaceLane(result, onOpenSource),
   ];
   const total = lanes.reduce((sum, lane) => sum + lane.count, 0);
@@ -713,7 +1233,9 @@ function FederatedMemorySearch({ state, graphMatchCount, onShowGraphMatches, onO
       * dead end below them becomes the one thing there is to do, built from
       * terms this page can already prove it holds.
       */}
-    {!state.query && starters.length ? <MemoryStarters starters={starters} onStart={onStart} /> : null}
+    {!state.query && (starters.length || recent.length)
+      ? <MemoryStarters starters={starters} onStart={onStart} recent={recent} onForgetSearches={onForgetSearches} />
+      : null}
     {settled && total === 0
       ? <MemoryNoMatchPanel query={state.query} lanes={lanes} graphMatchCount={graphMatchCount} onShowGraphMatches={onShowGraphMatches} />
       : <div class="memory-result-lanes">
@@ -730,17 +1252,20 @@ export type MemoryStarter = Readonly<{
 }>;
 
 /**
- * Search terms this page can prove it holds.
+ * Search terms this page can prove a lane holds.
  *
  * A suggestion is a claim about the corpus, so every one of these is read out
- * of live state at render time: an indexed workspace source, the pinned
- * profile, and the most connected idea in the derived graph. Nothing here is a
- * search history — none is kept — and each button says which of the three it
- * came from, so pressing it is a statement about the data, not a guess.
+ * of live state at render time and each button says which surface it came
+ * from. The measured defect this rule is written against: the strip offered
+ * the active profile's *name* "from this page's active profile", and the
+ * Active profile memory lane — the lane that label names — returned "No memory
+ * matched “General”" every time, because a profile name is not in any corpus.
+ * The pinned profile's terms now come from its actual records, whose `source`
+ * and content are exactly what `rankProfileMemories` searches.
  */
 export function memoryStarters(
   files: readonly WorkspaceEntry[],
-  profileName: string,
+  records: readonly MemoryRecordEntry[],
   graph: MemoryRelationshipGraph,
   /** As many as fit one row without the strip becoming a menu. */
   limit = 4,
@@ -759,28 +1284,241 @@ export function memoryStarters(
     const dot = base.lastIndexOf(".");
     push(dot > 0 ? base.slice(0, dot) : base, "workspace source");
   }
-  push(profileName, "active profile");
+  // Newest first: the record a person just wrote is the one they will look for.
+  for (const record of [...records].reverse()) push(record.source, "active profile memory");
+  // Last, and honest about the lane it hits: a graph term can leave all three
+  // corpora empty, and the zero state's "show the graph matches" is the exit.
   for (const node of mostConnectedNodes(graph, new Set(), new Set(), limit)) {
     push(node.label, `most connected ${node.kind}`);
   }
   return Object.freeze(starters);
 }
 
-function MemoryStarters({ starters, onStart }: Readonly<{ starters: readonly MemoryStarter[]; onStart: (query: string) => void }>) {
+function MemoryStarters({ starters, onStart, recent, onForgetSearches }: Readonly<{
+  starters: readonly MemoryStarter[];
+  onStart: (query: string) => void;
+  recent: readonly MemoryRecentSearch[];
+  onForgetSearches: () => void;
+}>) {
   return (
     <div class="memory-starters">
-      <p>Nothing searched yet. Each term below is read from this page's own index, profile and graph; no search history is kept.</p>
-      <div>
-        {starters.map((starter) => (
-          <button
-            key={starter.term}
-            type="button"
-            aria-label={`Search memory for ${starter.term}, from this page's ${starter.origin}`}
-            onClick={() => onStart(starter.term)}
-          ><strong>{starter.term}</strong><small>{starter.origin}</small></button>
-        ))}
-      </div>
+      {/*
+        * "No search history is kept" was literally true and cost a long
+        * investigation its thread: after a reload the field was empty and
+        * nothing recorded what had already been asked. The history is this
+        * tab's own, so the sentence states its lifetime rather than denying
+        * its existence — and a history a person cannot delete would be the
+        * worse trade.
+        */}
+      {recent.length ? (
+        <section class="memory-recent" aria-label="Recent searches in this tab">
+          <p>Recent searches, kept in this tab for this profile only. Closing the tab clears them; they are never written to the workspace and never leave the device.</p>
+          <div>
+            {recent.map((entry) => (
+              <button
+                key={entry.query}
+                type="button"
+                aria-label={`Search memory for ${entry.query} again, last run ${formatRecordedAt(entry.at)}${entry.generation ? ` against index generation ${provenanceTail(entry.generation)}` : ""}`}
+                onClick={() => onStart(entry.query)}
+              ><strong>{entry.query}</strong><small>{entry.generation ? `rerun · generation ${provenanceTail(entry.generation)}` : "rerun"}</small></button>
+            ))}
+            <button class="memory-recent__clear" type="button" onClick={onForgetSearches}>
+              <strong>Clear</strong><small>recent searches</small>
+            </button>
+          </div>
+        </section>
+      ) : null}
+      {starters.length ? (
+        <>
+          <p>{recent.length ? "Or start from a term this page holds." : "Nothing searched yet. Each term below is read from this page's own index, records and graph."}</p>
+          <div>
+            {starters.map((starter) => (
+              <button
+                key={starter.term}
+                type="button"
+                aria-label={`Search memory for ${starter.term}, from this page's ${starter.origin}`}
+                onClick={() => onStart(starter.term)}
+              ><strong>{starter.term}</strong><small>{starter.origin}</small></button>
+            ))}
+          </div>
+        </>
+      ) : null}
     </div>
+  );
+}
+
+/** What a record written from this route records itself as, unless changed. */
+export const MEMORY_MANUAL_SOURCE = "manual note";
+
+/**
+ * What happened, when the tool itself did not get far enough to say.
+ *
+ * A denial is the case that matters: the approval dialog focuses Deny, and
+ * Enter or Escape — both reflexes in a chat surface — resolve to it, so the
+ * sentence has to tell a person their typed note is still there rather than
+ * reading like a failure they have to redo.
+ */
+export function memoryOutcomeSentence(
+  status: MemoryCommitOutcome["status"],
+  action: MemoryChange["action"],
+): string {
+  if (status === "denied") {
+    return action === "remember"
+      ? "Not remembered — you denied the request. Nothing was written, and your note is still in the box."
+      : "Not forgotten — you denied the request. The record is unchanged.";
+  }
+  if (status === "unbound") return "No accountable session is bound, so nothing was written. Open a conversation and try again.";
+  return action === "remember"
+    ? "The record was not written. Nothing changed in this profile's memory."
+    : "The record was not removed. Nothing changed in this profile's memory.";
+}
+
+/**
+ * The corpus, listed — and the two verbs that change it.
+ *
+ * Measured defect: the Memory route's only inputs were a search box and the
+ * graph's view filters. There was no list of what the profile remembers, so a
+ * researcher could not audit, cite or prune the memory they were relying on;
+ * adding a record meant typing `/update-memory --json '{…}'` into the composer
+ * (in an argument order the product's own `/help` gets wrong), and forgetting
+ * one meant first digging its id out of a per-hit provenance popover.
+ *
+ * Both verbs go through the host's approval-gated `update_memory` call, so the
+ * journal, the profile silo and the approval dock see exactly what the slash
+ * command produced. What changes is only that a person can find them.
+ */
+function MemoryRecords({ page, error, commit, durability, profileName, onCommitted, onSearch }: Readonly<{
+  page?: MemoryRecordPage;
+  error?: string;
+  commit?: MemoryViewProps["commitMemory"];
+  durability: MemoryDurability;
+  profileName: string;
+  /** Re-reads the list, and tells the route what actually changed. */
+  onCommitted: (change: MemoryChange) => void;
+  onSearch: (query: string) => void;
+}>) {
+  const [expanded, setExpanded] = useState(true);
+  const [draft, setDraft] = useState("");
+  const [source, setSource] = useState(MEMORY_MANUAL_SOURCE);
+  /** The change in flight, so exactly one control reports itself busy. */
+  const [busy, setBusy] = useState<string>();
+  const [notice, setNotice] = useState<Readonly<{ tone: "ok" | "warn"; text: string }>>();
+  const records = page?.records ?? [];
+  const total = page?.total ?? records.length;
+  const quarantined = page?.legacyQuarantined ?? 0;
+
+  const run = async (change: MemoryChange, key: string) => {
+    if (!commit) return;
+    setBusy(key);
+    setNotice(undefined);
+    try {
+      const outcome = await commit(change);
+      setNotice(Object.freeze({
+        tone: outcome.status === "committed" ? "ok" as const : "warn" as const,
+        text: outcome.message ?? memoryOutcomeSentence(outcome.status, change.action),
+      }));
+      if (outcome.status !== "committed") return;
+      // The draft is cleared only on a committed write. A denial is a decision,
+      // not a mistake, and the note a person typed has to survive it — losing
+      // it to a reflexive Escape is what made this a lost-work defect.
+      if (change.action === "remember") setDraft("");
+      onCommitted(change);
+    } catch (failure) {
+      setNotice(Object.freeze({ tone: "warn" as const, text: failure instanceof Error ? failure.message : "The memory change did not complete." }));
+    } finally {
+      setBusy(undefined);
+    }
+  };
+
+  return (
+    <details id="memory-records" class="memory-disclosure" open={expanded} onToggle={(event) => setExpanded(event.currentTarget.open)}>
+      <summary>
+        <span><Icon name="memory" size={18} /><span><small>Explicit profile memory</small><strong>What {profileName} remembers</strong></span></span>
+        <span class="memory-summary-meta"><b>{page ? total : "—"}</b><small>record{total === 1 ? "" : "s"}</small><i aria-hidden="true" /></span>
+      </summary>
+      <div class="memory-disclosure-body memory-records">
+        {commit ? (
+          <form
+            class="memory-remember"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const content = draft.trim();
+              if (!content || busy) return;
+              void run({ action: "remember", content, source: source.trim() || MEMORY_MANUAL_SOURCE }, "remember");
+            }}
+          >
+            <label for="memory-remember-content">Remember something in this profile</label>
+            <textarea
+              id="memory-remember-content"
+              rows={3}
+              value={draft}
+              placeholder="Kyoto trial: DCAP quote freshness window was 300 seconds per the 2019 spec note."
+              aria-describedby="memory-remember-note"
+              onInput={(event) => setDraft(event.currentTarget.value)}
+            />
+            <div class="memory-remember__row">
+              <label for="memory-remember-source">Source</label>
+              <input id="memory-remember-source" value={source} maxLength={120} onInput={(event) => setSource(event.currentTarget.value)} />
+              <button class="small-button" type="submit" disabled={!draft.trim() || Boolean(busy)}>{busy === "remember" ? "Awaiting your decision…" : "Remember"}</button>
+            </div>
+            <p id="memory-remember-note">Writes one record through the same approval-gated <code>update_memory</code> tool the slash command uses, into {profileName} only. {durability.detail}</p>
+          </form>
+        ) : null}
+        {notice ? <p class={notice.tone === "ok" ? "memory-records__notice" : "memory-records__notice attention"} role="status">{notice.text}</p> : null}
+        {error ? <p class="memory-records__notice attention" role="alert">{error}</p> : null}
+        {!error && page && records.length === 0
+          ? <p class="memory-records__empty">{profileName} has remembered nothing yet. Records written here are searched by the Active profile memory lane above and by the agent's own recall, and they are never visible to another profile.</p>
+          : null}
+        {records.length ? (
+          <>
+            <p class="memory-records__count" role="status">
+              {records.length === total ? `${total} record${total === 1 ? "" : "s"}` : `Newest ${records.length} of ${total} records`}
+              {quarantined ? ` · ${quarantined} legacy unscoped record${quarantined === 1 ? " is" : "s are"} quarantined and not listed` : ""}
+            </p>
+            <div class="memory-records__list">
+              {records.map((record) => (
+                <MemoryHit
+                  key={record.id}
+                  title={record.source || "Explicit memory"}
+                  recordedAt={record.createdAt}
+                  text={record.content}
+                  subject="this memory record"
+                  citation={formatMemoryCitation(record.content, [
+                    `profile memory · ${record.source || "source not recorded"}`,
+                    `record ${record.id}`,
+                    `created ${record.createdAt}`,
+                    record.contentDigest ?? "",
+                    durability.state === "ephemeral" ? "held in page memory only" : "",
+                  ])}
+                  actions={<>
+                    <button class="memory-hit__open" type="button" onClick={() => onSearch(record.source || record.content.slice(0, 40))}>Search this source</button>
+                    {commit ? (
+                      <button
+                        class="memory-hit__forget"
+                        type="button"
+                        disabled={Boolean(busy)}
+                        aria-label={`Forget the record from ${record.source || "an unrecorded source"}, created ${formatRecordedAt(record.createdAt)}`}
+                        onClick={() => void run({ action: "forget", id: record.id }, record.id)}
+                      >{busy === record.id ? "Awaiting your decision…" : "Forget"}</button>
+                    ) : null}
+                  </>}
+                  provenance={Object.freeze([
+                    provenanceFact("Record id", record.id),
+                    provenanceFact("Source", record.source || "not recorded"),
+                    provenanceFact("Created", record.createdAt),
+                    provenanceFact("Created in session", record.createdInSessionId || "not recorded"),
+                    provenanceDigest("Content digest", record.contentDigest ?? "not reported"),
+                    provenanceDigest("Profile revision at creation", record.profileRevisionAtCreation ?? "not reported"),
+                    provenanceNote(durability.detail, durability.state === "ephemeral" ? "caution" : "neutral"),
+                  ] as ProvenanceRow[])}
+                />
+              ))}
+            </div>
+          </>
+        ) : null}
+        {!page && !error ? <p class="memory-records__empty" role="status">Reading this profile's records…</p> : null}
+      </div>
+    </details>
   );
 }
 
@@ -803,12 +1541,16 @@ function MemoryNoMatchPanel({ query, lanes, graphMatchCount, onShowGraphMatches 
       <ul>
         {lanes.map((lane) => (
           <li key={lane.id}>
-            <span>{lane.title} — {lane.searched}</span>
+            {/* The nearest disqualified row is named on the lane's own line:
+                "no confident match — closest: README.md (0.046)" is the honest
+                reading of what used to be reported as "1 result". */}
+            <span>{lane.title} — {lane.searched}{lane.closest ? ` No confident match; closest: ${lane.closest}.` : ""}</span>
             <ProvenanceChip subject={lane.title} rows={lane.provenance} />
           </li>
         ))}
       </ul>
       <p>Nothing was hidden, filtered, or ranked away.</p>
+      {lanes.map((lane) => lane.belowFloor ? <div key={`floor-${lane.id}`} class="memory-no-match__floor">{lane.belowFloor}</div> : null)}
       {graphMatchCount > 0 ? (
         <button class="small-button" type="button" onClick={onShowGraphMatches}>
           But the relationship graph has {graphMatchCount} match{graphMatchCount === 1 ? "" : "es"} — show {graphMatchCount === 1 ? "it" : "them"}
@@ -845,6 +1587,13 @@ function conversationLane(result: FederatedMemoryResult | undefined, sessionId: 
         subject="this journal event"
         open={sessionId && eventId ? { label: "Open this conversation", target: { kind: "message", sessionId } } : undefined}
         onOpenSource={onOpenSource}
+        citation={formatMemoryCitation(text, [
+          conversationHitTitle(memoryHitString(hit, "eventType")),
+          `conversation ${sessionId ?? "current session"}`,
+          `event ${eventId}`,
+          recordedAt ? `recorded ${recordedAt}` : "",
+          memoryHitString(hit, "textDigest"),
+        ])}
         provenance={Object.freeze([
           provenanceFact("Event type", memoryHitString(hit, "eventType")),
           provenanceFact("Sequence", memoryHitString(hit, "sequence")),
@@ -860,7 +1609,7 @@ function conversationLane(result: FederatedMemoryResult | undefined, sessionId: 
   });
 }
 
-function profileLane(result: FederatedMemoryResult | undefined, onOpenSource: MemoryViewProps["onOpenSource"]): MemoryLaneView {
+function profileLane(result: FederatedMemoryResult | undefined, onOpenSource: MemoryViewProps["onOpenSource"], durability: MemoryDurability): MemoryLaneView {
   const group = result?.groups[1];
   const hits = group?.hits ?? [];
   const quarantined = group?.legacyQuarantined ?? 0;
@@ -876,6 +1625,12 @@ function profileLane(result: FederatedMemoryResult | undefined, onOpenSource: Me
       provenanceFact("Profile", result?.authority.profileId ?? "pinned profile"),
       provenanceDigest("Profile revision", revision || "pinned revision"),
       provenanceFact("Record file", PROFILE_MEMORY_PATH),
+      /*
+       * The lane that lost the work states its own lifetime, at the lane, in
+       * the caution tone — the route-level chip says where records live, and
+       * this is the scope that is actually holding them.
+       */
+      provenanceNote(durability.detail, durability.state === "ephemeral" ? "caution" : "neutral"),
       ...(quarantined > 0
         ? [provenanceNote(`${quarantined} legacy record${quarantined === 1 ? " is" : "s are"} quarantined and ${quarantined === 1 ? "was" : "were"} not searched.`, "caution")]
         : []),
@@ -890,6 +1645,13 @@ function profileLane(result: FederatedMemoryResult | undefined, onOpenSource: Me
         subject="this memory record"
         open={recordId ? { label: "Open profile memory", target: { kind: "memory", recordId, path: PROFILE_MEMORY_PATH } } : undefined}
         onOpenSource={onOpenSource}
+        citation={formatMemoryCitation(memoryHitString(hit, "content"), [
+          `profile memory · ${memoryHitString(hit, "source") || "source not recorded"}`,
+          `record ${recordId}`,
+          `created ${memoryHitString(hit, "createdAt")}`,
+          memoryHitString(hit, "contentDigest"),
+          durability.state === "ephemeral" ? "held in page memory only" : "",
+        ])}
         provenance={Object.freeze([
           provenanceFact("Record id", recordId),
           provenanceFact("Source", memoryHitString(hit, "source") || "not recorded"),
@@ -906,13 +1668,40 @@ function profileLane(result: FederatedMemoryResult | undefined, onOpenSource: Me
 
 function workspaceLane(result: FederatedMemoryResult | undefined, onOpenSource: MemoryViewProps["onOpenSource"]): MemoryLaneView {
   const group = result?.groups[2];
-  const hits = group?.hits ?? [];
+  const allHits = group?.hits ?? [];
+  /*
+   * The floor, applied where the count is spoken.
+   *
+   * Measured: "Kyoto" against a workspace with no occurrence of the word
+   * reported "1 result · /workspace/README.md" and printed the whole README,
+   * with "Dense 0.065 · Lexical 0.000 · Combined 0.046" three disclosures down.
+   * The engine classifies each hit against its embedding posture; this lane
+   * stops counting the disqualified ones as results and shows them, with the
+   * disqualifying score at the top level, under a heading that says what they
+   * are. Nothing is dropped: `belowFloor` renders in the empty state too.
+   */
+  const hits = allHits.filter((hit) => hit.confidence !== "weak");
+  const weak = allHits.filter((hit) => hit.confidence === "weak");
   const generation = group?.generationDigest ?? "";
   const suppressed = group?.duplicatesSuppressed ?? 0;
   return Object.freeze({
     id: "workspace",
     title: "Workspace & sources",
     count: hits.length,
+    closest: weak[0] ? `${workspaceBaseName(weak[0].path)} (${weak[0].score.toFixed(3)})` : undefined,
+    belowFloor: weak.length ? <MemoryBelowFloor count={weak.length}>{weak.map((hit) => (
+      <MemoryHit
+        key={`${hit.path}:${hit.chunkId}`}
+        title={hit.path}
+        text={hit.text}
+        subject={workspaceBaseName(hit.path)}
+        caution={`Dense ${hit.denseScore.toFixed(3)} · Lexical ${hit.lexicalScore.toFixed(3)} · Combined ${hit.score.toFixed(3)}. ${hit.weakBecause ?? ""}`}
+        open={{ label: "Open in editor", target: { kind: "file", path: hit.path } }}
+        onOpenSource={onOpenSource}
+        citation={workspaceCitation(hit)}
+        provenance={workspaceHitProvenance(hit, generation)}
+      />
+    ))}</MemoryBelowFloor> : undefined,
     searched: group
       ? `searched the hybrid workspace index at generation ${provenanceTail(generation)}, completed in ${group.durationMs.toFixed(2)} ms.`
       : "searched the hybrid workspace index for this generation.",
@@ -923,6 +1712,9 @@ function workspaceLane(result: FederatedMemoryResult | undefined, onOpenSource: 
       provenanceDigest("Workspace snapshot", group?.workspaceSnapshotDigest ?? "not produced"),
       provenanceFact("Completed", group?.completedAt ?? "no completed run"),
       provenanceFact("Duration", group ? `${group.durationMs.toFixed(2)} ms` : "not measured"),
+      ...(weak.length > 0
+        ? [provenanceNote(`${weak.length} row${weak.length === 1 ? "" : "s"} ranked below the confidence floor and ${weak.length === 1 ? "is" : "are"} shown, uncounted, under “${RETRIEVAL_FLOOR_HEADING}”.`, "caution")]
+        : []),
       ...(suppressed > 0 ? [provenanceNote(`${suppressed} duplicate chunk${suppressed === 1 ? " was" : "s were"} suppressed.`, "caution")] : []),
     ] as ProvenanceRow[]),
     hits: hits.map((hit) => <MemoryHit
@@ -932,20 +1724,29 @@ function workspaceLane(result: FederatedMemoryResult | undefined, onOpenSource: 
       subject={workspaceBaseName(hit.path)}
       open={{ label: "Open in editor", target: { kind: "file", path: hit.path } }}
       onOpenSource={onOpenSource}
-      provenance={Object.freeze([
-        // The dedup rule at its smallest: the row's own title is the path, so
-        // the chip points at it instead of printing it a second time.
-        provenanceInherited("Path", hit.path, "this result's title"),
-        provenanceFact("Chunk index", String(hit.chunkIndex)),
-        provenanceFact("Scores", `Dense ${hit.denseScore.toFixed(3)} · Lexical ${hit.lexicalScore.toFixed(3)} · Combined ${hit.score.toFixed(3)}`),
-        provenanceNote("72% deterministic dense score · 28% lexical overlap. Scores are comparable inside this corpus only."),
-        provenanceDigest("Revision", hit.revision),
-        provenanceDigest("Content digest", hit.contentDigest),
-        provenanceDigest("Chunk id", hit.chunkId),
-        provenanceInherited("Generation", generation, "the Workspace & sources scope"),
-      ] as ProvenanceRow[])}
+      citation={workspaceCitation(hit)}
+      provenance={workspaceHitProvenance(hit, generation)}
     />),
   });
+}
+
+type WorkspaceMemoryHit = NonNullable<FederatedMemoryResult["groups"][2]>["hits"][number];
+
+/** One lineage list for a workspace row, whether or not it cleared the floor. */
+function workspaceHitProvenance(hit: WorkspaceMemoryHit, generation: string): readonly ProvenanceRow[] {
+  return Object.freeze([
+    // The dedup rule at its smallest: the row's own title is the path, so
+    // the chip points at it instead of printing it a second time.
+    provenanceInherited("Path", hit.path, "this result's title"),
+    provenanceFact("Chunk index", String(hit.chunkIndex)),
+    provenanceFact("Scores", `Dense ${hit.denseScore.toFixed(3)} · Lexical ${hit.lexicalScore.toFixed(3)} · Combined ${hit.score.toFixed(3)}`),
+    provenanceNote("72% deterministic dense score · 28% lexical overlap. Scores are comparable inside this corpus only."),
+    ...(hit.confidence === "weak" ? [provenanceNote(hit.weakBecause ?? "This row ranked below the confidence floor.", "caution")] : []),
+    provenanceDigest("Revision", hit.revision),
+    provenanceDigest("Content digest", hit.contentDigest),
+    provenanceDigest("Chunk id", hit.chunkId),
+    provenanceInherited("Generation", generation, "the Workspace & sources scope"),
+  ] as ProvenanceRow[]);
 }
 
 /** The file's own name, for a chip heading that has to fit beside a row. */
@@ -965,6 +1766,39 @@ function conversationHitTitle(eventType: string): string {
 /** The character budget a hit shows before it offers to show the whole record. */
 export const MEMORY_HIT_PREVIEW_CHARACTERS = 320;
 
+/** How much of a record a citation quotes before it says so. */
+export const MEMORY_CITATION_QUOTE_CHARACTERS = 600;
+
+/**
+ * The artifact that carries a result out of this route.
+ *
+ * The measured gap: every hit already holds an event id, a sequence, a revision,
+ * a chunk id and two digests — and none of it could leave the screen. A hit
+ * opened its source or it did nothing, so a researcher who wanted to quote a
+ * line back into a conversation retyped it and lost the provenance on the way.
+ * A citation is the smallest thing that travels: the quoted text, bounded and
+ * declared, plus the lineage that makes the quote checkable, in one paste.
+ */
+export function formatMemoryCitation(text: string, source: readonly string[]): string {
+  const bounded = text.length > MEMORY_CITATION_QUOTE_CHARACTERS;
+  const quote = bounded ? `${text.slice(0, MEMORY_CITATION_QUOTE_CHARACTERS)}…` : text;
+  const parts = source.filter(Boolean);
+  // The cut is part of the citation: a quote that silently ends early is a
+  // misquote, and this route's whole argument is that nothing is hidden.
+  const bound = bounded ? [`quoted ${MEMORY_CITATION_QUOTE_CHARACTERS} of ${text.length} characters`] : [];
+  return `> ${quote.replaceAll("\n", "\n> ")}\n— ${[...parts, ...bound].join(" · ")}`;
+}
+
+function workspaceCitation(hit: WorkspaceMemoryHit): string {
+  return formatMemoryCitation(hit.text, [
+    hit.path,
+    `chunk ${hit.chunkIndex}`,
+    `revision ${hit.revision}`,
+    hit.contentDigest,
+    ...(hit.confidence === "weak" ? ["below the retrieval confidence floor"] : []),
+  ]);
+}
+
 /**
  * One result, with a human title, a destination and its lineage.
  *
@@ -973,7 +1807,7 @@ export const MEMORY_HIT_PREVIEW_CHARACTERS = 320;
  * reader could neither see nor undo. Here the whole record is in the DOM, the
  * clamp is visual, and the expander states the length it is hiding.
  */
-function MemoryHit({ title, recordedAt, text, subject, open, onOpenSource, provenance }: Readonly<{
+function MemoryHit({ title, recordedAt, text, subject, open, onOpenSource, provenance, caution, citation, actions }: Readonly<{
   title: string;
   recordedAt?: string;
   text: string;
@@ -981,6 +1815,12 @@ function MemoryHit({ title, recordedAt, text, subject, open, onOpenSource, prove
   open?: Readonly<{ label: string; target: MemorySourceTarget }>;
   onOpenSource?: MemoryViewProps["onOpenSource"];
   provenance: readonly ProvenanceRow[];
+  /** The disqualifying fact, at the top level rather than inside the chip. */
+  caution?: string;
+  /** The pasteable quote-plus-lineage this row is worth citing as. */
+  citation?: string;
+  /** Verbs only the owning surface has — the record list's Forget lives here. */
+  actions?: ComponentChildren;
 }>) {
   const [expanded, setExpanded] = useState(false);
   const bounded = text.length > MEMORY_HIT_PREVIEW_CHARACTERS;
@@ -1003,7 +1843,10 @@ function MemoryHit({ title, recordedAt, text, subject, open, onOpenSource, prove
             }}
           >{destination.label}</button>
         ) : null}
+        {citation ? <MemoryCitationButton citation={citation} subject={subject} /> : null}
+        {actions}
       </header>
+      {caution ? <p class="memory-hit__caution">{caution}</p> : null}
       <p class="memory-hit__text" data-expanded={expanded ? "true" : "false"}>{text}</p>
       {bounded ? (
         <button class="memory-hit__more" type="button" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}>
@@ -1012,6 +1855,54 @@ function MemoryHit({ title, recordedAt, text, subject, open, onOpenSource, prove
       ) : null}
       <footer><ProvenanceChip subject={subject} rows={provenance} /></footer>
     </article>
+  );
+}
+
+/**
+ * Copy, or nothing — the same rule `provenance-chip`'s field copier follows.
+ *
+ * Not imported from it: that component's copier is private to the chip, and a
+ * control that silently fails where the Clipboard API is absent is worse than
+ * no control at all, so the rule is what travels rather than the code.
+ */
+function MemoryCitationButton({ citation, subject }: Readonly<{ citation: string; subject: string }>) {
+  const [copied, setCopied] = useState(false);
+  if (typeof navigator === "undefined" || !navigator.clipboard) return null;
+  return (
+    <button
+      class="memory-hit__cite"
+      type="button"
+      aria-label={copied ? `Citation for ${subject} copied` : `Copy a citation for ${subject}: the quoted text with its source, revision and digest`}
+      onClick={() => {
+        void navigator.clipboard.writeText(citation).then(
+          () => {
+            setCopied(true);
+            window.setTimeout(() => setCopied(false), 1_600);
+          },
+          () => setCopied(false),
+        );
+      }}
+    >{copied ? "Citation copied" : "Copy citation"}</button>
+  );
+}
+
+/**
+ * The rows the retrieval contract found and disqualified.
+ *
+ * Closed by default and never absent: this is the difference between a floor
+ * and a filter. The summary states the count, so the disclosure declares its
+ * own cost, and each row inside carries its scores at the top level — the
+ * defect was those scores being three disclosures deep, not their existing.
+ */
+function MemoryBelowFloor({ count, children }: Readonly<{ count: number; children: ComponentChildren }>) {
+  return (
+    <details class="memory-below-floor">
+      <summary>
+        <span>{RETRIEVAL_FLOOR_HEADING}</span>
+        <small>{count} row{count === 1 ? "" : "s"} · found, not counted as {count === 1 ? "a result" : "results"}</small>
+      </summary>
+      <div class="memory-below-floor__rows">{children}</div>
+    </details>
   );
 }
 
@@ -1036,7 +1927,7 @@ function memoryHitString(hit: Readonly<Record<string, import("../core/contracts"
  */
 function MemorySearchLane({ lane, query, searching, failed }: Readonly<{ lane: MemoryLaneView; query: string; searching: boolean; failed: boolean }>) {
   const state = memoryLaneState({ searching, failed, count: lane.count, query });
-  const count = memoryLaneCountLabel(state, lane.count);
+  const count = memoryLaneCountLabel(state, lane.count, Boolean(lane.closest));
   return (
     <section class="memory-result-lane" data-state={state}>
       <header>
@@ -1051,6 +1942,10 @@ function MemorySearchLane({ lane, query, searching, failed }: Readonly<{ lane: M
         <ProvenanceChip subject={lane.title} rows={lane.provenance} summary="" />
       </header>
       {state === "hits" ? <div class="memory-lane-hits">{lane.hits}</div> : null}
+      {/* A floor is not a filter: the disqualified rows render whether or not
+          the lane counted anything, including in the state where the count slot
+          reads "No confident match". */}
+      {state === "hits" || state === "empty" ? lane.belowFloor : null}
       {/* In-flight only. A scope that is still being read says so in its own
           body, because "Searching…" in the count slot alone would leave the
           lane looking settled at a moment when it is not. */}
@@ -1067,6 +1962,37 @@ function effectiveSkillIds(profile: ProfileRevision, catalog: ProfileCatalog): s
     })
     .sort((left, right) => left.promptOrder - right.promptOrder || left.skillId.localeCompare(right.skillId))
     .map((skill) => skill.skillId);
+}
+
+/**
+ * Where a selected node's source actually is.
+ *
+ * Measured: selecting the node "kyoto trial" reported "1 occurrence across 1
+ * source" and "MENTIONS user: /update-memory --js…", and pressing that
+ * relationship left `location.hash` at `#memory`. The graph derives every
+ * message node with its `sessionId` and every file node with its `path`, so the
+ * destination was known and simply never offered. A node whose metadata does
+ * not carry one — a derived term, a skill — gets no button rather than a dead
+ * one, exactly as a hit does.
+ */
+export function memoryNodeDestination(
+  node: MemoryGraphNode,
+  onOpenSource: MemoryViewProps["onOpenSource"],
+): Readonly<{ label: string; target: MemorySourceTarget }> | undefined {
+  if (!onOpenSource) return undefined;
+  if (node.kind === "message" || node.kind === "session") {
+    const sessionId = node.metadata.sessionId;
+    return typeof sessionId === "string" && sessionId
+      ? Object.freeze({ label: "Open this conversation", target: Object.freeze({ kind: "message" as const, sessionId }) })
+      : undefined;
+  }
+  if (node.kind === "workspace-file") {
+    const path = node.metadata.path;
+    return typeof path === "string" && path
+      ? Object.freeze({ label: "Open in editor", target: Object.freeze({ kind: "file" as const, path }) })
+      : undefined;
+  }
+  return undefined;
 }
 
 export type MemoryOverviewNode = Readonly<{ id: string; label: string; kind: string; degree: number }>;
@@ -1106,4 +2032,17 @@ function formatGraphDensity(graph: MemoryRelationshipGraph): string {
 
 function scrollToMemorySection(id: string): void {
   document.getElementById(id)?.scrollIntoView({ block: "start" });
+}
+
+/**
+ * The witness store, or nothing.
+ *
+ * A storage access can throw outright under a third-party-cookie or private-mode
+ * policy, and a route that cannot record a witness must still render: the
+ * consequence of `undefined` here is one notice that is not offered, never a
+ * Memory surface that fails to load.
+ */
+function browserSessionStorage(): Storage | undefined {
+  try { return typeof sessionStorage === "undefined" ? undefined : sessionStorage; }
+  catch { return undefined; }
 }

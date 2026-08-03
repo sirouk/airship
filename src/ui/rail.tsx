@@ -1,8 +1,9 @@
 import type { Ref } from "preact";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
-import { Icon } from "./icons";
+import { Icon, type IconName } from "./icons";
 import { MenuSelect } from "./menu-select";
 import {
+  CANONICAL_DESTINATIONS,
   MOBILE_MORE_ENTRIES,
   RAIL_SECTIONS,
   canonicalParentForView,
@@ -12,7 +13,7 @@ import {
   type RailNestedDestination,
   type RailRow,
 } from "./navigation-model";
-import type { RailState } from "./rail-state";
+import { loadRecentsPreference, saveRecentsPreference, type RailState } from "./rail-state";
 import { RuntimeLoadIndicator } from "./runtime-load-indicator";
 
 /**
@@ -70,6 +71,15 @@ export type RailProps = Readonly<{
   hasReceipt: boolean;
   conversations: readonly RailConversation[];
   activeConversationId: string;
+  /**
+   * The conversation the runtime refused to reopen, if there is one.
+   *
+   * Measured on a return after an interrupted approval: the blocked row and the
+   * healthy row were the same title, the same timestamp and the same shape, and
+   * the only place the difference existed was a badge inside the `#sessions`
+   * detail panel — three navigations from the list a person actually scans.
+   */
+  unresumableConversationId?: string;
   formatTime(value: string): string;
   profiles: readonly RailProfile[];
   profileId: string;
@@ -181,12 +191,38 @@ export function railCurrentHint(view: NavigationView): string | undefined {
 const CURRENT_HINT_ID = "rail-current-destination";
 
 /**
+ * The profile-scoped routes the rail draws under the pinned profile.
+ *
+ * Read out of `CANONICAL_DESTINATIONS` rather than named here, so the rail and
+ * the command palette cannot end up calling the same route two things. Only the
+ * glyph is stated, which is the one thing the destination table does not hold.
+ */
+const PROFILE_SCOPED_ROUTE_ICONS: Readonly<Record<string, IconName>> = Object.freeze({
+  skills: "skills", capabilities: "model",
+});
+
+const PROFILE_SCOPED_ROUTES: readonly Readonly<{ id: NavigationView; label: string; icon: IconName }>[] = Object.freeze(
+  (CANONICAL_DESTINATIONS.find((destination) => destination.id === "profiles")?.nested ?? [])
+    .filter((nested) => nested.id in PROFILE_SCOPED_ROUTE_ICONS)
+    .map((nested) => Object.freeze({ id: nested.id, label: nested.label, icon: PROFILE_SCOPED_ROUTE_ICONS[nested.id]! })),
+);
+
+/**
  * How many conversations the disclosure lists.
  *
  * Unchanged from the rail list it replaces — the ledger is `All conversations`,
  * and this is the shortcut. A larger number here would recreate the scroller
  * that was the defect.
  */
+/**
+ * How much rail a self-opening recents list has to have before it opens itself.
+ *
+ * The list costs about 200px. Below this the rail cannot show it and the Global
+ * group at the same time, and a navigation rail that hides its destinations to
+ * advertise a shortcut has made the wrong trade.
+ */
+const RAIL_RECENTS_AUTO_OPEN_MIN_HEIGHT = 560;
+
 export const RAIL_RECENT_LIMIT = 10;
 
 /**
@@ -221,6 +257,7 @@ export function Rail({
   hasReceipt,
   conversations,
   activeConversationId,
+  unresumableConversationId,
   formatTime,
   profiles,
   profileId,
@@ -240,7 +277,22 @@ export function Rail({
   // than one that saves a row.
   const [expanded, setExpanded] = useState<Readonly<Record<string, boolean>>>(() =>
     Object.freeze({ workspace: railRowFor(view)?.id === "workspace" }));
-  const [recentsOpen, setRecentsOpen] = useState(false);
+  // Seeded from the remembered choice, and opened by the list itself below when
+  // nobody has made one: a returning person's conversations must not need a
+  // disclosure click before they exist. See `loadRecentsPreference`.
+  const recentsChoice = useRef<boolean | undefined>(loadRecentsPreference());
+  /** True while the open state is the rail's own doing rather than a person's. */
+  const autoOpened = useRef(false);
+  const [recentsOpen, setRecentsOpen] = useState(recentsChoice.current ?? false);
+  const chooseRecentsOpen = (open: boolean) => {
+    // The moment a person touches the disclosure it stops being the rail's to
+    // close: `autoOpened` is what the height gate is allowed to reverse, and a
+    // deliberate choice is never that.
+    autoOpened.current = false;
+    recentsChoice.current = open;
+    saveRecentsPreference(open);
+    setRecentsOpen(open);
+  };
   const [draggingFavoriteId, setDraggingFavoriteId] = useState<string>();
   // Seeded through the traversal, not from `view` directly: `view` is only
   // sometimes a rail key, and a seed that names a row the rail does not render
@@ -264,6 +316,63 @@ export function Rail({
   // holding the same threads in the same order, which every parent re-render
   // would otherwise produce.
   const conversationKeys = visibleConversations.map((session) => `${CONVERSATION_PREFIX}${session.id}`).join("\n");
+
+  /*
+   * The list decides its own default, once.
+   *
+   * Conversations arrive asynchronously, so mount is always empty and a seed
+   * taken there would always say "closed". This opens the disclosure the first
+   * time the profile turns out to have something in it, and only while nobody
+   * has expressed a choice — a person who collapses it mid-session is not
+   * fought on the next render, and the choice survives the reload.
+   */
+  useEffect(() => {
+    if (recentsChoice.current !== undefined || visibleConversations.length === 0) return;
+    /*
+     * …and only where the rail can afford it.
+     *
+     * Opening the list adds about 200px. Measured on this build, the rail's
+     * content is 559px with it open, which fits only at a window height of
+     * roughly 900px and above: at 1440x800 — a 13" laptop — Vault, Connection
+     * and Account went below the fold and the overflow fade was the only thing
+     * saying so. Coming forward is worth doing where there is room and is not
+     * worth pushing the global destinations off the screen for.
+     *
+     * The person's own choice still wins in both directions: this only ever
+     * runs while nobody has expressed one.
+     */
+    const nav = typeof navRef === "object" && navRef !== null ? navRef.current : undefined;
+    const room = nav?.clientHeight ?? 0;
+    if (room > 0 && room < RAIL_RECENTS_AUTO_OPEN_MIN_HEIGHT) return;
+    autoOpened.current = true;
+    recentsChoice.current = true;
+    setRecentsOpen(true);
+  }, [conversationKeys, navRef]);
+
+  /*
+   * What it opened on its own, it gives back on its own.
+   *
+   * The height gate above only ran once, at the moment the list decided to
+   * open, so a rail that auto-opened on a tall window and was then resized
+   * smaller kept the list and pushed Vault, Connection and Account below the
+   * fold — the overflow fade was the only thing saying so, which is exactly the
+   * trade the gate exists to refuse. Measured across a resize from 1080 to 700.
+   *
+   * Only what the rail opened by itself is closed by itself: `autoOpened` is
+   * cleared the moment a person touches the disclosure, and after that the rail
+   * never fights them in either direction.
+   */
+  useEffect(() => {
+    if (!autoOpened.current || !recentsOpen) return;
+    const nav = typeof navRef === "object" && navRef !== null ? navRef.current : undefined;
+    const measure = () => {
+      const room = nav?.clientHeight ?? 0;
+      if (room > 0 && room < RAIL_RECENTS_AUTO_OPEN_MIN_HEIGHT) setRecentsOpen(false);
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [navRef, recentsOpen]);
 
   const order = useMemo(() => {
     const destinations = railTraversal(expanded);
@@ -435,12 +544,12 @@ export function Rail({
            * caret would give from there.
            */
           onClick={() => {
-            if (row.id === "chat") setRecentsOpen(true);
+            if (row.id === "chat") chooseRecentsOpen(true);
             if (row.nested.length > 0) setRowExpanded(row.id, true);
             onNavigate(row.id);
           }}
           onDblClick={() => {
-            if (row.id === "chat") setRecentsOpen((value) => !value);
+            if (row.id === "chat") chooseRecentsOpen(!recentsOpen);
             if (row.nested.length > 0) setRowExpanded(row.id, !open);
           }}
           {...itemProps(row.id)}
@@ -568,9 +677,21 @@ export function Rail({
           <span class="recent-conversation__mark-star" aria-hidden="true">★</span>
         </button>
         <button
-          class={session.id === activeConversationId ? "recent-conversation recent-conversation--thread active" : "recent-conversation recent-conversation--thread"}
+          class={[
+            "recent-conversation recent-conversation--thread",
+            session.id === activeConversationId ? "active" : "",
+            session.id === unresumableConversationId ? "is-blocked" : "",
+          ].filter(Boolean).join(" ")}
           type="button"
-          title={session.title}
+          title={session.id === unresumableConversationId
+            ? `${session.title} — needs review; this conversation could not be reopened`
+            : session.title}
+          // Named on the row, not only styled on it: the difference between a
+          // conversation that opens and one that does not may not be carried by
+          // colour, and the row is where the choice is made.
+          aria-label={session.id === unresumableConversationId
+            ? `${session.title} — needs review; this conversation could not be reopened.`
+            : undefined}
           aria-current={session.id === activeConversationId ? "page" : undefined}
           aria-keyshortcuts={session.favorite ? "Alt+ArrowUp Alt+ArrowDown" : undefined}
           {...itemProps(`${CONVERSATION_PREFIX}${session.id}`)}
@@ -596,6 +717,9 @@ export function Rail({
                 lineage so three retries cannot evict three unrelated threads,
                 and this line is what stops that from being a silent deletion:
                 the branches are all in All conversations, below. */}
+            {session.id === unresumableConversationId ? (
+              <small class="recent-conversation__blocked">Needs review · could not be reopened</small>
+            ) : null}
             {session.hiddenBranchCount ? <small class="recent-conversation__branches">
               {session.hiddenBranchCount} more branch{session.hiddenBranchCount === 1 ? "" : "es"} in All conversations
             </small> : null}
@@ -632,7 +756,7 @@ export function Rail({
           aria-label={`${recentsOpen ? "Collapse" : "Expand"} recent conversations`}
           aria-expanded={recentsOpen}
           aria-controls="airship-recent-conversations"
-          onClick={() => setRecentsOpen((open) => !open)}
+          onClick={() => chooseRecentsOpen(!recentsOpen)}
           {...itemProps(RECENTS_KEY)}
           ref={(element: HTMLButtonElement | null) => {
             recentsTrigger.current = element;
@@ -664,7 +788,13 @@ export function Rail({
                 aria-label="New conversation"
                 title="New conversation"
                 disabled={busy}
-                onClick={() => { setRecentsOpen(false); onNewConversation(); }}
+                // The list stays up where it is part of the rail: you have just
+                // made a conversation and its row is about to appear in it, and
+                // closing here also latched the disclosure shut for the rest of
+                // the page against the default `loadRecentsPreference` sets.
+                // Where the rail is collapsed this panel is a flyout over the
+                // page, so it still yields once its verb has been used.
+                onClick={() => { if (state !== "standard") setRecentsOpen(false); onNewConversation(); }}
                 {...itemProps(NEW_CONVERSATION_KEY)}
               ><span aria-hidden="true">+</span></button>
             </div>
@@ -715,6 +845,33 @@ export function Rail({
           <Icon name="profiles" />
           <span class="profile-manage-link__label">Profiles</span>
         </button>
+        {/*
+          The two routes that decide what the agent *is* and what it can *run*,
+          drawn at last.
+          Measured: the desktop rail enumerated Chat, Workspace (Editor,
+          Terminal), Memory, Proof, then Vault, Connection, Account — and
+          neither `#skills` nor `#capabilities` appeared anywhere in it. They
+          were reachable only by knowing to press `Profiles` first and then
+          finding a tab strip inside that route, which is the menu archaeology
+          Law 4 exists to forbid. They are drawn under the profile they are
+          scoped to, in the same nested treatment `All conversations` gets under
+          Chat, so the filing still says whose Skills these are.
+        */}
+        <div class="profile-scoped-routes" role="group" aria-label="Profile configuration">
+          {PROFILE_SCOPED_ROUTES.map((route) => (
+            <button
+              key={route.id}
+              type="button"
+              class={view === route.id ? "nav-item nav-item--nested active" : "nav-item nav-item--nested"}
+              title={`${route.label} · profile scope`}
+              aria-current={view === route.id ? "page" : undefined}
+              onClick={() => onNavigate(route.id)}
+            >
+              <Icon name={route.icon} />
+              <span class="nav-item__label">{route.label}</span>
+            </button>
+          ))}
+        </div>
       </div>
     );
   }

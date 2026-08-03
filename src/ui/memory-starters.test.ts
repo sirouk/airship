@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { memoryStarters } from "./memory-view";
+import { memoryStarters, type MemoryRecordEntry } from "./memory-view";
 import type { MemoryGraphEdge, MemoryGraphNode, MemoryNodeKind, MemoryRelationshipGraph } from "../memory-graph";
 import type { WorkspaceEntry } from "../workspace/contracts";
 
@@ -11,35 +11,54 @@ import type { WorkspaceEntry } from "../workspace/contracts";
  * press. Starters make that state actionable, which is only honest if every
  * term is read out of live page state at render time and every button says
  * which surface it came from. These tests exist to stop a starter from ever
- * becoming a guess, a hardcoded example, or a search history the product does
- * not keep.
+ * becoming a guess or a hardcoded example — and, since the measured defect,
+ * from naming a lane that cannot answer it.
  */
 describe("memory starters", () => {
-  it("takes terms from the indexed sources, the pinned profile and the graph, and names each origin", () => {
+  it("takes terms from the indexed sources, the profile's own records and the graph, and names each origin", () => {
     const starters = memoryStarters(
       [entry("/workspace/notes/retrieval.md"), entry("/workspace/README.md")],
-      "Developer",
+      [record("lab-notes")],
       stubGraph([node("s1", "General session", "session")], []),
     );
 
     expect(starters.map((starter) => starter.term)).toEqual([
       "retrieval",
       "README",
-      "Developer",
+      "lab-notes",
       "General session",
     ]);
     expect(starters.map((starter) => starter.origin)).toEqual([
       "workspace source",
       "workspace source",
-      "active profile",
+      "active profile memory",
       "most connected session",
     ]);
+  });
+
+  /*
+   * The defect this file is now the guard for: the strip offered the active
+   * profile's *name* under the origin "active profile", and the Active profile
+   * memory lane returned "No memory matched “General”" every single time,
+   * because a profile name is in no corpus. A profile term may only come from a
+   * record the profile actually holds.
+   */
+  it("never mints a term from the profile's name, which no lane searches", () => {
+    const starters = memoryStarters([], [], stubGraph([], []));
+    expect(starters).toEqual([]);
+    const withRecords = memoryStarters([], [record("kyoto-trial")], stubGraph([], []));
+    expect(withRecords.map((starter) => starter.term)).toEqual(["kyoto-trial"]);
+  });
+
+  it("offers the newest record's source first, because that is what a person just wrote", () => {
+    const starters = memoryStarters([], [record("older"), record("newest")], stubGraph([], []));
+    expect(starters.map((starter) => starter.term)).toEqual(["newest", "older"]);
   });
 
   it("never repeats a term, whatever the surface it came from", () => {
     const starters = memoryStarters(
       [entry("/workspace/general.md")],
-      "General",
+      [record("general")],
       stubGraph([node("s1", "general", "session")], []),
     );
     expect(starters).toHaveLength(1);
@@ -48,17 +67,17 @@ describe("memory starters", () => {
 
   it("refuses a term too long to sit on a 44px chip rather than truncating a claim", () => {
     const long = "x".repeat(64);
-    const starters = memoryStarters([entry(`/workspace/${long}.md`)], "General", stubGraph([], []));
-    expect(starters.map((starter) => starter.term)).toEqual(["General"]);
+    const starters = memoryStarters([entry(`/workspace/${long}.md`)], [record("lab-notes")], stubGraph([], []));
+    expect(starters.map((starter) => starter.term)).toEqual(["lab-notes"]);
   });
 
   it("returns nothing when the page holds nothing, so no button offers an empty search", () => {
-    expect(memoryStarters([], "   ", stubGraph([], []))).toEqual([]);
+    expect(memoryStarters([], [], stubGraph([], []))).toEqual([]);
   });
 
   it("honours the limit and freezes what it returns", () => {
     const files = Array.from({ length: 9 }, (_, index) => entry(`/workspace/file-${index}.md`));
-    const starters = memoryStarters(files, "General", stubGraph([], []), 3);
+    const starters = memoryStarters(files, [record("lab-notes")], stubGraph([], []), 3);
     expect(starters).toHaveLength(3);
     expect(Object.isFrozen(starters)).toBe(true);
     expect(Object.isFrozen(starters[0])).toBe(true);
@@ -67,6 +86,10 @@ describe("memory starters", () => {
 
 function entry(path: string): WorkspaceEntry {
   return { path, kind: "file", size: 12, revision: "r1", updatedAt: "2026-07-27T10:00:00.000Z" } as unknown as WorkspaceEntry;
+}
+
+function record(source: string): MemoryRecordEntry {
+  return { id: `id-${source}`, content: `content for ${source}`, source, createdAt: "2026-07-27T10:00:00.000Z" };
 }
 
 function node(id: string, label: string, kind: MemoryNodeKind): MemoryGraphNode {

@@ -3,7 +3,12 @@ import { describe, expect, it } from "vitest";
 import type { InferenceEvent, InferenceRequest, InferenceTransport } from "../core/contracts";
 import { createLocalReceipt, type ConversationReceipt } from "../receipts/types";
 import { resolveProofReceipt } from "./proof-route";
-import { conversationTitleFromModel, proofResolvableReceipts, usableConversationTitle } from "./app";
+import {
+  conversationTitleFromModel,
+  isAppMintedConversationTitle,
+  proofResolvableReceipts,
+  usableConversationTitle,
+} from "./app";
 
 const source = readFileSync(new URL("./app.tsx", import.meta.url), "utf8");
 
@@ -71,6 +76,43 @@ describe("model-proposed conversation titles", () => {
       expect(/[\u0000-\u001f\u007f]/u.test(title)).toBe(false);
       expect(title).toBe(title.trim());
     }
+  });
+});
+
+describe("names Airship gives a conversation before its content does", () => {
+  /*
+   * Measured (J091): the rail row for the thread whose first message was
+   * "Draft the Q3 pricing memo intro paragraph." read "General · encrypted
+   * vault", and `#sessions` showed five separate rows all called that. The
+   * titler's gate compared the current title against `"<Profile> conversation"`
+   * only, so a conversation minted by vault adoption — which mints a different
+   * default — never qualified and never took a name from its content. Tuesday's
+   * memo was unfindable by title because the storage backend had named it.
+   */
+  it("recognises every default the app mints, not just the new-conversation one", () => {
+    expect(isAppMintedConversationTitle("General conversation", "General")).toBe(true);
+    expect(isAppMintedConversationTitle("General · encrypted vault", "General")).toBe(true);
+    expect(isAppMintedConversationTitle("General · ephemeral", "General")).toBe(true);
+    expect(isAppMintedConversationTitle("Research · encrypted vault", "Research")).toBe(true);
+  });
+
+  it("never treats a name a person or a fork produced as replaceable", () => {
+    // The titler overwrites whatever this returns true for, so a false positive
+    // silently renames somebody's work.
+    expect(isAppMintedConversationTitle("Draft the Q3 pricing memo intro paragraph.", "General")).toBe(false);
+    expect(isAppMintedConversationTitle("Fork of General · encrypted vault", "General")).toBe(false);
+    expect(isAppMintedConversationTitle("General · encrypted vault · edit", "General")).toBe(false);
+    expect(isAppMintedConversationTitle("General conversation", "Research")).toBe(false);
+  });
+
+  it("is the same table the minting call sites use", () => {
+    // Three code paths write these strings and a fourth reads them; the drift
+    // between the writer and the reader is exactly what J091 measured.
+    const app = readFileSync(new URL("./app.tsx", import.meta.url), "utf8");
+    expect(app).toContain('appMintedConversationTitle(profile.name, "vault")');
+    expect(app).toContain('appMintedConversationTitle(profile.name, "ephemeral")');
+    expect(app).toContain("isAppMintedConversationTitle(activeSessionRecord.title, activeProfile.name)");
+    expect(app).not.toContain("`${profile.name} · encrypted vault`");
   });
 });
 

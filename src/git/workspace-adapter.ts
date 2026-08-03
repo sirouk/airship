@@ -3,6 +3,7 @@ import * as git from "isomorphic-git";
 import http from "isomorphic-git/http/web";
 import { Buffer as BrowserBuffer } from "buffer";
 import { sha256, stableStringify } from "../core/hash";
+import { AIRSHIP_WORKSPACE_ROOT, TERMINAL_SHELL_ROOT } from "../workspace/addressing";
 import {
   isBrowserGitControlPlanePath,
   normalizeWorkspacePath,
@@ -88,7 +89,7 @@ import { WorkspaceGitFileSystem } from "./workspace-fs";
 export const AIRSHIP_BOOTSTRAP_FILES = Object.freeze({
   readme: `# Airship workspace
 
-This private virtual workspace is rooted at \`/workspace\`. Its live durability follows the selected Vault: Local Device, Google Drive, S3-compatible object storage, or Ephemeral page memory. Inference uses the selected authenticated provider or local runtime.
+This private virtual workspace is rooted at \`${AIRSHIP_WORKSPACE_ROOT}\` for Explorer, the Editor, Source Control and every tool; the in-page terminal mounts the same directory at \`${TERMINAL_SHELL_ROOT}\`, which is what \`pwd\` prints there. Its live durability follows the selected Vault: Local Device, Google Drive, S3-compatible object storage, or Ephemeral page memory. Inference uses the selected authenticated provider or local runtime.
 
 The agent can:
 

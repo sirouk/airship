@@ -23,7 +23,7 @@ function fact(over: Partial<SessionStatusFact> & Pick<SessionStatusFact, "id" | 
 describe("sessionStatusShort", () => {
   it("keeps the leading clause of a claim when it fits the chip", () => {
     expect(sessionStatusShort("E2EE · evidence recorded", "Asserted")).toBe("E2EE");
-    expect(sessionStatusShort("Ephemeral · this page only", "Not checked")).toBe("Ephemeral");
+    expect(sessionStatusShort("Ephemeral · content not saved", "Not checked")).toBe("Ephemeral");
     expect(sessionStatusShort("Ready", "Ready")).toBe("Ready");
   });
 
@@ -155,13 +155,39 @@ describe("sessionStatusName", () => {
     expect(name).toContain("No TEE evidence has been requested.");
   });
 
+  it("does not read the durability claim twice when durability is also the weakest", () => {
+    /*
+     * Page memory is `attention` in the durability vocabulary, so it wins the
+     * ranking on every un-vaulted cold open — and the leading clause and the
+     * weakest-claim clause became the same sentence back to back: "Session.
+     * Ephemeral · this page only. Ephemeral · this page only. This session
+     * journal exists only in page memory." A screen-reader user cannot skim
+     * past a repeat the way an eye can.
+     */
+    const name = sessionStatusName(
+      [fact({
+        id: "durability",
+        state: "attention",
+        label: "Ephemeral · this page only",
+        detail: "This session journal exists only in page memory. Nothing is synced.",
+      })],
+      "Ephemeral · this page only",
+    );
+
+    expect(name.startsWith("Session. Ephemeral · this page only. This session journal")).toBe(true);
+    expect(name.match(/Ephemeral · this page only/gu)).toHaveLength(1);
+  });
+
   it("states how many claims the chip stands in front of", () => {
     const name = sessionStatusName(
       [fact({ id: "posture", state: "none" }), fact({ id: "attestation", state: "none" }), fact({ id: "durability", state: "none" })],
       "Ephemeral · this page only",
     );
 
-    expect(name).toContain("3 facts.");
+    // The visible count renders "3 claims"; the accessible name says the same
+    // noun. It used to say "facts", which is the eye/ear split this asserts is
+    // gone.
+    expect(name).toContain("3 claims.");
   });
 });
 
@@ -214,7 +240,7 @@ describe("the vault axis and the session durability claim", () => {
   });
 
   it("leaves the session's own durability claim untouched", () => {
-    expect(durabilityLabel("ephemeral")).toBe("Ephemeral · this page only");
+    expect(durabilityLabel("ephemeral")).toBe("Ephemeral · content not saved");
     expect(app).toContain("durabilityLabel(sessionDurability.state)");
   });
 });

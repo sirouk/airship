@@ -80,6 +80,8 @@ import { postureFloorRefusal } from "./posture-floor";
 /* The leaf record, not `attestation-gate` — that module carries the DCAP
    verifier's WASM and this file paints first. */
 import { CHUTES_STRICT_ENDPOINT_PROOF_CAPABILITY as strictProofCapability } from "../inference/chutes/strict-proof-capability";
+import type { VNode } from "preact";
+import type { QuarantineReportProps, ResumeReportProps } from "./chat/resume-report";
 import { providerBoundaryLabel } from "../inference/transport-boundary-label";
 import {
   createGlobalSkillSettings,
@@ -113,8 +115,12 @@ import {
   profileOwnsSession,
   requireProfileOwnedSession,
   resolveResumableProfileConversation,
+  resumableProfileConversationCandidates,
   resumableProfileManifestMatches,
 } from "../sessions/profile-cockpit";
+// Type-only: the value side lives in the deferred adoption chunk, beside the
+// migration whose result it describes, so first paint pays nothing for it.
+import type { AdoptionCarriedWork } from "../vault/runtime-adoption";
 import {
   createAirshipToolRegistry,
   createVaultAwareAirshipToolRegistry,
@@ -140,10 +146,10 @@ import {
 } from "../vault/local-device";
 import { isWorkspaceControlPlanePath, type WorkspaceEntry, type WorkspaceFile, type WorkspacePort } from "../workspace/contracts";
 import { MemoryWorkspace } from "../workspace/memory";
-import { ProfileWorkspacePort, adoptLegacyRootWorkspace, isProfileWorkspacePath, profileWorkspaceIdentity } from "../workspace/profile-scope";
+import { ProfileWorkspacePort, adoptLegacyRootWorkspace, profileWorkspaceIdentity } from "../workspace/profile-scope";
 import { WorkspaceRefreshCoordinator, type WorkspaceRefreshAuthority } from "./workspace-refresh";
 import { nextEditorSelection, type EditorSelection } from "./editor-selection";
-import { composeClaimStack, type ClaimStackFact, type ClaimStackItem } from "./claim-stack-model";
+import { type ClaimStackFact, type ClaimStackItem } from "./claim-stack-model";
 import { TURN_EVIDENCE_COPY, turnEvidenceVerdict } from "./turn-evidence";
 // The two per-message rung words, taken from the one dictionary rather than
 // retyped, so `RETIRED_TRUST_LABELS` cannot be re-spelled back into this file.
@@ -152,8 +158,7 @@ import { TRUST_LABEL_MESSAGE_ASSERTED_NO_ENDPOINT, TRUST_LABEL_MESSAGE_NO_EVIDEN
 // `#proof` renders the hero verdict and this inspector on the same screen; if
 // they fed their shared reducer from two different predicates the route would
 // print two verdicts for one turn, which is the defect this package closes.
-import { sealStateForReceipt } from "./seal-states";
-import { ApprovalDock } from "./approval-dock";
+
 import { attestationRecordIdForReceipt, sessionAttestationReceipts } from "./attestation-history";
 import type { AttestationRefreshTarget } from "./attestations-view";
 import { Icon } from "./icons";
@@ -162,15 +167,15 @@ import type {
   LocalDeviceAtomicRestoreRequest,
 } from "./local-device-vault-setup";
 import { chatHash, chatSessionIdFromHash } from "./chat-route";
+import { loadRetryableChunk } from "./chunk-recovery";
 import { MenuSelect } from "./menu-select";
 import { MobileNavigation } from "./mobile-navigation";
 import { activeConnectionProofLabel, ModelControl } from "./model-control";
 import { MODEL_CAPABILITY_WORDS } from "./model-vocabulary";
 import { CANONICAL_DESTINATIONS, navigationHashForView, navigationViewFromHash, type NavigationView } from "./navigation-model";
 import {
-  CommandPalette,
-  PreferencesDialog,
   PwaUpdateBanner,
+  SHORTCUT_SHEET_CHORD,
   TrustPostureSheet,
   TrustHubTabs,
   ViewErrorBoundary,
@@ -185,6 +190,7 @@ import {
   useDebouncedValue,
   useGlobalNavigationJumps,
   useGlobalPaletteShortcut,
+  useGlobalShortcutSheet,
   usePwaUpdate,
   useVisualViewport,
   vaultBackendUnavailableReason,
@@ -215,11 +221,11 @@ import {
   type RailPreference,
   type RailState,
 } from "./rail-state";
-import { SEAL_LABELS, Seal, sealStateForProofStatus, type SealState } from "./seal";
+import { SEAL_LABELS, Seal, type SealState } from "./seal";
 import { useScrollEdges } from "./scroll-affordance";
 import { enabledSlashSelection, firstEnabledSlashIndex, moveSlashSelection } from "./slash-menu-state";
 import type { SourcesImportRequest } from "./sources-view";
-import type { MemorySourceTarget } from "./memory-view";
+import type { MemoryChange, MemoryCommitOutcome, MemoryRecordPage, MemorySourceTarget } from "./memory-view";
 import { releaseVaultAuthority, transitionVaultProvider } from "./vault-provider-transition";
 import {
   ASSISTANT_MESSAGE_ESTIMATE,
@@ -232,7 +238,7 @@ import {
   reduceMessagePartFact,
   type MessagePart,
 } from "./chat/message-parts";
-import { MessagePartsView } from "./chat/message-parts-view";
+import type { MessagePartsViewProps } from "./chat/message-parts-view";
 import { capabilityTierDetail, capabilityTierLabel } from "./chat/capability-tier";
 import { useWindowedTranscript } from "./chat/use-windowed-transcript";
 import { composerAttachments, userMessageParts, COMPOSER_ATTACHMENT_LIMIT, type ComposerAttachment } from "./chat/composer-state";
@@ -253,7 +259,7 @@ import {
 // that used to sit on the Retry button drifted away from this constant and
 // ended up promising that the prior answer IS carried into the branch, which
 // is the opposite of what the fork does.
-import { forkBranchNotice, FORK_RETRY_TOOLTIP } from "./chat/fork-notice";
+import { branchTitleFor, forkBranchNotice, FORK_RETRY_TOOLTIP } from "./chat/fork-notice";
 import { originatingPromptForRow } from "./chat/retry-prompt";
 // Types only: the reducer itself stays in the deferred capability pack.
 import type {
@@ -263,8 +269,34 @@ import type {
   SessionPresentationProviderContext,
   SessionPresentationTurnStatus,
 } from "./chat/session-message-presentation";
-import { recoverPartialTurn } from "./chat/turn-recovery";
+/**
+ * The failure vocabulary is fetched when a turn fails, not at first paint.
+ *
+ * Every call site is already an `async` catch handler that awaits an import, so
+ * the entry chunk does not have to carry sentences a turn only needs when it
+ * goes wrong. The `.catch` at each site matters: the condition that produced
+ * the failure is often the condition that will refuse this fetch too, and a
+ * failed turn must still say something rather than throwing inside its own
+ * error handler.
+ */
+const loadTurnRecovery = () => import("./chat/turn-recovery");
+// One owner for everything a turn says out loud. Before it, the in-flight
+// utterance named a storage operation, arrival quoted an empty stream buffer,
+// and the local-command lane was silent in both directions.
+import {
+  arrivalAnnouncement,
+  failureAnnouncement,
+  localCommandAnnouncement,
+  spokenCommandName,
+  stoppedAnnouncement,
+  useTurnNarration,
+  workingAnnouncement,
+} from "./chat/turn-narration";
 import { claimThreadDraftHydration, readThreadDraft, writeThreadDraft } from "./chat/thread-draft";
+import { readDurableDraft, writeDurableDraft } from "./chat/durable-draft";
+import { publishReloadRisk } from "./reload-risk";
+import type { UnrecoveredWork } from "./chat/return-ledger";
+import { browserReturnLedgerStorage } from "./chat/ledger-storage";
 import { browserThreadViewportStorage, readThreadViewport, writeThreadViewport } from "./chat/thread-viewport";
 import { appendThreadQueueItem, removeThreadQueueItem } from "./chat/thread-queue";
 import {
@@ -272,7 +304,7 @@ import {
   releaseComposerAndReloadSession,
 } from "./chat/turn-housekeeping";
 import { StreamingMessageSlot, TranscriptStreamStore } from "./chat/streaming-slot";
-import { isNearLastRealCard, preferredJumpBehavior, scrollToLastRealCard } from "./chat/transcript-anchor";
+import { focusTranscriptTurn, isNearLastRealCard, preferredJumpBehavior, scrollToLastRealCard } from "./chat/transcript-anchor";
 import { DemoModelChip, SessionBar } from "./chat/session-bar";
 import { sessionStatusShort, type SessionStatusFact } from "./chat/session-status-chip";
 import {
@@ -286,7 +318,7 @@ import { TopbarPostureChip } from "./topbar";
 import { TabPresenceNote } from "./tab-presence";
 import { ProfileThemeSwatch, themePresentation, themePresentationSummary } from "./profile-theme-swatch";
 import { PostureChip } from "./posture-chip";
-import { durabilityLabel, durabilitySeal, type DurabilityState } from "./durability-indicator";
+import { durabilityLabel, durabilitySeal, durabilityShort, type DurabilityState } from "./durability-indicator";
 import { RouteFailure } from "./route-failure";
 import { RouteSkeleton } from "./route-skeleton";
 import type { LocalProviderProbeResult } from "./connect/connect-surface";
@@ -590,6 +622,7 @@ type ProviderConnectionsScreenComponent = typeof import("./provider-connections-
 type BillingScreenComponent = typeof import("./billing-view").BillingView;
 type BillingProviderId = import("./billing-view").BillingProviderId;
 type ProofScreenComponent = typeof import("./proof-view").ProofView;
+type ProofJournalRead = import("./proof-view").ProofJournalRead;
 type EvidenceAcquisitionQueueController = import("../attestation/evidence-acquisition-queue").ReceiptEvidenceAcquisitionQueue;
 type EvidenceAcquisitionQueueSnapshot = import("../attestation/evidence-acquisition-queue").EvidenceAcquisitionQueueSnapshot;
 type EvidenceAcquisitionQueueAuthorityController = import("../attestation/workspace-evidence-acquisition-persistence").WorkspaceEvidenceAcquisitionAuthority;
@@ -660,6 +693,112 @@ type ProfileEditorDraft = {
 };
 
 const CHUTES_OAUTH_ATTEMPT_KEY = "airship.chutes.oauth-attempt.v1";
+
+/**
+ * The return ledger, fetched rather than shipped at first paint.
+ *
+ * Every one of its callers is already asynchronous — recording an entry, and
+ * reconciling the ledger against a journal read — so deferring the module costs
+ * nothing at the call site. Statically imported it put 9.9 KiB of source into
+ * the entry chunk and helped push first paint to 114.73 KiB gzip against a
+ * 112.00 KiB ceiling, which is the one budget in this file that does not move:
+ * it is what a person waits for before anything at all is on screen.
+ */
+/**
+ * The approval dock, fetched when something first asks permission.
+ *
+ * A request can only exist once a model is connected and a turn is running, so
+ * none of this is first-paint content — and the pass that gave the dock its
+ * accessible write description and its outcome announcement also gave it 425
+ * lines, which the entry chunk was paying for on every cold open. The person
+ * waiting on the dock is already waiting on the agent, and the chunk resolves
+ * from cache on every request after the first.
+ */
+/**
+ * The message-part renderer, fetched when a message first has parts.
+ *
+ * Tool calls, attachments, receipts and errors are what it draws, and an empty
+ * conversation — the only thing on screen at first paint — has none of them. It
+ * was static, so every cold open paid 32 KiB of source for a renderer nobody
+ * had given anything to draw yet.
+ */
+function loadMessageParts() {
+  /*
+   * Through the chunk recovery every other deferred route already uses.
+   *
+   * A bare `import()` has exactly one attempt, and this one is on the path that
+   * draws tool calls, attachments and receipts — so a single failed fetch left a
+   * restored conversation unable to render its own contents. Observed under a
+   * loaded dev server: three consecutive "Failed to fetch dynamically imported
+   * module: .../message-parts-view.tsx" in one journey. A person on a bad
+   * connection gets the same event, and the warm below cannot help if the one
+   * attempt it makes is the one that fails.
+   */
+  return loadRetryableChunk("message-parts-view", () => import("./chat/message-parts-view"));
+}
+
+/**
+ * Warms the message-part chunk once the shell is up.
+ *
+ * Deferring it keeps 32 KiB of source out of first paint, and fetching it only
+ * when a message first has parts made that fetch a network dependency at the
+ * worst possible moment: this product is local-first, and the offline-reload
+ * journey failed with "Failed to fetch dynamically imported module" — a
+ * restored conversation that could not render its own tool calls because the
+ * renderer was still on the far side of a connection that had gone away.
+ *
+ * So the split stays and the fetch moves: after the first paint, while nothing
+ * is waiting on it, and long before anyone goes offline.
+ */
+function warmMessageParts(): void {
+  const warm = () => { void loadMessageParts(); };
+  if (typeof requestIdleCallback === "function") requestIdleCallback(warm, { timeout: 2_000 });
+  else setTimeout(warm, 0);
+}
+
+let messagePartsView: ((props: MessagePartsViewProps) => VNode) | undefined;
+
+function DeferredMessageParts(props: MessagePartsViewProps) {
+  const [View, setView] = useState<((props: MessagePartsViewProps) => VNode) | undefined>(() => messagePartsView);
+  useEffect(() => {
+    if (messagePartsView) return;
+    let live = true;
+    void loadMessageParts().then((module) => {
+      messagePartsView = module.MessagePartsView;
+      if (live) setView(() => module.MessagePartsView);
+    });
+    return () => { live = false; };
+  }, []);
+  return View ? <View {...props} /> : null;
+}
+
+function loadApprovalDock() {
+  return import("./approval-dock");
+}
+
+/**
+ * The return ledger, deferred — and remembered once it has arrived.
+ *
+ * Dismissing the resume report has to retire the records it reported, and doing
+ * that through a fresh `import()` leaves the same close/reload race the delete
+ * path was just fixed for: the report is gone from the screen and still on
+ * disk, so the next visit mourns work the person has already been told about
+ * and dismissed. By the time a dismiss is possible the module is loaded (the
+ * report is rendered from it), so this hands it back synchronously and the
+ * write cannot be outrun.
+ */
+let loadedReturnLedger: typeof import("./chat/return-ledger") | undefined;
+
+function loadReturnLedger() {
+  return import("./chat/return-ledger").then((module) => {
+    loadedReturnLedger = module;
+    return module;
+  });
+}
+
+function readyReturnLedger(): typeof import("./chat/return-ledger") | undefined {
+  return loadedReturnLedger;
+}
 
 async function loadDeferredCapabilities() {
   const broker = await import("../load-deferred-capabilities");
@@ -787,6 +926,14 @@ const SESSION_LIFECYCLE_SHORT: Readonly<Record<SessionLifecycle["state"], string
 type StarterCard = Readonly<{
   title: string;
   hint: string;
+  /**
+   * The one card that carries the weight of the screen.
+   *
+   * Only set where a starter is the thing the person almost certainly came to
+   * do. Three cards of equal weight is a menu, and a menu asks a newcomer to
+   * decide something before they know anything.
+   */
+  lead?: true;
   action:
     | Readonly<{ kind: "prompt"; prompt: string }>
     | Readonly<{ kind: "route"; view: NavigationView }>;
@@ -819,7 +966,28 @@ const CONNECTED_STARTERS: readonly StarterCard[] = Object.freeze([
   }),
 ]);
 
+/*
+ * Connect leads, and it says what it gives rather than what it is only for.
+ *
+ * The topbar already renders "Connect a model" as the one filled brass action
+ * on the screen, and the empty state disagreed with it: the same act was the
+ * third of three equal cards, subtitled "Only chat needs this" — a true
+ * sentence that reads, to someone who came here to chat, as a reason to skip
+ * it. Two surfaces, one act, opposite weights, and the newcomer's own errand
+ * ranked last.
+ *
+ * The other two stay exactly where they are. That a terminal and a real
+ * workspace work in this tab with no account is Airship's most surprising
+ * claim, it is already the headline above these cards, and burying it to make
+ * Connect louder would trade one misplaced emphasis for another.
+ */
 const DISCONNECTED_STARTERS: readonly StarterCard[] = Object.freeze([
+  Object.freeze({
+    title: "Connect a model",
+    hint: "Chutes, another cloud provider, or a model on this machine",
+    lead: true as const,
+    action: Object.freeze({ kind: "route" as const, view: "access" as const }),
+  }),
   Object.freeze({
     title: "Open a terminal",
     hint: "Real processes in this tab, no account",
@@ -829,11 +997,6 @@ const DISCONNECTED_STARTERS: readonly StarterCard[] = Object.freeze([
     title: "Browse the workspace",
     hint: "Files, the editor and browser-owned Git",
     action: Object.freeze({ kind: "route" as const, view: "workspace" as const }),
-  }),
-  Object.freeze({
-    title: "Connect a model",
-    hint: "Only chat needs this",
-    action: Object.freeze({ kind: "route" as const, view: "access" as const }),
   }),
 ]);
 
@@ -1003,6 +1166,31 @@ function transcriptMessagesFromPresentation(presentation: SessionMessagePresenta
   return merged;
 }
 
+/**
+ * Which of these conversations the journal still holds.
+ *
+ * Paged rather than capped: an absence from this set is what gets reported to a
+ * returning person as lost work, and a 200-item page boundary is not evidence
+ * of absence. The walk stops as soon as every wanted id is accounted for.
+ */
+async function findPresentSessions(
+  library: SessionLibrary,
+  wanted: ReadonlySet<string>,
+  signal: AbortSignal,
+): Promise<ReadonlySet<string>> {
+  const present = new Set<string>();
+  if (wanted.size === 0) return present;
+  let page = await library.list({ sort: "updated-desc", limit: 200 }, signal);
+  for (;;) {
+    for (const item of page.items) if (wanted.has(item.id)) present.add(item.id);
+    const next = page.offset + page.items.length;
+    if (signal.aborted || present.size === wanted.size || page.items.length === 0 || next >= page.total) break;
+    page = await library.list({ sort: "updated-desc", limit: page.limit, offset: next }, signal);
+  }
+  return present;
+}
+
+/** `localStorage`, or nothing where a private mode refuses it. */
 async function loadRecentConversations(
   library: SessionLibrary,
   open: (sessionId: string) => void,
@@ -1135,6 +1323,32 @@ function formatConversationTime(value: string): string {
   ).format(date);
 }
 
+/**
+ * Tab-scoped marker for a conversation address this page wrote into the URL.
+ *
+ * Namespaced so it cannot collide with the draft keys that share this storage,
+ * and short-lived by nature: session storage dies with the tab.
+ */
+const MINTED_ADDRESS_PREFIX = "airship.minted-chat-address.v1:";
+
+/**
+ * How long the resume verdict may stay undecided before the address is answered
+ * on whatever evidence exists. Measured Local Device adoption on this build
+ * completes in 1.1–2.4 s from first paint; this is the ceiling that keeps a
+ * backend which never reports from holding a bookmark open forever.
+ */
+const RESUME_SETTLE_CEILING_MS = 8_000;
+
+/** Keystroke-rate persistence into tab storage; cheap enough to run this often. */
+const DRAFT_TAB_PERSIST_MS = 160;
+
+/**
+ * The encrypted copy costs an authenticated envelope write, so it settles on a
+ * slower clock than the tab copy. A composer left mid-sentence is idle for far
+ * longer than this before a tab is closed.
+ */
+const DRAFT_DURABLE_PERSIST_MS = 700;
+
 export function App() {
   const [view, setView] = useState<View>(() => readViewHash());
   const [online, setOnline] = useState(() => readOnlineState(
@@ -1143,6 +1357,9 @@ export function App() {
   const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
   const [narrowComposer, setNarrowComposer] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  /** Whether the composer's queue is showing its whole backlog. See `.composer-queue`. */
+  const [queueExpanded, setQueueExpanded] = useState(false);
   const [preferencesOpen, setPreferencesOpen] = useState(false);
   const [trustSheetOpen, setTrustSheetOpen] = useState(false);
   const [approvalPending, setApprovalPending] = useState(false);
@@ -1176,7 +1393,24 @@ export function App() {
   const recentPaletteSessions = recentPaletteState.profileId === profileId
     ? recentPaletteState.sessions
     : Object.freeze([]);
+  /*
+   * The conversation you are standing in goes last.
+   *
+   * The library is sorted by recency, so the active thread is always its first
+   * row — and the palette's first row with an empty query is what `⌘K ↵` runs.
+   * Leading with "reopen the conversation already on screen" is the one answer
+   * that cannot be the one asked for. It stays listed and stays searchable by
+   * its own title; it just does not win the default.
+   */
+  const paletteSessions = useMemo(() => Object.freeze([
+    ...recentPaletteSessions.filter((session) => session.id !== sessionId),
+    ...recentPaletteSessions.filter((session) => session.id === sessionId),
+  ]), [recentPaletteSessions, sessionId]);
   const [recentProfileConversations, setRecentProfileConversations] = useState<readonly RecentConversation[]>([]);
+  // A bump, not a boolean: the palette's "Rename conversation" verb has to be
+  // able to ask twice in a row, and the editor that answers it lives in the
+  // session bar. See `paletteActions`.
+  const [renameRequest, setRenameRequest] = useState(0);
   const [proofSelection, setProofSelection] = useState<ProofSelection | undefined>(() =>
     typeof window === "undefined" ? undefined : proofSelectionFromHash(window.location.hash)
   );
@@ -1222,7 +1456,27 @@ export function App() {
     ? selectedFileSelection.file
     : undefined;
   const [busy, setBusy] = useState(false);
-  const [runtimeStatus, setRuntimeStatus] = useState("Starting local kernel");
+  const [runtimeStatus, setRuntimeLine] = useState("Starting local kernel");
+  /**
+   * The turn's own spoken channel, and the shell line's stand-down.
+   *
+   * The topbar runtime line is mirrored into a polite region, and at turn end
+   * it was setting "Local kernel ready" in the same animation frame the arrival
+   * sentence landed — two polite regions, one frame, and the reader hears
+   * whichever the screen reader picks. The visible line is unchanged; while the
+   * turn narrator is speaking, the *mirror* stands down, because a sentence
+   * about the kernel is not news about the turn.
+   */
+  const turnNarration = useTurnNarration();
+  const [runtimeAnnouncement, setRuntimeAnnouncement] = useState("Starting local kernel");
+  function setRuntimeStatus(next: string | ((current: string) => string)): void {
+    setRuntimeLine(next);
+    if (turnNarration.holdsChannel()) return;
+    setRuntimeAnnouncement(next);
+  }
+  function narrateTurn(utterance: string): void {
+    turnNarration.narrate(utterance);
+  }
   const [eventCount, setEventCount] = useState(0);
   const [connection, setConnection] = useState<ChutesConnection>(DISCONNECTED_CHUTES_CONNECTION);
   const [availableModels, setAvailableModels] = useState<readonly AirshipModel[]>([]);
@@ -1348,6 +1602,31 @@ export function App() {
   const [billingViewError, setBillingViewError] = useState<string>();
   const [ProofScreen, setProofScreen] = useState<ProofScreenComponent>();
   const [proofViewError, setProofViewError] = useState<string>();
+  /*
+   * Whether the claim stack is a rail or a line.
+   *
+   * Measured, one cause, two readings: the rail mounted itself the moment a
+   * receipt existed and was hidden entirely below 1050px. A novice's first
+   * ordinary question opened 310px of a 1440px viewport — 22% — and took the
+   * visible control count from 35 to 48, none of it asked for (J005); the same
+   * turn on a phone showed the "N events" chip with nothing on the page
+   * qualifying it (J127). The default follows the turn: a local demo turn has
+   * one asserted claim and seven absences, which is a line; anything that
+   * reached a provider has a stack worth standing open. Once a person opens it,
+   * it stays open — including across reloads, which is what "their level" means
+   * for somebody who reads this every turn.
+   */
+  const [claimRailOpen, setClaimRailOpen] = useState(() => readClaimRailPreference());
+  useEffect(() => {
+    if (!lastReceipt || lastReceipt.posture === "local" || claimRailOpen) return;
+    setClaimRailOpen(true);
+  }, [lastReceipt?.receiptId]);
+  useEffect(() => {
+    try { localStorage.setItem(CLAIM_RAIL_STORAGE_KEY, claimRailOpen ? "open" : "summary"); }
+    catch { /* The rail stays as it is for this page. */ }
+  }, [claimRailOpen]);
+  /** A "Return to this turn" waiting for its conversation's transcript. */
+  const [pendingTranscriptReturn, setPendingTranscriptReturn] = useState<Readonly<{ sessionId: string; turnId: string }>>();
   const [ProofInspector, setProofInspector] = useState<ProofInspectorComponent>();
   /*
    * `proof-inspector` and `proof-view` are separate assets, so the claim stack
@@ -1478,6 +1757,155 @@ export function App() {
   const [localDeviceBusy, setLocalDeviceBusy] = useState(false);
   const localDeviceAutoOpenOwner = useRef(0);
   const [localDeviceError, setLocalDeviceError] = useState<string>();
+  /**
+   * Whether the durability posture this browser profile is configured for has
+   * finished trying to load.
+   *
+   * The Atlas measured Airship reopening instead of resuming: on a reload with
+   * the Local Device Vault active, the page-memory runtime boots first, the
+   * `#chat/<id>` in the address bar resolves against a journal the Vault has not
+   * been adopted into yet, and the shell declares the conversation destroyed —
+   * "That conversation existed only in page memory and did not survive the
+   * reload" — one second before it restores that exact conversation and calls it
+   * "audited session resumed". The same race is what destroys the composer
+   * draft: the verdict re-keys the composer to the throwaway conversation the
+   * boot minted, and the real conversation then arrives and hydrates its empty
+   * draft over the text.
+   *
+   * So the route resolution waits for one declared answer. Every automatic
+   * adoption path settles this exactly once — adopted, refused, or not
+   * configured — and until then Airship says nothing about any address.
+   */
+  const [durableAuthoritySettled, setDurableAuthoritySettled] = useState(false);
+  /**
+   * The one resume verdict, read by the route resolver and the return report.
+   *
+   * Declared here rather than beside the other vault derivations further down
+   * because the effect that resolves `#chat/<id>` runs before them, and the
+   * whole point is that no surface may answer for an address before this does.
+   * `vaultRuntimeAdopted` below asks the same question of the *presented* trust
+   * state and is what every visible claim reads; this one asks it of the
+   * runtime this render is actually writing through, which is the fact the
+   * draft store and the ledger posture need.
+   */
+  const durableAuthorityAdopted = runtime.current?.storageId.startsWith("vault+") === true;
+  /*
+   * Deliberately not `durableAuthorityAdopted`. Adoption publishes the runtime
+   * ref several awaits before it publishes the journal, and Preact flushes a
+   * render inside those awaits — so there is a window in which the storage is
+   * the Vault's and `sessionLibrary` is still the page-memory one that cannot
+   * possibly hold the address. Resolving in that window is what moved an unsent
+   * draft onto a throwaway conversation on one reload in two. The explicit flag
+   * is set after the adoption has published everything.
+   */
+  const resumeAuthoritySettled = durableAuthoritySettled
+    // Ephemeral is a decision, not a wait: nothing durable is coming.
+    || preferences.vaultBackend === "ephemeral"
+    // A cloud backend that is not configured in this tab is waiting on a person
+    // (Drive's consent gesture) or on a service that answered "not here"
+    // (the loopback lab). Neither arrives on its own, so the address may be
+    // answered now rather than held open forever.
+    || ((preferences.vaultBackend === "google-drive" || preferences.vaultBackend === "local-lab")
+      && (vaultSnapshot.phase === "disconnected" || vaultSnapshot.phase === "degraded"));
+  /**
+   * Work this browser profile held that the journal did not give back.
+   *
+   * Held in state rather than read from storage at render time so a dismissal
+   * is felt immediately and the reconciliation runs exactly once per boot.
+   */
+  const [unrecoveredWork, setUnrecoveredWork] = useState<UnrecoveredWork>();
+  /*
+   * The lost-work report is fetched when there is lost work to report.
+   *
+   * It renders for a returning person whose previous session did not survive —
+   * the rarest state this surface has — and importing it statically put it, and
+   * its stylesheet, in the entry chunk. That chunk is first paint, it had
+   * 0.53 KiB of gzip headroom, and this cost 1.82 KiB of it: the release gate
+   * refused the build at 115.00 KiB against a 112.00 KiB ceiling. Every other
+   * rare surface in this file is already fetched on demand; this is the same
+   * pattern, applied to the one that pays the highest rent.
+   */
+  const [ResumeReportView, setResumeReportView] = useState<(props: ResumeReportProps) => VNode>();
+  /*
+   * The two overlays that are never on screen at first paint.
+   *
+   * They lived in `platform-shell.tsx`, which the boot path imports for its
+   * hooks, so 195 lines of dialog JSX shipped in the entry chunk to be rendered
+   * by nobody. Entry gzip had 20 bytes under its 112 KiB ceiling and then
+   * breached it at 112.01 — and a budget a symbol rename can breach is not a
+   * budget. Split out, then warmed on idle after first paint, so the chunk is
+   * in cache long before anyone presses Cmd+K and the ceiling gets a real
+   * margin back instead of a raise.
+   */
+  const [Overlays, setOverlays] = useState<typeof import("./platform-overlays")>();
+  /* The same deferred chunk carries the quarantine card, so the two return
+     states of this surface cost one fetch and one stylesheet between them. */
+  const [QuarantineReportView, setQuarantineReportView] = useState<(props: QuarantineReportProps) => VNode>();
+  /** Which conversation `#sessions` should open on, when the shell sends you. */
+  const [sessionsFocusId, setSessionsFocusId] = useState<string>();
+  /* Mounted as soon as a broker exists, so the dock is resident before the
+     first request rather than fetched while someone waits on a decision. */
+  const [ApprovalDockView, setApprovalDockView] = useState<(props: { broker: typeof approvalBroker }) => VNode>();
+  const [ShortcutSheetView, setShortcutSheetView] = useState<(props: {
+    open: boolean;
+    profiles?: readonly Readonly<{ name: string }>[];
+    onClose(): void;
+  }) => VNode | null>();
+  useEffect(() => {
+    let live = true;
+    void loadApprovalDock().then((module) => {
+      if (live) setApprovalDockView(() => module.ApprovalDock);
+    });
+    warmMessageParts();
+    return () => { live = false; };
+  }, []);
+  /* Same deferral, same reason: a sheet nobody has asked for yet is not
+     first-paint JavaScript. Fetched the first time `?` (or the palette's own
+     footer row) asks for it, and resident from then on. */
+  useEffect(() => {
+    if (!shortcutsOpen || ShortcutSheetView) return;
+    let live = true;
+    void import("./keyboard-shortcuts-sheet").then((module) => {
+      if (live) setShortcutSheetView(() => module.KeyboardShortcutsSheet);
+    });
+    return () => { live = false; };
+  }, [shortcutsOpen, ShortcutSheetView]);
+  useEffect(() => {
+    if ((!unrecoveredWork && !quarantinedSession) || ResumeReportView) return;
+    let live = true;
+    void import("./chat/resume-report").then((module) => {
+      if (!live) return;
+      setResumeReportView(() => module.ResumeReport);
+      setQuarantineReportView(() => module.QuarantineReport);
+    });
+    return () => { live = false; };
+  }, [ResumeReportView, unrecoveredWork, quarantinedSession]);
+  /** The journal the ledger has already been reconciled against. */
+  const returnLedgerReconciled = useRef<SessionLibrary>();
+  /**
+   * Identifies this page session in the return ledger.
+   *
+   * A conversation that leaves the journal while its own page is still open was
+   * deleted; only an absence that outlived the page that wrote it is a
+   * returning person's lost work, and this is how the two are told apart.
+   */
+  const pageSessionToken = useRef(randomUuid());
+  /** Addresses the reconciliation has already accounted for, so the composer
+   *  notice does not restate a loss the report states better. */
+  const reportedLostAddresses = useRef(new Set<string>());
+  /** The address the loss notice was raised about, so it can be withdrawn if
+   *  that conversation turns up after all. */
+  const lossNoticeAddress = useRef<string>();
+  /**
+   * Turns, not rows: the conversation seed and the journal markers are chrome
+   * and records, not work. A conversation whose count is zero has nothing to
+   * mourn and never enters the ledger, which is what keeps a first-ever visit
+   * from being told it lost something.
+   */
+  const recordedTranscriptSize = useMemo(
+    () => messages.reduce((total, message) => total + (message.seed || message.marker ? 0 : 1), 0),
+    [messages],
+  );
   const [driveReauthorizing, setDriveReauthorizing] = useState(false);
   const driveReauthorizingRef = useRef(false);
   const [vaultContextPublishing, setVaultContextPublishing] = useState(false);
@@ -1539,6 +1967,9 @@ export function App() {
   const queuedMessagesBySession = useRef(new Map<string, readonly QueuedComposerItem[]>());
   const queuedDispatch = useRef(false);
   const draftHydrationIdentity = useRef<string>();
+  /** The conversation whose encrypted draft has been read back, and is therefore
+   *  safe to write over. See the durable hydration effect. */
+  const durableDraftIdentity = useRef<string>();
   const preserveComposerForDraftIdentity = useRef<string>();
   const pendingForkRetry = useRef<Readonly<{
     sessionId: string;
@@ -1548,6 +1979,84 @@ export function App() {
     attachments: readonly ComposerAttachment[];
   }>>();
   const chatRouteOpening = useRef<string>();
+  /*
+   * Conversation addresses this page wrote into the URL itself.
+   *
+   * The first visit to a static host loads the document twice: the service
+   * worker takes control, `controllerchange` fires, and the shell reloads so
+   * COOP/COEP are established before anyone starts working. That reload is
+   * deliberate and only ever happens before a person has interacted.
+   *
+   * The composer canonicalises `#chat/<id>` as soon as a conversation exists,
+   * so the pre-reload address survives in the URL while the page-memory
+   * conversation it names does not. The reader then met, on the first screen
+   * they had ever seen, "That conversation existed only in page memory and did
+   * not survive the reload." — a report of lost work addressed to someone who
+   * had not yet done any. Measured on a never-visited namespace: five
+   * main-frame navigations, two distinct session ids, and that sentence.
+   *
+   * The sentence is right for the case it was written for — a bookmark, a link,
+   * a back button reaching a conversation that page memory could not keep. It
+   * is wrong for an address this page minted seconds earlier. So the addresses
+   * are remembered, and only the ones that came from somewhere else are
+   * reported as lost.
+   *
+   * Tab storage, not a ref: the reload replaces the document, so a ref is empty
+   * in exactly the case this exists for. Tab scope is also the right boundary —
+   * the same bookmark opened in a NEW tab did come from somewhere else, and
+   * still gets told.
+   *
+   * And the markers are dropped the moment a person touches the page. The boot
+   * reload only ever fires before an interaction (`platform-shell` holds a page
+   * that observed a gesture and offers it the reload instead), so an address
+   * minted before anyone typed cannot have carried work — while an address in a
+   * tab someone HAS worked in can, and that reader is owed the sentence. This
+   * is the difference between "Airship reloaded itself during boot" and "your
+   * draft was in a conversation page memory could not keep".
+   */
+  const rememberMintedAddress = (id: string): void => {
+    try {
+      sessionStorage.setItem(`${MINTED_ADDRESS_PREFIX}${id}`, "1");
+    } catch {
+      // A private mode without session storage keeps the previous behaviour.
+    }
+  };
+  const addressWasMintedHere = (id: string): boolean => {
+    try {
+      return sessionStorage.getItem(`${MINTED_ADDRESS_PREFIX}${id}`) !== null;
+    } catch {
+      return false;
+    }
+  };
+  const forgetMintedAddresses = (): void => {
+    try {
+      for (const key of Object.keys(sessionStorage)) {
+        if (key.startsWith(MINTED_ADDRESS_PREFIX)) sessionStorage.removeItem(key);
+      }
+    } catch {
+      // Nothing to forget without session storage.
+    }
+  };
+  useEffect(() => {
+    const events = ["pointerdown", "keydown"] as const;
+    events.forEach((type) => window.addEventListener(type, forgetMintedAddresses, { capture: true, once: true }));
+    return () => events.forEach((type) => window.removeEventListener(type, forgetMintedAddresses, { capture: true }));
+  }, []);
+  /*
+   * A liveness floor under the resume verdict, not a source of it.
+   *
+   * Every automatic adoption path settles the verdict itself, in a `finally` or
+   * on each terminal branch. This exists for the case none of them reach — a
+   * backend whose preconditions never assemble — because the failure mode of
+   * waiting forever is a bookmark that never opens and a person with no
+   * explanation at all. It can only ever release a wait; it never claims a
+   * conversation was lost, which remains the resolver's decision on the
+   * evidence it has by then.
+   */
+  useEffect(() => {
+    const ceiling = window.setTimeout(() => setDurableAuthoritySettled(true), RESUME_SETTLE_CEILING_MS);
+    return () => window.clearTimeout(ceiling);
+  }, []);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const transcriptElement = useRef<HTMLDivElement>(null);
   const transcriptBoundaryElement = useRef<HTMLDivElement>(null);
@@ -1620,6 +2129,46 @@ export function App() {
     if (response.isError) throw new Error(response.content || "Federated memory search failed safely.");
     return JSON.parse(response.content) as FederatedMemoryResult;
   }, [sessionId]);
+  /*
+   * Browsing the corpus, on the same read path the agent's own recall uses.
+   *
+   * `recall_memory` with no query is already a browse — newest first, scoped to
+   * the session's pinned profile by the tool itself — so the route lists
+   * exactly what the agent can reach, and cannot invent a record the silo would
+   * refuse. Identity is stable so the Memory route's effect does not re-read on
+   * every render.
+   */
+  const recallMemoryRecords = useMemo(() => async (signal: AbortSignal): Promise<MemoryRecordPage> => {
+    const active = runtime.current;
+    const authoritySessionId = activeSessionIdentity.current ?? sessionId;
+    if (!active || !authoritySessionId) throw new Error("The active accountable session is not ready.");
+    const tool = active.tools.get("recall_memory");
+    if (!tool || tool.definition.effect !== "read") throw new Error("Profile memory recall is not installed in this agent runtime.");
+    const operationId = `memory-list-${randomUuid()}`;
+    const response = await tool.execute({ limit: 50 }, {
+      sessionId: authoritySessionId,
+      turnId: operationId,
+      operationId,
+      signal,
+    });
+    if (response.isError) throw new Error(response.content || "The remembered records could not be read.");
+    const records = JSON.parse(response.content) as MemoryRecordPage["records"];
+    // The tool reports how many records the scope holds beyond this page, which
+    // is the difference between "these are the records" and "these are 50 of
+    // them" — a distinction the route has to be able to state.
+    const metadata = response.metadata && typeof response.metadata === "object" && !Array.isArray(response.metadata)
+      ? response.metadata
+      : {};
+    const count = (key: string): number | undefined => {
+      const value = metadata[key];
+      return typeof value === "number" ? value : undefined;
+    };
+    return Object.freeze({
+      records: Object.freeze(records),
+      total: count("total") ?? records.length,
+      legacyQuarantined: count("legacyQuarantined") ?? 0,
+    });
+  }, [sessionId]);
 
   /*
    * Any platform overlay (command palette, preferences, trust sheet, mobile
@@ -1630,12 +2179,23 @@ export function App() {
    * Rail buttons and overlay-owned navigation (palette entries, trust-sheet
    * rows) call `navigatePrimary` directly and stay ungated.
    */
-  const platformOverlayOpen = mobileMoreOpen || paletteOpen || preferencesOpen || trustSheetOpen || approvalPending || Boolean(profileCockpitTransition);
+  const platformOverlayOpen = mobileMoreOpen || paletteOpen || shortcutsOpen || preferencesOpen || trustSheetOpen || approvalPending || Boolean(profileCockpitTransition);
   const platformOverlayOpenRef = useRef(platformOverlayOpen);
   platformOverlayOpenRef.current = platformOverlayOpen;
 
   useGlobalPaletteShortcut(() => setPaletteOpen((open) => !open));
-  useGlobalNavigationJumps(navigatePrimary, () => !platformOverlayOpenRef.current);
+  useGlobalShortcutSheet(() => setShortcutsOpen(true), () => !platformOverlayOpenRef.current);
+  useGlobalNavigationJumps(
+    navigatePrimary,
+    () => !platformOverlayOpenRef.current,
+    // `g 1`…`g 9`, in the order the profile menu and the shortcut sheet list
+    // them. Out of range is silently nothing rather than a wrapped choice: a
+    // chord that switches the *wrong* profile is worse than one that misses.
+    (index) => {
+      const target = catalog ? managedProfiles(catalog)[index] : undefined;
+      if (target && target.profileId !== profileId) void requestProfileChange(target.profileId);
+    },
+  );
   useVisualViewport();
   useEffect(() => () => {
     for (const url of attachmentPreviewUrls.current) URL.revokeObjectURL(url);
@@ -1846,11 +2406,89 @@ export function App() {
     [input, slashRegistry, slashModule],
   );
   const slashCompletions = slashMenu.completions;
+  /*
+   * The shell's verbs, reachable without menu archaeology.
+   *
+   * The words live in `./palette-actions`, fetched the first time the palette
+   * opens: the entry chunk's first-paint budget does not move for feature work,
+   * and nothing here paints before ⌘K. What stays in the shell is what only the
+   * shell can answer — whether each verb can run right now, and what to run.
+   */
+  const [paletteActionsModule, setPaletteActionsModule] = useState<typeof import("./palette-actions")>();
+  useEffect(() => {
+    if (!paletteOpen || paletteActionsModule) return;
+    let live = true;
+    void import("./palette-actions").then((module) => { if (live) setPaletteActionsModule(() => module); });
+    return () => { live = false; };
+  }, [paletteOpen, paletteActionsModule]);
+  const paletteActions = useMemo(() => {
+    if (!paletteActionsModule) return undefined;
+    const lastUser = [...messages].reverse().find((message) => message.role === "user" && message.sourcePoint);
+    const lastAnswer = [...messages].reverse().find((message) => message.role === "assistant" && message.sourcePoint);
+    const turnBusy = busy ? "Stop the active turn first." : undefined;
+    const branchBlocked = turnBusy ?? (!sessionLibrary || !activeSessionRecord
+      ? "Available once the local session journal is ready."
+      : undefined);
+    return paletteActionsModule.conversationPaletteActions({
+      ...(turnBusy ? { newConversationBlocked: turnBusy, renameBlocked: turnBusy } : {}),
+      ...(branchBlocked ?? !lastAnswer ? { retryBlocked: branchBlocked ?? "No answer in this conversation to retry yet." } : {}),
+      ...(branchBlocked ?? !lastUser ? { editBranchBlocked: branchBlocked ?? "No prompt in this conversation to branch from yet." } : {}),
+      ...(branchBlocked ?? !lastAnswer ? { forkBlocked: branchBlocked ?? "No message in this conversation to fork from yet." } : {}),
+      onNewConversation: () => { navigate("chat"); void createConversation(); },
+      onRename: () => { navigate("chat"); setRenameRequest((value) => value + 1); },
+      onRetry: () => { if (lastAnswer) void forkFromMessage(lastAnswer, "retry"); },
+      onEditBranch: () => { if (lastUser) void forkFromMessage(lastUser, "edit"); },
+      onFork: () => { if (lastAnswer) void forkFromMessage(lastAnswer, "fork"); },
+    });
+  }, [paletteActionsModule, messages, busy, sessionLibrary, activeSessionRecord]);
+  /*
+   * Land the "Return to this turn" once the transcript it names has rendered.
+   *
+   * Keyed on the message list because the conversation is usually still being
+   * resumed when the route changes — running on navigation alone scrolled an
+   * empty stage and reported success. The request is one-shot in every branch,
+   * including the one where the transcript does not hold the turn: a control
+   * that says it will return you and then leaves the screen unchanged is the
+   * defect, and a silent retry loop would be a slower version of it.
+   */
+  useEffect(() => {
+    const request = pendingTranscriptReturn;
+    if (view !== "chat" || !request || request.sessionId !== sessionId || messages.length === 0) return;
+    setPendingTranscriptReturn(undefined);
+    /*
+     * Unpin first, synchronously, and before the pin effect below runs.
+     * Measured: the return marked and outlined the right card at top -1317 and
+     * left the reader at the bottom of the thread, because the pin-to-latest
+     * frame is queued after this one and wins. Unpinning is also the honest
+     * state — the reader is now away from the newest turn — so the jump control
+     * appears, which is the way back.
+     */
+    transcriptPinned.current = false;
+    setTranscriptDetached(true);
+    const frame = requestAnimationFrame(() => {
+      if (focusTranscriptTurn(request.turnId) === "not-rendered") {
+        setRuntimeStatus("That turn has no card in this transcript — a local command mints no receipt, so there is no id to land on. The conversation is open.");
+      }
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [view, sessionId, messages, pendingTranscriptReturn]);
   const paletteEntries = useMemo(() => buildPaletteEntries({
     navigate: navigatePrimary,
     openPreferences: () => setPreferencesOpen(true),
+    openShortcuts: () => setShortcutsOpen(true),
     commands: slashRegistry?.descriptors(),
-    sessions: recentPaletteSessions,
+    ...(paletteActions ? { actions: paletteActions } : {}),
+    sessions: paletteSessions,
+    // The keyboard route to the thing a multi-profile person does most often.
+    // The topbar control is the 24th tab stop; these rows and their `g 1`…`g 9`
+    // chords are three keystrokes from the transcript.
+    profiles: (catalog ? managedProfiles(catalog) : []).map((profile) => Object.freeze({
+      profileId: profile.profileId,
+      name: profile.name,
+      ...(profile.description ? { description: profile.description } : {}),
+      active: profile.profileId === profileId,
+      switchTo: () => { void requestProfileChange(profile.profileId); },
+    })),
     runCommand: (command) => {
       // A palette command used to replace the composer outright, and the
       // debounced draft writer then persisted the command over the stored
@@ -1866,7 +2504,7 @@ export function App() {
       navigate("chat");
       requestAnimationFrame(() => textarea.current?.focus({ preventScroll: true }));
     },
-  }), [slashRegistry, lastReceipt, sessionId, recentPaletteSessions]);
+  }), [slashRegistry, lastReceipt, sessionId, paletteSessions, paletteActions, catalog, profileId]);
   // The rail's chord has a searchable twin: a shortcut nobody can discover is
   // a shortcut that does not exist, and the chevron is 700px away on a laptop.
   const paletteEntriesWithRail = useMemo(() => Object.freeze([
@@ -1994,6 +2632,13 @@ export function App() {
       || !sessionRuntime
       || !catalog
       || busy
+      // A journal that is still being adopted has not yet failed to hold the
+      // address; asking it now is what produced "did not survive the reload"
+      // about a conversation restored a second later. See
+      // `durableAuthoritySettled`. The latch is the same one every storage
+      // transition already sets, so a later Vault change is covered too.
+      || !resumeAuthoritySettled
+      || catalogAuthorityChanging.current
       || chatRouteOpening.current === chatRouteRequest
     ) return;
     if (sessionId === chatRouteRequest) {
@@ -2006,6 +2651,7 @@ export function App() {
       .then((detail) => resumeLibrarySession(detail))
       .then(() => {
         setChatRouteRequest((current) => current === requestedSessionId ? undefined : current);
+        lossNoticeAddress.current = undefined;
         setComposerNotice(undefined);
       })
       .catch((error) => {
@@ -2022,7 +2668,21 @@ export function App() {
           // text that was typed a moment before the reload, and destroys it.
           adoptDraftFromUnresolvableAddress(requestedSessionId);
           setChatRouteRequest((current) => current === requestedSessionId ? undefined : current);
-          setComposerNotice("That conversation existed only in page memory and did not survive the reload. This is a new conversation.");
+          // Nothing to mourn if this page wrote the address itself: see
+          // `rememberMintedAddress`. Anything else came from a person.
+          //
+          // Nor if the return report already names this conversation among the
+          // work that was not kept. One loss, one statement — the report has
+          // the count, the clock and the remedy, and two surfaces narrating the
+          // same event in different words is the "three independent surfaces
+          // guessing" the Atlas measured on the resume path.
+          if (
+            !addressWasMintedHere(requestedSessionId)
+            && !reportedLostAddresses.current.has(requestedSessionId)
+          ) {
+            lossNoticeAddress.current = requestedSessionId;
+            setComposerNotice("That conversation existed only in page memory and did not survive the reload. This is a new conversation.");
+          }
           return;
         }
         // Keep the URL intact: a durable conversation can become available
@@ -2038,7 +2698,23 @@ export function App() {
       .finally(() => {
         if (chatRouteOpening.current === requestedSessionId) chatRouteOpening.current = undefined;
       });
-  }, [busy, catalog, chatRouteRequest, sessionId, sessionLibrary, sessionRuntime, view]);
+  }, [busy, catalog, chatRouteRequest, resumeAuthoritySettled, sessionId, sessionLibrary, sessionRuntime, view]);
+  /*
+   * A loss notice is withdrawn the moment the conversation it mourns is open.
+   *
+   * The gate above removes the race that raised the notice early, and this
+   * removes the claim itself if any other path — a Vault adopting and resuming
+   * its own latest session, a fork landing, a person picking the row out of the
+   * rail — puts that conversation back on screen. The measured failure was a
+   * cold open at `#chat/45b72a63` rendering "did not survive the reload" beside
+   * a fully restored transcript and a topbar reading "audited session resumed":
+   * whichever a reader believed, they had to distrust the other.
+   */
+  useEffect(() => {
+    if (!sessionId || lossNoticeAddress.current !== sessionId) return;
+    lossNoticeAddress.current = undefined;
+    setComposerNotice(undefined);
+  }, [sessionId]);
   useEffect(() => {
     if (view !== "chat" || chatRouteRequest || !sessionId) return;
     // A hash navigation can land between this effect being scheduled and
@@ -2047,6 +2723,7 @@ export function App() {
     if (navigationViewFromHash(window.location.hash) !== "chat") return;
     const target = chatHash(sessionId);
     if (window.location.hash !== target) {
+      rememberMintedAddress(sessionId);
       window.history.replaceState({ view: "chat", sessionId }, "", target);
     }
   }, [chatRouteRequest, sessionId, view]);
@@ -2209,6 +2886,37 @@ export function App() {
     }
     setAttachments([]);
   }, [chatRouteRequest, sessionId]);
+  /*
+   * The durable half of draft hydration.
+   *
+   * A browser restart empties `sessionStorage`, so the tab-scoped copy above is
+   * exactly as durable as page memory — right for a page-memory session, wrong
+   * for one whose journal the person has paid to keep. Measured with the Vault
+   * active: "and one more thing I still need to check before Friday" before the
+   * restart, `""` after, same URL, same conversation restored, no notice.
+   *
+   * It is a second effect rather than a branch of the first because the two
+   * hydrations arrive on different clocks: the tab copy is there at first paint
+   * and the Vault is adopted a second or two later, so a single fence keyed on
+   * the conversation would claim hydration before the durable store existed and
+   * never look again.
+   */
+  useEffect(() => {
+    const draftSessionId = chatRouteRequest ?? sessionId;
+    const durablePort = durableAuthorityAdopted ? runtime.current?.workspace : undefined;
+    if (!draftSessionId || !durablePort || durableDraftIdentity.current === draftSessionId) return;
+    // Until the read lands this conversation has no established durable draft,
+    // and the writer below must not persist an empty composer over one.
+    durableDraftIdentity.current = undefined;
+    let cancelled = false;
+    void readDurableDraft(durablePort, draftSessionId).then((carried) => {
+      if (cancelled) return;
+      durableDraftIdentity.current = draftSessionId;
+      // Never over anything typed while the read was in flight.
+      if (carried) setInput((current) => current || carried);
+    });
+    return () => { cancelled = true; };
+  }, [chatRouteRequest, durableAuthorityAdopted, sessionId]);
   /**
    * Moves an unsent draft off a conversation address that can never resolve.
    *
@@ -2262,12 +2970,102 @@ export function App() {
     const timer = window.setTimeout(() => {
       try {
         writeThreadDraft(draftSessionId, input, sessionStorage);
+        // Text in the composer is the plainest evidence that this tab has been
+        // worked in, so from here on a lost address is a lost conversation and
+        // is reported as one. See `rememberMintedAddress`.
+        if (input) forgetMintedAddresses();
       } catch {
         // Draft persistence is optional; the live composer remains authoritative.
       }
-    }, 160);
-    return () => window.clearTimeout(timer);
-  }, [chatRouteRequest, input, sessionId]);
+    }, DRAFT_TAB_PERSIST_MS);
+    /*
+     * The encrypted copy runs on its own, slower clock: the tab write is a
+     * `sessionStorage.setItem`, this one is an authenticated envelope through
+     * the Vault's workspace port, and a keystroke is not worth one of those.
+     * It is fenced on the durable read having already answered for this
+     * conversation, or the empty composer of the frame after a restart would
+     * erase the very text it is one tick away from restoring.
+     */
+    const durablePort = durableAuthorityAdopted ? runtime.current?.workspace : undefined;
+    const durableTimer = durablePort ? window.setTimeout(() => {
+      if (durableDraftIdentity.current !== draftSessionId) return;
+      void writeDurableDraft(durablePort, draftSessionId, input);
+    }, DRAFT_DURABLE_PERSIST_MS) : undefined;
+    return () => {
+      window.clearTimeout(timer);
+      if (durableTimer !== undefined) window.clearTimeout(durableTimer);
+    };
+  }, [chatRouteRequest, durableAuthorityAdopted, input, sessionId]);
+  /*
+   * Remember that work existed, so a return can be told what happened to it.
+   *
+   * The Atlas measured a person who had sent two turns close the browser and
+   * reopen to a screen byte-identical to a first-ever visit — no notice, no
+   * tombstone, "All conversations" reporting the empty conversation this boot
+   * had just minted. Airship could not say what was lost because nothing in the
+   * browser profile remembered that anything had been written.
+   *
+   * Only conversations that hold a real turn are recorded, which is what keeps
+   * a first-ever visit silent: a boot-minted empty shell never enters the
+   * ledger and can never be reported as lost. What is stored is a count, a
+   * clock and the posture — never a title or a word of the conversation, so a
+   * page-memory session's "What can lose it: Closing the page" stays true.
+   */
+  useEffect(() => {
+    const storage = browserReturnLedgerStorage();
+    if (!storage || !sessionId || !profileId || recordedTranscriptSize === 0) return;
+    const lastActiveAt = new Date().toISOString();
+    void loadReturnLedger().then(({ recordReturnLedgerEntry }) => {
+      recordReturnLedgerEntry(storage, {
+        sessionId,
+        profileId,
+        messageCount: recordedTranscriptSize,
+        lastActiveAt,
+        posture: durableAuthorityAdopted ? "durable" : "page-memory",
+        pageSession: pageSessionToken.current,
+      });
+    });
+  }, [durableAuthorityAdopted, profileId, recordedTranscriptSize, sessionId]);
+  /*
+   * Reconcile that memory with the journal that actually loaded, once.
+   *
+   * It waits for the same verdict the route resolver waits for: asking a
+   * page-memory journal what a Vault holds is how the product came to announce
+   * losses it was about to restore. The fence is the journal itself rather than
+   * a boolean, so if a Vault is adopted after a verdict has been reached — the
+   * liveness ceiling firing early on a slow machine is the way that happens —
+   * the new journal re-answers and a wrong report is withdrawn rather than left
+   * standing.
+   */
+  useEffect(() => {
+    const storage = browserReturnLedgerStorage();
+    if (!storage || !sessionLibrary || !resumeAuthoritySettled || returnLedgerReconciled.current === sessionLibrary) return;
+    returnLedgerReconciled.current = sessionLibrary;
+    const controller = new AbortController();
+    // Tombstones are re-tested too: a journal that produces the conversation is
+    // the only thing that can withdraw a verdict already written down.
+    void loadReturnLedger().then(async ({ readReturnLedger, reconcileReturnLedger, summarizeUnrecoveredWork }) => {
+      const wanted = new Set(readReturnLedger(storage).map((entry) => entry.sessionId));
+      const present = await findPresentSessions(sessionLibrary, wanted, controller.signal);
+        if (controller.signal.aborted) return;
+        const lost = reconcileReturnLedger(storage, { present, pageSession: pageSessionToken.current });
+        reportedLostAddresses.current = new Set(lost.map((entry) => entry.sessionId));
+        // Whichever of the two resolutions finished first, one loss gets one
+        // statement: the report carries the count, the clock and the remedy, so
+        // the address-scoped notice withdraws rather than repeating it.
+        if (lossNoticeAddress.current && reportedLostAddresses.current.has(lossNoticeAddress.current)) {
+          lossNoticeAddress.current = undefined;
+          setComposerNotice(undefined);
+        }
+        setUnrecoveredWork(summarizeUnrecoveredWork(lost));
+    })
+      .catch(() => {
+        // A journal that could not be listed has proved nothing about what it
+        // holds. Re-arm rather than report an absence nobody established.
+        returnLedgerReconciled.current = undefined;
+      });
+    return () => controller.abort();
+  }, [resumeAuthoritySettled, sessionLibrary]);
   useEffect(() => {
     if (
       !sessionId
@@ -2297,6 +3095,14 @@ export function App() {
   }, [view]);
   useEffect(() => {
     if (view !== "chat" || !transcriptPinned.current) return;
+    /*
+     * A conversation with no turns and a loss to report has one thing worth
+     * reading, and it is at the top. Measured at 390x844: the pin-to-latest
+     * scroll put "Your last visit was not kept" behind the sticky session bar
+     * while the starter cards it scrolled to were the least urgent thing on the
+     * surface. The pin resumes the moment a turn exists to be pinned to.
+     */
+    if (unrecoveredWork && recordedTranscriptSize === 0) return;
     const frame = requestAnimationFrame(() => {
       const element = transcriptElement.current;
       if (element) {
@@ -2305,7 +3111,22 @@ export function App() {
       }
     });
     return () => cancelAnimationFrame(frame);
-  }, [messages, transcriptLeadingHeight, view, windowedTranscript.totalHeight]);
+  }, [messages, recordedTranscriptSize, transcriptLeadingHeight, unrecoveredWork, view, windowedTranscript.totalHeight]);
+  /*
+   * The report arrives after first paint — it waits for the journal — so the
+   * pin above has already run and left the transcript scrolled to the starter
+   * cards. Measured at 390x844: "Your last visit was not kept" sat behind the
+   * sticky session bar while the least urgent thing on the surface was in view.
+   * Returning to the top is the only correction that survives the report
+   * appearing late.
+   */
+  useEffect(() => {
+    if (!unrecoveredWork || recordedTranscriptSize > 0) return;
+    const frame = requestAnimationFrame(() => {
+      if (transcriptElement.current) transcriptElement.current.scrollTop = 0;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [recordedTranscriptSize, unrecoveredWork]);
   const proofSelectionAuthorized = !proofSelection
     || proofSelection.sessionId === sessionId
     || (
@@ -2377,7 +3198,12 @@ export function App() {
             : cloudVaultRuntimeAdopted
             ? "Cloud Vault active"
           : preferences.vaultBackend === "local-device"
-            ? localDeviceBusy ? "Opening Local Device Vault" : "Local Device setup"
+            // Not "Local Device setup". The Atlas measured this state being
+            // announced only as a transient status string — "Local Device Vault
+            // needs a saved recovery key before first use" — which the first
+            // turn overwrote and never restored, so the label has to state the
+            // consequence rather than name the unfinished ceremony.
+            ? localDeviceBusy ? "Opening Local Device Vault" : "Not saved · Vault not set up"
             // "Ephemeral" here answered "is a vault backend adopted in this
             // tab", while the session chip's "Ephemeral · this page only"
             // answers "where does *this conversation's* journal live". Two
@@ -2396,7 +3222,17 @@ export function App() {
             ? "asserted"
             : vaultSnapshot.phase === "degraded" || Boolean(localDeviceError)
               ? "failed"
-              : "none",
+              // A durable destination is selected and nothing has been adopted,
+              // so every keystroke in this tab is in page memory. `none` — "no
+              // evidence was requested" — was the rung that let the whole state
+              // be carried by a transient status string; it is a state the
+              // reader has to act on, which is what `attention` means here.
+              // `ephemeral` stays `none`: that one is a decision the Vault route
+              // offers, its consequence is stated on the conversation's own
+              // durability claim, and a standing alarm about a choice Airship
+              // invited is the kind of noise that teaches people to ignore the
+              // real ones.
+              : preferences.vaultBackend === "ephemeral" ? "none" : "attention",
       detail: localDeviceRuntimeAdopted
         ? "Workspace, journal, profiles, Git objects, and context state are encrypted and persistent in this browser profile. No cloud synchronization is active."
         : localS3VaultRuntimeAdopted
@@ -2407,7 +3243,13 @@ export function App() {
           ? "This page uses the tested client-encrypted cloud workspace, journal, and profile adapters; cross-device convergence is not certified."
           : localDeviceError ?? (vaultSnapshot.phase === "ready"
             ? "The storage contract passed, but this active runtime is still page-memory until adoption completes."
-            : vaultSnapshot.message),
+            // The sentence a person can act on, in the place the alarm is
+            // raised. It shipped as `vaultSnapshot.message` — the coordinator's
+            // "No cloud vault is configured." — which describes a subsystem
+            // rather than the consequence to the reader.
+            : preferences.vaultBackend === "local-device"
+              ? "No device key is enrolled yet, so this tab's conversations, workspace files and memory live in page memory and are released when it closes. Open Vault to create the encrypted device Vault; nothing is enrolled until you save the one-time recovery key."
+              : vaultSnapshot.message),
       view: "vault",
     },
     { id: "e2ee", scope: "conversation", label: inferenceStatusLabel, state: activeChutesConnection ? (connection.invokeAuthorization === "verified" ? "verified" : "asserted") : activeExternalConnection ? "asserted" : "none", detail: inferenceStatusDetail, view: "access" },
@@ -2647,8 +3489,24 @@ export function App() {
       .then(async (key) => {
         if (cancelled) return;
         if (!key) {
+          /*
+           * Deliberately silent here. This is a standing state, not an event,
+           * and it used to be announced by writing it into `runtimeStatus` —
+           * the one mixed-purpose line the shell overwrites with the next thing
+           * that happens anywhere. The Atlas measured every consequence of that
+           * category error at once: the sentence was inert text with no action
+           * (J002), it collapsed to 0×0 on a phone (J003), the first turn's
+           * "Persisting turn intent" evicted it 0.6s in and "Local kernel ready"
+           * replaced it for the next three hours (J114), and on the way past it
+           * overwrote the completion signal for a profile switch (J020).
+           *
+           * The vault trust axis below carries it instead: derived from state,
+           * so nothing can evict it; rendered by the topbar posture chip, which
+           * is a control and is the one piece of chrome measured legible at
+           * 390px; and stated again by the durability claim on the conversation
+           * itself, where the person is typing.
+           */
           setVaultSetupOpen(true);
-          setRuntimeStatus("Local Device Vault needs a saved recovery key before first use");
           return;
         }
         await activateLocalDeviceWorkspace(key);
@@ -2660,7 +3518,19 @@ export function App() {
         setRuntimeStatus(`Local Device Vault blocked: ${message}`);
       })
       .finally(() => {
+        // Only the live attempt may answer. Boot re-runs this effect as the
+        // catalog, profile and Git client arrive, and settling from a cancelled
+        // attempt declared "no Vault is coming" while the real adoption was
+        // still two seconds out — which reproduced the whole defect: the route
+        // resolver condemned the address, moved the unsent draft onto the
+        // throwaway conversation the boot had minted, and the Vault then
+        // restored the real one over an empty composer.
         if (localDeviceAutoOpenOwner.current !== owner) return;
+        // The verdict settles on *conclusion*, not on success: an enrolment
+        // that needs its recovery ceremony and a keyring that refused are both
+        // definitive answers to "will a durable journal arrive", and the route
+        // resolver is waiting for either one.
+        setDurableAuthoritySettled(true);
         setLocalDeviceBusy(false);
         vaultAdoptionBusy.current = false;
       });
@@ -2701,7 +3571,9 @@ export function App() {
         setRuntimeStatus(message);
         setVaultAdoptionNotice(message);
       })
-      .finally(() => { vaultAdoptionBusy.current = false; });
+      // Adopted or refused, the resume verdict has its answer; see
+      // `durableAuthoritySettled`.
+      .finally(() => { setDurableAuthoritySettled(true); vaultAdoptionBusy.current = false; });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [preferences.vaultBackend, vaultSnapshot, catalog, activeProfile, gitClient, cockpitSettleRetry]);
 
@@ -3039,7 +3911,14 @@ export function App() {
     if ((view !== "memory" && view !== "context") || MemoryScreen) return;
     let current = true;
     setMemoryViewError(undefined);
-    void import("./memory-view").then((module) => {
+    /*
+     * Through the recovery loader, because the failure card's retry verb
+     * provably could not work: a module URL that has failed once is recorded as
+     * failed in this document's module map, so three presses of that button —
+     * and a round trip through Chat — issued zero network requests, and the
+     * route stayed dead for the life of the tab.
+     */
+    void loadRetryableChunk("memory-view", () => import("./memory-view")).then((module) => {
       if (current) setMemoryScreen(() => module.MemoryView);
     }).catch(() => {
       if (current) setMemoryViewError("The private Memory interface could not be loaded. No index or workspace state changed.");
@@ -3725,21 +4604,66 @@ export function App() {
   useEffect(() => { document.documentElement.dataset.rail = railState; }, [railState]);
 
   useEffect(() => {
+    if (Overlays) return;
+    const warm = () => { void import("./platform-overlays").then(setOverlays).catch(() => {}); };
+    if (typeof requestIdleCallback === "function") requestIdleCallback(warm, { timeout: 2_000 });
+    else setTimeout(warm, 0);
+  }, [Overlays]);
+
+  /*
+   * J151: tell the service-worker listener what a reload would cost.
+   *
+   * The takeover reloads the page so COOP/COEP are established before anyone
+   * starts working, and its fence was "has a trusted input gesture been seen".
+   * A conversation exists before anyone types. Measured on a fresh context
+   * against the production build — which is what a first visit is — the reload
+   * landed after the conversation had been minted, and page memory does not
+   * cross it: the work was rendered, reported complete, and gone.
+   *
+   * `messages` starts as the welcome card, so the count subtracts it: an
+   * untouched zero state has nothing to lose and should still take the reload
+   * immediately, which is the whole point of doing it early.
+   */
+  useEffect(() => {
+    publishReloadRisk({
+      durableAuthority: durableAuthorityAdopted,
+      recordedTurns: messages.filter((message) => message.id !== welcomeMessage.id).length,
+      unsentDraft: input.trim().length > 0,
+    });
+  }, [durableAuthorityAdopted, messages, input]);
+
+  useEffect(() => {
     const onResize = () => setRailViewport(readRailViewport());
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
+  /*
+   * Registered once, and read through a ref, because re-registering drops keys.
+   *
+   * This effect depended on `[railState, railViewport, railPreference]`, so
+   * every state change tore the listener down and put a new one up — and
+   * `railPreference` is loaded from storage after mount, and `railViewport`
+   * changes on every resize. A chord pressed inside one of those windows hit no
+   * listener at all and was silently discarded. Measured as an intermittent
+   * failure of the rail's own contract test across full-suite runs: the rail
+   * stayed 232px wide because Cmd+\ had landed in the gap. A person resizing
+   * the window, or pressing it early in boot, gets the same nothing.
+   *
+   * The handler is a ref updated on every render, so the listener registered at
+   * mount always calls the current one and never has to be replaced.
+   */
+  const railToggle = useRef(toggleRailState);
+  railToggle.current = toggleRailState;
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (!isRailToggleChord(event)) return;
       event.preventDefault();
-      toggleRailState();
+      railToggle.current();
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [railState, railViewport, railPreference]);
+  }, []);
 
   // The composer is 35 tab stops from <body> and is the most-used control in
   // the product. Claim it once the chat stage is actually mounted — the boot
@@ -4441,6 +5365,7 @@ export function App() {
         setMessages((current) => current.map((message) => message.id === assistantId
           ? { ...message, content: denied, status: undefined, error: true, history: { turnStatus: "completed", providerContext: "excluded" } }
           : message));
+        narrateTurn(localCommandAnnouncement(plan.command.name, "denied", "No tool effect ran, and nothing was sent to the model."));
         return;
       }
       await append([{ type: "local.command.approved", turnId, operationId, payload: { toolName: plan.toolName, approval: provenance ?? null } }]);
@@ -4461,11 +5386,27 @@ export function App() {
         // under any approval mode, so the line that used to name a "separate
         // safety review" under Auto Approve would now be describing a request
         // that does not happen.
+        // The lane was mute in both directions: `/help` wrote a full command
+        // listing and announced nothing, so a reader could not tell a completed
+        // command from a rejected one. The result's own words are spoken, and
+        // an `isError` result says so rather than reporting a completion.
+        // Before the ambient line, so the two do not land in one frame.
+        narrateTurn(localCommandAnnouncement(
+          plan.command.name,
+          result.isError ? "failed" : "completed",
+          result.content,
+        ));
         setRuntimeStatus("Local command complete; no model request made");
       }
     } catch (error) {
       const cancelled = controller.signal.aborted;
-      const message = cancelled ? "Local command stopped before completion." : error instanceof Error ? error.message : String(error);
+      // `readableLocalFailure`, not the raw throw: a runtime pack that failed to
+      // download reached the transcript as a hashed build-asset URL and nothing
+      // else. Every sentence the product wrote itself passes through unchanged.
+      const raw = error instanceof Error ? error.message : String(error);
+      const message = cancelled
+        ? "Local command stopped before completion."
+        : (await loadTurnRecovery().then(({ readableLocalFailure }) => readableLocalFailure(raw)).catch(() => raw));
       try {
         await append([{ type: "local.command.failed", turnId, operationId, payload: { content: message, toolName: plan.toolName, cancelled } }]);
       } catch {
@@ -4475,6 +5416,7 @@ export function App() {
         setMessages((current) => current.map((item) => item.id === assistantId
           ? { ...item, content: message, status: undefined, error: true, history: { turnStatus: cancelled ? "cancelled" : "failed", providerContext: "excluded" } }
           : item));
+        narrateTurn(localCommandAnnouncement(plan.command.name, cancelled ? "stopped" : "failed", message));
         setRuntimeStatus(cancelled ? "Local command stopped" : "Local command failed safely");
       }
     } finally {
@@ -4513,6 +5455,11 @@ export function App() {
       { id: randomUuid(), role: "user", content: source, history: { turnStatus: "completed", providerContext: "excluded" } },
       { id: randomUuid(), role: "assistant", content: boundedTranscriptContent(response), error, status: "Local command · excluded from model context", history: { turnStatus: error ? "failed" : "completed", providerContext: "excluded" } },
     ]);
+    // Every built-in command lands here, and every one of them was silent: a
+    // rejected `/nonsense-command` and a full `/help` listing produced the same
+    // nothing, so the one thing a reader could not do in this lane was tell
+    // success from failure.
+    narrateTurn(localCommandAnnouncement(spokenCommandName(source), error ? "failed" : "completed", response));
   }
 
   function acceptSlashCompletion(completion: SlashCompletion): void {
@@ -4607,7 +5554,14 @@ export function App() {
       }
       requireProfileOwnedSession(source, sourceProfile.profileId, "fork");
       const result = await sessionLibrary.fork(source.id, {
-        title: `${source.title} · ${action}`.slice(0, 240),
+        // Named for the turn it changed, not by appending to the ancestor's
+        // name: two branches from two different turns used to arrive with the
+        // identical title, and the suffix chain grew a word per operation.
+        title: branchTitleFor(
+          action === "fork" ? (message.role === "assistant" ? "fork-after-answer" : "fork-before-prompt") : action,
+          message.originatingPrompt ?? (message.role === "user" ? message.content : undefined),
+          source.title,
+        ),
         expectedSourceHead: { sequence: source.headSequence, digest: source.headDigest },
         sourcePoint: forkPoint,
       });
@@ -4661,6 +5615,26 @@ export function App() {
       sessionNavigationChanging.current = false;
       if (pendingForkRetry.current) setPendingForkRetryRevision((value) => value + 1);
     }
+  }
+
+  /**
+   * The failed turn's one working way forward.
+   *
+   * Retry forks and regenerates, which is the right verb when a durable pre-turn
+   * boundary exists; when the failure happened before one landed, the fork has
+   * nothing to cut at and the controls greyed out under a card still reading
+   * "Retry is available." This re-issues the recorded prompt into the same
+   * conversation, which is exactly what the person was left to do by hand —
+   * hover the user bubble, Copy, click the composer, paste, Enter.
+   */
+  async function resendFailedTurn(message: UiMessage): Promise<void> {
+    const prompt = message.originatingPrompt?.trim();
+    if (!prompt || busy) return;
+    if (message.turnStartPoint && sessionLibrary && activeSessionRecord) {
+      await forkFromMessage(message, "retry");
+      return;
+    }
+    await sendMessage(prompt, message.originatingAttachments ?? []);
   }
 
   function publishMessageQueue(
@@ -4801,10 +5775,11 @@ export function App() {
         try {
           await runSlashPlan(slashPlan, content, localPresentationAuthority);
         } catch (error) {
+          const raw = error instanceof Error ? error.message : String(error);
           appendLocalExchangeForAuthority(
             localPresentationAuthority,
             content,
-            error instanceof Error ? error.message : String(error),
+            await loadTurnRecovery().then(({ readableLocalFailure }) => readableLocalFailure(raw)).catch(() => raw),
             true,
           );
         } finally {
@@ -4883,6 +5858,12 @@ export function App() {
     activeTurn.current = controller;
     activePrompt.current = content;
     setBusy(true);
+    // The channel is claimed here, at the moment the turn is admitted and the
+    // composer swaps Send for Stop turn. Claiming it later left the shell's
+    // ambient line ("Preparing turn", then "Persisting turn intent") landing in
+    // the same animation frame as the sentence about the model working — the
+    // same two-regions-one-frame collision, moved to the start of the turn.
+    narrateTurn(workingAnnouncement(true));
     setRuntimeStatus("Preparing turn");
     const releasePreflight = () => {
       if (activeTurn.current !== controller) return;
@@ -4899,16 +5880,22 @@ export function App() {
       controller.signal.throwIfAborted();
     } catch (error) {
       releasePreflight();
-      setComposerNotice(controller.signal.aborted
+      const refusal = controller.signal.aborted
         ? "Turn stopped before inference; your prompt remains in the composer."
-        : error instanceof Error ? error.message : "The selected image could not be prepared safely.");
+        : error instanceof Error ? error.message : "The selected image could not be prepared safely.";
+      setComposerNotice(refusal);
+      // The channel already said Airship was answering. A turn admitted and
+      // then refused has to retract that, not leave it as the last word.
+      narrateTurn(controller.signal.aborted ? stoppedAnnouncement() : failureAnnouncement(refusal));
       requestAnimationFrame(() => textarea.current?.focus());
       return false;
     }
     if (!turnAuthorityStillCurrent()) {
       controller.abort(new DOMException("Profile or conversation authority changed.", "AbortError"));
       releasePreflight();
-      setComposerNotice("The Profile or conversation changed while the turn was being prepared. Your prompt remains in the active draft.");
+      const refusal = "The Profile or conversation changed while the turn was being prepared. Your prompt remains in the active draft.";
+      setComposerNotice(refusal);
+      narrateTurn(failureAnnouncement(refusal));
       requestAnimationFrame(() => textarea.current?.focus());
       return false;
     }
@@ -4921,12 +5908,21 @@ export function App() {
      * event at creation — and titling simply stopped happening, with nothing to
      * show for it. The default title is the fact that matters; how many
      * bookkeeping events preceded the message is not.
+     *
+     * The gate reads the whole set of names the app mints, not just the one the
+     * new-conversation button uses. It compared against `"<Profile>
+     * conversation"` alone, so a conversation opened by the Vault-attach path —
+     * `"<Profile> · encrypted vault"` — never qualified and never took a name
+     * from its content: the Atlas found five separate rows all titled "General ·
+     * encrypted vault", one of which was the thread whose first message was
+     * "Draft the Q3 pricing memo intro paragraph." (J091). A conversation is
+     * named by what is in it, whatever code path minted it.
      */
     if (
       !retryPrompt
       && activeSessionRecord?.id === turnSessionId
       && activeProfile
-      && activeSessionRecord.title === `${activeProfile.name} conversation`
+      && isAppMintedConversationTitle(activeSessionRecord.title, activeProfile.name)
     ) {
       const applyTitle = async (title: string) => {
         const renamed = await turnRuntime.journal.renameSession(turnSessionId, title, controller.signal);
@@ -5071,6 +6067,7 @@ export function App() {
     };
     const userMessageId = userMessage.id;
     const assistantId = randomUuid();
+    let turnRequestBoundary: Readonly<{ sequence: number; digest: string }> | undefined;
     setMessages((current) => [
       ...current,
       userMessage,
@@ -5098,6 +6095,12 @@ export function App() {
           if (signal.type === "durable") {
             const reachedAssistantBoundary = signal.events.some((event) => event.type === "assistant.completed");
             if (reachedAssistantBoundary) clearPendingDelta(assistantId);
+            // Held from the live signal because a failed turn never returns a
+            // result to read it from, and this is the boundary Retry forks at.
+            if (!turnRequestBoundary) {
+              const requested = signal.events.find((event) => event.type === "turn.requested" && event.sessionId === turnSessionId);
+              if (requested) turnRequestBoundary = Object.freeze({ sequence: requested.sequence - 1, digest: requested.previousDigest });
+            }
             setSessionRevision((value) => value + signal.events.length);
             if (activeSessionIdentity.current === turnSessionId) {
               const scopedEvents = signal.events.filter((event) => event.sessionId === turnSessionId);
@@ -5137,6 +6140,11 @@ export function App() {
       if (activeSessionIdentity.current === turnSessionId) {
         const requestEvent = result.events.find((event) => event.type === "turn.requested" && event.turnId === result.turnId);
         const terminalEvent = result.events.filter((event) => event.turnId === result.turnId && (event.type === "turn.completed" || event.type === "turn.failed" || event.type === "turn.cancelled")).at(-1);
+        const settledParts = messagePartsFromDurableEvents(result.events, { turnId: result.turnId });
+        // Spoken from what settled, not from the stream buffer: the demo and
+        // every non-streaming provider fill no buffer, which is why the arrival
+        // sentence carried no words on the default path.
+        narrateTurn(arrivalAnnouncement(result.content || messagePlainText(settledParts)));
         setMessages((current) =>
           current.map((message) =>
             message.id === userMessageId && requestEvent
@@ -5145,7 +6153,7 @@ export function App() {
               ? {
                   ...message,
                   content: result.content,
-                  parts: messagePartsFromDurableEvents(result.events, { turnId: result.turnId }),
+                  parts: settledParts,
                   receipt: result.receipt,
                   status: undefined,
                   liveToolOutput: undefined,
@@ -5191,22 +6199,46 @@ export function App() {
         : await import("./request-state")
           .then(({ mapUnknownRequestFailure }) => mapUnknownRequestFailure(error, online).message)
           .catch(() => "Request failed. Local state was kept; no remote success is assumed.");
+      const recovery = await loadTurnRecovery().catch(() => undefined);
       if (activeSessionIdentity.current === turnSessionId) {
         setMessages((current) =>
           current.map((message) =>
             message.id === assistantId
               ? {
                   ...message,
-                  content: "",
-                  parts: recoverPartialTurn(message.parts ?? [], "", pending, cancelled),
+                  // Without the recovery module the card has no error part to
+                  // carry the sentence, so the body carries it instead.
+                  content: recovery ? "" : failureMessage,
+                  // The pre-turn boundary, stamped on the failure path too.
+                  // Only the success path stamped it, so a failed turn's Retry
+                  // and Fork were disabled beneath a card that read "Retry is
+                  // available." — the product treating its own failure as less
+                  // recoverable than a completed turn.
+                  ...(turnRequestBoundary ? { sourcePoint: turnRequestBoundary, turnStartPoint: turnRequestBoundary } : {}),
+                  parts: recovery
+                    ? recovery.recoverPartialTurn(message.parts ?? [], "", pending, cancelled, undefined, Boolean(turnRequestBoundary || message.originatingPrompt))
+                    : message.parts,
                   status: undefined,
                   liveToolOutput: undefined,
                   error: true,
                 }
+              : message.id === userMessageId && turnRequestBoundary
+              ? { ...message, sourcePoint: turnRequestBoundary }
               : message,
           ),
         );
+        // Spoken from the most specific sentence that exists. The topbar's
+        // mapped vocabulary ("Request failed. Local state was kept…") is a
+        // classification; the thrown diagnostic is what the card shows, and a
+        // reader who cannot see the card should hear the same cause.
+        narrateTurn(cancelled
+          ? stoppedAnnouncement()
+          : failureAnnouncement(turnFailureCause(error) ?? failureMessage));
         setRuntimeStatus(failureMessage);
+        // A failure is not less worth recovering than a deliberate Stop, which
+        // has always restored the prompt. Same rule as Stop: never clobber a
+        // newer draft the person typed while the turn was running.
+        setInput((current) => current.trim() ? current : content);
       }
     } finally {
       const releasesComposer = activeTurn.current === controller;
@@ -5486,6 +6518,10 @@ export function App() {
   }, []);
 
   function openCapabilityCommand(command: string): void {
+    // Named before the switch, because after it this conversation is no longer
+    // the one on screen: the Atlas measured an 11-event thread replaced with no
+    // notice, no confirmation and nothing on the new screen that named it.
+    const leaving = activeSessionRecord?.title;
     void createConversation("Capability command").then((created) => {
       if (!created) {
         setRuntimeStatus("Finish the current operation before opening a capability conversation");
@@ -5493,7 +6529,9 @@ export function App() {
       }
       preserveComposerForDraftIdentity.current = created.id;
       setInput(command);
-      setComposerNotice("New profile-scoped conversation · capability command prefilled");
+      setComposerNotice(leaving
+        ? `New conversation, because a capability command pins its own runtime. The command is ready below — send it to run it. “${leaving}” is untouched; reopen it from the conversation switcher beside the title.`
+        : "New conversation, because a capability command pins its own runtime. The command is ready below — send it to run it.");
       if (!window.matchMedia(MOBILE_SHELL_MEDIA_QUERY).matches) {
         requestAnimationFrame(() => textarea.current?.focus({ preventScroll: true }));
       }
@@ -5582,6 +6620,52 @@ export function App() {
       descriptor.arguments,
       { turnId: `human-git-${randomUuid()}`, operationId: `git-${randomUuid()}` },
     );
+  }
+
+  /**
+   * Remembering and forgetting from the route that shows the corpus.
+   *
+   * The only way to write a memory was `/update-memory --json '{…}'` typed into
+   * the composer, and the only way to delete one was to find its id inside a
+   * per-hit provenance popover and type the command again. This is the same
+   * tool with the same approval, asked for by a button: the definition comes
+   * from the live registry rather than being synthesised here, so the dock
+   * derives its consequence panel from the real schema, and the decision is
+   * journaled by `reviewHumanIntent` exactly as the command's would be.
+   *
+   * Only what the tool itself said travels back as `message`. The wording for
+   * a refusal or an unbound session belongs to the route that shows it, and it
+   * is written in the route's own deferred chunk — first-paint bytes are not
+   * where copy for the Memory surface lives.
+   */
+  async function commitMemoryChange(change: MemoryChange): Promise<MemoryCommitOutcome> {
+    const active = runtime.current;
+    const authoritySessionId = activeSessionIdentity.current ?? sessionId;
+    const tool = active?.tools.get("update_memory");
+    if (!active || !authoritySessionId || !tool) return Object.freeze({ status: "unbound" });
+    const argumentsValue: JsonValue = change.action === "remember"
+      ? { action: "remember", content: change.content, source: change.source }
+      : { action: "forget", id: change.id };
+    const turnId = `human-memory-${randomUuid()}`;
+    const operationId = `memory-${randomUuid()}`;
+    const decision = await reviewHumanIntent(tool.definition, argumentsValue, { turnId, operationId });
+    if (decision === "deny") return Object.freeze({ status: "denied" });
+    const controller = new AbortController();
+    try {
+      const response = await tool.execute(argumentsValue, {
+        sessionId: authoritySessionId,
+        turnId,
+        operationId,
+        signal: controller.signal,
+      });
+      if (response.isError) return Object.freeze({ status: "failed", message: response.content });
+      await refreshWorkspacePresentation();
+      return Object.freeze({ status: "committed", message: response.content });
+    } catch (error) {
+      return Object.freeze({ status: "failed", ...(error instanceof Error ? { message: error.message } : {}) });
+    } finally {
+      controller.abort();
+    }
   }
 
   async function reviewSourceImport(request: SourcesImportRequest): Promise<"allow" | "deny"> {
@@ -5714,6 +6798,8 @@ export function App() {
     const priorCheckpoint = catalogCheckpoint.current;
     /** The one session, if any, whose transcript could not be replayed. */
     let quarantined: QuarantinedSession | undefined;
+    /** What the page-memory journal handed over, for the landing screen to state. */
+    let adoptionCarried: AdoptionCarriedWork | undefined;
     if (!prior || !priorCheckpoint || !activeProfile || !gitClient) {
       throw new Error("The active browser runtime is not ready for vault adoption.");
     }
@@ -5721,7 +6807,7 @@ export function App() {
     setRuntimeStatus(authority.kind === "local-device"
       ? "Opening encrypted device state"
       : "Migrating workspace and sessions into encrypted cloud objects");
-    const [{ migrateJournalState, migrateProfileCatalogState, migrateWorkspaceState, reconcileAdoptedProfileCatalog }, { quiesceBrowserTerminalWorkspace }] = await Promise.all([
+    const [{ adoptionCarriedNote, migrateJournalState, migrateProfileCatalogState, migrateWorkspaceState, readAdoptionCarriedWork, reconcileAdoptedProfileCatalog }, { quiesceBrowserTerminalWorkspace }] = await Promise.all([
       loadDeferredCapabilities(),
       import("../terminal/manager"),
     ]);
@@ -5802,7 +6888,13 @@ export function App() {
         // user files and leaves the target's repositories alone.
         await migrateWorkspaceState(prior.storage, ready.workspace, targetIsBlank ? "seed" : "merge");
       }
-      if (!pristineBootstrap) await migrateJournalState(prior.journal, ready.journal);
+      if (!pristineBootstrap) {
+        // Read before the copy runs, so the screen the person lands on can say
+        // what came with them and what did not. `adoptionCarriedNote` carries
+        // the measurement this answers (J110).
+        adoptionCarried = await readAdoptionCarriedWork(prior.journal, activeProfile.profileId);
+        await migrateJournalState(prior.journal, ready.journal);
+      }
     }
 
     const adoptedAuthority = await openProfileWorkspaceAuthority({
@@ -5849,10 +6941,19 @@ export function App() {
       ? catalogMigration.checkpoint
       : await ready.profiles.commit(catalogMigration.checkpoint, nextCatalog);
     const library = new SessionLibrary(journal);
-    const candidateSession = pristineBootstrap
-      ? await latestCompatibleProfileSession(nextRuntime, profile, nextCatalog)
-      : undefined;
-    let resumableSession = candidateSession;
+    /*
+     * The whole shelf, not only its top row.
+     *
+     * A person who closed the tab on an unanswered approval came back to a
+     * brand-new empty conversation while a fully resumable 14-event sibling sat
+     * in the same list: adoption asked for exactly one candidate, and when that
+     * one refused to replay it minted a new conversation instead of trying the
+     * next. Reopening is not resuming.
+     */
+    const candidateSessions = pristineBootstrap
+      ? await compatibleProfileSessions(nextRuntime, profile, nextCatalog)
+      : Object.freeze([]);
+    let resumableSession: SessionRecord | undefined;
     let resumedPresentation: Readonly<{
       messages: readonly UiMessage[];
       lastReceipt?: ConversationReceipt;
@@ -5875,7 +6976,7 @@ export function App() {
      * swallowed, and the affected session is carried in `quarantinedSession` so
      * its row cannot go on offering a resume it cannot perform.
      */
-    if (candidateSession) {
+    for (const candidateSession of candidateSessions) {
       let historyVerified = false;
       try {
         const detail = await library.inspect(
@@ -5920,15 +7021,21 @@ export function App() {
             }),
           } : {}),
         });
+        resumableSession = candidateSession;
+        break;
       } catch (error) {
         const { describeSessionPresentationFault } = await loadDeferredCapabilities();
-        quarantined = Object.freeze({
+        // The conversation the person was last in is the one they will look
+        // for, so its failure is the one reported even if a later candidate
+        // succeeds. Anything further down the shelf is a record the session
+        // library already marks; naming a second one here would replace the
+        // answer to "where did my work go" with a list.
+        quarantined ??= Object.freeze({
           sessionId: candidateSession.id,
           title: candidateSession.title,
           reason: describeSessionPresentationFault(error),
           historyVerified,
         });
-        resumableSession = undefined;
         resumedPresentation = undefined;
       }
     }
@@ -5936,7 +7043,7 @@ export function App() {
       nextRuntime,
       profile,
       nextCatalog,
-      `${profile.name} · encrypted vault`,
+      appMintedConversationTitle(profile.name, "vault"),
     );
 
     workspaceRefreshCoordinator.invalidate();
@@ -5961,9 +7068,10 @@ export function App() {
           id: randomUuid(),
           content: resumableSession
             ? `Resumed ${resumableSession.title} from the encrypted Vault. ${welcomeMessage.content}`
-            : authority.kind === "local-device"
+            : `${authority.kind === "local-device"
               ? "The encrypted Local Device Vault is active. This new pinned session writes workspace files, explicit memories, task state, and session events as encrypted browser-managed objects that remain available offline."
-              : "The verified Vault contract is now active. This new pinned session writes workspace files, explicit memories, task state, and session events as client-encrypted cloud objects; the previous page-memory sessions were migrated and remain separately inspectable.",
+              : "The verified Vault contract is now active. This new pinned session writes workspace files, explicit memories, task state, and session events as client-encrypted cloud objects; the previous page-memory sessions were migrated and remain separately inspectable."
+            }${adoptionCarriedNote(adoptionCarried)}`,
         }]);
     setEventCount(activated.headSequence);
     setQuarantinedSession(quarantined);
@@ -5985,12 +7093,25 @@ export function App() {
     setVaultContextPublicationMessage(vaultTools.contextMode === "encrypted-ranged"
       ? "A matching encrypted context generation was adopted without uploading new shards."
       : "No matching encrypted generation was found. Turns continue with the on-device index until you publish one.");
-    // The quarantine is named in full — title, short id and reason — because the
-    // version of this line that shipped said only "Local vault adoption failed"
-    // and a UUID, which tells a user nothing they can act on and everything
-    // they need to panic about.
+    /*
+     * The quarantine is named, and its explanation is left where it renders.
+     *
+     * This line used to carry the whole forensic account — title, short id,
+     * `quarantined.reason`, the history verdict and a raw
+     * `LOCAL_COMMAND_INCOMPLETE: Client-only local command local-command-70aa…`
+     * — 470 characters in a single-line chip that draws about sixty of them
+     * before ellipsis, with no expansion affordance and roughly two words of
+     * room on a phone. The Atlas is blunt about it: handing a person a raw
+     * internal identifier in a truncated chip is not disclosure.
+     *
+     * Every one of those strings already renders in full on `#sessions`, in the
+     * quarantine panel that `setQuarantinedSession` below feeds — verbatim
+     * reason, the "WHY THE RUNTIME DECIDED THAT" table and the history verdict.
+     * So this states the fact and names that destination, which is the whole of
+     * what a status line can honestly do.
+     */
     setRuntimeStatus(quarantined
-      ? `${authority.label} active · “${quarantined.title}” (session ${quarantined.sessionId.slice(0, 8)}) could not be replayed: ${quarantined.reason} ${quarantined.historyVerified ? "Its history is intact — open Sessions to inspect it" : "Its history was not verified — open Sessions to inspect it"} · ${contextLabel}${workspaceRefreshDeferred ? " · file view refresh due" : ""}`
+      ? `${authority.label} active · “${quarantined.title}” could not be replayed — open All conversations for the reason · ${contextLabel}${workspaceRefreshDeferred ? " · file view refresh due" : ""}`
       : resumableSession
         ? `${authority.label} active · audited session resumed · ${contextLabel}${workspaceRefreshDeferred ? " · file view refresh due" : ""}`
         : `${authority.label} active · ${contextLabel}${workspaceRefreshDeferred ? " · file view refresh due" : ""}`);
@@ -6183,7 +7304,7 @@ export function App() {
     const nextCatalogCheckpoint = nextCatalog === copiedCatalog.catalog
       ? copiedCatalog
       : await profiles.commit(copiedCatalog, nextCatalog);
-    const nextSession = await createProfileSession(nextRuntime, profile, nextCatalog, `${profile.name} · ephemeral`);
+    const nextSession = await createProfileSession(nextRuntime, profile, nextCatalog, appMintedConversationTitle(profile.name, "ephemeral"));
 
     workspaceRefreshCoordinator.invalidate();
     profileAuthorities.current.clear();
@@ -6242,7 +7363,29 @@ export function App() {
   async function wipeVaultStorage(): Promise<void> {
     const backend = preferences.vaultBackend;
     setVaultWipeBusy(true);
+    /*
+     * The continuity records go with the objects they describe.
+     *
+     * Every branch below ends in a reload, and the return ledger learns that a
+     * conversation is gone by finding it absent from the journal — so before
+     * this, the reload at the end of a wipe came back and mourned every
+     * conversation the person had just chosen to destroy. Retired here, ahead
+     * of the reload and ahead of the wipe itself, because a wipe that half
+     * fails must not leave records claiming work is missing when it is not:
+     * an empty ledger reports nothing, which is the honest answer either way
+     * once a person has asked for a wipe.
+     */
+    const retireContinuityRecords = async (): Promise<void> => {
+      try {
+        const { clearReturnLedger } = await loadReturnLedger();
+        const storage = browserReturnLedgerStorage();
+        if (storage) clearReturnLedger(storage);
+      } catch {
+        // Same rule as deletion: a record that cannot be retired stays.
+      }
+    };
     try {
+      await retireContinuityRecords();
       if (backend === "ephemeral") {
         location.reload();
         return;
@@ -8060,7 +9203,18 @@ export function App() {
     });
   }
 
-  async function loadSessionAudit(targetSessionId: string): Promise<SessionAuditReport> {
+  /*
+   * Proof reads the journal, not only the verdict about it.
+   *
+   * It used to receive `SessionAuditReport` alone, so the only thing it could
+   * say about a session was what `counts` classifies — and `counts` has no
+   * field for a human-approved effect, no record of what a local command ran,
+   * and no way to reach the selected sources the turn seam already journals.
+   * Four measured readings came out of that one narrowing. The events are
+   * already in hand here (the audit is computed over them); handing them on
+   * costs a reference.
+   */
+  async function loadSessionAudit(targetSessionId: string): Promise<ProofJournalRead> {
     const expectedRuntime = runtime.current;
     const expectedProfileId = profileAuthorityId.current;
     if (!expectedRuntime) throw new Error("The local runtime is not ready.");
@@ -8069,7 +9223,7 @@ export function App() {
       runtime.current !== expectedRuntime
       || profileAuthorityId.current !== expectedProfileId
     ) throw new Error("The Profile or Proof authority changed while the session audit was loading.");
-    return audited.report;
+    return Object.freeze({ report: audited.report, events: audited.events, title: audited.session.title });
   }
 
   async function publishAuditedSession(
@@ -8254,6 +9408,21 @@ export function App() {
     navigate("proof", proofHash(selection, "attestations"));
   }
 
+  /*
+   * The other half of "Inspect evidence →".
+   *
+   * The address already carried the turn; nothing on the chat side could be
+   * found by it, so Proof was a one-way door. The request is state rather than
+   * a scroll call because the conversation may still be resuming when the route
+   * changes — `pendingTranscriptReturn` is consumed by the effect below once
+   * the transcript for that session has rendered, and reports what happened
+   * either way.
+   */
+  function returnToTurn(targetSessionId: string, turnId: string): void {
+    setPendingTranscriptReturn(Object.freeze({ sessionId: targetSessionId, turnId }));
+    navigate("chat", chatHash(targetSessionId));
+  }
+
   function openReceiptProof(receipt: ConversationReceipt): void {
     const selection = proofSelectionForReceipt(receipt);
     setProofSelection(selection);
@@ -8283,6 +9452,26 @@ export function App() {
    */
   const seedOnlyTranscript = messages.length === 0
     || (messages.length === 1 && messages[0]!.seed === true);
+  /*
+   * A branch is not a first visit.
+   *
+   * An Edit & branch opened on the newcomer cards — "Open a terminal", "Browse
+   * the workspace", "Connect a model" — directly beneath its own sentence
+   * saying four ancestor messages had been carried in. The transcript holds
+   * only the seed marker at that moment, so every "is this conversation new"
+   * test based on row count said yes. Inherited context is the fact that tells
+   * them apart, and the marker now carries it.
+   */
+  /*
+   * What the backlog shows without being asked.
+   *
+   * One item is its own summary, so it is rendered. More than one collapses to
+   * the count line plus the next prompt, and every row stays one control away —
+   * the panel is a disclosure about the queue, not the queue itself.
+   */
+  const queueVisibleItems = queueExpanded || messageQueue.length === 1 ? messageQueue : [];
+  const isBranchTranscript = messages.some((message) => message.marker?.carriedContext !== undefined);
+  const firstRunTranscript = messages.length <= 1 && !isBranchTranscript;
   const e2eeTrustAxis = trustAxes.find((axis) => axis.id === "e2ee")!;
   // The vocabulary this claim belongs to owns the mapping: page memory is `none`
   // rather than `failed` (nothing went wrong, no durability evidence was asked
@@ -8331,7 +9520,12 @@ export function App() {
       state: sessionDurabilitySeal,
       label: durabilityLabel(sessionDurability.state),
       detail: sessionDurability.detail,
-      short: sessionStatusShort(durabilityLabel(sessionDurability.state), SEAL_LABELS[sessionDurabilitySeal]),
+      // The vocabulary's own abbreviation, not `sessionStatusShort`'s head-of-
+      // label rule. That rule yields the bare word "Ephemeral", and the Atlas
+      // measured a person meeting it four times and still losing a conversation
+      // to a refresh without understanding why. This chip is the only permanent
+      // durability claim on the surface where the typing happens.
+      short: durabilityShort(sessionDurability.state),
       action: Object.freeze({ label: "Vault", onSelect: () => navigate("vault") }),
     }),
     Object.freeze({
@@ -8386,6 +9580,25 @@ export function App() {
             onClick={() => textarea.current?.focus({ preventScroll: true })}
           >Skip to composer</button>
         ) : null}
+        {/* The third target, and the one the document order argues hardest for.
+            Navigation is the *last* thing in the phone's DOM: measured, the
+            mobile bar was entered at tab stop 22 of 25 and "More" — behind
+            which Vault, Memory, Account, Proof and seven other destinations
+            live — was stop 25, so reaching any of them from a cold phone load
+            cost a sweep of the entire page. The rail is `display: none` below
+            the phone breakpoint, which is what picks the destination here. */}
+        <button
+          class="skip-link"
+          type="button"
+          onClick={() => {
+            const rail = primaryNav.current;
+            const target = (rail && rail.offsetParent !== null
+              ? rail.querySelector<HTMLElement>('button[tabindex="0"]') ?? rail.querySelector<HTMLElement>("button")
+              : undefined)
+              ?? document.querySelector<HTMLElement>('nav[aria-label="Mobile navigation"] button');
+            target?.focus({ preventScroll: true });
+          }}
+        >Skip to navigation</button>
       </div>
       <header class="topbar" inert={platformOverlayOpen} aria-hidden={platformOverlayOpen || undefined}>
         <button class="brand" type="button" onClick={() => navigate("chat")} aria-label="Open session">
@@ -8427,9 +9640,16 @@ export function App() {
             onChange={(nextId) => void requestProfileChange(nextId)}
           />
           <span class="runtime-line" title={runtimeStatus}><span class="pulse-dot" /><span class="runtime-line__text">{runtimeStatus}</span></span>
-          <span class="sr-only" role="status" aria-live="polite">{runtimeStatus}</span>
-          <button class="icon-button" type="button" aria-label="Open command palette" title="Command palette · ⌘K" onClick={() => setPaletteOpen(true)}>
-            <span aria-hidden="true">⌘</span>
+          {/* The mirror lags the line on purpose: it holds the last status the
+              turn narrator did not claim, so ambient kernel telemetry cannot
+              land in the same frame as the sentence about the answer. */}
+          <span class="sr-only" role="status" aria-live="polite">{runtimeAnnouncement}</span>
+          {/* The chord is printed, not merely bound. Measured on a fully loaded
+              chat route: `document.body.innerText.includes("⌘K")` was false and
+              the only carrier was this button's `title` — invisible to touch
+              and to anyone who does not hover a bare ⌘ glyph. */}
+          <button class="icon-button command-palette-button" type="button" aria-label="Open command palette" title={`Command palette · ⌘K · ${SHORTCUT_SHEET_CHORD} for all shortcuts`} onClick={() => setPaletteOpen(true)}>
+            <kbd aria-hidden="true">⌘K</kbd>
           </button>
           <button class="icon-button" type="button" aria-label="Open Preferences" onClick={() => setPreferencesOpen(true)}>
             <Icon name="settings" />
@@ -8450,6 +9670,7 @@ export function App() {
         hasReceipt={Boolean(lastReceipt)}
         conversations={recentProfileConversations}
         activeConversationId={sessionId ?? ""}
+        {...(quarantinedSession ? { unresumableConversationId: quarantinedSession.sessionId } : {})}
         formatTime={formatConversationTime}
         profiles={managedProfiles(catalog)}
         profileId={profileId}
@@ -8467,7 +9688,7 @@ export function App() {
         ref={mainRegion}
         tabIndex={-1}
         class={view === "chat"
-          ? lastReceipt ? "main chat-layout" : "main chat-layout no-inspector"
+          ? lastReceipt && claimRailOpen ? "main chat-layout" : "main chat-layout no-inspector"
           : ["proof", "vault", "access", "billing"].includes(view)
             ? "main route-layout trust-route-layout"
             : "main route-layout"}
@@ -8508,6 +9729,11 @@ export function App() {
                 renameDisabled={busy}
                 onNewConversation={() => void createConversation()}
                 newConversationDisabled={busy}
+                conversations={recentProfileConversations}
+                activeConversationId={sessionId ?? ""}
+                formatTime={formatConversationTime}
+                onOpenAllConversations={() => navigate("sessions")}
+                renameRequest={renameRequest}
                 model={inferenceConnected || pinnedExternalRoute || activeInferenceBinding?.providerId === "chutes" ? (
                   <ModelControl
                     active={activeChutesConnection ? {
@@ -8558,7 +9784,16 @@ export function App() {
               />
               <div
                 ref={transcriptElement}
-                class={messages.length <= 1 ? "transcript no-turns" : "transcript"}
+                /*
+                 * `no-turns` centres a short first-run column so the intro is
+                 * not floating in 500px of void. A return report above that
+                 * intro makes the column taller than the scroller, and
+                 * `align-content: center` then overflows it *upwards*: measured
+                 * at 390x844, the card's top was 96px while the transcript's own
+                 * top was 107px, so "Your last visit was not kept" rendered
+                 * above the scrollport with no way to scroll up to it.
+                 */
+                class={firstRunTranscript && !unrecoveredWork ? "transcript no-turns" : "transcript"}
                 onScroll={(event) => {
                   const element = event.currentTarget;
                   const pinned = isNearLastRealCard(element, 64);
@@ -8581,6 +9816,47 @@ export function App() {
                   setStageScrolled(element.scrollTop > SESSION_BAR_COLLAPSE_SCROLL);
                 }}
               >
+                {/* Before anything else on the surface, because a person who
+                    lost work is looking for it and every other row on screen is
+                    about work they still have. */}
+                {/* A conversation the Vault could not replay is the first thing
+                    a returning person needs to know, and the Atlas measured the
+                    chat route saying nothing about it while the truthful record
+                    sat three clicks away. */}
+                {quarantinedSession && QuarantineReportView ? (
+                  <QuarantineReportView
+                    title={quarantinedSession.title}
+                    reason={quarantinedSession.reason}
+                    historyVerified={quarantinedSession.historyVerified}
+                    onOpenRecord={() => {
+                      setSessionsFocusId(quarantinedSession.sessionId);
+                      navigate("sessions");
+                    }}
+                    onDismiss={() => setQuarantinedSession(undefined)}
+                  />
+                ) : null}
+                {unrecoveredWork && ResumeReportView ? (
+                  <ResumeReportView
+                    work={unrecoveredWork}
+                    durableAuthorityAdopted={vaultRuntimeAdopted}
+                    onOpenVault={() => navigate("vault")}
+                    onDismiss={() => {
+                      const storage = browserReturnLedgerStorage();
+                      if (storage) {
+                        const ids = unrecoveredWork.sessionIds;
+                        // Synchronously where the module is already in hand,
+                        // which is every real dismiss: the report the person
+                        // is dismissing was rendered from it. The fallback
+                        // covers nothing a person can reach, and is kept so a
+                        // future caller cannot silently lose the write.
+                        const ledger = readyReturnLedger();
+                        if (ledger) ledger.forgetReturnLedgerEntries(storage, ids);
+                        else void loadReturnLedger().then(({ forgetReturnLedgerEntries }) => forgetReturnLedgerEntries(storage, ids));
+                      }
+                      setUnrecoveredWork(undefined);
+                    }}
+                  />
+                ) : null}
                 {transcriptBoundary ? (
                   <div ref={transcriptBoundaryElement} class="transcript-boundary" role="status">
                     <Icon name="warning" size={16} />
@@ -8604,6 +9880,11 @@ export function App() {
                   <TranscriptIntro
                     note={transcriptIntroNote(messages[0]?.content)}
                     demo={composerUsesDemo}
+                    // The one fact that decides whether anything typed below
+                    // survives, read from the same derivation the session chip
+                    // and the Vault route read.
+                    unsaved={sessionDurability.state === "ephemeral"}
+                    onKeepConversations={() => navigate("vault")}
                     tier={activeSessionRecord?.manifest.capabilityTier}
                     onOpenCapabilities={() => navigate("capabilities")}
                   />
@@ -8625,6 +9906,13 @@ export function App() {
                       attestation={describeMessageAttestation(entry.item.receipt, attestationRecords, attestationFailure, attestationNow)}
                       onCopy={() => void navigator.clipboard.writeText(entry.item.parts?.length ? messagePlainText(entry.item.parts) : entry.item.content)}
                       onRetry={() => void forkFromMessage(entry.item, "retry")}
+                      /* Recovery is not a privilege of durability. A failed
+                         turn whose branch boundary never landed still holds the
+                         prompt in this page, and re-sending it is the action
+                         the person was going to perform by hand anyway. */
+                      onResend={entry.item.error && entry.item.originatingPrompt?.trim() && !busy
+                        ? () => void resendFailedTurn(entry.item)
+                        : undefined}
                       onEdit={() => void forkFromMessage(entry.item, "edit")}
                       onBranch={() => void forkFromMessage(entry.item, "fork")}
                       branchDisabled={!sessionLibrary || !activeSessionRecord || busy || !entry.item.sourcePoint}
@@ -8633,13 +9921,13 @@ export function App() {
                   </div>
                 ))}
                 </>}
-                {messages.length <= 1 ? (
+                {firstRunTranscript ? (
                   <div class="transcript-starters" role="group" aria-label="Suggested ways to begin">
                     {(inferenceConnected ? CONNECTED_STARTERS : DISCONNECTED_STARTERS).map((starter) => (
                       <button
                         type="button"
                         key={starter.title}
-                        class="starter-chip"
+                        class={starter.lead ? "starter-chip starter-chip--lead" : "starter-chip"}
                         onClick={() => {
                           if (starter.action.kind === "route") {
                             navigate(starter.action.view);
@@ -8674,6 +9962,13 @@ export function App() {
                 ) : null}
               </div>
               <div class="composer-wrap">
+                {/* The turn's whole spoken lifecycle, in one region that is
+                    mounted for the life of the route. Per-message regions were
+                    inserted and removed with their own turns, which is why the
+                    settle sentence raced the shell's status mirror and why the
+                    local-command lane, which mounts no streaming slot at all,
+                    announced nothing in either direction. */}
+                <span class="sr-only" role="status" aria-live="polite" aria-atomic="true">{turnNarration.spoken}</span>
                 {/* Send's `aria-describedby` points here. The guidance band that
                     used to own this id was a 42px banner; the transcript intro
                     that now says the same sentence unmounts after the first
@@ -8724,16 +10019,49 @@ export function App() {
                     </div>
                   ) : null}
                   {messageQueue.length ? (
-                    <div class="composer-queue" role="group" aria-label="Queued messages" aria-live="polite">
+                    <div
+                      class="composer-queue"
+                      role="group"
+                      aria-label="Queued messages"
+                      aria-live="polite"
+                      /* A scroll container the keyboard cannot enter is a
+                         scroll container only a mouse wheel can read. */
+                      tabIndex={0}
+                      data-expanded={queueExpanded ? "true" : undefined}
+                    >
                       <header>
-                        <strong>Up next</strong>
+                        {/* Collapsed, the label carries the count so the panel
+                            is one row high; expanded, the list beneath it is
+                            the subject and the header is just its name. */}
+                        <strong>{queueVisibleItems.length ? "Up next" : `${messageQueue.length} queued`}</strong>
                         {/* A paused queue that looks identical to a running one
                             tells the same lie Stop used to tell. The way out is
                             already on screen — Send now and Edit — so the chip
                             only has to name the state it is in. */}
-                        <span>{messageQueue.length} queued{queuePaused ? " · paused after Stop" : ""}</span>
+                        <span>{queueVisibleItems.length
+                          ? `${messageQueue.length} queued${queuePaused ? " · paused after Stop" : ""}`
+                          : `Next: ${messageQueue[0]!.prompt}${queuePaused ? " · paused after Stop" : ""}`}</span>
+                        {/* Measured at 390×844 with 22 rows: the box was 208px
+                            of a 1,353px list — five rows visible, seventeen
+                            behind a nested scroller with no scrollbar, no fade
+                            and no control. The count in this header was the
+                            only evidence the rest existed. */}
+                        {messageQueue.length > 1 ? (
+                          <button
+                            class="composer-queue__expand"
+                            type="button"
+                            aria-expanded={queueExpanded}
+                            onClick={() => setQueueExpanded((open) => !open)}
+                          >{queueExpanded ? "Show fewer" : `Show all ${messageQueue.length}`}</button>
+                        ) : null}
                       </header>
-                      {messageQueue.map((item, index) => (
+                      {/* Collapsed, the backlog is one row about itself. It
+                          used to be the stack itself: 21 queued items took the
+                          composer to 210px and the transcript to 51% of a
+                          desktop viewport and 39% of a phone — the conversation
+                          the backlog belongs to lost half its reading area to
+                          it, silently, while it drained. */}
+                      {queueVisibleItems.map((item, index) => (
                         <div class="composer-queue__item" key={item.id}>
                           <span>{item.prompt}</span>
                           {item.attachments.length ? <small>{item.attachments.length} attachment{item.attachments.length === 1 ? "" : "s"}</small> : null}
@@ -8803,6 +10131,31 @@ export function App() {
                         if (slashMenuOpen && event.key === "Escape") {
                           event.preventDefault();
                           setSlashMenuDismissedFor(input);
+                          return;
+                        }
+                        if (event.key === "Escape" && !input.trim()) {
+                          /*
+                           * The way out of the box, which had none.
+                           *
+                           * Airship claims this control on every cold chat load
+                           * (see `shouldClaimComposerFocus`), and the chord
+                           * handler correctly refuses to steal keys from a text
+                           * field — so measured from where a person actually
+                           * lands, `g x` and every other chord did nothing at
+                           * all and nothing on screen said why. Escape releases
+                           * the keyboard to the conversation, which is both a
+                           * focus target with a visible ring and the place the
+                           * chords work.
+                           *
+                           * Only from an empty box. With a draft in it, Escape
+                           * is the key that dismisses the slash menu one clause
+                           * above and otherwise does nothing — and "type the
+                           * command, Escape the menu, Enter" is a sequence
+                           * people and specs both already have in their hands.
+                           * Leaving mid-draft is Shift+Tab, which always worked.
+                           */
+                          event.preventDefault();
+                          mainRegion.current?.focus({ preventScroll: true });
                           return;
                         }
                         if (
@@ -8913,11 +10266,13 @@ export function App() {
                     : null}
               </div>
             </section>
-              {lastReceipt && ProofInspector ? <aside class="inspector"><ProofInspector
+              {lastReceipt && ProofInspector ? <aside class={claimRailOpen ? "inspector" : "inspector inspector--summary"}><ProofInspector
               receipt={lastReceipt}
               endpointRecord={lastReceipt ? attestationRecords.find((record) => attestationRecordMatchesReceipt(record, lastReceipt)) : undefined}
               now={attestationNow}
               compact
+              collapsed={!claimRailOpen}
+              onExpand={() => setClaimRailOpen((open) => !open)}
               acquisitionFailure={inspectorAcquisitionFailure}
               onOpenAttestations={() => openAttestationEvidence()}
             /></aside>
@@ -8925,7 +10280,7 @@ export function App() {
                  a receipt existed, the rail that inspects it did not load, and
                  the transcript simply had no claim column — indistinguishable
                  from a turn that produced no claims at all. */
-              : lastReceipt && proofInspectorError ? <aside class="inspector">
+              : lastReceipt && proofInspectorError ? <aside class="inspector inspector--summary">
                 <RouteFailure inline title="the claim stack" message={proofInspectorError} onRetry={retryDeferredChunk} />
               </aside> : null}
           </>
@@ -8946,6 +10301,7 @@ export function App() {
             onOpenProof={openSessionProof}
             durability={sessionDurability}
             quarantine={quarantinedSession}
+            focusSessionId={sessionsFocusId}
           />
         ) : sessionsViewError ? (
           <RouteFailure title="All conversations" message={sessionsViewError} onRetry={retryDeferredChunk} />
@@ -9015,6 +10371,8 @@ export function App() {
             activeProfile={activeProfile}
             workspace={runtime.current?.workspace}
             searchMemory={searchMemoryForUi}
+            recallRecords={recallMemoryRecords}
+            commitMemory={commitMemoryChange}
             initialTab={view === "context" ? "index" : "search"}
             onOpenSource={(target) => void openMemorySource(target)}
           />
@@ -9065,6 +10423,7 @@ export function App() {
               if (activated) navigate("chat");
               return activated;
             }}
+            onStartConversation={() => void createConversation()}
             scope={profileHubScope}
           />
         ) : null}
@@ -9079,6 +10438,18 @@ export function App() {
                 || vaultSnapshot.phase === "ready"}
               wipeBusy={vaultWipeBusy}
               onWipeStorage={() => void wipeVaultStorage()}
+              onEraseContinuityRecord={() => {
+                // Erases the witness alone: no journal, no drafts, no
+                // preferences. A person who chose ephemeral for privacy gets to
+                // remove the one thing that outlives the tab without giving up
+                // the posture that keeps everything else out of storage.
+                void loadReturnLedger().then(({ clearReturnLedger }) => {
+                  const storage = browserReturnLedgerStorage();
+                  if (storage) clearReturnLedger(storage);
+                  setUnrecoveredWork(undefined);
+                  setRuntimeStatus("Continuity record erased. A return will look like a first visit.");
+                }).catch(() => setRuntimeStatus("The continuity record could not be erased."));
+              }}
               adoptionNotice={vaultAdoptionNotice}
               contextMode={runtime.current?.contextMode}
               contextPublishing={vaultContextPublishing}
@@ -9153,6 +10524,8 @@ export function App() {
             eventCount={proofScoped ? eventCount : sessionRevision}
             sessionId={proofTargetId}
             requestedReceiptId={effectiveProofSelection?.receiptId}
+            requestedTurnId={effectiveProofSelection?.turnId}
+            onReturnToTurn={returnToTurn}
             loadAudit={loadSessionAudit}
             section={proofSection}
             onSectionChange={(section) => {
@@ -9258,9 +10631,21 @@ export function App() {
         onOpenCommandPalette={() => { setMobileMoreOpen(false); setPaletteOpen(true); }}
         onOpenSettings={() => setPreferencesOpen(true)}
       />
-      <ApprovalDock broker={approvalBroker} />
-      <CommandPalette open={paletteOpen} entries={paletteEntriesWithRail} onClose={() => setPaletteOpen(false)} />
-      <PreferencesDialog open={preferencesOpen} value={preferences} onChange={(next) => {
+      {ApprovalDockView ? <ApprovalDockView broker={approvalBroker} /> : null}
+      {Overlays ? <Overlays.CommandPalette open={paletteOpen} entries={paletteEntriesWithRail} onClose={() => setPaletteOpen(false)} onOpenShortcuts={() => setShortcutsOpen(true)} /> : null}
+      {/* The keyboard layer's only printed form. Eleven chords shipped taught
+          nowhere: `?`, `F1` and `Shift+/` all opened nothing, Preferences had no
+          keyboard section, and the palette could not find the word "shortcut".
+          Fetched on first use, like the approval dock and the resume report —
+          the entry chunk's ceiling does not move for a sheet. */}
+      {ShortcutSheetView ? (
+        <ShortcutSheetView
+          open={shortcutsOpen}
+          profiles={managedProfiles(catalog).map((profile) => ({ name: profile.name }))}
+          onClose={() => setShortcutsOpen(false)}
+        />
+      ) : null}
+      {Overlays ? <Overlays.PreferencesDialog open={preferencesOpen} value={preferences} onChange={(next: PreferenceOverrides) => {
         if (next.vaultBackend !== preferences.vaultBackend) {
           setPreferences((current) => Object.freeze({ ...next, vaultBackend: current.vaultBackend }));
           void changeVaultProvider(next.vaultBackend);
@@ -9271,7 +10656,7 @@ export function App() {
         onManage: () => {
           if (openProfileManager(profileId)) setPreferencesOpen(false);
         },
-      }} />
+      }} /> : null}
       <TrustPostureSheet open={trustSheetOpen} axes={trustAxes} onClose={() => setTrustSheetOpen(false)} onNavigate={navigatePrimary} />
       {/*
         The reload the person just pressed is not the departure the guard
@@ -9301,9 +10686,42 @@ async function createProfileSession(
   requestedTitle?: string,
 ): Promise<SessionRecord> {
   const manifest = await createProfileSessionManifest(runtime, profile, catalog);
-  const title = requestedTitle?.trim() || `${profile.name} conversation`;
+  const title = requestedTitle?.trim() || appMintedConversationTitle(profile.name);
   if (title.length > 240 || /[\u0000-\u001f\u007f]/u.test(title)) throw new Error("The conversation title is invalid.");
   return runtime.journal.createSession(title, manifest);
+}
+
+/**
+ * The names Airship gives a conversation before its content has named it.
+ *
+ * One table, because these strings are written by three code paths and read by
+ * a fourth: the first-message titler asks "is this still the name the app gave
+ * it?" and compared against the new-conversation default only. A conversation
+ * minted by vault adoption therefore kept "General · encrypted vault" forever,
+ * and the Atlas found five of them stacked in the library — one being the
+ * thread whose first message was "Draft the Q3 pricing memo intro paragraph."
+ * The storage backend was naming the memo instead of the memo naming itself.
+ *
+ * A name written by a person, a rename, a fork or a policy change is never in
+ * this set, so the titler cannot overwrite one.
+ */
+const APP_MINTED_TITLE_SUFFIX = Object.freeze({
+  default: " conversation",
+  vault: " · encrypted vault",
+  ephemeral: " · ephemeral",
+} as const);
+
+export function appMintedConversationTitle(
+  profileName: string,
+  kind: keyof typeof APP_MINTED_TITLE_SUFFIX = "default",
+): string {
+  return `${profileName}${APP_MINTED_TITLE_SUFFIX[kind]}`;
+}
+
+export function isAppMintedConversationTitle(title: string, profileName: string): boolean {
+  const normalized = title.trim();
+  return (Object.keys(APP_MINTED_TITLE_SUFFIX) as (keyof typeof APP_MINTED_TITLE_SUFFIX)[])
+    .some((kind) => normalized === appMintedConversationTitle(profileName, kind));
 }
 
 async function createProfileSessionManifest(
@@ -9388,6 +10806,19 @@ async function latestCompatibleProfileSession(
   catalog: ProfileCatalog,
 ): Promise<SessionRecord | undefined> {
   return compatibleProfileSession(runtime, profile, catalog);
+}
+
+/**
+ * The same resolution, as the ordered shelf rather than only its top row, so
+ * adoption can try the next conversation when one refuses to replay.
+ */
+async function compatibleProfileSessions(
+  runtime: Runtime,
+  profile: ProfileRevision,
+  catalog: ProfileCatalog,
+): Promise<readonly SessionRecord[]> {
+  const expected = await createProfileSessionManifest(runtime, profile, catalog);
+  return resumableProfileConversationCandidates(runtime.journal, profile.profileId, expected);
 }
 
 async function compatibleProfileSession(
@@ -10090,6 +11521,21 @@ function boundedTranscriptContent(value: string, maximum = 64 * 1024): string {
   return `${value.slice(0, end)}\n\n[Local display shortened; the journaled tool result is larger.]`;
 }
 
+const CLAIM_RAIL_STORAGE_KEY = "airship.claim-rail.v1";
+
+/**
+ * The claim stack's resting shape, remembered.
+ *
+ * Summary is the default because the measured harm was in the other direction:
+ * a first-time reader met a cryptographic stack they had not asked for. A
+ * reader who opens it has demonstrated the altitude, and re-collapsing it on
+ * every reload would be the product forgetting something it was told.
+ */
+function readClaimRailPreference(): boolean {
+  try { return localStorage.getItem(CLAIM_RAIL_STORAGE_KEY) === "open"; }
+  catch { return false; }
+}
+
 function boundedSessionPresentationEvents(
   events: readonly DurableEvent[],
   maximum = 20_000,
@@ -10770,6 +12216,22 @@ function endpointEvidenceWithDurabilityWarning(
   });
 }
 
+/**
+ * The failure sentence the card is showing, for the channel that speaks it.
+ *
+ * A thrown provider diagnostic is another program's text landing in this
+ * person's page, so it is bounded and stripped exactly like every other
+ * passed-through string here. An empty or absurdly long value yields nothing
+ * and the caller falls back to the mapped vocabulary rather than speaking
+ * something that reads like a stack trace.
+ */
+function turnFailureCause(error: unknown): string | undefined {
+  const raw = error instanceof Error ? error.message : "";
+  const clean = raw.replace(/[\u0000-\u001F\u007F]+/gu, " ").replace(/\s+/gu, " ").trim();
+  if (!clean || clean.length > 400) return undefined;
+  return clean;
+}
+
 function modelCountLabel(count: number): string {
   return `${count} model${count === 1 ? "" : "s"}`;
 }
@@ -10828,6 +12290,7 @@ function MessageCard({
   attestation,
   onCopy,
   onRetry,
+  onResend,
   onEdit,
   onBranch,
   branchDisabled,
@@ -10840,6 +12303,8 @@ function MessageCard({
   attestation?: MessageAttestation;
   onCopy: () => void;
   onRetry: () => void;
+  /** Present only on a failed turn whose prompt this page still holds. */
+  onResend?: () => void;
   onEdit: () => void;
   onBranch: () => void;
   branchDisabled: boolean;
@@ -10848,8 +12313,21 @@ function MessageCard({
   return (
     <article
       class={`message ${message.role} ${message.error ? "error" : ""}`}
-      aria-label={`${message.role === "user" ? "Your" : "Airship"} message`}
+      /* A failed turn was styled as an error and named like a success: browse
+         mode read `Airship message` over a card badged FAILED TURN, so the one
+         signal a reader could not get was the disposition. The name carries it
+         because the alternative — role="alert" on a transcript row — would
+         re-announce every historical failure on every replay. */
+      aria-label={`${message.role === "user" ? "Your" : "Airship"} message${message.error ? " — failed turn" : ""}`}
       data-message-role={message.role}
+      {...(message.error ? { "data-turn-failed": "true" } : {})}
+      /* The address Proof opens with carries a turn id, and nothing on this
+         side could be found by it — which is why "Inspect evidence →" was a
+         one-way door. The receipt is where a rendered card learns its turn
+         identity; a row without one (a local command, a marker) simply has no
+         attribute, which is why `focusTranscriptTurn` reports "not-rendered"
+         rather than pretending it landed. */
+      {...(message.receipt?.turnId ? { "data-turn-id": message.receipt.turnId } : {})}
       data-transcript-card
     >
       <div class="message-rail" aria-hidden="true"><span>{message.role === "user" ? "You" : "A"}</span></div>
@@ -10867,7 +12345,7 @@ function MessageCard({
           {message.status ? <span class="message-status"><span class="pulse-dot" />{message.status}</span> : null}
         </div>
         {message.parts?.length ? (
-          <MessagePartsView parts={message.parts} live={message.status !== undefined} />
+          <DeferredMessageParts parts={message.parts} live={message.status !== undefined} onRetry={onResend} />
         ) : <p>{message.content || " "}</p>}
         <StreamingMessageSlot store={streamStore} messageId={message.id} active={message.status !== undefined} />
         {message.liveToolOutput ? (
@@ -11332,6 +12810,7 @@ function SkillsManagerView({
   onSetGlobal,
   onSetProfile,
   onApply,
+  onStartConversation,
   scope,
 }: {
   catalog: ProfileCatalog;
@@ -11341,6 +12820,17 @@ function SkillsManagerView({
   onSetProfile: (profileId: string, skillId: string, mode: SkillMode) => Promise<void>;
   /** Switches to the previewed profile, answering whether it became active. */
   onApply: (profileId: string) => Promise<boolean>;
+  /**
+   * Opens a conversation that will pin whatever this route currently resolves.
+   *
+   * The route's own copy says a change "applies only to a new conversation", and
+   * it had no way to make one: standing on the active profile, the only control
+   * was "Switch to <the profile you are already in>", which returns to the
+   * conversation whose prompt was composed by the *old* set. The measured
+   * result was a route that accepts a change, tells you it is inert here, and
+   * offers nothing.
+   */
+  onStartConversation: () => void;
   scope: string;
 }) {
   const [selectedProfileId, setSelectedProfileId] = useState(activeProfileId);
@@ -11399,7 +12889,14 @@ function SkillsManagerView({
       <div class="skills-toolbar panel">
         {scope === "global" ? <div class="skill-select-field"><span>Preview resolution for</span><MenuSelect placement="down" ariaLabel="Preview profile resolution" value={profile.profileId} options={profiles.map((candidate) => ({ value: candidate.profileId, label: candidate.name }))} onChange={setSelectedProfileId} /></div> : <div><span class="eyebrow">Profile scope</span><strong>{profile.name}</strong></div>}
         <div><span class="eyebrow">Effective set</span><strong>{resolvedCount} of {catalog.skills.length}</strong></div>
-        <button class="small-button" type="button" onClick={() => void applyProfile()}>Switch to {profile.name}</button>
+        {/* The route closes its own loop. Standing on the profile you are
+            already in, "Switch to <it>" returns to the conversation whose
+            prompt the *old* set composed — so the change the toolbar just
+            counted stays invisible. Here that control is the one action that
+            makes this set live: a conversation pinned to it. */}
+        {profile.profileId === activeProfileId
+          ? <button class="small-button" type="button" title={`Pins the ${resolvedCount} resolved skills into a new conversation's prompt.`} onClick={onStartConversation}>New conversation with this set</button>
+          : <button class="small-button" type="button" onClick={() => void applyProfile()}>Switch to {profile.name}</button>}
       </div>
       <div class="skill-grid">
         {catalog.skills.map((skill) => {

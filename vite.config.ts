@@ -134,6 +134,26 @@ export default defineConfig({
          * the protocol shell or silently grow the optional-pack count.
          */
         manualChunks(id) {
+          /*
+           * `transcript-operations` is imported by `platform-shell.tsx`, which
+           * is on the boot path, and by `message-parts-view.tsx`, which is
+           * deferred. Rollup is free to resolve that shared module either way,
+           * and it did: built from two checkouts of the identical tree — same
+           * sources, same config, same lockfile — it emitted a 350 B stub in
+           * one and a 10.5 KiB chunk in the other, moving the baseline budget
+           * by 4 KiB gzip and failing the release gate in a clean clone while
+           * passing on the machine it was tuned on.
+           *
+           * A budget that depends on which directory you built in is not a
+           * budget. The chunk is named here for ATTRIBUTION — the same reason
+           * `chunkFileNames` below names the shell and bridge packs, so the
+           * release gate's classifier is exact rather than matching on whatever
+           * Rollup happened to call it. Naming it did NOT remove the
+           * cross-checkout split: both forms are still observed, and the gate's
+           * ceilings cover both, pending a dedicated deterministic-build
+           * repair.
+           */
+          if (id.includes("/src/ui/chat/transcript-operations")) return "transcript-operations";
           return id.includes("/src/inference/bridge/")
             ? "inference-bridge-pack"
             : undefined;

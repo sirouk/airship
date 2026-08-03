@@ -215,9 +215,12 @@ export function describeConnectLanes(input: ConnectLaneInput): readonly ConnectL
 export function connectLaneCountLabel(lanes: readonly ConnectLane[]): string {
   const connected = lanes.filter((entry) => entry.status.kind === "connected");
   const ready = lanes.filter((entry) => entry.status.kind === "ready").length;
-  if (connected.length === 0) return `No model connected · ${String(ready)} ready`;
-  if (connected.length === 1) return `${connected[0]!.title} connected · ${String(ready)} more ready`;
-  return `${String(connected.length)} connected · ${String(ready)} more ready`;
+  // "5 ready" beside "No model connected" reads as five models standing by.
+  // The count is of ways in, so it says so: a bare adjective with no noun is
+  // the one shape this label cannot afford.
+  if (connected.length === 0) return `No model connected · ${String(ready)} ready to connect`;
+  if (connected.length === 1) return `${connected[0]!.title} connected · ${String(ready)} more ready to connect`;
+  return `${String(connected.length)} connected · ${String(ready)} more ready to connect`;
 }
 
 /** The seal beside that count: connected is the only verified state here. */

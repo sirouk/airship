@@ -107,6 +107,38 @@ const managers = new WeakMap<WorkspacePort, BrowserTerminalManager>();
 let activeHostManager: BrowserTerminalManager | undefined;
 let hostAuthorityTail: Promise<void> = Promise.resolve();
 
+/**
+ * The line that dates a process, so a tab cannot imply a continuity it lost.
+ *
+ * Two measured failures, one cause: a scrollback that never marks a process
+ * boundary. After a Profile round trip the buffer read "Airship changed
+ * terminal workspace authority; this terminal requires restart." and the very
+ * next line — typed after it — was `echo STILL-ALIVE` answering "STILL-ALIVE",
+ * because being shown auto-starts a `restart-required` tab and the new process
+ * inherits the old one's scrollback. And after a reload the tab still read
+ * "Terminal 1" with a green check over an empty buffer and "Input history · 0",
+ * so a restart looked exactly like the session the reader left.
+ *
+ * Attributed to Airship on purpose. Everything else in this buffer is bytes the
+ * shell wrote, and a sentence pretending to be shell output would be a second
+ * lie about the same frame.
+ */
+export function terminalProcessBanner(input: Readonly<{
+  processEpoch: number;
+  priorStatus: TerminalSessionStatus;
+  reconstructed: boolean;
+  startedAt: string;
+}>): string {
+  const run = `jsh run ${input.processEpoch} started ${input.startedAt}`;
+  if (input.reconstructed && input.processEpoch <= 1) {
+    return `Airship · ${run}. This tab was rebuilt from saved metadata; the process that wrote everything above it ended with the previous page.`;
+  }
+  if (input.priorStatus === "idle") {
+    return `Airship · ${run}. It lives in this page only: a reload ends the process, its scrollback and its input history.`;
+  }
+  return `Airship · ${run}. The process above this line has ended and is not running; input from here on goes to the new one.`;
+}
+
 export function getBrowserTerminalManager(workspace: WorkspacePort, defaultProfileId?: string): BrowserTerminalManager {
   const existing = managers.get(workspace);
   if (existing) return existing;
@@ -339,6 +371,9 @@ export class BrowserTerminalManager {
     await this.ready;
     const session = this.requireSession(sessionId);
     if (session.status === "running" || session.status === "starting") return;
+    // Read before the transition, because the banner below has to say whether
+    // this tab is picking up where a dead process left off or opening cold.
+    const priorStatus = session.status;
     await this.acquireSessionLease(sessionId, signal);
     session.status = "starting";
     session.detail = "Cold-starting the in-browser WebContainer runtime…";
@@ -374,6 +409,14 @@ export class BrowserTerminalManager {
       session.updatedAt = new Date().toISOString();
       session.lastProcessStartedAt = session.updatedAt;
       session.exitCode = undefined;
+      // Written before the pump attaches, so it is the first thing under the
+      // previous process's last line rather than racing the new prompt.
+      this.appendOutput(session, `\r\n\x1b[36m${terminalProcessBanner({
+        processEpoch,
+        priorStatus,
+        reconstructed: session.reconstructed,
+        startedAt: new Date(session.lastProcessStartedAt).toLocaleTimeString(),
+      })}\x1b[0m\r\n`);
       this.appendAudit(session, {
         kind: "process-start",
         outcome: "completed",

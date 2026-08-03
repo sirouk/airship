@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 
@@ -383,8 +384,22 @@ describe("a refused key is reported as a refused key", () => {
     // The shipped banner said "Endpoint discovery denied. Reconnect with
     // chutes:invoke or an API key." to a person who had just pasted an API key,
     // naming an OAuth scope that appears nowhere else in the product.
-    expect(source).toContain("<strong>Chutes did not accept this key.</strong> The catalog is readable without a key, so listing models succeeded; authorization is checked when you connect, and it failed. Check the key at <a href={CHUTES_API_KEYS_URL} target=\"_blank\" rel=\"noreferrer\">chutes.ai → API keys ↗</a>, or paste a different one.");
+    expect(source).toContain("<strong>Chutes did not accept this key.</strong>");
+    expect(source).toContain("Check the key at <a href={CHUTES_API_KEYS_URL} target=\"_blank\" rel=\"noreferrer\">chutes.ai → API keys ↗</a>, or paste a different one.");
     expect(source).toContain('failure.kind === "credential" && credential.kind === "inference-api-key"');
+  });
+
+  /*
+   * One banner, two refusals, and they are not the same event. The key check
+   * runs before the catalog is read; the model-authorization leg runs after a
+   * model is chosen. The single sentence told a person whose key was refused at
+   * the first step that "listing models succeeded" — about a listing that never
+   * happened, because the refusal is what stopped it.
+   */
+  it("says which leg refused, and never claims a listing that did not run", () => {
+    expect(source).toContain('keyRefusal.stage === "key-check"');
+    expect(source).toContain("Nothing was listed and no model was shown: the key was offered to Chutes first, and Chutes refused it.");
+    expect(source).toContain("The catalog is readable without a key, so listing models succeeded; access to the selected model is checked when you connect, and it failed.");
   });
 
   it("keeps the provider's own words, verbatim, under a disclosure that says so", () => {
@@ -392,7 +407,7 @@ describe("a refused key is reported as a refused key", () => {
     // provider sentence remain in the DOM, one rung down.
     expect(source).toContain("<summary>Provider response</summary>");
     expect(source).toContain("{keyRefusal.providerResponse}");
-    expect(source).toContain("setKeyRefusal(Object.freeze({ providerResponse: failure.message }))");
+    expect(source).toContain('setKeyRefusal(Object.freeze({ stage: "model-authorization", providerResponse: failure.message }))');
     const banner = source.indexOf("Chutes did not accept this key.");
     expect(banner).toBeLessThan(source.indexOf("<summary>Provider response</summary>"));
   });
@@ -448,5 +463,72 @@ describe("the model metadata is inside the picker, not beside it", () => {
     expect(source).not.toContain("ModelCandidateSummary");
     expect(source).not.toContain("model-candidate-summary");
     expect(styles).not.toContain("model-candidate-summary");
+  });
+});
+
+/**
+ * The credential reading has to know whether the credential has left.
+ *
+ * Measured on this build: one click put the key on the wire at t=9ms and both
+ * hosts answered inside 120ms, while "Nothing has been sent yet." stayed on
+ * screen until t=4,384ms — directly below a banner announcing that discovery
+ * was under way. The line was a pure function of the pasted prefix, so it had
+ * no way to know, and the reader it exists for is precisely the one who will
+ * not forgive it being wrong.
+ */
+describe("credentialReading while the credential is in flight", () => {
+  it("does not claim nothing was sent once something was", () => {
+    expect(credentialReading("inference-api-key", true)).not.toContain("Nothing has been sent");
+    expect(credentialReading("oauth-user-token", true)).not.toContain("Nothing has been sent");
+  });
+
+  it("names where it went, because a reader watching this line is asking that", () => {
+    expect(credentialReading("inference-api-key", true)).toContain("Chutes");
+    expect(credentialReading("oauth-user-token", true)).toContain("Chutes");
+  });
+
+  it("still refuses to imply acceptance while the answer is outstanding", () => {
+    for (const kind of ["inference-api-key", "oauth-user-token"] as const) {
+      const reading = credentialReading(kind, true);
+      expect(reading).not.toMatch(/valid|accepted|connected|verified/iu);
+      expect(reading).toMatch(/waiting/iu);
+    }
+  });
+
+  it("reads the prefix, and only the prefix, before anything is sent", () => {
+    expect(credentialReading("inference-api-key")).toContain("Nothing has been sent yet.");
+    expect(credentialReading("inference-api-key", false)).toContain("Nothing has been sent yet.");
+  });
+});
+
+/*
+ * Every field on this route that a phone user pastes a secret into.
+ *
+ * Measured at 390×844: the Chutes key field computed 15.9375px and the three
+ * "Paste credential" fields 13.3333px. Under 16px, iOS Safari zooms the layout
+ * viewport on focus and never zooms back — on the one control in the flow that
+ * cannot be retyped from memory. `--fs-field` is `max(16px, var(--fs-body))`,
+ * so this is a floor rather than a fixed size and still scales up with the
+ * type-scale preference.
+ */
+describe("no credential field can zoom a phone into a corner", () => {
+  const connectStyles = readFileSync(new URL("./connect/connect-surface.css", import.meta.url), "utf8");
+  const providerStyles = readFileSync(new URL("./provider-connections-view.css", import.meta.url), "utf8");
+
+  it("binds every credential input to the zoom-guard token", () => {
+    expect(styles).toMatch(/\.credential-entry input,[\s\S]*?font: var\(--fs-field\)/u);
+    expect(connectStyles).toMatch(/\.connect-paste__field input \{[\s\S]*?font: var\(--fs-field\)/u);
+    expect(providerStyles).toMatch(/\.provider-key-field input \{[\s\S]*?font-size: var\(--fs-field\)/u);
+  });
+
+  it("leaves no credential input on a smaller token", () => {
+    for (const [name, sheet] of [["connect-surface", connectStyles], ["provider-connections", providerStyles]] as const) {
+      const rules = sheet.replace(/\/\*[\s\S]*?\*\//gu, "");
+      const fields = rules.match(/(?:\.connect-paste__field|\.provider-key-field) input \{[^}]*\}/gu) ?? [];
+      expect(fields.length, name).toBeGreaterThan(0);
+      for (const rule of fields) {
+        expect(rule, `${name}: ${rule}`).not.toMatch(/--fs-(?:micro|caption|meta)\b/u);
+      }
+    }
   });
 });

@@ -83,6 +83,20 @@ test("a refused management read is recoverable, and the recovery restores the av
       });
     },
   );
+  /*
+   * The key check the product now performs before it draws a priced picker.
+   *
+   * Airship asks `api.chutes.ai/users/me` whether Chutes accepts the key before
+   * it renders a model list with prices against it — a key nobody has checked
+   * must not produce a picker that looks authoritative. This test predates that
+   * and mocked only the catalog reads, so the check reached the real network,
+   * failed, and no candidate model was ever drawn. Answering it here restores
+   * what the test is actually about: the management read's refusal and recovery.
+   */
+  await page.route(
+    (url) => url.hostname === "api.chutes.ai" && url.pathname === "/users/me",
+    async (route) => { await route.fulfill({ json: { username: "journey", user_id: "usr_journey" } }); },
+  );
   await page.route(
     (url) => url.hostname === "api.chutes.ai" && url.pathname === "/chutes/utilization",
     async (route) => { await route.fulfill({ json: [] }); },

@@ -60,7 +60,10 @@ test("durability preference moves safely between encrypted S3 and ephemeral page
 
   await openPreferences(page);
   await page.getByRole("button", { name: "Durability" }).click();
-  await page.getByRole("option", { name: "Page memory only" }).click();
+  // "Ephemeral content", not "Page memory only": the posture keeps one
+  // continuity line per conversation, so the old label claimed more than the
+  // product honours. See `EPHEMERAL_RETENTION_DISCLOSURE`.
+  await page.getByRole("option", { name: "Ephemeral content" }).click();
   await page.getByRole("button", { name: "Done" }).click();
   await expect(page.locator(".runtime-line")).toHaveAttribute("title", /Ephemeral mode/u, { timeout: 20_000 });
   await expect(page.getByText("Ephemeral mode is active.", { exact: false })).toBeVisible();
@@ -117,7 +120,19 @@ test("fresh browser contexts resume one audited Vault session without creating r
         .getByText("Airship is running this turn entirely on your device", { exact: false })
         .first()).toBeVisible({ timeout: 15_000 });
     } else {
-      await expect(page.getByText(marker, { exact: true })).toBeVisible({ timeout: 15_000 });
+      /*
+       * Scoped to the transcript card, for the same reason the branch above is.
+       *
+       * The conversation now takes its title from the first message, so the
+       * marker is legitimately on screen four times — the session-bar title, the
+       * rail's recents row, the conversation switcher, and the message itself.
+       * A bare exact-text lookup matched all four and failed strict mode, which
+       * reads as "the resumed conversation is missing" when what happened is
+       * that three more surfaces started naming it correctly. The claim here is
+       * that the message came back, so this asserts the message.
+       */
+      await expect(page.locator("[data-transcript-card]").getByText(marker, { exact: true }).first())
+        .toBeVisible({ timeout: 15_000 });
     }
 
     await page.goto(`/?airshipLabNamespace=${encodeURIComponent(namespace)}#sessions`);
@@ -185,7 +200,10 @@ test("a renamed conversation still adopts its vault, and the rename is on screen
   // pointer, then the rename.
   // (The detail heading keeps showing the pre-rename title until the list is
   // refreshed — pre-existing, unrelated, and not what stranded the vault.)
-  await expect(first.getByText("3 events", { exact: true }).first()).toBeVisible();
+  // The third append is the rename, and it is journalled after the control
+  // returns — so this is the durable write, not the render. The default 5s is
+  // the render's budget, not a write's.
+  await expect(first.getByText("3 events", { exact: true }).first()).toBeVisible({ timeout: 25_000 });
   await first.context().close();
 
   const second = await openFreshVaultPage(browser, namespace);

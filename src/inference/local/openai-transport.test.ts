@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { InferenceRequest } from "../../core/contracts";
+import type { InferenceEvent, InferenceRequest } from "../../core/contracts";
 import { LocalOpenAiTransport } from "./openai-transport";
 
 describe("LocalOpenAiTransport", () => {
@@ -124,6 +124,96 @@ describe("LocalOpenAiTransport", () => {
     await expect(collect(transport)).rejects.toMatchObject({
       diagnostic: { code: "invalid-payload" },
     });
+  });
+
+  /*
+   * Driven offline mid-turn: the console showed
+   * `net::ERR_INCOMPLETE_CHUNKED_ENCODING` and the screen showed "The local
+   * inference endpoint returned malformed UTF-8 or stream framing" — a verdict
+   * about the provider's data, for a failure of the connection, which points
+   * the person at the wrong system to fix.
+   */
+  it("names a dropped connection as a dropped connection, not as corrupt provider data", async () => {
+    let delivered = false;
+    const transport = new LocalOpenAiTransport({
+      id: "cut-stream",
+      endpoint: new URL("http://127.0.0.1:1234"),
+      fetch: vi.fn(async () => new Response(
+        new ReadableStream<Uint8Array>({
+          pull(controller) {
+            // One chunk delivered, then the connection dies: `error()` discards
+            // anything still queued, so the drop has to land on a later pull to
+            // reproduce what a person actually sees — a partial reply on screen.
+            if (delivered) return controller.error(new TypeError("Failed to fetch"));
+            delivered = true;
+            controller.enqueue(new TextEncoder().encode(`data: ${openAi({ content: "Half a repl" })}\n\n`));
+          },
+        }),
+        { headers: { "Content-Type": "text/event-stream" } },
+      )) as typeof fetch,
+    });
+    const events: InferenceEvent[] = [];
+    const failure = await (async () => {
+      try {
+        for await (const event of transport.stream(request(), new AbortController().signal)) events.push(event);
+        return undefined;
+      } catch (caught) {
+        return caught as { diagnostic: { code: string; message: string } };
+      }
+    })();
+    expect(events).toEqual([{ type: "text-delta", text: "Half a repl" }]);
+    expect(failure?.diagnostic.code).toBe("stream-interrupted");
+    expect(failure?.diagnostic.message).toContain("dropped before the reply finished");
+    expect(failure?.diagnostic.message).not.toContain("malformed UTF-8");
+  });
+
+  it("still blames the payload when the payload really is malformed mid-stream", async () => {
+    /*
+     * The other producer of a `TypeError` in this loop is the fatal
+     * `TextDecoder`, and it has to keep the payload verdict the connection
+     * failure was borrowing — otherwise this fix has only moved the wrong
+     * diagnosis to the other case. (The exact sentence differs by runtime:
+     * Node's decoder rejects with an error carrying a `code`, a browser's does
+     * not. The class of verdict is what must hold, and does in both.)
+     */
+    const transport = new LocalOpenAiTransport({
+      id: "bad-bytes-midstream",
+      endpoint: new URL("http://127.0.0.1:1234"),
+      fetch: vi.fn(async () => new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode(`data: ${openAi({ content: "ok" })}\n\n`));
+            controller.enqueue(new Uint8Array([0xff, 0xfe, 0xfd]));
+            controller.close();
+          },
+        }),
+        { headers: { "Content-Type": "text/event-stream" } },
+      )) as typeof fetch,
+    });
+    const failure = await collect(transport).then(() => undefined, (caught: { diagnostic: { code: string; message: string } }) => caught);
+    expect(failure?.diagnostic.code).toBe("invalid-payload");
+    expect(failure?.diagnostic.message).not.toContain("dropped before the reply finished");
+  });
+
+  it("keeps a cancellation a cancellation when the reader rejects with an abort", async () => {
+    const controller = new AbortController();
+    const transport = new LocalOpenAiTransport({
+      id: "cancelled-midstream",
+      endpoint: new URL("http://127.0.0.1:1234"),
+      fetch: vi.fn(async () => new Response(
+        new ReadableStream<Uint8Array>({
+          start(stream) {
+            stream.enqueue(new TextEncoder().encode(`data: ${openAi({ content: "partial" })}\n\n`));
+            queueMicrotask(() => {
+              controller.abort(new DOMException("User cancelled.", "AbortError"));
+              stream.error(new DOMException("User cancelled.", "AbortError"));
+            });
+          },
+        }),
+        { headers: { "Content-Type": "text/event-stream" } },
+      )) as typeof fetch,
+    });
+    await expect(collect(transport, controller.signal)).rejects.toThrow("User cancelled");
   });
 
   it("rejects credential header injection without contacting the provider", async () => {

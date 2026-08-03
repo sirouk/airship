@@ -8,7 +8,7 @@ import type {
   LocalProviderOptions,
 } from "./contracts";
 import { LocalProviderError, directFetchDiagnostic, providerDiagnostic, resolveLocalEndpoint } from "./endpoint-policy";
-import { boundedInteger, boundedJson, boundedOptions, isRecord } from "./http";
+import { boundedInteger, boundedJson, boundedOptions, isRecord, LOCAL_GENERATION_BUDGET_MS } from "./http";
 import { LocalOpenAiTransport } from "./openai-transport";
 
 export const OLLAMA_DEFAULT_ENDPOINT = "http://127.0.0.1:11434";
@@ -124,7 +124,9 @@ export class OllamaBrowserProvider implements BrowserLocalModelProvider {
       endpoint: this.endpoint,
       credential: this.http.credential,
       fetch: this.http.fetchImpl,
-      totalTimeoutMs: this.http.timeoutMs,
+      // The probe budget is not the generation budget — see
+      // `LOCAL_GENERATION_BUDGET_MS`, and the 30-second cap it replaced.
+      totalTimeoutMs: LOCAL_GENERATION_BUDGET_MS,
       maxStreamBytes: this.http.maxResponseBytes * 16,
     });
   }

@@ -8,7 +8,7 @@ import type {
   LocalProviderOptions,
 } from "./contracts";
 import { LocalProviderError, providerDiagnostic, resolveLocalEndpoint } from "./endpoint-policy";
-import { boundedInteger, boundedJson, boundedOptions, isRecord } from "./http";
+import { boundedInteger, boundedJson, boundedOptions, isRecord, LOCAL_GENERATION_BUDGET_MS } from "./http";
 import { LocalOpenAiTransport } from "./openai-transport";
 
 export const LM_STUDIO_DEFAULT_ENDPOINT = "http://127.0.0.1:1234";
@@ -84,7 +84,13 @@ export class LmStudioBrowserProvider implements BrowserLocalModelProvider {
       endpoint: this.endpoint,
       credential: this.http.credential,
       fetch: this.http.fetchImpl,
-      totalTimeoutMs: this.http.timeoutMs,
+      // Not `this.http.timeoutMs`. That is the catalog-probe budget — 30 s by
+      // default — and handing it to a streaming generation hard-capped every
+      // local answer at 30 seconds of wall clock, measured killing an
+      // unattended turn at t+32 s with 93 lines already on screen. A 35B model
+      // on consumer hardware routinely needs more, and no surface in the
+      // product raised the ceiling. A generation is not a probe.
+      totalTimeoutMs: LOCAL_GENERATION_BUDGET_MS,
       maxStreamBytes: this.http.maxResponseBytes * 16,
     });
   }

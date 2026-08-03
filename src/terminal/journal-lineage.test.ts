@@ -190,8 +190,12 @@ describe("terminal lineage in the session journal", () => {
     expect(app).toContain("if (!threadId || !active) return;");
     expect(app).toContain("terminalAuditTail.current = terminalAuditTail.current");
     // And the count reaches the one surface that claims to audit this journal.
+    // It moved out of the collapsed journal disclosure and into the recorded-
+    // work ledger beside the verdict, where the other three kinds of recorded
+    // work now stand with it — the row and its zero-is-a-fact rule are intact,
+    // one level further forward.
     const proof = await readFile(new URL("../ui/proof-view.tsx", import.meta.url), "utf8");
-    expect(proof).toContain("<dt>Shell records</dt><dd>{audit.counts.shellRecords}</dd>");
+    expect(proof).toContain('{ label: "Shell records", value: `${counts.shellRecords}` },');
   });
 });
 

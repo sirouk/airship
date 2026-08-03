@@ -4,6 +4,23 @@ import { applyPreferenceOverrides, approvalModeDescription, armBeforeUnloadGuard
 import type { SlashCommandDescriptor } from "../commands/types";
 import { CANONICAL_DESTINATIONS } from "./navigation-model";
 
+/**
+ * The shell's source, wherever the shell keeps it.
+ *
+ * The command palette and the preferences dialog moved to
+ * `platform-overlays.tsx` when they left the entry chunk, and five assertions
+ * here broke on the move even though nothing they assert had changed. These
+ * tests are about what the shell renders, not about which file holds the JSX,
+ * so they read both and the next split costs nothing.
+ */
+function shellSource(): string {
+  return [
+    readFileSync(new URL("./platform-shell.tsx", import.meta.url), "utf8"),
+    readFileSync(new URL("./platform-overlays.tsx", import.meta.url), "utf8"),
+  ].join("\n");
+}
+
+
 describe("platform shell contracts", () => {
   it("defaults to Drive only when this build can open Google authorization", () => {
     const configuredClientId = "123456789012-airship.apps.googleusercontent.com";
@@ -98,9 +115,45 @@ describe("platform shell contracts", () => {
 
     // Choosing a disabled row must refuse without dismissing the palette —
     // the silent close-and-no-op read as "ran, and nothing happened".
-    const dialog = readFileSync(new URL("./platform-shell.tsx", import.meta.url), "utf8");
+    const dialog = shellSource();
     expect(dialog).toContain("aria-disabled={entry.disabled || undefined}");
     expect(dialog).toContain("if (entry.disabled) return;");
+  });
+
+  /*
+   * With nothing typed, the palette's question is "take me back to what I was
+   * doing" — and it answered with 15 destinations then ~36 slash commands, with
+   * the session rows it already builds below all of them. `⌘K ↵` could not
+   * return a person to their own thread, and the verbs the live shell rendered
+   * as buttons ("New conversation", "Retry", "Rename conversation") answered
+   * "No matching destination or command."
+   */
+  it("leads the unfiltered list with conversations, then verbs, and never reorders a search", () => {
+    const entries = buildPaletteEntries({
+      navigate() {},
+      openPreferences() {},
+      sessions: [
+        { id: "s-1", title: "Thursday pricing memo", open() {} },
+        { id: "s-2", title: "Timezones", open() {} },
+      ],
+      actions: [
+        { id: "new-conversation", label: "New conversation", description: "Start a fresh conversation in this profile", keywords: ["new"], run() {} },
+        { id: "retry-turn", label: "Retry", description: "Branch before the last answer", keywords: ["retry"], reason: "No answer to retry yet.", run() {} },
+      ],
+    });
+
+    const unfiltered = filterPaletteEntries(entries, "");
+    expect(unfiltered.slice(0, 2).map((entry) => entry.label)).toEqual(["Thursday pricing memo", "Timezones"]);
+    expect(unfiltered.slice(2, 4).map((entry) => entry.label)).toEqual(["New conversation", "Retry"]);
+    expect(unfiltered.findIndex((entry) => entry.group === "Navigate"))
+      .toBeGreaterThan(unfiltered.findIndex((entry) => entry.group === "Actions"));
+
+    // A verb that cannot run says why and refuses, rather than being withheld:
+    // a person searching "retry" after a failure needs the reason, not silence.
+    const retry = entries.find((entry) => entry.id === "action:retry-turn");
+    expect(retry).toMatchObject({ disabled: true, description: "No answer to retry yet." });
+    expect(filterPaletteEntries(entries, "new conversation").map((entry) => entry.label)).toContain("New conversation");
+    expect(filterPaletteEntries(entries, "rename").map((entry) => entry.label)).not.toContain("Thursday pricing memo");
   });
 
   it("describes All conversations with the scope the route enforces", () => {
@@ -186,7 +239,7 @@ describe("platform shell contracts", () => {
   });
 
   it("makes appearance choices visual and requires confirmation before a broad reset", () => {
-    const dialog = readFileSync(new URL("./platform-shell.tsx", import.meta.url), "utf8");
+    const dialog = shellSource();
     expect(dialog).toContain('mode === "dark" ? "moon" : "sun"');
     expect(dialog).toContain('window.confirm("Reset display, durability, and legacy approval preferences to their defaults?")');
   });
@@ -297,7 +350,7 @@ describe("the Durability row states a destination and its state, never one as th
     // `vaultPhaseLabel` fixed on the Vault route by refusing to say
     // "Disconnected" for a vault that was never created.
     for (const adoption of ["connected", "not-connected", undefined] as const) {
-      expect(durabilityOptionLabel("ephemeral", adoption)).toBe("Page memory only");
+      expect(durabilityOptionLabel("ephemeral", adoption)).toBe("Ephemeral content");
     }
   });
 
@@ -358,8 +411,11 @@ describe("the Durability row states a destination and its state, never one as th
   });
 
   it("carries the consequence of each destination beside it", () => {
-    const dialog = readFileSync(new URL("./platform-shell.tsx", import.meta.url), "utf8");
-    expect(dialog).toContain("Nothing survives closing this tab.");
+    const dialog = shellSource();
+    // Copy corrected: the posture keeps one continuity line per conversation,
+    // so an unqualified "page memory only" / "nothing survives" was a claim the
+    // product does not honour. See `EPHEMERAL_RETENTION_DISCLOSURE`.
+    expect(dialog).toContain("Your writing dies with the tab. One line per conversation stays, so a return can tell you.");
     expect(dialog).toContain("DURABILITY[backend][1]");
     // The row's own divider, so a claim about the world is not read as the
     // ninth in a run of presentation rows.
@@ -383,7 +439,10 @@ describe("the Durability row states a destination and its state, never one as th
    */
   it("is told the adoption state at the one place the host renders it", () => {
     const app = readFileSync(new URL("./app.tsx", import.meta.url), "utf8");
-    const mounts = elementsNamed(app, "PreferencesDialog");
+    // `Overlays.` prefixed: the dialog is fetched as a module and rendered from
+    // it, because it left the entry chunk. Still exactly one mount — the claim
+    // this test makes is about the integration point, not the import style.
+    const mounts = elementsNamed(app, "Overlays.PreferencesDialog");
     expect(mounts).toHaveLength(1);
     expect(mounts[0]).toContain("vaultAdopted={vaultRuntimeAdopted}");
     // The same value the Vault route's own adoption seal reads, so the two
@@ -399,7 +458,7 @@ describe("the Durability row states a destination and its state, never one as th
  */
 function elementsNamed(source: string, name: string): readonly string[] {
   const found: string[] = [];
-  for (const match of source.matchAll(new RegExp(`<${name}(?=[\\s/>])`, "gu"))) {
+  for (const match of source.matchAll(new RegExp(`<${name.replace(/\./gu, "\\.")}(?=[\\s/>])`, "gu"))) {
     const start = match.index + match[0].length;
     let depth = 0;
     let quote = "";
@@ -419,7 +478,7 @@ function elementsNamed(source: string, name: string): readonly string[] {
 }
 
 describe("modal focus and key ownership", () => {
-  const dialog = () => readFileSync(new URL("./platform-shell.tsx", import.meta.url), "utf8");
+  const dialog = () => shellSource();
 
   /** The body of `TrustPostureSheet`, from its declaration to the next top-level symbol. */
   const trustSheetSource = () => {
@@ -429,12 +488,26 @@ describe("modal focus and key ownership", () => {
   };
 
   it("restores the focus Runtime trust took, the same way its sibling modals do", () => {
-    // `CommandPalette` and `PreferencesDialog` captured `document.activeElement`
-    // on open and repaid it on close; `TrustPostureSheet` focused itself and
-    // left the repayer out, so Escape left keyboard focus on `<body>`.
+    /*
+     * "The same way" now means the same code, which is what it should always
+     * have meant.
+     *
+     * The sheet kept a private capture/restore: `document.activeElement` at
+     * open, focused again at close. That has no guard for the active element
+     * being `<body>` — which it is whenever the chip is opened by pointer — so
+     * closing "restored" focus to the body and the chip measured as `inactive`
+     * immediately after being dismissed. `useOpenerRestore` is what the other
+     * overlays use: it ignores `<body>`, ignores anything inside an overlay,
+     * and remembers the last element focused outside one.
+     */
     const sheet = trustSheetSource();
-    expect(sheet).toContain("restore.current = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;");
-    expect(sheet).toContain("return () => { cancelAnimationFrame(frame); restore.current?.focus({ preventScroll: true }); };");
+    expect(sheet).toContain("useOpenerRestore(open);");
+    expect(sheet, "a private copy is how this drifted the first time")
+      .not.toContain("restore.current");
+    // And the siblings must be on the same hook, or "the same way" is a claim
+    // about two implementations again.
+    const overlays = readFileSync(new URL("./platform-overlays.tsx", import.meta.url), "utf8");
+    expect([...overlays.matchAll(/useOpenerRestore\(open\);/gu)]).toHaveLength(2);
   });
 
   it("does not close Preferences over an Escape a control inside it already handled", () => {
@@ -570,7 +643,7 @@ describe("the frame the boot screen renders on", () => {
     expect(html).not.toContain('<meta name="color-scheme" content="dark" />');
     // `theme-color` keeps a pre-script default, but the applied layer rewrites
     // it from the ground the document actually resolved.
-    expect(readFileSync(new URL("./platform-shell.tsx", import.meta.url), "utf8"))
+    expect(shellSource())
       .toContain('document.querySelector<HTMLMetaElement>(\'meta[name="theme-color"]\')?.setAttribute("content", ground)');
   });
 });

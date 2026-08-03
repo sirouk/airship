@@ -1,7 +1,14 @@
 # Airship Canon
 
 **Status:** Canonical project overview and product contract  
-**Last reconciled:** 2026-07-28
+**Last reconciled:** 2026-08-03 against `3f11393`, by verifying claims against
+the tree rather than re-reading the document. 133 claims were checked; 40 were
+inaccurate and the 17 that could mislead a reader about privacy, encryption,
+attestation, proof, or durability were corrected. The recurring defect was a
+contract that exists as a tested library but has no product path, written in the
+present indicative as though a user could reach it — the attested trust tier,
+the strict endpoint-proof floor, and remote compute placement were all read that
+way. Where this document and the tree disagreed, the tree won.
 **Applies to:** the Airship client, browser runtime, optional companions, provider adapters, user experience, and trust language
 
 **Maturity:** executable browser-native foundation; not yet a production,
@@ -138,8 +145,11 @@ The user-facing conversation operations have distinct immutable meanings:
   appends the replacement there; the original message and branch remain
   addressable.
 - **Retry** creates a new attempt from the same immutable input, selected
-  context, and pins. It records the attempt separately and recovers completed
-  stable operation IDs instead of duplicating effects.
+  context, and pins. It records the attempt separately as its own branch. Within
+  a single turn Airship reconciles a terminal event whose storage
+  acknowledgement was lost rather than duplicating it; effect recovery across
+  separate retry attempts is not implemented, because operation identity is
+  session-scoped and Retry opens a new session.
 - **Fork** creates an explicitly separate conversation/session from a selected
   historical point, records parent lineage, and may deliberately adopt new
   pinned settings.
@@ -158,7 +168,11 @@ actually produced it; no earlier event or manifest byte is mutated.
 
 Browser, network, write, execute, identity, and destructive effects are exposed
 through typed tools with limits and cancellation. The approval policy—not model
-text—decides whether an operation proceeds. Missing capability, ambiguous state,
+text—decides which gate applies. Ask First brokers every effectful action to the
+person. Auto Approve delegates the per-action decision to the active model and
+allows on a `safe` verdict, recording provenance as `model-review`, prompting
+only when the review is indeterminate. Full Access allows non-read effects
+inside the browser sandbox without a gate. Missing capability, ambiguous state,
 expired evidence, and unsupported provider behavior remain unavailable rather
 than being simulated.
 
@@ -179,9 +193,19 @@ awareness supplements immutable session pins; it never rewrites them.
 
 ### 3.6 Trust language is evidence-bound
 
-Airship may say **local**, **encrypted but unattested**, or **encrypted and
-attested** only when the corresponding evidence supports that exact scope.
-Provider metadata and assertions never silently become verified facts.
+Airship may say **local**, **remote but not end-to-end encrypted**, **encrypted
+but unattested**, or **encrypted and attested** only when the corresponding
+evidence supports that exact scope. Provider metadata and assertions never
+silently become verified facts.
+
+`remote but not end-to-end encrypted` — the `plaintext-remote` posture — is not
+an edge case. It is the posture of every direct OpenAI, xAI, and Anthropic
+browser connection, and a selectable profile floor.
+
+In this release the attested tier is defined but unreachable: no
+browser-complete independent NVIDIA GPU verifier ships, so `encrypted and
+attested` cannot be produced. The strict endpoint-proof floor is deliberately
+offered as disabled rather than as a policy that would reject every turn.
 
 ### 3.7 Interoperability lives at narrow contracts
 
@@ -199,9 +223,11 @@ moved to workers or WASM where that materially improves responsiveness.
 
 ### 3.9 Remote compute is delegated, never authoritative
 
-Airship may place an immutable, explicitly approved job on a paired executor,
-but placement is resolved before spawn and the browser remains the control
-authority. A remote runtime cannot advance the session journal, workspace or
+When Airship places an immutable, explicitly approved job on a paired executor,
+placement must be resolved before spawn and the browser remains the control
+authority. In this release the placement, transcript, and delta-adoption
+contracts ship as a tested library with no product path: the planner can select
+only the browser, and every remote branch returns unavailable. A remote runtime cannot advance the session journal, workspace or
 Vault head, Git ref, profile, or context generation. It returns bounded output,
 a terminal receipt, and optionally a copy-on-write delta for browser validation
 and adoption. Airship does not claim arbitrary live process migration between
@@ -226,8 +252,10 @@ browser runtimes and Linux.
   durable state. It cannot protect against a compromised browser, extension,
   device OS, same-origin supply chain, or content a user deliberately sends to a
   service.
-- **Portable:** state and protocols are versioned, exportable, and adapter-based;
-  portability is not a claim that every provider implements every capability.
+- **Portable:** state and protocols are versioned and adapter-based, and proof,
+  audit, and Vault material can be exported today. Conversation and workspace
+  export is not yet implemented. Portability is not a claim that every provider
+  implements every capability.
 
 ## 5. Product objects and scope
 
@@ -265,13 +293,11 @@ storage target. A Profile switch atomically replaces the visible conversation,
 Chat draft/viewport/favorites/search, Workspace tabs and repository/worktree
 selection, terminal tab set, Memory page presentation, and session Proof
 selection. Those are Profile-owned cockpit state. The selected `WorkspacePort`
-is still the underlying filesystem/Git authority: when two Profiles explicitly
-resolve to the same workspace binding, they observe the same file bytes,
-repository objects, refs, and worktree inventory even though each retains its
-own selection and presentation. The derived Memory index follows that
-authority. Airship therefore does not yet claim that changing Profiles creates
-separate physical filesystem or index authorities; that requires distinct
-bindings or the remaining durable authority work recorded in section 17.
+validates the storage authority, but each Profile then owns a disjoint subtree
+of it: its files, Git object database, worktree inventory, and derived index are
+its own. Two Profiles never share file bytes, even when pinned to the same
+workspace ID. What remains planned is an *explicitly shared* binding, plus the
+cross-device durable authority work recorded in section 17.
 Within the enforced cockpit, a copied session UUID is an address rather than a
 capability: session commands, fork sources, and direct Proof links must verify
 active-Profile ownership before reading or presenting session detail. Async
@@ -299,7 +325,7 @@ not a reduced product.
 | Chat | Profile-local conversations, streaming agent turns, attachments, tools, reasoning, receipts, and slash commands | Favorites, Recent, All conversations/search |
 | Workspace | Profile-local files, editing, browser Git, and execution bound to one virtual workspace | Editor, Source Control, Terminal |
 | Memory | Federated search, relationship exploration, and index lineage | Search, Graph, Index |
-| Proof | Profile/session-local conversation and terminal receipts, journal audit, and endpoint evidence | Summary verdict, Receipt & journal, Attestation evidence, raw details |
+| Proof | Profile/session-local conversation receipts, terminal activity journal records, journal audit, and endpoint evidence | Summary verdict, Receipt & journal, Attestation evidence, raw details |
 | Vault | Global durability provider, encryption path, live contract evidence, and provider transitions | Provider setup and technical details |
 | Connection | Global provider identity, model discovery/selection, and proof policy | Chutes first; advanced providers and credentials |
 | Account | Global provider identity, standing, balance, quota, reset, and usage telemetry | Provider-specific tabs where APIs permit |
@@ -347,8 +373,10 @@ options:
    request, export/restore, and browser retention limits. It is bound to this
    browser profile and is not cross-device sync.
 3. **Extension-enhanced/local-device — conditional and bounded:** an installed
-   companion may add an allowlisted provider relay, ciphertext cache, and
-   measured compute helpers. Today that extension is an enhancement, not a
+   companion may add an allowlisted provider relay, a ciphertext-only cache, and
+   bounded background compute helpers that make no hardware or attestation
+   claim — they use the same browser CPU as the page. Today that extension is an
+   enhancement, not a
    stronger authoritative Vault; any future authoritative companion store must
    pass the same encrypted object, CAS, recovery, and proof contracts.
 4. **Google Drive or S3-compatible — implemented adapters, externally
@@ -372,14 +400,17 @@ convergence, and no rung inherits a TEE claim from another.
    and primary action; direct API keys and other providers are explicit advanced
    paths.
 2. Discover models from Chutes and select an eligible model.
-3. Choose **Verify & record** (recommended) or deliberately enable the advanced
-   **Strict fail-closed** endpoint-proof policy.
+3. Choose **Verify & record**, the only endpoint-proof policy this build can
+   offer. An advanced **Strict fail-closed** policy is implemented in the
+   transport but is deliberately unavailable until independent NVIDIA GPU
+   verification is browser-complete; enabling it today would reject every turn.
 4. Airship creates a new provider/model-pinned session.
 5. Each supported turn uses the Chutes E2EE transport and independently evaluates
    fresh endpoint evidence before promoting any TEE claim. Verify & record keeps
-   incomplete claims explicit without breaking encrypted chat; Strict fail-closed
-   stops before inference unless every required CPU, GPU, freshness, policy, and
-   endpoint-key claim verifies.
+   incomplete claims explicit without breaking encrypted chat. Strict
+   fail-closed, when it can be offered, stops before inference unless every
+   required CPU, GPU, freshness, policy, and endpoint-key claim verifies; it is
+   implemented and unit-tested, and not selectable in this release.
 6. The completed turn exposes its receipt and claim stack in Chat and Proof.
 
 Localhost uses the deployed confidential Chutes registration through a
@@ -402,8 +433,10 @@ WASM, an extension, or a distributed binary.
    Explorer, stage/unstage, commit, and manage browser-owned branches and linked
    worktrees. Each linked checkout has its own conventional `HEAD` and index
    while objects and refs remain one shared browser-owned Git database.
-4. Authenticate to GitHub through a reviewed memory-only browser flow when
-   available, or import/export files, folders, and complete repository archives
+4. Import a public repository snapshot. This build installs no Git credential
+   broker, so authenticated GitHub remotes are refused and a memory-only browser
+   credential flow remains a planned adapter. Or import/export files, folders,
+   and complete repository archives
    through explicit capability paths.
 5. Open a resizable terminal in the workbench at the selected file/directory or
    manage the same persistent Profile-local sessions in the full Terminal view.
@@ -493,7 +526,10 @@ implementation language.
   assertions into verified claims.
 - the compute-continuum planner keeps browser and remote executors behind one
   prepared job contract while preserving their different authorities and proof;
-- `AuthPort`, `AccountTelemetryPort`, and `PaymentPort` keep identity, provider
+- `AuthPort`, `AccountTelemetryPort`, and `PaymentPort` are **planned** contract
+  names, not symbols in this tree; identity, account telemetry, and payment are
+  currently a single Chutes-specific client rather than adapters. They keep
+  identity, provider
   telemetry, and payment authority outside canonical agent events.
 - execution and semantic packs advertise availability before use and remain
   optional.
@@ -860,7 +896,8 @@ query + active scope -> route -> stream selected expert pages -> local fusion
 Every candidate and result retains lineage to the source revision, content
 digest, extractor, chunker, embedding/index generation, scope, and retrieval
 budget. Changed content is reprocessed; incompatible models create a new
-generation; deletions create tombstones.
+generation; deletions remove the affected chunks from the index. Index-level
+deletion tombstones are planned, not implemented.
 
 The shipped context engine provides bounded lexical and deterministic bootstrap
 embedding retrieval over the live virtual workspace. A lazy semantic embedding
@@ -885,7 +922,9 @@ Airship does not download a giant global vector database. It keeps a compact
 local routing mirror and streams only selected encrypted expert pages/ranges for
 the active workspace, directory, repository, worktree, branch, profile, and
 conversation context. Vectors are sensitive derived data and receive the same
-encryption and deletion policy as source content.
+encryption as source content, and a whole-vault wipe reclaims them alongside it.
+Deleting a single source file does not yet reclaim the encrypted expert pages
+derived from it.
 
 The Memory graph is a bounded, client-derived materialization over real
 messages, files, profiles, skills, terms, and lineage. It offers Neo4j-like
@@ -986,8 +1025,9 @@ expands on focus without hiding slash commands or approval state.
 
 The baseline targets current evergreen Chromium, Firefox, and WebKit browsers,
 including installed PWAs and mobile WebViews where required APIs exist. OPFS,
-Web Locks, WebGPU, WASM SIMD/threads, WebContainers, passkey PRF, and native
-bridges are optional accelerators or capability tiers.
+Web Locks, WebGPU, WASM SIMD/threads, WebContainers, and native bridges are
+optional accelerators or capability tiers. Passkey PRF is planned: nothing in
+this tree probes for it.
 
 Airship scales differently from a centralized SaaS agent: static assets can be
 served by a CDN, and each user talks directly to chosen services. There is no
@@ -1055,7 +1095,9 @@ remain alive.
 - boot and lifecycle browser-capability probing with explicit observed-state
   reporting;
 - deterministic static release gate, bundle budgets, unit tests, browser tests,
-  Rust tests, and a reproducible full-system local lab.
+  Rust tests, and a full-system local lab whose final step requires a sibling
+  `chutes-api` checkout plus `uv`/pytest; every other step is reproducible from
+  this repository alone.
 
 ### Conditional
 
@@ -1079,10 +1121,11 @@ remain alive.
 
 ### Planned
 
-- bind each Profile to a durable underlying workspace/files/Git authority, or
-  model an intentionally shared binding explicitly, and carry that boundary
-  through durable Memory/index generations rather than mistaking isolated UI
-  selection for separate storage;
+- bind each Profile to a *durable* underlying workspace/files/Git authority, and
+  model an intentionally shared binding explicitly. Per-Profile subtree
+  isolation itself now ships — each Profile owns a disjoint root and two
+  Profiles never share file bytes — so what remains is cross-device durability
+  and an explicit sharing mode, not the isolation boundary;
 - extend the implemented Profile-partitioned encrypted endpoint-evidence cache
   into a complete proof archive with explicit retention/export policy, durable
   verifier-cache reconstruction, governed local-action Proof, and cross-device
@@ -1301,10 +1344,12 @@ design history:
   top-level Attestations destination; `#attestations` is a compatibility alias.
 - The older “Google Drive first” wording now means first ordinary-user **remote**
   adapter, not the first durable rung. The canonical ladder is page memory →
-  encrypted Local Device → extension-enhanced local capability → Drive or
-  S3-compatible remote durability → future Chutes CPU TEE. Extension enhancement
+  encrypted Local Device → extension-enhanced local capability → Drive remote
+  durability, or an S3-compatible endpoint which this build can only configure
+  as a loopback development lab → future Chutes CPU TEE. Extension enhancement
   is not presently an authoritative Vault, Drive remains preview until its
-  real-provider gates pass, and Chutes CPU TEE remains planned/external.
+  real-provider gates pass, the S3 rung reaches no other device in this release,
+  and Chutes CPU TEE remains planned/external.
 - The opt-in pinned semantic embedding pack is implemented and locally
   executable. Deterministic hash embeddings remain the startup baseline, and
   production-scale persisted semantic generations remain a later gate.

@@ -98,6 +98,69 @@ button.status-seal:hover { border-color: var(--line-strong); background: var(--s
 .command-palette__empty { padding: 2rem; color: var(--ink-muted); text-align: center; }
 .command-palette footer { display: flex; gap: 1rem; justify-content: flex-end; padding: .5rem .75rem; border-top: 1px solid var(--line); color: var(--ink-faint); font-size: var(--fs-micro); }
 .command-palette footer span { display: flex; gap: .25rem; align-items: center; }
+/* The footer taught how to drive the palette and nothing about the eleven
+   chords outside it. This is a real control because the sheet has to be
+   reachable from a phone too, where `?` is a keyboard nobody has. */
+.command-palette__shortcuts {
+  display: flex;
+  gap: .25rem;
+  align-items: center;
+  min-height: var(--touch-target);
+  padding-inline: .35rem;
+  border: 0;
+  color: inherit;
+  background: none;
+  font: inherit;
+  cursor: pointer;
+}
+.command-palette__shortcuts:hover, .command-palette__shortcuts:focus-visible { color: var(--ink); }
+
+/*
+ * ── The shortcut sheet ──────────────────────────────────────────────────────
+ *
+ * Same panel recipe as Preferences; a definition list rather than rows of
+ * controls, because every line here is a fact rather than a choice.
+ */
+.shortcut-sheet {
+  width: min(34rem, 100%);
+  max-height: min(80vh, 48rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding: 1rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-panel);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow);
+}
+.shortcut-sheet > header { display: flex; gap: 1rem; justify-content: space-between; align-items: start; padding-bottom: .5rem; }
+.shortcut-sheet h2 { margin: .15rem 0; font-family: var(--font-display); font-size: var(--fs-title); }
+/* `--touch-target`, not the dialog family's 2.5rem: measured, that recipe
+   renders 43px, and this sheet's only control is the way out of it. */
+.shortcut-sheet > header button { min-height: var(--touch-target); padding-inline: .75rem; border: 1px solid var(--line-strong); border-radius: var(--radius-control); background: var(--surface); }
+.shortcut-sheet section { padding-top: .75rem; border-top: 1px solid var(--line); }
+/* Recipe from the shared `.eyebrow` group in shell.css; only its own box here. */
+.shortcut-sheet h3 { margin: 0; }
+.shortcut-sheet section > p { margin: .3rem 0 .5rem; color: var(--ink-faint); font-size: var(--fs-caption); line-height: 1.45; }
+.shortcut-sheet dl { display: grid; gap: .1rem; margin: .35rem 0 .75rem; }
+.shortcut-sheet dl > div { display: grid; grid-template-columns: 5.5rem minmax(0, 1fr); gap: .75rem; align-items: baseline; min-height: 2rem; padding: .2rem 0; }
+.shortcut-sheet dt { display: flex; gap: .2rem; align-items: center; }
+.shortcut-sheet dd { margin: 0; color: var(--ink); font-size: var(--fs-meta); line-height: 1.4; }
+.shortcut-sheet dd small { display: block; color: var(--ink-faint); font-size: var(--fs-micro); }
+.shortcut-sheet kbd, .command-palette__shortcuts kbd, .command-palette-button kbd {
+  min-width: 1.5rem;
+  padding: .1rem .3rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  color: var(--ink);
+  background: var(--surface-soft);
+  font: var(--fs-micro)/1.4 var(--font-mono);
+  text-align: center;
+}
+/* The topbar's palette control prints its own chord. It was a bare ⌘ glyph
+   whose `title` was the only place `⌘K` appeared in the entire product. */
+.command-palette-button { width: auto; padding-inline: .3rem; }
+.command-palette-button kbd { background: none; border-color: transparent; }
 
 .preferences-dialog {
   width: min(34rem, 100%);
@@ -163,7 +226,7 @@ button.status-seal:hover { border-color: var(--line-strong); background: var(--s
 .trust-sheet__scope > h3 { margin: 0; }
 .trust-sheet__where { margin: .25rem 0 .5rem; color: var(--ink-muted); font-size: var(--fs-caption); line-height: 1.45; }
 
-.pwa-update { position: fixed; z-index: 90; right: max(1rem, env(safe-area-inset-right)); bottom: max(1rem, env(safe-area-inset-bottom)); display: flex; gap: 1rem; align-items: center; max-width: min(30rem, calc(100vw - 2rem)); padding: .75rem; border: 1px solid var(--v-caution); border-radius: var(--radius-panel); background: var(--surface-raised); box-shadow: var(--shadow); transition: opacity 120ms ease, transform 120ms ease; }
+.pwa-update { position: fixed; z-index: 90; right: max(1rem, env(safe-area-inset-right)); bottom: calc(var(--pwa-update-floor, 0px) + max(1rem, env(safe-area-inset-bottom))); display: flex; gap: 1rem; align-items: center; max-width: min(30rem, calc(100vw - 2rem)); padding: .75rem; border: 1px solid var(--v-caution); border-radius: var(--radius-panel); background: var(--surface-raised); box-shadow: var(--shadow); transition: opacity 120ms ease, transform 120ms ease; }
 .pwa-update span, .pwa-update small { display: block; }
 .pwa-update small { margin-top: .2rem; color: var(--ink-muted); font-size: var(--fs-micro); }
 
@@ -260,7 +323,11 @@ button.status-seal:hover { border-color: var(--line-strong); background: var(--s
      would hang 155px off the top of the screen instead of under it. The scrim's
      content box is already the visual viewport, so a percentage of it is the
      room that actually exists. */
-  .command-palette, .preferences-dialog, .trust-sheet { width: 100%; max-height: min(84vh, 44rem, 100%); border-radius: var(--radius-panel) var(--radius-panel) 0 0; }
+  .command-palette, .preferences-dialog, .trust-sheet, .shortcut-sheet { width: 100%; max-height: min(84vh, 44rem, 100%); border-radius: var(--radius-panel) var(--radius-panel) 0 0; }
+  /* Two columns of 5.5rem + text do not fit a 390px sheet with its padding, and
+     a wrapped chord column reads as two shortcuts. The keys take their own
+     line instead. */
+  .shortcut-sheet dl > div { grid-template-columns: minmax(0, 1fr); gap: .15rem; }
   .preferences-dialog { -webkit-overflow-scrolling: touch; }
   /* A capped sheet has to give the height back from the scrolling middle, not
      from the footer: `overflow: hidden` on the palette clipped the ⏎/Esc
@@ -278,7 +345,9 @@ button.status-seal:hover { border-color: var(--line-strong); background: var(--s
   .preference-row { grid-template-columns: 1fr; gap: .35rem; padding: .55rem 0; }
   .profile-approval-preference { grid-template-columns: 1fr; }
   .profile-approval-preference > button { justify-self: stretch; }
-  .pwa-update { right: .5rem; bottom: calc(4.5rem + env(safe-area-inset-bottom)); left: .5rem; }
+  /* J152: the phone constant was 4.5rem for the mobile nav, which is right
+     until the composer grows past it. `--pwa-update-floor` measures both. */
+  .pwa-update { right: .5rem; bottom: calc(var(--pwa-update-floor, 4.5rem) + env(safe-area-inset-bottom) + .5rem); left: .5rem; }
 }
 
 @media (prefers-reduced-motion: reduce) {

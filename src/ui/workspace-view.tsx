@@ -13,8 +13,19 @@ import { isWorkspaceControlPlanePath, normalizeWorkspacePath, workspaceEntryByte
 import { decodeWorkspaceBytes, isWorkspaceBinaryEnvelope } from "../workspace/content-codec";
 import { searchWorkspaceContent, workspaceSearchSummary, type WorkspaceContentSearch } from "../workspace/content-search";
 import { moveWorkspaceFile } from "../workspace/mutations";
+import {
+  adoptWorkspaceWitness,
+  clearWorkspaceWitness,
+  dismissWorkspaceLoss,
+  lostWorkspaceWorkNotice,
+  readWorkspaceWitness,
+  recordWorkspaceWork,
+  WORKSPACE_PAGE_LOAD_ID,
+  writeWorkspaceWitness,
+} from "../workspace/page-witness";
 import { buildWorkspaceTree, visibleWorkspaceTree, workspaceBaseName, workspaceDirectories, workspaceFilesUnder, workspaceFolderRenamePlan, workspaceParentPath, type WorkspaceMove } from "../workspace/tree";
 import { ConfirmDialog } from "./confirm-dialog";
+import type { DurabilityState } from "./durability-indicator";
 import { downloadBytes, downloadFileName } from "./file-download";
 import { Icon } from "./icons";
 import { MenuSelect, moveMenuSelection } from "./menu-select";
@@ -52,6 +63,7 @@ import {
   workbenchArrivalPane,
   workbenchBufferState,
   workbenchDialogCopy,
+  workbenchDiscardConfirmation,
   workbenchDocumentId,
   workbenchFilterMatches,
   workbenchNotice,
@@ -198,6 +210,15 @@ export type WorkspaceViewProps = Readonly<{
   /** Opens one profile-scoped terminal tab at this exact workspace directory. */
   onOpenTerminalAt?: (cwd: string) => void;
   workspaceIdentity?: string;
+  /**
+   * What this workspace's storage authority can actually keep.
+   *
+   * Only `ephemeral` licenses the page witness below to record, and only it
+   * licenses the lost-work sentence: on any durable tier the commits and saves
+   * are still there after a reload, and a notice claiming otherwise would be
+   * the same kind of untruth in the opposite direction.
+   */
+  durability?: Readonly<{ state: DurabilityState }>;
   onOpenRepositoryManager?: () => void;
   /** Which pane the destination that opened this workbench asks for. */
   opensPane?: WorkbenchPane;
@@ -229,6 +250,7 @@ function ProfileScopedWorkspaceView({
   onWorkspaceChanged,
   onOpenTerminalAt,
   workspaceIdentity = "page-memory",
+  durability,
   onOpenRepositoryManager,
   opensPane = "navigation",
   opensPaneArrival = 0,
@@ -343,6 +365,32 @@ function ProfileScopedWorkspaceView({
   const [historyMessage, setHistoryMessage] = useState("");
   const [scmLoading, setScmLoading] = useState(false);
   const [commitMessage, setCommitMessage] = useState("");
+  /*
+   * Adopted once per mount, before this load records anything of its own: the
+   * comparison is between this page load and the one that wrote the witness.
+   * `lost` is what the reload destroyed, held in state so dismissing it is a
+   * decision and not a re-render away from coming back.
+   */
+  const witnessScope = workspaceWorkbenchScope(workspaceIdentity, profileId);
+  const [lostWork, setLostWork] = useState(() => {
+    const adopted = adoptWorkspaceWitness(readWorkspaceWitness(browserSessionStorage(), witnessScope), WORKSPACE_PAGE_LOAD_ID);
+    // Written back at adoption, so the previous load's record is retired
+    // exactly once and the loss survives leaving the route and coming back.
+    writeWorkspaceWitness(browserSessionStorage(), witnessScope, adopted);
+    return adopted.lost;
+  });
+  const ephemeral = durability?.state === "ephemeral";
+  const lostWorkMessage = lostWorkspaceWorkNotice(lostWork);
+  // Adopting a Vault copies this page's workspace and Git state into it, so the
+  // record of work at risk is not merely stale, it is wrong: drop it the moment
+  // the durability claim stops being page memory.
+  useEffect(() => {
+    if (!ephemeral) clearWorkspaceWitness(browserSessionStorage(), witnessScope);
+  }, [ephemeral, witnessScope]);
+  /** Only page-memory work is at risk, so only page-memory work is witnessed. */
+  function witness(work: Readonly<{ commit?: string; savedPath?: string }>): void {
+    if (ephemeral) recordWorkspaceWork(browserSessionStorage(), witnessScope, work);
+  }
   const hoverTimer = useRef<number>();
   const hoverDirectory = useRef("");
   const treeViewport = useRef<HTMLDivElement>(null);
@@ -1017,6 +1065,9 @@ function ProfileScopedWorkspaceView({
       else await workspace.remove(path, { expectedRevision: written.revision });
       throw cause;
     }
+    // The one chokepoint every workbench write passes through, so the witness
+    // cannot miss a save that a new caller forgets to report.
+    witness({ savedPath: written.path });
     return written;
   }
 
@@ -1335,8 +1386,22 @@ function ProfileScopedWorkspaceView({
       // The clear is a consequence of the adapter *accepting* the commit, never
       // of the click: a throw propagates out of `runSourceMutation` and the
       // typed message survives, which is the user's only copy of it.
-      if (await runSourceMutation(git, operation)) setCommitMessage("");
+      if (await runSourceMutation(git, operation)) {
+        // Recorded on acceptance for the same reason, and by subject rather
+        // than by oid: after the reload the oid names nothing, and the subject
+        // is what the person typed and will look for.
+        if (operation.kind === "commit") witness({ commit: commitSubject(operation.request.message) });
+        setCommitMessage("");
+      }
+      // A restore rewrites workspace bytes, which staging and committing never
+      // do — so the tree, the open buffer and the byte counts beside them are
+      // stale the instant it lands. Refreshing only Source Control would leave
+      // the Editor showing the text the user just threw away.
+      if (operation.kind === "restore") await onWorkspaceChanged();
       await refreshSourceControl();
+      if (operation.kind === "restore") {
+        setNotice(workbenchNotice("done", `Discarded worktree changes in ${operation.request.paths.map((path) => path.replace("/workspace/", "")).join(", ")}. ${operation.request.source === "head" ? "The file is back at HEAD." : "The file is back at the staged copy."}`));
+      }
     });
   }
 
@@ -1573,6 +1638,24 @@ function ProfileScopedWorkspaceView({
 
   return (
     <section class="work-view workspace-workbench">
+      {/*
+        The sentence the route owed the person who committed here.
+
+        Measured: commit, reload, and History is back to a freshly-seeded
+        "Initial browser workspace" under a new hash with nothing said. It is a
+        row in the grid, above the panes and before the tab strip, because a
+        loss is the first thing to read on arrival — not a toast that expires
+        while the reader is still looking for the commit. `role="alert"`: this
+        is not the status of an action the reader just took.
+      */}
+      {lostWorkMessage ? <div class="notice workbench-lost-work" data-state="attention" role="alert">
+        <Seal state="attention" density="dot" size={16} label="Work did not survive the reload" />
+        <p>{lostWorkMessage}</p>
+        <button type="button" onClick={() => {
+          dismissWorkspaceLoss(browserSessionStorage(), witnessScope);
+          setLostWork(undefined);
+        }}>Dismiss</button>
+      </div> : null}
       {/*
         One phone control instead of two. Three identically-weighted strips
         stacked to y=424 on a 932px phone; the route strip is now inside the
@@ -2324,6 +2407,16 @@ function SourceControlRail({ repositories, repositoryId, selectRepository, workt
   const { staged, unstaged } = lanes;
   const truncation = workbenchSourceTruncationNote(lanes);
   const operation = (kind: "stage" | "unstage", paths: readonly string[]): GitOperation | undefined => repository && worktree ? { kind, request: { repositoryId: repository.id, worktreeId: worktree.id, paths, expectedWorktreeVersion: worktree.version } } : undefined;
+  /**
+   * The path whose worktree changes are one confirmation from being destroyed.
+   *
+   * Gated the same way deleting a workspace file is, and for the same reason:
+   * the approval dialog behind this decides *permission*, and a profile in
+   * `full-access` mode never shows one. The row's own consequence sentence is
+   * the only thing between a mis-tap and unrecoverable bytes.
+   */
+  const [discarding, setDiscarding] = useState<string>();
+  const discardCopy = discarding ? workbenchDiscardConfirmation(discarding) : undefined;
   return <div class="workspace-scm">
     <label>Repository<MenuSelect placement="down" ariaLabel="Workspace repository" value={repository?.id ?? ""} options={repositories.map((item) => ({ value: item.id, label: item.name }))} onChange={selectRepository} /></label>
     {repository && repository.worktrees.length > 1 ? <label>Worktree<MenuSelect placement="down" ariaLabel="Workspace worktree" value={worktree?.id ?? ""} options={repository.worktrees.map((item) => ({ value: item.id, label: `${item.branch} · ${item.path}` }))} onChange={selectWorktree} /></label> : null}
@@ -2332,8 +2425,19 @@ function SourceControlRail({ repositories, repositoryId, selectRepository, workt
     {!loading && !repository ? <div class="workspace-boundary">No Git repositories are connected to this workspace.</div> : null}
     {staged.length ? <ScmGroup title="Staged" entries={staged} lane="staged" repository={repository} worktree={worktree} openDiff={openDiff} mutate={mutate} /> : null}
     {staged.length > 1 ? <button type="button" onClick={() => { const next = operation("unstage", staged.map((entry) => entry.path)); if (next) void mutate(next); }}>Unstage all visible</button> : null}
-    {unstaged.length ? <ScmGroup title="Changes" entries={unstaged} lane="unstaged" repository={repository} worktree={worktree} openDiff={openDiff} mutate={mutate} /> : null}
+    {unstaged.length ? <ScmGroup title="Changes" entries={unstaged} lane="unstaged" repository={repository} worktree={worktree} openDiff={openDiff} mutate={mutate} discard={setDiscarding} /> : null}
     {unstaged.length > 1 ? <button type="button" onClick={() => { const next = operation("stage", workbenchVisibleStagePaths(unstaged)); if (next) void mutate(next); }}>Stage all visible</button> : null}
+    {discarding && discardCopy && repository && worktree ? <ConfirmDialog
+      title={discardCopy.title}
+      titleDetail={discarding}
+      confirmLabel={discardCopy.confirm}
+      destructive
+      onCancel={() => setDiscarding(undefined)}
+      onConfirm={() => {
+        setDiscarding(undefined);
+        void mutate({ kind: "restore", request: { repositoryId: repository.id, worktreeId: worktree.id, paths: [discarding], source: "head", expectedWorktreeVersion: worktree.version } });
+      }}
+    ><p>{discardCopy.consequence}</p></ConfirmDialog> : null}
     {truncation ? <div class="workspace-boundary attention">{truncation}</div> : null}
     {worktree?.status.some((entry) => entry.index) ? <div class="scm-commit"><textarea aria-label="Commit message" value={commitMessage} onInput={(event) => setCommitMessage(event.currentTarget.value)} placeholder="Commit message" /><button class="primary" type="button" disabled={!commitMessage.trim()} onClick={() => repository && mutate({ kind: "commit", request: { repositoryId: repository.id, worktreeId: worktree.id, message: commitMessage, author: DEFAULT_AUTHOR, expectedWorktreeVersion: worktree.version } })}>Commit staged</button></div> : null}
     {/*
@@ -2365,7 +2469,7 @@ function SourceControlRail({ repositories, repositoryId, selectRepository, workt
   </div>;
 }
 
-function ScmGroup({ title, entries, lane, repository, worktree, openDiff, mutate }: { title: string; entries: readonly GitStatusEntry[]; lane: "staged" | "unstaged"; repository?: GitRepositorySnapshot; worktree?: GitWorktreeSnapshot; openDiff(document: WorkbenchStatusDiffDocument, mode: WorkbenchDocumentOpenMode): void; mutate(operation: GitOperation): void | Promise<void> }) {
+function ScmGroup({ title, entries, lane, repository, worktree, openDiff, mutate, discard }: { title: string; entries: readonly GitStatusEntry[]; lane: "staged" | "unstaged"; repository?: GitRepositorySnapshot; worktree?: GitWorktreeSnapshot; openDiff(document: WorkbenchStatusDiffDocument, mode: WorkbenchDocumentOpenMode): void; mutate(operation: GitOperation): void | Promise<void>; discard?(path: string): void }) {
   return <section class="scm-group"><header><strong>{title}</strong><span>{entries.length}</span></header>{entries.map((entry) => {
     const delta = lane === "staged" ? entry.index : entry.worktree;
     const conflicted = delta?.kind === "conflicted";
@@ -2390,6 +2494,22 @@ function ScmGroup({ title, entries, lane, repository, worktree, openDiff, mutate
       ><span>{entry.path}</span><b>{conflicted ? "C" : delta?.kind === "added" ? "A" : delta?.kind === "deleted" ? "D" : delta?.kind === "renamed" ? "R" : "M"}</b></button>
       <div>
         <button type="button" aria-label={`Open and keep ${lane} diff ${entry.path}`} title="Open and keep" disabled={!document} onClick={() => { if (document) openDiff(document, "pinned"); }}>↗</button>
+        {/*
+          The way back from a bad save, on the row that is showing you the
+          damage. `git restore` was implemented and approved and reachable only
+          by typing it into a text field on another route, so the Workspace
+          surface had every verb that makes a change and none that takes one
+          back. A conflicted path is fenced out for the same reason staging is:
+          restoring one half of an unresolved merge is not a recovery.
+        */}
+        {lane === "unstaged" && discard ? <button
+          class="danger"
+          type="button"
+          aria-label={`Discard changes in ${entry.path}`}
+          title={conflicted ? "Merge conflict — resolve it in Advanced source controls before discarding." : `Discard changes in ${entry.path} and return it to HEAD`}
+          disabled={!repository || !worktree || conflicted}
+          onClick={() => discard(entry.path)}
+        >↺</button> : null}
         {/*
           Staging a conflicted path cannot resolve the conflict — only mark it
           resolved verbatim — so the Advanced controls fence it out of every
@@ -2513,6 +2633,12 @@ function readTabState(
       ...(worktreeId ? { worktreeId } : {}),
     };
   } catch { return empty; }
+}
+
+/** A partitioned or blocked session storage costs the durability notice, nothing else. */
+function browserSessionStorage(): Storage | undefined {
+  try { return typeof sessionStorage === "undefined" ? undefined : sessionStorage; }
+  catch { return undefined; }
 }
 
 function boundedSourceSelectionId(value: unknown): string | undefined {
@@ -2667,6 +2793,7 @@ export type WorkbenchSourceMutations = Readonly<{
   stage(request: Extract<GitOperation, { kind: "stage" }>["request"]): Promise<unknown>;
   unstage(request: Extract<GitOperation, { kind: "unstage" }>["request"]): Promise<unknown>;
   commit(request: Extract<GitOperation, { kind: "commit" }>["request"]): Promise<unknown>;
+  restore(request: Extract<GitOperation, { kind: "restore" }>["request"]): Promise<unknown>;
 }>;
 
 /**
@@ -2683,7 +2810,14 @@ export async function runSourceMutation(git: WorkbenchSourceMutations, operation
   if (operation.kind === "stage") { await git.stage(operation.request); return false; }
   if (operation.kind === "unstage") { await git.unstage(operation.request); return false; }
   if (operation.kind === "commit") { await git.commit(operation.request); return true; }
-  // The rail issues exactly the three verbs above; anything else reaching here
+  // The way back from a bad save. `restore` was implemented, approved and
+  // reachable only by typing `git restore <path>` into the Terminal route's
+  // Browser Git field: a scan of every button, summary and menu item in
+  // Explorer, the Editor and Source Control for discard/revert/undo returned
+  // nothing at all, so the one surface that shows you the damage had no verb
+  // for it.
+  if (operation.kind === "restore") { await git.restore(operation.request); return false; }
+  // The rail issues exactly the four verbs above; anything else reaching here
   // is a caller bug, and refreshing the pane is the honest response to it.
   return false;
 }

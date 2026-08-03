@@ -142,8 +142,12 @@ function validateAllowedOrigin(value: string): string {
 export function directFetchDiagnostic(error: unknown): LocalProviderDiagnostic {
   if (error instanceof LocalProviderError) return error.diagnostic;
   if (error instanceof DOMException && error.name === "AbortError") {
-    return /timed out/i.test(error.message)
-      ? errorDiagnostic("timeout", "The local model request timed out.")
+    // The deadline's own sentence, when it set one: a streaming generation and
+    // a 30-second catalog probe elapse for different reasons and must not be
+    // reported with one string. Only a deadline may reach this branch with
+    // "timed out" in it — a user cancel carries the caller's reason.
+    return /timed out/iu.test(error.message)
+      ? errorDiagnostic("timeout", error.message.trim() || "The local model request timed out.")
       : errorDiagnostic("cancelled", "The local model request was cancelled.");
   }
   if (globalThis.navigator?.onLine === false) {

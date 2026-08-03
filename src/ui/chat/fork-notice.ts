@@ -73,6 +73,53 @@ export function forkContextClause(counts: ForkContextCounts): string {
     : `${carried}; ${omitted.join(" and ")} fell outside the bounded seed and are not in this branch's context.`;
 }
 
+/** How long a branch title's leading excerpt may run before the action word. */
+const BRANCH_TITLE_EXCERPT = 64;
+
+/** The action words this module appends, and strips before appending again. */
+const BRANCH_TITLE_SUFFIX: Readonly<Record<ForkBranchKind, string>> = Object.freeze({
+  "fork-after-answer": "fork",
+  "fork-before-prompt": "fork",
+  edit: "edit",
+  retry: "retry",
+});
+
+const TRAILING_ACTIONS = /(?:\s·\s(?:edit|retry|fork))+$/u;
+
+/**
+ * What a branch is called.
+ *
+ * Titles were built as `${source.title} · ${action}`, so a line of thought
+ * turned into "Base question", "Base question · retry", "Base question · retry
+ * · retry", "Base question · retry · retry · edit" — and two Edit & branches
+ * taken from *different* turns of one conversation were both called "Q1 about
+ * retrieval · edit". In the library column the title element rendered 119px of
+ * 353px, so the only distinguishing part was exactly the part that was clipped.
+ *
+ * A branch is named for the turn it changed, with the action word last: the
+ * distinguishing text is then the part that survives truncation, and two
+ * branches from two different turns cannot collide. Concatenation is bounded by
+ * construction — an ancestor's own trailing action words are stripped before
+ * one is added — so a retry of a retry is still one action deep in its name.
+ */
+export function branchTitleFor(
+  kind: ForkBranchKind,
+  anchorText: string | undefined,
+  sourceTitle: string,
+): string {
+  const action = BRANCH_TITLE_SUFFIX[kind];
+  const lead = titleExcerpt(anchorText) || titleExcerpt(sourceTitle.replace(TRAILING_ACTIONS, "")) || "Branch";
+  return `${lead} · ${action}`.slice(0, 240);
+}
+
+function titleExcerpt(value: string | undefined): string {
+  const line = (value ?? "").replace(/\s+/gu, " ").trim();
+  if (line.length <= BRANCH_TITLE_EXCERPT) return line;
+  const cut = line.slice(0, BRANCH_TITLE_EXCERPT);
+  const boundary = cut.lastIndexOf(" ");
+  return `${(boundary > BRANCH_TITLE_EXCERPT / 2 ? cut.slice(0, boundary) : cut).trimEnd()}…`;
+}
+
 /** The full sentence a branch announces, headline and reach together. */
 export function forkBranchNotice(kind: ForkBranchKind, counts: ForkContextCounts): string {
   return `${FORK_BRANCH_HEADLINES[kind]} ${forkContextClause(counts)}`;

@@ -121,6 +121,18 @@ export type SessionPresentationMarker = Readonly<{
    * over one perfectly valid rename.
    */
   presentable: boolean;
+  /**
+   * The ancestor turns a branch actually inherited, in order.
+   *
+   * The seed event has always carried them; nothing read them, so a branch
+   * opened announcing "Carrying 4 ancestor messages; none omitted." over
+   * `document.querySelectorAll('.message').length === 0` and the first-run
+   * empty state. The count and the screen disagreed, the model was answering
+   * from context the person could not read, and the only other trace was a
+   * digest. A number the reader can expand is a disclosure; a number they must
+   * take on faith is not.
+   */
+  carriedContext?: readonly Readonly<{ role: string; content: string }>[];
 }>;
 
 export type SessionMessagePresentation = Readonly<{
@@ -716,7 +728,19 @@ function sessionMarker(event: DurableEvent): SessionPresentationMarker {
   // because a marker that states a lineage must state one the payload proves.
   if (event.type === FORK_CONTEXT_EVENT_TYPE) {
     const seed = canonicalForkContextSeed(event.payload);
-    if (seed) return Object.freeze({ ...base, presentable: true, detail: forkContextDetail(seed) });
+    if (seed) {
+      return Object.freeze({
+        ...base,
+        presentable: true,
+        detail: forkContextDetail(seed),
+        // Re-validated above, so these are the exact messages the branch's
+        // provider context was sealed with — not a reconstruction of them.
+        carriedContext: Object.freeze(seed.messages.map((message) => Object.freeze({
+          role: message.role,
+          content: message.content,
+        }))),
+      });
+    }
   }
   /*
    * The two out-of-turn records, said in the transcript rather than counted in

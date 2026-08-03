@@ -11,6 +11,9 @@ import type {
 } from "./contracts";
 import { tokenize } from "./hash-embeddings";
 
+/** The mount every workspace path shares, stated once. */
+const WORKSPACE_ROOT_PREFIX = "/workspace/";
+
 const INDEXABLE_EXTENSIONS = new Map<string, string>([
   [".txt", "text/plain"],
   [".md", "text/markdown"],
@@ -166,7 +169,7 @@ export class IncrementalWorkspaceIndexer {
           contentDigest,
           chunkIndex,
           text,
-          tokens: tokenize(text),
+          tokens: chunkSearchTokens(file.path, text),
           vector: vectors[chunkIndex]!,
         })),
       );
@@ -191,6 +194,37 @@ export class IncrementalWorkspaceIndexer {
     this.lastYieldAt = this.clock();
     if (signal?.aborted) throw signal.reason;
   }
+}
+
+/**
+ * A chunk is searchable by its own name, not only by its prose.
+ *
+ * Measured: the Memory route's own suggestion chip — aria-label "Search memory
+ * for retrieval, from this page's workspace source", minted from the path
+ * notes/retrieval.md — returned "No memory matched “retrieval”" while the Index
+ * panel on the same screen read "INDEXED notes/retrieval.md · 1 chunk". The chip
+ * is a claim about the corpus and the corpus indexed only the file's body, so
+ * the two disagreed by construction.
+ *
+ * Path tokens are lexical evidence of exactly the kind a body word is — the file
+ * is literally named that — so they join the token set the lexical score reads,
+ * deduplicated so a word in both places is not counted twice. The dense vector
+ * still embeds the text alone: a filename is not prose, and it must not move
+ * what a chunk is *about*.
+ */
+export function chunkSearchTokens(path: string, text: string): string[] {
+  const tokens = tokenize(text);
+  const seen = new Set(tokens);
+  // The mount point is not part of any file's name: tokenizing the whole
+  // absolute path would put "workspace" in every chunk and make it a term that
+  // matches the entire corpus lexically.
+  const named = path.startsWith(WORKSPACE_ROOT_PREFIX) ? path.slice(WORKSPACE_ROOT_PREFIX.length) : path;
+  for (const token of tokenize(named)) {
+    if (seen.has(token)) continue;
+    seen.add(token);
+    tokens.push(token);
+  }
+  return tokens;
 }
 
 export function chunkText(text: string, maxCharacters = 1_200, overlapCharacters = 160): string[] {

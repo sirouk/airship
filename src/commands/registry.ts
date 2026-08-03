@@ -313,10 +313,21 @@ function inspectToolSchema(schemaValue: JsonValue): ToolSchema {
   });
 }
 
+/**
+ * The one sentence for the one rule.
+ *
+ * `--json` is accepted as the first and only tool argument, and the usage line
+ * used to advertise it trailing the positionals — so the reader who followed
+ * the documentation got "Unknown option: --json." from one branch here and a
+ * bare "must be the only tool argument" from another. One rule, one wording,
+ * naming both forms that do parse.
+ */
+const JSON_FORM_RULE = "--json must be the only tool argument. Use /command --json '<json>' on its own, or the positional form without it.";
+
 function parseToolArguments(tokens: readonly string[], schema: ToolSchema): JsonValue {
   if (tokens[0] === "--json" || tokens[0]?.startsWith("--json=")) {
     if (tokens.length !== (tokens[0] === "--json" ? 2 : 1)) {
-      invalid("--json must be the only tool argument.");
+      invalid(JSON_FORM_RULE);
     }
     const raw = tokens[0] === "--json" ? tokens[1]! : tokens[0]!.slice("--json=".length);
     return parseJsonToken(raw, "--json");
@@ -348,6 +359,10 @@ function parseToolArguments(tokens: readonly string[], schema: ToolSchema): Json
       const equals = token.indexOf("=");
       const option = equals >= 0 ? token.slice(0, equals) : token;
       const property = byOption.get(option);
+      // `--json` is a real option in the wrong place, not an unknown one. A
+      // person who followed the usage line's old ordering was told the flag did
+      // not exist, which sends them looking for a different command.
+      if (!property && option === "--json") invalid(JSON_FORM_RULE);
       if (!property) invalid(`Unknown option: ${option}.`);
       if (supplied.has(property.name)) invalid(`Argument ${property.name} was supplied more than once.`);
       const negated = option.startsWith("--no-");
@@ -423,9 +438,20 @@ function parsePropertyValue(raw: string, property: ToolProperty): JsonValue {
   return value;
 }
 
+/**
+ * Two forms, because the parser has two forms.
+ *
+ * Measured defect: `/help` printed
+ * `/update-memory <action> [id] [content] [source] [--json <json>]`, and typing
+ * exactly that — positionals first, then the flag — answered "Unknown option:
+ * --json." `parseToolArguments` accepts `--json` only as the first *and only*
+ * token, so the trailing `[--json <json>]` documented a syntax the product
+ * rejects. A usage line is a promise about the parser; this one states the
+ * alternation the parser actually implements.
+ */
 function toolUsage(name: string, args: readonly SlashArgumentDescriptor[]): string {
   const positional = args.map((argument) => argument.required ? `<${argument.name}>` : `[${argument.name}]`);
-  return [`/${name}`, ...positional, "[--json <json>]"].join(" ");
+  return [`/${name}`, ...positional].join(" ") + ` | /${name} --json <json>`;
 }
 
 function normalizeAvailability(value: SlashCommandAvailability | undefined): SlashCommandAvailability {

@@ -28,7 +28,15 @@ test.describe("Local Device Vault actual-app journey", () => {
       await openActualVault(page);
       await selectVaultProvider(page, "Local Device");
       await expect(page.getByRole("heading", { name: "Local Device Vault", level: 2 })).toBeVisible();
-      await expect(page.getByText("Local Device setup required", { exact: true })).toBeVisible();
+      /*
+       * The panel answers the intent that sends a person here rather than
+       * stating the requirement that blocks them. It used to read "Attention ·
+       * Local Device setup required" — a requirement in the failure register,
+       * offered as the remedy for work that in many cases had not been lost at
+       * all. Pinned as removed in vault-view.test.ts; asserted here as what a
+       * person now actually reads.
+       */
+      await expect(page.getByText("Keep this browser’s work on this device", { exact: false })).toBeVisible();
 
       await page.getByRole("button", { name: "Create new" }).click();
       const recoveryOutput = page.locator(".local-device-vault__ceremony output");
@@ -39,6 +47,11 @@ test.describe("Local Device Vault actual-app journey", () => {
         sessionStorage: false,
       });
 
+      // Saving the key is what unlocks the claim about having saved it: the
+      // acknowledgement is disabled until the key has been copied, downloaded
+      // or written down, because the whole point of a one-time recovery key is
+      // that the claim is true. "By hand" needs no clipboard permission.
+      await page.getByRole("button", { name: "I wrote it down by hand" }).click();
       // Acknowledgement intentionally removes the checkbox and secret in the
       // same event, so click rather than waiting for a post-click checked state.
       await page.getByLabel(/I saved this recovery key outside Airship/u).click();
@@ -67,7 +80,9 @@ test.describe("Local Device Vault actual-app journey", () => {
       );
 
       const downloadPromise = page.waitForEvent("download");
-      await page.getByRole("button", { name: "Download backup" }).click();
+      // Renamed with the recovery kit: the control says what the file is, and
+      // says it differently once one has been taken ("Download a fresh backup").
+      await page.getByRole("button", { name: /Download (encrypted backup|a fresh backup)/u }).click();
       const download = await downloadPromise;
       expect(download.suggestedFilename()).toMatch(/\.airship-vault$/u);
       const backup = await downloadBytes(download);
@@ -304,16 +319,43 @@ function observePageErrors(page: Page): string[] {
   return errors;
 }
 
+/**
+ * Inside the phone's width, and reachable down its length.
+ *
+ * This asserted `y >= 0` for every element, which is unsatisfiable for anything
+ * taller than the screen — and the Local Device ceremony is now 858px inside a
+ * 664px viewport, because it grew the step that makes you save the recovery key
+ * before you can claim you saved it. `scrollIntoViewIfNeeded` on an
+ * over-tall element parks its top above the fold by construction, so the test
+ * was reporting an unavoidable geometry as a defect while the thing that would
+ * actually hurt a person on a phone — sideways scrolling, a control off the
+ * right edge — went unchecked at 336px wide inside 390.
+ *
+ * So the claim is split. Horizontal containment is absolute: nothing may sit
+ * left of the screen or past its right edge, at any height. Vertically, an
+ * element that fits must be wholly visible; one that cannot fit must still have
+ * a reachable top, which is what scrolling to it proves.
+ */
 async function expectInsideViewport(page: Page, locator: Locator): Promise<void> {
   await locator.scrollIntoViewIfNeeded();
   const box = await locator.boundingBox();
   const viewport = page.viewportSize();
   expect(box).not.toBeNull();
   expect(viewport).not.toBeNull();
-  expect(box!.x).toBeGreaterThanOrEqual(0);
-  expect(box!.y).toBeGreaterThanOrEqual(0);
-  expect(box!.x + box!.width).toBeLessThanOrEqual(viewport!.width + 1);
-  expect(box!.y).toBeLessThan(viewport!.height);
+  expect(box!.x, "left of the screen").toBeGreaterThanOrEqual(0);
+  expect(box!.x + box!.width, "past the right edge").toBeLessThanOrEqual(viewport!.width + 1);
+  expect(box!.y, "starts below the fold after being scrolled to").toBeLessThan(viewport!.height);
+
+  if (box!.height <= viewport!.height) {
+    expect(box!.y, "fits the screen and is still cut off at the top").toBeGreaterThanOrEqual(0);
+    return;
+  }
+  // Taller than the screen: the top has to be reachable, so scroll to it and
+  // require it to land in view. An element whose top cannot be brought on
+  // screen is genuinely unusable, and that is what this now catches.
+  await locator.evaluate((element) => element.scrollIntoView({ block: "start" }));
+  const top = await locator.boundingBox();
+  expect(top!.y, "its top cannot be scrolled into view").toBeGreaterThanOrEqual(-1);
 }
 
 async function createEncryptedSourceBackup(

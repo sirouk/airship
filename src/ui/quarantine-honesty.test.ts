@@ -28,8 +28,11 @@ describe("quarantine and resume honesty", () => {
     expect(auditCheck, "the audit gate must exist").toBeGreaterThan(-1);
     expect(raise, "the flag must be raised after the audit gate").toBeGreaterThan(auditCheck);
 
-    // And it must travel with the quarantine record rather than being recomputed.
-    expect(app).toMatch(/quarantined = Object\.freeze\(\{[^}]*historyVerified/su);
+    // And it must travel with the quarantine record rather than being
+    // recomputed. `??=`, because adoption now walks the whole shelf of
+    // resumable conversations and the *first* failure — the one the person was
+    // last in — is the one reported, rather than the last one tried.
+    expect(app).toMatch(/quarantined \?\?= Object\.freeze\(\{[^}]*historyVerified/su);
   });
 
   it("never prints the intact-history sentence unconditionally", () => {

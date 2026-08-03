@@ -1,9 +1,37 @@
 import { expect, test, type Page } from "@playwright/test";
+import { waitForShellSettled } from "./support/settled";
+
+/*
+ * The rail's recents disclosure now opens itself the first time a profile turns
+ * out to have conversations in it — capability coming forward rather than
+ * waiting to be found. These specs were written when it always started closed,
+ * so an unconditional "Expand" click had become a coin flip: when the effect
+ * had already fired, the affordance said Collapse and the click either missed
+ * or shut the list the test was about to read.
+ *
+ * So they state what they need instead of assuming it.
+ */
+async function openRailRecents(scope: import("@playwright/test").Locator): Promise<void> {
+  const expand = scope.getByRole("button", { name: "Expand recent conversations" });
+  if (await expand.count()) await expand.click();
+}
 
 test("every conversation has a stable addressed URL and new conversations do not overwrite it", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium", "desktop addressed conversation contract");
   await page.goto("/#chat");
+  await waitForShellSettled(page);
   await expect(page.locator(".app-shell")).toBeVisible();
+  /*
+   * Past the boot reload before the address is trusted.
+   *
+   * A cold visit mints a conversation address, the service worker takes control
+   * and the document reloads, and a second, different address is minted — see
+   * `waitForShellSettled`. `.app-shell` is visible in the document about to be
+   * replaced and the address pattern matches the address about to be abandoned,
+   * so every URL captured here was the wrong one and every round trip back to
+   * it "failed" by returning the right conversation.
+   */
+  await waitForShellSettled(page);
   await expect(page).toHaveURL(/#chat\/[^/?#]+$/);
   const firstUrl = page.url();
 
@@ -24,6 +52,7 @@ test("every conversation has a stable addressed URL and new conversations do not
 test("desktop chat title supports durable inline rename", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium", "desktop inline rename contract");
   await page.goto("/#chat");
+  await waitForShellSettled(page);
   await expect(page.locator(".app-shell")).toBeVisible();
 
   await page.locator(".session-bar__identity-button").dblclick();
@@ -36,7 +65,7 @@ test("desktop chat title supports durable inline rename", async ({ page }, testI
 
   await expect(page.locator(".session-bar__title")).toHaveText("Inline rename survives navigation");
   const navigation = page.getByRole("navigation", { name: "Primary" });
-  await navigation.getByRole("button", { name: "Expand recent conversations" }).click();
+  await openRailRecents(navigation);
   await expect(navigation.getByRole("group", { name: "Profile conversations" }))
     .toContainText("Inline rename survives navigation");
 });
@@ -44,6 +73,7 @@ test("desktop chat title supports durable inline rename", async ({ page }, testI
 test("mobile exposes an explicit durable conversation rename action", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile-chromium", "mobile rename contract");
   await page.goto("/#chat");
+  await waitForShellSettled(page);
   await expect(page.locator(".app-shell")).toBeVisible();
   await page.getByRole("button", { name: "Rename conversation" }).click();
   const input = page.getByRole("textbox", { name: "Conversation title" });
@@ -69,6 +99,7 @@ test("mobile exposes an explicit durable conversation rename action", async ({ p
 test("a rename from All conversations reaches the chat title and the rail recents", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium", "desktop library rename propagation contract");
   await page.goto("/#chat");
+  await waitForShellSettled(page);
   await expect(page.locator(".app-shell")).toBeVisible();
   await expect(page).toHaveURL(/#chat\/[^/?#]+$/);
   const conversation = page.url();
@@ -76,7 +107,7 @@ test("a rename from All conversations reaches the chat title and the rail recent
   // In-app navigation, not a reload: a reload would restart the runtime and
   // hide the propagation this test is about.
   const navigation = page.getByRole("navigation", { name: "Primary" });
-  await navigation.getByRole("button", { name: "Expand recent conversations" }).click();
+  await openRailRecents(navigation);
   await navigation.locator("#airship-recent-conversations").getByRole("button", { name: "All conversations", exact: true }).click();
   await expect(page).toHaveURL(/#sessions$/);
 
@@ -102,6 +133,7 @@ test("a rename from All conversations reaches the chat title and the rail recent
 test("conversation branches preserve their source and navigate back through lineage", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium", "desktop immutable branch contract");
   await page.goto("/#chat");
+  await waitForShellSettled(page);
   await expect(page).toHaveURL(/#chat\/[^/?#]+$/);
   const sourceUrl = page.url();
   // Forked from a real turn rather than from the welcome card. That card is
@@ -138,6 +170,7 @@ test("conversation branches preserve their source and navigate back through line
 test("edit and retry create distinct immutable branches", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium", "desktop branch-aware message actions");
   await page.goto("/#chat");
+  await waitForShellSettled(page);
   await expect(page).toHaveURL(/#chat\/[^/?#]+$/);
   const sourceUrl = page.url();
   const prompt = "Explain why immutable branches are useful.";
@@ -167,6 +200,7 @@ test("edit and retry create distinct immutable branches", async ({ page }, testI
 test("each addressed conversation restores its own unsent draft", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium", "desktop conversation draft contract");
   await page.goto("/#chat");
+  await waitForShellSettled(page);
   await expect(page).toHaveURL(/#chat\/[^/?#]+$/);
   const sourceUrl = page.url();
   const composer = page.getByRole("combobox", { name: "Message Airship" });
@@ -179,7 +213,7 @@ test("each addressed conversation restores its own unsent draft", async ({ page 
   // AMENDED: the conversation list is a disclosure now, so it is opened before
   // it is read. The rows, their order and their targets are unchanged.
   const navigation = page.getByRole("navigation", { name: "Primary" });
-  await navigation.getByRole("button", { name: "Expand recent conversations" }).click();
+  await openRailRecents(navigation);
   const source = navigation
     .locator("#airship-recent-conversations .recent-conversation:not(.active)")
     .first();
@@ -191,6 +225,7 @@ test("each addressed conversation restores its own unsent draft", async ({ page 
 test("an addressed draft survives a full page reload before session resume", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium", "desktop reload draft contract");
   await page.goto("/#chat");
+  await waitForShellSettled(page);
   await expect(page).toHaveURL(/#chat\/[^/?#]+$/);
   const addressedUrl = page.url();
   const composer = page.getByRole("combobox", { name: "Message Airship" });
@@ -211,6 +246,7 @@ test("an addressed draft survives a full page reload before session resume", asy
   // The old assertion also only ever passed on a race — the first URL poll ran
   // before canonicalisation rewrote the hash.
   await expect(page.locator(".app-shell")).toBeVisible();
+  await waitForShellSettled(page);
   await expect(composer).toHaveValue("Restore this addressed draft after reload");
   await expect(page.locator(".composer-notice")).toContainText("did not survive the reload");
   await expect(page).toHaveURL(/#chat\/[^/?#]+$/);
@@ -220,6 +256,7 @@ test("an addressed draft survives a full page reload before session resume", asy
   await page.reload();
 
   await expect(page.locator(".app-shell")).toBeVisible();
+  await waitForShellSettled(page);
   await expect(composer).toHaveValue("Restore this addressed draft after reload");
   await expect.poll(() => page.url()).not.toBe(rehomedUrl);
 });
@@ -227,6 +264,7 @@ test("an addressed draft survives a full page reload before session resume", asy
 test("desktop treats Chat as the conversation disclosure and preserves the full ledger", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium", "desktop conversation information architecture");
   await page.goto("/#chat");
+  await waitForShellSettled(page);
   const navigation = page.getByRole("navigation", { name: "Primary" });
   await expect(navigation.getByRole("button", { name: "Sessions", exact: true })).toHaveCount(0);
   await expect(navigation.getByRole("button", { name: "Chat", exact: true })).toHaveAttribute("aria-current", "page");
@@ -234,11 +272,28 @@ test("desktop treats Chat as the conversation disclosure and preserves the full 
   // The profile-local thread tree expands directly beneath Chat. It is bounded
   // to the rail, keeps the complete-ledger action reachable, and names the
   // active profile rather than presenting a global session bucket.
+  /*
+   * The disclosure comes forward on its own now, so this asserts the contract
+   * rather than the old default.
+   *
+   * It used to pin "Expand recent conversations" with `aria-expanded="false"`
+   * and no panel — a rail that starts closed and waits to be found. The rail
+   * opens the list the first time the profile turns out to have something in
+   * it, which is the product law about capability coming forward, and the
+   * button renamed itself to match. The claims worth holding are unchanged and
+   * are all still made below: the panel exists, it is bounded to the rail, its
+   * label agrees with its state, and a person can close it and open it again.
+   */
+  const recent = navigation.locator("#airship-recent-conversations");
+  await expect(recent).toBeVisible();
+  const collapse = navigation.getByRole("button", { name: "Collapse recent conversations" });
+  await expect(collapse).toHaveAttribute("aria-expanded", "true");
+  // Closing is the person's choice and it must actually close.
+  await collapse.click();
+  await expect(navigation.locator("#airship-recent-conversations")).toHaveCount(0);
   const disclosure = navigation.getByRole("button", { name: "Expand recent conversations" });
   await expect(disclosure).toHaveAttribute("aria-expanded", "false");
-  await expect(navigation.locator("#airship-recent-conversations")).toHaveCount(0);
   await disclosure.click();
-  const recent = navigation.locator("#airship-recent-conversations");
   await expect(recent).toBeVisible();
   await expect(recent).toContainText("General conversations");
   expect(await recent.locator(".recent-conversation").count()).toBeLessThanOrEqual(10);
@@ -266,8 +321,9 @@ test("desktop treats Chat as the conversation disclosure and preserves the full 
 test("desktop favorites remain journal-backed and isolated to the active profile", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium", "desktop profile favorite contract");
   await page.goto("/#chat");
+  await waitForShellSettled(page);
   const navigation = page.getByRole("navigation", { name: "Primary" });
-  await navigation.getByRole("button", { name: "Expand recent conversations" }).click();
+  await openRailRecents(navigation);
   const tree = navigation.getByRole("group", { name: "Profile conversations" });
   const active = tree.locator(".recent-conversation.active");
   await expect(active).toBeVisible();
@@ -293,6 +349,7 @@ test("desktop favorites remain journal-backed and isolated to the active profile
 test("mobile keeps conversations out of the fixed bar and exposes the ledger through More", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile-chromium", "mobile conversation information architecture");
   await page.goto("/#chat");
+  await waitForShellSettled(page);
   await expect(page).toHaveURL(/#chat\/[^/?#]+$/);
   const originalConversation = page.url();
   await page.getByRole("region", { name: "Agent session" }).getByRole("button", { name: "New conversation" }).click();
@@ -451,10 +508,15 @@ test("Memory keeps its shared-query contract at the 768px tablet boundary", asyn
   await expect(relationships.locator(".memory-node-detail h2")).toBeVisible();
   await openMemoryIndex(page);
   await expect(page.getByRole("status", { name: "Shared Memory query in the workspace index" })).toContainText("Following “workspace”");
+  // Polled past the index's own first paint: opening it inserts a results
+  // region that is briefly wider than its column before the grid settles, and
+  // the default 5s poll caught that frame on a loaded machine. The claim is
+  // that the route settles with no overflow, not that it never has a frame with
+  // any.
   await expect.poll(() => page.evaluate(() => ({
     documentOverflow: document.documentElement.scrollWidth - innerWidth,
     mainOverflow: document.querySelector<HTMLElement>("main")!.scrollWidth - document.querySelector<HTMLElement>("main")!.clientWidth,
-  }))).toEqual({ documentOverflow: 0, mainOverflow: 0 });
+  })), { timeout: 20_000 }).toEqual({ documentOverflow: 0, mainOverflow: 0 });
 });
 
 test("an open Index shares one slow search authority with Recall", async ({ page }, testInfo) => {
@@ -486,6 +548,7 @@ test("an open Index shares one slow search authority with Recall", async ({ page
 test("the pinned profile row switches profiles, names each one, and reaches the manager", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium", "desktop profile information architecture");
   await page.goto("/#chat");
+  await waitForShellSettled(page);
   const navigation = page.getByRole("navigation", { name: "Primary" });
   await expect(navigation.getByRole("button", { name: "Skills", exact: true })).toHaveCount(0);
   await expect(navigation.getByRole("button", { name: "Capabilities", exact: true })).toHaveCount(0);
@@ -499,7 +562,26 @@ test("the pinned profile row switches profiles, names each one, and reaches the 
   await expect(navigation.locator("#airship-profile-navigation")).toHaveCount(0);
   const profileRow = page.locator(".sidebar .profile-switcher");
   await expect(profileRow).toBeVisible();
-  expect(Math.round((await profileRow.boundingBox())!.height)).toBeLessThanOrEqual(56);
+  /*
+   * 56px was the whole pinned block when the block was one control.
+   *
+   * It now holds three: the profile picker (40px), "Profiles" (40px), and the
+   * profile-scoped routes Skills and Capabilities (73px) — which is where those
+   * two destinations went when they left the primary nav, asserted two lines
+   * above. 128px is the honest measurement of what the row legitimately
+   * contains.
+   *
+   * The claim worth keeping is not a number, it is that the pinned block stays
+   * small enough for the rail to fit its global destinations: this test's own
+   * comment records that an inner 310px scroller was one of the two reasons the
+   * rail could not. So the picker itself is still held to one compact row, the
+   * block is bounded well below that old scroller, and the rail is asserted to
+   * fit rather than merely to be short.
+   */
+  expect(Math.round((await profileRow.locator(".menu-select").boundingBox())!.height)).toBeLessThanOrEqual(56);
+  expect(Math.round((await profileRow.boundingBox())!.height)).toBeLessThanOrEqual(160);
+  const railFits = await page.locator(".rail").evaluate((element) => element.scrollHeight - element.clientHeight);
+  expect(railFits).toBeLessThanOrEqual(1);
   const picker = profileRow.getByRole("button", { name: "Agent profile" });
   await picker.click();
   const listbox = page.getByRole("listbox", { name: "Agent profile" });
@@ -552,6 +634,7 @@ test("a profile catalog larger than ten never makes the rail scroll", async ({ p
   // every destination stays inside its painted box. The catalog is still
   // complete: one menu option per profile, counted against the route's cards.
   await page.goto("/#chat");
+  await waitForShellSettled(page);
   const rail = page.locator(".primary-nav");
   const railState = await rail.evaluate((element) => ({
     overflow: element.scrollHeight - element.clientHeight,
@@ -585,9 +668,21 @@ test("Proof owns receipt, journal, and attestation evidence without a duplicate 
  * and was removed; the disclosure is the ordinary heading it always was.
  */
 async function openMemoryIndex(page: Page): Promise<void> {
+  /*
+   * Converges on open instead of reading once and clicking once.
+   *
+   * This checked `open`, decided to click, and asserted the result — a
+   * check-then-act race with the disclosure's own state. If it opened between
+   * the read and the click, the click closed it again, and the assertion then
+   * failed on a control that had done exactly what it was told twice. It failed
+   * about one run in four under repetition.
+   */
   const index = page.locator("#memory-index");
-  if (!await index.evaluate((element: HTMLDetailsElement) => element.open)) {
+  const isOpen = () => index.evaluate((element: HTMLDetailsElement) => element.open);
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    if (await isOpen()) return;
     await index.locator("summary").click();
+    await page.waitForTimeout(150);
   }
-  await expect.poll(() => index.evaluate((element: HTMLDetailsElement) => element.open)).toBe(true);
+  await expect.poll(isOpen, { timeout: 10_000 }).toBe(true);
 }

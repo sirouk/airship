@@ -1,6 +1,6 @@
 import type { ComponentChildren } from "preact";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
-import { isContextSupersession, type ClientContextCandidate, type ClientContextEngineState, type ClientContextSearchHit, type ClientContextSearchResult } from "../indexing/client-context-engine";
+import { RETRIEVAL_FLOOR_HEADING, isContextSupersession, type ClientContextCandidate, type ClientContextEngineState, type ClientContextSearchHit, type ClientContextSearchResult } from "../indexing/client-context-engine";
 import { getClientContextRuntime } from "../retrieval/client-context-runtime";
 import type { WorkspaceEntry, WorkspacePort } from "../workspace/contracts";
 import { Icon } from "./icons";
@@ -157,6 +157,16 @@ export function ContextView({ workspace, entries, dimensions = 384, resultLimit 
     setLocalSearchStatus("cancelled");
   }
 
+  /*
+   * The floor the engine already applied, read where the counts are spoken.
+   *
+   * The engine classifies every hit against the posture of the provider that
+   * embedded it; this panel stops calling a disqualified row a hit. Both lists
+   * render — the disqualified ones under their own heading — so the split is a
+   * statement about confidence, never a deletion.
+   */
+  const confidentHits = searchResult?.hits.filter((hit) => hit.confidence !== "weak") ?? [];
+  const weakHits = searchResult?.hits.filter((hit) => hit.confidence === "weak") ?? [];
   const generation = engineState.generation;
   const candidateWindow = useMemo(
     () => contextCandidateWindow(generation?.candidates ?? [], candidatePages),
@@ -400,16 +410,16 @@ export function ContextView({ workspace, entries, dimensions = 384, resultLimit 
         <section class="context-surface context-results" aria-labelledby="context-results-title">
           <div class="context-surface-heading">
             <div><span>Generation-pinned retrieval</span><h2 id="context-results-title">Search hits</h2></div>
-            <span>{searchResult ? `${searchResult.hits.length} in ${formatMilliseconds(searchResult.durationMs)}` : "No query"}</span>
+            <span>{searchResult ? `${confidentHits.length} in ${formatMilliseconds(searchResult.durationMs)}${weakHits.length ? ` · ${weakHits.length} below floor` : ""}` : "No query"}</span>
           </div>
-          {searchResult?.hits.length ? (
+          {confidentHits.length ? (
             <div class="context-hit-list">
-              {searchResult.hits.map((hit, index) => (
+              {confidentHits.map((hit, index) => (
                 <ContextHitRow
                   key={hit.chunkId}
                   hit={hit}
                   rank={index + 1}
-                  generationDigest={searchResult.generationDigest}
+                  generationDigest={searchResult!.generationDigest}
                   onOpenFile={onOpenFile}
                   renderProvenance={renderProvenance}
                 />
@@ -418,8 +428,12 @@ export function ContextView({ workspace, entries, dimensions = 384, resultLimit 
           ) : searchResult ? (
             <ContextEmpty
               icon="context"
-              title="No local matches"
-              body={`The active flat index returned no candidates for this generation and result limit. ${candidateSummary(stats?.byStatus ?? {})} in this generation.`}
+              title={weakHits.length ? "No confident match" : "No local matches"}
+              /* The nearest row and its score, in the panel that would
+                 otherwise have counted it as a hit. */
+              body={weakHits.length
+                ? `Closest: ${displayPath(weakHits[0]!.path)} at ${formatScore(weakHits[0]!.score)} combined — below the floor for this embedding engine. ${candidateSummary(stats?.byStatus ?? {})} in this generation.`
+                : `The active flat index returned no candidates for this generation and result limit. ${candidateSummary(stats?.byStatus ?? {})} in this generation.`}
               action={{ label: "Change the query", onAct: () => focusContextQuery(embedded) }}
             />
           ) : (
@@ -430,6 +444,26 @@ export function ContextView({ workspace, entries, dimensions = 384, resultLimit 
               action={{ label: embedded ? "Search memory" : "Search the active generation", onAct: () => focusContextQuery(embedded) }}
             />
           )}
+          {/* Shown in every settled state, counted in none: a row the floor
+              disqualified is still a row the generation holds, and this panel
+              is where its scores and lineage are inspected. */}
+          {weakHits.length ? (
+            <details class="context-below-floor">
+              <summary><span>{RETRIEVAL_FLOOR_HEADING}</span><small>{weakHits.length} row{weakHits.length === 1 ? "" : "s"} · not counted as {weakHits.length === 1 ? "a hit" : "hits"}</small></summary>
+              <div class="context-hit-list">
+                {weakHits.map((hit, index) => (
+                  <ContextHitRow
+                    key={hit.chunkId}
+                    hit={hit}
+                    rank={index + 1}
+                    generationDigest={searchResult!.generationDigest}
+                    onOpenFile={onOpenFile}
+                    renderProvenance={renderProvenance}
+                  />
+                ))}
+              </div>
+            </details>
+          ) : null}
         </section>
       </div>
 
@@ -648,7 +682,7 @@ function ContextHitRow({ hit, rank, generationDigest, onOpenFile, renderProvenan
         {onOpenFile ? <button class="context-open" type="button" onClick={() => onOpenFile(hit.path)}>Open in editor</button> : null}
         {renderProvenance(workspaceBaseName(hit.path), rows)}
       </div>
-      <p class="context-hit__why"><span>{humanKind(hit.path)}</span>{whyMatched(hit.denseScore, hit.lexicalScore)}</p>
+      <p class="context-hit__why" data-confidence={hit.confidence}><span>{humanKind(hit.path)}</span>{whyMatched(hit)}</p>
       <p class="context-hit__chunk" data-expanded={expanded ? "true" : "false"}>{hit.text}</p>
       {hit.text.length > CONTEXT_CHUNK_PREVIEW_CHARACTERS ? (
         <button class="context-hit__more" type="button" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}>
@@ -666,9 +700,17 @@ function humanKind(path: string): string {
   return "Workspace source";
 }
 
-function whyMatched(dense: number, lexical: number): string {
-  if (lexical > dense) return "Matched the query’s exact words and nearby terms.";
-  if (dense > lexical) return "Matched the query’s broader meaning in this local index.";
+/**
+ * The row's own sentence about why it is here — including when it should not be.
+ *
+ * "Matched the query’s broader meaning in this local index" was printed over a
+ * hash-collision score of 0.046 for a query the file does not contain. A row the
+ * engine disqualified states the disqualifying fact instead of a match claim.
+ */
+function whyMatched(hit: Pick<ClientContextSearchHit, "denseScore" | "lexicalScore" | "confidence" | "weakBecause">): string {
+  if (hit.confidence === "weak") return hit.weakBecause ?? "Below the confidence floor for this embedding engine: the nearest row, not a match.";
+  if (hit.lexicalScore > hit.denseScore) return "Matched the query’s exact words and nearby terms.";
+  if (hit.denseScore > hit.lexicalScore) return "Matched the query’s broader meaning in this local index.";
   return "Matched both words and local semantic signals.";
 }
 
@@ -730,8 +772,21 @@ function candidateSummary(byStatus: Readonly<Record<string, number>>): string {
 function searchStatusText(status: "idle" | "searching" | "cancelled" | "complete", result?: ClientContextSearchResult): string {
   if (status === "searching") return "Searching the active in-memory generation…";
   if (status === "cancelled") return "Search cancelled; no stale result was committed.";
-  if (status === "complete" && result) return `${result.hits.length} result${result.hits.length === 1 ? "" : "s"} sealed to ${result.generationDigest}.`;
+  if (status === "complete" && result) return `${resultCountText(result)} sealed to ${result.generationDigest}.`;
   return "Search is cancellable and automatically invalidated by a workspace refresh.";
+}
+
+/**
+ * How many hits a status line may claim.
+ *
+ * The count is of rows that cleared the floor; rows below it are reported
+ * separately in the same breath rather than folded into the number, which is
+ * how "1 result" came to stand for a hash collision.
+ */
+function resultCountText(result: ClientContextSearchResult, noun = "result"): string {
+  const confident = result.hits.filter((hit) => hit.confidence !== "weak").length;
+  const weak = result.hits.length - confident;
+  return `${confident} ${noun}${confident === 1 ? "" : "s"}${weak ? ` · ${weak} below the confidence floor` : ""}`;
 }
 
 function sharedContextResult(state: FederatedMemorySearchState | undefined, query: string, generationDigest?: string): ClientContextSearchResult | undefined {
@@ -759,7 +814,7 @@ function managedSearchStatusText(
   if (!query.trim()) return "The index stays ready while the shared query is empty.";
   if (phase !== "ready") return "The query will run when the current workspace generation becomes searchable.";
   if (status === "searching") return "Searching the active in-memory generation with the query above…";
-  if (status === "complete" && result) return `${result.hits.length} index result${result.hits.length === 1 ? "" : "s"} sealed to ${result.generationDigest}.`;
+  if (status === "complete" && result) return `${resultCountText(result, "index result")} sealed to ${result.generationDigest}.`;
   return "The shared query is ready to run against this exact workspace generation.";
 }
 

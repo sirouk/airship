@@ -84,7 +84,7 @@ describe("the topbar speaks for the browser tab", () => {
     // The chip's count is its statement of its own cost and it may not shrink
     // to match the narrower set the verdict is drawn from; `airship-shell.spec`
     // asserts the sheet renders exactly as many rows as the chip claims.
-    expect(topbar).toContain("{axes.length} axes");
+    expect(topbar).toContain("{axes.length} runtime claims");
   });
 
   it("keeps every axis in the sheet, grouped rather than dropped", () => {

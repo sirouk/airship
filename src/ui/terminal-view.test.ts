@@ -13,11 +13,15 @@ import {
   terminalCloseConfirmation,
   terminalEmulatorWrite,
   terminalFooterNotice,
+  terminalGitHandoffSentence,
   terminalGitNotice,
   terminalPanelAutoStart,
   terminalPersistenceNotice,
   terminalSealState,
+  terminalShellGitHandoff,
   terminalTypography,
+  terminalUnreconciledInputs,
+  TERMINAL_KEYBOARD_OWNERSHIP,
 } from "./terminal-view";
 
 describe("terminal runtime band", () => {
@@ -421,5 +425,121 @@ describe("closing a terminal tab", () => {
     expect(source).toContain("onClick={() => setClosing(true)} aria-label=\"Close terminal tab\"");
     expect(source).toMatch(/onConfirm=\{\(\) => \{ setClosing\(false\); closeButton\.current\?\.focus\(\); void close\(\); \}\}/u);
     expect(source).toContain('import { ConfirmDialog } from "./confirm-dialog";');
+  });
+});
+
+/*
+ * One workspace was described by three mutually contradictory absolute paths in
+ * a single frame — chip "/workspace", prompt "~/airship-node/airship-workspace",
+ * Git note "/workspace" — and the one printed most prominently was the one
+ * `ls` could not find. The shell's own chrome now leads with the path `pwd`
+ * prints, and every surface that names the other spelling names it as the same
+ * directory rather than as a second one.
+ */
+describe("one workspace, one identity, two spellings", () => {
+  const source = readFileSync(new URL("./terminal-view.tsx", import.meta.url), "utf8");
+
+  it("prints the shell's own path in the shell's own status bar", () => {
+    expect(source).toContain("<code aria-hidden=\"true\" title={workspaceAddressNote(session.cwd)}>{terminalShellPath(session.cwd)}</code>");
+    // The workspace spelling stays beside it — removing either one is how the
+    // contradiction returns.
+    expect(source).toContain('<span class="terminal-panel__mirror" aria-hidden="true">= {session.cwd}</span>');
+    expect(source).toContain('<span class="sr-only">{workspaceAddressNote(session.cwd)}</span>');
+  });
+
+  it("names both spellings wherever a sentence spans the shell and the workspace", () => {
+    const closing = terminalCloseConfirmation({ name: "shell", status: "running", cwd: "/workspace/sources/repo" }, { state: "ephemeral" });
+    expect(closing.consequence).toContain("/home/airship-node/airship-workspace/sources/repo");
+    expect(closing.consequence).toContain("/workspace/sources/repo in Explorer");
+  });
+
+  it("keeps the Git bridge's scope note naming the directory the shell resolves", () => {
+    expect(source).toContain("the same directory the {WEB_CONTAINER_TERMINAL_RUNTIME.shellLabel} process calls <code>{terminalShellPath(gitCwd)}</code>");
+  });
+});
+
+/*
+ * `git status` is the likeliest first command on this route, and jsh answered
+ * it with "jsh: command not found: git" while the bridge that can answer it sat
+ * 200px below with `git status` as its placeholder. The refusal is a seam now.
+ */
+describe("a git the shell cannot run", () => {
+  it("lifts only the most recent submitted git line", () => {
+    expect(terminalShellGitHandoff(["ls", "git status"])).toBe("git status");
+    expect(terminalShellGitHandoff(["  git log --oneline  "])).toBe("git log --oneline");
+    expect(terminalShellGitHandoff(["git"])).toBe("git");
+  });
+
+  it("does not offer the bridge a command that is not git, or a stale one", () => {
+    expect(terminalShellGitHandoff(["git status", "ls"])).toBeUndefined();
+    expect(terminalShellGitHandoff(["gitalias status"])).toBeUndefined();
+    expect(terminalShellGitHandoff([])).toBeUndefined();
+    expect(terminalShellGitHandoff(undefined)).toBeUndefined();
+  });
+
+  it("says the same thing in both places it makes the offer", () => {
+    expect(terminalGitHandoffSentence("git status")).toBe("git status needs Browser Git: this jsh process has no git binary.");
+  });
+
+  it("stands where the scope paragraph stood, keeping the field's description", () => {
+    const source = readFileSync(new URL("./terminal-view.tsx", import.meta.url), "utf8");
+    // Added as an extra row it cost 114px, and this route's grid is
+    // height-locked: at 390x844 the browser took those pixels out of the tab
+    // strip, crushing a 44px tab to 23px.
+    expect(source).toContain('<p class="notice terminal-git__handoff" id="terminal-git-scope"');
+    expect(source).toContain('aria-describedby="terminal-git-scope"');
+    expect(source.match(/id="terminal-git-scope"/gu)).toHaveLength(2);
+  });
+
+  it("offers the lifted line to the bridge on both the route and the dock", () => {
+    const source = readFileSync(new URL("./terminal-view.tsx", import.meta.url), "utf8");
+    // Route: fills the field and runs it, so the answer lands in the region
+    // that already exists for bridge output rather than in the PTY scrollback.
+    expect(source).toContain("setGitCommand(gitHandoff);");
+    expect(source).toContain("void runGit(gitHandoff);");
+    // Dock: it owns no command row, so the refusal routes to the view that does
+    // instead of dead-ending a second time.
+    expect(source).toContain('{variant === "dock" && gitHandoff ?');
+  });
+});
+
+describe("the drift a sync button used to ask the reader to guess at", () => {
+  const record = (kind: "interactive-input" | "workspace-reconcile", recordedAt: string) => ({
+    id: `${kind}-${recordedAt}`, sequence: 1, kind, outcome: "completed" as const, recordedAt, processEpoch: 1, summary: kind,
+  });
+  const session = (audit: readonly ReturnType<typeof record>[]) => ({ audit } as never);
+
+  it("counts only the lines no reconciliation has followed", () => {
+    // Measured: `echo 'from the terminal' > from-terminal.txt` left Explorer at
+    // three files with nothing on screen saying the two copies had diverged.
+    expect(terminalUnreconciledInputs([session([
+      record("interactive-input", "2026-07-31T10:00:00.000Z"),
+      record("workspace-reconcile", "2026-07-31T10:00:01.000Z"),
+      record("interactive-input", "2026-07-31T10:00:02.000Z"),
+      record("interactive-input", "2026-07-31T10:00:03.000Z"),
+    ])])).toBe(2);
+  });
+
+  it("is zero the moment a reconciliation lands, across every tab", () => {
+    expect(terminalUnreconciledInputs([
+      session([record("interactive-input", "2026-07-31T10:00:00.000Z")]),
+      session([record("workspace-reconcile", "2026-07-31T10:00:05.000Z")]),
+    ])).toBe(0);
+  });
+
+  it("counts everything before the first reconciliation, because the mount was never pushed back", () => {
+    expect(terminalUnreconciledInputs([session([
+      record("interactive-input", "2026-07-31T10:00:00.000Z"),
+      record("interactive-input", "2026-07-31T10:00:01.000Z"),
+    ])])).toBe(2);
+  });
+});
+
+describe("who owns the keyboard inside a terminal", () => {
+  it("names the chords that stop firing and the key that leaves", () => {
+    // Measured: after clicking the xterm, `g` then `s` left the hash at
+    // `#terminal`, and no text anywhere on the route mentioned focus.
+    expect(TERMINAL_KEYBOARD_OWNERSHIP).toContain("g-chords do not fire");
+    expect(TERMINAL_KEYBOARD_OWNERSHIP).toContain("Shift+Tab");
   });
 });

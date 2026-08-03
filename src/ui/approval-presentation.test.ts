@@ -103,7 +103,15 @@ describe("approval presentation", () => {
     expect(writeApprovalFacts("execute_workspace_program", WRITE_FIXTURES.execute_workspace_program as never).targets)
       .toEqual(["text_editor"]);
     expect(writeApprovalFacts("git_change", WRITE_FIXTURES.git_change as never))
-      .toMatchObject({ disposition: expect.stringContaining("Git commit"), targets: ["repo", "tree"] });
+      .toMatchObject({ disposition: expect.stringContaining("Git commit"), targets: ["repo/tree"] });
+  });
+
+  it("leads a Git write with the file, not with the two ids that look like one", () => {
+    // Rendered before this: "Target airship-workspace, main, README.md" — three
+    // peers, of which only the last is what the person is deciding about.
+    expect(writeApprovalFacts("git_change", {
+      action: "stage", repositoryId: "airship-workspace", worktreeId: "main", paths: ["README.md"], expectedWorktreeVersion: "v1",
+    }).targets).toEqual(["README.md", "airship-workspace/main"]);
   });
 
   it("says so out loud when a write tool has no mapped consequence", async () => {

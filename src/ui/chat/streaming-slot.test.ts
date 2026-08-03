@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
-import { arrivalAnnouncement, TranscriptStreamStore } from "./streaming-slot";
+import { TranscriptStreamStore } from "./streaming-slot";
 
 /**
  * The class of bug this file exists to stop hiding.
@@ -69,17 +69,17 @@ describe("the streaming caret", () => {
   });
 });
 
-describe("the stream is not a live region, and the settled turn is announced once", () => {
+describe("the stream is not a live region, and announces nothing itself", () => {
   /*
    * `aria-live="polite"` on the streaming container turned every text delta
    * into a queued screen-reader utterance: a fast stream left the reader
    * minutes behind, narrating half-written sentences over everything else on
-   * the page. Removing it was right; removing it and putting nothing at settle
-   * time was not — turn start was still announced ("Airship is composing a
-   * reply") and arrival was announced by nothing at all, leaving the topbar's
-   * "Local kernel ready" as the only signal a reply had landed. So both halves
-   * are pinned here: no live region on either streaming container, and exactly
-   * one settle-time region that carries the words.
+   * the page. Removing it was right; the settle-time region that replaced it
+   * was written here, per message, and could only ever quote the stream buffer
+   * — empty on the demo provider and every non-streaming path, which is why the
+   * promised excerpt was never spoken on the journey every cold visitor takes.
+   * `turn-narration.ts` owns the whole lifecycle now, from the settled body, so
+   * what is pinned here is that this slot carries no announcement at all.
    */
   // Comments are stripped first — this repo's prose names the very attribute it
   // constrains (`terminalViewCode()` in `terminal-view.test.ts` sets the
@@ -100,53 +100,19 @@ describe("the stream is not a live region, and the settled turn is announced onc
     expect(streaming.slice(0, streaming.indexOf("<MarkdownView"))).not.toContain("aria-live");
   });
 
-  it("carries exactly one polite region, sr-only and fed only at settle time", async () => {
+  it("carries no live region of its own, so the lifecycle has exactly one speaker", async () => {
     const slot = codeOnly(await streamingSlotSource());
-    expect(slot.match(/aria-live=/gu) ?? []).toHaveLength(1);
-    expect(slot).toContain('<span class="sr-only" role="status" aria-live="polite" aria-atomic="true">{arrival}</span>');
-    // `arrival` is written in exactly two places: the settle branch, and the
-    // resets (turn start, and the timer that retires the sentence). Anything
-    // that wrote it from the delta subscription would be the old defect back.
-    expect(slot).toContain("setArrival(arrivalAnnouncement(streamed.current));");
-    expect(slot).toMatch(/if \(active\) \{\s*setArrival\(""\);/u);
-    expect(slot).toContain('setTimeout(() => setArrival(""), ARRIVAL_ANNOUNCEMENT_MS)');
-    expect(slot).not.toMatch(/subscribe\([^)]*\)[^;]*setArrival/u);
+    expect(slot.match(/aria-live=/gu) ?? []).toHaveLength(0);
+    // The per-message arrival region and everything that fed it are gone, not
+    // merely quiet: two of them mutated in the same frame as the shell's status
+    // mirror at settle time.
+    expect(slot).not.toContain("arrivalAnnouncement");
+    expect(slot).not.toContain("setArrival");
   });
 
-  it("mounts the region before the settle commit, because a region inserted with its text is not reliably read", async () => {
+  it("still mounts from turn start, because a card that appears with its text is announced by nothing", async () => {
     const slot = codeOnly(await streamingSlotSource());
-    // The gate on rendering anything is "was this message ever live in this
-    // mount", not "is it live now": if it were `active`, the region would
-    // unmount in the same commit that ends the turn and remount with the
-    // sentence already in it, which several screen readers do not announce.
     expect(slot).toContain("if (!streamedThisMount.current) return null;");
     expect(slot).toContain("if (active) streamedThisMount.current = true;");
-  });
-
-  it("says the turn ended and quotes what landed, without claiming success", () => {
-    // The slot cannot see a failed turn — `status` is cleared either way — so
-    // the sentence may not assert one. It states the event and hands over the
-    // words; the card and the runtime line carry the disposition.
-    expect(arrivalAnnouncement("The three files are listed below."))
-      .toBe("Airship’s turn ended. The three files are listed below.");
-    expect(arrivalAnnouncement("")).toBe("Airship’s turn ended.");
-    expect(arrivalAnnouncement("   \n  ")).toBe("Airship’s turn ended.");
-    // Markdown is punctuation to a synthesiser, and a heading hash or a fence
-    // gets read out loud or swallows the word after it.
-    expect(arrivalAnnouncement("## Result\n\n`ok` and **done**"))
-      .toBe("Airship’s turn ended. Result ok and done");
-    expect(arrivalAnnouncement("```ts\nconst x = 1;\n```"))
-      .toBe("Airship’s turn ended. const x = 1;");
-  });
-
-  it("truncates a long reply at a word boundary instead of speaking the whole answer", () => {
-    const long = `${"alpha ".repeat(60)}omega`;
-    const spoken = arrivalAnnouncement(long);
-    expect(spoken.endsWith("…")).toBe(true);
-    expect(spoken).not.toContain("omega");
-    // The excerpt is bounded, and the break is not mid-word.
-    const excerpt = spoken.replace("Airship’s turn ended. ", "").replace("…", "");
-    expect(excerpt.length).toBeLessThanOrEqual(200);
-    expect(excerpt.endsWith("alpha")).toBe(true);
   });
 });

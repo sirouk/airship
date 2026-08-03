@@ -130,6 +130,33 @@ describe("sessionIntegrityRow", () => {
     expect(row.label).toContain("proof scope");
   });
 
+  /*
+   * A conversation nobody has spoken in passes every check by having nothing to
+   * check. Measured on a returning person's first screen: a 0-message record
+   * minted seconds earlier rendered "Structure passed / Ready to resume / 0
+   * receipts" over "transcript · 0 messages" — a green completion claim on an
+   * empty shell, on the exact screen where the previous day's work should have
+   * been.
+   */
+  it("claims nothing about a conversation nothing was said in", () => {
+    const row = sessionIntegrityRow(integrityInput({
+      messageCount: 0,
+      history: { status: "consistent", label: "Journal structure passed", checkedEvents: 2, totalEvents: 2, turnCount: 0 },
+    }));
+    expect(row.pills.map((pill) => pill.label)).not.toContain("Structure passed");
+    expect(row.pills.map((pill) => pill.label)).not.toContain("Ready to resume");
+    expect(row.pills[0]).toMatchObject({ state: "none", label: "Nothing recorded yet" });
+    expect(row.pills[1]).toMatchObject({ state: "none", label: "Empty conversation" });
+    // Collapse may only ever hide agreement, and there is nothing here to
+    // disagree about — an empty record must not force its own expansion.
+    expect(row.autoExpanded).toBe(false);
+  });
+
+  it("still reads a used conversation normally when a message count is supplied", () => {
+    const row = sessionIntegrityRow(integrityInput({ messageCount: 4 }));
+    expect(row.pills.map((pill) => pill.label)).toEqual(["Structure passed", "Ready to resume", "0 receipts"]);
+  });
+
   it("does not claim a runtime decision when no runtime was supplied", () => {
     const row = sessionIntegrityRow(integrityInput({ compatibility: undefined }));
     expect(row.pills[1]).toMatchObject({ state: "none", label: "No active runtime" });

@@ -62,6 +62,7 @@
   font-weight: var(--fw-strong);
 }
 
+
 .billing-provider-tab strong > svg,
 .billing-provider-inventory__header h2 > svg {
   flex-shrink: 0;
@@ -97,6 +98,20 @@
    while another provider's panel is open. */
 .billing-provider-tab[data-state="rejected"] span {
   color: var(--danger, #ce7769);
+}
+
+/* The rule that reconciles this route's four rows with Connection's count of
+   ways in, on the same rung as the strip it explains. */
+.billing-provider-scope {
+  display: flex;
+  gap: var(--sp-2, 8px);
+  align-items: center;
+  flex-wrap: wrap;
+  max-width: 74ch;
+  margin: 0;
+  color: var(--ink-muted, #9fa5a3);
+  font-size: var(--fs-caption);
+  line-height: 1.5;
 }
 
 .billing-provider-panel {
@@ -430,13 +445,22 @@
 }
 
 @media (max-width: 640px) {
+  /*
+   * Two rows of two, not a four-column carousel.
+   *
+   * Measured at 390: `minmax(136px, 1fr)` made the strip 560px wide, so the
+   * Anthropic tab ended at x=430 and the xAI tab at x=570 — both off-screen —
+   * while the page itself reported no horizontal overflow. It did scroll, but
+   * nothing on screen said so: no edge, no partial tab, no affordance of any
+   * kind, so two of the four providers were simply absent. A provider you
+   * cannot see is a provider you cannot select, and this strip is the only
+   * Chutes state visible while another provider's panel is open. Four tabs fit
+   * a phone in two rows, so the scroll — and the snap that served it — is not
+   * needed at all. Reorganised into the space that exists rather than reduced
+   * to what fits on one line.
+   */
   .billing-provider-tabs {
-    grid-template-columns: repeat(4, minmax(136px, 1fr));
-    scroll-snap-type: x proximity;
-  }
-
-  .billing-provider-tab {
-    scroll-snap-align: start;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .billing-account-identity dl,

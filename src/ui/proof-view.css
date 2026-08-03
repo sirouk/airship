@@ -34,6 +34,9 @@
   gap: var(--sp-2) var(--sp-4);
   align-items: center;
   justify-content: space-between;
+  /* Same reason as `.proof-surface-tabs`: the row it wraps must be allowed to
+   * shrink, or the cap on its child is a cap on nothing. */
+  min-width: 0;
 }
 
 .proof-view .proof-surface-tabs {
@@ -100,7 +103,22 @@
 
 .proof-verdict {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  /*
+   * The claim rail is bounded, and the reason is worth keeping.
+   *
+   * This track was `auto`, and an `auto` track takes its max-content before the
+   * other column gets anything. The rail's trigger is one unwrapped sentence —
+   * "No evidence / No provider turn has completed, so this..." — so at 1024x900
+   * the columns resolved to 819px and 48px, and the 220px scope panel inside
+   * that 48px body ran 132px past the main column. The Proof route, the screen
+   * whose whole job is to be checkable, scrolled sideways on a laptop.
+   *
+   * `minmax(0, auto)` did not fix it: `auto` is still max-content as a maximum.
+   * A ceiling is what actually bounds it. 22rem holds the rail's status line at
+   * a comfortable measure and leaves the body its half; below 820px the stacked
+   * layout below takes over and the ceiling stops applying.
+   */
+  grid-template-columns: minmax(0, 22rem) minmax(0, 1fr);
   gap: var(--sp-3) var(--sp-4);
   align-items: start;
   padding: var(--sp-4);
@@ -113,9 +131,14 @@
 .proof-verdict__claims {
   grid-row: 1;
   grid-column: 1;
+  /* Without this the rail's own content re-imposes the width the track ceiling
+     was added to remove: a grid item's automatic minimum is its min-content. */
+  min-width: 0;
 }
 
 .proof-verdict__claims > .popover__trigger {
+  max-width: 100%;
+  text-align: start;
   padding: 0;
   border: 0;
   background: none;
@@ -355,7 +378,12 @@
   color: var(--ground);
 }
 
-@media (max-width: 760px) {
+/* 820px, not 760px: 768 is the classic tablet width and it fell in the gap.
+   Measured on this build at 768x900, `.proof-verdict`'s two-column
+   `auto minmax(0, 1fr)` pushed the verdict context and the conversation scope
+   186px past the main column — a horizontally scrolling Proof route on the
+   width most tablets actually report. */
+@media (max-width: 820px) {
   .proof-verdict {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -461,4 +489,124 @@
 .proof-view .proof-actions .small-button {
   min-height: 44px;
   padding-block: 0;
+}
+
+/* ── What this evidence is about, and the way back to it ─────────────── */
+
+/*
+ * The scope block, above the fold on both device classes.
+ *
+ * Measured: `#proof?session=…&receipt=…&turn=…` named neither the conversation
+ * nor the message, and every enabled control led further into evidence. This is
+ * the subject and the return; it sits inside `.proof-verdict__body` so it
+ * inherits the one column the phone collapses to.
+ */
+.proof-scope {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: var(--sp-1);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--line-control);
+  border-radius: var(--radius-panel);
+  background: var(--surface-soft);
+  min-width: 0;
+}
+
+.proof-scope p { margin: 0; min-width: 0; font-size: var(--fs-caption); overflow-wrap: anywhere; }
+.proof-scope .eyebrow { display: block; }
+.proof-scope__conversation strong { display: block; font-size: var(--fs-meta); color: var(--ink); }
+.proof-scope__conversation code { font: var(--fw-body) var(--fs-micro) / 1.5 var(--font-mono); color: var(--ink-faint); }
+.proof-scope__state { color: var(--ink-muted); }
+.proof-scope__return { justify-self: start; min-height: 44px; }
+
+/* ── The records the counts classify ─────────────────────────────────── */
+
+.proof-activity {
+  display: grid;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+/* Two columns where there is room for two. A single column of one-line records
+   in a 1160px measure is a list of stubs with 900px of nothing beside them. */
+@media (min-width: 1100px) {
+  .proof-activity__list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+.proof-activity__list { display: grid; gap: var(--sp-2); margin: 0; padding: 0; list-style: none; }
+
+.proof-activity__row {
+  display: grid;
+  gap: 3px;
+  padding: var(--sp-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  min-width: 0;
+}
+
+/* The turn the address named, marked where it sits rather than lifted out of
+   order: a reader following a deep link needs to see it among its neighbours. */
+.proof-activity__row[data-scoped="true"] { border-color: var(--line-strong); background: var(--surface-soft); }
+
+.proof-activity__row p { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.proof-activity__head { display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-2); align-items: baseline; }
+.proof-activity__kind { font-size: var(--fs-micro); letter-spacing: .04em; text-transform: uppercase; color: var(--ink-faint); }
+.proof-activity__state { font-size: var(--fs-micro); color: var(--ink-muted); }
+.proof-activity__state[data-outcome="failed"],
+.proof-activity__state[data-outcome="denied"] { color: var(--v-caution); }
+.proof-activity__title { font-size: var(--fs-caption); color: var(--ink); }
+.proof-activity__facts { display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-3); margin: 0; }
+.proof-activity__facts > div { display: flex; gap: var(--sp-1); min-width: 0; font-size: var(--fs-micro); }
+.proof-activity__facts dt { color: var(--ink-faint); }
+.proof-activity__facts dd { margin: 0; color: var(--ink-muted); overflow-wrap: anywhere; }
+
+.proof-activity__grounding > summary { font-size: var(--fs-micro); color: var(--ink-muted); cursor: pointer; min-height: 32px; display: flex; align-items: center; }
+.proof-activity__grounding ul { display: grid; gap: var(--sp-1); margin: 0; padding: 0 0 0 var(--sp-2); list-style: none; }
+.proof-activity__grounding li { display: grid; gap: 1px; min-width: 0; }
+.proof-activity__grounding strong { font-size: var(--fs-micro); color: var(--ink); overflow-wrap: anywhere; }
+.proof-activity__grounding span { font-size: var(--fs-micro); color: var(--ink-muted); }
+/* A 51-character digest in a 340px column: it wraps rather than clipping,
+   because a digest a reader cannot copy in full proves nothing. */
+.proof-activity__grounding code,
+.proof-activity__receipt code { font: var(--fw-body) var(--fs-micro) / 1.5 var(--font-mono); color: var(--ink-faint); overflow-wrap: anywhere; }
+.proof-activity__grounding-absent { font-size: var(--fs-micro); color: var(--ink-faint); }
+.proof-activity__open { justify-self: start; min-height: 32px; padding: 0; border: 0; background: none; color: var(--ink-muted); font-size: var(--fs-micro); cursor: pointer; }
+.proof-activity__open:hover { color: var(--ink); }
+.proof-activity__coverage { margin: 0; font-size: var(--fs-micro); color: var(--ink-faint); }
+
+/* ── What has left this device ───────────────────────────────────────── */
+
+.proof-egress {
+  display: grid;
+  gap: var(--sp-1);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--line-control);
+  border-radius: var(--radius-panel);
+  background: var(--surface-raised);
+  min-width: 0;
+}
+
+.proof-egress p { margin: 0; font-size: var(--fs-caption); color: var(--ink-muted); overflow-wrap: anywhere; }
+.proof-egress__route { font-size: var(--fs-micro) !important; color: var(--ink-faint) !important; }
+
+/* ── What each export discloses, before it is pressed ────────────────── */
+
+.proof-view dl.proof-export-boundary {
+  display: grid;
+  gap: var(--sp-2);
+  margin: 0;
+}
+
+.proof-view dl.proof-export-boundary > div { display: grid; gap: 1px; min-width: 0; }
+.proof-view dl.proof-export-boundary dt { font-size: var(--fs-micro); letter-spacing: .04em; text-transform: uppercase; color: var(--ink-faint); }
+.proof-view dl.proof-export-boundary dd { margin: 0; font-size: var(--fs-micro); color: var(--ink-muted); overflow-wrap: anywhere; }
+
+/* The card a return landed on, named for the two and a half seconds it takes
+   to find it. Colour alone would not survive `forced-colors`, so the outline
+   is the carrier and the tint is the reinforcement. */
+[data-return-focus="true"] {
+  /* The one ring, so a retarget reaches this surface too. */
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+  scroll-margin-block: var(--sp-4);
 }
