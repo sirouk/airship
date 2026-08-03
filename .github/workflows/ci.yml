@@ -42,11 +42,18 @@ jobs:
           # The exact commit that was reviewed.
           - gate: head
             ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          # What `main` will contain after the merge. GitHub's synthetic merge
-          # ref; on a push to `main` this is the same commit as `head`, and the
-          # duplicate run is cheap insurance against the two diverging.
+          # What `main` will contain after the merge.
+          #
+          # Not `merge_commit_sha`: that is the merge GitHub had already computed
+          # when the event fired, and it goes stale as soon as another commit
+          # lands on the branch. Run 30783741516 tested a merge whose branch
+          # parent was the *previous* head, so the gate certified a tree that did
+          # not contain the change under review — an integration gate reporting on
+          # something other than the integration. `refs/pull/N/merge` is the ref
+          # GitHub recomputes, and the certification step below proves which
+          # branch commit actually went in.
           - gate: integration
-            ref: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+            ref: ${{ github.event.pull_request.number && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.sha }}
     steps:
       - name: Checkout ${{ matrix.gate }} (${{ matrix.ref }})
         uses: actions/checkout@v4
@@ -56,6 +63,78 @@ jobs:
           # tree, and a shallow checkout has bitten enough projects to be worth
           # the seconds.
           fetch-depth: 0
+
+      - name: Check out the gate's own tooling
+        uses: actions/checkout@v4
+        with:
+          # The measuring instrument must not come from the tree being measured.
+          # A reviewed head can predate the tooling — PR #2's head does — and run
+          # 30783741516 died with
+          # `Cannot find module .../scripts/browser-cardinality.mjs` for exactly
+          # that reason. A gate that cannot run against an older tree cannot
+          # measure it, and a gate that silently does not run is the failure this
+          # workflow exists to prevent.
+          #
+          # Must follow the checkout above: that one cleans the workspace root.
+          ref: ${{ github.workflow_sha }}
+          path: .ci-tools
+          fetch-depth: 1
+
+      - name: Lift the gate clear of the measured tree
+        run: |
+          # …and then get it out of the workspace immediately.
+          #
+          # `npm test` excludes `.airship-lab`, `e2e` and `references`, but Vitest's
+          # default include still globs `**/*.test.ts` — so a second checkout left
+          # sitting in the workspace is collected as source. It has no
+          # `node_modules`, so `npm run check` fails on unresolvable imports; worse,
+          # were it installed it would double every count this workflow reports.
+          # Verified by probe: a throwaway `*.test.ts` under a sibling directory is
+          # picked up by the project's own test command.
+          #
+          # The gate imports nothing but `node:` builtins, so one file is the whole
+          # instrument. Copy it somewhere the measured tree cannot see and delete
+          # the rest.
+          cp .ci-tools/scripts/browser-cardinality.mjs "$RUNNER_TEMP/browser-cardinality.mjs"
+          rm -rf .ci-tools
+          echo "- Cardinality gate staged from \`${{ github.workflow_sha }}\`, outside the measured tree" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Certify what is being measured
+        env:
+          GATE: ${{ matrix.gate }}
+          REVIEWED_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # The cardinality gate exists because a run summed its own numbers and
+          # agreed with itself. This is that same failure one level up: a run
+          # agreeing that it tested whatever it happened to check out. Every
+          # number below is a number about this commit, so the commit is stated
+          # and reconciled before any of them are produced.
+          MEASURED_SHA="$(git rev-parse HEAD)"
+          echo "$MEASURED_SHA" > measured-sha.txt
+
+          if [ -z "$REVIEWED_SHA" ]; then
+            echo "- Measured \`$MEASURED_SHA\` (push build; no pull request to reconcile against)" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          if [ "$GATE" = "head" ]; then
+            if [ "$MEASURED_SHA" != "$REVIEWED_SHA" ]; then
+              echo "::error::The head gate checked out $MEASURED_SHA, but the reviewed commit is $REVIEWED_SHA."
+              exit 1
+            fi
+            echo "- Measured \`$MEASURED_SHA\`, which is the reviewed commit" >> "$GITHUB_STEP_SUMMARY"
+          else
+            # A merge ref's second parent is the branch being merged in. If that
+            # is not the reviewed commit, this run is certifying a merge of
+            # something else, which is precisely how run 30783741516 passed
+            # judgement on a tree nobody had reviewed.
+            MERGED_HEAD="$(git rev-parse 'HEAD^2')"
+            if [ "$MERGED_HEAD" != "$REVIEWED_SHA" ]; then
+              echo "::error::The integration gate merged $MERGED_HEAD, but the reviewed commit is $REVIEWED_SHA. The merge ref is stale; re-run once GitHub has recomputed it."
+              exit 1
+            fi
+            echo "- Measured merge \`$MEASURED_SHA\`, whose branch parent is the reviewed commit \`$REVIEWED_SHA\`" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -121,7 +200,7 @@ jobs:
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
 
-      - name: Start the local S3 lab
+      - name: Start the local S3 lab storage plane
         run: |
           # Several specs need the encrypted-Vault lab, and a runner without it
           # does not "skip" them — it fails them. The first run of this workflow
@@ -132,8 +211,19 @@ jobs:
           # Provisioning it is the honest fix. Gating those specs on the lab's
           # absence would turn Airship's durability coverage into a pass made of
           # skips, which is the one shape of green worth less than a red.
-          npm run lab:start
-          npm run lab:status
+          #
+          # Storage only, deliberately. `lab:start` also starts a lab-owned Vite,
+          # and `labEnvironment()` always sets `VITE_GOOGLE_CLIENT_ID`. Because
+          # `playwright.config.ts` reuses an existing server on 4173, that
+          # lab-owned Vite became the matrix's server and synthesised a Google
+          # registration the matrix documents it must not have — so
+          # `vault-provider-switch`, which asserts that a provider that cannot be
+          # opened cannot be chosen, failed on a premise this workflow had broken.
+          # A one-variable check is decisive: with the lab's client ID the spec
+          # fails 3/3, without it the spec passes 3/3, storage identical. The
+          # matrix owns its own server so the run measures the product rather than
+          # the harness.
+          npm run lab:storage
 
       - name: Lab must actually be up
         run: |
@@ -170,13 +260,19 @@ jobs:
         run: |
           # `scripts/browser-cardinality.test.mjs` holds this gate to every case
           # it must refuse, including the 127-of-184 run that made it necessary.
-          node scripts/browser-cardinality.mjs \
+          #
+          # Run from the staged copy of the workflow's own checkout, so that a
+          # reviewed tree predating this script is still measurable rather than
+          # unmeasured.
+          node "$RUNNER_TEMP/browser-cardinality.mjs" \
             "desktop-chromium:desktop-list.json:desktop.json:$DESKTOP_EXIT" \
             "mobile-chromium:mobile-list.json:mobile.json:$MOBILE_EXIT"
 
       - name: Stop the local S3 lab
         if: always()
-        run: docker compose -f compose.local-lab.yaml down --volumes || true
+        # `--project-name` must match the one `local-lab.mjs` starts it under, or
+        # this stops nothing and reports success for having done so.
+        run: docker compose --project-name airship-local-lab --file compose.local-lab.yaml down --volumes || true
 
       - name: Artifact inventory and checksums
         if: always()
@@ -198,6 +294,7 @@ jobs:
         with:
           name: ci-evidence-${{ matrix.gate }}-${{ github.run_id }}
           path: |
+            measured-sha.txt
             desktop-list.json
             mobile-list.json
             desktop.json
