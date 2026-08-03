@@ -19,12 +19,18 @@ import { expect, test } from "@playwright/test";
  * 360, 375 and 390 are covered because they are what people hold: 375 is the
  * iPhone SE and 13 mini, 360 is the common Android width.
  *
- * 320px is deliberately NOT asserted. `#memory` and `#context` overflow their
- * content edge by 13px there, measured and reproducible. Three attempts to fix
- * it — `min-width: 0` on the route header and its bar, and `minmax(0, 1fr)` on
- * both route grids — did not move the number, so the cause is not yet
- * understood and the fix is not yet earned. It is recorded here rather than
- * asserted, because a skipped expectation is honest and a wrong fix is not.
+ * 320px is covered too, and it took three failed attempts to earn. `#memory` and
+ * `#context` overflowed 13px there, and `min-width: 0` on the route header, on
+ * its bar, and `minmax(0, 1fr)` on both route grids all changed the number by
+ * nothing — because those elements were victims rather than sources. The real
+ * floor was `repeat(auto-fit, minmax(320px, 1fr))` on the result lanes: an
+ * unsatisfiable fixed track minimum inside a 294px content box, propagating up
+ * and stretching every sibling to match. A second floor sat three pixels
+ * underneath it and only appeared once a query was typed.
+ *
+ * 320px is the narrowest viewport worth asserting: it is the floor every
+ * responsive baseline has used since the original iPhone, and no shipping phone
+ * is narrower.
  */
 
 const ROUTES = [
@@ -42,8 +48,8 @@ const ROUTES = [
   "billing",
 ] as const;
 
-// The widths people actually hold. See the note above for why 320 is absent.
-const PHONE_WIDTHS = [360, 375, 390] as const;
+// The widths people actually hold, plus the responsive floor.
+const PHONE_WIDTHS = [320, 360, 375, 390] as const;
 
 for (const width of PHONE_WIDTHS) {
   test(`no route scrolls sideways at ${width}px`, async ({ page }, testInfo) => {

@@ -858,6 +858,20 @@
   .context-candidate__row > small,
   .context-hit-heading > small {
     flex-basis: 100%;
+    /*
+     * The base rule pairs `min-width: fit-content` with `white-space: nowrap`
+     * and says the shape line "takes a second line instead". With `nowrap` it
+     * can never take a second line, so `fit-content` is a hard floor — 295px on
+     * a 250px row, 369px at the x-large type scale — and it sits three pixels
+     * inside the lane floor above, so it only surfaces once someone searches,
+     * which is what this route is for.
+     *
+     * Allowing the wrap the comment already promised lets `fit-content` resolve
+     * to at most the available width. `min-width: 0` would also stop the
+     * overflow and was measured: it truncates 45px of "… 1.0 KiB retrieved",
+     * which is exactly what the base rule forbids.
+     */
+    white-space: normal;
     text-align: left;
   }
 
