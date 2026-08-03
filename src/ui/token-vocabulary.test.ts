@@ -123,15 +123,32 @@ describe("focus is drawn one way", () => {
     }
   });
 
+  /*
+   * What this counts is a sheet DECIDING the ring for itself, which is the
+   * thing that made a keyboard traverse change width, hue and placement four
+   * times. A rule that draws `var(--focus-ring)` has not decided anything — it
+   * has deferred, which is the outcome the count exists to produce.
+   *
+   * Counting every `outline:` could not tell those apart, so the composer's fix
+   * read as a regression: `.composer textarea` sets `outline: 0` on purpose so
+   * there are not two rings, and the box a person actually sees draws the token
+   * ring instead. Measured before it, a focused composer differed from a
+   * blurred one by 2.47% of pixels against the rail's 203/255 — a sighted
+   * keyboard user could not tell where their keystrokes were going. That is an
+   * override the ratchet should welcome.
+   */
   it("keeps every remaining override on the ratchet", () => {
+    const decidesItsOwnRing = ({ body }: { body: string }) => {
+      const declarations = [...body.matchAll(/outline\s*:\s*([^;]+)/gu)].map((match) => match[1]!.trim());
+      return declarations.some((value) => !/var\(--focus-ring\)|^0$|^none$/u.test(value));
+    };
     const overrides = sheets
       .filter(({ name }) => name !== "tokens.css")
       .flatMap(({ name, source }) => focusVisibleRules(source).map(([, body]) => ({ name, body })))
-      .filter(({ body }) => /outline\s*:/u.test(body));
-    // A ratchet, not a pin. Written as `toHaveLength(20)` this went red on the
-    // next person to correctly remove an override — which is the one behaviour
-    // it exists to encourage — and every other bound in this file is a
-    // high-water mark for exactly that reason.
+      .filter(({ body }) => /outline\s*:/u.test(body))
+      .filter(decidesItsOwnRing);
+    // A ratchet, not a pin: `toHaveLength` went red on the next person to
+    // correctly remove one, which is the behaviour it exists to encourage.
     expect(overrides.length, `${overrides.map((item) => item.name).join(", ")}`).toBeLessThanOrEqual(20);
   });
 });

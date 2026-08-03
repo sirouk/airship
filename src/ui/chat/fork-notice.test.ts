@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   FORK_RETRY_TOOLTIP,
+  branchTitleFor,
   forkBranchNotice,
   forkContextClause,
   forkLibraryAnnouncement,
@@ -92,5 +93,46 @@ describe("every branch kind carries the reach of its seed", () => {
     const announcement = forkLibraryAnnouncement("Source · fork", bounded);
     expect(announcement).toContain("Source history was not rewritten.");
     expect(announcement).toContain(forkContextClause(bounded));
+  });
+});
+
+/**
+ * Measured: two Edit & branch operations on different turns of one conversation
+ * both produced "Q1 about retrieval · edit", and one line of thought became
+ * "Base question", "Base question · retry", "Base question · retry · retry",
+ * "Base question · retry · retry · edit" — with the library column rendering
+ * 119px of 353px, so the distinguishing suffix was exactly what was clipped.
+ */
+describe("what a branch is called", () => {
+  it("names the turn it changed, so two branches of one conversation differ", () => {
+    const first = branchTitleFor("edit", "Q1 about retrieval", "Q1 about retrieval");
+    const second = branchTitleFor("edit", "Q3 about evaluation", "Q1 about retrieval");
+    expect(first).toBe("Q1 about retrieval · edit");
+    expect(second).toBe("Q3 about evaluation · edit");
+    expect(first).not.toBe(second);
+    // The distinguishing text leads, because the tail is what truncation eats.
+    expect(second.startsWith("Q3")).toBe(true);
+  });
+
+  it("does not grow a word per operation", () => {
+    const once = branchTitleFor("retry", undefined, "Base question");
+    const twice = branchTitleFor("retry", undefined, once);
+    const thrice = branchTitleFor("edit", undefined, twice);
+    expect(once).toBe("Base question · retry");
+    expect(twice).toBe("Base question · retry");
+    expect(thrice).toBe("Base question · edit");
+  });
+
+  it("bounds a long prompt at a word boundary and stays inside the journal's cap", () => {
+    const long = `${"retrieval quality ".repeat(20)}end`;
+    const title = branchTitleFor("fork-after-answer", long, "Source");
+    expect(title.endsWith("… · fork")).toBe(true);
+    expect(title.length).toBeLessThanOrEqual(240);
+    expect(title).not.toContain("end");
+  });
+
+  it("falls back to the source name rather than producing an unnamed row", () => {
+    expect(branchTitleFor("fork-before-prompt", "   ", "Source thread")).toBe("Source thread · fork");
+    expect(branchTitleFor("fork-before-prompt", undefined, "   ")).toBe("Branch · fork");
   });
 });

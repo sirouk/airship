@@ -30,6 +30,10 @@ test.describe("Local Device Vault product journey", () => {
 
     const recovery = setup.getByLabel("One-time Local Device recovery key");
     await expect(recovery).toHaveText(/^airship-wrk-v1\.[A-Za-z0-9_-]{43}$/u);
+    // The acknowledgement is disabled until the key has actually been saved:
+    // a person may no longer claim to have kept a one-time key they never
+    // looked at. "By hand" needs no clipboard permission.
+    await setup.getByRole("button", { name: "I wrote it down by hand" }).click();
     await setup.getByRole("checkbox", {
       name: /I saved this recovery key outside Airship/u,
     }).click();
@@ -41,7 +45,8 @@ test.describe("Local Device Vault product journey", () => {
     await expectTabTrustAxis(page, /^Local Device Vault active/u);
 
     const downloadPromise = page.waitForEvent("download");
-    await setup.getByRole("button", { name: "Download backup" }).click();
+    // Renamed with the recovery kit: the control names the file it produces.
+    await setup.getByRole("button", { name: /Download (encrypted backup|a fresh backup)/u }).click();
     const download = await downloadPromise;
     expect(download.suggestedFilename()).toMatch(/^airship-local-device-\d{4}-\d{2}-\d{2}\.airship-vault$/u);
     expect(await download.failure()).toBeNull();
@@ -84,7 +89,14 @@ test.describe("Local Device Vault product journey", () => {
  */
 async function expectTabTrustAxis(page: import("@playwright/test").Page, label: RegExp): Promise<void> {
   const chip = page.getByRole("button", { name: /^Runtime trust for this browser tab\./u });
-  await expect(chip).toHaveAccessibleName(/\s\d+ axes\./u);
+  /*
+   * "4 axes." became "4 runtime claims. 2 of them are scoped to this
+   * conversation and are stated in the session bar." — the noun a person can
+   * act on instead of the one the code uses, and it now says which of them
+   * belong to the conversation rather than to the tab. Asserted as the count
+   * and its noun, so the sentence around it can keep improving.
+   */
+  await expect(chip).toHaveAccessibleName(/\s\d+ runtime claims\./u);
   await chip.click();
   const sheet = page.getByRole("dialog", { name: "Runtime trust" });
   await expect(sheet).toBeVisible();

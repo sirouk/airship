@@ -1,0 +1,78 @@
+/*
+ * The two parts of the capability dialog that routes.css does not own.
+ *
+ * Escape used to file a denial, so the reflex that dismisses the slash menu
+ * destroyed the command it dismissed. Escape now defers: the request stays live
+ * on its own clock and stops being modal, which only works if there is a
+ * visible, keyboard-reachable way back to it. That is this bar.
+ *
+ * It borrows `.pwa-update`'s shape deliberately — same corner, same elevation —
+ * because it is the same object to a person: a persistent notice that owns an
+ * action and outlives the route. It does not borrow that banner's fixed phone
+ * offset: `--approval-deferred-floor` is the measured height of whatever holds
+ * the bottom edge (the composer, the mobile navigation), because the composer
+ * grows as it is typed into and a constant would cover the send button.
+ */
+.approval-deferred {
+  position: fixed;
+  z-index: 90;
+  right: max(1rem, env(safe-area-inset-right));
+  bottom: calc(var(--approval-deferred-floor, 0px) + max(1rem, env(safe-area-inset-bottom)));
+  display: flex;
+  gap: var(--sp-3);
+  align-items: center;
+  max-width: min(30rem, calc(100vw - 2rem));
+  padding: var(--sp-3);
+  border: 1px solid var(--v-caution);
+  border-radius: var(--radius-panel);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow);
+}
+
+.approval-deferred span {
+  display: block;
+  min-width: 0;
+}
+
+.approval-deferred strong {
+  display: block;
+}
+
+.approval-deferred small {
+  display: block;
+  margin-top: var(--sp-1);
+  overflow-wrap: anywhere;
+  color: var(--ink-muted);
+  font-size: var(--fs-micro);
+}
+
+.approval-deferred button {
+  flex: 0 0 auto;
+  min-height: var(--density-control);
+  cursor: pointer;
+}
+
+/* The dialog's own footnote for the same change: a person who presses Escape
+   and hears nothing has to be told, on the screen, that nothing was decided. */
+.approval-escape-hint {
+  margin: var(--sp-2) 0 0;
+  color: var(--ink-faint);
+  font-size: var(--fs-caption);
+  text-align: center;
+}
+
+@media (max-width: 640px), (max-width: 950px) and (max-height: 500px) {
+  /* Full width on a phone: at 390px a right-anchored card leaves a dead gutter
+     and the tool name — the only thing that says which request is waiting —
+     wraps to two lines. The bottom offset stays measured. */
+  .approval-deferred {
+    right: .5rem;
+    left: .5rem;
+  }
+}
+
+@media (pointer: coarse) {
+  .approval-deferred button {
+    min-height: var(--touch-target);
+  }
+}

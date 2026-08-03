@@ -137,7 +137,14 @@ describe("human-initiated approvals", () => {
  * abort becomes necessary and these assertions are where that is discovered.
  */
 describe("a pending decision cannot be navigated away from", () => {
-  const dock = "<ApprovalDock broker={approvalBroker} />";
+  /*
+   * The dock is fetched on demand — a permission request cannot exist before a
+   * model is connected and a turn is running, and its accessibility pass had
+   * put 425 lines in the entry chunk that first paint was paying for. It is
+   * still mounted from the same place, which is the whole of what this contract
+   * is about, so the assertion follows the component rather than the import.
+   */
+  const dock = "{ApprovalDockView ? <ApprovalDockView broker={approvalBroker} /> : null}";
 
   it("renders the dock outside the routed region, so a view change cannot unmount it", () => {
     expect(source).toContain(dock);

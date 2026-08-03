@@ -2415,8 +2415,18 @@
     min-width: 220px;
   }
 
+  /*
+   * The claim stack is a row here, not a column — reorganized, not removed.
+   *
+   * It used to be `display: none` below this breakpoint, which is how a phone
+   * came to show the confident "N events" chip with nothing on the page
+   * qualifying it (J127). `.chat-layout` is already one column at this width,
+   * so the aside is simply the next row: one line at rest, and a bounded,
+   * scrollable panel when the reader opens it. The cap keeps the transcript
+   * and composer on screen — an expanded stack must not become a takeover.
+   */
   .inspector {
-    display: none;
+    max-height: 45vh;
   }
 
   .chat-stage {
@@ -2547,9 +2557,60 @@
     min-height: var(--touch-target);
   }
 
+  /*
+   * The peer-tab note, at a width that has no room for its sentence.
+   *
+   * Measured before this: rect [52,0,71,99] — a six-line block in a 52px band,
+   * printing over the wordmark, the runtime chip and the profile title. The
+   * sentence is clipped out of the layout rather than removed, so the status
+   * region still announces the whole claim; the count is what the eye gets.
+   */
+  .tab-presence-note {
+    display: inline-flex;
+    align-items: center;
+    flex: 0 0 auto;
+    max-width: none;
+    min-height: 24px;
+    padding: 0 var(--sp-1);
+    border: 1px solid color-mix(in srgb, var(--v-caution) 34%, transparent);
+    border-radius: var(--radius-chip);
+    font-size: var(--fs-micro);
+    white-space: nowrap;
+  }
+
+  .tab-presence-note__sentence {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+
+  .tab-presence-note__count { display: inline; }
+
   .topbar-posture-chip .seal__label {
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  /*
+   * The claim gets the width; the count keeps only its accessible name.
+   *
+   * This chip's own contract is that a truncated claim is worse than a
+   * disclosed one, and at 390px the count was spending most of a 137px chip so
+   * that the weakest claim rendered as "N…". Measured on the durability alarm
+   * the Atlas found invisible on a phone (J003): "Not saved · Vault not set up"
+   * drawn as one letter. The count is still in `aria-label`, still rendered in
+   * full in the sheet this chip opens, and the chip is still the same target —
+   * it is the label that a person actually has to read at this width.
+   */
+  .topbar-posture-chip__count {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
   }
 
   .topbar-connect-action {
@@ -2812,9 +2873,18 @@
    * second deck back. A chip's whole claim still lives a tap away in its
    * popover, the way every compressed surface in this product has always
    * worked.
+   *
+   * `minmax(7rem, …)` because "what is left" turned out to be nothing:
+   * measured on this build, the conversation name rendered 38px wide at 390px
+   * and the identity block 2px at 320px, so the H1 read "Ge…" beside six fully
+   * legible chips. The element that answers "which conversation is this" was
+   * the only thing on the bar priced at zero. Seven rem is about sixteen
+   * characters of the title face — enough to tell two conversations apart,
+   * which is the job — and the surplus it costs is taken from the instrument
+   * strip, which scrolls, instead of from the title, which cannot.
    */
   .session-bar {
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: minmax(7rem, 1fr) auto;
     align-items: center;
     gap: var(--sp-1) var(--sp-2);
     padding-block: var(--sp-1);
@@ -2901,9 +2971,65 @@
     min-width: 0;
     justify-self: end;
     flex-wrap: nowrap;
+  }
+
+  /* The surplus is absorbed here, by the readings, and not by the two verbs
+     pinned to the right of them. */
+  .session-bar__instruments {
+    min-width: 0;
+    flex-wrap: nowrap;
     overflow-x: auto;
     overscroll-behavior-inline: contain;
     scrollbar-width: none;
+  }
+
+  .session-bar__instruments::-webkit-scrollbar { display: none; }
+
+  .session-bar__instruments > * {
+    flex: 0 0 auto;
+  }
+
+  /* The one shrinkable child of the row: the readings give up width so the
+     title keeps its floor and the two verbs keep their place. `> *` above
+     pins everything at its natural size, which is right for chips and wrong
+     for the container that has to absorb the surplus. */
+  .session-bar__chips > .session-bar__instruments {
+    flex: 0 1 auto;
+  }
+
+  .session-bar__rename-action,
+  .session-bar__new {
+    flex: 0 0 auto;
+  }
+
+  /*
+   * The switcher's panel is anchored to the viewport, not to the trigger.
+   *
+   * Anchored right-to-the-trigger it rendered at x=-58 on a 390px phone: the
+   * control sits third from the right edge, so a 340px panel hung 58px off the
+   * left of the screen and the conversation list this exists to show could not
+   * be read. `top: auto` keeps the vertical static position — directly under
+   * the bar — while the horizontal edges come from the viewport.
+   */
+  .session-bar__switch.menu-select.compact .menu-select-popover {
+    position: fixed;
+    top: auto;
+    right: var(--sp-2);
+    bottom: auto;
+    left: var(--sp-2);
+    width: auto;
+  }
+
+  /* The third pinned verb. Its own rule rather than a fourth selector on the
+     44px list above, so the contract that pins that list stays readable. */
+  .session-bar__switch.menu-select.compact .menu-select-trigger {
+    width: var(--touch-target);
+    min-width: var(--touch-target);
+    height: var(--touch-target);
+    min-height: var(--touch-target);
+    border: 1px solid var(--line-control);
+    border-radius: var(--radius-chip);
+    background: color-mix(in srgb, var(--surface-soft) 80%, transparent);
   }
 
   .session-bar__chips::-webkit-scrollbar { display: none; }
@@ -2946,11 +3072,20 @@
    *
    * §5.1 sheds the model label last, but the status chip renders a `dot` seal
    * whose plain word is the *adjacent* label P2 requires — clipping it would
-   * leave a glyph and a number standing for a trust claim. The demo chip's
-   * brass glyph plus its popover carry the same sentence at no width, so it
-   * yields first here. Every word stays in the accessible name either way.
+   * leave a glyph and a number standing for a trust claim. So the demo chip
+   * yields first here — but only its qualifier.
+   *
+   * It used to yield the whole label, on the reasoning that "the brass glyph
+   * plus its popover carry the same sentence at no width". Measured, they do
+   * not: at 390×844 the model chip rendered "⬡" and the credential chip a bare
+   * dot (its own word sheds at a 380px composer), the strings "Demo · local"
+   * and "Local demo" appeared nowhere on screen, and once the empty state
+   * scrolled away a phone user had nothing telling them the answers were a
+   * deterministic demo. A popover is a gesture nobody makes at a fact they do
+   * not know is there. Four characters buys the fact back; " · local" is the
+   * part the glyph and the popover really can carry.
    */
-  .session-model-chip--demo .session-model-chip__label {
+  .session-model-chip--demo .session-model-chip__qualifier {
     position: absolute;
     width: 1px;
     height: 1px;
@@ -3289,6 +3424,29 @@
     line-height: 1.5;
     text-overflow: ellipsis;
     white-space: nowrap;
+    /* The line has to fit the phone before it can be ellipsised. Measured at
+       390×844 without this: the element rendered 584px wide with its right
+       edge at x=597, `text-overflow` never engaged because
+       clientWidth === scrollWidth, and the document itself went to a 480px
+       scrollWidth — so the sentence was neither readable nor scrollable to. */
+    max-width: 100%;
+  }
+
+  /*
+   * Except the one that reports work that no longer exists.
+   *
+   * The rule above buys its line back from claims the composer states twice —
+   * the posture chip is four centimetres above it. `.composer-notice` is not
+   * one of those: it is where "That conversation existed only in page memory
+   * and did not survive the reload" lands, and on a phone it was cut at "did
+   * not survive t". A loss is not a whisper; it wraps.
+   */
+  .composer-wrap > p.composer-notice {
+    max-height: none;
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+    -webkit-line-clamp: none;
   }
 
   .route-layout {
@@ -3536,20 +3694,25 @@
     margin-top: 10px;
   }
 
+  /*
+   * Wrapped, not scrolled. As a snap strip with a hidden scrollbar the third
+   * managed profile sat at x=568..838 on a 390px screen — fully off it, with
+   * nothing on screen saying the strip moved: a whole agent profile was a
+   * capability the phone user could not know about. A CDP pan reached it, so it
+   * was never unreachable, only invisible, which is the worse of the two.
+   * Wrapping makes every card land in the page's own vertical scroll, where a
+   * phone user already knows to look, and needs no affordance because nothing
+   * is clipped.
+   */
   .profile-card-list {
     display: flex;
+    flex-wrap: wrap;
     gap: 7px;
-    overflow-x: auto;
-    scroll-snap-type: x proximity;
-    scrollbar-width: none;
   }
 
-  .profile-card-list::-webkit-scrollbar { display: none; }
-
   .profile-card {
-    flex: 0 0 min(78vw, 270px);
+    flex: 1 1 min(78vw, 270px);
     min-height: 68px;
-    scroll-snap-align: start;
   }
 
   .profile-card .posture-chip { display: none; }
@@ -3698,6 +3861,13 @@
     margin-top: 2px;
     line-height: 1.25;
     -webkit-line-clamp: 1;
+  }
+
+  /* Even here. A short viewport is a reason to spend fewer lines on ambient
+     posture, never a reason to clip the sentence about lost work. */
+  .composer-wrap > p.composer-notice {
+    max-height: none;
+    -webkit-line-clamp: none;
   }
 }
 

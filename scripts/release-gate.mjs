@@ -43,7 +43,36 @@ export const RELEASE_BUDGETS = Object.freeze({
   // is still the first tool to reach for, and a change that spends this
   // headroom should say what it bought. Measured 424.34 KiB raw /
   // 132.58 KiB gzip.
-  allJavaScriptAndWorkers: Object.freeze({ raw: 768 * 1024, gzip: 160 * 1024 }),
+  //
+  // The human-journey pass spends 2.14 KiB of it, and says what it bought: an
+  // approval dock that describes the write it is asking about to a screen
+  // reader and announces which way the decision went, and a returning person
+  // being told when their previous session did not survive instead of being
+  // shown a screen indistinguishable from a first visit. The deferral habit was
+  // reached for first — the report, its ledger and the dock all moved out of
+  // the entry chunk in this same change, which is what kept ENTRY JavaScript,
+  // the ceiling that actually blocks first paint, inside 112 KiB. Measured
+  // 162.14 KiB gzip.
+  //
+  // The eight-lane journey pass spends the rest of it, and every kilobyte is a
+  // capability someone did not have: an egress record answering what has left
+  // this device, a keyboard-shortcut sheet for chords that were undiscoverable,
+  // turn narration for a screen reader that heard nothing at the moments that
+  // mattered, chunk recovery on every deferred route, and a workspace that says
+  // where a file actually is. ENTRY JavaScript held at 111.59 KiB inside its
+  // unchanged 112 KiB ceiling — the message-part renderer, the approval dock,
+  // the resume report and its ledger were all pushed out of it rather than the
+  // number being moved.
+  // Sized for both observed chunk layouts, because the build is NOT
+  // deterministic across checkouts. `transcript-operations` is shared between
+  // the boot path and a deferred route, and Rollup resolves it either way: two
+  // clones of the identical tree — same sources, config and lockfile — emitted a
+  // 350 B stub in one and a 10.5 KiB chunk in the other. This ceiling had been
+  // tuned to the smaller split and failed in a clean clone. Naming the chunk in
+  // `vite.config.ts` gave it a stable name for attribution but did not remove
+  // the split, so this covers both forms pending a dedicated deterministic-build
+  // repair. Measured 171.49 KiB gzip here, 175.56 KiB gzip from a clean clone.
+  allJavaScriptAndWorkers: Object.freeze({ raw: 768 * 1024, gzip: 176 * 1024 }),
   // Provider routes, capability activation, and the stable lazy broker remain
   // absent from first paint. The broker now also exposes the canonical runtime
   // capability read used by a cold Capabilities deep link before any session
@@ -62,7 +91,34 @@ export const RELEASE_BUDGETS = Object.freeze({
   // group. gzip still clears by 1,319 B; the raw ceiling takes one further
   // whole-KiB step, leaving 2,708 bytes. Gzip — the figure that actually moves
   // over the wire — did not move.
-  deferredCapabilities: Object.freeze({ raw: 402 * 1024, gzip: 118 * 1024 }),
+  //
+  // The human-journey pass moves both. It buys the egress record — the answer
+  // to the Atlas's largest single hole, "there is no surface anywhere in
+  // Airship that shows what has left the device" — on a product whose entire
+  // pitch is that you can verify what happens. It also carries the connect
+  // lane's honesty repairs and the brand marks beside each provider.
+  // Measured 427,438 B raw / 126,873 B gzip, each the tightest whole-KiB step.
+  // Nothing here is fetched before a person opens a route that needs it.
+  //
+  // The connection lane's second pass moves both again, and says what it bought.
+  // The egress record above could not answer its own question: its boundary was
+  // the page's origin, so "Check Ollama" — one request to another port on this
+  // same machine — was filed under "What has left this device". It now
+  // classifies same-origin, on-device loopback and remote, keeps loopback
+  // visible as network activity under its own heading, and refuses to report a
+  // key handed to a local model server as having left. Beside it, a pasted
+  // Chutes key is offered to the provider before anything is drawn that implies
+  // it was accepted — `cpk_notarealkey000000` used to reach a priced model card
+  // with an availability reading, because the catalog answers anyone. Trimmed
+  // first: the provider-response reader lost its JSON path, and four disclosure
+  // sentences were shortened without dropping a claim, which returned 428 B.
+  // Measured 425,809 B raw / 125,687 B gzip. 416 KiB raw would have left 175
+  // bytes and 123 KiB gzip would have left 265 — a ceiling a minifier rename can
+  // breach is a tripwire rather than a budget, the same argument every reading
+  // above is set by — so each takes one further whole-KiB step, leaving 1,199
+  // bytes raw / 1,289 gzip. The fixed first-paint cap above did not move: none
+  // of this loads at startup.
+  deferredCapabilities: Object.freeze({ raw: 418 * 1024, gzip: 124 * 1024 }),
   // Core plus every optional route except the two independently delivered
   // vendor engines. The former 384 KiB "all routes" meaning became impossible
   // once full isomorphic-git and xterm engines were deliberately installed:
@@ -141,7 +197,80 @@ export const RELEASE_BUDGETS = Object.freeze({
   // rail recents reclamation re-measured the partition at 1924.54 KiB raw /
   // 603.6 KiB gzip — roughly four KiB of reviewed route work, still none of it
   // first-paint.
-  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 1925 * 1024, gzip: 604 * 1024 }),
+  //
+  // The journey pass added roughly half a KiB: a tab-scoped record of the
+  // conversation addresses this page wrote itself, so the first screen a person
+  // ever sees stops reporting a conversation lost to Airship's own boot reload.
+  //
+  // Its implementation wave then spent 38 KiB raw / 14 KiB gzip on the six
+  // journeys the Atlas found broken, and every kilobyte is a capability a
+  // person did not have: an egress record answering "what has left this
+  // device", a returning person being told when their previous session did not
+  // survive, an approval dock that describes the write it is asking about to a
+  // screen reader and announces which way the decision went, a Proof surface
+  // that counts the tool operations that actually happened, provenance that
+  // travels from a memory result back into a conversation, and a Git handoff
+  // where the terminal used to fail at a shell with no git binary.
+  //
+  // ENTRY JavaScript — the ceiling that blocks first paint — did not move, and
+  // was not allowed to: the report, its ledger and the approval dock were all
+  // pushed out of the entry chunk in the same change to keep it inside 112 KiB.
+  // Measured 1963.16 KiB raw / 618.03 KiB gzip.
+  //
+  // The connection lane's second pass spends 5.5 KiB raw / 1.86 KiB gzip of the
+  // same kind: the egress record learning the difference between another port
+  // on this machine and another machine, so a loopback model probe stops being
+  // reported as egress and a key handed to a local server stops being reported
+  // as having left; a Chutes key checked with Chutes before a priced model card
+  // is drawn for it; and Account stating why it lists four providers while
+  // Connection counts more ways in. See `deferredCapabilities` above — every
+  // byte of it lands there, behind a route. ENTRY JavaScript did not move.
+  // Measured 1968.69 KiB raw / 619.91 KiB gzip; 1969 KiB raw would have left
+  // 314 bytes and 620 KiB gzip 92, so both take one further whole-KiB step.
+  //
+  // The eight-lane journey pass — every one of the 148 routed findings — spends
+  // 51 KiB raw / 19 KiB gzip of this partition. Named, because a raised ceiling
+  // has to say what it bought: an egress record answering "what has left this
+  // device", a Proof surface that counts the operations that actually ran, a
+  // returning person told when their previous session did not survive, memory
+  // provenance that travels back into a conversation, a keyboard-shortcut sheet
+  // for chords that had no discovery surface at all, turn narration for a
+  // screen reader that heard nothing at the moments that mattered, and a
+  // workspace that prints the path a file is actually at.
+  //
+  // ENTRY JavaScript did not move and was not allowed to: it measures
+  // 111.59 KiB against its unchanged 112 KiB ceiling, because the message-part
+  // renderer, the approval dock, the resume report and its ledger were all
+  // pushed out of the entry chunk instead.
+  // J151/J152 add the reload-risk publisher and one shared bottom-floor
+  // measurement the update banner and the capability dock now both read
+  // (`bottom-floor.ts` replaces the dock's private copy, so this is smaller
+  // than two fixes), and deletion forgets its return-ledger entry so a deliberate
+  // removal is no longer mourned as loss. Measured 2024.00 KiB raw / 640.54 KiB
+  // gzip.
+  // Splitting the command palette and preferences dialog out of the entry chunk
+  // adds a chunk boundary and its shared imports here while removing them from
+  // first paint, which is the trade the entry ceiling exists to force.
+  // Measured below.
+  /*
+   * Sized for the range the build actually produces, not for one machine.
+   *
+   * `transcript-operations` is shared between the boot path and a deferred
+   * route, and Rollup resolves that either way depending on the checkout: two
+   * clones of the identical tree — same sources, same config, same lockfile —
+   * emitted a 350 B stub in one and a 10.5 KiB chunk in the other. These
+   * ceilings had been tuned to the smaller split and failed in a clean clone,
+   * which is the same class of defect as a gate that reads an untracked file:
+   * it passes where it was written and nowhere else.
+   *
+   * Naming the chunk gave it a stable name for attribution and did not pin the
+   * split, so the ceilings cover both forms and record both figures rather than
+   * pretending one of them is the number.
+   * Measured 2026.03 raw / 642.03 gzip here, 2035.75 raw / 645.87 gzip from a
+   * clean clone. Making the split itself deterministic is worth doing and is
+   * not this pass's job.
+   */
+  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2036 * 1024, gzip: 646 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now measures 672.33 KiB raw / 186.61 KiB gzip:
   // the browser-Git pack grew (see optionalBrowserGit) and the Terminal pack
@@ -149,7 +278,9 @@ export const RELEASE_BUDGETS = Object.freeze({
   // control after finding its 17 verb families had no caller at all. Both
   // vendor pins are unchanged, so all of the growth is first-party and
   // separately reviewable.
-  optionalVendorRuntimeAggregate: Object.freeze({ raw: 673 * 1024, gzip: 187 * 1024 }),
+  // The journey pass adds the Terminal's Git handoff to this pair; both vendor
+  // pins are unchanged, so the growth is first-party and reviewed above.
+  optionalVendorRuntimeAggregate: Object.freeze({ raw: 677 * 1024, gzip: 188 * 1024 }),
   // Absolute installed bundle backstop. It includes first-party/routes, both
   // vendor engines, model catalog chunks, and the service worker. Static
   // Pyodide assets remain governed by their separate pack cap below.
@@ -195,10 +326,31 @@ export const RELEASE_BUDGETS = Object.freeze({
   // The vendor-logo/theme/vault/rail pass carries the aggregate to
   // 2593.02 KiB raw / 789.33 KiB gzip — the sum of the lazy-route deltas
   // reviewed in `firstPartyJavaScriptAndWorkers` above, still nothing eager.
-  // The local-device reclaim and vault danger-zone pass carries the aggregate
+  // The local-device reclaim and vault danger-zone pass carried the aggregate
   // to 2596.87 KiB raw / 790.35 KiB gzip: the sum of the lazy-route deltas
   // reviewed in the same comment chain as `firstPartyJavaScriptAndWorkers`.
-  totalJavaScriptAndWorkers: Object.freeze({ raw: 2597 * 1024, gzip: 791 * 1024 }),
+  // The journey pass takes it to 2597.49 KiB raw, one whole KiB above.
+  // The journey pass carries the installed graph with the six lazy routes it
+  // improved; see `firstPartyJavaScriptAndWorkers` for what each bought.
+  // The connection lane's second pass carries the same lazy delta through to
+  // the aggregate — loopback classified out of the egress claim, a key checked
+  // before a priced picker is drawn for it — and nothing eager moved.
+  // Measured 2642.62 KiB raw / 806.96 KiB gzip.
+  // The human-journey pass carries the lazy graph past the old whole-KiB step
+  // by bytes, not by a feature: a height gate on the rail's auto-open recents
+  // (Global destinations must not be pushed off a short viewport) and a bounded
+  // claim rail on the Proof route. Nothing eager moved and the entry ceiling is
+  // untouched. Measured 2698.00 KiB raw / 827.54 KiB gzip.
+  // J151/J152 and the deletion-vs-loss fix carry the aggregate with them.
+  // Measured 2700.42 KiB raw / 828.47 KiB gzip.
+  // The shell-overlay split carries the aggregate with it: the palette and the
+  // preferences dialog now cost a chunk boundary in the lazy graph and nothing
+  // at first paint. Measured 2701.21 KiB raw / 829.51 KiB gzip.
+  // The rename/fork guard on the session detail effect adds its ref and its
+  // condition. Measured 2702.03 KiB raw / 829.66 KiB gzip.
+  // Sized for both chunk splits; see `firstPartyJavaScriptAndWorkers`. Measured
+  // 2712.18 KiB raw / 833.80 KiB gzip from a clean clone.
+  totalJavaScriptAndWorkers: Object.freeze({ raw: 2713 * 1024, gzip: 834 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. Keep it visible under a dedicated, deliberately small cap.
   serviceWorker: Object.freeze({ raw: 12 * 1024, gzip: 4 * 1024 }),
@@ -228,7 +380,7 @@ export const RELEASE_BUDGETS = Object.freeze({
   // one place, and this is the chunk that both importers share. Total shipped
   // JavaScript did not grow — the copies elsewhere went away — so the honest
   // budget is the new shape rather than the old number.
-  optionalExecutionTools: Object.freeze({ raw: 59 * 1024, gzip: 17 * 1024 }),
+  optionalExecutionTools: Object.freeze({ raw: 60 * 1024, gzip: 17 * 1024 }),
   // Pinned browser_wasi_shim plus Airship's bounded virtual-filesystem Worker.
   // It is fetched only when the precompiled WASI adapter executes a command.
   optionalWasiPreview1Worker: Object.freeze({ raw: 32 * 1024, gzip: 8 * 1024 }),
@@ -255,7 +407,14 @@ export const RELEASE_BUDGETS = Object.freeze({
   // Bounded provider/error projection is fetched on the first failed request
   // (or with a deferred provider route), not on a successful first paint.
   // Measured 2,583 B raw / 1,232 B gzip.
-  optionalRequestFailure: Object.freeze({ raw: 3 * 1024, gzip: 2 * 1024 }),
+  //
+  // The turn-failure vocabulary joined it here — the footer cause words, the
+  // "nothing had arrived yet" rule and the chunk-load translation — because
+  // they are fetched in the same handler at the same moment. This is a *net*
+  // move off first paint: the entry chunk gave up those sentences to gain this
+  // budget line. Measured together 4,797 B raw / 2,317 B gzip; each ceiling
+  // takes the lowest whole KiB above the reading.
+  optionalRequestFailure: Object.freeze({ raw: 5 * 1024, gzip: 3 * 1024 }),
   // Slash-command parser, registry, planner and completer.
   optionalSlashCommands: Object.freeze({ raw: 32 * 1024, gzip: 10 * 1024 }),
   // The research WASIX candidate is intentionally absent from production
@@ -306,10 +465,13 @@ export const RELEASE_BUDGETS = Object.freeze({
   // path filter structurally could not answer "which file says this"), an
   // empty-after-filter state that quotes the term and offers a way out, and the
   // shared destructive confirmation replacing this route's private copy.
-  // Measured 77,789 B raw / 24,561 B gzip; both ceilings are the tightest
+  // The human-journey pass added the workspace's lost-work row and the Git
+  // handoff the developer persona found missing, and then the eight-lane pass
+  // added the workspace's own honest path line and its lost-work row.
+  // Measured 80,247 B raw / 25,486 B gzip; both ceilings are the tightest
   // whole-KiB step that clears that reading. The route is still fetched only
   // when Workspace opens, so the fixed first-paint ceiling is untouched.
-  optionalWorkspaceWorkbench: Object.freeze({ raw: 76 * 1024, gzip: 24 * 1024 }),
+  optionalWorkspaceWorkbench: Object.freeze({ raw: 79 * 1024, gzip: 25 * 1024 }),
   optionalWorkspaceBinding: Object.freeze({ raw: 2 * 1024, gzip: 1 * 1024 }),
   optionalWorkspaceCodec: Object.freeze({ raw: 2 * 1024, gzip: 1 * 1024 }),
   optionalSourceControl: Object.freeze({ raw: 48 * 1024, gzip: 14 * 1024 }),
@@ -348,7 +510,12 @@ export const RELEASE_BUDGETS = Object.freeze({
   // raw / 16,919 B gzip: the facade now carries the reclaim verb it was written
   // before, and the route packs the delete path end-to-end. Both steps move one
   // whole KiB above the new figures.
-  optionalSessionLibrary: Object.freeze({ raw: 58 * 1024, gzip: 17 * 1024 }),
+  // Deletion now forgets the return-ledger entry in the same breath, which is
+  // what separates a decision from an accident: before it, deleting a thread and
+  // returning the next day was reported as lost work. The route carries the
+  // ledger's storage accessor and the forget call. Measured 59.58 KiB raw /
+  // 17.78 KiB gzip; both steps move one whole KiB above the new figures.
+  optionalSessionLibrary: Object.freeze({ raw: 60 * 1024, gzip: 18 * 1024 }),
   // Session pin/digest construction runs during profile-session activation,
   // after the shell can paint. Shared policy/mode code now owns its own lazy
   // chunk, leaving this one at 1,037 B raw / 546 B gzip.
@@ -391,7 +558,24 @@ export const RELEASE_BUDGETS = Object.freeze({
   // whole KiB, 16, which leaves 408 bytes; 45 KiB raw would have left 130, so raw
   // takes one step more and leaves 1,154. The startup ceiling is untouched — this
   // route has always been fetched on navigation.
-  optionalMemoryView: Object.freeze({ raw: 46 * 1024, gzip: 16 * 1024 }),
+  //
+  // The human-journey pass answered the researcher's verdict — "Memory is a
+  // beautifully instrumented read-only inspector" — by giving a result
+  // somewhere to go: provenance that travels back into a conversation, and a
+  // confidence reading that no longer presents bootstrap-embedding noise as a
+  // result with the disqualifying score three disclosures deep.
+  // Measured 52,861 B raw / 18,013 B gzip, each the tightest whole-KiB step.
+  // Still fetched only on navigation to Memory.
+  //
+  // The lane that answered the second half of that verdict — a corpus a
+  // researcher can browse, add to and prune, this tab's own search history,
+  // and the evidence disclosure coming forward when a query settles — took the
+  // route to a measured 61,402 B raw / 20,591 B gzip. Both steps go one whole
+  // KiB beyond the tightest that fits, for the reason stated throughout this
+  // file: 60 KiB raw would leave 38 bytes and 20 KiB gzip would leave none at
+  // all, and a ceiling a minifier rename can breach is a tripwire rather than a
+  // budget. Fetched only on navigation to Memory; first paint is untouched.
+  optionalMemoryView: Object.freeze({ raw: 61 * 1024, gzip: 21 * 1024 }),
   // Small shared node-shape vocabulary split out by Vite because both the
   // Memory route and deferred graph renderer consume it.
   optionalMemorySupport: Object.freeze({ raw: 2 * 1024, gzip: 1 * 1024 }),
@@ -409,6 +593,52 @@ export const RELEASE_BUDGETS = Object.freeze({
    * first, never at first paint.
    */
   optionalConfirmDialog: Object.freeze({ raw: 1 * 1024, gzip: 1 * 1024 }),
+  /*
+   * The keyboard shortcut sheet.
+   *
+   * Eleven chords shipped with no printed form anywhere — `?`, `F1` and
+   * `Shift+/` opened nothing, and the palette could not find the word
+   * "shortcut" — so the sheet is new surface. New surface does not get to move
+   * the first-paint ceiling: it is fetched the first time `?` or the palette's
+   * footer asks for it, which is by definition after first paint.
+   * Measured 2,993 B raw / 1,352 B gzip.
+   */
+  optionalShortcutSheet: Object.freeze({ raw: 4 * 1024, gzip: 2 * 1024 }),
+  /*
+   * The command palette and preferences dialog, out of the entry chunk.
+   *
+   * Entry gzip breached its 112 KiB ceiling at 112.01 KiB, and review was right
+   * that a budget a symbol rename can breach is not a budget. These two are
+   * never on screen at first paint, so they left rather than the ceiling moving.
+   * Entry came back to 110.54 KiB gzip — 1.46 KiB of headroom instead of 20
+   * bytes. The shell warms this chunk on idle after first paint, so the first
+   * Cmd+K is not slower for it. Measured 6.23 KiB raw / 2.46 KiB gzip.
+   */
+  optionalShellOverlays: Object.freeze({ raw: 7 * 1024, gzip: 3 * 1024 }),
+  /*
+   * The command palette's conversation verbs.
+   *
+   * Words only — the host keeps the availability rules and the callbacks — and
+   * nothing here can paint before ⌘K, so it is fetched on first open rather
+   * than shipped in first paint. Measured 979 B raw / 465 B gzip.
+   */
+  optionalPaletteActions: Object.freeze({ raw: 3 * 1024, gzip: 2 * 1024 }),
+  /*
+   * The lost-work report, and the timestamp helper it took with it.
+   *
+   * It renders only for a returning person whose previous session did not
+   * survive — the rarest state the chat surface has — and it was imported
+   * statically, which put it and its stylesheet in the entry chunk and pushed
+   * first paint to 115.00 KiB gzip against a 112.00 KiB ceiling. Fetched on
+   * demand it costs first paint nothing. The ledger it reads travels with it:
+   * every caller was already asynchronous, so deferring 9.9 KiB of source cost
+   * nothing at any call site. Measured 7,151 B raw / 2,795 B gzip.
+   */
+  optionalResumeReport: Object.freeze({ raw: 7 * 1024, gzip: 3 * 1024 }),
+  /* See `isOptionalMessagePartsPath`. Measured 12,554 B raw / 4,516 B gzip. */
+  optionalMessageParts: Object.freeze({ raw: 13 * 1024, gzip: 5 * 1024 }),
+  /* See `isOptionalApprovalDockPath`. Measured after the accessibility pass. */
+  optionalApprovalDock: Object.freeze({ raw: 24 * 1024, gzip: 8 * 1024 }),
   // Proof presentation and privacy-safe receipt serialization are fetched only
   // when the user opens the comprehensive Proof surface.
   // The claim rail (`proof-inspector`) and the one fail-closed receipt rule it
@@ -417,12 +647,24 @@ export const RELEASE_BUDGETS = Object.freeze({
   // first-paint weight moved out of `allJavaScriptAndWorkers` and landed here,
   // behind a panel that cannot render until a turn has produced a receipt.
   // That is the trade this file has taken three times before. Measured 74,690 B
-  // raw / 23,556 B gzip. Gzip did cross the 23 KiB ceiling this pack shipped under
+  // raw, and gzip crossed the 23 KiB ceiling this pack shipped under
   // — by four bytes, but it crossed it — so it steps to 24 KiB and leaves 1,020;
   // the 25 KiB it was briefly raised to was a further step nothing measured asked
   // for. 73 KiB raw would have left 62 bytes, which a minifier rename can erase, so
-  // raw holds at 74 KiB and leaves 1,086.
-  optionalProofSurface: Object.freeze({ raw: 74 * 1024, gzip: 24 * 1024 }),
+  // raw held at 74 KiB and left 1,086.
+  //
+  // The human-journey pass raises raw to 76 KiB. Proof is the route the whole
+  // product's promise rests on, and the Atlas caught it under-reporting: a
+  // session that had staged and committed under two approvals exported an audit
+  // declaring zero tool operations, and a local slash-command turn produced no
+  // receipt while the transcript labelled it COMPLETED. An audit surface that
+  // under-reports is worse than none, because it is believed.
+  // The eight-lane pass then answered the rest of it: an operation ledger that
+  // counts what actually ran, a receipt for a local turn that previously had
+  // none, and provenance a reader can follow from a claim back to its source.
+  // Measured 89,774 B raw / 27,986 B gzip, each the tightest whole-KiB step.
+  // Still fetched only when Proof opens; first paint is untouched.
+  optionalProofSurface: Object.freeze({ raw: 88 * 1024, gzip: 28 * 1024 }),
   // Receipt-keyed acquisition scheduling, its WorkspacePort CAS adapter, and
   // the credential-free endpoint-evidence record store. All three load only
   // when a Chutes credential can run or recover the worker, and none belongs to
@@ -439,9 +681,14 @@ export const RELEASE_BUDGETS = Object.freeze({
   // tested — had zero callers outside its own test, so stash, merge, tag, reset,
   // restore, rev-parse and remote management existed with no human path on any
   // device while docs/BROWSER_GIT.md still described them as reachable. It is
-  // now wired to a command field on the route. Measured 425,324 B raw /
-  // 111,475 B gzip, the tightest whole-KiB step above each.
-  optionalTerminal: Object.freeze({ raw: 416 * 1024, gzip: 109 * 1024 }),
+  // now wired to a command field on the route.
+  //
+  // The human-journey pass added the Git handoff the developer persona found
+  // missing — a `git` typed into the PTY now offers to run on the real browser
+  // Git bridge instead of failing at a shell with no git binary.
+  // Measured 426,772 B raw / 111,821 B gzip, the tightest whole-KiB step above
+  // each. Still fetched only when Terminal opens.
+  optionalTerminal: Object.freeze({ raw: 420 * 1024, gzip: 111 * 1024 }),
   // Protocol host only. The reviewed Transformers/ORT/model artifacts remain
   // a separately mounted same-origin semantic pack and are never preloaded.
   optionalSemanticWorker: Object.freeze({ raw: 16 * 1024, gzip: 6 * 1024 }),
@@ -506,7 +753,14 @@ export const RELEASE_BUDGETS = Object.freeze({
   // the one that actually blocks render — still clears its unchanged 32 KiB
   // ceiling by 2.8 KiB, and the JS startup ceiling is separately fixed and
   // untouched.
-  entryCss: Object.freeze({ raw: 170 * 1024, gzip: 32 * 1024 }),
+  //
+  // The eight-lane pass takes raw one further KiB, to 171, for the styles the
+  // journeys needed: the shortcut sheet, the egress panel, the resume and
+  // quarantine reports, and the workspace's lost-work row. Measured 174,407 B
+  // raw / 29,532 B gzip. Gzip does not move and is not close: 28.84 KiB inside
+  // a 32 KiB ceiling. Entry JavaScript, the other first-paint ceiling, is
+  // untouched at 111.59 KiB.
+  entryCss: Object.freeze({ raw: 171 * 1024, gzip: 32 * 1024 }),
   eachWasm: Object.freeze({ raw: 1024 * 1024, gzip: 350 * 1024 }),
   allWasm: Object.freeze({ raw: 1024 * 1024, gzip: 350 * 1024 }),
 });
@@ -1059,10 +1313,11 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
   }
   const optionalRoutePrimitiveMeasurement = sumMeasurements(optionalRoutePrimitivePacks.map((file) => measure(file.payload)));
   const optionalRequestFailurePacks = javaScriptFiles.filter((file) => isOptionalRequestFailurePath(file.path));
-  if (optionalRequestFailurePacks.length !== 1) {
-    throw new Error(`Production must contain exactly one optional request-failure pack; found ${optionalRequestFailurePacks.length}.`);
+  // Two: the failure classifier and the failure vocabulary, deferred together.
+  if (optionalRequestFailurePacks.length !== 2) {
+    throw new Error(`Production must contain exactly two optional request-failure packs; found ${optionalRequestFailurePacks.length}.`);
   }
-  const optionalRequestFailureMeasurement = measure(optionalRequestFailurePacks[0].payload);
+  const optionalRequestFailureMeasurement = sumMeasurements(optionalRequestFailurePacks.map((file) => measure(file.payload)));
   const optionalSessionLibraryPacks = javaScriptFiles.filter((file) => isOptionalSessionLibraryPath(file.path));
   if (optionalSessionLibraryPacks.length !== 1) {
     throw new Error(`Production must contain exactly one optional session-library pack; found ${optionalSessionLibraryPacks.length}.`);
@@ -1103,11 +1358,41 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
     throw new Error(`Production must contain exactly one optional Memory support chunk; found ${optionalMemorySupportPacks.length}.`);
   }
   const optionalMemorySupportMeasurement = measure(optionalMemorySupportPacks[0].payload);
+  const optionalMessagePartsPacks = javaScriptFiles.filter((file) => isOptionalMessagePartsPath(file.path));
+  if (optionalMessagePartsPacks.length !== 1) {
+    throw new Error(`Production must contain exactly one message-parts pack; found ${optionalMessagePartsPacks.length}.`);
+  }
+  const optionalMessagePartsMeasurement = measure(optionalMessagePartsPacks[0].payload);
+  const optionalApprovalDockPacks = javaScriptFiles.filter((file) => isOptionalApprovalDockPath(file.path));
+  if (optionalApprovalDockPacks.length !== 1) {
+    throw new Error(`Production must contain exactly one approval-dock pack; found ${optionalApprovalDockPacks.length}.`);
+  }
+  const optionalApprovalDockMeasurement = measure(optionalApprovalDockPacks[0].payload);
+  const optionalResumeReportPacks = javaScriptFiles.filter((file) => isOptionalResumeReportPath(file.path));
+  if (optionalResumeReportPacks.length !== 3) {
+    throw new Error(`Production must contain the resume-report pack, its ledger and its format helper; found ${optionalResumeReportPacks.length}.`);
+  }
+  const optionalResumeReportMeasurement = sumMeasurements(optionalResumeReportPacks.map((file) => measure(file.payload)));
   const optionalConfirmDialogPacks = javaScriptFiles.filter((file) => isOptionalConfirmDialogPath(file.path));
   if (optionalConfirmDialogPacks.length !== 1) {
     throw new Error(`Production must contain exactly one shared confirm-dialog chunk; found ${optionalConfirmDialogPacks.length}.`);
   }
   const optionalConfirmDialogMeasurement = measure(optionalConfirmDialogPacks[0].payload);
+  const optionalShellOverlayPacks = javaScriptFiles.filter((file) => isOptionalShellOverlayPath(file.path));
+  if (optionalShellOverlayPacks.length !== 1) {
+    throw new Error(`Production must contain exactly one deferred shell-overlay chunk; found ${optionalShellOverlayPacks.length}.`);
+  }
+  const optionalShellOverlayMeasurement = measure(optionalShellOverlayPacks[0].payload);
+  const optionalShortcutSheetPacks = javaScriptFiles.filter((file) => isOptionalShortcutSheetPath(file.path));
+  if (optionalShortcutSheetPacks.length !== 1) {
+    throw new Error(`Production must contain exactly one keyboard-shortcut-sheet chunk; found ${optionalShortcutSheetPacks.length}.`);
+  }
+  const optionalShortcutSheetMeasurement = measure(optionalShortcutSheetPacks[0].payload);
+  const optionalPaletteActionPacks = javaScriptFiles.filter((file) => isOptionalPaletteActionsPath(file.path));
+  if (optionalPaletteActionPacks.length !== 1) {
+    throw new Error(`Production must contain exactly one palette-actions chunk; found ${optionalPaletteActionPacks.length}.`);
+  }
+  const optionalPaletteActionsMeasurement = measure(optionalPaletteActionPacks[0].payload);
   const optionalProofSurfacePacks = javaScriptFiles.filter((file) => isOptionalProofSurfacePath(file.path));
   if (optionalProofSurfacePacks.length !== 6) {
     throw new Error(`Production must contain exactly six optional Proof-surface chunks; found ${optionalProofSurfacePacks.length}.`);
@@ -1189,6 +1474,7 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
       && !isOptionalWasiPreview1WorkerPath(file.path)
       && !isOptionalNodeExecutionPackPath(file.path)
       && !isOptionalShellPackPath(file.path)
+      && !isOptionalShellOverlayPath(file.path)
       && !isOptionalWasixJavaScriptPath(file.path)
       && !isOptionalAgentRuntimePath(file.path)
       && !isOptionalMultimodalPath(file.path)
@@ -1289,6 +1575,12 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
       { name: "memory-view", paths: optionalMemoryViewPacks.map((file) => file.path) },
       { name: "memory-support", paths: optionalMemorySupportPacks.map((file) => file.path) },
       { name: "confirm-dialog", paths: optionalConfirmDialogPacks.map((file) => file.path) },
+      { name: "shortcut-sheet", paths: optionalShortcutSheetPacks.map((file) => file.path) },
+      { name: "shell-overlays", paths: optionalShellOverlayPacks.map((file) => file.path) },
+      { name: "palette-actions", paths: optionalPaletteActionPacks.map((file) => file.path) },
+      { name: "resume-report", paths: optionalResumeReportPacks.map((file) => file.path) },
+      { name: "approval-dock", paths: optionalApprovalDockPacks.map((file) => file.path) },
+      { name: "message-parts", paths: optionalMessagePartsPacks.map((file) => file.path) },
       { name: "proof-surface", paths: optionalProofSurfacePacks.map((file) => file.path) },
       { name: "evidence-acquisition", paths: optionalEvidenceAcquisitionPacks.map((file) => file.path) },
       { name: "terminal-vendor", paths: optionalTerminalPacks.map((file) => file.path) },
@@ -1396,6 +1688,12 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
   assertWithinBudget("Optional Memory view", optionalMemoryViewMeasurement, RELEASE_BUDGETS.optionalMemoryView);
   assertWithinBudget("Optional Memory support", optionalMemorySupportMeasurement, RELEASE_BUDGETS.optionalMemorySupport);
   assertWithinBudget("Shared confirm dialog", optionalConfirmDialogMeasurement, RELEASE_BUDGETS.optionalConfirmDialog);
+  assertWithinBudget("Optional shortcut sheet", optionalShortcutSheetMeasurement, RELEASE_BUDGETS.optionalShortcutSheet);
+  assertWithinBudget("Optional shell overlays", optionalShellOverlayMeasurement, RELEASE_BUDGETS.optionalShellOverlays);
+  assertWithinBudget("Optional palette actions", optionalPaletteActionsMeasurement, RELEASE_BUDGETS.optionalPaletteActions);
+  assertWithinBudget("Optional resume report", optionalResumeReportMeasurement, RELEASE_BUDGETS.optionalResumeReport);
+  assertWithinBudget("Optional approval dock", optionalApprovalDockMeasurement, RELEASE_BUDGETS.optionalApprovalDock);
+  assertWithinBudget("Optional message parts", optionalMessagePartsMeasurement, RELEASE_BUDGETS.optionalMessageParts);
   assertWithinBudget("Optional Proof surface", optionalProofSurfaceMeasurement, RELEASE_BUDGETS.optionalProofSurface);
   assertWithinBudget(
     "Optional evidence acquisition",
@@ -1592,6 +1890,14 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
       optionalConfirmDialog: Object.freeze({
         path: optionalConfirmDialogPacks[0].path,
         ...optionalConfirmDialogMeasurement,
+      }),
+      optionalShortcutSheet: Object.freeze({
+        path: optionalShortcutSheetPacks[0].path,
+        ...optionalShortcutSheetMeasurement,
+      }),
+      optionalPaletteActions: Object.freeze({
+        path: optionalPaletteActionPacks[0].path,
+        ...optionalPaletteActionsMeasurement,
       }),
       optionalProofSurface: Object.freeze({
         paths: Object.freeze(optionalProofSurfacePacks.map((file) => file.path)),
@@ -1799,7 +2105,12 @@ export function isOptionalRoutePrimitivePath(path) {
 }
 
 export function isOptionalRequestFailurePath(path) {
-  return /^assets\/request-state-[A-Za-z0-9_-]+\.js$/u.test(path);
+  // `turn-recovery` joined `request-state` here: they are one concern — the
+  // vocabulary a turn uses when it goes wrong — and they are fetched at the
+  // same moment, inside the failure handler. Keeping them out of the entry
+  // chunk is the point: first paint should not carry the sentences a turn only
+  // needs if it fails.
+  return /^assets\/(?:request-state|turn-recovery)-[A-Za-z0-9_-]+\.js$/u.test(path);
 }
 
 export function isOptionalApprovalReviewerPath(path) {
@@ -1849,6 +2160,72 @@ export function isOptionalMemorySupportPath(path) {
 /** The shared destructive-confirmation dialog; see `optionalConfirmDialog`. */
 export function isOptionalConfirmDialogPath(path) {
   return /^assets\/confirm-dialog-[A-Za-z0-9_-]+\.js$/u.test(path);
+}
+
+/**
+ * The approval dock.
+ *
+ * A permission request cannot exist before a model is connected and a turn is
+ * running, so the dock is not first-paint content — and the pass that gave it
+ * an accessible write description and an outcome announcement also gave it 425
+ * lines the entry chunk was paying for on every cold open. It is fetched as
+ * soon as a broker exists, so it is resident well before the first request.
+ */
+export function isOptionalApprovalDockPath(path) {
+  return /^assets\/approval-dock-[A-Za-z0-9_-]+\.js$/u.test(path);
+}
+
+/**
+ * The keyboard shortcut sheet.
+ *
+ * Nothing renders it until a person presses `?` or opens the palette's footer
+ * row, so it is not first-paint content — the same rule that moved the approval
+ * dock and the resume report out of the entry chunk.
+ */
+export function isOptionalShortcutSheetPath(path) {
+  return /^assets\/keyboard-shortcuts-sheet-[A-Za-z0-9_-]+\.js$/u.test(path);
+}
+
+/**
+ * The command palette and the preferences dialog.
+ *
+ * They lived in `platform-shell.tsx`, which the boot path imports for its
+ * hooks, so their JSX shipped in the entry chunk to be rendered by nobody:
+ * neither is ever on screen at first paint, and the entry ceiling had been
+ * squeezed to 20 bytes before this moved. Classified with the shortcut sheet
+ * because it is the same category — a deferred shell overlay, fetched on idle
+ * after first paint so the first press is warm.
+ */
+export function isOptionalShellOverlayPath(path) {
+  return /^assets\/platform-overlays-[A-Za-z0-9_-]+\.js$/u.test(path);
+}
+
+/**
+ * The command palette's conversation verbs — New conversation, Rename, Retry,
+ * Edit & branch, Fork from here.
+ *
+ * The palette held no verbs at all, so every action still cost menu
+ * archaeology; the rows that fixed that are words, and words that cannot paint
+ * before ⌘K do not belong in first paint. Same rule as the shortcut sheet.
+ */
+export function isOptionalPaletteActionsPath(path) {
+  return /^assets\/palette-actions-[A-Za-z0-9_-]+\.js$/u.test(path);
+}
+
+/**
+ * The message-part renderer.
+ *
+ * Tool calls, attachments, receipts and errors are what it draws, and the empty
+ * conversation on screen at first paint has none of them. Static, it cost every
+ * cold open 32 KiB of source for a renderer with nothing yet to render.
+ */
+export function isOptionalMessagePartsPath(path) {
+  return /^assets\/message-parts-view-[A-Za-z0-9_-]+\.js$/u.test(path);
+}
+
+/** The on-demand lost-work report, its ledger, and its timestamp helper. */
+export function isOptionalResumeReportPath(path) {
+  return /^assets\/(?:resume-report|return-ledger|instant-format)-[A-Za-z0-9_-]+\.js$/u.test(path);
 }
 
 export function isOptionalProofSurfacePath(path) {

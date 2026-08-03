@@ -25,6 +25,7 @@ import { isRemoteOriginPermitted, remoteOrigin } from "../git/validation";
 import type { RepositoryImportProgress, RepositoryImportResult } from "../tools/repository-import";
 import { importAndAdmitGithubRepository } from "../tools/repository-admission";
 import type { WorkspacePort } from "../workspace/contracts";
+import { recordWorkspaceWork } from "../workspace/page-witness";
 import { ConfirmDialog } from "./confirm-dialog";
 import { Icon } from "./icons";
 import { MenuSelect } from "./menu-select";
@@ -52,6 +53,16 @@ export type SourcesViewProps = Readonly<{
   reviewImport: SourcesImportReview;
   onWorkspaceChanged?: () => void | Promise<void>;
   workspaceDurability?: Readonly<{ state: DurabilityState; detail: string }>;
+  /**
+   * The workbench authority whose page witness owns this dialog's commits.
+   *
+   * This is a *second* complete commit surface over the same repository, so a
+   * commit made here has to reach the same witness the rail's "Commit staged"
+   * feeds; otherwise a reload would silently drop a commit the Workspace route
+   * then failed to name. Absent means no witness — the route variant has no
+   * workbench above it to warn.
+   */
+  witnessScope?: string;
   /** Rendered as Workspace → Source Control's advanced modal, never a route. */
   embedded?: boolean;
 }>;
@@ -59,7 +70,7 @@ export type SourcesViewProps = Readonly<{
 /** Depth of one history read. Bounded here so the pane cannot outgrow its box. */
 const HISTORY_DEPTH = 50;
 
-export function SourcesView({ client, author, review, workspace, reviewImport, onWorkspaceChanged, workspaceDurability = { state: "ephemeral", detail: "Workspace files exist only in this page runtime." }, embedded = false }: SourcesViewProps) {
+export function SourcesView({ client, author, review, workspace, reviewImport, onWorkspaceChanged, workspaceDurability = { state: "ephemeral", detail: "Workspace files exist only in this page runtime." }, witnessScope, embedded = false }: SourcesViewProps) {
   const [repositories, setRepositories] = useState<readonly GitRepositorySnapshot[]>([]);
   const [repositoryId, setRepositoryId] = useState("");
   const [worktreeId, setWorktreeId] = useState("");
@@ -302,7 +313,13 @@ export function SourcesView({ client, author, review, workspace, reviewImport, o
   async function commitStaged() {
     if (!repository || !worktree || !commitMessage.trim()) return;
     const message = commitMessage;
-    if (await runMutation({ kind: "commit", request: { repositoryId: repository.id, worktreeId: worktree.id, message, author, expectedWorktreeVersion: worktree.version } }, "Commit created locally. Nothing was pushed.")) setCommitMessage("");
+    if (await runMutation({ kind: "commit", request: { repositoryId: repository.id, worktreeId: worktree.id, message, author, expectedWorktreeVersion: worktree.version } }, "Commit created locally. Nothing was pushed.")) {
+      // Only page-memory work is at risk, so only page-memory work is witnessed.
+      if (witnessScope && workspaceDurability.state === "ephemeral") {
+        recordWorkspaceWork(browserSessionStorage(), witnessScope, { commit: message.split("\n", 1)[0]?.trim() ?? message });
+      }
+      setCommitMessage("");
+    }
   }
 
   async function createBranch() {
@@ -1357,6 +1374,12 @@ function remoteLabel(transport: string): string {
   if (transport === "direct-git-http") return "Direct Git HTTPS";
   if (transport === "host-provider-api") return "Direct provider API";
   return "Remote operations unavailable";
+}
+
+/** A partitioned or blocked session storage costs the durability witness, nothing else. */
+function browserSessionStorage(): Storage | undefined {
+  try { return typeof sessionStorage === "undefined" ? undefined : sessionStorage; }
+  catch { return undefined; }
 }
 
 function publicError(caught: unknown): string {

@@ -150,7 +150,9 @@ describe("browser-native slash commands", () => {
     }
     expect(planSlashCommand('/arbitrary-input --json {} trailing', registry)).toMatchObject({
       kind: "invalid",
-      message: "--json must be the only tool argument.",
+      // One wording for one rule: the same sentence a misplaced `--json`
+      // gets, naming both forms that do parse.
+      message: "--json must be the only tool argument. Use /command --json '<json>' on its own, or the positional form without it.",
     });
     expect(planSlashCommand(
       `/write --json '{"path":"notes/a.md","content":"ok","undeclared":true}'`,

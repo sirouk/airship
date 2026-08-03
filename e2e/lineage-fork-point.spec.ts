@@ -55,6 +55,10 @@ test("the source conversation names the fork point of every alternate", async ({
  * from one whose shell work was never recorded. A count of zero is a fact; the
  * absence was not. This journey does not start a WebContainer — that is the
  * live master suite's job — it asserts the row exists and reads the audit.
+ *
+ * The row now stands in the recorded-work ledger beside the verdict rather than
+ * inside the journal disclosure: a reader asking what was recorded was reading
+ * a panel that collapses itself whenever the structure passes.
  */
 test("session journal integrity states how many shell records it audited", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium", "desktop proof surface contract");
@@ -67,14 +71,13 @@ test("session journal integrity states how many shell records it audited", async
   await expect(page.locator('[data-transcript-card][data-message-role="assistant"]').last()).toBeVisible();
 
   await page.goto("/#proof");
+  const ledger = page.getByLabel("Work recorded in this session’s journal");
+  await expect(ledger).toBeVisible();
+  await expect(ledger).toContainText("Shell records");
+  await expect(ledger.locator("div").filter({ hasText: "Shell records" }).locator("dd")).toHaveText(/^\d+$/u);
+  // The journal panel keeps the facts about the check itself.
   const journal = page.locator(".proof-journal");
-  await expect(journal).toBeVisible();
-  // Verified sessions collapse this panel, which is the state a fresh
-  // conversation is in.
   const summary = journal.locator("summary.proof-journal__row");
   if (await journal.evaluate((element) => !(element as HTMLDetailsElement).open)) await summary.click();
-  const commitment = journal.locator(".audit-commitment");
-  await expect(commitment).toBeVisible();
-  await expect(commitment).toContainText("Shell records");
-  await expect(commitment.locator("div").filter({ hasText: "Shell records" }).locator("dd")).toHaveText(/^\d+$/u);
+  await expect(journal.locator(".audit-commitment")).toContainText("Journal events");
 });

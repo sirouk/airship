@@ -419,6 +419,7 @@ describe("composed commit message", () => {
       stage: async (request: { paths: readonly string[] }) => { calls.push(`stage ${request.paths.join(",")}`); },
       unstage: async (request: { paths: readonly string[] }) => { calls.push(`unstage ${request.paths.join(",")}`); },
       commit: async (request: { message: string }) => { calls.push(`commit ${request.message}`); return commit(); },
+      restore: async (request: { paths: readonly string[]; source: string }) => { calls.push(`restore ${request.paths.join(",")} from ${request.source}`); },
     };
   }
 
@@ -450,6 +451,18 @@ describe("composed commit message", () => {
     await expect(runSourceMutation(git, { kind: "stage", request })).resolves.toBe(false);
     await expect(runSourceMutation(git, { kind: "unstage", request })).resolves.toBe(false);
     expect(git.calls).toEqual(["stage docs/a.md", "unstage docs/a.md"]);
+  });
+
+  it("dispatches the discard verb the Workspace surface had no control for", async () => {
+    // Measured before this: a scan of every button, summary and menu item in
+    // Explorer, the Editor, Source Control and the file `•••` menu for
+    // /discard|revert|restore|undo|reset|checkout|clean/ returned [] — while
+    // `git restore README.md` typed into the Terminal route's Browser Git field
+    // answered "Discarded changes in 1 path."
+    const git = recordingGit(() => Promise.resolve(undefined));
+    const request = { repositoryId: "repo", worktreeId: "main", paths: ["docs/a.md"], source: "head", expectedWorktreeVersion: "2" } as const;
+    await expect(runSourceMutation(git, { kind: "restore", request })).resolves.toBe(false);
+    expect(git.calls).toEqual(["restore docs/a.md from head"]);
   });
 });
 
@@ -846,5 +859,59 @@ describe("one byte vocabulary", () => {
     // "1907.3 MiB" here while #vault printed "1.9 GiB" for the same bytes.
     expect(formatBytes(2_000_000_000)).toContain("GiB");
     expect(formatBytes(12_000_000)).toBe("11 MiB");
+  });
+});
+
+/*
+ * A reload destroyed committed Git history and the route that lost it said
+ * nothing, while Chat and Memory have had a sentence for exactly this event for
+ * as long as they have had page-memory state. Measured: commit "docs: persist
+ * marker", confirm it in History, reload — History is back to a freshly-seeded
+ * "Initial browser workspace" under a new hash, README.md is 845 B again, and a
+ * scan for any line containing "did not survive" returned nothing.
+ */
+describe("work that did not survive the reload", () => {
+  const source = readFileSync(new URL("./workspace-view.tsx", import.meta.url), "utf8");
+
+  it("witnesses a commit when the adapter accepts it, and a save at the one write chokepoint", () => {
+    expect(source).toContain('if (operation.kind === "commit") witness({ commit: commitSubject(operation.request.message) });');
+    expect(source).toContain("witness({ savedPath: written.path });");
+  });
+
+  it("records only what page memory can actually lose, and stops the moment a Vault is adopted", () => {
+    expect(source).toContain('const ephemeral = durability?.state === "ephemeral";');
+    expect(source).toContain("if (ephemeral) recordWorkspaceWork(browserSessionStorage(), witnessScope, work);");
+    expect(source).toContain("if (!ephemeral) clearWorkspaceWitness(browserSessionStorage(), witnessScope);");
+  });
+
+  it("states the loss in a row of the workbench, not in the expiring toast", () => {
+    // A sentence about destroyed history is the first thing to read on arrival
+    // and belongs above the panes, not in the notice slot that expires.
+    expect(source).toContain('<div class="notice workbench-lost-work" data-state="attention" role="alert">');
+    expect(source).not.toContain('class="notice workbench-lost-work workbench-notice"');
+    const styles = readFileSync(new URL("./workspace-view.css", import.meta.url), "utf8");
+    expect(styles).toMatch(/\.workbench-lost-work\.notice \{[^}]*flex: 0 0 auto;/u);
+    expect(styles).not.toMatch(/\.workbench-lost-work\.notice \{[^}]*position: absolute/u);
+  });
+
+  it("keeps the completion notice out of the strip whose verdict it repeats", () => {
+    // Measured overlap before this rule: 3,632px² over `.editor-strip` at
+    // 1440×900 and 21,279px² at 390×844 — the toast covered the "Saved" chip,
+    // the revision hash and the Save/Wrap/Reveal controls it was announcing.
+    const styles = readFileSync(new URL("./workspace-view.css", import.meta.url), "utf8");
+    const notice = styles.match(/\.workbench-notice\.notice \{([^}]+)\}/u)?.[1] ?? "";
+    expect(notice).toContain("flex: 0 0 auto;");
+    expect(notice).not.toContain("position: absolute");
+    expect(notice).not.toContain("pointer-events: none");
+  });
+
+  it("feeds the advanced dialog's second commit surface into the same witness", () => {
+    // "Commit locally" writes the same repository the rail's "Commit staged"
+    // writes; a commit made there and dropped by a reload has to be named too.
+    const advanced = readFileSync(new URL("./sources-view.tsx", import.meta.url), "utf8");
+    expect(advanced).toContain("recordWorkspaceWork(browserSessionStorage(), witnessScope, { commit:");
+    const host = readFileSync(new URL("./editor-view.tsx", import.meta.url), "utf8");
+    expect(host).toContain("witnessScope={sourceToolsAuthority}");
+    expect(host).toContain("durability={props.durability}");
   });
 });

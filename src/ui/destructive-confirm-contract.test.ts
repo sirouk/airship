@@ -19,7 +19,9 @@ import { describe, expect, it } from "vitest";
  */
 const NATIVE_CONFIRM_HOLDOUTS = Object.freeze([
   "app.tsx",
-  "platform-shell.tsx",
+  // The palette and the preferences dialog moved to `platform-overlays.tsx`
+  // when they left the entry chunk; the reset confirmation went with them.
+  "platform-overlays.tsx",
 ]);
 
 async function* uiSources(directory: URL): AsyncGenerator<URL> {

@@ -84,7 +84,8 @@ export class TabPresenceRoster {
 }
 
 export function TabPresenceNote() {
-  const [peer, setPeer] = useState(false);
+  const [peers, setPeers] = useState(0);
+  const peer = peers > 0;
   useEffect(() => {
     if (!("BroadcastChannel" in globalThis)) return;
     const selfId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
@@ -95,14 +96,14 @@ export function TabPresenceNote() {
     channel.onmessage = (event) => {
       const reply = roster.receive(event.data as PresenceMessage, Date.now());
       if (reply) channel.postMessage(reply);
-      setPeer(roster.occupied(Date.now()));
+      setPeers(roster.count(Date.now()));
     };
 
     const heartbeat = setInterval(() => announce("present"), PRESENCE_HEARTBEAT_MS);
     const sweep = setInterval(() => {
       const now = Date.now();
       if (roster.sweep(now)) announce("hello");
-      setPeer(roster.occupied(now));
+      setPeers(roster.count(now));
     }, PRESENCE_SWEEP_MS);
 
     /*
@@ -129,5 +130,21 @@ export function TabPresenceNote() {
       channel.close();
     };
   }, []);
-  return peer ? <span class="tab-presence-note" role="status">Open in another tab · page-memory state is not shared</span> : null;
+  /*
+   * Two forms of one fact, because a 390px topbar has no room for the sentence.
+   *
+   * Measured at 390×844: the sentence wrapped to a 71px-wide, 99px-tall
+   * six-line block anchored at y=0 in a topbar whose next row starts at y=52 —
+   * it overprinted the wordmark, the runtime chip and the profile title, so the
+   * disclosure collided with the header instead of being read. The sentence is
+   * clipped out of the *layout* below the phone breakpoint and stays in the
+   * accessible name, and the count takes its place on screen: the eye gets a
+   * legible fact at 40px, a screen reader still gets the whole claim.
+   */
+  return peer ? (
+    <span class="tab-presence-note" role="status">
+      <span class="tab-presence-note__sentence">Open in another tab · page-memory state is not shared</span>
+      <span class="tab-presence-note__count" aria-hidden="true">{peers + 1} tabs</span>
+    </span>
+  ) : null;
 }

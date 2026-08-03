@@ -384,7 +384,17 @@ export function runtimeGlyph(runtime: Pick<ExecutionCapability, "shell">): "term
 export function runtimeAction(runtime: ExecutionCapability): Readonly<{ label: string; command: string }> | undefined {
   if (runtime.state === "unavailable" || runtime.state === "activating") return undefined;
   if (runtime.state === "installable" || runtime.state === "failed") {
-    return { label: runtime.state === "failed" ? "Review and retry in Chat" : "Activate in Chat", command: `/install-execution-runtime ${runtime.id}` };
+    /*
+     * The ellipsis is the whole of the claim.
+     *
+     * "Activate in Chat →" activated nothing: it opened a conversation with
+     * `/install-execution-runtime` typed into the composer and left it there,
+     * and the page it came from still read "3/6 runtimes ready · observed …"
+     * word for word afterwards. Auto-sending an install is a side effect nobody
+     * consented to, so the preparation is right and the label was wrong — an
+     * ellipsis is the shipped convention for "this opens the thing that asks".
+     */
+    return { label: runtime.state === "failed" ? "Review and retry in Chat…" : "Activate in Chat…", command: `/install-execution-runtime ${runtime.id}` };
   }
   // "Run a probe" must run something on *this* runtime. A runtime with no entry
   // here can only be inspected, so it says so instead of offering a probe that

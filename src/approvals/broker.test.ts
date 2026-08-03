@@ -105,6 +105,76 @@ describe("ApprovalBroker", () => {
     expect(approvalOutcomeReason("allow")).not.toBe(approvalOutcomeReason("deny"));
   });
 
+  /**
+   * Escape filed a denial, so the reflex that dismisses the slash menu one line
+   * above the composer destroyed the command it dismissed — measured as
+   * "Permission denied for local /update-memory. No tool effect ran" with no
+   * Retry on the turn. Deferring answers nothing: the promise stays unresolved,
+   * the clock is untouched, and the request only stops being modal.
+   */
+  it("keeps a deferred request live, unanswered, and out of the modal queue", async () => {
+    const broker = new ApprovalBroker();
+    const identity = context();
+    const decision = broker.request(writeTool, { path: "note.md" }, identity);
+    const id = approvalRequestId(identity);
+
+    expect(broker.defer(id)).toBe(true);
+    expect(broker.defer(id)).toBe(false);
+    expect(broker.snapshot().pending).toHaveLength(0);
+    expect(broker.snapshot().deferred).toHaveLength(1);
+    expect(broker.takeOutcome(id)).toBeUndefined();
+
+    expect(broker.resume(id)).toBe(true);
+    expect(broker.snapshot().pending).toHaveLength(1);
+    expect(broker.snapshot().deferred).toHaveLength(0);
+    broker.decide(id, "allow");
+    await expect(decision).resolves.toBe("allow");
+  });
+
+  it("still expires a deferred request, and still fails it closed", async () => {
+    vi.useFakeTimers();
+    try {
+      const broker = new ApprovalBroker({ decisionTimeoutMs: 10 });
+      const identity = context();
+      const decision = broker.request(writeTool, {}, identity);
+      broker.defer(approvalRequestId(identity));
+      await vi.advanceTimersByTimeAsync(11);
+      await expect(decision).resolves.toBe("deny");
+      expect(broker.snapshot().deferred).toHaveLength(0);
+      expect(broker.takeOutcome(approvalRequestId(identity))).toBe("expired");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /**
+   * The outcome of a security decision was never announced: a denial resolved
+   * into "Airship's turn ended." and an allow into "Local command complete; no
+   * model request made". A surface that has to speak the outcome cannot consume
+   * `takeOutcome` to do it — that record belongs to the journal — so settlement
+   * is published separately, carrying the request that is already gone from
+   * every snapshot by the time there is anything to say.
+   */
+  it("publishes each settlement with its request, without consuming the record", async () => {
+    const broker = new ApprovalBroker();
+    const settled: string[] = [];
+    broker.subscribeSettled(({ request, outcome }) => settled.push(`${request.toolName}:${outcome}`));
+
+    const allowed = context();
+    const allow = broker.request(writeTool, { path: "a.md" }, allowed);
+    broker.decide(approvalRequestId(allowed), "allow");
+    await expect(allow).resolves.toBe("allow");
+
+    const refused: ToolContext = { ...context(), operationId: "operation-2" };
+    const deny = broker.request(writeTool, { path: "b.md" }, refused);
+    broker.decide(approvalRequestId(refused), "deny");
+    await expect(deny).resolves.toBe("deny");
+
+    expect(settled).toEqual(["write_file:allow", "write_file:deny"]);
+    // The journal's copy is untouched by anything that merely spoke it.
+    expect(broker.takeOutcome(approvalRequestId(allowed))).toBe("allow");
+  });
+
   it("auto-allows configured read effects but brokers mutations", async () => {
     const broker = new ApprovalBroker();
     const policy = createBrokeredApprovalPolicy(broker);

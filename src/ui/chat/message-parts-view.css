@@ -101,7 +101,8 @@ summary.op-strip__header::-webkit-details-marker { display: none; }
    pushing the answer off the screen. */
 .op__body { display: grid; gap: var(--sp-2); max-height: min(320px, 38vh); padding: var(--sp-2); overflow: auto; border-top: 1px solid var(--line); background: color-mix(in srgb, var(--ground) 65%, transparent); }
 .op__sheet-head { display: flex; gap: var(--sp-2); justify-content: space-between; align-items: baseline; margin: 0; }
-.op__label { color: var(--ink-faint); font: var(--fs-micro)/1.3 var(--font-mono); letter-spacing: .08em; text-transform: uppercase; }
+/* Recipe from the shared `.eyebrow` group in shell.css; only its own box here. */
+.op__label { display: block; }
 .op__call-id { overflow: hidden; color: var(--ink-faint); font: var(--fs-micro)/1.3 var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
 .op__body pre { max-height: none; margin: 0; padding: var(--sp-2); border: 1px solid var(--line); border-radius: var(--radius-control); color: var(--ink-muted); background: var(--ground); font: var(--fs-micro)/1.55 var(--font-mono); white-space: pre-wrap; word-break: break-word; }
 

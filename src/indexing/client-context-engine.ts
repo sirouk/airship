@@ -22,6 +22,81 @@ const MAX_QUERY_CHARACTERS = 8_192;
 
 export type ClientContextPhase = "idle" | "refreshing" | "ready" | "error" | "disposed";
 
+/**
+ * Whether a hit is evidence, or merely the nearest row the index holds.
+ *
+ * The measured defect: the query "Kyoto", against a workspace containing no
+ * occurrence of the word, rendered "Workspace & sources · 1 result ·
+ * /workspace/README.md" and printed the whole README as the answer. The
+ * disqualifying fact — "Dense 0.065 · Lexical 0.000 · Combined 0.046" — was
+ * three disclosures down, under a route-level promise that "Nothing was
+ * hidden, filtered, or ranked away". `zzqqxv` produced the same "1 result".
+ *
+ * A flat index always returns its top-k, and that ranking is correct; what was
+ * missing is the floor that says which of those rows may be spoken of as a
+ * match. Classification never removes a row — a weak hit is still returned,
+ * still opens, still carries its full lineage — it only stops it being counted
+ * as a result and states, at the top level, why it does not qualify.
+ *
+ * It lives in the engine because the engine is the only layer that knows which
+ * provider embedded the vectors it scored, which is the whole basis of the rule.
+ */
+export type RetrievalConfidence = "confident" | "weak";
+
+export type RetrievalConfidenceVerdict = Readonly<{
+  confidence: RetrievalConfidence;
+  /** Present only on a weak hit: the disqualifying fact, in one sentence. */
+  weakBecause?: string;
+}>;
+
+/**
+ * The cosine a real local model has to reach before a wordless hit counts.
+ *
+ * Only the semantic posture gets a dense-only path at all: a sentence-embedding
+ * model legitimately matches "freshness window" to "quote expiry" with no token
+ * in common. Below this, the same model's neighbours are topic noise, so the
+ * row is reported as the nearest one rather than as a match.
+ */
+export const SEMANTIC_DENSE_FLOOR = 0.35;
+
+/**
+ * The words every surface uses for the rows that fell below the floor.
+ *
+ * Copied — not imported — by `ui/memory-view.tsx`, which is its own route chunk
+ * and would split this module out of the deferred-capabilities pack into an
+ * unattributable third one. The copy is fenced by a test that imports both.
+ */
+export const RETRIEVAL_FLOOR_HEADING = "Closest, below the confidence floor";
+
+/**
+ * The floor, derived from the embedding posture rather than from a taste.
+ *
+ * `deterministic-bootstrap` hashes each token into one of N buckets and sums
+ * ±1. Two texts that share no token can only score above zero when two
+ * different tokens land in the same bucket, so a dense score with zero lexical
+ * overlap is a hash collision and carries no information about meaning. That is
+ * exactly the 0.065 the README scored for "Kyoto". For that provider the rule
+ * is therefore absolute: a query word has to actually appear.
+ */
+export function classifyRetrievalHit(
+  hit: Pick<SearchHit, "denseScore" | "lexicalScore" | "score">,
+  posture: EmbeddingProvider["posture"] = "deterministic-bootstrap",
+): RetrievalConfidenceVerdict {
+  if (hit.lexicalScore > 0) return Object.freeze({ confidence: "confident" as const });
+  if (posture === "local-semantic") {
+    return hit.denseScore >= SEMANTIC_DENSE_FLOOR
+      ? Object.freeze({ confidence: "confident" as const })
+      : Object.freeze({
+        confidence: "weak" as const,
+        weakBecause: `No word of the query appears here, and the local semantic model scored it ${hit.denseScore.toFixed(3)} — below the ${SEMANTIC_DENSE_FLOOR.toFixed(2)} similarity floor.`,
+      });
+  }
+  return Object.freeze({
+    confidence: "weak" as const,
+    weakBecause: `No word of the query appears here. Bootstrap embeddings hash tokens into buckets, so unrelated text still scores ${hit.denseScore.toFixed(3)} by collision — this is the nearest row, not a match.`,
+  });
+}
+
 export type ClientContextCandidate = Readonly<{
   path: string;
   revision: string;
@@ -99,6 +174,13 @@ export type ClientContextGenerationExport = Readonly<{
 export type ClientContextSearchHit = Readonly<SearchHit & {
   contentDigest: string;
   chunkIndex: number;
+  /**
+   * Whether this row may be spoken of as a match. Every hit the ranking
+   * produced is still returned; `weak` is a label, never a filter.
+   */
+  confidence: RetrievalConfidence;
+  /** Present only on a weak hit: the disqualifying fact, in one sentence. */
+  weakBecause?: string;
 }>;
 
 export type ClientContextSearchResult = Readonly<{
@@ -341,7 +423,10 @@ export class ClientContextEngine {
       }
       const enriched = hits
         .filter((hit) => Number.isFinite(hit.score) && Number.isFinite(hit.denseScore) && Number.isFinite(hit.lexicalScore) && hit.score > 0)
-        .map((hit) => enrichHit(hit, active.chunks));
+        // The posture is read here rather than baked into the hit by the index:
+        // the flat index scores, and only the engine knows which provider
+        // produced the vectors it scored — which is the whole basis of the floor.
+        .map((hit) => enrichHit(hit, active.chunks, this.embeddings.posture));
       const completedAt = this.now().toISOString();
       const durationMs = elapsed(this.clock(), startedAt);
       const queryDigest = await sha256(normalizedQuery);
@@ -754,12 +839,21 @@ function createPublicGeneration(args: Readonly<{
   });
 }
 
-function enrichHit(hit: SearchHit, chunks: ReadonlyMap<string, EmbeddedChunk>): ClientContextSearchHit {
+function enrichHit(
+  hit: SearchHit,
+  chunks: ReadonlyMap<string, EmbeddedChunk>,
+  posture: EmbeddingProvider["posture"],
+): ClientContextSearchHit {
   const chunk = chunks.get(hit.chunkId);
   if (!chunk || chunk.path !== hit.path || chunk.revision !== hit.revision) {
     throw new ClientContextStaleSnapshotError("A search hit is not bound to the active index generation.");
   }
-  return Object.freeze({ ...hit, contentDigest: chunk.contentDigest, chunkIndex: chunk.chunkIndex });
+  return Object.freeze({
+    ...hit,
+    contentDigest: chunk.contentDigest,
+    chunkIndex: chunk.chunkIndex,
+    ...classifyRetrievalHit(hit, posture),
+  });
 }
 
 function boundedQuery(query: string): string {

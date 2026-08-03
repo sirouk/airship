@@ -113,7 +113,33 @@ export async function readBoundedBody(
   }
 }
 
-export function timeoutSignal(parent: AbortSignal | undefined, timeoutMs: number): {
+/**
+ * How long one local generation may run before its deadline fires.
+ *
+ * Deliberately far above the catalog-probe budget the local providers used to
+ * borrow for this: that budget is about a JSON GET answering, this one is about
+ * a model finishing an answer on the person's own hardware. Ten minutes is the
+ * ceiling this build will wait; the transcript keeps every line that arrived
+ * before it, and the message says a limit elapsed rather than blaming the
+ * person for a cancellation they did not perform.
+ */
+export const LOCAL_GENERATION_BUDGET_MS = 600_000;
+
+export function timeoutSignal(
+  parent: AbortSignal | undefined,
+  timeoutMs: number,
+  /**
+   * What the person is told when *this* deadline fires.
+   *
+   * A deadline and a cancellation are different events and were reaching the
+   * transcript as one word: an unattended turn died at t+32 s with 93 streamed
+   * lines on screen under "The local model request was cancelled." — an action
+   * attributed to a person who had done nothing. The caller owns this sentence
+   * because only the caller knows which budget elapsed; "timed out" is the
+   * marker `directFetchDiagnostic` matches on, so it has to stay in it.
+   */
+  timeoutMessage = "The local model request timed out.",
+): {
   signal: AbortSignal;
   dispose(): void;
 } {
@@ -122,7 +148,7 @@ export function timeoutSignal(parent: AbortSignal | undefined, timeoutMs: number
   if (parent?.aborted) abort();
   else parent?.addEventListener("abort", abort, { once: true });
   const timer = globalThis.setTimeout(
-    () => controller.abort(new DOMException("Local model request timed out.", "AbortError")),
+    () => controller.abort(new DOMException(timeoutMessage, "AbortError")),
     timeoutMs,
   );
   return {

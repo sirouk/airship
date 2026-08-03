@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import "@xterm/xterm/css/xterm.css";
 import type { BrowserGitClient } from "../git/client";
 import { runTerminalGitCommand, type TerminalGitReview } from "../git/terminal-commands";
+import { terminalShellPath, workspaceAddressNote } from "../workspace/addressing";
 import type { ClientEncryptedWorkspacePort, WorkspacePort } from "../workspace/contracts";
 import { nextTabId, stripViewport, tabBox, tabScrollLeft } from "./tabs";
 import { getBrowserTerminalManager, type BrowserTerminalManager } from "../terminal/manager";
@@ -65,6 +66,18 @@ function writeTerminalSetupOpen(open: boolean): void {
  */
 export const TERMINAL_CONTAINER_SCOPE_NOTICE = "Only the workspace mount is Profile-owned. The rest of this WebContainer's filesystem is page-shared: it is booted once per page, so anything a shell writes outside the mount is visible to every Profile that uses the terminal in this page and survives a Profile switch.";
 
+/**
+ * What "you cannot see what you left running" actually is, stated once.
+ *
+ * Measured: `jobs` and `yes` answered "jsh: command not found", `head -20` was
+ * read as a path, and `ping -c 1000 127.0.0.1 … &` produced no output and left
+ * no entry anywhere in the product. Airship cannot add job control to a shell
+ * it does not implement, and it must not imply it tracks what it cannot see —
+ * so it names the boundary and names the one process listing it does have,
+ * which is the tab strip above.
+ */
+export const TERMINAL_JOB_CONTROL_NOTICE = "jsh has no job control: `jobs`, `fg` and `bg` are not implemented, and a command backgrounded with `&` runs inside this one process where Airship cannot observe or list it. The tab strip above is the whole of the process listing Airship can stand behind — one row per PTY it started, with its live status.";
+
 export type TerminalEmulatorWrite =
   | Readonly<{ kind: "append"; text: string }>
   | Readonly<{ kind: "redraw"; text: string }>
@@ -92,6 +105,38 @@ export function terminalEmulatorWrite(
   return Object.freeze({ kind: "redraw", text: next.bufferedOutput });
 }
 
+/**
+ * How much shell work the Explorer has not been shown yet.
+ *
+ * Measured: `echo 'from the terminal' > from-terminal.txt` in a live shell left
+ * Explorer at three files, and an editor save was invisible to `cat` until
+ * "Reconcile workspace" was pressed — a sync button beside two copies of one
+ * directory, with nothing on screen saying they had diverged. A page cannot
+ * diff a WebContainer mount cheaply, but it does not have to: every submitted
+ * line and every reconciliation is already in this session's own audit lineage,
+ * so "lines the shell has run that no reconciliation has followed" is exact,
+ * costs nothing, and is the number a reader needs before trusting the tree.
+ *
+ * Deliberately counts commands, not changed files. Most commands write nothing,
+ * and claiming otherwise would be the same overstatement in the other
+ * direction; the sentence beside the count says so.
+ */
+/** The count as a sentence, in the one wording the chip and the control share. */
+export function terminalDriftSentence(unreconciled: number): string {
+  return `${unreconciled} shell command${unreconciled === 1 ? "" : "s"} since the last reconcile — anything they wrote is in the shell's copy only`;
+}
+
+export function terminalUnreconciledInputs(sessions: readonly TerminalSessionSnapshot[]): number {
+  const reconciledAt = sessions
+    .flatMap((session) => session.audit)
+    .filter((record) => record.kind === "workspace-reconcile" && record.outcome === "completed")
+    .reduce((latest, record) => record.recordedAt > latest ? record.recordedAt : latest, "");
+  return sessions
+    .flatMap((session) => session.audit)
+    .filter((record) => record.kind === "interactive-input" && record.recordedAt > reconciledAt)
+    .length;
+}
+
 /** The one status vocabulary, fed by the terminal's own lifecycle. */
 export function terminalSealState(status: TerminalSessionSnapshot["status"]): SealState {
   if (status === "running") return "verified";
@@ -115,6 +160,19 @@ export function terminalSealState(status: TerminalSessionSnapshot["status"]): Se
 export function terminalPanelAutoStart(status: TerminalSessionSnapshot["status"]): boolean {
   return status !== "exited" && status !== "failed";
 }
+
+/**
+ * Which keys this surface owns while the shell has focus.
+ *
+ * Measured: clicking the xterm moves focus to `textarea.xterm-helper-textarea`,
+ * after which `g` then `s` leaves the hash at `#terminal` — the whole chord
+ * vocabulary the palette teaches goes silently into the shell. The route
+ * already explains Git and durability; it said nothing at all about focus, so
+ * the only way to learn that navigation had stopped working was to try it. One
+ * constant, read by the sighted disclosure and the accessible description
+ * together, so the two cannot drift.
+ */
+export const TERMINAL_KEYBOARD_OWNERSHIP = "The shell has the keyboard: keystrokes go to the process, so Airship's g-chords do not fire here. Shift+Tab returns to this terminal's own controls; ⌃C interrupts.";
 
 export type TerminalDurability = Readonly<{ state: DurabilityState; detail?: string; label?: string }>;
 export type TerminalViewProps = Readonly<{
@@ -226,6 +284,35 @@ export async function runTerminalGitBridge(args: Readonly<{
   }
 }
 
+/**
+ * The `git` line the shell cannot run, lifted so the bridge can answer it.
+ *
+ * `git status` is the likeliest first command in a product whose Source Control
+ * tab is two clicks away, and jsh answers it with `jsh: command not found: git`
+ * and no pointer to the bridge 200px below — whose placeholder is literally
+ * `git status`. Submitted input is the honest trigger: the mount carries no
+ * `.git` and the container has no git binary, so every such line has already
+ * failed by the time it is in `history`. Only the most recent line counts; an
+ * older `git` buried under real shell work is not a live intention.
+ */
+export function terminalShellGitHandoff(history: readonly string[] | undefined): string | undefined {
+  const last = history?.at(-1)?.trim();
+  return last && /^git(?:\s|$)/u.test(last) ? last : undefined;
+}
+
+/**
+ * One sentence for the offer, in both places it is made.
+ *
+ * Deliberately short. The route's first draft explained the target and the
+ * approval policy too, and at 390px that wrapped to four lines — squeezing the
+ * tab strip above it to a 12px sliver and, in the dock, the shell it was
+ * describing off the screen entirely. Both facts are already stated by the
+ * scope paragraph directly below the field this offer fills.
+ */
+export function terminalGitHandoffSentence(command: string): string {
+  return `${command} needs Browser Git: this ${WEB_CONTAINER_TERMINAL_RUNTIME.shellLabel} process has no git binary.`;
+}
+
 /** One line for the route footer; the bridge's own text stays in the output region. */
 export function terminalGitNotice(outcome: TerminalGitOutcome): string {
   if (outcome.failed) return `git was refused at ${outcome.cwd}: ${outcome.output.split("\n")[0] ?? ""}`;
@@ -276,6 +363,10 @@ function ProfileScopedTerminalView({ workspace, git, reviewGit, onWorkspaceChang
   const [gitCommand, setGitCommand] = useState("");
   const [gitOutcome, setGitOutcome] = useState<TerminalGitOutcome>();
   const [gitRunning, setGitRunning] = useState(false);
+  /** The lifted `git` line already answered or waved off, so the offer is made once. */
+  const [gitHandoffSettled, setGitHandoffSettled] = useState<string>();
+  /** Shell work no reconciliation has followed into Explorer, from the lineage. */
+  const drift = useMemo(() => terminalUnreconciledInputs(sessions), [sessions]);
   const cancelRename = useRef(false);
   const strip = useRef<HTMLDivElement>(null);
   const workspaceChanged = useRef(onWorkspaceChanged);
@@ -309,7 +400,7 @@ function ProfileScopedTerminalView({ workspace, git, reviewGit, onWorkspaceChang
         : manager.ensureProfileSession({ ...(profileId ? { profileId } : {}), ...(threadId ? { threadId } : {}), cwd: workspaceRoot });
       if (openRequest) {
         setActiveId(ensured.id);
-        setNotice(`Opened a terminal at ${ensured.cwd}.`);
+        setNotice(`Opened a terminal at ${ensured.cwd} — ${terminalShellPath(ensured.cwd)} in the shell.`);
         openRequestHandled.current?.(openRequest.id);
       } else {
         setActiveId((selected) => selected ?? ensured.id);
@@ -362,8 +453,11 @@ function ProfileScopedTerminalView({ workspace, git, reviewGit, onWorkspaceChang
   // the repository the panel below it is standing in rather than needing a
   // `git -C` the user would have to type on every command.
   const gitCwd = active?.cwd ?? workspaceRoot;
-  const runGit = async () => {
-    const command = gitCommand.trim();
+  // A `git` the shell just refused, offered to the bridge that can answer it.
+  const liftedGit = terminalShellGitHandoff(active?.history);
+  const gitHandoff = liftedGit && liftedGit !== gitHandoffSettled ? liftedGit : undefined;
+  const runGit = async (requested = gitCommand) => {
+    const command = requested.trim();
     if (!command || gitRunning) return;
     setGitRunning(true);
     try {
@@ -462,7 +556,9 @@ function ProfileScopedTerminalView({ workspace, git, reviewGit, onWorkspaceChang
               with a baseline — not by a session-status proxy for it. A failed
               tab's mount is still reconcilable, and that was the work at risk.
               Read from the manager's own signal, never re-derived here. */}
-          <button type="button" onClick={() => void sync()} disabled={syncing || !reconcilable}><Icon name="cloud" size={16} />{syncing ? "Reconciling…" : "Reconcile workspace"}</button>
+          {/* The count rides the control, because a sync button with no drift
+              indicator is a button that asks the user to guess. */}
+          <button type="button" onClick={() => void sync()} disabled={syncing || !reconcilable} title={drift ? terminalDriftSentence(drift) : "The shell has run nothing since the last reconciliation."}><Icon name="cloud" size={16} />{syncing ? "Reconciling…" : "Reconcile workspace"}{drift ? <b class="terminal-route__drift">{drift}</b> : null}</button>
           <button type="button" onClick={createTab} disabled={sessions.length >= 8}><span aria-hidden="true">＋</span> New terminal</button>
         </div>}
       /> : <header class="terminal-dock__toolbar">
@@ -473,7 +569,7 @@ function ProfileScopedTerminalView({ workspace, git, reviewGit, onWorkspaceChang
           <span>{profileId ? `Profile ${profileName ?? compactId(profileId)}` : "Legacy unscoped"}</span>
         </div>
         <div class="terminal-dock__actions">
-          <button type="button" onClick={() => void sync()} disabled={syncing || !reconcilable} aria-label="Reconcile terminal workspace"><Icon name="cloud" size={15} /><span>{syncing ? "Reconciling…" : "Reconcile"}</span></button>
+          <button type="button" onClick={() => void sync()} disabled={syncing || !reconcilable} aria-label={drift ? `Reconcile terminal workspace — ${terminalDriftSentence(drift)}` : "Reconcile terminal workspace"} title={drift ? terminalDriftSentence(drift) : undefined}><Icon name="cloud" size={15} /><span>{syncing ? "Reconciling…" : "Reconcile"}</span>{drift ? <b class="terminal-route__drift">{drift}</b> : null}</button>
           <button type="button" onClick={createTab} disabled={sessions.length >= 8} aria-label="New terminal"><span aria-hidden="true">＋</span><span>New</span></button>
           {onOpenFullView ? <button type="button" onClick={onOpenFullView} aria-label="Open full Terminal view"><span aria-hidden="true">↗</span><span>Full view</span></button> : null}
           {onCollapse ? <button type="button" onClick={onCollapse} aria-label="Collapse terminal dock"><span aria-hidden="true">⌄</span><span>Collapse</span></button> : null}
@@ -494,6 +590,10 @@ function ProfileScopedTerminalView({ workspace, git, reviewGit, onWorkspaceChang
             <span>Interactive process · this page</span>
             <span>Metadata · {terminalDurabilityLabel(effectiveDurability)}</span>
             <span>{profileId ? `Profile ${compactId(profileId)}` : "Legacy unscoped"}</span>
+            {/* The drift reading, beside the boundary facts it belongs with.
+                Absent at zero: "0 unreconciled" is not a caveat, and a chip
+                that is always there stops being read. */}
+            {drift ? <span data-state="attention">{terminalDriftSentence(drift)}</span> : null}
           </span>
         </summary>
         <div class="terminal-route__setup-body">
@@ -504,6 +604,7 @@ function ProfileScopedTerminalView({ workspace, git, reviewGit, onWorkspaceChang
               owns — the WebContainer is booted once per page and cannot be
               rebooted per Profile without a multi-second teardown. */}
           <p>{TERMINAL_CONTAINER_SCOPE_NOTICE}</p>
+          <p>{TERMINAL_JOB_CONTROL_NOTICE}</p>
         </div>
       </details> : null}
 
@@ -568,7 +669,7 @@ function ProfileScopedTerminalView({ workspace, git, reviewGit, onWorkspaceChang
               origin: { kind: "workspace-path", path: active.cwd },
             });
             setActiveId(created.id);
-            setNotice(`Started a new terminal at ${active.cwd}.`);
+            setNotice(`Started a new terminal at ${active.cwd} — ${terminalShellPath(active.cwd)} in the shell.`);
           } catch (error) {
             setNotice(error instanceof Error ? error.message : "A terminal could not be opened at this path.");
           }
@@ -576,6 +677,16 @@ function ProfileScopedTerminalView({ workspace, git, reviewGit, onWorkspaceChang
       /> : (
         <div class="terminal-empty"><Icon name="terminal" /><h2>No terminal tab</h2><p>Create a tab to cold-start an isolated browser runtime.</p><button type="button" onClick={createTab}>New terminal</button></div>
       )}
+
+      {/* The dock has no command row of its own — it is a 220px PTY strip — so
+          the same refusal routes to the route that does own one, rather than
+          leaving the dock the one place where `git` still dead-ends. */}
+      {variant === "dock" && gitHandoff ? <p class="notice terminal-git__handoff" data-state="attention" role="status">
+        <Seal state="attention" label="Not runnable in this shell" density="dot" size={15} />
+        <span>{terminalGitHandoffSentence(gitHandoff)}</span>
+        {onOpenFullView ? <button type="button" class="primary" onClick={() => { setGitHandoffSettled(gitHandoff); onOpenFullView(); }}>Open Browser Git</button> : null}
+        <button type="button" onClick={() => setGitHandoffSettled(gitHandoff)}>Dismiss</button>
+      </p> : null}
 
       {/* The route's Git command row. `runTerminalGitCommand` had no caller in
           `src/**` at all, and seven of its verb families — stash, merge, tag,
@@ -598,7 +709,29 @@ function ProfileScopedTerminalView({ workspace, git, reviewGit, onWorkspaceChang
           onInput={(event) => setGitCommand(event.currentTarget.value)}
         />
         <button type="submit" disabled={gitRunning || !gitCommand.trim()}>{gitRunning ? "Running…" : "Run"}</button>
-        <p id="terminal-git-scope">Runs against the browser-owned <code>.git</code> holding <code>{gitCwd}</code>, under Editor's approval policy — not inside the {WEB_CONTAINER_TERMINAL_RUNTIME.shellLabel} process, which has no git binary. The answer lands below, never in the scrollback. <code>git help</code> lists the supported verbs and names what is absent.</p>
+        {/*
+          The seam, not a second dead end. `git status` in the PTY answers "jsh:
+          command not found: git" and pointed at nothing; the bridge that can
+          answer it is on the same screen, so the typed line is offered to it
+          verbatim instead of being retyped.
+
+          It stands *in place of* the scope paragraph, carrying that paragraph's
+          id so the field keeps its description. Added as an extra row it cost
+          114px, and this route's grid is height-locked: at 390x844 the browser
+          took every one of those pixels out of the tab strip and the runtime
+          band, crushing a 44px tab to 23px. The actionable form of a sentence
+          belongs where the sentence was.
+        */}
+        {gitHandoff ? <p class="notice terminal-git__handoff" id="terminal-git-scope" data-state="attention" role="status">
+          <Seal state="attention" label="Not runnable in this shell" density="dot" size={15} />
+          <span>{terminalGitHandoffSentence(gitHandoff)} Browser Git runs it against the browser-owned <code>.git</code> holding <code>{gitCwd}</code>, under Editor's approval policy.</span>
+          <button type="button" class="primary" onClick={() => {
+            setGitCommand(gitHandoff);
+            setGitHandoffSettled(gitHandoff);
+            void runGit(gitHandoff);
+          }}>Run it here</button>
+          <button type="button" onClick={() => setGitHandoffSettled(gitHandoff)}>Dismiss</button>
+        </p> : <p id="terminal-git-scope">Runs against the browser-owned <code>.git</code> holding <code>{gitCwd}</code> — the same directory the {WEB_CONTAINER_TERMINAL_RUNTIME.shellLabel} process calls <code>{terminalShellPath(gitCwd)}</code> — under Editor's approval policy. The shell has no git binary, so the answer lands below, never in the scrollback. <code>git help</code> lists the supported verbs and names what is absent.</p>}
         {/* Live because the answer is the point: the footer announces the
             one-line verdict, this region carries the bridge's own text. */}
         <div class="terminal-git__notice" role="status">
@@ -638,6 +771,8 @@ function TerminalPanel({ manager, session: initial, onNotice, durability, profil
    * magnitude between the consequences — so the more careful shape wins here.
    */
   const [closing, setClosing] = useState(false);
+  /** Whether the shell currently holds the keyboard, so the meta row can say so. */
+  const [captured, setCaptured] = useState(false);
   const closeButton = useRef<HTMLButtonElement>(null);
   const host = useRef<HTMLDivElement>(null);
   const terminal = useRef<Terminal>();
@@ -724,10 +859,21 @@ function TerminalPanel({ manager, session: initial, onNotice, durability, profil
       scheduleLayout();
     });
     densityObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["data-density"] });
+    // `focusin`/`focusout` rather than focus/blur: the element that actually
+    // takes the keyboard is xterm's helper textarea, several nodes down, and
+    // focus does not bubble. This is what tells the meta row to say who owns
+    // the keys, at exactly the moment the chords stop working.
+    const enter = () => setCaptured(true);
+    const leave = () => setCaptured(false);
+    host.current.addEventListener("focusin", enter);
+    host.current.addEventListener("focusout", leave);
+    const focusHost = host.current;
     scheduleLayout();
     return () => {
       resize.disconnect();
       densityObserver.disconnect();
+      focusHost.removeEventListener("focusin", enter);
+      focusHost.removeEventListener("focusout", leave);
       if (frame) cancelAnimationFrame(frame);
       input.dispose();
       binary.dispose();
@@ -762,17 +908,34 @@ function TerminalPanel({ manager, session: initial, onNotice, durability, profil
       {/* The seal is hidden from the accessible tree because the word it
           carries is the `<strong>` immediately beside it — shape and word are
           both present visually, and the name is said once. */}
-      <div><span aria-hidden="true"><Seal state={terminalSealState(session.status)} label={statusLabel(session)} density="dot" size={16} /></span><strong>{statusLabel(session)}</strong><code title={session.cwd}>{session.cwd}</code>{session.threadId ? <span title={session.threadId}>thread {compactId(session.threadId)}</span> : null}</div>
+      <div>
+        <span aria-hidden="true"><Seal state={terminalSealState(session.status)} label={statusLabel(session)} density="dot" size={16} /></span>
+        <strong>{statusLabel(session)}</strong>
+        {/* The measured defect: this chip printed the *workspace* path, so one
+            frame carried "/workspace" here, "~/airship-node/airship-workspace"
+            at the prompt and "/workspace" again in the Git note, and `ls
+            /workspace` in that shell failed. The shell's own chrome now leads
+            with the path `pwd` prints and names the workspace spelling beside
+            it; the sentence both come from is read once by assistive tech. */}
+        <code aria-hidden="true" title={workspaceAddressNote(session.cwd)}>{terminalShellPath(session.cwd)}</code>
+        <span class="terminal-panel__mirror" aria-hidden="true">= {session.cwd}</span>
+        <span class="sr-only">{workspaceAddressNote(session.cwd)}</span>
+        {session.threadId ? <span title={session.threadId}>thread {compactId(session.threadId)}</span> : null}
+      </div>
       <div>
         {session.status === "running" ? <button type="button" onClick={() => void manager.interrupt(session.id)} aria-label="Interrupt process">⌃C <span>Interrupt</span></button> : <span class="terminal-panel__starting" aria-live="polite">{statusLabel(session)}</span>}
-        <button type="button" onClick={onNewHere} aria-label="New terminal at current directory" title={`New terminal at ${session.cwd}`}><span aria-hidden="true">＋</span> <span>New here</span></button>
-        <button type="button" onClick={restart} disabled={session.status === "starting"}><Icon name="branch" size={14} /> Restart</button>
+        <button type="button" onClick={onNewHere} aria-label="New terminal at current directory" title={`New terminal at ${terminalShellPath(session.cwd)}`}><span aria-hidden="true">＋</span> <span>New here</span></button>
+        {/* The word is in a span like every other control's, because the phone
+            rule that sheds labels is written against `button span` — bare text
+            survived it, so "Restart" alone stayed ~100px wide on a 390px bar
+            and pushed the directory chip's two spellings off the row. */}
+        <button type="button" onClick={restart} disabled={session.status === "starting"}><Icon name="branch" size={14} /> <span>Restart</span></button>
         <button ref={closeButton} type="button" onClick={() => setClosing(true)} aria-label="Close terminal tab">× <span>Close</span></button>
       </div>
     </div>
     {closing ? <ConfirmDialog
       title={closeCopy.title}
-      titleDetail={session.cwd}
+      titleDetail={terminalShellPath(session.cwd)}
       confirmLabel={closeCopy.confirm}
       destructive
       onCancel={() => { setClosing(false); closeButton.current?.focus(); }}
@@ -783,10 +946,19 @@ function TerminalPanel({ manager, session: initial, onNotice, durability, profil
       ref={host}
       role="group"
       aria-label={`${session.name} browser terminal`}
+      aria-describedby={terminalKeysId(session.id)}
       data-output-chars={session.bufferedOutput.length}
     />
+    {/* Said to a listener on entry and to a reader on focus, from one string.
+        Not a live region: this is a property of the surface being entered, not
+        news about something that happened. */}
+    <span class="sr-only" id={terminalKeysId(session.id)}>{TERMINAL_KEYBOARD_OWNERSHIP}</span>
     <div class="terminal-panel__meta">
-      <span>{session.detail}</span>
+      {/* The same slot, answering the question the reader now has. The route
+          explained Git and durability and never once explained focus, so a
+          power user pressed `g` `s`, stayed on `#terminal`, and had nothing on
+          screen to read about it. */}
+      <span data-keyboard={captured ? "shell" : "page"}>{captured ? TERMINAL_KEYBOARD_OWNERSHIP : session.detail}</span>
       <div class="terminal-panel__meta-actions">
         <details>
           <summary>Input history · {session.history.length}</summary>
@@ -837,7 +1009,9 @@ export function terminalCloseConfirmation(
   return Object.freeze({
     title: `Close ${session.name}?`,
     consequence: live
-      ? `This ends the process running in ${session.cwd} and closes its shell, scrollback and input history. No workspace file is changed by closing, and ${lineage}.`
+      // Both spellings, because the sentence is about a process (shell path)
+      // and about files the reader will look for afterwards (workspace path).
+      ? `This ends the process running in ${terminalShellPath(session.cwd)} — ${session.cwd} in Explorer — and closes its shell, scrollback and input history. No workspace file is changed by closing, and ${lineage}.`
       : `This session's process has already ended. Closing removes the tab, its scrollback and its input history; ${lineage}.`,
     confirm: "Close terminal",
   });
@@ -859,6 +1033,7 @@ function compactId(value: string): string { return value.length > 14 ? `${value.
  */
 function terminalPanelId(sessionId: string): string { return `terminal-panel-${sessionId}`; }
 function terminalTabId(sessionId: string): string { return `terminal-tab-${sessionId}`; }
+function terminalKeysId(sessionId: string): string { return `terminal-keys-${sessionId}`; }
 
 function terminalDurabilityLabel(durability: TerminalDurability): string {
   return durability.label ?? durabilityLabel(durability.state);

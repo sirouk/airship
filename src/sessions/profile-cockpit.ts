@@ -174,25 +174,57 @@ export async function resolveResumableProfileConversation(
   preferredSessionId?: string,
   signal?: AbortSignal,
 ): Promise<SessionRecord | undefined> {
-  const pointer = await resolveProfileActiveConversation(journal, profileId, signal);
-  if (
-    pointer.state === "selected"
-    && pointer.session
-    && resumableProfileManifestMatches(pointer.session.manifest, expectedManifest)
-  ) return pointer.session;
+  return (await resumableProfileConversationCandidates(
+    journal,
+    profileId,
+    expectedManifest,
+    preferredSessionId,
+    signal,
+  ))[0];
+}
 
+/**
+ * Every conversation this profile could resume, best first.
+ *
+ * The single-answer form above is this list's head, and it was the whole of
+ * what adoption could see: when the newest conversation's transcript failed to
+ * replay, the runtime had no second candidate and minted an empty conversation
+ * instead — measured on a return after an interrupted approval, where a fully
+ * resumable 14-event sibling sat in the same list while the person landed in a
+ * brand-new "2 events" thread that mentioned none of it. Reopening is not
+ * resuming; a caller that can try again needs the rest of the shelf.
+ */
+export async function resumableProfileConversationCandidates(
+  journal: EventJournal,
+  profileId: string,
+  expectedManifest: SessionManifest,
+  preferredSessionId?: string,
+  signal?: AbortSignal,
+): Promise<readonly SessionRecord[]> {
+  const pointer = await resolveProfileActiveConversation(journal, profileId, signal);
   const sessions = (await journal.listSessions()).filter((session) =>
     session.manifest.profile?.profileId === profileId
     && resumableProfileManifestMatches(session.manifest, expectedManifest)
   );
   signal?.throwIfAborted();
-  if (pointer.state === "no-selection" && preferredSessionId) {
-    const preferred = sessions.find((session) => session.id === preferredSessionId);
-    if (preferred) return preferred;
-  }
-  return sessions.sort((left, right) =>
+  const byRecency = sessions.sort((left, right) =>
     Date.parse(right.updatedAt) - Date.parse(left.updatedAt) || right.id.localeCompare(left.id)
-  )[0];
+  );
+  // The durable pointer, then the page-local hint, then recency — the same
+  // precedence the single-answer form has always applied, expressed as an
+  // order over the whole set rather than as three early returns.
+  const leadId = pointer.state === "selected"
+      && pointer.session
+      && resumableProfileManifestMatches(pointer.session.manifest, expectedManifest)
+    ? pointer.session.id
+    : pointer.state === "no-selection" && preferredSessionId
+      && byRecency.some((session) => session.id === preferredSessionId)
+      ? preferredSessionId
+      : undefined;
+  const lead = leadId === pointer.session?.id ? pointer.session : byRecency.find((session) => session.id === leadId);
+  return Object.freeze(lead
+    ? [lead, ...byRecency.filter((session) => session.id !== leadId)]
+    : byRecency);
 }
 
 /** Strict parser shared by pointer projection and focused protocol tests. */

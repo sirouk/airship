@@ -123,8 +123,20 @@ export function sessionStatusName(
   durabilityLabel: string,
 ): string {
   const worst = worstSessionFact(facts);
-  const claim = worst ? ` ${worst.label}. ${worst.detail}` : "";
-  return `Session. ${durabilityLabel}.${claim} ${String(facts.length)} facts.`;
+  // The durability claim leads unconditionally, so when it is also the weakest
+  // fact the sentence must not say it twice. It began doing exactly that when
+  // page memory was raised to `attention` and started winning the ranking:
+  // "Session. Ephemeral · this page only. Ephemeral · this page only. This
+  // session journal exists only in page memory." — read out in full, on every
+  // cold open, to the reader least able to skip it.
+  const claim = worst
+    ? worst.id === "durability" ? ` ${worst.detail}` : ` ${worst.label}. ${worst.detail}`
+    : "";
+  // "claims", because that is the word rendered 4px away. Measured (J055): the
+  // chip read "Not checked 4 claims" to the eye and ended "…4 facts." to a
+  // screen reader — one control, one count, two nouns, and the reader who
+  // cannot see the visible one is the reader least able to reconcile them.
+  return `Session. ${durabilityLabel}.${claim} ${String(facts.length)} claims.`;
 }
 
 export function SessionStatusChip({

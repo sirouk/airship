@@ -115,6 +115,14 @@
   justify-self: end;
 }
 
+/* The readings. Scrolls when the row is tight; the verbs beside it never do. */
+.session-bar__instruments {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+  min-width: 0;
+}
+
 /*
  * The one chip recipe the whole right cluster is an instance of.
  *
@@ -199,6 +207,43 @@
 .journal-chip__branch:hover { color: var(--ink); }
 .journal-chip__glyph { color: var(--ink-faint); }
 .journal-chip__id { color: var(--ink-faint); font-size: var(--fs-micro); }
+
+/* The conversation switcher rides with the two verbs, not with the readings:
+   the instrument strip scrolls at phone widths and a verb that scrolls away is
+   a verb nobody finds. `compact` is borrowed for its sr-only value — the
+   current conversation's name belongs in the control's description — and its
+   topbar geometry is replaced, because this control is not in the topbar. */
+.session-bar__switch.menu-select.compact { width: auto; flex: 0 0 auto; }
+
+.session-bar__switch.menu-select.compact .menu-select-trigger {
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
+  border: 0;
+  border-radius: var(--radius-control);
+  color: var(--ink-muted);
+  background: none;
+}
+
+.session-bar__switch.menu-select.compact .menu-select-trigger:hover:not(:disabled),
+.session-bar__switch.menu-select.compact .menu-select-trigger[aria-expanded="true"] {
+  color: var(--accent-bright);
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
+}
+
+.session-bar__switch.menu-select.compact .menu-select-trigger:disabled { color: var(--ink-disabled); cursor: not-allowed; }
+.session-bar__switch.menu-select.compact .menu-select-caret { display: none; }
+
+/* Anchored to the control, not to the top-right of the viewport the topbar's
+   profile menu lives in. */
+.session-bar__switch.menu-select.compact .menu-select-popover {
+  position: absolute;
+  top: calc(100% + 7px);
+  right: 0;
+  bottom: auto;
+  left: auto;
+  width: min(340px, calc(100vw - 16px));
+}
 
 /* Promoted out of its phone-only slot to every width. That promotion is what
    permanently removes the tablet collision between this button and the model
@@ -377,6 +422,42 @@
   line-height: 1.45;
 }
 
+/*
+ * The one sentence a person has to read before they type into a conversation
+ * nothing is keeping.
+ *
+ * It is `--fs-body`, not the `--fs-meta` the two lines above it use: the Atlas
+ * measured the only existing warning at 12.75px in rgb(148,156,153) inside a
+ * chip, "stated at the same volume as the model name", and a person lost four
+ * messages past it. The `attention` ink is the seal vocabulary's own colour for
+ * a state the reader has to act on, which is what this is.
+ */
+.transcript-intro__unsaved {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-2);
+  align-items: baseline;
+  margin: 0;
+  color: var(--v-caution);
+  font-size: var(--fs-body);
+  line-height: 1.5;
+}
+
+.transcript-intro__keep {
+  min-height: var(--touch-target);
+  padding: 0;
+  border: 0;
+  color: inherit;
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  font-weight: var(--fw-strong);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.transcript-intro__keep:hover { text-decoration-thickness: 2px; }
+
 /* The pill's own rule pushes it left inside a message label row; here it is
    the right-hand cell and has nothing to push against. */
 .transcript-intro__tier { justify-self: end; margin-right: 0; }
@@ -414,7 +495,16 @@
 
 .transcript-marker__detail,
 .transcript-marker__provenance {
+  /* A provenance line is one unbreakable token — `Event 2 ·
+     profile.active-conversation.selected · sha256:qfvu3DLU…` — and with only
+     font and colour declared here it set the width of the whole resumed
+     transcript: measured after a reload at 390px, this leaf ran to right=599
+     and took the conversation's own scroll width to 610 inside a 390px phone,
+     cutting 159px off the person's own message with no pan that could reach it.
+     The digest wraps; nothing about it is hidden. */
+  min-width: 0;
   margin: 0;
+  overflow-wrap: anywhere;
   color: var(--ink-faint);
   font-size: var(--fs-meta);
   line-height: 1.45;
@@ -449,6 +539,54 @@
 
 @media (pointer: coarse) {
   .transcript-marker__proof { min-height: 44px; padding-block: var(--sp-1); }
+}
+
+/* The ancestor turns a branch inherited: a disclosure, not a transcript. They
+   are quoted from the sealed seed and are not this conversation's own turns, so
+   they read as evidence — indented, muted, and never dressed as cards with
+   avatars and action rows. `min-width: 0` and the wrap rule are load-bearing:
+   an inherited message can be one long unbroken token, and this column is
+   390px wide on a phone. */
+.transcript-marker__carried { min-width: 0; }
+
+.transcript-marker__carried > summary {
+  color: var(--ink-muted);
+  font-size: var(--fs-meta);
+  cursor: pointer;
+  text-underline-offset: 3px;
+}
+
+.transcript-marker__carried > summary:hover { text-decoration: underline; }
+
+.transcript-marker__carried ol {
+  display: grid;
+  gap: var(--sp-2);
+  margin: var(--sp-2) 0 0;
+  padding: 0 0 0 var(--sp-3);
+  border-left: 2px solid var(--line-faint, var(--line));
+  list-style: none;
+  min-width: 0;
+}
+
+.transcript-marker__carried li { display: grid; gap: 2px; min-width: 0; }
+
+/* The recipe is `.eyebrow`'s, in shell.css, where this selector joins the
+   grouped declaration. Only the box that is this label's own stays here. */
+.transcript-marker__carried strong {
+  display: block;
+}
+
+.transcript-marker__carried p {
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: var(--fs-meta);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+@media (pointer: coarse) {
+  .transcript-marker__carried > summary { min-height: 44px; display: flex; align-items: center; }
 }
 
 .proof-hero h2,
@@ -1268,6 +1406,28 @@ button.runtime-posture {
   border-color: color-mix(in srgb, var(--accent) 45%, transparent);
 }
 
+/*
+ * The one control in the product a keyboard could not find.
+ *
+ * `.composer textarea` below sets `outline: 0`, which suppresses the global
+ * `textarea:focus-visible` ring `tokens.css` draws for everything else — so the
+ * composer, which is the target of "Skip to composer", the landing spot after
+ * every send and where focus ends up after every dialog Escape, changed by a
+ * 1px border tint and nothing more. Measured blurred-vs-focused over the
+ * composer: 2.47% of pixels, max channel delta 39/255, against the rail's own
+ * 203/255. A sighted keyboard user genuinely could not tell whether their
+ * keystrokes were going into Airship or into the browser.
+ *
+ * The ring is drawn on the box rather than on the textarea because the box is
+ * the control a person sees, and `:has` keeps it to keyboard focus — a pointer
+ * user still gets only the border warm-up above.
+ */
+.composer:has(textarea:focus-visible) {
+  border-color: var(--focus);
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
+
 .composer.busy {
   border-color: color-mix(in srgb, var(--v-verified) 28%, transparent);
 }
@@ -1504,6 +1664,76 @@ button.runtime-posture {
   border: 1px solid var(--line);
   border-radius: var(--radius-control);
   background: color-mix(in srgb, var(--surface-soft) 82%, transparent);
+  /* The rest of the backlog is *behind* this edge, and a scroller with no
+     scrollbar (every touch platform) said nothing about that. Measured at
+     390×844 with 22 rows: 208px of a 1,353px list, five rows visible.
+     `scroll-shadow` is not a thing, so the fade is a background attachment
+     that only paints while there is more below. */
+  background-image: linear-gradient(to top, color-mix(in srgb, var(--ground) 92%, transparent), transparent 34px);
+  background-repeat: no-repeat;
+  background-position: bottom;
+  background-size: 100% 34px;
+  background-attachment: local, scroll;
+}
+
+/* Opened by the header's own control, so the backlog is a disclosure rather
+   than a secret.
+
+   It opens *over* the conversation instead of pushing it: inline, the expanded
+   list measured 540px and left the transcript at 14% of a desktop viewport and
+   4% of a phone — reading the backlog cost you the conversation it belongs to.
+   Overlaid, the transcript keeps its height and comes back uncovered the moment
+   the list closes. Bounded by the viewport, not by the list. */
+.composer-queue[data-expanded="true"] {
+  position: absolute;
+  inset-inline: 8px;
+  bottom: calc(100% + 4px);
+  z-index: 3;
+  max-height: min(60dvh, 620px);
+  margin: 0;
+  background: var(--surface-soft);
+  /* The one elevation, so paper mode flips it with everything else. */
+  box-shadow: var(--shadow);
+}
+
+/* The positioning context for the sheet above, and for nothing else: the
+   composer's own children are all in normal flow. */
+.composer { position: relative; }
+
+/* Collapsed, the header's second cell carries the next prompt rather than a
+   bare count: "24 queued" does not tell you what is about to be sent. It is one
+   line, ellipsised, because the panel's whole job when collapsed is to be small
+   enough that the conversation keeps its height. */
+.composer-queue:not([data-expanded="true"]) > header > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-transform: none;
+}
+
+/* Collapsed, the count is the label and must not wrap into two lines; the
+   prompt beside it is the part that gives way. */
+.composer-queue:not([data-expanded="true"]) > header:has(.composer-queue__expand) {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.composer-queue:not([data-expanded="true"]) > header > strong { white-space: nowrap; }
+
+/* Three cells now: name, count, and the way to the rest of them. */
+.composer-queue > header:has(.composer-queue__expand) {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+.composer-queue__expand {
+  min-height: var(--touch-target);
+  padding-inline: var(--sp-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  color: var(--accent-bright);
+  background: transparent;
+  cursor: pointer;
+  font-size: var(--fs-micro);
+  white-space: nowrap;
 }
 
 .composer-queue > header,
@@ -1712,6 +1942,25 @@ button.runtime-posture {
   background: var(--surface-raised);
 }
 
+/*
+ * The lead card wears the brass edge the topbar's Connect action already
+ * wears, so the same errand reads the same weight wherever a newcomer meets
+ * it. An outline rather than a fill: this sits inside the transcript, and a
+ * solid brass slab there would out-shout the sentence above it that explains
+ * why the other two cards work with no account at all.
+ */
+.starter-chip--lead {
+  border-color: color-mix(in srgb, var(--accent-bright) 62%, var(--line));
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface-soft));
+}
+
+.starter-chip--lead:hover {
+  border-color: var(--accent-bright);
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface-raised));
+}
+
+.starter-chip--lead strong { color: var(--accent-bright); }
+
 .starter-chip strong {
   color: var(--ink);
   font-size: var(--fs-meta);
@@ -1758,6 +2007,66 @@ button.runtime-posture {
   overflow-y: auto;
   background: color-mix(in srgb, var(--surface-soft) 82%, transparent);
 }
+
+/*
+ * The claim stack at rest: one line, under the composer, at every width.
+ *
+ * The rail used to be the only presentation — 310px of column that mounted on
+ * the first receipt, and `display: none` under 1050px. So the same object was
+ * simultaneously too loud for the person who had just asked what the capital of
+ * France was, and missing for the person on a phone whose "N events" chip had
+ * nothing qualifying it. Collapsed it is a row in the chat layout's second
+ * track rather than a column, which is why `no-inspector` (one column) is the
+ * grid it lives in.
+ */
+.inspector--summary {
+  overflow: visible;
+  border-top: 1px solid var(--line);
+  background: none;
+}
+
+.claim-rail-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-2);
+  align-items: baseline;
+  width: 100%;
+  min-height: 44px;
+  padding: var(--sp-1) var(--sp-3);
+  border: 0;
+  color: var(--ink-muted);
+  background: none;
+  text-align: start;
+  cursor: pointer;
+}
+
+.claim-rail-summary:hover,
+.claim-rail-summary:focus-visible { background: var(--surface-soft); }
+/* Everything but the sentence keeps its own width. Left to `flex: 0 1 auto`
+   the seal sat at the far left of a 1208px row with the verdict word stranded
+   in the middle of it — the glyph and the word it stands for 477px apart. */
+.claim-rail-summary > * { flex: 0 0 auto; }
+.claim-rail-summary > strong { font-size: var(--fs-caption); color: var(--ink); }
+/* The verdict's own sentence keeps every word: it is the only caveat a phone
+   reader gets, and a truncated caveat states nothing. The basis is wide enough
+   that a narrow viewport wraps it to its own row rather than shredding it. */
+/* Its own class, not `> span`: the seal is a `<span class="seal">` too, so
+   the bare element selector gave the glyph a 272px flex basis and pushed the
+   verdict word onto its own line. */
+.claim-rail-summary__line { flex: 1 1 16rem; min-width: 0; font-size: var(--fs-micro); }
+.claim-rail-summary > small { margin-inline-start: auto; font-size: var(--fs-micro); color: var(--ink-faint); }
+
+.claim-rail-hide {
+  min-height: 32px;
+  padding: 0 var(--sp-1);
+  border: 0;
+  color: var(--ink-muted);
+  background: none;
+  font-size: var(--fs-micro);
+  cursor: pointer;
+}
+
+.claim-rail-hide:hover { color: var(--ink); }
 
 .proof-inspector.compact {
   padding: 17px 15px;

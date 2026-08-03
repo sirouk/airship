@@ -6,7 +6,20 @@ async function openClaimStack(page: Page, projectName: string): Promise<Locator>
   await page.getByRole("combobox", { name: "Message Airship" }).fill("Create a local proof-layout fixture.");
   await page.getByRole("button", { name: "Send message" }).click();
   await expect(page.locator(".transcript .message.assistant").getByText("Airship is running this turn entirely on your device", { exact: false })).toBeVisible({ timeout: 15_000 });
-  if (projectName !== "desktop-chromium") await page.goto("/#proof");
+  if (projectName === "desktop-chromium") {
+    /*
+     * The stack rests as one line now, at both device classes. A first ordinary
+     * question used to open a 310px cryptographic rail nobody asked for — 22% of
+     * a 1440px viewport and thirteen extra controls — so the default follows the
+     * turn and the reader opens it. The summary is asserted here because it is
+     * the new guarantee: the verdict is on the page before anyone clicks.
+     */
+    const summary = page.locator(".claim-rail-summary");
+    await expect(summary).toContainText("turn claims");
+    await summary.click();
+  } else {
+    await page.goto("/#proof");
+  }
   const inspector = page.locator(projectName === "desktop-chromium"
     ? ".inspector .proof-inspector"
     : ".work-view .proof-inspector");

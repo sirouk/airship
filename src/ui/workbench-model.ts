@@ -488,6 +488,24 @@ export function workbenchDialogCopy(
 }
 
 /**
+ * What discarding a path's worktree changes costs, said before it happens.
+ *
+ * Its own function rather than a `WorkbenchDialogKind`: the existing kinds are
+ * all keyed on a workspace tree path and run through `runDialog`, while this
+ * one is a Git verb issued from a Source Control row. The wording is the shape
+ * the terminal's close gate uses — name the subject, then state the loss in
+ * the same words the notice afterwards will use.
+ */
+export function workbenchDiscardConfirmation(path: string): Readonly<{ title: string; consequence: string; confirm: string }> {
+  const name = path.replace("/workspace/", "");
+  return Object.freeze({
+    title: `Discard changes in ${name}?`,
+    consequence: `Every uncommitted edit to ${name} in this worktree is replaced by the copy at HEAD. Airship keeps no undo for this, and an unsaved editor draft of the same file is not what is restored — save or copy it first if you want to keep it.`,
+    confirm: "Discard changes",
+  });
+}
+
+/**
  * What a multi-file folder operation actually did, in one sentence.
  *
  * A folder rename is N moves. When step 9 of 14 fails, "Renaming folder failed

@@ -127,7 +127,14 @@ async function sampleText(page: Page): Promise<readonly Sample[]> {
       const ownsText = [...node.childNodes].some((child) =>
         child.nodeType === Node.TEXT_NODE && (child.textContent ?? "").trim().length > 0);
       const box = node.getBoundingClientRect();
-      const visible = box.width > 0 && box.height > 0;
+      // 1x1 and clipped counts as visible to `getBoundingClientRect`, so the
+      // screen-reader-only regions were being measured. Their text is never
+      // rendered at any size — a screen reader does not have a type ramp — and
+      // they carry no font-size rule at all, so they sit at the root size
+      // forever and read as frozen. Excluding them keeps the claim the one it
+      // says it is: text a person can actually read grows with the preference.
+      const readable = !node.closest(".sr-only");
+      const visible = box.width > 0 && box.height > 0 && readable;
       if (ownsText && visible) {
         samples.push({
           path,

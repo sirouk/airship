@@ -500,7 +500,10 @@ test("the virtualised tree states its real size and owns nothing but treeitems",
   // match the doubled name just as happily as the correct one.
   await expect(page.getByRole("treeitem", { name: /Actions for/u })).toHaveCount(0);
   await expect(page.getByRole("treeitem", { name: "docs", exact: true })).toBeVisible();
-  await expect(page.getByRole("treeitem", { name: /^README\.md \d+(?:\.\d)? [KMGT]?B$/u })).toBeVisible();
+  // `formatBytes` emits binary units — KiB/MiB/GiB — so the unit group has to
+  // admit the `i`. Written without it this passed only while the seed README
+  // stayed under 1,024 bytes, and failed the moment it said one more true thing.
+  await expect(page.getByRole("treeitem", { name: /^README\.md \d+(?:\.\d)? [KMGT]?i?B$/u })).toBeVisible();
   // And the button keeps the name that makes it reachable — the point of
   // adopting it rather than hiding it.
   await expect(page.getByRole("button", { name: "Actions for README.md" })).toHaveCount(1);

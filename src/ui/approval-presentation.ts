@@ -129,10 +129,13 @@ export function writeApprovalFacts(toolName: string, value: JsonValue): WriteApp
     case "git_change":
       return facts({
         disposition: `Git ${text(record.action) ?? "change"} in the browser-owned worktree`,
+        // Files first, worktree last and as one string. Listed as three peers
+        // the row read "airship-workspace, main, README.md", where the two ids
+        // are indistinguishable from the path — and the path is the only part
+        // of it a person is actually deciding about.
         targets: [
-          ...paths(record.repositoryId),
-          ...paths(record.worktreeId),
           ...(Array.isArray(record.paths) ? record.paths.flatMap((entry) => paths(entry)) : []),
+          ...worktreeScope(record.repositoryId, record.worktreeId),
         ],
       });
     case "git_configure":
@@ -158,6 +161,14 @@ function facts(value: Omit<WriteApprovalFacts, "derived">): WriteApprovalFacts {
 /** One argument that should name a path or an id, kept only when it does. */
 function paths(value: JsonValue | undefined): readonly string[] {
   return typeof value === "string" && value ? [value] : [];
+}
+
+/** Repository and worktree as the one place a Git write lands, never as two targets. */
+function worktreeScope(repositoryId: JsonValue | undefined, worktreeId: JsonValue | undefined): readonly string[] {
+  const repository = text(repositoryId);
+  const worktree = text(worktreeId);
+  if (repository && worktree) return [`${repository}/${worktree}`];
+  return [...paths(repository), ...paths(worktree)];
 }
 
 function text(value: JsonValue | undefined): string | undefined {

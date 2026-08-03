@@ -56,6 +56,20 @@ test("Capabilities states that runtime activation is provider-independent", asyn
   await page.getByRole("button", { name: "Browse slash tools" }).click();
   await expect(page).toHaveURL(/#chat\/[^/?#]+$/);
   await expect(page.locator(".session-bar__title")).toHaveText("Capability command");
-  await expect(page.getByText("New profile-scoped conversation · capability command prefilled")).toBeVisible();
+  /*
+   * The claims, not the phrasing.
+   *
+   * This pinned "New profile-scoped conversation · capability command
+   * prefilled", a label. The notice now explains itself — why a new
+   * conversation exists, that the command is ready, and what happened to the
+   * thread the person was in — which is strictly more honest and is what the
+   * Atlas asked for after measuring an 11-event thread replaced with no notice
+   * at all. A test that fails when copy improves teaches people not to improve
+   * copy, so this holds what the notice must say rather than how it says it.
+   */
+  const notice = page.locator(".composer-notice");
+  await expect(notice).toContainText(/New conversation/u);
+  await expect(notice).toContainText(/capability command pins its own runtime/u);
+  await expect(notice).toContainText(/send it to run it/u);
   await expect(page.getByRole("combobox", { name: "Message Airship" })).toHaveValue("/help ");
 });

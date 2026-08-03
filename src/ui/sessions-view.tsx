@@ -71,6 +71,14 @@ export type SessionsViewProps = Readonly<{
    * intactness it did not establish.
    */
   quarantine?: Readonly<{ sessionId: string; title: string; reason: string; historyVerified: boolean }>;
+  /**
+   * A conversation the shell wants inspected on arrival.
+   *
+   * The quarantine card on the chat surface names a conversation and offers to
+   * open its record; without this the route landed on whatever was active and
+   * left the reader to find the row the sentence they just read was about.
+   */
+  focusSessionId?: string;
 }>;
 
 /** The journal-adapter sentence, chosen by the adapter that is live. */
@@ -140,6 +148,7 @@ export function SessionsView({
   onOpenProof,
   durability = { state: "ephemeral", detail: "This journal exists only in page memory. Nothing is synced." },
   quarantine,
+  focusSessionId,
 }: SessionsViewProps) {
   const [draftSearch, setDraftSearch] = useState("");
   const [search, setSearch] = useState("");
@@ -147,7 +156,7 @@ export function SessionsView({
   const [model, setModel] = useState("");
   const [sort, setSort] = useState<SessionListSort>("updated-desc");
   const [page, setPage] = useState<SessionListPage>();
-  const [selectedId, setSelectedId] = useState(activeSessionId);
+  const [selectedId, setSelectedId] = useState(focusSessionId ?? activeSessionId);
   const [detail, setDetail] = useState<SessionLibraryDetail>();
   const [loadingList, setLoadingList] = useState(true);
   const [loadingDetail, setLoadingDetail] = useState(false);
@@ -155,7 +164,21 @@ export function SessionsView({
   const [error, setError] = useState<string>();
   const [detailError, setDetailError] = useState<string>();
   const [refresh, setRefresh] = useState(0);
+  /** The conversation whose open editors (rename, fork) belong to the person. */
+  const openEditorsFor = useRef<string>();
   const [forkOpen, setForkOpen] = useState(false);
+  /*
+   * The fork's own refusal, kept out of the pane-wide alert.
+   *
+   * Measured: pressing "Create fork" on a blocked conversation left the count
+   * at 3, the URL at #sessions and the panel open, and put "The observed source
+   * head did not pass the local journal audit (LOCAL_COMMAND_INCOMPLETE)." into
+   * the alert at the top of a scrolled pane — rendered at y=-117 with
+   * `document.body.scrollHeight === 900` in a 900px viewport, i.e. above the
+   * visible area with no scroll that could reach it. The person saw a button
+   * that did nothing. A refusal belongs at the control that was pressed.
+   */
+  const [forkError, setForkError] = useState<string>();
   const [forkTitle, setForkTitle] = useState("");
   const [announcement, setAnnouncement] = useState("");
   const [renameTitle, setRenameTitle] = useState("");
@@ -272,6 +295,10 @@ export function SessionsView({
     return () => controller.abort();
   }, [library, refresh, revision, scopeProfileId]);
 
+  // A later request is a later intent: arriving here twice for two different
+  // conversations must land on the second one, not on the first still selected.
+  useEffect(() => { if (focusSessionId) setSelectedId(focusSessionId); }, [focusSessionId]);
+
   useEffect(() => {
     if (!selectedId) {
       setDetail(undefined);
@@ -280,8 +307,27 @@ export function SessionsView({
     const controller = new AbortController();
     setLoadingDetail(true);
     setDetailError(undefined);
-    setForkOpen(false);
-    setRenaming(false);
+    /*
+     * Only a change of conversation closes what is open on it.
+     *
+     * This effect re-runs on `refresh` and on the host's `revision` too, and it
+     * used to close the rename field and the fork panel every time — so any
+     * unrelated background write, a turn completing or a vault appending, threw
+     * away a title someone was in the middle of typing. It is also why the
+     * rename spec was flaky: the Save button was detached from the DOM
+     * mid-click, "element is not stable ... element was detached", on roughly
+     * two runs in five. A person gets the same event as a click that does
+     * nothing.
+     *
+     * The re-fetch below still runs on every trigger, because the record really
+     * may have changed. It is only the person's own open editors that now
+     * survive it.
+     */
+    if (openEditorsFor.current !== selectedId) {
+      openEditorsFor.current = selectedId;
+      setForkOpen(false);
+      setRenaming(false);
+    }
     void library.inspect(selectedId, runtime, controller.signal).then(
       setDetail,
       (caught: unknown) => {
@@ -295,6 +341,39 @@ export function SessionsView({
     });
     return () => controller.abort();
   }, [library, refresh, revision, runtimeKey, selectedId]);
+
+  /*
+   * The row is an opener, not only a selector.
+   *
+   * Measured: single click, double click and Enter on a conversation row all
+   * left `location.hash` at "#sessions" — the only opener was "Resume
+   * conversation" in the detail pane, which on a 390×844 phone rendered at
+   * y=791, under the bottom tab bar. A person came here to get back into a
+   * conversation and the list would not let them.
+   *
+   * Selection is preserved as the audit gesture; this is the resume verb, one
+   * press from every row. A refusal selects the row instead of failing
+   * silently, so the pane that explains why is what appears.
+   */
+  async function openSession(sessionId: string) {
+    if (busy || sessionId === activeSessionId) { setSelectedId(sessionId); return; }
+    setBusy(true);
+    setDetailError(undefined);
+    try {
+      const fresh = await library.inspect(sessionId, runtime);
+      if (fresh.compatibility?.action !== "resume") {
+        setSelectedId(sessionId);
+        setDetailError(fresh.compatibility?.label ?? "This conversation cannot be resumed in the current runtime.");
+        return;
+      }
+      await onResume(fresh);
+    } catch (caught) {
+      setSelectedId(sessionId);
+      setDetailError(errorMessage(caught));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function resumeSelected() {
     if (!detail || detail.compatibility?.action !== "resume" || detail.session.id === activeSessionId) return;
@@ -315,12 +394,14 @@ export function SessionsView({
     setForkTitle(forkTitleFor(detail.session.title));
     setForkOpen(true);
     setDetailError(undefined);
+    setForkError(undefined);
   }
 
   async function createFork() {
     if (!detail || !forkTitle.trim()) return;
     setBusy(true);
     setDetailError(undefined);
+    setForkError(undefined);
     try {
       const result = await library.fork(detail.session.id, {
         title: forkTitle,
@@ -340,7 +421,7 @@ export function SessionsView({
       // source actually came with it.
       setAnnouncement(forkLibraryAnnouncement(result.session.title, result));
     } catch (caught) {
-      setDetailError(errorMessage(caught));
+      setForkError(errorMessage(caught));
     } finally {
       setBusy(false);
     }
@@ -358,11 +439,48 @@ export function SessionsView({
     if (!detail) return;
     setBusy(true);
     setDetailError(undefined);
+    /*
+     * Started before the delete so the write after it is synchronous.
+     *
+     * The continuity record has to be retired in the same breath as the
+     * deletion, and a dynamic import in that breath is a window a closing tab
+     * can fit through. Loading the module first turns the post-delete step into
+     * a `localStorage.setItem`, which is synchronous and cannot be half-done.
+     * Loaded, not used, until the journal has actually accepted the delete —
+     * a failed deletion must discard neither the conversation nor its record.
+     */
+    const ledgerModule = import("./chat/return-ledger").catch(() => undefined);
     try {
       await library.delete(detail.session.id, {
         expectedHead: { sequence: detail.session.headSequence, digest: detail.session.headDigest },
       });
       const removed = detail.session.title;
+      /*
+       * Deliberate removal is not lost work, and the ledger has to be told.
+       *
+       * The return ledger records every conversation this browser has seen so a
+       * later visit can report what did not come back. It learns that a
+       * conversation is gone by finding its entry absent from the journal — and
+       * a conversation the person deleted on purpose is absent in exactly the
+       * same way. Delete a thread, close the browser, come back, and Airship
+       * mourned it: "1 conversation · N messages · last active …", offering to
+       * set up a Vault to protect work that was thrown away on purpose. A
+       * product that cannot tell a decision from an accident is not telling the
+       * truth about either.
+       *
+       * Forgotten here rather than in reconciliation because this is the only
+       * place that knows the difference, and awaited before the success
+       * announcement rather than fired and forgotten: review pointed out that
+       * "deleted" spoken ahead of the record leaves a close/reload race in
+       * which the row is gone and the tombstone is not. Nothing claims the
+       * deletion is complete until the intent is durably recorded. A module
+       * that could not load leaves the record in place, which errs toward
+       * reporting a deletion as loss rather than losing work silently.
+       */
+      const deletedId = detail.session.id;
+      const ledger = await ledgerModule;
+      const storage = ledger?.browserReturnLedgerStorage();
+      if (ledger && storage) ledger.forgetReturnLedgerEntries(storage, [deletedId]);
       setDeleting(false);
       setSelectedId(undefined);
       setDetail(undefined);
@@ -656,10 +774,19 @@ export function SessionsView({
                     type="button"
                     aria-current={item.id === selectedId ? "true" : undefined}
                     aria-label={`${item.title}. ${relativeSessionTime(item.updatedAt)}. ${sessionEventCount(item.headSequence)}. ${item.providerId} ${item.model}${item.profileId ? `, profile ${item.profileId}` : ""}${lineage ? `, forked from ${lineage.label}` : ""}${active ? ", active conversation" : ""}`}
-                    title={`${item.title}\n${item.providerId} · ${item.model}\nUpdated ${formatDateTime(item.updatedAt)}`}
+                    title={`${item.title}\n${item.providerId} · ${item.model}\nUpdated ${formatDateTime(item.updatedAt)}\nDouble-click to open`}
                     onClick={() => setSelectedId(item.id)}
+                    // The mouse gesture every list of documents already binds,
+                    // and the keyboard one: Enter on a row already selected
+                    // opens it rather than re-selecting what is selected.
+                    onDblClick={() => void openSession(item.id)}
                     aria-keyshortcuts={favorite ? "Alt+ArrowUp Alt+ArrowDown" : undefined}
                     onKeyDown={(event) => {
+                      if (event.key === "Enter" && item.id === selectedId && item.id !== activeSessionId) {
+                        event.preventDefault();
+                        void openSession(item.id);
+                        return;
+                      }
                       if (!favorite || !event.altKey || (event.key !== "ArrowUp" && event.key !== "ArrowDown")) return;
                       event.preventDefault();
                       moveSessionFavoriteDirection(item.id, item.title, event.key === "ArrowUp" ? -1 : 1);
@@ -692,6 +819,18 @@ export function SessionsView({
                       <span class="session-library-card-model" title={`${item.providerId} · ${item.model}`}>{item.model}</span>
                     </span>
                   </button>
+                  {/* The one-press opener, on the row rather than 791px down
+                      the page. It is the row's own verb, so it carries the
+                      row's name; the active conversation's row says so
+                      instead of offering to reopen what is open. */}
+                  <button
+                    class="session-library-open"
+                    type="button"
+                    disabled={busy || active}
+                    aria-label={active ? `${item.title} is the active conversation` : `Open ${item.title}`}
+                    title={active ? "Active conversation" : `Open ${item.title}`}
+                    onClick={() => void openSession(item.id)}
+                  >{active ? "Active" : "Open"}</button>
                   {lineage?.navigable ? (
                     <button
                       class="session-library-lineage-jump"
@@ -795,6 +934,7 @@ export function SessionsView({
               busy={busy}
               forkOpen={forkOpen}
               forkTitle={forkTitle}
+              {...(forkError ? { forkError } : {})}
               forkUsesActiveManifest={Boolean(forkManifest)}
               runtimeAvailable={Boolean(runtime)}
               renaming={renaming}
@@ -854,6 +994,7 @@ function SessionDetail({
   outOfResults,
   busy,
   forkOpen,
+  forkError,
   forkTitle,
   forkUsesActiveManifest,
   runtimeAvailable,
@@ -881,6 +1022,8 @@ function SessionDetail({
   outOfResults: boolean;
   busy: boolean;
   forkOpen: boolean;
+  /** The fork's own refusal, rendered inside the panel that raised it. */
+  forkError?: string;
   forkTitle: string;
   forkUsesActiveManifest: boolean;
   runtimeAvailable: boolean;
@@ -926,6 +1069,7 @@ function SessionDetail({
     history: detail.history,
     receiptCount: detail.transcript.receipts.length,
     lifecycle: detail.transcript.lifecycle,
+    messageCount: detail.transcript.messages.length,
     ...(compatibility ? { compatibility } : {}),
     ...(quarantine ? { transcriptReplayFailed: true } : {}),
   });
@@ -1151,6 +1295,22 @@ function SessionDetail({
           </div>
           <label><span>Fork title</span><input value={forkTitle} maxlength={SESSION_TITLE_MAX} onInput={(event) => onForkTitle(event.currentTarget.value)} /></label>
           <div class="session-library-fork-note"><Icon name="lock" size={16} /><span>{forkUsesActiveManifest ? "The host supplied the active runtime manifest for this fork." : "The fork keeps the source runtime pins; only its conversation identity and lineage change."}</span></div>
+          {/* At the control that was pressed, and scrolled to — the pane-wide
+              alert this used to use rendered above the visible area with no
+              page scroll that could reach it, so the button read as inert. */}
+          {forkError ? (
+            <div
+              class="session-library-alert error session-library-fork-error"
+              role="alert"
+              ref={(element: HTMLDivElement | null) => element?.scrollIntoView({ block: "nearest" })}
+            >
+              <Icon name="warning" />
+              <span>
+                <strong>The fork was refused.</strong> {forkError}{" "}
+                This conversation stays readable below, and Rename, Proof and Delete still work on it.
+              </span>
+            </div>
+          ) : null}
           <div class="session-library-fork-actions"><button type="button" onClick={onCancelFork} disabled={busy}>Cancel</button><button class="primary" type="button" onClick={onCreateFork} disabled={busy || !forkTitle.trim()}>{busy ? "Creating…" : "Create fork"}</button></div>
         </section>
       ) : null}

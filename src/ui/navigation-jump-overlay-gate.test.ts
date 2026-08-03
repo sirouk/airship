@@ -17,19 +17,34 @@ const [appSource, shellSource] = await Promise.all([
 ]);
 
 describe("navigation-jump overlay gate", () => {
+  /*
+   * Asserted as a contract, not as a source literal.
+   *
+   * Both halves used to pin the exact signature and the exact expression, so a
+   * correct addition failed here: the hook grew a `switchProfile` argument for
+   * the `g 1`…`g 9` profile chords, and the overlay set grew `shortcutsOpen`
+   * when the shortcut sheet arrived. A test that fails when a new overlay is
+   * correctly gated is teaching the opposite of what it exists to teach.
+   */
   it("the hook accepts an enabled gate and refuses chords while it is closed", () => {
-    expect(shellSource).toMatch(
-      /useGlobalNavigationJumps\(navigate: \(view: NavigationView\) => void, enabled\?: \(\) => boolean\)/,
-    );
+    const signature = /useGlobalNavigationJumps\(\s*navigate: \(view: NavigationView\) => void,\s*enabled\?: \(\) => boolean/u;
+    expect(shellSource).toMatch(signature);
     expect(shellSource).toContain("if (enabledRef.current && !enabledRef.current()) { clear(); return; }");
   });
 
   it("the shell passes the platform-overlay state as that gate", () => {
-    expect(appSource).toContain(
-      "const platformOverlayOpen = mobileMoreOpen || paletteOpen || preferencesOpen || trustSheetOpen || approvalPending || Boolean(profileCockpitTransition);",
-    );
+    const declaration = /const platformOverlayOpen = ([^;]+);/u.exec(appSource)?.[1] ?? "";
+    expect(declaration, "platformOverlayOpen is not declared").not.toBe("");
+    // Every surface that takes the keyboard has to be in the gate. Adding an
+    // overlay without adding it here is exactly the regression this catches.
+    for (const overlay of [
+      "mobileMoreOpen", "paletteOpen", "preferencesOpen", "trustSheetOpen",
+      "approvalPending", "profileCockpitTransition", "shortcutsOpen",
+    ]) {
+      expect(declaration, `${overlay} does not gate the navigation chords`).toContain(overlay);
+    }
     expect(appSource).toContain("platformOverlayOpenRef.current = platformOverlayOpen;");
-    expect(appSource).toMatch(/useGlobalNavigationJumps\(navigatePrimary,\s*\(\)\s*=>\s*!platformOverlayOpenRef\.current\)/);
+    expect(appSource).toMatch(/useGlobalNavigationJumps\(\s*navigatePrimary,\s*\(\)\s*=>\s*!platformOverlayOpenRef\.current/u);
   });
 
   it("rail and overlay-owned navigation stay ungated on navigatePrimary itself", () => {

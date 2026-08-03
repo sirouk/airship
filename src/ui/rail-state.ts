@@ -121,6 +121,43 @@ export function saveRailPreference(
   }
 }
 
+export const RAIL_RECENTS_STORAGE_KEY = "airship.rail-recents.v1";
+
+/**
+ * Whether the conversation disclosure under Chat is open.
+ *
+ * It was `useState(false)` — so on every cold open the returning person's most
+ * important object was one chevron click from existing at all, measured as
+ * `button[aria-label="Expand recent conversations"]` present on a profile that
+ * already held two conversations. A default is only defensible when there is
+ * nothing to disclose, so the seed is the list, and the *choice* — once made —
+ * outranks it forever, the same rule `resolveRailState` applies to the rail.
+ *
+ * `undefined` means nobody has chosen, which is a different state from having
+ * chosen "closed" and must not be collapsed into `false`.
+ */
+export function loadRecentsPreference(
+  storage: Pick<Storage, "getItem"> | undefined = typeof localStorage === "undefined" ? undefined : localStorage,
+): boolean | undefined {
+  try {
+    const value = storage?.getItem(RAIL_RECENTS_STORAGE_KEY);
+    return value === "open" ? true : value === "closed" ? false : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function saveRecentsPreference(
+  open: boolean,
+  storage: Pick<Storage, "setItem"> | undefined = typeof localStorage === "undefined" ? undefined : localStorage,
+): void {
+  try {
+    storage?.setItem(RAIL_RECENTS_STORAGE_KEY, open ? "open" : "closed");
+  } catch {
+    /* The choice stays live for this page even when storage refuses it. */
+  }
+}
+
 /**
  * Does this keystroke ask for the rail to collapse or expand?
  *

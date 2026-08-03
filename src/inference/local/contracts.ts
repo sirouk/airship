@@ -45,6 +45,10 @@ export type LocalProviderDiagnosticCode =
   | "response-too-large"
   | "invalid-json"
   | "invalid-payload"
+  /** The response body stopped arriving mid-stream. Not a payload verdict. */
+  | "stream-interrupted"
+  /** The endpoint answered, then reported its own failure on the wire. */
+  | "provider-reported"
   | "model-details-unavailable";
 
 export type LocalProviderDiagnostic = Readonly<{
