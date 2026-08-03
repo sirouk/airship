@@ -1,10 +1,35 @@
 name: Deploy Airship to GitHub Pages
 
+# Deployment is a deliberate act, not a side effect of merging.
+#
+# This ran on every push to `main`, so integrating source WAS releasing it: the
+# moment a pull request merged, the build went public. That is the wrong
+# coupling for a product whose whole claim is that its security and durability
+# statements are true in the configuration a person is actually running, and it
+# was actively unsafe at the point it was found — the human-journey audit branch
+# was approved for merge while explicitly classified as "source-complete release
+# candidate, not yet production distributed".
+#
+# So `push` is gone. A merge to `main` integrates source and nothing else.
+# Deploying takes a person, an exact commit, and an approval on a protected
+# environment.
+#
+# Deliberately NOT added: an automatic release-tag trigger. Two clean clones of
+# a byte-identical tree currently produce different artifact graphs (see
+# `docs/audit/JOURNEY_CLOSEOUT.md`), so "the thing tested" and "the thing
+# deployed" are not yet provably the same bytes. Automatic tag deployment can be
+# considered once that is closed, and not before.
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
+    inputs:
+      ref:
+        description: "Full 40-character commit SHA to deploy. A branch name is refused: a moving ref cannot be qualified."
+        required: true
+        type: string
+      qualification:
+        description: "Where the release evidence for this SHA lives (CI run URL, or the qualification issue). Recorded in the deployment log."
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -13,17 +38,52 @@ permissions:
 
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     environment:
-      name: github-pages
+      # A protected environment with required reviewers. The approval gate is
+      # configured on the environment in repository settings, not here, so it
+      # cannot be removed by editing this file in a pull request.
+      name: production
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - name: Checkout
+      - name: Refuse anything but an exact commit
+        env:
+          REF: ${{ inputs.ref }}
+        run: |
+          # A branch or tag can move between qualification and deployment. The
+          # only ref that cannot is a full SHA, so it is the only one accepted.
+          if ! printf '%s' "$REF" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::'$REF' is not a full 40-character commit SHA. Deploy an exact commit, not a moving ref."
+            exit 1
+          fi
+
+      - name: Checkout the exact commit
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Record what is being deployed
+        env:
+          # Every one of these reaches the shell as an environment variable, not
+          # as template text spliced into the script. `qualification` is
+          # free-form and operator-supplied; interpolating it directly would let
+          # a backtick or `$(...)` in a URL execute here.
+          REF: ${{ inputs.ref }}
+          QUALIFICATION: ${{ inputs.qualification }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          {
+            echo "## Deploying \`$REF\`"
+            echo
+            echo "- Release evidence: $QUALIFICATION"
+            echo "- Requested by: $ACTOR"
+          } >> "$GITHUB_STEP_SUMMARY"
+          # Fail closed if the checkout is not the commit that was approved.
+          test "$(git rev-parse HEAD)" = "$REF"
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -52,6 +112,27 @@ jobs:
 
       - name: Add static callback fallback
         run: cp dist/index.html dist/404.html
+
+      - name: Record the deployed artifact inventory
+        run: |
+          # What actually shipped, in the log, so a deployed file can be checked
+          # against the manifest that was reviewed. This is the honest half of a
+          # build-integrity claim that cannot be made in full until the build is
+          # deterministic across checkouts.
+          find dist -type f -print0 | sort -z | xargs -0 shasum -a 256 > dist-checksums.txt
+          {
+            echo "### Deployed artifact"
+            echo
+            echo "- Files: $(wc -l < dist-checksums.txt)"
+            echo "- Inventory digest: \`$(shasum -a 256 dist-checksums.txt | cut -d' ' -f1)\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload artifact inventory
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployed-checksums-${{ inputs.ref }}
+          path: dist-checksums.txt
+          retention-days: 90
 
       - name: Configure Pages
         uses: actions/configure-pages@v5
