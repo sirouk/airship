@@ -219,34 +219,32 @@
 
 .proof-surface-tabs {
   display: flex;
-  /*
-   * Wrap, because `fit-content` capped by `max-width` does not shrink its
-   * children — it clips the box and lets them paint outside it.
-   *
-   * At the 390px phone width this control had 2px of slack: 375px of buttons in
-   * a 377px column. That is not a layout, it is a coincidence of one machine's
-   * fonts. On the Linux runner the same two labels measure ~8px wider and
-   * `Attestation evidence` left the screen, which `route-adversarial-audit`
-   * reported as 8px of horizontal overflow on the Proof route — a failure that
-   * could not be reproduced on macOS and so read for two runs as inherited
-   * flake.
-   *
-   * Wrapping costs nothing where the row already fits, and where it does not,
-   * both labels stay on screen whole. Truncating or scrolling would move a word
-   * off the screen, which is the one thing this route's own slab comment says
-   * it will not do.
-   */
-  flex-wrap: wrap;
   gap: 3px;
   width: fit-content;
   max-width: 100%;
   /*
-   * `max-width: 100%` alone does not bind here. A flex item defaults to
-   * `min-width: auto`, so this control refuses to shrink below its own
-   * min-content and simply reports a box wider than the column it sits in —
-   * measured: with wider labels the row grew to 390px inside a 377px column
-   * even after wrapping was allowed. Letting it shrink is what makes the cap
-   * mean anything.
+   * `max-width: 100%` does not bind without this.
+   *
+   * At the 390px phone width this control held 375px of buttons in a 377px
+   * column. Two pixels of slack is not a layout, it is a coincidence of one
+   * machine's fonts: on the Linux runner the same two labels measure wider,
+   * `Attestation evidence` left the screen, and `route-adversarial-audit`
+   * reported 8px of horizontal overflow on the Proof route — a failure that
+   * would not reproduce on macOS and so read for two runs as inherited flake.
+   *
+   * A flex item defaults to `min-width: auto`, so this row refused to shrink
+   * below its own min-content and simply reported a box wider than its column
+   * while its children painted outside it. Measured: with wider labels the row
+   * grew to 390px inside a 377px column. Allowing it to shrink is what makes
+   * the cap mean anything, and `.tabs` already knows what to do with a narrow
+   * row — it has an overflow trigger for exactly this.
+   *
+   * `flex-wrap: wrap` was tried here first and is deliberately absent. It did
+   * contain the overflow, but a lone item on a wrapped line no longer stretches
+   * to the line height, so the overflow trigger rendered 44×40 and
+   * `touch-target-floor` caught it under the 44px floor on the attestations
+   * surface. Letting the component's own overflow handling do the work costs no
+   * touch target.
    */
   min-width: 0;
   margin: 0 0 14px;
