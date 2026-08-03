@@ -65,6 +65,26 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref }}
+          # Full history, so the ancestry check below can actually resolve
+          # `origin/main`. A shallow checkout would make it unanswerable, and an
+          # unanswerable safety check is worse than none: it looks like one.
+          fetch-depth: 0
+
+      - name: Refuse a commit that is not on main
+        env:
+          REF: ${{ inputs.ref }}
+        run: |
+          # A SHA is exact but not therefore reviewed. Without this, anyone who
+          # can dispatch this workflow could deploy any commit that exists in
+          # the repository — an abandoned branch, an unmerged experiment, a
+          # reverted change — because they know its hash. Production deploys
+          # what `main` has accepted.
+          git fetch --quiet origin main
+          if ! git merge-base --is-ancestor "$REF" origin/main; then
+            echo "::error::$REF is not an ancestor of origin/main. Merge it before deploying it."
+            exit 1
+          fi
+          echo "- Ancestry: \`$REF\` is on origin/main" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Record what is being deployed
         env:

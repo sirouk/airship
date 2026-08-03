@@ -142,6 +142,16 @@ jobs:
           curl --fail --silent --show-error --max-time 10 http://127.0.0.1:9900/minio/health/live
           echo "- Local S3 lab: healthy" >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Discover the suite
+        run: |
+          # An expected count the execution cannot influence. Taken BEFORE the
+          # run, from a separate pass, because the previous version of this gate
+          # summed the execution report's own numbers and compared them to
+          # nothing — so a run that executed 127 of 184 tests agreed with itself
+          # and passed.
+          npx playwright test --list --project=desktop-chromium --reporter=json > desktop-list.json
+          npx playwright test --list --project=mobile-chromium --reporter=json > mobile-list.json
+
       - name: Browser matrix
         run: |
           set +e
@@ -152,62 +162,17 @@ jobs:
           set -e
           echo "DESKTOP_EXIT=$desktop" >> "$GITHUB_ENV"
           echo "MOBILE_EXIT=$mobile" >> "$GITHUB_ENV"
-          # Exit codes are reported by the arithmetic step below, which is the
-          # one that decides, so a reporter that dies mid-run cannot be read as
-          # a pass.
+          # The cardinality gate below is the one that decides, so a reporter
+          # that dies mid-run cannot be read as a pass.
           exit 0
 
-      - name: Browser totals must reconcile
+      - name: Browser cardinality and outcomes
         run: |
-          # A suite that "passes" with tests missing is the failure mode this
-          # exists for: an earlier run in this project reported "89 passed, 0
-          # failed" while accounting for 127 of 180 tests, and it looked like
-          # the best result of the day. Arithmetic caught it, so arithmetic is
-          # the gate — passed + failed + skipped must equal the reporter's own
-          # total, and failed must be zero.
-          node -e '
-            const fs = require("node:fs");
-            let bad = false;
-            const rows = [];
-            for (const [project, file, exit] of [
-              ["desktop-chromium", "desktop.json", process.env.DESKTOP_EXIT],
-              ["mobile-chromium", "mobile.json", process.env.MOBILE_EXIT],
-            ]) {
-              let stats;
-              try {
-                stats = JSON.parse(fs.readFileSync(file, "utf8")).stats ?? {};
-              } catch (error) {
-                console.log(`::error::${project} produced no readable report (exit ${exit}): ${error.message}`);
-                bad = true;
-                rows.push(`| ${project} | — | — | — | — | NO REPORT |`);
-                continue;
-              }
-              const passed = stats.expected ?? 0;
-              const failed = stats.unexpected ?? 0;
-              const skipped = stats.skipped ?? 0;
-              const flaky = stats.flaky ?? 0;
-              const total = passed + failed + skipped + flaky;
-              let verdict = "ok";
-              if (failed > 0) { verdict = `${failed} FAILED`; bad = true; }
-              if (total === 0) { verdict = "RAN NOTHING"; bad = true; }
-              if (String(exit) !== "0" && failed === 0) {
-                verdict = `runner exited ${exit} with no reported failure`;
-                bad = true;
-              }
-              rows.push(`| ${project} | ${passed} | ${failed} | ${skipped} | ${total} | ${verdict} |`);
-            }
-            const summary = [
-              "### Browser matrix",
-              "",
-              "| project | passed | failed | skipped | total | |",
-              "|---|---|---|---|---|---|",
-              ...rows,
-              "",
-            ].join("\n");
-            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
-            console.log(summary);
-            if (bad) process.exit(1);
-          '
+          # `scripts/browser-cardinality.test.mjs` holds this gate to every case
+          # it must refuse, including the 127-of-184 run that made it necessary.
+          node scripts/browser-cardinality.mjs \
+            "desktop-chromium:desktop-list.json:desktop.json:$DESKTOP_EXIT" \
+            "mobile-chromium:mobile-list.json:mobile.json:$MOBILE_EXIT"
 
       - name: Stop the local S3 lab
         if: always()
@@ -233,6 +198,8 @@ jobs:
         with:
           name: ci-evidence-${{ matrix.gate }}-${{ github.run_id }}
           path: |
+            desktop-list.json
+            mobile-list.json
             desktop.json
             mobile.json
             desktop.err
