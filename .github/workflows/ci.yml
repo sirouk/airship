@@ -121,6 +121,27 @@ jobs:
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
 
+      - name: Start the local S3 lab
+        run: |
+          # Several specs need the encrypted-Vault lab, and a runner without it
+          # does not "skip" them — it fails them. The first run of this workflow
+          # reported 10 desktop and 6 mobile failures that were entirely
+          # `vault-auto-adoption`, `vault-provider-switch` and
+          # `route-adversarial-audit` unable to reach MinIO on 127.0.0.1:9900.
+          #
+          # Provisioning it is the honest fix. Gating those specs on the lab's
+          # absence would turn Airship's durability coverage into a pass made of
+          # skips, which is the one shape of green worth less than a red.
+          npm run lab:start
+          npm run lab:status
+
+      - name: Lab must actually be up
+        run: |
+          # Fail here rather than 40 minutes later inside the browser matrix,
+          # where the same absence reads as a Vault regression.
+          curl --fail --silent --show-error --max-time 10 http://127.0.0.1:9900/minio/health/live
+          echo "- Local S3 lab: healthy" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Browser matrix
         run: |
           set +e
@@ -187,6 +208,10 @@ jobs:
             console.log(summary);
             if (bad) process.exit(1);
           '
+
+      - name: Stop the local S3 lab
+        if: always()
+        run: docker compose -f compose.local-lab.yaml down --volumes || true
 
       - name: Artifact inventory and checksums
         if: always()
