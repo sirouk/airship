@@ -20,7 +20,8 @@
  *     desktop-chromium:desktop-list.json:desktop.json:$DESKTOP_EXIT \
  *     mobile-chromium:mobile-list.json:mobile.json:$MOBILE_EXIT
  */
-import { appendFileSync, readFileSync } from "node:fs";
+import { appendFileSync, readFileSync, realpathSync } from "node:fs";
+import { pathToFileURL } from "node:url";
 
 /**
  * Tests in a Playwright JSON report, counted from the suite tree.
@@ -137,4 +138,23 @@ function main() {
   process.exit(results.every((result) => result.ok) ? 0 : 1);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) main();
+/*
+ * Resolved through `realpath` before comparing, because a plain
+ * `file://${process.argv[1]}` check is false whenever the invoking path crosses
+ * a symlink — `/tmp` is a link to `/private/tmp` on macOS, so running this from
+ * a temp directory silently did nothing and exited 0. It found me while I was
+ * using it to verify a CI result, which is the worst moment for a gate to be
+ * quietly inert. CI's paths are not symlinked, so it ran correctly there; that
+ * is luck, not design.
+ */
+const invokedDirectly = (() => {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  try {
+    return import.meta.url === pathToFileURL(realpathSync(entry)).href;
+  } catch {
+    return false;
+  }
+})();
+
+if (invokedDirectly) main();
