@@ -34,6 +34,9 @@
   gap: var(--sp-2) var(--sp-4);
   align-items: center;
   justify-content: space-between;
+  /* Same reason as `.proof-surface-tabs`: the row it wraps must be allowed to
+   * shrink, or the cap on its child is a cap on nothing. */
+  min-width: 0;
 }
 
 .proof-view .proof-surface-tabs {
