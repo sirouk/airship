@@ -11,8 +11,22 @@ name: Deploy Airship to GitHub Pages
 # candidate, not yet production distributed".
 #
 # So `push` is gone. A merge to `main` integrates source and nothing else.
-# Deploying takes a person, an exact commit, and an approval on a protected
-# environment.
+# Deploying takes a person and an exact, already-merged commit.
+#
+# What is actually enforced, here, by this file: manual dispatch only, a full
+# 40-character SHA, that SHA proven an ancestor of `origin/main`, and a recorded
+# location for its release evidence. Those hold regardless of repository plan.
+#
+# What is NOT enforced: approval by a second principal. An earlier version of
+# this comment claimed a protected environment with required reviewers stood in
+# front of this job. It does not. No `production` environment exists; the only
+# one that does, `github-pages`, has no protection rules and admins may bypass
+# it. Required reviewers are a public-repository feature on Free, Pro and Team,
+# so on this private repository no plan upgrade supplies the missing control —
+# only making the repository public, or moving deployment elsewhere, would. A
+# release-control file asserting a control it does not have is the same inert
+# gate this branch twice caught in itself, so the claim is withdrawn rather than
+# restated.
 #
 # Deliberately NOT added: an automatic release-tag trigger. Two clean clones of
 # a byte-identical tree currently produce different artifact graphs (see
@@ -44,9 +58,16 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     environment:
-      # A protected environment with required reviewers. The approval gate is
-      # configured on the environment in repository settings, not here, so it
-      # cannot be removed by editing this file in a pull request.
+      # Deployment tracking, not an approval gate. This environment has no
+      # protection rules and none can be added while the repository is private
+      # (see the header). Treat the name as a label on the deployment log.
+      #
+      # Known open item, deliberately not changed here because deployment is out
+      # of scope for this branch: `actions/deploy-pages` requires the job to run
+      # in the `github-pages` environment, so this `production` name would fail
+      # a real deploy. That is a live defect to fix when deployment work resumes
+      # — recorded rather than silently patched, because changing it now would be
+      # untested deployment design.
       name: production
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
