@@ -259,6 +259,28 @@ export function resolveBillingProviderInventory(
   }));
 }
 
+/**
+ * The providers this route has anything to show, which is not the same list as
+ * the providers that exist.
+ *
+ * The strip drew all four unconditionally, so a person who had connected
+ * nothing — or connected exactly one thing — was handed four tabs of which
+ * three could only say "Not connected" over six em dashes. That is a catalogue
+ * of what could exist rendered as if it were an inventory of what does, and it
+ * is the single loudest way this route taught people the product was empty.
+ *
+ * A held credential is the test, not a successful read: `rejected` keeps its
+ * tab because Chutes refusing a credential you hold is a fact about your
+ * account that this route is the place to state, and hiding the tab would hide
+ * the refusal with it. `not-connected` and `unavailable` are both "nothing is
+ * held here", which is a sentence Connection already makes better.
+ */
+export function authenticatedBillingProviders(
+  inventory: readonly BillingProviderInventoryEntry[],
+): readonly BillingProviderInventoryEntry[] {
+  return Object.freeze(inventory.filter((entry) => entry.state === "connected" || entry.state === "rejected"));
+}
+
 /** The em dash a metric shows when nothing has been read. It is not a zero. */
 const NOT_READ = "—";
 
@@ -274,17 +296,17 @@ const NOT_READ = "—";
 const ACCOUNT_ROUTE_EYEBROW = "Account standing · Chutes telemetry and provider inventory";
 
 /**
- * Why this route lists four providers while Connection offers more ways in.
+ * Why this route lists fewer providers than Connection offers ways in.
  *
  * Measured one click apart: `#connection` reads "No model connected · 5 ready
- * to connect" and `#account` shows four provider rows. Neither number is wrong
- * — Connection counts ways to connect, and a model server running on this
+ * to connect" and `#account` showed four provider rows. Neither number was
+ * wrong — Connection counts ways to connect, and a model server running on this
  * machine is one of them and has no account at all — but nothing said so, so
- * the two surfaces read as disagreeing about how many providers exist. The rule
- * is stated instead of a second number being printed, because two numbers in
- * two files is how they came to disagree in the first place.
+ * the two surfaces read as disagreeing about how many providers exist. The
+ * strip now lists only what is connected, so the remaining gap is the one this
+ * sentence explains: some connections have no account behind them.
  */
-const ACCOUNT_PROVIDER_SCOPE_NOTE = "These are the providers that have an account to read. Connection offers more ways to connect than appear here — a model server running on this machine has no account, and nothing about it is billed or read.";
+const ACCOUNT_PROVIDER_SCOPE_NOTE = "These are the providers you have connected that have an account to read. Connection offers more ways to connect than appear here — a model server running on this machine has no account, and nothing about it is billed or read.";
 
 /** How long a snapshot reads as fresh before the chip demotes it to an observation. */
 const OBSERVATION_FRESHNESS_BUDGET_MS = 5 * 60_000;
@@ -324,7 +346,16 @@ export function BillingView({
   const [loading, setLoading] = useState(false);
   const [fatalError, setFatalError] = useState<string>();
   const [refresh, setRefresh] = useState(0);
-  const [selectedProvider, setSelectedProvider] = useState<BillingProviderId>("chutes");
+  /**
+   * The tab the reader last asked for — which is not always a tab that exists.
+   *
+   * Disconnecting a provider while standing on its panel, or arriving with a
+   * remembered choice the strip no longer draws, would otherwise leave the
+   * route pointing at a tab nobody can see. The request is remembered here and
+   * resolved against the live strip below, so the selection can only ever name
+   * a provider the reader can actually reach.
+   */
+  const [providerRequest, setProviderRequest] = useState<BillingProviderId>("chutes");
   /**
    * The bucket the reader is pointing at, in either representation.
    *
@@ -405,12 +436,22 @@ export function BillingView({
   const chip = chutesAccountChip(acceptance, observed?.stale === true);
   const subscriptionInactive = subscriptionState.status === "verified" && subscriptionState.value?.active === false;
   const quota = invocationTelemetry?.quota;
-  const providers = useMemo(
+  const inventory = useMemo(
     () => resolveBillingProviderInventory(providerInventory, accountReadable, acceptance),
     [providerInventory, accountReadable, acceptance],
   );
-  const selectedInventory = providers.find((provider) => provider.providerId === selectedProvider)!;
-  const selectedDefinition = BILLING_PROVIDERS.find((provider) => provider.id === selectedProvider)!;
+  const providers = useMemo(() => authenticatedBillingProviders(inventory), [inventory]);
+  /*
+   * The request, resolved against what is actually drawn. Falling back to the
+   * first tab rather than to Chutes: Chutes is only the first tab while Chutes
+   * is connected, and a fallback that named it regardless would reintroduce the
+   * empty panel the strip no longer offers a way into.
+   */
+  const selectedProvider = providers.some((provider) => provider.providerId === providerRequest)
+    ? providerRequest
+    : providers[0]?.providerId;
+  const selectedInventory = providers.find((provider) => provider.providerId === selectedProvider);
+  const selectedDefinition = BILLING_PROVIDERS.find((provider) => provider.id === selectedProvider);
   const chutesIdentity = chutesAccountIdentityPresentation(snapshot, loading);
 
   return (
@@ -447,16 +488,21 @@ export function BillingView({
         ) : null}
       />
 
-      <BillingProviderTabs
-        providers={providers}
-        selected={selectedProvider}
-        onSelect={setSelectedProvider}
-      />
+      {/* No strip and no scope note with nothing connected: a tablist of zero
+          tabs is chrome describing an absence, and the gate below already says
+          it in words with the action attached. */}
+      {selectedProvider ? <>
+        <BillingProviderTabs
+          providers={providers}
+          selected={selectedProvider}
+          onSelect={setProviderRequest}
+        />
 
-      <p class="billing-provider-scope">
-        {ACCOUNT_PROVIDER_SCOPE_NOTE}{" "}
-        <button class="small-button" type="button" onClick={onOpenAccess}>Open Connection</button>
-      </p>
+        <p class="billing-provider-scope">
+          {ACCOUNT_PROVIDER_SCOPE_NOTE}{" "}
+          <button class="small-button" type="button" onClick={onOpenAccess}>Open Connection</button>
+        </p>
+      </> : <BillingAccountGate online={online} onOpenAccess={onOpenAccess} />}
 
       {selectedProvider === "chutes" ? <div
         class="billing-provider-panel"
@@ -471,51 +517,6 @@ export function BillingView({
         </div>
       ) : null}
       {fatalError ? <div class="billing-alert error" role="alert"><Icon name="warning" /><div><strong>Account read failed</strong><span>{fatalError}</span></div></div> : null}
-
-      {!accountReadable ? (
-        /*
-         * Not-yet-connected is a default, not a fault.
-         *
-         * This branch used to state one fact five times — a grey dot reading
-         * "Account telemetry unavailable", an eyebrow "USER-SCOPED TOKEN
-         * REQUIRED", a heading, and two near-verbatim page-memory sentences
-         * 110px apart — in Airship's own failure grammar. The sentence that
-         * carries the credential contract is kept word for word; what goes is
-         * the repetition and the alarm.
-         */
-        <div class="billing-gate panel">
-          <span class="billing-gate-mark"><Icon name="lock" size={22} /></span>
-          <div>
-            <h2>Not connected yet</h2>
-            {/* Method-agnostic on purpose. Naming sign-in here duplicated a
-                fact only Connection computes — whether this build can run the
-                OAuth exchange at all — so a build without it promised a route
-                one press later it had to withdraw. The credential contract, the
-                part Account does own, is unchanged word for word. */}
-            <p>Connect a Chutes credential to read account telemetry. The credential remains held only in page memory.</p>
-            <div class="billing-gate-actions">
-              <button class="primary billing-gate-action" type="button" onClick={onOpenAccess}>Connect Chutes</button>
-              {online
-                ? <a class="billing-gate-link" href="https://chutes.ai/app/settings/billing" target="_blank" rel="noreferrer">Manage at Chutes ↗</a>
-                : <span class="billing-gate-link is-disabled" aria-disabled="true">Manage at Chutes ↗</span>}
-            </div>
-          </div>
-          {/* `What becomes available` promised a list in prose that the header
-              had already promised in different words. The same six things are
-              named here as the labelled shape they arrive in, each holding an
-              em dash — which states the non-claim rather than describing it. */}
-          <div class="billing-gate-preview">
-            <MetricStrip label="What becomes available" class="billing-metric-strip">
-              <Metric label="Available Chutes balance" value={metricQuantity(NOT_READ)} />
-              <Metric label="Subscription" value={metricQuantity(NOT_READ)} />
-              <Metric label="Charged this UTC month" value={metricQuantity(NOT_READ)} />
-              <Metric label="Tokens this UTC month" value={metricQuantity(NOT_READ)} />
-              <Metric label="Live headroom" value={metricQuantity(NOT_READ)} caption="quota configuration and per-invocation headroom" />
-            </MetricStrip>
-            <p class="billing-gate-preview-note">Nothing is read from Chutes until you connect.</p>
-          </div>
-        </div>
-      ) : null}
 
       {accountReadable ? <>{snapshot?.issues.length ? (
         /*
@@ -735,13 +736,67 @@ export function BillingView({
         </section>
       </div>
       </> : null}
-      </div> : (
+      </div> : selectedDefinition && selectedInventory ? (
         <BillingProviderInventoryPanel
           provider={selectedDefinition}
           inventory={selectedInventory}
         />
-      )}
+      ) : null}
     </section>
+  );
+}
+
+/**
+ * What the route says when nothing is connected — which is now the only way to
+ * arrive here without a provider panel.
+ *
+ * Not-yet-connected is a default, not a fault.
+ *
+ * This branch used to state one fact five times — a grey dot reading "Account
+ * telemetry unavailable", an eyebrow "USER-SCOPED TOKEN REQUIRED", a heading,
+ * and two near-verbatim page-memory sentences 110px apart — in Airship's own
+ * failure grammar. The sentence that carries the credential contract is kept
+ * word for word; what goes is the repetition and the alarm.
+ *
+ * It sat inside the Chutes tabpanel, which is where it stopped making sense:
+ * with the strip listing only connected providers there is no Chutes tab to
+ * hang a "not connected" panel from, and this is the whole route rather than
+ * one tab of it.
+ */
+function BillingAccountGate({ online, onOpenAccess }: { online: boolean; onOpenAccess: () => void }) {
+  return (
+    <div class="billing-gate panel">
+      <span class="billing-gate-mark"><Icon name="lock" size={22} /></span>
+      <div>
+        <h2>Not connected yet</h2>
+        {/* Method-agnostic on purpose. Naming sign-in here duplicated a fact
+            only Connection computes — whether this build can run the OAuth
+            exchange at all — so a build without it promised a route one press
+            later it had to withdraw. The credential contract, the part Account
+            does own, is unchanged word for word. */}
+        <p>Connect a Chutes credential to read account telemetry. The credential remains held only in page memory.</p>
+        <div class="billing-gate-actions">
+          <button class="primary billing-gate-action" type="button" onClick={onOpenAccess}>Connect Chutes</button>
+          {online
+            ? <a class="billing-gate-link" href="https://chutes.ai/app/settings/billing" target="_blank" rel="noreferrer">Manage at Chutes ↗</a>
+            : <span class="billing-gate-link is-disabled" aria-disabled="true">Manage at Chutes ↗</span>}
+        </div>
+      </div>
+      {/* `What becomes available` promised a list in prose that the header had
+          already promised in different words. The same six things are named
+          here as the labelled shape they arrive in, each holding an em dash —
+          which states the non-claim rather than describing it. */}
+      <div class="billing-gate-preview">
+        <MetricStrip label="What becomes available" class="billing-metric-strip">
+          <Metric label="Available Chutes balance" value={metricQuantity(NOT_READ)} />
+          <Metric label="Subscription" value={metricQuantity(NOT_READ)} />
+          <Metric label="Charged this UTC month" value={metricQuantity(NOT_READ)} />
+          <Metric label="Tokens this UTC month" value={metricQuantity(NOT_READ)} />
+          <Metric label="Live headroom" value={metricQuantity(NOT_READ)} caption="quota configuration and per-invocation headroom" />
+        </MetricStrip>
+        <p class="billing-gate-preview-note">Nothing is read from Chutes until you connect.</p>
+      </div>
+    </div>
   );
 }
 
@@ -824,10 +879,10 @@ function BillingProviderInventoryPanel({
   /*
    * Why this panel is empty, rather than the fact that it is.
    *
-   * Account is a global destination beside Vault and Connection and lists four
-   * providers, and only the Chutes panel could ever hold anything: the other
-   * three said "Connection state was not supplied to this view" and "Unavailable"
-   * four times, which reads as a feature that has not loaded. It is not. Airship
+   * Account is a global destination beside Vault and Connection, and only the
+   * Chutes panel can ever hold telemetry: every other provider's panel said
+   * "Connection state was not supplied to this view" and "Unavailable" four
+   * times, which reads as a feature that has not loaded. It is not. Airship
    * reads account telemetry from Chutes and calls no other provider's account
    * API from the browser, so the honest panel states the rule and stops the
    * reader waiting for numbers that are never coming.

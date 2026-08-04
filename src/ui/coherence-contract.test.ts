@@ -10,7 +10,18 @@ describe("progressive disclosure coherence contract", () => {
     // contract, which Account does own, is still pinned verbatim.
     expect(source).toContain("Connect a Chutes credential to read account telemetry. The credential remains held only in page memory.");
     expect(source).toContain("{accountReadable ? <>{snapshot?.issues.length");
-    expect(source.indexOf("billing-gate-preview")).toBeLessThan(source.indexOf("{accountReadable ? <>"));
+    /*
+     * AMENDED: the gate is a component of its own now, because the strip lists
+     * only connected providers — so with nothing connected there is no Chutes
+     * tab left to hang a "not connected" panel from, and the gate is the whole
+     * route rather than one tab of it. The ordering that carries the disclosure
+     * is therefore where it is *rendered*, not where its markup is declared:
+     * the gate stands in the strip's place, above the provider panel.
+     */
+    expect(source).toContain("</> : <BillingAccountGate online={online} onOpenAccess={onOpenAccess} />}");
+    expect(source.indexOf("<BillingAccountGate online={online}"))
+      .toBeLessThan(source.indexOf('{selectedProvider === "chutes" ? <div'));
+    expect(source).toContain("billing-gate-preview");
   });
 
   // Replaces "puts the source task before mobile posture detail", which pinned

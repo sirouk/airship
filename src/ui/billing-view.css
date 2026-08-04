@@ -21,9 +21,17 @@
 
 /* --- Provider inventory ------------------------------------------------ */
 
+/* The strip draws only connected providers, so its column count is a fact
+   about the reader's account rather than about the provider catalog. `auto-fit`
+   collapses the tracks nothing occupies and lets the survivors share the width,
+   which is why the fixed `repeat(4, …)` and its phone override are both gone:
+   at 390px the 140px floor yields two columns and wraps four tabs into two rows
+   — exactly what the media query used to spell out — and at one tab it yields
+   one full-width tab instead of a quarter-width one beside three empty
+   quarters. */
 .billing-provider-tabs {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   gap: var(--sp-1, 4px);
   min-width: 0;
   padding: var(--sp-1, 4px);
@@ -446,7 +454,8 @@
 
 @media (max-width: 640px) {
   /*
-   * Two rows of two, not a four-column carousel.
+   * Two rows of two, not a four-column carousel — and now stated once, in the
+   * base rule, rather than twice.
    *
    * Measured at 390: `minmax(136px, 1fr)` made the strip 560px wide, so the
    * Anthropic tab ended at x=430 and the xAI tab at x=570 — both off-screen —
@@ -454,14 +463,11 @@
    * nothing on screen said so: no edge, no partial tab, no affordance of any
    * kind, so two of the four providers were simply absent. A provider you
    * cannot see is a provider you cannot select, and this strip is the only
-   * Chutes state visible while another provider's panel is open. Four tabs fit
-   * a phone in two rows, so the scroll — and the snap that served it — is not
-   * needed at all. Reorganised into the space that exists rather than reduced
-   * to what fits on one line.
+   * Chutes state visible while another provider's panel is open. The 140px
+   * track floor above yields the same two columns here without a second
+   * declaration of the same intent — and it does it for two and three tabs as
+   * well, which a hardcoded `repeat(2, …)` could not.
    */
-  .billing-provider-tabs {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
 
   .billing-account-identity dl,
   .billing-provider-data {

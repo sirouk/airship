@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { ChutesAccountIssue, ChutesAccountSnapshot } from "../billing/client";
 import {
   accountReadingLine,
+  authenticatedBillingProviders,
   BILLING_PROVIDERS,
   billingProviderDatumLabel,
   chutesAccountAcceptance,
@@ -132,6 +133,55 @@ describe("billing provider presentation", () => {
     expect(inventoryType).not.toMatch(/credential|token|secret|rawHeader|endpoint/iu);
     expect(source).toContain("This view did not call the provider API.");
     expect(source).not.toMatch(/Connect (?:OpenAI|Anthropic|xAI)|Sign in (?:to|with) (?:OpenAI|Anthropic|xAI)/u);
+  });
+});
+
+/*
+ * The route offered four tabs on an account with nothing connected, three of
+ * which could only say "Not connected" over six em dashes. That is the provider
+ * catalog rendered as if it were the reader's inventory, and it is the single
+ * loudest way this route taught a first-time user the product was empty.
+ */
+describe("the strip lists what is connected, not what could be", () => {
+  it("keeps a tab only where a credential is actually held", () => {
+    const strip = authenticatedBillingProviders(resolveBillingProviderInventory([
+      { providerId: "openai", state: "connected" },
+      { providerId: "anthropic", state: "not-connected" },
+    ], false));
+
+    expect(strip.map(({ providerId }) => providerId)).toEqual(["openai"]);
+  });
+
+  it("draws nothing at all when nothing is connected", () => {
+    expect(authenticatedBillingProviders(resolveBillingProviderInventory(undefined, false))).toEqual([]);
+    // The host has not spoken yet — `unavailable` is "nobody said", which is
+    // not a connection and must not be drawn as one.
+    expect(authenticatedBillingProviders(resolveBillingProviderInventory([
+      { providerId: "xai", state: "unavailable" },
+    ], false))).toEqual([]);
+  });
+
+  /*
+   * Chutes refusing a credential you hold is a fact about your account, and
+   * this route is where it is stated. Dropping the tab would drop the refusal
+   * with it, so `rejected` is a held credential for this purpose even though
+   * nothing was read through it.
+   */
+  it("does not hide a refusal by hiding the provider that made it", () => {
+    const strip = authenticatedBillingProviders(resolveBillingProviderInventory(undefined, true, "rejected"));
+    expect(strip.map(({ providerId, state }) => [providerId, state])).toEqual([["chutes", "rejected"]]);
+  });
+
+  it("resolves the reader's request against the strip rather than trusting it", () => {
+    // A remembered "chutes" cannot select a tab the strip no longer draws, and
+    // the fallback is the first live tab rather than a hardcoded Chutes.
+    expect(source).toContain("const selectedProvider = providers.some((provider) => provider.providerId === providerRequest)");
+    expect(source).toContain("providers[0]?.providerId;");
+    expect(source).toContain("const providers = useMemo(() => authenticatedBillingProviders(inventory), [inventory]);");
+    // No strip, no scope note, and the gate instead — a tablist with zero tabs
+    // is chrome describing an absence the gate already states in words.
+    expect(source).toContain("{selectedProvider ? <>");
+    expect(source).toContain("</> : <BillingAccountGate online={online} onOpenAccess={onOpenAccess} />}");
   });
 });
 
@@ -350,16 +400,23 @@ describe("no state is carried only by an aria-label ARIA discards", () => {
 });
 
 describe("billing provider responsive contract", () => {
-  it("shows four desktop tabs and all four on a phone, with nothing off-screen", () => {
-    expect(styles).toMatch(/\.billing-provider-tabs\s*\{[\s\S]*?grid-template-columns:\s*repeat\(4, minmax\(0, 1fr\)\)/u);
+  it("sizes the strip to the tabs it actually draws, on a desktop and on a phone", () => {
     /*
+     * The count is no longer a constant: the strip draws connected providers,
+     * so it can hold one, two, three or four tabs. `repeat(4, …)` would leave a
+     * single connected provider as a quarter-width tab beside three empty
+     * quarters, and `auto-fit` is the rule that lets the survivors share the
+     * width instead.
+     *
      * Measured at 390: `minmax(136px, 1fr)` made the strip 560px, putting the
      * Anthropic tab at x=430 and xAI at x=570 — off-screen, scrollable, and
-     * with no affordance saying so. Two rows of two show all four, so the
-     * scroll and its snap have nothing left to do and are gone rather than
-     * layered under a second rule.
+     * with no affordance saying so. Two rows of two show all four, and the
+     * 140px track floor produces exactly that at phone widths without a second
+     * declaration in a media query — so the override is gone rather than kept
+     * beside a base rule that already says it.
      */
-    expect(styles).toMatch(/@media \(max-width: 640px\)[\s\S]*?\.billing-provider-tabs\s*\{[\s\S]*?repeat\(2, minmax\(0, 1fr\)\)/u);
+    expect(styles).toMatch(/\.billing-provider-tabs\s*\{[\s\S]*?grid-template-columns:\s*repeat\(auto-fit, minmax\(140px, 1fr\)\)/u);
+    expect(styles).not.toMatch(/\.billing-provider-tabs\s*\{[^}]*repeat\(\d+, minmax/u);
     expect(styles).not.toContain("scroll-snap-type: x proximity");
     expect(styles).not.toMatch(/\.billing-provider-(?:tabs|tab)\s*\{[^}]*display:\s*none/gu);
   });
