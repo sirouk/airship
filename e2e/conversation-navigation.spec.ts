@@ -39,14 +39,24 @@ test("every conversation has a stable addressed URL and new conversations do not
   await expect.poll(() => page.url()).not.toBe(firstUrl);
   await expect(page).toHaveURL(/#chat\/[^/?#]+$/);
 
-  const firstConversation = page
-    .getByRole("navigation", { name: "Primary" })
+  /*
+   * Unconditional, deliberately.
+   *
+   * This was `if (await firstConversation.count()) { … }` — a guard that turns
+   * "the rail never rendered the other conversation" into a silent pass, on the
+   * one assertion in the file that opens a thread from the rail. The rail row
+   * that does not open its conversation shipped underneath it. A row that is
+   * not there is the failure, not a reason to skip the check.
+   */
+  const navigation = page.getByRole("navigation", { name: "Primary" });
+  const expand = navigation.getByRole("button", { name: "Expand recent conversations" });
+  if (await expand.count()) await expand.click();
+  const firstConversation = navigation
     .locator("#airship-recent-conversations .recent-conversation:not(.active)")
     .first();
-  if (await firstConversation.count()) {
-    await firstConversation.click();
-    await expect(page).toHaveURL(firstUrl);
-  }
+  await expect(firstConversation).toBeVisible();
+  await firstConversation.click();
+  await expect(page).toHaveURL(firstUrl);
 });
 
 test("desktop chat title supports durable inline rename", async ({ page }, testInfo) => {

@@ -2621,6 +2621,31 @@ export function App() {
    * value that was ever going to be rendered.
    */
   const settledSessionRevision = useDebouncedValue(sessionRevision, RECENTS_REFRESH_DEBOUNCE_MS);
+  /*
+   * A conversation row reads its opener at click time; it does not carry one.
+   *
+   * Both loaders below bake an `open` callback into every row they return, and
+   * both effects are keyed on `settledSessionRevision` — the trailing edge of a
+   * turn's event burst, which by construction settles while that turn is still
+   * running. So the rows a person actually clicks were built during a render
+   * where `busy` was true, and they kept that answer after the turn ended.
+   *
+   * Measured on a two-conversation profile, both with one message: clicking the
+   * other thread in the rail threw "Stop the active turn before resuming
+   * another session." and dropped the person on #sessions — the library they
+   * did not ask for — while the composer was enabled and the run indicator on
+   * the same screen read `Idle`. Re-listing the library by any idle route
+   * (toggling a favorite) made the identical click open the identical row.
+   * A stale closure, not a stale journal.
+   *
+   * The indirection is the fix: the row calls whatever the current render's
+   * opener is, so every guard inside it reads live state.
+   */
+  const openConversationRef = useRef<(targetSessionId: string) => Promise<void>>();
+  openConversationRef.current = openPaletteSession;
+  const openConversationFromList = (targetSessionId: string) => {
+    void openConversationRef.current?.(targetSessionId);
+  };
   useEffect(() => {
     if (!sessionLibrary) {
       setRecentPaletteState(Object.freeze({ profileId: "", sessions: Object.freeze([]) }));
@@ -2629,7 +2654,7 @@ export function App() {
     const controller = new AbortController();
     void loadRecentSessionPaletteSources(
       sessionLibrary,
-      (targetSessionId) => { void openPaletteSession(targetSessionId); },
+      openConversationFromList,
       controller.signal,
       profileId,
     ).then((sessions) => {
@@ -2757,7 +2782,7 @@ export function App() {
     };
     void loadRecentConversations(
       sessionLibrary,
-      (targetSessionId) => { void openPaletteSession(targetSessionId); },
+      openConversationFromList,
       (targetSessionId, favorite) => {
         void setProfileConversationFavorite(targetSessionId, favorite, ownerProfileId, ownerRuntime)
           .catch(presentMutationFailure);
@@ -4090,7 +4115,19 @@ export function App() {
       setRuntimeStatus(error instanceof Error
         ? describeSessionPresentationFault(error)
         : "The recent session could not be opened.");
-      navigate("sessions");
+      /*
+       * A running turn is a "not yet", not a "somewhere else".
+       *
+       * `resumeLibrarySession` will not resume a conversation out from under a
+       * turn that is still writing to the journal — that refusal is correct.
+       * The answer it gave was not: every refusal in here landed on the library
+       * route, so "open this thread" was answered by replacing the thread on
+       * screen with a list of all of them. That is the loudest possible
+       * response to a two-second wait, and it throws away the place the person
+       * was standing in. The reason is already on screen; the library is for
+       * faults that outlive the turn, not for waiting out this one.
+       */
+      if (!busy) navigate("sessions");
     }
   }
 

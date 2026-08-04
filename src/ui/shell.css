@@ -735,24 +735,32 @@
   scrollbar-color: var(--line-strong) transparent;
 }
 
-/* Only while content is genuinely hidden: an always-on fade would claim there
-   is more below a list that ends where it looks like it ends. */
-.recent-conversations__list[data-scroll-edges="start"] { --recents-scroll-fade: linear-gradient(to bottom, transparent 0, #000 20px); }
-.recent-conversations__list[data-scroll-edges="end"] { --recents-scroll-fade: linear-gradient(to bottom, #000 calc(100% - 20px), transparent 100%); }
-.recent-conversations__list[data-scroll-edges="both"] { --recents-scroll-fade: linear-gradient(to bottom, transparent 0, #000 20px, #000 calc(100% - 20px), transparent 100%); }
-
-.recent-conversations__list[data-scroll-edges]:not([data-scroll-edges="none"]) {
-  -webkit-mask-image: var(--recents-scroll-fade);
-  mask-image: var(--recents-scroll-fade);
+/*
+ * A clipped thread reads as "more below", and only when there genuinely is.
+ *
+ * Measured with nine threads: the sixth row was sliced through the middle of
+ * its own preview line with no edge treatment at all, so the list looked like a
+ * list that ended badly rather than one that continues. `.primary-nav` solves
+ * this with `data-scroll-edges`, a measured JavaScript affordance — correct,
+ * but this list is inside the entry chunk and that budget is spent to the byte
+ * (measured: 37 bytes of gzip headroom at the time of writing). So the same
+ * honesty is bought in CSS for nothing: the two `local` layers scroll WITH the
+ * threads and mask the shadow away at each extreme, while the two `scroll`
+ * shadows stay put. A list that does not overflow shows neither, which is the
+ * same contract `scrollEdges` enforces — an always-on fade would assert there
+ * is more below a list that ends where it looks like it ends.
+ */
+.recent-conversations__list {
+  background:
+    linear-gradient(var(--surface-soft) 40%, transparent) top / 100% 18px local no-repeat,
+    linear-gradient(transparent, var(--surface-soft) 60%) bottom / 100% 18px local no-repeat,
+    linear-gradient(to bottom, color-mix(in srgb, var(--ink) 10%, transparent), transparent) top / 100% 10px scroll no-repeat,
+    linear-gradient(to top, color-mix(in srgb, var(--ink) 10%, transparent), transparent) bottom / 100% 10px scroll no-repeat;
 }
 
-/* A fade has no forced-colors equivalent; keep every thread at full contrast
-   and let the scrollbar carry the affordance instead. */
+/* A shadow carries no forced-colors equivalent; the scrollbar carries it there. */
 @media (forced-colors: active) {
-  .recent-conversations__list[data-scroll-edges]:not([data-scroll-edges="none"]) {
-    -webkit-mask-image: none;
-    mask-image: none;
-  }
+  .recent-conversations__list { background: none; }
 }
 
 .rail-recents__header {

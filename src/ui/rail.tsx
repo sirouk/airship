@@ -15,7 +15,6 @@ import {
 } from "./navigation-model";
 import { loadRecentsPreference, saveRecentsPreference, type RailState } from "./rail-state";
 import { RuntimeLoadIndicator } from "./runtime-load-indicator";
-import { useScrollEdges } from "./scroll-affordance";
 
 /**
  * The left rail.
@@ -336,7 +335,6 @@ export function Rail({
     rovingKey(view, railTraversal({ workspace: railRowFor(view)?.id === "workspace" })));
   const items = useRef(new Map<string, HTMLButtonElement>());
   const recentsTrigger = useRef<HTMLButtonElement>(null);
-  const recentsList = useRef<HTMLDivElement | null>(null);
   // The rail's half of the phone band's "Current page: …" line. Undefined on
   // the eleven views that have a row of their own to be marked.
   const currentHint = railCurrentHint(view);
@@ -495,14 +493,6 @@ export function Rail({
     return keys;
   }, [expanded, recentsOpen, conversationKeys]);
 
-  /*
-   * A clipped thread row must read as "more below", not as a thread that was
-   * cut in half. The mask machinery is the one `.primary-nav` already uses, and
-   * it paints only while content is genuinely hidden — re-bound whenever the
-   * disclosure opens or the thread set changes so a collapsed panel cannot
-   * leave a stale fade behind.
-   */
-  useScrollEdges(recentsList, `${String(recentsOpen)}:${conversationKeys}`);
 
   // A route can change from the palette, a hash, or a link inside the page.
   // The roving stop follows it so `Tab` into the rail always lands on where the
@@ -943,10 +933,7 @@ export function Rail({
               * worth having. Moving the overflow one level down pins the
               * header above the scroll and the ledger link below it.
               */}
-            <div
-              class="recent-conversations__list"
-              ref={(element: HTMLDivElement | null) => { recentsList.current = element; }}
-            >
+            <div class="recent-conversations__list">
               {favorites.length ? <div class="rail-conversation-group">Favorites</div> : null}
               {favorites.map(conversationRow)}
               {recent.length ? <div class="rail-conversation-group">Recent</div> : null}
