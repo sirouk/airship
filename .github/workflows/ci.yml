@@ -166,7 +166,15 @@ jobs:
       - name: Production dependency audit
         run: npm audit --omit=dev --audit-level=high
 
-      - name: Unit tests, typecheck, security, references and release budgets
+      - name: Install Playwright browsers
+        # Ahead of `npm run check`, not after it: `check` now ends with
+        # `check:browser`, the two geometry specs that are cheap enough to be a
+        # precondition for a green local run. Leaving the install where it used
+        # to sit would make the gate fail on a missing executable rather than on
+        # the product.
+        run: npx playwright install --with-deps chromium
+
+      - name: Unit tests, typecheck, security, references, release budgets and phone geometry
         run: npm run check
 
       - name: Journey Atlas verification
@@ -196,9 +204,6 @@ jobs:
             echo "::error::A gate modified tracked files. Commit the regenerated output."
             exit 1
           fi
-
-      - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium
 
       - name: Start the local S3 lab storage plane
         run: |

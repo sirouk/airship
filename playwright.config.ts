@@ -59,6 +59,16 @@ export default defineConfig({
     // the Google surface has no registration. Every dedicated config that does
     // exercise a Google flow (master, google-drive, portability) sets its own
     // synthetic registration in its own env, on its own port.
+    //
+    // `npm run check:browser` runs the two geometry specs through this same
+    // config, so a local `npm run check` will adopt whatever is already on 4173
+    // rather than cold-booting a second Vite. That is deliberate and safe for
+    // those two specifically: they assert overflow and touch-target geometry,
+    // which no provider registration can make true or false. It is *not* safe
+    // in general — a lab-owned Vite always sets `VITE_GOOGLE_CLIENT_ID`, which
+    // is exactly how `vault-provider-switch` came to fail on a premise the
+    // harness had broken — so the check runs a named pair of files, never the
+    // whole suite.
     command: "npm run dev",
     url: "http://127.0.0.1:4173",
     reuseExistingServer: true,
