@@ -1,6 +1,5 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { CHUTES_EMBEDDING_ENDPOINT } from "../../indexing/chutes-embeddings";
 import { CHUTES_API_BASE, CHUTES_LLM_MODELS_URL } from "../../models/types";
 import {
   CHUTES_AUTHORIZATION_HOST,
@@ -49,36 +48,45 @@ describe("the hosts named before the button is pressed", () => {
   });
 
   /*
-   * The fourth Chutes host, now reachable.
+   * The host a confidential embedding request reaches.
    *
-   * This assertion used to hold that no control selected the mode, and said in
-   * as many words that the day one appeared, the fix was the disclosure beside
-   * it rather than deleting the line. A control appeared. So the three halves
-   * are still asserted, and the third has flipped: the host stays out of the
-   * *discovery* sentence — that button still never contacts it — and it is
-   * named instead in the sentence rendered beside the control that does.
+   * This assertion once bound the sentence to one chute's own hostname, taken
+   * from a constant in the embedding provider. Both are gone: the corpus is
+   * sealed on this device and posted to `/e2e/invoke` on the Chutes API host,
+   * which is the same host the connection flow already discloses and — unlike a
+   * per-chute name — does not move when a second embedding chute is published.
+   *
+   * The three halves still hold. The host is a real grant, the discovery
+   * sentence still describes only its own button, and the control that does
+   * reach it renders the sentence beside itself.
    */
-  it("names the embedding chute in the sentence beside the control that reaches it, and nowhere else", () => {
-    expect(CHUTES_CONFIDENTIAL_EMBEDDING_HOST).toBe(new URL(CHUTES_EMBEDDING_ENDPOINT).host);
+  it("names the encrypted invoke host in the sentence beside the control that reaches it", () => {
+    expect(CHUTES_CONFIDENTIAL_EMBEDDING_HOST).toBe(new URL(CHUTES_API_BASE).host);
 
-    // (i) The grant is real, so this is a genuine egress surface, not a typo.
+    // (i) The grant is real, so this is a genuine egress surface, not a typo —
+    // and no per-chute hostname is granted any more, because a discovered chute
+    // could never have been named in a static policy.
     const csp = readFileSync(new URL("../../../index.html", import.meta.url), "utf8");
     expect(csp).toContain(`https://${CHUTES_CONFIDENTIAL_EMBEDDING_HOST}`);
+    expect(csp).not.toMatch(/https:\/\/chutes-[a-z0-9-]+\.chutes\.ai/u);
 
-    // (ii) The discovery sentence still describes only what its own button does.
-    expect(CHUTES_DISCOVERY_PREFLIGHT).not.toContain(CHUTES_CONFIDENTIAL_EMBEDDING_HOST);
+    // (ii) The discovery sentence still describes only what its own button
+    // does: it reads catalogs, it never embeds a corpus.
+    expect(CHUTES_DISCOVERY_PREFLIGHT).not.toContain("indexed file");
 
     // (iii) The control exists, and the sentence that discloses it names the
-    // host, names the credential, and says the text leaves the page. A control
-    // without all three of those is the defect this assertion exists to catch.
+    // host, says the request is encrypted, and still says the text leaves the
+    // page. A control missing any of those is the defect this catches.
     const engineControls = readFileSync(new URL("../context-view.tsx", import.meta.url), "utf8");
     expect(engineControls).toContain(`changeEmbeddingMode("semantic")`);
     expect(engineControls).toContain(`changeEmbeddingMode("chutes")`);
     expect(engineControls).toContain("CHUTES_CONFIDENTIAL_EMBEDDING_PREFLIGHT");
 
     expect(CHUTES_CONFIDENTIAL_EMBEDDING_PREFLIGHT).toContain(CHUTES_CONFIDENTIAL_EMBEDDING_HOST);
-    expect(CHUTES_CONFIDENTIAL_EMBEDDING_PREFLIGHT).toContain("bearer token");
+    expect(CHUTES_CONFIDENTIAL_EMBEDDING_PREFLIGHT).toContain("encrypted on this device");
     expect(CHUTES_CONFIDENTIAL_EMBEDDING_PREFLIGHT).toContain("does leave this page");
+    // And it names no model: the model is discovered, this string is not.
+    expect(CHUTES_CONFIDENTIAL_EMBEDDING_PREFLIGHT).not.toMatch(/Qwen|Embedding-8B/u);
   });
 
   /*

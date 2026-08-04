@@ -3391,10 +3391,12 @@ export function App() {
    * dead, `SwitchableEmbeddingProvider`'s confidential path was unreachable,
    * and the whole mode existed as code nothing could enter.
    *
-   * It supplies the *same* page-memory bearer the chat transport and the
-   * attestation client already hold, read at each embed rather than copied, so
-   * a rotation is picked up without reinstalling anything and a release is
-   * observed as `undefined` rather than as a stale token. Nothing is persisted
+   * It hands the indexing side a *capability*, not a credential: the corpus is
+   * sealed to the serving instance's own public key and posted to `/e2e/invoke`
+   * by the same transport the chat lane uses, so the bearer never leaves the
+   * connection that owns it. The transport is read from the ref at each call
+   * rather than captured, so a rotation is picked up without reinstalling
+   * anything and a release is observed as a refusal. Nothing is persisted
    * — this effect is the only thing that makes a persisted `chutes` preference
    * admissible on a page load, which is exactly the check
    * `readStoredEmbeddingMode` performs.
@@ -3409,7 +3411,11 @@ export function App() {
       setConfidentialAuthority(undefined);
       return;
     }
-    setConfidentialAuthority(() => providerCredential.current);
+    setConfidentialAuthority((request) => {
+      const transport = chutesTransport.current;
+      if (!transport) throw new Error("Chutes is no longer connected, so nothing can be embedded confidentially.");
+      return transport.invokeJson(request, request.signal);
+    });
     return () => setConfidentialAuthority(undefined);
   }, [connection]);
 

@@ -61,6 +61,8 @@ export function ContextView({ workspace, entries, dimensions = 384, resultLimit 
   const [localSearchResult, setLocalSearchResult] = useState<ClientContextSearchResult>();
   const [localSearchStatus, setLocalSearchStatus] = useState<"idle" | "searching" | "cancelled" | "complete">("idle");
   const [localSearchError, setLocalSearchError] = useState<string>();
+  /** Why the last embedding-engine selection was refused, if it was. */
+  const [engineFailure, setEngineFailure] = useState<string>();
   const [fabric, setFabric] = useState<Readonly<{ experts: readonly RoutedExpert[]; warnings: readonly string[]; commitment?: RetrievalCommitment }>>({ experts: [], warnings: [] });
   /** How many `CONTEXT_CANDIDATE_PAGE_SIZE` pages of sources the reader asked for. */
   const [candidatePages, setCandidatePages] = useState(1);
@@ -198,13 +200,25 @@ export function ContextView({ workspace, entries, dimensions = 384, resultLimit 
     if (mode === embeddingMode || embeddingChange === "changing") return;
     setEmbeddingChange("changing");
     setLocalSearchError(undefined);
+    setEngineFailure(undefined);
     try {
       await runtime.setEmbeddingMode(mode);
       setEmbeddingMode(mode);
       setLocalSearchResult(undefined);
     } catch (error) {
       setEmbeddingMode(runtime.getEmbeddingMode());
-      setLocalSearchError(error instanceof Error ? error.message : "The local embedding engine could not be changed.");
+      /*
+       * Beside the control, not in the search slot.
+       *
+       * This refusal used to be written to `localSearchError`, which renders
+       * only inside the retrieval panel — so a confidential engine that could
+       * not reach its chute produced a press, a pause, and a button that
+       * quietly stayed where it was. Measured in a browser: the engine row
+       * still read "Bootstrap active", nothing on the page said why, and the
+       * only trace of a failed remote call was a 503 in the console. An engine
+       * that refuses has to say so where it was chosen.
+       */
+      setEngineFailure(error instanceof Error ? error.message : "The embedding engine could not be changed.");
     } finally {
       setEmbeddingChange("idle");
     }
@@ -290,6 +304,18 @@ export function ContextView({ workspace, entries, dimensions = 384, resultLimit 
         {confidentialAvailable || embeddingMode === "chutes" ? (
           <p class="context-confidential-preflight" role="note">{CHUTES_CONFIDENTIAL_EMBEDDING_PREFLIGHT}</p>
         ) : null}
+
+        {/*
+          * A refused engine, said where the engine was chosen.
+          *
+          * The confidential engine has to ask Chutes which chutes embed and how
+          * wide their vectors are before it can hold an index, and any of that
+          * can fail — an unreadable catalog, a chute that answers no OpenAI
+          * embeddings path, a rate limit pinned to one instance. The provider's
+          * own sentence names which; repeating it here is the difference
+          * between a button that did nothing and a button that explained.
+          */}
+        {engineFailure ? <p class="context-engine-failure" role="alert">{engineFailure}</p> : null}
 
         {/*
           * One line where a 76px card stood.

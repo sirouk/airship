@@ -62,6 +62,7 @@ export type ChutesTransportOptions = {
   maxAttestationAgeMs?: number;
   attestationClockSkewMs?: number;
   maxJsonResponseBytes?: number;
+  maxInvokeResponseBytes?: number;
   maxErrorBodyBytes?: number;
   maxSseEventChars?: number;
   maxInstances?: number;
@@ -87,6 +88,7 @@ type ResolvedOptions = {
   maxAttestationAgeMs: number;
   attestationClockSkewMs: number;
   maxJsonResponseBytes: number;
+  maxInvokeResponseBytes: number;
   maxErrorBodyBytes: number;
   maxSseEventChars: number;
   maxInstances: number;
@@ -127,6 +129,13 @@ const DEFAULTS: ResolvedOptions = {
   maxAttestationAgeMs: 300_000,
   attestationClockSkewMs: 30_000,
   maxJsonResponseBytes: 2 * 1024 * 1024,
+  // A non-streamed E2EE answer is one opaque frame, and the largest one Airship
+  // asks for is a batch of embeddings: 64 vectors × 4096 float32 rendered as
+  // JSON is several megabytes before gzip. The catalog bound above is sized for
+  // metadata and would refuse a legitimate embedding batch, so the encrypted
+  // invoke frame gets its own ceiling. It stays well under the WASM's own 64 MiB
+  // frame and plaintext limits (`crates/chutes-e2ee-wasm/src/lib.rs`).
+  maxInvokeResponseBytes: 16 * 1024 * 1024,
   maxErrorBodyBytes: 32 * 1024,
   maxSseEventChars: 6 * 1024 * 1024,
   maxInstances: 64,
@@ -245,6 +254,192 @@ export class ChutesInferenceTransport implements InferenceTransport {
     }
   }
 
+  /**
+   * One non-streamed encrypted call into an arbitrary path inside a chute.
+   *
+   * `stream()` is this same machinery pointed at `/v1/chat/completions` with the
+   * streaming iterator attached. Embeddings are not streamed and are not chat,
+   * but they are the *same* sealed request to the *same* `/e2e/invoke` against
+   * the *same* instance public key — so they get the transport's crypto, its
+   * nonce ledger, its attestation gate and its bounded reads rather than a
+   * second implementation of any of them.
+   *
+   * `chuteId` and `path` are supplied by the caller because the model catalog
+   * this transport reads (`llm.chutes.ai/v1/models`) lists chat deployments
+   * only: an embedding chute is absent from it, and inventing a name for one
+   * here would hardcode what the management API already publishes.
+   */
+  async invokeJson(
+    request: Readonly<{ chuteId: string; path: string; payload: unknown }>,
+    parentSignal: AbortSignal = new AbortController().signal,
+  ): Promise<unknown> {
+    const linked = linkAbortSignals(parentSignal, this.credentialRevocation.signal);
+    const lifetime = new RequestLifetime(linked.signal, this.options.totalTimeoutMs);
+    let requestContext: E2eeRequestCryptoContext | undefined;
+    try {
+      const signal = lifetime.signal;
+      throwIfAborted(signal);
+      if (!request.path.startsWith("/")) {
+        throw new ChutesTransportError("INVALID_RESPONSE", "An E2EE invoke path must start with '/'.");
+      }
+      const apiKey = await abortable(this.resolveApiKey(), signal);
+      const authScope = await sha256Local(apiKey);
+      const invoked = await this.postEncrypted({
+        apiKey,
+        authScope,
+        chuteId: request.chuteId,
+        path: request.path,
+        payloadJson: JSON.stringify(request.payload),
+        streamed: false,
+        signal,
+      });
+      requestContext = invoked.requestContext;
+      const frame = await readBytesBounded(
+        invoked.response,
+        this.options.maxInvokeResponseBytes,
+        signal,
+      );
+      // The response secret is consumed by this call whether or not it
+      // authenticates, which is the WASM's rule and not a convention here.
+      const plaintext = requestContext.decrypt_response(frame);
+      frame.fill(0);
+      try {
+        return JSON.parse(plaintext) as unknown;
+      } catch (error) {
+        throw new ChutesTransportError(
+          "INVALID_RESPONSE",
+          "The authenticated Chutes E2EE response was not valid JSON.",
+          { cause: error },
+        );
+      }
+    } catch (error) {
+      throw normalizeTransportError(error, lifetime.signal);
+    } finally {
+      if (requestContext) safeFreeRequest(requestContext);
+      lifetime.dispose();
+      linked.dispose();
+    }
+  }
+
+  /**
+   * Acquire a lease, check its attestation, seal the payload to that instance's
+   * public key and POST it to `/e2e/invoke`.
+   *
+   * Shared by the streaming and non-streaming callers so there is exactly one
+   * place where a nonce is spent, one place where the ciphertext is zeroed, and
+   * one definition of what a safe nonce-rejection retry is. The only difference
+   * between the two is `X-E2E-Stream`, which used to be the string `"true"`
+   * written into the request literal.
+   */
+  private async postEncrypted(args: Readonly<{
+    apiKey: string;
+    authScope: string;
+    chuteId: string;
+    path: string;
+    payloadJson: string;
+    streamed: boolean;
+    signal: AbortSignal;
+  }>): Promise<{
+    response: Response;
+    requestContext: E2eeRequestCryptoContext;
+    lease: InstanceLease;
+    attestation: AttestationOutcome;
+    requestCiphertextDigest: string;
+  }> {
+    const { apiKey, authScope, chuteId, path, payloadJson, streamed, signal } = args;
+    const poolKey = `${authScope}:${chuteId}`;
+    // Held here rather than inside the attempt so that *any* exit other than a
+    // returned response — an abort mid-flight included — still frees the WASM
+    // context. Ownership transfers to the caller only on the success return.
+    let requestContext: E2eeRequestCryptoContext | undefined;
+
+    try {
+      for (let attempt = 1; attempt <= 2; attempt += 1) {
+        const lease = await this.acquireLease(apiKey, chuteId, poolKey, signal);
+        const attestation = await this.checkAttestation(lease, signal);
+
+        requestContext = await abortable(
+          this.crypto.buildRequest(lease.e2ePublicKey, payloadJson),
+          signal,
+        );
+        const encryptedBody = requestContext.take_blob();
+        const requestCiphertextDigest = await sha256Local(encryptedBody);
+        let response: Response;
+        try {
+          response = await abortable(
+            this.fetchImpl(`${this.options.apiBase}/e2e/invoke`, {
+              method: "POST",
+              mode: "cors",
+              credentials: "omit",
+              signal,
+              headers: {
+                Authorization: `Bearer ${apiKey}`,
+                "Content-Type": "application/octet-stream",
+                "X-Chute-Id": chuteId,
+                "X-Instance-Id": lease.instanceId,
+                "X-E2E-Nonce": lease.nonce,
+                "X-E2E-Path": path,
+                "X-E2E-Stream": streamed ? "true" : "false",
+              },
+              body: encryptedBody as unknown as BodyInit,
+            }),
+            signal,
+          );
+        } finally {
+          encryptedBody.fill(0);
+        }
+
+        const invocationTelemetry = parseChutesInvocationTelemetry(response.headers, this.now());
+        if (invocationTelemetry && this.onInvocationTelemetry) {
+          try {
+            this.onInvocationTelemetry(invocationTelemetry);
+          } catch {
+            // Account telemetry is advisory and must never break an inference turn.
+          }
+        }
+
+        if (response.ok) {
+          const owned = requestContext;
+          requestContext = undefined;
+          return { response, requestContext: owned, lease, attestation, requestCiphertextDigest };
+        }
+
+        const errorBody = await readTextBounded(response, this.options.maxErrorBodyBytes, signal);
+        safeFreeRequest(requestContext);
+        requestContext = undefined;
+        if (isSafeNonceRejection(response, errorBody)) {
+          if (attempt === 1) {
+            this.leasePools.delete(poolKey);
+            continue;
+          }
+          throw new ChutesTransportError(
+            "NONCE_REJECTED",
+            "Chutes rejected a freshly discovered E2EE nonce after one safe retry.",
+            { status: response.status, detail: errorBody.slice(0, 500) },
+          );
+        }
+        if (response.status === 429) {
+        // Named apart from the generic HTTP error because it is the one status
+        // whose meaning differs between this route and the shared inference
+        // gateway. `/e2e/invoke` is pinned to the single instance the nonce was
+        // issued against (`X-Instance-Id`), so it cannot be shed to a sibling
+        // the way `llm.chutes.ai` sheds a chat completion — which is why the
+        // same key and model can answer 200 there and 429 here.
+          throw new ChutesTransportError(
+            "HTTP_ERROR",
+            `Chutes E2EE invoke failed with HTTP 429. This route is pinned to instance ${lease.instanceId} of chute ${chuteId} and cannot be re-routed to another instance the way an unencrypted completion can.`,
+            { status: 429, detail: errorBody.slice(0, 500), operation: "invoke" },
+          );
+        }
+        throw httpError("invoke", "Chutes E2EE invoke", response.status, errorBody);
+      }
+
+      throw new ChutesTransportError("NONCE_REJECTED", "Chutes rejected a fresh E2EE nonce twice.");
+    } finally {
+      if (requestContext) safeFreeRequest(requestContext);
+    }
+  }
+
   async *stream(request: InferenceRequest, parentSignal: AbortSignal): AsyncIterable<InferenceEvent> {
     const linked = linkAbortSignals(parentSignal, this.credentialRevocation.signal);
     const lifetime = new RequestLifetime(linked.signal, this.options.totalTimeoutMs);
@@ -283,77 +478,21 @@ export class ChutesInferenceTransport implements InferenceTransport {
       }
 
       const payloadJson = JSON.stringify(buildOpenAiPayload(request));
-      let response: Response | undefined;
-      let attestation: AttestationOutcome = {};
-      let requestCiphertextDigest: string | undefined;
-      let invokedLease: InstanceLease | undefined;
+      const invoked = await this.postEncrypted({
+        apiKey,
+        authScope,
+        chuteId: model.chuteId,
+        path: this.options.inferencePath,
+        payloadJson,
+        streamed: true,
+        signal,
+      });
+      requestContext = invoked.requestContext;
+      const response = invoked.response;
+      const attestation: AttestationOutcome = invoked.attestation;
+      const requestCiphertextDigest: string | undefined = invoked.requestCiphertextDigest;
+      const invokedLease: InstanceLease | undefined = invoked.lease;
 
-      for (let attempt = 1; attempt <= 2; attempt += 1) {
-        const poolKey = `${authScope}:${model.chuteId}`;
-        const lease = await this.acquireLease(apiKey, model.chuteId, poolKey, signal);
-        invokedLease = lease;
-        attestation = await this.checkAttestation(lease, signal);
-
-        requestContext = await abortable(
-          this.crypto.buildRequest(lease.e2ePublicKey, payloadJson),
-          signal,
-        );
-        const encryptedBody = requestContext.take_blob();
-        requestCiphertextDigest = await sha256Local(encryptedBody);
-        try {
-          response = await abortable(
-            this.fetchImpl(`${this.options.apiBase}/e2e/invoke`, {
-              method: "POST",
-              mode: "cors",
-              credentials: "omit",
-              signal,
-              headers: {
-                Authorization: `Bearer ${apiKey}`,
-                "Content-Type": "application/octet-stream",
-                "X-Chute-Id": model.chuteId,
-                "X-Instance-Id": lease.instanceId,
-                "X-E2E-Nonce": lease.nonce,
-                "X-E2E-Path": this.options.inferencePath,
-                "X-E2E-Stream": "true",
-              },
-              body: encryptedBody as unknown as BodyInit,
-            }),
-            signal,
-          );
-        } finally {
-          encryptedBody.fill(0);
-        }
-
-        const invocationTelemetry = parseChutesInvocationTelemetry(response.headers, this.now());
-        if (invocationTelemetry && this.onInvocationTelemetry) {
-          try {
-            this.onInvocationTelemetry(invocationTelemetry);
-          } catch {
-            // Account telemetry is advisory and must never break an inference turn.
-          }
-        }
-
-        if (response.ok) break;
-        const errorBody = await readTextBounded(response, this.options.maxErrorBodyBytes, signal);
-        safeFreeRequest(requestContext);
-        requestContext = undefined;
-        if (isSafeNonceRejection(response, errorBody)) {
-          if (attempt === 1) {
-            this.leasePools.delete(poolKey);
-            continue;
-          }
-          throw new ChutesTransportError(
-            "NONCE_REJECTED",
-            "Chutes rejected a freshly discovered E2EE nonce after one safe retry.",
-            { status: response.status, detail: errorBody.slice(0, 500) },
-          );
-        }
-        throw httpError("invoke", "Chutes E2EE invoke", response.status, errorBody);
-      }
-
-      if (!response?.ok) {
-        throw new ChutesTransportError("NONCE_REJECTED", "Chutes rejected a fresh E2EE nonce twice.");
-      }
       if (!response.body) {
         throw new ChutesTransportError("INVALID_RESPONSE", "Chutes streaming response has no body.");
       }
@@ -726,8 +865,21 @@ export class ChutesInferenceTransport implements InferenceTransport {
         : 55;
     const ttlMs = Math.min(this.options.maxNonceTtlMs, Math.max(1_000, ttlSeconds * 1_000));
     const expiresAt = this.now() + Math.max(1_000, ttlMs - this.options.nonceSafetyMs);
-    const leases: InstanceLease[] = [];
-
+    /*
+     * Leases are taken a nonce at a time across the instances, not instance by
+     * instance until the pool is full.
+     *
+     * The pool holds up to `maxCachedNonces` (8) and an instance may offer up to
+     * `maxNoncesPerInstance` (32), so filling depth-first meant every lease in
+     * the pool named the *first* instance: eight consecutive encrypted
+     * invocations aimed at one endpoint while its siblings sat idle. That is
+     * invisible on `llm.chutes.ai`, which routes a completion to whichever
+     * instance is free, and it is not invisible on `/e2e/invoke`, which is
+     * pinned to `X-Instance-Id` because the payload is sealed to that
+     * instance's public key. Concentrating a session's whole burst on one
+     * endpoint is a way to earn a 429 that the unencrypted path would not.
+     */
+    const perInstance: InstanceLease[][] = [];
     for (const rawInstance of body.instances) {
       if (!isRecord(rawInstance)) continue;
       const instanceId = rawInstance.instance_id;
@@ -745,12 +897,25 @@ export class ChutesInferenceTransport implements InferenceTransport {
       ) {
         continue;
       }
+      const usable: InstanceLease[] = [];
       for (const nonce of nonces) {
         if (typeof nonce !== "string" || !nonce || nonce.length > 1_024) continue;
-        leases.push({ chuteId, instanceId, e2ePublicKey, nonce, expiresAt });
+        usable.push({ chuteId, instanceId, e2ePublicKey, nonce, expiresAt });
+      }
+      if (usable.length) perInstance.push(usable);
+    }
+
+    const leases: InstanceLease[] = [];
+    for (let round = 0; leases.length < this.options.maxCachedNonces; round += 1) {
+      let placed = false;
+      for (const instanceLeases of perInstance) {
+        const lease = instanceLeases[round];
+        if (!lease) continue;
+        leases.push(lease);
+        placed = true;
         if (leases.length >= this.options.maxCachedNonces) break;
       }
-      if (leases.length >= this.options.maxCachedNonces) break;
+      if (!placed) break;
     }
     if (!leases.length) {
       throw new ChutesTransportError("NO_E2EE_INSTANCE", "Chutes returned no bounded E2EE nonce leases.");

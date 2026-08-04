@@ -209,6 +209,28 @@
   overflow-wrap: anywhere;
 }
 
+/*
+ * A refused engine selection, beside the control that was pressed.
+ *
+ * The pre-flight above is a disclosure and wears `--accent`. This is a failure
+ * and wears `--v-caution`, which this screen reserves for a degraded index —
+ * which is exactly what an engine that would not switch leaves behind. Measured
+ * in a browser before it existed: pressing Confidential with an unreachable
+ * chute produced a pause and a button that stayed where it was, with the only
+ * evidence in the developer console.
+ */
+.context-engine-failure {
+  margin: 0;
+  padding: var(--sp-2);
+  border-left: 2px solid var(--v-caution);
+  color: var(--ink);
+  background: color-mix(in srgb, var(--v-caution) 8%, transparent);
+  font-size: var(--fs-caption);
+  line-height: 1.5;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .context-live-strip {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));

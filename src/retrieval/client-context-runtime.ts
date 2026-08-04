@@ -76,6 +76,17 @@ export class ClientContextRuntime {
     // An explicit selection settles the question the probe exists to answer,
     // including when it arrives before the first generation.
     this.derivedMode = Promise.resolve();
+    /*
+     * Discovery happens before the switch, not after it.
+     *
+     * The confidential engine has to ask Chutes which chutes embed and how wide
+     * their vectors are before it can hold an index. Doing that here means an
+     * unreadable catalog or a deployment that will not answer a width probe
+     * rejects `setEmbeddingMode` with its own sentence — which the Context view
+     * puts on screen — instead of switching the index into a mode that cannot
+     * embed and discovering it one rebuild later.
+     */
+    await this.switchable.prepare(mode);
     if (this.switchable.getMode() === mode && this.engine.getState().generation) return this.refreshNow();
     try { await this.refreshNow(); } catch { /* A failed old generation does not prevent a clean rebuild. */ }
     this.engine.cancelSearch(new DOMException("Embedding mode changed.", "AbortError"));

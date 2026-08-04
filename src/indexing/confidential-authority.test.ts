@@ -9,12 +9,16 @@ import {
 
 afterEach(() => setConfidentialAuthority(undefined));
 
+function invocation() {
+  return { chuteId: "chute-a", path: "/v1/embeddings", payload: { input: ["x"] } };
+}
+
 describe("the confidential embedding authority", () => {
-  it("reports installation and withdrawal", () => {
+  it("reports installation and withdrawal", async () => {
     expect(hasConfidentialAuthority()).toBe(false);
-    setConfidentialAuthority(() => "cpk_live");
+    setConfidentialAuthority(async () => "sealed");
     expect(hasConfidentialAuthority()).toBe(true);
-    expect(readConfidentialAuthority()?.()).toBe("cpk_live");
+    await expect(readConfidentialAuthority()?.(invocation())).resolves.toBe("sealed");
     setConfidentialAuthority(undefined);
     expect(hasConfidentialAuthority()).toBe(false);
     expect(readConfidentialAuthority()).toBeUndefined();
@@ -24,9 +28,9 @@ describe("the confidential embedding authority", () => {
     const listener = vi.fn();
     subscribeConfidentialAuthority(listener);
 
-    setConfidentialAuthority(() => "cpk_first");
-    setConfidentialAuthority(() => "cpk_rotated");
-    setConfidentialAuthority(() => "cpk_rotated_again");
+    setConfidentialAuthority(async () => "first");
+    setConfidentialAuthority(async () => "rotated");
+    setConfidentialAuthority(async () => "rotated again");
     expect(listener).toHaveBeenCalledTimes(1);
     expect(listener).toHaveBeenLastCalledWith(true);
 
@@ -39,7 +43,7 @@ describe("the confidential embedding authority", () => {
   it("stops notifying an unsubscribed listener", () => {
     const listener = vi.fn();
     subscribeConfidentialAuthority(listener)();
-    setConfidentialAuthority(() => "cpk_live");
+    setConfidentialAuthority(async () => "sealed");
     expect(listener).not.toHaveBeenCalled();
   });
 
@@ -53,7 +57,7 @@ describe("the confidential embedding authority", () => {
     const first = subscribeConfidentialAuthority(() => { order.push("first"); first(); });
     subscribeConfidentialAuthority(() => order.push("second"));
 
-    setConfidentialAuthority(() => "cpk_live");
+    setConfidentialAuthority(async () => "sealed");
     expect(order).toEqual(["first", "second"]);
 
     setConfidentialAuthority(undefined);
@@ -65,26 +69,40 @@ describe("the confidential embedding authority", () => {
  * The defect this module was extracted to fix was not a bug in the setter — it
  * was that the setter had no caller at all, so `hasConfidentialAuthority()` was
  * permanently false and the whole `chutes` embedding mode was unreachable.
- * These bind the writer to the page-memory credential it must read, because a
- * writer that installs a captured copy of the token would keep serving a
- * released credential.
+ * These bind the writer to the live E2EE transport it must read, because a
+ * writer that installs a captured reference would keep invoking through a
+ * released connection.
  */
 describe("the writer", () => {
   const app = readFileSync(new URL("../ui/app.tsx", import.meta.url), "utf8");
+  const install = app.indexOf("setConfidentialAuthority((request) => {");
 
-  it("installs a supplier that reads the live credential ref, not a copy of it", () => {
-    expect(app).toContain("setConfidentialAuthority(() => providerCredential.current)");
+  it("installs an invoker that reads the live transport ref, not a copy of it", () => {
+    expect(install).toBeGreaterThan(0);
+    const body = app.slice(install, app.indexOf("}, [", install));
+    expect(body).toContain("const transport = chutesTransport.current;");
+    expect(body).toContain("transport.invokeJson(");
+  });
+
+  /*
+   * The whole point of moving embeddings onto the encrypted transport: the
+   * indexing side is handed the capability to invoke, never the bearer. A
+   * writer that reached for `providerCredential` here would put the raw key
+   * back into a module whose job is to embed a corpus.
+   */
+  it("hands over a capability, never the bearer token", () => {
+    const body = app.slice(install, app.indexOf("}, [", install));
+    expect(body).not.toContain("providerCredential");
+    expect(body).not.toContain("Bearer");
   });
 
   it("withdraws it when Chutes is released and when the page tears down", () => {
-    const install = app.indexOf("setConfidentialAuthority(() => providerCredential.current)");
     expect(install).toBeGreaterThan(0);
     // The guarded early return, the effect cleanup, and the unmount teardown.
     expect(app.split("setConfidentialAuthority(undefined)").length - 1).toBeGreaterThanOrEqual(3);
   });
 
   it("keys the authority on the connection rather than on the pinned session", () => {
-    const install = app.indexOf("setConfidentialAuthority(() => providerCredential.current)");
     const guard = app.lastIndexOf("useEffect(() => {", install);
     const body = app.slice(guard, app.indexOf("}, [", install) + 16);
 

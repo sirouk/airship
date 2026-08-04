@@ -1038,6 +1038,160 @@ describe("ChutesInferenceTransport", () => {
   });
 });
 
+/**
+ * `invokeJson` exists so embeddings do not get a second crypto path.
+ *
+ * The transport already posts a sealed body to `/e2e/invoke` with `X-Chute-Id`
+ * naming the target and `X-E2E-Path` naming the path inside it. An embedding
+ * request is that machinery aimed elsewhere and not streamed — so these pin the
+ * two things that differ (the path, and `X-E2E-Stream`) and the several things
+ * that must not (the sealing, the nonce, the bearer, the cleanup).
+ */
+describe("ChutesInferenceTransport.invokeJson", () => {
+  it("seals a payload to an arbitrary chute and path and decrypts the non-streamed answer", async () => {
+    const crypto = new MockCrypto({});
+    const fetch = vi.fn<FetchLike>(async (input) => {
+      if (String(input).includes("/e2e/instances/")) return instanceResponse(["nonce-a"]);
+      return new Response(new Uint8Array([9, 9, 9]), { status: 200 });
+    });
+    const transport = new ChutesInferenceTransport({
+      apiKey: "cak_memory-only",
+      fetch,
+      crypto,
+      attestationMode: "optional",
+    });
+
+    const answer = await transport.invokeJson({
+      chuteId: "chute-embed",
+      path: "/v1/embeddings",
+      payload: { model: "Some/Model", input: ["hello"] },
+    });
+
+    // MockRequestContext.decrypt_response answers "{}".
+    expect(answer).toEqual({});
+    // Model discovery is never consulted: an embedding chute is absent from
+    // `llm.chutes.ai/v1/models`, so requiring it there would make this
+    // permanently impossible.
+    expect(fetch.mock.calls.some(([input]) => String(input).endsWith("/v1/models"))).toBe(false);
+    expect(String(fetch.mock.calls[0]![0])).toContain("/e2e/instances/chute-embed");
+
+    const [, init] = invokeCalls(fetch)[0]!;
+    expect(header(init, "X-Chute-Id")).toBe("chute-embed");
+    expect(header(init, "X-E2E-Path")).toBe("/v1/embeddings");
+    // Not `"true"`, which used to be written into the request literal. An
+    // embeddings response is one frame, not a stream.
+    expect(header(init, "X-E2E-Stream")).toBe("false");
+    expect(header(init, "X-E2E-Nonce")).toBe("nonce-a");
+    expect(header(init, "Authorization")).toBe("Bearer cak_memory-only");
+    // The plaintext was handed to the crypto, never to fetch.
+    expect(crypto.requests[0]?.payloadJson).toBe(JSON.stringify({ model: "Some/Model", input: ["hello"] }));
+    expect(crypto.requests[0]?.e2ePublicKey).toBe("public-key-a");
+    expect(crypto.requests[0]?.freeCalls).toBe(1);
+  });
+
+  it("refuses to invoke without a leading-slash path", async () => {
+    const transport = new ChutesInferenceTransport({
+      apiKey: "cak_memory-only",
+      fetch: vi.fn<FetchLike>(),
+      crypto: new MockCrypto({}),
+      attestationMode: "optional",
+    });
+    await expect(transport.invokeJson({ chuteId: "c", path: "v1/embeddings", payload: {} }))
+      .rejects.toMatchObject({ code: "INVALID_RESPONSE" });
+  });
+
+  /*
+   * The 429 the owner saw on this route while the same key and model answered
+   * 200 on `llm.chutes.ai`. The gateway load-balances a completion across a
+   * chute's instances; `/e2e/invoke` cannot, because the body is sealed to the
+   * one instance the nonce was issued against. The error has to say that, or the
+   * next reader concludes the credential is bad.
+   */
+  it("says why a 429 here is not a 429 on the shared inference gateway", async () => {
+    const fetch = vi.fn<FetchLike>(async (input) => {
+      if (String(input).includes("/e2e/instances/")) return instanceResponse(["nonce-a"]);
+      return jsonResponse({ detail: "too many requests" }, 429);
+    });
+    const transport = new ChutesInferenceTransport({
+      apiKey: "cak_memory-only",
+      fetch,
+      crypto: new MockCrypto({}),
+      attestationMode: "optional",
+    });
+
+    const failure = await transport
+      .invokeJson({ chuteId: "chute-embed", path: "/v1/embeddings", payload: {} })
+      .then(() => undefined, (error: unknown) => error as ChutesTransportError);
+
+    expect(failure).toMatchObject({ code: "HTTP_ERROR", status: 429, operation: "invoke" });
+    expect(failure?.message).toContain("pinned to instance instance-a");
+    // A 429 is not a nonce rejection, so it is not retried into a second spent
+    // nonce.
+    expect(invokeCalls(fetch)).toHaveLength(1);
+  });
+
+  it("frees the sealed request context when the encrypted answer is unreadable", async () => {
+    const crypto = new MockCrypto({});
+    const fetch = vi.fn<FetchLike>(async (input) => {
+      if (String(input).includes("/e2e/instances/")) return instanceResponse(["nonce-a"]);
+      return new Response(new Uint8Array([1]), { status: 200 });
+    });
+    const transport = new ChutesInferenceTransport({
+      apiKey: "cak_memory-only",
+      fetch,
+      crypto,
+      attestationMode: "optional",
+    });
+    // MockRequestContext answers "{}", so make the parse fail by having the
+    // context return something that is not JSON.
+    vi.spyOn(MockRequestContext.prototype, "decrypt_response").mockReturnValue("not json");
+
+    await expect(transport.invokeJson({ chuteId: "c", path: "/v1/embeddings", payload: {} }))
+      .rejects.toMatchObject({ code: "INVALID_RESPONSE" });
+    expect(crypto.requests[0]?.freeCalls).toBe(1);
+  });
+});
+
+/**
+ * A pool of eight leases used to be eight nonces from the *first* instance,
+ * because filling ran instance-by-instance until it was full. On
+ * `llm.chutes.ai` that is invisible — a completion goes wherever there is room.
+ * On `/e2e/invoke` it is not: the body is sealed to one instance's key and the
+ * request names that instance, so eight consecutive turns hammered one endpoint
+ * while its siblings idled.
+ */
+describe("E2EE lease distribution", () => {
+  it("spreads a lease pool across the instances instead of draining the first", async () => {
+    const crypto = new MockCrypto({});
+    const instances = jsonResponse({
+      nonce_expires_in: 55,
+      instances: [
+        { instance_id: "instance-a", e2e_pubkey: "public-key-a", nonces: ["a1", "a2", "a3", "a4"] },
+        { instance_id: "instance-b", e2e_pubkey: "public-key-b", nonces: ["b1", "b2", "b3", "b4"] },
+      ],
+    });
+    const fetch = vi.fn<FetchLike>(async (input) => {
+      if (String(input).includes("/e2e/instances/")) return instances;
+      return new Response(new Uint8Array([1]), { status: 200 });
+    });
+    const transport = new ChutesInferenceTransport({
+      apiKey: "cak_memory-only",
+      fetch,
+      crypto,
+      attestationMode: "optional",
+    });
+
+    for (let call = 0; call < 4; call += 1) {
+      await transport.invokeJson({ chuteId: "chute-embed", path: "/v1/embeddings", payload: { call } });
+    }
+
+    const targeted = invokeCalls(fetch).map(([, init]) => header(init, "X-Instance-Id"));
+    expect(targeted).toEqual(["instance-a", "instance-b", "instance-a", "instance-b"]);
+    // One discovery served all four: the pool was not exhausted by one instance.
+    expect(fetch.mock.calls.filter(([input]) => String(input).includes("/e2e/instances/"))).toHaveLength(1);
+  });
+});
+
 function baseRequest(withImage = false): InferenceRequest {
   return {
     requestId: "request-1",

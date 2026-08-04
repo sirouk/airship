@@ -79,10 +79,10 @@ export const RELEASE_BUDGETS = Object.freeze({
   // exists. Measured together at 398.25 KiB raw / 116.64 KiB gzip (407,804 B /
   // 119,442 B), so both ceilings moved this time — raw 398 → 400 KiB and gzip
   // 117 → 118 KiB. The build crossed the old 398 KiB raw step outright, and then
-  // 399 KiB raw would have left 772 bytes while 117 KiB gzip would have left 366.
-  // A ceiling a minifier rename can breach is a tripwire, not a budget — the same
-  // argument the installed-total gzip ceiling below is set by — so each takes one
-  // further whole-KiB step, leaving 1,796 bytes raw / 1,390 gzip. The fixed
+  // 399 KiB raw left only 772 bytes while 117 KiB gzip left only 366. A ceiling a
+  // minifier rename can breach is a tripwire, not a budget — the same argument
+  // the installed-total gzip ceiling below is set by — so each took one further
+  // whole-KiB step, leaving 1,796 bytes raw / 1,390 gzip. The fixed
   // first-paint cap above is what did not move: none of this loads at startup.
   //
   // Re-measured at 409,852 B raw / 120,513 B gzip after the vault usage strip
@@ -112,11 +112,10 @@ export const RELEASE_BUDGETS = Object.freeze({
   // with an availability reading, because the catalog answers anyone. Trimmed
   // first: the provider-response reader lost its JSON path, and four disclosure
   // sentences were shortened without dropping a claim, which returned 428 B.
-  // Measured 425,809 B raw / 125,687 B gzip. 416 KiB raw would have left 175
-  // bytes and 123 KiB gzip would have left 265 — a ceiling a minifier rename can
-  // breach is a tripwire rather than a budget, the same argument every reading
-  // above is set by — so each takes one further whole-KiB step, leaving 1,199
-  // bytes raw / 1,289 gzip. The fixed first-paint cap above did not move: none
+  // Measured 425,809 B raw / 125,687 B gzip. 416 KiB raw left only 175 bytes and
+  // 123 KiB gzip only 265 — a ceiling a minifier rename can breach is a tripwire
+  // rather than a budget, the same argument every reading above is set by — so
+  // each took one further whole-KiB step, leaving 1,199 bytes raw / 1,289 gzip. The fixed first-paint cap above did not move: none
   // of this loads at startup.
   //
   // The confidential embedding mode moves both a third time. `EmbeddingMode`
@@ -132,16 +131,38 @@ export const RELEASE_BUDGETS = Object.freeze({
   // is why raw moves 1,543 B while gzip moves 536 B. Trimmed first: the expanded
   // panel's engine paragraph stopped restating the pre-flight's egress claim and
   // kept its own two facts, returning 66 B.
-  // Measured 429,452 B raw / 126,907 B gzip. 420 KiB raw would have left 628
-  // bytes and 124 KiB gzip would have left 69 — the same tripwire the reading
-  // above refused — so each takes one further whole-KiB step, leaving 1,652
-  // bytes raw / 1,093 gzip. The fixed first-paint cap still did not move: the
+  // Measured 429,452 B raw / 126,907 B gzip. 420 KiB raw left only 628 bytes and
+  // 124 KiB gzip only 69 — the same tripwire the reading above refused — so each
+  // took one further whole-KiB step, leaving 1,652 bytes raw / 1,093 gzip. The fixed first-paint cap still did not move: the
   // Context route is behind `context-route.tsx`'s dynamic import, and the
   // *writer* is deliberately a dependency-free module
   // (`src/indexing/confidential-authority.ts`) precisely so installing it from
   // `app.tsx` does not drag the provider, the hash embedder and a worker URL
   // into startup JavaScript.
-  deferredCapabilities: Object.freeze({ raw: 421 * 1024, gzip: 125 * 1024 }),
+  //
+  // Confidential embeddings then stopped naming what they could ask for. The
+  // provider held a hardcoded chute hostname, a hardcoded model id and a
+  // hardcoded 4096 — three facts about one deployment written down as if they
+  // were properties of Airship — and it reached that host over plain HTTPS with
+  // the bearer in its own `Authorization` header, which is a second network path
+  // and a second place the credential lives. All of it is now asked for: the
+  // management catalog says which chutes carry `standard_template: "embedding"`
+  // and which path inside them speaks the OpenAI shape, one probe vector
+  // establishes the width, and the corpus travels sealed through the same
+  // `/e2e/invoke` the chat lane uses. The growth is the discovery module and its
+  // refusals; the provider itself shrank, having given up a fetch, an endpoint
+  // and a token. Measured 431,111 B raw / 127,389 B gzip. Both ceilings are now
+  // the tightest whole-KiB step above that reading — raw moves 421 KiB → 422 and
+  // leaves 1,017 bytes, gzip does not move at all and leaves 611 — so the two
+  // second steps the paragraphs above bought are no longer being claimed. Their
+  // sentences are restated in the past tense for that reason and no other: the
+  // guard reads this block for the phrase that grants a second step, and a
+  // superseded grant left it excusing a KiB this reading does not need. First
+  // paint did not move: this
+  // is all behind `context-route.tsx`'s dynamic import, and the one eager line
+  // is still the dependency-free writer described above, which now hands over a
+  // capability instead of a token and is no larger for it.
+  deferredCapabilities: Object.freeze({ raw: 422 * 1024, gzip: 125 * 1024 }),
   // Core plus every optional route except the two independently delivered
   // vendor engines. The former 384 KiB "all routes" meaning became impossible
   // once full isomorphic-git and xterm engines were deliberately installed:
@@ -348,7 +369,25 @@ export const RELEASE_BUDGETS = Object.freeze({
   // raw / 650.13 KiB gzip. 2050 KiB raw would have left 246 bytes, so raw takes
   // one further whole-KiB step for the tripwire reason stated throughout this
   // file; 651 KiB gzip leaves 891 and takes the tighter step.
-  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2051 * 1024, gzip: 651 * 1024 }),
+  //
+  // The embedding pass carries the partition again, and all of its growth is in
+  // the two deferred packs reviewed above — `deferredCapabilities` and
+  // `optionalAgentTools`. Confidential embeddings stopped hardcoding a chute
+  // hostname, a model id and a 4096, and started asking the management catalog
+  // which chutes embed, asking the chute which path speaks the OpenAI shape, and
+  // asking the deployment how wide its vectors are; the corpus then travels
+  // sealed through the same `/e2e/invoke` as a conversation instead of over a
+  // second plain-HTTPS path with a second copy of the credential. What that
+  // bought back is not counted here and is worth saying: a `connect-src` entry
+  // naming one chute is gone from `index.html` and `public/_headers`, because a
+  // chute discovered tomorrow could never have been named in a static policy.
+  // Measured 2055.11 KiB raw / 651.80 KiB gzip. 2056 KiB raw would have left 911
+  // bytes and 652 KiB gzip would have left 205 — both inside the tripwire this
+  // file refuses everywhere else — so each takes one further whole-KiB step,
+  // leaving 1,935 bytes raw and 1,229 gzip. `entryJavaScript` is untouched: the
+  // one eager line is the same dependency-free authority setter, which now
+  // installs a capability rather than a token and is no larger for it.
+  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2057 * 1024, gzip: 653 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now measures 672.33 KiB raw / 186.61 KiB gzip:
   // the browser-Git pack grew (see optionalBrowserGit) and the Terminal pack
@@ -454,7 +493,16 @@ export const RELEASE_BUDGETS = Object.freeze({
   // Measured 2726.16 KiB raw / 838.04 KiB gzip. Both take the smallest whole-KiB
   // step above that reading, leaving 860 bytes raw and 983 gzip. Nothing eager
   // moved and the entry ceiling is untouched.
-  totalJavaScriptAndWorkers: Object.freeze({ raw: 2727 * 1024, gzip: 839 * 1024 }),
+  // The embedding pass carries into the installed aggregate exactly as it lands
+  // in the first-party partition above; the vendor pins are unchanged, so all of
+  // the growth is weight already reviewed there — discovery replacing three
+  // hardcoded facts about one embedding deployment, and the corpus moving onto
+  // the encrypted transport the chat lane already uses. Measured 2731.51 KiB raw
+  // / 839.71 KiB gzip. 2732 KiB raw would have left 502 bytes and 840 KiB gzip
+  // would have left 297, so each takes one further whole-KiB step for the
+  // tripwire reason stated throughout this file, leaving 1,526 bytes raw and
+  // 1,321 gzip. Nothing eager moved and the entry ceiling is untouched.
+  totalJavaScriptAndWorkers: Object.freeze({ raw: 2733 * 1024, gzip: 841 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. Keep it visible under a dedicated, deliberately small cap.
   serviceWorker: Object.freeze({ raw: 12 * 1024, gzip: 4 * 1024 }),
@@ -564,9 +612,14 @@ export const RELEASE_BUDGETS = Object.freeze({
   optionalContextPolicy: Object.freeze({ raw: 4 * 1024, gzip: 2 * 1024 }),
   // The registry, local retrieval broker, live-environment projection, and
   // repository admission logic load together when an agent-capable workspace
-  // is first constructed. Measured 124,352 B raw / 37,825 B gzip; the shared
-  // pack remains absent from first paint.
-  optionalAgentTools: Object.freeze({ raw: 128 * 1024, gzip: 38 * 1024 }),
+  // is first constructed. The retrieval runtime in this pack now resolves the
+  // confidential embedding engine before switching into it — a catalog read and
+  // a width probe, so a deployment that cannot be discovered refuses the switch
+  // with its own sentence instead of leaving the index in a mode that cannot
+  // embed. Measured 126,627 B raw / 39,002 B gzip; raw is unchanged at 128 KiB
+  // with 4,445 bytes spare, and gzip takes the smallest whole-KiB step above the
+  // reading, leaving 934. The shared pack remains absent from first paint.
+  optionalAgentTools: Object.freeze({ raw: 128 * 1024, gzip: 39 * 1024 }),
   // Files/editor shell plus its in-page source-control handoff. Git remains a
   // second lazy pack; this cap covers only the combined Editor route chrome.
   // The workbench gained the behaviour its measured defects needed: a tree

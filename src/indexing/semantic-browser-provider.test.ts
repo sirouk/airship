@@ -8,7 +8,7 @@ import {
   setConfidentialAuthority,
   writeEmbeddingMode,
 } from "./semantic-browser-provider";
-import { CHUTES_EMBEDDING_DIMENSIONS } from "./chutes-embeddings";
+import type { ChutesEmbeddingModel } from "./chutes-embedding-catalog";
 import { AIRSHIP_SEMANTIC_MODEL, LazySemanticWorkerEmbeddingProvider, type SemanticWorkerRequest, type SemanticWorkerResponse } from "./semantic-worker-provider";
 import { ClientContextRuntime } from "../retrieval/client-context-runtime";
 import { MemoryWorkspace } from "../workspace/memory";
@@ -221,43 +221,64 @@ describe("confidential embedding mode", () => {
     vi.unstubAllGlobals();
   });
 
-  it("reports the remote width and posture rather than the on-device ones", () => {
-    const provider = new SwitchableEmbeddingProvider(384, "chutes");
-    // 4096, not 384. `cosine()` throws on a width mismatch (flat-index.ts:85),
-    // so an index allocated at the constructor's 384 would have thrown on the
-    // first search of a generation that had already been embedded remotely.
-    expect(provider.dimensions).toBe(CHUTES_EMBEDDING_DIMENSIONS);
-    expect(provider.dimensions).not.toBe(384);
+  it("reports the discovered width and posture rather than the on-device ones", async () => {
+    const provider = new SwitchableEmbeddingProvider(384, "chutes", undefined, discovery(2048));
+    // Zero until discovery answers, because there is no honest number to report
+    // before it: the width belongs to whichever deployment Chutes publishes.
+    // Writing 4096 here was writing down one model's property as if it were a
+    // property of embeddings.
+    expect(provider.dimensions).toBe(0);
+
+    await provider.prepare("chutes");
+
+    // 2048, not 384 and not a constant. `cosine()` throws on a width mismatch
+    // (flat-index.ts:85), so an index allocated at the constructor's 384 would
+    // have thrown on the first search of a generation embedded remotely.
+    expect(provider.dimensions).toBe(2048);
     expect(provider.posture).toBe("confidential-remote");
+    expect(provider.getConfidentialReadiness()?.modelId).toBe("Some/Discovered-Embedding-Model");
+    // The count of what Chutes publishes, exposed rather than assumed to be one.
+    expect(provider.getConfidentialReadiness()?.catalog.count).toBe(1);
     expect(new SwitchableEmbeddingProvider(384, "bootstrap").dimensions).toBe(384);
   });
 
   it("refuses to embed without an authority instead of falling back to hash vectors", async () => {
-    const provider = new SwitchableEmbeddingProvider(384, "chutes");
+    const provider = new SwitchableEmbeddingProvider(384, "chutes", undefined, async () => {
+      throw new Error("Chutes is not connected, so the confidential embedding width cannot be measured.");
+    });
     await expect(provider.embed(["turbine"])).rejects.toThrow(/Chutes is not connected/u);
     expect(hasConfidentialAuthority()).toBe(false);
   });
 
   it("serves the next embed from an authority installed after the provider was materialized", async () => {
-    const requests: RequestInit[] = [];
-    vi.stubGlobal("fetch", vi.fn((_url: string, init: RequestInit) => {
-      requests.push(init);
-      return Promise.resolve(new Response(JSON.stringify({
-        data: [{ index: 0, embedding: Array.from({ length: CHUTES_EMBEDDING_DIMENSIONS }, () => 0) }],
-      }), { status: 200, headers: { "Content-Type": "application/json" } }));
-    }));
+    // Discovery is anonymous and answers; the *invocation* is what has no
+    // authority yet.
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(managementCatalog()), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    })));
     const provider = new SwitchableEmbeddingProvider(384, "chutes");
-    // The failed embed is what materializes the inner provider, so the token
-    // supplier below is installed strictly after it exists. Capturing the
-    // authority at construction would have left this connection unusable until
-    // the next profile switch re-minted the runtime.
-    await expect(provider.embed(["turbine"])).rejects.toThrow(/Chutes is not connected/u);
+    // The failed embed is what attempts discovery, so the invoker below is
+    // installed strictly after it. Capturing the authority at construction
+    // would have left this connection unusable until the next profile switch
+    // re-minted the runtime.
+    await expect(provider.embed(["turbine"])).rejects.toThrow(/not connected/iu);
 
-    setConfidentialAuthority(() => "cpk_installed_late");
+    const invoked: Array<{ chuteId: string; path: string }> = [];
+    setConfidentialAuthority(async (request) => {
+      invoked.push({ chuteId: request.chuteId, path: request.path });
+      const input = (request.payload as { input: string[] }).input;
+      return { data: input.map((_, index) => ({ index, embedding: Array.from({ length: 2048 }, () => 0) })) };
+    });
     const vectors = await provider.embed(["turbine"]);
 
-    expect(vectors[0]).toHaveLength(CHUTES_EMBEDDING_DIMENSIONS);
-    expect((requests[0]?.headers as Record<string, string>).Authorization).toBe("Bearer cpk_installed_late");
+    expect(vectors[0]).toHaveLength(2048);
+    // Every request went through the sealed transport, at the discovered chute
+    // and the discovered path. No host and no bearer appear anywhere here.
+    expect(invoked).toEqual([
+      { chuteId: "chute-embed-0001", path: "/v1/embeddings" },
+      { chuteId: "chute-embed-0001", path: "/v1/embeddings" },
+    ]);
   });
 
   it("does not restore a persisted chutes preference with no authority to serve it", () => {
@@ -271,7 +292,7 @@ describe("confidential embedding mode", () => {
     expect(readStoredEmbeddingMode()).toBeUndefined();
     expect(readEmbeddingMode()).toBe("bootstrap");
 
-    setConfidentialAuthority(() => "cpk_connected");
+    setConfidentialAuthority(async () => ({ data: [] }));
     expect(readStoredEmbeddingMode()).toBe("chutes");
   });
 });
@@ -325,5 +346,53 @@ function scheduling(
     powerPreference: "default",
     reasons: Object.freeze(["test policy"]),
     ...overrides,
+  });
+}
+
+/** The one discovered deployment these tests hand the provider. */
+const DISCOVERED: ChutesEmbeddingModel = Object.freeze({
+  id: "Some/Discovered-Embedding-Model",
+  chuteId: "chute-embed-0001",
+  slug: "some-discovered-embedding-model",
+  path: "/v1/embeddings",
+  hot: true,
+});
+
+/** A management-catalog payload in the exact envelope `GET /chutes/` returns. */
+function managementCatalog() {
+  return {
+    total: 1,
+    items: [{
+      chute_id: DISCOVERED.chuteId,
+      name: DISCOVERED.id,
+      slug: DISCOVERED.slug,
+      standard_template: "embedding",
+      cord_ref_id: "cord-ref-1",
+      tee: true,
+      hot: true,
+      public: true,
+    }],
+    cord_refs: {
+      "cord-ref-1": [
+        { path: "/embed", method: "POST", stream: false, public_api_path: "/v1/embeddings", public_api_method: "POST" },
+      ],
+    },
+  };
+}
+
+/** Stands in for `prepareConfidentialEmbeddings` without a network. */
+function discovery(dimensions: number) {
+  return async () => ({
+    provider: {
+      id: `chutes:${DISCOVERED.id}`,
+      dimensions,
+      posture: "confidential-remote" as const,
+      embed: async (texts: string[]) => texts.map(() => new Float32Array(dimensions)),
+    },
+    readiness: Object.freeze({
+      catalog: Object.freeze({ models: Object.freeze([DISCOVERED]), count: 1, declined: 0 }),
+      modelId: DISCOVERED.id,
+      dimensions,
+    }),
   });
 }

@@ -1,6 +1,10 @@
 import { hasConfidentialAuthority, readConfidentialAuthority } from "./confidential-authority";
 import { HashEmbeddingProvider } from "./hash-embeddings";
-import { CHUTES_EMBEDDING_DIMENSIONS, ChutesEmbeddingProvider } from "./chutes-embeddings";
+import { ChutesEmbeddingProvider, measureEmbeddingWidth } from "./chutes-embeddings";
+import {
+  discoverChutesEmbeddingModels,
+  type ChutesEmbeddingCatalog,
+} from "./chutes-embedding-catalog";
 import type { EmbeddingProvider } from "./contracts";
 import type { EmbeddingPosture } from "../core/contracts";
 import {
@@ -32,7 +36,57 @@ export {
   subscribeConfidentialAuthority,
   type ConfidentialAuthorityListener,
   type ConfidentialEmbeddingAuthority,
+  type ConfidentialEmbeddingInvocation,
 } from "./confidential-authority";
+
+/**
+ * What discovery found, for the screen that offers the choice.
+ *
+ * Exposed because "Confidential" used to be a button naming one model in a
+ * constant. How many embedding deployments Chutes actually publishes, and which
+ * one an index was built against, are facts the person choosing is entitled to
+ * — and they change without this repository being touched.
+ */
+export type ConfidentialEmbeddingReadiness = Readonly<{
+  catalog: ChutesEmbeddingCatalog;
+  modelId: string;
+  dimensions: number;
+}>;
+
+/**
+ * Discover an embedding deployment and measure its width, in that order.
+ *
+ * Both halves are questions to Chutes. The catalog says which chutes embed and
+ * what path inside them speaks the OpenAI shape; the width probe takes one real
+ * vector from the chosen deployment and counts it. Only then does a provider
+ * exist, because a provider that does not know its width cannot refuse a wrong
+ * one — and refusing a wrong one is the guarantee the index depends on.
+ */
+export async function prepareConfidentialEmbeddings(
+  signal?: AbortSignal,
+): Promise<{ provider: ChutesEmbeddingProvider; readiness: ConfidentialEmbeddingReadiness }> {
+  const catalog = await discoverChutesEmbeddingModels(signal ? { signal } : {});
+  // Prefer a deployment with a live instance; a cold one still works, it just
+  // pays a scale-up. Order is otherwise the catalog's, which is stable by id.
+  const model = catalog.models.find((candidate) => candidate.hot) ?? catalog.models[0];
+  if (!model) {
+    throw new Error(
+      catalog.declined > 0
+        ? `Chutes lists ${catalog.declined} embedding chute${catalog.declined === 1 ? "" : "s"}, but none of them is confidential compute with an OpenAI-compatible embeddings path, so none can hold this corpus.`
+        : "Chutes lists no embedding chutes, so confidential embeddings have nothing to run on.",
+    );
+  }
+  const dimensions = await measureEmbeddingWidth(readConfidentialAuthority, model, signal);
+  const provider = new ChutesEmbeddingProvider({
+    invoker: readConfidentialAuthority,
+    model,
+    dimensions,
+  });
+  return {
+    provider,
+    readiness: Object.freeze({ catalog, modelId: model.id, dimensions }),
+  };
+}
 
 /**
  * The recorded choice, or nothing when the person has never made one.
@@ -145,14 +199,18 @@ export class SwitchableEmbeddingProvider implements EmbeddingProvider {
   private readonly bootstrap: HashEmbeddingProvider;
   private semantic?: LazySemanticWorkerEmbeddingProvider;
   private confidential?: EmbeddingProvider;
+  private confidentialReadiness?: ConfidentialEmbeddingReadiness;
+  private confidentialPreparation?: Promise<void>;
   private mode: EmbeddingMode;
 
   constructor(
     dimensions = 384,
     mode: EmbeddingMode = readEmbeddingMode(),
     private readonly semanticFactory: () => LazySemanticWorkerEmbeddingProvider = createBrowserSemanticProvider,
-    private readonly confidentialFactory: () => EmbeddingProvider =
-      () => new ChutesEmbeddingProvider({ token: () => readConfidentialAuthority()?.() }),
+    private readonly confidentialFactory: (signal?: AbortSignal) => Promise<{
+      provider: EmbeddingProvider;
+      readiness: ConfidentialEmbeddingReadiness;
+    }> = prepareConfidentialEmbeddings,
   ) {
     this.localDimensions = dimensions;
     this.bootstrap = new HashEmbeddingProvider(dimensions);
@@ -162,20 +220,57 @@ export class SwitchableEmbeddingProvider implements EmbeddingProvider {
   /**
    * Per mode, because the widths differ and a mismatch is not recoverable.
    *
-   * The on-device engines are 384; Qwen3-Embedding-8B is 4096
-   * (`chutes-embeddings.ts:37`). `cosine()` throws on any width mismatch
-   * (`flat-index.ts:85`), so reporting one fixed number here would have had the
-   * engine allocate and query a 384-wide index against 4096-wide vectors — a
-   * throw on the first search rather than at the moment the mode changed.
-   * Switching modes rebuilds the generation (`client-context-runtime.ts`
-   * `setEmbeddingMode`), so no live index ever sees this value change under it.
+   * The on-device engines are 384. The confidential one is whatever the
+   * discovered deployment measured at — 4096 for Qwen3-Embedding-8B today, and
+   * that is a fact about that model rather than about embeddings, so it is not
+   * written down here. `cosine()` throws on any width mismatch
+   * (`flat-index.ts:85`), so reporting one fixed number would have had the
+   * engine query a 384-wide index against wider vectors — a throw on the first
+   * search rather than at the moment the mode changed. Switching modes rebuilds
+   * the generation (`client-context-runtime.ts` `setEmbeddingMode`), so no live
+   * index ever sees this value change under it.
+   *
+   * Zero before discovery answers, which is honest and not inert: the snapshot
+   * comparison in `incremental-indexer.ts` treats a changed width as a rebuild,
+   * and no generation is ever recorded at zero because recording one requires an
+   * embed, and an embed requires the width.
    */
   get dimensions(): number {
-    return this.mode === "chutes" ? CHUTES_EMBEDDING_DIMENSIONS : this.localDimensions;
+    if (this.mode !== "chutes") return this.localDimensions;
+    return this.confidentialReadiness?.dimensions ?? 0;
+  }
+
+  /** What discovery found, once it has. */
+  getConfidentialReadiness(): ConfidentialEmbeddingReadiness | undefined {
+    return this.confidentialReadiness;
+  }
+
+  /**
+   * Resolve everything the confidential engine needs before it is switched into.
+   *
+   * Called by `ClientContextRuntime.setEmbeddingMode` before the switch commits,
+   * so a catalog that cannot be read or a deployment that will not answer a
+   * width probe refuses the change with its own sentence instead of leaving the
+   * index in a mode that cannot embed.
+   */
+  async prepare(mode: EmbeddingMode, signal?: AbortSignal): Promise<void> {
+    if (mode !== "chutes" || this.confidential) return;
+    this.confidentialPreparation ??= (async () => {
+      try {
+        const prepared = await this.confidentialFactory(signal);
+        this.confidential = prepared.provider;
+        this.confidentialReadiness = prepared.readiness;
+      } finally {
+        // Cleared either way: a failed discovery must be retryable when the
+        // person presses again, and a succeeded one has nothing left to await.
+        this.confidentialPreparation = undefined;
+      }
+    })();
+    return this.confidentialPreparation;
   }
 
   get id(): string {
-    if (this.mode === "chutes") return this.confidentialProvider.id;
+    if (this.mode === "chutes") return this.confidential?.id ?? "chutes:undiscovered";
     return this.mode === "semantic" ? this.semanticProvider.id : this.bootstrap.id;
   }
 
@@ -207,12 +302,20 @@ export class SwitchableEmbeddingProvider implements EmbeddingProvider {
     this.mode = mode;
   }
 
-  embed(texts: string[], signal?: AbortSignal): Promise<Float32Array[]> {
+  async embed(texts: string[], signal?: AbortSignal): Promise<Float32Array[]> {
     // No fallback branch. A confidential request that cannot be authorized
     // rejects with the provider's own sentence; substituting hash vectors here
     // would label 384-wide bootstrap output `confidential-remote` in the same
     // lineage the receipt prints.
-    if (this.mode === "chutes") return this.confidentialProvider.embed(texts, signal);
+    if (this.mode === "chutes") {
+      // Discovery is idempotent and normally already done by `prepare`. Doing it
+      // here too means a restored `chutes` preference on a fresh page load — a
+      // path with no button press in it — embeds against a discovered
+      // deployment rather than failing for want of one.
+      await this.prepare("chutes", signal);
+      if (!this.confidential) throw new Error("Confidential embeddings were not discovered.");
+      return this.confidential.embed(texts, signal);
+    }
     return this.mode === "semantic" ? this.semanticProvider.embed(texts, signal) : this.bootstrap.embed(texts, signal);
   }
 
@@ -220,9 +323,5 @@ export class SwitchableEmbeddingProvider implements EmbeddingProvider {
 
   private get semanticProvider(): LazySemanticWorkerEmbeddingProvider {
     return this.semantic ??= this.semanticFactory();
-  }
-
-  private get confidentialProvider(): EmbeddingProvider {
-    return this.confidential ??= this.confidentialFactory();
   }
 }

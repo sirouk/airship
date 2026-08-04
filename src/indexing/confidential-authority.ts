@@ -16,17 +16,36 @@
  * is unchanged.
  */
 
+/** One sealed call into a path inside a chute. */
+export type ConfidentialEmbeddingInvocation = Readonly<{
+  chuteId: string;
+  /** The path *inside* the chute, e.g. the discovered `/v1/embeddings`. */
+  path: string;
+  payload: unknown;
+  signal?: AbortSignal;
+}>;
+
 /**
- * Supplies the `cpk_`/`cak_` bearer for confidential embeddings, or `undefined`
- * when Chutes is not connected.
+ * Performs one end-to-end encrypted invocation on behalf of the embedding
+ * provider, or is absent when Chutes is not connected.
+ *
+ * This used to hand out the raw `cpk_`/`cak_` bearer, because the provider
+ * opened its own plain HTTPS connection to a named embedding host and needed
+ * something to put in an `Authorization` header. It does not any more: the
+ * corpus is sealed to the instance's public key and posted to `/e2e/invoke` by
+ * the same transport the chat lane uses, so what the indexing side needs is the
+ * *capability to invoke*, not the credential that authorizes it. The bearer now
+ * never leaves the connection that owns it.
  *
  * Held in module state rather than passed at construction because the context
  * runtime is minted per workspace object (`src/retrieval/client-context-runtime.ts`,
  * a `WeakMap`) and re-minted on every profile switch, so whichever caller won
  * that race would otherwise decide whether the page has an authority at all.
- * It is memory-only and never persisted: this is a bearer token.
+ * It is memory-only and never persisted.
  */
-export type ConfidentialEmbeddingAuthority = () => Promise<string | undefined> | string | undefined;
+export type ConfidentialEmbeddingAuthority = (
+  request: ConfidentialEmbeddingInvocation,
+) => Promise<unknown>;
 
 export type ConfidentialAuthorityListener = (installed: boolean) => void;
 
@@ -34,7 +53,7 @@ let confidentialAuthority: ConfidentialEmbeddingAuthority | undefined;
 const listeners = new Set<ConfidentialAuthorityListener>();
 
 /**
- * Installs (or, with `undefined`, withdraws) the confidential bearer supplier.
+ * Installs (or, with `undefined`, withdraws) the confidential invoker.
  *
  * Read at each embed rather than captured, so an authority that arrives after
  * the provider was materialized still serves the next request — a connection
@@ -60,7 +79,7 @@ export function hasConfidentialAuthority(): boolean {
   return confidentialAuthority !== undefined;
 }
 
-/** The installed supplier, or `undefined`. Called per embed, never cached. */
+/** The installed invoker, or `undefined`. Read per embed, never cached. */
 export function readConfidentialAuthority(): ConfidentialEmbeddingAuthority | undefined {
   return confidentialAuthority;
 }

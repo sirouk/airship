@@ -48,6 +48,35 @@ contains input, output, and cache-read USD/TAO rates; the same object also has
 GPU-hour/second economics. `GET /chutes/{id}` returns the same `ChuteResponse`
 shape for one chute.
 
+## Embedding chutes
+
+Embedding deployments are absent from `llm.chutes.ai/v1/models`, which lists the
+chat router's models only, so they are discovered from the management API
+instead: `GET /chutes/?include_public=true&template=embedding&…` filters
+server-side and every returned record carries `standard_template: "embedding"`.
+Airship filters again on the client and admits only `tee: true`, because
+`confidential-remote` is a claim about attested compute and `/e2e/invoke` needs
+an instance public key to seal against.
+
+The path *inside* the chute comes from the same response. `cord_refs` maps each
+chute's `cord_ref_id` to its cord list, and an embedding chute publishes a
+non-streaming `POST` cord whose `public_api_path` is `/v1/embeddings` (its
+internal `path` is the chute author's own, e.g. `/embed`). That public path is
+what `X-E2E-Path` carries; the chute's `name` is what the request body's `model`
+field carries. Neither is written down in this repository.
+
+Vector width is not a property of embeddings and is not declared: Airship takes
+one probe vector from the chosen deployment and counts it, then refuses any
+later vector of another width rather than reshaping it. At the time of writing
+exactly one public embedding chute exists — `Qwen/Qwen3-Embedding-8B-TEE`, 4096
+dimensions — and nothing in the code may assume either fact.
+
+Embedding requests use the same encrypted transport as chat: the batch is sealed
+to the serving instance's E2EE public key and posted to `POST /e2e/invoke` with
+`X-E2E-Stream: false`, because an embeddings response is one frame rather than a
+stream. No per-chute hostname is ever contacted, which is why none appears in
+`connect-src`.
+
 TEE evidence for a public chute is requested anonymously with
 `GET /chutes/{id}/evidence?nonce=<64 lowercase-or-uppercase hex characters>`.
 The response is:
