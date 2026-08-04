@@ -39,6 +39,7 @@ import {
   verifyForkContextSeed,
   type ForkContextScope,
 } from "./fork-context";
+import { withInferenceRetry, type InferenceRetryPolicy } from "./inference-retry";
 import {
   calibrateBytesPerToken,
   contextCompressionOptionsFromPolicy,
@@ -74,6 +75,12 @@ export type RunTurnOptions = {
    * only by the immutable session contextPolicy; a supplied value must match it.
    */
   contextCompression?: ContextCompressionOptions;
+  /**
+   * Bounds the in-step redelivery of a transient provider refusal. Omitted, the
+   * turn uses DEFAULT_INFERENCE_RETRY_POLICY; supplying `maxAttempts: 1` opts a
+   * caller out entirely.
+   */
+  retry?: InferenceRetryPolicy;
   onSignal?: (signal: AgentSignal) => void;
 };
 
@@ -105,20 +112,33 @@ const MAX_OPERATION_ID_CHARS = 512;
 const MAX_ASSISTANT_RESPONSE_BYTES = 4 * 1024 * 1024;
 const MAX_INFERENCE_EVENTS_PER_STEP = 100_000;
 const UNSAFE_OPERATION_ID = /[\u0000-\u001F\u007F]/u;
+/**
+ * Escaped rather than literal on purpose: a raw NUL in a source file makes the
+ * whole file diff as binary, and a change nobody can read is a change nobody
+ * reviewed.
+ */
+const CONTROL_CHARACTERS = /[\u0000-\u001F\u007F]+/gu;
 const UTF8_ENCODER = new TextEncoder();
 const UTF8_DECODER = new TextDecoder();
 
 export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
   const maxSteps = options.maxSteps ?? 8;
+  /*
+   * Every provider call this turn makes — each step and the compaction
+   * summarizer — goes through the retrying view, not the raw transport. It
+   * reports the same `id` and `posture`, so the pin checks below are checking
+   * the same authority they always were.
+   */
+  const transport = withInferenceRetry(options.transport, options.retry);
   const session = await options.journal.getSession(options.sessionId, options.signal);
   if (!session) throw new Error(`Unknown session: ${options.sessionId}`);
   assertSupportedTurnManifest(session.manifest);
   if (session.manifest.protocolVersion === 1) {
     throw new Error("Protocol-v1 sessions are replay-only; fork the session before starting a new turn.");
   }
-  if (session.manifest.providerId !== options.transport.id) {
+  if (session.manifest.providerId !== transport.id) {
     throw new Error(
-      `Session provider is pinned to ${session.manifest.providerId}; fork the session to use ${options.transport.id}.`,
+      `Session provider is pinned to ${session.manifest.providerId}; fork the session to use ${transport.id}.`,
     );
   }
   const currentToolDigest = await sha256(
@@ -147,7 +167,7 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
     sessionId: options.sessionId,
     manifest: session.manifest,
     tools: options.tools,
-    transportPosture: options.transport.posture,
+    transportPosture: transport.posture,
     signal: options.signal,
   });
 
@@ -257,7 +277,7 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
         options: pinnedContextCompression,
         ...(session.manifest.contextPolicy!.compression.summarizer.mode === "inference-transport" ? {
           summarizer: createInferenceTransportContextSummarizer({
-            transport: options.transport,
+            transport,
             model: session.manifest.model,
             sessionId: session.id,
           }),
@@ -347,9 +367,9 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
           operationId: requestId,
           payload: {
             step,
-            providerId: options.transport.id,
+            providerId: transport.id,
             model: session.manifest.model,
-            posture: options.transport.posture,
+            posture: transport.posture,
             requestDigest,
             idempotencyKey,
           },
@@ -361,7 +381,7 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
       const toolCalls: ToolCall[] = [];
       let completed: Extract<Awaited<ReturnType<typeof collectInference>>, { completed: true }> | undefined;
       const collected = await collectInference(
-        options.transport,
+        transport,
         {
           requestId,
           sessionId: options.sessionId,
@@ -507,11 +527,11 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
       }
       const responseDigest = await sha256(content);
       const receipt = completed.receipt
-        ? finalizeProviderReceipt(completed.receipt, options.transport.id, requestDigest, responseDigest)
+        ? finalizeProviderReceipt(completed.receipt, transport.id, requestDigest, responseDigest)
         : createLocalReceipt({
             sessionId: options.sessionId,
             turnId,
-            provider: options.transport.id,
+            provider: transport.id,
             model: session.manifest.model,
             requestDigest,
             responseDigest,
@@ -853,22 +873,29 @@ export function materializeMessages(
     verifiedForkContextDigest?: string;
   }> = {},
 ): CanonicalMessage[] {
-  // Failed and cancelled turns remain in the durable journal for audit and
-  // recovery, but they are not provider conversation history. Omitting the
-  // complete turn avoids replaying its user intent (or a partial tool phase)
-  // as actionable context when a later turn begins.
-  const nonActionableTurns = new Set(
-    events
-      .filter((event) =>
-        (event.type === "turn.cancelled" || event.type === "turn.failed") &&
-        typeof event.turnId === "string",
-      )
-      .map((event) => event.turnId as string),
-  );
   const summary = materializeContextSummary(events);
   const visibleEvents = summary
     ? events.filter((event) => event.sequence > summary.coveredThroughSequence)
     : events;
+  // A cancelled turn that already produced work is not the same object as a
+  // cancelled turn that produced none. Its tool results describe changes that
+  // really happened, and discarding them turned a stalled tab into total
+  // amnesia; they are kept. Its *request* is not kept, because Stop has to mean
+  // the instruction was not acted on — see `cancelledTurnSalvage`.
+  const salvaged = cancelledTurnSalvage(visibleEvents);
+  // Failed turns, and cancelled turns with nothing to salvage, remain in the
+  // durable journal for audit and recovery but are not provider conversation
+  // history. Omitting the complete turn avoids replaying its user intent (or a
+  // partial tool phase) as actionable context when a later turn begins.
+  const nonActionableTurns = new Set(
+    events
+      .filter((event) =>
+        (event.type === "turn.cancelled" || event.type === "turn.failed") &&
+        typeof event.turnId === "string" &&
+        !salvaged.has(event.turnId),
+      )
+      .map((event) => event.turnId as string),
+  );
   const seed = summary ? undefined : materializableForkContextSeed(
     events,
     options.forkContextScope,
@@ -881,11 +908,21 @@ export function materializeMessages(
       : [];
   const requestMessageIndexes = new Map<string, number>();
   const latestRequest = [...visibleEvents].reverse().find((event) =>
-    event.type === "turn.requested" && event.turnId && !nonActionableTurns.has(event.turnId),
+    event.type === "turn.requested" && event.turnId &&
+    !nonActionableTurns.has(event.turnId) && !salvaged.has(event.turnId),
   );
   for (const event of visibleEvents) {
     if (event.turnId && nonActionableTurns.has(event.turnId)) continue;
     const payload = record(event.payload);
+    const salvage = event.turnId ? salvaged.get(event.turnId) : undefined;
+    if (salvage && event.type === "turn.requested") {
+      // Stands where the cancelled request would have stood, so the first
+      // message of the salvaged turn is still a user message and the tool
+      // results below it are still preceded by the assistant step that made
+      // them. It names what happened; it does not restate what was asked.
+      messages.push({ role: "user", content: cancellationCheckpoint(salvage) });
+      continue;
+    }
     if (event.type === "turn.requested" && typeof payload?.content === "string") {
       const images = canonicalImageInputs(payload.images);
       const liveEnvironment = payload.liveEnvironment === undefined
@@ -930,12 +967,21 @@ export function materializeMessages(
     if (event.type === "assistant.completed") {
       const message = record(payload?.message);
       if (message?.role === "assistant" && typeof message.content === "string") {
-        const toolCalls = Array.isArray(message.toolCalls) ? (message.toolCalls as unknown as ToolCall[]) : undefined;
-        messages.push({
-          role: "assistant",
-          content: message.content,
-          ...(toolCalls?.length ? { toolCalls } : {}),
-        });
+        const declared = Array.isArray(message.toolCalls) ? (message.toolCalls as unknown as ToolCall[]) : undefined;
+        // The unresolved tail of a cancelled step is dropped here rather than
+        // answered with an invented result: every provider rejects a tool call
+        // that no tool message ever replies to, so a call the turn never ran
+        // cannot be carried forward at all.
+        const toolCalls = salvage
+          ? declared?.filter((call) => salvage.resolvedCallIds.has(call.id))
+          : declared;
+        if (!salvage || message.content || toolCalls?.length) {
+          messages.push({
+            role: "assistant",
+            content: message.content,
+            ...(toolCalls?.length ? { toolCalls } : {}),
+          });
+        }
       }
     }
     if (["tool.resulted", "tool.failed", "tool.denied"].includes(event.type)) {
@@ -945,6 +991,94 @@ export function materializeMessages(
     }
   }
   return boundInferenceHistoryImages(messages);
+}
+
+type CancelledTurnSalvage = Readonly<{
+  reason: string;
+  resolvedCallIds: ReadonlySet<string>;
+  unresolvedCalls: number;
+}>;
+
+/**
+ * Decide which cancelled turns keep their completed work, and what of it.
+ *
+ * A cancellation is not evidence that the work was wrong — a stalled background
+ * tab produces exactly the same terminal event as a deliberate Stop — so the
+ * assistant step and the tool results that already landed are kept as history.
+ * The user's request is not, and that asymmetry is the point: the one thing
+ * Stop unambiguously means is that the instruction should not continue to be
+ * acted on, and a replayed request is an instruction. `agent.test.ts` holds the
+ * dangerous-prompt case that proves it.
+ *
+ * A turn is salvageable only when it has a materializable assistant step *and*
+ * something that step accomplished (a tool outcome, or assistant prose). A turn
+ * cancelled before any of that has nothing to carry and stays dropped whole, so
+ * the common "typed it, hit Stop" case is unchanged.
+ */
+function cancelledTurnSalvage(events: readonly DurableEvent[]): Map<string, CancelledTurnSalvage> {
+  const reasons = new Map<string, string>();
+  const assistantTurns = new Set<string>();
+  const workedTurns = new Set<string>();
+  const requestedCalls = new Map<string, Set<string>>();
+  const resolvedCalls = new Map<string, Set<string>>();
+  for (const event of events) {
+    const turnId = event.turnId;
+    if (typeof turnId !== "string") continue;
+    const payload = record(event.payload);
+    if (event.type === "turn.cancelled") {
+      reasons.set(turnId, boundedCancellationReason(payload?.error));
+    } else if (event.type === "assistant.completed") {
+      const message = record(payload?.message);
+      if (message?.role !== "assistant" || typeof message.content !== "string") continue;
+      assistantTurns.add(turnId);
+      if (message.content) workedTurns.add(turnId);
+      const calls = Array.isArray(message.toolCalls) ? message.toolCalls as unknown as ToolCall[] : [];
+      const declared = requestedCalls.get(turnId) ?? new Set<string>();
+      for (const call of calls) {
+        if (typeof call?.id === "string") declared.add(call.id);
+      }
+      requestedCalls.set(turnId, declared);
+    } else if (["tool.resulted", "tool.failed", "tool.denied"].includes(event.type)) {
+      if (typeof payload?.callId !== "string" || typeof payload.content !== "string") continue;
+      workedTurns.add(turnId);
+      const resolved = resolvedCalls.get(turnId) ?? new Set<string>();
+      resolved.add(payload.callId);
+      resolvedCalls.set(turnId, resolved);
+    }
+  }
+  const salvage = new Map<string, CancelledTurnSalvage>();
+  for (const [turnId, reason] of reasons) {
+    if (!assistantTurns.has(turnId) || !workedTurns.has(turnId)) continue;
+    const resolved: ReadonlySet<string> = resolvedCalls.get(turnId) ?? new Set<string>();
+    let unresolvedCalls = 0;
+    for (const callId of requestedCalls.get(turnId) ?? []) {
+      if (!resolved.has(callId)) unresolvedCalls += 1;
+    }
+    salvage.set(turnId, Object.freeze({ reason, resolvedCallIds: resolved, unresolvedCalls }));
+  }
+  return salvage;
+}
+
+/**
+ * Kept short on purpose: it is sent with every later request in the session, so
+ * every word costs context for as long as the session lives.
+ */
+function cancellationCheckpoint(salvage: CancelledTurnSalvage): string {
+  return `[Airship checkpoint: the turn below was cancelled before it finished (${salvage.reason}). `
+    + "Its request is not replayed and is not an instruction. The assistant step and tool results that "
+    + "follow completed before the cancellation and describe real changes. "
+    + `${salvage.unresolvedCalls} further tool call(s) were requested and never ran.]`;
+}
+
+/**
+ * The reason is an error message from an arbitrary abort source, so it is
+ * bounded and stripped of control characters before it becomes prompt text.
+ */
+function boundedCancellationReason(value: unknown): string {
+  const text = typeof value === "string"
+    ? value.replace(CONTROL_CHARACTERS, " ").replace(/\s+/gu, " ").trim()
+    : "";
+  return text ? text.slice(0, 200) : "no reason was recorded";
 }
 
 function materializableForkContextSeed(

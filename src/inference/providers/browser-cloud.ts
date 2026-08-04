@@ -91,14 +91,24 @@ export type ProviderTransportErrorCode =
   | "bridge-protocol";
 
 export class ProviderTransportError extends Error {
+  /**
+   * The provider's own `Retry-After`, verbatim, when it sent one *and* let this
+   * origin read it. `Retry-After` is not CORS-safelisted, so a provider that
+   * omits `access-control-expose-headers: retry-after` leaves this undefined
+   * even though it sent the header. Nothing is inferred in that case — the
+   * turn's retry policy falls back to its own backoff (`core/inference-retry`).
+   */
+  readonly retryAfter?: string;
+
   constructor(
     readonly code: ProviderTransportErrorCode,
     message: string,
     readonly status?: number,
-    options: { cause?: unknown } = {},
+    options: { cause?: unknown; retryAfter?: string } = {},
   ) {
     super(message, options);
     this.name = "ProviderTransportError";
+    if (options.retryAfter !== undefined) this.retryAfter = options.retryAfter;
   }
 }
 
@@ -358,6 +368,7 @@ class OpenAiResponsesBrowserTransport implements InferenceTransport {
           "http",
           `${this.provider.displayName} rejected the request with HTTP ${response.status}.`,
           response.status,
+          retryAfterOption(response),
         );
       }
       return response;
@@ -609,6 +620,7 @@ export class AnthropicBrowserTransport implements InferenceTransport {
           "http",
           `Anthropic rejected the request with HTTP ${response.status}.`,
           response.status,
+          retryAfterOption(response),
         );
       }
       return response;
@@ -1320,6 +1332,17 @@ function normalizeFetchFailure(
     undefined,
     { cause: error },
   );
+}
+
+/**
+ * Carry the refusal's own `Retry-After` onto the error, bounded so a hostile or
+ * broken header cannot become an unbounded string on a thrown object. A header
+ * this origin cannot read is simply absent; the parser refuses anything that is
+ * not delay-seconds or an HTTP-date.
+ */
+function retryAfterOption(response: Response): { retryAfter?: string } {
+  const value = response.headers.get("retry-after")?.trim();
+  return value ? { retryAfter: value.slice(0, 64) } : {};
 }
 
 function normalizedAbort(signal: AbortSignal): ProviderTransportError {

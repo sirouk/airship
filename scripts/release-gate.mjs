@@ -289,7 +289,18 @@ export const RELEASE_BUDGETS = Object.freeze({
   // have left 727 bytes and 647 KiB gzip would have left 164; both take one
   // further whole-KiB step, for the reason stated throughout this file — a
   // ceiling a minifier rename can breach is a tripwire, not a budget.
-  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2042 * 1024, gzip: 648 * 1024 }),
+  //
+  // In-turn provider resilience carries the partition with it, and all of the
+  // growth is the agent pack reviewed under `optionalAgentRuntime` below — an
+  // attempt loop around each inference call plus the materialization that keeps
+  // a cancelled turn's completed tool results. It buys the difference between an
+  // agent and a demo: before it, one 429 or one dropped connection ended a turn
+  // that may have run twenty steps and written files, and every completed tool
+  // result went with it. Nothing eager moved and the entry ceiling is untouched.
+  // Measured 2043.86 KiB raw / 648.05 KiB gzip. 2044 KiB raw would have left 143
+  // bytes, so raw takes one further whole-KiB step for the tripwire reason
+  // above; 649 KiB gzip leaves 973 and takes the tighter step.
+  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2045 * 1024, gzip: 649 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now measures 672.33 KiB raw / 186.61 KiB gzip:
   // the browser-Git pack grew (see optionalBrowserGit) and the Terminal pack
@@ -375,7 +386,13 @@ export const RELEASE_BUDGETS = Object.freeze({
   // 2716.69 KiB raw / 834.76 KiB gzip on the larger chunk split. 2717 KiB raw
   // would have left 318 bytes and 835 KiB gzip 246; both take one further
   // whole-KiB step. Nothing eager moved and the entry ceiling is untouched.
-  totalJavaScriptAndWorkers: Object.freeze({ raw: 2718 * 1024, gzip: 836 * 1024 }),
+  // In-turn provider resilience carries into the installed aggregate exactly as
+  // it lands in the first-party partition above; the vendor pins are unchanged,
+  // so all of the growth is weight already reviewed there. Measured 2720.22 KiB
+  // raw / 835.95 KiB gzip. 836 KiB gzip would have left 51 bytes, so gzip takes
+  // one further whole-KiB step; 2721 KiB raw leaves 799 and takes the tighter
+  // step. Nothing eager moved and the entry ceiling is untouched.
+  totalJavaScriptAndWorkers: Object.freeze({ raw: 2721 * 1024, gzip: 837 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. Keep it visible under a dedicated, deliberately small cap.
   serviceWorker: Object.freeze({ raw: 12 * 1024, gzip: 4 * 1024 }),
@@ -447,10 +464,20 @@ export const RELEASE_BUDGETS = Object.freeze({
   optionalWasixJavaScript: Object.freeze({ raw: 0, gzip: 0 }),
   optionalWasixWasm: Object.freeze({ raw: 0, gzip: 0 }),
   // The full inspect-act-verify loop is fetched on the first sent turn. Live
-  // environment capture and persisted evidence scheduling put the measured
-  // pack at 49,170 B raw / 14,093 B gzip: raw crossed the old cap by 18 bytes,
-  // so only that ceiling takes the next whole-KiB step. First paint is fixed.
-  optionalAgentRuntime: Object.freeze({ raw: 49 * 1024, gzip: 14 * 1024 }),
+  // environment capture and persisted evidence scheduling had put the pack at
+  // 49,170 B raw / 14,093 B gzip.
+  //
+  // In-turn provider resilience now joins it, and this pack is the only place
+  // it can live: the attempt loop has to sit where the turn can see whether the
+  // stream was ever observed, because a failure after the first event can never
+  // be redelivered. What landed is jittered decorrelated backoff, an RFC 7231
+  // `Retry-After` parse (delay-seconds and HTTP-date), the classification that
+  // says a 429 or a 5xx may be repeated while a 400 or a 401 may not, and the
+  // materialization that keeps a cancelled turn's completed tool results rather
+  // than discarding the turn whole. Measured 49.48 KiB raw / 14.33 KiB gzip;
+  // both ceilings take the smallest whole-KiB step above that reading. First
+  // paint is fixed — none of this is fetched until a turn is sent.
+  optionalAgentRuntime: Object.freeze({ raw: 50 * 1024, gzip: 15 * 1024 }),
   // Image normalization is fetched only when a turn actually carries an image;
   // text-only first paint and text-only turns do not pay for it. Measured
   // 2,343 B raw / 1,153 B gzip.
