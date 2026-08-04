@@ -171,7 +171,7 @@ Every subsystem has explicit states: `unavailable`, `probing`, `ready`,
 
 | Concern | Baseline budget |
 |---|---:|
-| automatically loaded startup JavaScript | 224 KiB compressed engineering target; executable entry/baseline caps are in `RELEASE_GATE.md` |
+| automatically loaded startup JavaScript | an engineering target only; the executable entry and baseline ceilings, and the figures for them, live in `RELEASE_GATE.md` |
 | automatic context injected per turn | 6 chunks and 24 KiB plaintext default |
 | remote context fan-out | 4 experts, 8 MiB, 1.5 s default |
 | image input | 8 images, 10 MiB each, 20 MiB aggregate |

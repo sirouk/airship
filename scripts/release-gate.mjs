@@ -920,7 +920,11 @@ export const RELEASE_BUDGETS = Object.freeze({
   // all — a visitor who never presses New skill or Edit pays nothing for it.
   // Named in MEASUREMENT_JUSTIFIED_BUDGETS, so this pair is enforced rather
   // than merely written: a placeholder left here fails the gate instead of
-  // surviving it. Measured 3,396 B raw / 1,320 B gzip.
+  // surviving it. Re-measured 3,396 B raw / 1,319 B gzip. The gzip figure came
+  // down one byte, and one byte is the whole point of recording it: 1,320 was
+  // the first reading this file's comments were compared against the build they
+  // describe, and it was the only one of the six that claimed more than the
+  // build contained. Neither ceiling moves.
   optionalSkillEditor: Object.freeze({ raw: 4 * 1024, gzip: 2 * 1024 }),
   /*
    * The one destructive-confirmation dialog, shared rather than re-implemented.
@@ -1301,21 +1305,104 @@ export function assertDocumentedBudgetMeasurements(source) {
 }
 
 /**
+ * A documented measurement may not be larger than the artifact this run measures.
+ *
+ * Everything above compares a comment to a *ceiling*, and a ceiling is the one
+ * thing a stale-high figure keeps satisfying: a pack whose comment overstates
+ * the build still clears its ceiling, and is still the tightest whole-KiB step
+ * above the number it claims. So it passes every rule in
+ * `assertDocumentedBudgetMeasurements` while justifying transfer budget with
+ * bytes nothing shipped. `optionalWorkspaceWorkbench` recorded 80,247 bytes for
+ * a route the tree had not touched since, and the comment beside it says in as
+ * many words that this guard "did not catch it". Nothing structurally could —
+ * the guard had never seen a build.
+ *
+ * This one runs after the artifacts are measured, and it refuses exactly that:
+ * an overstatement. Not a mismatch. Ordinary growth in a shared chunk moves
+ * every one of these readings by a handful of bytes on commits that touched
+ * none of them — the six documented packs each drifted 1–300 bytes across two
+ * unrelated commits while this was being written — and a rule demanding equality
+ * would put six comment edits on every pull request until someone deleted the
+ * rule. Understatement is already bracketed from the other side: the tightness
+ * rule forces the ceiling down to one step above whatever the comment claims,
+ * and `assertWithinBudget` then fails if the real build does not fit under it.
+ * A figure that is too low cannot survive both. A figure that is too high could
+ * survive everything, and that is the hole.
+ *
+ * The largest pair a comment states is the one checked — the same selection
+ * `assertDocumentedBudgetMeasurements` makes, so a comment that also quotes the
+ * reading it grew from is unaffected. And a figure is held only to the precision
+ * it was written at: "49.48 KiB raw" claims a hundredth of a KiB, and turning
+ * that into a byte claim would be enforcing a promise its author never made.
+ */
+export function assertDocumentedMeasurementsMatchBuild(source, measurements) {
+  const failures = [];
+  for (const entry of parseDocumentedBudgets(source)) {
+    if (!MEASUREMENT_JUSTIFIED_BUDGETS.includes(entry.name)) continue;
+    const measured = measurements[entry.name];
+    if (!measured) {
+      failures.push(`${entry.name}: named as measurement-justified, but this run measured no artifact under that name`);
+      continue;
+    }
+    const documented = entry.measured.reduce((largest, pair) => (largest && largest.raw >= pair.raw ? largest : pair), null);
+    // Its absence is already a failure in the guard that runs before the build.
+    if (!documented) continue;
+    for (const role of ["raw", "gzip"]) {
+      const written = documented.written[role];
+      // Half of the last digit the author actually wrote.
+      const tolerance = (0.5 * unitScale(written.unit)) / 10 ** written.decimals;
+      if (documented[role] - measured[role] > tolerance) {
+        failures.push(
+          `${entry.name}: its comment claims ${written.text} ${role}, but this build measures only ${formatAsWritten(measured[role], written)} (${measured[role]} B). Re-take the reading; a ceiling justified by bytes nothing shipped is a raise nobody reviewed.`,
+        );
+      }
+    }
+  }
+  if (failures.length > 0) {
+    throw new Error(`Release budget comments claim more than this build contains:\n- ${failures.join("\n- ")}`);
+  }
+}
+
+/**
  * Pairs each `name: Object.freeze({ raw, gzip })` ceiling with the contiguous
  * comment block directly above it and the byte figures that block states. Parsing
  * this file's own comments is unusual; it is warranted because those comments are
  * the ceilings' only justification, and an unchecked justification is the defect
  * this guards against.
+ *
+ * Both comment syntaxes count. This read `//` lines only, and every other line
+ * — including every line of a `/* *\/` block — reset the accumulator, so a
+ * ceiling whose justification was written as a block comment arrived at the
+ * guard as empty prose. Empty prose states no figure that can contradict a
+ * ceiling, states no measurement to be too loose for, and is only *required* to
+ * exist for the names in MEASUREMENT_JUSTIFIED_BUDGETS — so eight budgets
+ * documented in block form were being waved through a guard that reported
+ * itself green. Which of the two forms a comment happens to use is a typographic
+ * accident, and it was deciding whether the budget was checked at all.
  */
-function parseDocumentedBudgets(source) {
+export function parseDocumentedBudgets(source) {
   const lines = source.split("\n");
   const start = lines.findIndex((line) => line.startsWith("export const RELEASE_BUDGETS"));
   if (start < 0) throw new Error("Release budgets are not declared where the documentation guard expects them.");
   const entries = [];
   let comment = [];
+  let insideBlockComment = false;
   for (let index = start + 1; index < lines.length; index += 1) {
     const line = lines[index];
     if (line === "});") break;
+    if (insideBlockComment) {
+      const body = /^\s*\*?\/?\s?(.*?)\s*$/u.exec(line)[1];
+      if (/\*\/\s*$/u.test(line)) insideBlockComment = false;
+      comment.push(body.replace(/\*\/\s*$/u, "").trim());
+      continue;
+    }
+    const blockOpen = /^\s*\/\*+\s?(.*)$/u.exec(line);
+    if (blockOpen) {
+      const closes = /\*\/\s*$/u.test(line);
+      comment.push(blockOpen[1].replace(/\*\/\s*$/u, "").trim());
+      insideBlockComment = !closes;
+      continue;
+    }
     const commentText = /^\s*\/\/ ?(.*)$/u.exec(line);
     if (commentText) {
       comment.push(commentText[1]);
@@ -1364,17 +1451,67 @@ const BYTE_FIGURE = /(\d[\d,]*(?:\.\d+)?)\s(KiB|MiB|B)\s(raw|gzip)\b/gu;
 // tightness rule; the same comment may also quote a delta or another surface.
 const MEASURED_PAIR =
   /[Mm]easur\w*[^.;]{0,80}?(\d[\d,]*(?:\.\d+)?)\s(KiB|MiB|B)\sraw\s*\/\s*(\d[\d,]*(?:\.\d+)?)\s(KiB|MiB|B)\sgzip/gu;
+/*
+ * The sentence a measurement is stated in, from the word that claims it to the
+ * end of that sentence. A period between digits is a decimal point, not a full
+ * stop — `Measured 6.23 KiB raw / 2.46 KiB gzip` is one sentence.
+ *
+ * The ceiling rule below is scoped to these spans for the reason MEASURED_PAIR
+ * already states: a budget comment may legitimately quote another surface's
+ * figure, and several do. `optionalShellOverlays` and `optionalResumeReport`
+ * both exist *because* the entry chunk breached 112 KiB gzip, so both name the
+ * entry chunk's reading — a number no route-pack ceiling could ever clear.
+ * Reading those as claims about the pack would force the story out of the
+ * comment, and the story is what a reviewer needs. Nothing is weakened by the
+ * narrowing: the pairs a comment states about itself are now compared against
+ * the artifact the same run measures, which is a stronger check than any rule
+ * about which numbers may appear in prose.
+ */
+const MEASURED_SENTENCE = /[Mm]easur\w*(?:[^.;]|\.(?=\d))*/gu;
 
 function parseByteFigures(prose) {
-  return [...prose.matchAll(BYTE_FIGURE)].map((match) =>
-    Object.freeze({ text: `${match[1]} ${match[2]}`, role: match[3], bytes: toBytes(match[1], match[2]) }),
+  return [...prose.matchAll(MEASURED_SENTENCE)].flatMap((sentence) =>
+    [...sentence[0].matchAll(BYTE_FIGURE)].map((match) =>
+      Object.freeze({ text: `${match[1]} ${match[2]}`, role: match[3], bytes: toBytes(match[1], match[2]) }),
+    ),
   );
 }
 
 function parseMeasuredPairs(prose) {
   return [...prose.matchAll(MEASURED_PAIR)].map((match) =>
-    Object.freeze({ raw: toBytes(match[1], match[2]), gzip: toBytes(match[3], match[4]) }),
+    Object.freeze({
+      raw: toBytes(match[1], match[2]),
+      gzip: toBytes(match[3], match[4]),
+      /*
+       * The precision a figure was written at is part of the claim. "49.48 KiB
+       * raw" asserts a hundredth of a KiB, not a byte, and a cross-check that
+       * demanded byte equality of it would be enforcing a promise its author
+       * never made — and would push every comment towards raw byte counts,
+       * which are the harder form to read.
+       */
+      written: Object.freeze({
+        raw: Object.freeze({ text: `${match[1]} ${match[2]}`, unit: match[2], decimals: decimalPlaces(match[1]) }),
+        gzip: Object.freeze({ text: `${match[3]} ${match[4]}`, unit: match[4], decimals: decimalPlaces(match[3]) }),
+      }),
+    }),
   );
+}
+
+function decimalPlaces(value) {
+  const point = value.indexOf(".");
+  return point < 0 ? 0 : value.length - point - 1;
+}
+
+/** The scale a figure was written at, so a re-measurement can be offered in the same form. */
+function unitScale(unit) {
+  return unit === "MiB" ? 1024 * 1024 : unit === "KiB" ? 1024 : 1;
+}
+
+/** A measurement rendered in the unit and precision the comment beside it uses. */
+function formatAsWritten(bytes, written) {
+  const value = bytes / unitScale(written.unit);
+  const rendered = written.decimals > 0 ? value.toFixed(written.decimals) : Math.round(value).toLocaleString("en-US");
+  return `${rendered} ${written.unit}`;
 }
 
 function toBytes(value, unit) {
@@ -1431,6 +1568,150 @@ export function assertNoSimulatedGitRuntime(files) {
   }
 }
 
+/*
+ * `docs/RELEASE_GATE.md`'s budget table, row by row, in the order each row
+ * names its classes.
+ *
+ * That document says of the table that it mirrors "the executable ceilings
+ * exported by `scripts/release-gate.mjs`" and that a reviewer "must update this
+ * inventory in the same change when a ceiling moves". Nothing checked it, and
+ * six rows had stopped being true: entry JS gzip read 110 KiB against 113, the
+ * installed backstop 2,152 / 643 against 2,746 / 846, the deferred capability
+ * pack 388 / 113 against 424 / 126. Two more described gates this file does not
+ * contain at all — a 224 KiB compressed-startup ceiling and a 640 / 132 KiB
+ * initial-load class, both of which a reader would reasonably argue a raise
+ * against. A stale ceiling in the one document a reviewer consults is worse than
+ * no document, because it is consulted.
+ *
+ * Matched by label and compared by value rather than by string: a cell may
+ * write 1.5 MiB or 1,536 KiB and that is the author's choice. A row may cover
+ * several ceilings in the order it names them, and a row carrying one figure
+ * for several of them requires those ceilings to be equal — the only case where
+ * one number can honestly stand for more than one.
+ */
+export const DOCUMENTED_BUDGET_ROWS = Object.freeze([
+  Object.freeze({ label: "HTML-referenced entry JavaScript", budgets: Object.freeze(["entryJavaScript"]) }),
+  Object.freeze({ label: "Baseline JavaScript and workers, lazy packs excluded", budgets: Object.freeze(["allJavaScriptAndWorkers"]) }),
+  Object.freeze({ label: "Deferred advanced capability bundle", budgets: Object.freeze(["deferredCapabilities"]) }),
+  Object.freeze({ label: "First-party and other non-vendor JS/workers", budgets: Object.freeze(["firstPartyJavaScriptAndWorkers"]) }),
+  Object.freeze({ label: "Browser Git + Terminal vendor runtime aggregate", budgets: Object.freeze(["optionalVendorRuntimeAggregate"]) }),
+  Object.freeze({ label: "Absolute installed JavaScript/worker backstop", budgets: Object.freeze(["totalJavaScriptAndWorkers"]) }),
+  Object.freeze({ label: "Service worker", budgets: Object.freeze(["serviceWorker"]) }),
+  Object.freeze({
+    label: "Optional execution broker / engine / support",
+    budgets: Object.freeze(["optionalExecutionPack", "optionalExecutionEngine", "optionalExecutionSupport"]),
+  }),
+  Object.freeze({ label: "Optional pinned WASI Preview 1 Worker", budgets: Object.freeze(["optionalWasiPreview1Worker"]) }),
+  Object.freeze({ label: "Optional Node/WebContainer pack", budgets: Object.freeze(["optionalNodeExecutionPack"]) }),
+  Object.freeze({ label: "Optional first-party `airship-sh` shell pack", budgets: Object.freeze(["optionalShellPack"]) }),
+  Object.freeze({
+    label: "Unpromoted WASIX JavaScript / WASM",
+    budgets: Object.freeze(["optionalWasixJavaScript", "optionalWasixWasm"]),
+  }),
+  Object.freeze({
+    label: "Optional agent runtime / tool bundle",
+    budgets: Object.freeze(["optionalAgentRuntime", "optionalAgentTools"]),
+  }),
+  Object.freeze({
+    label: "Optional Workspace / Source Control / browser Git",
+    budgets: Object.freeze(["optionalWorkspaceWorkbench", "optionalSourceControl", "optionalBrowserGit"]),
+  }),
+  Object.freeze({
+    label: "Optional Sessions / Memory / Memory support / Proof",
+    budgets: Object.freeze(["optionalSessionLibrary", "optionalMemoryView", "optionalMemorySupport", "optionalProofSurface"]),
+  }),
+  Object.freeze({ label: "Optional Terminal", budgets: Object.freeze(["optionalTerminal"]) }),
+  Object.freeze({
+    label: "Optional semantic worker / model catalog",
+    budgets: Object.freeze(["optionalSemanticWorker", "optionalModelCatalog"]),
+  }),
+  Object.freeze({ label: "Optional inference/provider + Companion protocol packs", budgets: Object.freeze(["optionalInferenceProviders"]) }),
+  Object.freeze({
+    label: "Optional Intel DCAP QVL JS / WASM",
+    budgets: Object.freeze(["optionalDcapQvlJavaScript", "optionalDcapQvlWasm"]),
+  }),
+  Object.freeze({ label: "Pinned same-origin Pyodide distribution", budgets: Object.freeze(["optionalPythonPack"]) }),
+  Object.freeze({ label: "HTML-referenced entry CSS", budgets: Object.freeze(["entryCss"]) }),
+  Object.freeze({
+    label: "General WASM excluding separately capped DCAP",
+    budgets: Object.freeze(["eachWasm", "allWasm"]),
+  }),
+]);
+
+/** The figures in one table cell, as bytes. A trailing unit governs a cell that writes it once. */
+function parseCeilingCell(cell) {
+  const scaleOf = (text) => (/MiB/u.test(text) ? 1024 * 1024 : 1024);
+  const cellScale = scaleOf(cell);
+  return cell
+    .split("/")
+    .map((part) => {
+      const figure = /(\d[\d,]*(?:\.\d+)?)/u.exec(part);
+      if (!figure) return undefined;
+      const scale = /KiB|MiB/u.test(part) ? scaleOf(part) : cellScale;
+      return Math.round(Number(figure[1].replaceAll(",", "")) * scale);
+    })
+    .filter((value) => value !== undefined);
+}
+
+function parseBudgetTable(doc) {
+  const lines = doc.split("\n");
+  const header = lines.findIndex((line) => line.startsWith("| Class |"));
+  if (header < 0) throw new Error("docs/RELEASE_GATE.md no longer carries a budget table with a `Class` column.");
+  const rows = [];
+  for (let index = header + 2; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (!line.startsWith("|")) break;
+    const cells = line.split("|").slice(1, -1).map((cell) => cell.trim());
+    rows.push(Object.freeze({ label: cells[0], raw: cells[1] ?? "", gzip: cells[2] ?? "" }));
+  }
+  return rows;
+}
+
+export function assertReleaseGateDocumentationMirrors(doc) {
+  const failures = [];
+  const rows = parseBudgetTable(doc);
+  const documented = new Set(rows.map((row) => row.label));
+  for (const { label, budgets } of DOCUMENTED_BUDGET_ROWS) {
+    const row = rows.find((candidate) => candidate.label === label);
+    if (!row) {
+      failures.push(`the table has no row for "${label}", which covers ${budgets.join(", ")}`);
+      continue;
+    }
+    documented.delete(label);
+    for (const role of ["raw", "gzip"]) {
+      const written = parseCeilingCell(row[role]);
+      const expected = budgets.map((name) => RELEASE_BUDGETS[name][role]);
+      // One figure may stand for several ceilings only when they are the same
+      // number; otherwise the row is quietly hiding whichever it omitted.
+      if (written.length === 1 && expected.length > 1 && expected.every((value) => value === expected[0])) {
+        if (written[0] !== expected[0]) {
+          failures.push(`"${label}" ${role}: the table says ${formatBytes(written[0])}, the ceiling is ${formatBytes(expected[0])}`);
+        }
+        continue;
+      }
+      if (written.length !== expected.length) {
+        failures.push(
+          `"${label}" ${role}: the table states ${written.length} figure(s) for ${expected.length} ceiling(s) (${budgets.join(", ")})`,
+        );
+        continue;
+      }
+      for (const [position, value] of written.entries()) {
+        if (value !== expected[position]) {
+          failures.push(
+            `"${label}" ${role}: the table says ${formatBytes(value)} for ${budgets[position]}, the ceiling is ${formatBytes(expected[position])}`,
+          );
+        }
+      }
+    }
+  }
+  for (const label of documented) {
+    failures.push(`the table row "${label}" names no ceiling this file exports; a class that is not gated must not be tabled as one`);
+  }
+  if (failures.length > 0) {
+    throw new Error(`docs/RELEASE_GATE.md no longer mirrors the executable ceilings:\n- ${failures.join("\n- ")}`);
+  }
+}
+
 /**
  * The fork contract, as the shipped documentation states it.
  *
@@ -1481,7 +1762,10 @@ export function assertForkContractDocumented(source) {
 export async function runReleaseGate(outputDirectory = defaultOutput) {
   // The ceilings below are only as trustworthy as the measurements that justify
   // them, so the gate checks its own justifications before it checks the build.
-  assertDocumentedBudgetMeasurements(await readFile(fileURLToPath(import.meta.url), "utf8"));
+  // It is kept for a second pass at the end, where those justifications are
+  // compared to the artifacts this same run measured.
+  const gateSource = await readFile(fileURLToPath(import.meta.url), "utf8");
+  assertDocumentedBudgetMeasurements(gateSource);
   const output = resolve(outputDirectory);
   const files = await collectFiles(output);
   const manifestPath = posix.normalize(RELEASE_MANIFEST_NAME);
@@ -1523,6 +1807,7 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
 
   await validatePublicCopies(output, required.filter((path) => path !== "index.html"));
   assertForkContractDocumented(await readFile(resolve(root, "docs", "SESSION_LIBRARY.md"), "utf8"));
+  assertReleaseGateDocumentationMirrors(await readFile(resolve(root, "docs", "RELEASE_GATE.md"), "utf8"));
   const headers = fileMap.get("_headers").payload.toString("utf8");
   const index = fileMap.get("index.html").payload.toString("utf8");
   validateHeaders(headers);
@@ -2159,6 +2444,18 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
     assertWithinBudget(`WASM ${wasm.path}`, measure(wasm.payload), RELEASE_BUDGETS.eachWasm);
   }
   assertWithinBudget("All WASM", allWasmMeasurement, RELEASE_BUDGETS.allWasm);
+
+  // Last, because a pack over its ceiling is the more useful failure to report
+  // first, and because this is the only check in the file that can compare a
+  // written justification with the bytes that justify it.
+  assertDocumentedMeasurementsMatchBuild(gateSource, {
+    deferredCapabilities: deferredCapabilityMeasurement,
+    optionalWorkspaceWorkbench: optionalWorkspaceWorkbenchMeasurement,
+    optionalCapabilitiesView: optionalCapabilitiesViewMeasurement,
+    optionalMemoryView: optionalMemoryViewMeasurement,
+    optionalProofSurface: optionalProofSurfaceMeasurement,
+    optionalSkillEditor: optionalSkillEditorMeasurement,
+  });
 
   const artifacts = releasableFiles.map((file) => ({
     path: file.path,

@@ -38,61 +38,67 @@ ceilings are both blocking.
 
 | Class | Raw ceiling | Gzip ceiling |
 | --- | ---: | ---: |
-| HTML-referenced entry JavaScript | 384 KiB | 110 KiB |
-| Initial JavaScript and module preloads | 640 KiB | 132 KiB |
-| Deferred advanced capability bundle | 388 KiB | 113 KiB |
-| First-party and other non-vendor JS/workers | 1,768 KiB | 462 KiB |
-| Browser Git + Terminal vendor runtime aggregate | 656 KiB | 182 KiB |
-| Absolute installed JavaScript/worker backstop | 2,152 KiB | 643 KiB |
+| HTML-referenced entry JavaScript | 384 KiB | 113 KiB |
+| Baseline JavaScript and workers, lazy packs excluded | 768 KiB | 176 KiB |
+| Deferred advanced capability bundle | 424 KiB | 126 KiB |
+| First-party and other non-vendor JS/workers | 2,070 KiB | 658 KiB |
+| Browser Git + Terminal vendor runtime aggregate | 677 KiB | 188 KiB |
+| Absolute installed JavaScript/worker backstop | 2,746 KiB | 846 KiB |
 | Service worker | 12 KiB | 4 KiB |
-| Optional execution broker / engine / support | 32 / 56 / 8 KiB | 10 / 14 / 3 KiB |
+| Optional execution broker / engine / support | 32 / 56 / 10 KiB | 10 / 14 / 4 KiB |
 | Optional pinned WASI Preview 1 Worker | 32 KiB | 8 KiB |
-| Optional Node/WebContainer pack | 32 KiB | 8 KiB |
+| Optional Node/WebContainer pack | 32 KiB | 11 KiB |
 | Optional first-party `airship-sh` shell pack | 100 KiB | 30 KiB |
 | Unpromoted WASIX JavaScript / WASM | 0 / 0 KiB | 0 / 0 KiB |
-| Optional agent runtime / tool bundle | 48 / 128 KiB | 14 / 36 KiB |
-| Optional Workspace / Source Control / browser Git | 28 / 48 / 276 KiB | 10 / 14 / 83 KiB |
-| Optional Sessions / Memory / Memory support / Proof | 48 / 36 / 2 / 64 KiB | 14 / 12 / 1 / 20 KiB |
-| Optional Terminal | 384 KiB | 100 KiB |
-| Optional semantic worker / model catalog | 16 / 32 KiB | 6 / 10 KiB |
+| Optional agent runtime / tool bundle | 53 / 128 KiB | 16 / 39 KiB |
+| Optional Workspace / Source Control / browser Git | 84 / 48 / 276 KiB | 27 / 14 / 83 KiB |
+| Optional Sessions / Memory / Memory support / Proof | 60 / 61 / 2 / 88 KiB | 18 / 21 / 1 / 28 KiB |
+| Optional Terminal | 420 KiB | 111 KiB |
+| Optional semantic worker / model catalog | 16 / 33 KiB | 6 / 12 KiB |
 | Optional inference/provider + Companion protocol packs | 124 KiB | 38 KiB |
 | Optional Intel DCAP QVL JS / WASM | 32 / 1,536 KiB | 8 / 512 KiB |
 | Pinned same-origin Pyodide distribution | 16 MiB | 8 MiB |
-| HTML-referenced entry CSS | 160 KiB | 32 KiB |
+| HTML-referenced entry CSS | 175 KiB | 32 KiB |
 | General WASM excluding separately capped DCAP | 1,024 KiB each and aggregate | 350 KiB each and aggregate |
 
 These values mirror the executable ceilings exported by
-`scripts/release-gate.mjs`; reviewers must update this inventory in the same
-change when a ceiling moves. The 224 KiB compressed startup figure in
-`PRODUCT_SPEC.md` is an engineering target, while the stricter
-HTML-entry and 132 KiB initial-load ceilings above are blocking gates. Lazy
-route and vendor packs do not count as startup bytes, but they remain subject to
-both individual limits and the 530 KiB installed-JavaScript backstop. Raw limits
-also catch parse and memory regressions that compression can hide. Changing a
-ceiling requires an explicit code and documentation review; a build must not
-silently learn a larger baseline.
+`scripts/release-gate.mjs`, and `assertReleaseGateDocumentationMirrors` in that
+file now refuses a build where they do not. That check exists because this
+paragraph used to be the only thing holding them together, and six rows had
+stopped being true — entry JavaScript read 110 KiB against a 113 KiB ceiling,
+the installed backstop 2,152 / 643 against 2,746 / 846 — while two rows
+described gates the file does not contain. A reader who argued a raise against
+those numbers was arguing against a build that never existed. The table is now
+the only place a ceiling is written down in prose; the figures that used to be
+repeated in the paragraphs below were a second copy with nothing keeping it
+honest, and repeating a number is how a mirror cracks.
 
-The installed-only backstop moved from 1,760 / 528 KiB to 1,768 / 530 KiB when
-genuine linked worktrees landed. That capability preserves isolated worktree
-indexes and administration state over one shared object/ref database. The
-reviewed build measured 1,767.75 KiB raw and 529.55 KiB gzip after the
-nested-repository container exclusion was added, so the new ceiling keeps less
-than 1 KiB headroom on each axis. No startup, route, service-worker,
-vendor-aggregate, or Browser Git pack ceiling changed.
+`PRODUCT_SPEC.md`'s compressed startup figure is an engineering target, not a
+gate; the entry and baseline rows above are the blocking ones. Lazy route and
+vendor packs do not count as startup bytes, but they remain subject to both
+their individual limits and the installed-JavaScript backstop. Raw limits also
+catch parse and memory regressions that compression can hide. Changing a ceiling
+requires an explicit code and documentation review, in the same change, or the
+gate above fails; a build must not silently learn a larger baseline.
+
+Ceilings move with measurements, not with need. Each one in
+`scripts/release-gate.mjs` carries the reading that sets it, the six named in
+`MEASUREMENT_JUSTIFIED_BUDGETS` are required to, and
+`assertDocumentedMeasurementsMatchBuild` compares those readings against the
+artifacts the same run measures — so a justification that quotes a build nobody
+produced fails the gate rather than surviving it.
 
 The shell and shared browser capability bundle are measured separately at the
-dynamic-import boundary already enforced by the app. The initial-load class
-pays for startup, routing, and chat; the service worker has its own cap. The
-deferred class pays for advanced audit, S3, attestation, and route capabilities
-only after demand. The
-full-screen Workspace workbench, Worker/WASI/Python adapter,
+dynamic-import boundary already enforced by the app. The baseline class pays for
+startup, routing, and chat; the service worker has its own cap. The deferred
+class pays for advanced audit, S3, attestation, and route capabilities only
+after demand. The full-screen Workspace workbench, Worker/WASI/Python adapter,
 Node/WebContainer adapter, and pinned Pyodide distribution remain separate,
-blocking budget classes. A new total-JavaScript ceiling prevents chunking from
+blocking budget classes. A total-JavaScript ceiling prevents chunking from
 hiding aggregate growth. The gate rejects production HTML that module-preloads
-any of these packs and keeps the 110 KiB entry ceiling intact. WASIX is an
-unpromoted research candidate and therefore has a zero-byte production budget.
-Classifying a lazy pack separately never removes its own raw/gzip or total
-ceiling.
+any of these packs and keeps the entry ceiling intact. WASIX is an unpromoted
+research candidate and therefore has a zero-byte production budget. Classifying
+a lazy pack separately never removes its own raw/gzip or total ceiling.
 
 ## Deterministic manifest
 

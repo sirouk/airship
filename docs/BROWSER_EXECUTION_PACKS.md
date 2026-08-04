@@ -500,5 +500,9 @@ probe succeeds. Package failure, memory pressure, and broader browser/device
 coverage remain promotion gates.
 
 Optional pack JavaScript/WASM, the pinned WASI Worker, and language distributions have their own budgets.
-They have separate blocking budgets and are never module-preloaded; the baseline
-226 KiB application-JavaScript gate remains blocking.
+They have separate blocking budgets and are never module-preloaded, and the
+baseline application-JavaScript ceiling stays blocking beside them. This
+sentence used to name a 226 KiB gate; no such ceiling exists in
+`scripts/release-gate.mjs` and none ever did. The figures live in
+`RELEASE_GATE.md`, where a gate compares them against the executable ceilings —
+restating one here would recreate exactly the copy that went stale.
