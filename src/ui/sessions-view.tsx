@@ -34,8 +34,10 @@ import {
   sessionEventCount,
   sessionIntegrityRow,
   sessionLineage,
+  sessionReconnectPlan,
   shortSessionId,
   titleMatchSegments,
+  type SessionReconnectPlan,
 } from "./sessions-presentation";
 
 export type SessionsViewProps = Readonly<{
@@ -774,7 +776,18 @@ export function SessionsView({
                     type="button"
                     aria-current={item.id === selectedId ? "true" : undefined}
                     aria-label={`${item.title}. ${relativeSessionTime(item.updatedAt)}. ${sessionEventCount(item.headSequence)}. ${item.providerId} ${item.model}${item.profileId ? `, profile ${item.profileId}` : ""}${lineage ? `, forked from ${lineage.label}` : ""}${active ? ", active conversation" : ""}`}
-                    title={`${item.title}\n${item.providerId} · ${item.model}\nUpdated ${formatDateTime(item.updatedAt)}\nDouble-click to open`}
+                    /*
+                     * The gesture line names the affordance that exists on
+                     * every input device, and names double-click second.
+                     *
+                     * It used to say only "Double-click to open" — on a phone,
+                     * a row documenting a gesture the reader does not have,
+                     * beside an `Open` button it never mentioned. Pressing the
+                     * row selects; that is the audit gesture the detail pane,
+                     * the fork and the rename all depend on, so it is stated
+                     * too rather than left to be discovered by pressing.
+                     */
+                    title={`${item.title}\n${item.providerId} · ${item.model}\nUpdated ${formatDateTime(item.updatedAt)}\n${active ? "Active conversation · press to inspect it" : "Press to select · Open on this row, or double-click, to open it"}`}
                     onClick={() => setSelectedId(item.id)}
                     // The mouse gesture every list of documents already binds,
                     // and the keyboard one: Enter on a row already selected
@@ -937,6 +950,7 @@ export function SessionsView({
               {...(forkError ? { forkError } : {})}
               forkUsesActiveManifest={Boolean(forkManifest)}
               runtimeAvailable={Boolean(runtime)}
+              {...(runtime ? { runtime } : {})}
               renaming={renaming}
               renameTitle={renameTitle}
               parentTitle={detail.pins.lineage ? titleById.get(detail.pins.lineage.sourceSessionId) : undefined}
@@ -998,6 +1012,7 @@ function SessionDetail({
   forkTitle,
   forkUsesActiveManifest,
   runtimeAvailable,
+  runtime,
   renaming,
   renameTitle,
   parentTitle,
@@ -1027,6 +1042,8 @@ function SessionDetail({
   forkTitle: string;
   forkUsesActiveManifest: boolean;
   runtimeAvailable: boolean;
+  /** The live runtime, so the pane can name what this tab is actually on. */
+  runtime?: ActiveSessionRuntime;
   renaming: boolean;
   renameTitle: string;
   parentTitle?: string;
@@ -1063,7 +1080,25 @@ function SessionDetail({
       : quarantine
         ? "Transcript cannot be replayed"
         : compatibility?.action === "resume" ? "Resume conversation" : compatibility?.label ?? "Cannot resume";
-  const forkPrimary = requirement.required;
+  /*
+   * The refusal that has a remedy other than forking.
+   *
+   * `undefined` for every refusal that reconnecting would not cure — a moved
+   * approval policy, a suspect history — so this card is never the answer to a
+   * question it cannot answer. When it *is* present it owns the primary
+   * emphasis, and the fork in the action row steps down to an ordinary button:
+   * offering two gold buttons for one decision is how "Fork to continue" came
+   * to read as the only way forward in the first place.
+   */
+  const reconnect = sessionReconnectPlan({
+    pins: detail.pins,
+    ...(runtime ? { runtime } : {}),
+    ...(compatibility ? { compatibility } : {}),
+    sessionId: detail.session.id,
+  });
+  // The label still states the requirement; only the gold moves.
+  const forkRequired = requirement.required;
+  const forkPrimary = forkRequired && !reconnect;
   const lineage = detail.pins.lineage;
   const integrity = sessionIntegrityRow({
     history: detail.history,
@@ -1084,6 +1119,24 @@ function SessionDetail({
 
   return (
     <article class="session-library-inspector">
+      {/*
+        * Above the title, not below the action row.
+        *
+        * Measured on a 390x664 phone: the five-button action row wraps to three
+        * lines, so anything after the heading starts 346px below the
+        * conversation's own name — the same shape as the defect this work
+        * exists to end, where the only opener rendered at y=791 under the
+        * bottom tab bar. The card's own sentence names the pinned route and the
+        * active one, so it locates itself without borrowing the heading.
+        */}
+      {reconnect ? (
+        <SessionReconnectCard
+          plan={reconnect}
+          reasons={requirement.reasons}
+          disabled={mutationBlocked}
+          onFork={onPrepareFork}
+        />
+      ) : null}
       <header class="session-library-detail-heading">
         <div>
           <span class="session-library-eyebrow">Conversation {shortSessionId(detail.session.id)}</span>
@@ -1170,7 +1223,10 @@ function SessionDetail({
           <button type="button" onClick={onStartRename} disabled={mutationBlocked || renaming} aria-expanded={renaming}>Rename</button>
           {onOpenProof ? <button type="button" onClick={onOpenProof}><Icon name="proof" size={16} />Proof</button> : null}
           <button class={forkPrimary ? "primary" : ""} type="button" onClick={onPrepareFork} disabled={mutationBlocked}><Icon name="branch" size={16} />{forkPrimary ? "Fork to continue" : "Fork"}</button>
-          <button class={!forkPrimary ? "primary" : ""} type="button" onClick={onResume} disabled={resumeDisabled}>{resumeLabel}</button>
+          {/* Emphasis follows what can actually be pressed. Keyed on the
+              requirement rather than on which control is gold, so demoting the
+              fork for the reconnect card does not promote a disabled Resume. */}
+          <button class={!forkRequired ? "primary" : ""} type="button" onClick={onResume} disabled={resumeDisabled}>{resumeLabel}</button>
           {/* Last in the row and styled as the danger it is. The product's spec
               has always promised "Export, migrate, delete", and this is the
               first build in which the verb exists — before it, a conversation
@@ -1374,6 +1430,75 @@ function SessionDetail({
         </details>
       ) : null}
     </article>
+  );
+}
+
+/**
+ * The way out of "Fork to continue" that is not a fork.
+ *
+ * Measured on this build: a 110-event conversation pinned to a cloud provider,
+ * opened in a tab that had lost its connection on reload, rendered five stacked
+ * amber mismatch rows — provider, model, inference connection, posture, profile
+ * digest — all with one cause and one remedy, and offered exactly one enabled
+ * action: `Fork to continue` — which the same panel defines as a new identity
+ * carrying none of this transcript. The product had already computed the pinned
+ * provider id, the pinned model id and the delta, and then made the reader
+ * carry all three by hand to `#access`, re-run key discovery, find the model
+ * again and navigate back.
+ *
+ * Nothing is removed here. Every mismatch string still renders verbatim, inside
+ * the disclosure; the ones carrying concrete identifiers are additionally
+ * promoted into a pinned/active table, because comparing two ids in prose is
+ * the part a person cannot do at a glance. The disclosure is closed at rest:
+ * the reader who just read the header already knows what it says.
+ */
+function SessionReconnectCard({ plan, reasons, disabled, onFork }: {
+  plan: SessionReconnectPlan;
+  /** The runtime's own reasons, worst first, unchanged. */
+  reasons: readonly Readonly<{ code: string; severity: string; message: string }>[];
+  disabled: boolean;
+  onFork: () => void;
+}) {
+  return (
+    <section class="session-library-reconnect" aria-labelledby="session-reconnect-title">
+      <p id="session-reconnect-title">{plan.header}</p>
+      {/*
+        * An anchor, not a button calling `location.hash`: this is a navigation
+        * to an address the card can name, so it is one the reader can middle-
+        * click, copy, or read in the status bar before committing to it. The
+        * lane, auth method, model and the conversation to come back to ride in
+        * the query so `#access` can preselect them; `navigationViewFromHash`
+        * splits on `?`, so the route resolves whether or not it reads them.
+        */}
+      <a class="session-library-reconnect__primary" href={plan.href}>{plan.primaryLabel}</a>
+      <button class="session-library-reconnect__fork" type="button" onClick={onFork} disabled={disabled}>{plan.secondaryLabel}</button>
+      {/* The fork's own contract, said beside the fork rather than discovered
+          after pressing it. Deliberately not the design note's blanker phrase
+          for a fork: `forkSession` seals and commits a bounded
+          ancestor-context seed, and `sessions-view.test.ts` holds the line
+          against reintroducing that older, blanker claim. What a person asking
+          "will forking bring my conversation" needs to know is the middle
+          clause. */}
+      <small>A fork is a new conversation. It carries a bounded, digest-sealed copy of the context — not this transcript — and leaves this one untouched.</small>
+      <details class="session-library-reconnect__delta">
+        <summary>{plan.disclosureLabel}</summary>
+        {plan.deltas.length ? (
+          <table>
+            <thead><tr><th scope="col">Pin</th><th scope="col">Pinned</th><th scope="col">Active</th></tr></thead>
+            <tbody>
+              {plan.deltas.map((delta) => (
+                <tr key={delta.label}>
+                  <th scope="row">{delta.label}</th>
+                  <td>{delta.pinned}</td>
+                  <td>{delta.active}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : null}
+        <ReasonList reasons={reasons} />
+      </details>
+    </section>
   );
 }
 

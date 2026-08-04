@@ -11,8 +11,16 @@ import {
   sessionLineage,
   shortSessionId,
   titleMatchSegments,
+  sessionReconnectPlan,
   type SessionIntegrityInput,
 } from "./sessions-presentation";
+import { CONNECT_LANE_IDS } from "./connect/connect-lanes";
+import {
+  decideSessionResume,
+  type ActiveSessionRuntime,
+  type SessionHistoryAssessment,
+  type SessionPins,
+} from "../sessions/domain";
 
 const NOW = new Date("2026-07-27T15:00:00.000Z");
 
@@ -297,5 +305,190 @@ describe("forkRequirement", () => {
     expect(forkRequirement({ action: "resume", label: "Ready to resume", reasons: [] }).required).toBe(false);
     expect(forkRequirement(undefined).required).toBe(false);
     expect(forkRequirement(undefined).label).toBe("No active runtime supplied");
+  });
+});
+
+/*
+ * The way out of "Fork to continue" that is not a fork.
+ *
+ * These drive `decideSessionResume` rather than hand-writing the reason codes
+ * the plan keys on. That is the whole safety property: `732095e` and `3ea40cf`
+ * narrowed which pin differences are reported at all, and a second narrowing
+ * that stopped reporting the inference drift would leave the Reconnect button
+ * keyed on a code nobody emits — rendering as dead rather than failing here.
+ */
+describe("sessionReconnectPlan", () => {
+  const CONVERSATION = "3f2c1b0a-0000-4000-8000-000000000001";
+
+  function pins(overrides: Partial<SessionPins> = {}): SessionPins {
+    return Object.freeze({
+      protocolVersion: 2,
+      providerId: "chutes-e2ee-v1",
+      model: "zai-org/GLM-5.2-TEE",
+      inferenceBinding: {
+        version: 1,
+        connectionId: "conn-1",
+        connectionGeneration: 3,
+        providerId: "chutes-e2ee-v1",
+        providerLabel: "Chutes",
+        providerRevision: 2,
+        authMethod: "api-key",
+        transportBoundary: "e2ee-attestable",
+        modelId: "zai-org/GLM-5.2-TEE",
+        boundAt: "2026-07-27T10:25:00.000Z",
+      },
+      workspaceId: "workspace-1",
+      capabilityTier: "web-enhanced",
+      systemPromptDigest: "sha256:prompt",
+      toolManifestDigest: "sha256:tools",
+      posture: { basis: "manifest", value: "encrypted-unattested", observedValues: ["encrypted-unattested"], mixed: false },
+      ...overrides,
+    } as SessionPins);
+  }
+
+  function runtime(overrides: Partial<ActiveSessionRuntime> = {}): ActiveSessionRuntime {
+    return Object.freeze({
+      providerId: "airship-demo",
+      model: "airship/demo-v1",
+      posture: "local",
+      toolManifestDigest: "sha256:tools",
+      workspaceId: "workspace-1",
+      ...overrides,
+    } as ActiveSessionRuntime);
+  }
+
+  const HISTORY: SessionHistoryAssessment = Object.freeze({
+    status: "consistent",
+    label: "Locally consistent",
+    verification: { scope: "structural-linkage-only" as const, digestRecomputed: false as const, authenticity: "not-proven" as const },
+    checkedEvents: 110,
+    totalEvents: 110,
+    turnCount: 12,
+    completedTurnCount: 12,
+    issues: [],
+  });
+
+  function plan(sessionPins = pins(), active = runtime()) {
+    const compatibility = decideSessionResume(sessionPins, HISTORY, active);
+    return { compatibility, plan: sessionReconnectPlan({ pins: sessionPins, runtime: active, compatibility, sessionId: CONVERSATION }) };
+  }
+
+  it("names both routes, and says so when reconnecting is the whole remedy", () => {
+    const { compatibility, plan: reconnect } = plan();
+    // The premise: the runtime really is reporting the drift this is keyed on.
+    expect(compatibility.action).toBe("fork-required");
+    expect(compatibility.reasons.map((reason) => reason.code)).toContain("PROVIDER_MISMATCH");
+    expect(reconnect?.header).toBe(
+      "CANNOT CONTINUE HERE — this tab is on airship-demo · demo-v1; this conversation is pinned to Chutes · GLM-5.2-TEE.",
+    );
+    expect(reconnect?.primaryLabel).toBe("Reconnect Chutes · GLM-5.2-TEE and continue");
+    expect(reconnect?.secondaryLabel).toBe("Fork to a new conversation on airship-demo · demo-v1");
+    // A pinned posture the demo runtime cannot offer is a real fourth
+    // difference, so the shorter claim below is withheld here.
+    expect(reconnect?.connectionOnly).toBe(false);
+  });
+
+  /*
+   * The extra sentence is earned, not decorative: it is said only when the
+   * whole set is the inference route, which is the case where one press really
+   * does end the problem.
+   */
+  it("says the connection is the only thing missing only when it is", () => {
+    const { plan: reconnect } = plan(pins(), runtime({ posture: "encrypted-unattested" }));
+    expect(reconnect?.connectionOnly).toBe(true);
+    expect(reconnect?.header.endsWith(" The only thing missing is your provider connection.")).toBe(true);
+  });
+
+  it("carries the lane, the auth method and the model the conversation pinned", () => {
+    const href = plan().plan?.href ?? "";
+    const query = new URLSearchParams(href.slice(href.indexOf("?") + 1));
+    expect(href.startsWith("#access?")).toBe(true);
+    expect(query.get("method")).toBe("api-key");
+    expect(query.get("model")).toBe("zai-org/GLM-5.2-TEE");
+    expect(query.get("return")).toBe(CONVERSATION);
+    /*
+     * And the lane token is one `#access` actually has. It is derived from the
+     * provider id's first segment rather than transcribed, so `chutes-e2ee-v1`
+     * and a future `chutes-oauth` land on one lane without a second table to
+     * keep in step; this is the assertion that the derivation is not fiction.
+     */
+    expect(CONNECT_LANE_IDS).toContain(query.get("lane"));
+  });
+
+  it("promotes every pin that carries an identifier into a pinned/active row", () => {
+    expect(plan().plan?.deltas).toEqual([
+      { label: "Provider", pinned: "chutes-e2ee-v1", active: "airship-demo" },
+      { label: "Model", pinned: "zai-org/GLM-5.2-TEE", active: "airship/demo-v1" },
+      { label: "Posture", pinned: "encrypted-unattested", active: "local" },
+    ]);
+  });
+
+  it("counts the differences it can account for, and names each in the code's own words", () => {
+    const { compatibility, plan: reconnect } = plan();
+    const differing = compatibility.reasons.filter((reason) => reason.severity !== "info");
+    expect(reconnect?.disclosureLabel).toBe(
+      `${differing.length} pinned values differ (provider, model, inference connection, posture)`,
+    );
+  });
+
+  /*
+   * An observation is not a difference. `POSTURE_OBSERVED_ONLY` and
+   * `PROFILE_REVISION_NEWER` both say in their own text that they are not a
+   * reason to fork; counting them would put a number in the summary that the
+   * table underneath cannot account for.
+   */
+  it("does not count the reasons the runtime files as observations", () => {
+    const observed = pins({ posture: { basis: "event-observation", observedValues: [], mixed: false } });
+    const { compatibility, plan: reconnect } = plan(observed);
+    expect(compatibility.reasons.some((reason) => reason.severity === "info")).toBe(true);
+    expect(reconnect?.disclosureLabel).toBe("3 pinned values differ (provider, model, inference connection)");
+  });
+
+  /*
+   * The refusal this cannot fix must not be offered a fix. A conversation
+   * refused because its profile's approval policy moved has no provider to
+   * reconnect, and a gold button promising otherwise costs a round trip to
+   * discover.
+   */
+  it("stays absent when reconnecting would not cure the refusal", () => {
+    const governed = pins({
+      providerId: "airship-demo",
+      model: "airship/demo-v1",
+      inferenceBinding: undefined,
+      profile: {
+        profileId: "general", profileRevision: "rev-2", themeId: "brass", themeDigest: "sha256:t",
+        skillSetDigest: "sha256:s", resolutionDigest: "sha256:r", skills: [], skillCount: 0, skillsTruncated: false,
+        approvalMode: "ask-first",
+      },
+    });
+    const active = runtime({
+      posture: "encrypted-unattested",
+      profile: {
+        profileId: "general", profileRevision: "rev-3", themeDigest: "sha256:t",
+        skillSetDigest: "sha256:s", resolutionDigest: "sha256:r",
+        approvalMode: "full-access",
+      },
+    });
+    const { compatibility, plan: reconnect } = plan(governed, active);
+    expect(compatibility.action).toBe("fork-required");
+    expect(compatibility.reasons.map((reason) => reason.code)).toContain("PROFILE_BOUNDARY_MISMATCH");
+    expect(reconnect).toBeUndefined();
+  });
+
+  it("stays absent when the runtime is willing to resume, and when there is no runtime", () => {
+    const matched = runtime({ providerId: "chutes-e2ee-v1", model: "zai-org/GLM-5.2-TEE", posture: "encrypted-unattested" });
+    const source = pins({ inferenceBinding: undefined });
+    const compatibility = decideSessionResume(source, HISTORY, matched);
+    expect(compatibility.action).toBe("resume");
+    expect(sessionReconnectPlan({ pins: source, runtime: matched, compatibility, sessionId: CONVERSATION })).toBeUndefined();
+    expect(sessionReconnectPlan({ pins: pins(), compatibility: decideSessionResume(pins(), HISTORY, runtime()), sessionId: CONVERSATION })).toBeUndefined();
+  });
+
+  /* An older manifest with no inference binding still has a route to name. */
+  it("falls back to the pinned provider id when no binding was recorded", () => {
+    const bare = pins({ inferenceBinding: undefined });
+    const reconnect = plan(bare).plan;
+    expect(reconnect?.primaryLabel).toBe("Reconnect chutes-e2ee-v1 · GLM-5.2-TEE and continue");
+    expect(new URLSearchParams(reconnect!.href.slice(reconnect!.href.indexOf("?") + 1)).has("method")).toBe(false);
   });
 });

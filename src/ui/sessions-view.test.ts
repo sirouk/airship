@@ -354,3 +354,98 @@ describe("conversation library vocabulary", () => {
     expect(source).toContain('conversation record{page.rejected === 1 ? " was" : "s were"} excluded.');
   });
 });
+
+/*
+ * The refusal that had no remedy but a fork.
+ *
+ * Measured: a conversation pinned to a cloud provider, opened in a tab whose
+ * connection did not survive a reload, rendered five stacked amber mismatch
+ * rows — provider, model, inference connection, posture, profile digest — with
+ * one cause between them, and offered exactly one enabled action: `Fork to
+ * continue`. The product knew the pinned provider id, the pinned model id and
+ * the delta, and made the reader carry all three to `#access` by hand.
+ *
+ * The plan itself is asserted against the real `decideSessionResume` in
+ * `sessions-presentation.test.ts`. What is asserted here is the wiring: that
+ * the card is conditional on the plan, that it does not leave two gold buttons
+ * arguing about one decision, and that both of its controls clear the touch
+ * floor — the original defect was a resume verb at y=791 on a 390x844 phone.
+ */
+describe("reconnecting instead of forking", () => {
+  it("renders only when the runtime's own reasons say a reconnect would cure it", () => {
+    expect(source).toContain("const reconnect = sessionReconnectPlan({");
+    expect(source).toContain("{reconnect ? (");
+    // Keyed on the plan, not on "some pin differs": a refusal a reconnect
+    // cannot fix must not be offered one.
+    expect(source).toContain("const forkPrimary = forkRequired && !reconnect;");
+  });
+
+  it("does not put two gold buttons on one decision", () => {
+    // The fork steps down to an ordinary button while the card holds the
+    // primary, and Resume's emphasis follows the requirement rather than
+    // whichever control happens to be gold — otherwise demoting the fork
+    // promotes a disabled "Fork required".
+    expect(source).toContain('<button class={!forkRequired ? "primary" : ""} type="button" onClick={onResume}');
+  });
+
+  it("keeps every mismatch string, and adds the comparison prose cannot make", () => {
+    // The runtime's reasons render through the one shared list, verbatim.
+    expect(source).toContain("<ReasonList reasons={reasons} />");
+    // Closed at rest: the reader who just read the header knows what it says.
+    const card = source.slice(source.indexOf("function SessionReconnectCard"));
+    expect(card.slice(0, card.indexOf("\n}\n"))).not.toContain("<details open");
+    expect(source).toContain('<th scope="row">{delta.label}</th>');
+  });
+
+  it("gives both of its controls the touch floor, at every pointer", () => {
+    const rule = styles.slice(styles.indexOf(".session-library-reconnect__primary,"));
+    expect(rule.slice(0, rule.indexOf("}"))).toContain("min-height: var(--touch-target, 44px)");
+    // The disclosure is a control too, and it is the one a thumb reaches for
+    // when the header did not answer the question.
+    const summary = styles.slice(styles.indexOf(".session-library-reconnect__delta > summary"));
+    expect(summary.slice(0, summary.indexOf("}"))).toContain("min-height: var(--touch-target, 44px)");
+  });
+});
+
+/*
+ * A row may not document a gesture the reader does not have.
+ *
+ * The row's `title` said only "Double-click to open" — on a phone, an
+ * instruction naming an input the reader has no way to perform, printed beside
+ * an `Open` button it never mentioned. Both halves of the fix have to travel
+ * together: the affordance and the sentence that tells you it is there.
+ */
+describe("the row's own gesture line", () => {
+  const title = source.slice(source.indexOf("title={`${item.title}\\n${item.providerId}"));
+  const template = title.slice(0, title.indexOf("}\n"));
+
+  it("names the control that exists on every input device", () => {
+    expect(template).not.toContain("Double-click to open");
+    expect(template).toContain("Open on this row");
+    // And the control it names is really in the row, under that word — rename
+    // the button and this sentence stops being true.
+    expect(source).toContain('>{active ? "Active" : "Open"}</button>');
+  });
+
+  /*
+   * The opener is quiet at rest and states itself on hover — a trade that only
+   * pays where a hover exists. Under a coarse pointer it has to state itself
+   * outright, or the row is back to documenting a gesture nobody can make.
+   */
+  it("stops relying on hover to reveal the opener where there is no hover", () => {
+    const coarse = styles.slice(styles.lastIndexOf("@media (pointer: coarse)"));
+    expect(coarse).toContain(".session-library-open:not(:disabled)");
+    // Scoped to the enabled control: the active conversation's row says
+    // "Active", and lighting that up as a verb would offer to reopen what is
+    // already open.
+    expect(coarse.slice(coarse.indexOf(".session-library-open:not(:disabled)"))).toContain("color: var(--accent-bright");
+  });
+
+  it("says what pressing the row itself does, since that is the other half", () => {
+    // Selection without opening is what the detail pane, the fork, the rename
+    // and the resume requirement all depend on; it is not a bug to be
+    // discovered by pressing.
+    expect(template).toContain("Press to select");
+    expect(source).toContain("onClick={() => setSelectedId(item.id)}");
+  });
+});

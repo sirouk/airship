@@ -439,3 +439,179 @@ export function historyIncompleteMessage(history: Readonly<{
  */
 export const SESSION_OUT_OF_RESULTS_NOTICE = "Not in the current results. Showing the last conversation you opened.";
 export const SESSION_OUT_OF_RESULTS_CAPTION = "Clear the filter to act on this conversation.";
+
+/**
+ * The reasons that are cured by reconnecting a provider, and nothing else.
+ *
+ * Read as a set rather than a list of strings the reader has to recognise: the
+ * whole point of this affordance is that it appears exactly when the runtime
+ * has already said the inference route is what moved, and never when it has
+ * said something else moved. `decideSessionResume` owns these codes, and
+ * `sessions-presentation.test.ts` drives that function rather than transcribing
+ * them, so if the domain stops reporting a drift the button is keyed on, the
+ * test fails instead of the button quietly becoming decoration.
+ */
+const RECONNECTABLE_CODES = Object.freeze(new Set([
+  "PROVIDER_MISMATCH",
+  "MODEL_MISMATCH",
+  "INFERENCE_CONNECTION_MISMATCH",
+]));
+
+/** One line of the pinned/active table, for the reasons that carry real ids. */
+export type SessionPinDelta = Readonly<{ label: string; pinned: string; active: string }>;
+
+export type SessionReconnectPlan = Readonly<{
+  /** The one-sentence verdict, with the pinned route and the active one named. */
+  header: string;
+  /** The full-width primary verb. */
+  primaryLabel: string;
+  /** `#access`, carrying the lane, auth method and model to preselect. */
+  href: string;
+  /** The fork, demoted to what it is: a second conversation, not this one. */
+  secondaryLabel: string;
+  /** The disclosure summary — closed at rest, and it counts what it will show. */
+  disclosureLabel: string;
+  /** Pinned-versus-active for every drift that carries a concrete identifier. */
+  deltas: readonly SessionPinDelta[];
+  /** True when reconnecting is the *whole* remedy, not merely part of it. */
+  connectionOnly: boolean;
+}>;
+
+type ReconnectPins = Readonly<{
+  providerId: string;
+  model: string;
+  inferenceBinding?: Readonly<{ providerLabel: string; authMethod: string; modelId: string }>;
+  posture?: Readonly<{ value?: string }>;
+}>;
+
+type ReconnectRuntime = Readonly<{
+  providerId: string;
+  model: string;
+  inferenceBinding?: Readonly<{ providerLabel: string }>;
+  posture?: string;
+}>;
+
+/**
+ * The lane token `#access` groups this provider under.
+ *
+ * Derived, never transcribed: `chutes-e2ee-v1` and `chutes-oauth` are two
+ * revisions of one lane, and a hand-written provider→lane table is a second
+ * place for that fact to be wrong. The first identifier segment *is* the lane
+ * vocabulary — `connect-lanes.ts` names its lanes `chutes`, `codex`, `claude`,
+ * `grok`, `local`, `companion` — and `sessions-presentation.test.ts` imports
+ * `CONNECT_LANE_IDS` to prove that, rather than this module importing it: the
+ * connect surface is a separate deferred chunk and pulling it in here would
+ * merge two release-gate packs to save one `split`.
+ */
+function reconnectLane(providerId: string): string {
+  return providerId.split(/[^a-z0-9]+/iu).filter(Boolean)[0]?.toLowerCase() ?? providerId;
+}
+
+/**
+ * The model as a person says it.
+ *
+ * `zai-org/GLM-5.2-TEE` is one model with an org prefix, and the button that
+ * names it is competing for a 44px row on a 390px phone. The full id is not
+ * lost — the pinned/active table below prints it unabbreviated, which is where
+ * comparing two ids is the point.
+ */
+function shortModelName(model: string): string {
+  const tail = model.split("/").filter(Boolean).at(-1);
+  return tail || model;
+}
+
+/** `Chutes · GLM-5.2-TEE` — the label the lane and the model make together. */
+function routeLabel(providerLabel: string, model: string): string {
+  return `${providerLabel} · ${shortModelName(model)}`;
+}
+
+/**
+ * The noun a mismatch code stands for, in the words the code already uses.
+ *
+ * `PROVIDER_MISMATCH` → "provider", `INFERENCE_CONNECTION_MISMATCH` →
+ * "inference connection". Derived so a reason code added to
+ * `decideSessionResume` tomorrow is named in this summary the day it lands,
+ * instead of being silently absent from a count that claims to be complete.
+ */
+function reasonNoun(code: string): string {
+  return code.replace(/_MISMATCH$/u, "").replaceAll("_", " ").toLowerCase();
+}
+
+/**
+ * What to do instead of forking, when forking is not what the user wants.
+ *
+ * The measured defect: `#sessions` computed five stacked amber rows that all
+ * had one cause — the pinned provider is not connected in this tab — and then
+ * offered exactly one enabled action, `Fork to continue`, which the same panel
+ * defines as "new identity · empty transcript". The product had already worked
+ * out the pinned provider id, the pinned model id and the delta, and made the
+ * reader carry all three by hand to `#access`.
+ *
+ * Returns `undefined` when nothing here would be cured by reconnecting — a
+ * conversation refused because its profile's approval policy moved has no
+ * provider to reconnect, and a button offering to fix it would be a lie that
+ * costs a round trip to discover. That is also why this is keyed on the
+ * runtime's own reason codes and not on "some pin differs": `732095e` and
+ * `3ea40cf` deliberately narrowed which differences are reported at all.
+ */
+export function sessionReconnectPlan(input: Readonly<{
+  pins: ReconnectPins;
+  runtime?: ReconnectRuntime;
+  compatibility?: Readonly<{ action: string; reasons: readonly Readonly<{ code: string; severity: string }>[] }>;
+  sessionId: string;
+}>): SessionReconnectPlan | undefined {
+  const { pins, runtime, compatibility, sessionId } = input;
+  if (!runtime || !compatibility || compatibility.action === "resume") return undefined;
+  /*
+   * An `info` reason is an observation, not a difference: `PROFILE_REVISION_NEWER`
+   * and `POSTURE_OBSERVED_ONLY` both say in their own text that they are not a
+   * reason to fork. Counting them would make "5 pinned values differ" a number
+   * the expanded table cannot account for, which is the failure mode this
+   * disclosure exists to end.
+   */
+  const codes = compatibility.reasons.filter((reason) => reason.severity !== "info").map((reason) => reason.code);
+  if (!codes.some((code) => RECONNECTABLE_CODES.has(code))) return undefined;
+
+  const pinnedRoute = routeLabel(pins.inferenceBinding?.providerLabel ?? pins.providerId, pins.model);
+  const activeRoute = routeLabel(runtime.inferenceBinding?.providerLabel ?? runtime.providerId, runtime.model);
+  // Only the drifts that carry an identifier a reader can compare. The prose
+  // reasons are not dropped — they render verbatim beneath this table.
+  const deltas: SessionPinDelta[] = [];
+  if (pins.providerId !== runtime.providerId) {
+    deltas.push(Object.freeze({ label: "Provider", pinned: pins.providerId, active: runtime.providerId }));
+  }
+  if (pins.model !== runtime.model) {
+    deltas.push(Object.freeze({ label: "Model", pinned: pins.model, active: runtime.model }));
+  }
+  if (pins.posture?.value && runtime.posture && pins.posture.value !== runtime.posture) {
+    deltas.push(Object.freeze({ label: "Posture", pinned: pins.posture.value, active: runtime.posture }));
+  }
+
+  const connectionOnly = codes.every((code) => RECONNECTABLE_CODES.has(code));
+  const nouns = codes.map(reasonNoun);
+  const link = new URLSearchParams({
+    lane: reconnectLane(pins.providerId),
+    ...(pins.inferenceBinding ? { method: pins.inferenceBinding.authMethod } : {}),
+    model: pins.inferenceBinding?.modelId ?? pins.model,
+    // Where to come back to. `#access` does not read this yet; emitting it from
+    // the surface that knows the answer is what makes reading it a one-file
+    // change there rather than a re-derivation.
+    return: sessionId,
+  });
+
+  return Object.freeze({
+    header: `CANNOT CONTINUE HERE — this tab is on ${activeRoute}; this conversation is pinned to ${pinnedRoute}.`
+      // Said only when it is true. Five drifts with one cause deserve the
+      // sentence; five drifts with three causes would be misled by it.
+      + (connectionOnly ? " The only thing missing is your provider connection." : ""),
+    primaryLabel: `Reconnect ${pinnedRoute} and continue`,
+    href: `#access?${link.toString()}`,
+    // Not the design note's "Fork to a clean session": this route calls the
+    // thing a conversation everywhere else, and its own vocabulary test fails
+    // the word "session" in anything a reader can see or hear.
+    secondaryLabel: `Fork to a new conversation on ${activeRoute}`,
+    disclosureLabel: `${codes.length} pinned value${codes.length === 1 ? "" : "s"} differ (${nouns.join(", ")})`,
+    deltas: Object.freeze(deltas),
+    connectionOnly,
+  });
+}
