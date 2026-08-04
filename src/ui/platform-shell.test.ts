@@ -58,6 +58,17 @@ describe("platform shell contracts", () => {
     // The strip's accessible name counts them in words, so the count is pinned
     // to the table that now produces it.
     expect(TRUST_TABS).toHaveLength(4);
+    /*
+     * And the scope travels with the row, because that is what the strip used
+     * to drop. `Trust` files four destinations together; it does not make them
+     * one scope. Proof is `session` — evidence about the turns of the
+     * conversation you are in — and the other three are `global` services that
+     * outlive every conversation. Read from the table rather than restated, so
+     * the strip cannot be the surface that disagrees with the rail next.
+     */
+    expect(TRUST_TABS.map((tab) => tab.scope)).toEqual(trust.map((destination) => destination.scope));
+    expect(TRUST_TABS.find((tab) => tab.view === "proof")?.scope).toBe("session");
+    expect(TRUST_TABS.filter((tab) => tab.scope === "global").map((tab) => tab.view)).toEqual(["vault", "access", "billing"]);
   });
 
   it("filters across labels, hashes, group, and keywords", () => {

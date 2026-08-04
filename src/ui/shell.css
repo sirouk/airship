@@ -704,25 +704,58 @@
  */
 .rail-recents { display: contents; }
 
+/*
+ * The panel does not scroll; the thread list inside it does.
+ *
+ * When the panel itself was the scroll box, its last child — the only in-rail
+ * route to the conversation library — was clipped out of existence by its own
+ * threads. Measured at 1440x1000 with nine of them: box 250→670, scrollHeight
+ * 520, `All conversations` at 730→766. The header and the ledger row are the
+ * panel's frame, so they are outside the box that clips.
+ */
 .recent-conversations {
   grid-column: 1 / -1;
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
   align-content: start;
   width: 100%;
-  max-height: min(420px, 48vh);
   margin-top: var(--sp-1);
   padding: 0 0 var(--sp-1) var(--sp-2);
-  overflow-y: auto;
   border-left: 1px solid var(--line);
   background: transparent;
+}
+
+.recent-conversations__list {
+  display: grid;
+  align-content: start;
+  min-height: 0;
+  max-height: min(420px, 48vh);
+  overflow-y: auto;
   scrollbar-width: thin;
   scrollbar-color: var(--line-strong) transparent;
 }
 
+/* Only while content is genuinely hidden: an always-on fade would claim there
+   is more below a list that ends where it looks like it ends. */
+.recent-conversations__list[data-scroll-edges="start"] { --recents-scroll-fade: linear-gradient(to bottom, transparent 0, #000 20px); }
+.recent-conversations__list[data-scroll-edges="end"] { --recents-scroll-fade: linear-gradient(to bottom, #000 calc(100% - 20px), transparent 100%); }
+.recent-conversations__list[data-scroll-edges="both"] { --recents-scroll-fade: linear-gradient(to bottom, transparent 0, #000 20px, #000 calc(100% - 20px), transparent 100%); }
+
+.recent-conversations__list[data-scroll-edges]:not([data-scroll-edges="none"]) {
+  -webkit-mask-image: var(--recents-scroll-fade);
+  mask-image: var(--recents-scroll-fade);
+}
+
+/* A fade has no forced-colors equivalent; keep every thread at full contrast
+   and let the scrollbar carry the affordance instead. */
+@media (forced-colors: active) {
+  .recent-conversations__list[data-scroll-edges]:not([data-scroll-edges="none"]) {
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
+}
+
 .rail-recents__header {
-  position: sticky;
-  top: 0;
-  z-index: 1;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
   gap: var(--sp-2);
@@ -913,8 +946,9 @@
   white-space: nowrap;
 }
 .recent-conversation--thread.is-blocked { box-shadow: inset 2px 0 0 var(--v-failed); }
-/* The ledger link, pinned as the panel's last row rather than the sixth row of
-   a 250px scroller where nine threads pushed it out of reach entirely. */
+/* The ledger link, now genuinely pinned as the panel's last row rather than the
+   last child of the scroller — where, measured with nine threads, it sat 60px
+   below the clip and could not be reached at all. */
 .recent-conversations .nav-item--nested {
   margin: var(--sp-1) 0 0;
   width: 100%;
@@ -925,8 +959,18 @@
 
 /* This row carries no icon span, and `.nav-item`'s first track is the 25px
    reserved for one: without this its whole label owns exactly those 25px and
-   "All conversations" prints as "Al…". */
-.recent-conversations .nav-item--nested .nav-item__label { grid-column: 1 / -1; }
+   "All conversations" prints as "Al…". The last track is left to the count. */
+.recent-conversations .nav-item--nested .nav-item__label { grid-column: 1 / -2; }
+
+/* How many threads the profile actually has, including the ones the bounded
+   shortcut above is not showing. The scroller can no longer answer that
+   question by being scrolled to its end, so the row that survives it answers. */
+.rail-recents__ledger-count {
+  justify-self: end;
+  color: var(--ink-faint);
+  font-size: var(--fs-micro);
+  font-variant-numeric: tabular-nums;
+}
 
 .nav-group-label {
   padding: 3px 10px 4px;
@@ -1151,6 +1195,10 @@
 .edition,
 .rail-conversation-group,
 .nav-group-label,
+/* The Trust hub strip's scope band is the same object as the rail's `GLOBAL`
+   group label on the line above — same word, same job, same seam — so it
+   consumes the recipe rather than restating it. */
+.trust-hub-tabs__band,
 .git-section-label,
 .git-sources-trust-disclosure > summary > .eyebrow,
 .git-repository-controls > summary .eyebrow,
@@ -1231,62 +1279,71 @@
  * so nothing in the transcript moves while a person skims the rail. 180ms of
  * dwell before it opens is the difference between intent and transit; 240ms
  * before it closes is what stops it flickering on the way to the composer.
- * `:focus-within` pins it open, because a keyboard user reading a label must
+ * Keyboard focus pins it open, because a keyboard user reading a label must
  * not lose it to a mouse that happened to move.
+ *
+ * `:has(:focus-visible)` rather than `:focus-within`, and the difference is a
+ * defect. `.rail-collapse` lives inside `.sidebar`, so clicking `Collapse
+ * navigation rail` left focus in the rail and `:focus-within` pinned the peek
+ * at 268px on the spot: measured immediately after the click, `.rail` and every
+ * `.nav-item` inside it were still 268px and 255px wide under a 60px sidebar.
+ * The control appeared not to work until the person clicked somewhere else.
+ * `:focus-visible` is exactly the distinction — a keyboard user tabbing in gets
+ * the labels; a pointer user who just pressed collapse gets a collapsed rail.
  */
 .sidebar[data-rail-state="rail"] .rail {
   transition: width 140ms ease 240ms;
 }
 
 @media (hover: hover) {
-  .sidebar[data-rail-state="rail"]:hover .rail {
+  .sidebar[data-rail-state="rail"]:not([data-recents="flyout"]):hover .rail {
     z-index: 30;
     width: 268px;
     box-shadow: var(--shadow);
     transition-delay: 180ms;
   }
 
-  .sidebar[data-rail-state="rail"]:hover .nav-item__label,
-  .sidebar[data-rail-state="rail"]:hover .nav-group-label,
-  .sidebar[data-rail-state="rail"]:hover .profile-manage-link__label,
-  .sidebar[data-rail-state="rail"]:hover .menu-select-value,
-  .sidebar[data-rail-state="rail"]:focus-within .nav-item__label,
-  .sidebar[data-rail-state="rail"]:focus-within .nav-group-label,
-  .sidebar[data-rail-state="rail"]:focus-within .profile-manage-link__label,
-  .sidebar[data-rail-state="rail"]:focus-within .menu-select-value {
+  .sidebar[data-rail-state="rail"]:not([data-recents="flyout"]):hover .nav-item__label,
+  .sidebar[data-rail-state="rail"]:not([data-recents="flyout"]):hover .nav-group-label,
+  .sidebar[data-rail-state="rail"]:not([data-recents="flyout"]):hover .profile-manage-link__label,
+  .sidebar[data-rail-state="rail"]:not([data-recents="flyout"]):hover .menu-select-value,
+  .sidebar[data-rail-state="rail"]:not([data-recents="flyout"]):has(:focus-visible) .nav-item__label,
+  .sidebar[data-rail-state="rail"]:not([data-recents="flyout"]):has(:focus-visible) .nav-group-label,
+  .sidebar[data-rail-state="rail"]:not([data-recents="flyout"]):has(:focus-visible) .profile-manage-link__label,
+  .sidebar[data-rail-state="rail"]:not([data-recents="flyout"]):has(:focus-visible) .menu-select-value {
     position: static;
     width: auto;
     height: auto;
     clip-path: none;
   }
 
-  .sidebar[data-rail-state="rail"]:hover .nav-item,
-  .sidebar[data-rail-state="rail"]:focus-within .nav-item {
+  .sidebar[data-rail-state="rail"]:not([data-recents="flyout"]):hover .nav-item,
+  .sidebar[data-rail-state="rail"]:not([data-recents="flyout"]):has(:focus-visible) .nav-item {
     grid-template-columns: 25px minmax(0, 1fr) auto;
     justify-items: stretch;
     padding: 0 10px;
   }
 
-  .sidebar[data-rail-state="rail"]:hover .rail-row,
-  .sidebar[data-rail-state="rail"]:focus-within .rail-row {
+  .sidebar[data-rail-state="rail"]:not([data-recents="flyout"]):hover .rail-row,
+  .sidebar[data-rail-state="rail"]:not([data-recents="flyout"]):has(:focus-visible) .rail-row {
     grid-template-columns: minmax(0, 1fr) auto auto;
   }
 
-  .sidebar[data-rail-state="rail"]:hover .nav-turn-badge,
-  .sidebar[data-rail-state="rail"]:focus-within .nav-turn-badge,
-  .sidebar[data-rail-state="rail"]:hover .nav-proof-dot,
-  .sidebar[data-rail-state="rail"]:focus-within .nav-proof-dot {
+  .sidebar[data-rail-state="rail"]:not([data-recents="flyout"]):hover .nav-turn-badge,
+  .sidebar[data-rail-state="rail"]:not([data-recents="flyout"]):has(:focus-visible) .nav-turn-badge,
+  .sidebar[data-rail-state="rail"]:not([data-recents="flyout"]):hover .nav-proof-dot,
+  .sidebar[data-rail-state="rail"]:not([data-recents="flyout"]):has(:focus-visible) .nav-proof-dot {
     position: static;
   }
 
-  .sidebar[data-rail-state="rail"]:hover .profile-switcher,
-  .sidebar[data-rail-state="rail"]:focus-within .profile-switcher {
+  .sidebar[data-rail-state="rail"]:not([data-recents="flyout"]):hover .profile-switcher,
+  .sidebar[data-rail-state="rail"]:not([data-recents="flyout"]):has(:focus-visible) .profile-switcher {
     grid-template-columns: minmax(0, 1fr) auto;
     justify-items: stretch;
   }
 }
 
-.sidebar[data-rail-state="rail"]:focus-within .rail {
+.sidebar[data-rail-state="rail"]:not([data-recents="flyout"]):has(:focus-visible) .rail {
   z-index: 30;
   width: 268px;
   box-shadow: var(--shadow);
@@ -1341,6 +1398,120 @@
 @media (prefers-reduced-motion: reduce) {
   .sidebar[data-rail-state="rail"] .rail { transition: none; }
 }
+
+/* ── The conversation list, when the rail is too narrow to hold it ──────────
+ *
+ * Measured before this rule, at 1440x1000 with `data-rail="rail"` and four
+ * threads: the rail is 60px wide, and `.recent-conversations` was an ordinary
+ * in-flow grid inside it. Every row measured 67px starting at x=13 — 20px past
+ * the rail's own right edge — the title element reported `clientWidth: 29`
+ * against `scrollWidth: 132`, so "General conversation" printed as "Ge", the
+ * time as "2", the "RECENT" group label as "RECE", and the `All conversations`
+ * row as an empty bordered box with no glyph and no text at all. 290px of a
+ * 60px rail spent saying nothing.
+ *
+ * `.rail-recents` has carried the design in a comment since it was written:
+ * `fixed` placement from the trigger's own rect, because `.primary-nav` is a
+ * block-axis scroller and a block-axis scroller clips the inline axis too.
+ * This is that panel. Nothing is dropped from it — the header, its count, the
+ * `+`, favorites, recents and `All conversations` are the same nodes the
+ * standard rail renders, at a width that fits their words.
+ */
+.recent-conversations[data-flyout] {
+  position: fixed;
+  z-index: 40;
+  width: 320px;
+  max-width: calc(100vw - var(--rail-width) - 16px);
+  margin-top: 0;
+  padding: 0 var(--sp-1) var(--sp-1);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-panel);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+/* One frame, between mounting the panel and measuring the trigger it hangs
+   off. Reserved rather than painted at 0,0. */
+.recent-conversations[data-flyout="pending"] { visibility: hidden; }
+
+/* The bound belongs to the scrolling threads, not to the panel. Held on the
+   panel it would clip the panel's own last row — the ledger link — which is the
+   exact reachability defect this structure exists to end. */
+.recent-conversations[data-flyout] .recent-conversations__list { max-height: min(360px, 52vh); }
+
+.recent-conversations[data-flyout] .rail-recents__header { padding-inline: var(--sp-2); background: var(--surface); }
+
+/*
+ * The panel is a descendant of a 60px rail but is not 60px wide, so the rail's
+ * label-clipping and single-track geometry must not reach into it.
+ *
+ * Measured with this rule missing: `All conversations` rendered inside the
+ * flyout as a 306px-wide empty bordered box — the row was there, the string was
+ * in the DOM, and `.sidebar[data-rail-state="rail"] .nav-item__label` had
+ * clipped it to a 1px square. An icon rail's clip belongs to the icon rail.
+ */
+.recent-conversations[data-flyout] .nav-item__label {
+  position: static;
+  width: auto;
+  height: auto;
+  clip-path: none;
+  white-space: normal;
+}
+
+.recent-conversations[data-flyout] .nav-item {
+  /* Two tracks, not one: the label owns the first and the thread count the
+     second. A single-track grid here would leave `grid-column: 1 / -2` with no
+     line to end on and collapse the label to nothing. */
+  grid-template-columns: minmax(0, 1fr) auto;
+  justify-items: stretch;
+  padding-left: var(--sp-2);
+}
+
+/*
+ * The count, on the face of the collapsed trigger.
+ *
+ * A 60px rail cannot print "General conversations 4", so the digit is what
+ * survives — the same number the panel's own header prints, from the same
+ * array. This is the "nothing removed" half of the collapse: the rail still
+ * states how many conversations this profile has without being opened.
+ */
+.rail-recents__badge {
+  display: none;
+  min-width: 14px;
+  padding: 0 3px;
+  border-radius: 7px;
+  color: var(--ground);
+  background: var(--v-verified);
+  font-size: var(--fs-micro);
+  font-variant-numeric: tabular-nums;
+  line-height: 14px;
+  text-align: center;
+}
+
+.sidebar[data-rail-state="rail"] .rail-recents__badge { display: block; }
+
+/* The 18px strip the collapsed disclosure rides is 46px tall, so the chevron
+   and the count stack rather than compete for the same 18px of inline space. */
+.sidebar[data-rail-state="rail"] .chat-nav-disclosure {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  align-items: center;
+  justify-content: center;
+}
+
+/*
+ * While the flyout is up, the hover-peek stands down.
+ *
+ * Both are the same answer to "show me the labels", and running them together
+ * draws a 268px peek panel underneath a 320px flyout on the same pixels — a
+ * second broken collapsed rail rather than a fixed one. Written as a `:not()`
+ * on the peek's own selectors rather than as a later override, because an
+ * override that re-clips `.nav-item__label` also re-clips the copy of that
+ * class inside the flyout: measured, `All conversations` came back as a
+ * 306px-wide empty box with its label at `width: 1px; clip-path: inset(50%)`.
+ * A rule that never fires cannot reach into the panel by accident.
+ */
 
 /*
  * The collapse control, and the only place the rail states are named in the UI.

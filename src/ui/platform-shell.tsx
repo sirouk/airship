@@ -1,8 +1,8 @@
-import { Component, type ComponentChildren } from "preact";
+import { Component, Fragment, type ComponentChildren } from "preact";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import type { SlashCommandDescriptor } from "../commands/types";
 import type { SessionListItem } from "../sessions/domain";
-import { CANONICAL_DESTINATIONS, destinationLabel, navigationHashForView, SETTINGS_OVERLAY_ENTRY, type NavigationView } from "./navigation-model";
+import { CANONICAL_DESTINATIONS, destinationLabel, navigationHashForView, SETTINGS_OVERLAY_ENTRY, type NavigationScope, type NavigationView } from "./navigation-model";
 import { Seal, type SealState } from "./seal";
 import { trapFocus } from "./focus-trap";
 import type { ApprovalMode } from "../approvals/modes";
@@ -850,13 +850,48 @@ export function TrustPostureSheet({ open, axes, onClose, onNavigate }: Readonly<
  * "Account standing"). A strip built from the table cannot be the surface that
  * disagrees next. The `Trust` group, with `access`'s nested `billing` folded in
  * after its parent, is exactly the four in exactly the order they were typed.
+ *
+ * The scope travels with the row, and that is the part this strip used to drop.
+ * `Trust` is a filing group, not a scope: `proof` is `session` — evidence about
+ * the turns of the conversation you are in — while `vault`, `access` and
+ * `billing` are `global` services that outlive every conversation. The rail has
+ * always drawn that seam (its `GLOBAL` band sits above Vault), and the e2e
+ * ledger in `profile-silo` asserts `data-scope="global"` on exactly those three
+ * and deliberately not on Proof. A strip that renders all four as flat peers is
+ * the surface that disagrees with both, and it tells a reader that the receipts
+ * for this conversation are a global setting page. So the scope is carried onto
+ * the tab, and the strip is banded by it — with the rail's own `GLOBAL` label,
+ * in the rail's own place.
  */
-export const TRUST_TABS: readonly Readonly<{ view: NavigationView; label: string }>[] = Object.freeze(
+export const TRUST_TABS: readonly Readonly<{ view: NavigationView; label: string; scope: NavigationScope }>[] = Object.freeze(
   CANONICAL_DESTINATIONS
     .filter((destination) => destination.group === "Trust")
     .flatMap((destination) => [destination, ...destination.nested])
-    .map((destination) => Object.freeze({ view: destination.id as NavigationView, label: destination.label })),
+    .map((destination) => Object.freeze({ view: destination.id as NavigationView, label: destination.label, scope: destination.scope })),
 );
+
+/**
+ * The band that opens the global run of tabs, spelled the way the rail spells
+ * it — and the only one drawn, for the same reason the rail draws only one.
+ *
+ * The rail has no `SESSION` heading above Chat, Workspace, Memory and Proof:
+ * the absence of `GLOBAL` is what makes them session-scoped, and one label
+ * describes a seam that two labels would only describe twice. The strip does
+ * exactly that, and the measurement is why it matters here rather than being a
+ * taste argument. At 390x664 the strip's content is 375px in a 390px box with
+ * no band at all, 438px with this one, and 585px — 1.5 viewports — with a
+ * `THIS CONVERSATION` band as well. The second label costs 147px of a phone's
+ * only navigation between these four routes to restate what the first one
+ * already implies. Every tab still carries its own scope in `data-scope` and in
+ * the `title` a pointer user reads, so nothing is known only to the band.
+ */
+const TRUST_TAB_GLOBAL_BAND = "Global";
+
+/** Where the strip's one band goes: before the first tab that leaves session scope. */
+function trustTabBandBefore(index: number): boolean {
+  const tab = TRUST_TABS[index];
+  return tab?.scope === "global" && TRUST_TABS[index - 1]?.scope !== "global";
+}
 
 export function TrustHubTabs({ view, onNavigate }: Readonly<{ view: NavigationView; onNavigate(view: NavigationView): void }>) {
   const tabs = useRef<HTMLElement>(null);
@@ -871,7 +906,7 @@ export function TrustHubTabs({ view, onNavigate }: Readonly<{ view: NavigationVi
     });
     return () => cancelAnimationFrame(frame);
   }, [view]);
-  return <nav ref={tabs} class="trust-hub-tabs" aria-label="Trust hub, four horizontally scrollable views">{TRUST_TABS.map((tab) => <button key={tab.view} type="button" class={view === tab.view ? "is-active" : ""} aria-current={view === tab.view ? "page" : undefined} onClick={() => onNavigate(tab.view)}>{tab.label}</button>)}</nav>;
+  return <nav ref={tabs} class="trust-hub-tabs" aria-label="Trust hub, four horizontally scrollable views; the conversation's own evidence first, then the global services">{TRUST_TABS.map((tab, index) => <Fragment key={tab.view}>{trustTabBandBefore(index) ? <span class="trust-hub-tabs__band" data-scope={tab.scope}>{TRUST_TAB_GLOBAL_BAND}</span> : null}<button type="button" class={view === tab.view ? "is-active" : ""} data-scope={tab.scope} title={`${tab.label} · ${tab.scope} scope`} aria-current={view === tab.view ? "page" : undefined} onClick={() => onNavigate(tab.view)}>{tab.label}</button></Fragment>)}</nav>;
 }
 
 type ViewBoundaryProps = { name: string; onRecover(): void; children: ComponentChildren };

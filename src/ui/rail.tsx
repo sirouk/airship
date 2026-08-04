@@ -15,6 +15,7 @@ import {
 } from "./navigation-model";
 import { loadRecentsPreference, saveRecentsPreference, type RailState } from "./rail-state";
 import { RuntimeLoadIndicator } from "./runtime-load-indicator";
+import { useScrollEdges } from "./scroll-affordance";
 
 /**
  * The left rail.
@@ -226,6 +227,19 @@ const RAIL_RECENTS_AUTO_OPEN_MIN_HEIGHT = 560;
 export const RAIL_RECENT_LIMIT = 10;
 
 /**
+ * The panel's id, shared by `aria-controls`, the `id` attribute and the pointer
+ * dismissal that has to know what "inside the panel" means.
+ */
+const RECENTS_PANEL_ID = "airship-recent-conversations";
+
+/**
+ * How much of the viewport the collapsed rail's conversation flyout is
+ * guaranteed, so a trigger sitting low on a short screen still opens a panel a
+ * person can read rather than one that starts below the fold.
+ */
+const RAIL_FLYOUT_MIN_HEIGHT = 260;
+
+/**
  * Which row holds the rail's single tab stop, for a view that may not be a row.
  *
  * The roving seed treated `view` as if it were always a rail key. Five of the
@@ -294,6 +308,27 @@ export function Rail({
     setRecentsOpen(open);
   };
   const [draggingFavoriteId, setDraggingFavoriteId] = useState<string>();
+  /*
+   * The conversation list cannot live in-flow inside a 60px rail.
+   *
+   * Measured at 1440x1000 with four threads and `data-rail="rail"`: the rail is
+   * 60px, `.recent-conversations` was still an in-flow block, so every row was
+   * 67px wide starting at x=13 — 20px past the rail's own right edge — and the
+   * title element had `clientWidth: 29` against `scrollWidth: 132`. "General
+   * conversation" printed as "Ge", the timestamp as "2", the group label
+   * "RECENT" as "RECE", and the `All conversations` row as an empty bordered
+   * box with neither glyph nor text. 290px of the collapsed rail were spent on
+   * four unreadable rows.
+   *
+   * `.rail-recents`' own comment has always described the fix — a panel that
+   * hangs off the rail on `fixed` placement "positioned from the trigger's own
+   * rect", because `.primary-nav`'s `overflow-y: auto` clips the inline axis
+   * too — and it was never built. This is that measurement: the flyout is
+   * placed from the trigger and the rail's right edge, so the panel keeps its
+   * full 320px of title regardless of how narrow the rail is.
+   */
+  const flyout = state !== "standard";
+  const [flyoutAnchor, setFlyoutAnchor] = useState<Readonly<{ top: number; left: number }>>();
   // Seeded through the traversal, not from `view` directly: `view` is only
   // sometimes a rail key, and a seed that names a row the rail does not render
   // leaves the whole nav with no tab stop at all.
@@ -301,6 +336,7 @@ export function Rail({
     rovingKey(view, railTraversal({ workspace: railRowFor(view)?.id === "workspace" })));
   const items = useRef(new Map<string, HTMLButtonElement>());
   const recentsTrigger = useRef<HTMLButtonElement>(null);
+  const recentsList = useRef<HTMLDivElement | null>(null);
   // The rail's half of the phone band's "Current page: …" line. Undefined on
   // the eleven views that have a row of their own to be marked.
   const currentHint = railCurrentHint(view);
@@ -374,6 +410,73 @@ export function Rail({
     return () => window.removeEventListener("resize", measure);
   }, [navRef, recentsOpen]);
 
+  /*
+   * Collapsing the rail does not throw a panel over the page.
+   *
+   * `Collapse navigation rail` is a request for room. Honouring it by turning
+   * the in-flow list into a 320px flyout the same frame gives back none of it,
+   * and the person did not ask to open anything. The panel closes with the
+   * rail and comes back with it — `recentsChoice` is untouched, so the
+   * remembered preference decides the restored state, not this.
+   */
+  const previousState = useRef(state);
+  useEffect(() => {
+    const was = previousState.current;
+    previousState.current = state;
+    if (was === state) return;
+    setRecentsOpen(state === "standard" ? recentsChoice.current ?? false : false);
+  }, [state]);
+
+  /*
+   * Where the flyout hangs, remeasured whenever the thing it hangs off moves.
+   *
+   * `scroll` is captured because the trigger rides `.primary-nav`, which is its
+   * own scroller — a panel pinned once would drift off its row the first time
+   * the rail scrolled. The anchor is only replaced when it actually changed, so
+   * a scroll that does not move the trigger costs no render.
+   */
+  useEffect(() => {
+    if (!flyout || !recentsOpen) { setFlyoutAnchor(undefined); return; }
+    const place = () => {
+      const trigger = recentsTrigger.current;
+      const sidebar = trigger?.closest(".sidebar");
+      if (!trigger || !sidebar) return;
+      const rect = trigger.getBoundingClientRect();
+      const bar = sidebar.getBoundingClientRect();
+      // Clamped so a trigger near the bottom of a short viewport still opens a
+      // panel that is on screen rather than one that starts below the fold.
+      const top = Math.max(8, Math.min(rect.top, Math.max(8, window.innerHeight - RAIL_FLYOUT_MIN_HEIGHT)));
+      const left = bar.right + 4;
+      setFlyoutAnchor((current) => current && current.top === top && current.left === left ? current : Object.freeze({ top, left }));
+    };
+    place();
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    return () => {
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
+  }, [flyout, recentsOpen, conversationKeys]);
+
+  /*
+   * A flyout over the page is dismissed by the page. Escape already returns
+   * focus to the trigger; this is the pointer half, and it deliberately does
+   * not fire for the rail itself — clicking another rail row navigates, and the
+   * panel closing under that click would eat the gesture.
+   */
+  useEffect(() => {
+    if (!flyout || !recentsOpen) return;
+    const dismiss = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (recentsTrigger.current?.contains(target)) return;
+      if (document.getElementById(RECENTS_PANEL_ID)?.contains(target)) return;
+      setRecentsOpen(false);
+    };
+    document.addEventListener("pointerdown", dismiss, true);
+    return () => document.removeEventListener("pointerdown", dismiss, true);
+  }, [flyout, recentsOpen]);
+
   const order = useMemo(() => {
     const destinations = railTraversal(expanded);
     const keys: string[] = [];
@@ -391,6 +494,15 @@ export function Rail({
     }
     return keys;
   }, [expanded, recentsOpen, conversationKeys]);
+
+  /*
+   * A clipped thread row must read as "more below", not as a thread that was
+   * cut in half. The mask machinery is the one `.primary-nav` already uses, and
+   * it paints only while content is genuinely hidden — re-bound whenever the
+   * disclosure opens or the thread set changes so a collapsed panel cannot
+   * leave a stale fade behind.
+   */
+  useScrollEdges(recentsList, `${String(recentsOpen)}:${conversationKeys}`);
 
   // A route can change from the palette, a hash, or a link inside the page.
   // The roving stop follows it so `Tab` into the rail always lands on where the
@@ -755,7 +867,11 @@ export function Rail({
           type="button"
           aria-label={`${recentsOpen ? "Collapse" : "Expand"} recent conversations`}
           aria-expanded={recentsOpen}
-          aria-controls="airship-recent-conversations"
+          aria-controls={RECENTS_PANEL_ID}
+          // The accessible name is the ledger every e2e reading of this rail
+          // uses, so the count rides `title` and a badge instead of being
+          // spliced into it.
+          title={`${recentsOpen ? "Collapse" : "Expand"} recent conversations · ${visible.length} in this profile`}
           onClick={() => chooseRecentsOpen(!recentsOpen)}
           {...itemProps(RECENTS_KEY)}
           ref={(element: HTMLButtonElement | null) => {
@@ -763,11 +879,27 @@ export function Rail({
             if (element) items.current.set(RECENTS_KEY, element);
             else items.current.delete(RECENTS_KEY);
           }}
-        ><span aria-hidden="true">›</span></button>
+        ><span aria-hidden="true">›</span>{/*
+          * The count badge the collapsed rail is priced at.
+          *
+          * A 60px rail cannot print "General conversations 4", so the number is
+          * what survives — the same number `.rail-recents__header small` prints
+          * inside the panel, from the same array. It is `aria-hidden` because
+          * the trigger's `title` already says it in words and a bare digit
+          * announced after "Expand recent conversations" is noise.
+          */}
+          {visible.length > 0 ? <span class="rail-recents__badge" aria-hidden="true">{visible.length}</span> : null}
+        </button>
         {recentsOpen ? (
           <div
-            id="airship-recent-conversations"
+            id={RECENTS_PANEL_ID}
             class="recent-conversations"
+            // `pending` is the one frame between mounting the panel and
+            // measuring the trigger it hangs off. Painting a fixed panel at
+            // 0,0 for that frame is a flash in the corner of the screen, so
+            // the state is named and the stylesheet holds it back.
+            data-flyout={flyout ? (flyoutAnchor ? "true" : "pending") : undefined}
+            style={flyout && flyoutAnchor ? { top: `${String(flyoutAnchor.top)}px`, left: `${String(flyoutAnchor.left)}px` } : undefined}
             role="group"
             aria-label="Profile conversations"
             onKeyDown={(event) => {
@@ -798,17 +930,47 @@ export function Rail({
                 {...itemProps(NEW_CONVERSATION_KEY)}
               ><span aria-hidden="true">+</span></button>
             </div>
-            {favorites.length ? <div class="rail-conversation-group">Favorites</div> : null}
-            {favorites.map(conversationRow)}
-            {recent.length ? <div class="rail-conversation-group">Recent</div> : null}
-            {recent.map(conversationRow)}
+            {/*
+              * The threads scroll; the panel does not.
+              *
+              * The scroll box used to be this panel, with `All conversations`
+              * as its last child — so the ledger link was the row after the
+              * last thread inside a 420px clip. Measured at 1440x1000 with
+              * nine threads: the box ran 250→670 with a 520px scrollHeight and
+              * the link's own rect was 730→766, entirely below the clip and
+              * invisible on screen. The only in-rail route to the library
+              * disappeared at exactly the thread count that makes a library
+              * worth having. Moving the overflow one level down pins the
+              * header above the scroll and the ledger link below it.
+              */}
+            <div
+              class="recent-conversations__list"
+              ref={(element: HTMLDivElement | null) => { recentsList.current = element; }}
+            >
+              {favorites.length ? <div class="rail-conversation-group">Favorites</div> : null}
+              {favorites.map(conversationRow)}
+              {recent.length ? <div class="rail-conversation-group">Recent</div> : null}
+              {recent.map(conversationRow)}
+            </div>
             <button
               class={view === "sessions" ? "nav-item nav-item--nested active" : "nav-item nav-item--nested"}
               type="button"
               aria-current={view === "sessions" ? "page" : undefined}
+              /* The accessible name stays exactly the destination. The count is
+                 the row's description rather than part of its name, so it is
+                 announced without turning the destination into a sentence that
+                 changes every time a conversation is made. */
+              aria-label="All conversations"
+              title={`All conversations · ${String(scopedConversations.length)} in this profile`}
               onClick={() => onNavigate("sessions")}
               {...itemProps(ALL_CONVERSATIONS_KEY)}
-            ><span class="nav-item__label">All conversations</span></button>
+            >
+              <span class="nav-item__label">All conversations</span>
+              {/* It earns its permanent row by carrying what the clipped list
+                  cannot: how many threads there are in total, including the
+                  ones the shortcut is not showing. */}
+              <span class="rail-recents__ledger-count" aria-hidden="true">{scopedConversations.length}</span>
+            </button>
           </div>
         ) : null}
       </div>
@@ -877,7 +1039,10 @@ export function Rail({
   }
 
   return (
-    <aside class="sidebar" data-rail-state={state} inert={inert} aria-hidden={inert || undefined}>
+    // `data-recents` stands the hover-peek down while the flyout is up. Both
+    // are the same answer to "show me the labels", and running them together
+    // draws a 268px peek panel underneath a 320px flyout on the same pixels.
+    <aside class="sidebar" data-rail-state={state} data-recents={flyout && recentsOpen ? "flyout" : undefined} inert={inert} aria-hidden={inert || undefined}>
       <div class="rail">
         {/* The visible stand-in highlight says "a page under this row"; this
             says which one, in the same words the phone band uses. Without it a
