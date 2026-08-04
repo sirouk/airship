@@ -10,6 +10,28 @@ Engineering work that was measured, argued, adversarially reviewed, and never co
 
 **Read this first:** a prior verification pass re-checked 149 claimed-open findings from `docs/audit/CANON_RECONCILIATION_2026-08-03.md` and found **82 confirmed, 29 partial, 31 false positives, 7 unverifiable** — a 21% outright error rate, from three named failure modes: reading the named file and stopping, grepping for the *proposed* name instead of the *shipped* mechanism, and stale line citations. That pass's own headline instruction applies to this register too: **do not act on any row without re-deriving its evidence.** My own pass overturned six more rows against the tree, which is the rate you should expect to keep finding.
 
+**Recovery status — 2026-08-04, added after the register was written.** Four of the
+documents this register describes as living only in `/private/tmp` are now committed,
+each re-verified against `03af2c5` rather than copied forward:
+
+| Register section | Now at |
+|---|---|
+| §3.19 the twelve measured negative constraints | `docs/engineering/MEASURED_NEGATIVE_CONSTRAINTS.md` |
+| §3.20 the Caddy deployment guide | `docs/DEPLOYMENT.md` |
+| §3.20 the thirteen canon contradictions | `docs/audit/CANON_CONTRADICTIONS_2026-08-03.md` |
+| §3.21 the 38 KB verified polish worklist | `docs/audit/CANON_VERIFICATION_2026-08-03.md` |
+
+Two corrections to this register fell out of that re-verification. §3.21 says
+`authorization-code-paste.ts:163` "does not exist" — **the file exists and the check
+is intact**; it is the *line* that moved, to `src/ui/connect/authorization-code-paste.ts:164-175`.
+And §3.18 calls the workspace-egress guard "triplicated" where it is **quadruplicated**;
+four copies were confirmed at `03af2c5` and `src/execution/workspace-egress.ts` still
+does not exist.
+
+**`docs/CANON.md` is bound to `3f11393` and is 47 commits behind as of 2026-08-04.**
+Reconciling it was out of scope for this pass; a dated drift notice now sits at the top
+of that file so nobody reads it as current.
+
 ---
 
 ## 1. Fix now — a user feels this

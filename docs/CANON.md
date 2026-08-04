@@ -11,6 +11,36 @@ the strict endpoint-proof floor, and remote compute placement were all read that
 way. Where this document and the tree disagreed, the tree won.
 **Applies to:** the Airship client, browser runtime, optional companions, provider adapters, user experience, and trust language
 
+> **DRIFT NOTICE — 2026-08-04. Do not read this document as current.**
+>
+> This document is bound to `3f11393`. As of 2026-08-04 the tree is **47 commits
+> past that baseline**. It has not been reconciled since, and reconciling it is a
+> large job that has not been done.
+>
+> What that means in practice, measured rather than assumed:
+>
+> - **Line-number citations into this document from other documents are off by
+>   roughly 20-40 lines**, because CANON.md was itself rewritten in
+>   `cff08de`/`a8c777a` after the `3f11393` baseline. Following such a citation
+>   lands you in the wrong section, not merely a few lines off.
+> - **At least two shipped capabilities have no entry here at all** — the
+>   first-party POSIX-sh interpreter `airship-sh` (`src/execution/shell/`,
+>   registered at `src/execution/runtime-registry.ts`) and the Ollama / LM Studio
+>   local-model adapter. Both were confirmed absent from this file on 2026-08-04.
+>   These are *under*-claims: the ledger is missing things that work.
+> - Thirteen canon-versus-subsystem contradictions are recorded in
+>   `docs/audit/CANON_CONTRADICTIONS_2026-08-03.md`. **Seven of them conclude this
+>   document is already right** and the subsystem doc is wrong, so the drift is not
+>   uniformly in one direction. **Do not bulk-apply that document to this one.**
+> - A re-check of 149 claimed-open findings measured a **21% outright false-positive
+>   rate** against the inventory that partly informs this file. See
+>   `docs/audit/CANON_VERIFICATION_2026-08-03.md`, which carries its own derivation
+>   header naming what was and was not re-verified.
+>
+> Until this notice is removed by an actual reconciliation, **the tree wins over
+> this document on any point of fact** — which is the rule the "Last reconciled"
+> paragraph above already states, now applied to the document as a whole.
+
 **Maturity:** executable browser-native foundation; not yet a production,
 fully attestable multi-device agent
 
