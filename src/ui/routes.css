@@ -1083,11 +1083,19 @@
    route the filter belongs to — physically collapsed the strip to text width
    and snapped the whole row left. The tabs keep their `1fr` share here
    exactly as without a filter; the filter takes what is left. */
-.profile-hub-tabs.with-scope { grid-template-columns: repeat(3, minmax(100px, 1fr)) minmax(210px, auto); }
 /* 39px was a fourth answer to a question the Tabs primitive already answers. */
 .profile-hub-tabs > button { min-height: var(--tab-height); border: 0; background: transparent; }
 .profile-hub-tabs > button[aria-current="page"] { color: var(--ground); background: var(--accent-bright); }
-.profile-hub-scope { display: grid; grid-template-columns: auto minmax(150px, 1fr); gap: var(--sp-2); align-items: center; justify-self: end; min-width: min(330px, 100%); }
+/*
+ * A row of its own, under the tabs and above the page it scopes.
+ *
+ * This used to be a fourth cell in `.profile-hub-tabs`' grid, which is why it
+ * read as a fourth tab. `justify-self: end` and the `min-width` floor were both
+ * artefacts of living in that grid; standing alone it simply sits at the start
+ * of its own row and shrinks with the viewport.
+ */
+.profile-hub-scope { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; min-width: 0; margin: var(--sp-3) 0 var(--sp-2); }
+.profile-hub-scope .menu-select { min-width: 0; max-width: min(280px, 100%); }
 .profile-hub-scope > span { color: var(--ink-faint); font: var(--fs-micro)/1 var(--font-mono); text-transform: uppercase; }
 .profile-scope-contract { display: flex; gap: 10px; width: min(1320px, 100%); margin: var(--sp-3) auto 0; padding: 10px var(--sp-3); border: 1px solid var(--line); border-radius: var(--radius-control); color: var(--ink-muted); background: var(--surface-soft); font-size: var(--fs-caption); }
 .profile-scope-contract strong { flex: 0 0 auto; color: var(--ink); }
@@ -3747,8 +3755,7 @@
   }
 
   .profile-hub-tabs,
-  .profile-hub-tabs.with-scope { grid-template-columns: repeat(3, minmax(0, 1fr)); width: 100%; }
-  .profile-hub-scope { grid-column: 1 / -1; justify-self: stretch; min-width: 0; padding: var(--sp-1); }
+  .profile-hub-scope { margin: var(--sp-2) 0; }
   .profile-scope-contract { display: grid; width: 100%; }
 
   .profile-editor {

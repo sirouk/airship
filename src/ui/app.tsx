@@ -10501,10 +10501,34 @@ export function App() {
             onOpenSource={(target) => void openMemorySource(target)}
           />
         ) : memoryViewError ? <RouteFailure title="Memory" message={memoryViewError} onRetry={retryDeferredChunk} /> : <RouteSkeleton label="Loading private memory" /> : null}
-        {view === "profiles" || view === "capabilities" || view === "skills" ? <nav class={view === "skills" ? "profile-hub-tabs with-scope" : "profile-hub-tabs"} aria-label="Agent configuration">
+        {view === "profiles" || view === "capabilities" || view === "skills" ? <nav class="profile-hub-tabs" aria-label="Agent configuration">
           {([{"id":"profiles","label":"Profiles"},{"id":"skills","label":"Skills"},{"id":"capabilities","label":"Capabilities"}] as const).map((tab) => <button key={tab.id} type="button" aria-current={view === tab.id ? "page" : undefined} onClick={() => navigate(tab.id)}>{tab.label}</button>)}
-          {view === "skills" ? <div class="profile-hub-scope"><span>Applies to</span><MenuSelect placement="down" ariaLabel="Skill scope" value={profileHubScope} options={[{ value: "global", label: "All profiles" }, ...managedProfiles(catalog).map((profile) => ({ value: profile.profileId, label: profile.name }))]} onChange={setProfileHubScope} /></div> : null}
         </nav> : null}
+        {/*
+          * The scope control belongs to the Skills page, not to the tab strip.
+          *
+          * It was rendered as a sibling of the three tab buttons *inside*
+          * `<nav aria-label="Agent configuration">`, which put a form control in
+          * a navigation landmark — so a screen reader announced "Applies to,
+          * Research" as part of the site navigation, and sighted readers saw a
+          * dropdown wedged into a row of tabs where it read as a fourth tab.
+          *
+          * A tab strip says which page you are on. This says what the page you
+          * are already on will act upon. Those are different questions and the
+          * second one belongs with its page.
+          */}
+        {view === "skills" ? (
+          <div class="profile-hub-scope">
+            <span id="skill-scope-label">Applies to</span>
+            <MenuSelect
+              placement="down"
+              ariaLabel="Skill scope"
+              value={profileHubScope}
+              options={[{ value: "global", label: "All profiles" }, ...managedProfiles(catalog).map((profile) => ({ value: profile.profileId, label: profile.name }))]}
+              onChange={setProfileHubScope}
+            />
+          </div>
+        ) : null}
         {view === "profiles" ? (
           <ProfileManagerView
             key={profileHubScope}
