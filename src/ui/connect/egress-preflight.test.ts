@@ -6,6 +6,7 @@ import {
   CHUTES_AUTHORIZATION_HOST,
   CHUTES_CATALOG_HOSTS,
   CHUTES_CONFIDENTIAL_EMBEDDING_HOST,
+  CHUTES_CONFIDENTIAL_EMBEDDING_PREFLIGHT,
   CHUTES_DISCOVERY_PREFLIGHT,
   CHUTES_LOGO_HOST,
   hostPhrase,
@@ -48,28 +49,46 @@ describe("the hosts named before the button is pressed", () => {
   });
 
   /*
-   * The fourth Chutes host. It is granted in `connect-src` and takes the same
-   * `cpk_` bearer, so its absence from the sentence above is a claim that must
-   * be checkable rather than a comment that can rot: it is absent *because
-   * nothing can reach it yet*, not because it is unimportant. All three halves
-   * are asserted here so the exemption expires by itself.
+   * The fourth Chutes host, now reachable.
+   *
+   * This assertion used to hold that no control selected the mode, and said in
+   * as many words that the day one appeared, the fix was the disclosure beside
+   * it rather than deleting the line. A control appeared. So the three halves
+   * are still asserted, and the third has flipped: the host stays out of the
+   * *discovery* sentence — that button still never contacts it — and it is
+   * named instead in the sentence rendered beside the control that does.
    */
-  it("keeps the unreachable embedding chute out of a sentence about a button that never contacts it", () => {
+  it("names the embedding chute in the sentence beside the control that reaches it, and nowhere else", () => {
     expect(CHUTES_CONFIDENTIAL_EMBEDDING_HOST).toBe(new URL(CHUTES_EMBEDDING_ENDPOINT).host);
 
     // (i) The grant is real, so this is a genuine egress surface, not a typo.
     const csp = readFileSync(new URL("../../../index.html", import.meta.url), "utf8");
     expect(csp).toContain(`https://${CHUTES_CONFIDENTIAL_EMBEDDING_HOST}`);
 
-    // (ii) The discovery sentence still describes only what the button does.
+    // (ii) The discovery sentence still describes only what its own button does.
     expect(CHUTES_DISCOVERY_PREFLIGHT).not.toContain(CHUTES_CONFIDENTIAL_EMBEDDING_HOST);
 
-    // (iii) And nothing ships that selects the mode which would contact it. If
-    // a control ever does, this fails, and the fix is the disclosure beside it
-    // — not deleting this line.
+    // (iii) The control exists, and the sentence that discloses it names the
+    // host, names the credential, and says the text leaves the page. A control
+    // without all three of those is the defect this assertion exists to catch.
     const engineControls = readFileSync(new URL("../context-view.tsx", import.meta.url), "utf8");
     expect(engineControls).toContain(`changeEmbeddingMode("semantic")`);
-    expect(engineControls).not.toContain(`changeEmbeddingMode("chutes")`);
+    expect(engineControls).toContain(`changeEmbeddingMode("chutes")`);
+    expect(engineControls).toContain("CHUTES_CONFIDENTIAL_EMBEDDING_PREFLIGHT");
+
+    expect(CHUTES_CONFIDENTIAL_EMBEDDING_PREFLIGHT).toContain(CHUTES_CONFIDENTIAL_EMBEDDING_HOST);
+    expect(CHUTES_CONFIDENTIAL_EMBEDDING_PREFLIGHT).toContain("bearer token");
+    expect(CHUTES_CONFIDENTIAL_EMBEDDING_PREFLIGHT).toContain("does leave this page");
+  });
+
+  /*
+   * A disclosure is only load-bearing if it is rendered before the press, so
+   * this binds the sentence to a visible element rather than to a `title`
+   * attribute — a tooltip is not a disclosure on a touch device.
+   */
+  it("puts the sentence on screen, not only in a tooltip", () => {
+    const engineControls = readFileSync(new URL("../context-view.tsx", import.meta.url), "utf8");
+    expect(engineControls).toContain(`<p class="context-confidential-preflight" role="note">{CHUTES_CONFIDENTIAL_EMBEDDING_PREFLIGHT}</p>`);
   });
 
   it("reads as a sentence for one, two or many hosts", () => {

@@ -20,6 +20,7 @@ import {
   type ActiveChutesConnection,
   type ChutesConnection,
 } from "../auth/connection";
+import { setConfidentialAuthority } from "../indexing/confidential-authority";
 import type { ChutesOAuthRegistration } from "../auth/chutes-oauth-registration";
 import type { ChutesOAuthTokenSet } from "../auth/chutes-oauth";
 import type { VaultUsageFacts } from "./vault-view";
@@ -3354,7 +3355,38 @@ export function App() {
     evidenceAcquisitionQueueLoad.current = undefined;
     void evidenceAcquisitionQueueAuthority.current?.release();
     providerCredential.current = undefined;
+    setConfidentialAuthority(undefined);
   }, [approvalBroker]);
+
+  /*
+   * The confidential embedding mode's writer.
+   *
+   * `setConfidentialAuthority` had no caller, so `hasConfidentialAuthority()`
+   * was permanently false: the `chutes` branch of `readStoredEmbeddingMode` was
+   * dead, `SwitchableEmbeddingProvider`'s confidential path was unreachable,
+   * and the whole mode existed as code nothing could enter.
+   *
+   * It supplies the *same* page-memory bearer the chat transport and the
+   * attestation client already hold, read at each embed rather than copied, so
+   * a rotation is picked up without reinstalling anything and a release is
+   * observed as `undefined` rather than as a stale token. Nothing is persisted
+   * — this effect is the only thing that makes a persisted `chutes` preference
+   * admissible on a page load, which is exactly the check
+   * `readStoredEmbeddingMode` performs.
+   *
+   * Keyed on the connection rather than on `activeChutesConnection`: that
+   * derivation additionally requires the *active session* to be pinned to this
+   * connection, and the index is not a conversation. A workspace index may be
+   * rebuilt while the open session is a local one.
+   */
+  useEffect(() => {
+    if (!isChutesConnected(connection)) {
+      setConfidentialAuthority(undefined);
+      return;
+    }
+    setConfidentialAuthority(() => providerCredential.current);
+    return () => setConfidentialAuthority(undefined);
+  }, [connection]);
 
   // Endpoint proof and its scheduler are one Profile cockpit. A switch first
   // pauses the no-longer-authoritative worker/client, then installs a client
@@ -12407,10 +12439,21 @@ function MessageCard({
               class={`message-capability-tier ${capabilityTier}`}
               title={`Initial session observation. ${capabilityTierDetail(capabilityTier)} Tool results name their live producing runtime separately.`}
             >
-              <span aria-hidden="true" />Initial · {capabilityTierLabel(capabilityTier)}
+              {/* The dot and the words are separate elements because text
+                  cannot be ellipsised while it is an anonymous flex item — the
+                  same reason `.runtime-line` carries a `__text` span. */}
+              <span class="message-capability-tier__dot" aria-hidden="true" />
+              <span class="message-capability-tier__label">Initial · {capabilityTierLabel(capabilityTier)}</span>
             </span>
           ) : null}
-          {message.status ? <span class="message-status"><span class="pulse-dot" />{message.status}</span> : null}
+          {message.status ? (
+            // `title` so the truncated form at 320px is still readable on hover
+            // and long-press; the accessible text is the full string either way.
+            <span class="message-status" title={message.status}>
+              <span class="pulse-dot" />
+              <span class="message-status__text">{message.status}</span>
+            </span>
+          ) : null}
         </div>
         {message.parts?.length ? (
           <DeferredMessageParts parts={message.parts} live={message.status !== undefined} onRetry={onResend} />
@@ -12449,11 +12492,13 @@ function MessageCard({
               * `model` is optional on the receipt, so an answer without one shows
               * nothing rather than the word "unknown".
               *
-              * It belongs in this row and not beside the role word:
-              * `.message-label` already overflows its column by 30px at 320px
-              * from `.message-capability-tier`, so a chip there would be adding
-              * weight to something already broken. This row is receipt-gated,
-              * which is precisely the condition `model` needs.
+              * It belongs in this row and not beside the role word. When this
+              * chip was placed, `.message-label` overflowed its column by 30px
+              * at 320px and a fourth chip would have been weight on something
+              * already broken; that row now wraps and truncates instead, so the
+              * original reason has been repaired. The reason that outlives it is
+              * the one that mattered anyway: this row is receipt-gated, which is
+              * precisely the condition `model` needs.
               */}
             {message.receipt.model ? (
               <span class="message-model" title={`This answer was produced by ${message.receipt.model}.`}>

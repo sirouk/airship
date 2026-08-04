@@ -186,6 +186,29 @@
   line-height: 1.5;
 }
 
+/*
+ * The egress sentence beside the Confidential engine button.
+ *
+ * Same shape as `.context-bootstrap-caution` — a rule and a tint, not a card —
+ * because it is the same kind of statement: a caveat about how the numbers on
+ * screen were produced. The accent rather than the caution colour, because the
+ * choice is legitimate and the sentence is a disclosure, not a warning: this
+ * screen already reserves `--v-caution` for a degraded index.
+ */
+.context-confidential-preflight {
+  margin: 0;
+  padding: var(--sp-2);
+  border-left: 2px solid var(--accent);
+  color: var(--ink-muted);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  font-size: var(--fs-caption);
+  line-height: 1.5;
+  /* The host name is one long unbreakable token and this row is a flex/grid
+     item on every host that mounts it, including Memory's compact disclosure. */
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .context-live-strip {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));

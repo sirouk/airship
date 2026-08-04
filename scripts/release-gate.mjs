@@ -118,7 +118,30 @@ export const RELEASE_BUDGETS = Object.freeze({
   // above is set by — so each takes one further whole-KiB step, leaving 1,199
   // bytes raw / 1,289 gzip. The fixed first-paint cap above did not move: none
   // of this loads at startup.
-  deferredCapabilities: Object.freeze({ raw: 418 * 1024, gzip: 124 * 1024 }),
+  //
+  // The confidential embedding mode moves both a third time. `EmbeddingMode`
+  // has had a `chutes` member and a working provider behind it for as long as
+  // `SwitchableEmbeddingProvider` has existed, and no writer: nothing called
+  // `setConfidentialAuthority`, so the mode was unreachable and every string on
+  // the Context screen was written as a two-branch ternary that filed it under
+  // "bootstrap". This pass adds the third toggle, per-mode text for a union that
+  // is now exhaustive, and — because the fourth Chutes host is a genuine egress
+  // surface that ships the text of every indexed file — the pre-flight sentence
+  // `egress-preflight.ts` promised would have to be written the day a control
+  // appeared. That prose is the growth; it is nearly all string literals, which
+  // is why raw moves 1,543 B while gzip moves 536 B. Trimmed first: the expanded
+  // panel's engine paragraph stopped restating the pre-flight's egress claim and
+  // kept its own two facts, returning 66 B.
+  // Measured 429,452 B raw / 126,907 B gzip. 420 KiB raw would have left 628
+  // bytes and 124 KiB gzip would have left 69 — the same tripwire the reading
+  // above refused — so each takes one further whole-KiB step, leaving 1,652
+  // bytes raw / 1,093 gzip. The fixed first-paint cap still did not move: the
+  // Context route is behind `context-route.tsx`'s dynamic import, and the
+  // *writer* is deliberately a dependency-free module
+  // (`src/indexing/confidential-authority.ts`) precisely so installing it from
+  // `app.tsx` does not drag the provider, the hash embedder and a worker URL
+  // into startup JavaScript.
+  deferredCapabilities: Object.freeze({ raw: 421 * 1024, gzip: 125 * 1024 }),
   // Core plus every optional route except the two independently delivered
   // vendor engines. The former 384 KiB "all routes" meaning became impossible
   // once full isomorphic-git and xterm engines were deliberately installed:
@@ -310,7 +333,22 @@ export const RELEASE_BUDGETS = Object.freeze({
   // own channel, or none of it is visible where it has to be. Measured 2047.34
   // KiB raw / 649.31 KiB gzip; both ceilings take the smallest whole-KiB step
   // above that reading, leaving 676 bytes raw and 706 gzip.
-  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2048 * 1024, gzip: 650 * 1024 }),
+  //
+  // The surfaces pass carries the partition again, and the whole of the growth
+  // is the deferred-capability pack reviewed above: a `chutes` embedding mode
+  // that had a provider, a persistence guard and a dimension contract and no
+  // writer at all, so nothing in the shipped tree could enter it. Making it
+  // reachable is mostly prose — a third toggle, per-mode text for a union that
+  // three screens were treating as two, and the egress sentence the fourth
+  // Chutes host has always been owed. `entryJavaScript` is untouched and nothing
+  // eager moved: the Context route is already behind a dynamic import, and the
+  // one piece that does load eagerly — the authority setter — was extracted into
+  // a module with no imports (`src/indexing/confidential-authority.ts`) rather
+  // than reached for through the provider it belongs to. Measured 2049.76 KiB
+  // raw / 650.13 KiB gzip. 2050 KiB raw would have left 246 bytes, so raw takes
+  // one further whole-KiB step for the tripwire reason stated throughout this
+  // file; 651 KiB gzip leaves 891 and takes the tighter step.
+  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2051 * 1024, gzip: 651 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now measures 672.33 KiB raw / 186.61 KiB gzip:
   // the browser-Git pack grew (see optionalBrowserGit) and the Terminal pack
@@ -409,7 +447,14 @@ export const RELEASE_BUDGETS = Object.freeze({
   // further whole-KiB step for the tripwire reason stated throughout this file;
   // 838 KiB gzip leaves 809 and takes the tighter step. Nothing eager moved and
   // the entry ceiling is untouched.
-  totalJavaScriptAndWorkers: Object.freeze({ raw: 2725 * 1024, gzip: 838 * 1024 }),
+  // The surfaces pass carries into the installed aggregate exactly as it lands
+  // in the first-party partition above; the vendor pins are unchanged, so all of
+  // the growth is weight already reviewed there — a `chutes` embedding mode with
+  // no writer, given one, plus the egress sentence that reaching it requires.
+  // Measured 2726.16 KiB raw / 838.04 KiB gzip. Both take the smallest whole-KiB
+  // step above that reading, leaving 860 bytes raw and 983 gzip. Nothing eager
+  // moved and the entry ceiling is untouched.
+  totalJavaScriptAndWorkers: Object.freeze({ raw: 2727 * 1024, gzip: 839 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. Keep it visible under a dedicated, deliberately small cap.
   serviceWorker: Object.freeze({ raw: 12 * 1024, gzip: 4 * 1024 }),

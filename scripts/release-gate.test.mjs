@@ -213,7 +213,9 @@ describe("release gate", () => {
      * The gzip ceilings as the review found them: a whole KiB past the smallest step
      * that clears the measurement recorded beside them, which is transfer budget
      * granted by a comment that said nothing about it. (deferredCapabilities is shown
-     * at two steps, because its 118 KiB is itself the justified second step.) Any step
+     * at two steps, because its own ceiling is already the justified second step —
+     * the pair moves with it, which is the point: this row has to name the ceiling
+     * as it stands or it stops testing anything.) Any step
      * beyond the first has to be paid for with the sentence naming what the tighter one
      * would have left — which is why the raw ceilings beside these pass untouched.
      */
@@ -221,7 +223,7 @@ describe("release gate", () => {
       ["optionalMemoryView", "gzip: 21 * 1024", "gzip: 22 * 1024"],
       ["optionalProofSurface", "gzip: 28 * 1024", "gzip: 29 * 1024"],
       ["optionalWorkspaceWorkbench", "gzip: 25 * 1024", "gzip: 26 * 1024"],
-      ["deferredCapabilities", "gzip: 124 * 1024", "gzip: 126 * 1024"],
+      ["deferredCapabilities", "gzip: 125 * 1024", "gzip: 126 * 1024"],
     ]) {
       const raised = source.replace(new RegExp(`^  ${name}: .*$`, "mu"), (line) => line.replace(ceiling, granted));
       expect(raised, name).not.toBe(source);

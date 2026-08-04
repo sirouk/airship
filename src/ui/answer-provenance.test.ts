@@ -68,10 +68,12 @@ describe("the answer names its model", () => {
     expect(chips).toBeGreaterThanOrEqual(0);
     expect(model).toBeGreaterThan(chips);
     /*
-     * `.message-label` already overflows its column by 30px at 320px from
-     * `.message-capability-tier`. Adding a chip there would be loading weight
-     * onto something already broken; this row is receipt-gated, which is exactly
-     * the condition the model id needs anyway.
+     * When the chip was placed, `.message-label` overflowed its column by 30px
+     * at 320px from `.message-capability-tier`, and adding a chip there would
+     * have been weight on something already broken. That row wraps and truncates
+     * now (`narrow-viewport-overflow` measures it), so this assertion no longer
+     * rests on the breakage — it rests on the reason that outlived it: this row
+     * is receipt-gated, which is exactly the condition the model id needs.
      */
     expect(model, "the chip must not live in .message-label").toBeGreaterThan(label);
   });

@@ -123,7 +123,8 @@ export function TranscriptIntro({
           aria-label={`${capabilityTierLabel(tier)}. Initial session observation. Open Capabilities.`}
           onClick={onOpenCapabilities}
         >
-          <span aria-hidden="true" />{capabilityTierLabel(tier)}
+          <span class="message-capability-tier__dot" aria-hidden="true" />
+          <span class="message-capability-tier__label">{capabilityTierLabel(tier)}</span>
         </button>
       ) : null}
     </section>

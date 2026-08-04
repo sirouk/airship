@@ -1,3 +1,4 @@
+import { hasConfidentialAuthority, readConfidentialAuthority } from "./confidential-authority";
 import { HashEmbeddingProvider } from "./hash-embeddings";
 import { CHUTES_EMBEDDING_DIMENSIONS, ChutesEmbeddingProvider } from "./chutes-embeddings";
 import type { EmbeddingProvider } from "./contracts";
@@ -19,35 +20,19 @@ const PREFERENCE_KEY = "airship.context.embedding.v1";
 
 export type EmbeddingMode = "bootstrap" | "semantic" | "chutes";
 
-/**
- * Supplies the `cpk_` bearer for confidential embeddings, or `undefined` when
- * Chutes is not connected.
- *
- * Held here rather than passed at construction because the runtime is minted
- * per workspace object (`src/retrieval/client-context-runtime.ts:28`, a
- * `WeakMap`) and re-minted on every profile switch, so whichever caller wins
- * that race would otherwise decide whether the page has an authority at all.
- * It is memory-only and never persisted: this is a bearer token.
+/*
+ * The authority lives in its own dependency-free module so the connection code
+ * that installs it does not have to import this one — see the header of
+ * `confidential-authority.ts`. Re-exported here because this is where every
+ * reader already looks for it.
  */
-export type ConfidentialEmbeddingAuthority = () => Promise<string | undefined> | string | undefined;
-
-let confidentialAuthority: ConfidentialEmbeddingAuthority | undefined;
-
-/**
- * Installs (or, with `undefined`, withdraws) the confidential bearer supplier.
- *
- * Read at each embed rather than captured, so an authority that arrives after
- * the provider was materialized still serves the next request — a connection
- * completing during a page's first index build is the ordinary case, not an
- * edge one.
- */
-export function setConfidentialAuthority(authority: ConfidentialEmbeddingAuthority | undefined): void {
-  confidentialAuthority = authority;
-}
-
-export function hasConfidentialAuthority(): boolean {
-  return confidentialAuthority !== undefined;
-}
+export {
+  hasConfidentialAuthority,
+  setConfidentialAuthority,
+  subscribeConfidentialAuthority,
+  type ConfidentialAuthorityListener,
+  type ConfidentialEmbeddingAuthority,
+} from "./confidential-authority";
 
 /**
  * The recorded choice, or nothing when the person has never made one.
@@ -167,7 +152,7 @@ export class SwitchableEmbeddingProvider implements EmbeddingProvider {
     mode: EmbeddingMode = readEmbeddingMode(),
     private readonly semanticFactory: () => LazySemanticWorkerEmbeddingProvider = createBrowserSemanticProvider,
     private readonly confidentialFactory: () => EmbeddingProvider =
-      () => new ChutesEmbeddingProvider({ token: () => confidentialAuthority?.() }),
+      () => new ChutesEmbeddingProvider({ token: () => readConfidentialAuthority()?.() }),
   ) {
     this.localDimensions = dimensions;
     this.bootstrap = new HashEmbeddingProvider(dimensions);
