@@ -30,6 +30,32 @@ export const CHUTES_AUTHORIZATION_HOST = "api.chutes.ai";
  */
 export const CHUTES_LOGO_HOST = "logos.chutes.ai";
 
+/**
+ * A fourth Chutes host the same key authorizes, and deliberately not in the
+ * sentence below.
+ *
+ * `connect-src` permits it (`index.html`), `ChutesEmbeddingProvider` sends the
+ * `cpk_` bearer this route collects, and what it would embed is the text of the
+ * person's own workspace files and memories — so leaving it unnamed anywhere
+ * would be the same defect this module was written to fix. But it does not belong in the discovery pre-flight, because
+ * that sentence makes one promise: *these are the hosts this button reaches, in
+ * the order it reaches them*. "Discover models with key" never contacts this
+ * host. Adding it would buy breadth by making the sentence false, and a
+ * disclosure that over-names is not more honest than one that under-names — it
+ * is differently wrong, and it teaches the reader that the list is decorative.
+ *
+ * What keeps the two from disagreeing is that nothing reaches it yet: the
+ * embedding-engine control offers Bootstrap and Local semantic only
+ * (`src/ui/context-view.tsx`), and `readStoredEmbeddingMode` admits a persisted
+ * `chutes` only when a memory-only authority is already installed. The host is
+ * a wired provider with a CSP grant and no shipped way to select it. That is a
+ * fact with an expiry date, so `egress-preflight.test.ts` asserts all three
+ * halves — the grant exists, this sentence omits it, and no control selects the
+ * mode. The day a control appears, that test fails, and the failure is the
+ * requirement to write the disclosure that belongs beside it.
+ */
+export const CHUTES_CONFIDENTIAL_EMBEDDING_HOST = "chutes-qwen-qwen3-embedding-8b-tee.chutes.ai";
+
 /** How a list of hosts reads in a sentence. */
 export function hostPhrase(hosts: readonly string[]): string {
   if (hosts.length === 0) return "no host";

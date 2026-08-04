@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import type { DurableEvent } from "../../core/journal";
 import {
+  ASSISTANT_LENGTH_CODE,
   messagePartsFromDurableEvents,
   messagePartsFromFacts,
   type MessagePart,
@@ -276,6 +277,13 @@ describe("terminal-aware operations", () => {
     expect(errorHeading("turn.failed")).toBe("Turn failed");
     expect(errorHeading(undefined)).toBe("Turn stopped safely");
     expect(errorHeading("turn.exploded")).not.toContain("turn.");
+  });
+
+  it("heads a cut-off answer without claiming the turn itself failed", () => {
+    expect(errorHeading(ASSISTANT_LENGTH_CODE)).toBe("Response was cut off");
+    // The turn completed: its receipt is real and its footer says so one element
+    // away. A heading borrowing "Turn failed" here would contradict it.
+    expect(errorHeading(ASSISTANT_LENGTH_CODE).toLowerCase()).not.toContain("turn");
   });
 
   it("heads a local command with command words, never with turn words", () => {

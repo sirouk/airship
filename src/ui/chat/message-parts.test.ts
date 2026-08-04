@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { JsonValue } from "../../core/contracts";
 import type { DurableEvent } from "../../core/journal";
 import {
+  ASSISTANT_LENGTH_CODE,
   MESSAGE_PART_DISPLAY_LIMITS,
   boundedDisplayText,
   messagePartFactsFromDurableEvents,
@@ -269,6 +270,52 @@ describe("message parts", () => {
     const parts = messagePartsFromDurableEvents(events, { includeTurnRequest: true });
     expect(parts.map((part) => part.kind)).toEqual(["text", "attachment"]);
     expect(parts[1]).toMatchObject({ kind: "attachment", status: "failed" });
+  });
+
+  /*
+   * The whole point of the marker: two turns whose journals differ in exactly
+   * one field must not render the same. Before this, they did — `finishReason`
+   * was written, audited, and read by nothing, so a severed answer and a
+   * finished one were byte-identical on screen.
+   */
+  it("distinguishes a length-finished answer from a stop-finished one", () => {
+    const severedPayload = {
+      message: { role: "assistant", content: "The three causes are: first, the" },
+      finishReason: "length",
+      responseDigest: "a".repeat(64),
+    } satisfies JsonValue;
+    const severed = messagePartsFromDurableEvents(
+      eventSequence([draft("assistant.completed", severedPayload), draft("turn.completed", { receiptId: "receipt-1" })]),
+    );
+    const finished = messagePartsFromDurableEvents(
+      eventSequence([
+        draft("assistant.completed", { ...severedPayload, finishReason: "stop" }),
+        draft("turn.completed", { receiptId: "receipt-1" }),
+      ]),
+    );
+
+    expect(finished.map((part) => part.kind)).toEqual(["text", "footer"]);
+    expect(severed.map((part) => part.kind)).toEqual(["text", "error", "footer"]);
+    const marker = severed[1];
+    expect(marker).toMatchObject({ kind: "error", code: ASSISTANT_LENGTH_CODE, retryable: false });
+    // The marker orders after the text it qualifies and before the footer that
+    // says the turn completed — both of which remain true statements.
+    expect(marker!.sequence).toBe(1);
+    expect(severed[2]).toMatchObject({ kind: "footer" });
+    // A caveat that a copy button drops is a caveat that does not exist.
+    expect(messagePlainText(severed)).toContain("maximum output length");
+    expect(messagePlainText(finished)).not.toContain("maximum output length");
+  });
+
+  /* A tool-call step finishes for tool calls, never for length; no marker. */
+  it("does not mark the tool-call phase of a turn as cut off", () => {
+    const parts = messagePartsFromDurableEvents(eventSequence([
+      draft("assistant.completed", {
+        message: { role: "assistant", content: "", toolCalls: [{ id: "call-1", name: "read_file", arguments: {} }] },
+        finishReason: "tool-calls",
+      }),
+    ]));
+    expect(parts.every((part) => part.kind !== "error")).toBe(true);
   });
 });
 

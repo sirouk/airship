@@ -206,7 +206,7 @@ describe("release gate", () => {
     expect(() => assertDocumentedBudgetMeasurements(source.replace("74,690 B\n  // raw", "94,690 B\n  // raw")))
       .toThrow(/optionalProofSurface: its comment records 94,690 B raw, above the 88\.00 KiB raw ceiling/u);
     // …and a raise cannot be laundered by deleting the number it contradicts.
-    expect(() => assertDocumentedBudgetMeasurements(source.replace("Measured 80,247 B raw / 25,486 B gzip", "Weighed at 80,247 B and 25,486 B")))
+    expect(() => assertDocumentedBudgetMeasurements(source.replace("measured on this build: 78,628 B raw / 24,795 B gzip", "weighed at 78,628 B and 24,795 B")))
       .toThrow(/optionalWorkspaceWorkbench: its comment no longer records a measured raw\/gzip pair/u);
 
     /*

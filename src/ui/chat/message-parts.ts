@@ -35,6 +35,33 @@ export const MESSAGE_PART_DISPLAY_LIMITS = Object.freeze({
   jsonStringChars: 256,
 } as const);
 
+/**
+ * The finish reason that means the model ran out of room, not out of things to say.
+ *
+ * `assistant.completed` has carried `finishReason: "length"` since the union was
+ * written, it is journaled, it is audited (`session-audit.ts` accepts it as a
+ * valid terminal value) — and until this fact existed nothing outside a test ever
+ * read it. `runTurn` branches on `"tool-calls"` and treats everything else as a
+ * finished answer, so a reply severed mid-sentence at the provider's output
+ * ceiling rendered exactly like one the model chose to end: same text card, same
+ * "Turn completed." footer, same receipt. On a product whose whole claim is that
+ * you can check what it told you, presenting a fragment as the whole answer is
+ * the one defect that makes every other disclosure worth less.
+ *
+ * The marker is an `error` part rather than a new part kind because the machinery
+ * for "something about the output above is not what it appears" already exists
+ * here, is already bounded, already carries a traceable `code`, and already
+ * survives into `messagePlainText` — so a copied transcript carries the caveat
+ * with the text it qualifies instead of shedding it.
+ */
+export const ASSISTANT_LENGTH_FINISH = "length";
+
+/** The durable code the marker is traced by; see ERROR_HEADINGS in message-parts-view. */
+export const ASSISTANT_LENGTH_CODE = "assistant.length";
+
+export const ASSISTANT_LENGTH_SUMMARY =
+  "The model reached its maximum output length and stopped mid-response. Everything above is what it managed to send; the rest was never generated. Ask it to continue to get the remainder.";
+
 type MessagePartBase<Kind extends MessagePartKind> = Readonly<{
   /** Stable presentation identity derived from the first durable fact. */
   id: string;
@@ -434,6 +461,22 @@ export function messagePartFactsFromDurableEvents(
           });
           ordinal += 1;
         }
+      }
+      if (payload?.finishReason === ASSISTANT_LENGTH_FINISH) {
+        facts.push({
+          kind: "error",
+          factId: eventFactId(event, "length"),
+          sequence: event.sequence,
+          ordinal,
+          summary: ASSISTANT_LENGTH_SUMMARY,
+          code: ASSISTANT_LENGTH_CODE,
+          // Nothing about re-sending the same prompt makes an output ceiling
+          // recede, so this card offers no verb. The reader's remedy is to ask
+          // for the rest, and the sentence says that instead of a button that
+          // would most likely reproduce the cut.
+          retryable: false,
+        });
+        ordinal += 1;
       }
       continue;
     }

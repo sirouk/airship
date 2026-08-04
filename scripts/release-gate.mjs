@@ -493,10 +493,21 @@ export const RELEASE_BUDGETS = Object.freeze({
   // The human-journey pass added the workspace's lost-work row and the Git
   // handoff the developer persona found missing, and then the eight-lane pass
   // added the workspace's own honest path line and its lost-work row.
-  // Measured 80,247 B raw / 25,486 B gzip; both ceilings are the tightest
-  // whole-KiB step that clears that reading. The route is still fetched only
-  // when Workspace opens, so the fixed first-paint ceiling is untouched.
-  optionalWorkspaceWorkbench: Object.freeze({ raw: 79 * 1024, gzip: 25 * 1024 }),
+  // Re-measured on this build: 78,628 B raw / 24,795 B gzip. This line recorded
+  // 80,247 bytes and a 25,486-byte gzip, which describe no build this tree
+  // produces — the route and everything it imports are untouched since, so the
+  // figure had simply stopped being re-taken. That is the failure
+  // assertDocumentedBudgetMeasurements exists to catch, and it did not catch it,
+  // because a *stale-high* figure keeps satisfying every rule here: the ceiling
+  // still clears it, and it is still the tightest step above it. The guard can
+  // only refuse a comment that overstates its ceiling, never one that overstates
+  // the build. Only a re-measurement closes that, so the raw ceiling comes down
+  // 79 KiB → 78 KiB with the reading. 77 KiB raw would have left 220 bytes,
+  // inside the margin a minifier rename moves, which is the step this file
+  // declines elsewhere for the same reason; the gzip ceiling is already the
+  // tightest whole-KiB step above its reading and does not move. The route is
+  // still fetched only when Workspace opens, so first paint is untouched.
+  optionalWorkspaceWorkbench: Object.freeze({ raw: 78 * 1024, gzip: 25 * 1024 }),
   // Held only the Git workspace binding, at 519 B raw / 345 B gzip. It now also
   // holds the one bounded content scan: `search_text` and the Explorer's Contents
   // filter both import it, so Rollup gives it to the chunk those two share rather

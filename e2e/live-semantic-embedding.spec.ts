@@ -94,9 +94,7 @@ test("production UI activates the same-origin semantic worker and rebuilds the i
     if ((url.pathname.includes("mxbai-embed") || url.pathname.includes("transformers.web")) && url.origin !== appOrigin) offOriginRequests.push(request.url());
   });
   const index = page.locator("#memory-index");
-  if (!await index.evaluate((element: HTMLDetailsElement) => element.open)) {
-    await openMemoryIndex(page);
-  }
+  await openMemoryIndex(page);
   await expect(index).toHaveJSProperty("open", true);
   await page.getByRole("button", { name: "Local semantic" }).click();
   const semanticStatus = page.locator(".embedding-engine-state");
@@ -110,11 +108,26 @@ test("production UI activates the same-origin semantic worker and rebuilds the i
  * The Index section is reached by its own disclosure now. The scope strip that
  * used to offer a "Local index" jump restated counts the sections already carry
  * and was removed; the disclosure is the ordinary heading it always was.
+ *
+ * Converges on open instead of reading once and clicking once. This copy kept
+ * the check-then-act shape after `conversation-navigation.spec.ts` and
+ * `profile-silo.spec.ts` were both converted — the same race that reddened CI
+ * twice, about one run in four under repetition: if the route's own open lands
+ * between the read and the click, the click closes it again and the assertion
+ * fails on a control that did exactly what it was told, twice. It survived here
+ * only because this file is excluded from the default matrix
+ * (`playwright.config.ts`), so it could not redden the gate — which makes it a
+ * latent trap for whoever next runs the live semantic lane, not a safe one.
  */
 async function openMemoryIndex(page: Page): Promise<void> {
   const index = page.locator("#memory-index");
-  if (!await index.evaluate((element: HTMLDetailsElement) => element.open)) {
+  const isOpen = () => index.evaluate((element: HTMLDetailsElement) => element.open);
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    if (await isOpen()) return;
     await index.locator("summary").click();
+    // Long enough for the route's own open to land and be observed, so the next
+    // attempt cannot fight a toggle that is still in flight.
+    await page.waitForTimeout(150);
   }
-  await expect.poll(() => index.evaluate((element: HTMLDetailsElement) => element.open)).toBe(true);
+  await expect.poll(isOpen, { timeout: 10_000 }).toBe(true);
 }

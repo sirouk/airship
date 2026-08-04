@@ -250,10 +250,10 @@ test("Profile is the primary A → B → A cockpit silo while global services st
  * cancelled by the test itself. A race does not become correct by being given
  * more time.
  *
- * `conversation-navigation.spec.ts:670` already converges here for the same
- * reason. `live-semantic-embedding.spec.ts:114` still reads once and clicks
- * once; it is excluded from this matrix (`playwright.config.ts:9-14`) so it
- * cannot redden this gate, and belongs to the lane that owns it.
+ * `conversation-navigation.spec.ts` and `live-semantic-embedding.spec.ts` now
+ * converge here for the same reason; the last of the three was the one this
+ * matrix excludes (`playwright.config.ts`), which is exactly why it kept the
+ * racing shape longest — a gate it cannot redden reports nothing about it.
  */
 async function openMemoryIndex(page: Page): Promise<void> {
   const index = page.locator("#memory-index");

@@ -1,9 +1,11 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { CHUTES_EMBEDDING_ENDPOINT } from "../../indexing/chutes-embeddings";
 import { CHUTES_API_BASE, CHUTES_LLM_MODELS_URL } from "../../models/types";
 import {
   CHUTES_AUTHORIZATION_HOST,
   CHUTES_CATALOG_HOSTS,
+  CHUTES_CONFIDENTIAL_EMBEDDING_HOST,
   CHUTES_DISCOVERY_PREFLIGHT,
   CHUTES_LOGO_HOST,
   hostPhrase,
@@ -43,6 +45,31 @@ describe("the hosts named before the button is pressed", () => {
     expect(CHUTES_DISCOVERY_PREFLIGHT).toContain("without your key attached");
     expect(CHUTES_DISCOVERY_PREFLIGHT.indexOf(CHUTES_AUTHORIZATION_HOST))
       .toBeLessThan(CHUTES_DISCOVERY_PREFLIGHT.indexOf(CHUTES_LOGO_HOST));
+  });
+
+  /*
+   * The fourth Chutes host. It is granted in `connect-src` and takes the same
+   * `cpk_` bearer, so its absence from the sentence above is a claim that must
+   * be checkable rather than a comment that can rot: it is absent *because
+   * nothing can reach it yet*, not because it is unimportant. All three halves
+   * are asserted here so the exemption expires by itself.
+   */
+  it("keeps the unreachable embedding chute out of a sentence about a button that never contacts it", () => {
+    expect(CHUTES_CONFIDENTIAL_EMBEDDING_HOST).toBe(new URL(CHUTES_EMBEDDING_ENDPOINT).host);
+
+    // (i) The grant is real, so this is a genuine egress surface, not a typo.
+    const csp = readFileSync(new URL("../../../index.html", import.meta.url), "utf8");
+    expect(csp).toContain(`https://${CHUTES_CONFIDENTIAL_EMBEDDING_HOST}`);
+
+    // (ii) The discovery sentence still describes only what the button does.
+    expect(CHUTES_DISCOVERY_PREFLIGHT).not.toContain(CHUTES_CONFIDENTIAL_EMBEDDING_HOST);
+
+    // (iii) And nothing ships that selects the mode which would contact it. If
+    // a control ever does, this fails, and the fix is the disclosure beside it
+    // — not deleting this line.
+    const engineControls = readFileSync(new URL("../context-view.tsx", import.meta.url), "utf8");
+    expect(engineControls).toContain(`changeEmbeddingMode("semantic")`);
+    expect(engineControls).not.toContain(`changeEmbeddingMode("chutes")`);
   });
 
   it("reads as a sentence for one, two or many hosts", () => {
