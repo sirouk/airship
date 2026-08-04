@@ -3756,6 +3756,19 @@
 
   .profile-hub-tabs,
   .profile-hub-scope { margin: var(--sp-2) 0; }
+  /*
+   * The tabs shrink with the phone rather than holding it open.
+   *
+   * The base grid floors each of the three tabs at `minmax(100px, 1fr)`. That
+   * floor used to be relaxed here by `.profile-hub-tabs.with-scope`, and when
+   * the scope control moved out of the strip that override went with it — but
+   * the floor it was relaxing belongs to the strip, not to the scope control.
+   * Measured at 320px on `#capabilities`: the third tab sat at right=323 against
+   * a 320px main, `scrollWidth` 323 vs `clientWidth` 320, i.e. the whole route
+   * scrolled sideways by 3px. Nothing in `npm run check` runs the e2e suite, so
+   * `narrow-viewport-overflow` was the only thing that ever said so.
+   */
+  .profile-hub-tabs { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .profile-scope-contract { display: grid; width: 100%; }
 
   .profile-editor {
