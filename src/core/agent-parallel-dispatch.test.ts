@@ -43,11 +43,32 @@ describe("parallel dispatch of read-effect tools", () => {
     // Every review lands before any execution: a person is asked the same
     // questions in the same order they would have been asked serially.
     expect(log.slice(0, 3)).toEqual(["review:read_item", "review:read_item", "review:read_item"]);
-    // All three are in flight at once. Serially this would read
-    // start/end/start/end/start/end.
-    expect(log.slice(3, 6)).toEqual(["start:a.md", "start:b.md", "start:c.md"]);
-    // They finish in the opposite order to the order they were called in.
-    expect(log.slice(6)).toEqual(["end:c.md", "end:b.md", "end:a.md"]);
+    /*
+     * All three are in flight at once: every start lands before any end.
+     * Serially this would read start/end/start/end/start/end, so this is the
+     * assertion that actually distinguishes overlapped dispatch from sequential
+     * dispatch.
+     *
+     * It deliberately does NOT pin the order within the starts. `executeApproved`
+     * awaits a SHA-256 of the arguments against the approval ticket
+     * (`tools/registry.ts:159`) before it calls `execute`, and WebCrypto's digest
+     * is not a plain microtask — three of them issued back to back can resolve in
+     * any order once the machine is busy. This test asserted `a, b, c` and failed
+     * as `a, c, b` under `vitest --maxWorkers=4`, while passing 6/6 in isolation.
+     *
+     * That reordering is not a defect and pinning it would be asserting a promise
+     * the product does not make: the batch exists precisely because every call in
+     * it declares `effect: "read"`, so none can observe another's outcome and the
+     * order they enter in cannot be load-bearing. What IS promised is that the
+     * journal reads in call order regardless — which is asserted below, and is
+     * the guarantee a reader of the transcript depends on.
+     */
+    const starts = log.slice(3).filter((entry) => entry.startsWith("start:"));
+    const ends = log.slice(3).filter((entry) => entry.startsWith("end:"));
+    expect(new Set(starts)).toEqual(new Set(["start:a.md", "start:b.md", "start:c.md"]));
+    expect(new Set(ends)).toEqual(new Set(["end:a.md", "end:b.md", "end:c.md"]));
+    expect(log.slice(3, 6).every((entry) => entry.startsWith("start:"))).toBe(true);
+    expect(log.slice(6).every((entry) => entry.startsWith("end:"))).toBe(true);
 
     // ...and the journal still reads in call order, not completion order.
     const events = await journal.readEvents(sessionId);
@@ -82,18 +103,26 @@ describe("parallel dispatch of read-effect tools", () => {
       signal: new AbortController().signal,
     });
 
-    // The leading reads overlap; the write waits for both, and the trailing
-    // read waits for the write. A writer never runs beside anything.
-    expect(log).toEqual([
-      "start:a.md",
-      "start:b.md",
-      "end:b.md",
-      "end:a.md",
-      "start:w.md",
-      "end:w.md",
-      "start:c.md",
-      "end:c.md",
-    ]);
+    /*
+     * The leading reads overlap; the write waits for both, and the trailing
+     * read waits for the write. A writer never runs beside anything.
+     *
+     * Stated as positions rather than as one literal sequence for the reason
+     * given in the first test: the order *within* the overlapping pair is not a
+     * promise the product makes, because `executeApproved` awaits a WebCrypto
+     * digest before `execute` and two of those can resolve either way round on
+     * a busy machine. The barrier, which is the actual subject here, is exact.
+     */
+    const at = (entry: string) => log.indexOf(entry);
+    expect(log).toHaveLength(8);
+    // a and b overlap: both have started before either has finished.
+    expect(Math.max(at("start:a.md"), at("start:b.md")))
+      .toBeLessThan(Math.min(at("end:a.md"), at("end:b.md")));
+    // The write is a barrier on both sides, and runs alone.
+    expect(at("start:w.md")).toBeGreaterThan(Math.max(at("end:a.md"), at("end:b.md")));
+    expect(at("end:w.md")).toBe(at("start:w.md") + 1);
+    expect(at("start:c.md")).toBeGreaterThan(at("end:w.md"));
+    expect(at("end:c.md")).toBe(at("start:c.md") + 1);
 
     const events = await journal.readEvents(sessionId);
     const session = await journal.getSession(sessionId);
