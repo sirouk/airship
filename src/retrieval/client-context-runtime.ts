@@ -66,6 +66,16 @@ export class ClientContextRuntime {
   get embeddingProviderId(): string { return this.embeddings!.id; }
   getEmbeddingMode(): EmbeddingMode { return this.switchable?.getMode() ?? (this.embeddings?.posture === "local-semantic" ? "semantic" : "bootstrap"); }
   getSemanticState(): SemanticProviderState | undefined { return this.switchable?.getSemanticState(); }
+  /**
+   * Which embedding deployment the confidential engine actually resolved.
+   *
+   * Undefined until discovery answers, and that is the honest state rather than
+   * a gap to paper over: before `prepare()` completes nothing here knows which
+   * chute will serve, so the screen that describes the engine must be able to
+   * say so instead of naming a model from a constant. See
+   * `context-view.tsx` `embeddingEngineNote`.
+   */
+  getConfidentialEmbeddingModelId(): string | undefined { return this.switchable?.getConfidentialReadiness()?.modelId; }
   subscribeSemantic(listener: (state: SemanticProviderState) => void): (() => void) | undefined {
     return this.switchable?.subscribeSemantic(listener);
   }

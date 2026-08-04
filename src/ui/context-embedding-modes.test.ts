@@ -46,12 +46,40 @@ describe("every embedding mode names itself", () => {
      * this mode is reachable and `egress-preflight.test.ts` binds it — so what
      * is left is which model runs, and what does not leave.
      */
-    expect(note.body).toContain("Qwen3-Embedding-8B");
     expect(note.body).toContain("page-memory only");
     expect(note.body).toContain("TEE");
 
     for (const mode of ["bootstrap", "semantic"] as const) {
       expect(embeddingEngineNote(mode).title).toContain("Private embedding engine");
+    }
+  });
+
+  /*
+   * This is the assertion the old one should have been.
+   *
+   * The previous test pinned the literal "Qwen3-Embedding-8B", which is exactly
+   * what made a hardcoded model name survive a batch whose whole purpose was
+   * removing hardcoded model names: the test agreed with the bug. What the
+   * sentence owes a person is the model that is *actually* serving their text,
+   * so the test names two different ones and requires the sentence to follow.
+   */
+  it("names the discovered chute, and admits when discovery has not answered", () => {
+    const discovered = embeddingEngineNote("chutes", "Qwen/Qwen3-Embedding-8B-TEE");
+    expect(discovered.body).toContain("Qwen/Qwen3-Embedding-8B-TEE");
+
+    const other = embeddingEngineNote("chutes", "BAAI/bge-m3-TEE");
+    expect(other.body).toContain("BAAI/bge-m3-TEE");
+    expect(other.body).not.toContain("Qwen");
+
+    // Before discovery answers there is no model to name, and inventing one
+    // would be the original bug wearing a different string.
+    const unknown = embeddingEngineNote("chutes");
+    expect(unknown.body).not.toContain("Qwen");
+    expect(unknown.body).toContain("the embedding chute you selected");
+
+    // The on-device engines take no model argument and must ignore one.
+    for (const mode of ["bootstrap", "semantic"] as const) {
+      expect(embeddingEngineNote(mode, "BAAI/bge-m3-TEE")).toEqual(embeddingEngineNote(mode));
     }
   });
 

@@ -54,6 +54,14 @@ export function ContextView({ workspace, entries, dimensions = 384, resultLimit 
   const [embeddingMode, setEmbeddingMode] = useState<EmbeddingMode>(() => runtime.getEmbeddingMode());
   const [semanticState, setSemanticState] = useState<SemanticProviderState | undefined>(() => runtime.getSemanticState());
   const [embeddingChange, setEmbeddingChange] = useState<"idle" | "changing">("idle");
+  /**
+   * Which chute the confidential engine resolved, once discovery has answered.
+   *
+   * Held as state rather than read at render because discovery is asynchronous
+   * and completes inside `setEmbeddingMode`; a render-time read would sample
+   * whatever the module happened to hold and never update again.
+   */
+  const [confidentialModelId, setConfidentialModelId] = useState<string | undefined>(() => runtime.getConfidentialEmbeddingModelId());
   /** Whether a Chutes credential is in page memory right now. Never persisted. */
   const [confidentialAvailable, setConfidentialAvailable] = useState(hasConfidentialAuthority);
   const [statusExpanded, setStatusExpanded] = useState(detailExpanded);
@@ -85,6 +93,7 @@ export function ContextView({ workspace, entries, dimensions = 384, resultLimit 
   useEffect(() => runtime.subscribe((state) => {
     setEngineState(state);
     setEmbeddingMode(runtime.getEmbeddingMode());
+    setConfidentialModelId(runtime.getConfidentialEmbeddingModelId());
   }), [runtime]);
   useEffect(() => runtime.subscribeSemantic(setSemanticState), [runtime]);
   /*
@@ -204,6 +213,7 @@ export function ContextView({ workspace, entries, dimensions = 384, resultLimit 
     try {
       await runtime.setEmbeddingMode(mode);
       setEmbeddingMode(mode);
+      setConfidentialModelId(runtime.getConfidentialEmbeddingModelId());
       setLocalSearchResult(undefined);
     } catch (error) {
       setEmbeddingMode(runtime.getEmbeddingMode());
@@ -365,7 +375,7 @@ export function ContextView({ workspace, entries, dimensions = 384, resultLimit 
             {/* The eyebrow was the literal "Private embedding engine" for every
                 mode, which the confidential one makes false — so the heading is
                 per-mode too, not just the paragraph under it. */}
-            <p class="context-engine-note"><strong>{embeddingEngineNote(embeddingMode).title}</strong> {embeddingEngineNote(embeddingMode).body}</p>
+            <p class="context-engine-note"><strong>{embeddingEngineNote(embeddingMode, confidentialModelId).title}</strong> {embeddingEngineNote(embeddingMode, confidentialModelId).body}</p>
             <p class="context-injection-disclosure" role="note"><strong>Shared runtime.</strong> This screen, the search_context tool, and automatic turn grounding use the same memory-only generation. Selected turn context is bounded and committed to the session journal with source digests.</p>
           </div>
         ) : null}
@@ -595,8 +605,18 @@ export function embeddingModeNoun(mode: EmbeddingMode): string {
   return unreachable;
 }
 
-/** The expanded panel's engine paragraph, per mode. Exhaustive for the same reason. */
-export function embeddingEngineNote(mode: EmbeddingMode): Readonly<{ title: string; body: string }> {
+/**
+ * The expanded panel's engine paragraph, per mode. Exhaustive for the same reason.
+ *
+ * `modelId` is what discovery resolved, not a constant. This sentence used to
+ * name one model outright, which was the same assumption the rest of the
+ * confidential path had already been rewritten to drop: the catalog is read
+ * from Chutes, the width is probed, the choice is the person's — and then the
+ * one sentence a person actually reads about where their text goes named a
+ * model nobody had checked was serving. Undefined means discovery has not
+ * answered yet, and the sentence says that rather than guessing.
+ */
+export function embeddingEngineNote(mode: EmbeddingMode, modelId?: string): Readonly<{ title: string; body: string }> {
   if (mode === "semantic") {
     return Object.freeze({
       title: "Private embedding engine · Semantic transformer.",
@@ -610,7 +630,7 @@ export function embeddingEngineNote(mode: EmbeddingMode): Readonly<{ title: stri
       // always on screen and owns the egress claim. This one describes the
       // engine, and adds the two facts the pre-flight has no room for — which
       // model, and what stays here.
-      body: "Chunk text is sent to the Qwen3-Embedding-8B chute with your Chutes credential; the vectors come back here and, like every search, stay page-memory only. The chute runs in a TEE, which is the only reason a remote engine is offered beside two on-device ones.",
+      body: `Chunk text is sent to ${modelId ? `the ${modelId} chute` : "the embedding chute you selected"} with your Chutes credential; the vectors come back here and, like every search, stay page-memory only. Every chute runs in a TEE, which is the only reason a remote engine is offered beside two on-device ones.`,
     });
   }
   if (mode === "bootstrap") {
