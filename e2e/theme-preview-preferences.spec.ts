@@ -115,7 +115,7 @@ test("previewing a dark-scheme theme on Paper keeps the light instrument", async
   expect(await readPresentation(page)).toEqual({ ...PINNED, mode: "light" });
 
   /*
-   * All three shipped themes declare `colorScheme: "dark"`. The theme layer has
+   * Verdigris declares `colorScheme: "dark"`. The theme layer has
    * no light expression of a dark palette, so when the mode in force disagrees
    * with the manifest the only truthful answer is to write nothing and let the
    * light stylesheet own the instrument — otherwise nine dark roles get pinned
@@ -127,4 +127,54 @@ test("previewing a dark-scheme theme on Paper keeps the light instrument", async
   await expect(page.locator("html")).toHaveAttribute("data-theme", "verdigris");
   expect(await inlineSurface(page)).toBe("");
   expect(await readPresentation(page), "preview under Paper").toEqual({ ...PINNED, mode: "light" });
+});
+
+/*
+ * The same rule from the side that did not exist until the library had light
+ * palettes at all, and the side that would be far worse if it broke.
+ *
+ * A dark manifest wrongly pinned under Paper produced dark surfaces under light
+ * dividers — bad, but the ink was still pale on a dark bed. A *light* manifest
+ * wrongly pinned under Dark instrument would write near-white surfaces while
+ * the dark sheet keeps its pale `--ink`, `--line` and every verdict hex: white
+ * on white, and the verdict vocabulary is exactly what stops being readable.
+ * `deferToStylesheet` is symmetric and already covers this, which is the point
+ * — the assertion is here so it stays symmetric.
+ *
+ * Measured on the running page rather than reasoned about: the shipped dark
+ * ink reads 6.14:1 against the surface behind it while Rosé Pine Dawn is the
+ * selected theme, because the palette layer wrote nothing.
+ */
+test("previewing a light-scheme theme on Dark instrument keeps the dark instrument", async ({ page }) => {
+  await openThemeLibrary(page, "dark");
+
+  await themeOption(page, "Rosé Pine Dawn").click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "rose-pine-dawn");
+  expect(await inlineSurface(page)).toBe("");
+  await expect(page.getByText("Previewing — not saved")).toBeVisible();
+  expect(await readPresentation(page), "light preview under Dark instrument").toEqual({ ...PINNED });
+
+  // The ink the dark sheet still owns, against the bed it is actually painted
+  // on. A pinned light palette would collapse this toward 1:1.
+  const inkOnSurface = await page.evaluate(() => {
+    const style = getComputedStyle(document.documentElement);
+    const channels = (value: string): [number, number, number] => {
+      const hex = value.trim().replace("#", "");
+      const full = hex.length === 3 ? [...hex].map((digit) => digit + digit).join("") : hex;
+      return [0, 2, 4].map((offset) => Number.parseInt(full.slice(offset, offset + 2), 16)) as [number, number, number];
+    };
+    const luminance = (rgb: readonly number[]): number => {
+      const [red, green, blue] = rgb.map((channel) => {
+        const scaled = channel / 255;
+        return scaled <= 0.04045 ? scaled / 12.92 : ((scaled + 0.055) / 1.055) ** 2.4;
+      });
+      return 0.2126 * red! + 0.7152 * green! + 0.0722 * blue!;
+    };
+    const [high, low] = [
+      luminance(channels(style.getPropertyValue("--ink"))),
+      luminance(channels(style.getPropertyValue("--surface"))),
+    ].sort((left, right) => right - left);
+    return (high! + 0.05) / (low! + 0.05);
+  });
+  expect(inkOnSurface).toBeGreaterThan(7);
 });

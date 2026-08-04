@@ -431,18 +431,46 @@ export async function createBuiltInProfileCatalog(): Promise<ProfileCatalog> {
  * 2. Every palette's `inkFaint` must clear AA on its own `surfaceRaised` and
  *    its `inkMuted` 7:1 on its own `surface`; a caption is where provenance
  *    lives. `ui/css-variable-contract.test.ts` enforces both, per theme.
+ * 3. A theme is content-addressed and a profile pins `{themeId, digest}`, so
+ *    editing a *shipped* entry's colours, name or description mints a new
+ *    digest and `createProfileSessionManifest` throws "references an
+ *    unavailable theme revision" for anyone whose profile pinned the old one.
+ *    Adding an entry is free; changing one is a migration. This is why the
+ *    corrections noted below are recorded rather than applied.
  */
 /*
- * Curated first, in-house second.
+ * Curated first, in-house second — and the curated half has to cover the
+ * colour space, not just the popular corner of it.
  *
- * The top six are well-known dark schemes, translated into this product's
- * nine roles rather than re-typed from their dotfiles: each keeps its own
- * accent pair and surface ladder but answers the same questions (ground,
- * surface, raised, soft, ink, muted, faint, accent, bright) with the same
- * constraints the house themes answer — inkFaint clears AA on surfaceRaised,
- * inkMuted clears 7:1 on surface, verified by `css-variable-contract.test.ts`
- * like everything else. They lead the library because a person choosing a look
- * deserves proven options before house experiments.
+ * The well-known schemes are translated into this product's nine roles rather
+ * than re-typed from their dotfiles: each keeps its own accent pair and surface
+ * ladder but answers the same questions (ground, surface, raised, soft, ink,
+ * muted, faint, accent, bright) with the same constraints the house themes
+ * answer — inkFaint clears AA on surfaceRaised, inkMuted clears 7:1 on surface,
+ * verified by `css-variable-contract.test.ts` like everything else. They lead
+ * the library because a person choosing a look deserves proven options before
+ * house experiments.
+ *
+ * The set used to be nine palettes and all nine were dark, while the display
+ * preference has offered Paper (light mode) the whole time — so choosing Paper
+ * meant leaving the theme library behind entirely, because every manifest
+ * declared `colorScheme: "dark"` and `themeCssVariables` correctly writes
+ * nothing when the mode in force disagrees with the manifest. Three of the six
+ * curated darks were also cool blue-violet within a few degrees of each other.
+ * Rosé Pine Dawn and Modus Operandi close the mode gap; Dracula and Everforest
+ * widen the hue range to saturated violet and warm forest. Nothing was removed:
+ * adjacent is not redundant, and the digest rule above makes removal expensive.
+ *
+ * Upstream values are kept verbatim wherever they clear this product's floors,
+ * and every value that had to move says so on its own line — the same
+ * convention `profiles/code-themes.ts` uses for the editor palettes. Two floors
+ * do most of the moving: the ink ladder (inkMuted 7:1, inkFaint AA), and the
+ * fact that a theme owns the *surfaces* but never the verdict colours, so a
+ * palette whose raised surface is lighter than the fixed `--v-failed`/`--copper`
+ * hexes can carry would push evidence colour below AA. That constraint sets the
+ * ceiling on how light a dark theme may be and the floor on how light a light
+ * theme must be, and it is not negotiable in a product whose whole claim is
+ * that a verdict means something.
  */
 const themeDrafts: readonly ThemeManifestDraft[] = [
   {
@@ -557,6 +585,148 @@ const themeDrafts: readonly ThemeManifestDraft[] = [
       accentBright: "#8fc6f2",
     },
     typography: { body: "system-sans", scale: "standard" },
+    layout: { density: "comfortable", corners: "square" },
+  },
+  {
+    themeId: "dracula",
+    name: "Dracula",
+    description: "Curated · saturated violet and hot pink on slate.",
+    colorScheme: "dark",
+    colors: {
+      // Dracula's own ANSI black and background, unchanged: #282a36 is the one
+      // hex the scheme is recognised by, and it carries --copper at 4.92:1, so
+      // there is no reason to move it.
+      ground: "#21222c",
+      surface: "#282a36",
+      // Upstream "current line" #44475a is the natural raised surface and it is
+      // the one value that could not be kept: the fixed --copper and --v-failed
+      // hexes read 3.1:1 against it, and a theme may not dim a verdict. This is
+      // #282a36 lifted one rung instead, which holds both at 4.65:1.
+      surfaceRaised: "#2c2e3b",
+      surfaceSoft: "#24252f",
+      ink: "#f8f8f2",
+      // Upstream "comment" #6272a4 is 3.03:1 on the background — a comment
+      // colour doing a caption's job. Both ink tiers are that violet-grey
+      // carried up its own hue until they clear the ladder rather than a
+      // different colour: muted 8.58:1, faint 6.14:1.
+      inkMuted: "#c5c8db",
+      inkFaint: "#a5a9c2",
+      accent: "#bd93f9",
+      accentBright: "#ff79c6",
+    },
+    typography: { body: "system-sans", scale: "standard" },
+    layout: { density: "comfortable", corners: "rounded" },
+  },
+  {
+    themeId: "everforest",
+    name: "Everforest",
+    description: "Curated · warm sage and sand over soft forest grey.",
+    colorScheme: "dark",
+    colors: {
+      /*
+       * Everforest Dark Hard, shifted one rung down the author's own ladder.
+       *
+       * Upstream pairs bg0 #272e33 with bg1 #2e383c, and #2e383c holds --copper
+       * at only 4.15:1. Rather than invent surfaces, the ladder starts a rung
+       * lower — bg_dim becomes the surface and bg0 the raised one — which keeps
+       * every hex Everforest's own and puts --copper at 5.03:1.
+       */
+      ground: "#1a1f22",
+      surface: "#1e2326",
+      surfaceRaised: "#232a2e",
+      surfaceSoft: "#1c2124",
+      // Everforest's fg is a muted sand, not a near-white, so this palette sits
+      // at 9.39:1 where the rest of the library runs 10.5–15:1. That is the
+      // scheme's whole character and it clears AAA for body text; flattening it
+      // toward white would produce something that is no longer Everforest.
+      ink: "#d3c6aa",
+      // grey2 #9da9a0 is 5.97:1, below the 7:1 the middle tier owes; lifted
+      // along its own hue. inkFaint is grey2 itself, which clears AA with room.
+      inkMuted: "#aebaaf",
+      inkFaint: "#9da9a0",
+      accent: "#a7c080",
+      accentBright: "#dbbc7f",
+    },
+    typography: { body: "system-sans", scale: "standard" },
+    layout: { density: "comfortable", corners: "subtle" },
+  },
+  /*
+   * The two light palettes.
+   *
+   * `themeCssVariables` writes nothing at all when the colour mode in force
+   * disagrees with the manifest, so these are inert under Dark instrument and
+   * the dark stylesheet owns the screen — safe, but silent, and a theme that
+   * appears to do nothing when clicked reads as a bug. The description is the
+   * only field a manifest has to say so, so it says so.
+   *
+   * Light is also where the verdict floor binds from the other side: the light
+   * sheet's --v-failed #ae4939 needs a bed at or above ~#e9e9e9 luminance to
+   * clear AA, which is why neither of these has a mid-grey surface.
+   */
+  {
+    themeId: "rose-pine-dawn",
+    name: "Rosé Pine Dawn",
+    description: "Curated · warm ivory and rose; needs Paper mode.",
+    colorScheme: "light",
+    colors: {
+      // base, and "surface"/"overlay" as the raised and recessed rungs. The
+      // middle surface is interpolated between base and overlay because the
+      // upstream ladder has no rung there.
+      ground: "#faf4ed",
+      surface: "#f7efe7",
+      surfaceRaised: "#fffaf3",
+      surfaceSoft: "#f2e9e1",
+      /*
+       * Dawn's whole ink ramp is below this product's floors, which is what
+       * "low-contrast light theme" means in practice: text #575279 is 6.39:1,
+       * subtle #797593 is 3.86:1 and muted #9893a5 is 2.62:1 on the surface
+       * above. Each is carried down its own violet hue until it clears the
+       * tier it occupies — 11.34:1, 7.96:1 and 5.71:1 — rather than swapped for
+       * a grey, so the palette still reads as Dawn and a caption is still
+       * legible in daylight.
+       */
+      ink: "#332e49",
+      inkMuted: "#494564",
+      inkFaint: "#5f5b73",
+      // pine, upstream and untouched at 5.37:1.
+      accent: "#286983",
+      // love #b4637a is 3.69:1 and, as the primary button's bed, would put
+      // near-white ground text at 3.84:1; deepened until that pairing reads
+      // 6.90:1. In a light palette the "bright" accent is the darker one —
+      // the same inversion the light stylesheet makes.
+      accentBright: "#7d4256",
+    },
+    typography: { body: "system-sans", scale: "standard" },
+    layout: { density: "comfortable", corners: "rounded" },
+  },
+  {
+    themeId: "modus-operandi",
+    name: "Modus Operandi",
+    description: "Curated · black on white at AAA; needs Paper mode.",
+    colorScheme: "light",
+    colors: {
+      // Modus is the one well-known scheme designed to WCAG AAA from the
+      // start, so it is the only entry here whose accents needed no lift at
+      // all. It is in the library because nothing else in it is high-contrast:
+      // black on white against nine soft palettes is the coverage.
+      ground: "#f7f7f7",
+      surface: "#f2f2f2",
+      surfaceRaised: "#ffffff",
+      surfaceSoft: "#e6e6e6",
+      ink: "#000000",
+      // fg-dim #595959 is 6.26:1 on this surface, just under the 7:1 the middle
+      // tier owes; darkened to 7.55:1. inkFaint is a rung below it at 5.79:1 —
+      // set against `surfaceSoft`, not `surface`, because the recessed surface
+      // is the darkest bed a caption actually lands on and no test covers it.
+      inkMuted: "#4d4d4d",
+      inkFaint: "#5e5e5e",
+      accent: "#0031a9",
+      accentBright: "#3548cf",
+    },
+    // Large type, deliberately: this palette exists for legibility, and the
+    // manifest's type scale is a real render input, so the option that promises
+    // maximum contrast should not arrive at the same size as everything else.
+    typography: { body: "system-sans", scale: "large" },
     layout: { density: "comfortable", corners: "square" },
   },
   {

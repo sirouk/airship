@@ -6,7 +6,7 @@ import { MemoryGitAdapter } from "../git/memory-adapter";
 import { createAirshipToolRegistry } from "../tools/airship-tools";
 import { MemoryWorkspace } from "../workspace/memory";
 import { archiveProfileRevision, createBuiltInProfileCatalog, managedProfileRevisions } from "./catalog";
-import { resolveProfileForSession, themeCssVariables } from "./domain";
+import { resolveProfileForSession, themeCssVariables, type ThemeColorScheme } from "./domain";
 
 describe("built-in Airship profiles", () => {
   it("resolves every profile into a pinned prompt, skill set, and semantic theme", async () => {
@@ -41,6 +41,28 @@ describe("built-in Airship profiles", () => {
       expect(["ask-first", "auto-approve", "full-access"]).toContain(pin.approvalMode);
       expect(Object.keys(themeCssVariables(theme!))).toHaveLength(9);
     }
+  });
+
+  /*
+   * The display preference offers two colour modes, so the library owes a
+   * palette to each of them.
+   *
+   * For nine releases it did not: every shipped manifest declared
+   * `colorScheme: "dark"`, and `themeCssVariables` deliberately writes nothing
+   * when the mode in force disagrees with the manifest — so a person on Paper
+   * could open the theme library, click every option in it, and watch the
+   * screen not change. Nothing failed, which is precisely why nothing caught
+   * it. The mode list is a `Record<ThemeColorScheme, true>`, which is the same
+   * vocabulary `PreferenceOverrides["mode"]` carries, so a third colour mode
+   * fails to compile here until someone lists it — and then fails to pass until
+   * a palette exists for it.
+   */
+  it("offers at least one palette for every colour mode the shell can be in", async () => {
+    const catalog = await createBuiltInProfileCatalog();
+    const modes = { dark: true, light: true } satisfies Record<ThemeColorScheme, true>;
+    const covered = new Set(catalog.themes.map((theme) => theme.colorScheme));
+    const uncovered = (Object.keys(modes) as ThemeColorScheme[]).filter((mode) => !covered.has(mode));
+    expect(uncovered, "A colour mode with no palette makes the theme library inert for anyone in it.").toEqual([]);
   });
 
   it("requires only tool names implemented by the composed edge registry", async () => {

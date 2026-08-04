@@ -89,6 +89,29 @@ describe("colour contract", () => {
     expect(failures, "Three ink tiers only read as three if the middle one is a step, not a nudge.").toEqual([]);
   });
 
+  /*
+   * The primary button's own pairing, per palette.
+   *
+   * The mode assertion below already holds `--ground` on `--accent-bright`,
+   * because that pairing — not the token on a surface — is what a person
+   * actually reads on the one button every route puts its main action on. But
+   * it reads the *stylesheet's* two hexes, and both of those roles belong to
+   * the theme: any manifest overwrites them together, and nothing checked the
+   * result. A palette with a pale `accentBright` would have painted a
+   * near-invisible label on every primary button in the product and passed the
+   * whole suite. The light palettes make that reachable rather than
+   * theoretical, since a light theme's "bright" accent has to be the darker of
+   * the pair for exactly this reason.
+   */
+  it("keeps every shipped palette's primary button label legible on its own accent", async () => {
+    const { themes } = await createBuiltInProfileCatalog();
+    const failures = themes.flatMap((theme) => {
+      const ratio = contrast(theme.colors.ground, theme.colors.accentBright);
+      return ratio >= AA_TEXT ? [] : [`${theme.themeId} ground on accentBright ${ratio.toFixed(2)}:1`];
+    });
+    expect(failures, "Every route's main action paints --ground on --accent-bright.").toEqual([]);
+  });
+
   it("mirrors the stylesheet exactly in the baseline the theme layer diffs against", () => {
     const dark = resolvedTokens("dark");
     const light = resolvedTokens("light");
