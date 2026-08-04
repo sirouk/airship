@@ -2708,12 +2708,13 @@
     z-index: 30;
     display: grid;
     grid-row: 3;
-    /* The leading track carries the live-load reading, which is not a
-       destination and never a tap target. It is `auto` rather than a fixed
-       width so a build that stops rendering the indicator collapses the track
-       to zero and the four tabs return to quarters on their own; the indicator
-       sizes itself, so the tabs do not resize when the count changes. */
-    grid-template-columns: auto repeat(4, minmax(0, 1fr));
+    /* Five destinations, equal shares. The leading `auto` track that used to
+       lead this list held the live-load reading, which read `0 · Idle` on a
+       phone permanently because it counts execution-pack runs; the reading now
+       rides the desktop rail and #capabilities only, and Memory took the band
+       slot it was holding. Nothing here may auto-flow or scroll: a destination
+       that has to be scrolled to is not in the band. */
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     overflow: hidden;
     padding:
       0

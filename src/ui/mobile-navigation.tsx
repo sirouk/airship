@@ -10,7 +10,6 @@ import {
 } from "./navigation-model";
 import { Icon, type IconName } from "./icons";
 import { trapFocus } from "./focus-trap";
-import { RuntimeLoadIndicator } from "./runtime-load-indicator";
 
 export type MobileNavigationProps = Readonly<{
   view: NavigationView;
@@ -34,6 +33,7 @@ export type MobileNavigationProps = Readonly<{
 const primaryIcons: Readonly<Record<MobilePrimaryControlId, IconName>> = Object.freeze({
   chat: "chat",
   workspace: "workspace",
+  memory: "memory",
   trust: "proof",
   more: "plus",
 });
@@ -125,16 +125,25 @@ export function MobileNavigation({
   return (
     <>
       <nav class="mobile-nav fixed-mobile-nav" aria-label="Mobile navigation" inert={moreOpen || chromeInert} aria-hidden={moreOpen || chromeInert || undefined}>
-        {/* The live-load reading rides this band for the same reason it rides
-            the rail on desktop: below the phone breakpoint `.sidebar` is
-            `display: none`, so a rail-only indicator is removed from the render
-            tree *and* the accessibility tree exactly where the reader has the
-            least room to go looking for it. This bar is the only band a phone
-            renders on every route. It is not a destination and takes no tap
-            target — it gets the nav grid's leading track and sizes itself, so
-            the four destinations keep equal shares and do not resize under a
-            finger when the count changes. */}
-        <RuntimeLoadIndicator placement="nav" />
+        {/*
+          * The band is five destinations and nothing else.
+          *
+          * The shell's live-load reading held the leading track and read
+          * `0 · Idle` on a phone permanently. That is not a bug in the
+          * indicator: `RuntimeLoadMonitor.begin` has exactly one caller —
+          * `ClientExecutionRuntime.execute`, around the execution *adapter*
+          * call (`src/execution/runtime-registry.ts`) — so it counts runs of an
+          * optional execution pack. Sending a prompt, running a tool, indexing
+          * a workspace and searching memory all pass it by, which is why the
+          * owner typed a prompt and neither the word nor the number moved. It
+          * was reporting truthfully about a runtime a phone almost never has.
+          *
+          * So the reading is not repaired here, it is relocated to where it is
+          * read on purpose: the desktop rail still mounts it on every route,
+          * and #capabilities still expands the same report into running/peak
+          * counts, page memory and origin storage. A permanent `0` was buying
+          * a fifth of the most constrained band in the product.
+          */}
         {MOBILE_PRIMARY_CONTROLS.map((control) => {
           const current = activeControl === control.id;
           const open = control.id === "more" && moreOpen;
@@ -265,7 +274,14 @@ export function MobileNavigation({
                       type="button"
                       onClick={openSettingsFromMore}
                     >
-                      <Icon name="model" size={21} />
+                      {/* Register 1.16. This was `name="model"` — the glyph
+                          that means "an inference model" everywhere else in the
+                          product — over the word Preferences. The desktop half
+                          of the collision was fixed when the `settings` gear
+                          joined the icon map for exactly this row; the phone
+                          sheet was left disagreeing with it, which is the
+                          defect rather than the fix. */}
+                      <Icon name="settings" size={21} />
                       <span>{entry.label}</span>
                       <small>Preferences</small>
                     </button>

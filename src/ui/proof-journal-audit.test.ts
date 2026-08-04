@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import type { SessionAuditReport } from "../core/session-audit";
-import { answerProvenanceReading, journalAuditReading, missingReceiptReading, recordedActivityFacts } from "./proof-view";
+import { answerProvenanceReading, journalAuditReading, missingReceiptReading, recordedActivityFacts, recordedActivitySummary } from "./proof-view";
 
 const source = await readFile(new URL("./proof-view.tsx", import.meta.url), "utf8");
 
@@ -182,11 +182,41 @@ describe("the recorded-work ledger", () => {
   });
 
   it("stands beside the verdict, not inside a panel that collapses when the structure passes", () => {
-    expect(source).toContain('<dl class="proof-posture" aria-label="Work recorded in this session’s journal">');
+    expect(source).toContain('aria-label="Work recorded in this session\u2019s journal"');
     // The journal disclosure keeps the facts about the check itself and no
     // longer carries the one recorded-work count that used to hide in it.
     expect(source).not.toContain("<dt>Shell records</dt>");
     expect(source).toContain("<dt>Journal events</dt>");
+  });
+
+  it("states its own contents when a phone collapses it, so a recorded session never reads as an empty one", () => {
+    /*
+     * The list is in a `<details>` on a phone now, because five mono labels in
+     * a 12ch column wrapped to ten lines directly above the VERIFIED /
+     * ASSERTED / NO EVIDENCE block. A disclosure that says nothing about what
+     * it holds would reopen the exact finding this ledger exists to close: a
+     * person who had just committed under two approvals being told, on the
+     * integrity surface, that nothing had been recorded.
+     *
+     * So the summary distinguishes the two zeros the same way the list does.
+     */
+    const empty = recordedActivityFacts(counted({ events: 4 }).counts);
+    expect(recordedActivitySummary(empty)).toBe("Nothing recorded \u00b7 5 kinds checked");
+
+    const worked = recordedActivityFacts(counted({
+      events: 22, turns: 3, completedTurns: 2, failedTurns: 1,
+      toolOperations: 4, terminalToolOperations: 3, shellRecords: 7,
+    }).counts);
+    const summary = recordedActivitySummary(worked);
+    expect(summary).toContain("3 of 5 kinds recorded");
+    expect(summary).toContain("provider turns");
+    expect(summary).toContain("shell records");
+    // Read back out of the rendered facts, never recomputed from `counts`:
+    // the summary and the list may not be able to disagree.
+    expect(worked.filter((fact) => fact.value !== "0")).toHaveLength(3);
+
+    // `open` follows the width and nothing else — the facts exist either way.
+    expect(source).toContain("<details class=\"proof-recorded\" open={!phone}>");
   });
 
   it("states what the completeness check can and cannot show", () => {

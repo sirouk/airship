@@ -6,7 +6,7 @@ import {
   destinationHintForControl,
   evidenceRecordLabel,
 } from "./mobile-navigation";
-import { MOBILE_PRIMARY_CONTROLS, mobilePrimaryControlForView, type NavigationView } from "./navigation-model";
+import { MOBILE_MORE_ENTRIES, MOBILE_PRIMARY_CONTROLS, mobilePrimaryControlForView, type NavigationView } from "./navigation-model";
 
 const source = readFileSync(new URL("./mobile-navigation.tsx", import.meta.url), "utf8");
 
@@ -70,18 +70,23 @@ describe("every route states its location to assistive tech, including the five 
     expect(source).not.toContain('activeControl === "more" ?');
   });
 
-  it("names every overflow destination, including the one with no sheet entry of its own", () => {
+  it("names every destination, including the one with no sheet entry of its own", () => {
     // `context` is absent from MOBILE_MORE_ENTRIES, so a lookup that only read
-    // that table would leave the #context route unnamed.
-    const overflow = (["memory", "context", "profiles", "capabilities", "skills"] as const)
+    // that table would leave the #context route unnamed. It is named through
+    // the canonical fallback instead, and asserted beside four views that do
+    // have sheet rows so a regression in either branch reddens this.
+    const named = (["memory", "context", "profiles", "capabilities", "skills"] as const)
       .map((view) => [view, mobilePrimaryControlForView(view), currentDestinationLabel(view)] as const);
-    expect(overflow).toEqual([
-      ["memory", "more", "Memory"],
-      ["context", "more", "Memory"],
+    expect(named).toEqual([
+      // Memory owns a band control now, so its own tab is what highlights —
+      // and #context, which has no control of its own, highlights Memory's.
+      ["memory", "memory", "Memory"],
+      ["context", "memory", "Memory"],
       ["profiles", "more", "Profiles"],
       ["capabilities", "more", "Capabilities"],
       ["skills", "more", "Skills"],
     ]);
+    expect(MOBILE_MORE_ENTRIES.some((entry) => entry.id === "context")).toBe(false);
   });
 
   it("names the route on every control whose own label is not the route's name", () => {

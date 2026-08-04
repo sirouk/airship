@@ -93,15 +93,20 @@ describe("canonical navigation model", () => {
     expect(navigationViewFromHash("#unknown")).toBe("chat");
   });
 
-  it("defines four fixed mobile controls with conversations available through More", () => {
+  it("defines five fixed mobile controls with conversations available through More", () => {
+    // Memory before Trust, and in the band rather than behind the overflow
+    // glyph. The slot it takes was the live-load reading's, which counted
+    // execution-pack runs and therefore read `0 · Idle` on a phone forever.
     expect(MOBILE_PRIMARY_CONTROLS).toEqual([
       { id: "chat", label: "Chat", kind: "route", view: "chat" },
       { id: "workspace", label: "Workspace", kind: "route", view: "workspace" },
+      { id: "memory", label: "Memory", kind: "route", view: "memory" },
       { id: "trust", label: "Trust", kind: "route", view: "proof" },
       { id: "more", label: "More", kind: "overlay", overlay: "more" },
     ]);
-    expect(MOBILE_PRIMARY_CONTROLS).toHaveLength(4);
+    expect(MOBILE_PRIMARY_CONTROLS).toHaveLength(5);
     expect(mobilePrimaryControlForView("proof")).toBe("trust");
+    expect(mobilePrimaryControlForView("memory")).toBe("memory");
   });
 
   it("keeps nested destinations attached to their primary mobile parent", () => {
@@ -111,8 +116,9 @@ describe("canonical navigation model", () => {
       workspace: "workspace",
       editor: "workspace",
       terminal: "workspace",
-      memory: "more",
-      context: "more",
+      memory: "memory",
+      // Memory's index tab, so it highlights Memory rather than the overflow.
+      context: "memory",
       profiles: "more",
       capabilities: "more",
       skills: "more",
@@ -128,6 +134,8 @@ describe("canonical navigation model", () => {
       "sessions",
       "editor",
       "terminal",
+      // Memory has a band slot *and* a sheet row: the sheet is the phone's full
+      // index, and a promotion is not a reason to take a learned path away.
       "memory",
       "profiles",
       "skills",

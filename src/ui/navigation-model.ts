@@ -20,7 +20,7 @@ export type CanonicalDestinationId = Exclude<NavigationView, "sessions" | "edito
 export type NestedDestinationId = Extract<NavigationView, "sessions" | "editor" | "terminal" | "capabilities" | "skills" | "billing">;
 export type NavigationGroup = "Work" | "Agent" | "Trust";
 export type NavigationScope = "session" | "workspace" | "profile" | "global";
-export type MobilePrimaryControlId = "chat" | "workspace" | "trust" | "more";
+export type MobilePrimaryControlId = "chat" | "workspace" | "memory" | "trust" | "more";
 export type NavigationHash =
   | "#chat"
   | "#sessions"
@@ -283,9 +283,22 @@ export function railTraversal(expanded: Readonly<Record<string, boolean>>): read
   return Object.freeze(order);
 }
 
+/**
+ * The phone's band, in the order the owner reads it.
+ *
+ * Memory comes before Trust, and it is a primary control rather than a row in
+ * the More sheet: it is the second-most-opened destination on a phone and it
+ * was two taps away behind an overflow glyph while a live-load reading — a
+ * count of execution-pack runs, which is zero on every phone that has not
+ * activated one — held the band's leading track. That reading is not deleted;
+ * it rides the desktop rail and expands on #capabilities, which is where the
+ * rest of its report already lives. What it stopped doing is occupying a fifth
+ * of the most constrained screen in the product to say `0 · Idle` forever.
+ */
 export const MOBILE_PRIMARY_CONTROLS: readonly MobilePrimaryControl[] = Object.freeze([
   Object.freeze({ id: "chat", label: "Chat", kind: "route", view: "chat" }),
   Object.freeze({ id: "workspace", label: "Workspace", kind: "route", view: "workspace" }),
+  Object.freeze({ id: "memory", label: "Memory", kind: "route", view: "memory" }),
   Object.freeze({ id: "trust", label: "Trust", kind: "route", view: "proof" }),
   Object.freeze({ id: "more", label: "More", kind: "overlay", overlay: "more" }),
 ]);
@@ -301,6 +314,17 @@ export const MOBILE_MORE_ENTRIES: readonly MobileMoreEntry[] = Object.freeze([
   moreRoute("sessions", "All conversations", "Search and resume past chats", "chat"),
   moreRoute("editor", "Editor", "Files and code", "workspace"),
   moreRoute("terminal", "Terminal", "Sandboxed command sessions", "workspace"),
+  /*
+   * Kept, even though Memory is a primary control now.
+   *
+   * Chat, Workspace and Proof are not repeated here, so the consistent thing
+   * would be to drop this row — but the sheet is the product's full index of
+   * destinations on a phone, `airship-shell.spec.ts` reaches #memory through
+   * it, and a person who learned the route lives behind More does not benefit
+   * from having it taken away on the release that promotes it. The two entries
+   * cannot both claim to be current: the band is `inert` and `aria-hidden`
+   * whenever the sheet is open, so at most one is in the accessibility tree.
+   */
   moreRoute("memory", "Memory", "Recall, sources, and relationships"),
   moreRoute("profiles", "Profiles", "Agent behavior and approvals"),
   moreRoute("skills", "Skills", "Reusable instructions across profiles", "profiles"),
@@ -318,8 +342,10 @@ const MOBILE_CONTROL_BY_VIEW: Readonly<Record<NavigationView, MobilePrimaryContr
   proof: "trust",
   editor: "workspace",
   terminal: "workspace",
-  memory: "more",
-  context: "more",
+  memory: "memory",
+  // Memory's index tab, not a destination of its own — so the band highlights
+  // the control that owns it rather than falling through to the overflow.
+  context: "memory",
   profiles: "more",
   capabilities: "more",
   skills: "more",

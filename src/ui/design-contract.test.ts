@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
+import { MOBILE_PRIMARY_CONTROLS } from "./navigation-model";
 import { readAirshipStyles } from "./style-sheets.test-helper";
 
 const [appSource, attestationSource, sealSource, sessionsSource, sourcesSource, styles, vaultStyles, localLabStyles, menuStyles, mobileNavSource, routeStyles, durabilityStyles] = await Promise.all([
@@ -146,27 +147,35 @@ describe("Airship Instrument design contract", () => {
     expect(routeStyles.match(/font-family:\s*var\(--font-display\)/gu)).toHaveLength(2);
   });
 
-  it("renders the mobile shell as four fixed primary controls without horizontal scrolling", () => {
+  it("renders the mobile shell as fixed primary controls without horizontal scrolling", () => {
     const mobileNavRules = [...styles.matchAll(/\.mobile-nav\s*\{([^}]+)\}/gu)].map((match) => match[1] ?? "");
-    const mobileRule = mobileNavRules.find((rule) => rule.includes("repeat(4")) ?? "";
+    const mobileRule = mobileNavRules.find((rule) => rule.includes("grid-template-columns")) ?? "";
     /*
-     * AMENDED — the track list may carry one leading `auto` column, and only
-     * that. It holds the shell's live-load reading, which is a `role="status"`
-     * region rather than a fifth destination: below this breakpoint `.sidebar`
-     * is `display: none`, so the rail's copy leaves the render tree and the
-     * accessibility tree, and a phone reader was left navigating to
-     * #capabilities to learn what was running.
+     * AMENDED — the track count is read out of the model rather than pinned.
      *
-     * The claim this test makes is unchanged and is now stated as a suffix
-     * rather than as the whole value: four primary controls, equal shares of
-     * whatever width remains, no scroll, no auto flow. A fifth *destination*
-     * still fails it, because `repeat(4, …)` is still the tail of the list.
+     * The literal `repeat(4, …)` this asserted, and the leading `auto` track
+     * the previous amendment allowed beside it, were both descriptions of one
+     * arrangement: four destinations plus the shell's live-load reading. The
+     * reading has left the band (it counted execution-pack runs and read
+     * `0 · Idle` on a phone forever; it rides the rail and #capabilities now)
+     * and Memory took the slot. Pinning `4` again would only mean this test
+     * has to be edited the next time the band is right — so it derives the
+     * count from `MOBILE_PRIMARY_CONTROLS`, which is the one table the band,
+     * the sheet and the palette all read.
+     *
+     * The claim is unchanged and is the part that matters: every primary
+     * control gets an equal share of the width, and none of them is reached by
+     * scrolling or by auto-flowing onto a second row. A control that is not in
+     * the model still cannot claim a track, because there are exactly as many
+     * tracks as the model has entries.
      */
-    expect(mobileRule).toMatch(/grid-template-columns:\s*(?:auto )?repeat\(4, minmax\(0, 1fr\)\);/u);
-    expect(mobileNavSource).toContain("<RuntimeLoadIndicator placement=\"nav\" />");
-    // Nothing else may claim the track: the reading is the one non-destination
-    // child, so the tabs cannot be pushed off the row by a second occupant.
-    expect(mobileNavSource.match(/<RuntimeLoadIndicator/gu)).toHaveLength(1);
+    expect(mobileRule).toMatch(
+      new RegExp(`grid-template-columns:\\s*repeat\\(${MOBILE_PRIMARY_CONTROLS.length}, minmax\\(0, 1fr\\)\\);`, "u"),
+    );
+    // A `<button>` per model entry and nothing else in the band: an occupant
+    // that is not a destination is what pushed the tabs into a fifth of the row.
+    expect(mobileNavSource).toContain("{MOBILE_PRIMARY_CONTROLS.map((control) => {");
+    expect(mobileNavSource).not.toContain("<RuntimeLoadIndicator");
     expect(mobileRule).toContain("overflow: hidden");
     expect(mobileRule).not.toContain("overflow-x: auto");
     expect(mobileRule).not.toContain("grid-auto-flow");

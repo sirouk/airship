@@ -27,6 +27,7 @@ import { downloadFileName, downloadText } from "./file-download";
 import { Icon } from "./icons";
 import { Popover } from "./popover";
 import "./popover.css";
+import { useShellIsPhone } from "./phone-viewport";
 import type { ProofSection } from "./proof-route";
 import { RouteHeader } from "./route-header";
 import { sealStateForProofStatus, Seal, type SealState } from "./seal";
@@ -106,6 +107,8 @@ export function ProofView({
    * dependency, so bumping it re-audits the same session.
    */
   const [auditAttempt, setAuditAttempt] = useState(0);
+  /** Decides only what starts open, never what exists. */
+  const phone = useShellIsPhone();
 
   useEffect(() => {
     let current = true;
@@ -326,51 +329,22 @@ export function ProofView({
             <p class="proof-hero-claims__evidence">{claimStack.evidenceSummary}</p>
             {claimStack.items.map((item) => <ClaimPopoverRow key={item.key} item={item} />)}
           </Popover>
-          {/* The hero seal is the verdict: `density="hero"` is the one place a
-              seal renders its own word and detail as visible text, so restating
-              `chip` and `line` here would reopen the defect this package
-              closes — one turn, several phrasings, in one viewport. */}
-          <div class="proof-verdict__body">
-            {/* The hero's word is about one turn's claim stack, and it was read
-                as a verdict on the whole session: after two human-approved Git
-                effects this panel led with "No evidence", and a person who had
-                just committed concluded Airship had recorded nothing. The scope
-                line is the same device the journal panel below already uses —
-                the verdict keeps its one word, and the word stops covering more
-                than it checked. */}
-            <p class="proof-verdict__context"><span class="eyebrow">Turn evidence</span></p>
-            {/* The subject, named. This route was reached by a deep link
-                carrying `session`, `receipt` and `turn`, rendered the claim
-                stack for that turn, and then named neither the conversation nor
-                the message — so the one question a reader arrives with ("which
-                answer is this about?") had no answer on the page, and every
-                enabled control led further in. */}
-            <ProofScope
-              sessionId={sessionId}
-              conversationTitle={journal?.title}
-              turn={scopedTurn}
-              requestedTurnId={requestedTurnId ?? receipt?.turnId}
-              journalRead={Boolean(journal)}
-              onReturnToTurn={onReturnToTurn}
-            />
-            {/* An acquisition failure is a modifier on the verdict, never a
-                second verdict: the fetch that did not happen is not a
-                verification that failed. */}
-            {verdict.modifier ? <p class="proof-verdict__modifier"><Icon name="warning" size={14} />{verdict.modifier}</p> : null}
-            {receipt ? <p class="proof-verdict__summary">{summarizeReceipt(receipt)}</p> : null}
-            {/* Inside the body, under its own scope line, because it is the one
-                block here that is not about the turn: an unlabelled ledger sat
-                under "Turn evidence" and claimed the wrong subject at 390px,
-                where the two columns become one. Present exactly when there is
-                an audited journal to speak for — an unread or unreadable
-                journal must not render four zeros as if it had counted them. */}
-            {recordedActivity.length > 0 ? <>
-              <p class="proof-verdict__context"><span class="eyebrow">Recorded in this session’s journal</span></p>
-              <dl class="proof-posture" aria-label="Work recorded in this session’s journal">
-                {recordedActivity.map((fact) => <div key={fact.label}><dt>{fact.label}</dt><dd>{fact.value}</dd></div>)}
-              </dl>
-            </> : null}
-          </div>
+          {/*
+            * The counts read second, directly under the word they decompose.
+            *
+            * Measured at 430×932: this block sat 572px down the route, behind
+            * the header, the tab pair, the verdict card, a `TURN EVIDENCE`
+            * panel and a five-row journal ledger — a wall of text in front of
+            * the one part of the page the owner said reads well. Nothing is
+            * removed; the subject and the ledger simply stop coming first,
+            * because "what was checked, and how did it come out" is the
+            * question a person opens this route with, and "which conversation
+            * is this about" is the one they ask after reading the answer.
+            *
+            * On desktop the counts take the verdict's second column, so the
+            * DOM order and the visual order agree at both widths rather than
+            * one of them being achieved with `order:`.
+            */}
           <dl class="proof-counts" aria-label="Claim states in this turn">
             {CLAIM_STATE_LEGEND.map((entry) => (
               <div key={entry.status} data-status={entry.status}>
@@ -413,6 +387,68 @@ export function ProofView({
               ))}
             </section>
           ) : null}
+          {/* The hero seal is the verdict: `density="hero"` is the one place a
+              seal renders its own word and detail as visible text, so restating
+              `chip` and `line` here would reopen the defect this package
+              closes — one turn, several phrasings, in one viewport. */}
+          <div class="proof-verdict__body">
+            {/* The hero's word is about one turn's claim stack, and it was read
+                as a verdict on the whole session: after two human-approved Git
+                effects this panel led with "No evidence", and a person who had
+                just committed concluded Airship had recorded nothing. The scope
+                line is the same device the journal panel below already uses —
+                the verdict keeps its one word, and the word stops covering more
+                than it checked. */}
+            <p class="proof-verdict__context"><span class="eyebrow">Turn evidence</span></p>
+            {/* The subject, named. This route was reached by a deep link
+                carrying `session`, `receipt` and `turn`, rendered the claim
+                stack for that turn, and then named neither the conversation nor
+                the message — so the one question a reader arrives with ("which
+                answer is this about?") had no answer on the page, and every
+                enabled control led further in. */}
+            <ProofScope
+              sessionId={sessionId}
+              conversationTitle={journal?.title}
+              turn={scopedTurn}
+              requestedTurnId={requestedTurnId ?? receipt?.turnId}
+              journalRead={Boolean(journal)}
+              onReturnToTurn={onReturnToTurn}
+            />
+            {/* An acquisition failure is a modifier on the verdict, never a
+                second verdict: the fetch that did not happen is not a
+                verification that failed. */}
+            {verdict.modifier ? <p class="proof-verdict__modifier"><Icon name="warning" size={14} />{verdict.modifier}</p> : null}
+            {receipt ? <p class="proof-verdict__summary">{summarizeReceipt(receipt)}</p> : null}
+            {/* Inside the body, under its own scope line, because it is the one
+                block here that is not about the turn: an unlabelled ledger sat
+                under "Turn evidence" and claimed the wrong subject at 390px,
+                where the two columns become one. Present exactly when there is
+                an audited journal to speak for — an unread or unreadable
+                journal must not render four zeros as if it had counted them. */}
+            {/*
+              * A five-row ledger, behind its own count.
+              *
+              * It is not the turn's evidence and never was — it is what the
+              * whole session recorded — and at 430px its five mono labels wrap
+              * into ten lines of chrome directly above the block a reader came
+              * for. The disclosure states its own total in the summary, so the
+              * fact that work *was* recorded survives at rest and the breakdown
+              * is one tap; the rule from TRM-06 is unchanged, every kind still
+              * renders including the zeros. `open` on desktop, where there is
+              * no fold to spend.
+              */}
+            {recordedActivity.length > 0 ? (
+              <details class="proof-recorded" open={!phone}>
+                <summary>
+                  <span class="eyebrow">Recorded in this session’s journal</span>
+                  <span class="proof-recorded__total">{recordedActivitySummary(recordedActivity)}</span>
+                </summary>
+                <dl class="proof-posture proof-recorded__facts" aria-label="Work recorded in this session’s journal">
+                  {recordedActivity.map((fact) => <div key={fact.label}><dt>{fact.label}</dt><dd>{fact.value}</dd></div>)}
+                </dl>
+              </details>
+            ) : null}
+          </div>
           {receipt ? (
             <dl class="proof-posture" aria-label="Declared turn posture">
               <div><dt>Declared proof level</dt><dd>{proofLevelLabel(receipt.proofLevel)}</dd></div>
@@ -616,6 +652,27 @@ export function recordedActivityFacts(counts?: SessionAuditReport["counts"]): re
     { label: "Shell records", value: `${counts.shellRecords}` },
     { label: "Approved by you", value: counts.humanIntentDecisions === 0 ? "0" : `${counts.humanIntentDecisions} decided · ${counts.humanIntentAllowed} allowed` },
   ]);
+}
+
+/**
+ * The one line a collapsed journal ledger owes its reader.
+ *
+ * A disclosure that hides five facts and says nothing about them is a place to
+ * bury things, and this particular list exists *because* a person who had just
+ * committed under two approvals was told nothing had been recorded. So the
+ * summary states the count and, when it is not zero, names the kinds — the
+ * closed row still distinguishes "this session recorded nothing" from "this
+ * session recorded work you have not looked at".
+ *
+ * The kinds are read back out of the rendered facts rather than recomputed from
+ * `counts`: the two must never be able to disagree about what is in the list.
+ * A value is "recorded" when it does not begin with the zero row that
+ * `recordedActivityFacts` writes for an empty kind.
+ */
+export function recordedActivitySummary(facts: readonly ProofFact[]): string {
+  const recorded = facts.filter((fact) => fact.value !== "0");
+  if (recorded.length === 0) return `Nothing recorded · ${facts.length} kinds checked`;
+  return `${recorded.length} of ${facts.length} kinds recorded · ${recorded.map((fact) => fact.label.toLowerCase()).join(", ")}`;
 }
 
 /**

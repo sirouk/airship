@@ -19,6 +19,7 @@ import { Icon } from "./icons";
 import { MemoryKindLegend } from "./memory-controls";
 import { groupMemoryRelationships } from "./memory-relationships";
 import { messagePlainText, type MessagePart } from "./chat/message-parts";
+import { useShellIsPhone } from "./phone-viewport";
 import { RouteHeader } from "./route-header";
 import { Seal } from "./seal";
 import {
@@ -488,13 +489,25 @@ export function MemoryView({
   const restoredPresentation = workspace
     ? MEMORY_PRESENTATIONS.read(workspace, activeProfile.profileId, sessionId)
     : undefined;
+  /*
+   * Decides what the statistics section *starts* as, never what it holds.
+   *
+   * Measured at 430×932: with the graph and the record list both open at rest
+   * the route was 2,859px tall and the last thing above the fold was a
+   * relationship canvas nobody had asked for. A phone fold is 932px and the
+   * owner's ask was search, then results, then the statistics — which is what
+   * three collapsed rows carrying their counts actually is. Desktop keeps the
+   * graph open, because there is no fold there to spend and
+   * `conversation-navigation` asserts the canvas is on screen at rest.
+   */
+  const phone = useShellIsPhone();
   const [query, setQuery] = useState(restoredPresentation?.query ?? "");
   const [selectedNodeId, setSelectedNodeId] = useState<string>();
   const [hiddenMemoryKinds, setHiddenMemoryKinds] = useState<ReadonlySet<MemoryNodeKind>>(() => new Set(DEFAULT_HIDDEN_KINDS));
   const [hiddenMemoryNodeIds, setHiddenMemoryNodeIds] = useState<ReadonlySet<string>>(() => new Set());
   const [relationshipLimit, setRelationshipLimit] = useState(18);
   const [relationshipsExpanded, setRelationshipsExpanded] = useState(
-    initialTab === "index" ? false : restoredPresentation?.relationshipsExpanded ?? true,
+    initialTab === "index" ? false : restoredPresentation?.relationshipsExpanded ?? !phone,
   );
   const [indexExpanded, setIndexExpanded] = useState(
     initialTab === "index" ? true : restoredPresentation?.indexExpanded ?? false,
@@ -705,6 +718,25 @@ export function MemoryView({
   }, [workspace, activeProfile.profileId, sessionId]);
   useEffect(() => setRelationshipLimit(18), [selectedNodeId]);
   const normalizedQuery = query.trim();
+  /*
+   * On a phone the graph is a statistic at rest and a result once there is a
+   * query — which is what the search field has always claimed it is:
+   * `aria-controls` names `memory-relationships` beside `memory-results`.
+   *
+   * The disclosure starts collapsed on a phone because a 360px canvas nobody
+   * asked for was the visible half of the fold, and it re-opens when the query
+   * changes because at that moment it stops being a statistic. Deliberately
+   * keyed on the query rather than latched on a flag: a reader who collapses
+   * it stays collapsed for that query (the ref has already recorded it) and
+   * every state remains reachable by a gesture, which is the property the
+   * Index's `indexDismissed` lacked and paid for on an integration gate.
+   */
+  const graphOpenedFor = useRef<string>();
+  useEffect(() => {
+    if (!phone || !normalizedQuery || graphOpenedFor.current === normalizedQuery) return;
+    graphOpenedFor.current = normalizedQuery;
+    setRelationshipsExpanded(true);
+  }, [normalizedQuery, phone]);
   const droppedNotice = droppedMemoryNotice(witness.dropped);
   const starters = useMemo(
     () => memoryStarters(files, recordPage?.records ?? [], graph),
@@ -726,10 +758,27 @@ export function MemoryView({
     });
     setSelectedNodeId(nodeId);
   };
+  /*
+   * The dismissal is a preference, not a latch.
+   *
+   * Latching the flag on a close and clearing it nowhere was a one-way door,
+   * and it cost an integration gate three attempts: `profile-silo` clicked this
+   * summary,
+   * arrived *after* the route's own auto-open, closed the section, and nothing
+   * could ever re-open it — so the poll had nothing to wait for. Raising that
+   * spec's budget from 5s to 15s was the wrong fix, because a latched state is
+   * not a slow one: no timeout outwaits a door that is bolted.
+   *
+   * A reader who opens the section has plainly stopped declining it, so the
+   * open clears the flag. That leaves the honest behaviour intact — an
+   * auto-open that fights a deliberate collapse is still worse than one that
+   * never happened, and one collapse still stops it for the query that caused
+   * it — while removing the only state in this route no gesture could leave.
+   */
   const openIndex = (open: boolean) => {
     setIndexExpanded(open);
     if (open) setIndexMounted(true);
-    else setIndexDismissed(true);
+    setIndexDismissed(!open);
   };
   const revealGraphMatches = () => {
     setRelationshipsExpanded(true);
@@ -766,21 +815,14 @@ export function MemoryView({
           ? "Opened at the on-device index: health, candidates, generation-pinned hits and lineage for this workspace. Search, records and relationships are on this page above it."
           : "One private query across conversation, profile memory, workspace index, and typed relationships."}
         /*
-         * Two claims, because they are two claims. "Private · on-device" is
-         * where recall *runs*; a reader takes it for where memory *lives*, and
-         * took it for that while a reload was destroying explicitly remembered
-         * records. The second chip is the durability claim, in the same
-         * vocabulary Workspace and Terminal already use for it.
+         * The two posture claims used to ride here, and the phone met them
+         * before it met the search box: two pills above the field, on a route
+         * whose first act is always to type something. They are still two
+         * claims and both still render verbatim — they are rows of the
+         * statistics section at the foot of the route now, each under a label
+         * that says what the claim is *about*, which is the part a pill above
+         * the fold could never carry.
          */
-        status={<>
-          <Seal state="none" density="chip" label="Private · on-device" detail="Recall, ranking and graph derivation all run inside this browser tab." />
-          <Seal
-            state={durabilitySeal(recallDurability.state)}
-            density="chip"
-            label={recallDurability.label ?? durabilityLabel(recallDurability.state)}
-            detail={recallDurability.detail}
-          />
-        </>}
         notes={<>
           <p>Updates every loaded scope. Each corpus keeps its own scores.</p>
           <p>The agent and interface share one revision-checked service; each corpus keeps independent scores.</p>
@@ -867,6 +909,46 @@ export function MemoryView({
       />
 
       {/*
+        * Search, results, statistics — in that order, which is the order the
+        * route is read in and was not built in.
+        *
+        * Everything below this line used to be interleaved with the search: the
+        * corpus list and the relationship graph both opened at rest, so a phone
+        * arriving on #memory met a 2,859px page whose visible half was a graph
+        * canvas. Nothing is deleted. The three sections keep every count, every
+        * control and every provenance chip they had; they are filed under one
+        * heading that says what they are, and on a phone they start collapsed
+        * with their counts on the summary row — which is what "the stats at the
+        * bottom" means when the stats are also operable.
+        */}
+      <section class="memory-stats" aria-labelledby="memory-stats-title">
+        <h2 id="memory-stats-title" class="eyebrow">Statistics</h2>
+        {/*
+          * Two claims, because they are two claims. "Private · on-device" is
+          * where recall *runs*; a reader takes it for where memory *lives*, and
+          * took it for that while a reload was destroying explicitly remembered
+          * records. The second is the durability claim, in the same vocabulary
+          * Workspace and Terminal already use for it. Each carries the label
+          * that says which question it answers — the pills at the top of the
+          * route carried the answers with the questions missing.
+          */}
+        <dl class="memory-posture">
+          <div>
+            <dt>Recall runs</dt>
+            <dd><Seal state="none" density="chip" label="Private · on-device" detail="Recall, ranking and graph derivation all run inside this browser tab." /></dd>
+          </div>
+          <div>
+            <dt>Records live</dt>
+            <dd><Seal
+              state={durabilitySeal(recallDurability.state)}
+              density="chip"
+              label={recallDurability.label ?? durabilityLabel(recallDurability.state)}
+              detail={recallDurability.detail}
+            /></dd>
+          </div>
+        </dl>
+
+      {/*
         * The corpus itself, which the route never showed.
         *
         * Memory could be interrogated one guess at a time and nothing else: no
@@ -877,6 +959,7 @@ export function MemoryView({
         */}
       {recallRecords ? (
         <MemoryRecords
+          expanded={!phone}
           page={recordPage}
           error={recordsError}
           commit={commitMemory}
@@ -1074,6 +1157,7 @@ export function MemoryView({
             : <p class="memory-deferred-note" role="status">Open to load on-device indexing. Source files remain unchanged.</p>}
         </div>
       </details>
+      </section>
     </section>
   );
 }
@@ -1175,6 +1259,18 @@ type MemoryLaneView = Readonly<{
   id: "conversation" | "profile" | "workspace";
   title: string;
   count: number;
+  /**
+   * What this lane *is*, in the present tense, for the state before a query.
+   *
+   * Deliberately not the same string as `searched`, and deliberately not
+   * derived from it. `searched` is a claim about a run that happened — it
+   * carries the pinned generation, the profile revision and the duration, and
+   * it is past tense because those facts only exist once a search has settled.
+   * A resting lane has none of them, and printing that sentence anyway would
+   * have the route asserting it consulted a corpus it has not touched. Short,
+   * because at rest this is a label rather than a receipt.
+   */
+  scope: string;
   /** One sentence naming exactly what this lane consulted. */
   searched: string;
   provenance: readonly ProvenanceRow[];
@@ -1220,7 +1316,15 @@ function FederatedMemorySearch({ state, graphMatchCount, onShowGraphMatches, onO
       * in the accessibility tree instead of spending 104px restating it.
       */}
     <h2 id="memory-search-title" class="sr-only">Federated client recall · Results across private scopes</h2>
-    <p class="memory-search-status" role={failed ? "alert" : "status"} aria-live="polite">{state.status ?? (state.query ? "Search complete · results pinned to reported revisions." : "Ready for a private on-device query.")}</p>
+    {/*
+      * The status line reports a search. Before there is one it was reporting
+      * that nothing had happened — "Ready for a private on-device query." — in
+      * a bordered row directly under a field whose placeholder already says
+      * "Search memory", which is one of the five things the owner met above
+      * the first result. The live region is still here for every state that is
+      * a state; the resting one simply is not spoken.
+      */}
+    {state.query ? <p class="memory-search-status" role={failed ? "alert" : "status"} aria-live="polite">{state.status ?? "Results pinned to reported revisions."}</p> : null}
     {/* The sentence above is the only place the failure is stated, and this is
         the only way back to it: the effect is keyed on the query, so before
         this button the sole recovery from a rejected search was to retype a
@@ -1312,7 +1416,11 @@ function MemoryStarters({ starters, onStart, recent, onForgetSearches }: Readonl
         */}
       {recent.length ? (
         <section class="memory-recent" aria-label="Recent searches in this tab">
-          <p>Recent searches, kept in this tab for this profile only. Closing the tab clears them; they are never written to the workspace and never leave the device.</p>
+          {/* The lifetime, in one clause instead of three. The claim is
+              unchanged and is the one that matters — this history is this
+              tab's, dies with it, and never reaches the workspace or the
+              network. Its longer form is the ⓘ's; this is the label. */}
+          <p>Recent in this tab · cleared when it closes, never stored or sent.</p>
           <div>
             {recent.map((entry) => (
               <button
@@ -1330,7 +1438,9 @@ function MemoryStarters({ starters, onStart, recent, onForgetSearches }: Readonl
       ) : null}
       {starters.length ? (
         <>
-          <p>{recent.length ? "Or start from a term this page holds." : "Nothing searched yet. Each term below is read from this page's own index, records and graph."}</p>
+          {/* Each chip still names the surface it was read from, on the chip
+              itself, so the sentence no longer has to say it for all four. */}
+          <p>{recent.length ? "Or start from a term this page holds." : "Terms this page holds."}</p>
           <div>
             {starters.map((starter) => (
               <button
@@ -1387,7 +1497,9 @@ export function memoryOutcomeSentence(
  * journal, the profile silo and the approval dock see exactly what the slash
  * command produced. What changes is only that a person can find them.
  */
-function MemoryRecords({ page, error, commit, durability, profileName, onCommitted, onSearch }: Readonly<{
+function MemoryRecords({ expanded: initiallyExpanded, page, error, commit, durability, profileName, onCommitted, onSearch }: Readonly<{
+  /** What the panel starts as. A phone gets the summary row and its count. */
+  expanded: boolean;
   page?: MemoryRecordPage;
   error?: string;
   commit?: MemoryViewProps["commitMemory"];
@@ -1397,7 +1509,7 @@ function MemoryRecords({ page, error, commit, durability, profileName, onCommitt
   onCommitted: (change: MemoryChange) => void;
   onSearch: (query: string) => void;
 }>) {
-  const [expanded, setExpanded] = useState(true);
+  const [expanded, setExpanded] = useState(initiallyExpanded);
   const [draft, setDraft] = useState("");
   const [source, setSource] = useState(MEMORY_MANUAL_SOURCE);
   /** The change in flight, so exactly one control reports itself busy. */
@@ -1568,6 +1680,7 @@ function conversationLane(result: FederatedMemoryResult | undefined, sessionId: 
     id: "conversation",
     title: "Current conversation",
     count: hits.length,
+    scope: "This session's journal, newest first.",
     searched: "searched this session's journal, newest first, for lexical matches.",
     provenance: Object.freeze([
       provenanceNote(group?.ranking ?? "reverse-chronological lexical matches"),
@@ -1618,6 +1731,7 @@ function profileLane(result: FederatedMemoryResult | undefined, onOpenSource: Me
     id: "profile",
     title: "Active profile memory",
     count: hits.length,
+    scope: "The pinned profile's explicit records.",
     searched: `searched the pinned profile's explicit memory records${revision ? ` at profile revision ${provenanceTail(revision)}` : ""}.`,
     provenance: Object.freeze([
       provenanceNote(group?.ranking ?? "bounded BM25 relevance, recency-tiebroken; within this corpus only"),
@@ -1688,6 +1802,7 @@ function workspaceLane(result: FederatedMemoryResult | undefined, onOpenSource: 
     id: "workspace",
     title: "Workspace & sources",
     count: hits.length,
+    scope: "The on-device workspace index.",
     closest: weak[0] ? `${workspaceBaseName(weak[0].path)} (${weak[0].score.toFixed(3)})` : undefined,
     belowFloor: weak.length ? <MemoryBelowFloor count={weak.length}>{weak.map((hit) => (
       <MemoryHit
@@ -1937,10 +2052,21 @@ function MemorySearchLane({ lane, query, searching, failed }: Readonly<{ lane: M
             no "No matches" after a rejection, which is the same claim made
             about three corpora that were never consulted. */}
         {count ? <span class="memory-lane-count">{count}</span> : null}
-        {/* No digest token on a lane header: the scope name has to win the
-            width, and the untruncated values are one tap inside the chip. */}
-        <ProvenanceChip subject={lane.title} rows={lane.provenance} summary="" />
+        {/*
+          * The lineage chip belongs to a search, so it appears when there is
+          * one. At rest it rendered a chain glyph and a bare integer — the
+          * number of *provenance rows*, so `Current conversation` sat above a
+          * circled `4` that counted nothing a reader could name, three times
+          * down the route. Its rows describe a query that has not run:
+          * "Corpus: current-thread", "Freshness: journal revision at query
+          * time". They are facts about a search, filed the moment one exists.
+          */}
+        {state === "idle" ? null : <ProvenanceChip subject={lane.title} rows={lane.provenance} summary="" />}
       </header>
+      {/* What this scope is, before anything has been asked of it. The three
+          lanes at rest were three boxes carrying a name and a circle, and the
+          reader's question was "what do I do with these". */}
+      {state === "idle" ? <p class="memory-lane-scope">{lane.scope}</p> : null}
       {state === "hits" ? <div class="memory-lane-hits">{lane.hits}</div> : null}
       {/* A floor is not a filter: the disqualified rows render whether or not
           the lane counted anything, including in the state where the count slot

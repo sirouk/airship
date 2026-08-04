@@ -391,7 +391,17 @@ describe("embedded index surface", () => {
     // The history exists now, so the sentence states its lifetime instead of
     // denying it, and the reader can delete it.
     expect(source).not.toContain("no search history is kept");
-    expect(source).toContain("Recent searches, kept in this tab for this profile only.");
+    // The lifetime is stated in a clause rather than in three sentences: the
+    // long form is the route's own ⓘ, and the phone met the long one above its
+    // first result. What may not be dropped is the claim itself, so the three
+    // facts it makes are asserted separately from the sentence that carries
+    // them — a shorter line that quietly stopped saying "never sent" would
+    // fail this even though the string it replaced is gone.
+    const recentLifetime = source.slice(source.indexOf('aria-label="Recent searches in this tab"'));
+    const recentSentence = recentLifetime.slice(recentLifetime.indexOf("<p>"), recentLifetime.indexOf("</p>"));
+    expect(recentSentence).toContain("this tab");
+    expect(recentSentence).toMatch(/clear|cleared/u);
+    expect(recentSentence).toContain("never stored or sent");
     expect(source).toContain("Clear</strong><small>recent searches");
 
     // The Index panels reach the field they are describing rather than naming it.
@@ -757,7 +767,8 @@ describe("memory as a corpus a person can act on", () => {
     expect(rememberRecentSearch(second, { query: "   ", at: "t5" })).toBe(second);
 
     expect(source).toContain("onForgetSearches={() => setRecent(Object.freeze([]))}");
-    expect(source).toContain("never written to the workspace and never leave the device");
+    // Same claim, in the ⓘ-length form the panel no longer prints at rest.
+    expect(source).toContain("never stored or sent");
   });
 
   it("brings the evidence layer forward the moment a query settles, and stops when the reader closes it", () => {
@@ -766,7 +777,26 @@ describe("memory as a corpus a person can act on", () => {
     // lineage were reachable only through a deep link the route never names.
     expect(source).toContain("autoOpenedFor.current = settled;");
     expect(source).toContain("if (!settled || indexDismissed || autoOpenedFor.current === settled) return;");
-    expect(source).toContain("else setIndexDismissed(true);");
+  });
+
+  it("leaves no state in the route that a gesture cannot get back out of", () => {
+    /*
+     * The dismissal was `else setIndexDismissed(true)` and nothing anywhere
+     * cleared it: one close bolted the auto-open shut for the rest of the
+     * visit, including for queries the reader had not run yet. It is a
+     * measured defect and not a theoretical one — `profile-silo` clicked this
+     * summary, landed after the route's own auto-open, closed the section, and
+     * then polled for an open that could never come. Raising that spec's
+     * `expect` budget from 5s to 15s was the wrong reading: no timeout
+     * outwaits a latch.
+     *
+     * `setIndexDismissed(!open)` is the whole fix. Opening the section is a
+     * person plainly no longer declining it, and the per-query guard
+     * (`autoOpenedFor`) still stops the effect re-firing for the query that
+     * was collapsed, so the honest behaviour survives.
+     */
+    expect(source).toContain("setIndexDismissed(!open);");
+    expect(source).not.toMatch(/else\s+setIndexDismissed\(true\)/u);
   });
 
   it("says which section a deep link landed on, instead of re-rendering the page you were on", () => {

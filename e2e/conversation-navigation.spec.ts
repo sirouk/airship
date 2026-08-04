@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { MOBILE_PRIMARY_CONTROLS } from "../src/ui/navigation-model";
 import { waitForShellSettled } from "./support/settled";
 
 /*
@@ -381,7 +382,22 @@ test("mobile keeps conversations out of the fixed bar and exposes the ledger thr
   await expect(page).toHaveURL(/#chat\/[^/?#]+$/);
   const navigation = page.getByRole("navigation", { name: "Mobile navigation" });
   await expect(navigation.getByRole("button", { name: "Sessions", exact: true })).toHaveCount(0);
-  await expect(navigation.getByRole("button")).toHaveCount(4);
+  /*
+   * AMENDED 4 → 5, and read out of the model rather than pinned again.
+   *
+   * The literal was a description of one arrangement, not a contract: the band
+   * is `MOBILE_PRIMARY_CONTROLS` and it gained Memory, which the owner's mobile
+   * review asked for by name ("Memory should come before Trust"). The slot came
+   * from the shell's live-load reading, which counted execution-pack runs and
+   * therefore read `0 · Idle` on a phone from first paint to tab close.
+   *
+   * The claim this line actually makes is the one that matters and it is
+   * unchanged: the fixed bar holds the primary controls and *only* those, so a
+   * conversation ledger cannot appear in it. Derived from the model so it
+   * cannot go stale a third time — `design-contract.test.ts` asserts the grid
+   * has exactly this many equal tracks, from the same source.
+   */
+  await expect(navigation.getByRole("button")).toHaveCount(MOBILE_PRIMARY_CONTROLS.length);
   await navigation.getByRole("button", { name: "More", exact: true }).click();
   const more = page.getByRole("dialog", { name: "More" });
   await more.getByRole("button").filter({ hasText: "All conversations" }).click();

@@ -146,12 +146,23 @@
   border-radius: var(--radius-control);
 }
 
+/*
+ * The subject reads after the verdict and its counts, at every width.
+ *
+ * This used to be `grid-row: 1; grid-column: 2` — the counts' old slot — which
+ * paired the verdict word with "which conversation is this about" and pushed
+ * the VERIFIED / ASSERTED / NO EVIDENCE block below both. At 430×932 that put
+ * the one block on this route that reads well 572px down. The counts take the
+ * pairing now; the scope, the modifier and the journal ledger take the full
+ * measure below it, which is also the width a source path with a revision and
+ * a digest actually needs. `start`, not `center`: a full-width block has no
+ * sibling to centre against.
+ */
 .proof-verdict__body {
-  grid-row: 1;
-  grid-column: 2;
+  grid-column: 1 / -1;
   display: grid;
   gap: var(--sp-1);
-  align-content: center;
+  align-content: start;
   min-width: 0;
 }
 
@@ -194,7 +205,11 @@
  * exactly the state words the surfaces emit and nothing else.
  */
 .proof-counts {
-  grid-column: 1 / -1;
+  /* Row 1, column 2 — beside the word it decomposes. Below 820px the verdict
+     collapses to one column and this spans it, which is where the ordering
+     this package is about actually lands. */
+  grid-row: 1;
+  grid-column: 2;
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: 0;
@@ -283,6 +298,62 @@
   font-size: var(--fs-caption);
   line-height: 1.5;
   color: var(--ink-muted);
+}
+
+/* ── What the session recorded ───────────────────────────────────────── */
+
+/*
+ * The one disclosure on this route, and it declares its own contents.
+ *
+ * "Never a disclosure" is the rule above `.proof-ceilings`, and it holds for
+ * the *reason the headline is not green*. This list is a different thing: it is
+ * about the whole session rather than this turn, and it was rendering five
+ * label/value pairs above the block a reader opens the route for. The summary
+ * states the count and names the kinds, so the closed row still tells a person
+ * who has just committed under two approvals that work was recorded — which is
+ * the finding the list was added for, kept intact.
+ */
+.proof-recorded {
+  min-width: 0;
+}
+
+/* `display: flex` removes the UA marker in Chromium, so the affordance is
+   drawn here rather than lost: a `<details>` whose summary looks like a
+   heading is a heading, and nobody taps it. */
+.proof-recorded > summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-2);
+  align-items: baseline;
+  min-height: var(--touch-target);
+  padding-block: var(--sp-1);
+  cursor: pointer;
+  list-style: none;
+}
+
+.proof-recorded > summary::-webkit-details-marker { display: none; }
+
+.proof-recorded > summary::after {
+  width: 8px;
+  height: 8px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  color: var(--ink-faint);
+  content: "";
+  transform: rotate(45deg) translate(-2px, -1px);
+}
+
+.proof-recorded[open] > summary::after {
+  transform: rotate(225deg) translate(-1px, -2px);
+}
+
+.proof-recorded__total {
+  color: var(--ink-faint);
+  font-size: var(--fs-caption);
+}
+
+.proof-recorded__facts {
+  padding-block: var(--sp-1) var(--sp-2);
 }
 
 /* ── Declared posture ────────────────────────────────────────────────── */
@@ -408,9 +479,26 @@
   }
 
   .proof-verdict__claims,
+  .proof-counts,
   .proof-verdict__body {
     grid-column: 1;
     grid-row: auto;
+  }
+
+  /*
+   * The session ledger, collapsed on a phone and stated in its summary.
+   *
+   * Five `dt`s of mono uppercase in a 12ch column wrapped to two lines each —
+   * ~250px of chrome, and it sat above the counts. It is below them now and
+   * behind a disclosure whose summary carries the total, so nothing is hidden
+   * that was not already one gesture away in the activity list below.
+   */
+  .proof-recorded__facts > div {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .proof-recorded__facts dd {
+    text-align: end;
   }
 
   .proof-journal__row {

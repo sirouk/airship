@@ -247,22 +247,38 @@ describe("shell load indicator", () => {
     expect(mount).not.toContain("view !==");
   });
 
-  it("rides the phone tab bar too, where the rail is display:none", () => {
-    // Below the phone breakpoint `routes.css` sets `.sidebar { display: none }`,
-    // which takes the rail's copy out of the render tree *and* the accessibility
-    // tree — leaving a phone reader with the original finding: navigate to
-    // #capabilities to learn what is running. The mobile nav is the band a phone
-    // renders on every route, so the same component mounts there.
-    expect(mobileNav).toContain("<RuntimeLoadIndicator placement=\"nav\" />");
+  it("does not spend a phone nav slot on a count only an execution pack can move", () => {
+    /*
+     * REVERSED, on measurement rather than on taste.
+     *
+     * This used to assert the indicator into the phone tab bar, on the argument
+     * that `.sidebar { display: none }` takes the rail's copy out of both trees
+     * below the breakpoint. The argument was sound and the placement was still
+     * wrong, because of what the number actually counts: `begin()` has exactly
+     * one caller, `ClientExecutionRuntime.execute`, wrapped around the adapter
+     * call. Sending a prompt, running a tool, indexing a workspace and querying
+     * memory are all invisible to it. On a phone that has activated no optional
+     * execution pack — which is every phone, since none of them is promoted
+     * there — the band read `0 · Idle` from first paint until the tab closed.
+     *
+     * A permanent constant is not an indicator, and this one was holding the
+     * leading track of the most constrained band in the product. The reading is
+     * not deleted: the rail still mounts it on every desktop route (asserted
+     * above) and #capabilities still expands the whole report. What is asserted
+     * here is that the phone band is destinations only.
+     */
+    // The element, not the identifier: the file still names the component in
+    // the comment that records why it left.
+    expect(mobileNav).not.toContain("<RuntimeLoadIndicator");
     const phone = routeStyles.slice(routeStyles.indexOf("@media (max-width: 640px)"));
     expect(phone).toContain(".sidebar {");
     const navRule = phone.slice(phone.indexOf("  .mobile-nav {"));
-    // The four destinations keep equal shares; the reading gets its own track
-    // rather than being auto-placed onto a second, clipped row.
-    expect(navRule.slice(0, navRule.indexOf("}"))).toContain("grid-template-columns: auto repeat(4, minmax(0, 1fr));");
-    // The reading sizes itself, so a count change never resizes a tap target.
+    // Equal shares for every destination and no leading non-destination track.
+    expect(navRule.slice(0, navRule.indexOf("}"))).toMatch(/grid-template-columns: repeat\(\d+, minmax\(0, 1fr\)\);/u);
+    // The `nav` placement rules stay in the sheet: `RuntimeLoadPlacement` still
+    // declares the variant, and a sheet that forgets it is how a re-mount lands
+    // unstyled. Deleting the rules is a separate decision from this one.
     expect(indicatorStyles).toContain("[data-placement=\"nav\"]");
-    expect(indicatorStyles.slice(indicatorStyles.indexOf("[data-placement=\"nav\"]"))).toContain("width: 58px;");
   });
 
   it("renders counts, not a meter, and reads its words from the monitor", () => {
