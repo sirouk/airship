@@ -7,10 +7,12 @@
 # The header blocks below are not decoration. `public/_headers` is the
 # Netlify/Cloudflare format and **Caddy does not read it**, so serving `dist/`
 # without these would silently publish Airship with no Content-Security-Policy
-# and no cross-origin isolation. `check-static-security.mjs` compares
-# `index.html` against `public/_headers` and would not notice, because neither
-# file is what Caddy sends. Keep this in step with `public/_headers` by hand;
-# `deploy.sh --verify` checks that the policies still agree.
+# and no cross-origin isolation. The `header { … }` block is kept in step with
+# the `/*` section of `public/_headers` by hand, and two checks refuse a drift:
+# `check-static-security.mjs` — which runs in `npm run check`, so a CSP edit
+# that misses this file is red at review time rather than at deploy time — and
+# `deploy.sh --verify`, which repeats the comparison on the deploying machine.
+# The matcher-scoped caching headers below are not covered by the former.
 
 {$CADDY_PROTOCOL:}{$CADDY_DOMAIN:localhost}:{$CADDY_PORT:443} {
 	root * /srv
