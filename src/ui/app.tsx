@@ -65,7 +65,15 @@ import type { VaultContextFabricPort } from "../vault/context-fabric-port";
 import type { ChutesInferenceTransport, ChutesInvocationTelemetry } from "../inference/chutes";
 import { modelInputModalityCapability, sortModels, type AirshipModel } from "../models";
 import type { ExecutionCapability } from "../execution/runtime-registry";
-import { archiveProfileRevision, createBuiltInProfileCatalog, managedProfileRevisions, type ProfileCatalog } from "../profiles/catalog";
+import {
+  archiveProfileRevision,
+  createBuiltInProfileCatalog,
+  managedProfileRevisions,
+  removeAuthoredSkill,
+  skillReferences,
+  upsertAuthoredSkill,
+  type ProfileCatalog,
+} from "../profiles/catalog";
 import {
   MemoryProfileCatalogStore,
   type ProfileCatalogCheckpoint,
@@ -86,7 +94,9 @@ import { providerBoundaryLabel } from "../inference/transport-boundary-label";
 import {
   createGlobalSkillSettings,
   createProfileRevision,
+  createSkillRevision,
   enforcedMemoryScope,
+  isCustomSkillId,
   resolveProfileSilo,
   resolveProfileForSession,
   resolveSkillDecisions,
@@ -94,6 +104,8 @@ import {
   type ProfileRevision,
   type ResolvedSkillDecision,
   type SkillMode,
+  type SkillRevision,
+  type SkillRevisionDraft,
   type ThemeColorScheme,
   type ThemeManifest,
 } from "../profiles/domain";
@@ -612,6 +624,8 @@ type TerminalScreenComponent = typeof import("./terminal-view").TerminalView;
 type CapabilitiesScreenComponent = typeof import("./capabilities-view").CapabilitiesView;
 type ModelPickerComponent = typeof import("./model-picker").ModelPicker;
 type MemoryScreenComponent = typeof import("./memory-view").MemoryView;
+type SkillEditorComponent = typeof import("./skill-editor").SkillEditor;
+type SkillEditorTarget = import("./skill-editor").SkillEditorTarget;
 type GoogleDriveSetupComponent = typeof import("./google-drive-setup").GoogleDriveSetup;
 type LocalLabSetupComponent = typeof import("./local-lab-setup").LocalLabSetup;
 type LocalDeviceVaultSetupComponent = typeof import("./local-device-vault-setup").LocalDeviceVaultSetup;
@@ -9113,7 +9127,7 @@ export function App() {
         revisedProfile = await createProfileRevision({
           ...profile,
           parentRevision: profile.revision,
-          skillModes: { ...profile.skillModes, [skillId]: mode },
+          skillModes: profileSkillModes(profile.skillModes, skillId, mode),
           createdAt: new Date().toISOString(),
         });
         return replaceProfile(current, revisedProfile);
@@ -9157,6 +9171,29 @@ export function App() {
     } finally {
       if (editingActiveProfile) sessionNavigationChanging.current = false;
     }
+  }
+
+  /**
+   * Commit an authored skill revision.
+   *
+   * Deliberately NOT a session re-pin, where `setProfileSkill` above is one. A
+   * mode change alters which skills the next resolution selects and the route
+   * has to say so; a skill's *text* is content-addressed, so a running
+   * conversation is pinned to the digest it was composed from and is untouched
+   * by definition. The status line says which authority took the write, because
+   * "page memory" and "encrypted Vault" are a materially different promise about
+   * whether these words survive the tab.
+   */
+  async function saveSkillRevision(draft: SkillRevisionDraft): Promise<void> {
+    const revision = await createSkillRevision(draft);
+    const editing = catalog?.skills.some((skill) => skill.skillId === revision.skillId) ?? false;
+    await mutateProfileCatalog((current) => upsertAuthoredSkill(current, revision));
+    setRuntimeStatus(`${revision.name} ${editing ? "revised" : "created"} in ${profileCatalogAuthorityLabel()} · conversations already running keep the instruction text they pinned`);
+  }
+
+  async function deleteSkillRevision(skillId: string): Promise<void> {
+    await mutateProfileCatalog((current) => removeAuthoredSkill(current, skillId));
+    setRuntimeStatus(`Skill removed from ${profileCatalogAuthorityLabel()} · conversations already running keep the instruction text they pinned`);
   }
 
   async function loadBillingSnapshot(signal: AbortSignal) {
@@ -10418,6 +10455,8 @@ export function App() {
             activeProfileId={profileId}
             onSetGlobal={setGlobalSkill}
             onSetProfile={setProfileSkill}
+            onSaveSkill={saveSkillRevision}
+            onDeleteSkill={deleteSkillRevision}
             onApply={async (id) => {
               const activated = await requestProfileChange(id, true);
               if (activated) navigate("chat");
@@ -11328,6 +11367,35 @@ async function openProfileWorkspaceAuthority(input: Readonly<{
   });
 }
 
+
+/**
+ * The `skillModes` map `setProfileSkill` commits. An explicit "inherit" is
+ * deleted, not stored.
+ *
+ * `resolveSkillDecisions` reads `skillModes[id] ?? "inherit"`
+ * (`src/profiles/domain.ts`), so an explicit entry and no entry are the same
+ * decision, the same `skillSetDigest` and the same composed prompt. Storing one
+ * was invisible until skills became authorable, and then it was not: setting a
+ * profile's control to "Inherit global" and back left a key behind, and the
+ * removal path — which asks `skillReferences` whether any profile still uses the
+ * skill — read that key as a profile that does. Remove then refused permanently,
+ * naming a profile the skill does not affect, and `validateProfileCatalog`
+ * refuses a `skillModes` key with no matching revision, so nothing inside the
+ * product could clear it. Both refuters found this independently, from opposite
+ * ends.
+ *
+ * Deleting costs no extra revision: this call already mints one.
+ */
+function profileSkillModes(
+  current: Readonly<Record<string, SkillMode>>,
+  skillId: string,
+  mode: SkillMode,
+): Record<string, SkillMode> {
+  const next = { ...current };
+  if (mode === "inherit") delete next[skillId];
+  else next[skillId] = mode;
+  return next;
+}
 
 function replaceProfile(catalog: ProfileCatalog, revision: ProfileRevision): ProfileCatalog {
   return Object.freeze({
@@ -12834,6 +12902,8 @@ function SkillsManagerView({
   activeProfileId,
   onSetGlobal,
   onSetProfile,
+  onSaveSkill,
+  onDeleteSkill,
   onApply,
   onStartConversation,
   scope,
@@ -12843,6 +12913,8 @@ function SkillsManagerView({
   activeProfileId: string;
   onSetGlobal: (skillId: string, enabled: boolean) => Promise<void>;
   onSetProfile: (profileId: string, skillId: string, mode: SkillMode) => Promise<void>;
+  onSaveSkill: (draft: SkillRevisionDraft) => Promise<void>;
+  onDeleteSkill: (skillId: string) => Promise<void>;
   /** Switches to the previewed profile, answering whether it became active. */
   onApply: (profileId: string) => Promise<boolean>;
   /**
@@ -12875,6 +12947,40 @@ function SkillsManagerView({
     [decisions],
   );
   const resolvedCount = decisions.filter((decision) => decision.enabled).length;
+  const [editorTarget, setEditorTarget] = useState<SkillEditorTarget>();
+  const [SkillEditorPanel, setSkillEditorPanel] = useState<SkillEditorComponent>();
+  const [editorError, setEditorError] = useState<string>();
+
+  useEffect(() => {
+    if (!editorTarget || SkillEditorPanel) return;
+    let current = true;
+    setEditorError(undefined);
+    /*
+     * Through the recovery loader for the same reason the Memory route uses it:
+     * a module URL that has failed once is recorded as failed in this document's
+     * module map, so a plain retry button issues no network request at all and
+     * the panel stays dead for the life of the tab.
+     */
+    void loadRetryableChunk("skill-editor", () => import("./skill-editor")).then((module) => {
+      if (current) setSkillEditorPanel(() => module.SkillEditor);
+    }).catch(() => {
+      if (current) setEditorError("The skill editor could not be loaded. No skill was created or changed.");
+    });
+    return () => { current = false; };
+  }, [editorTarget, SkillEditorPanel]);
+
+  async function removeSkill(skill: SkillRevision): Promise<void> {
+    setStatus(undefined);
+    try {
+      await onDeleteSkill(skill.skillId);
+      // Closed by id, not unconditionally: removing skill A while editing skill
+      // B must not shut B's unsaved draft.
+      setEditorTarget((current) => (current?.mode === "edit" && current.source.skillId === skill.skillId ? undefined : current));
+      setStatus(`${skill.name} removed.`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error));
+    }
+  }
 
   async function updateGlobal(skillId: string, enabled: boolean): Promise<void> {
     setStatus(undefined);
@@ -12922,10 +13028,35 @@ function SkillsManagerView({
         {profile.profileId === activeProfileId
           ? <button class="small-button" type="button" title={`Pins the ${resolvedCount} resolved skills into a new conversation's prompt.`} onClick={onStartConversation}>New conversation with this set</button>
           : <button class="small-button" type="button" onClick={() => void applyProfile()}>Switch to {profile.name}</button>}
+        <button class="small-button" type="button" onClick={() => setEditorTarget({ mode: "new" })}>New skill</button>
       </div>
+      {editorTarget ? SkillEditorPanel ? (
+        <SkillEditorPanel
+          /*
+           * Keyed by target. `useState(() => initialFields(target))` runs its
+           * initializer on mount only, so pressing Edit on a second skill while
+           * the first panel is open showed the first skill's text under the
+           * second one's heading, and Save then refused with "A skill's ID is
+           * fixed when it is created." about a skill nobody had opened.
+           */
+          key={`${editorTarget.mode}:${editorTarget.mode === "new" ? "" : editorTarget.source.skillId}`}
+          target={editorTarget}
+          onSave={onSaveSkill}
+          onClose={() => setEditorTarget(undefined)}
+        />
+      ) : editorError ? <p class="skill-editor-status" role="status" aria-live="polite">{editorError}</p> : <p role="status" aria-live="polite">Loading the skill editor…</p> : null}
       <div class="skill-grid">
         {catalog.skills.map((skill) => {
           const { mode, globallyEnabled: globalEnabled, enabled } = decisionBySkillId.get(skill.skillId)!;
+          const authored = isCustomSkillId(skill.skillId);
+          /*
+           * Only profiles whose mode actually decides something. An explicit
+           * "inherit" resolves exactly as absence does, so counting it here
+           * would refuse a removal on behalf of a profile the skill does not
+           * reach — the defect `profileSkillModes` and `skillReferences` were
+           * changed together to remove.
+           */
+          const referencing = authored ? skillReferences(catalog, skill.skillId) : [];
           return (
             <article class={enabled ? "skill-card panel enabled" : "skill-card panel"} key={skill.skillId}>
               <header><span class="skill-glyph"><Icon name="skills" /></span><div><h2>{skill.name}</h2><code>{skill.skillId}</code></div><span class={enabled ? "skill-state on" : "skill-state"}>{enabled ? "resolved on" : "resolved off"}</span></header>
@@ -12933,6 +13064,16 @@ function SkillsManagerView({
               <div class="skill-controls">
                 {scope === "global" ? <button class={globalEnabled ? "toggle-control on" : "toggle-control"} role="switch" aria-label={`Global default for ${skill.name}`} aria-checked={globalEnabled} type="button" onClick={() => void updateGlobal(skill.skillId, !globalEnabled)}><span /> Global default</button> : <div class="skill-select-field"><span>{profile.name}</span><MenuSelect placement="down" ariaLabel={`${profile.name} mode for ${skill.name}`} value={mode} options={[{ value: "inherit", label: "Inherit global" }, { value: "on", label: "Always on" }, { value: "off", label: "Always off" }]} onChange={(next) => void updateProfileSkill(skill.skillId, next as SkillMode)} /></div>}
               </div>
+              {authored ? (
+                <div class="skill-authoring">
+                  <button class="small-button" type="button" onClick={() => setEditorTarget({ mode: "edit", source: skill })}>Edit</button>
+                  <button class="small-button danger" type="button" disabled={referencing.length > 0} onClick={() => void removeSkill(skill)}>Remove</button>
+                  {/* Visible, not a `title`: a disabled button does not reliably
+                      raise a tooltip, and on a touch device nothing does. The
+                      refusal has to be readable where the refused control is. */}
+                  {referencing.length > 0 ? <span class="skill-authoring-note">{referencing.join(", ")} set this skill explicitly. Return each to Inherit global first.</span> : null}
+                </div>
+              ) : null}
               <details class="skill-details"><summary>Instruction boundary</summary><footer><span>{skill.requiredTools.length ? `References ${skill.requiredTools.join(" · ")}` : "Instruction-only"}<br />Tools remain approval-gated.</span><code>{skill.digest.slice(-9)}</code></footer></details>
             </article>
           );

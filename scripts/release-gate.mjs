@@ -270,7 +270,26 @@ export const RELEASE_BUDGETS = Object.freeze({
    * clean clone. Making the split itself deterministic is worth doing and is
    * not this pass's job.
    */
-  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2036 * 1024, gzip: 646 * 1024 }),
+  // Skill authoring spends 6.67 KiB raw / 2.36 KiB gzip of this partition, and
+  // says what it bought: a Skills route that could only toggle six instructions
+  // shipped by the release can now write, revise and delete its own. Before
+  // this, `createSkillRevision` had no authoring caller anywhere in the tree —
+  // the capability existed in the domain and had no way in.
+  //
+  // ENTRY JavaScript did not move past its ceiling and was not allowed to: the
+  // authoring panel and its stylesheet are a separate chunk fetched only when
+  // someone presses New skill or Edit (`optionalSkillEditor` below), so a
+  // visitor who reads the grid pays none of it. What lands in the entry graph
+  // is the grid's own two controls and the three catalog transforms behind
+  // them, which the removal path has to reach from the card.
+  //
+  // Measured 2040.29 KiB raw / 646.84 KiB gzip on the larger of the two
+  // `transcript-operations` splits described above, so the ceiling covers both
+  // forms rather than the one this machine happened to emit. 2041 KiB raw would
+  // have left 727 bytes and 647 KiB gzip would have left 164; both take one
+  // further whole-KiB step, for the reason stated throughout this file — a
+  // ceiling a minifier rename can breach is a tripwire, not a budget.
+  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2042 * 1024, gzip: 648 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now measures 672.33 KiB raw / 186.61 KiB gzip:
   // the browser-Git pack grew (see optionalBrowserGit) and the Terminal pack
@@ -350,7 +369,13 @@ export const RELEASE_BUDGETS = Object.freeze({
   // condition. Measured 2702.03 KiB raw / 829.66 KiB gzip.
   // Sized for both chunk splits; see `firstPartyJavaScriptAndWorkers`. Measured
   // 2712.18 KiB raw / 833.80 KiB gzip from a clean clone.
-  totalJavaScriptAndWorkers: Object.freeze({ raw: 2713 * 1024, gzip: 834 * 1024 }),
+  // Skill authoring carries into the installed aggregate exactly as it lands in
+  // the first-party partition above — both vendor pins are unchanged, so all of
+  // the growth is the first-party weight already reviewed there. Measured
+  // 2716.69 KiB raw / 834.76 KiB gzip on the larger chunk split. 2717 KiB raw
+  // would have left 318 bytes and 835 KiB gzip 246; both take one further
+  // whole-KiB step. Nothing eager moved and the entry ceiling is untouched.
+  totalJavaScriptAndWorkers: Object.freeze({ raw: 2718 * 1024, gzip: 836 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. Keep it visible under a dedicated, deliberately small cap.
   serviceWorker: Object.freeze({ raw: 12 * 1024, gzip: 4 * 1024 }),
@@ -589,6 +614,14 @@ export const RELEASE_BUDGETS = Object.freeze({
   // Small shared node-shape vocabulary split out by Vite because both the
   // Memory route and deferred graph renderer consume it.
   optionalMemorySupport: Object.freeze({ raw: 2 * 1024, gzip: 1 * 1024 }),
+  // The authoring panel for a `custom.` skill: form, its stylesheet's JS shim,
+  // and nothing else. Deferred because the Skills route is a grid people read
+  // far more often than they write, and the six built-ins cannot be edited at
+  // all — a visitor who never presses New skill or Edit pays nothing for it.
+  // Named in MEASUREMENT_JUSTIFIED_BUDGETS, so this pair is enforced rather
+  // than merely written: a placeholder left here fails the gate instead of
+  // surviving it. Measured 3,396 B raw / 1,320 B gzip.
+  optionalSkillEditor: Object.freeze({ raw: 4 * 1024, gzip: 2 * 1024 }),
   /*
    * The one destructive-confirmation dialog, shared rather than re-implemented.
    *
@@ -770,7 +803,17 @@ export const RELEASE_BUDGETS = Object.freeze({
   // raw / 29,532 B gzip. Gzip does not move and is not close: 28.84 KiB inside
   // a 32 KiB ceiling. Entry JavaScript, the other first-paint ceiling, is
   // untouched at 111.59 KiB.
-  entryCss: Object.freeze({ raw: 171 * 1024, gzip: 32 * 1024 }),
+  //
+  // Skill authoring takes raw one further KiB, to 172, for two rules the route
+  // could not be honest without: the Edit/Remove row on an authored card, which
+  // wraps rather than scrolls so a Remove button cannot leave the card at 320px;
+  // and the coarse-pointer floor for this route's own two controls, a 37px
+  // `role="switch"` toggle and a 38px mode trigger that the product-wide
+  // `.small-button` floor never covered. The panel's own stylesheet is NOT here
+  // — it ships with the deferred `skill-editor` chunk. Measured 175,303 B raw /
+  // 29,655 B gzip. Gzip does not move and is not close: 28.96 KiB inside a
+  // 32 KiB ceiling.
+  entryCss: Object.freeze({ raw: 172 * 1024, gzip: 32 * 1024 }),
   eachWasm: Object.freeze({ raw: 1024 * 1024, gzip: 350 * 1024 }),
   allWasm: Object.freeze({ raw: 1024 * 1024, gzip: 350 * 1024 }),
 });
@@ -875,6 +918,7 @@ export const MEASUREMENT_JUSTIFIED_BUDGETS = Object.freeze([
   "optionalCapabilitiesView",
   "optionalMemoryView",
   "optionalProofSurface",
+  "optionalSkillEditor",
 ]);
 
 /*
@@ -1368,6 +1412,11 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
     throw new Error(`Production must contain exactly one optional Memory support chunk; found ${optionalMemorySupportPacks.length}.`);
   }
   const optionalMemorySupportMeasurement = measure(optionalMemorySupportPacks[0].payload);
+  const optionalSkillEditorPacks = javaScriptFiles.filter((file) => isOptionalSkillEditorPath(file.path));
+  if (optionalSkillEditorPacks.length !== 1) {
+    throw new Error(`Production must contain exactly one optional skill editor; found ${optionalSkillEditorPacks.length}.`);
+  }
+  const optionalSkillEditorMeasurement = measure(optionalSkillEditorPacks[0].payload);
   const optionalMessagePartsPacks = javaScriptFiles.filter((file) => isOptionalMessagePartsPath(file.path));
   if (optionalMessagePartsPacks.length !== 1) {
     throw new Error(`Production must contain exactly one message-parts pack; found ${optionalMessagePartsPacks.length}.`);
@@ -1510,6 +1559,7 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
       && !isOptionalBrowserCapabilityPath(file.path)
       && !isOptionalMemoryViewPath(file.path)
       && !isOptionalMemorySupportPath(file.path)
+      && !isOptionalSkillEditorPath(file.path)
       && !isOptionalProofSurfacePath(file.path)
       && !isOptionalEvidenceAcquisitionPath(file.path)
       && !isOptionalTerminalPath(file.path)
@@ -1584,6 +1634,7 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
       { name: "browser-capabilities", paths: optionalBrowserCapabilityPacks.map((file) => file.path) },
       { name: "memory-view", paths: optionalMemoryViewPacks.map((file) => file.path) },
       { name: "memory-support", paths: optionalMemorySupportPacks.map((file) => file.path) },
+      { name: "skill-editor", paths: optionalSkillEditorPacks.map((file) => file.path) },
       { name: "confirm-dialog", paths: optionalConfirmDialogPacks.map((file) => file.path) },
       { name: "shortcut-sheet", paths: optionalShortcutSheetPacks.map((file) => file.path) },
       { name: "shell-overlays", paths: optionalShellOverlayPacks.map((file) => file.path) },
@@ -1697,6 +1748,7 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
   );
   assertWithinBudget("Optional Memory view", optionalMemoryViewMeasurement, RELEASE_BUDGETS.optionalMemoryView);
   assertWithinBudget("Optional Memory support", optionalMemorySupportMeasurement, RELEASE_BUDGETS.optionalMemorySupport);
+  assertWithinBudget("Optional skill editor", optionalSkillEditorMeasurement, RELEASE_BUDGETS.optionalSkillEditor);
   assertWithinBudget("Shared confirm dialog", optionalConfirmDialogMeasurement, RELEASE_BUDGETS.optionalConfirmDialog);
   assertWithinBudget("Optional shortcut sheet", optionalShortcutSheetMeasurement, RELEASE_BUDGETS.optionalShortcutSheet);
   assertWithinBudget("Optional shell overlays", optionalShellOverlayMeasurement, RELEASE_BUDGETS.optionalShellOverlays);
@@ -1896,6 +1948,10 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
       optionalMemorySupport: Object.freeze({
         path: optionalMemorySupportPacks[0].path,
         ...optionalMemorySupportMeasurement,
+      }),
+      optionalSkillEditor: Object.freeze({
+        path: optionalSkillEditorPacks[0].path,
+        ...optionalSkillEditorMeasurement,
       }),
       optionalConfirmDialog: Object.freeze({
         path: optionalConfirmDialogPacks[0].path,
@@ -2165,6 +2221,11 @@ export function isOptionalMemoryViewPath(path) {
 
 export function isOptionalMemorySupportPath(path) {
   return /^assets\/kind-visual-[A-Za-z0-9_-]+\.js$/u.test(path);
+}
+
+/** The `custom.` skill authoring panel; see `optionalSkillEditor`. */
+export function isOptionalSkillEditorPath(path) {
+  return /^assets\/skill-editor-[A-Za-z0-9_-]+\.js$/u.test(path);
 }
 
 /** The shared destructive-confirmation dialog; see `optionalConfirmDialog`. */
@@ -2590,6 +2651,9 @@ function printResult(result) {
   );
   console.log(
     `Optional Memory support ${formatBytes(measurements.optionalMemorySupport.raw)} raw / ${formatBytes(measurements.optionalMemorySupport.gzip)} gzip`,
+  );
+  console.log(
+    `Optional skill editor ${formatBytes(measurements.optionalSkillEditor.raw)} raw / ${formatBytes(measurements.optionalSkillEditor.gzip)} gzip`,
   );
   console.log(
     `Optional Proof surface ${formatBytes(measurements.optionalProofSurface.raw)} raw / ${formatBytes(measurements.optionalProofSurface.gzip)} gzip`,

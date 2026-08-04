@@ -1,0 +1,121 @@
+/*
+ * The authoring panel for a `custom.` skill.
+ *
+ * Its own sheet rather than a block in `routes.css` because the component is
+ * fetched only when someone presses New skill or Edit — a route stylesheet is
+ * paid for by every visitor to the route, including the ones who only ever read
+ * the grid. Same reason the component is a separate chunk.
+ */
+
+.skill-editor {
+  display: grid;
+  gap: var(--sp-3);
+  margin-bottom: 14px;
+  padding: var(--sp-3);
+}
+
+.skill-editor > header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.skill-editor > header h2 {
+  margin: 4px 0 0;
+  font: var(--fw-strong) var(--fs-lead)/1.25 var(--font-display);
+}
+
+.skill-editor > header code {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink-faint);
+  font: var(--fs-micro) var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skill-editor-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-3);
+}
+
+.skill-editor-fields label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.skill-editor-fields input,
+.skill-editor-fields textarea {
+  width: 100%;
+  /*
+   * Both floors, not just `width: 100%`. A grid item's default `min-width:auto`
+   * is its content, so a long instruction line in the textarea widened its own
+   * track and pushed the panel past the viewport at 320px — the 30px-overflow
+   * shape this repository has already paid for once elsewhere.
+   */
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-control);
+  color: var(--ink);
+  background: var(--surface-soft);
+  font-size: var(--fs-caption);
+}
+
+.skill-editor-fields textarea {
+  min-height: 150px;
+  font: var(--fs-caption)/1.55 var(--font-mono);
+  resize: vertical;
+}
+
+.skill-editor-fields input:disabled {
+  color: var(--ink-faint);
+  cursor: not-allowed;
+}
+
+.skill-editor-wide {
+  grid-column: 1 / -1;
+}
+
+.skill-editor-boundary {
+  max-width: 78ch;
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: var(--fs-micro);
+  line-height: 1.5;
+}
+
+.skill-editor-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.skill-editor-status {
+  margin: 0;
+  color: var(--v-failed);
+  font-size: var(--fs-caption);
+  line-height: 1.5;
+}
+
+@media (max-width: 720px) {
+  .skill-editor-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/*
+ * Coarse pointers only. `e2e/touch-target-floor.spec.ts` measures every
+ * `input`/`textarea`/`button` on this route at 390x844; the shared
+ * `.small-button` floor in `tokens.css` covers the two actions, and nothing
+ * floors a bare text input.
+ */
+@media (pointer: coarse) {
+  .skill-editor-fields input {
+    min-height: var(--touch-target);
+  }
+}

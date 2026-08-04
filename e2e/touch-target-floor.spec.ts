@@ -25,6 +25,15 @@ import { expect, test } from "@playwright/test";
 const ROUTES = [
   "chat", "sessions", "memory", "workspace", "editor",
   "attestations", "billing", "access", "profiles", "vault",
+  /*
+   * `skills` joined when the route became writable. It was measurably under the
+   * floor the whole time it was read-only: the global toggle is a
+   * `role="switch"` button at 37px and the per-profile mode control is a
+   * `.menu-select-trigger` at 38px, and the product-wide floor in `tokens.css`
+   * only covers `.small-button` / `.icon-button` / `button.primary` / `.brand`.
+   * The rule now lives beside the route's own styles; this is what proves it.
+   */
+  "skills",
 ] as const;
 
 const FLOOR = 44;
