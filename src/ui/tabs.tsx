@@ -235,7 +235,7 @@ export function Tabs({
   const baseId = useId();
   const stripRef = useRef<HTMLDivElement>(null);
   const [overflow, setOverflow] = useState<TabOverflow>(NO_OVERFLOW);
-  const signature = items.map((item) => item.id).join(" ");
+  const signature = items.map((item) => item.id).join("\u0000");
 
   useEffect(() => {
     const strip = stripRef.current;
@@ -243,7 +243,7 @@ export function Tabs({
     let last = "";
     const measure = () => {
       const next = measureTabOverflow(strip);
-      const key = `${next.edges} ${next.hidden.join(" ")}`;
+      const key = `${next.edges}\u0000${next.hidden.join("\u0000")}`;
       if (key === last) return;
       last = key;
       setOverflow(next);

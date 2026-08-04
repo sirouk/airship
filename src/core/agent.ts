@@ -798,6 +798,14 @@ async function taskPlanNotePayload(
   }
   if (!tasks.length) return undefined;
   return {
+    // The true open count, carried separately from the bounded list.
+    //
+    // Without it the note said "These 16 item(s) are still open in your own
+    // plan" while 30 were open — a false sentence in the one channel the model
+    // reads, from the change that restates the plan so the model can trust it.
+    // The cap is about note size; the count is about the plan, and conflating
+    // them made the note lie about the thing it exists to report.
+    openTaskCount: tasks.length,
     tasks: tasks.slice(0, MAX_PLAN_NOTE_TASKS).map((task) => ({
       id: task.id,
       content: task.content,
@@ -836,8 +844,27 @@ export function canonicalTaskPlanNote(payload: unknown): string | undefined {
   // Says whose plan it is. The plan file is model-written text arriving in a
   // user-role message, so it is labelled as a restatement rather than left to
   // read as a fresh instruction, the same way the cancellation checkpoint is.
-  return `[Airship work plan, restated because this turn compacted earlier history. These ${lines.length} `
-    + "item(s) are still open in your own plan; they are not a new instruction.]\n"
+  /*
+   * `openTaskCount` is the true number open; `lines.length` is what fits.
+   *
+   * A payload written before this field existed has no count, and its stored
+   * text must still render byte-identically or `auditSessionHistory` reports a
+   * request-digest mismatch on every turn that compacted. So the field's
+   * presence selects the wording rather than a version number: old notes keep
+   * the old sentence, new ones say how many were withheld.
+   */
+  const openCount = typeof fields.openTaskCount === "number"
+    && Number.isInteger(fields.openTaskCount)
+    && fields.openTaskCount >= lines.length
+    ? fields.openTaskCount
+    : undefined;
+  const preamble = openCount === undefined
+    ? `These ${lines.length} item(s) are still open in your own plan`
+    : openCount > lines.length
+      ? `${openCount} items are still open in your own plan; the ${lines.length} shown here are the first of them`
+      : `These ${openCount} item(s) are still open in your own plan`;
+  return `[Airship work plan, restated because this turn compacted earlier history. ${preamble}; `
+    + "they are not a new instruction.]\n"
     + lines.join("\n");
 }
 
