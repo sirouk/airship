@@ -88,17 +88,30 @@ read -r -p "Enter choice (1/2/3/4): " choice
 
 case "${choice}" in
   1|2)
-    require_env
-    # shellcheck disable=SC1091
-    source .env
-
     if [ "${choice}" = "2" ]; then
+      # Local mode asks for no domain, so it must not demand one be configured.
+      # It overrides every value `.env` would supply for the domain anyway, so
+      # requiring the file was pure friction — and it stopped the one path whose
+      # whole purpose is to work before anything is set up.
+      #
+      # `.env` is still read when present, for the optional provider
+      # registrations, which are the only settings local mode does not dictate.
+      if [ -f .env ]; then
+        # shellcheck disable=SC1091
+        source .env
+        echo -e "${BLUE}Read .env for optional provider settings.${NC}"
+      fi
       export CADDY_DOMAIN="localhost"
       export CADDY_TLS="false"
       export CADDY_PORT="${LOCAL_PORT:-8080}"
       export VITE_AIRSHIP_PUBLIC_ORIGIN="http://localhost:${CADDY_PORT}"
       export AIRSHIP_PUBLIC_BASE_PATH="/"
       echo -e "${YELLOW}Local mode: http://localhost:${CADDY_PORT} — no TLS, no domain.${NC}"
+    else
+      # A real deployment does need a domain, so this one asks for the file.
+      require_env
+      # shellcheck disable=SC1091
+      source .env
     fi
 
     echo -e "${BLUE}Configuration:${NC}"
