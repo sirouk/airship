@@ -44,6 +44,9 @@ export type EditorViewProps = Readonly<{
    * a same-document navigation back to it — must return to the tree.
    */
   destinationArrival?: number;
+  /** The active profile's editor syntax palette, and its auto-save seam. */
+  codeThemeId?: string | undefined;
+  onCodeThemeChange?: ((codeThemeId: string) => void | Promise<void>) | undefined;
 }>;
 
 /**
@@ -160,6 +163,8 @@ export function EditorView(props: EditorViewProps) {
         opensPane={identity.opensPane}
         opensPaneArrival={props.destinationArrival ?? 0}
         opensActivity={sourceToolsOpen ? "source" : "explorer"}
+        codeThemeId={props.codeThemeId}
+        onCodeThemeChange={props.onCodeThemeChange}
       />
       </div>
       <WorkspaceTerminalDock

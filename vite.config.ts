@@ -154,6 +154,16 @@ export default defineConfig({
            * repair.
            */
           if (id.includes("/src/ui/chat/transcript-operations")) return "transcript-operations";
+          /*
+           * The code scanner is now shared by two deferred surfaces — the
+           * transcript's code blocks and the Workspace editor's painted layer
+           * — and their only common ancestor is the entry. Rollup answered
+           * that by hoisting its five grammar tables into the eager bundle,
+           * which is 2 KiB of first paint spent on a scanner that cannot run
+           * until a route neither of them is has been opened. Named here so it
+           * stays one deferred chunk fetched by whichever surface asks first.
+           */
+          if (id.includes("/src/ui/chat/highlight")) return "code-highlight";
           return id.includes("/src/inference/bridge/")
             ? "inference-bridge-pack"
             : undefined;

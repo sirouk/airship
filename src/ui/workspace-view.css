@@ -359,16 +359,66 @@
   flex: 0 0 auto;
 }
 
-.code-editor-frame { display: flex; flex: 1 1 auto; min-height: 0; min-width: 0; }
+/*
+ * The editing sheet.
+ *
+ * `--code-ground` and `--code-ink` are written inline by the active editor
+ * theme (`codeSurfaceStyle`), and every use below falls back to the shell's
+ * own roles so the diff pane — which shares this frame and takes no editor
+ * theme — is unchanged. The editor theme reaches nothing outside this frame:
+ * it is the sheet on the desk, not a second answer to the colour-mode
+ * preference the whole instrument obeys.
+ */
+.code-editor-frame { display: flex; flex: 1 1 auto; min-height: 0; min-width: 0; background: var(--code-ground, transparent); }
 /* The gutter must share the textarea's exact metrics or the numbers drift out
    of register as the file scrolls. Keep the font/line-height/padding paired. */
-.code-gutter { box-sizing: border-box; flex: 0 0 auto; margin: 0; padding: 1rem .55rem 2rem .8rem; border-right: 1px solid var(--line); color: var(--ink-faint); background: var(--surface-soft); font: var(--fs-caption)/1.72 var(--font-mono); text-align: right; overflow: hidden; user-select: none; -webkit-user-select: none; }
-.code-editor { box-sizing: border-box; width: 100%; min-height: 0; flex: 1 1 auto; resize: none; padding: 1rem 1.15rem 2rem; border: 0; border-radius: 0; outline: 0; color: color-mix(in srgb, var(--ink) 92%, white); background: transparent; caret-color: var(--accent); font: var(--fs-caption)/1.72 var(--font-mono); tab-size: 2; white-space: pre; overflow: auto; }
+.code-gutter { box-sizing: border-box; flex: 0 0 auto; margin: 0; padding: 1rem .55rem 2rem .8rem; border-right: 1px solid var(--line); color: color-mix(in srgb, var(--code-ink, var(--ink-faint)) 62%, transparent); background: color-mix(in srgb, var(--code-ground, var(--surface-soft)) 92%, var(--ink)); font: var(--fs-caption)/1.72 var(--font-mono); text-align: right; overflow: hidden; user-select: none; -webkit-user-select: none; }
+/* The stack: one real control, one painted twin, one box. `min-width: 0` so a
+   long unwrapped line cannot widen the flex item past the pane. */
+.code-surface { position: relative; display: flex; flex: 1 1 auto; min-width: 0; min-height: 0; }
+/*
+ * Every metric here is paired with `.code-editor` below and must move with it.
+ * The two boxes hold the same characters; if the padding, the font, the line
+ * height, the tab size or the wrap mode disagree by so much as a pixel, the
+ * colour under the caret is the colour of a different character.
+ */
+.code-highlight { position: absolute; inset: 0; z-index: 0; box-sizing: border-box; margin: 0; padding: 1rem 1.15rem 2rem; color: var(--code-ink, var(--ink)); font: var(--fs-caption)/1.72 var(--font-mono); tab-size: 2; white-space: pre; overflow: auto; pointer-events: none; scrollbar-color: transparent transparent; }
+/* Not `overflow: hidden`: a hidden box reserves no scrollbar gutter, so on a
+   platform with space-taking scrollbars the painted lines would wrap one
+   column wider than the ones being typed. It scrolls like the textarea and is
+   simply painted transparent. */
+.code-highlight::-webkit-scrollbar { background: transparent; }
+.code-highlight::-webkit-scrollbar-thumb { background: transparent; }
+.code-highlight[data-wrap="on"] { white-space: pre-wrap; overflow-wrap: anywhere; }
+.code-highlight .tok-com { color: var(--tok-com); font-style: italic; }
+.code-highlight .tok-kw { color: var(--tok-kw); }
+.code-highlight .tok-fn { color: var(--tok-fn); }
+.code-highlight .tok-str { color: var(--tok-str); }
+.code-highlight .tok-num { color: var(--tok-num); }
+/* The glyphs the textarea paints are transparent so the layer beneath shows
+   through, but the *selection* is not: a transparent selected glyph over a
+   selection background is an unreadable block. `color` returns for the
+   selection only, which is also what makes find-on-page and drag-select
+   legible. */
+.code-editor { box-sizing: border-box; position: relative; z-index: 1; width: 100%; min-height: 0; flex: 1 1 auto; resize: none; padding: 1rem 1.15rem 2rem; border: 0; border-radius: 0; outline: 0; color: transparent; background: transparent; caret-color: var(--code-ink, var(--accent)); font: var(--fs-caption)/1.72 var(--font-mono); tab-size: 2; white-space: pre; overflow: auto; }
+.code-editor::selection { color: var(--code-ink, var(--ink)); background: color-mix(in srgb, var(--accent) 34%, transparent); }
 /* Soft wrap is a mode the user owns, defaulted by width in `defaultEditorWrap`
    and persisted with the open tabs. `anywhere` because the thing that overflows
    a 390px pane is usually one unbroken URL or path. */
 .code-editor[data-wrap="on"] { white-space: pre-wrap; overflow-wrap: anywhere; }
 .code-editor:focus { box-shadow: inset 2px 0 var(--accent); }
+/*
+ * Forced colours replace the whole palette, including the `color: transparent`
+ * that lets the layer show through — which would leave the system's own ink
+ * painted on top of the layer's, one file rendered twice with a half-pixel of
+ * antialiasing between them. There is no syntax colour to keep in that mode
+ * anyway: every token would be forced to the same ink. The layer goes, and the
+ * textarea is the plain editor it always was.
+ */
+@media (forced-colors: active) {
+  .code-highlight { display: none; }
+  .code-editor { color: CanvasText; }
+}
 .workspace-diff { margin: 0; cursor: text; }
 .workspace-diff-state { display: grid; flex: 1 1 auto; place-content: center; justify-items: center; gap: .55rem; padding: clamp(1.5rem, 6vw, 4rem); color: var(--ink-faint); text-align: center; }
 .workspace-diff-state strong { color: var(--ink); font: var(--fw-strong) var(--fs-body)/1.3 var(--font-body); }
@@ -445,12 +495,32 @@
   cursor: not-allowed;
 }
 
-.editor-strip__reveal-menu .menu-select-trigger {
+.editor-strip__reveal-menu .menu-select-trigger,
+.editor-strip__theme .menu-select-trigger {
   min-height: 30px;
   padding: 0 var(--sp-2);
   border-color: var(--line-control);
   background: var(--surface);
   font-size: var(--fs-micro);
+}
+
+/*
+ * A palette is easier to recognise than its name. The swatch is three of the
+ * theme's own roles — sheet, keyword, string — drawn from the same inline
+ * custom properties the editor frame receives, so a swatch cannot drift from
+ * the sheet it promises. Decorative and `aria-hidden`: the option's name and
+ * its licence line carry the meaning.
+ */
+.editor-strip__theme-swatch {
+  display: inline-block;
+  flex: 0 0 auto;
+  width: var(--sp-3);
+  height: var(--sp-3);
+  border: 1px solid var(--line-control);
+  border-radius: var(--radius-control);
+  background:
+    linear-gradient(135deg, transparent 52%, var(--tok-kw) 52% 74%, var(--tok-str) 74%),
+    var(--code-ground, var(--ground));
 }
 
 .editor-strip__wrap[aria-pressed="true"] {
@@ -507,6 +577,7 @@
   .editor-strip__pin,
   .editor-strip__reveal,
   .editor-strip__reveal-menu .menu-select-trigger,
+  .editor-strip__theme .menu-select-trigger,
   .workspace-filter,
   .workspace-new,
   .workbench-context button,
@@ -516,6 +587,11 @@
   .move-targets button {
     min-height: 44px;
   }
+
+  /* A finger needs both axes. On a phone the theme trigger is a swatch and a
+     caret, so nothing in its content floors the width — the same shape that
+     shipped a 9×44 popover trigger in the session bar. */
+  .editor-strip__theme .menu-select-trigger { min-width: 44px; }
 
   .workbench-section-heading { min-height: 52px; }
   .scm-row > div button { width: 44px; height: 44px; }
@@ -814,10 +890,15 @@
   .scm-group > header { min-height: var(--touch-target); }
 }
 
-:root[data-density="comfortable"] .workspace-workbench .code-editor { font-size: var(--fs-body); line-height: 1.78; padding: 1.25rem 1.35rem 2.4rem; }
+/* `:is(.code-editor, .code-highlight)` and not two rules: the textarea and the
+   layer painted behind it hold the same characters, so a density that moved
+   one and not the other would colour each glyph from a different line. The
+   first version of this shipped as two rules and the layer stayed at caption
+   size under Comfortable — every token painted a quarter of a line high. */
+:root[data-density="comfortable"] .workspace-workbench :is(.code-editor, .code-highlight) { font-size: var(--fs-body); line-height: 1.78; padding: 1.25rem 1.35rem 2.4rem; }
 :root[data-density="comfortable"] .workspace-workbench .code-gutter { font-size: var(--fs-body); line-height: 1.78; padding-block: 1.25rem 2.4rem; }
 :root[data-density="comfortable"] .workspace-workbench .editor-strip { min-height: 38px; padding-inline: var(--sp-4); }
-:root[data-density="compact"] .workspace-workbench .code-editor { font-size: var(--fs-micro); line-height: 1.55; padding: .7rem .85rem 1.4rem; }
+:root[data-density="compact"] .workspace-workbench :is(.code-editor, .code-highlight) { font-size: var(--fs-micro); line-height: 1.55; padding: .7rem .85rem 1.4rem; }
 :root[data-density="compact"] .workspace-workbench .code-gutter { font-size: var(--fs-micro); line-height: 1.55; padding-block: .7rem 1.4rem; }
 :root[data-density="compact"] .workspace-workbench .editor-strip { min-height: 28px; padding-block: 0; }
 
@@ -835,7 +916,22 @@
   .workbench-activity.mobile-active, .workbench-editor.mobile-active { display: flex; flex-direction: column; }
   .workbench-splitter { display: none; }
   .workbench-context { inset: auto .6rem max(4.8rem, env(safe-area-inset-bottom)) .6rem !important; }
-  .code-editor { font-size: var(--fs-meta); line-height: 1.68; padding-inline: .8rem; }
+  :is(.code-editor, .code-highlight) { font-size: var(--fs-meta); line-height: 1.68; padding-inline: .8rem; }
+  /*
+   * On a phone the swatch is the whole control: "GitHub Light" in the width
+   * this strip can spare rendered as "G…", which is not a name, a swatch or a
+   * decision. The label is clipped rather than removed, so the `sr-only`
+   * recipe keeps the chosen theme in the control's `aria-describedby` — the
+   * value is invisible, never absent.
+   */
+  .editor-strip__theme .menu-select-value {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
   /*
    * The gutter used to be `display: none` here, which deleted the line numbers
    * on every phone with nothing said and no way back. It is now retired by the

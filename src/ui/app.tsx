@@ -70,7 +70,9 @@ import {
   archiveProfileRevision,
   createBuiltInProfileCatalog,
   managedProfileRevisions,
+  profileCodeThemeId,
   removeAuthoredSkill,
+  setProfileCodeTheme,
   skillReferences,
   upsertAuthoredSkill,
   type ProfileCatalog,
@@ -9170,6 +9172,30 @@ export function App() {
     setRuntimeStatus("Profile archived from new work; historical conversations retain their pinned manifest and receipts");
   }
 
+  /**
+   * Auto-save for the editor's syntax palette.
+   *
+   * One conditional write against the same catalog transaction every other
+   * profile edit uses, so the choice is durable in the Vault the moment one is
+   * adopted and ephemeral in page memory when it is not — with no new storage
+   * key and, deliberately, no new profile revision: a colour preference is not
+   * something a year of pinned conversations should have to resolve.
+   *
+   * The failure path is a status line rather than a throw. Nothing about the
+   * open file changed, and a modal over a theme click would be the wrong size
+   * of interruption; but a silent revert would leave the menu showing a choice
+   * the catalog never took.
+   */
+  async function setProfileCodeThemeId(profileIdToEdit: string, codeThemeId: string): Promise<void> {
+    try {
+      await mutateProfileCatalog((current) => setProfileCodeTheme(current, profileIdToEdit, codeThemeId));
+    } catch (error) {
+      setRuntimeStatus(error instanceof Error
+        ? `Editor theme not saved to ${profileCatalogAuthorityLabel()}: ${error.message}`
+        : `Editor theme not saved to ${profileCatalogAuthorityLabel()}.`);
+    }
+  }
+
   async function setGlobalSkill(skillId: string, enabled: boolean): Promise<void> {
     await mutateProfileCatalog((current) => Object.freeze({
       ...current,
@@ -10470,6 +10496,8 @@ export function App() {
           onOpenFullTerminal={() => navigate("terminal")}
           durability={sessionDurability}
           destinationArrival={destinationArrival}
+          codeThemeId={profileCodeThemeId(catalog, activeProfile.profileId)}
+          onCodeThemeChange={async (codeThemeId) => { await setProfileCodeThemeId(activeProfile.profileId, codeThemeId); }}
         /> : editorViewError ? <RouteFailure title="Editor" message={editorViewError} onRetry={retryDeferredChunk} /> : <RouteSkeleton label="Loading the browser-native Workspace Editor" /> : null}
         {view === "terminal" && runtime.current && gitClient ? TerminalScreen ? <TerminalScreen
           workspace={runtime.current.workspace}

@@ -211,7 +211,11 @@ describe("release gate", () => {
     // stopped proving anything once Source Control's rail added a bigger one
     // above it. The claim is unchanged — remove the operative measurement and
     // the block must stop justifying its ceilings.
-    expect(() => assertDocumentedBudgetMeasurements(source.replace("Re-measured on this build: 81,152 B raw / 25,637 B gzip", "Re-weighed at 81,152 B and 25,637 B")
+    // AMENDED again for the same reason: the editor-theme pass recorded a
+    // third, larger pair in this block, and a claim that blanks two of three
+    // readings proves nothing while the operative one survives.
+    expect(() => assertDocumentedBudgetMeasurements(source.replace("Re-measured on this build: 84,687 B raw / 26,979 B gzip", "Re-weighed at 84,687 B and 26,979 B")
+      .replace("Re-measured on this build: 81,152 B raw / 25,637 B gzip", "Re-weighed at 81,152 B and 25,637 B")
       .replace("Re-measured on this build: 78,628 B raw / 24,795 B gzip", "Re-weighed at 78,628 B and 24,795 B")))
       .toThrow(/optionalWorkspaceWorkbench: its comment no longer records a measured raw\/gzip pair/u);
 
@@ -229,10 +233,10 @@ describe("release gate", () => {
       ["optionalMemoryView", "gzip: 21 * 1024", "gzip: 22 * 1024"],
       ["optionalProofSurface", "gzip: 28 * 1024", "gzip: 29 * 1024"],
       // AMENDED with the ceiling it names, for the same reason the
-      // `deferredCapabilities` row below was: 26 KiB is now the tightest step
+      // `deferredCapabilities` row below was: 27 KiB is now the tightest step
       // above this chunk's recorded gzip, so the unpaid-for step is the one
       // past it.
-      ["optionalWorkspaceWorkbench", "gzip: 26 * 1024", "gzip: 27 * 1024"],
+      ["optionalWorkspaceWorkbench", "gzip: 27 * 1024", "gzip: 28 * 1024"],
       // AMENDED with the ceiling it names: `deferredCapabilities` gzip moved to
       // 126 KiB when the Connection route stopped interviewing people, and that
       // step is the tightest one above its recorded measurement — so the step

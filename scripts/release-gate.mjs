@@ -440,7 +440,23 @@ export const RELEASE_BUDGETS = Object.freeze({
   // refuses everywhere else — so raw takes one further whole-KiB step and
   // leaves 1,475; gzip's tightest step leaves 1,004 and does not need one.
   // `entryJavaScript` is untouched.
-  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2065 * 1024, gzip: 656 * 1024 }),
+  //
+  // The editor-theme pass then took the partition's growth again, and again in
+  // full: the Workspace editor gained real syntax highlighting and six
+  // licence-clean palettes, itemised against `optionalWorkspaceWorkbench`
+  // below. Isolated by building this tree with and without that pass: 2063.56
+  // KiB raw / 655.02 KiB gzip before, 2068.36 KiB raw / 656.84 KiB gzip after,
+  // so all 4.80 KiB raw is this work's. It is deferred in full, and the same
+  // pass moved the shared code scanner off the boot path into its own chunk,
+  // so `entryJavaScript` *falls* 3.05 KiB raw across it — this partition grew
+  // while the thing a visitor waits for shrank. 2069 KiB raw would have left
+  // 655 bytes and 657 KiB gzip would have left 164. The gzip figure is plainly
+  // inside the tripwire this file refuses everywhere else; the raw one is below
+  // the 768 bytes of the tightest margin this file has ever accepted, on the
+  // one partition every deferred lane adds to — a 2 MiB aggregate whose
+  // minifier renames move more than that between builds. So each takes one
+  // further whole-KiB step, leaving 1,679 raw and 1,188 gzip.
+  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2070 * 1024, gzip: 658 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now measures 672.33 KiB raw / 186.61 KiB gzip:
   // the browser-Git pack grew (see optionalBrowserGit) and the Terminal pack
@@ -575,7 +591,17 @@ export const RELEASE_BUDGETS = Object.freeze({
   // this file refuses everywhere else, so each takes one further whole-KiB
   // step, leaving 1,055 bytes raw and 1,096 gzip. Nothing eager moved and the
   // entry ceiling is untouched.
-  totalJavaScriptAndWorkers: Object.freeze({ raw: 2741 * 1024, gzip: 844 * 1024 }),
+  // The editor themes carry into the installed aggregate exactly as they land
+  // in the first-party partition above; the vendor pins are unchanged, so all
+  // of the growth is weight already reviewed there — a painted highlight layer
+  // behind the editing textarea and six seven-role syntax palettes, none of it
+  // reachable until Workspace opens. Measured 2744.81 KiB raw / 844.77 KiB
+  // gzip. 2745 KiB raw would have left 195 bytes and 845 KiB gzip would have
+  // left 236, both far inside the tripwire this file refuses everywhere else,
+  // so each takes one further whole-KiB step, leaving 1,219 bytes raw and
+  // 1,260 gzip. Nothing eager moved — the entry ceiling is untouched and the
+  // entry chunk is 3.05 KiB raw lighter than it was.
+  totalJavaScriptAndWorkers: Object.freeze({ raw: 2746 * 1024, gzip: 846 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. Keep it visible under a dedicated, deliberately small cap.
   serviceWorker: Object.freeze({ raw: 12 * 1024, gzip: 4 * 1024 }),
@@ -752,7 +778,25 @@ export const RELEASE_BUDGETS = Object.freeze({
   // Both ceilings move to the smallest whole-KiB step that clears the new
   // reading — 80 KiB raw leaves 768 B, 26 KiB gzip leaves 987 B. The route is
   // still fetched only when Workspace opens, so first paint is untouched.
-  optionalWorkspaceWorkbench: Object.freeze({ raw: 80 * 1024, gzip: 26 * 1024 }),
+  //
+  // The editor-theme pass then gave the editor the two things it never had: a
+  // syntax palette and something to paint it on. The `<textarea>` keeps being
+  // the one real control — native undo, IME, selection — with a `<pre>` behind
+  // it holding the same characters in the same metrics, so the bytes are the
+  // painted layer, the scroll pairing, and six seven-role palettes (One Dark
+  // Pro, Nord, Gruvbox Dark, Tokyo Night, GitHub Light, Catppuccin Latte) with
+  // the licence line each one is shown under. The palettes are deliberately
+  // charged *here* rather than to the eager bundle: `catalog.ts` is on the boot
+  // path and stores only the chosen id, so nothing about the table is reachable
+  // until Workspace opens. The same pass moved the shared code scanner out of
+  // the entry chunk into its own deferred `code-highlight` chunk, which is why
+  // `entryJavaScript` falls 3.05 KiB raw in this build rather than rising.
+  // Re-measured on this build: 84,687 B raw / 26,979 B gzip. 83 KiB raw would
+  // have left 305 bytes, inside the margin a minifier rename moves, so raw
+  // takes the next step to 84 KiB (1,329 B); 27 KiB gzip is the tightest whole
+  // step above its reading and leaves 669 B. The route is still fetched only
+  // when Workspace opens, so first paint is untouched.
+  optionalWorkspaceWorkbench: Object.freeze({ raw: 84 * 1024, gzip: 27 * 1024 }),
   // Held only the Git workspace binding, at 519 B raw / 345 B gzip. It now also
   // holds the one bounded content scan: `search_text` and the Explorer's Contents
   // filter both import it, so Rollup gives it to the chunk those two share rather

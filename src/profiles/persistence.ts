@@ -8,7 +8,7 @@ import {
   sealEnvelope,
 } from "../storage/encrypted-envelope";
 import type { ObjectRecord, ObjectStore } from "../storage/object-store";
-import { managedProfileRevisions, type ProfileCatalog } from "./catalog";
+import { managedProfileRevisions, type ProfileCatalog, type ProfileEditorSettings } from "./catalog";
 import {
   createGlobalSkillSettings,
   createProfileRevision,
@@ -305,6 +305,7 @@ export async function validateProfileCatalog(value: unknown): Promise<ProfileCat
     profiles: Object.freeze(profiles),
     archivedProfileIds: Object.freeze(archivedProfileIds),
     globalSkills,
+    editorSettings: validateEditorSettings(value.editorSettings, profileIds),
   });
   if (managedProfileRevisions(catalog).length === 0) throw new Error("Profile catalog must retain one profile for new work.");
   return catalog;
@@ -365,6 +366,37 @@ function normalizePrefix(value: string): string {
   const normalized = value.replace(/^\/+|\/+$/gu, "");
   if (!normalized || /(?:^|\/)\.\.(?:\/|$)/u.test(normalized)) throw new Error("Profile catalog prefix is invalid.");
   return normalized;
+}
+
+/**
+ * Per-profile editor presentation, kept only for profiles this catalog retains.
+ *
+ * The theme id itself is *not* checked against the shipped table. A Vault
+ * written by a later release may name a palette this build has never heard of,
+ * and refusing to decrypt a catalog over a colour preference would strand the
+ * whole profile set; `resolveCodeTheme` renders the default and the stored id
+ * survives untouched, so returning to the newer build restores the choice. An
+ * entry whose profile is gone is dropped, like every other unrecognized key.
+ */
+function validateEditorSettings(
+  value: unknown,
+  profileIds: ReadonlySet<string>,
+): Readonly<Record<string, ProfileEditorSettings>> {
+  if (value === undefined) return Object.freeze({});
+  if (!isRecord(value)) throw new Error("Profile catalog editor settings are invalid.");
+  const entries = Object.entries(value);
+  if (entries.length > MAX_PROFILES) throw new Error("Profile catalog editor settings are invalid.");
+  const settings: Record<string, ProfileEditorSettings> = {};
+  for (const [profileId, candidate] of entries) {
+    if (!profileIds.has(profileId)) continue;
+    if (!isRecord(candidate)) throw new Error(`Editor settings for ${profileId} are invalid.`);
+    const codeThemeId = candidate.codeThemeId;
+    if (typeof codeThemeId !== "string" || codeThemeId.length === 0 || codeThemeId.length > 64) {
+      throw new Error(`Editor settings for ${profileId} name an invalid theme.`);
+    }
+    settings[profileId] = Object.freeze({ codeThemeId });
+  }
+  return Object.freeze(settings);
 }
 
 function boundedArray(value: unknown, maximum: number, label: string): unknown[] {

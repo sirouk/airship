@@ -14,6 +14,24 @@ import {
   type ThemeManifestDraft,
 } from "./domain";
 
+/**
+ * Presentation a profile owns but no session has to resolve.
+ *
+ * The editor's syntax palette is carried by the agent — switching profiles
+ * switches the sheet — and it is saved the instant it is changed, with no Save
+ * button anywhere near it. Neither of those is compatible with
+ * `ProfileRevision`, which is immutable, content-addressed and pinned into
+ * every conversation started under it: a theme click would mint one revision
+ * per click, and each one would have to be resolvable forever to answer a
+ * question no transcript ever asks.
+ *
+ * So it sits beside the revisions in the same catalog, exactly as
+ * `globalSkills` does — mutable, keyed by `profileId` rather than by revision,
+ * written through the one conditional-write catalog transaction, and durable
+ * in the Vault when a Vault has been adopted.
+ */
+export type ProfileEditorSettings = Readonly<{ codeThemeId: string }>;
+
 export type ProfileCatalog = Readonly<{
   themes: readonly ThemeManifest[];
   skills: readonly SkillRevision[];
@@ -21,7 +39,46 @@ export type ProfileCatalog = Readonly<{
   /** Revisions retained for historical conversation resolution but hidden from new work. */
   archivedProfileIds?: readonly string[];
   globalSkills: GlobalSkillSettings;
+  /** Keyed by `profileId`. An absent entry reads as the shipped default. */
+  editorSettings?: Readonly<Record<string, ProfileEditorSettings>>;
 }>;
+
+/**
+ * The id this profile stored, or nothing.
+ *
+ * Deliberately *not* resolved against the shipped palette table. This module
+ * is on the boot path — `app.tsx` reads the catalog before first paint — and
+ * the palettes are six full colour tables nobody needs until the editor opens.
+ * Naming the table here would have hoisted it into the eager bundle for a
+ * string comparison. The editor resolves the id, including the fallback for an
+ * id a later release wrote and this build does not ship.
+ */
+export function profileCodeThemeId(catalog: ProfileCatalog, profileId: string): string | undefined {
+  return catalog.editorSettings?.[profileId]?.codeThemeId;
+}
+
+/**
+ * Identity is returned when the choice is already the stored one, so a menu
+ * that re-selects the current theme costs no catalog generation and no write.
+ *
+ * The id is checked for shape, not for membership — same reason as above, and
+ * the same forward-compatibility rule the persistence validator follows: a
+ * palette this build does not know is stored intact and rendered as the
+ * default, never discarded.
+ */
+export function setProfileCodeTheme(catalog: ProfileCatalog, profileId: string, codeThemeId: string): ProfileCatalog {
+  if (codeThemeId.length === 0 || codeThemeId.length > 64 || !/^[a-z0-9][a-z0-9-]*$/u.test(codeThemeId)) {
+    throw new Error(`${codeThemeId} is not a usable editor theme id.`);
+  }
+  if (catalog.editorSettings?.[profileId]?.codeThemeId === codeThemeId) return catalog;
+  return Object.freeze({
+    ...catalog,
+    editorSettings: Object.freeze({
+      ...catalog.editorSettings,
+      [profileId]: Object.freeze({ codeThemeId }),
+    }),
+  });
+}
 
 export function managedProfileRevisions(catalog: ProfileCatalog): readonly ProfileRevision[] {
   const archived = new Set(catalog.archivedProfileIds ?? []);

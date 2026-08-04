@@ -24,11 +24,13 @@ import {
   writeWorkspaceWitness,
 } from "../workspace/page-witness";
 import { buildWorkspaceTree, visibleWorkspaceTree, workspaceBaseName, workspaceDirectories, workspaceFilesUnder, workspaceFolderRenamePlan, workspaceParentPath, type VisibleWorkspaceNode, type WorkspaceMove } from "../workspace/tree";
+import { CODE_THEMES, codeThemeCssVariables, resolveCodeTheme } from "../profiles/code-themes";
+import { CodeHighlightLayer } from "./code-surface";
 import { ConfirmDialog } from "./confirm-dialog";
 import type { DurabilityState } from "./durability-indicator";
 import { downloadBytes, downloadFileName } from "./file-download";
 import { Icon } from "./icons";
-import { MenuSelect, moveMenuSelection } from "./menu-select";
+import { MenuSelect, moveMenuSelection, type MenuSelectOption } from "./menu-select";
 import { Seal } from "./seal";
 // One conflict predicate for every staging surface: the Advanced controls
 // exclude conflicted paths from bulk staging (`isConflicted`) and the
@@ -217,6 +219,12 @@ export class WorkbenchProfileSelectionFence {
   }
 }
 
+/* Static: the shipped palettes cannot change at runtime, so the option list
+   is built once rather than on every keystroke in the buffer below it. */
+const CODE_THEME_OPTIONS: readonly MenuSelectOption[] = Object.freeze(
+  CODE_THEMES.map((theme) => Object.freeze({ value: theme.codeThemeId, label: theme.name, description: theme.description })),
+);
+
 export type WorkspaceViewProps = Readonly<{
   profileId: string;
   files: readonly WorkspaceEntry[];
@@ -245,6 +253,20 @@ export type WorkspaceViewProps = Readonly<{
   opensPaneArrival?: number;
   /** Compatibility/request seam for opening the Source Control activity. */
   opensActivity?: "explorer" | "source";
+  /**
+   * The syntax palette this profile edits under.
+   *
+   * Absent means "the shipped default" rather than "no theme": the editor
+   * always paints a sheet, and a workbench rendered before the catalog has
+   * been read must not flash an unstyled one.
+   */
+  codeThemeId?: string | undefined;
+  /**
+   * Auto-save. There is no Save button beside the theme menu because the menu
+   * *is* the commit: the shell writes the catalog on change and the choice
+   * travels with the agent, not with this browser tab.
+   */
+  onCodeThemeChange?: ((codeThemeId: string) => void | Promise<void>) | undefined;
 }>;
 
 /** A profile switch remounts the state owner while preserving the shared WorkspacePort. */
@@ -274,7 +296,10 @@ function ProfileScopedWorkspaceView({
   opensPane = "navigation",
   opensPaneArrival = 0,
   opensActivity = "explorer",
+  codeThemeId,
+  onCodeThemeChange,
 }: WorkspaceViewProps) {
+  const codeTheme = resolveCodeTheme(codeThemeId);
   const contextHintId = useId();
   // One id per *window slot*, not per path: a workspace path may contain a
   // space, and an `aria-owns` value is a space-separated IDREF list.
@@ -446,6 +471,10 @@ function ProfileScopedWorkspaceView({
   const hoverDirectory = useRef("");
   const treeViewport = useRef<HTMLDivElement>(null);
   const gutter = useRef<HTMLPreElement>(null);
+  // The painted twin behind the textarea, and the textarea itself. Both are
+  // scroll-synced from the one real control; see `syncCodeScroll`.
+  const highlightLayer = useRef<HTMLPreElement>(null);
+  const editorArea = useRef<HTMLTextAreaElement>(null);
   const shell = useRef<HTMLDivElement>(null);
   const dialogBox = useRef<HTMLDivElement>(null);
   const dialogOpener = useRef<HTMLElement>();
@@ -760,6 +789,27 @@ function ProfileScopedWorkspaceView({
   const diffBuffer = activeDocument?.kind === "diff" ? diffs[activeId] : undefined;
   const dirty = Boolean(buffer && buffer.draft !== buffer.content);
   const gutterLines = buffer && !buffer.binary ? workspaceGutterLines(buffer.draft) : undefined;
+  /**
+   * One scroll position, three boxes.
+   *
+   * The textarea is the only one a person scrolls; the gutter and the painted
+   * layer are followers. `scrollLeft` matters as much as `scrollTop` — without
+   * it an unwrapped long line paints its colours at the left margin while the
+   * caret is a hundred columns to the right.
+   */
+  function syncCodeScroll(source: HTMLTextAreaElement): void {
+    if (gutter.current) gutter.current.scrollTop = source.scrollTop;
+    if (highlightLayer.current) {
+      highlightLayer.current.scrollTop = source.scrollTop;
+      highlightLayer.current.scrollLeft = source.scrollLeft;
+    }
+  }
+  // Activating another document, or toggling wrap, moves the textarea's own
+  // scroll offset without emitting a scroll event. Re-register after the paint
+  // that changed it rather than leaving the layer at the previous file's offset.
+  useEffect(() => {
+    if (editorArea.current) syncCodeScroll(editorArea.current);
+  });
   const contextIsFile = Boolean(context && files.some((file) => file.path === context.path));
   // A folder operation is a set of file operations, so the dialog computes the
   // set before it offers the button and prints its size in the confirmation.
@@ -2063,32 +2113,36 @@ function ProfileScopedWorkspaceView({
               {buffer.truncated ? <div class="workspace-boundary attention" role="status">{buffer.content ? "Bounded preview only." : "Encrypted file not downloaded."} Files above {formatBytes(WORKSPACE_EDITOR_BYTE_LIMIT)} are read-only; full-object AES-GCM verification is never mislabeled as a range stream.</div> : null}
               {/* The gutter is presentational and scroll-synced from the
                   textarea, so the editable surface remains one real control. */}
-              <div class="code-editor-frame">
+              <div class="code-editor-frame" data-code-theme={codeTheme.codeThemeId} style={codeThemeCssVariables(codeTheme)}>
                 {/* Numbers down the side of a soft-wrapped buffer count visual
                     rows, not file lines, so wrapping retires the gutter rather
                     than mislabelling it — and the file strip says so. */}
                 {gutterLines && !wrap ? <pre class="code-gutter" ref={gutter} aria-hidden="true">{gutterLines}</pre> : null}
-                <textarea
-                  class="code-editor"
-                  data-wrap={wrap ? "on" : "off"}
-                  aria-label={`Edit ${workspaceBaseName(buffer.path)}`}
-                  value={buffer.draft}
-                  readOnly={buffer.truncated}
-                  spellcheck={false}
-                  onScroll={(event) => { if (gutter.current) gutter.current.scrollTop = event.currentTarget.scrollTop; }}
-                  onInput={(event) => {
-                    // The first edit promotes a replaceable preview before its
-                    // draft changes, so a subsequent file activation cannot
-                    // evict unsaved work.
-                    pinTab(buffer.path);
-                    setBuffers((current) => {
-                      const next = { ...current, [buffer.path]: { ...buffer, draft: event.currentTarget.value } };
-                      buffersRef.current = next;
-                      return next;
-                    });
-                  }}
-                  onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") { event.preventDefault(); void saveActive(); } }}
-                />
+                <div class="code-surface">
+                  <CodeHighlightLayer text={buffer.draft} path={buffer.path} wrap={wrap} layer={highlightLayer} />
+                  <textarea
+                    class="code-editor"
+                    ref={editorArea}
+                    data-wrap={wrap ? "on" : "off"}
+                    aria-label={`Edit ${workspaceBaseName(buffer.path)}`}
+                    value={buffer.draft}
+                    readOnly={buffer.truncated}
+                    spellcheck={false}
+                    onScroll={(event) => syncCodeScroll(event.currentTarget)}
+                    onInput={(event) => {
+                      // The first edit promotes a replaceable preview before its
+                      // draft changes, so a subsequent file activation cannot
+                      // evict unsaved work.
+                      pinTab(buffer.path);
+                      setBuffers((current) => {
+                        const next = { ...current, [buffer.path]: { ...buffer, draft: event.currentTarget.value } };
+                        buffersRef.current = next;
+                        return next;
+                      });
+                    }}
+                    onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") { event.preventDefault(); void saveActive(); } }}
+                  />
+                </div>
               </div>
             </>}
             {/*
@@ -2121,6 +2175,26 @@ function ProfileScopedWorkspaceView({
                   wraps: a Save button on a line of its own reads as belonging
                   to whatever ends up beside it. */}
               <span class="editor-strip__controls">
+              {/*
+                The editor theme lives here, beside Wrap, because both are
+                answers to "how do I want to read this file" and neither is a
+                property of the file. There is no Save beside it: `onChange`
+                writes the profile catalog, which is what "saved with the
+                agent, auto-saved on change" has to mean if switching profiles
+                is to switch the sheet back.
+              */}
+              {onCodeThemeChange ? <MenuSelect
+                className="editor-strip__theme"
+                ariaLabel="Editor theme"
+                value={codeTheme.codeThemeId}
+                options={CODE_THEME_OPTIONS}
+                onChange={(value) => { void onCodeThemeChange(value); }}
+                leading={(option) => <span
+                  class="editor-strip__theme-swatch"
+                  aria-hidden="true"
+                  style={codeThemeCssVariables(resolveCodeTheme(option.value))}
+                />}
+              /> : null}
               <button
                 class="editor-strip__reveal"
                 type="button"
