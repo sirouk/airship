@@ -427,6 +427,132 @@ describe("browser-native session domain", () => {
     expect(decideSessionResume(pins, suspect, runtime).action).toBe("blocked");
   });
 
+  /*
+   * Saving a profile is not losing your conversations.
+   *
+   * Driven in a browser before it was changed: send one turn, open Profiles,
+   * choose a different interface theme, press "Save new revision" and switch to
+   * it. The finished conversation's only forward action became a gold "Fork to
+   * continue"; its Resume button read "Fork required" and was disabled; the
+   * row's one-press Open refused and left the route on #sessions — beside that
+   * same conversation's "Journal structure passed · 11 of 11 events inspected ·
+   * Last turn completed". A theme is not a pin.
+   */
+  it("resumes a conversation whose profile was re-saved with only presentation changed", async () => {
+    const fixture = createJournal();
+    const created = await fixture.journal.createSession("Themed", await manifest({ profile: profileBindingV2() }));
+    const session = (await fixture.journal.getSession(created.id))!;
+    const events = await fixture.journal.readEvents(session.id);
+    const pins = extractSessionPins(session, events);
+    const health = assessSessionHistory(session, events);
+    const runtime = activeRuntime(session.manifest);
+
+    const resaved = decideSessionResume(pins, health, {
+      ...runtime,
+      profile: {
+        ...runtime.profile!,
+        profileRevision: `sha256:${"B".repeat(43)}`,
+        themeDigest: `sha256:${"C".repeat(43)}`,
+        resolutionDigest: `sha256:${"D".repeat(43)}`,
+      },
+    });
+    expect(resaved.action).toBe("resume");
+    expect(resaved.label).toBe("Ready to resume");
+    // Stated, not hidden: the person is told they are on an older revision.
+    expect(resaved.reasons.map((reason) => reason.code)).toContain("PROFILE_REVISION_NEWER");
+    expect(resaved.reasons.every((reason) => reason.severity !== "warning")).toBe(true);
+  });
+
+  it("still requires a fork when the profile's skills or governing boundaries moved", async () => {
+    const fixture = createJournal();
+    const created = await fixture.journal.createSession("Governed", await manifest({ profile: profileBindingV2() }));
+    const session = (await fixture.journal.getSession(created.id))!;
+    const events = await fixture.journal.readEvents(session.id);
+    const pins = extractSessionPins(session, events);
+    const health = assessSessionHistory(session, events);
+    const runtime = activeRuntime(session.manifest);
+
+    const skills = decideSessionResume(pins, health, {
+      ...runtime,
+      profile: { ...runtime.profile!, skillSetDigest: `sha256:${"E".repeat(43)}` },
+    });
+    expect(skills.action).toBe("fork-required");
+    expect(skills.reasons.map((reason) => reason.code)).toContain("PROFILE_SKILLS_MISMATCH");
+
+    for (const boundary of [
+      { approvalMode: "full-access" },
+      { memoryScope: "session" },
+      { workspaceBinding: "workspace-id:other" },
+      { minimumPosture: "encrypted-unattested" as const },
+    ]) {
+      const moved = decideSessionResume(pins, health, {
+        ...runtime,
+        profile: { ...runtime.profile!, ...boundary },
+      });
+      expect(moved.action).toBe("fork-required");
+      expect(moved.reasons.map((reason) => reason.code)).toContain("PROFILE_BOUNDARY_MISMATCH");
+    }
+
+    const other = decideSessionResume(pins, health, {
+      ...runtime,
+      profile: { ...runtime.profile!, profileId: "profile-2" },
+    });
+    expect(other.action).toBe("fork-required");
+    expect(other.reasons.map((reason) => reason.code)).toContain("PROFILE_MISMATCH");
+  });
+
+  /*
+   * "Unfinished — 103 of 103 events inspected · 1 turn" over "Last turn
+   * completed", with "RUNTIME DECISION: Fork required / HISTORY INCOMPLETE /
+   * The session ended mid-turn or was only partially inspected" — while the
+   * composer for that conversation accepted input. Every one of those words was
+   * false about a fully inspected, fully terminated journal carrying a
+   * timestamp drift, and the fork they demanded was not needed.
+   */
+  it("does not call a fully inspected, fully terminated history unfinished", async () => {
+    const fixture = createJournal();
+    const created = await fixture.journal.createSession("Drifted", await manifest({}));
+    await fixture.journal.append(created.id, [
+      { type: "turn.requested", turnId: "turn-1", payload: { content: "hello" } },
+      { type: "assistant.completed", turnId: "turn-1", payload: { message: { role: "assistant", content: "hi" } } },
+      { type: "turn.completed", turnId: "turn-1", payload: {} },
+    ]);
+    const stored = (await fixture.journal.getSession(created.id))!;
+    const events = await fixture.journal.readEvents(stored.id);
+    // The one observation, and nothing else: the session's own updated-at
+    // clock differs from its final event's.
+    const drifted = { ...stored, updatedAt: new Date(Date.parse(stored.updatedAt) + 1_000).toISOString() };
+
+    const health = assessSessionHistory(drifted, events);
+    expect(health.status).toBe("incomplete");
+    expect(health.issues.map((issue) => issue.code)).toEqual(["SESSION_UPDATE_TIME_MISMATCH"]);
+    expect(health.checkedEvents).toBe(health.totalEvents);
+    expect(health.label).toBe("Observations recorded");
+
+    const decision = decideSessionResume(extractSessionPins(drifted, events), health, activeRuntime(drifted.manifest));
+    expect(decision.action).toBe("resume");
+    expect(decision.reasons.map((reason) => reason.code)).not.toContain("HISTORY_INCOMPLETE");
+    expect(decision.reasons.find((reason) => reason.code === "HISTORY_OBSERVED")?.message)
+      .toContain("Fork not required");
+  });
+
+  it("still requires a fork for a conversation that genuinely ended mid-turn", async () => {
+    const fixture = createJournal();
+    const created = await fixture.journal.createSession("Mid-turn", await manifest({}));
+    await fixture.journal.append(created.id, [
+      { type: "turn.requested", turnId: "turn-1", payload: { content: "hello" } },
+    ]);
+    const session = (await fixture.journal.getSession(created.id))!;
+    const events = await fixture.journal.readEvents(session.id);
+    const health = assessSessionHistory(session, events);
+    expect(health.label).toBe("Unfinished");
+
+    const decision = decideSessionResume(extractSessionPins(session, events), health, activeRuntime(session.manifest));
+    expect(decision.action).toBe("fork-required");
+    expect(decision.reasons.find((reason) => reason.code === "HISTORY_INCOMPLETE")?.message)
+      .toBe("The most recent turn has no durable terminal event; fork before continuing.");
+  });
+
   it("never resumes a session through a replacement inference credential generation", async () => {
     const binding = {
       version: 1 as const,
@@ -1065,6 +1191,18 @@ function profileBinding(): NonNullable<SessionManifest["profile"]> {
   };
 }
 
+/** The current pin shape, which carries the boundaries a turn is governed by. */
+function profileBindingV2(): NonNullable<SessionManifest["profile"]> {
+  return {
+    ...profileBinding(),
+    version: 2,
+    workspaceBinding: { kind: "active-workspace" },
+    memoryScope: "profile",
+    approvalMode: "ask-first",
+    minimumPosture: "local",
+  };
+}
+
 function activeRuntime(sessionManifest: SessionManifest): ActiveSessionRuntime {
   const profile = sessionManifest.profile;
   return {
@@ -1081,6 +1219,14 @@ function activeRuntime(sessionManifest: SessionManifest): ActiveSessionRuntime {
         themeDigest: profile.themeDigest,
         skillSetDigest: profile.skillSetDigest,
         resolutionDigest: profile.resolutionDigest,
+        ...(profile.version === 2 ? {
+          workspaceBinding: profile.workspaceBinding.kind === "workspace-id"
+            ? `workspace-id:${profile.workspaceBinding.workspaceId}`
+            : "active-workspace",
+          memoryScope: profile.memoryScope,
+          approvalMode: profile.approvalMode,
+          minimumPosture: profile.minimumPosture,
+        } : {}),
       },
     } : {}),
   };

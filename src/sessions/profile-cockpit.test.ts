@@ -65,8 +65,44 @@ describe("profile cockpit resume matching", () => {
     })).toBe(false);
     expect(resumableProfileManifestMatches(actual, {
       ...actual,
-      profile: { ...actual.profile!, profileRevision: "sha256:new-profile" },
+      profile: { ...actual.profile!, skillSetDigest: "sha256:other-skills" },
     })).toBe(false);
+    expect(resumableProfileManifestMatches(actual, {
+      ...actual,
+      profile: { ...actual.profile!, approvalMode: "full-access" },
+    } as SessionManifest)).toBe(false);
+    expect(resumableProfileManifestMatches(actual, {
+      ...actual,
+      profile: { ...actual.profile!, profileId: "general" },
+    })).toBe(false);
+  });
+
+  /*
+   * A profile edit that changes nothing a turn is run by must not cost the
+   * person their conversations.
+   *
+   * The catalog holds one revision per profile, so the revision a conversation
+   * pinned stops existing the moment the profile is saved again — and the
+   * revision digest moves for the interface theme, the profile's name and its
+   * description, none of which reach a turn. Comparing it made a theme swap
+   * equivalent to a changed pin: the profile reported it "had no compatible
+   * conversation" and opened an empty one, and the finished conversation beside
+   * it offered "Fork to continue" as its only forward action.
+   */
+  it("keeps a conversation resumable when a saved profile revision changed only its presentation", async () => {
+    const pinned = await manifest("Pinned prompt");
+    const afterThemeChange = {
+      ...pinned,
+      profile: {
+        ...pinned.profile!,
+        profileRevision: `sha256:${"B".repeat(43)}`,
+        themeId: "blue-ledger",
+        themeDigest: `sha256:${"C".repeat(43)}`,
+        resolutionDigest: `sha256:${"D".repeat(43)}`,
+      },
+    } as SessionManifest;
+    expect(profileManifestResumeMismatches(pinned, afterThemeChange)).toEqual([]);
+    expect(resumableProfileManifestMatches(pinned, afterThemeChange)).toBe(true);
   });
 
   it("resumes a conversation pinned under the withdrawn workspace memory scope", async () => {

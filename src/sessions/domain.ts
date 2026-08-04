@@ -6,6 +6,7 @@ import type {
   SessionProfileBinding,
 } from "../core/contracts";
 import type { DurableEvent, SessionRecord } from "../core/journal";
+import { enforcedMemoryScope } from "../profiles/domain";
 import type {
   ClaimKey,
   ConversationReceipt,
@@ -68,7 +69,7 @@ export type SessionHistoryIssue = Readonly<{
 
 export type SessionHistoryAssessment = Readonly<{
   status: "consistent" | "incomplete" | "suspect";
-  label: "Locally consistent" | "Unfinished" | "Needs review";
+  label: "Locally consistent" | "Unfinished" | "Observations recorded" | "Needs review";
   verification: Readonly<{
     scope: "structural-linkage-only";
     digestRecomputed: false;
@@ -128,6 +129,22 @@ export type SessionPostureBinding = Readonly<{
   mixed: boolean;
 }>;
 
+/**
+ * The boundaries a profile pin actually governs a running turn with.
+ *
+ * Separated from the pin's identity (`profileRevision`) and its presentation
+ * (`themeId`/`themeDigest`) because only these decide what a resumed turn does:
+ * which workspace it may touch, which memory it may read, whether it asks
+ * before acting, and the evidence floor it refuses to run below. A v1 pin
+ * predates the fields and carries none of them.
+ */
+export type SessionProfileGovernance = Readonly<{
+  workspaceBinding?: string;
+  memoryScope?: string;
+  approvalMode?: string;
+  minimumPosture?: SecurityPosture;
+}>;
+
 export type SessionPinnedProfile = Readonly<{
   profileId: string;
   profileRevision: string;
@@ -138,7 +155,7 @@ export type SessionPinnedProfile = Readonly<{
   skills: readonly Readonly<{ skillId: string; digest: string; promptOrder: number }>[];
   skillCount: number;
   skillsTruncated: boolean;
-}>;
+} & SessionProfileGovernance>;
 
 export type SessionPins = Readonly<{
   protocolVersion: number;
@@ -172,7 +189,7 @@ export type ActiveSessionRuntime = Readonly<{
     themeDigest: string;
     skillSetDigest: string;
     resolutionDigest: string;
-  }>;
+  } & SessionProfileGovernance>;
 }>;
 
 export type SessionCompatibilityReason = Readonly<{
@@ -791,7 +808,7 @@ export function assessSessionHistory(
       : "consistent";
   return deepFreeze({
     status,
-    label: status === "consistent" ? "Locally consistent" : status === "incomplete" ? "Unfinished" : "Needs review",
+    label: sessionHistoryLabel(status, issues, inspected.length, events.length),
     verification: {
       scope: "structural-linkage-only",
       digestRecomputed: false,
@@ -803,6 +820,29 @@ export function assessSessionHistory(
     completedTurnCount: completedTurns,
     issues,
   });
+}
+
+/**
+ * The one word for what a journal's structure came to, said once.
+ *
+ * "Unfinished" is a claim about a turn, and it was being printed for any
+ * observation at all — a fully terminated, fully inspected history carrying a
+ * timestamp drift was labelled "Unfinished" directly above its own "103 of 103
+ * events inspected" and "Last turn completed". Both assessment paths (the
+ * synchronous structural pass and the audited one) call this, so the two
+ * routes cannot disagree about the same journal.
+ */
+export function sessionHistoryLabel(
+  status: SessionHistoryAssessment["status"],
+  issues: readonly Readonly<{ code: string }>[],
+  checkedEvents: number,
+  totalEvents: number,
+): SessionHistoryAssessment["label"] {
+  if (status === "consistent") return "Locally consistent";
+  if (status === "suspect") return "Needs review";
+  return issues.some((issue) => issue.code === "TURN_INCOMPLETE") || checkedEvents < totalEvents
+    ? "Unfinished"
+    : "Observations recorded";
 }
 
 export function extractSessionPins(
@@ -869,7 +909,32 @@ export function decideSessionResume(
   if (assessment.status === "suspect") {
     add({ code: "HISTORY_SUSPECT", severity: "error", message: "Structural history issues must be reviewed before this session can resume." });
   } else if (assessment.status === "incomplete") {
-    add({ code: "HISTORY_INCOMPLETE", severity: "warning", message: "The session ended mid-turn or was only partially inspected; fork before continuing." });
+    /*
+     * Say the one that is true, and only require a fork for it.
+     *
+     * `incomplete` is raised for *any* non-fatal observation, and the sentence
+     * asserted both halves of a disjunction — "ended mid-turn or was only
+     * partially inspected" — beside the surface's own "103 of 103 events
+     * inspected · last turn completed". A fully inspected, fully terminated
+     * journal whose only observation was a timestamp drift was told it could
+     * not be continued, while the composer for that same conversation kept
+     * accepting input. Neither disjunct holds there; the journal is simply
+     * carrying an observation, which is worth saying and is not a reason to
+     * make somebody fork.
+     */
+    const endedMidTurn = assessment.issues.some((issue) => issue.code === "TURN_INCOMPLETE");
+    const partiallyInspected = assessment.checkedEvents < assessment.totalEvents;
+    if (endedMidTurn) {
+      add({ code: "HISTORY_INCOMPLETE", severity: "warning", message: "The most recent turn has no durable terminal event; fork before continuing." });
+    } else if (partiallyInspected) {
+      add({ code: "HISTORY_INCOMPLETE", severity: "warning", message: `Only ${assessment.checkedEvents} of ${assessment.totalEvents} events were inspected; fork before continuing.` });
+    } else {
+      add({
+        code: "HISTORY_OBSERVED",
+        severity: "info",
+        message: `${assessment.issues.length} structural observation${assessment.issues.length === 1 ? "" : "s"} on a fully inspected, fully terminated history. Fork not required.`,
+      });
+    }
   }
   if (pins.providerId !== runtime.providerId) {
     add({ code: "PROVIDER_MISMATCH", severity: "warning", message: `Pinned provider ${pins.providerId} differs from active provider ${runtime.providerId}.` });
@@ -902,7 +967,11 @@ export function decideSessionResume(
 
   compareProfiles(pins.profile, runtime.profile, add);
   const blocked = reasons.some((reason) => reason.severity === "error");
-  const requiresFork = assessment.status === "incomplete" || reasons.some((reason) => reason.severity === "warning");
+  // The requirement is the reasons, and nothing beside them. `status ===
+  // "incomplete"` used to force a fork independently of whether any reason
+  // above had survived — so a conversation could be told "Fork required" while
+  // the list of why was empty or said "fork not required".
+  const requiresFork = reasons.some((reason) => reason.severity === "warning");
   const action = blocked ? "blocked" : requiresFork ? "fork-required" : "resume";
   return deepFreeze({
     action,
@@ -1054,15 +1123,63 @@ function compareProfiles(
     add({ code: "PROFILE_BINDING_MISMATCH", severity: "warning", message: "The active profile binding differs from the session manifest." });
     return;
   }
-  if (
-    pinned.profileId !== active.profileId ||
-    pinned.profileRevision !== active.profileRevision ||
-    pinned.themeDigest !== active.themeDigest ||
-    pinned.skillSetDigest !== active.skillSetDigest ||
-    pinned.resolutionDigest !== active.resolutionDigest
-  ) {
-    add({ code: "PROFILE_DIGEST_MISMATCH", severity: "warning", message: "The active profile, theme, or resolved skill digests differ from the session pin." });
+  if (pinned.profileId !== active.profileId) {
+    add({ code: "PROFILE_MISMATCH", severity: "warning", message: `This conversation belongs to profile ${pinned.profileId}, and ${active.profileId} is active.` });
+    return;
   }
+  if (pinned.skillSetDigest !== active.skillSetDigest) {
+    add({ code: "PROFILE_SKILLS_MISMATCH", severity: "warning", message: "The skills resolved for this profile differ from the set this conversation pinned." });
+    return;
+  }
+  const boundary = changedGovernance(pinned, active);
+  if (boundary) {
+    add({ code: "PROFILE_BOUNDARY_MISMATCH", severity: "warning", message: `The profile's ${boundary} differs from the boundary this conversation pinned.` });
+    return;
+  }
+  /*
+   * A newer revision of the same profile, governing identically.
+   *
+   * `profileRevision`, `themeDigest` and `resolutionDigest` all move when a
+   * profile is edited at all — including for a theme, a name, or a description,
+   * none of which reach a turn. Comparing them made resumability a function of
+   * cosmetics: measured on this build, choosing a different interface theme and
+   * pressing "Save new revision" turned a completed conversation's only forward
+   * action into "Fork to continue", refused its one-press Open, and made the
+   * profile report that it "had no compatible conversation" and mint an empty
+   * one. What actually governs a resumed turn is compared above and is equal
+   * here, so this is stated and the conversation resumes.
+   */
+  if (pinned.profileRevision !== active.profileRevision) {
+    add({
+      code: "PROFILE_REVISION_NEWER",
+      severity: "info",
+      message: "This conversation was started on an earlier revision of the same profile. Its skills and boundaries are unchanged, so it resumes as it stands.",
+    });
+  }
+}
+
+/** The governing boundaries, in the order a person would ask about them. */
+const GOVERNING_BOUNDARIES = Object.freeze([
+  ["workspaceBinding", "workspace boundary"],
+  ["memoryScope", "memory scope"],
+  ["approvalMode", "approval policy"],
+  ["minimumPosture", "minimum proof posture"],
+] as const);
+
+/** The first governing boundary that differs, named as a person would say it. */
+function changedGovernance(
+  pinned: SessionProfileGovernance,
+  active: SessionProfileGovernance,
+): string | undefined {
+  // Only fields both sides carry are compared: a v1 pin has none of them, and
+  // inventing a difference against an absent value would strand exactly the
+  // oldest conversations this change exists to keep openable.
+  for (const [field, name] of GOVERNING_BOUNDARIES) {
+    const left = pinned[field];
+    const right = active[field];
+    if (left !== undefined && right !== undefined && left !== right) return name;
+  }
+  return undefined;
 }
 
 function pinnedProfile(profile: SessionProfileBinding): SessionPinnedProfile {
@@ -1082,6 +1199,25 @@ function pinnedProfile(profile: SessionProfileBinding): SessionPinnedProfile {
     })),
     skillCount,
     skillsTruncated: skillCount > skills.length,
+    ...profileGovernance(profile),
+  };
+}
+
+/**
+ * The governing half of a pin, in the shape both sides of a resume comparison
+ * hold it. `memoryScope` arrives through `enforcedMemoryScope` for the same
+ * reason `profile-cockpit` normalizes it: a pin written under the withdrawn
+ * `workspace` scope is enforced as `profile` and must not read as a difference.
+ */
+function profileGovernance(profile: SessionProfileBinding): SessionProfileGovernance {
+  if (profile.version !== 2) return {};
+  return {
+    workspaceBinding: profile.workspaceBinding.kind === "workspace-id"
+      ? `workspace-id:${boundedText(profile.workspaceBinding.workspaceId, 2_048) ?? "[invalid workspace]"}`
+      : "active-workspace",
+    memoryScope: enforcedMemoryScope(profile.memoryScope),
+    approvalMode: profile.approvalMode,
+    minimumPosture: profile.minimumPosture,
   };
 }
 

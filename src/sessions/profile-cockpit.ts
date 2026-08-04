@@ -298,11 +298,21 @@ function profileBindingsMatch(
   if (
     actual.version !== expected.version
     || actual.profileId !== expected.profileId
-    || actual.profileRevision !== expected.profileRevision
-    || actual.themeId !== expected.themeId
-    || actual.themeDigest !== expected.themeDigest
     || actual.skillSetDigest !== expected.skillSetDigest
   ) return false;
+  /*
+   * Deliberately not `profileRevision`, `themeId` or `themeDigest`.
+   *
+   * A revision digest moves for every edit a profile can receive, and two of
+   * the things it covers — the interface theme and the profile's own name —
+   * never reach a turn. Comparing them made a saved theme change equivalent to
+   * a changed pin: measured on this build, one theme swap and "Save new
+   * revision" left the profile reporting that it "had no compatible
+   * conversation", minting an empty one while a finished conversation sat one
+   * row away with "Fork to continue" as its only forward action. What a resumed
+   * turn is actually governed by — profile identity, the resolved skill set,
+   * and every boundary below — is compared here and still refuses.
+   */
   if (actual.version === 1 || expected.version === 1) return actual.version === expected.version;
   return JSON.stringify(actual.workspaceBinding) === JSON.stringify(expected.workspaceBinding)
     /*

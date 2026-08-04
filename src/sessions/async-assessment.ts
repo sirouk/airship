@@ -2,6 +2,7 @@ import type { DurableEvent, SessionRecord } from "../core/journal";
 import { loadDeferredCapabilities } from "../load-deferred-capabilities";
 import {
   DEFAULT_SESSION_INSPECTION_LIMITS,
+  sessionHistoryLabel,
   type SessionHistoryAssessment,
   type SessionHistoryIssue,
   type SessionInspectionLimits,
@@ -68,7 +69,7 @@ export function assessmentFromAudit(
       : "consistent";
   return Object.freeze({
     status,
-    label: status === "consistent" ? "Locally consistent" : status === "incomplete" ? "Unfinished" : "Needs review",
+    label: sessionHistoryLabel(status, issues, Math.min(totalEvents, maxEvents), totalEvents),
     verification: Object.freeze({
       scope: "structural-linkage-only",
       digestRecomputed: false,

@@ -9355,10 +9355,22 @@ export function App() {
       const pinnedProfile = fresh.session.manifest.profile;
       let resumedProfileId: string | undefined;
       if (pinnedProfile) {
+        /*
+         * The profile the pin names, at the revision the catalog still holds.
+         *
+         * This used to demand the exact revision digest and refuse otherwise —
+         * and the catalog keeps one revision per profile, so every conversation
+         * became unresumable the moment its profile was edited at all, theme
+         * included. `decideSessionResume` has already refused this session if
+         * the profile's identity, skill set or any governing boundary moved, so
+         * what survives to here is the same profile governing identically; a
+         * revision digest that differs only in presentation is not a reason to
+         * strand a finished conversation.
+         */
         const profile = catalog.profiles.find((candidate) =>
           candidate.profileId === pinnedProfile.profileId && candidate.revision === pinnedProfile.profileRevision,
-        );
-        if (!profile) throw new Error("The exact profile revision pinned by this session is unavailable; create a fork instead.");
+        ) ?? catalog.profiles.find((candidate) => candidate.profileId === pinnedProfile.profileId);
+        if (!profile) throw new Error("The profile this conversation was started in is no longer in this catalog; create a fork instead.");
         resumedProfileId = profile.profileId;
         if (profile.profileId !== profileId) {
           workspaceRefreshCoordinator.invalidate();
@@ -11313,6 +11325,18 @@ function sessionManifestRuntime(runtime: Runtime, manifest: SessionManifest): Ac
         themeDigest: profile.themeDigest,
         skillSetDigest: profile.skillSetDigest,
         resolutionDigest: profile.resolutionDigest,
+        // The governing boundaries travel with the runtime side of the
+        // comparison, so `decideSessionResume` can refuse a changed workspace,
+        // memory scope, approval policy or proof floor without having to refuse
+        // every cosmetic revision along with them.
+        ...(profile.version === 2 ? {
+          workspaceBinding: profile.workspaceBinding.kind === "workspace-id"
+            ? `workspace-id:${profile.workspaceBinding.workspaceId}`
+            : "active-workspace",
+          memoryScope: enforcedMemoryScope(profile.memoryScope),
+          approvalMode: profile.approvalMode,
+          minimumPosture: profile.minimumPosture,
+        } : {}),
       }),
     } : {}),
   });
