@@ -1,7 +1,34 @@
 # ADR-001 — Hybrid retrieval is Airship's default
 
-**Status:** Accepted. Binding on all product work after the release-control and
-human-journey branches land.
+**Status:** Accepted, and **partly implemented** as of 2026-08-04 on `main`.
+
+The release-control and human-journey branches have landed, so this is binding
+now rather than pending. Two of the three lanes in the evidence table below have
+been unified onto one real BM25 in `src/retrieval/bm25.ts`:
+
+- `src/retrieval/memory-ranking.ts` — extracted, not rewritten. Its seven tests
+  pass unchanged, which is what makes it an extraction.
+- `src/indexing/flat-index.ts` — the lane the agent reads on **every turn**, and
+  the one that had no inverse document frequency at all. Its lexical half is now
+  real BM25, with `semantic` and `lexical` modes available, and it gained the
+  test file it never had.
+
+**What is not yet done, and §4 says so explicitly.** That lane still fuses with
+`denseScore * 0.72 + lexicalScore * 0.28` — the raw-score addition §4 supersedes
+by name. Replacing the scorer improved the lexical evidence; it did not adopt
+weighted Reciprocal Rank Fusion, and BM25 scores and cosine similarities remain
+not-comparable quantities being added. Calling the current state "hybrid
+retrieval per ADR-001" would overstate it. The honest description is: the lexical
+lane is fixed, the fusion is not.
+
+**Still divergent: `src/retrieval/context-driver.ts:185`.** Expert routing scores
+`0.58 · semantic + 0.22 · overlap(queryTokens, expert.lexicalSketch) + 0.2 · gate`
+and does not import the shared ranker. That is deliberately left open rather than
+quietly claimed: it ranks *which encrypted expert pages to fetch* against a
+compact sketch, not chunks against a corpus, and BM25 needs document-frequency
+statistics a sketch may not carry. Whether it should share the ranker, share only
+the tokenizer, or stay distinct is a real design question and wants its own
+measurement — not an assumption that three lanes must mean one algorithm.
 **Supersedes:** the per-route retrieval implementations described under
 "Evidence" below.
 
