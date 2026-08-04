@@ -44,11 +44,9 @@ button.status-seal:hover { border-color: var(--line-strong); background: var(--s
 .trust-hub-tabs::-webkit-scrollbar-thumb { border-radius: 3px; background: var(--line-strong); }
 .trust-hub-tabs button { min-height: 2.75rem; padding: 0 .75rem; border: 1px solid transparent; border-radius: var(--radius-control); background: transparent; color: var(--ink-muted); scroll-snap-align: nearest; }
 .trust-hub-tabs button.is-active { border-color: var(--line-strong); box-shadow: inset 0 -2px var(--accent); color: var(--ink); background: var(--surface-soft); }
-/* The scope seam, stated rather than implied. Proof is evidence about the turns
-   of the conversation you are in; Vault, Connection and Account are services
-   that outlive every conversation. Flat peers said the opposite. Same label,
-   same casing and same tracking as the rail's own `GLOBAL` group heading, and
-   it is a label rather than a control — no tab stop and no scroll snap. */
+/* The scope seam, stated rather than implied: Proof is this conversation's
+   evidence, the other three outlive every conversation, and flat peers said the
+   opposite. The rail's own `GLOBAL` heading, and a label not a control. */
 .trust-hub-tabs__band { flex: none; align-self: center; margin-inline-start: .25rem; padding-inline-start: .75rem; border-left: 1px solid var(--line); white-space: nowrap; }
 
 .command-palette {
@@ -306,8 +304,8 @@ button.status-seal:hover { border-color: var(--line-strong); background: var(--s
   .trust-hub-tabs button { min-height: 44px; padding-inline: 12px; border: 0; border-radius: 0; background: transparent; white-space: nowrap; }
   .trust-hub-tabs button.is-active { border: 0; background: transparent; box-shadow: inset 0 -2px var(--accent); }
   .trust-hub-tabs button:focus-visible { outline: 2px solid var(--accent-bright); outline-offset: -3px; }
-  /* The seam survives the phone. It is the cheapest thing on the strip — one
-     word and a rule — and it is the whole reason the strip is honest. */
+  /* The seam survives the phone: one word and a rule, and the whole reason the
+     strip is honest. */
   .trust-hub-tabs__band { margin-inline-start: 2px; padding-inline-start: 10px; }
   /*
    * Docked to the visual viewport, not the layout viewport.

@@ -232,13 +232,6 @@ export const RAIL_RECENT_LIMIT = 10;
 const RECENTS_PANEL_ID = "airship-recent-conversations";
 
 /**
- * How much of the viewport the collapsed rail's conversation flyout is
- * guaranteed, so a trigger sitting low on a short screen still opens a panel a
- * person can read rather than one that starts below the fold.
- */
-const RAIL_FLYOUT_MIN_HEIGHT = 260;
-
-/**
  * Which row holds the rail's single tab stop, for a view that may not be a row.
  *
  * The roving seed treated `view` as if it were always a rail key. Five of the
@@ -319,15 +312,17 @@ export function Rail({
    * box with neither glyph nor text. 290px of the collapsed rail were spent on
    * four unreadable rows.
    *
-   * `.rail-recents`' own comment has always described the fix — a panel that
-   * hangs off the rail on `fixed` placement "positioned from the trigger's own
-   * rect", because `.primary-nav`'s `overflow-y: auto` clips the inline axis
-   * too — and it was never built. This is that measurement: the flyout is
-   * placed from the trigger and the rail's right edge, so the panel keeps its
-   * full 320px of title regardless of how narrow the rail is.
+   * `.rail-recents`' own comment named the obstacle correctly — `.primary-nav`
+   * is a block-axis scroller and a block-axis scroller clips the inline axis
+   * too — and proposed measuring the trigger's rect in script to escape it.
+   * That is not necessary: `.sidebar` is already `position: relative` and
+   * `.primary-nav` sits *inside* it, so an absolutely positioned panel whose
+   * containing block is the sidebar is not clipped by the scroller between
+   * them. The placement is therefore three CSS declarations and no script —
+   * which also means it cannot drift on scroll, cannot need a resize listener,
+   * and costs the entry chunk (a first-paint budget) nothing but an attribute.
    */
   const flyout = state !== "standard";
-  const [flyoutAnchor, setFlyoutAnchor] = useState<Readonly<{ top: number; left: number }>>();
   // Seeded through the traversal, not from `view` directly: `view` is only
   // sometimes a rail key, and a seed that names a row the rail does not render
   // leaves the whole nav with no tab stop at all.
@@ -426,53 +421,22 @@ export function Rail({
   }, [state]);
 
   /*
-   * Where the flyout hangs, remeasured whenever the thing it hangs off moves.
+   * A panel over the page is dismissed by the page.
    *
-   * `scroll` is captured because the trigger rides `.primary-nav`, which is its
-   * own scroller — a panel pinned once would drift off its row the first time
-   * the rail scrolled. The anchor is only replaced when it actually changed, so
-   * a scroll that does not move the trigger costs no render.
-   */
-  useEffect(() => {
-    if (!flyout || !recentsOpen) { setFlyoutAnchor(undefined); return; }
-    const place = () => {
-      const trigger = recentsTrigger.current;
-      const sidebar = trigger?.closest(".sidebar");
-      if (!trigger || !sidebar) return;
-      const rect = trigger.getBoundingClientRect();
-      const bar = sidebar.getBoundingClientRect();
-      // Clamped so a trigger near the bottom of a short viewport still opens a
-      // panel that is on screen rather than one that starts below the fold.
-      const top = Math.max(8, Math.min(rect.top, Math.max(8, window.innerHeight - RAIL_FLYOUT_MIN_HEIGHT)));
-      const left = bar.right + 4;
-      setFlyoutAnchor((current) => current && current.top === top && current.left === left ? current : Object.freeze({ top, left }));
-    };
-    place();
-    window.addEventListener("resize", place);
-    window.addEventListener("scroll", place, true);
-    return () => {
-      window.removeEventListener("resize", place);
-      window.removeEventListener("scroll", place, true);
-    };
-  }, [flyout, recentsOpen, conversationKeys]);
-
-  /*
-   * A flyout over the page is dismissed by the page. Escape already returns
-   * focus to the trigger; this is the pointer half, and it deliberately does
-   * not fire for the rail itself — clicking another rail row navigates, and the
-   * panel closing under that click would eat the gesture.
+   * Escape is handled on the panel itself and returns focus to the trigger;
+   * this is the pointer half. It deliberately ignores the rail: clicking
+   * another rail row navigates, and a panel closing under that click would eat
+   * the gesture rather than complete it.
    */
   useEffect(() => {
     if (!flyout || !recentsOpen) return;
-    const dismiss = (event: PointerEvent) => {
-      const target = event.target;
-      if (!(target instanceof Node)) return;
-      if (recentsTrigger.current?.contains(target)) return;
-      if (document.getElementById(RECENTS_PANEL_ID)?.contains(target)) return;
-      setRecentsOpen(false);
+    const dismiss = ({ target }: Event) => {
+      if (target instanceof Node
+        && !recentsTrigger.current?.contains(target)
+        && !document.getElementById(RECENTS_PANEL_ID)?.contains(target)) setRecentsOpen(false);
     };
-    document.addEventListener("pointerdown", dismiss, true);
-    return () => document.removeEventListener("pointerdown", dismiss, true);
+    addEventListener("pointerdown", dismiss, true);
+    return () => removeEventListener("pointerdown", dismiss, true);
   }, [flyout, recentsOpen]);
 
   const order = useMemo(() => {
@@ -884,12 +848,9 @@ export function Rail({
           <div
             id={RECENTS_PANEL_ID}
             class="recent-conversations"
-            // `pending` is the one frame between mounting the panel and
-            // measuring the trigger it hangs off. Painting a fixed panel at
-            // 0,0 for that frame is a flash in the corner of the screen, so
-            // the state is named and the stylesheet holds it back.
-            data-flyout={flyout ? (flyoutAnchor ? "true" : "pending") : undefined}
-            style={flyout && flyoutAnchor ? { top: `${String(flyoutAnchor.top)}px`, left: `${String(flyoutAnchor.left)}px` } : undefined}
+            // The whole of the collapsed placement: one attribute, and the
+            // stylesheet does the rest against `.sidebar`'s own box.
+            data-flyout={flyout ? "true" : undefined}
             role="group"
             aria-label="Profile conversations"
             onKeyDown={(event) => {

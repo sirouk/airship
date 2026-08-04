@@ -21,7 +21,18 @@ export const RELEASE_BUDGETS = Object.freeze({
   // gzip. It is still the strictest ceiling here, so it moves one whole-KiB
   // step with a named cause, and the deferral habit documented below is still
   // the first tool to reach for when the next few hundred bytes are asked for.
-  entryJavaScript: Object.freeze({ raw: 384 * 1024, gzip: 112 * 1024 }),
+  // Three shell repairs landed against the 585 B this ceiling had left, and
+  // together they cleared it: measured 112.35 KiB gzip / 365.88 KiB raw. The
+  // named cause is surface correctness, not capability. The conversation rail
+  // could not be opened from a collapsed rail without the panel being clipped
+  // to two characters per title; a conversation row carried a stale opener and
+  // sent people to the library instead of the conversation; and the embedding
+  // catalog is asked for rather than assumed. The first of those was written
+  // twice — the second time out of `--rail-width` and `--shell-topbar` in CSS
+  // instead of a measured anchor in script, which returned 217 B of the 548 it
+  // first cost. One whole-KiB step; the deferral habit above is still the
+  // first tool to reach for, and none of these three had a chunk to defer to.
+  entryJavaScript: Object.freeze({ raw: 384 * 1024, gzip: 113 * 1024 }),
   // Trust composition adds ~1.8 KiB gzip to the baseline while the actual
   // entry remains below its stricter 110 KiB limit. Heavy QVL stays deferred.
   //
@@ -387,7 +398,11 @@ export const RELEASE_BUDGETS = Object.freeze({
   // leaving 1,935 bytes raw and 1,229 gzip. `entryJavaScript` is untouched: the
   // one eager line is the same dependency-free authority setter, which now
   // installs a capability rather than a token and is no larger for it.
-  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2057 * 1024, gzip: 653 * 1024 }),
+  // The shell repairs recorded against `entryJavaScript` above take the raw
+  // reading past that: measured 2058.06 KiB raw / 651.99 KiB gzip. Raw takes
+  // one whole-KiB step; gzip is untouched, because the same work compresses
+  // into the 1,229 bytes the step above already left it.
+  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2059 * 1024, gzip: 653 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now measures 672.33 KiB raw / 186.61 KiB gzip:
   // the browser-Git pack grew (see optionalBrowserGit) and the Terminal pack
@@ -502,7 +517,10 @@ export const RELEASE_BUDGETS = Object.freeze({
   // would have left 297, so each takes one further whole-KiB step for the
   // tripwire reason stated throughout this file, leaving 1,526 bytes raw and
   // 1,321 gzip. Nothing eager moved and the entry ceiling is untouched.
-  totalJavaScriptAndWorkers: Object.freeze({ raw: 2733 * 1024, gzip: 841 * 1024 }),
+  // The shell repairs recorded against `entryJavaScript` carry through the same
+  // way: measured 2734.46 KiB raw / 839.72 KiB gzip. Raw takes one whole-KiB
+  // step; gzip is untouched, still inside the 1,321 bytes the step above left.
+  totalJavaScriptAndWorkers: Object.freeze({ raw: 2735 * 1024, gzip: 841 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. Keep it visible under a dedicated, deliberately small cap.
   serviceWorker: Object.freeze({ raw: 12 * 1024, gzip: 4 * 1024 }),
@@ -981,7 +999,17 @@ export const RELEASE_BUDGETS = Object.freeze({
   // — it ships with the deferred `skill-editor` chunk. Measured 175,303 B raw /
   // 29,655 B gzip. Gzip does not move and is not close: 28.96 KiB inside a
   // 32 KiB ceiling.
-  entryCss: Object.freeze({ raw: 172 * 1024, gzip: 32 * 1024 }),
+  //
+  // The collapsed rail takes raw three further KiB, to 175. What it bought:
+  // the conversation panel is placed off the rail's own tokens instead of a
+  // measured anchor in script — the trade that returned 217 B of first-paint
+  // JavaScript for CSS the entry sheet already loads — plus the scroll-edge
+  // fade and pinned frame that stopped nine threads clipping the ledger link
+  // out of reach, and the collapsed rail's count badge. Measured 178,941 B raw
+  // / 30,120 B gzip. Gzip still does not move and is still not close:
+  // 29.41 KiB inside 32 KiB, because none of this is new vocabulary — it is
+  // the existing families used in one more state.
+  entryCss: Object.freeze({ raw: 175 * 1024, gzip: 32 * 1024 }),
   eachWasm: Object.freeze({ raw: 1024 * 1024, gzip: 350 * 1024 }),
   allWasm: Object.freeze({ raw: 1024 * 1024, gzip: 350 * 1024 }),
 });

@@ -44,6 +44,9 @@ describe("progressive disclosure coherence contract", () => {
      * which names those three and deliberately not Proof.
      */
     expect(source).toContain('<span class="trust-hub-tabs__band" data-scope={tab.scope}>{TRUST_TAB_GLOBAL_BAND}</span>');
+    // One band, in one place: the index is resolved from the table, so a
+    // destination that changes scope moves the seam instead of stranding it.
+    expect(source).toContain("const TRUST_TAB_BAND_INDEX = TRUST_TABS.findIndex((tab) => tab.scope === \"global\");");
     expect(source).toContain('data-scope={tab.scope} title={`${tab.label} · ${tab.scope} scope`}');
     expect(styles).toContain(".trust-hub-tabs__band");
     expect(styles).toContain("scroll-snap-type: x proximity");

@@ -887,11 +887,12 @@ export const TRUST_TABS: readonly Readonly<{ view: NavigationView; label: string
  */
 const TRUST_TAB_GLOBAL_BAND = "Global";
 
-/** Where the strip's one band goes: before the first tab that leaves session scope. */
-function trustTabBandBefore(index: number): boolean {
-  const tab = TRUST_TABS[index];
-  return tab?.scope === "global" && TRUST_TABS[index - 1]?.scope !== "global";
-}
+/**
+ * Where the strip's one band goes: before the first tab that leaves session
+ * scope. Resolved once from the frozen table rather than per render, because
+ * the table cannot change while the page is up.
+ */
+const TRUST_TAB_BAND_INDEX = TRUST_TABS.findIndex((tab) => tab.scope === "global");
 
 export function TrustHubTabs({ view, onNavigate }: Readonly<{ view: NavigationView; onNavigate(view: NavigationView): void }>) {
   const tabs = useRef<HTMLElement>(null);
@@ -906,7 +907,7 @@ export function TrustHubTabs({ view, onNavigate }: Readonly<{ view: NavigationVi
     });
     return () => cancelAnimationFrame(frame);
   }, [view]);
-  return <nav ref={tabs} class="trust-hub-tabs" aria-label="Trust hub, four horizontally scrollable views; the conversation's own evidence first, then the global services">{TRUST_TABS.map((tab, index) => <Fragment key={tab.view}>{trustTabBandBefore(index) ? <span class="trust-hub-tabs__band" data-scope={tab.scope}>{TRUST_TAB_GLOBAL_BAND}</span> : null}<button type="button" class={view === tab.view ? "is-active" : ""} data-scope={tab.scope} title={`${tab.label} · ${tab.scope} scope`} aria-current={view === tab.view ? "page" : undefined} onClick={() => onNavigate(tab.view)}>{tab.label}</button></Fragment>)}</nav>;
+  return <nav ref={tabs} class="trust-hub-tabs" aria-label="Trust hub, four horizontally scrollable views; the conversation's own evidence first, then the global services">{TRUST_TABS.map((tab, index) => <Fragment key={tab.view}>{index === TRUST_TAB_BAND_INDEX ? <span class="trust-hub-tabs__band" data-scope={tab.scope}>{TRUST_TAB_GLOBAL_BAND}</span> : null}<button type="button" class={view === tab.view ? "is-active" : ""} data-scope={tab.scope} title={`${tab.label} · ${tab.scope} scope`} aria-current={view === tab.view ? "page" : undefined} onClick={() => onNavigate(tab.view)}>{tab.label}</button></Fragment>)}</nav>;
 }
 
 type ViewBoundaryProps = { name: string; onRecover(): void; children: ComponentChildren };

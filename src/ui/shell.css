@@ -8,10 +8,14 @@
   /* One token for the rail's three states, shared with `.topbar` below so the
      brand block keeps tracking the rail exactly at every width. */
   grid-template-columns: var(--rail-width) minmax(0, 1fr);
-  grid-template-rows: 58px minmax(0, 1fr);
+  /* And one for the topbar's, so anything drawn over the shell starts where the
+     shell's content starts instead of copying the number. */
+  grid-template-rows: var(--shell-topbar) minmax(0, 1fr);
   width: 100%;
   height: 100%;
 }
+
+:root { --shell-topbar: 58px; }
 
 .topbar {
   z-index: 20;
@@ -1150,7 +1154,7 @@
 .op__label,
 .shortcut-sheet h3,
 .access-section-heading > div > span,
-.candidate-model > span,
+.candidate-embedding legend,
 .proof-policy__legend,
 .proof-policy-consent legend,
 .attestations-heading > div:first-child > span,
@@ -1203,9 +1207,8 @@
 .edition,
 .rail-conversation-group,
 .nav-group-label,
-/* The Trust hub strip's scope band is the same object as the rail's `GLOBAL`
-   group label on the line above — same word, same job, same seam — so it
-   consumes the recipe rather than restating it. */
+/* Same word and same job as `.nav-group-label` above, so it consumes the
+   recipe rather than restating it. */
 .trust-hub-tabs__band,
 .git-section-label,
 .git-sources-trust-disclosure > summary > .eyebrow,
@@ -1290,14 +1293,14 @@
  * Keyboard focus pins it open, because a keyboard user reading a label must
  * not lose it to a mouse that happened to move.
  *
- * `:has(:focus-visible)` rather than `:focus-within`, and the difference is a
- * defect. `.rail-collapse` lives inside `.sidebar`, so clicking `Collapse
- * navigation rail` left focus in the rail and `:focus-within` pinned the peek
- * at 268px on the spot: measured immediately after the click, `.rail` and every
- * `.nav-item` inside it were still 268px and 255px wide under a 60px sidebar.
- * The control appeared not to work until the person clicked somewhere else.
- * `:focus-visible` is exactly the distinction — a keyboard user tabbing in gets
- * the labels; a pointer user who just pressed collapse gets a collapsed rail.
+ * `:has(:focus-visible)`, not `:focus-within`: `.rail-collapse` is inside
+ * `.sidebar`, so pressing `Collapse navigation rail` left focus in the rail and
+ * pinned the peek — measured on the click, `.rail` was still 268px and its
+ * nav-items 255px under a 60px sidebar, so the control looked broken until you
+ * clicked elsewhere. And `:not([data-recents="flyout"])` because the peek and
+ * the flyout are one answer twice: run together they drew a 268px panel under
+ * a 320px one. Held here rather than as a later override, which would re-clip
+ * the flyout's own copy of `.nav-item__label`.
  */
 .sidebar[data-rail-state="rail"] .rail {
   transition: width 140ms ease 240ms;
@@ -1409,28 +1412,30 @@
 
 /* ── The conversation list, when the rail is too narrow to hold it ──────────
  *
- * Measured before this rule, at 1440x1000 with `data-rail="rail"` and four
- * threads: the rail is 60px wide, and `.recent-conversations` was an ordinary
- * in-flow grid inside it. Every row measured 67px starting at x=13 — 20px past
- * the rail's own right edge — the title element reported `clientWidth: 29`
- * against `scrollWidth: 132`, so "General conversation" printed as "Ge", the
- * time as "2", the "RECENT" group label as "RECE", and the `All conversations`
- * row as an empty bordered box with no glyph and no text at all. 290px of a
- * 60px rail spent saying nothing.
+ * Measured at 1440x1000, `data-rail="rail"`, four threads, before this rule:
+ * the rail is 60px and this was an in-flow grid inside it, so every row was
+ * 67px starting at x=13 — 20px past the rail's right edge — and the title
+ * reported clientWidth 29 against scrollWidth 132. "General conversation"
+ * printed "Ge", the time "2", "RECENT" as "RECE", and `All conversations` as
+ * an empty box. 290px of a 60px rail saying nothing.
  *
- * `.rail-recents` has carried the design in a comment since it was written:
- * `fixed` placement from the trigger's own rect, because `.primary-nav` is a
- * block-axis scroller and a block-axis scroller clips the inline axis too.
- * This is that panel. Nothing is dropped from it — the header, its count, the
- * `+`, favorites, recents and `All conversations` are the same nodes the
- * standard rail renders, at a width that fits their words.
+ * `.rail-recents` names the obstacle: `.primary-nav` is a block-axis scroller
+ * and a block-axis scroller clips the inline axis too. Its proposed fix was a
+ * measured anchor in script; these tokens do it without one, so the panel
+ * cannot drift on scroll and the entry chunk pays nothing. `absolute` would
+ * land on `.rail-row`, which is `position: relative` for its expander and is
+ * inside the scroller. Nothing is dropped: same nodes, wider box.
  */
 .recent-conversations[data-flyout] {
   position: fixed;
   z-index: 40;
+  top: calc(var(--shell-topbar) + var(--sp-2));
+  left: calc(var(--rail-width) + 4px);
   width: 320px;
   max-width: calc(100vw - var(--rail-width) - 16px);
-  margin-top: 0;
+  /* Bounded by the shell region, never by a constant. */
+  max-height: calc(100vh - var(--shell-topbar) - var(--sp-2) * 2);
+  margin: 0;
   padding: 0 var(--sp-1) var(--sp-1);
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-panel);
@@ -1438,26 +1443,15 @@
   box-shadow: var(--shadow);
 }
 
-/* One frame, between mounting the panel and measuring the trigger it hangs
-   off. Reserved rather than painted at 0,0. */
-.recent-conversations[data-flyout="pending"] { visibility: hidden; }
-
-/* The bound belongs to the scrolling threads, not to the panel. Held on the
-   panel it would clip the panel's own last row — the ledger link — which is the
-   exact reachability defect this structure exists to end. */
-.recent-conversations[data-flyout] .recent-conversations__list { max-height: min(360px, 52vh); }
+/* The panel is bounded above and its middle row takes the shortfall, so the
+   header and the ledger link — its frame, not its content — are never what
+   gets clipped. That is the reachability defect this structure ends. */
+.recent-conversations[data-flyout] .recent-conversations__list { max-height: none; }
 
 .recent-conversations[data-flyout] .rail-recents__header { padding-inline: var(--sp-2); background: var(--surface); }
 
-/*
- * The panel is a descendant of a 60px rail but is not 60px wide, so the rail's
- * label-clipping and single-track geometry must not reach into it.
- *
- * Measured with this rule missing: `All conversations` rendered inside the
- * flyout as a 306px-wide empty bordered box — the row was there, the string was
- * in the DOM, and `.sidebar[data-rail-state="rail"] .nav-item__label` had
- * clipped it to a 1px square. An icon rail's clip belongs to the icon rail.
- */
+/* An icon rail's clip belongs to the icon rail. Measured without this:
+   `All conversations` was a 306px empty box, its label clipped to 1px. */
 .recent-conversations[data-flyout] .nav-item__label {
   position: static;
   width: auto;
@@ -1467,22 +1461,15 @@
 }
 
 .recent-conversations[data-flyout] .nav-item {
-  /* Two tracks, not one: the label owns the first and the thread count the
-     second. A single-track grid here would leave `grid-column: 1 / -2` with no
-     line to end on and collapse the label to nothing. */
+  /* Two tracks: the label, then the thread count `grid-column: 1 / -2` ends on. */
   grid-template-columns: minmax(0, 1fr) auto;
   justify-items: stretch;
   padding-left: var(--sp-2);
 }
 
-/*
- * The count, on the face of the collapsed trigger.
- *
- * A 60px rail cannot print "General conversations 4", so the digit is what
- * survives — the same number the panel's own header prints, from the same
- * array. This is the "nothing removed" half of the collapse: the rail still
- * states how many conversations this profile has without being opened.
- */
+/* The count, on the face of the collapsed trigger: a 60px rail cannot print
+   "General conversations 4", so the digit is what survives. The rail still
+   states how many threads this profile has without being opened. */
 .rail-recents__badge {
   display: none;
   min-width: 14px;
@@ -1507,19 +1494,6 @@
   align-items: center;
   justify-content: center;
 }
-
-/*
- * While the flyout is up, the hover-peek stands down.
- *
- * Both are the same answer to "show me the labels", and running them together
- * draws a 268px peek panel underneath a 320px flyout on the same pixels — a
- * second broken collapsed rail rather than a fixed one. Written as a `:not()`
- * on the peek's own selectors rather than as a later override, because an
- * override that re-clips `.nav-item__label` also re-clips the copy of that
- * class inside the flyout: measured, `All conversations` came back as a
- * 306px-wide empty box with its label at `width: 1px; clip-path: inset(50%)`.
- * A rule that never fires cannot reach into the panel by accident.
- */
 
 /*
  * The collapse control, and the only place the rail states are named in the UI.
