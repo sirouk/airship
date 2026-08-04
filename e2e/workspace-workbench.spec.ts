@@ -261,7 +261,7 @@ test("mobile workbench uses pane switching and an explicit folder move sheet", a
   await keepStatusDiff.click();
   await expect(page.getByRole("region", { name: "Working diff README.md" })).toBeVisible();
   await expect(page.getByRole("tab", { name: /README\.md · worktree diff, Working diff, Preview/u })).toHaveCount(0);
-  await page.getByRole("tab", { name: "Files", exact: true }).click();
+  await page.getByRole("tab", { name: "Explorer", exact: true }).click();
 
   await page.getByRole("treeitem", { name: /retrieval\.md/ }).click();
   const editor = page.getByRole("textbox", { name: "Edit retrieval.md" });
@@ -275,7 +275,7 @@ test("mobile workbench uses pane switching and an explicit folder move sheet", a
   await expect(strip).toContainText(/\d+ B/u);
   await editor.fill("Unsaved mobile draft follows its tab.\n");
   await expect(page.getByRole("tab", { name: /retrieval\.md, Preview/u })).toHaveCount(0);
-  await page.getByRole("tab", { name: "Files", exact: true }).click();
+  await page.getByRole("tab", { name: "Explorer", exact: true }).click();
   await page.getByRole("button", { name: "Actions for retrieval.md" }).click();
   await expect(page.getByRole("menuitem", { name: "Open and keep" })).toBeVisible();
   await page.getByRole("menuitem", { name: "Move…" }).click();

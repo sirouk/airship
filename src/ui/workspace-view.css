@@ -153,45 +153,21 @@
 /*
  * The rail header no longer restates WORKSPACE: the route title, the Explorer
  * tab 40px above and the tree's own `aria-label="Workspace files"` all say it.
- * The row spends its width on the two things the tree had neither of — a way
- * to find a file, and a creation control that is not a bare 26x26 glyph.
+ *
+ * One row, three controls, and the same `minmax(0,1fr) auto auto` grid Source
+ * Control's own bar uses — because it is the same problem. Creation used to be
+ * two full-word bordered buttons on a row of their own, under a file count on
+ * a row of its own: 56px between the search field and the first file at
+ * 1440x900, against nothing at all in VS Code. The field takes the width and
+ * the two verbs take a glyph each.
  */
 .workbench-section-heading {
   display: grid;
-  gap: var(--sp-2);
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: var(--sp-1);
   align-items: center;
   min-height: 36px;
   padding: var(--sp-1) var(--sp-2);
-}
-
-/*
- * The creation row. `New folder` shares it with `New file` and with the file
- * count, so both affordances are named at rest without the count buying a line
- * of its own. It wraps rather than truncating: a rail dragged to its 12%
- * minimum must not be able to hide either verb.
- */
-.workspace-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--sp-1) var(--sp-2);
-  align-items: center;
-  padding: 0 var(--sp-2) var(--sp-1);
-}
-
-/*
- * The count owns the whole line rather than competing for one.
- *
- * It used to be `flex: 1 1 auto` beside the two creation verbs, which was fine
- * for "3 files" and wrong for the sentence a search now produces: at "3 of 3
- * files · 4 matches · 3 files read" the row wrapped and put New folder on a
- * line of its own, 34px of chrome becoming 68px exactly when the reader was
- * looking for a file. Truncating it is not the alternative — the bounds a scan
- * hit are the part that would be cut — so it wraps in place and the two verbs
- * keep their row.
- */
-.workspace-actions .workspace-filter-count {
-  flex: 1 1 100%;
-  padding: 0;
 }
 
 .workspace-filter {
@@ -206,25 +182,43 @@
 }
 
 .workspace-new {
-  display: inline-flex;
-  gap: var(--sp-1);
+  display: flex;
   align-items: center;
-  min-height: 30px;
-  padding: 0 var(--sp-2);
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
   border: 1px solid var(--line-control);
   border-radius: var(--radius-control);
   color: var(--ink-muted);
   background: var(--surface);
   cursor: pointer;
-  font-size: var(--fs-caption);
-  white-space: nowrap;
 }
 
 .workspace-new:hover {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line-control));
   color: var(--ink);
+  background: var(--surface-raised);
 }
 
-/* The filtered state states its own cost, so it cannot read as an empty tree. */
+/* The `+` overlaps the corner of the mark it modifies, and paints the panel's
+   own ground behind itself so the two strokes never cross. Wider stroke because
+   a 9px glyph at the set's 1.65 reads as a smudge next to a 16px one. */
+.workspace-new__glyph { position: relative; display: flex; }
+.workspace-new__glyph svg + svg {
+  position: absolute;
+  right: -3px;
+  bottom: -2px;
+  border-radius: 50%;
+  background: var(--surface);
+  stroke-width: 3;
+}
+.workspace-new:hover .workspace-new__glyph svg + svg { background: var(--surface-raised); }
+
+/* The filtered state states its own cost, so it cannot read as an empty tree.
+   At rest it says nothing and takes no room: `:empty` is what lets the live
+   region outlive the query without being the second of two lines standing
+   between the search field and the first file. */
 .workspace-filter-count {
   margin: 0;
   padding: 0 var(--sp-2) var(--sp-1);
@@ -232,6 +226,12 @@
   font-size: var(--fs-micro);
   font-variant-numeric: tabular-nums;
 }
+
+.workspace-filter-count:empty { display: none; }
+
+/* The folder a flattened search result came from: dimmer than the filename,
+   because the filename is what was matched and the folder is where it lives. */
+.tree-row__dir { margin-left: var(--sp-1); }
 
 /*
  * The tree fills the rail it is given. It used to be `height: 432px` inside a
@@ -479,6 +479,9 @@
 .editor-strip__wrap,
 .editor-strip__pin,
 .editor-strip__reveal {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   min-height: 30px;
   padding: 0 var(--sp-2);
   border: 1px solid var(--line-control);
@@ -590,8 +593,11 @@
 
   /* A finger needs both axes. On a phone the theme trigger is a swatch and a
      caret, so nothing in its content floors the width — the same shape that
-     shipped a 9×44 popover trigger in the session bar. */
-  .editor-strip__theme .menu-select-trigger { min-width: 44px; }
+     shipped a 9×44 popover trigger in the session bar. The two creation
+     controls join it now that they are a glyph rather than a word: `min-width`
+     outranks their resting `width`, so one declaration lifts both axes. */
+  .editor-strip__theme .menu-select-trigger,
+  .workspace-new { min-width: 44px; }
 
   .workbench-section-heading { min-height: 52px; }
   .scm-row > div button { width: 44px; height: 44px; }

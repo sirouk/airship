@@ -27,40 +27,51 @@
 }
 
 /*
- * Colour that survives an 18px box.
+ * One colour per language, not three colour families.
  *
- * Every kind used to be mixed 62-88% toward `--ink` — a near-white on dark and
- * a near-black on Paper — so a two-character mark at 11px arrived as a muted
- * grey badge and the owner read the file tree as having no icons at all. The
- * mixes are raised so the *role* dominates and the ink is what keeps it legible
- * rather than what it is made of; the ordering between kinds is unchanged, so a
- * TypeScript file is still the same relation to a JSON file it always was.
+ * The previous pass fixed the brightness — every kind had been mixed 62-88%
+ * toward `--ink`, so an 11px mark arrived as a grey badge — but it drew all
+ * sixteen kinds out of three metals, varying only the *lightness*. Stylesheet
+ * and shell resolved to the identical declaration; six kinds were the same
+ * green at six brightnesses. Colour that only varies in lightness is not
+ * colour you can read a filetype off at a glance, which is what the owner
+ * asked for when he asked for VS Code's file-type icons "and colour".
+ *
+ * Every kind below now differs from every other in *hue*. The vocabulary is
+ * the product's own: the two metals, the verified green, and the four `--tok-*`
+ * roles the syntax highlighter already publishes at `:root` — which is the
+ * right source for a language mark, and mode-aware, because the Paper block
+ * redeclares all four. Where a hue is not in that vocabulary it is mixed from
+ * two that are, and the ordering the previous pass established between related
+ * kinds (TypeScript above Go, JavaScript above JSON) is preserved.
+ *
+ * `in oklch`, uniquely in this product, and only on the hue↔hue mixes: `in
+ * srgb` interpolates through the achromatic middle, so green mixed with violet
+ * came out grey — which is the one result this rule cannot use. The mixes that
+ * shade a hue toward ink stay in srgb like every other sheet.
+ *
+ * `--copper`, `--v-info`, `--v-caution`, `--v-failed` and the `--truth-*` pair
+ * are excluded: those are verdict and provenance colours, and
+ * `css-variable-contract.test.ts` keeps a ledger of the rules entitled to
+ * them. A file-type badge is not a verdict. The alias `--verdigris` is gone in
+ * favour of the canonical `--v-verified`, per the ledger in tokens.css.
+ *
  * `text` and `binary` stay neutral on purpose: "no type we recognise" is a fact
  * about the file, and colouring it would make the palette a decoration.
- *
- * The metals are `--accent`, `--accent-bright` and `--verdigris` only.
- * `--copper` is the colour of "asserted, not verified", and
- * `css-variable-contract.test.ts` keeps a ledger of every rule that paints
- * text with it; a file-type badge is not a verdict and does not belong there.
- *
- * The brass kinds are lifted least. `DESIGN_DIRECTION.md` puts brass on "you
- * are here" and "act here" and forbids it on decoration, and a source tree is
- * a hundred rows of it: the verdigris kinds carry the visible step and the
- * brass ones take enough to separate from `--ink-muted` and no more.
  */
-.workspace-file-icon[data-file-kind="typescript"] { color: color-mix(in srgb, var(--verdigris) 96%, var(--ink)); }
-.workspace-file-icon[data-file-kind="javascript"] { color: color-mix(in srgb, var(--accent-bright) 92%, var(--ink)); }
-.workspace-file-icon[data-file-kind="json"] { color: color-mix(in srgb, var(--accent) 86%, var(--ink)); }
-.workspace-file-icon[data-file-kind="markdown"] { color: color-mix(in srgb, var(--verdigris) 78%, var(--ink)); }
-.workspace-file-icon[data-file-kind="markup"] { color: color-mix(in srgb, var(--accent-bright) 80%, var(--ink)); }
-.workspace-file-icon[data-file-kind="stylesheet"] { color: color-mix(in srgb, var(--verdigris) 86%, var(--ink)); }
-.workspace-file-icon[data-file-kind="python"] { color: color-mix(in srgb, var(--accent-bright) 76%, var(--ink)); }
-.workspace-file-icon[data-file-kind="rust"] { color: color-mix(in srgb, var(--accent-bright) 72%, var(--ink)); }
-.workspace-file-icon[data-file-kind="go"] { color: var(--verdigris); }
-.workspace-file-icon[data-file-kind="shell"] { color: color-mix(in srgb, var(--verdigris) 86%, var(--ink)); }
-.workspace-file-icon[data-file-kind="image"] { color: color-mix(in srgb, var(--verdigris) 92%, var(--ink)); }
-.workspace-file-icon[data-file-kind="archive"] { color: color-mix(in srgb, var(--accent) 78%, var(--ink)); }
-.workspace-file-icon[data-file-kind="config"] { color: color-mix(in srgb, var(--ink-muted) 66%, var(--accent)); }
+.workspace-file-icon[data-file-kind="typescript"] { color: var(--v-verified); }
+.workspace-file-icon[data-file-kind="go"] { color: color-mix(in oklch, var(--v-verified) 62%, var(--tok-kw)); }
+.workspace-file-icon[data-file-kind="shell"] { color: color-mix(in oklch, var(--v-verified) 62%, var(--accent-bright)); }
+.workspace-file-icon[data-file-kind="python"] { color: color-mix(in oklch, var(--tok-kw) 52%, var(--v-verified)); }
+.workspace-file-icon[data-file-kind="stylesheet"] { color: var(--tok-kw); }
+.workspace-file-icon[data-file-kind="markdown"] { color: var(--tok-fn); }
+.workspace-file-icon[data-file-kind="image"] { color: color-mix(in oklch, var(--tok-fn) 55%, var(--v-verified)); }
+.workspace-file-icon[data-file-kind="javascript"] { color: var(--accent-bright); }
+.workspace-file-icon[data-file-kind="json"] { color: var(--accent); }
+.workspace-file-icon[data-file-kind="markup"] { color: var(--tok-num); }
+.workspace-file-icon[data-file-kind="rust"] { color: color-mix(in oklch, var(--tok-num) 55%, var(--tok-kw)); }
+.workspace-file-icon[data-file-kind="document"] { color: var(--tok-str); }
+.workspace-file-icon[data-file-kind="config"] { color: color-mix(in srgb, var(--tok-str) 62%, var(--ink-faint)); }
+.workspace-file-icon[data-file-kind="archive"] { color: color-mix(in srgb, var(--accent) 66%, var(--ink-faint)); }
 .workspace-file-icon[data-file-kind="binary"] { color: var(--ink-faint); }
-.workspace-file-icon[data-file-kind="document"] { color: color-mix(in srgb, var(--accent) 76%, var(--ink)); }
 .workspace-file-icon[data-file-kind="text"] { color: var(--ink-faint); }

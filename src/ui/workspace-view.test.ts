@@ -21,6 +21,8 @@ import {
   workspaceEditorProjection,
   workspaceFileWindow,
   explorerRows,
+  explorerSearchNodes,
+  workspaceSearchFolder,
   workspaceFilterEmptyCopy,
   workspaceGutterLines,
   workspaceHistoryPatch,
@@ -993,12 +995,116 @@ describe("Explorer rows", () => {
     expect(rows[0]?.hits).toBe(2);
   });
 
+  /*
+   * A search answers with files, not with the folders that happen to hold them.
+   * Measured in the browser before this pass: searching `src` in a 13-file
+   * workspace drew 7 rows, of which `src` and `lib` were folder rows the reader
+   * cannot act on and did not ask for. A six-match search across six folders
+   * cost six of them. VS Code flattens to file → matches, and so does this.
+   */
+  it("draws one row per matched file, and no folder rows at all", () => {
+    const entry = (path: string) => ({ path, revision: "r1", updatedAt: "2026-08-04T00:00:00.000Z", size: 0 });
+    const nodes = explorerSearchNodes([
+      entry("/workspace/src/app.ts"),
+      entry("/workspace/src/lib/util.js"),
+      entry("/workspace/README.md"),
+    ]);
+    expect(nodes).toHaveLength(3);
+    expect(nodes.every((node) => node.kind === "file")).toBe(true);
+    // Depth 1 for every row: the indent a tree spends on ancestry is what a
+    // result list has no ancestry to spend it on.
+    expect(new Set(nodes.map((node) => node.depth))).toEqual(new Set([1]));
+    expect(nodes.map((node) => node.name)).toEqual(["app.ts", "util.js", "README.md"]);
+    // Each row still carries its own entry, so the byte size, the file icon and
+    // every row action read exactly what a tree row reads.
+    expect(nodes[1]?.entry?.path).toBe("/workspace/src/lib/util.js");
+  });
+
+  it("states the folder a result came from, and nothing for the root", () => {
+    expect(workspaceSearchFolder("/workspace/src/lib/util.js")).toBe("src/lib");
+    expect(workspaceSearchFolder("/workspace/src/app.ts")).toBe("src");
+    // A bare `/` beside every top-level filename is noise standing in for
+    // "no folder"; VS Code prints nothing there either.
+    expect(workspaceSearchFolder("/workspace/README.md")).toBe("");
+  });
+
   it("leaves a tree with no hits exactly as the tree", () => {
     const nodes = [node("/workspace/docs", "directory", 1), node("/workspace/docs/a.ts", "file", 2)];
     const rows = explorerRows(nodes, new Map());
     expect(rows).toHaveLength(2);
     expect(rows.every((row) => row.node !== undefined)).toBe(true);
     expect(rows.every((row) => row.hits === undefined)).toBe(true);
+  });
+});
+
+/*
+ * What stands between the search field and the first file.
+ *
+ * Measured at 1440x900, 13 files, default density: 56px before this pass — a
+ * file count on one line and two full-word bordered buttons on another — and
+ * 4px after, which is the heading row's own bottom padding. VS Code has none.
+ * The owner had already called this exact pattern "horrible UI/UX" when it was
+ * Refresh/Advanced in Source Control; that panel deleted it and the Explorer
+ * kept it.
+ *
+ * These assertions are on the chrome's *shape*, not on any string it renders,
+ * so they can still fail if the row grows a third line or the verbs come back
+ * as words.
+ */
+describe("Explorer chrome above the tree", () => {
+  const styles = readFileSync(new URL("./workspace-view.css", import.meta.url), "utf8");
+  const source = readFileSync(new URL("./workspace-view.tsx", import.meta.url), "utf8");
+
+  it("puts both creation verbs on the search field's own row", () => {
+    // The same three-column grid Source Control's bar uses, because it is the
+    // same problem: a field that takes the width and controls that take a glyph.
+    const heading = styles.match(/\.workbench-section-heading \{([^}]+)\}/u)?.[1] ?? "";
+    expect(heading).toContain("grid-template-columns: minmax(0, 1fr) auto auto;");
+    // No second row survives to hold them.
+    expect(styles).not.toContain(".workspace-actions");
+    expect(source).not.toContain("workspace-actions");
+  });
+
+  it("names the glyph controls without printing the name", () => {
+    const row = source.match(/<div class="workbench-section-heading">[\s\S]*?<\/div>/u)?.[0] ?? "";
+    expect(row).toContain('aria-label="New file"');
+    expect(row).toContain('aria-label="New folder"');
+    // A word inside the button is what made them chrome. `CreationGlyph` is
+    // the whole of each button's content.
+    expect([...row.matchAll(/<button class="workspace-new"[\s\S]*?<\/button>/gu)].map((match) => match[0]))
+      .toHaveLength(2);
+    for (const button of row.matchAll(/<button class="workspace-new"[\s\S]*?<\/button>/gu)) {
+      expect(button[0]).toMatch(/>\s*<CreationGlyph name="(?:file|workspace)" \/>\s*<\/button>$/u);
+    }
+    // The path that survived: a folder-scoped create has always lived in the
+    // row menu, and both entries are still there.
+    expect(source).toContain(">New file…</button>");
+    expect(source).toContain(">New folder…</button>");
+  });
+
+  it("keeps the finger floor on both axes now that the verbs are square", () => {
+    const coarse = coarseBlock(styles);
+    expect(coarse).toContain(".workspace-new");
+    // `min-width` outranks the resting `width`, so one declaration lifts both.
+    expect(coarse).toMatch(/\.workspace-new \{ min-width: 44px; \}/u);
+    expect(coarse).toMatch(/\.workspace-new,[\s\S]{0,400}?min-height: 44px;/u);
+  });
+
+  it("says nothing at rest, without the live region ceasing to exist", () => {
+    // A `role="status"` that appears already carrying its text is a live region
+    // most screen readers never announce, so the element outlives the query and
+    // `:empty` is what stops it costing a line.
+    expect(source).toMatch(/<p class="workspace-filter-count" role="status">\s*\{query\s*\?/u);
+    expect(styles).toContain(".workspace-filter-count:empty { display: none; }");
+  });
+
+  it("gives the editor strip's widest control a glyph and keeps its name", () => {
+    // "Reveal in Explorer" was three words in a status bar. Both call sites —
+    // the file strip and the diff strip — are the icon now, and the accessible
+    // name is unchanged, which is what keeps the keyboard path and the e2e
+    // that drives it by name working.
+    expect(source).not.toContain(">Reveal in Explorer</button>");
+    expect([...source.matchAll(/aria-label="Reveal in Explorer"/gu)]).toHaveLength(2);
   });
 });
 
@@ -1139,6 +1245,19 @@ describe("Explorer density", () => {
     expect(button).toContain("font-size: var(--fs-body);");
     expect(styles).toContain(".tabs.workbench-mode-tabs .tabs__strip {\n  gap: 0;\n}");
     expect(source).toContain('{ id: "explorer", label: "Explorer", leading: <Icon name="workspace" size={15} /> }');
+  });
+
+  it("calls the same control the same thing on a phone and on a desktop", () => {
+    // The desktop strip said Explorer and the phone strip said Files: one
+    // control, two names, and a reader who learns it twice. Every `explorer`
+    // tab in this file agrees now — asserted by collecting them rather than by
+    // spelling either strip's line out, so a third strip cannot quietly
+    // reintroduce a third name.
+    const labels = [...source.matchAll(/\{ id: "explorer", label: "([^"]+)"/gu)].map((match) => match[1]);
+    expect(labels.length).toBeGreaterThanOrEqual(2);
+    expect(new Set(labels).size).toBe(1);
+    // And it is the name the tree's own heading and the route already use.
+    expect(source).toContain('{mode === "source" ? "Source Control" : "Explorer"}');
   });
 });
 

@@ -26,6 +26,7 @@ import {
 import { buildWorkspaceTree, visibleWorkspaceTree, workspaceBaseName, workspaceDirectories, workspaceFilesUnder, workspaceFolderRenamePlan, workspaceParentPath, type VisibleWorkspaceNode, type WorkspaceMove } from "../workspace/tree";
 import { CODE_THEMES, codeThemeCssVariables, resolveCodeTheme } from "../profiles/code-themes";
 import { CodeHighlightLayer } from "./code-surface";
+import { readMirroredCodeTheme, writeMirroredCodeTheme } from "./code-theme-mirror";
 import { ConfirmDialog } from "./confirm-dialog";
 import type { DurabilityState } from "./durability-indicator";
 import { downloadBytes, downloadFileName } from "./file-download";
@@ -299,7 +300,42 @@ function ProfileScopedWorkspaceView({
   codeThemeId,
   onCodeThemeChange,
 }: WorkspaceViewProps) {
-  const codeTheme = resolveCodeTheme(codeThemeId);
+  /*
+   * The catalog answers first. The device mirror answers only when it does not.
+   *
+   * Without an adopted Vault the catalog is page memory, so a reload returned
+   * every reader to One Dark Pro no matter what they picked — while the shell's
+   * own theme, mode, density and body font all came back from
+   * `airship.display-preferences.v1`. `code-theme-mirror` closes that gap for
+   * the one preference that was missing it, and the ordering here is what keeps
+   * it a fallback: a Vault-backed catalog is durable, encrypted and portable
+   * between devices, and must never be overruled by a value one browser
+   * remembers.
+   */
+  const [mirroredCodeThemeId, setMirroredCodeThemeId] = useState<string>();
+  useEffect(() => {
+    if (codeThemeId) return;
+    let current = true;
+    // The answer is written even when it is "nothing". `WorkspaceView` keys
+    // this component on the profile so a switch remounts it, but a state that
+    // only ever moves forward would carry one profile's sheet into the next the
+    // day that key changes — and a colour crossing a profile boundary is the
+    // one failure this whole module exists to avoid.
+    void readMirroredCodeTheme(profileId).then((value) => { if (current) setMirroredCodeThemeId(value); });
+    return () => { current = false; };
+  }, [profileId, codeThemeId]);
+  const codeTheme = resolveCodeTheme(codeThemeId ?? mirroredCodeThemeId);
+  const changeCodeTheme = onCodeThemeChange
+    ? (value: string) => {
+      // Optimistic and local: the mirror is written before the catalog is
+      // asked, because the catalog write is what can fail, and a reader who
+      // saw the sheet change should get the same sheet back on reload whether
+      // or not the ephemeral catalog survived the trip.
+      setMirroredCodeThemeId(value);
+      void writeMirroredCodeTheme(profileId, value);
+      void onCodeThemeChange(value);
+    }
+    : undefined;
   const contextHintId = useId();
   // One id per *window slot*, not per path: a workspace path may contain a
   // space, and an `aria-owns` value is a space-separated IDREF list.
@@ -370,7 +406,20 @@ function ProfileScopedWorkspaceView({
     () => filtering ? new Set(workspaceDirectories(tree).map((node) => node.path)) : expanded,
     [filtering, tree, expanded],
   );
-  const visible = useMemo(() => visibleWorkspaceTree(tree, effectiveExpanded), [tree, effectiveExpanded]);
+  /*
+   * A search answers with files, not with the folders that happen to contain
+   * them. Searching `src` in a 13-file workspace drew 7 rows, 2 of which were
+   * `src` and `lib` — folder rows the reader cannot open, cannot act on, and
+   * did not ask for; a 6-match search across six folders cost six of them. The
+   * matched files are listed flat, each carrying its own folder as a dimmed
+   * suffix the way VS Code's own results list does, so the row count is the
+   * match count. Clearing the field restores the tree, and the reader's
+   * expansion state with it, because `expanded` was never touched.
+   */
+  const visible = useMemo(
+    () => query ? explorerSearchNodes(searchMatches) : visibleWorkspaceTree(tree, effectiveExpanded),
+    [query, searchMatches, tree, effectiveExpanded],
+  );
   /**
    * The drawn tree: its nodes, and the text hits that belong inside them.
    *
@@ -1817,7 +1866,10 @@ function ProfileScopedWorkspaceView({
         class="workbench-mobile-switch"
         label="Workspace pane"
         items={[
-          { id: "explorer", label: "Files" },
+          // "Explorer", not "Files": this is the same control as the desktop
+          // strip's first tab, and one control that answers to two names is a
+          // control the reader has to learn twice.
+          { id: "explorer", label: "Explorer" },
           { id: "editor", label: "Editor", count: tabs.length || undefined, countLabel: `${String(tabs.length)} open documents`, disabled: tabs.length === 0 },
           { id: "source", label: "Source Control", count: changeCount, countLabel: `${String(changeCount)} changes` },
         ]}
@@ -1861,6 +1913,17 @@ function ProfileScopedWorkspaceView({
               between searching paths and searching text before typing a
               character. It now does both.
             */}
+            {/*
+              One control row, the way Source Control's own row was rebuilt.
+              Creation used to be two full-word bordered buttons on a line of
+              their own, below a file count on a line of its own: 56px of chrome
+              between the search field and the first file, measured at 1440x900,
+              where VS Code has none. Both verbs are icon controls on the search
+              field's row now — named for assistive technology and on hover, and
+              still reachable as `New file…` / `New folder…` from every row's
+              context menu, which is where a folder-scoped create has always
+              lived.
+            */}
             <div class="workbench-section-heading">
               <input
                 class="workspace-filter"
@@ -1876,35 +1939,35 @@ function ProfileScopedWorkspaceView({
                   clearFilter();
                 }}
               />
-            </div>
-            {/*
-              Creation used to be a 26x26 bare "+" that made files only; a folder
-              could be had exactly one way — by typing a slash into a filename.
-              Both are now named buttons on the same row as the count, so the
-              count is not paying for a line of its own.
-            */}
-            <div class="workspace-actions">
-              {/* A filtered tree must never be mistakable for an empty
-                  workspace, and a bounded scan must never read as an exhaustive
-                  one. One field now asks two questions, so one sentence answers
-                  both: how much of the tree is left, and — verbatim from
-                  `workspaceSearchSummary`, the sentence the model's own
-                  `search_text` gets — what the scan did and did not reach.
-                  `truncated`, `unsearchedFiles` and `capReachedIn` ride in that
-                  sentence, and a path match must never make a bounded scan look
-                  exhaustive by standing in front of it. */}
-              <p class="workspace-filter-count" role="status">
-                {!query
-                  ? `${String(filtered.total)} files`
-                  : `${String(searchMatches.length)} of ${String(filtered.total)} files · ${scanning || !search ? "reading contents…" : workspaceSearchSummary(search)}`}
-              </p>
-              <button class="workspace-new" type="button" onClick={() => openDialog("create", "/workspace")}>
-                <span aria-hidden="true">+</span> New file
+              <button class="workspace-new" type="button" aria-label="New file" title="New file in this workspace" onClick={() => openDialog("create", "/workspace")}>
+                <CreationGlyph name="file" />
               </button>
-              <button class="workspace-new" type="button" onClick={() => openDialog("create-folder", "/workspace")}>
-                <span aria-hidden="true">+</span> New folder
+              <button class="workspace-new" type="button" aria-label="New folder" title="New folder in this workspace" onClick={() => openDialog("create-folder", "/workspace")}>
+                <CreationGlyph name="workspace" />
               </button>
             </div>
+            {/* A filtered tree must never be mistakable for an empty workspace,
+                and a bounded scan must never read as an exhaustive one. One
+                field now asks two questions, so one sentence answers both: how
+                much of the tree is left, and — verbatim from
+                `workspaceSearchSummary`, the sentence the model's own
+                `search_text` gets — what the scan did and did not reach.
+                `truncated`, `unsearchedFiles` and `capReachedIn` ride in that
+                sentence, and a path match must never make a bounded scan look
+                exhaustive by standing in front of it.
+
+                At rest it says nothing: an unfiltered tree states its own
+                contents, and the count was the second of the two lines standing
+                between the search field and the first file. It is emptied
+                rather than unmounted, and hidden by `:empty` — a `role="status"`
+                that appears already carrying its text is a live region most
+                screen readers never announce, so the region has to outlive the
+                query that fills it. */}
+            <p class="workspace-filter-count" role="status">
+              {query
+                ? `${String(searchMatches.length)} of ${String(filtered.total)} files · ${scanning || !search ? "reading contents…" : workspaceSearchSummary(search)}`
+                : ""}
+            </p>
             {/* `hidden`, not unmounted: the tree owns the scroll box the
                 virtualization window is measured from, and remounting it on
                 every empty filter would strand the ResizeObserver on a detached
@@ -2011,7 +2074,12 @@ function ProfileScopedWorkspaceView({
                     onContextMenu={(event) => { event.preventDefault(); openContextMenu(node.path, event.clientX, event.clientY, event.currentTarget); }}
                     onClick={() => node.kind === "directory" ? toggleDirectory(node.path) : void openPreviewTab(node.path)}
                     onDblClick={() => { if (node.kind === "file") void openPinnedTab(node.path); }}
-                  ><span class="tree-chevron">{node.kind === "directory" ? node.expanded ? "⌄" : "›" : ""}</span>{node.kind === "directory" ? <Icon name="workspace" size={15} /> : <WorkspaceFileIcon path={node.path} />}<span id={nameId}>{node.name}</span>{node.entry ? <small id={sizeId}>{row.hits ? `${String(row.hits)} in text · ` : ""}{formatBytes(workspaceEntryByteLength(node.entry))}</small> : null}</button>
+                  ><span class="tree-chevron">{node.kind === "directory" ? node.expanded ? "⌄" : "›" : ""}</span>{node.kind === "directory" ? <Icon name="workspace" size={15} /> : <WorkspaceFileIcon path={node.path} />}<span id={nameId}>{node.name}{/* The folder the flattened result came from. It rides inside the
+                        name cell, not beside it, because the cell's own
+                        `nth-of-type(2)` rule is what truncates a long row —
+                        stated as a sibling it would escape that rule and push
+                        the byte size off the rail. */}
+                    {query ? workspaceSearchFolder(node.path) && <small class="tree-row__dir">{workspaceSearchFolder(node.path)}</small> : null}</span>{node.entry ? <small id={sizeId}>{row.hits ? `${String(row.hits)} in text · ` : ""}{formatBytes(workspaceEntryByteLength(node.entry))}</small> : null}</button>
                   {/* Not in the tab order: the tree's contract is that Tab
                       leaves it in one press, and the same menu is on the row
                       itself via ContextMenu, Shift+F10 and — for the Macs where
@@ -2183,24 +2251,33 @@ function ProfileScopedWorkspaceView({
                 agent, auto-saved on change" has to mean if switching profiles
                 is to switch the sheet back.
               */}
-              {onCodeThemeChange ? <MenuSelect
+              {changeCodeTheme ? <MenuSelect
                 className="editor-strip__theme"
                 ariaLabel="Editor theme"
                 value={codeTheme.codeThemeId}
                 options={CODE_THEME_OPTIONS}
-                onChange={(value) => { void onCodeThemeChange(value); }}
+                onChange={changeCodeTheme}
                 leading={(option) => <span
                   class="editor-strip__theme-swatch"
                   aria-hidden="true"
                   style={codeThemeCssVariables(resolveCodeTheme(option.value))}
                 />}
               /> : null}
+              {/*
+                Three words became a glyph. This strip is the file's status bar
+                — VS Code's carries short states and icons, never a sentence —
+                and "Reveal in Explorer" was its widest control by some way. The
+                accessible name is unchanged, so every keyboard and
+                screen-reader path to it, and the e2e that drives it by name,
+                still find the same button.
+              */}
               <button
                 class="editor-strip__reveal"
                 type="button"
+                aria-label="Reveal in Explorer"
                 title="Show this exact path in Explorer without closing the editor"
                 onClick={() => revealWorkspacePath(buffer.path)}
-              >Reveal in Explorer</button>
+              ><Icon name="workspace" size={15} /></button>
               {previewId === workbenchDocumentId({ kind: "file", path: buffer.path }) ? (
                 <button
                   class="editor-strip__pin"
@@ -2353,6 +2430,54 @@ function ProfileScopedWorkspaceView({
 }
 
 /**
+ * A search result list: the matched files, flat, in inventory order.
+ *
+ * Every row is a file at depth 1, which is what deletes the folder rows and
+ * the indent that went with them. It takes the already-filtered entries rather
+ * than a tree, so the ordering `searchMatches` established — inventory order,
+ * so a content-only hit does not jump ahead of a path match — is carried
+ * through untouched.
+ */
+export function explorerSearchNodes(matches: readonly WorkspaceEntry[]): readonly VisibleWorkspaceNode[] {
+  return Object.freeze(matches.map((entry) => Object.freeze({
+    kind: "file" as const,
+    name: workspaceBaseName(entry.path),
+    path: entry.path,
+    depth: 1,
+    entry,
+    children: [],
+  })));
+}
+
+/**
+ * The folder a flattened search result came from, workspace-relative.
+ *
+ * Empty for a file at the workspace root — VS Code prints nothing there, and a
+ * bare `/` beside every top-level filename is noise standing in for "no
+ * folder".
+ */
+export function workspaceSearchFolder(path: string): string {
+  const parent = workspaceParentPath(path);
+  return parent === "/workspace" ? "" : parent.slice("/workspace/".length);
+}
+
+/**
+ * A creation mark: the thing being made, with the `+` that makes it.
+ *
+ * `icons.tsx` carries no new-file or new-folder glyph and this lane does not
+ * own that file, so both are composed from marks the set already ships — the
+ * same `file` and `workspace` glyphs the tree and the empty state draw. The
+ * `+` sits in the corner rather than beside the mark, which is what keeps two
+ * `<svg>` elements from reading as two separate controls in a 30px button.
+ */
+function CreationGlyph({ name }: Readonly<{ name: "file" | "workspace" }>) {
+  return <span class="workspace-new__glyph" aria-hidden="true">
+    <Icon name={name} size={16} />
+    <Icon name="plus" size={9} />
+  </span>;
+}
+
+/**
  * Restore only identifiers that still exist in the freshly-read Git inventory.
  * A deleted/imported repository or worktree falls back inside the same live
  * inventory; an opaque saved id is never rendered as if it remained valid.
@@ -2432,9 +2557,10 @@ function DiffDocumentEditor({ document, buffer, preview, wrap, pin, toggleWrap, 
         {revealPaths.length === 1 ? <button
           class="editor-strip__reveal"
           type="button"
+          aria-label="Reveal in Explorer"
           title={document.source === "history" ? "Reveal this commit path in the current Explorer tree; the commit diff stays open" : "Reveal this changed path in Explorer; the diff stays open"}
           onClick={() => reveal(revealPaths[0]!)}
-        >Reveal in Explorer</button> : revealPaths.length > 1 ? <MenuSelect
+        ><Icon name="workspace" size={15} /></button> : revealPaths.length > 1 ? <MenuSelect
           className="editor-strip__reveal-menu"
           placement="up"
           ariaLabel="Reveal a changed path from this commit in Explorer"
