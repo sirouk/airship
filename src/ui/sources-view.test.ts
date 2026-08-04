@@ -227,7 +227,11 @@ describe("one patch renderer for both panes of the Workspace route", () => {
 
   it("leaves no second diff renderer in the workbench pane", () => {
     expect(workspaceView).not.toMatch(/<pre[^>]*workspace-diff/u);
-    expect(workspaceView).toMatch(/import \{ isConflicted, UnifiedPatch \} from "\.\/sources-view"/u);
+    // The named set grows as the rail stops re-implementing this module's
+    // vocabulary — `deltaLetter` joined when Source Control's status letters
+    // moved off an inline ternary chain — so the claim is that `UnifiedPatch`
+    // arrives from here, not that it arrives alone.
+    expect(workspaceView).toMatch(/import \{[^}]*\bUnifiedPatch\b[^}]*\} from "\.\/sources-view"/u);
     expect(workspaceView).toMatch(/<UnifiedPatch\b/u);
   });
 

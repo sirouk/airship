@@ -428,7 +428,19 @@ export const RELEASE_BUDGETS = Object.freeze({
   // is most of the gzip movement here. Measured 2061.06 KiB raw / 654.25 KiB
   // gzip; both ceilings take the tightest whole-KiB step above that reading.
   // `entryJavaScript` is untouched — nothing eager moved.
-  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2062 * 1024, gzip: 655 * 1024 }),
+  //
+  // Source Control's rail then took the whole of its own partition's growth:
+  // one control row, and the repository row with branch, ahead/behind, head
+  // and change count that `optionalWorkspaceWorkbench` below itemises. It is
+  // deferred in full — the workbench pack is fetched when Workspace opens, and
+  // nothing here is eager. Isolated by building this tree with and without the
+  // three files that pass touched: 2061.34 KiB raw / 654.35 KiB gzip before,
+  // 2063.56 KiB raw / 655.02 KiB gzip after, so all 2.22 KiB is this work's.
+  // 2064 KiB raw would have left 451 bytes — inside the tripwire this file
+  // refuses everywhere else — so raw takes one further whole-KiB step and
+  // leaves 1,475; gzip's tightest step leaves 1,004 and does not need one.
+  // `entryJavaScript` is untouched.
+  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2065 * 1024, gzip: 656 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now measures 672.33 KiB raw / 186.61 KiB gzip:
   // the browser-Git pack grew (see optionalBrowserGit) and the Terminal pack
@@ -554,7 +566,16 @@ export const RELEASE_BUDGETS = Object.freeze({
   // Measured 2737.47 KiB raw / 842.17 KiB gzip; both take the smallest
   // whole-KiB step above that reading. Nothing eager moved and the entry
   // ceiling is untouched.
-  totalJavaScriptAndWorkers: Object.freeze({ raw: 2738 * 1024, gzip: 843 * 1024 }),
+  // Source Control's rail carries into the installed aggregate exactly as it
+  // lands in the first-party partition above; the vendor pins are unchanged,
+  // so all of the growth is weight already reviewed there — one control row,
+  // and the repository row with the ahead/behind that no adapter publishes.
+  // Measured 2739.97 KiB raw / 842.93 KiB gzip. 2740 KiB raw would have left
+  // 31 bytes and 843 KiB gzip would have left 72, both far inside the tripwire
+  // this file refuses everywhere else, so each takes one further whole-KiB
+  // step, leaving 1,055 bytes raw and 1,096 gzip. Nothing eager moved and the
+  // entry ceiling is untouched.
+  totalJavaScriptAndWorkers: Object.freeze({ raw: 2741 * 1024, gzip: 844 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. Keep it visible under a dedicated, deliberately small cap.
   serviceWorker: Object.freeze({ raw: 12 * 1024, gzip: 4 * 1024 }),
@@ -716,7 +737,22 @@ export const RELEASE_BUDGETS = Object.freeze({
   // declines elsewhere for the same reason; the gzip ceiling is already the
   // tightest whole-KiB step above its reading and does not move. The route is
   // still fetched only when Workspace opens, so first paint is untouched.
-  optionalWorkspaceWorkbench: Object.freeze({ raw: 78 * 1024, gzip: 25 * 1024 }),
+  //
+  // The editor-workbench pass then rebuilt Source Control's rail. The control
+  // block collapsed from a full-width repository dropdown over two wrapping
+  // word buttons into one row — dropdown, refresh glyph, gear glyph — and the
+  // rail gained the repository row VS Code has and this panel did not: branch,
+  // ahead/behind against its upstream, head, and the change count. Ahead/behind
+  // is the bytes: no adapter publishes it, so it is derived from a second
+  // bounded `log` against `refs/remotes/<remote>/<branch>` plus the set
+  // difference, the bound-aware count, and the sentence that carries the arrow
+  // pair to a screen reader. The change rows also took Explorer's file-type
+  // icon and the shared `deltaLetter`, and the two bulk verbs moved onto their
+  // group headers. Re-measured on this build: 81,152 B raw / 25,637 B gzip.
+  // Both ceilings move to the smallest whole-KiB step that clears the new
+  // reading — 80 KiB raw leaves 768 B, 26 KiB gzip leaves 987 B. The route is
+  // still fetched only when Workspace opens, so first paint is untouched.
+  optionalWorkspaceWorkbench: Object.freeze({ raw: 80 * 1024, gzip: 26 * 1024 }),
   // Held only the Git workspace binding, at 519 B raw / 345 B gzip. It now also
   // holds the one bounded content scan: `search_text` and the Explorer's Contents
   // filter both import it, so Rollup gives it to the chunk those two share rather

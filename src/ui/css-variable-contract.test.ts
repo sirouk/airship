@@ -396,6 +396,16 @@ const VERDICT_TOKEN_TEXT_LEDGER = Object.freeze([
   // failed hue, so it is held to the same 4.5:1 word floor as every other
   // site named above.
   "ui/vault-view.css .vault-danger__action --v-failed",
+  /*
+   * Source Control's status letters. The workbench rail printed all five
+   * deltas in the same brass, so "deleted" and "added" were one glyph apart
+   * and no colour apart; these two spend the failed metal on a single
+   * character at `--fs-micro` against `--surface`, which is exactly the class
+   * of use the AA floor above was raised for. The letter is the meaning and
+   * the row's `aria-label` says the word — the colour only reinforces.
+   */
+  "ui/workspace-view.css .scm-row > button b[data-delta=\"conflicted\"] --v-failed",
+  "ui/workspace-view.css .scm-row > button b[data-delta=\"deleted\"] --v-failed",
 ]);
 
 /**

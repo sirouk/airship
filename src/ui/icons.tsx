@@ -28,6 +28,7 @@ export type IconName =
   | "sun"
   | "terminal"
   | "plus"
+  | "refresh"
   | "trash"
   | "storage-device"
   | "storage-s3"
@@ -64,6 +65,11 @@ const paths: Record<IconName, JSX.Element> = {
   sun: <><circle cx="12" cy="12" r="4" /><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></>,
   terminal: <path d="m4 6 5 5-5 5m8 1h8" />,
   plus: <path d="M12 4v16M4 12h16" />,
+  /* Source Control's reload verb was a full word wide enough to push the panel
+     into a two-column wrap. The set had no circular arrow, so this is it: one
+     297° sweep of the same r=8 circle the rest of the glyphs are built on,
+     leaving at -45° into the corner that reads as the head. */
+  refresh: <path d="M19.6 14.5A8 8 0 1 1 17.7 6.3l3.4 3.4M21.1 4.9v4.8h-4.8" />,
   /* `sessions-view.tsx` renders this for its destructive row action; the map had
      no destructive glyph at all, so the name did not typecheck. */
   trash: <path d="M4 6.5h16M9.5 6.5V4h5v2.5M6 6.5l1 14.5h10l1-14.5M10 11v5.5m4-5.5v5.5" />,

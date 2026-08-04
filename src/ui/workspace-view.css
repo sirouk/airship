@@ -726,24 +726,79 @@
 .workspace-scm { display: grid; gap: .55rem; padding: .65rem; overflow: auto; }
 .workspace-scm label { display: grid; gap: .3rem; color: var(--ink-faint); font: var(--fs-micro) var(--font-mono); }
 .workspace-scm select { min-width: 0; height: 32px; color: var(--ink); background: var(--surface); border: 1px solid var(--line); }
-.scm-summary { display: flex; justify-content: space-between; color: var(--ink-muted); font-size: var(--fs-micro); }
-.scm-toolbar { display: grid; grid-template-columns: 1fr 1fr; gap: .35rem; }
-.scm-toolbar button { min-height: 32px; border: 1px solid var(--line); color: var(--ink-muted); background: var(--surface); }
+/*
+ * One row: the repository, the reload, and the door to everything else.
+ *
+ * The shipped block was `grid-template-columns: 1fr 1fr` under a full-width
+ * dropdown on its own row — three rows, 93px, before a single changed path,
+ * and "Advanced source controls" is 24 characters, so it wrapped to two lines
+ * inside its own 44px button. The dropdown now yields exactly what the two
+ * icon buttons need and keeps the rest; both words survive as `aria-label`.
+ */
+.scm-bar { display: grid; grid-template-columns: minmax(0,1fr) auto auto; gap: var(--sp-1); align-items: center; }
+.scm-bar__action { display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; min-height: 32px; padding: 0; border: 1px solid var(--line-control); border-radius: var(--radius-control); color: var(--ink-muted); background: var(--surface); }
+.scm-bar__action:hover:not(:disabled) { border-color: color-mix(in srgb, var(--accent) 55%, var(--line-control)); color: var(--ink); background: var(--surface-raised); }
+/* The word "Refreshing…" was the only thing that said a read was in flight,
+   and a 32px square has no room for it. `seal-checking` is declared in
+   shell.css — @keyframes names are global, and it already carries the
+   reduced-motion opt-out this rotation needs. */
+.scm-bar__action[aria-busy="true"] { color: var(--accent); }
+.scm-bar__action[aria-busy="true"] svg { animation: seal-checking 1.4s linear infinite; }
+/*
+ * The repository row, on one line: what branch, how far it has drifted from
+ * its upstream, which commit these changes are measured against, and how many
+ * there are. `head` was in the workbench inventory with no home on screen.
+ */
+.scm-branch { display: flex; align-items: center; gap: var(--sp-1); min-height: 22px; color: var(--ink-muted); font-size: var(--fs-micro); }
+.scm-branch > svg { flex: 0 0 auto; color: var(--ink-faint); }
+.scm-branch strong { overflow: hidden; min-width: 0; color: var(--ink); font-weight: var(--fw-strong); text-overflow: ellipsis; white-space: nowrap; }
+.scm-branch__sync, .scm-branch__head { flex: 0 0 auto; font-family: var(--font-mono); }
+.scm-branch__sync { color: var(--accent); }
+/* A floor is not a total. When the two bounded logs never reached common
+   ground the counts are lower bounds, and they wear the faint colour rather
+   than the accent that reads as a settled fact. */
+.scm-branch__sync[data-bounded="true"] { color: var(--ink-faint); }
+.scm-branch__head { color: var(--ink-faint); }
+.scm-branch__count { flex: 0 0 auto; margin-left: auto; white-space: nowrap; }
 .scm-group { display: grid; }
-.scm-group > header { display: flex; align-items: center; justify-content: space-between; min-height: 30px; color: var(--ink-faint); font: var(--fs-micro) var(--font-mono); letter-spacing: .05em; }
+.scm-group > header { display: flex; align-items: center; gap: var(--sp-1); min-height: 30px; color: var(--ink-faint); font: var(--fs-micro) var(--font-mono); letter-spacing: .05em; }
+/* Was `justify-content: space-between` over two children; the group verb is a
+   third, and it belongs beside the count rather than halfway across the row. */
+.scm-group > header > strong { margin-right: auto; }
+.scm-group__bulk { display: flex; align-items: center; justify-content: center; width: 22px; height: 22px; min-height: 22px; padding: 0; border: 1px solid var(--line-control); border-radius: var(--radius-control); color: var(--ink-muted); background: var(--surface); }
+.scm-group__bulk:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--line-control)); color: var(--ink); background: var(--surface-raised); }
 .scm-row { display: grid; grid-template-columns: minmax(0,1fr) auto; border-bottom: 1px solid var(--line); }
-.scm-row > button { display: flex; min-width: 0; justify-content: space-between; gap: .5rem; padding: .45rem .2rem; border: 0; color: var(--ink-muted); background: transparent; text-align: left; }
+.scm-row > button { display: flex; align-items: center; justify-content: space-between; min-width: 0; gap: var(--sp-1); padding: .25rem .2rem; border: 0; color: var(--ink-muted); background: transparent; text-align: left; }
 .scm-row > button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.scm-row > button b { color: var(--accent); font: var(--fs-micro) var(--font-mono); }
+.scm-row > button .workspace-file-icon { flex: 0 0 auto; }
+.scm-row__path { display: flex; flex: 1 1 auto; min-width: 0; color: var(--ink); }
+/* The directory gives way first. A path is read from its right-hand end, so
+   shrinking both halves evenly would eat the file name — the one part of
+   `docs/architecture.md` that is not already implied by the tree next door. */
+.scm-row__dir { flex: 0 999 auto; min-width: 0; color: var(--ink-faint); }
+.scm-row__file { flex: 0 1 auto; min-width: 0; }
+.scm-row > button b { flex: 0 0 auto; color: var(--accent); font: var(--fs-micro) var(--font-mono); }
+/* Colour reinforces the letter; the letter carries the meaning, and its
+   `role="img"` name carries it again for anyone who reads neither. */
+.scm-row > button b[data-delta="added"] { color: var(--v-verified); }
+.scm-row > button b[data-delta="deleted"], .scm-row > button b[data-delta="conflicted"] { color: var(--v-failed); }
 .scm-row > button:disabled { opacity: .72; cursor: not-allowed; }
 .scm-row > div { display: flex; align-items: center; }
 .scm-row > div button { width: 27px; height: 27px; border: 1px solid var(--line); color: var(--ink); background: var(--surface); }
 .scm-history { margin-top: var(--sp-1); }
-.scm-history-row > button > span { display: grid; gap: 2px; }
+/* The row is a flex line now, so the subject block claims the slack the old
+   `space-between` gave it — otherwise the trailing `↱` sits against the date
+   instead of at the row's end. */
+.scm-history-row > button > span { display: grid; flex: 1 1 auto; min-width: 0; gap: 2px; }
 .scm-history-row > button strong { overflow: hidden; color: var(--ink-muted); font-size: var(--fs-micro); font-weight: var(--fw-strong); text-overflow: ellipsis; white-space: nowrap; }
 .scm-history-row > button small { color: var(--ink-faint); font: var(--fs-micro)/1.2 var(--font-mono); }
 .scm-commit { display: grid; gap: .4rem; margin-top: .5rem; }
 .scm-commit textarea { min-height: 64px; resize: vertical; }
+/* The one full-word button the rail still needs, and it was drawing at 24px —
+   thinner than the row actions above it. Sized from the density block rather
+   than from another literal, which is where the rest of this rail should end
+   up too. */
+.scm-commit button { min-height: var(--density-control); }
 .tabs.workbench-mobile-switch { display: none; }
 
 /* These declarations must follow the desktop SCM dimensions above; otherwise
@@ -751,6 +806,12 @@
    to 27px after the coarse-pointer floor has applied. */
 @media (pointer: coarse) {
   .scm-row > div button { width: 44px; height: 44px; }
+  /* `.workspace-scm button` already raises the height above; a square control
+     needs the other axis raised with it or the reload is a 32x44 sliver. */
+  .scm-bar__action, .scm-group__bulk { width: 44px; }
+  /* The header grows to hold its verb rather than the verb shrinking to fit a
+     30px strip: `touch-target-floor.spec.ts` measures the rendered box. */
+  .scm-group > header { min-height: var(--touch-target); }
 }
 
 :root[data-density="comfortable"] .workspace-workbench .code-editor { font-size: var(--fs-body); line-height: 1.78; padding: 1.25rem 1.35rem 2.4rem; }

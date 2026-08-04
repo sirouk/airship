@@ -70,7 +70,11 @@ test("desktop workbench edits with CAS, keeps tabs, and surfaces the real Git ch
   await expect(page.locator(".editor-strip")).toContainText("Saved");
 
   await page.getByRole("tab", { name: /Source Control/ }).click();
-  await expect(page.getByRole("button", { name: /docs\/architecture\.md [AM]/u })).toBeVisible();
+  // The row announces the delta as a word, not as the bare letter it draws:
+  // a status column that reads out "M" was the defect `aria-name-contract`
+  // was written for, and the letter is now `aria-hidden` decoration under a
+  // name that says the whole thing.
+  await expect(page.getByRole("button", { name: /docs\/architecture\.md · Working (added|modified)/u })).toBeVisible();
   await page.getByRole("button", { name: "Stage docs/architecture.md" }).click();
   const stageApproval = page.getByRole("dialog", { name: /Allow git_stage once/ });
   if (await stageApproval.isVisible()) await stageApproval.getByRole("button", { name: "Allow once" }).click();
@@ -143,7 +147,7 @@ test("source status and history open real patch documents with the shared previe
 
   // A status row opens the adapter's bounded diff, not the working file. The
   // worktree version is part of the identity and verified around the read.
-  await page.getByRole("button", { name: /README\.md M/u }).click();
+  await page.getByRole("button", { name: /README\.md · Working modified/u }).click();
   const statusPreview = page.getByRole("tab", { name: /README\.md · worktree diff, Working diff, Preview/u });
   await expect(statusPreview).toBeVisible();
   await expect(page.getByRole("tab", { name: /README\.md, Unsaved/u })).toBeVisible();
@@ -165,7 +169,7 @@ test("source status and history open real patch documents with the shared previe
   await page.getByRole("button", { name: /Open and keep commit [0-9a-f]+ diff/u }).click();
   await expect(page.getByRole("tab", { name: /Commit [0-9a-f]+, Commit diff, Preview/u })).toHaveCount(0);
   const keptHistory = page.getByRole("tab", { name: /Commit [0-9a-f]+, Commit diff/u });
-  await page.getByRole("button", { name: /docs\/architecture\.md A/u }).click();
+  await page.getByRole("button", { name: /docs\/architecture\.md · Working added/u }).click();
   await expect(keptHistory).toBeVisible();
   await expect(page.getByRole("tab", { name: /docs\/architecture\.md · worktree diff, Working diff, Preview/u })).toBeVisible();
 });
@@ -206,7 +210,7 @@ test("file-type icons and Reveal in Explorer preserve exact document context", a
   await expect(page.getByRole("region", { name: /Commit [0-9a-f]+ diff/u })).toBeVisible();
 
   await page.getByRole("tab", { name: /Source Control/u }).click();
-  await page.getByRole("button", { name: /README\.md M/u }).click();
+  await page.getByRole("button", { name: /README\.md · Working modified/u }).click();
   const statusTab = page.getByRole("tab", { name: /README\.md · worktree diff, Working diff, Preview/u });
   await expect(statusTab.locator('[data-file-kind="markdown"]')).toBeVisible();
   await page.getByRole("button", { name: "Reveal in Explorer", exact: true }).click();

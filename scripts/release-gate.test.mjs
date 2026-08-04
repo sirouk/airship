@@ -206,7 +206,13 @@ describe("release gate", () => {
     expect(() => assertDocumentedBudgetMeasurements(source.replace("74,690 B\n  // raw", "94,690 B\n  // raw")))
       .toThrow(/optionalProofSurface: its comment records 94,690 B raw, above the 88\.00 KiB raw ceiling/u);
     // …and a raise cannot be laundered by deleting the number it contradicts.
-    expect(() => assertDocumentedBudgetMeasurements(source.replace("measured on this build: 78,628 B raw / 24,795 B gzip", "weighed at 78,628 B and 24,795 B")))
+    // AMENDED to the pair the ceiling now rests on: the guard reads the
+    // *largest* pair a comment states, so blanking the older 78,628 B reading
+    // stopped proving anything once Source Control's rail added a bigger one
+    // above it. The claim is unchanged — remove the operative measurement and
+    // the block must stop justifying its ceilings.
+    expect(() => assertDocumentedBudgetMeasurements(source.replace("Re-measured on this build: 81,152 B raw / 25,637 B gzip", "Re-weighed at 81,152 B and 25,637 B")
+      .replace("Re-measured on this build: 78,628 B raw / 24,795 B gzip", "Re-weighed at 78,628 B and 24,795 B")))
       .toThrow(/optionalWorkspaceWorkbench: its comment no longer records a measured raw\/gzip pair/u);
 
     /*
@@ -222,7 +228,11 @@ describe("release gate", () => {
     for (const [name, ceiling, granted] of [
       ["optionalMemoryView", "gzip: 21 * 1024", "gzip: 22 * 1024"],
       ["optionalProofSurface", "gzip: 28 * 1024", "gzip: 29 * 1024"],
-      ["optionalWorkspaceWorkbench", "gzip: 25 * 1024", "gzip: 26 * 1024"],
+      // AMENDED with the ceiling it names, for the same reason the
+      // `deferredCapabilities` row below was: 26 KiB is now the tightest step
+      // above this chunk's recorded gzip, so the unpaid-for step is the one
+      // past it.
+      ["optionalWorkspaceWorkbench", "gzip: 26 * 1024", "gzip: 27 * 1024"],
       // AMENDED with the ceiling it names: `deferredCapabilities` gzip moved to
       // 126 KiB when the Connection route stopped interviewing people, and that
       // step is the tightest one above its recorded measurement — so the step

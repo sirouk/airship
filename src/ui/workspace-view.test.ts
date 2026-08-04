@@ -25,6 +25,9 @@ import {
   workspaceGutterLines,
   workspaceHistoryPatch,
   workspacePersistedWorktreeId,
+  workbenchBranchDivergence,
+  workbenchDivergenceSentence,
+  workbenchUpstreamRef,
   workbenchDiffRevealPaths,
   workbenchDirtyDraftsUnderFolder,
   workbenchExternalRevisionBuffer,
@@ -42,6 +45,7 @@ import {
   workspaceTabStorageKey,
   writeWorkspaceTabState,
   SCM_LANE_LIMIT,
+  WORKBENCH_DIVERGENCE_DEPTH,
   WORKBENCH_HISTORY_DEPTH,
   WORKSPACE_FILE_ROW_HEIGHT,
   WORKSPACE_EDITOR_BYTE_LIMIT,
@@ -370,6 +374,61 @@ describe("bounded commit history", () => {
     expect(workbenchHistoryCount(7)).toBe("7");
     expect(workbenchHistoryCount(0)).toBe("0");
     expect(workbenchHistoryCount(WORKBENCH_HISTORY_DEPTH)).toBe(`${String(WORKBENCH_HISTORY_DEPTH)}+`);
+  });
+});
+
+describe("branch divergence from two bounded logs", () => {
+  it("counts each side's exclusive commits once the windows overlap", () => {
+    const divergence = workbenchBranchDivergence(["e", "d", "c", "b", "a"], ["z", "y", "c", "b", "a"]);
+    expect(divergence).toEqual({ ahead: 2, behind: 2, bounded: false });
+  });
+
+  it("does not call an already-merged history divergent", () => {
+    /*
+     * The cheap implementation is "index of the first shared oid", and a
+     * branch that merged its upstream shares its tip with nothing while
+     * sharing everything below — so that version would have reported this
+     * fast-forwarded branch as 1 ahead of a remote it is exactly level with.
+     */
+    expect(workbenchBranchDivergence(["c", "b", "a"], ["c", "b", "a"])).toEqual({ ahead: 0, behind: 0, bounded: false });
+    expect(workbenchBranchDivergence(["m", "c", "b", "a"], ["c", "b", "a"])).toEqual({ ahead: 1, behind: 0, bounded: false });
+  });
+
+  it("says when the windows never reached common ground", () => {
+    // Two full reads that share nothing are not evidence of 20 and 20. They
+    // are evidence that 20 was not deep enough, and the row prints `20+`.
+    const local = Array.from({ length: WORKBENCH_DIVERGENCE_DEPTH }, (_, index) => `local-${String(index)}`);
+    const remote = Array.from({ length: WORKBENCH_DIVERGENCE_DEPTH }, (_, index) => `remote-${String(index)}`);
+    const divergence = workbenchBranchDivergence(local, remote);
+    expect(divergence.bounded).toBe(true);
+    expect(divergence.ahead).toBe(WORKBENCH_DIVERGENCE_DEPTH);
+    expect(divergence.behind).toBe(WORKBENCH_DIVERGENCE_DEPTH);
+  });
+
+  it("treats an empty pair as settled rather than as an unmeasured fork", () => {
+    expect(workbenchBranchDivergence([], [])).toEqual({ ahead: 0, behind: 0, bounded: false });
+  });
+
+  it("claims an upstream only where a remote-tracking ref could exist", () => {
+    const origin = { name: "origin", url: "https://example.invalid/a.git", transport: "direct-git-http" } as const;
+    const mirror = { name: "mirror", url: "https://example.invalid/b.git", transport: "direct-git-http" } as const;
+    expect(workbenchUpstreamRef([], "main")).toBeUndefined();
+    expect(workbenchUpstreamRef([origin], "")).toBeUndefined();
+    // Two remotes and no configured upstream is a guess, not a fact.
+    expect(workbenchUpstreamRef([mirror, { ...origin, name: "backup" }], "main")).toBeUndefined();
+    expect(workbenchUpstreamRef([mirror], "main")).toEqual({ ref: "refs/remotes/mirror/main", label: "mirror/main" });
+    expect(workbenchUpstreamRef([mirror, origin], "main")).toEqual({ ref: "refs/remotes/origin/main", label: "origin/main" });
+  });
+
+  it("gives the arrow pair a sentence that survives being read alone", () => {
+    const sentence = (ahead: number, behind: number, bounded = false) =>
+      workbenchDivergenceSentence({ ahead, behind, bounded }, "origin/main");
+    expect(sentence(0, 0)).toBe("Up to date with origin/main");
+    expect(sentence(1, 0)).toBe("1 commit to push to origin/main");
+    expect(sentence(0, 3)).toBe("3 commits to pull from origin/main");
+    expect(sentence(2, 1)).toBe("2 commits to push, 1 to pull, against origin/main");
+    // The bound reaches the listener too, or the arrows lie only to them.
+    expect(sentence(20, 20, true)).toContain("at least");
   });
 });
 
@@ -742,8 +801,10 @@ describe("merge conflicts and the workbench stage fence", () => {
     const source = readFileSync(new URL("./workspace-view.tsx", import.meta.url), "utf8");
     // `UnifiedPatch` now arrives on the same import, for the same reason: the
     // workbench diff pane used to render its own patch instead of the one
-    // Source Control renders.
-    expect(source).toContain('import { isConflicted, UnifiedPatch } from "./sources-view";');
+    // Source Control renders. `deltaLetter` joined them when the rail started
+    // drawing status letters: it was spelling A/D/R/M/C out of an inline
+    // ternary chain while `sources-view` held the vocabulary.
+    expect(source).toContain('import { deltaLetter, isConflicted, UnifiedPatch } from "./sources-view";');
     expect(source).toContain("isConflicted(entry)");
     expect(source).toContain("Merge conflict — resolve it in Advanced source controls before staging.");
   });

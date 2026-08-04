@@ -11,16 +11,16 @@ or profile-local drafts.
 
 | Capability | Workbench home |
 | --- | --- |
-| Repository and worktree selection | Repository/worktree selectors at the top of Source Control |
-| Refresh | Source Control toolbar |
-| Branch, head, and changed-path count | Source Control summary |
+| Repository and worktree selection | Repository selector on the Source Control control row; worktree selector below it when the repository has more than one |
+| Refresh | Icon button on the Source Control control row, named "Refresh" |
+| Branch, head, and changed-path count | Source Control repository row, with ahead/behind against the upstream ref where one has been fetched |
 | Staged and working status | Staged and Changes path groups |
-| Stage/unstage one or all visible paths | Per-path actions and group actions |
+| Stage/unstage one or all visible paths | Per-path actions, and a group action on the Staged/Changes header named "Stage all visible" / "Unstage all visible" |
 | Working/staged diff | Shared preview/pinned editor document |
 | Local commit | Commit message and Commit staged action |
 | Recent bounded history | History group; commit patch opens as an editor document |
 | Reveal current file or Git path | Active file/diff strip; exact Explorer expansion and focus |
-| Import/advanced entry | Advanced source controls action, present even when no repository exists |
+| Import/advanced entry | Advanced source controls icon button on the control row, named in full, present even when no repository exists |
 
 ## Advanced source controls sheet
 

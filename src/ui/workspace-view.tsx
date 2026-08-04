@@ -7,7 +7,7 @@ import type { BrowserGitClient } from "../git/client";
 import { describeGitOperation } from "../git/operations";
 import { preferredSourceRepositoryId } from "../git/source-selection";
 import { resolveGitWorkspaceBinding } from "../git/workspace-binding";
-import type { GitAuthor, GitCommitDetail, GitCommitFilePatch, GitCommitSummary, GitDiff, GitOperation, GitOperationDescriptor, GitRepositorySnapshot, GitStatusEntry, GitWorktreeSnapshot } from "../git/types";
+import type { GitAuthor, GitCommitDetail, GitCommitFilePatch, GitCommitSummary, GitDiff, GitOperation, GitOperationDescriptor, GitRemoteSummary, GitRepositorySnapshot, GitStatusEntry, GitWorktreeSnapshot } from "../git/types";
 import type { WorkspaceEntry, WorkspaceFile, WorkspacePort } from "../workspace/contracts";
 import { isWorkspaceControlPlanePath, normalizeWorkspacePath, workspaceEntryByteLength } from "../workspace/contracts";
 import { decodeWorkspaceBytes, isWorkspaceBinaryEnvelope } from "../workspace/content-codec";
@@ -36,7 +36,7 @@ import { Seal } from "./seal";
 // `UnifiedPatch` arrives the same way and for the same reason: this pane used
 // to dump the identical `git.diff` result into a `<pre>` while Source Control,
 // one click away on the same route, numbered and classified every line.
-import { isConflicted, UnifiedPatch } from "./sources-view";
+import { deltaLetter, isConflicted, UnifiedPatch } from "./sources-view";
 import { middleTruncate, Tabs, type TabItem } from "./tabs";
 import { WorkspaceFileIcon } from "./workspace-file-icon";
 import {
@@ -131,6 +131,19 @@ export const SCM_LANE_LIMIT = 250;
  * the column prints a total, so a bounded read read as a repository fact.
  */
 export const WORKBENCH_HISTORY_DEPTH = 20;
+/**
+ * How far the branch row looks for the point where a branch and its upstream
+ * last agreed.
+ *
+ * Ahead/behind is not a field any adapter publishes — `GitWorktreeSnapshot`
+ * carries `branch` and `head` and nothing about a remote-tracking ref — so the
+ * rail derives it from two bounded `log` reads, exactly like the History group
+ * derives its list. Two bounded reads can only produce a bounded answer, which
+ * is why `workbenchBranchDivergence` reports whether it found common ground at
+ * all, and why the row prints `20+` rather than a confident number when it did
+ * not. A count that is a floor must look like a floor.
+ */
+export const WORKBENCH_DIVERGENCE_DEPTH = WORKBENCH_HISTORY_DEPTH;
 /** The dialogs whose subject is the path itself, so an empty field is fine. */
 const DIALOG_KINDS_WITHOUT_VALUE: readonly string[] = Object.freeze(["delete", "delete-folder", "discard"]);
 type Review = (operation: GitOperation, descriptor: GitOperationDescriptor) => Promise<"allow" | "deny">;
@@ -400,6 +413,7 @@ function ProfileScopedWorkspaceView({
   const [sourceSelectionResolved, setSourceSelectionResolved] = useState(false);
   const [history, setHistory] = useState<readonly GitCommitSummary[]>([]);
   const [historyMessage, setHistoryMessage] = useState("");
+  const [upstream, setUpstream] = useState<Readonly<{ label: string; divergence: WorkbenchBranchDivergence }>>();
   const [scmLoading, setScmLoading] = useState(false);
   const [commitMessage, setCommitMessage] = useState("");
   /*
@@ -857,22 +871,56 @@ function ProfileScopedWorkspaceView({
       if (!repository || !nextWorktree) {
         setHistory([]);
         setHistoryMessage("");
+        setUpstream(undefined);
       } else if (!historyCapability?.available) {
         setHistory([]);
         setHistoryMessage(historyCapability?.reason ?? "History is unavailable for this repository adapter.");
+        setUpstream(undefined);
       } else {
         try {
-          setHistory(await git.log({ repositoryId: repository.id, worktreeId: nextWorktree.id, depth: WORKBENCH_HISTORY_DEPTH }));
+          const local = await git.log({ repositoryId: repository.id, worktreeId: nextWorktree.id, depth: WORKBENCH_HISTORY_DEPTH });
+          setHistory(local);
           setHistoryMessage("");
+          setUpstream(await readUpstreamDivergence(repository, nextWorktree, local));
         } catch (cause) {
           setHistory([]);
           setHistoryMessage(cause instanceof Error ? cause.message : "Commit history could not be read.");
+          setUpstream(undefined);
         }
       }
     } catch (cause) {
       setNotice(workbenchNotice("error", cause instanceof Error ? cause.message : "Source control could not be refreshed."));
     } finally {
       setScmLoading(false);
+    }
+  }
+
+  /**
+   * A second bounded log, and only when there is a ref to read.
+   *
+   * Guarded three ways because the cheap version of this is a lie: no remote
+   * means no upstream and no arrows; a `refs/remotes/…` ref that has never been
+   * fetched throws, and that throw means "unknown", not "up to date". Anything
+   * other than a resolved ref leaves the branch row printing branch and head
+   * with no sync claim at all, which is the honest state for a repository this
+   * page has never fetched.
+   */
+  async function readUpstreamDivergence(
+    repository: GitRepositorySnapshot,
+    target: GitWorktreeSnapshot,
+    local: readonly GitCommitSummary[],
+  ): Promise<Readonly<{ label: string; divergence: WorkbenchBranchDivergence }> | undefined> {
+    if (!git) return undefined;
+    const candidate = workbenchUpstreamRef(repository.remotes, target.branch);
+    if (!candidate) return undefined;
+    try {
+      const remote = await git.log({ repositoryId: repository.id, worktreeId: target.id, ref: candidate.ref, depth: WORKBENCH_DIVERGENCE_DEPTH });
+      return Object.freeze({
+        label: candidate.label,
+        divergence: workbenchBranchDivergence(local.map((entry) => entry.oid), remote.map((entry) => entry.oid)),
+      });
+    } catch {
+      return undefined;
     }
   }
 
@@ -1959,6 +2007,7 @@ function ProfileScopedWorkspaceView({
             selectWorktree={(id) => void refreshSourceControl(repositoryId, id)}
             history={history}
             historyMessage={historyMessage}
+            upstream={upstream}
             loading={scmLoading}
             refresh={() => void refreshSourceControl(repositoryId, worktree?.id)}
             openDiff={(document, openMode) => void openDiffDocument(document, openMode)}
@@ -2475,7 +2524,75 @@ function commitSubject(message: string): string {
   return message.trim().split(/\r?\n/u)[0] || "(no commit message)";
 }
 
-function SourceControlRail({ repositories, repositoryId, selectRepository, worktree, selectWorktree, history, historyMessage, loading, refresh, openDiff, mutate, commitMessage, setCommitMessage, onOpenRepositoryManager }: {
+/**
+ * What this branch has that its upstream does not, and the reverse.
+ *
+ * Set difference over two bounded reads rather than an index walk: a branch
+ * that merged its upstream shares commits at several depths, and "the first
+ * oid the two lists have in common" would call an already-merged history
+ * divergent. Both counts are exact whenever the two windows reach shared
+ * ground; when they share nothing at all the windows were too shallow to see
+ * the fork, and `bounded` says so instead of the caller inventing certainty.
+ */
+export type WorkbenchBranchDivergence = Readonly<{ ahead: number; behind: number; bounded: boolean }>;
+
+export function workbenchBranchDivergence(
+  local: readonly string[],
+  upstream: readonly string[],
+): WorkbenchBranchDivergence {
+  const upstreamSet = new Set(upstream);
+  const localSet = new Set(local);
+  const shared = local.some((oid) => upstreamSet.has(oid));
+  return Object.freeze({
+    ahead: local.filter((oid) => !upstreamSet.has(oid)).length,
+    behind: upstream.filter((oid) => !localSet.has(oid)).length,
+    bounded: !shared && (local.length > 0 || upstream.length > 0),
+  });
+}
+
+/**
+ * The upstream a rail can actually read.
+ *
+ * Airship never writes a branch's configured upstream, so there is no
+ * `branch.<name>.merge` to consult. What a fetch does leave behind is
+ * `refs/remotes/<remote>/<branch>`, so that — and only that — is what the row
+ * claims. `origin` wins when it exists because that is the name every import
+ * and clone in this product creates; otherwise the single remote is
+ * unambiguous, and two unnamed candidates are not a guess worth printing.
+ */
+export function workbenchUpstreamRef(
+  remotes: readonly GitRemoteSummary[],
+  branch: string,
+): Readonly<{ ref: string; label: string }> | undefined {
+  if (!branch) return undefined;
+  const remote = remotes.find((candidate) => candidate.name === "origin") ?? (remotes.length === 1 ? remotes[0] : undefined);
+  if (!remote) return undefined;
+  return Object.freeze({ ref: `refs/remotes/${remote.name}/${branch}`, label: `${remote.name}/${branch}` });
+}
+
+/**
+ * The sentence a screen reader hears where sighted readers see `↑2 ↓1`.
+ *
+ * Arrows are not text. The glyph pair is `aria-hidden` and this is its only
+ * carrier, so it has to survive being read alone — including the bounded case,
+ * where a floor announced as a total would be worse than saying nothing.
+ */
+export function workbenchDivergenceSentence(divergence: WorkbenchBranchDivergence, upstream: string): string {
+  const bound = divergence.bounded ? "at least " : "";
+  const ahead = `${bound}${String(divergence.ahead)} ${divergence.ahead === 1 ? "commit" : "commits"} to push`;
+  const behind = `${bound}${String(divergence.behind)} to pull`;
+  if (divergence.ahead === 0 && divergence.behind === 0) return `Up to date with ${upstream}`;
+  if (divergence.behind === 0) return `${ahead} to ${upstream}`;
+  if (divergence.ahead === 0) return `${bound}${String(divergence.behind)} ${divergence.behind === 1 ? "commit" : "commits"} to pull from ${upstream}`;
+  return `${ahead}, ${behind}, against ${upstream}`;
+}
+
+/** `20+` where the read saturated, a plain number where it did not. See `workbenchHistoryCount`. */
+function divergenceCount(value: number, bounded: boolean): string {
+  return bounded && value >= WORKBENCH_DIVERGENCE_DEPTH ? `${String(value)}+` : String(value);
+}
+
+function SourceControlRail({ repositories, repositoryId, selectRepository, worktree, selectWorktree, history, historyMessage, upstream, loading, refresh, openDiff, mutate, commitMessage, setCommitMessage, onOpenRepositoryManager }: {
   repositories: readonly GitRepositorySnapshot[];
   repositoryId: string;
   selectRepository(id: string): void;
@@ -2483,6 +2600,7 @@ function SourceControlRail({ repositories, repositoryId, selectRepository, workt
   selectWorktree(id: string): void;
   history: readonly GitCommitSummary[];
   historyMessage: string;
+  upstream?: Readonly<{ label: string; divergence: WorkbenchBranchDivergence }>;
   loading: boolean;
   refresh(): void;
   openDiff(document: WorkbenchStatusDiffDocument | WorkbenchHistoryDiffDocument, mode: WorkbenchDocumentOpenMode): void;
@@ -2506,16 +2624,76 @@ function SourceControlRail({ repositories, repositoryId, selectRepository, workt
    */
   const [discarding, setDiscarding] = useState<string>();
   const discardCopy = discarding ? workbenchDiscardConfirmation(discarding) : undefined;
+  const changed = worktree?.status.length ?? 0;
   return <div class="workspace-scm">
-    <label>Repository<MenuSelect placement="down" ariaLabel="Workspace repository" value={repository?.id ?? ""} options={repositories.map((item) => ({ value: item.id, label: item.name }))} onChange={selectRepository} /></label>
+    {/*
+      One row: the repository, the reload, and the way to everything else.
+      Two full words in a `1fr 1fr` grid put "Advanced source controls" — 24
+      characters — into a 143px cell, so it wrapped to two lines inside a 44px
+      button and the block cost 93px before a single changed path. The words
+      survive verbatim as the accessible names; `aria-name-contract.test.ts`
+      and `workspace-source-controls.spec.ts` both read them, and so does
+      anyone who cannot see the glyph.
+    */}
+    <div class="scm-bar">
+      <MenuSelect placement="down" ariaLabel="Workspace repository" value={repository?.id ?? ""} options={repositories.map((item) => ({ value: item.id, label: item.name }))} onChange={selectRepository} />
+      <button class="scm-bar__action" type="button" aria-label="Refresh" aria-busy={loading ? "true" : undefined} title={loading ? "Refreshing…" : "Refresh repositories, status and history"} onClick={refresh} disabled={loading}><Icon name="refresh" size={16} /></button>
+      {onOpenRepositoryManager ? <button class="scm-bar__action" type="button" aria-label="Advanced source controls" title="Import, trust posture, branch checkout, worktrees, remote operations, full status selection, tags, and detailed history" onClick={onOpenRepositoryManager}><Icon name="settings" size={16} /></button> : null}
+    </div>
     {repository && repository.worktrees.length > 1 ? <label>Worktree<MenuSelect placement="down" ariaLabel="Workspace worktree" value={worktree?.id ?? ""} options={repository.worktrees.map((item) => ({ value: item.id, label: `${item.branch} · ${item.path}` }))} onChange={selectWorktree} /></label> : null}
-    <div class="scm-toolbar"><button type="button" onClick={refresh} disabled={loading}>{loading ? "Refreshing…" : "Refresh"}</button>{onOpenRepositoryManager ? <button type="button" title="Import, trust posture, branch checkout, worktrees, remote operations, full status selection, tags, and detailed history" onClick={onOpenRepositoryManager}>Advanced source controls</button> : null}</div>
-    <div class="scm-summary"><strong>{worktree?.branch ?? "No worktree"}</strong><span>{worktree?.status.length ?? 0} changes</span></div>
+    {/*
+      The repository row: branch, how far it has drifted from its upstream, the
+      head it is actually at, and the size of the working set. `head` was in
+      the workbench inventory and had no home on screen — the old summary
+      printed branch and a count and nothing that identified the commit those
+      changes are measured against.
+    */}
+    <div class="scm-branch">
+      <Icon name="branch" size={14} />
+      <strong>{worktree?.branch ?? "No worktree"}</strong>
+      {upstream ? <span class="scm-branch__sync" data-bounded={upstream.divergence.bounded ? "true" : undefined}>
+        <span aria-hidden="true">↑{divergenceCount(upstream.divergence.ahead, upstream.divergence.bounded)} ↓{divergenceCount(upstream.divergence.behind, upstream.divergence.bounded)}</span>
+        <span class="sr-only">{workbenchDivergenceSentence(upstream.divergence, upstream.label)}</span>
+      </span> : null}
+      {/* Twelve, because every other object id in this workbench — the diff
+          tab's label, its strip, the History row — is abbreviated to twelve.
+          Two shorthands for one commit on adjacent rows is two commits to
+          anyone scanning the column. */}
+      {worktree ? <code class="scm-branch__head">{worktree.head.slice(0, 12)}</code> : null}
+      <span class="scm-branch__count">{changed} {changed === 1 ? "change" : "changes"}</span>
+    </div>
     {!loading && !repository ? <div class="workspace-boundary">No Git repositories are connected to this workspace.</div> : null}
-    {staged.length ? <ScmGroup title="Staged" entries={staged} lane="staged" repository={repository} worktree={worktree} openDiff={openDiff} mutate={mutate} /> : null}
-    {staged.length > 1 ? <button type="button" onClick={() => { const next = operation("unstage", staged.map((entry) => entry.path)); if (next) void mutate(next); }}>Unstage all visible</button> : null}
-    {unstaged.length ? <ScmGroup title="Changes" entries={unstaged} lane="unstaged" repository={repository} worktree={worktree} openDiff={openDiff} mutate={mutate} discard={setDiscarding} /> : null}
-    {unstaged.length > 1 ? <button type="button" onClick={() => { const next = operation("stage", workbenchVisibleStagePaths(unstaged)); if (next) void mutate(next); }}>Stage all visible</button> : null}
+    {/*
+      The group's own verb, on the group's own header.
+      Two full-width word buttons stacked under the two lists, each a 24px
+      slab, and the reader had to work out which list "Stage all visible"
+      belonged to from its position. The names are unchanged — the inventory
+      requires "stage/unstage one or all visible paths" to keep a tested home,
+      and `+`/`−` on a header is only legible because the accessible name still
+      says the whole sentence. The `> 1` gate is unchanged too: with a single
+      path in a lane, its own row toggle already is the bulk action.
+    */}
+    {staged.length ? <ScmGroup
+      title="Staged"
+      entries={staged}
+      lane="staged"
+      repository={repository}
+      worktree={worktree}
+      openDiff={openDiff}
+      mutate={mutate}
+      bulk={staged.length > 1 ? { label: "Unstage all visible", glyph: "−", run: () => { const next = operation("unstage", staged.map((entry) => entry.path)); if (next) void mutate(next); } } : undefined}
+    /> : null}
+    {unstaged.length ? <ScmGroup
+      title="Changes"
+      entries={unstaged}
+      lane="unstaged"
+      repository={repository}
+      worktree={worktree}
+      openDiff={openDiff}
+      mutate={mutate}
+      discard={setDiscarding}
+      bulk={unstaged.length > 1 ? { label: "Stage all visible", glyph: "+", run: () => { const next = operation("stage", workbenchVisibleStagePaths(unstaged)); if (next) void mutate(next); } } : undefined}
+    /> : null}
     {discarding && discardCopy && repository && worktree ? <ConfirmDialog
       title={discardCopy.title}
       titleDetail={discarding}
@@ -2558,10 +2736,17 @@ function SourceControlRail({ repositories, repositoryId, selectRepository, workt
   </div>;
 }
 
-function ScmGroup({ title, entries, lane, repository, worktree, openDiff, mutate, discard }: { title: string; entries: readonly GitStatusEntry[]; lane: "staged" | "unstaged"; repository?: GitRepositorySnapshot; worktree?: GitWorktreeSnapshot; openDiff(document: WorkbenchStatusDiffDocument, mode: WorkbenchDocumentOpenMode): void; mutate(operation: GitOperation): void | Promise<void>; discard?(path: string): void }) {
-  return <section class="scm-group"><header><strong>{title}</strong><span>{entries.length}</span></header>{entries.map((entry) => {
+function ScmGroup({ title, entries, lane, repository, worktree, openDiff, mutate, discard, bulk }: { title: string; entries: readonly GitStatusEntry[]; lane: "staged" | "unstaged"; repository?: GitRepositorySnapshot; worktree?: GitWorktreeSnapshot; openDiff(document: WorkbenchStatusDiffDocument, mode: WorkbenchDocumentOpenMode): void; mutate(operation: GitOperation): void | Promise<void>; discard?(path: string): void; bulk?: Readonly<{ label: string; glyph: string; run: () => void }> }) {
+  return <section class="scm-group"><header><strong>{title}</strong>{bulk ? <button class="scm-group__bulk" type="button" aria-label={bulk.label} title={bulk.label} onClick={bulk.run}>{bulk.glyph}</button> : null}<span>{entries.length}</span></header>{entries.map((entry) => {
     const delta = lane === "staged" ? entry.index : entry.worktree;
     const conflicted = delta?.kind === "conflicted";
+    // Split on the raw Git path: status entries are repository-relative
+    // (`docs/architecture.md`), so the `/workspace`-rooted helpers would
+    // normalize a prefix onto them that this row must never print.
+    const cut = entry.path.lastIndexOf("/");
+    const folder = cut > 0 ? entry.path.slice(0, cut) : "";
+    const kind = conflicted ? "conflicted" : delta?.kind ?? "modified";
+    const status = `${lane === "staged" ? "Staged" : "Working"} ${kind}`;
     const document: WorkbenchStatusDiffDocument | undefined = repository && worktree ? {
       kind: "diff",
       source: "status",
@@ -2572,15 +2757,40 @@ function ScmGroup({ title, entries, lane, repository, worktree, openDiff, mutate
       scope: lane === "staged" ? "staged" : "worktree",
     } : undefined;
     return <div class="scm-row" key={`${lane}:${entry.path}`}>
+      {/*
+        The name is authored rather than assembled.
+        Splitting the path into a dimmed directory and a file name puts two
+        text nodes in the button, and the accessible-name algorithm joins them
+        with a space — `docs/ architecture.md` is not a path. So the exact path
+        is written once, here, and the status letter is decoration under it.
+        The tooltip leads with the path for the same reason: in a 15rem rail
+        the directory is the first thing elided.
+      */}
       <button
         type="button"
         disabled={!document}
-        title="Click previews this patch · Shift+Enter or double-click keeps it open"
+        aria-label={`${entry.path} · ${status}`}
+        title={`${entry.path} · Click previews this patch · Shift+Enter or double-click keeps it open`}
         aria-keyshortcuts="Enter Shift+Enter"
         onClick={() => { if (document) openDiff(document, "preview"); }}
         onDblClick={() => { if (document) openDiff(document, "pinned"); }}
         onKeyDown={(event) => { if (document && event.key === "Enter" && event.shiftKey) { event.preventDefault(); openDiff(document, "pinned"); } }}
-      ><span>{entry.path}</span><b>{conflicted ? "C" : delta?.kind === "added" ? "A" : delta?.kind === "deleted" ? "D" : delta?.kind === "renamed" ? "R" : "M"}</b></button>
+      >
+        {/*
+          The same mark Explorer draws for this path, on the row that says the
+          path changed. Source Control was the one list in the workbench
+          identifying a file by its characters alone — 250 of them at
+          `--fs-micro`, a wall of grey text where the neighbouring pane has
+          per-kind colour. `data-file-kind` is the hook `workspace-file-icon`'s
+          own tests read, so the two panes cannot drift.
+        */}
+        <WorkspaceFileIcon path={entry.path} />
+        {/* Path order, not VS Code's file-then-folder: the directory is dimmed
+            rather than moved, so what a sighted reader scans and what the
+            tooltip and label say are the same string in the same order. */}
+        <span class="scm-row__path">{folder ? <span class="scm-row__dir">{folder}/</span> : null}<span class="scm-row__file">{entry.path.slice(cut + 1)}</span></span>
+        <b data-delta={kind} aria-hidden="true">{deltaLetter(kind)}</b>
+      </button>
       <div>
         <button type="button" aria-label={`Open and keep ${lane} diff ${entry.path}`} title="Open and keep" disabled={!document} onClick={() => { if (document) openDiff(document, "pinned"); }}>↗</button>
         {/*
