@@ -69,6 +69,7 @@ export type ChutesTransportOptions = {
   maxNoncesPerInstance?: number;
   maxCachedNonces?: number;
   maxUsedNonces?: number;
+  maxInstanceAttempts?: number;
   maxNonceTtlMs?: number;
   nonceSafetyMs?: number;
   maxToolCalls?: number;
@@ -95,6 +96,7 @@ type ResolvedOptions = {
   maxNoncesPerInstance: number;
   maxCachedNonces: number;
   maxUsedNonces: number;
+  maxInstanceAttempts: number;
   maxNonceTtlMs: number;
   nonceSafetyMs: number;
   maxToolCalls: number;
@@ -142,6 +144,16 @@ const DEFAULTS: ResolvedOptions = {
   maxNoncesPerInstance: 32,
   maxCachedNonces: 8,
   maxUsedNonces: 2_048,
+  /*
+   * How many distinct instances one sealed request may be re-routed across
+   * before a 429 is reported as a capacity wait.
+   *
+   * Three, because each attempt spends a nonce and costs a full seal, and
+   * because the failure this covers is a saturated *instance* rather than a
+   * saturated chute — if three siblings are all full the chute genuinely has no
+   * room and a fourth seal buys a slower error rather than an answer.
+   */
+  maxInstanceAttempts: 3,
   maxNonceTtlMs: 120_000,
   nonceSafetyMs: 5_000,
   maxToolCalls: 128,
@@ -353,9 +365,34 @@ export class ChutesInferenceTransport implements InferenceTransport {
     // context. Ownership transfers to the caller only on the success return.
     let requestContext: E2eeRequestCryptoContext | undefined;
 
+    /*
+     * Instances that answered 429 for *this* request.
+     *
+     * `/e2e/invoke` is pinned to `X-Instance-Id` because the payload is sealed
+     * to that instance's public key, so the gateway cannot shed a saturated
+     * request to a sibling the way `llm.chutes.ai` sheds a completion. That
+     * re-routing has to happen here or it does not happen at all — which is why
+     * the same key and model answered 200 on the chat gateway and 429 here.
+     *
+     * Retrying is safe precisely because 429 means the instance refused before
+     * running anything: no inference happened, nothing was billed, and the
+     * sealed body never reached a model. The retry spends a *different* nonce
+     * against a *different* instance; it is a new request, not a replay.
+     */
+    const saturated = new Set<string>();
+    /** One safe retry for a nonce rejection, independent of the instance budget. */
+    let nonceRetried = false;
+
     try {
-      for (let attempt = 1; attempt <= 2; attempt += 1) {
-        const lease = await this.acquireLease(apiKey, chuteId, poolKey, signal);
+      for (let attempt = 1; attempt <= this.options.maxInstanceAttempts; attempt += 1) {
+        const lease = await this.acquireLease(apiKey, chuteId, poolKey, signal, saturated);
+        if (!lease) {
+          throw new ChutesTransportError(
+            "HTTP_ERROR",
+            `Chutes E2EE invoke failed with HTTP 429: every instance of chute ${chuteId} that this session could reach is at capacity (tried ${saturated.size}). Encrypted inference is pinned to one instance per request and cannot be re-routed the way an unencrypted completion can, so this is a capacity wait rather than a fault.`,
+            { status: 429, operation: "invoke" },
+          );
+        }
         const attestation = await this.checkAttestation(lease, signal);
 
         requestContext = await abortable(
@@ -408,7 +445,12 @@ export class ChutesInferenceTransport implements InferenceTransport {
         safeFreeRequest(requestContext);
         requestContext = undefined;
         if (isSafeNonceRejection(response, errorBody)) {
-          if (attempt === 1) {
+          // Counted on its own, not off the attempt index. The attempt budget
+          // is now wider than two so a saturated instance can be re-routed
+          // around, and a nonce rejection must still get exactly one safe
+          // retry — reusing `attempt` here would silently widen it too.
+          if (!nonceRetried) {
+            nonceRetried = true;
             this.leasePools.delete(poolKey);
             continue;
           }
@@ -419,15 +461,16 @@ export class ChutesInferenceTransport implements InferenceTransport {
           );
         }
         if (response.status === 429) {
-        // Named apart from the generic HTTP error because it is the one status
-        // whose meaning differs between this route and the shared inference
-        // gateway. `/e2e/invoke` is pinned to the single instance the nonce was
-        // issued against (`X-Instance-Id`), so it cannot be shed to a sibling
-        // the way `llm.chutes.ai` sheds a chat completion — which is why the
-        // same key and model can answer 200 there and 429 here.
+          // Not a fault and not a rate limit on the credential: this one
+          // instance is full. Re-route by leasing a different one, which is the
+          // job `llm.chutes.ai` does for unencrypted completions and that
+          // nothing can do for a payload sealed to a specific instance.
+          saturated.add(lease.instanceId);
+          this.leasePools.delete(poolKey);
+          if (attempt < this.options.maxInstanceAttempts) continue;
           throw new ChutesTransportError(
             "HTTP_ERROR",
-            `Chutes E2EE invoke failed with HTTP 429. This route is pinned to instance ${lease.instanceId} of chute ${chuteId} and cannot be re-routed to another instance the way an unencrypted completion can.`,
+            `Chutes E2EE invoke failed with HTTP 429 on ${saturated.size} instance(s) of chute ${chuteId}, most recently ${lease.instanceId}. Encrypted inference is pinned to one instance per request and cannot be re-routed the way an unencrypted completion can, so this is a capacity wait rather than a fault.`,
             { status: 429, detail: errorBody.slice(0, 500), operation: "invoke" },
           );
         }
@@ -796,16 +839,32 @@ export class ChutesInferenceTransport implements InferenceTransport {
     return models;
   }
 
+  /**
+   * A lease on an instance that is not in `avoid`.
+   *
+   * `avoid` carries the instances that have already answered 429 for this
+   * request. Returns `undefined` — rather than looping — once a fresh discovery
+   * round has failed to produce an unavoided lease, because at that point every
+   * instance the chute has is either saturated or already tried, and spinning
+   * would turn a capacity refusal into a hang.
+   */
   private async acquireLease(
     apiKey: string,
     chuteId: string,
     poolKey: string,
     signal: AbortSignal,
-  ): Promise<InstanceLease> {
+    avoid?: ReadonlySet<string>,
+  ): Promise<InstanceLease | undefined> {
+    let discovered = false;
     for (;;) {
       this.pruneNonces(poolKey);
-      const lease = this.consumeLease(poolKey);
+      const lease = this.consumeLease(poolKey, avoid);
       if (lease) return lease;
+      // One discovery round is the whole budget when instances are being
+      // avoided: discovery re-reads the same instance list, so a second round
+      // cannot produce an instance the first did not.
+      if (discovered && avoid?.size) return undefined;
+      discovered = true;
 
       let flight = this.pendingDiscovery.get(poolKey);
       if (!flight) {
@@ -923,23 +982,45 @@ export class ChutesInferenceTransport implements InferenceTransport {
     this.leasePools.set(poolKey, leases);
   }
 
-  private consumeLease(poolKey: string): InstanceLease | undefined {
+  /**
+   * Take one unspent, unexpired lease, optionally skipping named instances.
+   *
+   * A skipped lease is *deferred*, not consumed: its nonce is still good, and
+   * the instance it belongs to is only saturated for this request. Dropping it
+   * would spend the pool down every time one instance was busy, which is the
+   * opposite of what the interleaving above is for.
+   */
+  private consumeLease(poolKey: string, avoid?: ReadonlySet<string>): InstanceLease | undefined {
     const pool = this.leasePools.get(poolKey);
+    const deferred: InstanceLease[] = [];
+    const restore = () => {
+      if (!deferred.length) return;
+      const current = this.leasePools.get(poolKey);
+      if (current) current.unshift(...deferred);
+      else this.leasePools.set(poolKey, deferred);
+    };
     while (pool?.length) {
       const lease = pool.shift() as InstanceLease;
       const nonceKey = `${poolKey}:${lease.instanceId}:${lease.nonce}`;
       if (lease.expiresAt <= this.now() || this.usedNonces.has(nonceKey)) continue;
+      if (avoid?.has(lease.instanceId)) {
+        deferred.push(lease);
+        continue;
+      }
       if (this.usedNonces.size >= this.options.maxUsedNonces) {
+        restore();
         throw new ChutesTransportError(
           "NONCE_CACHE_EXHAUSTED",
           "The bounded live nonce-use ledger is full; refusing to risk a v1 nonce reuse.",
         );
       }
       this.usedNonces.set(nonceKey, lease.expiresAt);
-      if (!pool.length) this.leasePools.delete(poolKey);
+      restore();
+      if (!this.leasePools.get(poolKey)?.length) this.leasePools.delete(poolKey);
       return lease;
     }
-    this.leasePools.delete(poolKey);
+    restore();
+    if (!this.leasePools.get(poolKey)?.length) this.leasePools.delete(poolKey);
     return undefined;
   }
 

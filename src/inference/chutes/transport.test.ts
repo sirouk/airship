@@ -1102,15 +1102,63 @@ describe("ChutesInferenceTransport.invokeJson", () => {
 
   /*
    * The 429 the owner saw on this route while the same key and model answered
-   * 200 on `llm.chutes.ai`. The gateway load-balances a completion across a
-   * chute's instances; `/e2e/invoke` cannot, because the body is sealed to the
-   * one instance the nonce was issued against. The error has to say that, or the
-   * next reader concludes the credential is bad.
+   * 200 on `llm.chutes.ai`.
+   *
+   * Measured against real Chutes, the body is
+   * `{"detail":"Instance is at maximum capacity, try again later"}` — one
+   * *instance* is full, not the credential and not the chute. The shared
+   * gateway load-balances a completion across siblings; `/e2e/invoke` cannot,
+   * because the body is sealed to the one instance the nonce was issued
+   * against. So the re-routing has to happen client-side or it does not happen
+   * at all, and for a long time it did not: this transport threw on the first
+   * 429 while an idle sibling sat one lease away.
    */
-  it("says why a 429 here is not a 429 on the shared inference gateway", async () => {
+  it("re-routes a saturated instance to a sibling instead of failing the turn", async () => {
+    const seen: string[] = [];
+    const fetch = vi.fn<FetchLike>(async (input, init) => {
+      if (String(input).includes("/e2e/instances/")) {
+        return jsonResponse({
+          nonce_expires_in: 55,
+          instances: [
+            { instance_id: "instance-full", e2e_pubkey: "public-key-a", nonces: ["nonce-a"] },
+            { instance_id: "instance-free", e2e_pubkey: "public-key-b", nonces: ["nonce-b"] },
+          ],
+        });
+      }
+      const instanceId = header(init, "X-Instance-Id") ?? "";
+      seen.push(instanceId);
+      if (instanceId === "instance-full") return jsonResponse({ detail: "Instance is at maximum capacity, try again later" }, 429);
+      return new Response(new Uint8Array([9, 9, 9]), { status: 200 });
+    });
+    const transport = new ChutesInferenceTransport({
+      apiKey: "cak_memory-only",
+      fetch,
+      crypto: new MockCrypto({}),
+      attestationMode: "optional",
+    });
+
+    // MockRequestContext.decrypt_response answers "{}"; the point here is that
+    // it resolves at all rather than throwing on the first 429.
+    await expect(transport.invokeJson({ chuteId: "chute-embed", path: "/v1/embeddings", payload: {} }))
+      .resolves.toEqual({});
+
+    // The saturated instance is tried once and then avoided; the answer comes
+    // from the sibling. Retrying the same instance would be the bug this fixes.
+    expect(seen).toEqual(["instance-full", "instance-free"]);
+  });
+
+  it("reports a capacity wait, not a fault, once every instance is full", async () => {
     const fetch = vi.fn<FetchLike>(async (input) => {
-      if (String(input).includes("/e2e/instances/")) return instanceResponse(["nonce-a"]);
-      return jsonResponse({ detail: "too many requests" }, 429);
+      if (String(input).includes("/e2e/instances/")) {
+        return jsonResponse({
+          nonce_expires_in: 55,
+          instances: [
+            { instance_id: "instance-a", e2e_pubkey: "public-key-a", nonces: ["nonce-a1", "nonce-a2"] },
+            { instance_id: "instance-b", e2e_pubkey: "public-key-b", nonces: ["nonce-b1", "nonce-b2"] },
+          ],
+        });
+      }
+      return jsonResponse({ detail: "Instance is at maximum capacity, try again later" }, 429);
     });
     const transport = new ChutesInferenceTransport({
       apiKey: "cak_memory-only",
@@ -1124,10 +1172,14 @@ describe("ChutesInferenceTransport.invokeJson", () => {
       .then(() => undefined, (error: unknown) => error as ChutesTransportError);
 
     expect(failure).toMatchObject({ code: "HTTP_ERROR", status: 429, operation: "invoke" });
-    expect(failure?.message).toContain("pinned to instance instance-a");
-    // A 429 is not a nonce rejection, so it is not retried into a second spent
-    // nonce.
-    expect(invokeCalls(fetch)).toHaveLength(1);
+    // The message must still explain why this route behaves differently from
+    // the shared gateway, or the next reader concludes the credential is bad.
+    expect(failure?.message).toContain("cannot be re-routed");
+    expect(failure?.message).toContain("capacity wait rather than a fault");
+    // Bounded. Every attempt spends a nonce and a full seal, so a saturated
+    // chute must not turn into an unbounded retry storm.
+    expect(invokeCalls(fetch).length).toBeLessThanOrEqual(3);
+    expect(invokeCalls(fetch).length).toBeGreaterThan(1);
   });
 
   it("frees the sealed request context when the encrypted answer is unreadable", async () => {

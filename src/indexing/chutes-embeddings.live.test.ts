@@ -39,9 +39,9 @@ async function liveAuthority(): Promise<ConfidentialEmbeddingAuthority> {
     attestationMode: "optional",
     crypto: new WasmChutesE2eeCrypto({ module_or_path: wasm }),
   });
-  // Exactly the wiring `app.tsx` installs, so this exercises the shipped seam
-  // rather than a test-only one.
-  return (request, signal) => transport.invokeJson(request, signal);
+  // Exactly the wiring `app.tsx:3419` installs, so this exercises the shipped
+  // seam rather than a test-only one.
+  return (request) => transport.invokeJson(request, request.signal);
 }
 
 liveDescribe("live confidential embeddings", () => {
