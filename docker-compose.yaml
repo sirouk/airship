@@ -1,0 +1,50 @@
+# Airship behind Caddy.
+#
+# One service, not two. The proxy projects in this fleet run their application
+# and put Caddy in front of it; Airship has no application process — it is a
+# static bundle and a browser — so Caddy serves it directly rather than reverse
+# proxying to a second web server that would only hand it the same files.
+#
+# Everything Vite inlines is a *build* argument. A `VITE_*` value passed as a
+# runtime environment variable reaches nothing, because by then the bundle is
+# already compiled; changing the domain means rebuilding, which `deploy.sh`
+# does for you.
+
+services:
+  airship:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        AIRSHIP_PUBLIC_BASE_PATH: ${AIRSHIP_PUBLIC_BASE_PATH:-/}
+        VITE_AIRSHIP_PUBLIC_ORIGIN: ${VITE_AIRSHIP_PUBLIC_ORIGIN:-}
+        VITE_GOOGLE_CLIENT_ID: ${VITE_GOOGLE_CLIENT_ID:-}
+        VITE_AIRSHIP_CHUTES_PUBLIC_CLIENT_ID: ${VITE_AIRSHIP_CHUTES_PUBLIC_CLIENT_ID:-}
+    container_name: airship
+    environment:
+      CADDY_DOMAIN: ${CADDY_DOMAIN:-localhost}
+      CADDY_PORT: ${CADDY_PORT:-443}
+      CADDY_TLS: ${CADDY_TLS:-true}
+    ports:
+      - "${CADDY_PORT:-443}:${CADDY_PORT:-443}"
+      # ACME HTTP-01 challenges. Harmless when CADDY_TLS=false, and the
+      # certificate cannot be issued without it when TLS is on.
+      - "80:80"
+    volumes:
+      # Certificates and OCSP staples. Without this every restart re-requests
+      # from Let's Encrypt and walks into the rate limit.
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+    healthcheck:
+      # Asks Caddy for the app over loopback inside the container, so the check
+      # does not depend on public DNS or on a certificate having been issued.
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:80/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  caddy_data:
+  caddy_config:

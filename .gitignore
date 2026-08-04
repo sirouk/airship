@@ -35,6 +35,8 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+# The deployment template is meant to be committed; `.env*` above would eat it.
+!.env.sample
 
 # vercel
 .vercel
