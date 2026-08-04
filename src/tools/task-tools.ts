@@ -1,5 +1,5 @@
 import { objectArguments, requiredString } from "./schema";
-import type { JsonValue, Tool } from "../core/contracts";
+import type { JsonValue, TaskPlanEntry, Tool } from "../core/contracts";
 import type { WorkspacePort } from "../workspace/contracts";
 import type { ToolRegistry } from "./registry";
 
@@ -72,6 +72,17 @@ export function registerTaskTools(registry: ToolRegistry, workspace: WorkspacePo
 
   registry.register(listTasks);
   registry.register(updateTasks);
+  registry.attachTaskPlanProvider({
+    async openTasks(context): Promise<readonly TaskPlanEntry[]> {
+      context.signal.throwIfAborted();
+      const stored = await workspace.read(TASK_PATH);
+      // Throws on a malformed plan exactly as `list_tasks` does. The turn loop
+      // turns that into a note telling the model its plan file is unreadable,
+      // which is the one thing it can act on; swallowing it here would leave a
+      // compaction silently forgetting a plan that is sitting right there.
+      return stored ? parseTasks(stored.content).filter((task) => task.status !== "completed") : [];
+    },
+  });
 }
 
 function parseTasks(content: string): AirshipTask[] {

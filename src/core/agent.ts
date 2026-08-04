@@ -7,9 +7,11 @@ import type {
   InferenceTransport,
   JsonValue,
   SessionManifest,
+  TaskPlanEntry,
   ToolCall,
+  ToolContext,
 } from "./contracts";
-import { sha256, stableStringify } from "./hash";
+import { sha256, stableStringify, toolArgumentsDigest } from "./hash";
 import { randomUuid } from "./id";
 import type { DurableEvent, EventDraft } from "./journal";
 import { EventJournal } from "./journal";
@@ -39,6 +41,7 @@ import {
   verifyForkContextSeed,
   type ForkContextScope,
 } from "./fork-context";
+import { withInferenceRetry, type InferenceRetryPolicy } from "./inference-retry";
 import {
   calibrateBytesPerToken,
   contextCompressionOptionsFromPolicy,
@@ -74,6 +77,12 @@ export type RunTurnOptions = {
    * only by the immutable session contextPolicy; a supplied value must match it.
    */
   contextCompression?: ContextCompressionOptions;
+  /**
+   * Bounds the in-step redelivery of a transient provider refusal. Omitted, the
+   * turn uses DEFAULT_INFERENCE_RETRY_POLICY; supplying `maxAttempts: 1` opts a
+   * caller out entirely.
+   */
+  retry?: InferenceRetryPolicy;
   onSignal?: (signal: AgentSignal) => void;
 };
 
@@ -85,6 +94,17 @@ export type TurnResult = {
 };
 
 const MAX_TOOL_CALLS_PER_STEP = 64;
+/**
+ * Repeating a call that has already failed with byte-identical arguments is the
+ * cheapest way to spend a 32-step turn on nothing. The first threshold says so
+ * in the only channel the model reads — the tool message itself — and the
+ * second ends the turn rather than letting it burn to the step limit.
+ *
+ * Two is deliberately early: one retry after a transient failure is legitimate,
+ * a third attempt is not, and the warning costs a couple of hundred bytes.
+ */
+const REPEATED_FAILURE_WARN_AT = 2;
+const REPEATED_FAILURE_STOP_AT = 5;
 /**
  * Tokens held back from the in-loop tool budget so a step that fills the window
  * still leaves room for the assistant reply that has to read the results.
@@ -105,20 +125,33 @@ const MAX_OPERATION_ID_CHARS = 512;
 const MAX_ASSISTANT_RESPONSE_BYTES = 4 * 1024 * 1024;
 const MAX_INFERENCE_EVENTS_PER_STEP = 100_000;
 const UNSAFE_OPERATION_ID = /[\u0000-\u001F\u007F]/u;
+/**
+ * Escaped rather than literal on purpose: a raw NUL in a source file makes the
+ * whole file diff as binary, and a change nobody can read is a change nobody
+ * reviewed.
+ */
+const CONTROL_CHARACTERS = /[\u0000-\u001F\u007F]+/gu;
 const UTF8_ENCODER = new TextEncoder();
 const UTF8_DECODER = new TextDecoder();
 
 export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
   const maxSteps = options.maxSteps ?? 8;
+  /*
+   * Every provider call this turn makes — each step and the compaction
+   * summarizer — goes through the retrying view, not the raw transport. It
+   * reports the same `id` and `posture`, so the pin checks below are checking
+   * the same authority they always were.
+   */
+  const transport = withInferenceRetry(options.transport, options.retry);
   const session = await options.journal.getSession(options.sessionId, options.signal);
   if (!session) throw new Error(`Unknown session: ${options.sessionId}`);
   assertSupportedTurnManifest(session.manifest);
   if (session.manifest.protocolVersion === 1) {
     throw new Error("Protocol-v1 sessions are replay-only; fork the session before starting a new turn.");
   }
-  if (session.manifest.providerId !== options.transport.id) {
+  if (session.manifest.providerId !== transport.id) {
     throw new Error(
-      `Session provider is pinned to ${session.manifest.providerId}; fork the session to use ${options.transport.id}.`,
+      `Session provider is pinned to ${session.manifest.providerId}; fork the session to use ${transport.id}.`,
     );
   }
   const currentToolDigest = await sha256(
@@ -147,7 +180,7 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
     sessionId: options.sessionId,
     manifest: session.manifest,
     tools: options.tools,
-    transportPosture: options.transport.posture,
+    transportPosture: transport.posture,
     signal: options.signal,
   });
 
@@ -257,7 +290,7 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
         options: pinnedContextCompression,
         ...(session.manifest.contextPolicy!.compression.summarizer.mode === "inference-transport" ? {
           summarizer: createInferenceTransportContextSummarizer({
-            transport: options.transport,
+            transport,
             model: session.manifest.model,
             sessionId: session.id,
           }),
@@ -274,9 +307,46 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
         turnId,
         payload: contextSummary as unknown as JsonValue,
       }]);
+      // A compaction is the one moment the plan can fall out of the prompt: the
+      // file survives by construction, but nothing put it back, so a long turn
+      // had to remember to call `list_tasks` in order to remember what it was
+      // doing. Restated here it costs one bounded message per compaction.
+      const planNote = await taskPlanNotePayload(options.tools, options.sessionId, options.signal);
+      if (planNote) {
+        await append([{ type: TASK_PLAN_NOTE_EVENT_TYPE, turnId, payload: planNote }]);
+      }
     }
 
     let turnBaselineTokens: number | undefined;
+    /*
+     * Keyed on `(toolName, argumentsDigest, wasError)` for the whole turn, using
+     * the broker's own definition of identical arguments. Only error outcomes
+     * are counted, so the `error` component is pinned rather than dropped: a
+     * call that succeeded twice and then failed starts its failure count at one.
+     */
+    const repeatedFailures = new Map<string, number>();
+    let guardrailStop: string | undefined;
+    /**
+     * Record one failed outcome and return the guidance to append to the tool
+     * message the model will read. Metadata is not enough — `payload.content` is
+     * the entire tool message — so the warning has to ride in the content.
+     */
+    const noteFailedOutcome = async (call: ToolCall): Promise<string> => {
+      const digest = await toolArgumentsDigest(call.arguments);
+      const key = `${call.name.length}:${call.name}|${digest}|error`;
+      const count = (repeatedFailures.get(key) ?? 0) + 1;
+      repeatedFailures.set(key, count);
+      if (count >= REPEATED_FAILURE_STOP_AT) {
+        guardrailStop = `${call.name} failed ${count} times in this turn with identical arguments. `
+          + "The turn was stopped instead of spending its remaining steps on a call that is not going to "
+          + "start succeeding; change the arguments or the approach and send it again.";
+        return "";
+      }
+      if (count < REPEATED_FAILURE_WARN_AT) return "";
+      return `\n\n[Airship guardrail: ${call.name} has now failed ${count} times in this turn with identical `
+        + "arguments, so repeating it unchanged will fail again. Change the arguments, use a different tool, "
+        + `or tell the person what is blocking you. This turn stops at ${REPEATED_FAILURE_STOP_AT} identical failures.]`;
+    };
     for (let step = 0; step < maxSteps; step += 1) {
       throwIfAborted(options.signal);
       const history = await options.journal.readEvents(options.sessionId, 0, options.signal);
@@ -347,9 +417,9 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
           operationId: requestId,
           payload: {
             step,
-            providerId: options.transport.id,
+            providerId: transport.id,
             model: session.manifest.model,
-            posture: options.transport.posture,
+            posture: transport.posture,
             requestDigest,
             idempotencyKey,
           },
@@ -361,7 +431,7 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
       const toolCalls: ToolCall[] = [];
       let completed: Extract<Awaited<ReturnType<typeof collectInference>>, { completed: true }> | undefined;
       const collected = await collectInference(
-        options.transport,
+        transport,
         {
           requestId,
           sessionId: options.sessionId,
@@ -411,61 +481,119 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
         ];
         await append(drafts);
 
-        for (const call of toolCalls) {
+        for (let cursor = 0; cursor < toolCalls.length;) {
           throwIfAborted(options.signal);
-          const context = {
-            sessionId: options.sessionId,
-            turnId,
-            operationId: call.id,
-            signal: options.signal,
-            capabilityTier: session.manifest.capabilityTier,
-            onOutput(chunk: Readonly<{ stream: "stdout" | "stderr" | "combined"; text: string }>) {
-              notifySignal(options.onSignal, { type: "tool-output", turnId, operationId: call.id, ...chunk });
-            },
-          };
-          let decision: "allow" | "deny";
-          try {
-            decision = await options.tools.review(call.name, call.arguments, context, options.approvalPolicy);
-          } catch (error) {
-            await append([
-              {
-                type: "tool.failed",
-                turnId,
-                operationId: call.id,
-                payload: { callId: call.id, name: call.name, content: errorMessage(error) },
-              },
-            ]);
-            continue;
-          }
-          const provenance = approvalProvenance(options.approvalPolicy, context);
-          if (decision === "deny") {
-            await append([
-              {
-                type: "tool.denied",
-                turnId,
-                operationId: call.id,
-                payload: { callId: call.id, name: call.name, content: `Permission denied for ${call.name}.`, approval: provenance ?? null },
-              },
-            ]);
-            continue;
-          }
-          await append([
-            {
-              type: "tool.approved",
+          const batch = readEffectBatch(toolCalls, cursor, options.tools);
+          cursor += batch.length;
+          /*
+           * Phase 1 — review, strictly in call order, one at a time. Nothing
+           * here is parallelised: a person answering an approval prompt must be
+           * asked the same questions in the same order they would have been
+           * asked serially, and the journal has to read the same way too.
+           */
+          const admitted: { call: ToolCall; context: ToolContext }[] = [];
+          for (const call of batch) {
+            const context = {
+              sessionId: options.sessionId,
               turnId,
               operationId: call.id,
-              payload: { callId: call.id, name: call.name, approval: provenance ?? null },
-            },
-          ]);
-          notifySignal(options.onSignal, { type: "status", turnId, status: `running ${call.name}` });
-          try {
-            const execution = await options.tools.executeApproved(call.name, call.arguments, context);
+              signal: options.signal,
+              capabilityTier: session.manifest.capabilityTier,
+              onOutput(chunk: Readonly<{ stream: "stdout" | "stderr" | "combined"; text: string }>) {
+                notifySignal(options.onSignal, { type: "tool-output", turnId, operationId: call.id, ...chunk });
+              },
+            };
+            let decision: "allow" | "deny";
+            try {
+              decision = await options.tools.review(call.name, call.arguments, context, options.approvalPolicy);
+            } catch (error) {
+              await append([
+                {
+                  type: "tool.failed",
+                  turnId,
+                  operationId: call.id,
+                  payload: { callId: call.id, name: call.name, content: `${errorMessage(error)}${await noteFailedOutcome(call)}` },
+                },
+              ]);
+              continue;
+            }
+            const provenance = approvalProvenance(options.approvalPolicy, context);
+            if (decision === "deny") {
+              // A denial counts as a failed outcome. Re-asking for the same
+              // denied call is the loop with the highest cost of all, because
+              // every lap of it interrupts a person who already answered.
+              await append([
+                {
+                  type: "tool.denied",
+                  turnId,
+                  operationId: call.id,
+                  payload: {
+                    callId: call.id,
+                    name: call.name,
+                    content: `Permission denied for ${call.name}.${await noteFailedOutcome(call)}`,
+                    approval: provenance ?? null,
+                  },
+                },
+              ]);
+              continue;
+            }
+            await append([
+              {
+                type: "tool.approved",
+                turnId,
+                operationId: call.id,
+                payload: { callId: call.id, name: call.name, approval: provenance ?? null },
+              },
+            ]);
+            notifySignal(options.onSignal, { type: "status", turnId, status: `running ${call.name}` });
+            admitted.push({ call, context });
+          }
+          /*
+           * Phase 2 — the only thing that overlaps. Six `read_file` calls used
+           * to cost six sequential round trips through review and execute for
+           * no reason: they declare `effect: "read"`, so none of them can
+           * observe another's outcome. `allSettled`, not `all`, because one
+           * rejection must not discard five results that already landed.
+           */
+          const outcomes = await Promise.allSettled(
+            admitted.map(({ call, context }) => options.tools.executeApproved(call.name, call.arguments, context)),
+          );
+          /*
+           * Phase 3 — journal in call order, whatever order they finished in.
+           * The transcript the model reads, and the byte budget each result is
+           * bounded against, must not depend on which disk read won a race.
+           */
+          for (let slot = 0; slot < admitted.length; slot += 1) {
+            const call = admitted[slot]!.call;
+            const outcome = outcomes[slot]!;
+            if (outcome.status === "rejected") {
+              await append([
+                {
+                  type: "tool.failed",
+                  turnId,
+                  operationId: call.id,
+                  payload: {
+                    callId: call.id,
+                    name: call.name,
+                    content: `${errorMessage(outcome.reason)}${await noteFailedOutcome(call)}`,
+                  },
+                },
+              ]);
+              continue;
+            }
+            const execution = outcome.value;
             // A single verbose result must not cost the user the whole turn. What
             // is stored is exactly what the model will read, and the marker plus
             // metadata state that the tail was dropped.
             const bounded = boundToolResultContent(execution.content, remainingToolOutputBytes);
+            // Appended after the bound, not before it: a guardrail warning that
+            // the truncator can eat is a guardrail the model never sees.
+            const guidance = execution.isError === true ? await noteFailedOutcome(call) : "";
             if (remainingToolOutputBytes !== undefined) {
-              remainingToolOutputBytes = Math.max(0, remainingToolOutputBytes - bounded.retainedBytes);
+              remainingToolOutputBytes = Math.max(
+                0,
+                remainingToolOutputBytes - bounded.retainedBytes - UTF8_ENCODER.encode(guidance).byteLength,
+              );
             }
             await append([
               {
@@ -475,7 +603,7 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
                 payload: {
                   callId: call.id,
                   name: call.name,
-                  content: bounded.content,
+                  content: `${bounded.content}${guidance}`,
                   isError: execution.isError ?? false,
                   metadata: bounded.truncated
                     ? {
@@ -488,17 +616,12 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
                 },
               },
             ]);
-          } catch (error) {
-            await append([
-              {
-                type: "tool.failed",
-                turnId,
-                operationId: call.id,
-                payload: { callId: call.id, name: call.name, content: errorMessage(error) },
-              },
-            ]);
           }
         }
+        // Thrown after the batch, never inside it. Stopping mid-batch would
+        // leave a declared tool call with no tool message answering it, and a
+        // dangling call is a history every provider rejects.
+        if (guardrailStop) throw new Error(guardrailStop);
         continue;
       }
 
@@ -507,11 +630,11 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
       }
       const responseDigest = await sha256(content);
       const receipt = completed.receipt
-        ? finalizeProviderReceipt(completed.receipt, options.transport.id, requestDigest, responseDigest)
+        ? finalizeProviderReceipt(completed.receipt, transport.id, requestDigest, responseDigest)
         : createLocalReceipt({
             sessionId: options.sessionId,
             turnId,
-            provider: options.transport.id,
+            provider: transport.id,
             model: session.manifest.model,
             requestDigest,
             responseDigest,
@@ -646,11 +769,121 @@ async function prepareLiveEnvironment(args: Readonly<{
 }
 
 /**
+ * The journal record of the work plan restated into the prompt after a
+ * compaction. Named here beside the renderer that is the only thing allowed to
+ * turn it into prompt text, because the turn loop writes it and the session
+ * audit has to reproduce the exact message it became.
+ */
+export const TASK_PLAN_NOTE_EVENT_TYPE = "turn.plan.restated";
+/** Bounds what one note can cost; the plan itself already caps at 64 tasks. */
+const MAX_PLAN_NOTE_TASKS = 16;
+const MAX_PLAN_NOTE_CONTENT_CHARS = 160;
+
+async function taskPlanNotePayload(
+  tools: ToolRegistry,
+  sessionId: string,
+  signal: AbortSignal,
+): Promise<JsonValue | undefined> {
+  const provider = tools.getTaskPlanProvider();
+  if (!provider) return undefined;
+  let tasks: readonly TaskPlanEntry[];
+  try {
+    tasks = await provider.openTasks({ sessionId, signal });
+  } catch (error) {
+    if (signal.aborted || isAbortError(error)) throw error;
+    // The plan file is the model's own to repair, and a turn that dies because
+    // it wrote bad JSON into it cannot repair anything. Say what happened, in
+    // the channel that can act on it.
+    return { unreadable: errorMessage(error) };
+  }
+  if (!tasks.length) return undefined;
+  return {
+    // The true open count, carried separately from the bounded list.
+    //
+    // Without it the note said "These 16 item(s) are still open in your own
+    // plan" while 30 were open — a false sentence in the one channel the model
+    // reads, from the change that restates the plan so the model can trust it.
+    // The cap is about note size; the count is about the plan, and conflating
+    // them made the note lie about the thing it exists to report.
+    openTaskCount: tasks.length,
+    tasks: tasks.slice(0, MAX_PLAN_NOTE_TASKS).map((task) => ({
+      id: task.id,
+      content: task.content,
+      status: task.status,
+    })),
+  } as unknown as JsonValue;
+}
+
+/**
+ * Render a plan-note payload into the exact prompt text it becomes, or
+ * `undefined` if the payload is not a canonical note.
+ *
+ * Exported because `auditSessionHistory` rebuilds the transcript this turn was
+ * digested over and has to produce byte-identical text; two renderers would
+ * make every compacting turn report a request-digest mismatch.
+ */
+export function canonicalTaskPlanNote(payload: unknown): string | undefined {
+  const fields = record(payload);
+  if (!fields) return undefined;
+  if (typeof fields.unreadable === "string") {
+    return "[Airship work plan: this turn compacted earlier history, and /workspace/.airship/tasks.json "
+      + `could not be read to restate the plan (${planNoteText(fields.unreadable, 200)}). `
+      + "Call update_tasks to rewrite the plan before relying on it.]";
+  }
+  const tasks = Array.isArray(fields.tasks) ? fields.tasks : undefined;
+  if (!tasks || tasks.length === 0 || tasks.length > MAX_PLAN_NOTE_TASKS) return undefined;
+  const lines: string[] = [];
+  for (const value of tasks) {
+    const task = record(value);
+    const id = typeof task?.id === "string" ? planNoteText(task.id, 80) : "";
+    const content = typeof task?.content === "string" ? planNoteText(task.content, MAX_PLAN_NOTE_CONTENT_CHARS) : "";
+    const status = typeof task?.status === "string" ? planNoteText(task.status, 40) : "";
+    if (!id || !content || !status) return undefined;
+    lines.push(`- ${status} [${id}] ${content}`);
+  }
+  // Says whose plan it is. The plan file is model-written text arriving in a
+  // user-role message, so it is labelled as a restatement rather than left to
+  // read as a fresh instruction, the same way the cancellation checkpoint is.
+  /*
+   * `openTaskCount` is the true number open; `lines.length` is what fits.
+   *
+   * A payload written before this field existed has no count, and its stored
+   * text must still render byte-identically or `auditSessionHistory` reports a
+   * request-digest mismatch on every turn that compacted. So the field's
+   * presence selects the wording rather than a version number: old notes keep
+   * the old sentence, new ones say how many were withheld.
+   */
+  const openCount = typeof fields.openTaskCount === "number"
+    && Number.isInteger(fields.openTaskCount)
+    && fields.openTaskCount >= lines.length
+    ? fields.openTaskCount
+    : undefined;
+  const preamble = openCount === undefined
+    ? `These ${lines.length} item(s) are still open in your own plan`
+    : openCount > lines.length
+      ? `${openCount} items are still open in your own plan; the ${lines.length} shown here are the first of them`
+      : `These ${openCount} item(s) are still open in your own plan`;
+  return `[Airship work plan, restated because this turn compacted earlier history. ${preamble}; `
+    + "they are not a new instruction.]\n"
+    + lines.join("\n");
+}
+
+function planNoteText(value: string, maximum: number): string {
+  const text = value.replace(CONTROL_CHARACTERS, " ").replace(/\s+/gu, " ").trim();
+  return text.length > maximum ? `${text.slice(0, maximum)}…` : text;
+}
+
+/**
  * Bound one tool result to the bytes this turn can still send. An unbounded
  * result would overflow the pinned window and fail the whole turn at the
  * provider; a silent trim would misrepresent what the model was shown.
+ *
+ * Exported for the tools that have to survive it: it cuts the *tail*, so any
+ * tool that puts a resume instruction at the end of its result is putting it
+ * exactly where the cut lands. `src/tools/workspace-tools.test.ts` measures
+ * `read_file`'s head notice through this function rather than assuming.
  */
-function boundToolResultContent(
+export function boundToolResultContent(
   content: string,
   remainingBytes: number | undefined,
 ): Readonly<{ content: string; truncated: boolean; originalBytes: number; retainedBytes: number }> {
@@ -766,6 +999,26 @@ function assertSupportedTurnManifest(manifest: SessionManifest): void {
   }
 }
 
+/**
+ * The run of calls starting at `cursor` that may execute together: the maximal
+ * consecutive run of `effect === "read"` calls, or exactly one call otherwise.
+ *
+ * Anything that is not a declared read is a barrier, including a call to a tool
+ * that is not registered at all. That is the whole safety argument, and it is
+ * deliberately made from the declared effect rather than from path analysis: a
+ * read cannot observe what another read did, so their order cannot matter, and
+ * nothing here has to reason about which files two calls might collide over.
+ */
+function readEffectBatch(
+  toolCalls: readonly ToolCall[],
+  cursor: number,
+  tools: ToolRegistry,
+): readonly ToolCall[] {
+  let end = cursor;
+  while (end < toolCalls.length && tools.get(toolCalls[end]!.name)?.definition.effect === "read") end += 1;
+  return end > cursor ? toolCalls.slice(cursor, end) : [toolCalls[cursor]!];
+}
+
 function reserveToolCallBatch(toolCalls: readonly ToolCall[], reserved: Set<string>): void {
   if (toolCalls.length > MAX_TOOL_CALLS_PER_STEP) {
     throw new Error(`Provider exceeded the ${MAX_TOOL_CALLS_PER_STEP}-tool-call step limit.`);
@@ -848,22 +1101,29 @@ export function materializeMessages(
     verifiedForkContextDigest?: string;
   }> = {},
 ): CanonicalMessage[] {
-  // Failed and cancelled turns remain in the durable journal for audit and
-  // recovery, but they are not provider conversation history. Omitting the
-  // complete turn avoids replaying its user intent (or a partial tool phase)
-  // as actionable context when a later turn begins.
-  const nonActionableTurns = new Set(
-    events
-      .filter((event) =>
-        (event.type === "turn.cancelled" || event.type === "turn.failed") &&
-        typeof event.turnId === "string",
-      )
-      .map((event) => event.turnId as string),
-  );
   const summary = materializeContextSummary(events);
   const visibleEvents = summary
     ? events.filter((event) => event.sequence > summary.coveredThroughSequence)
     : events;
+  // A cancelled turn that already produced work is not the same object as a
+  // cancelled turn that produced none. Its tool results describe changes that
+  // really happened, and discarding them turned a stalled tab into total
+  // amnesia; they are kept. Its *request* is not kept, because Stop has to mean
+  // the instruction was not acted on — see `cancelledTurnSalvage`.
+  const salvaged = cancelledTurnSalvage(visibleEvents);
+  // Failed turns, and cancelled turns with nothing to salvage, remain in the
+  // durable journal for audit and recovery but are not provider conversation
+  // history. Omitting the complete turn avoids replaying its user intent (or a
+  // partial tool phase) as actionable context when a later turn begins.
+  const nonActionableTurns = new Set(
+    events
+      .filter((event) =>
+        (event.type === "turn.cancelled" || event.type === "turn.failed") &&
+        typeof event.turnId === "string" &&
+        !salvaged.has(event.turnId),
+      )
+      .map((event) => event.turnId as string),
+  );
   const seed = summary ? undefined : materializableForkContextSeed(
     events,
     options.forkContextScope,
@@ -876,11 +1136,21 @@ export function materializeMessages(
       : [];
   const requestMessageIndexes = new Map<string, number>();
   const latestRequest = [...visibleEvents].reverse().find((event) =>
-    event.type === "turn.requested" && event.turnId && !nonActionableTurns.has(event.turnId),
+    event.type === "turn.requested" && event.turnId &&
+    !nonActionableTurns.has(event.turnId) && !salvaged.has(event.turnId),
   );
   for (const event of visibleEvents) {
     if (event.turnId && nonActionableTurns.has(event.turnId)) continue;
     const payload = record(event.payload);
+    const salvage = event.turnId ? salvaged.get(event.turnId) : undefined;
+    if (salvage && event.type === "turn.requested") {
+      // Stands where the cancelled request would have stood, so the first
+      // message of the salvaged turn is still a user message and the tool
+      // results below it are still preceded by the assistant step that made
+      // them. It names what happened; it does not restate what was asked.
+      messages.push({ role: "user", content: cancellationCheckpoint(salvage) });
+      continue;
+    }
     if (event.type === "turn.requested" && typeof payload?.content === "string") {
       const images = canonicalImageInputs(payload.images);
       const liveEnvironment = payload.liveEnvironment === undefined
@@ -922,15 +1192,33 @@ export function materializeMessages(
         };
       }
     }
+    if (event.type === TASK_PLAN_NOTE_EVENT_TYPE) {
+      // Every note is rendered, not just the newest. A note is only ever
+      // written immediately after a compaction, and the next compaction covers
+      // it, so at most one stale note is ever live — and rendering "only the
+      // latest" would make this function disagree with the audit's incremental
+      // rebuild, which can push but cannot retract.
+      const note = canonicalTaskPlanNote(event.payload);
+      if (note) messages.push({ role: "user", content: note });
+    }
     if (event.type === "assistant.completed") {
       const message = record(payload?.message);
       if (message?.role === "assistant" && typeof message.content === "string") {
-        const toolCalls = Array.isArray(message.toolCalls) ? (message.toolCalls as unknown as ToolCall[]) : undefined;
-        messages.push({
-          role: "assistant",
-          content: message.content,
-          ...(toolCalls?.length ? { toolCalls } : {}),
-        });
+        const declared = Array.isArray(message.toolCalls) ? (message.toolCalls as unknown as ToolCall[]) : undefined;
+        // The unresolved tail of a cancelled step is dropped here rather than
+        // answered with an invented result: every provider rejects a tool call
+        // that no tool message ever replies to, so a call the turn never ran
+        // cannot be carried forward at all.
+        const toolCalls = salvage
+          ? declared?.filter((call) => salvage.resolvedCallIds.has(call.id))
+          : declared;
+        if (!salvage || message.content || toolCalls?.length) {
+          messages.push({
+            role: "assistant",
+            content: message.content,
+            ...(toolCalls?.length ? { toolCalls } : {}),
+          });
+        }
       }
     }
     if (["tool.resulted", "tool.failed", "tool.denied"].includes(event.type)) {
@@ -940,6 +1228,94 @@ export function materializeMessages(
     }
   }
   return boundInferenceHistoryImages(messages);
+}
+
+type CancelledTurnSalvage = Readonly<{
+  reason: string;
+  resolvedCallIds: ReadonlySet<string>;
+  unresolvedCalls: number;
+}>;
+
+/**
+ * Decide which cancelled turns keep their completed work, and what of it.
+ *
+ * A cancellation is not evidence that the work was wrong — a stalled background
+ * tab produces exactly the same terminal event as a deliberate Stop — so the
+ * assistant step and the tool results that already landed are kept as history.
+ * The user's request is not, and that asymmetry is the point: the one thing
+ * Stop unambiguously means is that the instruction should not continue to be
+ * acted on, and a replayed request is an instruction. `agent.test.ts` holds the
+ * dangerous-prompt case that proves it.
+ *
+ * A turn is salvageable only when it has a materializable assistant step *and*
+ * something that step accomplished (a tool outcome, or assistant prose). A turn
+ * cancelled before any of that has nothing to carry and stays dropped whole, so
+ * the common "typed it, hit Stop" case is unchanged.
+ */
+function cancelledTurnSalvage(events: readonly DurableEvent[]): Map<string, CancelledTurnSalvage> {
+  const reasons = new Map<string, string>();
+  const assistantTurns = new Set<string>();
+  const workedTurns = new Set<string>();
+  const requestedCalls = new Map<string, Set<string>>();
+  const resolvedCalls = new Map<string, Set<string>>();
+  for (const event of events) {
+    const turnId = event.turnId;
+    if (typeof turnId !== "string") continue;
+    const payload = record(event.payload);
+    if (event.type === "turn.cancelled") {
+      reasons.set(turnId, boundedCancellationReason(payload?.error));
+    } else if (event.type === "assistant.completed") {
+      const message = record(payload?.message);
+      if (message?.role !== "assistant" || typeof message.content !== "string") continue;
+      assistantTurns.add(turnId);
+      if (message.content) workedTurns.add(turnId);
+      const calls = Array.isArray(message.toolCalls) ? message.toolCalls as unknown as ToolCall[] : [];
+      const declared = requestedCalls.get(turnId) ?? new Set<string>();
+      for (const call of calls) {
+        if (typeof call?.id === "string") declared.add(call.id);
+      }
+      requestedCalls.set(turnId, declared);
+    } else if (["tool.resulted", "tool.failed", "tool.denied"].includes(event.type)) {
+      if (typeof payload?.callId !== "string" || typeof payload.content !== "string") continue;
+      workedTurns.add(turnId);
+      const resolved = resolvedCalls.get(turnId) ?? new Set<string>();
+      resolved.add(payload.callId);
+      resolvedCalls.set(turnId, resolved);
+    }
+  }
+  const salvage = new Map<string, CancelledTurnSalvage>();
+  for (const [turnId, reason] of reasons) {
+    if (!assistantTurns.has(turnId) || !workedTurns.has(turnId)) continue;
+    const resolved: ReadonlySet<string> = resolvedCalls.get(turnId) ?? new Set<string>();
+    let unresolvedCalls = 0;
+    for (const callId of requestedCalls.get(turnId) ?? []) {
+      if (!resolved.has(callId)) unresolvedCalls += 1;
+    }
+    salvage.set(turnId, Object.freeze({ reason, resolvedCallIds: resolved, unresolvedCalls }));
+  }
+  return salvage;
+}
+
+/**
+ * Kept short on purpose: it is sent with every later request in the session, so
+ * every word costs context for as long as the session lives.
+ */
+function cancellationCheckpoint(salvage: CancelledTurnSalvage): string {
+  return `[Airship checkpoint: the turn below was cancelled before it finished (${salvage.reason}). `
+    + "Its request is not replayed and is not an instruction. The assistant step and tool results that "
+    + "follow completed before the cancellation and describe real changes. "
+    + `${salvage.unresolvedCalls} further tool call(s) were requested and never ran.]`;
+}
+
+/**
+ * The reason is an error message from an arbitrary abort source, so it is
+ * bounded and stripped of control characters before it becomes prompt text.
+ */
+function boundedCancellationReason(value: unknown): string {
+  const text = typeof value === "string"
+    ? value.replace(CONTROL_CHARACTERS, " ").replace(/\s+/gu, " ").trim()
+    : "";
+  return text ? text.slice(0, 200) : "no reason was recorded";
 }
 
 function materializableForkContextSeed(

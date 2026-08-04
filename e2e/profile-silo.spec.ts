@@ -83,7 +83,7 @@ test("Profile is the primary A → B → A cockpit silo while global services st
   await openPrimary(page, "Memory");
   await page.getByRole("searchbox", { name: "Search every memory surface" }).fill(ALPHA_MEMORY_QUERY);
   const alphaIndex = page.locator("#memory-index");
-  await alphaIndex.locator("summary").click();
+  await openMemoryIndex(page);
   await expect.poll(() => alphaIndex.evaluate((element: HTMLDetailsElement) => element.open)).toBe(true);
 
   await openPrimary(page, "Proof");
@@ -233,6 +233,40 @@ test("Profile is the primary A → B → A cockpit silo while global services st
   ]);
   expect(crossViewportValues).toEqual([null, null]);
 });
+
+/*
+ * Converges on open instead of clicking the disclosure once and asserting.
+ *
+ * The Memory route opens this section itself the first time a query settles
+ * (`src/ui/memory-view.tsx:692-695`). The single unconditional click this
+ * replaces won every workstation run and lost on the integration gate of run
+ * 30851082563: it arrived after the auto-open, *closed* the section, and
+ * `openIndex(false)` latches `indexDismissed` (`src/ui/memory-view.tsx:729-733`),
+ * so nothing re-opened it. The poll then had nothing to wait for and failed all
+ * three attempts.
+ *
+ * That is why raising the global `expect` budget from 5s to 15s did not fix
+ * this. The wait was not short; the thing being waited for had already been
+ * cancelled by the test itself. A race does not become correct by being given
+ * more time.
+ *
+ * `conversation-navigation.spec.ts` and `live-semantic-embedding.spec.ts` now
+ * converge here for the same reason; the last of the three was the one this
+ * matrix excludes (`playwright.config.ts`), which is exactly why it kept the
+ * racing shape longest — a gate it cannot redden reports nothing about it.
+ */
+async function openMemoryIndex(page: Page): Promise<void> {
+  const index = page.locator("#memory-index");
+  const isOpen = () => index.evaluate((element: HTMLDetailsElement) => element.open);
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    if (await isOpen()) return;
+    await index.locator("summary").click();
+    // Long enough for the route's own open to land and be observed, so the next
+    // attempt cannot fight a toggle that is still in flight.
+    await page.waitForTimeout(150);
+  }
+  await expect.poll(isOpen, { timeout: 10_000 }).toBe(true);
+}
 
 async function openPrimary(page: Page, name: string): Promise<void> {
   const primary = page.getByRole("navigation", { name: "Primary" });

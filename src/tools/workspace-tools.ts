@@ -8,16 +8,24 @@ import {
   type WorkspacePort,
 } from "../workspace/contracts";
 import { isWorkspaceBinaryEnvelope, workspaceContentByteLength } from "../workspace/content-codec";
+import { searchWorkspaceContent, workspaceSearchSummary, WORKSPACE_SEARCH_LIMITS } from "../workspace/content-search";
 import { ToolRegistry } from "./registry";
 import { objectArguments, rawString, requiredString } from "./schema";
 
-const MAX_SEARCH_FILES = 512;
-const MAX_SEARCH_FILE_BYTES = 512 * 1024;
-const MAX_SEARCH_TOTAL_BYTES = 8 * 1024 * 1024;
-const DEFAULT_SEARCH_RESULTS = 50;
-const MAX_SEARCH_RESULTS = 200;
-const MAX_SNIPPET_CHARACTERS = 240;
 const MAX_TEXT_EDITOR_EDITS = 32;
+
+/**
+ * The window `read_file` returns when the caller names none.
+ *
+ * `registry.ts:149-151` refuses any tool result over 1 MiB *after* the tool has
+ * already built it, so a 2 MiB file used to cost a read and then throw
+ * `Tool output exceeded 1048576 bytes.` — a budget message where a fix belonged,
+ * and no way to see any part of the file at all. This sits just under that
+ * ceiling with room for the head notice, so every file that returns whole today
+ * still does and the throw becomes a first window instead. A caller that wants
+ * less passes `maxBytes`.
+ */
+const MAX_READ_FILE_BYTES = 1_040_000;
 
 function optionalStringArgument(value: JsonValue | undefined, name: string): string | undefined {
   if (value === undefined) return undefined;
@@ -95,17 +103,28 @@ export function createWorkspaceToolRegistry(workspace: WorkspacePort): ToolRegis
   const readFile: Tool = {
     definition: {
       name: "read_file",
-      description: "Read one UTF-8 file from the private virtual workspace.",
+      description: "Read one UTF-8 file, or one byte window of it, from the private virtual workspace. A partial read says so in its first line and names the offset to continue from.",
       effect: "read",
       inputSchema: {
         type: "object",
-        properties: { path: { type: "string" } },
+        properties: {
+          path: { type: "string" },
+          offset: { type: "integer", minimum: 0, description: "First byte to return. Use the nextOffsetBytes a partial read reports." },
+          maxBytes: { type: "integer", minimum: 1, maximum: MAX_READ_FILE_BYTES, description: "Bytes to return, snapped down to a whole character." },
+        },
         required: ["path"],
         additionalProperties: false,
       },
     },
     async execute(argumentsValue): Promise<ToolExecutionResult> {
-      const path = workspacePath(objectArguments(argumentsValue).path, "path");
+      const argumentsObject = objectArguments(argumentsValue);
+      const path = workspacePath(argumentsObject.path, "path");
+      const offset = integerArgument(argumentsObject.offset, "offset", 0);
+      const maxBytes = integerArgument(argumentsObject.maxBytes, "maxBytes", MAX_READ_FILE_BYTES);
+      if (offset < 0) throw new Error("offset must not be negative.");
+      if (maxBytes < 1 || maxBytes > MAX_READ_FILE_BYTES) {
+        throw new Error(`maxBytes must be between 1 and ${MAX_READ_FILE_BYTES}.`);
+      }
       const file = await workspace.read(path);
       if (!file) return { content: `File not found: ${path}`, isError: true };
       if (isWorkspaceBinaryEnvelope(file.content)) {
@@ -115,7 +134,37 @@ export function createWorkspaceToolRegistry(workspace: WorkspacePort): ToolRegis
           metadata: { path: file.path, revision: file.revision, size: workspaceContentByteLength(file.content), encoding: "binary" },
         };
       }
-      return { content: file.content, metadata: { path: file.path, revision: file.revision, size: file.size } };
+      const bytes = new TextEncoder().encode(file.content);
+      if (offset > bytes.byteLength) {
+        return {
+          content: `read_file offset ${String(offset)} is past the end of ${file.path}, which is ${String(bytes.byteLength)} bytes.`,
+          isError: true,
+          metadata: { path: file.path, revision: file.revision, size: bytes.byteLength, offset },
+        };
+      }
+      const window = utf8Window(bytes, offset, maxBytes);
+      const complete = window.start === 0 && window.end === bytes.byteLength;
+      return {
+        /*
+         * The notice leads, and is never a trailer. `boundToolResultContent`
+         * cuts the *tail* of a tool result (src/core/agent.ts:658-676) and
+         * `metadata` never reaches the model at all (`:941-943` builds the tool
+         * message from `content` alone), so a trailing notice is both the sole
+         * carrier of the resume offset and the first thing deleted when the
+         * context budget bites — exactly when the model most needs to know the
+         * read was partial.
+         */
+        content: complete ? window.text : `${readWindowNotice(file.path, window.start, window.end, bytes.byteLength)}\n\n${window.text}`,
+        metadata: {
+          path: file.path,
+          revision: file.revision,
+          size: bytes.byteLength,
+          offset: window.start,
+          returnedBytes: window.end - window.start,
+          complete,
+          ...(window.end < bytes.byteLength ? { nextOffsetBytes: window.end } : {}),
+        },
+      };
     },
   };
 
@@ -189,7 +238,7 @@ export function createWorkspaceToolRegistry(workspace: WorkspacePort): ToolRegis
   const searchText: Tool = {
     definition: {
       name: "search_text",
-      description: "Search bounded UTF-8 workspace content for a literal string and return line-oriented matches.",
+      description: "Search bounded UTF-8 workspace content for a literal string and return line-oriented matches. The reply's summary states every bound that fired, and an incomplete scan names either the cursor to resume from or the file its result cap filled inside.",
       effect: "read",
       inputSchema: {
         type: "object",
@@ -197,7 +246,20 @@ export function createWorkspaceToolRegistry(workspace: WorkspacePort): ToolRegis
           path: { type: "string", description: "File or directory under /workspace" },
           query: { type: "string", minLength: 1, maxLength: 4096 },
           caseSensitive: { type: "boolean", default: false },
-          maxResults: { type: "integer", minimum: 1, maximum: MAX_SEARCH_RESULTS, default: DEFAULT_SEARCH_RESULTS },
+          maxResults: {
+            type: "integer",
+            minimum: 1,
+            maximum: WORKSPACE_SEARCH_LIMITS.resultCeiling,
+            default: WORKSPACE_SEARCH_LIMITS.results,
+          },
+          include: {
+            type: "string",
+            description: "Path glob. A bare name matches the file name (*.ts); ** spans directories (src/**/*.ts). Matched against the whole path, inside path.",
+          },
+          cursor: {
+            type: "string",
+            description: "A previous reply's nextCursor. Resumes after that path in inventory order.",
+          },
         },
         required: ["query"],
         additionalProperties: false,
@@ -214,61 +276,63 @@ export function createWorkspaceToolRegistry(workspace: WorkspacePort): ToolRegis
       // always had it.
       const query = requiredString(argumentsObject.query, "query");
       const caseSensitive = booleanArgument(argumentsObject.caseSensitive, "caseSensitive");
-      const maxResults = integerArgument(argumentsObject.maxResults, "maxResults", DEFAULT_SEARCH_RESULTS);
-      if (maxResults < 1 || maxResults > MAX_SEARCH_RESULTS) {
-        throw new Error(`maxResults must be between 1 and ${MAX_SEARCH_RESULTS}.`);
+      const maxResults = integerArgument(argumentsObject.maxResults, "maxResults", WORKSPACE_SEARCH_LIMITS.results);
+      if (maxResults < 1 || maxResults > WORKSPACE_SEARCH_LIMITS.resultCeiling) {
+        throw new Error(`maxResults must be between 1 and ${WORKSPACE_SEARCH_LIMITS.resultCeiling}.`);
+      }
+      const include = optionalStringArgument(argumentsObject.include, "include");
+      const cursor = optionalStringArgument(argumentsObject.cursor, "cursor");
+
+      /*
+       * One scanner, driven from here and from the Explorer's Contents filter
+       * (src/ui/workspace-view.tsx:643). The copy that used to live in this file
+       * had drifted: it counted the storage envelope of a binary as the file's
+       * size and reported `truncatedFiles` the shared scan calls `skippedFiles`,
+       * so the same question answered here and on the route that owns files
+       * could return two different bounded answers.
+       */
+      const entries = userWorkspaceEntries(await workspace.list(path));
+      const result = await searchWorkspaceContent(workspace, entries, query, { caseSensitive, maxResults, include, cursor });
+
+      if (include !== undefined && result.candidateFiles > 0 && result.candidateFiles === result.filteredOutFiles) {
+        // Missing input, not a result. A filter that selects nothing used to
+        // return `complete: true` with an empty match list — a confident false
+        // negative in the one field the model receives (agent.ts:941-943),
+        // which is the defect this whole lane exists to remove.
+        const examples = entries.slice(0, 3).map((entry) => entry.path).join(", ");
+        return {
+          content: `search_text include ${JSON.stringify(include)} selected 0 of ${String(result.candidateFiles)} files under ${path}, so nothing was searched. Paths here look like ${examples}. A pattern matches the whole path: a bare name matches the file name (*.ts), ** spans directories (src/**/*.ts), and a leading ./ is not supported.`,
+          isError: true,
+          metadata: { path, query, include, candidateFiles: result.candidateFiles, selectedFiles: 0 },
+        };
       }
 
-      const allEntries = userWorkspaceEntries(await workspace.list(path));
-      const entries = allEntries.slice(0, MAX_SEARCH_FILES);
-      const matches: Array<{ path: string; line: number; column: number; snippet: string }> = [];
-      let scannedBytes = 0;
-      let scannedFiles = 0;
-      let truncatedFiles = 0;
-      let skippedFiles = 0;
-
-      for (const entry of entries) {
-        if (matches.length >= maxResults || scannedBytes >= MAX_SEARCH_TOTAL_BYTES) break;
-        const remaining = MAX_SEARCH_TOTAL_BYTES - scannedBytes;
-        const readLimit = Math.min(MAX_SEARCH_FILE_BYTES, remaining);
-        if (readLimit < 1) break;
-        let file: WorkspaceFile | undefined;
-        if (workspace.readBounded) {
-          file = await workspace.readBounded(entry.path, readLimit);
-        } else if (entry.size <= readLimit) {
-          file = await workspace.read(entry.path);
-        } else {
-          skippedFiles += 1;
-          continue;
-        }
-        if (!file) continue;
-        if (isWorkspaceBinaryEnvelope(file.content)) {
-          skippedFiles += 1;
-          continue;
-        }
-        scannedFiles += 1;
-        const contentBytes = new TextEncoder().encode(file.content).byteLength;
-        scannedBytes += contentBytes;
-        if (entry.size > contentBytes) truncatedFiles += 1;
-        collectLiteralMatches(file.path, file.content, query, caseSensitive, maxResults, matches);
-      }
-
-      const truncated = allEntries.length > MAX_SEARCH_FILES
-        || scannedBytes >= MAX_SEARCH_TOTAL_BYTES
-        || matches.length >= maxResults
-        || truncatedFiles > 0
-        || skippedFiles > 0;
       return {
-        content: matches.length > 0 ? JSON.stringify(matches, null, 2) : `No matches for ${JSON.stringify(query)} under ${path}.`,
+        /*
+         * `summary` first, and `complete` before the matches, because this
+         * object is the whole of what the model reads (agent.ts:941-943) and a
+         * context bound cuts the tail (`:658-676`). A truncated payload must
+         * still have said "this scan was bounded" before it was cut.
+         */
+        content: JSON.stringify({
+          summary: workspaceSearchSummary(result),
+          complete: !result.truncated,
+          ...(result.nextCursor !== undefined ? { nextCursor: result.nextCursor } : {}),
+          ...(result.capReachedIn !== undefined ? { capReachedIn: result.capReachedIn } : {}),
+          matches: result.matches,
+        }, null, 2),
         metadata: {
           path,
           query,
-          matches: matches.length,
-          scannedFiles,
-          scannedBytes,
-          truncatedFiles,
-          skippedFiles,
-          truncated,
+          ...(include !== undefined ? { include } : {}),
+          ...(cursor !== undefined ? { cursor } : {}),
+          matches: result.matches.length,
+          scannedFiles: result.scannedFiles,
+          skippedFiles: result.skippedFiles,
+          candidateFiles: result.candidateFiles,
+          filteredOutFiles: result.filteredOutFiles,
+          unsearchedFiles: result.unsearchedFiles,
+          truncated: result.truncated,
         },
       };
     },
@@ -514,26 +578,41 @@ function countOccurrences(content: string, query: string): number {
   return count;
 }
 
-function collectLiteralMatches(
-  path: string,
-  content: string,
-  query: string,
-  caseSensitive: boolean,
-  maxResults: number,
-  matches: Array<{ path: string; line: number; column: number; snippet: string }>,
-): void {
-  const needle = caseSensitive ? query : query.toLocaleLowerCase();
-  for (const [lineIndex, line] of content.split(/\r?\n/u).entries()) {
-    const haystack = caseSensitive ? line : line.toLocaleLowerCase();
-    let offset = 0;
-    while (offset <= haystack.length - needle.length && matches.length < maxResults) {
-      const index = haystack.indexOf(needle, offset);
-      if (index < 0) break;
-      const snippetStart = Math.max(0, index - Math.floor(MAX_SNIPPET_CHARACTERS / 3));
-      const snippet = line.slice(snippetStart, snippetStart + MAX_SNIPPET_CHARACTERS);
-      matches.push({ path, line: lineIndex + 1, column: index + 1, snippet });
-      offset = index + needle.length;
-    }
-    if (matches.length >= maxResults) return;
+/**
+ * The byte index of the character containing `index`.
+ *
+ * A window that ends mid-character decodes to U+FFFD on both sides of the seam,
+ * so the two halves of a resumed read would not reassemble into the file the
+ * caller asked for. Snapping backwards keeps every window a whole-character
+ * string and every reported offset a boundary the next call can start on.
+ */
+function codepointStart(bytes: Uint8Array, index: number): number {
+  let at = Math.min(Math.max(index, 0), bytes.byteLength);
+  while (at > 0 && at < bytes.byteLength && ((bytes[at] ?? 0) & 0xc0) === 0x80) at -= 1;
+  return at;
+}
+
+function utf8Window(
+  bytes: Uint8Array,
+  offset: number,
+  maxBytes: number,
+): Readonly<{ text: string; start: number; end: number }> {
+  const start = codepointStart(bytes, offset);
+  let end = codepointStart(bytes, Math.min(start + maxBytes, bytes.byteLength));
+  // A `maxBytes` smaller than the character at `start` would otherwise return an
+  // empty window whose `nextOffsetBytes` equals its own offset — a caller
+  // following the instruction would loop forever. One whole character is the
+  // floor, so every window advances.
+  if (end <= start && start < bytes.byteLength) {
+    end = start + 1;
+    while (end < bytes.byteLength && ((bytes[end] ?? 0) & 0xc0) === 0x80) end += 1;
   }
+  return Object.freeze({ text: new TextDecoder().decode(bytes.subarray(start, end)), start, end });
+}
+
+function readWindowNotice(path: string, start: number, end: number, total: number): string {
+  const next = end < total
+    ? ` Continue with read_file {"path":${JSON.stringify(path)},"offset":${String(end)}}.`
+    : " This window reaches the end of the file.";
+  return `[Airship returned bytes ${String(start)}–${String(end)} of ${String(total)} for ${path}.${next}]`;
 }

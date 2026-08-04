@@ -5,6 +5,7 @@ import type { DurableEvent, SessionRecord } from "../../core/journal";
 import type { SessionAuditReport } from "../../core/session-audit";
 import type { ConversationReceipt } from "../../receipts/types";
 import {
+  ASSISTANT_LENGTH_FINISH,
   messagePartsFromFacts,
   messagePartsFromDurableEvents,
   toolCallAuthorityFrom,
@@ -1147,6 +1148,8 @@ function estimatedPartCount(group: TurnGroup): number {
       const message = record(payload?.message);
       if (typeof message?.content === "string" && message.content.length > 0) count += 1;
       if (Array.isArray(message?.toolCalls)) count += message.toolCalls.length;
+      // A length-finished answer also projects its cut-off marker.
+      if (payload?.finishReason === ASSISTANT_LENGTH_FINISH) count += 1;
     }
     if (event.type === "tool.requested") count += 1;
     if (["tool.resulted", "tool.failed", "tool.denied"].includes(event.type)) count += 1;

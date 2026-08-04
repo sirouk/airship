@@ -61,6 +61,42 @@ describe("materializeMessages", () => {
     )).toBe(true);
   });
 
+  it("keeps a cancelled turn's completed work without replaying what it was asked to do", () => {
+    const events = eventSequence([
+      draft("turn.requested", "cancelled-turn", { content: "Index every file under docs/." }),
+      draft("assistant.completed", "cancelled-turn", {
+        message: {
+          role: "assistant",
+          content: "Reading the first two.",
+          toolCalls: [
+            { id: "read-1", name: "read_file", arguments: { path: "docs/a.md" } },
+            { id: "read-2", name: "read_file", arguments: { path: "docs/b.md" } },
+          ],
+        },
+        finishReason: "tool-calls",
+      }),
+      draft("tool.resulted", "cancelled-turn", { callId: "read-1", name: "read_file", content: "# A" }),
+      draft("turn.cancelled", "cancelled-turn", { error: "Stopped by user" }),
+      draft("turn.requested", "next-turn", { content: "What did you find?" }),
+    ]);
+
+    const messages = materializeMessages(events);
+    expect(messages).toHaveLength(4);
+    expect(messages[0]?.role).toBe("user");
+    expect(messages[0]?.content).toContain("cancelled before it finished (Stopped by user)");
+    expect(messages[0]?.content).toContain("1 further tool call(s) were requested and never ran");
+    expect(messages[0]?.content).not.toContain("Index every file under docs/.");
+    // The unanswered call is gone from the assistant message, because a tool
+    // call no tool message ever replies to is rejected by every provider.
+    expect(messages[1]).toEqual({
+      role: "assistant",
+      content: "Reading the first two.",
+      toolCalls: [{ id: "read-1", name: "read_file", arguments: { path: "docs/a.md" } }],
+    });
+    expect(messages[2]).toEqual({ role: "tool", toolCallId: "read-1", content: "# A" });
+    expect(messages[3]).toEqual({ role: "user", content: "What did you find?" });
+  });
+
   it("omits a failed dangerous prompt and its partial tool phase before the next turn", () => {
     const events = eventSequence([
       draft("turn.requested", "failed-turn", {

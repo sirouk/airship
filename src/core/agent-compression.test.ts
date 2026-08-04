@@ -181,7 +181,119 @@ describe("agent context compression integration", () => {
     expect(audit.findings).toEqual([]);
     expect(audit.status).toBe("verified");
   });
+
+  it("restates the open work plan into the prompt whenever a compaction fires", async () => {
+    const journal = new EventJournal(new MemoryJournalBackend());
+    const tools = new ToolRegistry();
+    tools.attachTaskPlanProvider({
+      async openTasks() {
+        return [
+          { id: "t1", content: "Migrate the deployment contract", status: "in_progress" },
+          { id: "t2", content: "Re-run the release gate", status: "pending" },
+        ];
+      },
+    });
+    const transport = new LongResponseTransport();
+    const session = await journal.createSession("Plan", await compressionManifest(transport, tools));
+
+    for (let index = 1; index <= 5; index += 1) {
+      await runTurn({
+        sessionId: session.id,
+        content: `Request ${index}: ${"important constraint ".repeat(240)}`,
+        transport,
+        tools,
+        journal,
+        approvalPolicy: allowAllForTests,
+        signal: new AbortController().signal,
+      });
+    }
+
+    const events = await journal.readEvents(session.id);
+    const summaries = events.filter((event) => event.type === "context.summary.updated");
+    const notes = events.filter((event) => event.type === "turn.plan.restated");
+    // Stated separately so a fixture that stopped compacting fails here rather
+    // than passing an equality between two empty lists.
+    expect(summaries.length).toBeGreaterThanOrEqual(1);
+    expect(notes).toHaveLength(summaries.length);
+    // Immediately after its compaction, inside the same turn, before inference.
+    expect(notes[0]!.sequence).toBe(summaries[0]!.sequence + 1);
+    expect(notes[0]!.turnId).toBe(summaries[0]!.turnId);
+
+    const restated = transport.requests.find((request) =>
+      request.messages.some((message) => message.content.includes("Airship work plan, restated")),
+    );
+    expect(restated).toBeDefined();
+    const note = restated!.messages.find((message) => message.content.includes("Airship work plan, restated"))!;
+    expect(note.role).toBe("user");
+    expect(note.content).toContain("- in_progress [t1] Migrate the deployment contract");
+    expect(note.content).toContain("- pending [t2] Re-run the release gate");
+    expect(note.content).toContain("not a new instruction");
+
+    // The load-bearing assertion: the audit rebuilds the transcript every
+    // request digest was taken over. A note the audit cannot reproduce byte for
+    // byte would surface here as INFERENCE_REQUEST_DIGEST_MISMATCH.
+    const current = await journal.getSession(session.id);
+    const audit = await auditSessionHistory({ session: current!, events });
+    expect(audit.findings).toEqual([]);
+    expect(audit.status).toBe("verified");
+  });
+
+  it("tells the model its plan file is unreadable rather than failing the turn", async () => {
+    const journal = new EventJournal(new MemoryJournalBackend());
+    const tools = new ToolRegistry();
+    tools.attachTaskPlanProvider({
+      async openTasks() {
+        throw new Error("/workspace/.airship/tasks.json is not valid JSON.");
+      },
+    });
+    const transport = new LongResponseTransport();
+    const session = await journal.createSession("Broken plan", await compressionManifest(transport, tools));
+
+    for (let index = 1; index <= 5; index += 1) {
+      await runTurn({
+        sessionId: session.id,
+        content: `Request ${index}: ${"important constraint ".repeat(240)}`,
+        transport,
+        tools,
+        journal,
+        approvalPolicy: allowAllForTests,
+        signal: new AbortController().signal,
+      });
+    }
+
+    const events = await journal.readEvents(session.id);
+    expect(events.filter((event) => event.type === "turn.failed")).toHaveLength(0);
+    const note = transport.requests
+      .flatMap((request) => request.messages)
+      .find((message) => message.content.includes("could not be read to restate the plan"));
+    expect(note?.content).toContain("is not valid JSON");
+    expect(note?.content).toContain("Call update_tasks");
+
+    const current = await journal.getSession(session.id);
+    const audit = await auditSessionHistory({ session: current!, events });
+    expect(audit.findings).toEqual([]);
+  });
 });
+
+async function compressionManifest(transport: InferenceTransport, tools: ToolRegistry) {
+  return createSessionManifest({
+    systemPrompt: "Preserve decisions while keeping context bounded.",
+    providerId: transport.id,
+    model: "compression-test",
+    tools: tools.definitions(),
+    workspaceId: "memory://compression-plan",
+    contextPolicy: createSessionContextPolicy({
+      contextWindowTokens: 2_048,
+      source: { kind: "runtime-config", label: "compression integration fixture" },
+      compression: { threshold: 0.82, preserveRecentTurns: 2 },
+      summarizer: {
+        mode: "inference-transport",
+        adapterId: "airship/inference-transport-summary-v1",
+        onFailure: "extractive-fallback",
+      },
+    }),
+  });
+}
 
 class LongResponseTransport implements InferenceTransport {
   readonly id = "compression-transport";

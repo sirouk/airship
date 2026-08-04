@@ -375,6 +375,9 @@ const VERDICT_TOKEN_TEXT_LEDGER = Object.freeze([
   "ui/routes.css .profile-archive-zone .danger --v-failed",
   "ui/routes.css .profile-danger-disclosure[open] > summary --v-failed",
   "ui/routes.css .runway-card > p --v-failed",
+  // Remove, on a card holding a skill someone wrote. Same role as the profile
+  // archive action above it: the only destructive verb on the surface.
+  "ui/routes.css .skill-authoring .danger --v-failed",
   "ui/shell.css .attestation-chip.asserted --copper",
   "ui/shell.css .attestation-chip.failed --v-failed",
   "ui/shell.css .recent-conversation--thread .recent-conversation__blocked --v-failed",
@@ -382,6 +385,9 @@ const VERDICT_TOKEN_TEXT_LEDGER = Object.freeze([
   "ui/shell.css .seal[data-state=\"failed\"] --v-failed",
   "ui/shell.css .topbar-posture-chip[data-state=\"failed\"] --v-failed",
   "ui/shell.css .topbar-posture-chip__elsewhere[data-state=\"failed\"] --v-failed",
+  // The authoring panel's refusal sentence — the verbatim message from
+  // `domain.ts` or `catalog.ts` explaining why a save did not happen.
+  "ui/skill-editor.css .skill-editor-status --v-failed",
   "ui/sources-view.css .conflicted .git-delta --v-failed",
   "ui/sources-view.css .git-conflict-note --v-failed",
   "ui/sources-view.css .git-diff-lines .removed b --v-failed",

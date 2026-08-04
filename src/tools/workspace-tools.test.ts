@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { boundToolResultContent } from "../core/agent";
 import type { JsonValue, Tool, ToolContext } from "../core/contracts";
 import { MemoryWorkspace } from "../workspace/memory";
 import { encodeWorkspaceBytes } from "../workspace/content-codec";
@@ -66,7 +67,7 @@ describe("workspace tools", () => {
       query: "needle",
       maxResults: 2,
     });
-    const matches = JSON.parse(insensitive.content) as Array<Record<string, unknown>>;
+    const { matches } = JSON.parse(insensitive.content) as { matches: Array<Record<string, unknown>> };
     expect(matches).toEqual([
       expect.objectContaining({ path: "/workspace/a.txt", line: 1, column: 7 }),
       expect.objectContaining({ path: "/workspace/a.txt", line: 2, column: 8 }),
@@ -78,9 +79,144 @@ describe("workspace tools", () => {
       query: "NEEDLE",
       caseSensitive: true,
     });
-    expect(JSON.parse(sensitive.content)).toEqual([
+    expect((JSON.parse(sensitive.content) as { matches: unknown[] }).matches).toEqual([
       expect.objectContaining({ path: "/workspace/a.txt", line: 2, column: 8 }),
     ]);
+  });
+
+  it("returns a byte window whose halves reassemble into the file, with the notice first", async () => {
+    /*
+     * `read_file` had no window at all: a 2 MiB file cost a full read and then
+     * threw `Tool output exceeded 1048576 bytes.` from registry.ts:149 — after
+     * the work, with no part of the file returned and no smaller call to make.
+     * The notice leads because `boundToolResultContent` cuts the tail and
+     * `metadata` never reaches the model.
+     */
+    const workspace = new MemoryWorkspace();
+    const body = "héllo world\n".repeat(120);
+    await workspace.write("big.md", body);
+
+    const first = await execute(workspace, "read_file", { path: "big.md", maxBytes: 500 });
+    expect(first.metadata).toMatchObject({ complete: false, offset: 0 });
+    expect(first.content.startsWith("[Airship returned bytes 0–")).toBe(true);
+    const nextOffset = (first.metadata as { nextOffsetBytes: number }).nextOffsetBytes;
+
+    const second = await execute(workspace, "read_file", { path: "big.md", offset: nextOffset });
+    const head = (content: string) => content.slice(content.indexOf("\n\n") + 2);
+    // A window that ended mid-character would decode to U+FFFD on both seams and
+    // the two halves would not be the file.
+    expect(head(first.content) + head(second.content)).toBe(body);
+    expect(first.content).not.toContain("�");
+    expect(second.metadata).toMatchObject({ complete: false });
+    expect(second.content).toContain("This window reaches the end of the file.");
+    expect(second.metadata).not.toHaveProperty("nextOffsetBytes");
+  });
+
+  it("still returns whole every file that returned whole before the window existed", async () => {
+    const workspace = new MemoryWorkspace();
+    await workspace.write("wide.md", "a".repeat(1_040_000));
+    const whole = await execute(workspace, "read_file", { path: "wide.md" });
+    expect(whole.metadata).toMatchObject({ complete: true });
+    expect(whole.content).toHaveLength(1_040_000);
+    expect(whole.content.startsWith("[Airship")).toBe(false);
+
+    await workspace.write("wider.md", "b".repeat(2_000_000));
+    const windowed = await execute(workspace, "read_file", { path: "wider.md" });
+    /*
+     * The default has to clear two bars at once: above it, files that work today
+     * would start being cut; below `registry.ts:149`'s 1_048_576, the window plus
+     * its notice would throw the same error this replaces.
+     */
+    expect(new TextEncoder().encode(windowed.content).byteLength).toBeLessThan(1_048_576);
+    expect(windowed.metadata).toMatchObject({ complete: false, nextOffsetBytes: 1_040_000 });
+    await expect(execute(workspace, "read_file", { path: "wider.md", offset: 3_000_000 }))
+      .resolves.toMatchObject({ isError: true });
+  });
+
+  it("keeps the resume instruction when the turn's remaining bytes cut the result", async () => {
+    // The turn's own bound (src/core/agent.ts:653) removes the tail. Measured
+    // here rather than assumed, because a tail-placed notice would be the first
+    // thing deleted and it is the only carrier of the next offset.
+    const workspace = new MemoryWorkspace();
+    await workspace.write("big.md", "line\n".repeat(4000));
+    const windowed = await execute(workspace, "read_file", { path: "big.md", maxBytes: 4000 });
+    const bounded = boundToolResultContent(windowed.content, 600);
+    expect(bounded.truncated).toBe(true);
+    expect(bounded.content).toContain("Continue with read_file");
+    expect(bounded.content).toContain('"offset":4000');
+  });
+
+  it("names a next action whenever it reports an incomplete scan", async () => {
+    const workspace = new MemoryWorkspace();
+    await workspace.write("a.md", "needle\n".repeat(10));
+    await workspace.write("b.md", "needle");
+    const capped = JSON.parse((await execute(workspace, "search_text", { query: "needle", maxResults: 3 })).content) as {
+      summary: string;
+      complete: boolean;
+      nextCursor?: string;
+      capReachedIn?: string;
+      matches: unknown[];
+    };
+    expect(capped.matches).toHaveLength(3);
+    expect(capped.complete).toBe(false);
+    // Measured against the first draft of this change: a cap that filled inside
+    // the first eligible file returned `complete: false` with no cursor and no
+    // other field — an incomplete answer naming no action the caller could take.
+    expect(capped.nextCursor ?? capped.capReachedIn).toBe("/workspace/a.md");
+    expect(capped.summary).toContain("result cap reached inside");
+  });
+
+  it("resumes from its own cursor and then reports a complete scan", async () => {
+    const workspace = new MemoryWorkspace();
+    await workspace.write("a.md", "needle a");
+    await workspace.write("b.md", "needle b");
+    const parse = (content: string) => JSON.parse(content) as {
+      complete: boolean;
+      nextCursor?: string;
+      matches: Array<{ path: string }>;
+    };
+    const first = parse((await execute(workspace, "search_text", { query: "needle", maxResults: 1 })).content);
+    expect(first.matches.map((match) => match.path)).toEqual(["/workspace/a.md"]);
+    const second = parse((await execute(workspace, "search_text", { query: "needle", cursor: "/workspace/a.md" })).content);
+    expect(second.matches.map((match) => match.path)).toEqual(["/workspace/b.md"]);
+    expect(second.complete).toBe(true);
+    expect(second.nextCursor).toBeUndefined();
+  });
+
+  it("selects files with a relative glob and says how many the filter kept", async () => {
+    const workspace = new MemoryWorkspace();
+    await workspace.write("src/a.ts", "needle");
+    await workspace.write("src/deep/b.ts", "needle");
+    await workspace.write("docs/readme.md", "needle");
+    const filtered = JSON.parse((await execute(workspace, "search_text", { query: "needle", include: "src/**/*.ts" })).content) as {
+      summary: string;
+      matches: Array<{ path: string }>;
+    };
+    // `src/**/*.ts` is the commonest form a model writes and it selected zero
+    // files in the first draft of this matcher, then reported a complete scan.
+    expect(filtered.matches.map((match) => match.path)).toEqual(["/workspace/src/a.ts", "/workspace/src/deep/b.ts"]);
+    expect(filtered.summary).toContain("2 of 3 files matched the filter");
+  });
+
+  it("refuses an include that selects nothing rather than reporting a complete empty scan", async () => {
+    const workspace = new MemoryWorkspace();
+    await workspace.write("docs/readme.md", "needle");
+    const refused = await execute(workspace, "search_text", { query: "needle", include: "./src/*.ts" });
+    expect(refused.isError).toBe(true);
+    expect(refused.content).toContain("selected 0 of 1 files");
+    expect(refused.content).toContain("/workspace/docs/readme.md");
+    expect(refused.metadata).toMatchObject({ selectedFiles: 0 });
+  });
+
+  it("keeps include inside the path scope rather than widening past it", async () => {
+    // Correct today only because `workspace.list(path)` scopes first. This lane's
+    // whole thesis is that filter-vs-bound ordering is load-bearing, so pin it.
+    const workspace = new MemoryWorkspace();
+    await workspace.write("docs/helper.ts", "no match here");
+    await workspace.write("docs/notes.md", "needle");
+    await workspace.write("src/other.ts", "needle");
+    const filtered = await execute(workspace, "search_text", { path: "/workspace/docs", query: "needle", include: "**/*.ts" });
+    expect((JSON.parse(filtered.content) as { matches: unknown[] }).matches).toEqual([]);
   });
 
   it("keeps opaque workspace bytes out of UTF-8 read, search, and edit tools", async () => {
@@ -267,7 +403,7 @@ describe("workspace tools", () => {
     expect(listed.metadata).toEqual({ count: 1 });
 
     const searched = await execute(workspace, "search_text", { path: "/workspace", query: "needle" });
-    expect(JSON.parse(searched.content)).toEqual([
+    expect((JSON.parse(searched.content) as { matches: unknown[] }).matches).toEqual([
       expect.objectContaining({ path: "/workspace/visible.txt" }),
     ]);
 

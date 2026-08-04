@@ -113,7 +113,7 @@ describe("unified Memory surface", () => {
   it("lets a scope size to what it actually found", () => {
     const lanes = cssRule(styles, ".memory-view .memory-result-lanes");
     expect(lanes).toContain("align-items: start");
-    expect(lanes).toContain("repeat(auto-fit, minmax(320px, 1fr))");
+    expect(lanes).toContain("repeat(auto-fit, minmax(min(320px, 100%), 1fr))");
     expect(styles).not.toContain(".memory-lane-empty");
     // A scope with nothing in it is one 44px row that still names its corpus.
     // The word itself is the projection's, so a fourth lane state cannot be

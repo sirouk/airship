@@ -261,6 +261,23 @@ export interface Tool {
   execute(argumentsValue: JsonValue, context: ToolContext): Promise<ToolExecutionResult>;
 }
 
+/**
+ * Read access to the session work plan for the turn loop itself, rather than
+ * for the model.
+ *
+ * It is a port and not a call to `list_tasks` on purpose: every tool invocation
+ * in this product is reviewed, journalled and bound to an approval ticket, and
+ * a system-side read that borrowed the tool path would either forge that record
+ * or bypass it. The plan is read here the way the live-environment snapshot is
+ * read — beside the tool surface, not through it.
+ */
+export type TaskPlanEntry = Readonly<{ id: string; content: string; status: string }>;
+
+export interface TaskPlanProvider {
+  /** Open work only. Completed items are not worth the context they cost. */
+  openTasks(context: Readonly<{ sessionId: string; signal: AbortSignal }>): Promise<readonly TaskPlanEntry[]>;
+}
+
 export type ApprovalDecision = "allow" | "deny";
 
 export type ApprovalProvenance = Readonly<{
@@ -314,4 +331,27 @@ export interface ApprovalPolicy {
   review(tool: ToolDefinition, argumentsValue: JsonValue, context: ToolContext): Promise<ApprovalDecision>;
   /** One-shot provenance for the immediately completed decision. */
   takeProvenance?(context: ToolContext): ApprovalProvenance | undefined;
+}
+
+/**
+ * Where a corpus's vectors were computed. This is a privacy claim, so it is
+ * declared once and imported: it was previously written out in five places, and
+ * adding a posture updated the provider while leaving lineage, selection, the
+ * live environment and the publisher describing the old world.
+ *
+ * `confidential-remote` may only name a provider whose compute is attested. An
+ * ordinary remote embedder puts the corpus in someone else's plaintext and does
+ * not belong in this union.
+ */
+export const EMBEDDING_POSTURES = Object.freeze([
+  "deterministic-bootstrap",
+  "local-semantic",
+  "confidential-remote",
+] as const);
+
+export type EmbeddingPosture = (typeof EMBEDDING_POSTURES)[number];
+
+/** Boundary check. The type and the runtime list are the same declaration. */
+export function isEmbeddingPosture(value: unknown): value is EmbeddingPosture {
+  return typeof value === "string" && (EMBEDDING_POSTURES as readonly string[]).includes(value);
 }

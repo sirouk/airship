@@ -1137,7 +1137,10 @@
 .skill-card {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: auto 1fr auto auto;
+  /* Header, description, mode control, authoring row, boundary details. The
+     authoring row is present only on `custom.` skills, so the track is written
+     `auto` and collapses to nothing on the six built-ins. */
+  grid-template-rows: auto 1fr auto auto auto;
   min-width: 0;
   min-height: 190px;
   padding: 14px;
@@ -1270,6 +1273,39 @@
 
 .toggle-control.on > span::after {
   transform: translateX(11px);
+}
+
+/*
+ * Edit / Remove for an authored skill. Wraps rather than scrolls: at 320px the
+ * two buttons and the refusal note do not fit on one line, and a horizontally
+ * scrolled control strip inside a card is how a Remove button becomes
+ * unreachable without any measurement saying so.
+ */
+.skill-authoring {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  align-items: center;
+  padding-top: var(--sp-3);
+}
+
+.skill-authoring .danger {
+  color: var(--v-failed);
+  border-color: color-mix(in srgb, var(--v-failed) 45%, var(--line));
+}
+
+.skill-authoring .danger:disabled {
+  color: var(--ink-faint);
+  border-color: var(--line);
+  cursor: not-allowed;
+}
+
+.skill-authoring-note {
+  flex: 1 1 100%;
+  min-width: 0;
+  color: var(--ink-faint);
+  font-size: var(--fs-micro);
+  line-height: 1.45;
 }
 
 .skill-controls label,
@@ -4172,7 +4208,22 @@
   .tabs__tab-button,
   .tabs__close,
   .tabs__overflow .tabs__overflow-trigger,
-  .profile-hub-tabs > button {
+  .profile-hub-tabs > button,
+  /*
+   * The Skills route's two controls, floored here rather than in their own
+   * block for the same reason the strips are: one answer per sheet, so the next
+   * control inherits it instead of having to remember it. `tokens.css` covers
+   * `.small-button` / `.icon-button` / `button.primary` / `.brand` product-wide
+   * and covered neither of these — the global toggle is a `role="switch"`
+   * button at 37px and the per-profile mode control is a `.menu-select-trigger`
+   * at 38px, and each is the primary action of a card.
+   * `e2e/touch-target-floor.spec.ts` measures `skills` now, which is what keeps
+   * this honest: the rule and the rendered box are different claims.
+   */
+  .toggle-control,
+  .profile-hub-scope .menu-select-trigger,
+  .skills-toolbar .menu-select-trigger,
+  .skill-controls .menu-select-trigger {
     min-height: var(--touch-target);
   }
 }

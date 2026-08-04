@@ -1,8 +1,11 @@
 import {
+  CUSTOM_SKILL_ID_PREFIX,
+  MAX_CATALOG_SKILLS,
   createGlobalSkillSettings,
   createProfileRevision,
   createSkillRevision,
   createThemeManifest,
+  isCustomSkillId,
   type GlobalSkillSettings,
   type ProfileRevision,
   type SkillMode,
@@ -40,10 +43,7 @@ export function archiveProfileRevision(catalog: ProfileCatalog, profileId: strin
  *
  * The skill set is a build-time constant, and the catalog is durable state, so
  * the two drift the moment a Vault is adopted: the persisted catalog wins for
- * every later boot and the release's new skills are unreachable forever. There
- * is no authoring path yet either, so the shipped set is the only source a
- * skill can come from and a missing one is unambiguous absence, not a deletion
- * the reader chose.
+ * every later boot and the release's new skills are unreachable forever.
  *
  * The join is therefore deliberately narrow and one-directional:
  *
@@ -52,14 +52,29 @@ export function archiveProfileRevision(catalog: ProfileCatalog, profileId: strin
  *   built-in's text is release-owned and past conversations carry their own
  *   pinned copy of the revision they ran under;
  * - anything else in `persisted.skills` is left exactly as it is, including
- *   skills this build has never heard of;
+ *   skills this build has never heard of and every skill the person authored;
  * - `globalSkills`, `skillModes`, profiles, themes and archive state are never
  *   touched — an absent entry already reads as off/inherit downstream.
+ *
+ * The second bullet is why the namespace assertion below exists. "Replaced"
+ * means the persisted text is discarded with no record it was ever there, which
+ * is the correct answer for release-owned words and the wrong answer for a
+ * person's. Before authoring, a missing skill was unambiguous absence and a
+ * present one could only have come from a release, so no id could be contested.
+ * Now one can, and the only thing standing between an authored skill and a
+ * future release quietly overwriting it is that the shipped set never claims the
+ * `custom.` namespace. That is a build-time property of this file's own drafts,
+ * so it is asserted here rather than hoped for.
  *
  * Identity is returned when nothing changed, which is what lets callers skip a
  * pointless generation bump and keep the digest chain still.
  */
 export function reconcileBuiltInSkills(persisted: ProfileCatalog, builtIn: ProfileCatalog): ProfileCatalog {
+  for (const shipped of builtIn.skills) {
+    if (isCustomSkillId(shipped.skillId)) {
+      throw new Error(`Built-in skill ${shipped.skillId} claims the authored ${CUSTOM_SKILL_ID_PREFIX} namespace.`);
+    }
+  }
   const shippedById = new Map(builtIn.skills.map((skill) => [skill.skillId, skill]));
   const persistedIds = new Set(persisted.skills.map((skill) => skill.skillId));
   let changed = false;
@@ -76,6 +91,118 @@ export function reconcileBuiltInSkills(persisted: ProfileCatalog, builtIn: Profi
   }
   if (!changed) return persisted;
   return Object.freeze({ ...persisted, skills: Object.freeze(skills) });
+}
+
+/**
+ * Which profiles would resolve differently if this skill disappeared.
+ *
+ * Deliberately NOT `Object.hasOwn(profile.skillModes, skillId)`. An explicit
+ * `"inherit"` is byte-identical to absence everywhere the value is read —
+ * `resolveSkillDecisions` reads `skillModes[id] ?? "inherit"` (domain.ts) — so
+ * it changes no decision, no `skillSetDigest` and no composed prompt. Counting
+ * it as a reference is what made an authored skill permanently undeletable
+ * after one ordinary click: the per-profile control wrote `"inherit"` on the
+ * way back from "on", nothing in the tree ever deleted a `skillModes` key, and
+ * Remove then refused forever with a sentence naming a profile that does not
+ * use the skill. `validateProfileCatalog` rejects an orphan key, so there was
+ * no way out of that state from inside the product.
+ *
+ * With `profileSkillModes` in the UI deleting rather than storing `"inherit"`,
+ * such a key can only be legacy state, and `removeAuthoredSkill` strips it.
+ *
+ * Managed profiles only, for the same reason. An archived revision governs no
+ * new work — the Skills route's own scope selector is built from
+ * `managedProfileRevisions`, so it cannot be listed, opened, or set back to
+ * Inherit — and naming one in a refusal would be the identical dead end wearing
+ * different clothes: a sentence telling someone to change a control that is not
+ * on any surface. `removeAuthoredSkill` strips the key from archived revisions
+ * instead, which costs nothing observable because every conversation that ran
+ * under one carries its own pinned copy of the skill set it resolved.
+ */
+export function skillReferences(catalog: ProfileCatalog, skillId: string): readonly string[] {
+  return Object.freeze(
+    managedProfileRevisions(catalog)
+      .filter((profile) => (profile.skillModes[skillId] ?? "inherit") !== "inherit")
+      .map((profile) => profile.name),
+  );
+}
+
+/**
+ * Insert or replace an authored skill revision.
+ *
+ * Only the `custom.` namespace, in both directions: a caller may not author over
+ * a built-in id (the next release would replace the text — see
+ * `reconcileBuiltInSkills`), and may not turn a persisted built-in into an
+ * authored one by handing in a revision that reuses its id. The count ceiling is
+ * checked on insert rather than left to `validateProfileCatalog`, so the refusal
+ * names the skill being added instead of the whole catalog being rejected after
+ * the commit path has already begun.
+ */
+export function upsertAuthoredSkill(catalog: ProfileCatalog, revision: SkillRevision): ProfileCatalog {
+  if (!isCustomSkillId(revision.skillId)) {
+    throw new Error(`Authored skills live in the ${CUSTOM_SKILL_ID_PREFIX} namespace; ${revision.skillId} does not.`);
+  }
+  const index = catalog.skills.findIndex((skill) => skill.skillId === revision.skillId);
+  if (index < 0 && catalog.skills.length >= MAX_CATALOG_SKILLS) {
+    throw new Error(`This catalog already holds the maximum of ${String(MAX_CATALOG_SKILLS)} skills.`);
+  }
+  if (index >= 0 && catalog.skills[index]!.digest === revision.digest) return catalog;
+  const skills = index < 0
+    ? [...catalog.skills, revision]
+    : catalog.skills.map((skill, position) => (position === index ? revision : skill));
+  return Object.freeze({ ...catalog, skills: Object.freeze(skills) });
+}
+
+/**
+ * Remove an authored skill, and every inert trace of it.
+ *
+ * Three states have to be cleared together or the resulting catalog is one
+ * `validateProfileCatalog` will refuse — which, on the commit path, means the
+ * skill stays and the person is told the catalog is invalid rather than what to
+ * do about it:
+ *
+ * - the revision itself;
+ * - its `globalSkills` key, because "Global settings reference missing skill"
+ *   is a rejection, not a default;
+ * - any leftover `skillModes` key, on a managed or an archived revision alike.
+ *   On a managed one it can only be a legacy `"inherit"` — `skillReferences`
+ *   above has already refused anything that decides — and on an archived one it
+ *   may be any mode, because an archived revision starts no new conversation and
+ *   has no control anywhere that could return it to Inherit. Dropping the key
+ *   re-mints the profile revision, which is why this is async, and costs a
+ *   digest that changes nothing observable: every conversation carries its own
+ *   pinned copy of the skill set it resolved.
+ */
+export async function removeAuthoredSkill(catalog: ProfileCatalog, skillId: string): Promise<ProfileCatalog> {
+  if (!isCustomSkillId(skillId)) {
+    throw new Error(`${skillId} is a built-in skill. Built-in skills are owned by the release and can only be turned off.`);
+  }
+  if (!catalog.skills.some((skill) => skill.skillId === skillId)) {
+    throw new Error(`Skill ${skillId} is no longer in this catalog.`);
+  }
+  const referencing = skillReferences(catalog, skillId);
+  if (referencing.length > 0) {
+    throw new Error(`${referencing.join(", ")} still refer to this skill. Set each of them back to Inherit global before removing it.`);
+  }
+  const profiles = await Promise.all(catalog.profiles.map(async (profile) => {
+    if (!Object.hasOwn(profile.skillModes, skillId)) return profile;
+    const skillModes = { ...profile.skillModes };
+    delete skillModes[skillId];
+    return createProfileRevision({
+      ...profile,
+      parentRevision: profile.revision,
+      skillModes,
+      createdAt: new Date().toISOString(),
+    });
+  }));
+  const globalSkills = { ...catalog.globalSkills };
+  delete globalSkills[skillId];
+  return Object.freeze({
+    ...catalog,
+    skills: Object.freeze(catalog.skills.filter((skill) => skill.skillId !== skillId)),
+    profiles: Object.freeze(profiles),
+    globalSkills: createGlobalSkillSettings(globalSkills),
+  });
 }
 
 /**

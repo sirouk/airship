@@ -1,0 +1,206 @@
+import { describe, expect, it } from "vitest";
+import { ToolRegistry, allowAllForTests } from "../tools/registry";
+import { createSessionManifest, runTurn } from "./agent";
+import type {
+  ApprovalPolicy,
+  InferenceEvent,
+  InferenceRequest,
+  InferenceTransport,
+  JsonValue,
+  Tool,
+} from "./contracts";
+import { EventJournal } from "./journal";
+import { MemoryJournalBackend } from "./memory-journal";
+import { auditSessionHistory } from "./session-audit";
+
+describe("parallel dispatch of read-effect tools", () => {
+  it("overlaps a consecutive run of reads while keeping every review serial and ordered", async () => {
+    const log: string[] = [];
+    const tools = instrumentedTools(log, { "a.md": 30, "b.md": 20, "c.md": 10 });
+    const { journal, sessionId } = await sessionFixture(tools);
+    const policy: ApprovalPolicy = {
+      async review(tool) {
+        log.push(`review:${tool.name}`);
+        return "allow";
+      },
+      takeProvenance: allowAllForTests.takeProvenance!,
+    };
+
+    await runTurn({
+      sessionId,
+      content: "Read all three.",
+      transport: batchTransport([
+        ["read_item", "a.md"],
+        ["read_item", "b.md"],
+        ["read_item", "c.md"],
+      ]),
+      tools,
+      journal,
+      approvalPolicy: policy,
+      signal: new AbortController().signal,
+    });
+
+    // Every review lands before any execution: a person is asked the same
+    // questions in the same order they would have been asked serially.
+    expect(log.slice(0, 3)).toEqual(["review:read_item", "review:read_item", "review:read_item"]);
+    // All three are in flight at once. Serially this would read
+    // start/end/start/end/start/end.
+    expect(log.slice(3, 6)).toEqual(["start:a.md", "start:b.md", "start:c.md"]);
+    // They finish in the opposite order to the order they were called in.
+    expect(log.slice(6)).toEqual(["end:c.md", "end:b.md", "end:a.md"]);
+
+    // ...and the journal still reads in call order, not completion order.
+    const events = await journal.readEvents(sessionId);
+    expect(
+      events.filter((event) => event.type === "tool.resulted")
+        .map((event) => String((event.payload as Record<string, JsonValue>).content)),
+    ).toEqual(["read a.md", "read b.md", "read c.md"]);
+
+    const session = await journal.getSession(sessionId);
+    const report = await auditSessionHistory({ session: session!, events });
+    expect(report.findings).toEqual([]);
+    expect(report.status).toBe("verified");
+  });
+
+  it("treats any non-read call as a barrier the surrounding reads cannot cross", async () => {
+    const log: string[] = [];
+    const tools = instrumentedTools(log, { "a.md": 20, "b.md": 5, "w.md": 5, "c.md": 5 });
+    const { journal, sessionId } = await sessionFixture(tools);
+
+    await runTurn({
+      sessionId,
+      content: "Read, write, read.",
+      transport: batchTransport([
+        ["read_item", "a.md"],
+        ["read_item", "b.md"],
+        ["write_item", "w.md"],
+        ["read_item", "c.md"],
+      ]),
+      tools,
+      journal,
+      approvalPolicy: allowAllForTests,
+      signal: new AbortController().signal,
+    });
+
+    // The leading reads overlap; the write waits for both, and the trailing
+    // read waits for the write. A writer never runs beside anything.
+    expect(log).toEqual([
+      "start:a.md",
+      "start:b.md",
+      "end:b.md",
+      "end:a.md",
+      "start:w.md",
+      "end:w.md",
+      "start:c.md",
+      "end:c.md",
+    ]);
+
+    const events = await journal.readEvents(sessionId);
+    const session = await journal.getSession(sessionId);
+    const report = await auditSessionHistory({ session: session!, events });
+    expect(report.findings).toEqual([]);
+  });
+
+  it("keeps the results that landed when one call in the batch throws", async () => {
+    const log: string[] = [];
+    const tools = instrumentedTools(log, { "a.md": 5, "c.md": 5 }, "b.md");
+    const { journal, sessionId } = await sessionFixture(tools);
+
+    await runTurn({
+      sessionId,
+      content: "Read all three.",
+      transport: batchTransport([
+        ["read_item", "a.md"],
+        ["read_item", "b.md"],
+        ["read_item", "c.md"],
+      ]),
+      tools,
+      journal,
+      approvalPolicy: allowAllForTests,
+      signal: new AbortController().signal,
+    });
+
+    const events = await journal.readEvents(sessionId);
+    // `allSettled`, not `all`: one rejection must not discard the two results
+    // that already landed, and each call still answers its own tool message.
+    expect(
+      events
+        .filter((event) => ["tool.resulted", "tool.failed"].includes(event.type))
+        .map((event) => `${event.type}:${String((event.payload as Record<string, JsonValue>).content)}`),
+    ).toEqual(["tool.resulted:read a.md", "tool.failed:b.md is unreadable", "tool.resulted:read c.md"]);
+
+    const session = await journal.getSession(sessionId);
+    const report = await auditSessionHistory({ session: session!, events });
+    expect(report.findings).toEqual([]);
+  });
+});
+
+function instrumentedTools(
+  log: string[],
+  delays: Readonly<Record<string, number>>,
+  failing?: string,
+): ToolRegistry {
+  const tools = new ToolRegistry();
+  const execute: Tool["execute"] = async (argumentsValue) => {
+    const path = String((argumentsValue as Record<string, JsonValue>).path);
+    if (path === failing) throw new Error(`${path} is unreadable`);
+    log.push(`start:${path}`);
+    await new Promise((resolve) => setTimeout(resolve, delays[path] ?? 0));
+    log.push(`end:${path}`);
+    return { content: `read ${path}` };
+  };
+  for (const [name, effect] of [["read_item", "read"], ["write_item", "write"]] as const) {
+    tools.register({
+      definition: {
+        name,
+        description: `${effect} one item.`,
+        effect,
+        inputSchema: {
+          type: "object",
+          properties: { path: { type: "string" } },
+          required: ["path"],
+          additionalProperties: false,
+        },
+      },
+      execute,
+    });
+  }
+  return tools;
+}
+
+async function sessionFixture(tools: ToolRegistry) {
+  const journal = new EventJournal(new MemoryJournalBackend());
+  const manifest = await createSessionManifest({
+    systemPrompt: "Read what you need.",
+    providerId: "scripted",
+    model: "test/model",
+    tools: tools.definitions(),
+    workspaceId: "memory://parallel",
+  });
+  const session = await journal.createSession("Parallel", manifest);
+  return { journal, sessionId: session.id };
+}
+
+/** One step emitting the whole batch, then a final answer. */
+function batchTransport(calls: readonly (readonly [string, string])[]): InferenceTransport {
+  let step = 0;
+  return {
+    id: "scripted",
+    posture: "local",
+    async *stream(_request: InferenceRequest, signal: AbortSignal) {
+      if (signal.aborted) throw signal.reason;
+      if (step++ > 0) {
+        yield { type: "text-delta", text: "Done." } satisfies InferenceEvent;
+        yield { type: "completed", finishReason: "stop" } satisfies InferenceEvent;
+        return;
+      }
+      for (const [index, [name, path]] of calls.entries()) {
+        yield {
+          type: "tool-call",
+          call: { id: `call-${index}`, name, arguments: { path } },
+        } satisfies InferenceEvent;
+      }
+      yield { type: "completed", finishReason: "tool-calls" } satisfies InferenceEvent;
+    },
+  };
+}

@@ -5,6 +5,7 @@ import type { ObjectStore } from "../storage/object-store";
 import type { WorkspaceRootKey } from "../storage/encrypted-envelope";
 import { encodeExpertBlock } from "./codec";
 import type { ContextExpert, ContextRoutingMirror, ContextScope } from "./contracts";
+import type { EmbeddingPosture } from "../core/contracts";
 
 export async function publishContextGeneration(args: {
   store: ObjectStore;
@@ -17,7 +18,7 @@ export async function publishContextGeneration(args: {
   sourceDigest: string;
   extractor: string;
   chunker: string;
-  embeddingPosture: "deterministic-bootstrap" | "local-semantic";
+  embeddingPosture: EmbeddingPosture;
   indexFormat: string;
   chunks: EmbeddedChunk[];
   maxRecordsPerExpert?: number;

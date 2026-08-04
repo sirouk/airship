@@ -5,8 +5,9 @@ import type {
   ToolContext,
   ToolDefinition,
   ToolExecutionResult,
+  TaskPlanProvider,
 } from "../core/contracts";
-import { sha256, stableStringify } from "../core/hash";
+import { toolArgumentsDigest } from "../core/hash";
 import { compileToolInputSchema } from "./schema";
 import type { ClientContextRuntime } from "../retrieval/client-context-runtime";
 import type { TurnContextProvider } from "../core/context-selection";
@@ -37,6 +38,7 @@ export class ToolRegistry {
   private contextRuntime?: ClientContextRuntime;
   private turnContextProvider?: TurnContextProvider;
   private liveEnvironmentProvider?: LiveEnvironmentProvider;
+  private taskPlanProvider?: TaskPlanProvider;
 
   attachContextRuntime(runtime: ClientContextRuntime): void {
     if (this.contextRuntime && this.contextRuntime !== runtime) throw new Error("A different context runtime is already attached.");
@@ -67,6 +69,17 @@ export class ToolRegistry {
 
   getLiveEnvironmentProvider(): LiveEnvironmentProvider | undefined {
     return this.liveEnvironmentProvider;
+  }
+
+  attachTaskPlanProvider(provider: TaskPlanProvider): void {
+    if (this.taskPlanProvider && this.taskPlanProvider !== provider) {
+      throw new Error("A different task plan provider is already attached.");
+    }
+    this.taskPlanProvider = provider;
+  }
+
+  getTaskPlanProvider(): TaskPlanProvider | undefined {
+    return this.taskPlanProvider;
   }
 
   register(tool: Tool): void {
@@ -117,7 +130,7 @@ export class ToolRegistry {
     this.pendingOperations.add(operation);
     try {
       const canonicalArguments = structuredClone(argumentsValue);
-      const argumentsDigest = await sha256(stableStringify(canonicalArguments));
+      const argumentsDigest = await toolArgumentsDigest(canonicalArguments);
       const decision = await approvalPolicy.review(registered.tool.definition, canonicalArguments, context);
       if (decision !== "allow" || context.signal.aborted) return "deny";
       const abort = () => this.consumeApproval(key);
@@ -143,7 +156,7 @@ export class ToolRegistry {
     const key = approvalKey(context);
     const ticket = this.consumeApproval(key);
     if (!ticket || ticket.toolName !== name) throw new Error("Tool execution is not bound to a live approval.");
-    const argumentsDigest = await sha256(stableStringify(argumentsValue));
+    const argumentsDigest = await toolArgumentsDigest(argumentsValue);
     if (argumentsDigest !== ticket.argumentsDigest) throw new Error("Approved tool arguments changed before execution.");
     const result = await registered.tool.execute(structuredClone(argumentsValue), context);
     if (new TextEncoder().encode(result.content).byteLength > MAX_TOOL_OUTPUT_BYTES) {

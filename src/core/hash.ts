@@ -17,6 +17,21 @@ export async function sha256(value: string | Uint8Array): Promise<string> {
   return `sha256:${toBase64Url(new Uint8Array(digest))}`;
 }
 
+/**
+ * The identity a tool approval ticket is bound to, and the product's only
+ * definition of "the same call".
+ *
+ * It lives beside the primitives rather than in the registry because both the
+ * broker that enforces it and the turn loop that detects repeats need it, and a
+ * second, independently-written notion of sameness would drift until repeat
+ * detection either never fired or fired on calls the broker considers distinct.
+ * It is here rather than in `tools/registry` so `core/` does not take a runtime
+ * dependency on `tools/` — that import splits the bundle graph.
+ */
+export function toolArgumentsDigest(argumentsValue: JsonValue): Promise<string> {
+  return sha256(stableStringify(argumentsValue));
+}
+
 export function toBase64Url(bytes: Uint8Array): string {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);

@@ -6,7 +6,8 @@ import type { WorkspaceEntry, WorkspacePort } from "../workspace/contracts";
 import { Icon } from "./icons";
 import type { ContextFabricDriver } from "../retrieval/context-driver";
 import type { RetrievalCommitment, RoutedExpert } from "../retrieval/contracts";
-import type { EmbeddingMode } from "../indexing/semantic-browser-provider";
+import { hasConfidentialAuthority, subscribeConfidentialAuthority, type EmbeddingMode } from "../indexing/semantic-browser-provider";
+import { CHUTES_CONFIDENTIAL_EMBEDDING_PREFLIGHT } from "./connect/egress-preflight";
 import type { SemanticProviderState } from "../indexing/semantic-worker-provider";
 import type { FederatedMemorySearchState } from "../tools/federated-memory";
 import type { ProvenanceRow } from "./provenance-chip";
@@ -53,6 +54,8 @@ export function ContextView({ workspace, entries, dimensions = 384, resultLimit 
   const [embeddingMode, setEmbeddingMode] = useState<EmbeddingMode>(() => runtime.getEmbeddingMode());
   const [semanticState, setSemanticState] = useState<SemanticProviderState | undefined>(() => runtime.getSemanticState());
   const [embeddingChange, setEmbeddingChange] = useState<"idle" | "changing">("idle");
+  /** Whether a Chutes credential is in page memory right now. Never persisted. */
+  const [confidentialAvailable, setConfidentialAvailable] = useState(hasConfidentialAuthority);
   const [statusExpanded, setStatusExpanded] = useState(detailExpanded);
   const [draftQuery, setDraftQuery] = useState("");
   const [localSearchResult, setLocalSearchResult] = useState<ClientContextSearchResult>();
@@ -82,6 +85,17 @@ export function ContextView({ workspace, entries, dimensions = 384, resultLimit 
     setEmbeddingMode(runtime.getEmbeddingMode());
   }), [runtime]);
   useEffect(() => runtime.subscribeSemantic(setSemanticState), [runtime]);
+  /*
+   * The credential can arrive or be released while this view is mounted, and
+   * the initial `useState` read would be a one-time sample of a module global.
+   * Re-read on subscribe as well: connecting between render and effect is a
+   * real ordering, and it would otherwise leave the control hidden until the
+   * next connection change.
+   */
+  useEffect(() => {
+    setConfidentialAvailable(hasConfidentialAuthority());
+    return subscribeConfidentialAuthority(setConfidentialAvailable);
+  }, []);
   useEffect(() => {
     if (!onReady) return;
     const frame = window.requestAnimationFrame(onReady);
@@ -237,15 +251,45 @@ export function ContextView({ workspace, entries, dimensions = 384, resultLimit 
             <i class="context-index-status__chevron" aria-hidden="true" />
           </button>
           <p class="embedding-engine-state" role="status" aria-live="polite">
-            <span class={semanticTone(embeddingMode, semanticState)} />
-            {embeddingStatus(embeddingMode, semanticState, embeddingChange)}
+            <span class={semanticTone(embeddingMode, semanticState, confidentialAvailable)} />
+            {embeddingStatus(embeddingMode, semanticState, embeddingChange, confidentialAvailable)}
             {semanticState?.loadedBytes !== undefined ? <small>{formatBytes(semanticState.loadedBytes)}{semanticState.totalBytes ? ` / ${formatBytes(semanticState.totalBytes)}` : ""}</small> : null}
           </p>
           <div class="embedding-engine-actions" role="group" aria-label="Embedding engine">
             <button type="button" class={embeddingMode === "bootstrap" ? "selected" : ""} aria-pressed={embeddingMode === "bootstrap"} disabled={embeddingChange === "changing"} title="Hash vectors keep retrieval immediately available without a model download. They are deterministic test/bootstrap signals, not semantic understanding." onClick={() => void changeEmbeddingMode("bootstrap")}>Bootstrap</button>
             <button type="button" class={embeddingMode === "semantic" ? "selected" : ""} aria-pressed={embeddingMode === "semantic"} disabled={embeddingChange === "changing"} title="The pinned model executes in an isolated browser worker. WebGPU is preferred; WASM is the automatic fallback." onClick={() => void changeEmbeddingMode("semantic")}>Local semantic</button>
+            {/*
+              * Offered when Chutes is connected — and also whenever it is the
+              * mode in force, even after a release. A `toggle` group whose
+              * selected member has been removed reports `aria-pressed="false"`
+              * on every remaining button, which is a screen reader being told
+              * that nothing is selected while an engine is demonstrably running.
+              * Disabled without an authority, so the group can state the mode
+              * without offering a press that would only fail.
+              */}
+            {confidentialAvailable || embeddingMode === "chutes" ? (
+              <button
+                type="button"
+                class={embeddingMode === "chutes" ? "selected" : ""}
+                aria-pressed={embeddingMode === "chutes"}
+                disabled={embeddingChange === "changing" || !confidentialAvailable}
+                title={CHUTES_CONFIDENTIAL_EMBEDDING_PREFLIGHT}
+                onClick={() => void changeEmbeddingMode("chutes")}
+              >Confidential</button>
+            ) : null}
           </div>
         </div>
+
+        {/*
+          * The one egress disclosure on this screen, beside the control that
+          * causes it rather than behind the disclosure the status row collapses.
+          * Rendered whenever the choice is *offered*, not once it is taken: a
+          * sentence that appears after the corpus has been sent is a receipt,
+          * and this is meant to be a decision.
+          */}
+        {confidentialAvailable || embeddingMode === "chutes" ? (
+          <p class="context-confidential-preflight" role="note">{CHUTES_CONFIDENTIAL_EMBEDDING_PREFLIGHT}</p>
+        ) : null}
 
         {/*
           * One line where a 76px card stood.
@@ -292,9 +336,10 @@ export function ContextView({ workspace, entries, dimensions = 384, resultLimit 
               <ContextMetric label="Refresh" value={generation ? formatMilliseconds(generation.timing.totalMs) : "—"} detail={generation ? `${formatMilliseconds(generation.timing.indexingMs)} indexing` : "no completed run"} />
               <ContextMetric label="Vector memory" value={chunks ? formatBytes(chunks.vectorBytes) : "—"} detail={generation ? `${generation.lineage.embeddingDimensions} dimensions` : "not allocated"} />
             </div>
-            <p class="context-engine-note"><strong>Private embedding engine · {embeddingMode === "semantic" ? "Semantic transformer" : "Deterministic bootstrap"}.</strong> {embeddingMode === "semantic"
-              ? "The pinned model executes in an isolated browser worker. WebGPU is preferred; WASM is the automatic fallback. Public model artifacts may be cached, but workspace text and vectors remain page-memory only."
-              : "Hash vectors keep retrieval immediately available without a model download. They are deterministic test/bootstrap signals, not semantic understanding."}</p>
+            {/* The eyebrow was the literal "Private embedding engine" for every
+                mode, which the confidential one makes false — so the heading is
+                per-mode too, not just the paragraph under it. */}
+            <p class="context-engine-note"><strong>{embeddingEngineNote(embeddingMode).title}</strong> {embeddingEngineNote(embeddingMode).body}</p>
             <p class="context-injection-disclosure" role="note"><strong>Shared runtime.</strong> This screen, the search_context tool, and automatic turn grounding use the same memory-only generation. Selected turn context is bounded and committed to the session journal with source digests.</p>
           </div>
         ) : null}
@@ -512,6 +557,47 @@ function ContextMetric({ label, value, detail, tone = "neutral" }: { label: stri
 }
 
 /**
+ * How each engine is named in a sentence. Exhaustive over `EmbeddingMode`: the
+ * `never` arm is what turns a future fifth mode into a compile error instead of
+ * a mislabelled index.
+ */
+export function embeddingModeNoun(mode: EmbeddingMode): string {
+  if (mode === "semantic") return "local semantic embeddings";
+  if (mode === "chutes") return "confidential remote embeddings";
+  if (mode === "bootstrap") return "bootstrap embeddings";
+  const unreachable: never = mode;
+  return unreachable;
+}
+
+/** The expanded panel's engine paragraph, per mode. Exhaustive for the same reason. */
+export function embeddingEngineNote(mode: EmbeddingMode): Readonly<{ title: string; body: string }> {
+  if (mode === "semantic") {
+    return Object.freeze({
+      title: "Private embedding engine · Semantic transformer.",
+      body: "The pinned model executes in an isolated browser worker. WebGPU is preferred; WASM is the automatic fallback. Public model artifacts may be cached, but workspace text and vectors remain page-memory only.",
+    });
+  }
+  if (mode === "chutes") {
+    return Object.freeze({
+      title: "Remote embedding engine · Chutes confidential compute.",
+      // Deliberately not a second copy of the pre-flight sentence: that one is
+      // always on screen and owns the egress claim. This one describes the
+      // engine, and adds the two facts the pre-flight has no room for — which
+      // model, and what stays here.
+      body: "Chunk text is sent to the Qwen3-Embedding-8B chute with your Chutes credential; the vectors come back here and, like every search, stay page-memory only. The chute runs in a TEE, which is the only reason a remote engine is offered beside two on-device ones.",
+    });
+  }
+  if (mode === "bootstrap") {
+    return Object.freeze({
+      title: "Private embedding engine · Deterministic bootstrap.",
+      body: "Hash vectors keep retrieval immediately available without a model download. They are deterministic test/bootstrap signals, not semantic understanding.",
+    });
+  }
+  const unreachable: never = mode;
+  return unreachable;
+}
+
+/**
  * The four counts the status row carries, in one sentence.
  *
  * They are the same numbers the five metric cards hold; the cards keep their
@@ -525,7 +611,15 @@ export function indexSummaryText(sources: number, chunkCount: number, vectorByte
     `${formatInteger(chunkCount)} chunk${chunkCount === 1 ? "" : "s"}`,
   ];
   if (vectorBytes !== undefined) parts.push(formatBytes(vectorBytes));
-  parts.push(mode === "semantic" ? "local semantic embeddings" : "bootstrap embeddings");
+  /*
+   * A two-branch ternary over a three-member union printed "bootstrap
+   * embeddings" for confidential ones, so the one line that names the engine
+   * named the wrong engine — and named the *safest* wrong engine, in the
+   * accessible label of the collapsed status row as well as in its text. The
+   * union is exhaustive here now, so a fourth mode is a typecheck failure
+   * rather than another silent "bootstrap".
+   */
+  parts.push(embeddingModeNoun(mode));
   return parts.join(" · ");
 }
 
@@ -849,8 +943,27 @@ function formatScore(score: number): string {
   return score.toFixed(3);
 }
 
-function embeddingStatus(mode: EmbeddingMode, state: SemanticProviderState | undefined, change: "idle" | "changing"): string {
-  if (change === "changing") return mode === "semantic" ? "Returning to bootstrap…" : "Loading the same-origin semantic pack…";
+export function embeddingStatus(
+  mode: EmbeddingMode,
+  state: SemanticProviderState | undefined,
+  change: "idle" | "changing",
+  confidentialAvailable = true,
+): string {
+  /*
+   * `mode` during a change is still the mode being left — `changeEmbeddingMode`
+   * only advances it after the rebuild resolves — so the old two-branch guess
+   * ("Returning to bootstrap…" / "Loading the same-origin semantic pack…") named
+   * a destination it could not know even with two modes, and with three it was
+   * wrong more often than right. What is actually true of every direction is the
+   * work `ClientContextRuntime.setEmbeddingMode` does: cancel, reset, rebuild.
+   */
+  if (change === "changing") return "Rebuilding the index for the selected engine…";
+  if (mode === "chutes") {
+    // Fail loudly rather than showing a running engine that cannot authorize.
+    return confidentialAvailable
+      ? "Confidential embeddings active · text leaves this page"
+      : "Confidential embeddings unavailable · Chutes is not connected";
+  }
   if (mode === "bootstrap") return "Bootstrap active · no model loaded";
   if (!state || state.phase === "cold") return "Semantic selected · starts on first index operation";
   if (state.phase === "ready") return `${state.backend === "webgpu" ? "WebGPU" : "WASM"} semantic model ready`;
@@ -860,7 +973,11 @@ function embeddingStatus(mode: EmbeddingMode, state: SemanticProviderState | und
   return state.phase;
 }
 
-function semanticTone(mode: EmbeddingMode, state?: SemanticProviderState): string {
+export function semanticTone(mode: EmbeddingMode, state?: SemanticProviderState, confidentialAvailable = true): string {
+  // The confidential engine has no `SemanticProviderState` — it has no worker
+  // and nothing to download — so without its own arm it fell through to the
+  // `!state` neutral dot and looked identical to bootstrap.
+  if (mode === "chutes") return confidentialAvailable ? "ready" : "error";
   if (mode === "bootstrap" || !state) return "neutral";
   if (state.phase === "ready") return "ready";
   if (state.phase === "failed" || state.phase === "unavailable") return "error";

@@ -391,7 +391,27 @@
    * the three lanes were locked to a common row height, so a lane with one
    * sentence in it was as tall as a lane with three results.
    */
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  /*
+   * `min(320px, 100%)`, not a bare `320px`.
+   *
+   * A track whose minimum is a fixed length takes that length as its base size,
+   * and `auto-fit` always lays down at least one track — so a bare 320px floor
+   * is unsatisfiable inside this route's 294px content box at a 320px viewport,
+   * and the track simply becomes 320px wide inside a 294px parent. The overflow
+   * that produces does not stop here: the oversized track is a minimum
+   * contribution that propagates up, and every sibling grid item of
+   * `.memory-view` — the route header, its bar, its status row, the query form —
+   * then stretches to match it.
+   *
+   * That is why this is the fix and three earlier attempts were not. `min-width:
+   * 0` on the header and its bar, and `minmax(0, 1fr)` on the view itself, all
+   * changed nothing: those elements are victims of this floor, not sources, and
+   * none of them had an automatic minimum left to relax.
+   *
+   * Same guard as `provider-fabric-panel.css` and `provider-connections-view.css`.
+   * Arithmetically identical to `320px` at every width at or above 346px.
+   */
+  grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr));
   align-items: start;
 }
 

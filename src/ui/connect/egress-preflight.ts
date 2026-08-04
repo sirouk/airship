@@ -30,6 +30,50 @@ export const CHUTES_AUTHORIZATION_HOST = "api.chutes.ai";
  */
 export const CHUTES_LOGO_HOST = "logos.chutes.ai";
 
+/**
+ * A fourth Chutes host the same key authorizes, and deliberately not in the
+ * sentence below.
+ *
+ * `connect-src` permits it (`index.html`), `ChutesEmbeddingProvider` sends the
+ * `cpk_` bearer this route collects, and what it would embed is the text of the
+ * person's own workspace files and memories — so leaving it unnamed anywhere
+ * would be the same defect this module was written to fix. But it does not belong in the discovery pre-flight, because
+ * that sentence makes one promise: *these are the hosts this button reaches, in
+ * the order it reaches them*. "Discover models with key" never contacts this
+ * host. Adding it would buy breadth by making the sentence false, and a
+ * disclosure that over-names is not more honest than one that under-names — it
+ * is differently wrong, and it teaches the reader that the list is decorative.
+ *
+ * That day has arrived. The embedding-engine control now offers a third
+ * choice, so the exemption's third half — "no control selects the mode" — has
+ * been paid off in the only currency it accepted: the disclosure below, on
+ * screen beside the control, before the press. `egress-preflight.test.ts` still
+ * asserts all three halves; the third one now reads the other way round.
+ */
+export const CHUTES_CONFIDENTIAL_EMBEDDING_HOST = "chutes-qwen-qwen3-embedding-8b-tee.chutes.ai";
+
+/**
+ * The sentence beside the Confidential embedding button.
+ *
+ * The discovery pre-flight above discloses one credentialed request. This one
+ * discloses something larger and has to say so plainly: selecting confidential
+ * embeddings sends *the text of every indexed workspace file and memory* to a
+ * host outside this page, and keeps doing it on every rebuild — not one request
+ * at the moment of a button press.
+ *
+ * It says "leaves this page" rather than "is uploaded" because the TEE posture
+ * is the only reason this option is admissible at all, and eliding it would
+ * make the choice look worse than it is; it says it *before* naming the TEE
+ * because a caveat that arrives after the reassurance is not read. Both
+ * on-device engines are named in the same breath so the alternative to the
+ * egress is a thing the reader can see rather than infer.
+ *
+ * Placed where the choice is made, not behind the disclosure the status row can
+ * collapse: this is the reader deciding about the request that carries their
+ * corpus, and they decide before pressing.
+ */
+export const CHUTES_CONFIDENTIAL_EMBEDDING_PREFLIGHT = `Choosing this sends the text of every indexed file and memory to ${CHUTES_CONFIDENTIAL_EMBEDDING_HOST}, with your Chutes credential as a bearer token, and again on every rebuild. That chute is confidential compute, which is why it is offered here at all — but the text does leave this page. Bootstrap and Local semantic never send it anywhere.`;
+
 /** How a list of hosts reads in a sentence. */
 export function hostPhrase(hosts: readonly string[]): string {
   if (hosts.length === 0) return "no host";

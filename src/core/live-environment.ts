@@ -6,6 +6,7 @@ import type {
   ToolDefinition,
 } from "./contracts";
 import { sha256, stableStringify } from "./hash";
+import { isEmbeddingPosture, type EmbeddingPosture } from "./contracts";
 
 const MAX_ENTRIES_PER_GROUP = 48;
 const MAX_ENTRY_DETAIL_CHARS = 512;
@@ -86,7 +87,7 @@ export type LiveWorkspaceIndexObservation = Readonly<{
   generationDigest?: string;
   workspaceSnapshotDigest?: string;
   embeddingProvider?: string;
-  embeddingPosture?: "deterministic-bootstrap" | "local-semantic";
+  embeddingPosture?: EmbeddingPosture;
   indexedFiles?: number;
   chunks?: number;
   detail: string;
@@ -393,7 +394,7 @@ function canonicalWorkspaceIndex(value: unknown): LiveEnvironmentSnapshot["works
   if (value.generationDigest !== undefined && !DIGEST_PATTERN.test(String(value.generationDigest))) return undefined;
   if (value.workspaceSnapshotDigest !== undefined && !DIGEST_PATTERN.test(String(value.workspaceSnapshotDigest))) return undefined;
   if (value.embeddingProvider !== undefined && !boundedToken(value.embeddingProvider, 256)) return undefined;
-  if (value.embeddingPosture !== undefined && !["deterministic-bootstrap", "local-semantic"].includes(String(value.embeddingPosture))) return undefined;
+  if (value.embeddingPosture !== undefined && !isEmbeddingPosture(value.embeddingPosture)) return undefined;
   for (const field of ["indexedFiles", "chunks"] as const) {
     if (value[field] !== undefined && (!Number.isSafeInteger(value[field]) || (value[field] as number) < 0 || (value[field] as number) > 10_000_000)) return undefined;
   }
@@ -405,7 +406,7 @@ function canonicalWorkspaceIndex(value: unknown): LiveEnvironmentSnapshot["works
     ...(value.generationDigest ? { generationDigest: value.generationDigest as string } : {}),
     ...(value.workspaceSnapshotDigest ? { workspaceSnapshotDigest: value.workspaceSnapshotDigest as string } : {}),
     ...(value.embeddingProvider ? { embeddingProvider: value.embeddingProvider as string } : {}),
-    ...(value.embeddingPosture ? { embeddingPosture: value.embeddingPosture as "deterministic-bootstrap" | "local-semantic" } : {}),
+    ...(value.embeddingPosture ? { embeddingPosture: value.embeddingPosture as EmbeddingPosture } : {}),
     ...(value.indexedFiles !== undefined ? { indexedFiles: value.indexedFiles as number } : {}),
     ...(value.chunks !== undefined ? { chunks: value.chunks as number } : {}),
     detail,

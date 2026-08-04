@@ -206,14 +206,16 @@ describe("release gate", () => {
     expect(() => assertDocumentedBudgetMeasurements(source.replace("74,690 B\n  // raw", "94,690 B\n  // raw")))
       .toThrow(/optionalProofSurface: its comment records 94,690 B raw, above the 88\.00 KiB raw ceiling/u);
     // …and a raise cannot be laundered by deleting the number it contradicts.
-    expect(() => assertDocumentedBudgetMeasurements(source.replace("Measured 80,247 B raw / 25,486 B gzip", "Weighed at 80,247 B and 25,486 B")))
+    expect(() => assertDocumentedBudgetMeasurements(source.replace("measured on this build: 78,628 B raw / 24,795 B gzip", "weighed at 78,628 B and 24,795 B")))
       .toThrow(/optionalWorkspaceWorkbench: its comment no longer records a measured raw\/gzip pair/u);
 
     /*
      * The gzip ceilings as the review found them: a whole KiB past the smallest step
      * that clears the measurement recorded beside them, which is transfer budget
      * granted by a comment that said nothing about it. (deferredCapabilities is shown
-     * at two steps, because its 118 KiB is itself the justified second step.) Any step
+     * at two steps, because its own ceiling is already the justified second step —
+     * the pair moves with it, which is the point: this row has to name the ceiling
+     * as it stands or it stops testing anything.) Any step
      * beyond the first has to be paid for with the sentence naming what the tighter one
      * would have left — which is why the raw ceilings beside these pass untouched.
      */
@@ -221,7 +223,7 @@ describe("release gate", () => {
       ["optionalMemoryView", "gzip: 21 * 1024", "gzip: 22 * 1024"],
       ["optionalProofSurface", "gzip: 28 * 1024", "gzip: 29 * 1024"],
       ["optionalWorkspaceWorkbench", "gzip: 25 * 1024", "gzip: 26 * 1024"],
-      ["deferredCapabilities", "gzip: 124 * 1024", "gzip: 126 * 1024"],
+      ["deferredCapabilities", "gzip: 125 * 1024", "gzip: 126 * 1024"],
     ]) {
       const raised = source.replace(new RegExp(`^  ${name}: .*$`, "mu"), (line) => line.replace(ceiling, granted));
       expect(raised, name).not.toBe(source);

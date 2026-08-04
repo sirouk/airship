@@ -430,12 +430,19 @@ test("Memory unifies federated search, graph, and the legacy Context index deep 
   const relationships = page.locator("#memory-relationships");
   await expect.poll(() => relationships.evaluate((element: HTMLDetailsElement) => element.open)).toBe(true);
   await expect(page.getByLabel("Interactive memory relationship graph")).toBeVisible();
+  const index = page.locator("#memory-index");
+  /*
+   * Asserted before any query exists, because "closed" is only a claim about
+   * arrival. The route opens this section itself the first time a search settles
+   * (`src/ui/memory-view.tsx:692-695`), so asserting it closed *after* the fill
+   * raced the route's own writer — a race no timeout can win, and the same shape
+   * that reddened the integration gate at `profile-silo.spec.ts`.
+   */
+  await expect.poll(() => index.evaluate((element: HTMLDetailsElement) => element.open)).toBe(false);
   await query.fill("workspace");
   await expect(relationships.getByText("Graph matches for “workspace”", { exact: true })).toBeVisible();
   await expect(page.locator("#memory-results").getByRole("status")).toContainText(/Searching|current/u);
-  const index = page.locator("#memory-index");
-  await expect.poll(() => index.evaluate((element: HTMLDetailsElement) => element.open)).toBe(false);
-  await index.locator("summary").click();
+  await openMemoryIndex(page);
   await expect(page.getByRole("status", { name: "Shared Memory query in the workspace index" })).toContainText("Following “workspace”");
 
   await page.goto("/#context");

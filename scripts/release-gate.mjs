@@ -118,7 +118,30 @@ export const RELEASE_BUDGETS = Object.freeze({
   // above is set by — so each takes one further whole-KiB step, leaving 1,199
   // bytes raw / 1,289 gzip. The fixed first-paint cap above did not move: none
   // of this loads at startup.
-  deferredCapabilities: Object.freeze({ raw: 418 * 1024, gzip: 124 * 1024 }),
+  //
+  // The confidential embedding mode moves both a third time. `EmbeddingMode`
+  // has had a `chutes` member and a working provider behind it for as long as
+  // `SwitchableEmbeddingProvider` has existed, and no writer: nothing called
+  // `setConfidentialAuthority`, so the mode was unreachable and every string on
+  // the Context screen was written as a two-branch ternary that filed it under
+  // "bootstrap". This pass adds the third toggle, per-mode text for a union that
+  // is now exhaustive, and — because the fourth Chutes host is a genuine egress
+  // surface that ships the text of every indexed file — the pre-flight sentence
+  // `egress-preflight.ts` promised would have to be written the day a control
+  // appeared. That prose is the growth; it is nearly all string literals, which
+  // is why raw moves 1,543 B while gzip moves 536 B. Trimmed first: the expanded
+  // panel's engine paragraph stopped restating the pre-flight's egress claim and
+  // kept its own two facts, returning 66 B.
+  // Measured 429,452 B raw / 126,907 B gzip. 420 KiB raw would have left 628
+  // bytes and 124 KiB gzip would have left 69 — the same tripwire the reading
+  // above refused — so each takes one further whole-KiB step, leaving 1,652
+  // bytes raw / 1,093 gzip. The fixed first-paint cap still did not move: the
+  // Context route is behind `context-route.tsx`'s dynamic import, and the
+  // *writer* is deliberately a dependency-free module
+  // (`src/indexing/confidential-authority.ts`) precisely so installing it from
+  // `app.tsx` does not drag the provider, the hash embedder and a worker URL
+  // into startup JavaScript.
+  deferredCapabilities: Object.freeze({ raw: 421 * 1024, gzip: 125 * 1024 }),
   // Core plus every optional route except the two independently delivered
   // vendor engines. The former 384 KiB "all routes" meaning became impossible
   // once full isomorphic-git and xterm engines were deliberately installed:
@@ -270,7 +293,62 @@ export const RELEASE_BUDGETS = Object.freeze({
    * clean clone. Making the split itself deterministic is worth doing and is
    * not this pass's job.
    */
-  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2036 * 1024, gzip: 646 * 1024 }),
+  // Skill authoring spends 6.67 KiB raw / 2.36 KiB gzip of this partition, and
+  // says what it bought: a Skills route that could only toggle six instructions
+  // shipped by the release can now write, revise and delete its own. Before
+  // this, `createSkillRevision` had no authoring caller anywhere in the tree —
+  // the capability existed in the domain and had no way in.
+  //
+  // ENTRY JavaScript did not move past its ceiling and was not allowed to: the
+  // authoring panel and its stylesheet are a separate chunk fetched only when
+  // someone presses New skill or Edit (`optionalSkillEditor` below), so a
+  // visitor who reads the grid pays none of it. What lands in the entry graph
+  // is the grid's own two controls and the three catalog transforms behind
+  // them, which the removal path has to reach from the card.
+  //
+  // Measured 2040.29 KiB raw / 646.84 KiB gzip on the larger of the two
+  // `transcript-operations` splits described above, so the ceiling covers both
+  // forms rather than the one this machine happened to emit. 2041 KiB raw would
+  // have left 727 bytes and 647 KiB gzip would have left 164; both take one
+  // further whole-KiB step, for the reason stated throughout this file — a
+  // ceiling a minifier rename can breach is a tripwire, not a budget.
+  //
+  // In-turn provider resilience carries the partition with it, and all of the
+  // growth is the agent pack reviewed under `optionalAgentRuntime` below — an
+  // attempt loop around each inference call plus the materialization that keeps
+  // a cancelled turn's completed tool results. It buys the difference between an
+  // agent and a demo: before it, one 429 or one dropped connection ended a turn
+  // that may have run twenty steps and written files, and every completed tool
+  // result went with it. Nothing eager moved and the entry ceiling is untouched.
+  // Measured 2043.86 KiB raw / 648.05 KiB gzip. 2044 KiB raw would have left 143
+  // bytes, so raw takes one further whole-KiB step for the tripwire reason
+  // above; 649 KiB gzip leaves 973 and takes the tighter step.
+  //
+  // The turn-loop pass carries the partition again, and again every byte of the
+  // growth is in the agent pack reviewed under `optionalAgentRuntime` below —
+  // nothing eager moved and `entryJavaScript` is untouched. Most of it is not
+  // code but the sentences themselves: the guardrail warning and stop have to
+  // name the repeated call and say what to do instead, and the plan note has to
+  // label itself a restatement rather than a fresh instruction, in the model's
+  // own channel, or none of it is visible where it has to be. Measured 2047.34
+  // KiB raw / 649.31 KiB gzip; both ceilings take the smallest whole-KiB step
+  // above that reading, leaving 676 bytes raw and 706 gzip.
+  //
+  // The surfaces pass carries the partition again, and the whole of the growth
+  // is the deferred-capability pack reviewed above: a `chutes` embedding mode
+  // that had a provider, a persistence guard and a dimension contract and no
+  // writer at all, so nothing in the shipped tree could enter it. Making it
+  // reachable is mostly prose — a third toggle, per-mode text for a union that
+  // three screens were treating as two, and the egress sentence the fourth
+  // Chutes host has always been owed. `entryJavaScript` is untouched and nothing
+  // eager moved: the Context route is already behind a dynamic import, and the
+  // one piece that does load eagerly — the authority setter — was extracted into
+  // a module with no imports (`src/indexing/confidential-authority.ts`) rather
+  // than reached for through the provider it belongs to. Measured 2049.76 KiB
+  // raw / 650.13 KiB gzip. 2050 KiB raw would have left 246 bytes, so raw takes
+  // one further whole-KiB step for the tripwire reason stated throughout this
+  // file; 651 KiB gzip leaves 891 and takes the tighter step.
+  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2051 * 1024, gzip: 651 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now measures 672.33 KiB raw / 186.61 KiB gzip:
   // the browser-Git pack grew (see optionalBrowserGit) and the Terminal pack
@@ -350,7 +428,33 @@ export const RELEASE_BUDGETS = Object.freeze({
   // condition. Measured 2702.03 KiB raw / 829.66 KiB gzip.
   // Sized for both chunk splits; see `firstPartyJavaScriptAndWorkers`. Measured
   // 2712.18 KiB raw / 833.80 KiB gzip from a clean clone.
-  totalJavaScriptAndWorkers: Object.freeze({ raw: 2713 * 1024, gzip: 834 * 1024 }),
+  // Skill authoring carries into the installed aggregate exactly as it lands in
+  // the first-party partition above — both vendor pins are unchanged, so all of
+  // the growth is the first-party weight already reviewed there. Measured
+  // 2716.69 KiB raw / 834.76 KiB gzip on the larger chunk split. 2717 KiB raw
+  // would have left 318 bytes and 835 KiB gzip 246; both take one further
+  // whole-KiB step. Nothing eager moved and the entry ceiling is untouched.
+  // In-turn provider resilience carries into the installed aggregate exactly as
+  // it lands in the first-party partition above; the vendor pins are unchanged,
+  // so all of the growth is weight already reviewed there. Measured 2720.22 KiB
+  // raw / 835.95 KiB gzip. 836 KiB gzip would have left 51 bytes, so gzip takes
+  // one further whole-KiB step; 2721 KiB raw leaves 799 and takes the tighter
+  // step. Nothing eager moved and the entry ceiling is untouched.
+  // The turn-loop pass carries into the installed aggregate exactly as it lands
+  // in the first-party partition above; the vendor pins are unchanged, so all
+  // of the growth is weight already reviewed there. Measured 2723.70 KiB raw /
+  // 837.21 KiB gzip. 2724 KiB raw would have left 307 bytes, so raw takes one
+  // further whole-KiB step for the tripwire reason stated throughout this file;
+  // 838 KiB gzip leaves 809 and takes the tighter step. Nothing eager moved and
+  // the entry ceiling is untouched.
+  // The surfaces pass carries into the installed aggregate exactly as it lands
+  // in the first-party partition above; the vendor pins are unchanged, so all of
+  // the growth is weight already reviewed there — a `chutes` embedding mode with
+  // no writer, given one, plus the egress sentence that reaching it requires.
+  // Measured 2726.16 KiB raw / 838.04 KiB gzip. Both take the smallest whole-KiB
+  // step above that reading, leaving 860 bytes raw and 983 gzip. Nothing eager
+  // moved and the entry ceiling is untouched.
+  totalJavaScriptAndWorkers: Object.freeze({ raw: 2727 * 1024, gzip: 839 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. Keep it visible under a dedicated, deliberately small cap.
   serviceWorker: Object.freeze({ raw: 12 * 1024, gzip: 4 * 1024 }),
@@ -422,10 +526,35 @@ export const RELEASE_BUDGETS = Object.freeze({
   optionalWasixJavaScript: Object.freeze({ raw: 0, gzip: 0 }),
   optionalWasixWasm: Object.freeze({ raw: 0, gzip: 0 }),
   // The full inspect-act-verify loop is fetched on the first sent turn. Live
-  // environment capture and persisted evidence scheduling put the measured
-  // pack at 49,170 B raw / 14,093 B gzip: raw crossed the old cap by 18 bytes,
-  // so only that ceiling takes the next whole-KiB step. First paint is fixed.
-  optionalAgentRuntime: Object.freeze({ raw: 49 * 1024, gzip: 14 * 1024 }),
+  // environment capture and persisted evidence scheduling had put the pack at
+  // 49,170 B raw / 14,093 B gzip.
+  //
+  // In-turn provider resilience now joins it, and this pack is the only place
+  // it can live: the attempt loop has to sit where the turn can see whether the
+  // stream was ever observed, because a failure after the first event can never
+  // be redelivered. What landed is jittered decorrelated backoff, an RFC 7231
+  // `Retry-After` parse (delay-seconds and HTTP-date), the classification that
+  // says a 429 or a 5xx may be repeated while a 400 or a 401 may not, and the
+  // materialization that keeps a cancelled turn's completed tool results rather
+  // than discarding the turn whole. Measured 49.48 KiB raw / 14.33 KiB gzip;
+  // both ceilings take the smallest whole-KiB step above that reading. First
+  // paint is fixed — none of this is fetched until a turn is sent.
+  //
+  // The turn loop now also stops wasting itself. Three mechanisms land in this
+  // pack because all three are properties of the loop rather than of any tool:
+  // a per-turn repeat detector keyed on the broker's own `(tool, arguments)`
+  // digest, which warns inside the tool message the model actually reads and
+  // ends the turn on the fifth identical failure instead of burning 32 steps on
+  // it; a work-plan restatement emitted when a compaction fires, so a long turn
+  // stops having to remember to call `list_tasks` to remember its own plan; and
+  // parallel dispatch of consecutive read-effect calls, which is the smallest
+  // of the three on disk and the largest in latency. The restatement carries a
+  // canonical renderer because the session audit rebuilds every request this
+  // turn was digested over and has to reproduce the note byte for byte.
+  // Measured 52.08 KiB raw / 15.33 KiB gzip; both ceilings take the smallest
+  // whole-KiB step above that reading, leaving 942 bytes raw and 686 gzip.
+  // Still nothing before the first sent turn.
+  optionalAgentRuntime: Object.freeze({ raw: 53 * 1024, gzip: 16 * 1024 }),
   // Image normalization is fetched only when a turn actually carries an image;
   // text-only first paint and text-only turns do not pay for it. Measured
   // 2,343 B raw / 1,153 B gzip.
@@ -468,11 +597,32 @@ export const RELEASE_BUDGETS = Object.freeze({
   // The human-journey pass added the workspace's lost-work row and the Git
   // handoff the developer persona found missing, and then the eight-lane pass
   // added the workspace's own honest path line and its lost-work row.
-  // Measured 80,247 B raw / 25,486 B gzip; both ceilings are the tightest
-  // whole-KiB step that clears that reading. The route is still fetched only
-  // when Workspace opens, so the fixed first-paint ceiling is untouched.
-  optionalWorkspaceWorkbench: Object.freeze({ raw: 79 * 1024, gzip: 25 * 1024 }),
-  optionalWorkspaceBinding: Object.freeze({ raw: 2 * 1024, gzip: 1 * 1024 }),
+  // Re-measured on this build: 78,628 B raw / 24,795 B gzip. This line recorded
+  // 80,247 bytes and a 25,486-byte gzip, which describe no build this tree
+  // produces — the route and everything it imports are untouched since, so the
+  // figure had simply stopped being re-taken. That is the failure
+  // assertDocumentedBudgetMeasurements exists to catch, and it did not catch it,
+  // because a *stale-high* figure keeps satisfying every rule here: the ceiling
+  // still clears it, and it is still the tightest step above it. The guard can
+  // only refuse a comment that overstates its ceiling, never one that overstates
+  // the build. Only a re-measurement closes that, so the raw ceiling comes down
+  // 79 KiB → 78 KiB with the reading. 77 KiB raw would have left 220 bytes,
+  // inside the margin a minifier rename moves, which is the step this file
+  // declines elsewhere for the same reason; the gzip ceiling is already the
+  // tightest whole-KiB step above its reading and does not move. The route is
+  // still fetched only when Workspace opens, so first paint is untouched.
+  optionalWorkspaceWorkbench: Object.freeze({ raw: 78 * 1024, gzip: 25 * 1024 }),
+  // Held only the Git workspace binding, at 519 B raw / 345 B gzip. It now also
+  // holds the one bounded content scan: `search_text` and the Explorer's Contents
+  // filter both import it, so Rollup gives it to the chunk those two share rather
+  // than inlining a copy in each — the Workspace route shed 1,556 raw bytes of
+  // its own copy in the same build. The scan grew a resume cursor, an `include`
+  // path glob and a summary that names every bound that fired, because the tool's
+  // separate copy could answer "0 matches" for a filter that had selected no file
+  // to search at all. Measured 3,844 B raw / 1,741 B gzip; both ceilings are the
+  // tightest whole-KiB step that clears that reading. Still fetched only when the
+  // Workspace route or the agent's tool bundle binds, so first paint is untouched.
+  optionalWorkspaceBinding: Object.freeze({ raw: 4 * 1024, gzip: 2 * 1024 }),
   optionalWorkspaceCodec: Object.freeze({ raw: 2 * 1024, gzip: 1 * 1024 }),
   optionalSourceControl: Object.freeze({ raw: 48 * 1024, gzip: 14 * 1024 }),
   // Binds only when Vite emits the ~650-byte store as its own chunk. In the
@@ -579,6 +729,14 @@ export const RELEASE_BUDGETS = Object.freeze({
   // Small shared node-shape vocabulary split out by Vite because both the
   // Memory route and deferred graph renderer consume it.
   optionalMemorySupport: Object.freeze({ raw: 2 * 1024, gzip: 1 * 1024 }),
+  // The authoring panel for a `custom.` skill: form, its stylesheet's JS shim,
+  // and nothing else. Deferred because the Skills route is a grid people read
+  // far more often than they write, and the six built-ins cannot be edited at
+  // all — a visitor who never presses New skill or Edit pays nothing for it.
+  // Named in MEASUREMENT_JUSTIFIED_BUDGETS, so this pair is enforced rather
+  // than merely written: a placeholder left here fails the gate instead of
+  // surviving it. Measured 3,396 B raw / 1,320 B gzip.
+  optionalSkillEditor: Object.freeze({ raw: 4 * 1024, gzip: 2 * 1024 }),
   /*
    * The one destructive-confirmation dialog, shared rather than re-implemented.
    *
@@ -760,7 +918,17 @@ export const RELEASE_BUDGETS = Object.freeze({
   // raw / 29,532 B gzip. Gzip does not move and is not close: 28.84 KiB inside
   // a 32 KiB ceiling. Entry JavaScript, the other first-paint ceiling, is
   // untouched at 111.59 KiB.
-  entryCss: Object.freeze({ raw: 171 * 1024, gzip: 32 * 1024 }),
+  //
+  // Skill authoring takes raw one further KiB, to 172, for two rules the route
+  // could not be honest without: the Edit/Remove row on an authored card, which
+  // wraps rather than scrolls so a Remove button cannot leave the card at 320px;
+  // and the coarse-pointer floor for this route's own two controls, a 37px
+  // `role="switch"` toggle and a 38px mode trigger that the product-wide
+  // `.small-button` floor never covered. The panel's own stylesheet is NOT here
+  // — it ships with the deferred `skill-editor` chunk. Measured 175,303 B raw /
+  // 29,655 B gzip. Gzip does not move and is not close: 28.96 KiB inside a
+  // 32 KiB ceiling.
+  entryCss: Object.freeze({ raw: 172 * 1024, gzip: 32 * 1024 }),
   eachWasm: Object.freeze({ raw: 1024 * 1024, gzip: 350 * 1024 }),
   allWasm: Object.freeze({ raw: 1024 * 1024, gzip: 350 * 1024 }),
 });
@@ -865,6 +1033,7 @@ export const MEASUREMENT_JUSTIFIED_BUDGETS = Object.freeze([
   "optionalCapabilitiesView",
   "optionalMemoryView",
   "optionalProofSurface",
+  "optionalSkillEditor",
 ]);
 
 /*
@@ -1358,6 +1527,11 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
     throw new Error(`Production must contain exactly one optional Memory support chunk; found ${optionalMemorySupportPacks.length}.`);
   }
   const optionalMemorySupportMeasurement = measure(optionalMemorySupportPacks[0].payload);
+  const optionalSkillEditorPacks = javaScriptFiles.filter((file) => isOptionalSkillEditorPath(file.path));
+  if (optionalSkillEditorPacks.length !== 1) {
+    throw new Error(`Production must contain exactly one optional skill editor; found ${optionalSkillEditorPacks.length}.`);
+  }
+  const optionalSkillEditorMeasurement = measure(optionalSkillEditorPacks[0].payload);
   const optionalMessagePartsPacks = javaScriptFiles.filter((file) => isOptionalMessagePartsPath(file.path));
   if (optionalMessagePartsPacks.length !== 1) {
     throw new Error(`Production must contain exactly one message-parts pack; found ${optionalMessagePartsPacks.length}.`);
@@ -1500,6 +1674,7 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
       && !isOptionalBrowserCapabilityPath(file.path)
       && !isOptionalMemoryViewPath(file.path)
       && !isOptionalMemorySupportPath(file.path)
+      && !isOptionalSkillEditorPath(file.path)
       && !isOptionalProofSurfacePath(file.path)
       && !isOptionalEvidenceAcquisitionPath(file.path)
       && !isOptionalTerminalPath(file.path)
@@ -1574,6 +1749,7 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
       { name: "browser-capabilities", paths: optionalBrowserCapabilityPacks.map((file) => file.path) },
       { name: "memory-view", paths: optionalMemoryViewPacks.map((file) => file.path) },
       { name: "memory-support", paths: optionalMemorySupportPacks.map((file) => file.path) },
+      { name: "skill-editor", paths: optionalSkillEditorPacks.map((file) => file.path) },
       { name: "confirm-dialog", paths: optionalConfirmDialogPacks.map((file) => file.path) },
       { name: "shortcut-sheet", paths: optionalShortcutSheetPacks.map((file) => file.path) },
       { name: "shell-overlays", paths: optionalShellOverlayPacks.map((file) => file.path) },
@@ -1687,6 +1863,7 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
   );
   assertWithinBudget("Optional Memory view", optionalMemoryViewMeasurement, RELEASE_BUDGETS.optionalMemoryView);
   assertWithinBudget("Optional Memory support", optionalMemorySupportMeasurement, RELEASE_BUDGETS.optionalMemorySupport);
+  assertWithinBudget("Optional skill editor", optionalSkillEditorMeasurement, RELEASE_BUDGETS.optionalSkillEditor);
   assertWithinBudget("Shared confirm dialog", optionalConfirmDialogMeasurement, RELEASE_BUDGETS.optionalConfirmDialog);
   assertWithinBudget("Optional shortcut sheet", optionalShortcutSheetMeasurement, RELEASE_BUDGETS.optionalShortcutSheet);
   assertWithinBudget("Optional shell overlays", optionalShellOverlayMeasurement, RELEASE_BUDGETS.optionalShellOverlays);
@@ -1886,6 +2063,10 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
       optionalMemorySupport: Object.freeze({
         path: optionalMemorySupportPacks[0].path,
         ...optionalMemorySupportMeasurement,
+      }),
+      optionalSkillEditor: Object.freeze({
+        path: optionalSkillEditorPacks[0].path,
+        ...optionalSkillEditorMeasurement,
       }),
       optionalConfirmDialog: Object.freeze({
         path: optionalConfirmDialogPacks[0].path,
@@ -2155,6 +2336,11 @@ export function isOptionalMemoryViewPath(path) {
 
 export function isOptionalMemorySupportPath(path) {
   return /^assets\/kind-visual-[A-Za-z0-9_-]+\.js$/u.test(path);
+}
+
+/** The `custom.` skill authoring panel; see `optionalSkillEditor`. */
+export function isOptionalSkillEditorPath(path) {
+  return /^assets\/skill-editor-[A-Za-z0-9_-]+\.js$/u.test(path);
 }
 
 /** The shared destructive-confirmation dialog; see `optionalConfirmDialog`. */
@@ -2580,6 +2766,9 @@ function printResult(result) {
   );
   console.log(
     `Optional Memory support ${formatBytes(measurements.optionalMemorySupport.raw)} raw / ${formatBytes(measurements.optionalMemorySupport.gzip)} gzip`,
+  );
+  console.log(
+    `Optional skill editor ${formatBytes(measurements.optionalSkillEditor.raw)} raw / ${formatBytes(measurements.optionalSkillEditor.gzip)} gzip`,
   );
   console.log(
     `Optional Proof surface ${formatBytes(measurements.optionalProofSurface.raw)} raw / ${formatBytes(measurements.optionalProofSurface.gzip)} gzip`,

@@ -4,6 +4,7 @@ import { Icon } from "../icons";
 import { PROFILE_APPROVAL_LABELS } from "../profiles-governance";
 import { Seal, type SealState } from "../seal";
 import { capabilityTierDetail, capabilityTierLabel } from "./capability-tier";
+import { ASSISTANT_LENGTH_CODE } from "./message-parts";
 import type { MessagePart, TextPart, ToolCallAuthority, ToolCallPart, ToolResultPart } from "./message-parts";
 import { MarkdownView } from "./markdown";
 import { useTranscriptOperations, type TranscriptOperationsMode } from "./transcript-operations";
@@ -726,6 +727,11 @@ const ERROR_HEADINGS: Readonly<Record<string, string>> = Object.freeze({
   "turn.failed": "Turn failed",
   "local.command.cancelled": "Command cancelled",
   "local.command.failed": "Command failed",
+  // The turn itself succeeded — the provider answered, the receipt is real, the
+  // footer below is true. What failed is the *answer*, and the heading has to
+  // say so without borrowing turn vocabulary that would contradict the footer
+  // one element away.
+  [ASSISTANT_LENGTH_CODE]: "Response was cut off",
 });
 
 /**

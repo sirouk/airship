@@ -1,5 +1,6 @@
 import type { JsonValue, SessionManifest } from "./contracts";
 import { sha256, stableStringify } from "./hash";
+import { isEmbeddingPosture, type EmbeddingPosture } from "./contracts";
 
 const DIGEST = /^sha256:[A-Za-z0-9_-]{43}$/u;
 const MAX_HITS = 8;
@@ -42,7 +43,7 @@ export type CanonicalContextGeneration = Readonly<{
   embedding?: Readonly<{
     provider: string;
     dimensions: number;
-    posture: "deterministic-bootstrap" | "local-semantic";
+    posture: EmbeddingPosture;
   }>;
   indexFormat: string;
   persistence: "memory-only" | "encrypted-vault";
@@ -379,7 +380,7 @@ function canonicalGeneration(value: unknown): CanonicalContextGeneration | undef
   if (value.embedding !== undefined) {
     if (!isRecord(value.embedding) || !boundedString(value.embedding.provider, 512) ||
         !safeInteger(value.embedding.dimensions, 1, 65_536) ||
-        (value.embedding.posture !== "deterministic-bootstrap" && value.embedding.posture !== "local-semantic")) return undefined;
+        !isEmbeddingPosture(value.embedding.posture)) return undefined;
     embedding = Object.freeze({
       provider: value.embedding.provider as string,
       dimensions: value.embedding.dimensions as number,

@@ -11,8 +11,38 @@ import type { ApprovalMode } from "../approvals/modes";
 const MAX_DESCRIPTION_LENGTH = 4_096;
 const MAX_NAME_LENGTH = 120;
 const MAX_PROMPT_LENGTH = 128 * 1_024;
-const MAX_SKILLS = 512;
+/**
+ * One skill-count ceiling for the whole product.
+ *
+ * There were two, and they disagreed: this module refused above 512 while
+ * `persistence.ts` admitted 1_024. A catalog of 600 skills therefore passed
+ * `validateProfileCatalog`, was sealed into the encrypted head, and then threw
+ * "Skill catalog exceeds the supported limit." out of `resolveProfileForSession`
+ * on every subsequent boot — durable state the product had accepted and could
+ * no longer open. That gap was unreachable while the shipped set was the only
+ * source of a skill (6 built-ins). Authoring makes it reachable one skill at a
+ * time, so the two constants become one and the value that refuses is the value
+ * that admits.
+ */
+export const MAX_CATALOG_SKILLS = 512;
 const MAX_TOOLS_PER_SKILL = 128;
+
+/**
+ * The namespace an authored skill lives in, and the only namespace this product
+ * will edit or delete.
+ *
+ * A built-in's text is release-owned: `reconcileBuiltInSkills` replaces any
+ * persisted copy whose digest drifts from the shipped one, so letting authoring
+ * write a built-in id would mean the next release silently overwrites the
+ * person's words with no record that they existed. The prefix is what makes
+ * "this is yours" and "this is ours" a decidable question at every seam that
+ * has to answer it.
+ */
+export const CUSTOM_SKILL_ID_PREFIX = "custom.";
+
+export function isCustomSkillId(skillId: string): boolean {
+  return skillId.startsWith(CUSTOM_SKILL_ID_PREFIX);
+}
 
 export type ContentDigest = `sha256:${string}`;
 export type SkillMode = "inherit" | "on" | "off";
@@ -280,7 +310,7 @@ export async function createSkillRevision(draft: SkillRevisionDraft): Promise<Sk
 /** Copies and freezes UI-owned toggle state; this is not a persistence adapter. */
 export function createGlobalSkillSettings(settings: Readonly<Record<string, boolean>>): GlobalSkillSettings {
   const entries = Object.entries(settings);
-  if (entries.length > MAX_SKILLS) throw new Error("Global skill settings exceed the supported limit.");
+  if (entries.length > MAX_CATALOG_SKILLS) throw new Error("Global skill settings exceed the supported limit.");
   const normalized: Record<string, boolean> = {};
   for (const [rawSkillId, enabled] of entries.sort(([left], [right]) => asciiCompare(left, right))) {
     const skillId = identifier(rawSkillId, "skill ID");
@@ -399,7 +429,7 @@ export async function resolveProfileForSession(args: Readonly<{
   if (args.profile.theme.themeId !== args.theme.themeId || args.profile.theme.digest !== args.theme.digest) {
     throw new Error("Profile theme reference does not match the supplied theme revision.");
   }
-  if (args.skills.length > MAX_SKILLS) throw new Error("Skill catalog exceeds the supported limit.");
+  if (args.skills.length > MAX_CATALOG_SKILLS) throw new Error("Skill catalog exceeds the supported limit.");
 
   const skillsById = new Map<string, SkillRevision>();
   for (const skill of args.skills) {
@@ -579,7 +609,7 @@ function skillPayload(draft: SkillRevisionDraft): Omit<SkillRevision, "digest"> 
 
 function profilePayload(draft: ProfileRevisionDraft): Omit<ProfileRevision, "revision"> {
   const skillEntries = Object.entries(draft.skillModes);
-  if (skillEntries.length > MAX_SKILLS) throw new Error("Profile skill settings exceed the supported limit.");
+  if (skillEntries.length > MAX_CATALOG_SKILLS) throw new Error("Profile skill settings exceed the supported limit.");
   const skillModes: Record<string, SkillMode> = {};
   for (const [rawSkillId, rawMode] of skillEntries.sort(([left], [right]) => asciiCompare(left, right))) {
     const skillId = identifier(rawSkillId, "skill ID");

@@ -14,6 +14,7 @@ import {
   createProfileRevision,
   createSkillRevision,
   createThemeManifest,
+  MAX_CATALOG_SKILLS,
   type ProfileRevision,
   type SkillRevision,
   type ThemeManifest,
@@ -27,7 +28,6 @@ const CATALOG_CONTENT_TYPE = "application/vnd.airship.profile-catalog+json";
 const MAX_CATALOG_BYTES = 32 * 1024 * 1024;
 const MAX_PROFILES = 1_024;
 const MAX_THEMES = 256;
-const MAX_SKILLS = 1_024;
 
 type PersistedCatalogHead = Readonly<{
   version: 1;
@@ -242,7 +242,10 @@ export async function validateProfileCatalog(value: unknown): Promise<ProfileCat
   if (!isRecord(value)) throw new Error("Profile catalog must be a JSON object.");
   rejectPoisonKeys(value);
   const themeValues = boundedArray(value.themes, MAX_THEMES, "themes");
-  const skillValues = boundedArray(value.skills, MAX_SKILLS, "skills");
+  // `MAX_CATALOG_SKILLS`, not a second local ceiling: this admission bound used
+  // to sit at 1_024 while `domain.ts` refused above 512, so a catalog between
+  // the two validated, persisted, and then failed every session resolution.
+  const skillValues = boundedArray(value.skills, MAX_CATALOG_SKILLS, "skills");
   const profileValues = boundedArray(value.profiles, MAX_PROFILES, "profiles");
   if (profileValues.length === 0) throw new Error("Profile catalog must contain at least one profile.");
 

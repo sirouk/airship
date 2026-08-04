@@ -875,10 +875,33 @@ button.runtime-posture {
   border-color: rgba(200, 103, 88, 0.35);
 }
 
+/*
+ * Three nowrap chips in a 231px column.
+ *
+ * Measured at 320px on the chat route: the label's own box reported
+ * `scrollWidth 261` against `clientWidth 231` on the first assistant turn, and
+ * `541` against `231` once a status chip joined it. `narrow-viewport-overflow`
+ * passed the whole time because `.transcript` carries `overflow-x: auto` and
+ * swallowed all 282px of it before `main.main` — the spec measures `main`, so
+ * the absorber was reporting on behalf of the source.
+ *
+ * The sources were `.message-capability-tier` (206.84px) and `.message-status`
+ * (269.75px): both `white-space: nowrap`, both flex items, and a flex item
+ * defaults to `min-width: auto`, so each one set a min-content floor its column
+ * could not satisfy. Nothing about the label was wrong; it was being held open.
+ *
+ * `flex-wrap` first, truncation only as the backstop: a chip that will not fit
+ * beside the role word gets a whole row of its own and stays fully legible, and
+ * only a chip too wide even for the whole row ellipsises. Truncating first
+ * would have cut "Initial · Browser baseline" on every phone turn to buy space
+ * the wrap already had. Row gap is tighter than column gap because stacked
+ * chips at 10px read as separate blocks rather than one label.
+ */
 .message-label {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
-  gap: 10px;
+  gap: 4px 10px;
   align-items: center;
 }
 
@@ -904,29 +927,47 @@ button.runtime-posture {
   color: var(--ink-faint);
   background: rgba(255, 255, 255, 0.012);
   font: var(--fs-micro)/1.2 var(--font-mono);
+  /* `min-width: 0` releases the flex-item default that made this pill a floor.
+     It is written on the class rather than on `button.message-capability-tier`
+     so the coarse-pointer rule above — which is one specificity point higher —
+     still wins for the transcript intro's real button and keeps its 44px. */
+  min-width: 0;
+  overflow: hidden;
   white-space: nowrap;
 }
 
-.message-capability-tier > span {
+/* Was `.message-capability-tier > span`, which is now ambiguous: the pill has
+   two span children, and the dot rules would have shrunk the words to 5px. */
+.message-capability-tier__dot {
+  flex: 0 0 auto;
   width: 5px;
   height: 5px;
   border-radius: 50%;
   background: var(--v-info);
 }
 
-.message-capability-tier.web-enhanced > span,
-.message-capability-tier.native > span {
+.message-capability-tier.web-enhanced .message-capability-tier__dot,
+.message-capability-tier.native .message-capability-tier__dot {
   background: var(--v-verified);
 }
 
-.message-capability-tier.remote-confidential > span {
+.message-capability-tier.remote-confidential .message-capability-tier__dot {
   background: var(--accent);
+}
+
+.message-capability-tier__label,
+.message-status__text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .message-status {
   display: inline-flex;
   gap: 6px;
   align-items: center;
+  min-width: 0;
+  overflow: hidden;
   color: var(--ink-faint);
   font-size: var(--fs-micro);
   white-space: nowrap;
@@ -1204,6 +1245,28 @@ button.runtime-posture {
   gap: 7px;
   align-items: center;
   margin-top: 8px;
+}
+
+/*
+ * The producing model, named on the answer itself.
+ *
+ * A model id is a long unbroken token — `Qwen/Qwen3.5-397B-A17B-TEE` is 26
+ * characters with no break opportunity — so it needs `min-width: 0` and an
+ * explicit wrap rule or it becomes the min-content floor of this row and pushes
+ * the chips beside it off a phone. That failure mode is the same one that held
+ * the Memory route open at 320px, and it is cheaper to prevent here than to
+ * diagnose again.
+ */
+.message-model {
+  min-width: 0;
+  max-width: 100%;
+  padding: 2px var(--sp-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-chip);
+  color: var(--ink-muted);
+  background: var(--surface-soft);
+  font: var(--fs-micro)/1.35 var(--font-mono);
+  overflow-wrap: anywhere;
 }
 
 .message-history {
