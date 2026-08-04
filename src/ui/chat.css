@@ -1206,6 +1206,28 @@ button.runtime-posture {
   margin-top: 8px;
 }
 
+/*
+ * The producing model, named on the answer itself.
+ *
+ * A model id is a long unbroken token — `Qwen/Qwen3.5-397B-A17B-TEE` is 26
+ * characters with no break opportunity — so it needs `min-width: 0` and an
+ * explicit wrap rule or it becomes the min-content floor of this row and pushes
+ * the chips beside it off a phone. That failure mode is the same one that held
+ * the Memory route open at 320px, and it is cheaper to prevent here than to
+ * diagnose again.
+ */
+.message-model {
+  min-width: 0;
+  max-width: 100%;
+  padding: 2px var(--sp-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-chip);
+  color: var(--ink-muted);
+  background: var(--surface-soft);
+  font: var(--fs-micro)/1.35 var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
 .message-history {
   display: flex;
   flex-wrap: wrap;

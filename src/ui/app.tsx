@@ -12367,6 +12367,31 @@ function MessageCard({
         ) : null}
         {message.receipt ? (
           <div class="message-evidence-chips">
+            {/*
+              * Which model produced this answer, on the answer.
+              *
+              * The receipt carried `model` all along and exactly one surface
+              * rendered it — the Proof inspector, one navigation away. On the
+              * transcript an answer said only "Airship", so a reader comparing
+              * two turns had no way to see that a different model wrote them.
+              *
+              * Read from `message.receipt.model`, never from the active binding:
+              * the binding is whatever is pinned *now*, and using it would
+              * relabel every historical answer whenever someone switched models.
+              * `model` is optional on the receipt, so an answer without one shows
+              * nothing rather than the word "unknown".
+              *
+              * It belongs in this row and not beside the role word:
+              * `.message-label` already overflows its column by 30px at 320px
+              * from `.message-capability-tier`, so a chip there would be adding
+              * weight to something already broken. This row is receipt-gated,
+              * which is precisely the condition `model` needs.
+              */}
+            {message.receipt.model ? (
+              <span class="message-model" title={`This answer was produced by ${message.receipt.model}.`}>
+                {message.receipt.model}
+              </span>
+            ) : null}
             <button class="receipt-chip" type="button" onClick={onProof}>
               <Seal
                 state={receiptSealState(message.receipt)}
