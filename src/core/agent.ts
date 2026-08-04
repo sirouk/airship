@@ -649,8 +649,13 @@ async function prepareLiveEnvironment(args: Readonly<{
  * Bound one tool result to the bytes this turn can still send. An unbounded
  * result would overflow the pinned window and fail the whole turn at the
  * provider; a silent trim would misrepresent what the model was shown.
+ *
+ * Exported for the tools that have to survive it: it cuts the *tail*, so any
+ * tool that puts a resume instruction at the end of its result is putting it
+ * exactly where the cut lands. `src/tools/workspace-tools.test.ts` measures
+ * `read_file`'s head notice through this function rather than assuming.
  */
-function boundToolResultContent(
+export function boundToolResultContent(
   content: string,
   remainingBytes: number | undefined,
 ): Readonly<{ content: string; truncated: boolean; originalBytes: number; retainedBytes: number }> {

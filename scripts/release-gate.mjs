@@ -472,7 +472,17 @@ export const RELEASE_BUDGETS = Object.freeze({
   // whole-KiB step that clears that reading. The route is still fetched only
   // when Workspace opens, so the fixed first-paint ceiling is untouched.
   optionalWorkspaceWorkbench: Object.freeze({ raw: 79 * 1024, gzip: 25 * 1024 }),
-  optionalWorkspaceBinding: Object.freeze({ raw: 2 * 1024, gzip: 1 * 1024 }),
+  // Held only the Git workspace binding, at 519 B raw / 345 B gzip. It now also
+  // holds the one bounded content scan: `search_text` and the Explorer's Contents
+  // filter both import it, so Rollup gives it to the chunk those two share rather
+  // than inlining a copy in each — the Workspace route shed 1,556 raw bytes of
+  // its own copy in the same build. The scan grew a resume cursor, an `include`
+  // path glob and a summary that names every bound that fired, because the tool's
+  // separate copy could answer "0 matches" for a filter that had selected no file
+  // to search at all. Measured 3,844 B raw / 1,741 B gzip; both ceilings are the
+  // tightest whole-KiB step that clears that reading. Still fetched only when the
+  // Workspace route or the agent's tool bundle binds, so first paint is untouched.
+  optionalWorkspaceBinding: Object.freeze({ raw: 4 * 1024, gzip: 2 * 1024 }),
   optionalWorkspaceCodec: Object.freeze({ raw: 2 * 1024, gzip: 1 * 1024 }),
   optionalSourceControl: Object.freeze({ raw: 48 * 1024, gzip: 14 * 1024 }),
   // Binds only when Vite emits the ~650-byte store as its own chunk. In the
