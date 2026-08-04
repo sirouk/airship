@@ -36,6 +36,32 @@ export type PinnedSessionSkills = Readonly<{
 }>;
 
 /**
+ * Whether the primary pointer is coarse, as state rather than as a read.
+ *
+ * The bar's rename gesture has to differ by input device — a mouse already has
+ * double-click and F2, a thumb has neither — and the answer has to be able to
+ * change while the page is open: a tablet with a keyboard folded on and off
+ * flips this without a reload, and so does a desktop browser's device emulation
+ * (which is how every measurement in this package was taken).
+ *
+ * Kept here rather than read inline in the handler because a `matchMedia` call
+ * inside an event handler is a fact the render pass never sees, and the button's
+ * own `title` has to name the gesture the reader actually has.
+ */
+export function usePrimaryPointerIsCoarse(): boolean {
+  const [coarse, setCoarse] = useState(false);
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const media = window.matchMedia("(pointer: coarse)");
+    const sync = () => setCoarse(media.matches);
+    sync();
+    media.addEventListener("change", sync);
+    return () => media.removeEventListener("change", sync);
+  }, []);
+  return coarse;
+}
+
+/**
  * A conversation the switcher can move to. The rail's row shape, minus the
  * gestures only a rail row has.
  */
@@ -56,8 +82,6 @@ export type SessionBarProps = Readonly<{
   monogram: string;
   /** The model chip. A slot: this package places it, the model package fills it. */
   model: ComponentChildren;
-  /** The immutable skill set that composed this conversation's prompt. */
-  pinnedSkills?: PinnedSessionSkills;
   statusFacts: readonly SessionStatusFact[];
   durabilityLabel: string;
   journal: SessionJournal;
@@ -84,7 +108,6 @@ export function SessionBar({
   profileName,
   monogram,
   model,
-  pinnedSkills,
   statusFacts,
   durabilityLabel,
   journal,
@@ -102,6 +125,7 @@ export function SessionBar({
   const [renaming, setRenaming] = useState(false);
   const renameInput = useRef<HTMLInputElement>(null);
   const renameInFlight = useRef(false);
+  const coarsePointer = usePrimaryPointerIsCoarse();
 
   useEffect(() => {
     if (renaming) renameInput.current?.select();
@@ -167,10 +191,24 @@ export function SessionBar({
             type="button"
             // The tooltip named the mouse gesture and not the key, so F2 was a
             // shortcut only its author knew about — and it is the only rename
-            // start a keyboard user has here.
-            title={`${title} · ${RENAME_START_HINT}`}
+            // start a keyboard user has here. Under a coarse pointer it names
+            // the gesture that device actually has, because the sentence is the
+            // only place the tap is documented.
+            title={coarsePointer ? `${title} · Tap to rename` : `${title} · ${RENAME_START_HINT}`}
             disabled={renameDisabled}
-            onClick={(event) => { if (event.detail === 0) startRename(); }}
+            /*
+             * One tap renames, but only where a tap is the only gesture there is.
+             *
+             * `event.detail === 0` is the keyboard's Enter/Space arriving as a
+             * click, which is why it was the sole opener; a mouse click stayed
+             * inert so that double-click could be the mouse's rename without
+             * the first of the two firing anything. A thumb has neither
+             * double-click nor F2, so the phone's only rename start was a
+             * separate 44px pencil button sharing the bar with the title it
+             * renames — a second control for the thing under the reader's
+             * finger. Coarse pointer: the title is the control.
+             */
+            onClick={(event) => { if (event.detail === 0 || coarsePointer) startRename(); }}
             onDblClick={startRename}
             onKeyDown={renameStartKeyHandler(startRename)}
           >
@@ -197,9 +235,21 @@ export function SessionBar({
           * exact sizes, and the two actions stay pinned to the right edge at
           * every width — the three constraints this row has to satisfy at once.
           */}
+        {/*
+          * The pinned-skill set is not a chip here any more.
+          *
+          * It was a glyph with its own 44px slot on a 430px bar, beside the
+          * model chip's slot and the status chip's slot and the journal chip's
+          * slot — four indicators competing with the one element that answers
+          * "which conversation am I in". Its whole content was a popover, and
+          * the topbar's runtime chip already opens a sheet whose "This
+          * conversation" group is exactly the place for a fact about this
+          * conversation. So the fact moved there in full — the count, the skill
+          * names, the digests and the set digest — rather than being clipped
+          * into an accessible name. Nothing was shed; a slot was.
+          */}
         <div class="session-bar__instruments">
           {model}
-          {pinnedSkills ? <PinnedSkillsChip pin={pinnedSkills} /> : null}
           <SessionStatusChip facts={statusFacts} durabilityLabel={durabilityLabel} />
           <JournalChip journal={journal} durabilityLabel={durabilityLabel} onOpenSession={onOpenSession} />
         </div>
@@ -238,16 +288,18 @@ export function SessionBar({
             conversations.find((conversation) => conversation.id === value)?.open();
           }}
         />
-        <button
-          class="session-bar__rename-action"
-          type="button"
-          aria-label="Rename conversation"
-          title="Rename conversation"
-          disabled={renameDisabled || renaming}
-          onClick={startRename}
-        >
-          <Icon name="edit" size={16} />
-        </button>
+        {/*
+          * The phone's pencil button is gone, and the gesture it stood in for
+          * is not.
+          *
+          * It existed for one reason — "fine pointers already have
+          * double-click/F2; touch gets an explicit action in the chip row" —
+          * and the identity button above now starts the rename on a single tap
+          * under a coarse pointer. Two controls for one verb, 44px apart, on
+          * the row whose whole problem is that it has four indicators and one
+          * title: the redundant one is the one that is not also the thing being
+          * renamed.
+          */}
         <button
           class="session-bar__new"
           type="button"
@@ -267,21 +319,21 @@ export function pinnedSkillsLabel(count: number): string {
   return `${count} skill${count === 1 ? "" : "s"} pinned to this conversation`;
 }
 
-function PinnedSkillsChip({ pin }: Readonly<{ pin: PinnedSessionSkills }>) {
-  const label = pinnedSkillsLabel(pin.skills.length);
-  return (
-    <Popover
-      class="session-skills-popover"
-      triggerClass="session-skills-chip"
-      label={`${label}. Skill-set digest ${pin.skillSetDigest}.`}
-      heading="Pinned conversation skills"
-      trigger={<><Icon name="skills" size={14} /><span class="session-skills-chip__label">{pin.skills.length} skills</span></>}
-    >
-      <p>This immutable set composed the conversation prompt. Later Skill changes apply only to a new conversation.</p>
-      {pin.skills.length ? <ul>{pin.skills.map((skill) => <li key={`${skill.skillId}:${skill.digest}`}><strong>{skill.name}</strong><code>{skill.digest.slice(-9)}</code></li>)}</ul> : <p>No Skill instructions were pinned.</p>}
-      <code>{pin.skillSetDigest}</code>
-    </Popover>
-  );
+/**
+ * The whole sentence the pinned-skills popover used to render, now that the
+ * chip that opened it no longer occupies a slot on the bar.
+ *
+ * A `<ul>` of names inside a 44px trigger became one line of prose because the
+ * carrier changed: the runtime chip's sheet renders a claim as label plus
+ * sentence, and a sentence is what a claim row can hold. Every name and every
+ * short digest survives — the set digest included, because it is the thing a
+ * reader compares against a manifest.
+ */
+export function pinnedSkillsDetail(pin: PinnedSessionSkills): string {
+  const named = pin.skills.length
+    ? pin.skills.map((skill) => `${skill.name} (${skill.digest.slice(-9)})`).join(", ")
+    : "No Skill instructions were pinned.";
+  return `This immutable set composed the conversation prompt. Later Skill changes apply only to a new conversation. ${named} Skill-set digest ${pin.skillSetDigest}.`;
 }
 
 /**

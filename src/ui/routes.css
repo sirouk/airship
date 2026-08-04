@@ -2562,10 +2562,16 @@
     height: calc(100dvh - var(--visual-viewport-bottom, 0px));
   }
 
+  /*
+   * The top band is `--touch-target` plus four pixels, which is what the
+   * landscape block below has always used and what portrait was paying 52px
+   * for. Every child of the topbar is a 44px control; the extra eight pixels
+   * were skyline above a conversation on the screen with the least of it.
+   */
   .app-shell {
     grid-template-columns: 1fr;
     grid-template-rows:
-      calc(52px + env(safe-area-inset-top))
+      calc(var(--touch-target) + 4px + env(safe-area-inset-top))
       minmax(0, 1fr)
       calc(56px + env(safe-area-inset-bottom));
   }
@@ -2580,7 +2586,7 @@
    * impose row tracks on the desktop two-column shell.
    */
   :root[data-keyboard-open="true"] .app-shell {
-    grid-template-rows: calc(52px + env(safe-area-inset-top)) minmax(0, 1fr) 0;
+    grid-template-rows: calc(var(--touch-target) + 4px + env(safe-area-inset-top)) minmax(0, 1fr) 0;
   }
 
   /* Three children, three columns. Two columns wrapped the actions onto a
@@ -2952,17 +2958,42 @@
    * which is the job — and the surplus it costs is taken from the instrument
    * strip, which scrolls, instead of from the title, which cannot.
    */
+  /*
+   * `min(9rem, 40vw)` rather than the flat `7rem` this floor shipped as.
+   *
+   * Seven rem bought the title 85px at every portrait width — measured on this
+   * build at 430, 390, 360 and 320, byte-identical, because the floor is an
+   * absolute length and the surplus all went to the chips. 85px is eight
+   * characters of the title face: "General …" for every conversation whose
+   * name begins with a word. Retiring the pinned-skills chip and the pencil
+   * button gave the row 88px back, and the title is what it is spent on — but
+   * only where there is width to spend, which is what the `40vw` term is for:
+   * at 320px it resolves to 128px and the instrument strip keeps a usable
+   * scroll window, at 390 and above the 9rem cap takes over and the title gets
+   * about twelve characters. Two conversations named for their first sentence
+   * are told apart at twelve and are not at eight.
+   */
   .session-bar {
-    grid-template-columns: minmax(7rem, 1fr) auto;
+    grid-template-columns: minmax(min(9rem, 40vw), 1fr) auto;
     align-items: center;
     gap: var(--sp-1) var(--sp-2);
-    padding-block: var(--sp-1);
+    /*
+     * No block padding, and the row is still 44px tall for a thumb.
+     *
+     * Every chip in it already carries `min-height: var(--touch-target)`, so
+     * 4px above and 4px below was 8px of skyline buying nothing a finger could
+     * use — measured 55px of session bar at 430×932 against a 46px cluster. On
+     * the surface whose header the owner called a tumor, padding that only
+     * exists around objects that already have their own floor is the cheapest
+     * thing on the bar to give back.
+     */
+    padding-block: 0;
     padding-inline-start: max(var(--sp-3), env(safe-area-inset-left));
     padding-inline-end: max(var(--sp-3), env(safe-area-inset-right));
   }
 
   :root[data-density] .session-bar {
-    min-height: 48px;
+    min-height: var(--touch-target);
   }
 
   /* Both axes: with the indicators priced first, the title's column is the
@@ -2983,8 +3014,6 @@
   .session-status-chip,
   .journal-chip,
   .session-model-chip,
-  .session-skills-chip,
-  .session-bar__rename-action,
   .session-bar__new,
   .session-bar .session-runtime {
     min-width: var(--touch-target);
@@ -2993,16 +3022,6 @@
   }
 
   .session-bar__new { width: var(--touch-target); }
-
-  .session-bar__rename-action {
-    display: inline-grid;
-    width: var(--touch-target);
-    place-items: center;
-    border: 1px solid var(--line-control);
-    border-radius: var(--radius-chip);
-    color: var(--ink-muted);
-    background: color-mix(in srgb, var(--surface-soft) 80%, transparent);
-  }
 
   /*
    * Both axes, and the same 44 as its siblings above.
@@ -3066,7 +3085,10 @@
     flex: 0 1 auto;
   }
 
-  .session-bar__rename-action,
+  /* The verb that is pinned outside the strip that scrolls. Rename left this
+     list when the title became its own control: a reading you scroll to is
+     still a reading, a verb you scroll to is a verb nobody finds, and the
+     shortest way to stop `+` scrolling away was to stop competing with it. */
   .session-bar__new {
     flex: 0 0 auto;
   }
@@ -3162,16 +3184,9 @@
     clip-path: inset(50%);
   }
 
-  /* Next in that order: the skills count is the popover's own lead sentence
-     and the trigger's accessible name, so an icon-only chip here costs the
-     row one glyph — less than a wrap — and clips nothing mid-word. */
-  .session-skills-chip__label {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
-  }
+  /* The skills count used to shed to an icon here, second in the shed order.
+     There is no chip left to shed: the pinned set is stated in full in the
+     runtime chip's sheet instead of being clipped into an accessible name. */
 
   /*
    * Last in that order, and only at the widths whose arithmetic forces it.
@@ -3359,10 +3374,24 @@
    */
   .composer-wrap {
     padding:
-      5px
+      var(--sp-1)
       max(9px, env(safe-area-inset-right))
-      6px
+      var(--sp-2)
       max(9px, env(safe-area-inset-left));
+  }
+
+  /*
+   * The rule above was inert on its own block axis, and had been since it was
+   * written. `:root[data-density] .composer-wrap` in `tokens.css` sets
+   * `padding-block: calc(var(--density-gap) * .7) var(--density-gap)` at
+   * (0,2,0), so the phone's 5px/6px lost to the desktop's 9.8px/14px on every
+   * phone: measured 114.8px of composer region at 430×932, of which 23.8px was
+   * padding this block had already decided against. The landscape block below
+   * restates the density selector for exactly this reason; portrait was the
+   * half that was missed.
+   */
+  :root[data-density] .composer-wrap {
+    padding-block: var(--sp-1) var(--sp-2);
   }
 
   /* `--fs-field` is the iOS zoom guard: anything smaller and focusing the
@@ -3398,17 +3427,15 @@
   /* The footer is its own 44px touch row on a phone. This is where
      `.composer-tools span:nth-child(2) { display: none }` used to live — the
      rule that rendered the credential posture at 0×0px on the device most
-     likely to be borrowed. It is a chip at every breakpoint now. */
+     likely to be borrowed. The posture is not in this row at all now: it is a
+     claim row in the runtime chip's sheet, visible on every device rather than
+     hidden on one, and the two controls that remain here are both targets. */
   .composer-footer {
     min-height: var(--touch-target);
   }
 
   .composer-tools {
     gap: var(--sp-1);
-  }
-
-  .composer-posture {
-    min-height: var(--touch-target);
   }
 
   /* No pointer to press a modifier with, so the legend states nothing the
@@ -3900,17 +3927,6 @@
   }
 
   .session-bar__identity.is-renaming { grid-column: 1 / -1; }
-
-  .session-bar__rename-action {
-    display: inline-grid;
-    width: var(--touch-target);
-    min-height: var(--touch-target);
-    place-items: center;
-    border: 1px solid var(--line-control);
-    border-radius: var(--radius-chip);
-    color: var(--ink-muted);
-    background: color-mix(in srgb, var(--surface-soft) 80%, transparent);
-  }
 
   /* Portrait pays for the cluster's honesty with a second row; a ≤500px-tall
      landscape has no height to pay with, so here it stays one line beside the

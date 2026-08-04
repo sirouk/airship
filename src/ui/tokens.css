@@ -443,7 +443,12 @@ body {
 :root[data-density="compact"] .session-bar { min-height: 32px; padding-block: 0; }
 :root[data-density="compact"] .session-bar__identity-button { min-height: 28px; }
 :root[data-density="comfortable"] .session-bar { min-height: 40px; }
-:root[data-density="comfortable"] .session-bar__title { font-size: calc(1.0625rem * var(--type-scale)); }
+/* Named through the ramp rather than restating its value: `--fs-lead` *is*
+   1.0625rem at every desktop width, so this is the same size it always was —
+   but the phone block at :459 moves the lead rung, and a literal here would
+   have held the conversation title at the desktop size while everything
+   around it moved. A size that opts out of the ramp opts out of the ramp. */
+:root[data-density="comfortable"] .session-bar__title { font-size: var(--fs-lead); }
 :root[data-density] .composer { max-width: var(--density-chat-measure); }
 :root[data-density] .composer-wrap { padding-block: calc(var(--density-gap) * .7) var(--density-gap); }
 /* Density owns the composer's gutter, never its height. `min-height:
@@ -460,10 +465,56 @@ body {
   :root[data-density="compact"] { --density-control: var(--touch-target); --density-row: var(--touch-target); }
 
   /* A phone column is roughly half the measure of the desktop chat column, so
-     the desktop leading pushes an ordinary answer past the fold. Tighten the
-     body rhythm only — the reading size itself is untouched. */
+     the desktop leading pushes an ordinary answer past the fold. */
   :root[data-density="comfortable"] { --lh-body: 1.5; }
   :root[data-density="compact"] { --lh-body: 1.4; }
+
+  /*
+   * The phone's own ramp — the thing this block used to say it deliberately did
+   * not do ("the reading size itself is untouched").
+   *
+   * Measured: computed `:root` was byte-identical at 360, 430 and 1440, so a
+   * 430px phone rendered the 1440px type scale verbatim. Two consequences, both
+   * measured on this build at 430×932. `--fs-micro` resolved to 11.69px and is
+   * what carries the mobile nav labels, the composer's Enter legend and posture
+   * word, and the Proof route's eyebrow — under the 12px floor, on the device
+   * held at arm's length. And `--fs-lead` against `--fs-body` is 1.133:1, so the
+   * conversation title and the sentence beneath it are the same size: there is
+   * no hierarchy to scan, which is why the header reads as one grey mass.
+   *
+   * The three smallest rungs move up one rung each — the small end is a
+   * legibility problem, not a hierarchy one — and the three largest move apart
+   * from `--fs-body`, which is the anchor and does not move. `--fs-title` against
+   * `--fs-body` goes 1.333:1 → 1.533:1, matching the desktop heading contrast
+   * the phone never had. `--fs-hero` comes *down*: 40px of display type is a
+   * desktop luxury that costs a phone a third of its fold.
+   *
+   * Every step stays `calc(<rem> * var(--type-scale))`, in sixteenths of a rem
+   * like the base ramp at :133. Two rules this must not break, both easy to:
+   * a px literal here would freeze the text against the Type scale preference
+   * (WCAG 1.4.4, the reason recorded at :130), and bumping `--type-scale` itself
+   * would multiply *all eight* steps by a factor that then composes with the
+   * user's own `data-type-scale` — `x-large` would arrive twice.
+   */
+  :root {
+    --fs-micro: calc(.75rem * var(--type-scale));
+    --fs-caption: calc(.8125rem * var(--type-scale));
+    --fs-meta: calc(.875rem * var(--type-scale));
+    --fs-lead: calc(1.125rem * var(--type-scale));
+    --fs-title: calc(1.4375rem * var(--type-scale));
+    --fs-hero: calc(2rem * var(--type-scale));
+  }
+
+  /*
+   * Compact density roots the page at 15px rather than 17px (:378), so the same
+   * rem lands 2px lower and `--fs-micro` would be 11.25px — back under the floor
+   * the block above exists to clear. The two rungs that carry chrome labels take
+   * one more sixteenth here; still rem, still scaled by the preference.
+   */
+  :root[data-density="compact"] {
+    --fs-micro: calc(.8125rem * var(--type-scale));
+    --fs-caption: calc(.875rem * var(--type-scale));
+  }
 }
 
 button,

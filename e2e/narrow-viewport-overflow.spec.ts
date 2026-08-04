@@ -68,9 +68,52 @@ for (const width of PHONE_WIDTHS) {
       const geometry = await page.evaluate(() => {
         const main = document.querySelector<HTMLElement>("main.main");
         if (!main) return undefined;
+        /*
+         * Inside every scrollport, not just up to the first one.
+         *
+         * The header comment above says a route-level assertion is silent about
+         * anything behind an absorber, and then this loop asserted only at route
+         * level anyway — so `.transcript` (which computes to `overflow-x: auto`
+         * as a side effect of its `overflow-y: auto`) kept the whole class of
+         * defect out of view. It was hiding a real one: a `/help` turn's slash
+         * roster ran 85px past its column at 320px and scrolled the transcript
+         * sideways by 57px, while `main.main` genuinely did not move and every
+         * assertion here stayed green.
+         *
+         * The scrollports are discovered, never listed, because an allowlist is
+         * how this went blind the first time. What separates a defect from a
+         * design is not the scrollport — a chip strip and a transcript are
+         * indistinguishable in the computed cascade, since CSS resolves the
+         * unset axis of a scroll container to `auto` — it is what is inside it.
+         * A strip of chips that scrolls is wider than its box in *aggregate*
+         * and every chip in it fits. A paragraph, a list item or a heading that
+         * is *itself* wider than the box it is reading in is text nobody can
+         * read without dragging, and there is no layout in this product for
+         * which that is the intent. Only those are reported, and only the
+         * widest per scrollport, so the failure names its own source.
+         */
+        const absorbers = [...main.querySelectorAll<HTMLElement>("*")]
+          .filter((element) => {
+            const style = getComputedStyle(element);
+            return (style.overflowX === "auto" || style.overflowX === "scroll")
+              && element.scrollWidth - element.clientWidth > 1;
+          })
+          .flatMap((scrollport) => {
+            const room = scrollport.clientWidth;
+            const widest = [...scrollport.querySelectorAll<HTMLElement>("p,li,h1,h2,h3,h4")]
+              .map((block) => ({
+                what: `${scrollport.className || scrollport.tagName.toLowerCase()} › ${block.tagName.toLowerCase()}.${block.className}`,
+                over: Math.round(block.getBoundingClientRect().width - room),
+                text: (block.textContent ?? "").slice(0, 40),
+              }))
+              .filter((block) => block.over > 1)
+              .sort((a, b) => b.over - a.over);
+            return widest.slice(0, 1);
+          });
         return {
           mainOverflow: main.scrollWidth - main.clientWidth,
           documentOverflow: document.documentElement.scrollWidth - window.innerWidth,
+          absorbers,
         };
       });
 
@@ -78,6 +121,9 @@ for (const width of PHONE_WIDTHS) {
       // One pixel of slack absorbs subpixel rounding, and nothing more.
       if (geometry!.mainOverflow > 1 || geometry!.documentOverflow > 1) {
         overflowing.push(`${route}: main +${geometry!.mainOverflow}px, document +${geometry!.documentOverflow}px`);
+      }
+      for (const absorber of geometry!.absorbers) {
+        overflowing.push(`${route}: ${absorber.what} is +${absorber.over}px wider than the scrollport holding it — "${absorber.text}"`);
       }
     }
 
@@ -133,6 +179,59 @@ test("no chip in a message label holds its column open at 320px", async ({ page 
   expect(rows.filter((row) => row.selfOverflow > 1), "labels wider than their own column").toEqual([]);
   expect(rows.flatMap((row) => row.spill), "chips reaching past their label").toEqual([]);
 });
+
+/*
+ * The other half of the same absorber, and the reason the spec above was scoped
+ * to `.message-label` when it was written: its author measured the chips, fixed
+ * the chips, and reported — against their own green result — that the *answer*
+ * was still overflowing and they had not touched it.
+ *
+ * Measured at 320px on this build before the fix: `.transcript` reported 57px of
+ * `scrollWidth` over `clientWidth` on a `/help` turn, with zero elements inside
+ * any `.message-label` past their column. The source was a `<p>` in
+ * `.message-body` holding `/deactivate-execution-runtime <runtime> |
+ * /deactivate…`, 85px past its column, because that rule carried no
+ * `overflow-wrap` while eleven other rules in the same sheet did. `main.main`
+ * and the document both measured 0 throughout.
+ *
+ * So this measures the prose, and it measures it at the three widths the fix
+ * had to be checked at: `overflow-wrap: break-word` is the narrower of the two
+ * candidates precisely because `anywhere` participates in min-content sizing
+ * and would start breaking ordinary sentences mid-word at comfortable widths.
+ * 768 is here to catch that regression, not the overflow.
+ */
+for (const width of [320, 390, 768] as const) {
+  test(`no message paragraph outruns its column at ${width}px`, async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "mobile-chromium", "phone widths are a mobile-project concern");
+    await page.setViewportSize({ width, height: 812 });
+    await page.goto("/#chat");
+
+    await page.getByRole("combobox", { name: "Message Airship" }).fill("/help");
+    await page.getByRole("button", { name: "Send message" }).click();
+    await expect(page.locator(".message-status").last()).toBeVisible();
+
+    const measured = await page.evaluate(() => {
+      const transcript = document.querySelector<HTMLElement>(".transcript");
+      if (!transcript) return undefined;
+      const edge = transcript.getBoundingClientRect().right;
+      return {
+        // The absorber itself: the number the route loop structurally cannot see.
+        transcriptOverflow: transcript.scrollWidth - transcript.clientWidth,
+        spill: [...transcript.querySelectorAll<HTMLElement>("p")]
+          .map((paragraph) => ({
+            text: (paragraph.textContent ?? "").slice(0, 48),
+            own: paragraph.scrollWidth - paragraph.clientWidth,
+            past: Math.round((paragraph.getBoundingClientRect().right - edge) * 100) / 100,
+          }))
+          .filter((paragraph) => paragraph.own > 1 || paragraph.past > 0.5),
+      };
+    });
+
+    expect(measured, "the transcript rendered").toBeDefined();
+    expect(measured!.spill, `paragraphs wider than the transcript at ${width}px`).toEqual([]);
+    expect(measured!.transcriptOverflow, `the transcript absorbed sideways scroll at ${width}px`).toBeLessThanOrEqual(1);
+  });
+}
 
 /*
  * The fix that made the row fit must not shrink the one chip that is a target.

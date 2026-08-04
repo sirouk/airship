@@ -209,6 +209,7 @@ import {
   usePwaUpdate,
   useVisualViewport,
   vaultBackendUnavailableReason,
+  type ClaimRow,
   type PreferenceOverrides,
   type VaultBackend,
   type TrustAxis,
@@ -265,7 +266,6 @@ import {
   composerPlaceholder,
   composerPosture,
   ComposerKeyhintLegend,
-  ComposerPostureChip,
   COMPOSER_NARROW_PLACEHOLDER_QUERY,
   COMPOSER_PLACEHOLDER_TITLE,
   SLASH_MENU_HEADER,
@@ -320,7 +320,7 @@ import {
 } from "./chat/turn-housekeeping";
 import { StreamingMessageSlot, TranscriptStreamStore } from "./chat/streaming-slot";
 import { focusTranscriptTurn, isNearLastRealCard, preferredJumpBehavior, scrollToLastRealCard } from "./chat/transcript-anchor";
-import { DemoModelChip, SessionBar } from "./chat/session-bar";
+import { DemoModelChip, pinnedSkillsDetail, pinnedSkillsLabel, SessionBar } from "./chat/session-bar";
 import { sessionStatusShort, type SessionStatusFact } from "./chat/session-status-chip";
 import {
   TRANSCRIPT_INTRO_DEMO_LINE,
@@ -3296,6 +3296,79 @@ export function App() {
     },
     { id: "e2ee", scope: "conversation", label: inferenceStatusLabel, state: activeChutesConnection ? (connection.invokeAuthorization === "verified" ? "verified" : "asserted") : activeExternalConnection ? "asserted" : "none", detail: inferenceStatusDetail, view: "access" },
     { id: "attestation", scope: "conversation", label: attestationSeal.label, state: attestationSeal.state, detail: attestationSeal.detail, view: "proof" },
+  ]);
+  /*
+   * The three facts that used to each own a slot of the phone's session bar or
+   * a permanent line under the composer, gathered into the sheet the topbar's
+   * runtime chip already opens.
+   *
+   * They are not trust *axes* and are deliberately not added to `trustAxes`:
+   * the count that chip renders ("4 runtime claims") stands for the four
+   * independently-scoped posture claims, and folding presentation facts into it
+   * would make the number mean two things. They ride in the sheet's "This
+   * conversation" group as claim rows, which is the shape the sheet already
+   * renders and the group whose heading says whose facts these are.
+   *
+   * What was retired to get here, measured at 430×932: the pinned-skills chip
+   * (a 44px glyph whose entire content was a popover), the composer's permanent
+   * `Encrypted inference through …` caption (a line of chrome under the input
+   * on every turn, connected or not), and the composer's credential-posture
+   * chip, which put "Key in memory" inside the box a person types their message
+   * into. None of the sentences changed; the places they interrupt did.
+   */
+  const composerCredentialPosture = composerPosture({
+    online,
+    offlineReason: OFFLINE_INLINE_REASON,
+    inferenceConnected,
+    authMethod: activeInferenceBinding?.authMethod,
+  });
+  const conversationFacts: readonly ClaimRow[] = Object.freeze([
+    /*
+     * The bound model, and only while there is one.
+     *
+     * The `e2ee` axis two rows above already says "Connect a model" with this
+     * exact sentence when nothing is connected, so an unconditional row here
+     * would print one fact twice in one sheet — the duplication this whole
+     * package exists to remove. Connected, the two rows are different claims:
+     * the axis carries the *posture* under a compacted provider·model label,
+     * this row carries the *identifier* being talked to and the sentence the
+     * composer used to print under the input on every single turn.
+     */
+    ...(inferenceConnected ? [Object.freeze({
+      id: "session-model",
+      state: "asserted" as const,
+      label: activeChutesConnection
+        ? connection.model
+        : activeExternalConnection?.pin.model.id ?? inferenceStatusLabel,
+      detail: isChutesConnected(connection)
+        ? connection.posture === "encrypted-attested"
+          ? `Encrypted inference through ${connection.model}; fresh endpoint proof is required before the next invocation.`
+          : `Encrypted inference through ${connection.model}; this compatibility connection has no required endpoint-proof gate.`
+        : inferenceStatusDetail,
+      action: Object.freeze({ label: "Models", onSelect: () => navigatePrimary("access") }),
+    })] : []),
+    Object.freeze({
+      id: "credential-posture",
+      state: composerCredentialPosture.state,
+      label: composerCredentialPosture.label,
+      detail: composerCredentialPosture.detail,
+      action: Object.freeze({ label: "Connections", onSelect: () => navigatePrimary("access") }),
+    }),
+    ...(activeSessionRecord?.manifest.profile ? [Object.freeze({
+      id: "pinned-skills",
+      state: "asserted" as const,
+      label: pinnedSkillsLabel(activeSessionRecord.manifest.profile.resolvedSkills.length),
+      detail: pinnedSkillsDetail({
+        skillSetDigest: activeSessionRecord.manifest.profile.skillSetDigest,
+        skills: activeSessionRecord.manifest.profile.resolvedSkills.map((resolved) => ({
+          skillId: resolved.skillId,
+          digest: resolved.digest,
+          name: catalog?.skills.find((candidate) => candidate.skillId === resolved.skillId && candidate.digest === resolved.digest)?.name
+            ?? resolved.skillId,
+        })),
+      }),
+      action: Object.freeze({ label: "Skills", onSelect: () => navigatePrimary("skills") }),
+    })] : []),
   ]);
   const attestationReceipts = useMemo(() => sessionAttestationReceipts({
     messages,
@@ -9853,15 +9926,6 @@ export function App() {
                 title={activeSessionRecord?.title ?? activeProfile.name}
                 profileName={activeProfile.name}
                 monogram={profileMonogram(activeProfile.name)}
-                pinnedSkills={activeSessionRecord?.manifest.profile ? {
-                  skillSetDigest: activeSessionRecord.manifest.profile.skillSetDigest,
-                  skills: activeSessionRecord.manifest.profile.resolvedSkills.map((resolved) => ({
-                    skillId: resolved.skillId,
-                    digest: resolved.digest,
-                    name: catalog.skills.find((candidate) => candidate.skillId === resolved.skillId && candidate.digest === resolved.digest)?.name
-                      ?? resolved.skillId,
-                  })),
-                } : undefined}
                 statusFacts={sessionStatusFacts}
                 durabilityLabel={durabilityLabel(sessionDurability.state)}
                 journal={{
@@ -10330,22 +10394,20 @@ export function App() {
                     <div class="composer-footer">
                       <div class="composer-tools">
                         <label class="composer-attach"><input type="file" aria-label="Attach image" accept="image/*" multiple onChange={(event) => { addComposerFiles(Array.from(event.currentTarget.files ?? [])); event.currentTarget.value = ""; }} /><Icon name="plus" size={14} /><span>Attach image</span></label>
-                        {/* The credential posture, as a chip rather than the
-                            caption it shipped as. The caption was
-                            `display: none` on a phone, so the fact stating what
-                            this keystroke is about to trust was blank on the
-                            device most likely to be someone else's. The chip
-                            also carries the Send refusal, because a `title` has
-                            no touch gesture. */}
-                        <ComposerPostureChip
-                          claim={composerPosture({
-                            online,
-                            offlineReason: OFFLINE_INLINE_REASON,
-                            inferenceConnected,
-                            authMethod: activeInferenceBinding?.authMethod,
-                          })}
-                          blockedReason={attachmentsAwaitText ? composerAttachmentNeedsText(composerRequestEncrypted) : undefined}
-                        />
+                        {/*
+                          The credential posture is not in the box any more.
+                          "Key in memory" sat inside the control a person types
+                          their message into — a standing caveat where a caret
+                          is, on the surface that has least room for one. The
+                          claim did not shrink: it is a row of the runtime
+                          chip's sheet now (`conversationFacts`), in full, with
+                          its route, beside the model it is a credential for.
+
+                          Its second job stays here, because it was never a
+                          posture job: the Send refusal that a `title` cannot
+                          deliver to a thumb is stated below the composer, as a
+                          status line that appears when the refusal does.
+                        */}
                         <MenuSelect
                           // Not "Conversation approval policy": choosing here
                           // revises the active profile, so the profile's later
@@ -10409,11 +10471,24 @@ export function App() {
                   </div>
                 </div>
                 {composerNotice ? <p class="composer-notice" role="status">{composerNotice}</p> : null}
-                {!online ? <p class="connectivity-inline-reason" role="status">{OFFLINE_INLINE_REASON}</p>
-                  : isChutesConnected(connection) ? <p>{connection.posture === "encrypted-attested"
-                    ? `Encrypted inference through ${connection.model}; fresh endpoint proof is required before the next invocation.`
-                    : `Encrypted inference through ${connection.model}; this compatibility connection has no required endpoint-proof gate.`}</p>
-                    : null}
+                {/* The refusal the posture chip used to carry, in the band that
+                    already exists for things the composer has to say right now.
+                    Present only while Send is actually refusing, which is the
+                    difference between a caveat and a caption. */}
+                {attachmentsAwaitText ? <p class="composer-notice" role="status">{composerAttachmentNeedsText(composerRequestEncrypted)}</p> : null}
+                {/*
+                  Offline is a state the composer must state at rest — remote
+                  inference is paused and nothing the reader types will go
+                  anywhere. `Encrypted inference through …` is not: it was true
+                  on every turn of every connected conversation and therefore
+                  told nobody anything they did not already know, while costing
+                  a permanent line directly under the input on the smallest
+                  screen the product runs on. The sentence is unchanged and now
+                  rides in the runtime chip's sheet as this conversation's model
+                  fact, which is where the owner asked the session's facts to
+                  live.
+                */}
+                {!online ? <p class="connectivity-inline-reason" role="status">{OFFLINE_INLINE_REASON}</p> : null}
               </div>
             </section>
               {lastReceipt && ProofInspector ? <aside class={claimRailOpen ? "inspector" : "inspector inspector--summary"}><ProofInspector
@@ -10835,7 +10910,7 @@ export function App() {
           if (openProfileManager(profileId)) setPreferencesOpen(false);
         },
       }} /> : null}
-      <TrustPostureSheet open={trustSheetOpen} axes={trustAxes} onClose={() => setTrustSheetOpen(false)} onNavigate={navigatePrimary} />
+      <TrustPostureSheet open={trustSheetOpen} axes={trustAxes} conversationFacts={conversationFacts} onClose={() => setTrustSheetOpen(false)} onNavigate={navigatePrimary} />
       {/*
         The reload the person just pressed is not the departure the guard
         exists for. Released synchronously, because `reload()` navigates in this

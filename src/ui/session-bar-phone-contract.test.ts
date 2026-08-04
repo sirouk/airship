@@ -72,19 +72,32 @@ describe("session bar at phone width", () => {
    */
   it("gives the conversation's own name a floor", () => {
     const bar = phoneBlock.match(/\.session-bar \{([^}]+)\}/u)?.[1] ?? "";
-    expect(bar).toMatch(/grid-template-columns:\s*minmax\(\s*7rem/u);
+    /*
+     * The floor was a flat `7rem`, and a flat length is a floor that never
+     * becomes a ceiling: measured on this build the title rendered 85px at 430,
+     * 390, 360 and 320 alike — eight characters at every portrait width,
+     * because an absolute minimum takes no share of a wider bar. The `min()`
+     * form spends the two slots this package retired (the skills chip and the
+     * pencil button) on the element they were crowding, and still yields at
+     * 320px where 40vw is the smaller term.
+     */
+    expect(bar).toMatch(/grid-template-columns:\s*minmax\(\s*min\(9rem,\s*40vw\)/u);
   });
 
-  it("pins the two verbs outside the strip that scrolls", () => {
-    const pinned = phoneBlock.match(/\.session-bar__rename-action,\s*\n\s*\.session-bar__new \{([^}]+)\}/u)?.[1] ?? "";
-    expect(pinned, "rename and new conversation must not be carried off by the instrument scroll").toContain("flex: 0 0 auto");
+  it("pins the verb outside the strip that scrolls", () => {
+    // Rename is not in this list any more, and not because it stopped
+    // mattering: the title starts the rename on a tap now, so the verb travels
+    // with the thing it renames instead of with `+`. What may never regress is
+    // `+` being carried off by the instrument scroll.
+    const pinned = [...phoneBlock.matchAll(/\.session-bar__new \{([^}]+)\}/gu)].map((rule) => rule[1] ?? "");
+    expect(pinned.join(""), "new conversation must not be carried off by the instrument scroll").toContain("flex: 0 0 auto");
     const shrinkable = phoneBlock.match(/\.session-bar__chips > \.session-bar__instruments \{([^}]+)\}/u)?.[1] ?? "";
     expect(shrinkable, "the readings are the row's one shrinkable child").toContain("flex: 0 1 auto");
   });
 
   it("keeps 44px hit targets for every phone chip and action", () => {
     const targets = phoneBlock.match(
-      /\.session-status-chip,\s*\.journal-chip,\s*\.session-model-chip,\s*\.session-skills-chip,\s*\.session-bar__rename-action,\s*\.session-bar__new,\s*\.session-bar \.session-runtime \{([^}]+)\}/u,
+      /\.session-status-chip,\s*\.journal-chip,\s*\.session-model-chip,\s*\.session-bar__new,\s*\.session-bar \.session-runtime \{([^}]+)\}/u,
     )?.[1] ?? "";
     // The token, not a copy of the number: `--touch-target` is the one place
     // the 44px floor is declared, and it was written out longhand 144 times.
@@ -92,16 +105,17 @@ describe("session bar at phone width", () => {
   });
 
   it("clips shed labels into the accessible tree rather than removing them", () => {
-    // Skills joins the demo label in the shed order: icon-only chips whose
-    // counts live in the trigger's accessible name and popover. A shed label
-    // is a layout instruction — `display: none` would take it out of the
-    // accessibility tree, which is the one theft `clip-path` refuses to do.
+    // A shed label is a layout instruction — `display: none` would take it out
+    // of the accessibility tree, which is the one theft `clip-path` refuses to
+    // do. The skills label used to be measured here too; there is no skills
+    // chip on this bar to shed, because the set it counted is stated in full in
+    // the runtime chip's sheet rather than clipped into an accessible name.
+    expect(phoneBlock).not.toContain(".session-skills-chip");
     for (const selector of [
       // The demo chip sheds its qualifier, not its word: measured at 390×844
       // the whole-label shed left the phone with no visible statement anywhere
       // that a deterministic demo was answering.
       ".session-model-chip--demo .session-model-chip__qualifier",
-      ".session-skills-chip__label",
     ]) {
       const escaped = selector.replaceAll(".", "\\.").replaceAll(" ", "\\s");
       const rule = phoneBlock.match(new RegExp(`${escaped} \\{([^}]+)\\}`, "u"))?.[1] ?? "";

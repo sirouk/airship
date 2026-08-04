@@ -30,7 +30,26 @@
 .menu-select.compact .menu-select-trigger { justify-content:center; width:44px; height:44px; min-height:44px; padding:0; border-radius:50%; color:var(--brass-bright); background:color-mix(in srgb,var(--accent) 6.5%,transparent); }
 .menu-select.compact .menu-select-caret { position:absolute; right:-2px; bottom:-2px; display:grid; place-items:center; width:16px; height:16px; border:1.5px solid var(--ground); border-radius:50%; color:var(--ink); background:var(--surface-raised); font-size:var(--fs-micro); }
 .menu-select.compact .menu-select-popover { position:fixed; top:58px; right:8px; bottom:auto; width:min(320px,calc(100vw - 16px)); }
+/*
+ * The phone's profile control: one mark, one ring.
+ *
+ * It was drawing three concentric circles and a chevron for a two-letter
+ * monogram — a 44px tinted disc from the rule above, the 30px bordered disc
+ * `.profile-monogram` draws inside it, and a 16px ringed badge holding a `⌄`
+ * pinned to the corner of both. Three borders and a caret is 1998 chrome around
+ * an avatar, and it is the first object in the top-right corner of every phone
+ * screen in the product. The disc and the badge are the two that carry no
+ * information: the mark itself is the affordance (`aria-haspopup="listbox"`
+ * states the menu for anything that cannot see it), the 44px target survives
+ * untouched because it is the trigger's own box, and the pressed and open
+ * states are what the fill is spent on instead of a resting decoration.
+ */
 .compact-profile-menu { display:none; }
+/* `.menu-select.compact` above is (0,3,0); a `.compact-profile-menu` prefix
+   alone loses to it and the disc and the badge both survived the removal. */
+.menu-select.compact.compact-profile-menu .menu-select-trigger { background:transparent; }
+.menu-select.compact.compact-profile-menu .menu-select-trigger:hover, .menu-select.compact.compact-profile-menu .menu-select-trigger[aria-expanded="true"] { background:color-mix(in srgb,var(--accent) 10%,transparent); }
+.menu-select.compact.compact-profile-menu .menu-select-caret { display:none; }
 .profile-switcher .profile-menu { margin:0; }
 .profile-switcher .profile-menu .menu-select-popover { right:auto; left:0; }
 .profile-switcher .profile-menu .menu-select-trigger { padding:6px; border:0; background:transparent; }

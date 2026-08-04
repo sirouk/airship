@@ -146,9 +146,19 @@ test("compact runtime indicators disclose scoped detail without expanding the to
   await runtime.click();
   const sheet = page.getByRole("dialog", { name: "Runtime trust" });
   await expect(sheet).toContainText("The agent kernel executes in this browser.");
-  // The chip says four; the sheet must render four. The count is the chip's
-  // statement of its own cost, so it may not drift from what it hides.
-  await expect(sheet.locator(".claim-rows > button")).toHaveCount(4);
+  // The chip says four; the sheet must render four *axes*. The count is the
+  // chip's statement of its own cost, so it may not drift from what it hides.
+  //
+  // Scoped to `.trust-sheet__axes` because the sheet now also carries this
+  // conversation's facts — the bound model, what holds the credential, the
+  // pinned Skill set — which used to occupy a 44px slot each on the phone's
+  // session bar or a permanent line under the composer. They are facts, not
+  // posture axes, and they live in their own block precisely so that this
+  // count keeps meaning what the chip says it means.
+  await expect(sheet.locator(".trust-sheet__axes .claim-rows > button")).toHaveCount(4);
+  // And the facts are actually there: a collapse that renders nothing is a
+  // deletion, which is the failure this whole arrangement exists to avoid.
+  await expect(sheet.locator(".trust-sheet__facts .claim-rows > button").first()).toBeVisible();
   const disclosedTopbar = await page.locator(".topbar").boundingBox();
   expect(disclosedTopbar).not.toBeNull();
   expect(disclosedTopbar!.height).toBe(initialTopbar!.height);

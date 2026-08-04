@@ -800,7 +800,27 @@ export function ClaimRows({ rows }: Readonly<{ rows: readonly ClaimRow[] }>) {
   })}</div>;
 }
 
-export function TrustPostureSheet({ open, axes, onClose, onNavigate }: Readonly<{ open: boolean; axes: readonly TrustAxis[]; onClose(): void; onNavigate(view: NavigationView): void }>) {
+export function TrustPostureSheet({ open, axes, conversationFacts = [], onClose, onNavigate }: Readonly<{
+  open: boolean;
+  axes: readonly TrustAxis[];
+  /**
+   * Facts about the open conversation that are not posture axes: which model
+   * this thread is bound to and what the encrypted-inference statement says,
+   * what holds the credential, and which Skill set was pinned when the prompt
+   * was composed.
+   *
+   * They arrive as finished `ClaimRow`s rather than as axes on purpose. The
+   * topbar chip's count stands for the independently-scoped posture claims and
+   * has to keep meaning exactly that; these are the facts the phone's session
+   * bar used to spend a 44px slot each on, and the composer a permanent line.
+   * Rendering them in the conversation group is what makes that collapse a move
+   * rather than a deletion — the group's own heading says whose facts they are,
+   * and the sheet is one tap from the chip that is always on screen.
+   */
+  conversationFacts?: readonly ClaimRow[];
+  onClose(): void;
+  onNavigate(view: NavigationView): void;
+}>) {
   const dialog = useRef<HTMLDivElement>(null);
   /*
    * The same capture/restore contract `CommandPalette` and `PreferencesDialog`
@@ -836,9 +856,35 @@ export function TrustPostureSheet({ open, axes, onClose, onNavigate }: Readonly<
    * follows the deferral has to be able to see which group they arrived at.
    */
   const groups = (["tab", "conversation"] as const)
-    .map((scope) => ({ scope, band: TRUST_SCOPE_BANDS[scope], axes: trustAxesInScope(axes, scope) }))
-    .filter((group) => group.axes.length > 0);
-  return <div class="platform-scrim trust-sheet-scrim" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><div ref={dialog} class="trust-sheet" role="dialog" aria-modal="true" aria-labelledby="trust-sheet-title" tabIndex={-1} onKeyDown={(event) => { if (event.key === "Escape") onClose(); else if (event.key === "Tab") trapFocus(event, dialog.current); }}><header><div><span class="eyebrow">Four-axis posture</span><h2 id="trust-sheet-title">Runtime trust</h2></div><button type="button" onClick={onClose}>Close</button></header><p>Each axis is independently scoped. The weakest claim in this browser tab is shown in the topbar; the conversation's own claims are shown in its session bar.</p>{groups.map((group) => <section key={group.scope} class="trust-sheet__scope" aria-label={group.band.heading}><h3 class="eyebrow">{group.band.heading}</h3><p class="trust-sheet__where">{group.band.restingHome}</p><ClaimRows rows={group.axes.map((axis) => Object.freeze({ id: axis.id, state: axis.state, label: axis.label, detail: axis.detail, action: Object.freeze({ label: axis.label, onSelect: () => { onClose(); onNavigate(axis.view); } }) }))} /></section>)}</div></div>;
+    .map((scope) => ({
+      scope,
+      band: TRUST_SCOPE_BANDS[scope],
+      axisRows: trustAxesInScope(axes, scope).map((axis) => Object.freeze({
+        id: axis.id,
+        state: axis.state,
+        label: axis.label,
+        detail: axis.detail,
+        action: Object.freeze({ label: axis.label, onSelect: () => { onClose(); onNavigate(axis.view); } }),
+      })),
+      /*
+       * The conversation's own facts follow its posture claims and are kept in
+       * their own block, never merged into the axis list.
+       *
+       * The topbar chip states its own cost — "4 runtime claims" — and that
+       * number may not drift from what the sheet renders behind it. An axis is
+       * a claim about whether something can be trusted; a fact is a claim about
+       * what is currently true. Mixing them would have made the chip's count
+       * wrong in the only place a reader can check it.
+       */
+      factRows: scope === "conversation" ? conversationFacts.map((fact) => Object.freeze({
+        ...fact,
+        action: fact.action
+          ? Object.freeze({ label: fact.action.label, onSelect: () => { onClose(); fact.action!.onSelect(); } })
+          : undefined,
+      })) : [],
+    }))
+    .filter((group) => group.axisRows.length + group.factRows.length > 0);
+  return <div class="platform-scrim trust-sheet-scrim" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><div ref={dialog} class="trust-sheet" role="dialog" aria-modal="true" aria-labelledby="trust-sheet-title" tabIndex={-1} onKeyDown={(event) => { if (event.key === "Escape") onClose(); else if (event.key === "Tab") trapFocus(event, dialog.current); }}><header><div><span class="eyebrow">Four-axis posture</span><h2 id="trust-sheet-title">Runtime trust</h2></div><button type="button" onClick={onClose}>Close</button></header><p>Each axis is independently scoped. The weakest claim in this browser tab is shown in the topbar; the conversation's own claims are shown in its session bar.</p>{groups.map((group) => <section key={group.scope} class="trust-sheet__scope" aria-label={group.band.heading}><h3 class="eyebrow">{group.band.heading}</h3><p class="trust-sheet__where">{group.band.restingHome}</p><div class="trust-sheet__axes"><ClaimRows rows={group.axisRows} /></div>{group.factRows.length ? <div class="trust-sheet__facts"><ClaimRows rows={group.factRows} /></div> : null}</section>)}</div></div>;
 }
 
 /**

@@ -80,12 +80,26 @@ test("desktop chat title supports durable inline rename", async ({ page }, testI
     .toContainText("Inline rename survives navigation");
 });
 
-test("mobile exposes an explicit durable conversation rename action", async ({ page }, testInfo) => {
+/*
+ * The gesture changed; the contract did not.
+ *
+ * This used to press a pencil button in the chip row, which existed because a
+ * thumb has neither double-click nor F2. It was a second control for the verb
+ * that acts on the element beside it, taking a 44px slot on the one row that
+ * also has to hold the conversation's name and three indicators — so the title
+ * became the control and the button went. What still has to be true is that
+ * touch can rename at all, and that the rename is durable enough to reach the
+ * library, which is what the rest of this test measures.
+ */
+test("mobile renames a conversation durably by tapping its title", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile-chromium", "mobile rename contract");
   await page.goto("/#chat");
   await waitForShellSettled(page);
   await expect(page.locator(".app-shell")).toBeVisible();
-  await page.getByRole("button", { name: "Rename conversation" }).click();
+  // The pencil may not come back: two controls for one verb is what this row
+  // could least afford.
+  await expect(page.getByRole("button", { name: "Rename conversation" })).toHaveCount(0);
+  await page.locator(".session-bar__identity-button").tap();
   const input = page.getByRole("textbox", { name: "Conversation title" });
   await expect(input).toBeVisible();
   await input.fill("Mobile rename persists");

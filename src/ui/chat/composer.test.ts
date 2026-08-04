@@ -120,23 +120,38 @@ describe("composer keyhint", () => {
  * not a shipped fact, so the mount is asserted here beside the behaviour.
  */
 const app = await readFile(new URL("../app.tsx", import.meta.url), "utf8");
-const composerSource = await readFile(new URL("./composer.tsx", import.meta.url), "utf8");
 const routeStyles = await readFile(new URL("../routes.css", import.meta.url), "utf8");
+const chatStyles = await readFile(new URL("../chat.css", import.meta.url), "utf8");
 
 describe("the composer footer's stated facts are mounted", () => {
-  it("renders the credential posture as the chip rather than the phone-hidden caption", () => {
-    expect(app).toContain("<ComposerPostureChip");
+  /*
+   * The posture is still mounted; it is no longer mounted inside the input box.
+   *
+   * The previous version of this test asserted `<ComposerPostureChip` in
+   * `app.tsx`, which was the right assertion for the defect it was written
+   * against — a pure function nothing mounts is not a shipped fact. The mount
+   * moved rather than disappeared: `composerPosture` now feeds a conversation
+   * claim row in the runtime chip's sheet, so what has to be pinned is that the
+   * claim is still computed from the live binding and still reaches a surface,
+   * and that it is not back in the composer.
+   */
+  it("computes the credential posture and states it outside the input box", () => {
+    expect(app).toContain("composerCredentialPosture = composerPosture({");
     expect(app).toContain("authMethod: activeInferenceBinding?.authMethod,");
-    // The caption this replaces, in the exact words it shipped with.
+    expect(app).toContain("label: composerCredentialPosture.label,");
+    expect(app).toContain("conversationFacts={conversationFacts}");
+    // The two carriers this claim has already been wrongly given: a caption
+    // that computed to 0×0px on a phone, and a chip inside the textarea's own
+    // control row.
     expect(app).not.toContain('"local demo · page memory"');
+    expect(app).not.toContain("<ComposerPostureChip");
   });
 
   it("renders the Enter contract in the footer", () => {
     expect(app).toContain("<ComposerKeyhintLegend busy={busy} />");
   });
 
-  it("builds the chip's accessible name from both halves of every posture claim", () => {
-    expect(composerSource).toContain("label={`Credential posture. ${claim.label}. ${claim.detail}`}");
+  it("gives every posture claim both halves of a readable statement", () => {
     const kinds: readonly ComposerPostureKind[] = ["local-demo", "local-endpoint", "key-in-memory", "offline"];
     const claims = [
       composerPosture({ online: true, offlineReason: OFFLINE_INLINE_REASON, inferenceConnected: false }),
@@ -148,11 +163,20 @@ describe("the composer footer's stated facts are mounted", () => {
     // Four kinds, four sentences: an empty detail would give the chip an
     // accessible name that stops at its own one-word label.
     for (const claim of claims) expect(claim.detail.length).toBeGreaterThan(0);
+    // Both halves are what the claim row renders: the label is its heading and
+    // the detail is its sentence, so a claim missing either arrives as a word
+    // with nothing behind it.
+    for (const claim of claims) expect(claim.label.length).toBeGreaterThan(0);
   });
 
-  it("keeps the chip a 44px touch target at the phone breakpoint", () => {
-    const phone = routeStyles.match(/\.composer-posture \{[^}]*min-height: var\(--touch-target\);[^}]*\}/u);
-    expect(phone, "routes.css must give .composer-posture a 44px phone minimum").not.toBeNull();
+  it("leaves no orphaned posture chrome in the composer's sheets", () => {
+    // The rules that sized the chip, clipped its word at a 380px container and
+    // anchored its popover upward all went with it. A selector that matches
+    // nothing reads as a decision about a control that is not there — which is
+    // exactly how `.composer-tools span:nth-child(2) { display: none }`, the
+    // rule that hid this fact on phones, survived three waves.
+    expect(routeStyles).not.toContain(".composer-posture");
+    expect(chatStyles).not.toContain(".composer-posture");
   });
 });
 

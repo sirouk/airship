@@ -66,10 +66,12 @@
 
 .session-bar__identity-button:hover .session-bar__title { color: var(--accent-bright); }
 
-/* Fine pointers already have double-click/F2. Touch gets an explicit action in
-   the chip row at its breakpoint, including phone landscape where the title is
-   deliberately folded. */
-.session-bar__rename-action { display: none; }
+/* `.session-bar__rename-action` used to be declared here and revealed at the
+   phone and landscape breakpoints, because "fine pointers already have
+   double-click/F2" and touch had neither. Touch now renames by tapping the
+   title itself, so the pencil button is gone from the markup rather than
+   hidden by a rule — a second control for the verb that acts on the element
+   under the reader's finger was the header slot easiest to give back. */
 
 .session-bar__rename {
   display: grid;
@@ -132,7 +134,6 @@
 .session-status-chip,
 .journal-chip,
 .session-model-chip,
-.session-skills-chip,
 .session-bar__new,
 .session-bar .session-runtime {
   min-height: 28px;
@@ -143,8 +144,7 @@
 }
 
 .session-status-chip,
-.session-model-chip,
-.session-skills-chip {
+.session-model-chip {
   display: inline-flex;
   gap: var(--sp-1);
   align-items: center;
@@ -284,26 +284,10 @@
   white-space: nowrap;
 }
 
-.session-skills-chip__label {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.session-skills-popover ul {
-  display: grid;
-  gap: var(--sp-2);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.session-skills-popover li {
-  display: flex;
-  gap: var(--sp-3);
-  align-items: baseline;
-  justify-content: space-between;
-}
+/* The pinned-skills chip and its popover were declared here. The set they
+   listed is a claim row in the runtime chip's sheet now — every name, every
+   short digest and the set digest, as prose rather than as a `<ul>` inside a
+   44px trigger — so the bar is one indicator lighter at every width. */
 
 /*
  * The connected model control, resized to the bar it now sits in.
@@ -371,7 +355,6 @@
   .chat-stage[data-scrolled="true"] .journal-chip__id,
   .chat-stage[data-scrolled="true"] .journal-chip__unit,
   .chat-stage[data-scrolled="true"] .session-model-chip__label,
-  .chat-stage[data-scrolled="true"] .session-skills-chip__label,
   .chat-stage[data-scrolled="true"] .session-bar .runtime-posture {
     position: absolute;
     width: 1px;
@@ -729,9 +712,20 @@ button.runtime-posture {
  * (`firstTopWithin > 120`) still holds because centring is further from the top
  * than the padding it replaces, not nearer.
  */
+/*
+ * `safe center`, because bare `center` has no floor.
+ *
+ * `e2e/responsive-breakpoints` has said "`safe center` must fall back to start
+ * alignment; bare `center` puts the first card at a negative offset a scroll
+ * container can never reach" since the centring landed, and the rule underneath
+ * it said `center`. It passed at 390×844 by 2px of slack, and the phone type
+ * ramp spent that slack: measured -2.05px, i.e. the top of the welcome card
+ * rendered above the top of the scrollport with no way to scroll to it. The
+ * keyword is the fallback the assertion was written against.
+ */
 .transcript.no-turns {
   display: grid;
-  align-content: center;
+  align-content: safe center;
   padding-block: var(--sp-5);
 }
 
@@ -973,8 +967,25 @@ button.runtime-posture {
   white-space: nowrap;
 }
 
+/*
+ * `overflow-wrap` is used eleven times elsewhere in this file; its absence here
+ * was an omission rather than house style, and it was the readable half of the
+ * transcript that paid. Measured at 320px on a `/help` turn: this `<p>` — the
+ * slash roster, `/deactivate-execution-runtime <runtime> | /deactivate…` —
+ * ran 85px past its column and pushed `.transcript` to 57px of horizontal
+ * scroll. Nothing above noticed, because `.transcript` computes to
+ * `overflow-x: auto` and absorbed all of it before `main.main` could see it.
+ *
+ * `break-word`, not `anywhere`: `anywhere` participates in min-content sizing,
+ * so it changes what *every* transcript paragraph contributes to the intrinsic
+ * width of the flex and grid tracks around it — combined with the `pre-wrap`
+ * on the line below, ordinary prose starts breaking mid-word at comfortable
+ * widths. `break-word` breaks only the word that would otherwise overflow.
+ * Measured at 320, 390 and 768 after the change: zero overflow at all three.
+ */
 .message-body p {
   margin: 7px 0 0;
+  overflow-wrap: break-word;
   color: var(--ink);
   font-size: var(--fs-meta);
   line-height: 1.62;
@@ -1574,49 +1585,12 @@ button.runtime-posture {
    a decision about a row that has none, which is how the phone `display: none`
    on this row's second child survived three waves. */
 
-/* What holds the credential for the keystroke about to be made. This shipped
-   as a caption that was `display: none` on phones; it is a chip at every
-   breakpoint now, and the chip expands to the whole sentence. */
-.composer-posture {
-  min-height: 28px;
-  padding: 0 var(--sp-2);
-  border: 1px solid transparent;
-  border-radius: var(--radius-chip);
-  color: var(--ink-muted);
-  font-size: var(--fs-micro);
-}
-
-.composer-posture:hover,
-.composer-posture[aria-expanded="true"] {
-  border-color: var(--line-control);
-  color: var(--ink);
-  background: var(--surface-soft);
-}
-
-.composer-posture__word {
-  white-space: nowrap;
-}
-
-.composer-posture__word[data-state="attention"] {
-  color: var(--v-caution);
-}
-
-.composer-posture__blocked {
-  margin: 0;
-  color: var(--v-caution);
-}
-
-.composer-posture__detail {
-  margin: 0;
-}
-
-/* Every footer disclosure opens upward: the strip sits against the bottom of
-   the viewport, so the primitive's default downward anchor would render the
-   claim off-screen. */
-.composer-posture-popover .popover__panel {
-  top: auto;
-  bottom: calc(100% + var(--sp-2));
-}
+/* The credential-posture chip's recipe used to live here. The claim it drew —
+   "Key in memory", "Local demo" — is now a row of the runtime chip's sheet
+   rather than a caveat inside the box a person types into, so the rules that
+   sized it, the ones that clipped its word at 380px, and its upward-opening
+   popover anchor all went with it. Nothing else in this footer opens a
+   popover, which is why no anchor rule survives the removal. */
 
 /*
  * The Enter contract. Shipped since the first wave, stated nowhere in the UI
@@ -1688,16 +1662,6 @@ button.runtime-posture {
      width, so without this the longest label clips at 430px too. */
   .composer-approval-select {
     flex: 0 0 auto;
-  }
-}
-
-@container (max-width: 380px) {
-  .composer-posture__word {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
   }
 }
 

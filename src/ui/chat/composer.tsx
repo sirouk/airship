@@ -1,6 +1,5 @@
 import { useEffect, useState } from "preact/hooks";
-import { Popover } from "../popover";
-import { Seal, type SealState } from "../seal";
+import { type SealState } from "../seal";
 import { COMPOSER_ATTACHMENT_LIMIT } from "./composer-state";
 
 /**
@@ -168,31 +167,21 @@ export function composerPosture(input: Readonly<{
     : COMPOSER_POSTURE_CLAIMS["key-in-memory"];
 }
 
-export function ComposerPostureChip({
-  claim,
-  blockedReason,
-}: Readonly<{
-  claim: ComposerPostureClaim;
-  /** Why Send is refusing, mirrored here because a `title` has no touch gesture. */
-  blockedReason?: string;
-}>) {
-  return (
-    <Popover
-      class="composer-posture-popover"
-      triggerClass="composer-posture"
-      label={`Credential posture. ${claim.label}. ${claim.detail}`}
-      heading="Credential posture"
-      width={300}
-    trigger={<>
-      <Seal state={claim.state} density="dot" size={16} label={claim.label} />
-      <span class="composer-posture__word" data-state={claim.state}>{claim.label}</span>
-    </>}
-    >
-      <p class="composer-posture__detail">{claim.detail}</p>
-      {blockedReason ? <p class="composer-posture__blocked" role="status">{blockedReason}</p> : null}
-    </Popover>
-  );
-}
+/*
+ * `ComposerPostureChip` used to be here, and the claim it rendered still is.
+ *
+ * The chip put "Key in memory" inside the box a person types their message
+ * into. It got there for a good reason — the same fact had shipped as a caption
+ * that computed to 0×0px on a phone — but the fix moved a standing caveat into
+ * the one control on the screen that exists for the reader's own words. The
+ * claim `composerPosture` returns is now a row in the runtime chip's sheet,
+ * beside the model it is a credential for and the conversation's other facts,
+ * which is both visible on every device and somewhere a person looks for it.
+ *
+ * The chip's second job did not move: the Send refusal it mirrored (because a
+ * `title` has no touch gesture) is stated under the composer as a status line,
+ * present only while Send is actually refusing.
+ */
 
 /**
  * Why an attachment-only composer refuses Enter, in one sentence, everywhere.

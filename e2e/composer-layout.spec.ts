@@ -268,12 +268,29 @@ test("the approval policy opens inside the phone viewport, reads whole, and take
     // wrong item. The strip buys the policy value its room by shedding the
     // attach control's *visible* label — a duplicate of its own input's
     // accessible name, which is why that shed costs nothing and is checked
-    // here — and never by shedding the credential posture, which is a caveat
-    // and stays on screen at every width the product supports.
+    // here.
     await expect(page.getByLabel("Attach image"), `${at}: attach control still names itself`).toHaveCount(1);
-    await expect(page.locator(".composer-posture"), `${at}: credential posture stays visible`).toBeVisible();
-    const caveat = await page.locator(".composer-posture").boundingBox();
-    expect(caveat!.height, `${at}: credential posture is rendered, not clipped`).toBeGreaterThanOrEqual(12);
+    /*
+     * The credential posture used to be measured here as the third occupant of
+     * this row, on the reasoning that it is a caveat and a caveat may not be
+     * shed. It is still a caveat and it is still unshed — it is just not in the
+     * box a person types their message into any more. "Key in memory" beside a
+     * caret is a standing warning attached to the reader's own words, on the
+     * one control on a phone with least room for anything.
+     *
+     * So the assertion inverts: the row may not hold it, and the runtime chip's
+     * sheet must. That second half is what stops this being a deletion — the
+     * two carriers this claim has already been wrongly given were a caption
+     * that computed to 0×0px on a phone and this row.
+     */
+    await expect(page.locator(".composer-posture"), `${at}: the input row does not carry the credential caveat`).toHaveCount(0);
+    await page.locator(".topbar-posture-chip").click();
+    await expect(
+      page.locator(".trust-sheet").getByText("No provider credential is held.", { exact: false }),
+      `${at}: the credential posture is stated in the runtime chip's sheet`,
+    ).toBeVisible();
+    await page.locator(".trust-sheet").getByRole("button", { name: "Close" }).first().click();
+    await expect(page.locator(".trust-sheet")).toHaveCount(0);
 
     await trigger.click();
     const geometry = await page.evaluate(() => {

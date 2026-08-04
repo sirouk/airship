@@ -84,6 +84,13 @@ describe("Chat takes its rename keys from the shared contract", () => {
     // A tooltip that named only the mouse gesture left F2 discoverable by
     // nothing at all — and it is the only keyboard start this control has.
     expect(RENAME_START_HINT).toContain(RENAME_SHORTCUT_KEY);
-    expect(bar).toContain("title={`${title} · ${RENAME_START_HINT}`}");
+    // The hint is now conditional, because the gesture is: a coarse pointer has
+    // neither double-click nor F2 and renames by tapping the title, so naming
+    // the keyboard start to a phone would document a key that device has not
+    // got. Both branches are asserted — the keyboard hint may not be lost on
+    // the way to giving touch its own sentence.
+    expect(bar).toContain("`${title} · ${RENAME_START_HINT}`");
+    expect(bar).toContain("`${title} · Tap to rename`");
+    expect(bar).toContain("coarsePointer ?");
   });
 });

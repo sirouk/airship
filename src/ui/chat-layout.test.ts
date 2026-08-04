@@ -54,7 +54,13 @@ describe("chat role layout", () => {
     // cluster wraps; wrapping is what turned one row into three.
     expect(styles).toMatch(/\.session-bar__title \{[^}]*text-overflow: ellipsis/u);
     expect(styles).toContain(".session-bar__chips {");
-    expect(styles).toMatch(/\.session-status-chip,\n\.journal-chip,\n\.session-model-chip,\n\.session-skills-chip,\n\.session-bar__new,/u);
+    // Three indicators and one verb share the chip recipe. The pinned-skills
+    // chip left this list when its content moved into the runtime chip's
+    // sheet: it was a 44px glyph on a 430px bar whose whole payload was a
+    // popover, and the bar's problem is that it has more indicators than the
+    // title it crowds. A fourth name reappearing here is a fourth slot.
+    expect(styles).toMatch(/\.session-status-chip,\n\.journal-chip,\n\.session-model-chip,\n\.session-bar__new,/u);
+    expect(styles).not.toContain(".session-skills-chip");
     // The old two-column header may not come back under any breakpoint.
     expect(styles).not.toContain(".stage-header");
     expect(styles).not.toContain(".session-meta");
@@ -103,7 +109,15 @@ describe("chat role layout", () => {
      */
     const empty = styles.match(/\.transcript\.no-turns \{([^}]+)\}/u)?.[1] ?? "";
 
-    expect(empty).toContain("align-content: center");
+    /*
+     * `safe center`, not bare `center`. The keyword is the whole point of the
+     * companion assertion in `e2e/responsive-breakpoints.spec.ts` — "bare
+     * `center` puts the first card at a negative offset a scroll container can
+     * never reach" — and the rule said `center` anyway, passing at 390×844 by
+     * 2px of slack that the phone type ramp then spent: measured -2.05px, the
+     * welcome card rendered above the top of its own scrollport.
+     */
+    expect(empty).toContain("align-content: safe center");
     expect(empty).not.toContain("align-content: end");
   });
 });

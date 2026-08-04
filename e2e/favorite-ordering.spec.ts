@@ -94,7 +94,11 @@ async function expandConversations(page: Page): Promise<void> {
 }
 
 async function renameConversation(page: Page, title: string, mobile: boolean): Promise<void> {
-  if (mobile) await page.getByRole("button", { name: "Rename conversation" }).click();
+  // One control, two gestures: a coarse pointer taps the title, a mouse
+  // double-clicks it. The phone's separate pencil button is gone — it was a
+  // second control for the verb that acts on the element beside it, on the row
+  // that also has to hold the conversation's name.
+  if (mobile) await page.locator(".session-bar__identity-button").tap();
   else await page.locator(".session-bar__identity-button").dblclick();
   const input = page.getByRole("textbox", { name: "Conversation title" });
   await input.fill(title);
