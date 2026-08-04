@@ -97,15 +97,20 @@ Duplication that is verified beats duplication that drifts.
   (`deploy.sh:135-139`) — before publishing, not after. This runs on the
   deploying machine.
 - `check-static-security.mjs` runs inside `npm run check`, so a CSP edit that
-  misses the Caddyfile is red at **review** time rather than at deploy time.
-  *(At `03af2c5` this check covered `index.html` and `public/_headers` only;
-  extending it to the Caddyfile was in flight in the working tree as this guide
-  was written. Confirm which behaviour you have before relying on it.)*
+  misses the Caddyfile is red at **review** time rather than at deploy time. It
+  reads all three sources — `index.html`, `public/_headers` and the `Caddyfile` —
+  folded into one normalization (`0245110`). `frame-ancestors` is header-only, so
+  the `<meta>` CSP is compared against the header set with that directive removed,
+  while the Caddyfile is compared against the whole of it. **A header only the
+  Caddyfile sends is also a failure**, because no other host this build is served
+  from would send it.
 
 Note what neither check covers: **the matcher-scoped caching headers**
-(`@immutable`, `@nocache`) exist only in the Caddyfile and have no counterpart in
-`public/_headers` to be compared against. Those are verified by the post-deploy
-`curl` probes below, or not at all.
+(`@immutable`, `@nocache`) are deliberately out of scope. Caddy expresses them
+with path matchers, and they have no `public/_headers` counterpart to be compared
+against — re-implementing matcher semantics to check them would be a second
+gate's worth of guessing. **They are verified by the post-deploy `curl` probes
+below, or not at all.**
 
 ### 3. The local path must not require configuration
 
