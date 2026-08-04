@@ -3,8 +3,18 @@
 Airship ships a real, opt-in client-side semantic embedding engine. The
 startup and offline baseline remains `HashEmbeddingProvider`; selecting
 **Local semantic** atomically rebuilds the active memory-only index with the
-pinned transformer. There is no remote embedding endpoint and no silent
-fallback that can mislabel hash vectors as semantic vectors.
+pinned transformer.
+
+This document describes the **on-device** engine. It is not the only one: a
+Chutes confidential engine runs the same job inside a TEE over the end-to-end
+encrypted transport, and the two are alternatives rather than a local option and
+a compromise. This file previously said "there is no remote embedding endpoint",
+which stopped being true when that engine shipped and was misleading even as a
+principle — the invariant is that corpus material is never plaintext to anyone,
+not that it never leaves the device.
+
+What holds for both engines: no silent fallback that can mislabel hash vectors
+as semantic ones, and no plaintext embedding endpoint.
 
 ## Runtime contract
 

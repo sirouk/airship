@@ -129,11 +129,31 @@ relationships, previously learned facts expressed differently, sources related
 by meaning rather than vocabulary.
 
 Embedding models, dimensions, chunking rules and model versions are **pinned and
-inspectable**. Embeddings are generated locally wherever the active browser,
-extension or runtime can do so. **Airship never silently sends private corpus
-material to an external embedding service.** If remote embedding is deliberately
-selected, the destination, data boundary, credential, storage behaviour and
-proof posture are disclosed before use.
+inspectable**.
+
+**Corpus material is never sent as plaintext to anyone.** That is the actual
+invariant, and it holds for both engines rather than only the local one.
+
+The original wording here — "Airship never silently sends private corpus material
+to an external embedding service", with a disclosure ceremony required before
+remote embedding — described a threat that does not exist on this path, and the
+ceremony it demanded bought nothing. Chutes serves every model from a TEE, and
+Airship reaches it over the same end-to-end encrypted transport the chat lane
+uses: the request is sealed against the instance's public key on this device, the
+keys stay under the user's control on the client side, and the provider never
+holds plaintext. A remote embedding computed that way is not "material leaving
+for a third party to read". Treating it as one produced a worse product — an
+interruption in the middle of connecting, protecting against nothing.
+
+What must remain true, and is enforced rather than announced:
+
+- Embeddings run either **on device**, or **inside a TEE over E2EE**. There is no
+  third option, and a plaintext remote embedding endpoint is not admissible.
+- The engine actually used is recorded in generation lineage and visible on the
+  Index route, so which engine produced a vector is always checkable after the
+  fact.
+- A failure to reach the confidential engine surfaces as a failure. It never
+  degrades to another engine while keeping the label.
 
 ### 4. Fuse ranks; do not add raw scores
 
