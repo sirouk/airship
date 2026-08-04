@@ -83,12 +83,23 @@ export function classifyRetrievalHit(
   posture: EmbeddingProvider["posture"] = "deterministic-bootstrap",
 ): RetrievalConfidenceVerdict {
   if (hit.lexicalScore > 0) return Object.freeze({ confidence: "confident" as const });
-  if (posture === "local-semantic") {
+  /*
+   * Any real embedding model, wherever it runs.
+   *
+   * The bootstrap sentence below is a specific claim — that hashing tokens into
+   * buckets makes unrelated text score by collision — and it is true only of
+   * `HashEmbeddingProvider`. Left unwidened, the first wordless hit from a
+   * 4096-dimension Qwen model computed on confidential compute would have been
+   * explained to the reader as a hash collision, which is not merely unhelpful
+   * but false about how that number was produced.
+   */
+  if (posture === "local-semantic" || posture === "confidential-remote") {
+    const engine = posture === "local-semantic" ? "the local semantic model" : "the confidential embedding model";
     return hit.denseScore >= SEMANTIC_DENSE_FLOOR
       ? Object.freeze({ confidence: "confident" as const })
       : Object.freeze({
         confidence: "weak" as const,
-        weakBecause: `No word of the query appears here, and the local semantic model scored it ${hit.denseScore.toFixed(3)} — below the ${SEMANTIC_DENSE_FLOOR.toFixed(2)} similarity floor.`,
+        weakBecause: `No word of the query appears here, and ${engine} scored it ${hit.denseScore.toFixed(3)} — below the ${SEMANTIC_DENSE_FLOOR.toFixed(2)} similarity floor.`,
       });
   }
   return Object.freeze({

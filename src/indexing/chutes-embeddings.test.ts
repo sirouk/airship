@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import {
   CHUTES_EMBEDDING_DIMENSIONS,
@@ -145,6 +146,27 @@ describe("ChutesEmbeddingProvider ordering", () => {
     const fetchImpl = vi.fn(async () => jsonResponse({ object: "list" }));
     await expect(provider(fetchImpl as unknown as typeof globalThis.fetch).embed(["x"]))
       .rejects.toThrow(/no `data` array/iu);
+  });
+});
+
+describe("the page is allowed to reach the embedding chute", () => {
+  /*
+   * The provider shipped before this test did, and it could not have worked: the
+   * content security policy named `llm.chutes.ai` and not the embedding chute,
+   * so every request would have been blocked by the browser before it left the
+   * page — a provider with 13 passing unit tests and no route out.
+   *
+   * Both policies are asserted because `check-static-security.mjs` requires them
+   * to serialize identically apart from `frame-ancestors`; granting one and not
+   * the other fails the build, and granting neither fails only in a browser.
+   */
+  const origin = new URL(CHUTES_EMBEDDING_ENDPOINT).origin;
+
+  it.each(["index.html", "public/_headers"])("%s grants the embedding origin in connect-src", async (file) => {
+    const source = await readFile(new URL(`../../${file}`, import.meta.url), "utf8");
+    const connectSrc = /connect-src [^;]*/u.exec(source)?.[0];
+    expect(connectSrc, `${file} has no connect-src`).toBeDefined();
+    expect(connectSrc).toContain(origin);
   });
 });
 
