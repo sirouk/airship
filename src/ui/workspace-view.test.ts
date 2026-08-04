@@ -20,6 +20,7 @@ import {
   workspaceRowMenuKey,
   workspaceEditorProjection,
   workspaceFileWindow,
+  explorerRows,
   workspaceFilterEmptyCopy,
   workspaceGutterLines,
   workspaceHistoryPatch,
@@ -142,10 +143,15 @@ describe("profile-scoped workbench view state", () => {
 
 describe("bounded workspace presentation", () => {
   it("mounts a constant metadata window for a 100k-file workspace", () => {
+    // 30, not 28: the rail's default pitch fell from 34px to 28px, so the same
+    // 432px of viewport now holds 16 rows plus the 7-row overscan on each side.
+    // What the claim is about is that the number is a constant of the viewport
+    // and never of the workspace — the ceiling moves with the row height, the
+    // 100,000 files do not move it.
     const first = workspaceFileWindow(100_000, 0, 432);
     const middle = workspaceFileWindow(100_000, 1_800_000, 432);
-    expect(first.end - first.start).toBeLessThanOrEqual(28);
-    expect(middle.end - middle.start).toBeLessThanOrEqual(28);
+    expect(first.end - first.start).toBeLessThanOrEqual(30);
+    expect(middle.end - middle.start).toBeLessThanOrEqual(30);
     expect(middle.start).toBeGreaterThan(49_000);
   });
 
@@ -799,10 +805,30 @@ describe("Explorer empty-after-filter state", () => {
     expect(workspaceFilterEmptyCopy("x", 1).detail).toContain("1 file is in this workspace");
   });
 
-  it("says which search came back empty, because the two ask different questions", () => {
-    expect(workspaceFilterEmptyCopy("x", 3, "path").title).toContain("No path matches");
-    expect(workspaceFilterEmptyCopy("x", 3, "contents").title).toContain("No file contains");
-    expect(workspaceFilterEmptyCopy("x", 3, "contents").detail).toContain("3 files were searched");
+  /*
+   * One search, so one empty sentence. The two it replaces — "No path matches"
+   * and "No file contains" — each existed to send the reader to the other mode,
+   * and the modes are gone. What may not go with them is the bound: a scan that
+   * stopped early must say so in the same breath as "nothing matched", or the
+   * reader concludes the workspace does not contain the term when the truth is
+   * that the scan never reached the file that does.
+   */
+  it("accounts for both halves of the one search, and for the bound the scan hit", () => {
+    const copy = workspaceFilterEmptyCopy("x", 3, {
+      matches: [],
+      scannedFiles: 2,
+      skippedFiles: 1,
+      truncated: true,
+      unsearchedFiles: 7,
+      candidateFiles: 10,
+      filteredOutFiles: 0,
+    });
+    expect(copy.title).toBe("Nothing matches “x”");
+    expect(copy.detail).toContain("3 files are in this workspace, and no path contains it");
+    expect(copy.detail).toContain("2 of them were read for text");
+    // Verbatim from the sentence the model's own `search_text` is given.
+    expect(copy.detail).toContain("7 files not reached");
+    expect(copy.detail).toContain("bounded scan");
   });
 
   it("renders the block with its clear action instead of an empty tree", () => {
@@ -810,7 +836,7 @@ describe("Explorer empty-after-filter state", () => {
     // The tree keeps its element — the ResizeObserver measures it — and yields
     // the rail to a named block whenever it has no row to draw.
     expect(source).toContain("hidden={treeHidden}");
-    expect(source).toContain("workspaceFilterEmptyCopy(filter, filtered.total, \"path\")");
+    expect(source).toContain("workspaceFilterEmptyCopy(filter, filtered.total, search)");
     expect(source).toContain("onClick={clearFilter}");
     // Escape and the button are the same two acts, so neither can drift.
     const clear = source.match(/function clearFilter\(\): void \{[\s\S]*?\n  \}/u);
@@ -823,30 +849,95 @@ describe("Explorer empty-after-filter state", () => {
  * `search_text` — "Search bounded UTF-8 workspace content for a literal string"
  * — had no button, menu item or field anywhere on the route that owns files.
  * The one search-shaped box was a path filter, so the capability was reachable
- * only by typing `/search-text` into the composer.
+ * only by typing `/search-text` into the composer. It then arrived as a *mode*,
+ * which is the state the owner met: a filled segmented control asking the
+ * reader to decide whether the thing they are looking for is a filename or a
+ * line of text before they have found it.
  */
-describe("Explorer content search", () => {
+describe("Explorer search: one field, both questions", () => {
   const source = readFileSync(new URL("./workspace-view.tsx", import.meta.url), "utf8");
 
-  it("gives the existing field a mode instead of adding a second search box", () => {
+  it("keeps one field and no mode switch anywhere near it", () => {
     expect([...source.matchAll(/class="workspace-filter"/gu)]).toHaveLength(1);
-    expect(source).toContain('aria-label="Search workspace by"');
-    expect(source).toContain('aria-pressed={filterMode === "contents"}');
+    expect(source).toContain('aria-label="Search workspace files by path and contents"');
+    // The segmented control, its group label and the state behind it are gone
+    // rather than hidden — a mode nobody can see is still a mode.
+    expect(source).not.toContain("git-view-toggle");
+    expect(source).not.toContain("filterMode");
   });
 
-  it("reads real file content in Contents mode, through the shared bounded scan", () => {
+  it("runs the path matcher and the bounded scan against the same query", () => {
+    expect(source).toContain("workbenchFilterMatches(files, filter)");
     expect(source).toContain("searchWorkspaceContent(workspace, files, query");
-    // The rows say which file and which line, and open the same replaceable
-    // preview a tree row opens.
-    expect(source).toContain("line {String(match.line)}");
-    expect(source).toContain("onClick={() => void openPreviewTab(match.path)}");
+    // The debounce is what makes running both on every keystroke affordable:
+    // the path half is synchronous, the 8 MiB half waits to see if the reader
+    // has finished the word.
+    const scan = source.match(/const timer = setTimeout\([\s\S]*?WORKSPACE_SEARCH_DEBOUNCE_MS\);/u);
+    expect(scan?.[0]).toContain("searchWorkspaceContent");
   });
 
-  it("leaves the path filter exactly as it was", () => {
-    // Contents mode passes an empty query to the path matcher rather than
-    // teaching it a second behaviour.
-    expect(source).toContain('const pathFilter = filterMode === "path" ? filter : "";');
-    expect(source).toContain("workbenchFilterMatches(files, pathFilter)");
+  it("draws one tree out of both answers rather than swapping the tree for a list", () => {
+    // Union in inventory order, so the tree does not reshuffle under the reader.
+    expect(source).toContain("byPath.has(entry.path) || hitsByPath.has(entry.path)");
+    expect(source).toContain("explorerRows(visible, hitsByPath)");
+    // And the rail says which of the two matched: hits are child rows under
+    // their file, and the file states how many it holds beside its size.
+    expect(source).toContain('{row.hits ? `${String(row.hits)} in text · ` : ""}');
+  });
+
+  it("never lets a path match stand in front of a bounded scan", () => {
+    // The scan's own sentence — truncated, unsearched, capReachedIn — reaches
+    // the reader in the same line as the file count.
+    expect(source).toContain("workspaceSearchSummary(search)");
+    expect(source).toContain('scanning || !search ? "reading contents…"');
+  });
+});
+
+/*
+ * The row model the one search needs: a text hit is a place inside a file, so
+ * it is a row of the same tree one level deeper — not a second list in a second
+ * mode. `id` is the field that makes it work, because a hit and its file share
+ * a path and every keyboard lookup in the tree is a lookup by row identity.
+ */
+describe("Explorer rows", () => {
+  const node = (path: string, kind: "directory" | "file", depth: number) =>
+    Object.freeze({ kind, name: path.slice(path.lastIndexOf("/") + 1), path, depth, children: [] });
+  const hit = (path: string, line: number, column: number, snippet: string) =>
+    Object.freeze({ path, line, column, snippet });
+
+  it("nests each hit under the file that holds it, one level deeper", () => {
+    const rows = explorerRows(
+      [node("/workspace/docs", "directory", 1), node("/workspace/docs/a.ts", "file", 2)],
+      new Map([["/workspace/docs/a.ts", [hit("/workspace/docs/a.ts", 4, 2, "const a = 1")]]]),
+    );
+    expect(rows.map((row) => row.id)).toEqual([
+      "/workspace/docs",
+      "/workspace/docs/a.ts",
+      "/workspace/docs/a.ts#4:2",
+    ]);
+    expect(rows[1]?.hits).toBe(1);
+    expect(rows[2]?.depth).toBe(3);
+    // A hit acts on its file: opening, revealing and the row menu all need the
+    // path, and none of them needs a second code path for the deeper row.
+    expect(rows[2]?.path).toBe("/workspace/docs/a.ts");
+    expect(rows[2]?.node).toBeUndefined();
+  });
+
+  it("gives two hits on the same line different identities", () => {
+    const rows = explorerRows(
+      [node("/workspace/a.ts", "file", 1)],
+      new Map([["/workspace/a.ts", [hit("/workspace/a.ts", 4, 2, "x"), hit("/workspace/a.ts", 4, 9, "x")]]]),
+    );
+    expect(new Set(rows.map((row) => row.id)).size).toBe(rows.length);
+    expect(rows[0]?.hits).toBe(2);
+  });
+
+  it("leaves a tree with no hits exactly as the tree", () => {
+    const nodes = [node("/workspace/docs", "directory", 1), node("/workspace/docs/a.ts", "file", 2)];
+    const rows = explorerRows(nodes, new Map());
+    expect(rows).toHaveLength(2);
+    expect(rows.every((row) => row.node !== undefined)).toBe(true);
+    expect(rows.every((row) => row.hits === undefined)).toBe(true);
   });
 });
 
@@ -915,3 +1006,82 @@ describe("work that did not survive the reload", () => {
     expect(host).toContain("durability={props.durability}");
   });
 });
+
+/*
+ * The rail's own density, and the two places it is written down.
+ *
+ * The workbench opted out of the systemic density block entirely: 34px rows in
+ * CSS that measured a 42px pitch at the shipped default, a 30px field, a 36px
+ * heading. The row height in particular is written twice on purpose — CSS draws
+ * the box, JS sizes the virtualization window — and the failure mode when they
+ * disagree is silent: the window scrolls at one pitch while the rows are drawn
+ * at another, and rows go missing at the bottom of a long tree.
+ */
+describe("Explorer density", () => {
+  const styles = readFileSync(new URL("./workspace-view.css", import.meta.url), "utf8");
+  const source = readFileSync(new URL("./workspace-view.tsx", import.meta.url), "utf8");
+  const treeRow = (selector: string) => styles.match(new RegExp(`${selector} \\{ --tree-row: ([^;]+);`, "u"))?.[1];
+
+  it("draws the row at the height the virtualization window measures", () => {
+    expect(treeRow("\\.workspace-workbench")).toBe(`${String(WORKSPACE_FILE_ROW_HEIGHT)}px`);
+    expect(treeRow(':root\\[data-density="compact"\\] \\.workspace-workbench')).toBe("24px");
+    expect(treeRow(':root\\[data-density="comfortable"\\] \\.workspace-workbench')).toBe("32px");
+    // The same three numbers, in the function that drives the window.
+    const height = source.match(/function workspaceRowHeight\(\): number \{[\s\S]*?\n\}/u)?.[0] ?? "";
+    expect(height).toContain('=== "comfortable" ? 32');
+    expect(height).toContain('=== "compact" ? 24');
+    expect(height).toContain("return WORKSPACE_FILE_ROW_HEIGHT");
+    // A finger gets the floor from both sides.
+    expect(height).toContain('matchMedia("(pointer: coarse)").matches) return 44');
+    // Written at the specificity of the density overrides it has to beat: a
+    // bare `.workspace-workbench` here loses to `:root[data-density=
+    // "comfortable"] .workspace-workbench` and quietly exempts every
+    // comfortable-density tablet from the touch floor.
+    expect(coarseBlock(styles)).toContain(":root[data-density] .workspace-workbench { --tree-row: var(--touch-target); }");
+  });
+
+  it("stops spending 12% of every filename on a button nobody asked for", () => {
+    // The lane was 34px wide and the `•••` inside it was `opacity: .45` at
+    // rest, on all five rows of a three-file workspace.
+    expect(styles).toContain(".tree-row-wrap { --tree-action-lane: 0px;");
+    expect(styles).toContain(".tree-row-wrap:hover, .tree-row-wrap:focus-within { --tree-action-lane: 30px; }");
+    const overflow = styles.match(/\.tree-overflow \{([^}]+)\}/u)?.[1] ?? "";
+    expect(overflow).toContain("opacity: 0;");
+    // `:focus-within` is what keeps it reachable when the keyboard puts focus
+    // on the row, and the row's own menu keys never depended on it.
+    expect(styles).toContain(".tree-row-wrap:focus-within .tree-overflow");
+    expect(source).toContain('aria-keyshortcuts={node.kind === "file" ? "Enter Shift+Enter Control+Enter Shift+F10"');
+    expect(source).toContain('aria-label={`Actions for ${node.name}`}');
+  });
+
+  it("keeps the lane open where there is no hover to open it with", () => {
+    const coarse = coarseBlock(styles);
+    // Listed with its own `:hover`/`:focus-within` selectors, which outrank the
+    // bare class and would otherwise win this argument on a device that has
+    // neither.
+    expect(coarse).toContain(".tree-row-wrap, .tree-row-wrap:hover, .tree-row-wrap:focus-within { --tree-action-lane: 47px; }");
+    expect(coarse).toContain("width: 44px;");
+    expect(coarse).toContain("opacity: 1;");
+  });
+
+  it("gives the two rail tabs the product's own tab padding", () => {
+    // `--sp-1` plus the strip's own `--sp-1` gap put 12px between "Explorer"
+    // and "Source Control" — two controls reading as one sentence.
+    // Every rule the strip's tab button carries, joined: the button is named by
+    // two of them — one for the padding, one for the `min-width: 0` that lets a
+    // 240px rail truncate a label instead of hiding a whole tab.
+    const button = [...styles.matchAll(/\.tabs\.workbench-mode-tabs \.tabs__tab-button \{([^}]+)\}/gu)]
+      .map((match) => match[1] ?? "").join("\n");
+    expect(button).toContain("padding: 0 var(--sp-3);");
+    // The step down in *size* keeps its documented reason: "Source Control"
+    // plus its count has to fit a 15rem rail.
+    expect(button).toContain("font-size: var(--fs-body);");
+    expect(styles).toContain(".tabs.workbench-mode-tabs .tabs__strip {\n  gap: 0;\n}");
+    expect(source).toContain('{ id: "explorer", label: "Explorer", leading: <Icon name="workspace" size={15} /> }');
+  });
+});
+
+/** The one `@media (pointer: coarse)` block a workbench sheet is allowed. */
+function coarseBlock(styles: string): string {
+  return [...styles.matchAll(/@media \(pointer: coarse\) \{\n((?:[^@]|\n)*?)\n\}\n/gu)].map((match) => match[1] ?? "").join("\n");
+}

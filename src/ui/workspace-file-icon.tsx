@@ -170,10 +170,15 @@ export function workspaceFileIconDescriptor(path: string): WorkspaceFileIconDesc
  * Three-character marks lose the width two-character marks can spend, and the
  * symbol pairs (`{}`, `<>`, `>$`) read as shapes rather than letters, so they
  * carry the optical weight the letterforms get from their strokes.
+ *
+ * Raised from 8 / 9.5 / 12.5. At the old values an 18px box rendered a 2-letter
+ * mark at roughly 7px of type, which is why the owner read the file tree as
+ * having no icons on it at all; the widest mark at these values is `CSS` at
+ * about 17 of the 24 units, so nothing has started to touch the box edge.
  */
 export function workspaceFileIconMarkUnits(mark: string): number {
-  if (mark.length > 2) return 8;
-  return /^[\p{L}\p{N}]+$/u.test(mark) ? 9.5 : 12.5;
+  if (mark.length > 2) return 9.5;
+  return /^[\p{L}\p{N}]+$/u.test(mark) ? 11 : 14;
 }
 
 const ICON_VIEWBOX = "0 0 24 24";

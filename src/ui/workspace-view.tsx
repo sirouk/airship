@@ -11,7 +11,7 @@ import type { GitAuthor, GitCommitDetail, GitCommitFilePatch, GitCommitSummary, 
 import type { WorkspaceEntry, WorkspaceFile, WorkspacePort } from "../workspace/contracts";
 import { isWorkspaceControlPlanePath, normalizeWorkspacePath, workspaceEntryByteLength } from "../workspace/contracts";
 import { decodeWorkspaceBytes, isWorkspaceBinaryEnvelope } from "../workspace/content-codec";
-import { searchWorkspaceContent, workspaceSearchSummary, type WorkspaceContentSearch } from "../workspace/content-search";
+import { searchWorkspaceContent, workspaceSearchSummary, type WorkspaceContentMatch, type WorkspaceContentSearch } from "../workspace/content-search";
 import { moveWorkspaceFile } from "../workspace/mutations";
 import {
   adoptWorkspaceWitness,
@@ -23,7 +23,7 @@ import {
   WORKSPACE_PAGE_LOAD_ID,
   writeWorkspaceWitness,
 } from "../workspace/page-witness";
-import { buildWorkspaceTree, visibleWorkspaceTree, workspaceBaseName, workspaceDirectories, workspaceFilesUnder, workspaceFolderRenamePlan, workspaceParentPath, type WorkspaceMove } from "../workspace/tree";
+import { buildWorkspaceTree, visibleWorkspaceTree, workspaceBaseName, workspaceDirectories, workspaceFilesUnder, workspaceFolderRenamePlan, workspaceParentPath, type VisibleWorkspaceNode, type WorkspaceMove } from "../workspace/tree";
 import { ConfirmDialog } from "./confirm-dialog";
 import type { DurabilityState } from "./durability-indicator";
 import { downloadBytes, downloadFileName } from "./file-download";
@@ -85,8 +85,6 @@ import {
 import "./workspace-view.css";
 import "./workspace-file-icon.css";
 
-/** What the Explorer's one search field is searching. */
-export type WorkspaceFilterMode = "path" | "contents";
 /**
  * How long the field waits before spending a bounded read on what was typed.
  *
@@ -94,7 +92,15 @@ export type WorkspaceFilterMode = "path" | "contents";
  * charge the whole workspace for a word the user has not finished typing.
  */
 export const WORKSPACE_SEARCH_DEBOUNCE_MS = 180;
-export const WORKSPACE_FILE_ROW_HEIGHT = 34;
+/**
+ * The Explorer's default row pitch, and the virtualization window's unit.
+ *
+ * 28px, down from 34px — which measured a 42px pitch at the shipped default
+ * density, against VS Code's 22px list row. `--tree-row` in workspace-view.css
+ * carries the same number for the box that is drawn; `workspaceRowHeight()`
+ * below carries the density and touch variants for both.
+ */
+export const WORKSPACE_FILE_ROW_HEIGHT = 28;
 export const WORKSPACE_FILE_OVERSCAN = 7;
 export const WORKSPACE_EDITOR_BYTE_LIMIT = 128 * 1024;
 /**
@@ -275,28 +281,48 @@ function ProfileScopedWorkspaceView({
   const editorPanelId = `${panelBaseId}-editor-panel`;
   const editorPanelTitleId = `${panelBaseId}-editor-title`;
   const [filter, setFilter] = useState("");
-  /**
-   * Which question the one search-shaped box on this route is answering.
-   *
-   * `workbenchFilterMatches` reads `entry.path` and nothing else, so a developer
-   * who imported a repository and typed a symbol name got filename matches and
-   * concluded the product cannot grep — while `search_text`, which does exactly
-   * this over file bodies, had no control anywhere on the route that owns files.
-   * A mode on the existing field rather than a second widget: two search boxes
-   * in a 15% rail is how a person ends up typing into the wrong one.
-   */
-  const [filterMode, setFilterMode] = useState<WorkspaceFilterMode>("path");
   const [search, setSearch] = useState<WorkspaceContentSearch>();
   const [searching, setSearching] = useState(false);
   const query = filter.trim();
-  // Contents mode leaves the tree unfiltered: its rows answer "where is this
-  // path", and the results list answers "where is this text". Path-mode
-  // behaviour is byte-for-byte what it was.
-  const pathFilter = filterMode === "path" ? filter : "";
-  const filtered = useMemo(() => workbenchFilterMatches(files, pathFilter), [files, pathFilter]);
-  const filtering = filtered.shown !== filtered.total;
+  const filtered = useMemo(() => workbenchFilterMatches(files, filter), [files, filter]);
+  /**
+   * The text hits this query found, grouped under the file that holds them.
+   *
+   * One question, one field. The route used to ask the reader to choose between
+   * "Path" and "Contents" before typing — a segmented control the owner called
+   * "a mess", filled `--accent-bright` as if picking a search mode were the
+   * primary action on the page — and the two modes were genuinely disjoint: the
+   * path matcher saw an empty query in Contents mode and the content results
+   * replaced the tree wholesale. A person who does not already know which of
+   * the two answers their question has to try both. So both run on every
+   * keystroke: `workbenchFilterMatches` is free and synchronous, the bounded
+   * scan is debounced and abortable, and the rail draws one tree out of the
+   * union of what they found.
+   */
+  const hitsByPath = useMemo(() => {
+    const grouped = new Map<string, WorkspaceContentMatch[]>();
+    for (const match of search?.matches ?? []) {
+      const existing = grouped.get(match.path);
+      if (existing) existing.push(match);
+      else grouped.set(match.path, [match]);
+    }
+    return grouped;
+  }, [search]);
+  /*
+   * Inventory order, not match order: `buildWorkspaceTree` takes its child
+   * ordering from insertion, and both workspace backends list with
+   * `localeCompare`. Filtering `files` keeps that order for free, where
+   * concatenating the two match sets would have put content-only hits after
+   * every path match and shuffled the tree under the reader.
+   */
+  const searchMatches = useMemo(() => {
+    if (!query) return filtered.matches;
+    const byPath = new Set(filtered.matches.map((entry) => entry.path));
+    return files.filter((entry) => byPath.has(entry.path) || hitsByPath.has(entry.path));
+  }, [query, files, filtered.matches, hitsByPath]);
+  const filtering = searchMatches.length !== filtered.total;
   const fullTree = useMemo(() => buildWorkspaceTree(files), [files]);
-  const tree = useMemo(() => filtering ? buildWorkspaceTree(filtered.matches) : fullTree, [filtering, filtered.matches, fullTree]);
+  const tree = useMemo(() => filtering ? buildWorkspaceTree(searchMatches) : fullTree, [filtering, searchMatches, fullTree]);
   const directories = useMemo(() => workspaceDirectories(fullTree), [fullTree]);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set(["/workspace", "/workspace/docs", "/workspace/notes", "/workspace/sources"]));
   // A filter that left its matches inside collapsed folders would report a
@@ -307,6 +333,17 @@ function ProfileScopedWorkspaceView({
     [filtering, tree, expanded],
   );
   const visible = useMemo(() => visibleWorkspaceTree(tree, effectiveExpanded), [tree, effectiveExpanded]);
+  /**
+   * The drawn tree: its nodes, and the text hits that belong inside them.
+   *
+   * A hit is a place in a file, so it is a row of this tree one level deeper
+   * than the file — not a separate list that replaced the tree, which is what
+   * Contents mode did. Keeping them in one array is what keeps them in one
+   * keyboard path: ↑/↓ walk hits and files alike, the roving tabindex is
+   * unchanged, and `aria-posinset`/`aria-setsize` still describe the whole
+   * list rather than the ~24 rows virtualization renders.
+   */
+  const rows = useMemo(() => explorerRows(visible, hitsByPath), [visible, hitsByPath]);
   /**
    * Clearing a filter cannot hand the keyboard back inside the same call.
    *
@@ -320,7 +357,7 @@ function ProfileScopedWorkspaceView({
   const [scrollTop, setScrollTop] = useState(0);
   const [treeHeight, setTreeHeight] = useState(WORKSPACE_FILE_VIEWPORT_HEIGHT);
   const rowHeight = workspaceRowHeight();
-  const rowWindow = workspaceFileWindow(visible.length, scrollTop, treeHeight, rowHeight);
+  const rowWindow = workspaceFileWindow(rows.length, scrollTop, treeHeight, rowHeight);
   const [treeFocusPath, setTreeFocusPath] = useState("");
   const [revealedPath, setRevealedPath] = useState("");
   const [revealRequest, setRevealRequest] = useState<Readonly<{ path: string; sequence: number }>>();
@@ -628,11 +665,13 @@ function ProfileScopedWorkspaceView({
     return () => observer.disconnect();
   }, [mode]);
 
-  // Contents mode reads real bytes, so it is the one filter that costs
-  // something: the request is debounced, abortable, and dropped entirely the
-  // moment the field empties or the mode flips back to Path.
+  // The content half of the one search reads real bytes, so it is the half that
+  // costs something: the request is debounced, abortable, and dropped entirely
+  // the moment the field empties. The path half runs on every keystroke and is
+  // already on screen while this one is still reading, which is what lets a
+  // single field answer both questions without a mode.
   useEffect(() => {
-    if (filterMode !== "contents" || !query) {
+    if (!query) {
       setSearch(undefined);
       setSearching(false);
       return;
@@ -649,28 +688,28 @@ function ProfileScopedWorkspaceView({
         .finally(() => { if (!controller.signal.aborted) setSearching(false); });
     }, WORKSPACE_SEARCH_DEBOUNCE_MS);
     return () => { controller.abort(); clearTimeout(timer); };
-  }, [filterMode, query, files, workspace]);
+  }, [query, files, workspace]);
 
   /*
    * Spends the queued focus request the moment the rows it names exist.
    *
-   * `filter` and `filterMode` are dependencies because `visible` is derived
-   * from `tree` and `effectiveExpanded` alone — clearing a Contents-mode filter
-   * changes neither, so keyed on `[visible]` this effect could not run at all
-   * on the path that queues it most. The request then stayed armed until some
-   * unrelated change (expanding a folder, a refresh adding a file) rebuilt
-   * `visible`, and yanked focus and scroll to row 0 while the reader was
+   * `filter` is a dependency because `rows` is derived from `tree`,
+   * `effectiveExpanded` and the hit map alone — clearing a filter that matched
+   * nothing changes none of them, so keyed on `[rows]` this effect could not
+   * run at all on the path that queues it most. The request then stayed armed
+   * until some unrelated change (expanding a folder, a refresh adding a file)
+   * rebuilt the list, and yanked focus and scroll to row 0 while the reader was
    * somewhere else entirely.
    */
   useEffect(() => {
-    if (!pendingTreeFocus.current || !visible.length) return;
+    if (!pendingTreeFocus.current || !rows.length) return;
     pendingTreeFocus.current = false;
     focusTreeIndex(0);
-  }, [visible, filter, filterMode]);
+  }, [rows, filter]);
 
   useEffect(() => {
     if (!revealRequest || mode !== "explorer" || filter) return;
-    const index = visible.findIndex((node) => node.path === revealRequest.path);
+    const index = rows.findIndex((row) => row.id === revealRequest.path);
     if (index < 0) return;
     const viewport = treeViewport.current;
     if (!viewport) return;
@@ -686,7 +725,7 @@ function ProfileScopedWorkspaceView({
       setRevealRequest((current) => current?.sequence === revealRequest.sequence ? undefined : current);
     });
     return () => cancelAnimationFrame(frame);
-  }, [revealRequest?.sequence, visible, mode, filter, scrollTop, rowWindow.start, rowWindow.end, rowHeight, treeHeight]);
+  }, [revealRequest?.sequence, rows, mode, filter, scrollTop, rowWindow.start, rowWindow.end, rowHeight, treeHeight]);
 
   // A completion sentence is worth reading once; it is not worth 40px of
   // permanent layout. Errors are excluded — see `dismissNotice`.
@@ -1559,10 +1598,10 @@ function ProfileScopedWorkspaceView({
   }
 
   function focusTreeIndex(index: number): void {
-    if (!visible.length) return;
-    const bounded = Math.max(0, Math.min(index, visible.length - 1));
-    const node = visible[bounded]!;
-    setTreeFocusPath(node.path);
+    if (!rows.length) return;
+    const bounded = Math.max(0, Math.min(index, rows.length - 1));
+    const row = rows[bounded]!;
+    setTreeFocusPath(row.id);
     const viewport = treeViewport.current;
     if (viewport) {
       const top = bounded * rowHeight;
@@ -1572,38 +1611,54 @@ function ProfileScopedWorkspaceView({
     requestAnimationFrame(() => treeRowElement(bounded)?.focus());
   }
 
-  function handleTreeKey(event: KeyboardEvent, path: string): void {
-    const index = visible.findIndex((node) => node.path === path);
+  /*
+   * One keyboard path over both row kinds.
+   *
+   * `id` rather than `path`, because a text hit and the file that holds it
+   * share a path and only the id distinguishes them. A hit answers the same
+   * verbs its file does — Enter opens the file, Ctrl+Enter opens the file's
+   * menu, ArrowLeft climbs to the file — so nothing in the tree's contract
+   * needs a second spelling for the deeper row.
+   */
+  function handleTreeKey(event: KeyboardEvent, id: string): void {
+    const index = rows.findIndex((row) => row.id === id);
     if (index < 0) return;
-    const node = visible[index]!;
+    const row = rows[index]!;
+    const node = row.node;
     if (event.key === "ArrowDown") { event.preventDefault(); focusTreeIndex(index + 1); }
     else if (event.key === "ArrowUp") { event.preventDefault(); focusTreeIndex(index - 1); }
     else if (event.key === "Home") { event.preventDefault(); focusTreeIndex(0); }
-    else if (event.key === "End") { event.preventDefault(); focusTreeIndex(visible.length - 1); }
-    else if (event.key === "ArrowRight" && node.kind === "directory") {
+    else if (event.key === "End") { event.preventDefault(); focusTreeIndex(rows.length - 1); }
+    else if (event.key === "ArrowRight" && node?.kind === "directory") {
       event.preventDefault();
       if (!node.expanded) toggleDirectory(node.path); else focusTreeIndex(index + 1);
+    } else if (event.key === "ArrowRight" && !node && index + 1 < rows.length) {
+      // A hit already shows everything it has; the only place right can go is
+      // the next hit in the same file, and it stops at that file's last one.
+      event.preventDefault();
+      if (rows[index + 1]?.node === undefined) focusTreeIndex(index + 1);
     } else if (event.key === "ArrowLeft") {
       event.preventDefault();
-      if (node.kind === "directory" && node.expanded) toggleDirectory(node.path);
+      if (node?.kind === "directory" && node.expanded) toggleDirectory(node.path);
       else {
-        const parent = workspaceParentPath(node.path);
-        const parentIndex = visible.findIndex((candidate) => candidate.path === parent);
+        // A hit's parent is its own file; a node's parent is its folder.
+        const parent = node ? workspaceParentPath(node.path) : row.path;
+        const parentIndex = rows.findIndex((candidate) => candidate.node !== undefined && candidate.path === parent);
         if (parentIndex >= 0) focusTreeIndex(parentIndex);
       }
     } else if (workspaceRowMenuKey(event)) {
       // Ahead of the Enter branches on purpose: Control+Enter is a menu key
       // here, not a second way to open the file.
       event.preventDefault();
-      const row = treeRowElement(index);
-      const bounds = row?.getBoundingClientRect();
-      openContextMenu(node.path, bounds?.left ?? 24, bounds?.bottom ?? 48, row);
-    } else if (event.key === "Enter" && event.shiftKey && node.kind === "file") {
+      const element = treeRowElement(index);
+      const bounds = element?.getBoundingClientRect();
+      openContextMenu(row.path, bounds?.left ?? 24, bounds?.bottom ?? 48, element);
+    } else if (event.key === "Enter" && event.shiftKey && node?.kind !== "directory") {
       event.preventDefault();
-      void openPinnedTab(node.path);
+      void openPinnedTab(row.path);
     } else if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
-      if (node.kind === "directory") toggleDirectory(node.path); else void openPreviewTab(node.path);
+      if (node?.kind === "directory") toggleDirectory(node.path); else void openPreviewTab(row.path);
     }
   }
 
@@ -1619,22 +1674,20 @@ function ProfileScopedWorkspaceView({
     else if (event.key === "End") { event.preventDefault(); resizeRail(WORKBENCH_RAIL_MAX_PERCENT); }
   }
 
-  // Contents mode replaces the rows in the rail, never the rail itself: the
-  // tree keeps its element (and the ResizeObserver measuring it) and is hidden,
-  // so returning to Path mode restores the same scroll position and window.
-  // An empty Contents field shows the whole tree rather than a blank pane —
-  // there is no query to answer, and a blank rail is the defect being fixed.
-  const contentPane = filterMode !== "contents" || !query ? undefined
-    : searching || !search ? "searching"
-    : search.matches.length ? "results"
-    : "empty";
-  const contentMatches = contentPane === "results" ? search?.matches ?? [] : [];
-  const emptyFilterCopy = contentPane === "empty"
-    ? workspaceFilterEmptyCopy(filter, search?.scannedFiles ?? 0, "contents")
-    : filterMode === "path" && filtering && visible.length === 0
-      ? workspaceFilterEmptyCopy(filter, filtered.total, "path")
-      : undefined;
-  const treeHidden = contentPane !== undefined || emptyFilterCopy !== undefined;
+  /*
+   * What the rail says while and after the bounded half of the search runs.
+   *
+   * The path half has already answered by the time a keystroke settles, so the
+   * tree is only yielded when *neither* half found anything — and "nothing yet"
+   * is never allowed to read as "nothing": while the scan is still out, the
+   * rail says it is reading rather than that the query matched no file.
+   */
+  const scanSettled = Boolean(query) && !searching && search !== undefined;
+  const scanning = Boolean(query) && !scanSettled;
+  const emptyFilterCopy = query && rows.length === 0 && scanSettled
+    ? workspaceFilterEmptyCopy(filter, filtered.total, search)
+    : undefined;
+  const treeHidden = rows.length === 0 && (scanning || emptyFilterCopy !== undefined);
 
   return (
     <section class="work-view workspace-workbench">
@@ -1676,12 +1729,20 @@ function ProfileScopedWorkspaceView({
       />
       <div class="workbench-shell" ref={shell} style={{ "--workbench-rail": `${String(rail)}%` }}>
         <aside class={`workbench-activity ${mobilePane === "navigation" ? "mobile-active" : ""}`} aria-label="Workspace activity">
+          {/*
+            Two tabs that read as tabs. The leading glyphs are the ones each
+            destination already owns in `icons.tsx` — the same folder the
+            Workspace rail item carries and the same branch mark Source Control
+            carries — so the strip states what it switches between before its
+            labels are read. The count stays `.tabs__count` text: "a count
+            travels with its label as text; a filled badge outranks the word".
+          */}
           <Tabs
             class="workbench-mode-tabs"
             label="Workspace activity view"
             items={[
-              { id: "explorer", label: "Explorer" },
-              { id: "source", label: "Source Control", count: changeCount, countLabel: `${String(changeCount)} changes` },
+              { id: "explorer", label: "Explorer", leading: <Icon name="workspace" size={15} /> },
+              { id: "source", label: "Source Control", leading: <Icon name="source" size={15} />, count: changeCount, countLabel: `${String(changeCount)} changes` },
             ]}
             activeId={mode}
             onSelect={(id) => setMode(id === "source" ? "source" : "explorer")}
@@ -1695,14 +1756,21 @@ function ProfileScopedWorkspaceView({
           <div class="workbench-panel" id={activityPanelId} role="tabpanel" aria-labelledby={activityPanelTitleId}>
           <h2 class="sr-only" id={activityPanelTitleId}>{mode === "source" ? "Source Control" : "Explorer"}</h2>
           {mode === "explorer" ? <>
+            {/*
+              One field, above the tree, where it already was — the one thing
+              about this rail the owner asked us to keep. What it lost is the
+              44px segmented control under it that made the reader choose
+              between searching paths and searching text before typing a
+              character. It now does both.
+            */}
             <div class="workbench-section-heading">
               <input
                 class="workspace-filter"
                 ref={filterField}
                 type="search"
                 value={filter}
-                aria-label={filterMode === "contents" ? "Search workspace file contents" : "Filter workspace files by path"}
-                placeholder={filterMode === "contents" ? "Search in files" : "Filter files"}
+                aria-label="Search workspace files by path and contents"
+                placeholder="Search files"
                 onInput={(event) => setFilter(event.currentTarget.value)}
                 onKeyDown={(event) => {
                   if (event.key !== "Escape") return;
@@ -1710,15 +1778,6 @@ function ProfileScopedWorkspaceView({
                   clearFilter();
                 }}
               />
-              {/*
-                The same segmented control Source Control uses for Tree/Flat, so
-                the two panes of one route do not invent two grammars for "the
-                same list, read a different way".
-              */}
-              <div class="git-view-toggle" role="group" aria-label="Search workspace by">
-                <button type="button" aria-pressed={filterMode === "path"} onClick={() => setFilterMode("path")}>Path</button>
-                <button type="button" aria-pressed={filterMode === "contents"} onClick={() => setFilterMode("contents")}>Contents</button>
-              </div>
             </div>
             {/*
               Creation used to be a 26x26 bare "+" that made files only; a folder
@@ -1729,11 +1788,17 @@ function ProfileScopedWorkspaceView({
             <div class="workspace-actions">
               {/* A filtered tree must never be mistakable for an empty
                   workspace, and a bounded scan must never read as an exhaustive
-                  one — so the count states which of the three it is. */}
+                  one. One field now asks two questions, so one sentence answers
+                  both: how much of the tree is left, and — verbatim from
+                  `workspaceSearchSummary`, the sentence the model's own
+                  `search_text` gets — what the scan did and did not reach.
+                  `truncated`, `unsearchedFiles` and `capReachedIn` ride in that
+                  sentence, and a path match must never make a bounded scan look
+                  exhaustive by standing in front of it. */}
               <p class="workspace-filter-count" role="status">
-                {filterMode === "contents"
-                  ? !query ? `${String(filtered.total)} files · type to search their contents` : searching || !search ? `Reading ${String(filtered.total)} files…` : workspaceSearchSummary(search)
-                  : filtering ? `${String(filtered.shown)} of ${String(filtered.total)} files` : `${String(filtered.total)} files`}
+                {!query
+                  ? `${String(filtered.total)} files`
+                  : `${String(searchMatches.length)} of ${String(filtered.total)} files · ${scanning || !search ? "reading contents…" : workspaceSearchSummary(search)}`}
               </p>
               <button class="workspace-new" type="button" onClick={() => openDialog("create", "/workspace")}>
                 <span aria-hidden="true">+</span> New file
@@ -1750,8 +1815,8 @@ function ProfileScopedWorkspaceView({
               {/* Presentational, all three of them: a `role="tree"` owns
                   `role="treeitem"` children, and the virtualization scaffolding
                   put two generic boxes and a row wrapper in between. */}
-              <div role="presentation" style={{ height: visible.length * rowHeight, position: "relative" }}><div role="presentation" style={{ position: "absolute", top: rowWindow.start * rowHeight, left: 0, right: 0 }}>
-                {visible.slice(rowWindow.start, rowWindow.end).map((node, offset) => {
+              <div role="presentation" style={{ height: rows.length * rowHeight, position: "relative" }}><div role="presentation" style={{ position: "absolute", top: rowWindow.start * rowHeight, left: 0, right: 0 }}>
+                {rows.slice(rowWindow.start, rowWindow.end).map((row, offset) => {
                   // The absolute row index, not the window offset: every id and
                   // every position below has to be stated in the coordinates of
                   // the whole tree, because the window is a rendering detail no
@@ -1760,7 +1825,51 @@ function ProfileScopedWorkspaceView({
                   const actionId = `${rowActionBaseId}-${String(index)}`;
                   const nameId = `${rowLabelBaseId}-${String(index)}`;
                   const sizeId = `${nameId}-size`;
-                  return <div class="tree-row-wrap" role="presentation" style={{ height: rowHeight }} key={node.path}>
+                  const node = row.node;
+                  /*
+                    A text hit, drawn as the tree row it is. It has no `•••`:
+                    every verb the menu offers acts on the *file*, and the file
+                    is the row directly above this one, where the menu already
+                    is. Enter, click and Shift+Enter still open the file, so the
+                    hit is never a dead end.
+                  */
+                  if (!node) return <div class="tree-row-wrap" role="presentation" style={{ height: rowHeight }} key={row.id}>
+                    <button
+                      class="tree-row tree-row--hit"
+                      type="button" role="treeitem"
+                      aria-level={row.depth}
+                      aria-selected={false}
+                      aria-posinset={index + 1}
+                      aria-setsize={rows.length}
+                      /* The name is capped where the snippet is not: a scan
+                         keeps 240 characters around a hit, and a screen reader
+                         reading all of them for each of fifty rows is a worse
+                         answer than the first line of one. The `title` keeps
+                         the whole snippet, and the column is in it because two
+                         hits on one line are otherwise indistinguishable. */
+                      aria-label={`Line ${String(row.match?.line ?? 0)} in ${workspaceBaseName(row.path)}: ${workspaceHitLabel(row.match?.snippet ?? "")}`}
+                      title={`${row.path}:${String(row.match?.line ?? 0)}:${String(row.match?.column ?? 0)} — ${(row.match?.snippet ?? "").trim()}`}
+                      data-workspace-tree-index={index}
+                      tabIndex={treeFocusPath === row.id ? 0 : -1}
+                      onFocus={() => setTreeFocusPath(row.id)}
+                      onKeyDown={(event) => handleTreeKey(event, row.id)}
+                      style={{ height: rowHeight, paddingLeft: `${String(7 + Math.max(0, row.depth - 1) * 15)}px` }}
+                      onClick={() => void openPreviewTab(row.path)}
+                    >
+                      {/* Three columns, not four: a hit has no icon of its own
+                          — the file above it carries the one that matters —
+                          and `.tree-row--hit` restates the template so the
+                          snippet lands in the same `span:nth-of-type(2)` the
+                          filename does, which is where the tree's truncation
+                          rule lives. Written as four children with an empty
+                          spacer, the snippet was the third span, missed that
+                          rule, and wrapped nine lines deep inside a 28px row. */}
+                      <span class="tree-chevron" aria-hidden="true" />
+                      <span>{(row.match?.snippet ?? "").trim()}</span>
+                      <small>line {String(row.match?.line ?? 0)}</small>
+                    </button>
+                  </div>;
+                  return <div class="tree-row-wrap" role="presentation" style={{ height: rowHeight }} key={row.id}>
                   {/* `aria-posinset`/`aria-setsize` are the window's restatement
                       of the truth virtualization deleted: without them every
                       row reports its position within the ~24 rendered rows, so
@@ -1787,7 +1896,7 @@ function ProfileScopedWorkspaceView({
                     type="button" role="treeitem" aria-level={node.depth} aria-expanded={node.kind === "directory" ? Boolean(node.expanded) : undefined}
                     aria-selected={treeSelectedPath === node.path}
                     aria-posinset={index + 1}
-                    aria-setsize={visible.length}
+                    aria-setsize={rows.length}
                     aria-keyshortcuts={node.kind === "file" ? "Enter Shift+Enter Control+Enter Shift+F10" : "Control+Enter Shift+F10"}
                     title={node.kind === "file" ? `${node.path} · Enter/click previews · Shift+Enter/double-click keeps open · Ctrl+Enter opens actions` : `${node.path} · Ctrl+Enter opens actions`}
                     data-workspace-tree-index={index}
@@ -1804,7 +1913,7 @@ function ProfileScopedWorkspaceView({
                     onContextMenu={(event) => { event.preventDefault(); openContextMenu(node.path, event.clientX, event.clientY, event.currentTarget); }}
                     onClick={() => node.kind === "directory" ? toggleDirectory(node.path) : void openPreviewTab(node.path)}
                     onDblClick={() => { if (node.kind === "file") void openPinnedTab(node.path); }}
-                  ><span class="tree-chevron">{node.kind === "directory" ? node.expanded ? "⌄" : "›" : ""}</span>{node.kind === "directory" ? <Icon name="workspace" size={15} /> : <WorkspaceFileIcon path={node.path} />}<span id={nameId}>{node.name}</span>{node.entry ? <small id={sizeId}>{formatBytes(workspaceEntryByteLength(node.entry))}</small> : null}</button>
+                  ><span class="tree-chevron">{node.kind === "directory" ? node.expanded ? "⌄" : "›" : ""}</span>{node.kind === "directory" ? <Icon name="workspace" size={15} /> : <WorkspaceFileIcon path={node.path} />}<span id={nameId}>{node.name}</span>{node.entry ? <small id={sizeId}>{row.hits ? `${String(row.hits)} in text · ` : ""}{formatBytes(workspaceEntryByteLength(node.entry))}</small> : null}</button>
                   {/* Not in the tab order: the tree's contract is that Tab
                       leaves it in one press, and the same menu is on the row
                       itself via ContextMenu, Shift+F10 and — for the Macs where
@@ -1816,32 +1925,13 @@ function ProfileScopedWorkspaceView({
                 })}
               </div></div>
             </div>
-            {contentPane === "searching" ? <div class="workbench-empty" role="status">
+            {/* Only reached when the path half found nothing either: while the
+                scan is out and the tree has rows, those rows are the answer and
+                this never draws. */}
+            {rows.length === 0 && scanning ? <div class="workbench-empty" role="status">
               <Icon name="workspace" size={28} />
               <strong>Searching file contents…</strong>
               <span>Reading bounded UTF-8 text from this workspace. Binary and oversized files are skipped.</span>
-            </div> : null}
-            {/*
-              A content hit is a place in a file, so the row says which file and
-              which line and opens the same replaceable preview a tree row does.
-              `role="group"`, not a second tree: these rows have no hierarchy,
-              and claiming one would make a screen reader announce a depth that
-              does not exist.
-            */}
-            {contentMatches.length ? <div class="workspace-tree" role="group" aria-label={`Content matches for ${query}`}>
-              {contentMatches.map((match) => <button
-                class="tree-row"
-                type="button"
-                key={`${match.path}:${String(match.line)}:${String(match.column)}`}
-                title={`${match.path}:${String(match.line)} — ${match.snippet.trim()}`}
-                style={{ height: rowHeight }}
-                onClick={() => void openPreviewTab(match.path)}
-              >
-                <span class="tree-chevron" aria-hidden="true">›</span>
-                <WorkspaceFileIcon path={match.path} />
-                <span>{match.path.replace("/workspace/", "")} <small>{match.snippet.trim()}</small></span>
-                <small>line {String(match.line)}</small>
-              </button>)}
             </div> : null}
             {/*
               `.workbench-empty` and not the shared `EmptyState`: this is the
@@ -1855,11 +1945,10 @@ function ProfileScopedWorkspaceView({
               <Icon name="workspace" size={28} />
               <strong>{emptyFilterCopy.title}</strong>
               <span>{emptyFilterCopy.detail}</span>
+              {/* One action, because there is no longer a second search to
+                  offer: both have already run against this term. */}
               <div class="workbench-empty__actions">
                 <button class="primary" type="button" onClick={clearFilter}>{emptyFilterCopy.action}</button>
-                {filterMode === "path"
-                  ? <button type="button" onClick={() => setFilterMode("contents")}>Search file contents</button>
-                  : <button type="button" onClick={() => setFilterMode("path")}>Filter paths instead</button>}
               </div>
             </div> : null}
           </> : <SourceControlRail
@@ -2896,12 +2985,75 @@ export function workspaceFileWindow(count: number, scrollTop: number, viewportHe
  * A tablet is 834px wide and has no hover, so the old `innerWidth <= 760` test
  * shipped 34px rows — and hover-only row actions — to every finger over 760px.
  * The touch floor follows the finger.
+ *
+ * These four numbers are the JS half of `--tree-row` in workspace-view.css and
+ * must move with it: this one drives the virtualization window, that one draws
+ * the box, and a disagreement between them desyncs the window from the rows.
+ * They fell from 42/34/30 because the rail had opted out of the density block
+ * entirely — five rows for three files were spending 210px of it.
  */
 function workspaceRowHeight(): number {
   if (typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches) return 44;
   if (typeof innerWidth === "number" && innerWidth <= 760) return 44;
   if (typeof document === "undefined") return WORKSPACE_FILE_ROW_HEIGHT;
-  return document.documentElement.dataset.density === "comfortable" ? 42 : document.documentElement.dataset.density === "compact" ? 30 : WORKSPACE_FILE_ROW_HEIGHT;
+  return document.documentElement.dataset.density === "comfortable" ? 32 : document.documentElement.dataset.density === "compact" ? 24 : WORKSPACE_FILE_ROW_HEIGHT;
+}
+
+/**
+ * One drawn line of the Explorer: a tree node, or a text hit inside a file.
+ *
+ * `id` is what the keyboard, the roving tabindex and the reveal request all
+ * index on, and it is the one field the two kinds cannot share — a hit and the
+ * file that holds it have the same `path`, so a path-keyed lookup would find
+ * the wrong row for one of them. `path` stays the thing the row *acts* on, so
+ * a hit opens, reveals and menus its own file without a second code path.
+ */
+export type ExplorerRow = Readonly<{
+  id: string;
+  path: string;
+  depth: number;
+  node?: VisibleWorkspaceNode;
+  match?: WorkspaceContentMatch;
+  /** On a file row: how many of this scan's hits are inside it. */
+  hits?: number;
+}>;
+
+/** How much of a 240-character snippet a hit row spends on its accessible name. */
+export const WORKSPACE_HIT_LABEL_MAX = 120;
+
+/** The snippet as a hit row announces it: one readable line, never the cap. */
+export function workspaceHitLabel(snippet: string, max = WORKSPACE_HIT_LABEL_MAX): string {
+  const text = snippet.trim();
+  return text.length > max ? `${text.slice(0, max).trimEnd()}…` : text;
+}
+
+/**
+ * Interleave the tree's visible nodes with the text hits found inside them.
+ *
+ * The shipped alternative was a mode: the tree for paths, a flat list for text,
+ * and the reader choosing between them from a segmented control before typing.
+ * One list means one virtualization window, one keyboard path, and — the part
+ * that matters to a reader — one answer to "where is this thing", whether the
+ * thing is a filename or a line of code.
+ */
+export function explorerRows(
+  visible: readonly VisibleWorkspaceNode[],
+  hitsByPath: ReadonlyMap<string, readonly WorkspaceContentMatch[]>,
+): readonly ExplorerRow[] {
+  const rows: ExplorerRow[] = [];
+  for (const node of visible) {
+    const hits = node.kind === "file" ? hitsByPath.get(node.path) : undefined;
+    rows.push(Object.freeze({ id: node.path, path: node.path, depth: node.depth, node, ...(hits?.length ? { hits: hits.length } : {}) }));
+    for (const match of hits ?? []) {
+      rows.push(Object.freeze({
+        id: `${match.path}#${String(match.line)}:${String(match.column)}`,
+        path: match.path,
+        depth: node.depth + 1,
+        match,
+      }));
+    }
+  }
+  return Object.freeze(rows);
 }
 
 export function workspaceEditorProjection(file: WorkspaceFile) {
@@ -2930,18 +3082,29 @@ export { WORKSPACE_GUTTER_LINE_LIMIT };
  *
  * The term is quoted verbatim rather than summarized, because the reader's next
  * act is to correct a typo they cannot see any other way.
+ *
+ * One sentence for one search. There used to be two — "No path matches" and
+ * "No file contains" — because there were two modes, and each of them told the
+ * reader to go and try the other one. The field now runs both, so the empty
+ * state has to account for both in the same breath: how many paths were
+ * compared, how many files were actually read, and every bound that fired while
+ * they were. A scan that stopped early may never be reported as an exhaustive
+ * one, and "nothing matched" is the exact sentence where that would be easiest
+ * to imply by omission.
  */
 export function workspaceFilterEmptyCopy(
   filter: string,
   total: number,
-  mode: WorkspaceFilterMode = "path",
+  scan?: WorkspaceContentSearch,
 ): Readonly<{ title: string; detail: string; action: string }> {
   const term = filter.trim();
+  const paths = `${String(total)} file${total === 1 ? "" : "s"} ${total === 1 ? "is" : "are"} in this workspace, and no path contains it.`;
+  const read = scan
+    ? ` ${String(scan.scannedFiles)} of them ${scan.scannedFiles === 1 ? "was" : "were"} read for text: ${workspaceSearchSummary(scan)}. Binary and oversized files are skipped.`
+    : "";
   return Object.freeze({
-    title: mode === "contents" ? `No file contains “${term}”` : `No path matches “${term}”`,
-    detail: mode === "contents"
-      ? `${String(total)} file${total === 1 ? "" : "s"} were searched in this workspace. Content search reads bounded UTF-8 text only; binary and oversized files are skipped.`
-      : `${String(total)} file${total === 1 ? "" : "s"} ${total === 1 ? "is" : "are"} in this workspace. Search their contents instead, or clear the filter to see them all.`,
+    title: `Nothing matches “${term}”`,
+    detail: `${paths}${read}`,
     action: "Clear filter",
   });
 }
