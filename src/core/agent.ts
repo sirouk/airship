@@ -9,6 +9,7 @@ import type {
   SessionManifest,
   TaskPlanEntry,
   ToolCall,
+  ToolContext,
 } from "./contracts";
 import { sha256, stableStringify, toolArgumentsDigest } from "./hash";
 import { randomUuid } from "./id";
@@ -480,63 +481,107 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
         ];
         await append(drafts);
 
-        for (const call of toolCalls) {
+        for (let cursor = 0; cursor < toolCalls.length;) {
           throwIfAborted(options.signal);
-          const context = {
-            sessionId: options.sessionId,
-            turnId,
-            operationId: call.id,
-            signal: options.signal,
-            capabilityTier: session.manifest.capabilityTier,
-            onOutput(chunk: Readonly<{ stream: "stdout" | "stderr" | "combined"; text: string }>) {
-              notifySignal(options.onSignal, { type: "tool-output", turnId, operationId: call.id, ...chunk });
-            },
-          };
-          let decision: "allow" | "deny";
-          try {
-            decision = await options.tools.review(call.name, call.arguments, context, options.approvalPolicy);
-          } catch (error) {
-            await append([
-              {
-                type: "tool.failed",
-                turnId,
-                operationId: call.id,
-                payload: { callId: call.id, name: call.name, content: `${errorMessage(error)}${await noteFailedOutcome(call)}` },
-              },
-            ]);
-            continue;
-          }
-          const provenance = approvalProvenance(options.approvalPolicy, context);
-          if (decision === "deny") {
-            // A denial counts as a failed outcome. Re-asking for the same denied
-            // call is the loop with the highest cost of all, because every lap
-            // of it interrupts a person who has already answered the question.
-            await append([
-              {
-                type: "tool.denied",
-                turnId,
-                operationId: call.id,
-                payload: {
-                  callId: call.id,
-                  name: call.name,
-                  content: `Permission denied for ${call.name}.${await noteFailedOutcome(call)}`,
-                  approval: provenance ?? null,
-                },
-              },
-            ]);
-            continue;
-          }
-          await append([
-            {
-              type: "tool.approved",
+          const batch = readEffectBatch(toolCalls, cursor, options.tools);
+          cursor += batch.length;
+          /*
+           * Phase 1 — review, strictly in call order, one at a time. Nothing
+           * here is parallelised: a person answering an approval prompt must be
+           * asked the same questions in the same order they would have been
+           * asked serially, and the journal has to read the same way too.
+           */
+          const admitted: { call: ToolCall; context: ToolContext }[] = [];
+          for (const call of batch) {
+            const context = {
+              sessionId: options.sessionId,
               turnId,
               operationId: call.id,
-              payload: { callId: call.id, name: call.name, approval: provenance ?? null },
-            },
-          ]);
-          notifySignal(options.onSignal, { type: "status", turnId, status: `running ${call.name}` });
-          try {
-            const execution = await options.tools.executeApproved(call.name, call.arguments, context);
+              signal: options.signal,
+              capabilityTier: session.manifest.capabilityTier,
+              onOutput(chunk: Readonly<{ stream: "stdout" | "stderr" | "combined"; text: string }>) {
+                notifySignal(options.onSignal, { type: "tool-output", turnId, operationId: call.id, ...chunk });
+              },
+            };
+            let decision: "allow" | "deny";
+            try {
+              decision = await options.tools.review(call.name, call.arguments, context, options.approvalPolicy);
+            } catch (error) {
+              await append([
+                {
+                  type: "tool.failed",
+                  turnId,
+                  operationId: call.id,
+                  payload: { callId: call.id, name: call.name, content: `${errorMessage(error)}${await noteFailedOutcome(call)}` },
+                },
+              ]);
+              continue;
+            }
+            const provenance = approvalProvenance(options.approvalPolicy, context);
+            if (decision === "deny") {
+              // A denial counts as a failed outcome. Re-asking for the same
+              // denied call is the loop with the highest cost of all, because
+              // every lap of it interrupts a person who already answered.
+              await append([
+                {
+                  type: "tool.denied",
+                  turnId,
+                  operationId: call.id,
+                  payload: {
+                    callId: call.id,
+                    name: call.name,
+                    content: `Permission denied for ${call.name}.${await noteFailedOutcome(call)}`,
+                    approval: provenance ?? null,
+                  },
+                },
+              ]);
+              continue;
+            }
+            await append([
+              {
+                type: "tool.approved",
+                turnId,
+                operationId: call.id,
+                payload: { callId: call.id, name: call.name, approval: provenance ?? null },
+              },
+            ]);
+            notifySignal(options.onSignal, { type: "status", turnId, status: `running ${call.name}` });
+            admitted.push({ call, context });
+          }
+          /*
+           * Phase 2 — the only thing that overlaps. Six `read_file` calls used
+           * to cost six sequential round trips through review and execute for
+           * no reason: they declare `effect: "read"`, so none of them can
+           * observe another's outcome. `allSettled`, not `all`, because one
+           * rejection must not discard five results that already landed.
+           */
+          const outcomes = await Promise.allSettled(
+            admitted.map(({ call, context }) => options.tools.executeApproved(call.name, call.arguments, context)),
+          );
+          /*
+           * Phase 3 — journal in call order, whatever order they finished in.
+           * The transcript the model reads, and the byte budget each result is
+           * bounded against, must not depend on which disk read won a race.
+           */
+          for (let slot = 0; slot < admitted.length; slot += 1) {
+            const call = admitted[slot]!.call;
+            const outcome = outcomes[slot]!;
+            if (outcome.status === "rejected") {
+              await append([
+                {
+                  type: "tool.failed",
+                  turnId,
+                  operationId: call.id,
+                  payload: {
+                    callId: call.id,
+                    name: call.name,
+                    content: `${errorMessage(outcome.reason)}${await noteFailedOutcome(call)}`,
+                  },
+                },
+              ]);
+              continue;
+            }
+            const execution = outcome.value;
             // A single verbose result must not cost the user the whole turn. What
             // is stored is exactly what the model will read, and the marker plus
             // metadata state that the tail was dropped.
@@ -569,15 +614,6 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
                     }
                     : execution.metadata ?? null,
                 },
-              },
-            ]);
-          } catch (error) {
-            await append([
-              {
-                type: "tool.failed",
-                turnId,
-                operationId: call.id,
-                payload: { callId: call.id, name: call.name, content: `${errorMessage(error)}${await noteFailedOutcome(call)}` },
               },
             ]);
           }
@@ -934,6 +970,26 @@ function assertSupportedTurnManifest(manifest: SessionManifest): void {
   ) {
     throw new Error("The session manifest uses an unsupported protocol or turn-context policy.");
   }
+}
+
+/**
+ * The run of calls starting at `cursor` that may execute together: the maximal
+ * consecutive run of `effect === "read"` calls, or exactly one call otherwise.
+ *
+ * Anything that is not a declared read is a barrier, including a call to a tool
+ * that is not registered at all. That is the whole safety argument, and it is
+ * deliberately made from the declared effect rather than from path analysis: a
+ * read cannot observe what another read did, so their order cannot matter, and
+ * nothing here has to reason about which files two calls might collide over.
+ */
+function readEffectBatch(
+  toolCalls: readonly ToolCall[],
+  cursor: number,
+  tools: ToolRegistry,
+): readonly ToolCall[] {
+  let end = cursor;
+  while (end < toolCalls.length && tools.get(toolCalls[end]!.name)?.definition.effect === "read") end += 1;
+  return end > cursor ? toolCalls.slice(cursor, end) : [toolCalls[cursor]!];
 }
 
 function reserveToolCallBatch(toolCalls: readonly ToolCall[], reserved: Set<string>): void {

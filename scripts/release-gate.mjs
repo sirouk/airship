@@ -301,17 +301,15 @@ export const RELEASE_BUDGETS = Object.freeze({
   // bytes, so raw takes one further whole-KiB step for the tripwire reason
   // above; 649 KiB gzip leaves 973 and takes the tighter step.
   //
-  // The turn-loop guardrails and the post-compaction work-plan restatement
-  // carry the partition again, and again every byte of the growth is in the
-  // agent pack reviewed under `optionalAgentRuntime` below — nothing eager
-  // moved and `entryJavaScript` is untouched. Most of it is not code but the
-  // sentences themselves: the guardrail warning and stop have to name the
-  // repeated call and say what to do instead, and the plan note has to label
-  // itself a restatement rather than a fresh instruction, in the model's own
-  // channel, or none of it is visible where it has to be. Measured 2046.99 KiB
-  // raw / 649.13 KiB gzip. 2047 KiB raw would have left 10 bytes, so raw takes
-  // one further whole-KiB step; 650 KiB gzip leaves 891 and takes the tighter
-  // step.
+  // The turn-loop pass carries the partition again, and again every byte of the
+  // growth is in the agent pack reviewed under `optionalAgentRuntime` below —
+  // nothing eager moved and `entryJavaScript` is untouched. Most of it is not
+  // code but the sentences themselves: the guardrail warning and stop have to
+  // name the repeated call and say what to do instead, and the plan note has to
+  // label itself a restatement rather than a fresh instruction, in the model's
+  // own channel, or none of it is visible where it has to be. Measured 2047.34
+  // KiB raw / 649.31 KiB gzip; both ceilings take the smallest whole-KiB step
+  // above that reading, leaving 676 bytes raw and 706 gzip.
   firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2048 * 1024, gzip: 650 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now measures 672.33 KiB raw / 186.61 KiB gzip:
@@ -404,13 +402,13 @@ export const RELEASE_BUDGETS = Object.freeze({
   // raw / 835.95 KiB gzip. 836 KiB gzip would have left 51 bytes, so gzip takes
   // one further whole-KiB step; 2721 KiB raw leaves 799 and takes the tighter
   // step. Nothing eager moved and the entry ceiling is untouched.
-  // The turn-loop guardrails and the post-compaction plan restatement carry
-  // into the installed aggregate exactly as they land in the first-party
-  // partition above; the vendor pins are unchanged, so all of the growth is
-  // weight already reviewed there. Measured 2723.35 KiB raw / 837.02 KiB gzip.
-  // 2724 KiB raw would have left 666 bytes and 838 KiB gzip 1,003; raw takes
-  // one further whole-KiB step and gzip the tighter one. Nothing eager moved
-  // and the entry ceiling is untouched.
+  // The turn-loop pass carries into the installed aggregate exactly as it lands
+  // in the first-party partition above; the vendor pins are unchanged, so all
+  // of the growth is weight already reviewed there. Measured 2723.70 KiB raw /
+  // 837.21 KiB gzip. 2724 KiB raw would have left 307 bytes, so raw takes one
+  // further whole-KiB step for the tripwire reason stated throughout this file;
+  // 838 KiB gzip leaves 809 and takes the tighter step. Nothing eager moved and
+  // the entry ceiling is untouched.
   totalJavaScriptAndWorkers: Object.freeze({ raw: 2725 * 1024, gzip: 838 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. Keep it visible under a dedicated, deliberately small cap.
@@ -497,19 +495,20 @@ export const RELEASE_BUDGETS = Object.freeze({
   // both ceilings take the smallest whole-KiB step above that reading. First
   // paint is fixed — none of this is fetched until a turn is sent.
   //
-  // The turn loop now also stops wasting itself. Two mechanisms land in this
-  // pack because both are properties of the loop rather than of any tool: a
-  // per-turn repeat detector keyed on the broker's own `(tool, arguments)`
+  // The turn loop now also stops wasting itself. Three mechanisms land in this
+  // pack because all three are properties of the loop rather than of any tool:
+  // a per-turn repeat detector keyed on the broker's own `(tool, arguments)`
   // digest, which warns inside the tool message the model actually reads and
   // ends the turn on the fifth identical failure instead of burning 32 steps on
-  // it; and a work-plan restatement emitted when a compaction fires, so a long
-  // turn stops having to remember to call `list_tasks` to remember its own
-  // plan. The second carries a canonical renderer because the session audit
-  // rebuilds every request this turn was digested over and has to reproduce the
-  // note byte for byte. Measured 51.72 KiB raw / 15.17 KiB gzip; 52 KiB raw
-  // would have left 287 bytes, so raw takes one further whole-KiB step for the
-  // tripwire reason stated throughout this file, and 16 KiB gzip leaves 850 and
-  // takes the tighter step. Still nothing before the first sent turn.
+  // it; a work-plan restatement emitted when a compaction fires, so a long turn
+  // stops having to remember to call `list_tasks` to remember its own plan; and
+  // parallel dispatch of consecutive read-effect calls, which is the smallest
+  // of the three on disk and the largest in latency. The restatement carries a
+  // canonical renderer because the session audit rebuilds every request this
+  // turn was digested over and has to reproduce the note byte for byte.
+  // Measured 52.08 KiB raw / 15.33 KiB gzip; both ceilings take the smallest
+  // whole-KiB step above that reading, leaving 942 bytes raw and 686 gzip.
+  // Still nothing before the first sent turn.
   optionalAgentRuntime: Object.freeze({ raw: 53 * 1024, gzip: 16 * 1024 }),
   // Image normalization is fetched only when a turn actually carries an image;
   // text-only first paint and text-only turns do not pay for it. Measured
