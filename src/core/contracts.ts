@@ -261,6 +261,23 @@ export interface Tool {
   execute(argumentsValue: JsonValue, context: ToolContext): Promise<ToolExecutionResult>;
 }
 
+/**
+ * Read access to the session work plan for the turn loop itself, rather than
+ * for the model.
+ *
+ * It is a port and not a call to `list_tasks` on purpose: every tool invocation
+ * in this product is reviewed, journalled and bound to an approval ticket, and
+ * a system-side read that borrowed the tool path would either forge that record
+ * or bypass it. The plan is read here the way the live-environment snapshot is
+ * read — beside the tool surface, not through it.
+ */
+export type TaskPlanEntry = Readonly<{ id: string; content: string; status: string }>;
+
+export interface TaskPlanProvider {
+  /** Open work only. Completed items are not worth the context they cost. */
+  openTasks(context: Readonly<{ sessionId: string; signal: AbortSignal }>): Promise<readonly TaskPlanEntry[]>;
+}
+
 export type ApprovalDecision = "allow" | "deny";
 
 export type ApprovalProvenance = Readonly<{

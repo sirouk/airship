@@ -38,7 +38,7 @@ import {
   verifyContextSummary,
   type ContextSummaryProvenance,
 } from "./context-compressor";
-import { materializeMessages } from "./agent";
+import { TASK_PLAN_NOTE_EVENT_TYPE, canonicalTaskPlanNote, materializeMessages } from "./agent";
 
 const EVENT_FIELDS = new Set([
   "version",
@@ -63,6 +63,7 @@ const KNOWN_EVENT_TYPES = new Set([
   "context.summary.updated",
   "turn.requested",
   "turn.context.selected",
+  TASK_PLAN_NOTE_EVENT_TYPE,
   "inference.started",
   "inference.usage",
   "assistant.completed",
@@ -251,6 +252,8 @@ type TurnState = {
     liveEnvironment?: LiveEnvironmentSnapshot;
   };
   contextSelected?: boolean;
+  compacted?: boolean;
+  planRestated?: boolean;
   inference?: {
     operationId: string;
     requestDigest: string;
@@ -888,6 +891,7 @@ async function validateProtocol(
             verifiedForkContextDigest,
           },
         ));
+        if (active && turnBoundPreprocessing) active.compacted = true;
         if (active?.request) {
           active.request.messageIndex = messages.length - 1;
           lastContextMessage = active.contextSelected || active.request.liveEnvironment
@@ -1335,6 +1339,35 @@ async function validateProtocol(
       if (turn.request.liveEnvironment || selection.hits.length) {
         lastContextMessage = { index: turn.request.messageIndex, content: turn.request.content };
       }
+      continue;
+    }
+
+    if (event.type === TASK_PLAN_NOTE_EVENT_TYPE) {
+      const turn = requireActive(event);
+      const note = canonicalTaskPlanNote(payload);
+      if (
+        !turn ||
+        event.operationId ||
+        turn.step !== -1 ||
+        turn.inference ||
+        turn.tools.length ||
+        !turn.request ||
+        // A restatement with no compaction behind it is not a restatement; it
+        // is an extra message somebody added to the transcript.
+        !turn.compacted ||
+        turn.planRestated ||
+        !note
+      ) {
+        add({
+          ...eventLocation(event),
+          code: "TURN_PLAN_NOTE_INVALID",
+          category: "protocol",
+          message: "A work-plan restatement must be a canonical, unique note journaled after this turn's compaction and before inference.",
+        });
+        continue;
+      }
+      turn.planRestated = true;
+      messages.push({ role: "user", content: note });
       continue;
     }
 
