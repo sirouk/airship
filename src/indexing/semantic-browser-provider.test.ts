@@ -1,11 +1,14 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createBrowserSemanticProvider,
   SwitchableEmbeddingProvider,
+  hasConfidentialAuthority,
   readEmbeddingMode,
   readStoredEmbeddingMode,
+  setConfidentialAuthority,
   writeEmbeddingMode,
 } from "./semantic-browser-provider";
+import { CHUTES_EMBEDDING_DIMENSIONS } from "./chutes-embeddings";
 import { AIRSHIP_SEMANTIC_MODEL, LazySemanticWorkerEmbeddingProvider, type SemanticWorkerRequest, type SemanticWorkerResponse } from "./semantic-worker-provider";
 import { ClientContextRuntime } from "../retrieval/client-context-runtime";
 import { MemoryWorkspace } from "../workspace/memory";
@@ -195,6 +198,81 @@ describe("capability-derived embedding mode", () => {
 
     const generation = await new ClientContextRuntime(workspace, { embeddings: provider }).refreshNow();
     expect(generation.lineage.embeddingPosture).toBe("deterministic-bootstrap");
+  });
+});
+
+/**
+ * The confidential lane, which is the only mode whose vectors leave the device
+ * and the only one whose width is not 384.
+ */
+describe("confidential embedding mode", () => {
+  beforeEach(() => {
+    const values = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+    });
+  });
+
+  afterEach(() => {
+    // Memory-only and page-scoped: a bearer that outlived its test would make
+    // the boot guard below pass for the wrong reason.
+    setConfidentialAuthority(undefined);
+    vi.unstubAllGlobals();
+  });
+
+  it("reports the remote width and posture rather than the on-device ones", () => {
+    const provider = new SwitchableEmbeddingProvider(384, "chutes");
+    // 4096, not 384. `cosine()` throws on a width mismatch (flat-index.ts:85),
+    // so an index allocated at the constructor's 384 would have thrown on the
+    // first search of a generation that had already been embedded remotely.
+    expect(provider.dimensions).toBe(CHUTES_EMBEDDING_DIMENSIONS);
+    expect(provider.dimensions).not.toBe(384);
+    expect(provider.posture).toBe("confidential-remote");
+    expect(new SwitchableEmbeddingProvider(384, "bootstrap").dimensions).toBe(384);
+  });
+
+  it("refuses to embed without an authority instead of falling back to hash vectors", async () => {
+    const provider = new SwitchableEmbeddingProvider(384, "chutes");
+    await expect(provider.embed(["turbine"])).rejects.toThrow(/Chutes is not connected/u);
+    expect(hasConfidentialAuthority()).toBe(false);
+  });
+
+  it("serves the next embed from an authority installed after the provider was materialized", async () => {
+    const requests: RequestInit[] = [];
+    vi.stubGlobal("fetch", vi.fn((_url: string, init: RequestInit) => {
+      requests.push(init);
+      return Promise.resolve(new Response(JSON.stringify({
+        data: [{ index: 0, embedding: Array.from({ length: CHUTES_EMBEDDING_DIMENSIONS }, () => 0) }],
+      }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    }));
+    const provider = new SwitchableEmbeddingProvider(384, "chutes");
+    // The failed embed is what materializes the inner provider, so the token
+    // supplier below is installed strictly after it exists. Capturing the
+    // authority at construction would have left this connection unusable until
+    // the next profile switch re-minted the runtime.
+    await expect(provider.embed(["turbine"])).rejects.toThrow(/Chutes is not connected/u);
+
+    setConfidentialAuthority(() => "cpk_installed_late");
+    const vectors = await provider.embed(["turbine"]);
+
+    expect(vectors[0]).toHaveLength(CHUTES_EMBEDDING_DIMENSIONS);
+    expect((requests[0]?.headers as Record<string, string>).Authorization).toBe("Bearer cpk_installed_late");
+  });
+
+  it("does not restore a persisted chutes preference with no authority to serve it", () => {
+    writeEmbeddingMode("chutes");
+    // A fresh page load: the preference survived, the bearer did not. The first
+    // generation is built by an unguarded `await refreshNow()` on the
+    // registry-construction path (airship-tools.ts:115-125), so admitting the
+    // stored mode here would fail profile activation rather than degrade
+    // retrieval. Both directions are pinned: a guard that always answers
+    // `undefined` would pass the first assertion and measure nothing.
+    expect(readStoredEmbeddingMode()).toBeUndefined();
+    expect(readEmbeddingMode()).toBe("bootstrap");
+
+    setConfidentialAuthority(() => "cpk_connected");
+    expect(readStoredEmbeddingMode()).toBe("chutes");
   });
 });
 

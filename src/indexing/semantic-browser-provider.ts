@@ -1,5 +1,7 @@
 import { HashEmbeddingProvider } from "./hash-embeddings";
+import { CHUTES_EMBEDDING_DIMENSIONS, ChutesEmbeddingProvider } from "./chutes-embeddings";
 import type { EmbeddingProvider } from "./contracts";
+import type { EmbeddingPosture } from "../core/contracts";
 import {
   getBrowserCapabilityRegistry,
   semanticWasmThreadCount,
@@ -15,7 +17,37 @@ import semanticWorkerUrl from "./semantic.worker.ts?worker&url";
 
 const PREFERENCE_KEY = "airship.context.embedding.v1";
 
-export type EmbeddingMode = "bootstrap" | "semantic";
+export type EmbeddingMode = "bootstrap" | "semantic" | "chutes";
+
+/**
+ * Supplies the `cpk_` bearer for confidential embeddings, or `undefined` when
+ * Chutes is not connected.
+ *
+ * Held here rather than passed at construction because the runtime is minted
+ * per workspace object (`src/retrieval/client-context-runtime.ts:28`, a
+ * `WeakMap`) and re-minted on every profile switch, so whichever caller wins
+ * that race would otherwise decide whether the page has an authority at all.
+ * It is memory-only and never persisted: this is a bearer token.
+ */
+export type ConfidentialEmbeddingAuthority = () => Promise<string | undefined> | string | undefined;
+
+let confidentialAuthority: ConfidentialEmbeddingAuthority | undefined;
+
+/**
+ * Installs (or, with `undefined`, withdraws) the confidential bearer supplier.
+ *
+ * Read at each embed rather than captured, so an authority that arrives after
+ * the provider was materialized still serves the next request — a connection
+ * completing during a page's first index build is the ordinary case, not an
+ * edge one.
+ */
+export function setConfidentialAuthority(authority: ConfidentialEmbeddingAuthority | undefined): void {
+  confidentialAuthority = authority;
+}
+
+export function hasConfidentialAuthority(): boolean {
+  return confidentialAuthority !== undefined;
+}
 
 /**
  * The recorded choice, or nothing when the person has never made one.
@@ -28,6 +60,15 @@ export function readStoredEmbeddingMode(): EmbeddingMode | undefined {
   if (typeof localStorage === "undefined") return undefined;
   try {
     const stored = localStorage.getItem(PREFERENCE_KEY);
+    /*
+     * `chutes` is admitted only when a confidential authority is installed.
+     * The first generation is built on the registry-construction critical path
+     * (src/tools/airship-tools.ts:115-125, an unguarded `await refreshNow()`),
+     * and the bearer is memory-only — so a persisted `chutes` on a fresh page
+     * load is not a dead memory index, it is a failed profile activation.
+     * Treating it as "no preference" keeps the probe's answer and fails no boot.
+     */
+    if (stored === "chutes") return hasConfidentialAuthority() ? "chutes" : undefined;
     return stored === "semantic" || stored === "bootstrap" ? stored : undefined;
   } catch {
     // Storage can be denied by browser privacy policy even when the API is
@@ -115,23 +156,49 @@ function trustedSemanticWorkerUrl(url: URL): string | object {
  * performed only between completed index generations by ClientContextRuntime.
  */
 export class SwitchableEmbeddingProvider implements EmbeddingProvider {
-  readonly dimensions: number;
+  private readonly localDimensions: number;
   private readonly bootstrap: HashEmbeddingProvider;
   private semantic?: LazySemanticWorkerEmbeddingProvider;
+  private confidential?: EmbeddingProvider;
   private mode: EmbeddingMode;
 
   constructor(
     dimensions = 384,
     mode: EmbeddingMode = readEmbeddingMode(),
     private readonly semanticFactory: () => LazySemanticWorkerEmbeddingProvider = createBrowserSemanticProvider,
+    private readonly confidentialFactory: () => EmbeddingProvider =
+      () => new ChutesEmbeddingProvider({ token: () => confidentialAuthority?.() }),
   ) {
-    this.dimensions = dimensions;
+    this.localDimensions = dimensions;
     this.bootstrap = new HashEmbeddingProvider(dimensions);
     this.mode = mode;
   }
 
-  get id(): string { return this.mode === "semantic" ? this.semanticProvider.id : this.bootstrap.id; }
-  get posture(): "deterministic-bootstrap" | "local-semantic" { return this.mode === "semantic" ? "local-semantic" : "deterministic-bootstrap"; }
+  /**
+   * Per mode, because the widths differ and a mismatch is not recoverable.
+   *
+   * The on-device engines are 384; Qwen3-Embedding-8B is 4096
+   * (`chutes-embeddings.ts:37`). `cosine()` throws on any width mismatch
+   * (`flat-index.ts:85`), so reporting one fixed number here would have had the
+   * engine allocate and query a 384-wide index against 4096-wide vectors — a
+   * throw on the first search rather than at the moment the mode changed.
+   * Switching modes rebuilds the generation (`client-context-runtime.ts`
+   * `setEmbeddingMode`), so no live index ever sees this value change under it.
+   */
+  get dimensions(): number {
+    return this.mode === "chutes" ? CHUTES_EMBEDDING_DIMENSIONS : this.localDimensions;
+  }
+
+  get id(): string {
+    if (this.mode === "chutes") return this.confidentialProvider.id;
+    return this.mode === "semantic" ? this.semanticProvider.id : this.bootstrap.id;
+  }
+
+  get posture(): EmbeddingPosture {
+    if (this.mode === "chutes") return "confidential-remote";
+    return this.mode === "semantic" ? "local-semantic" : "deterministic-bootstrap";
+  }
+
   getMode(): EmbeddingMode { return this.mode; }
   getSemanticState(): SemanticProviderState { return this.semantic?.getState() ?? Object.freeze({ phase: "cold" }); }
   subscribeSemantic(listener: (state: SemanticProviderState) => void): () => void {
@@ -156,6 +223,11 @@ export class SwitchableEmbeddingProvider implements EmbeddingProvider {
   }
 
   embed(texts: string[], signal?: AbortSignal): Promise<Float32Array[]> {
+    // No fallback branch. A confidential request that cannot be authorized
+    // rejects with the provider's own sentence; substituting hash vectors here
+    // would label 384-wide bootstrap output `confidential-remote` in the same
+    // lineage the receipt prints.
+    if (this.mode === "chutes") return this.confidentialProvider.embed(texts, signal);
     return this.mode === "semantic" ? this.semanticProvider.embed(texts, signal) : this.bootstrap.embed(texts, signal);
   }
 
@@ -163,5 +235,9 @@ export class SwitchableEmbeddingProvider implements EmbeddingProvider {
 
   private get semanticProvider(): LazySemanticWorkerEmbeddingProvider {
     return this.semantic ??= this.semanticFactory();
+  }
+
+  private get confidentialProvider(): EmbeddingProvider {
+    return this.confidential ??= this.confidentialFactory();
   }
 }
