@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { completeLocalDeviceCeremony, expectLocalDeviceVaultActive } from "./support/vault-ceremony";
+import { completeLocalDeviceCeremony } from "./support/vault-ceremony";
 
 /**
  * A finished conversation is continued by opening it, not by forking it.
@@ -47,6 +47,21 @@ async function sendOneTurn(page: Page, prompt: string): Promise<void> {
     .toBeVisible({ timeout: 40_000 });
 }
 
+/**
+ * The Vault is the authority being written through, on either shell.
+ *
+ * Deliberately not `expectLocalDeviceVaultActive`: the runtime line it waits
+ * on is a desktop topbar element, and in the phone shell the same span is
+ * rendered with the right sentence and `hidden`. Waiting for it to be *visible*
+ * failed this journey on mobile for a reason that has nothing to do with
+ * resuming a conversation. What this needs to know is that adoption happened
+ * before the first turn is sent, and the sentence's presence is that fact.
+ */
+async function expectVaultAdopted(page: Page): Promise<void> {
+  await expect(page.locator(".runtime-line__text").filter({ hasText: /Encrypted Local Device vault active/u }))
+    .toHaveCount(1, { timeout: 40_000 });
+}
+
 /** Change something the person can see and nothing a turn is run by. */
 async function saveANewThemeRevision(page: Page, namespace: string): Promise<void> {
   await page.goto(`/?airshipLabNamespace=${namespace}#profiles`);
@@ -74,7 +89,7 @@ test.describe("a conversation you finished yesterday", () => {
     await page.goto(`/?airshipLabNamespace=${namespace}#vault`);
     await completeLocalDeviceCeremony(page);
     await page.goto(`/?airshipLabNamespace=${namespace}`);
-    await expectLocalDeviceVaultActive(page);
+    await expectVaultAdopted(page);
     await sendOneTurn(page, "Draft the Q3 pricing memo intro paragraph.");
 
     await saveANewThemeRevision(page, namespace);
@@ -133,7 +148,7 @@ test.describe("a conversation you finished yesterday", () => {
     await page.goto(`/?airshipLabNamespace=${namespace}#vault`);
     await completeLocalDeviceCeremony(page);
     await page.goto(`/?airshipLabNamespace=${namespace}`);
-    await expectLocalDeviceVaultActive(page);
+    await expectVaultAdopted(page);
     await sendOneTurn(page, "Draft the Q3 pricing memo intro paragraph.");
 
     /*
