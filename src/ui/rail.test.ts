@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { RAIL_RECENT_LIMIT, railCurrentHint, railRowFor, railStandInFor, rovingKey } from "./rail";
-import { destinationLabel, railTraversal, type NavigationView } from "./navigation-model";
+import { CANONICAL_DESTINATIONS, destinationLabel, railTraversal, type NavigationView } from "./navigation-model";
 
 /*
  * The returning person's most important object may not need a click to exist.
@@ -156,5 +156,128 @@ describe("the rail's you-are-here state", () => {
     expect(readFileSync(new URL("./mobile-navigation.tsx", import.meta.url), "utf8"))
       .toContain('aria-current={current ? "page" : undefined}');
     expect(source).toContain('aria-describedby={childActive && currentHint ? CURRENT_HINT_ID : undefined}');
+  });
+});
+
+/*
+ * One rail, one left-edge language.
+ *
+ * The owner's reading of this rail found three at once. The destination rows —
+ * Chat, Workspace, Memory, Proof, Vault, Connection, Account — carry the inset
+ * tab mark `.nav-item[data-scope]::after` draws, and he named those as the
+ * reference. `Skills` and `Capabilities` carried a full-height hairline
+ * instead, because `.nav-item--nested` draws one and neither row had a
+ * `data-scope` to draw a mark from. `All conversations` carried that hairline
+ * plus a `border-top` and squared corners, which is a third thing again: a
+ * bordered button sitting in a list of rows.
+ *
+ * The mark is drawn from the destination table, so these assertions are about
+ * the two attributes that decide which language a row speaks, not about the
+ * pixels — the stylesheet is free to restyle the mark, and this still holds.
+ */
+describe("the rail's rows all speak the same language", () => {
+  const source = readFileSync(new URL("./rail.tsx", import.meta.url), "utf8");
+
+  it("leaves the nested hairline to genuine nesting, and to nothing else", () => {
+    // Editor and Terminal are pages *inside* the row above them, which is what
+    // the indent and the 1px rule say. Skills, Capabilities and the conversation
+    // ledger are rows in a block that already says whose they are, and giving
+    // them the same treatment said it twice in a dialect nothing else uses.
+    expect(source.split("nav-item--nested").length - 1).toBe(2);
+    expect(source).toContain('class={active ? "nav-item nav-item--nested active" : "nav-item nav-item--nested"}');
+  });
+
+  it("gives every rail row a scope to draw its mark from", () => {
+    expect(source).toContain("data-scope={ALL_CONVERSATIONS_SCOPE}");
+    expect(source).toContain("data-scope={route.scope}");
+  });
+
+  it("reads each scope out of the destination table rather than restating it", () => {
+    // A literal here is a second place to change when a route is re-scoped, and
+    // the rail would go on drawing the old answer with nothing to catch it.
+    expect(source).not.toMatch(/data-scope="[a-z]+"/u);
+  });
+
+  it("finds the ledger row a scope in the table it reads from", () => {
+    // The lookup fails silently: a missing entry renders `data-scope` off the
+    // element entirely and the mark disappears with no error anywhere. This is
+    // the condition that would cause it.
+    expect(CANONICAL_DESTINATIONS.flatMap((destination) => destination.nested).map((nested) => nested.id))
+      .toContain("sessions");
+  });
+
+  it("keeps the profile control's name after dropping the word it printed", () => {
+    // `Profiles` beside a person glyph, on a 232px row already spending its
+    // width on a monogram, a name and a caret: measured at the compact density,
+    // `Research` needed 63.7px and the name's box was 56.6px, so it printed
+    // `Resear…`. Without the word the box is 90px. The word survives in three
+    // places that were always the ones a reader uses.
+    expect(source).toContain('aria-label="Manage profiles"');
+    expect(source).toContain('title="Manage profiles · profile scope"');
+    expect(source).not.toContain("profile-manage-link__label");
+  });
+});
+
+/*
+ * The collapse affordance, and the one gesture that must not move the rail.
+ *
+ * Asserted against the stylesheet because that is where both behaviours live —
+ * the handle's placement and the withdrawn hover-peek are declarations, not
+ * script, and a source-grep for a class name would have passed the whole time
+ * the peek was firing on every trip to the composer.
+ */
+describe("the rail's collapse control", () => {
+  /** Comment-free, so a rule's text cannot be matched inside prose about it. */
+  const css = readFileSync(new URL("./shell.css", import.meta.url), "utf8").replace(/\/\*[\s\S]*?\*\//gu, "");
+  /** Every rule in the sheet, split into what it selects and what it declares. */
+  const rules = css.split("}").filter((rule) => rule.includes("{")).map((rule) => {
+    const [head, ...body] = rule.split("{");
+    return { selectors: head!.split(",").map((selector) => selector.trim()).filter(Boolean), body: body.join("{") };
+  });
+  /** The selector lists of the rules whose declarations carry every mark. */
+  const rulesDeclaring = (...marks: readonly string[]): readonly (readonly string[])[] =>
+    rules.filter((rule) => marks.every((mark) => rule.body.includes(mark))).map((rule) => rule.selectors);
+
+  it("hangs the handle on the seam instead of pinning it to a corner", () => {
+    // `.rail` is the box whose width changes, so its right edge *is* the seam in
+    // all three rail states — which is why the handle is positioned against it
+    // and not against `.sidebar`, the grid column that never moves.
+    const [handle] = rulesDeclaring("position: absolute", "top: 50%", "right: 0", "translate: 50% -50%");
+    expect(handle).toEqual([".rail-collapse"]);
+  });
+
+  it("never widens the rail because a pointer crossed it", () => {
+    // "That's clunky and jumps around": the rail sits on the path to the
+    // composer, and it treated every crossing as a request to open.
+    const peeks = rulesDeclaring("width: 268px");
+    expect(peeks).not.toHaveLength(0);
+    for (const selectors of peeks) for (const selector of selectors) expect(selector).not.toContain(":hover");
+  });
+
+  it("keeps the keyboard's way to the labels", () => {
+    const [peek] = rulesDeclaring("width: 268px");
+    expect(peek!.every((selector) => selector.includes(":has(:focus-visible)"))).toBe(true);
+  });
+
+  it("brings back for the keyboard exactly what the collapsed rail hides", () => {
+    /*
+     * These two lists drifted: `.profile-manage-link__label` was clipped by the
+     * first and restored by the second, and when the label was deleted the
+     * restoring copy was the one that stayed — a selector matching nothing,
+     * sitting in the block a reader would trust to say what comes back.
+     * A collapsed rail that hides a name it cannot restore is the worse half of
+     * the same drift, which is why this is a set comparison in both directions.
+     */
+    const last = (selectors: readonly string[]) => [...selectors.map((selector) => selector.split(" ").at(-1)!)].sort();
+    /** The one rule every selector of which carries `guard`, declaring `mark`. */
+    const guardedRule = (guard: string, mark: string) => {
+      const matches = rules.filter((rule) => rule.body.includes(mark)
+        && rule.selectors.every((selector) => selector.includes(guard)));
+      expect(matches, `one ${guard} rule declares ${mark}`).toHaveLength(1);
+      return matches[0]!.selectors;
+    };
+    const hidden = guardedRule('[data-rail-state="rail"] ', "clip-path: inset(50%)");
+    const restored = guardedRule(":has(:focus-visible)", "clip-path: none");
+    expect(last(restored)).toEqual(last(hidden));
   });
 });

@@ -2530,7 +2530,10 @@ export function App() {
       id: "rail:toggle",
       label: railState === "standard" ? "Collapse navigation rail" : "Expand navigation rail",
       description: railState === "standard"
-        ? "Icons only, labels on hover · ⌘\\"
+        // Not "labels on hover" any more: the pointer no longer opens the
+        // collapsed rail, so what a person gets is icons plus every row's
+        // `title`, and the labels back on the row the keyboard is standing on.
+        ? "Icons only, labels on the row you focus · ⌘\\"
         : "Show every destination label · ⌘\\",
       keywords: ["rail", "sidebar", "navigation", "collapse", "expand", "focus"],
       group: "Preferences" as const,

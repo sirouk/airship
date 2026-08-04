@@ -9,6 +9,7 @@ import {
   canonicalParentForView,
   destinationLabel,
   railTraversal,
+  type NavigationScope,
   type NavigationView,
   type RailNestedDestination,
   type RailRow,
@@ -201,11 +202,24 @@ const PROFILE_SCOPED_ROUTE_ICONS: Readonly<Record<string, IconName>> = Object.fr
   skills: "skills", capabilities: "model",
 });
 
-const PROFILE_SCOPED_ROUTES: readonly Readonly<{ id: NavigationView; label: string; icon: IconName }>[] = Object.freeze(
+const PROFILE_SCOPED_ROUTES: readonly Readonly<{ id: NavigationView; label: string; icon: IconName; scope: NavigationScope }>[] = Object.freeze(
   (CANONICAL_DESTINATIONS.find((destination) => destination.id === "profiles")?.nested ?? [])
     .filter((nested) => nested.id in PROFILE_SCOPED_ROUTE_ICONS)
-    .map((nested) => Object.freeze({ id: nested.id, label: nested.label, icon: PROFILE_SCOPED_ROUTE_ICONS[nested.id]! })),
+    .map((nested) => Object.freeze({ id: nested.id, label: nested.label, icon: PROFILE_SCOPED_ROUTE_ICONS[nested.id]!, scope: nested.scope })),
 );
+
+/**
+ * The ledger row's scope, read from the destination table rather than restated.
+ *
+ * `data-scope` is what draws a row's left-edge mark (`.nav-item[data-scope]`
+ * in platform-shell.css) — the thick, inset tab mark every destination row
+ * carries and this row did not, which is why it had to draw a hairline box of
+ * its own to say anything at all about itself. Three left-edge languages in one
+ * rail was the defect; this is the one the owner named as the reference.
+ */
+const ALL_CONVERSATIONS_SCOPE: NavigationScope | undefined = CANONICAL_DESTINATIONS
+  .flatMap((destination) => destination.nested)
+  .find((nested) => nested.id === "sessions")?.scope;
 
 /**
  * How many conversations the disclosure lists.
@@ -900,9 +914,16 @@ export function Rail({
               {recent.length ? <div class="rail-conversation-group">Recent</div> : null}
               {recent.map(conversationRow)}
             </div>
+            {/* A destination row, in the destination rows' own language. It was
+                a bordered button nested inside the thread list — a hairline box
+                where every row above it carries an inset tab mark — which made
+                the rail speak three visual dialects at once. Same node, same
+                name, same count; it is the mark that changed, and `data-scope`
+                is the whole of it. */}
             <button
-              class={view === "sessions" ? "nav-item nav-item--nested active" : "nav-item nav-item--nested"}
+              class={view === "sessions" ? "nav-item active" : "nav-item"}
               type="button"
+              data-scope={ALL_CONVERSATIONS_SCOPE}
               aria-current={view === "sessions" ? "page" : undefined}
               /* The accessible name stays exactly the destination. The count is
                  the row's description rather than part of its name, so it is
@@ -952,8 +973,15 @@ export function Rail({
           aria-describedby={view !== "profiles" && railStandInFor(view) === "profiles" && currentHint ? CURRENT_HINT_ID : undefined}
           onClick={onManageProfiles}
         >
+          {/* The word `Profiles` used to ride beside this glyph, and the row it
+              shares is 232px wide holding a monogram, a profile name, a caret
+              and this control: `General` fit and `Research` printed `Resear…`.
+              A label on a control whose glyph, `title` and `aria-label` all say
+              the same word is the cheapest 60px in the rail to give back, and
+              it is given to the name. Nothing is lost — `aria-label="Manage
+              profiles"` above is unchanged, which is the name every reading of
+              this control has ever used. */}
           <Icon name="profiles" />
-          <span class="profile-manage-link__label">Profiles</span>
         </button>
         {/*
           The two routes that decide what the agent *is* and what it can *run*,
@@ -964,15 +992,17 @@ export function Rail({
           were reachable only by knowing to press `Profiles` first and then
           finding a tab strip inside that route, which is the menu archaeology
           Law 4 exists to forbid. They are drawn under the profile they are
-          scoped to, in the same nested treatment `All conversations` gets under
-          Chat, so the filing still says whose Skills these are.
+          scoped to, and — since the owner's read of this rail — in the same row
+          language every other destination uses. The filing is carried by the
+          block they sit in, not by a hairline nothing else in the rail draws.
         */}
         <div class="profile-scoped-routes" role="group" aria-label="Profile configuration">
           {PROFILE_SCOPED_ROUTES.map((route) => (
             <button
               key={route.id}
               type="button"
-              class={view === route.id ? "nav-item nav-item--nested active" : "nav-item nav-item--nested"}
+              class={view === route.id ? "nav-item active" : "nav-item"}
+              data-scope={route.scope}
               title={`${route.label} · profile scope`}
               aria-current={view === route.id ? "page" : undefined}
               onClick={() => onNavigate(route.id)}
@@ -987,7 +1017,7 @@ export function Rail({
   }
 
   return (
-    // `data-recents` stands the hover-peek down while the flyout is up. Both
+    // `data-recents` stands the focus-peek down while the flyout is up. Both
     // are the same answer to "show me the labels", and running them together
     // draws a 268px peek panel underneath a 320px flyout on the same pixels.
     <aside class="sidebar" data-rail-state={state} data-recents={flyout && recentsOpen ? "flyout" : undefined} inert={inert} aria-hidden={inert || undefined}>
@@ -1019,6 +1049,14 @@ export function Rail({
             Below the phone breakpoint the rail is `display: none` and the same
             component rides the mobile tab bar instead. */}
         <RuntimeLoadIndicator placement="rail" />
+        {/* The drawer handle on the seam. It was a chevron pinned at the rail's
+            bottom-left corner — the shipped design, and the owner's verdict on
+            it once built was that the affordance belongs in the middle of the
+            seam between the rail and the page. It is the same button with the
+            same name and the same `⌘\` twin; only where it is painted moved,
+            which is `.rail-collapse` in shell.css. It stays a child of `.rail`
+            deliberately: `.rail` is the box whose width changes, so the handle
+            tracks the seam in all three states without measuring anything. */}
         <button
           class="rail-collapse"
           type="button"

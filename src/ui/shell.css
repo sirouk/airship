@@ -579,9 +579,11 @@
  *
  * `.sidebar` is the grid *column* and never moves; `.rail` is what is painted
  * inside it, and is the only thing that changes width. The separation is what
- * makes hover-peek possible without reflowing the conversation: the peeked
+ * makes the focus-peek possible without reflowing the conversation: the peeked
  * panel overflows its column instead of widening the grid track, so a person
- * skimming destinations never watches the transcript jump sideways.
+ * reading destinations never watches the transcript jump sideways. It is also
+ * why `.rail-collapse` hangs off `.rail` — the seam is that edge, not the
+ * column's.
  */
 .sidebar {
   position: relative;
@@ -734,6 +736,10 @@
   align-content: start;
   min-height: 0;
   max-height: min(420px, 48vh);
+  /* Where the threads end and the pinned ledger row begins. The rule used to
+     be a `border-top` on that row, which is what made a destination read as a
+     bordered button; the boundary belongs to the scroller it bounds. */
+  border-bottom: 1px solid var(--line);
   overflow-y: auto;
   scrollbar-width: thin;
   scrollbar-color: var(--line-strong) transparent;
@@ -958,21 +964,18 @@
   white-space: nowrap;
 }
 .recent-conversation--thread.is-blocked { box-shadow: inset 2px 0 0 var(--v-failed); }
-/* The ledger link, now genuinely pinned as the panel's last row rather than the
+/* The ledger link, genuinely pinned as the panel's last row rather than the
    last child of the scroller — where, measured with nine threads, it sat 60px
-   below the clip and could not be reached at all. */
-.recent-conversations .nav-item--nested {
-  margin: var(--sp-1) 0 0;
-  width: 100%;
-  padding-left: var(--sp-2);
-  border-top: 1px solid var(--line);
-  border-radius: 0;
-}
+   below the clip and could not be reached at all. It is a destination row now,
+   not a bordered button: the hairline box it drew for itself was a third
+   left-edge language in a rail that already had two, and the separation it was
+   really buying belongs to the scroller's end, below. */
+.recent-conversations .nav-item { margin-top: var(--sp-1); }
 
 /* This row carries no icon span, and `.nav-item`'s first track is the 25px
    reserved for one: without this its whole label owns exactly those 25px and
    "All conversations" prints as "Al…". The last track is left to the count. */
-.recent-conversations .nav-item--nested .nav-item__label { grid-column: 1 / -2; }
+.recent-conversations .nav-item .nav-item__label { grid-column: 1 / -2; }
 
 /* How many threads the profile actually has, including the ones the bounded
    shortcut above is not showing. The scroller can no longer answer that
@@ -1228,13 +1231,12 @@
  *
  * The labels are clipped out of the layout, never removed — the accessible
  * name, the `<title>` (which carries the scope, i.e. *more* than the visible
- * label) and the hover-peek panel all still say the word. `display: none` here
+ * label) and the focus-peek panel all still say the word. `display: none` here
  * would take the name off the button as well, which is how an icon rail ends up
  * shipping nine anonymous glyphs.
  */
 .sidebar[data-rail-state="rail"] .nav-item__label,
 .sidebar[data-rail-state="rail"] .nav-group-label,
-.sidebar[data-rail-state="rail"] .profile-manage-link__label,
 .sidebar[data-rail-state="rail"] .menu-select-value {
   position: absolute;
   width: 1px;
@@ -1284,74 +1286,60 @@
 }
 
 /*
- * Hover-peek: an overlay, never a reflow.
+ * Focus-peek: an overlay, never a reflow, and never a pointer.
+ *
+ * There was a hover half to this: pointer into the collapsed rail, 180ms of
+ * dwell, and it widened to 268px on its own. Judged and withdrawn — "that's
+ * clunky and jumps around" — because the pointer crosses this rail on every
+ * trip to the composer and the rail treated each crossing as a request. The
+ * deliberate ways in are the seam handle and `⌘\`; the labels also live in
+ * every row's `title`, which carries the scope the visible label never did.
+ *
+ * The keyboard half stays, and is no longer wrapped in `@media (hover: hover)`.
+ * The widening below always was ungated while the rules that un-clip the labels
+ * were not, so on a touch device a focused row widened `.rail` to 268px and
+ * left every name at 1px. One condition, one behaviour.
  *
  * The panel widens over the conversation instead of widening the grid track,
- * so nothing in the transcript moves while a person skims the rail. 180ms of
- * dwell before it opens is the difference between intent and transit; 240ms
- * before it closes is what stops it flickering on the way to the composer.
- * Keyboard focus pins it open, because a keyboard user reading a label must
- * not lose it to a mouse that happened to move.
- *
- * `:has(:focus-visible)`, not `:focus-within`: `.rail-collapse` is inside
- * `.sidebar`, so pressing `Collapse navigation rail` left focus in the rail and
- * pinned the peek — measured on the click, `.rail` was still 268px and its
- * nav-items 255px under a 60px sidebar, so the control looked broken until you
- * clicked elsewhere. And `:not([data-recents="flyout"])` because the peek and
- * the flyout are one answer twice: run together they drew a 268px panel under
- * a 320px one. Held here rather than as a later override, which would re-clip
- * the flyout's own copy of `.nav-item__label`.
+ * so nothing in the transcript moves. `:has(:focus-visible)`, not
+ * `:focus-within`: `.rail-collapse` is inside `.sidebar`, so pressing
+ * `Collapse navigation rail` left focus in the rail and pinned the peek —
+ * measured on the click, `.rail` was still 268px and its nav-items 255px under
+ * a 60px sidebar, so the control looked broken until you clicked elsewhere.
+ * And `:not([data-recents="flyout"])` because the peek and the flyout are one
+ * answer twice: run together they drew a 268px panel under a 320px one.
  */
 .sidebar[data-rail-state="rail"] .rail {
   transition: width 140ms ease 240ms;
 }
 
-@media (hover: hover) {
-  .sidebar[data-rail-state="rail"]:not([data-recents="flyout"]):hover .rail {
-    z-index: 30;
-    width: 268px;
-    box-shadow: var(--shadow);
-    transition-delay: 180ms;
-  }
+.sidebar[data-rail-state="rail"]:not([data-recents="flyout"]):has(:focus-visible) .nav-item__label,
+.sidebar[data-rail-state="rail"]:not([data-recents="flyout"]):has(:focus-visible) .nav-group-label,
+.sidebar[data-rail-state="rail"]:not([data-recents="flyout"]):has(:focus-visible) .menu-select-value {
+  position: static;
+  width: auto;
+  height: auto;
+  clip-path: none;
+}
 
-  .sidebar[data-rail-state="rail"]:not([data-recents="flyout"]):hover .nav-item__label,
-  .sidebar[data-rail-state="rail"]:not([data-recents="flyout"]):hover .nav-group-label,
-  .sidebar[data-rail-state="rail"]:not([data-recents="flyout"]):hover .profile-manage-link__label,
-  .sidebar[data-rail-state="rail"]:not([data-recents="flyout"]):hover .menu-select-value,
-  .sidebar[data-rail-state="rail"]:not([data-recents="flyout"]):has(:focus-visible) .nav-item__label,
-  .sidebar[data-rail-state="rail"]:not([data-recents="flyout"]):has(:focus-visible) .nav-group-label,
-  .sidebar[data-rail-state="rail"]:not([data-recents="flyout"]):has(:focus-visible) .profile-manage-link__label,
-  .sidebar[data-rail-state="rail"]:not([data-recents="flyout"]):has(:focus-visible) .menu-select-value {
-    position: static;
-    width: auto;
-    height: auto;
-    clip-path: none;
-  }
+.sidebar[data-rail-state="rail"]:not([data-recents="flyout"]):has(:focus-visible) .nav-item {
+  grid-template-columns: 25px minmax(0, 1fr) auto;
+  justify-items: stretch;
+  padding: 0 10px;
+}
 
-  .sidebar[data-rail-state="rail"]:not([data-recents="flyout"]):hover .nav-item,
-  .sidebar[data-rail-state="rail"]:not([data-recents="flyout"]):has(:focus-visible) .nav-item {
-    grid-template-columns: 25px minmax(0, 1fr) auto;
-    justify-items: stretch;
-    padding: 0 10px;
-  }
+.sidebar[data-rail-state="rail"]:not([data-recents="flyout"]):has(:focus-visible) .rail-row {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
 
-  .sidebar[data-rail-state="rail"]:not([data-recents="flyout"]):hover .rail-row,
-  .sidebar[data-rail-state="rail"]:not([data-recents="flyout"]):has(:focus-visible) .rail-row {
-    grid-template-columns: minmax(0, 1fr) auto auto;
-  }
+.sidebar[data-rail-state="rail"]:not([data-recents="flyout"]):has(:focus-visible) .nav-turn-badge,
+.sidebar[data-rail-state="rail"]:not([data-recents="flyout"]):has(:focus-visible) .nav-proof-dot {
+  position: static;
+}
 
-  .sidebar[data-rail-state="rail"]:not([data-recents="flyout"]):hover .nav-turn-badge,
-  .sidebar[data-rail-state="rail"]:not([data-recents="flyout"]):has(:focus-visible) .nav-turn-badge,
-  .sidebar[data-rail-state="rail"]:not([data-recents="flyout"]):hover .nav-proof-dot,
-  .sidebar[data-rail-state="rail"]:not([data-recents="flyout"]):has(:focus-visible) .nav-proof-dot {
-    position: static;
-  }
-
-  .sidebar[data-rail-state="rail"]:not([data-recents="flyout"]):hover .profile-switcher,
-  .sidebar[data-rail-state="rail"]:not([data-recents="flyout"]):has(:focus-visible) .profile-switcher {
-    grid-template-columns: minmax(0, 1fr) auto;
-    justify-items: stretch;
-  }
+.sidebar[data-rail-state="rail"]:not([data-recents="flyout"]):has(:focus-visible) .profile-switcher {
+  grid-template-columns: minmax(0, 1fr) auto;
+  justify-items: stretch;
 }
 
 .sidebar[data-rail-state="rail"]:not([data-recents="flyout"]):has(:focus-visible) .rail {
@@ -1364,8 +1352,8 @@
 /*
  * No hover, no tooltip, so no unlabelled icons.
  *
- * The 60px rail pays for its width with a hover-revealed label, and a touch
- * viewport narrow enough to land in `rail` has nothing to hover with. It gets
+ * A 60px rail pays for its width with `title`, and a touch viewport narrow
+ * enough to land in `rail` has nothing to hover with to read one. It gets
  * the label permanently, stacked under the glyph at the micro step — the one
  * thing the retired tablet block got right — and 16px more width to hold the
  * longest destination name without cutting it.
@@ -1496,27 +1484,60 @@
 }
 
 /*
- * The collapse control, and the only place the rail states are named in the UI.
- * 24px of glyph in a target that clears 44px wherever a finger might use it.
+ * The collapse control, on the seam, and the only place the rail states are
+ * named in the UI.
+ *
+ * It was a chevron pinned at the rail's bottom-left corner — the shipped
+ * design, built to spec, and then judged: the affordance belongs "in the middle
+ * of the seam between the rail and the page", behaving like a drawer handle,
+ * "ever so subtle". So it is a grip straddling that seam, vertically centred.
+ *
+ * Positioned against `.rail` rather than `.sidebar` on purpose. `.sidebar` is
+ * the grid column and never moves; `.rail` is the box whose width changes, and
+ * the seam is wherever `.rail`'s right edge currently is — so the handle rides
+ * the collapsed rail, the standard rail and the focus-peek without a
+ * measurement, a resize listener or a second source of truth about the width.
+ * `right: 0` is the padding edge inside the 1px border, and `translate: 50%`
+ * hangs it half over that border: half in the rail, half in the page, which is
+ * what makes it read as belonging to neither and dividing both.
+ *
+ * `⌘\` and the two command-palette entries are unchanged. This is where the
+ * affordance is drawn, not the only way to reach it.
  */
 .rail-collapse {
+  position: absolute;
+  z-index: 1;
+  top: 50%;
+  right: 0;
   display: grid;
   place-items: center;
-  flex: 0 0 auto;
-  min-height: 28px;
-  padding: 0 var(--sp-2);
-  border: 0;
-  border-top: 1px solid var(--line);
+  width: 13px;
+  height: 46px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-chip);
   color: var(--ink-faint);
-  background: transparent;
+  background: var(--surface-soft);
   cursor: pointer;
-  font-size: var(--fs-meta);
+  font-size: var(--fs-micro);
+  /* "Ever so subtle" is a measurable instruction: at rest this is a grip on a
+     seam, not a button on a page. It comes forward on approach and on focus,
+     and never before — which is also why it is the one thing here that fades
+     rather than moves, since the whole objection to what it replaces was
+     chrome that jumps. */
+  opacity: .5;
+  translate: 50% -50%;
+  transition: opacity 120ms ease;
 }
 
-.rail-collapse:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 2.6%, transparent); }
+.rail-collapse:hover,
+.rail-collapse:focus-visible { color: var(--ink); border-color: var(--line-strong); opacity: 1; }
 
 @media (pointer: coarse) {
-  .rail-collapse { min-height: 44px; }
+  /* A 13px grip is not a target. On a coarse pointer it becomes a 44px round
+     handle on the same seam, in the same place — the shape changes, the
+     gesture and the position do not. */
+  .rail-collapse { width: 44px; }
   .chat-nav-disclosure,
   .rail-expander,
   .chat-nav-new { min-height: 44px; min-width: 44px; }
@@ -1543,16 +1564,26 @@
 .profile-switcher .profile-menu .menu-select-trigger { gap: var(--sp-2); min-height: 40px; padding: 0 var(--sp-1); }
 .profile-switcher .profile-menu .profile-monogram { width: 26px; height: 26px; }
 
+/*
+ * A glyph, not a glyph plus the word it already means.
+ *
+ * Measured on this rail: the 232px profile line spends its width on a 26px
+ * monogram, the profile name, the picker's caret and this control — and this
+ * control was `[person] Profiles`, ~62px of it the word. `General` fit;
+ * `Research` printed `Resear…`. Dropping the visible word returns that width to
+ * the one thing on the line that is not already saying itself, and the same
+ * argument the `AGENT PROFILE` eyebrow was deleted under: a label beside a
+ * glyph, a `title` and an `aria-label` that all read `Manage profiles` is the
+ * fourth copy. Square rather than auto so it stays a target, not a hairline.
+ */
 .profile-switcher .profile-manage-link {
-  display: flex;
-  gap: var(--sp-1);
-  align-items: center;
-  width: auto;
+  display: grid;
+  place-items: center;
+  width: 40px;
   min-height: 40px;
   margin: 0;
-  padding: 0 var(--sp-2);
+  padding: 0;
   border-radius: var(--radius-control);
-  white-space: nowrap;
 }
 
 .profile-switcher .profile-manage-link.active { color: var(--ink); background: color-mix(in srgb, var(--accent) 11%, transparent); }
@@ -1565,17 +1596,20 @@
 
 /* Skills and Capabilities, drawn under the profile they are scoped to. They
    span both columns because they are rows, not a third control on the profile
-   line, and they take the nested indent so the filing is visible: these belong
-   to this profile the way `All conversations` belongs to Chat. */
+   line. They took a nested indent and a hairline once; the block they sit in
+   already says whose these are, and the indent was buying that twice in a
+   language no other row in the rail speaks. */
 .profile-switcher .profile-scoped-routes {
   display: grid;
   gap: 1px;
   grid-column: 1 / -1;
   margin-top: 2px;
 }
-.profile-switcher .profile-scoped-routes .nav-item--nested { margin-left: var(--sp-2); width: calc(100% - var(--sp-2)); }
 
 @media (pointer: coarse) {
+  /* Both axes: a 40px-square icon button is under the floor on the axis a
+     fingertip actually has to find. */
+  .profile-switcher .profile-manage-link { width: 44px; }
   .profile-switcher .profile-manage-link,
   .profile-switcher .profile-menu .menu-select-trigger { min-height: 44px; }
 }
