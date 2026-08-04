@@ -315,8 +315,16 @@
 
 /* `SESSION MODEL` was a label, not a fact. It is the prefix of the control's
    accessible name now, so it is clipped from the layout rather than removed
-   from the accessibility tree. */
-.session-bar .session-runtime label small {
+   from the accessibility tree.
+
+   Both of `ModelControl`'s branches, not just the `<label>` one. The picker
+   branch renders the same eyebrow inside `.session-runtime-picker`, and it is
+   the branch a Chutes catalogue unlocks — so this rule matched every provider
+   except the one most people connect, which printed `CHUTES · SESSI…` clipped
+   mid-word above the trigger. `e2e/connected-header-phone.spec.ts` reaches the
+   connected tree, which no other phone assertion did. */
+.session-bar .session-runtime label small,
+.session-bar .session-runtime-picker > small {
   position: absolute;
   width: 1px;
   height: 1px;

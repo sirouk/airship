@@ -60,3 +60,4 @@ next-env.d.ts
 
 # Editor tooling that is not a repository-level decision.
 /.kilo/
+/.playwright-mcp/
