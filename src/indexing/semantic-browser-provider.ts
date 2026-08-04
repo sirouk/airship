@@ -5,6 +5,7 @@ import {
   discoverChutesEmbeddingModels,
   type ChutesEmbeddingCatalog,
 } from "./chutes-embedding-catalog";
+import { readConfidentialEmbeddingChoice } from "./confidential-embedding-choice";
 import type { EmbeddingProvider } from "./contracts";
 import type { EmbeddingPosture } from "../core/contracts";
 import {
@@ -66,9 +67,20 @@ export async function prepareConfidentialEmbeddings(
   signal?: AbortSignal,
 ): Promise<{ provider: ChutesEmbeddingProvider; readiness: ConfidentialEmbeddingReadiness }> {
   const catalog = await discoverChutesEmbeddingModels(signal ? { signal } : {});
+  /*
+   * A recorded choice outranks the automatic pick, and only a recorded choice
+   * does. When Chutes publishes one usable embedding chute there is nothing to
+   * decide and nobody is asked; when it publishes several, the tie was being
+   * broken by whichever one was warm at that instant, which is not a basis for
+   * deciding where a corpus lives. An id that no longer appears in the catalog
+   * loses here rather than throwing — a retired deployment is not an error.
+   */
+  const chosen = readConfidentialEmbeddingChoice();
   // Prefer a deployment with a live instance; a cold one still works, it just
   // pays a scale-up. Order is otherwise the catalog's, which is stable by id.
-  const model = catalog.models.find((candidate) => candidate.hot) ?? catalog.models[0];
+  const model = (chosen ? catalog.models.find((candidate) => candidate.id === chosen) : undefined)
+    ?? catalog.models.find((candidate) => candidate.hot)
+    ?? catalog.models[0];
   if (!model) {
     throw new Error(
       catalog.declined > 0

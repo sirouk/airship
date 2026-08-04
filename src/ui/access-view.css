@@ -476,25 +476,72 @@
   justify-content: center;
 }
 
-.candidate-model {
+/*
+ * The embedding step, which exists only when Chutes offers a second deployment.
+ *
+ * It stands where the chat-model picker used to gate this panel, and it is
+ * deliberately smaller than that control was: one legend, one sentence of
+ * consequence, and as many rows as Chutes published. The chat-model picker's
+ * flow-layout override went with it — nothing here opens a 620px popover over
+ * the panel it belongs to.
+ */
+.candidate-embedding {
   display: grid;
-  gap: var(--sp-1);
+  gap: 8px;
+  margin: 0;
+  padding: 11px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-control);
+  background: var(--surface-soft);
 }
 
-/*
- * Where there is room, the open picker renders in flow and pushes the panel
- * down. Anchored, a 620px popover landed on top of the availability, context,
- * price and trust-readiness tiles — hiding the evidence about the model
- * precisely while someone was choosing it.
- */
-@media (min-width: 900px) {
-  .candidate-model .model-picker-popover {
-    position: static;
-    width: 100%;
-    max-height: min(520px, 60dvh);
-    margin-top: var(--sp-2);
-    box-shadow: none;
-  }
+.candidate-embedding legend {
+  padding: 0 4px;
+}
+
+.candidate-embedding__why {
+  margin: 0;
+  color: var(--ink-faint);
+  font-size: var(--fs-micro);
+  line-height: 1.45;
+}
+
+/* One column per published deployment, and one per row once they stop fitting. */
+.candidate-embedding__options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px;
+}
+
+.candidate-embedding__options button {
+  min-height: 66px;
+  padding: 10px;
+  text-align: left;
+  background: transparent;
+}
+
+.candidate-embedding__options button.selected {
+  border-color: color-mix(in srgb, var(--accent-bright) 56%, transparent);
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-bright) 16%, transparent);
+}
+
+.candidate-embedding__options strong,
+.candidate-embedding__options small {
+  display: block;
+}
+
+.candidate-embedding__options strong {
+  font-size: var(--fs-meta);
+  /* Deployment ids are long, unspaced and not this route's to shorten. */
+  overflow-wrap: anywhere;
+}
+
+.candidate-embedding__options small {
+  margin-top: 4px;
+  color: var(--ink-muted);
+  font-size: var(--fs-caption);
+  line-height: 1.45;
 }
 
 /*

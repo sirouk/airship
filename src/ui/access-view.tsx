@@ -49,6 +49,7 @@ import { verifyChutesKey } from "./connect/chutes-key-authorization";
 import { EgressPanel } from "./connect/egress-panel";
 import { egressRecorder, lastCredentialEgress } from "./connect/egress-record";
 import { CHUTES_DISCOVERY_PREFLIGHT } from "./connect/egress-preflight";
+import type { ChutesEmbeddingModel } from "../indexing/chutes-embedding-catalog";
 import { destinationLabel } from "./navigation-model";
 import { Popover } from "./popover";
 import { RouteHeader } from "./route-header";
@@ -193,6 +194,62 @@ export type AccessViewProps = Readonly<{
   connectedProviderIds?: readonly string[];
 }>;
 
+/**
+ * What Chutes can embed with — and therefore whether there is anything to ask.
+ *
+ * Connecting used to be an interview: paste a key, then pick a chat model to
+ * finish. The chat model is selectable in the chat header, so that question was
+ * being asked in the one place it could not be reconsidered cheaply. What is
+ * left here is the single question a connection genuinely settles, and only
+ * when it is genuinely a question — which is a count, read from Chutes, not a
+ * number written into this file.
+ *
+ * `none` is not a failure and `unasked` is not either. A build that cannot see
+ * an embedding chute keeps the local engine, which is a working product; making
+ * that an error on the connection route would block a chat connection over an
+ * index setting.
+ */
+type EmbeddingOffer =
+  | Readonly<{ state: "none" }>
+  | Readonly<{ state: "adopted"; model: ChutesEmbeddingModel }>
+  | Readonly<{ state: "choose"; models: readonly ChutesEmbeddingModel[] }>
+  | Readonly<{ state: "unasked" }>;
+
+/**
+ * Ask Chutes which chutes embed, and never reject.
+ *
+ * Imported dynamically for the same reason the provider fabric is passed in as
+ * a prop: a static import would merge the indexing graph into this route's
+ * chunk. The catalog read is anonymous — discovering *what exists* does not
+ * spend a credential — so it can run beside the model catalog on the same
+ * press without lengthening the journey.
+ */
+async function askEmbeddingOffer(signal: AbortSignal): Promise<EmbeddingOffer> {
+  try {
+    const { discoverChutesEmbeddingModels } = await import("../indexing/chutes-embedding-catalog");
+    const catalog = await discoverChutesEmbeddingModels({ signal });
+    if (catalog.models.length === 0) return Object.freeze({ state: "none" as const });
+    if (catalog.models.length === 1) return Object.freeze({ state: "adopted" as const, model: catalog.models[0]! });
+    return Object.freeze({ state: "choose" as const, models: catalog.models });
+  } catch {
+    /*
+     * Deliberately silent, and deliberately not `none`.
+     *
+     * "Chutes lists no embedding chutes" and "Airship could not ask" are
+     * different facts — the discovery module is careful to keep them apart —
+     * but neither of them is a reason to interrupt someone connecting a chat
+     * model. The confidential engine states its own refusal on the Context
+     * route, where it is chosen; here it produces no step at all.
+     */
+    return Object.freeze({ state: "unasked" as const });
+  }
+}
+
+/** The deployment the indexing side would resolve unaided: live first, then order. */
+function automaticEmbeddingPick(models: readonly ChutesEmbeddingModel[]): ChutesEmbeddingModel | undefined {
+  return models.find((model) => model.hot) ?? models[0];
+}
+
 type Candidate = Readonly<{
   credentialKind: ChutesCredentialKind;
   models: readonly AirshipModel[];
@@ -200,7 +257,6 @@ type Candidate = Readonly<{
   sourceComplete: boolean;
   managementState: ModelSourceState;
   issues: readonly ModelCatalogIssue[];
-  recommendedModelId?: string;
 }>;
 
 export function AccessView({
@@ -233,12 +289,31 @@ export function AccessView({
   const ephemeralTokenSource = useRef<(() => string | Promise<string>)>();
   const candidateTransport = useRef<ChutesInferenceTransport>();
   const discoveryAbort = useRef<AbortController>();
-  // Set only by the returning OAuth redirect: that journey verifies itself
-  // through to a connection. A pasted key still discovers and stops, because
-  // choosing the model is the reason that lane has a panel.
+  /*
+   * Set by every accepted credential, whichever door it came through.
+   *
+   * It used to be set only by the returning OAuth redirect, and the comment
+   * here said a pasted key "still discovers and stops, because choosing the
+   * model is the reason that lane has a panel". That reason does not survive
+   * inspection: the chat model is a control in the chat header, changeable per
+   * conversation, so making it a gate on connecting asked for a decision at the
+   * one moment the person has the least information and the most friction. Both
+   * doors now carry through to chat. The panel is still there — it is where
+   * verification reports itself, and where the one question a connection really
+   * does settle is asked when it is really a question.
+   */
   const autoConnectAfterDiscovery = useRef(false);
   const [candidate, setCandidate] = useState<Candidate>();
   const [modelId, setModelId] = useState("");
+  /*
+   * What Chutes can embed with, read on the same press that reads the model
+   * catalog. `undefined` means the question has not been answered yet, which is
+   * why the automatic connect leg waits for it: connecting past an unanswered
+   * count would decide by racing.
+   */
+  const [embeddingOffer, setEmbeddingOffer] = useState<EmbeddingOffer>();
+  /** The embedding deployment this connection will index against, when asked. */
+  const [embeddingModelId, setEmbeddingModelId] = useState("");
   const [detectedKind, setDetectedKind] = useState<ChutesCredentialKind>();
   // Whether anything has been typed at all, kept separate from what it parsed
   // as: without it, "nothing entered" and "entered and not recognised" collapse
@@ -402,6 +477,7 @@ export function AccessView({
     if (!isChutesConnected(connection)) return;
     clearEphemeral();
     setCandidate(undefined);
+    setEmbeddingOffer(undefined);
     setDetectedKind(undefined);
     setStrictProof(false);
   }, [connection.kind]);
@@ -450,6 +526,38 @@ export function AccessView({
     });
   }
 
+  /**
+   * Record what the embedding catalog answered, and pick only if nobody must.
+   *
+   * One deployment is adopted outright: there is no decision in a set of one,
+   * and manufacturing a step for it is the interrogation this route is losing.
+   * Two or more are pre-set to the deployment the indexing side would have
+   * resolved unaided, so the step below opens on the answer it would otherwise
+   * have taken silently — and the person changes it, or does not.
+   */
+  async function adoptEmbeddingOffer(offer: EmbeddingOffer): Promise<void> {
+    setEmbeddingOffer(offer);
+    const preferred = offer.state === "adopted"
+      ? offer.model
+      : offer.state === "choose"
+        ? automaticEmbeddingPick(offer.models)
+        : undefined;
+    setEmbeddingModelId(preferred?.id ?? "");
+    if (!preferred) return;
+    await recordEmbeddingChoice(preferred.id);
+  }
+
+  /** Hand the indexing side the id, so what is shown is what an index uses. */
+  async function recordEmbeddingChoice(id: string): Promise<void> {
+    const { writeConfidentialEmbeddingChoice } = await import("../indexing/confidential-embedding-choice");
+    writeConfidentialEmbeddingChoice(id);
+  }
+
+  function chooseEmbeddingModel(id: string): void {
+    setEmbeddingModelId(id);
+    void recordEmbeddingChoice(id);
+  }
+
   async function discoverCredential(
     rawCredential: string,
     tokenSource?: () => string | Promise<string>,
@@ -467,6 +575,7 @@ export function AccessView({
     setLastAttempt(NO_CREDENTIAL_ATTEMPT);
     setOauthConnectRetry(false);
     setCandidate(undefined);
+    setEmbeddingOffer(undefined);
     clearEphemeral();
     // Where this attempt starts in the egress record, so a failure can report
     // what *this* press sent rather than what some earlier press did.
@@ -507,7 +616,16 @@ export function AccessView({
       }
       setStatus("Chutes accepted the key. Discovering encrypted-inference models available to this connection…");
       const catalogClient = new ModelCatalogClient({ includeManagement: true, timeoutMs: 20_000 });
-      const snapshot = await catalogClient.load({ signal: controller.signal, forceRefresh: true });
+      /*
+       * Both catalogs on one press. The embedding read is anonymous and
+       * independent, so pairing it here costs the journey nothing and means the
+       * connect leg never has to guess whether there is a choice to offer.
+       */
+      const [snapshot, offer] = await Promise.all([
+        catalogClient.load({ signal: controller.signal, forceRefresh: true }),
+        askEmbeddingOffer(controller.signal),
+      ]);
+      await adoptEmbeddingOffer(offer);
       const compatibleModels = filterModels(snapshot.models, {
         confidentialCompute: "required",
         requireE2eeCandidate: true,
@@ -550,7 +668,6 @@ export function AccessView({
         sourceComplete: snapshot.complete,
         managementState: snapshot.sources.management,
         issues: snapshot.issues,
-        ...(selection.model ? { recommendedModelId: selection.model.id } : {}),
       }));
       setModelId(selection.model?.id ?? compatibleModels[0]!.id);
       setDetectedKind(credential.kind);
@@ -588,6 +705,10 @@ export function AccessView({
   async function discover() {
     const input = credentialInput.current;
     if (!input) return;
+    // A pasted key is a decision already made, exactly like a returning
+    // redirect: the person went and got a credential and typed it in. What
+    // follows is verification, not choice, so it carries itself through.
+    autoConnectAfterDiscovery.current = true;
     await discoverCredential(input.value);
   }
 
@@ -617,9 +738,19 @@ export function AccessView({
   useEffect(() => {
     if (!autoConnectAfterDiscovery.current) return;
     if (busy || !candidate || !modelId) return;
+    /*
+     * The one thing that may stop a connection short of chat: a real choice.
+     *
+     * Two or more usable embedding deployments means the index a corpus is
+     * built into would otherwise be settled by whichever one happened to be
+     * warm. One, none, or an unanswerable catalog are not choices, and none of
+     * them produces a step.
+     */
+    if (!embeddingOffer) return;
     autoConnectAfterDiscovery.current = false;
+    if (embeddingOffer.state === "choose") return;
     void activate();
-  }, [candidate, modelId, busy]);
+  }, [candidate, modelId, busy, embeddingOffer]);
 
   async function activate() {
     const credential = ephemeralCredential.current;
@@ -771,7 +902,6 @@ export function AccessView({
         sourceComplete: snapshot.complete,
         managementState: snapshot.sources.management,
         issues: snapshot.issues,
-        ...(selection.model ? { recommendedModelId: selection.model.id } : {}),
       }));
       if (!models.some((model) => model.id === modelId)) setModelId(selection.model?.id ?? models[0]!.id);
       setStatus(snapshot.sources.management === "fresh"
@@ -789,6 +919,7 @@ export function AccessView({
   function chooseDifferentCredential() {
     clearEphemeral();
     setCandidate(undefined);
+    setEmbeddingOffer(undefined);
     setDetectedKind(undefined);
     setStrictProof(false);
     setStatus(undefined);
@@ -1190,27 +1321,56 @@ export function AccessView({
                 </Popover>
               </div>
               {/*
-                Row 2: the task, and only the task. `Model · privacy-first
-                recommendation` was a 22px label floating above the control; the
-                recommendation travels inside the trigger. The four catalogue
-                tiles that used to sit *beside* this control — availability,
-                context, input/output and trust readiness, all four captions
-                included — now render inside it via `attachFacts`, so the
-                evidence about a model moves when the model does, and every row
-                in the open list carries its own availability and trust
-                readiness for comparison before a choice is made.
+                Row 2: the one question a connection actually settles, and only
+                when it is a question.
+
+                What stood here was a chat-model picker — `Model`, with the
+                whole catalogue's availability, context, modality and trust
+                facts attached — as a gate on finishing the connection. The chat
+                model is a control in the chat header, changeable per
+                conversation and reversible in one press, so requiring it here
+                asked for a decision at the moment a person knows least and is
+                paying the most friction, and the same control 340px lower in
+                the connected summary could already correct it. The picker is
+                not deleted; it is where it belongs, and this route stops
+                interviewing people on the way to a chat.
+
+                What replaces it appears only when Chutes publishes two or more
+                usable embedding deployments. That number is read from Chutes on
+                the same press as the model catalogue — it is not written down
+                here, and it changes without this repository being touched.
               */}
-              <label class="candidate-model">
-                <span>Model</span>
-                <ModelPicker
-                  value={modelId}
-                  models={candidate.models}
-                  onSelect={setModelId}
-                  disabled={busy}
-                  attachFacts
-                  {...(candidate.recommendedModelId ? { recommendedModelId: candidate.recommendedModelId } : {})}
-                />
-              </label>
+              {embeddingOffer?.state === "choose" ? (
+                <fieldset class="candidate-embedding">
+                  <legend>Embedding model</legend>
+                  <p class="candidate-embedding__why">
+                    Chutes publishes {embeddingOffer.models.length} embedding deployments this build can
+                    use, so this one is a choice rather than a fact. It is the model your workspace
+                    index is built against if you turn on confidential embeddings — the chat model is
+                    chosen in the chat header, not here.
+                  </p>
+                  <div class="candidate-embedding__options" role="group" aria-label="Chutes embedding deployment">
+                    {embeddingOffer.models.map((model) => (
+                      <button
+                        key={model.id}
+                        type="button"
+                        class={embeddingModelId === model.id ? "selected" : ""}
+                        aria-pressed={embeddingModelId === model.id}
+                        disabled={busy}
+                        onClick={() => chooseEmbeddingModel(model.id)}
+                      >
+                        <strong>{model.id}</strong>
+                        {/*
+                          Warm or cold, because that is the difference the first
+                          index build will feel — and because it is the fact the
+                          automatic pick was silently deciding on.
+                        */}
+                        <small>{model.hot ? "Running now" : "Cold · the first request pays a scale-up"}</small>
+                      </button>
+                    ))}
+                  </div>
+                </fieldset>
+              ) : null}
               <div class="candidate-decision">
                 <ProofPolicyControl strict={strictProof} onChange={setStrictProof} />
               </div>

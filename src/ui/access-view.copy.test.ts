@@ -457,12 +457,47 @@ describe("the catalog enrichment retry is offered in the state it is a retry for
   });
 });
 
-describe("the model metadata is inside the picker, not beside it", () => {
-  it("hands the picker the facts instead of restating them in a parallel grid", () => {
-    expect(source).toContain("attachFacts");
+describe("connecting does not interview the person doing it", () => {
+  /*
+   * AMENDED. This described a fix one rung down: the four catalogue tiles that
+   * used to sit *beside* the candidate's chat-model picker moved inside it via
+   * `attachFacts`, so the evidence about a model travelled with the model. The
+   * step itself has now gone. A chat model is a control in the chat header,
+   * changeable per conversation and correctable in one press from the connected
+   * summary, so requiring one before a connection could finish asked for a
+   * decision at the moment a person knows least — and the parallel grid this
+   * test was written to forbid cannot come back to a step that no longer runs.
+   */
+  it("does not gate the connection on a chat model, or restate its facts anywhere", () => {
+    expect(source).not.toContain("attachFacts");
+    expect(source).not.toContain('class="candidate-model"');
     expect(source).not.toContain("ModelCandidateSummary");
     expect(source).not.toContain("model-candidate-summary");
     expect(styles).not.toContain("model-candidate-summary");
+    expect(styles).not.toContain(".candidate-model");
+    // The model the connection pins is still discovered rather than assumed —
+    // it is the catalog's own recommendation, taken without asking.
+    expect(source).toContain("setModelId(selection.model?.id ?? compatibleModels[0]!.id);");
+  });
+
+  it("carries a pasted key through to chat exactly as a returning redirect is", () => {
+    // One flag, set on both doors. The OAuth leg already did this; the key leg
+    // stopped at a chooser, which is the asymmetry that made pasting a key the
+    // longer journey.
+    const discover = source.slice(source.indexOf("async function discover()"));
+    expect(discover.slice(0, discover.indexOf("\n  }"))).toContain("autoConnectAfterDiscovery.current = true;");
+  });
+
+  it("asks about the embedding model only when Chutes published a choice", () => {
+    // The count is read, never written down: `askEmbeddingOffer` branches on
+    // `catalog.models.length`, and nothing in this file names a number of
+    // models or a model id.
+    expect(source).toContain("if (catalog.models.length === 0) return Object.freeze({ state: \"none\" as const });");
+    expect(source).toContain("if (catalog.models.length === 1) return Object.freeze({ state: \"adopted\" as const, model: catalog.models[0]! });");
+    expect(source).toContain('{embeddingOffer?.state === "choose" ? (');
+    // Zero, one, and an unanswerable catalog all connect. Only a real choice
+    // holds the journey, and it holds it by returning before `activate()`.
+    expect(source).toContain('if (embeddingOffer.state === "choose") return;');
   });
 });
 

@@ -19,26 +19,25 @@ test("a catalog-declared vision model receives an encrypted inline image", async
   await page.getByLabel("Chutes API key").fill(credential!);
   await page.getByRole("button", { name: "Discover models with key" }).click();
 
-  const candidate = page.locator(".connection-candidate");
-  await expect(candidate).toBeVisible({ timeout: 30_000 });
-  const candidatePicker = candidate.locator(".model-picker-trigger");
-  await expect(candidatePicker).toBeEnabled({ timeout: 30_000 });
-  await candidatePicker.click();
+  /*
+   * AMENDED for a route that stopped interviewing people. Entering a key used
+   * to open a chat-model chooser that had to be answered before the connection
+   * would finish; it now carries itself through to a conversation, and the chat
+   * model is chosen where it belongs — the chat header, per conversation.
+   *
+   * connectChutes navigates to Chat itself. Do not use page.goto here: a
+   * document reload must erase Airship's memory-only credential by design.
+   */
+  await expect(page).toHaveURL(/#chat\/[^/?#]+$/u, { timeout: 60_000 });
+
+  await page.locator(".model-picker-trigger").first().click();
   const picker = page.getByRole("dialog", { name: "Choose a Chutes model" });
   await picker.getByRole("searchbox", { name: "Search models" }).fill(visionModel);
   const option = picker.getByRole("option").filter({ hasText: visionModel }).first();
   await expect(option).toContainText(/Tools/i, { timeout: 15_000 });
   await expect(option).toContainText(/confidential candidate/i);
   await option.click();
-  const proofPolicy = page.getByRole("group", { name: "Turn proof policy" });
-  const verifyAndRecord = proofPolicy.getByRole("button", { name: /^Verify & record Recommended\./ });
-  await expect(verifyAndRecord).toHaveAttribute("aria-pressed", "true");
-  await page.getByRole("button", { name: "Finish: verify & connect" }).click();
-  await expect(page.getByText("Chutes API key · direct session").first()).toBeVisible({ timeout: 60_000 });
-
-  // connectChutes already navigates to Chat. Do not use page.goto here: a
-  // document reload must erase Airship's memory-only credential by design.
-  await expect(page).toHaveURL(/#chat\/[^/?#]+$/u);
+  await expect(page).toHaveURL(/#chat\/[^/?#]+$/u, { timeout: 60_000 });
   const input = page.locator('input[type="file"][accept="image/*"]');
   await input.setInputFiles({
     name: "airship-vision-smoke.png",

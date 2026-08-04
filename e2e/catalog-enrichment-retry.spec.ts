@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { mlKem768EncapsulationKey } from "./support/chutes-e2ee-key";
 
 /**
  * The recovery journey for a failed management read, end to end in a browser.
@@ -15,6 +16,14 @@ import { expect, test, type Page } from "@playwright/test";
  * count are all render, so it is asserted here rather than in a source test.
  * The management endpoint refuses once and succeeds on the retry, which is
  * exactly the sequence the old gate made unrecoverable.
+ *
+ * AMENDED for a route that no longer interviews people. Entering a key used to
+ * park on a chat-model chooser, which is where this journey stood while it
+ * pressed the retry; a key now carries itself through to a conversation. The
+ * one thing that still holds the connect stage open is a genuine choice — two
+ * published embedding deployments — so that is the state this journey runs in,
+ * and the availability facts it is about are read from the model picker where
+ * they now live: the connected summary, after the connection exists.
  */
 
 const HOT_CHUTE = "chute-hot-0001";
@@ -54,8 +63,8 @@ async function openProvenance(page: Page) {
   return popover;
 }
 
-async function hotFacetText(page: Page): Promise<string> {
-  const picker = page.locator(".candidate-model .model-picker");
+async function hotFacetText(page: Page, scope: string): Promise<string> {
+  const picker = page.locator(`${scope} .model-picker`);
   if ((await picker.getAttribute("data-open")) !== "true") {
     await picker.locator("button.model-picker-trigger").click();
   }
@@ -122,6 +131,60 @@ test("a refused management read is recoverable, and the recovery restores the av
       });
     },
   );
+  /*
+   * Two published embedding deployments, which is the only state in which the
+   * connect stage waits for a person at all. It waits because that *is* a
+   * choice: with one, or none, the route adopts and carries on to chat.
+   */
+  await page.route(
+    (url) => url.hostname === "api.chutes.ai" && url.pathname === "/chutes/"
+      && new URL(url.href).searchParams.get("template") === "embedding",
+    async (route) => {
+      const deployment = (chuteId: string, name: string, hot: boolean) => ({
+        chute_id: chuteId,
+        name,
+        slug: name,
+        standard_template: "embedding",
+        cord_ref_id: "cord-ref-1",
+        public: true,
+        tee: true,
+        hot,
+      });
+      await route.fulfill({
+        json: {
+          total: 2,
+          items: [deployment("chute-embed-a", "Journey/Embedding-A-TEE", true), deployment("chute-embed-b", "Journey/Embedding-B-TEE", false)],
+          cord_refs: {
+            "cord-ref-1": [
+              { path: "/embed", method: "POST", stream: false, function: "embed", public_api_path: "/v1/embeddings", public_api_method: "POST" },
+            ],
+          },
+        },
+      });
+    },
+  );
+
+  /*
+   * The E2EE endpoint discovery `verifyModelAccess` performs before the route
+   * will call a connection made. This journey now finishes the connection, so
+   * the facts it is about can be read from the picker they ended up in.
+   */
+  await page.route(
+    (url) => url.hostname === "api.chutes.ai" && url.pathname.startsWith("/e2e/instances/"),
+    async (route) => {
+      await route.fulfill({
+        json: {
+          instances: [{
+            instance_id: "instance-enrichment-journey",
+            e2e_pubkey: mlKem768EncapsulationKey(),
+            nonces: ["one_time_nonce_value_0001", "one_time_nonce_value_0002"],
+          }],
+          nonce_expires_in: 60,
+          nonce_expires_at: Math.floor(Date.now() / 1_000) + 60,
+        },
+      });
+    },
+  );
 
   await page.goto("/#connection");
   await expect(page.getByRole("heading", { name: "Connection", exact: true, level: 1 })).toBeVisible();
@@ -146,7 +209,7 @@ test("a refused management read is recoverable, and the recovery restores the av
   // than pinned to 1 — the guarantee is that pressing the control issues one
   // more read, and the state it recovers from is asserted from the rendered
   // provenance, not from the counter.
-  await expect(page.locator(".candidate-model")).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".candidate-embedding")).toBeVisible({ timeout: 30_000 });
   const readsBeforeRetry = managementReads;
   expect(readsBeforeRetry).toBeGreaterThanOrEqual(1);
 
@@ -155,10 +218,6 @@ test("a refused management read is recoverable, and the recovery restores the av
   const retry = provenance.getByRole("button", { name: "Load live availability metadata" });
   await expect(retry).toBeVisible();
   await expect(retry).toBeEnabled();
-
-  // Nothing was read about availability, so nothing claims it: the Hot facet is
-  // the count that used to be permanently zero.
-  expect(await hotFacetText(page)).toBe("Hot0");
 
   await (await openProvenance(page)).getByRole("button", { name: "Load live availability metadata" }).click();
 
@@ -171,7 +230,17 @@ test("a refused management read is recoverable, and the recovery restores the av
   await expect(settled.getByText("Inference + management metadata loaded")).toBeVisible();
   await expect(settled.getByRole("button", { name: "Load live availability metadata" })).toHaveCount(0);
 
-  // And the fact the failed read had deleted is back: one of the two chutes is
-  // hot, and the picker can now say so.
-  expect(await hotFacetText(page)).toBe("Hot1");
+  // And the fact the failed read had deleted is back. The picker that can say
+  // so is the connected summary's, so the connection is finished first — which
+  // also proves the enriched list is the one the connection carries.
+  await page.getByRole("button", { name: "Finish: verify & connect" }).click();
+  await expect(page).toHaveURL(/#chat\/[^/?#]+$/u, { timeout: 60_000 });
+  await page.goto("/#connection");
+  await page.keyboard.press("Escape");
+  const connected = page.locator('.connect-lane[data-lane="chutes"]');
+  if ((await connected.getAttribute("data-open")) !== "true") {
+    await connected.locator("button.connect-lane__header").click();
+  }
+  await expect(page.locator(".active-connection-summary")).toBeVisible({ timeout: 30_000 });
+  expect(await hotFacetText(page, ".active-connection-summary")).toBe("Hot1");
 });

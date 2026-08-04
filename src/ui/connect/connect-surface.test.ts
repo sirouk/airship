@@ -105,6 +105,29 @@ describe("lane rows", () => {
     // Openness is a per-card prop, never a reason not to render a card.
     expect(source).toContain("open={openLane === lane.id}");
   });
+
+  /*
+   * "The first lane that is not connected" reads as helpfulness and behaves as
+   * an interrogation. Connect Chutes and the surface unfolded OpenAI at you;
+   * close that and it unfolded Anthropic. Each of those panels is a vendor
+   * asking for a credential nobody went looking for.
+   */
+  it("lets only the lane a new arrival needs open itself", () => {
+    expect(source).toContain('const chutesLane = lanes.find((entry) => entry.id === "chutes");');
+    expect(source).toContain('const leadLane = chutesLane && chutesLane.status.kind !== "connected" ? chutesLane.id : undefined;');
+    // Nothing selects a default by position, which is how every other vendor
+    // inherited the open state the moment the one before it connected.
+    expect(source).not.toContain('lanes.find((entry) => entry.status.kind !== "connected")');
+    expect(source).not.toContain("lanes[0]?.id");
+  });
+
+  it("lets a lane that opened itself be closed and stay closed", () => {
+    // `undefined` means "nobody has chosen", so closing the default lane by
+    // writing `undefined` handed it straight back to the default — a
+    // disclosure that reopened itself on the press that closed it.
+    expect(source).toContain('const [chosenLane, setChosenLane] = useState<ConnectLaneId | "none">();');
+    expect(source).toContain('setChosenLane(openLane === lane.id ? "none" : lane.id)');
+  });
 });
 
 describe("one name per fact inside a lane", () => {

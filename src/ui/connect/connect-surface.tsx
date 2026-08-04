@@ -130,10 +130,29 @@ export function ConnectSurface({
   // model's own connected state unreachable. It also called the hook below
   // after an early return, which is a hook-order violation the moment the first
   // provider connects.
-  const leadLane = lanes.find((entry) => entry.status.kind !== "connected")?.id ?? lanes[0]?.id;
-  const [chosenLane, setChosenLane] = useState<ConnectLaneId>();
-  // Until someone chooses, the open lane follows the best available route, so
-  // a cold visitor lands already inside a path that works.
+  /*
+   * At most one lane opens itself, and only the one a new arrival needs.
+   *
+   * The rule used to be "the first lane that is not connected", which reads as
+   * helpfulness and behaves as an interrogation: connect Chutes and the surface
+   * immediately unfolded OpenAI at you; dismiss that and it unfolded Anthropic.
+   * Every one of those panels is a vendor asking for a credential nobody went
+   * looking for, and a person who has just connected has finished, not started.
+   *
+   * The exception is the path that has no alternative: with no Chutes
+   * connection yet there is nothing else on this route to be doing, so that one
+   * lane may start open. Once it is connected, nothing opens by itself — the
+   * whole list is still there, one press away, in the order the lane model
+   * already ranks it.
+   */
+  const chutesLane = lanes.find((entry) => entry.id === "chutes");
+  const leadLane = chutesLane && chutesLane.status.kind !== "connected" ? chutesLane.id : undefined;
+  /*
+   * `"none"` is a choice, not the absence of one. Without it, closing the lane
+   * that opened itself set the state back to "no choice yet" and the default
+   * immediately reopened it — a disclosure that could not be closed.
+   */
+  const [chosenLane, setChosenLane] = useState<ConnectLaneId | "none">();
   const openLane = chosenLane ?? leadLane;
 
   return (
@@ -144,7 +163,7 @@ export function ConnectSurface({
             key={lane.id}
             lane={lane}
             open={openLane === lane.id}
-            onToggle={() => setChosenLane(openLane === lane.id ? undefined : lane.id)}
+            onToggle={() => setChosenLane(openLane === lane.id ? "none" : lane.id)}
           >
             {lane.id === "chutes" ? chutesPanel : null}
             {lane.id === "codex" ? (

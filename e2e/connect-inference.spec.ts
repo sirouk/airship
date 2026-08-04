@@ -489,8 +489,16 @@ test("every lane is reachable by keyboard alone", async ({ page }, testInfo) => 
     const isHeader = await page.evaluate(() => document.activeElement?.classList.contains("connect-lane__header") ?? false);
     if (lane && isHeader) {
       reached.add(lane);
+      const card = page.locator(`.connect-lane[data-lane="${lane}"]`);
+      // AMENDED: the assertion was `data-open="true"`, which passed for the
+      // wrong reason. Only one lane may open itself now — the Chutes lane, and
+      // only while there is no Chutes connection — and pressing Enter on the
+      // one that is already open closes it. It used to reopen, because closing
+      // wrote "nobody has chosen" and the default was read again. What the
+      // keyboard owes each row is that Enter *acts*, so that is what is checked.
+      const before = await card.getAttribute("data-open");
       await page.keyboard.press("Enter");
-      await expect(page.locator(`.connect-lane[data-lane="${lane}"]`)).toHaveAttribute("data-open", "true");
+      await expect(card).toHaveAttribute("data-open", before === "true" ? "false" : "true");
     }
     await page.keyboard.press("Tab");
   }

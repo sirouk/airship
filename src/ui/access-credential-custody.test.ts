@@ -143,7 +143,13 @@ describe("an unproven key never wears a proven credential's sentence", () => {
   it("keeps 'direct session' for the connection and not for the candidate", () => {
     expect(source).toContain('<Seal state="asserted" density="chip" label={candidateCredentialLabel(candidate.credentialKind)} />');
     expect(source).toContain('"Chutes API key · not authorized yet"');
-    const candidateBlock = source.slice(source.indexOf('<div class="candidate-identity">'), source.indexOf('class="candidate-model"'));
+    // AMENDED: the identity row's lower boundary used to be the chat-model
+    // picker that gated this panel. That picker is gone — the chat model is
+    // chosen in the chat header, not as a toll on connecting — so the block
+    // now ends where the panel's decisions begin. The claim under test is
+    // unchanged: nothing between the seal and the decisions may wear the
+    // connected summary's sentence.
+    const candidateBlock = source.slice(source.indexOf('<div class="candidate-identity">'), source.indexOf('<div class="candidate-decision">'));
     // No padlock: a lock glyph is a security claim, and this row has no
     // security fact to report yet.
     expect(candidateBlock).not.toContain('name="lock"');

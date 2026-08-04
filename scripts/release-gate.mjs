@@ -173,7 +173,21 @@ export const RELEASE_BUDGETS = Object.freeze({
   // is all behind `context-route.tsx`'s dynamic import, and the one eager line
   // is still the dependency-free writer described above, which now hands over a
   // capability instead of a token and is no larger for it.
-  deferredCapabilities: Object.freeze({ raw: 422 * 1024, gzip: 125 * 1024 }),
+  //
+  // The Connection route then stopped interviewing people, and that is what
+  // this reading pays for. Entering a credential used to park on a chat-model
+  // chooser that had to be answered before a connection would finish; it now
+  // carries itself through to a conversation, and the one question left is asked
+  // only when Chutes has published more than one usable embedding deployment —
+  // a count read from the management catalog on the same press, never written
+  // down here. The pack gained that discovery call, the offer states it can be
+  // in, and the step that renders when there is genuinely something to choose;
+  // it gave back the candidate stage's picker. Measured 433,115 B raw /
+  // 128,056 B gzip. Gzip takes the tightest whole-KiB step above that reading,
+  // 126 KiB, which leaves 968 bytes. Raw takes the second, 424 KiB, and the
+  // reason is stated rather than assumed: 423 KiB raw would have left 37 bytes,
+  // and this file does not accept a ceiling a minifier rename could breach.
+  deferredCapabilities: Object.freeze({ raw: 424 * 1024, gzip: 126 * 1024 }),
   // Core plus every optional route except the two independently delivered
   // vendor engines. The former 384 KiB "all routes" meaning became impossible
   // once full isomorphic-git and xterm engines were deliberately installed:
@@ -402,7 +416,19 @@ export const RELEASE_BUDGETS = Object.freeze({
   // reading past that: measured 2058.06 KiB raw / 651.99 KiB gzip. Raw takes
   // one whole-KiB step; gzip is untouched, because the same work compresses
   // into the 1,229 bytes the step above already left it.
-  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2059 * 1024, gzip: 653 * 1024 }),
+  //
+  // The Connection route's de-interrogation carries the partition once more,
+  // and again all of it is deferred: the connect stage gained the embedding
+  // discovery call and the step it renders only when Chutes has published a
+  // real choice, and the two dependency-free modules that carry that question
+  // became their own shared pack — `optionalConfidentialEmbedding` below —
+  // because the connect route and the context runtime both ask it and neither
+  // may drag the other's graph across a pack boundary. Splitting them out costs
+  // the cross-chunk compression they used to get inside the context pack, which
+  // is most of the gzip movement here. Measured 2061.06 KiB raw / 654.25 KiB
+  // gzip; both ceilings take the tightest whole-KiB step above that reading.
+  // `entryJavaScript` is untouched — nothing eager moved.
+  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2062 * 1024, gzip: 655 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now measures 672.33 KiB raw / 186.61 KiB gzip:
   // the browser-Git pack grew (see optionalBrowserGit) and the Terminal pack
@@ -520,7 +546,15 @@ export const RELEASE_BUDGETS = Object.freeze({
   // The shell repairs recorded against `entryJavaScript` carry through the same
   // way: measured 2734.46 KiB raw / 839.72 KiB gzip. Raw takes one whole-KiB
   // step; gzip is untouched, still inside the 1,321 bytes the step above left.
-  totalJavaScriptAndWorkers: Object.freeze({ raw: 2735 * 1024, gzip: 841 * 1024 }),
+  // The Connection route's de-interrogation carries into the installed
+  // aggregate exactly as it lands in the first-party partition above; the vendor
+  // pins are unchanged, so all of the growth is weight already reviewed there —
+  // an embedding question asked only when Chutes published a choice, and the two
+  // dependency-free modules that carry it becoming their own shared pack.
+  // Measured 2737.47 KiB raw / 842.17 KiB gzip; both take the smallest
+  // whole-KiB step above that reading. Nothing eager moved and the entry
+  // ceiling is untouched.
+  totalJavaScriptAndWorkers: Object.freeze({ raw: 2738 * 1024, gzip: 843 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. Keep it visible under a dedicated, deliberately small cap.
   serviceWorker: Object.freeze({ raw: 12 * 1024, gzip: 4 * 1024 }),
@@ -924,6 +958,14 @@ export const RELEASE_BUDGETS = Object.freeze({
   // Model catalog + utilization normalization is loaded only when provider
   // discovery opens and is enforced separately from the interactive app.
   optionalModelCatalog: Object.freeze({ raw: 33 * 1024, gzip: 12 * 1024 }),
+  // Which chutes can embed, and which one was chosen. Two modules with no
+  // imports at all, shared by the Connection route (which asks whether there is
+  // an embedding choice to hand over) and the context runtime (which resolves
+  // one). They are their own pack because that sharing is the point: a static
+  // import from either side would drag the other's graph across a pack
+  // boundary, which is the same reason `confidential-authority.ts` exists.
+  // Measured 2.96 KiB raw / 1.60 KiB gzip.
+  optionalConfidentialEmbedding: Object.freeze({ raw: 6 * 1024, gzip: 3 * 1024 }),
   // Multi-provider connection UI, page-lifetime provider fabric, credential-
   // free route contracts, and cloud transport adapters load with the
   // Connection route/runtime bootstrap. They are deliberately absent from the
@@ -1675,6 +1717,13 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
     throw new Error(`Production must contain exactly three optional model-catalog packs; found ${optionalModelCatalogPacks.length}.`);
   }
   const optionalModelCatalogMeasurement = sumMeasurements(optionalModelCatalogPacks.map((file) => measure(file.payload)));
+  const optionalConfidentialEmbeddingPacks = javaScriptFiles.filter((file) => isOptionalConfidentialEmbeddingPath(file.path));
+  if (optionalConfidentialEmbeddingPacks.length !== 2) {
+    throw new Error(`Production must contain exactly two confidential-embedding discovery chunks; found ${optionalConfidentialEmbeddingPacks.length}.`);
+  }
+  const optionalConfidentialEmbeddingMeasurement = sumMeasurements(
+    optionalConfidentialEmbeddingPacks.map((file) => measure(file.payload)),
+  );
   // Six since the extension-bridge client became shared: the Connect surface
   // observes bridge presence with the same client the provider transports use,
   // so Rollup emits it once instead of embedding it in the session route.
@@ -1761,6 +1810,7 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
       && !isOptionalTerminalPath(file.path)
       && !isOptionalSemanticWorkerPath(file.path)
       && !isOptionalModelCatalogPath(file.path)
+      && !isOptionalConfidentialEmbeddingPath(file.path)
       && !isOptionalInferenceProviderPath(file.path)
       && !isOptionalChutesOAuthPath(file.path)
       && !isOptionalExtensionObservationPath(file.path)
@@ -1843,6 +1893,7 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
       { name: "terminal-vendor", paths: optionalTerminalPacks.map((file) => file.path) },
       { name: "semantic-worker", paths: optionalSemanticWorkerPacks.map((file) => file.path) },
       { name: "model-catalog", paths: optionalModelCatalogPacks.map((file) => file.path) },
+      { name: "confidential-embedding", paths: optionalConfidentialEmbeddingPacks.map((file) => file.path) },
       { name: "inference-providers", paths: optionalInferenceProviderPacks.map((file) => file.path) },
       { name: "chutes-oauth", paths: optionalChutesOAuthPacks.map((file) => file.path) },
       { name: "extension-observation", paths: optionalExtensionObservationPacks.map((file) => file.path) },
@@ -1960,6 +2011,11 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
   );
   assertWithinBudget("Optional Terminal", optionalTerminalMeasurement, RELEASE_BUDGETS.optionalTerminal);
   assertWithinBudget("Optional semantic worker", optionalSemanticWorkerMeasurement, RELEASE_BUDGETS.optionalSemanticWorker);
+  assertWithinBudget(
+    "Optional confidential-embedding discovery",
+    optionalConfidentialEmbeddingMeasurement,
+    RELEASE_BUDGETS.optionalConfidentialEmbedding,
+  );
   assertWithinBudget(
     "Optional model catalog",
     optionalModelCatalogMeasurement,
@@ -2177,6 +2233,10 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
       optionalModelCatalog: Object.freeze({
         paths: Object.freeze(optionalModelCatalogPacks.map((file) => file.path)),
         ...optionalModelCatalogMeasurement,
+      }),
+      optionalConfidentialEmbedding: Object.freeze({
+        paths: Object.freeze(optionalConfidentialEmbeddingPacks.map((file) => file.path)),
+        ...optionalConfidentialEmbeddingMeasurement,
       }),
       optionalInferenceProviders: Object.freeze({
         paths: Object.freeze(optionalInferenceProviderPacks.map((file) => file.path)),
@@ -2524,6 +2584,10 @@ export function isOptionalModelCatalogPath(path) {
   // dynamically imported by both, so it fetches with the catalog it renders and
   // never at first paint.
   return /^assets\/(?:client-runtime|telemetry|model-picker)-[A-Za-z0-9_-]+\.js$/u.test(path);
+}
+
+export function isOptionalConfidentialEmbeddingPath(path) {
+  return /^assets\/(?:chutes-embedding-catalog|confidential-embedding-choice)-[A-Za-z0-9_-]+\.js$/u.test(path);
 }
 
 export function isOptionalInferenceProviderPath(path) {

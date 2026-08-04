@@ -223,7 +223,11 @@ describe("release gate", () => {
       ["optionalMemoryView", "gzip: 21 * 1024", "gzip: 22 * 1024"],
       ["optionalProofSurface", "gzip: 28 * 1024", "gzip: 29 * 1024"],
       ["optionalWorkspaceWorkbench", "gzip: 25 * 1024", "gzip: 26 * 1024"],
-      ["deferredCapabilities", "gzip: 125 * 1024", "gzip: 126 * 1024"],
+      // AMENDED with the ceiling it names: `deferredCapabilities` gzip moved to
+      // 126 KiB when the Connection route stopped interviewing people, and that
+      // step is the tightest one above its recorded measurement — so the step
+      // this row grants without paying for it is now the one past it.
+      ["deferredCapabilities", "gzip: 126 * 1024", "gzip: 127 * 1024"],
     ]) {
       const raised = source.replace(new RegExp(`^  ${name}: .*$`, "mu"), (line) => line.replace(ceiling, granted));
       expect(raised, name).not.toBe(source);
