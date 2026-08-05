@@ -30,6 +30,7 @@ import { mlKem768EncapsulationKey } from "./support/chutes-e2ee-key";
 
 const CHUTE = "chute-header-0001";
 const MODEL = "zai-org/GLM-5.2-TEE";
+const ALTERNATE_MODEL = "moonshotai/Kimi-K2-Instruct-TEE";
 const E2E_PUBLIC_KEY = mlKem768EncapsulationKey();
 const PHONE = { width: 430, height: 932 };
 
@@ -71,7 +72,7 @@ async function mockChutes(page: Page): Promise<readonly string[]> {
         object: "list",
         // More than one, or the picker is disabled and the branch under test
         // never opens.
-        data: [inferenceModel(MODEL, CHUTE), inferenceModel("moonshotai/Kimi-K2-Instruct-TEE", "chute-header-0002")],
+        data: [inferenceModel(MODEL, CHUTE), inferenceModel(ALTERNATE_MODEL, "chute-header-0002")],
       },
     }),
   );
@@ -166,13 +167,132 @@ test.describe("connected chat header on a phone", () => {
 
     // The circular runtime glyph and the picker trigger are the two the owner
     // saw overlapping. They are siblings in one grid row and must not intersect.
+    /*
+     * Unconditionally. This read `if (rects) expect(…)`, so the one assertion
+     * about the overlap the owner drew a picture of was skipped — silently, and
+     * passing — for any tree where either element stopped being found. The
+     * file's first test already establishes that this is the picker branch, so
+     * both elements existing is the premise, not a hope.
+     */
     const rects = await page.locator(".session-bar .session-runtime").evaluate((node) => {
       const icon = node.querySelector(".session-runtime-icon")?.getBoundingClientRect();
       const trigger = node.querySelector(".model-picker-trigger")?.getBoundingClientRect();
-      return icon && trigger
-        ? { iconRight: icon.right, triggerLeft: trigger.left }
-        : undefined;
+      return { iconRight: icon?.right, triggerLeft: trigger?.left };
     });
-    if (rects) expect(rects.triggerLeft).toBeGreaterThanOrEqual(rects.iconRight - 0.5);
+    expect(typeof rects.iconRight).toBe("number");
+    expect(typeof rects.triggerLeft).toBe("number");
+    expect(rects.triggerLeft ?? 0).toBeGreaterThanOrEqual((rects.iconRight ?? 0) - 0.5);
+  });
+
+  /*
+   * The size, which is the half of the complaint this file never measured.
+   *
+   * "The model dropdown is like a TUMOR" is a claim about height, and every
+   * assertion above is about width, overlap and the accessibility tree — so a
+   * connected header measuring 197.1px of a 932px viewport passed all three.
+   * The cause was `model-picker.css`'s phone block letting the trigger wrap:
+   * `.session-bar .session-runtime` is capped at 32ch, so a 31-character model
+   * id broke to four lines, took the trigger to 146.1px and the session bar
+   * to 149.1px under a 48px topbar.
+   *
+   * The bounds are the geometry, not the sample. One 44px touch row plus the
+   * bar's own padding is 47px measured; 56px allows a density change to move it
+   * and still fails a second line. The header fraction is the number the review
+   * actually used, and 95/932 is 10.2%.
+   */
+  test("stays one row: a wrapping model id may not grow the header", async ({ page }) => {
+    await mockChutes(page);
+    await connectChutes(page);
+
+    const geometry = await page.evaluate(() => {
+      const topbar = document.querySelector(".topbar")?.getBoundingClientRect();
+      const bar = document.querySelector(".session-bar")?.getBoundingClientRect();
+      const trigger = document.querySelector(".session-bar .model-picker-trigger")?.getBoundingClientRect();
+      return {
+        barHeight: bar?.height,
+        triggerHeight: trigger?.height,
+        headerFraction: topbar && bar ? (bar.bottom - topbar.top) / window.innerHeight : undefined,
+      };
+    });
+
+    expect(geometry.barHeight).toBeLessThanOrEqual(56);
+    expect(geometry.triggerHeight).toBeLessThanOrEqual(48);
+    expect(geometry.headerFraction).toBeLessThanOrEqual(0.13);
+  });
+
+  test("keeps catalogue option focus on Search and restores the model trigger", async ({ page }) => {
+    await mockChutes(page);
+    await connectChutes(page);
+
+    const trigger = page.locator(".session-bar .model-picker-trigger");
+    await trigger.focus();
+    await trigger.press("Enter");
+
+    let picker = page.getByRole("dialog", { name: "Choose a Chutes model" });
+    let search = picker.getByRole("combobox", { name: "Search models" });
+    await expect(search).toBeFocused();
+    await expect(search).toHaveAttribute("aria-autocomplete", "list");
+    expect(await picker.getByRole("option").evaluateAll((options) => options.filter((option) => option.tabIndex >= 0).length)).toBe(0);
+
+    await search.fill("no-model-can-match-this-query");
+    await expect(picker.getByRole("status")).toHaveText("No matching models.");
+    await expect(search).toBeFocused();
+    await search.fill("");
+
+    const initial = await search.getAttribute("aria-activedescendant");
+    expect(initial).toBeTruthy();
+    await search.press("ArrowDown");
+    await expect(search).toBeFocused();
+    const next = await search.getAttribute("aria-activedescendant");
+    expect(next).toBeTruthy();
+    expect(next).not.toBe(initial);
+
+    const activeOption = picker.locator(`[id="${next!}"]`);
+    await expect(activeOption).toHaveAttribute("data-active", "true");
+    await expect(activeOption).toHaveAttribute("aria-selected", "true");
+    const chosenModel = (await activeOption.locator(".model-row-id").innerText()).trim();
+    await search.press("Enter");
+    await expect(picker).toHaveCount(0);
+    await expect(trigger).toContainText(chosenModel);
+
+    // Selecting a model deliberately creates a new pinned conversation, so
+    // that transition owns post-action focus. A cancellation changes nothing
+    // and therefore returns to the trigger that opened the picker.
+    await trigger.focus();
+    await trigger.press("Enter");
+    picker = page.getByRole("dialog", { name: "Choose a Chutes model" });
+    search = picker.getByRole("combobox", { name: "Search models" });
+    await expect(search).toBeFocused();
+    await search.press("Escape");
+    await expect(picker).toHaveCount(0);
+    await expect(trigger).toBeFocused();
+
+    // Removing options from the Tab sequence does not remove pointer choice.
+    const pointerModel = chosenModel === MODEL ? ALTERNATE_MODEL : MODEL;
+    await trigger.click();
+    picker = page.getByRole("dialog", { name: "Choose a Chutes model" });
+    await picker.getByRole("option").filter({ hasText: pointerModel }).click();
+    await expect(picker).toHaveCount(0);
+    await expect(trigger).toContainText(pointerModel);
+  });
+
+  test("commits a filled search when Enter beats the debounce", async ({ page }) => {
+    await mockChutes(page);
+    await connectChutes(page);
+
+    const trigger = page.locator(".session-bar .model-picker-trigger");
+    const currentModel = (await trigger.locator(".model-picker-value").innerText()).trim();
+    const targetModel = currentModel === MODEL ? ALTERNATE_MODEL : MODEL;
+    await trigger.click();
+
+    const picker = page.getByRole("dialog", { name: "Choose a Chutes model" });
+    const search = picker.getByRole("combobox", { name: "Search models" });
+    // `fill` models paste/autofill: one input event, then Enter before the
+    // picker's 140ms presentation debounce can publish the filtered rows.
+    await search.fill(targetModel);
+    await page.keyboard.press("Enter");
+
+    await expect(picker).toHaveCount(0);
+    await expect(trigger.locator(".model-picker-value")).toHaveText(targetModel, { timeout: 60_000 });
   });
 });

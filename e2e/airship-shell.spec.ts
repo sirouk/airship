@@ -409,6 +409,75 @@ test("mobile shell keeps primary destinations usable and exposes additional rout
   await capture(page, testInfo, "mobile-shell.png");
 });
 
+test("command palette keeps composite focus on its search field and restores its opener", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "desktop command palette keyboard contract");
+  await openReadyApp(page);
+
+  const opener = page.getByRole("button", { name: "Open command palette" });
+  await opener.focus();
+  await opener.press("Enter");
+
+  let palette = page.getByRole("dialog", { name: "Airship command palette" });
+  let search = palette.getByRole("combobox");
+  const close = palette.getByRole("button", { name: "Close command palette" });
+  await expect(search).toBeFocused();
+  await expect(search).toHaveAttribute("aria-autocomplete", "list");
+  expect(await palette.getByRole("option").evaluateAll((options) => options.filter((option) => option.tabIndex >= 0).length)).toBe(0);
+
+  // Results belong to the combobox's active-descendant model, so Tab reaches
+  // the dialog's real dismissal control instead of walking dozens of options.
+  await search.press("Tab");
+  await expect(close).toBeFocused();
+  await close.press("Enter");
+  await expect(palette).toHaveCount(0);
+  await expect(opener).toBeFocused();
+
+  await opener.press("Enter");
+  palette = page.getByRole("dialog", { name: "Airship command palette" });
+  search = palette.getByRole("combobox");
+  await expect(search).toBeFocused();
+  await search.press("Escape");
+  await expect(palette).toHaveCount(0);
+  await expect(opener).toBeFocused();
+
+  await opener.press("Enter");
+  palette = page.getByRole("dialog", { name: "Airship command palette" });
+  search = palette.getByRole("combobox");
+  await expect(search).toBeFocused();
+  await search.fill("no-command-can-match-this-query");
+  await expect(palette.getByRole("status")).toHaveText("No matching destination or command.");
+  await expect(search).toBeFocused();
+  await search.fill("Memory");
+  await expect(search).toHaveAttribute("aria-activedescendant", "palette-view-memory");
+  await search.press("ArrowDown");
+  await expect(search).toBeFocused();
+  await expect(search).toHaveAttribute("aria-activedescendant", "palette-view-context");
+  await expect(palette.getByRole("option", { name: /^Memory index/u })).toHaveAttribute("aria-selected", "true");
+  await search.press("Enter");
+  await expect(page).toHaveURL(/#context$/u);
+});
+
+test("mobile Command Center has an explicit touch dismissal and returns to More", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile-chromium", "mobile command palette contract");
+  await openReadyApp(page);
+
+  const more = page.getByRole("navigation", { name: "Mobile navigation" }).getByRole("button", { name: "More", exact: true });
+  await more.click();
+  await page.getByRole("dialog", { name: "More" }).getByRole("button", { name: /^Command Center/u }).click();
+
+  const palette = page.getByRole("dialog", { name: "Airship command palette" });
+  const close = palette.getByRole("button", { name: "Close command palette" });
+  await expect(close).toBeVisible();
+  const box = await close.boundingBox();
+  expect(box).not.toBeNull();
+  expect(Math.round(box!.width)).toBeGreaterThanOrEqual(44);
+  expect(Math.round(box!.height)).toBeGreaterThanOrEqual(44);
+
+  await close.click();
+  await expect(palette).toHaveCount(0);
+  await expect(more).toBeFocused();
+});
+
 test("profile-owned approval policy clearly switches new pinned conversations", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium", "desktop settings contract");
   test.setTimeout(60_000);

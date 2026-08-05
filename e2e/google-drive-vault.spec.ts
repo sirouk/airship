@@ -121,8 +121,12 @@ test("real browser UI adopts and recovers the encrypted Google Drive vault throu
   // the one in Airship's failure grammar. Both branches now render the Local
   // Device wording, so this journey clicks the same control by its one name.
   await page.getByRole("button", { name: "Switch to ephemeral · keep a page copy" }).click();
-  await expect(page.getByText("Disconnected", { exact: true })).toBeVisible({ timeout: 60_000 });
-  await expect(page.getByRole("heading", { name: "Connect your Google Drive" })).toBeVisible();
+  await expect(page.locator(".runtime-line__text")).toHaveText(
+    "Vault disconnected · active workspace continues in page memory",
+    { timeout: 60_000 },
+  );
+  await expect(page.getByText("Ephemeral · page memory only", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Choose a durable provider" })).toBeVisible();
   await expect(page.getByText("No endpoint, credential authority, or workspace key is attached.")).toBeVisible();
 
   expect(drive.authorizationHeaders.length).toBeGreaterThan(20);

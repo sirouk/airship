@@ -12,6 +12,12 @@ const ALPHA_WORKTREE = `/workspace/worktrees/${ALPHA_BRANCH}`;
 test("Profile is the primary A → B → A cockpit silo while global services stay global", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium", "one full desktop cockpit journey exercises every profile surface");
   test.setTimeout(90_000);
+  let stage = "boot";
+  const pageErrors: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push([
+    `${stage} · ${error.name}: ${error.message}`,
+    error.stack ?? "no stack",
+  ].join("\n")));
   await page.addInitScript(() => {
     localStorage.setItem("airship.display-preferences.v1", JSON.stringify({
       mode: "dark",
@@ -23,22 +29,34 @@ test("Profile is the primary A → B → A cockpit silo while global services st
       approvalMode: "full-access",
     }));
     (window as typeof window & { __airshipProfileLeaks?: string[] }).__airshipProfileLeaks = [];
-    new MutationObserver(() => {
-      const shell = document.querySelector<HTMLElement>(".app-shell");
-      if (!shell || document.querySelector(".profile-cockpit-transition")) return;
-      const profile = shell.dataset.activeProfile;
-      const sessionProfile = shell.dataset.sessionProfile;
-      if (profile && sessionProfile && profile !== sessionProfile) {
-        (window as typeof window & { __airshipProfileLeaks?: string[] }).__airshipProfileLeaks?.push(`${profile}:${sessionProfile}`);
-      }
-      const proofSession = shell.dataset.proofSession;
-      const mappedProofProfile = proofSession
-        ? (window as typeof window & { __airshipSessionProfiles?: Record<string, string> }).__airshipSessionProfiles?.[proofSession]
-        : undefined;
-      if (location.hash.startsWith("#proof") && profile && mappedProofProfile && mappedProofProfile !== profile) {
-        (window as typeof window & { __airshipProfileLeaks?: string[] }).__airshipProfileLeaks?.push(`proof:${profile}:${mappedProofProfile}`);
-      }
-    }).observe(document.documentElement, { subtree: true, childList: true, attributes: true });
+    const diagnostics = window as typeof window & { __airshipUnhandledReasons?: unknown[] };
+    diagnostics.__airshipUnhandledReasons = [];
+    addEventListener("unhandledrejection", (event) => {
+      const reason = event.reason as unknown;
+      diagnostics.__airshipUnhandledReasons?.push(reason && typeof reason === "object"
+        ? Object.fromEntries(Object.getOwnPropertyNames(reason).map((key) => [key, (reason as Record<string, unknown>)[key]]))
+        : reason);
+    });
+    const observeProfileLeaks = () => {
+      new MutationObserver(() => {
+        const shell = document.querySelector<HTMLElement>(".app-shell");
+        if (!shell || document.querySelector(".profile-cockpit-transition")) return;
+        const profile = shell.dataset.activeProfile;
+        const sessionProfile = shell.dataset.sessionProfile;
+        if (profile && sessionProfile && profile !== sessionProfile) {
+          (window as typeof window & { __airshipProfileLeaks?: string[] }).__airshipProfileLeaks?.push(`${profile}:${sessionProfile}`);
+        }
+        const proofSession = shell.dataset.proofSession;
+        const mappedProofProfile = proofSession
+          ? (window as typeof window & { __airshipSessionProfiles?: Record<string, string> }).__airshipSessionProfiles?.[proofSession]
+          : undefined;
+        if (location.hash.startsWith("#proof") && profile && mappedProofProfile && mappedProofProfile !== profile) {
+          (window as typeof window & { __airshipProfileLeaks?: string[] }).__airshipProfileLeaks?.push(`proof:${profile}:${mappedProofProfile}`);
+        }
+      }).observe(document.documentElement, { subtree: true, childList: true, attributes: true });
+    };
+    if (document.documentElement) observeProfileLeaks();
+    else addEventListener("DOMContentLoaded", observeProfileLeaks, { once: true });
   });
 
   await page.goto("/#chat");
@@ -69,11 +87,13 @@ test("Profile is the primary A → B → A cockpit silo while global services st
   await favoriteActiveConversation(page, ALPHA_TITLE);
   await assertConversationSearch(page, ALPHA_TITLE, true, "General");
 
+  stage = "general workspace";
   await openPrimary(page, "Workspace");
   await page.getByRole("treeitem", { name: /README\.md/u }).click();
   await page.getByRole("textbox", { name: "Edit README.md" }).fill("Alpha unsaved workspace draft.\n");
   await createAndSelectAlphaWorktree(page);
 
+  stage = "general terminal";
   await openPrimary(page, "Terminal");
   await renameTerminal(page, "Terminal 1", "Alpha primary");
   await page.getByRole("button", { name: "New terminal", exact: true }).click();
@@ -96,6 +116,7 @@ test("Profile is the primary A → B → A cockpit silo while global services st
     await expect(primary.getByRole("button", { name: globalDestination, exact: true })).toHaveAttribute("data-scope", "global");
   }
 
+  stage = "switch to research";
   await selectProfile(page, "Research", "research");
   await expect(page).toHaveURL(/#chat\/[^/?#]+$/u);
   const betaUrl = page.url();
@@ -136,6 +157,7 @@ test("Profile is the primary A → B → A cockpit silo while global services st
   await expect(betaTree).not.toContainText(ALPHA_TITLE);
   await assertConversationSearch(page, ALPHA_TITLE, false, "Research");
 
+  stage = "research workspace";
   await openPrimary(page, "Workspace");
   await page.getByRole("tab", { name: /Source Control/u }).click();
   await page.getByRole("button", { name: "Refresh", exact: true }).click();
@@ -157,6 +179,7 @@ test("Profile is the primary A → B → A cockpit silo while global services st
   await page.getByRole("treeitem", { name: /architecture\.md/u }).click();
   await page.getByRole("textbox", { name: "Edit architecture.md" }).fill("Beta unsaved workspace draft.\n");
 
+  stage = "research terminal";
   await openPrimary(page, "Terminal");
   const betaTabs = page.getByRole("tablist", { name: "Terminal tabs" });
   await expect(betaTabs.getByRole("tab")).toHaveCount(1);
@@ -193,6 +216,7 @@ test("Profile is the primary A → B → A cockpit silo while global services st
   await openPrimary(page, "Account");
   await expect(page.getByRole("heading", { name: "Account", level: 1 })).toBeVisible();
 
+  stage = "switch to general";
   await selectProfile(page, "General", "general");
   await expect(page).toHaveURL(alphaUrl);
   await expect(composer).toHaveValue(ALPHA_DRAFT);
@@ -205,12 +229,14 @@ test("Profile is the primary A → B → A cockpit silo while global services st
   await expect(alphaTree).not.toContainText("Research conversation");
   await assertConversationSearch(page, ALPHA_TITLE, true, "General");
 
+  stage = "restored general workspace";
   await openPrimary(page, "Workspace");
   await expect(page.getByRole("tab", { name: /README\.md, Unsaved/u })).toHaveAttribute("aria-selected", "true");
   await expect(page.getByRole("textbox", { name: "Edit README.md" })).toHaveValue("Alpha unsaved workspace draft.\n");
   await page.getByRole("tab", { name: /Source Control/u }).click();
   await expect(page.getByRole("button", { name: "Workspace worktree" })).toContainText(new RegExp(`${ALPHA_BRANCH}.*${ALPHA_WORKTREE}`, "u"));
 
+  stage = "restored general terminal";
   await openPrimary(page, "Terminal");
   const restoredAlphaTabs = page.getByRole("tablist", { name: "Terminal tabs" });
   await expect(restoredAlphaTabs.getByRole("tab")).toHaveCount(2);
@@ -232,6 +258,11 @@ test("Profile is the primary A → B → A cockpit silo while global services st
     threadViewportStorageKey("research", alphaSessionId),
   ]);
   expect(crossViewportValues).toEqual([null, null]);
+  const unhandledReasons = await page.evaluate(() => (
+    window as typeof window & { __airshipUnhandledReasons?: unknown[] }
+  ).__airshipUnhandledReasons ?? []);
+  expect({ pageErrors, unhandledReasons }, "the complete profile transition must not leave an unhandled browser error")
+    .toEqual({ pageErrors: [], unhandledReasons: [] });
 });
 
 /*

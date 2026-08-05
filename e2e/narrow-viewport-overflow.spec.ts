@@ -131,6 +131,38 @@ for (const width of PHONE_WIDTHS) {
   });
 }
 
+test("shared tab overflow and metric labels stay inside their own 320px surfaces", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile-chromium", "phone widths are a mobile-project concern");
+  await page.setViewportSize({ width: 320, height: 812 });
+
+  await page.goto("/#proof");
+  const proofTabs = page.locator(".proof-surface-tabs");
+  const overflowTrigger = proofTabs.locator(".tabs__overflow-trigger");
+  await expect(overflowTrigger).toBeVisible();
+  const tabEdges = await Promise.all([
+    proofTabs.evaluate((node) => node.getBoundingClientRect().right),
+    overflowTrigger.evaluate((node) => node.getBoundingClientRect().right),
+  ]);
+  expect(tabEdges[1]).toBeLessThanOrEqual(tabEdges[0] + 1);
+
+  await page.goto("/#account");
+  await expect(page.locator(".billing-metric-strip")).toBeVisible();
+  const metricGeometry = await page.locator(".billing-metric-strip .metric-strip__cell").evaluateAll((cells) => cells.reduce((result, cell) => {
+    const edge = cell.getBoundingClientRect().right;
+    const label = cell.querySelector<HTMLElement>(".metric-strip__label");
+    if (!label) return result;
+    const name = label.textContent?.trim() ?? "unnamed metric";
+    if (label.getBoundingClientRect().right > edge + 1) result.spills.push(name);
+    if (name === "Subscription") {
+      const lineHeight = Number.parseFloat(getComputedStyle(label).lineHeight);
+      result.subscriptionLines = Math.round(label.getBoundingClientRect().height / lineHeight);
+    }
+    return result;
+  }, { spills: [] as string[], subscriptionLines: 0 }));
+  expect(metricGeometry.spills).toEqual([]);
+  expect(metricGeometry.subscriptionLines).toBe(1);
+});
+
 /*
  * The loop above cannot see this one, and that is the point.
  *

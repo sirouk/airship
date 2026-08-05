@@ -28,7 +28,7 @@ export default defineConfig({
     video: "retain-on-failure",
   },
   webServer: {
-    command: "VITE_GOOGLE_CLIENT_ID=123456789012-airship-portability.apps.googleusercontent.com npm exec -- vite --host 127.0.0.1 --port 4189 --strictPort",
+    command: "AIRSHIP_DISABLE_SEMANTIC_PACK=1 VITE_GOOGLE_CLIENT_ID=123456789012-airship-portability.apps.googleusercontent.com npm exec -- vite --host 127.0.0.1 --port 4189 --strictPort",
     url: PORTABILITY_ACCEPTANCE_ORIGIN,
     reuseExistingServer: false,
     timeout: 30_000,

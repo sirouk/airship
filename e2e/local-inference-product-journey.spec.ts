@@ -61,6 +61,152 @@ test("connects, pins, invokes, and disconnects an Ollama model through the mount
   await expectConversationTrustAxis(page, /^Ollama · disconnected/u);
 });
 
+test("a stopped queue stays paused across conversation switches and reconnects", async ({ page, context }, testInfo) => {
+  test.skip(
+    testInfo.project.name !== "desktop-chromium",
+    "One real Chromium queue-lifecycle journey is sufficient; responsive layout is covered separately.",
+  );
+  await page.addInitScript(({ key }) => {
+    localStorage.setItem(key, JSON.stringify({
+      mode: "dark",
+      typeScale: "default",
+      density: "comfortable",
+      corners: "subtle",
+      bodyFont: "system-sans",
+      vaultBackend: "ephemeral",
+      approvalMode: "ask-first",
+    }));
+  }, { key: PREFERENCES_KEY });
+
+  let chatRequests = 0;
+  let releaseActiveTurn: (() => void) | undefined;
+  await mockOllama(page, async (route) => {
+    chatRequests += 1;
+    if (chatRequests === 2) {
+      await new Promise<void>((resolve) => {
+        releaseActiveTurn = resolve;
+      });
+      await route.abort("aborted").catch(() => {});
+      return;
+    }
+    await cors(
+      route,
+      200,
+      ollamaSse(chatRequests === 1 ? "PREFLIGHT" : "SENT_BY_PERSON"),
+      "text/event-stream",
+    );
+  });
+  await page.goto("/#connection");
+
+  const fabric = page.locator(".provider-fabric");
+  await fabric.getByRole("button", { name: "Check Ollama" }).click();
+  const connected = fabric.locator("article.provider-connection", { hasText: "Ollama" });
+  await connected.getByRole("button", { name: "Use in new conversation" }).click();
+  await expect(page).toHaveURL(/#chat\/[^/?#]+$/u, { timeout: 20_000 });
+  await expect.poll(() => chatRequests).toBe(1);
+
+  const composer = page.getByRole("combobox", { name: "Message Airship" });
+  await composer.fill("active slow turn");
+  await composer.press("Enter");
+  await expect.poll(() => chatRequests).toBe(2);
+  await composer.fill("queued follow-up must remain paused");
+  await composer.press("Enter");
+  await expect(page.locator(".composer-queue")).toBeVisible();
+  await page.getByRole("button", { name: "Stop turn" }).click();
+  releaseActiveTurn?.();
+  await expect(page.locator(".composer-queue")).toContainText("paused after Stop");
+
+  const sourceUrl = page.url();
+  await page.getByRole("region", { name: "Agent session" })
+    .getByRole("button", { name: "New conversation" }).click();
+  await page.waitForFunction((prior) => location.href !== prior, sourceUrl);
+
+  const navigation = page.getByRole("navigation", { name: "Primary" });
+  const expand = navigation.getByRole("button", { name: "Expand recent conversations" });
+  if (await expand.count()) await expand.click();
+  const sourceRow = navigation.locator(
+    "#airship-recent-conversations .recent-conversation:not(.active)",
+  ).first();
+  await expect(sourceRow).toBeVisible();
+  await sourceRow.click();
+  await expect(page).toHaveURL(sourceUrl);
+
+  expect(chatRequests).toBe(2);
+  await expect(page.locator(".composer-queue")).toContainText("paused after Stop");
+  await context.setOffline(true);
+  await page.waitForTimeout(300);
+  await context.setOffline(false);
+  await page.waitForTimeout(500);
+  expect(chatRequests).toBe(2);
+  await expect(page.locator(".composer-queue")).toBeVisible();
+  await expect(page.getByRole("article", { name: "Your message" })
+    .filter({ hasText: "queued follow-up must remain paused" })).toHaveCount(0);
+
+  await page.locator(".composer-queue").getByRole("button", { name: "Send now" }).click();
+  await expect.poll(() => chatRequests).toBe(3);
+  await expect(page.locator(".composer-queue")).toBeHidden();
+  await expect(page.getByRole("article", { name: "Your message" })
+    .filter({ hasText: "queued follow-up must remain paused" })).toHaveCount(1);
+});
+
+test("Skills explains why its pinned conversation cannot start during an active turn", async ({ page }, testInfo) => {
+  test.skip(
+    testInfo.project.name !== "desktop-chromium",
+    "One deterministic held-turn journey is sufficient; responsive Skills coverage runs separately.",
+  );
+  await page.addInitScript(({ key }) => {
+    localStorage.setItem(key, JSON.stringify({
+      mode: "dark",
+      typeScale: "default",
+      density: "comfortable",
+      corners: "subtle",
+      bodyFont: "system-sans",
+      vaultBackend: "ephemeral",
+      approvalMode: "ask-first",
+    }));
+  }, { key: PREFERENCES_KEY });
+
+  let chatRequests = 0;
+  let releaseActiveTurn: (() => void) | undefined;
+  await mockOllama(page, async (route) => {
+    chatRequests += 1;
+    if (chatRequests === 2) {
+      await new Promise<void>((resolve) => { releaseActiveTurn = resolve; });
+    }
+    await cors(route, 200, ollamaSse(chatRequests === 1 ? "PREFLIGHT" : "HELD_TURN"), "text/event-stream");
+  });
+
+  try {
+    await page.goto("/#connection");
+    const fabric = page.locator(".provider-fabric");
+    await fabric.getByRole("button", { name: "Check Ollama" }).click();
+    const connected = fabric.locator("article.provider-connection", { hasText: "Ollama" });
+    await connected.getByRole("button", { name: "Use in new conversation" }).click();
+    await expect.poll(() => chatRequests).toBe(1);
+
+    const composer = page.getByRole("combobox", { name: "Message Airship" });
+    await composer.fill("Hold this turn while I inspect Skills.");
+    await composer.press("Enter");
+    await expect.poll(() => chatRequests).toBe(2);
+
+    await page.getByRole("group", { name: "Profile configuration" })
+      .getByRole("button", { name: "Skills", exact: true }).click();
+    const start = page.getByRole("button", { name: "New conversation with this set" });
+    await expect(start).toBeDisabled();
+    await expect(start).toHaveAttribute("aria-describedby", "skill-conversation-start-status");
+    await expect(page.locator("#skill-conversation-start-status"))
+      .toHaveText("Stop the active turn before starting a new conversation.");
+    await page.screenshot({ path: testInfo.outputPath("skills-active-turn.png"), animations: "disabled" });
+
+    releaseActiveTurn?.();
+    releaseActiveTurn = undefined;
+    await expect(start).toBeEnabled({ timeout: 20_000 });
+    await expect(page.locator("#skill-conversation-start-status")).toHaveCount(0);
+  } finally {
+    releaseActiveTurn?.();
+  }
+});
+
 /**
  * AMENDED: the four trust axes stopped rendering as four topbar pills.
  *
@@ -96,7 +242,10 @@ async function expectConversationTrustAxis(page: Page, label: RegExp): Promise<v
   await expect(sheet).toBeHidden();
 }
 
-async function mockOllama(page: Page): Promise<void> {
+async function mockOllama(
+  page: Page,
+  onChat?: (route: Route) => Promise<void>,
+): Promise<void> {
   await page.route("http://127.0.0.1:11434/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -133,17 +282,24 @@ async function mockOllama(page: Page): Promise<void> {
       return;
     }
     if (url.pathname === "/v1/chat/completions") {
-      const body = [
-        `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: "OK" }, finish_reason: null }] })}`,
-        `data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })}`,
-        "data: [DONE]",
-        "",
-      ].join("\n\n");
-      await cors(route, 200, body, "text/event-stream");
+      if (onChat) {
+        await onChat(route);
+        return;
+      }
+      await cors(route, 200, ollamaSse("OK"), "text/event-stream");
       return;
     }
     await cors(route, 404, "not found", "text/plain");
   });
+}
+
+function ollamaSse(content: string): string {
+  return [
+    `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content }, finish_reason: null }] })}`,
+    `data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })}`,
+    "data: [DONE]",
+    "",
+  ].join("\n\n");
 }
 
 async function json(route: Route, value: unknown): Promise<void> {

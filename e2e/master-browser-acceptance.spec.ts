@@ -76,12 +76,12 @@ test("the real browser runtime stays coherent across the required device classes
     expect(mobileTerminal.disclosureHeight).toBeGreaterThanOrEqual(44);
   }
   if ((await setup.getAttribute("open")) === null) await setup.locator("summary").click();
-  const sharedGit = page.locator(".terminal-git-bridge");
-  await expect(sharedGit).toContainText("Authoritative Editor/source-control state");
-  await sharedGit.getByRole("textbox").fill("git status");
-  await sharedGit.getByRole("button", { name: "Run", exact: true }).click();
+  const browserGit = page.locator("form.terminal-git");
+  await expect(browserGit).toContainText("Runs against the browser-owned .git");
+  await browserGit.getByRole("textbox", { name: "Browser Git" }).fill("git status");
+  await browserGit.getByRole("button", { name: "Run", exact: true }).click();
   await expect(page.locator(".terminal-route__footer")).toContainText(
-    "Shared Git command completed against the authoritative browser repository.",
+    /git status answered from the browser-owned repository at .* without changing it/u,
   );
 
   await expectContainedLayout(page);
@@ -97,7 +97,10 @@ test("high-value controls remain usable without credentials on every device clas
   const runtimeErrors: string[] = [];
   page.on("pageerror", (error) => runtimeErrors.push(error.message));
   page.on("console", (message) => {
-    if (message.type() === "error") runtimeErrors.push(message.text());
+    if (message.type() !== "error") return;
+    const expectedSignInReadinessResponse = message.location().url.endsWith("/__airship/chutes/oauth/token")
+      && /status of 503/u.test(message.text());
+    if (!expectedSignInReadinessResponse) runtimeErrors.push(message.text());
   });
 
   await page.goto("/#chat");
@@ -106,14 +109,17 @@ test("high-value controls remain usable without credentials on every device clas
   await profileTrigger.click();
   const profileMenu = page.getByRole("listbox", { name: "Agent profile" });
   await expect(profileMenu).toBeVisible();
-  await profileMenu.getByRole("option", { name: /Builder \/ Systems/ }).click();
-  await expect(page.getByRole("heading", { level: 1 })).toHaveAccessibleName(/Builder \/ Systems profile/u);
+  await profileMenu.getByRole("option", { name: /Developer/ }).click();
+  await expect(page.getByRole("heading", { level: 1 })).toHaveAccessibleName(/Developer profile/u);
 
   await page.goto("/#profiles");
   const cards = page.locator(".profile-card");
   await expect(cards).toHaveCount(3);
   const boundaries = page.locator("details.profile-editor-disclosure").filter({ hasText: "Profile boundaries" });
-  if (!(await boundaries.getAttribute("open"))) await boundaries.locator("summary").click();
+  // A present boolean attribute serializes as the empty string. Testing its
+  // truthiness closed this disclosure when it was already open, then waited
+  // forever for the approval control the test itself had just hidden.
+  if ((await boundaries.getAttribute("open")) === null) await boundaries.locator("summary").click();
   await boundaries.getByRole("button", { name: "Profile approval policy" }).click();
   const approvals = page.getByRole("listbox", { name: "Profile approval policy" });
   await expect(approvals).toBeVisible();
@@ -126,7 +132,7 @@ test("high-value controls remain usable without credentials on every device clas
   await cards.filter({ hasText: "Research" }).click();
   await expect(cards.filter({ hasText: "Research" })).toHaveClass(/active/u);
   const danger = page.locator("details.profile-danger-disclosure");
-  if (!(await danger.getAttribute("open"))) await danger.locator("summary").click();
+  if ((await danger.getAttribute("open")) === null) await danger.locator("summary").click();
   const remove = page.getByRole("button", { name: "Remove profile" });
   await expect(remove).toBeEnabled();
   await remove.click();
@@ -161,7 +167,9 @@ test("high-value controls remain usable without credentials on every device clas
   await page.goto("/#connection");
   await expect(page.getByRole("heading", { name: "Connection", exact: true, level: 1 })).toBeVisible();
   const chutes = page.locator('.connect-lane[data-lane="chutes"]');
-  await chutes.getByRole("button", { name: /Chutes/u }).first().click();
+  if ((await chutes.getAttribute("data-open")) !== "true") {
+    await chutes.getByRole("button", { name: /Chutes/u }).first().click();
+  }
   // This acceptance build does not configure Chutes OAuth. It must lead with
   // the functional API-key path instead of rendering a broken sign-in action.
   await expect(chutes.getByRole("button", { name: "Sign in to Chutes", exact: true })).toHaveCount(0);
@@ -203,7 +211,7 @@ test("the desktop browser terminal executes Node and reconciles a real file into
   await expect(emulator.locator(".xterm-accessibility-tree")).toContainText("QUlSU0hJUF9NQVNURVJfVEVSTUlOQUxfT0s=", { timeout: 30_000 });
   await input.focus();
   await page.keyboard.press("Enter");
-  await expect(page.getByText("Command history · 1", { exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText("Input history · 1", { exact: true })).toBeVisible({ timeout: 30_000 });
   await expect(emulator.locator(".xterm-accessibility-tree")).toContainText("AIRSHIP_MASTER_TERMINAL_OK", { timeout: 30_000 });
 
   await page.getByRole("button", { name: "Reconcile workspace" }).click();

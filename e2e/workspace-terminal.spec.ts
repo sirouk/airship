@@ -96,6 +96,16 @@ test("mobile terminal keeps process controls and horizontal tabs usable", async 
   await page.getByRole("button", { name: "New terminal", exact: true }).click();
   const tabs = page.getByRole("tablist", { name: "Terminal tabs" });
   await expect(tabs.getByRole("tab")).toHaveCount(2);
+  const [setupBounds, tabsBounds] = await Promise.all([
+    page.locator("details.terminal-route__setup summary").boundingBox(),
+    tabs.boundingBox(),
+  ]);
+  expect(setupBounds).not.toBeNull();
+  expect(tabsBounds).not.toBeNull();
+  expect(
+    setupBounds!.y + setupBounds!.height,
+    "the setup control ends before the terminal tabs begin",
+  ).toBeLessThanOrEqual(tabsBounds!.y);
   await expect(page.getByText(/Starting|Running|Failed|Restart required/, { exact: true }).first()).toBeVisible();
   await expect(page.getByRole("button", { name: "Close terminal tab" })).toBeVisible();
   const newHere = page.getByRole("button", { name: "New terminal at current directory" });

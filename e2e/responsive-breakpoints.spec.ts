@@ -312,9 +312,53 @@ test("the rail keeps three states, remembers the one it is put in, and reaches e
     await expect(navigation.getByRole("button", { name: label, exact: true })).toBeVisible();
   }
 
-  // Hover-peek is an overlay, not a reflow: the conversation must not move.
+  // Collapsing owns a closed conversation panel. Wait for that state before
+  // testing the mutually exclusive label peek: rendering the 320px conversation
+  // panel and the 268px label panel together is explicitly forbidden.
+  const recentDisclosure = navigation.locator(".chat-nav-disclosure");
+  await expect(recentDisclosure).toHaveAttribute("aria-expanded", "false");
+  await expect(sidebar).not.toHaveAttribute("data-recents", "flyout");
+
+  /*
+   * Peek is an overlay, not a reflow — and it is not a pointer.
+   *
+   * AMENDED: this asserted that hovering the collapsed rail widened it to
+   * 268px. `cfda29f` withdrew that half on purpose: the rail sits on the path
+   * to the composer, it treated every crossing as a request to open, and the
+   * judgement was that it "is clunky and jumps around". So hovering must now
+   * leave the rail exactly where it is, and the keyboard half is what opens it.
+   * The original claim is not dropped — a peek still must not move the
+   * conversation — it is now made about the half that still exists.
+   *
+   * Sampled rather than asserted once, because this is a negative: a single
+   * read taken before the 240ms delay and 140ms transition a peek used to run
+   * would pass against a rail that was about to open. Eight reads across ~1.2s
+   * is the same measurement the commit that withdrew the behaviour recorded.
+   */
   const mainBefore = await page.locator("main.main").boundingBox();
   await sidebar.hover();
+  const hoverWidths: number[] = [];
+  for (let sample = 0; sample < 8; sample += 1) {
+    hoverWidths.push(await page.locator(".rail").evaluate((element) => Math.round(element.getBoundingClientRect().width)));
+    await page.waitForTimeout(150);
+  }
+  expect(hoverWidths).toEqual([60, 60, 60, 60, 60, 60, 60, 60]);
+  expect((await page.locator("main.main").boundingBox())!.x).toBe(mainBefore!.x);
+  await page.mouse.move(900, 500);
+
+  // The keyboard half stays, and it is the overlay the original claim was about:
+  // the panel widens over the conversation rather than widening the grid track.
+  // Escape leaves the composer for main, and Shift+Tab reaches the rail's last
+  // control in document order. This is the product's real keyboard exit and
+  // proves keyboard modality instead of manufacturing focus in script.
+  const composer = page.getByRole("combobox", { name: "Message Airship" });
+  await expect(composer).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(page.locator("main.main")).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  const expandRail = page.getByRole("button", { name: "Expand navigation rail" });
+  await expect(expandRail).toBeFocused();
+  await expect.poll(() => expandRail.evaluate((element) => element.matches(":focus-visible"))).toBe(true);
   await expect.poll(async () => (await page.locator(".rail").boundingBox())?.width).toBe(268);
   const mainAfter = await page.locator("main.main").boundingBox();
   expect(mainAfter!.x).toBe(mainBefore!.x);
@@ -501,6 +545,22 @@ test("mobile workspace and terminal controls preserve their content lanes", asyn
   expect(setupGeometry.detailTop).toBeGreaterThanOrEqual(setupGeometry.labelBottom - 1);
   expect(setupGeometry.overflow).toBeLessThanOrEqual(1);
   await page.screenshot({ path: testInfo.outputPath("mobile-terminal-content-lanes.png"), animations: "disabled" });
+
+  /*
+   * The document can absorb an inner route spill in its 13px shell gutter and
+   * still report zero page overflow. Measure the route's own contract at the
+   * 320px floor: every direct grid child must remain inside the 294px track.
+   */
+  await page.setViewportSize({ width: 320, height: 844 });
+  const terminalRouteGeometry = await page.locator(".terminal-route").evaluate((route) => {
+    const edge = route.getBoundingClientRect().right;
+    return {
+      selfOverflow: route.scrollWidth - route.clientWidth,
+      childSpill: [...route.children].map((child) => child.getBoundingClientRect().right - edge),
+    };
+  });
+  expect(terminalRouteGeometry.selfOverflow).toBeLessThanOrEqual(1);
+  expect(Math.max(...terminalRouteGeometry.childSpill)).toBeLessThanOrEqual(1);
 });
 
 for (const density of densities) {
@@ -635,6 +695,60 @@ for (const density of densities) {
     }
   });
 }
+
+test("dense tablet controls recompose before their content becomes unreadable", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "controlled tablet geometry uses the desktop browser context");
+  await page.setViewportSize({ width: 768, height: 1024 });
+
+  await page.goto("/#capabilities");
+  const deviceGrid = page.locator(".capability-device-grid");
+  await expect(deviceGrid.locator(".capability-device-card")).toHaveCount(4, { timeout: 20_000 });
+  const deviceGeometry = await deviceGrid.evaluate((grid) => {
+    const boundary = grid.getBoundingClientRect();
+    const cards = [...grid.querySelectorAll<HTMLElement>(".capability-device-card")].map((card) => {
+      const rect = card.getBoundingClientRect();
+      const header = card.querySelector<HTMLElement>("header");
+      return {
+        width: rect.width,
+        rightSpill: rect.right - boundary.right,
+        selfOverflow: card.scrollWidth - card.clientWidth,
+        headerOverflow: header ? header.scrollWidth - header.clientWidth : 0,
+      };
+    });
+    return { selfOverflow: grid.scrollWidth - grid.clientWidth, cards };
+  });
+  expect(deviceGeometry.selfOverflow).toBeLessThanOrEqual(1);
+  for (const card of deviceGeometry.cards) {
+    expect(card.width).toBeGreaterThan(240);
+    expect(card.rightSpill).toBeLessThanOrEqual(1);
+    expect(card.selfOverflow).toBeLessThanOrEqual(1);
+    expect(card.headerOverflow).toBeLessThanOrEqual(1);
+  }
+  await page.screenshot({ path: testInfo.outputPath("capabilities-768.png"), animations: "disabled" });
+
+  await page.goto("/#profiles");
+  const danger = page.locator("details.profile-danger-disclosure");
+  await danger.locator("summary").click();
+  const archive = danger.locator(".profile-archive-zone");
+  await expect(archive).toBeVisible();
+  const archiveGeometry = await archive.evaluate((zone) => {
+    const boundary = zone.getBoundingClientRect();
+    const children = [...zone.children].map((child) => {
+      const rect = child.getBoundingClientRect();
+      return { width: rect.width, rightSpill: rect.right - boundary.right };
+    });
+    return {
+      columns: getComputedStyle(zone).gridTemplateColumns.trim().split(/\s+/u),
+      width: boundary.width,
+      children,
+    };
+  });
+  expect(archiveGeometry.columns).toHaveLength(1);
+  expect(archiveGeometry.children).toHaveLength(3);
+  expect(archiveGeometry.children[0]!.width / archiveGeometry.width).toBeGreaterThan(0.85);
+  for (const child of archiveGeometry.children) expect(child.rightSpill).toBeLessThanOrEqual(1);
+  await page.screenshot({ path: testInfo.outputPath("profile-archive-768.png"), animations: "disabled" });
+});
 
 test("styled menus stay anchored and usable at intermediate widths", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium", "controlled viewport menu contract");

@@ -13,6 +13,19 @@ async function seedOneTurn(page: Page) {
   await expect(page.locator("[data-transcript-card]").first()).toBeVisible({ timeout: 30_000 });
 }
 
+async function denyClipboardWrites(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        async writeText() {
+          throw new DOMException("Write permission denied.", "NotAllowedError");
+        },
+      },
+    });
+  });
+}
+
 test("revealing message actions on hover does not change message or transcript geometry", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name.includes("mobile"), "desktop hover layout contract");
   await seedOneTurn(page);
@@ -50,6 +63,7 @@ test("revealing message actions on hover does not change message or transcript g
 
 test("touch messages expose one calm action trigger and tappable actions", async ({ page }, testInfo) => {
   test.skip(!testInfo.project.name.includes("mobile"), "touch layout contract");
+  await denyClipboardWrites(page);
   await seedOneTurn(page);
   const message = page.locator("[data-transcript-card]").first();
   const trigger = message.locator('summary[aria-label="Message actions"]');
@@ -65,6 +79,8 @@ test("touch messages expose one calm action trigger and tappable actions", async
   const box = await copy.boundingBox();
   expect(box?.height, "touch targets stay at the 44px minimum").toBeGreaterThanOrEqual(44);
   await copy.click();
+  await expect(message.getByRole("alert"))
+    .toContainText("Select the message text and use your browser's Copy command.");
   expect(
     await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
     "the action row must scroll within itself rather than widen the document",
@@ -127,6 +143,7 @@ test("touch action disclosure reports its expanded state and keeps every action 
  */
 test("pointer messages expose actions that can actually be clicked and tabbed to", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name.includes("mobile"), "pointer layout contract");
+  await denyClipboardWrites(page);
   await seedOneTurn(page);
   const message = page.locator("[data-transcript-card]").first();
   const copy = message.locator(".message-actions button", { hasText: "Copy" }).first();
@@ -146,6 +163,8 @@ test("pointer messages expose actions that can actually be clicked and tabbed to
   ).toBe(true);
 
   await copy.click();
+  await expect(message.getByRole("alert"))
+    .toContainText("Select the message text and use your browser's Copy command.");
 
   await page.keyboard.press("Tab");
   expect(

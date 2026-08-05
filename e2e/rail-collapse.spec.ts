@@ -162,8 +162,6 @@ test("the collapsed rail opens its conversations beside itself, at a width that 
    */
   await page.getByRole("button", { name: "Expand navigation rail" }).click();
   await expect.poll(() => page.evaluate(() => document.documentElement.dataset.rail)).toBe("standard");
-  const expand = primary.getByRole("button", { name: "Expand recent conversations" });
-  if (await expand.count()) await expand.click();
   const restored = page.locator("#airship-recent-conversations");
   await expect(restored).toBeVisible();
   expect(await restored.evaluate((element) => element.getAttribute("data-flyout"))).toBeNull();

@@ -186,7 +186,7 @@ test("opt-in live Workspace Terminal accepts an interactive command", async ({ p
   console.log("terminal-live: focused");
   await page.keyboard.type("node -e \"console.log('AIRSHIP_TERMINAL_42')\"");
   await page.keyboard.press("Enter");
-  await expect(page.getByText("Command history · 1", { exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText("Input history · 1", { exact: true })).toBeVisible({ timeout: 30_000 });
   console.log("terminal-live: history");
   await expect(emulator.locator(".xterm-accessibility-tree")).toContainText("AIRSHIP_TERMINAL_42", { timeout: 30_000 });
   console.log("terminal-live: output");
@@ -198,7 +198,7 @@ test("opt-in live Workspace Terminal accepts an interactive command", async ({ p
   });
   await input.focus();
   await page.keyboard.press("Enter");
-  await expect(page.getByText("Command history · 2", { exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText("Input history · 2", { exact: true })).toBeVisible({ timeout: 30_000 });
   await expect(emulator.locator(".xterm-accessibility-tree")).toContainText("AIRSHIP_PASTE_43", { timeout: 30_000 });
   console.log("terminal-live: paste");
 
@@ -214,7 +214,7 @@ test("opt-in live Workspace Terminal accepts an interactive command", async ({ p
   await input.focus();
   await page.keyboard.type("node -e \"console.log('AIRSHIP_RESTART_44')\"");
   await page.keyboard.press("Enter");
-  await expect(page.getByText("Command history · 3", { exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText("Input history · 3", { exact: true })).toBeVisible({ timeout: 30_000 });
   await expect(emulator.locator(".xterm-accessibility-tree")).toContainText("AIRSHIP_RESTART_44", { timeout: 30_000 });
   console.log("terminal-live: restart");
 

@@ -1,6 +1,7 @@
 import { expect, test, type Page, type Response } from "@playwright/test";
 
 const ORIGIN = "http://127.0.0.1:4193";
+const PUBLIC_BASE_PATH = "/airship/";
 const LOAD_COUNTER = "airship.static-host-document-loads.v1";
 
 type DocumentEvidence = Readonly<{
@@ -8,6 +9,15 @@ type DocumentEvidence = Readonly<{
   url: string;
   headers: Record<string, string>;
 }>;
+
+function expectVersionedServiceWorker(rawUrl: string | undefined): void {
+  expect(rawUrl).toBeDefined();
+  const workerUrl = new URL(rawUrl as string);
+  expect(workerUrl.origin).toBe(ORIGIN);
+  expect(workerUrl.pathname).toBe(`${PUBLIC_BASE_PATH}sw.js`);
+  expect([...workerUrl.searchParams.keys()]).toEqual(["revision"]);
+  expect(workerUrl.searchParams.get("revision")).toMatch(/^index-[A-Za-z0-9_-]+\.js$/u);
+}
 
 test("a headerless static host becomes isolated once, then boots the browser terminal", async ({ page }) => {
   test.setTimeout(120_000);
@@ -27,7 +37,7 @@ test("a headerless static host becomes isolated once, then boots the browser ter
     sessionStorage.setItem(counter, String(Number.isFinite(prior) ? prior + 1 : 1));
   }, { origin: ORIGIN, counter: LOAD_COUNTER });
 
-  const first = await page.goto("/#terminal", { waitUntil: "domcontentloaded" });
+  const first = await page.goto(`${PUBLIC_BASE_PATH}#terminal`, { waitUntil: "domcontentloaded" });
   expect(first).not.toBeNull();
   expect(await first?.headerValue("cross-origin-opener-policy")).toBeNull();
   expect(await first?.headerValue("cross-origin-embedder-policy")).toBeNull();
@@ -68,8 +78,8 @@ test("a headerless static host becomes isolated once, then boots the browser ter
     documentLoads: 2,
     navigationType: "reload",
   });
-  expect(runtime.controller).toBe(`${ORIGIN}/sw.js`);
-  expect(runtime.activeWorker).toBe(`${ORIGIN}/sw.js`);
+  expect(runtime.activeWorker).toBe(runtime.controller);
+  expectVersionedServiceWorker(runtime.controller);
 
   await expect.poll(() => documents.length, { timeout: 10_000 }).toBeGreaterThanOrEqual(2);
   const navigationEvidence = await Promise.all(documents);
@@ -100,9 +110,16 @@ test("a headerless static host becomes isolated once, then boots the browser ter
   await input.focus();
   await page.keyboard.type("node -e \"console.log('AIRSHIP_STATIC_HOST_42')\"");
   await page.keyboard.press("Enter");
-  await expect(page.getByText("Command history · 1", { exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText("Input history · 1", { exact: true })).toBeVisible({ timeout: 30_000 });
   await expect(emulator.locator(".xterm-accessibility-tree"))
     .toContainText("AIRSHIP_STATIC_HOST_42", { timeout: 30_000 });
+
+  await page.goto(`${PUBLIC_BASE_PATH}#memory`);
+  const index = page.locator("#memory-index");
+  if ((await index.getAttribute("open")) === null) await index.locator("summary").click();
+  await expect(page.getByRole("button", { name: "Local semantic" })).toBeDisabled();
+  await expect(page.locator(".embedding-engine-state"))
+    .toContainText("local semantic not included in this build");
 });
 
 test("service-worker takeover never interrupts work started during first install", async ({ page }) => {
@@ -113,7 +130,7 @@ test("service-worker takeover never interrupts work started during first install
     sessionStorage.setItem(counter, String(Number.isFinite(prior) ? prior + 1 : 1));
   }, { origin: ORIGIN, counter: LOAD_COUNTER });
 
-  const first = await page.goto("/#chat", { waitUntil: "domcontentloaded" });
+  const first = await page.goto(`${PUBLIC_BASE_PATH}#chat`, { waitUntil: "domcontentloaded" });
   expect(await first?.headerValue("cross-origin-opener-policy")).toBeNull();
   const composer = page.getByRole("combobox", { name: "Message Airship" });
   await composer.click();
@@ -138,7 +155,7 @@ test("service-worker takeover never interrupts work started during first install
   // A changed worker installs beside the active one. One click must both
   // promote it and reload; the user-activation guard must not swallow the
   // controllerchange event after this explicit request.
-  await page.request.get(`${ORIGIN}/__airship_test__/bump-sw`);
+  await page.request.get(`${ORIGIN}${PUBLIC_BASE_PATH}__airship_test__/bump-sw`);
   await page.evaluate(async () => (await navigator.serviceWorker.getRegistration())?.update());
   await expect(page.getByText("Runtime update ready")).toBeVisible({ timeout: 30_000 });
   await reloadFromBanner(page);
@@ -166,5 +183,5 @@ function isAirshipDocument(response: Response): boolean {
   const url = new URL(response.url());
   return response.request().resourceType() === "document"
     && url.origin === ORIGIN
-    && url.pathname === "/";
+    && url.pathname === PUBLIC_BASE_PATH;
 }

@@ -75,3 +75,50 @@ test("connecting one provider gives Account exactly that one tab", async ({ page
   await expect(openAi.getByText("Not provided", { exact: true })).toHaveCount(6);
   await expect(openAi).not.toContainText("0");
 });
+
+test("a refused cloud credential stays editable beside its recovery message and clears only after success", async ({ page }) => {
+  let catalogAttempts = 0;
+  await page.route("https://api.openai.com/v1/models", (route) => {
+    catalogAttempts += 1;
+    return catalogAttempts === 1
+      ? route.fulfill({
+          status: 401,
+          contentType: "application/json",
+          body: JSON.stringify({ error: { message: "Credential rejected for this acceptance check." } }),
+        })
+      : route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ object: "list", data: [{ id: "gpt-recovered", object: "model", owned_by: "openai" }] }),
+        });
+  });
+  await page.goto("/#connection");
+  await expect(page.getByRole("heading", { name: "Connection", exact: true, level: 1 })).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  const card = page.locator("#provider-setup-openai");
+  await card.scrollIntoViewIfNeeded();
+  const key = card.locator('input[type="password"]');
+  const acknowledgement = card.locator('input[type="checkbox"]');
+  const connect = card.getByRole("button", { name: /^Connect OpenAI$/u });
+  await key.fill("sk-refused-but-preserved");
+  await acknowledgement.check();
+  await connect.click();
+
+  const failure = card.locator(".provider-setup-card__error");
+  await expect(failure).toBeVisible();
+  await expect(failure).toHaveAttribute("role", "alert");
+  await expect(failure).toContainText("Your credential and acknowledgement were kept.");
+  await expect(key).toHaveValue("sk-refused-but-preserved");
+  await expect(key).toBeFocused();
+  await expect(acknowledgement).toBeChecked();
+  await expect(connect).toBeEnabled();
+  expect(await connect.getAttribute("aria-describedby")).toBe(await failure.getAttribute("id"));
+
+  await connect.click();
+  await expect(card.getByRole("button", { name: "Connected above" })).toBeVisible();
+  await expect(key).toHaveValue("");
+  await expect(acknowledgement).not.toBeChecked();
+  await expect(failure).toHaveCount(0);
+  expect(catalogAttempts).toBe(2);
+});

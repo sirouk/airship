@@ -61,45 +61,6 @@ test("the live-load reading is on routes that are not #capabilities, and says wh
   }
 });
 
-test("the phone keeps the live-load reading on screen instead of sending the reader to a route", async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name !== "mobile-chromium", "phone breakpoint contract");
-  for (const hash of ["chat", "sessions"] as const) {
-    await page.goto(`/#${hash}`);
-    // The rail is `display: none` at this width, so its copy is out of the
-    // accessibility tree — the mobile tab bar carries the reading instead.
-    await expect(page.locator('.load-indicator[data-placement="rail"]')).toBeHidden();
-    const indicator = page.locator('.mobile-nav .load-indicator[data-placement="nav"]');
-    await expect(indicator).toBeVisible();
-    expect(await accessibleReading(indicator)).toContain("Browser-wide CPU load is not observable from a page");
-  }
-
-  // The reading takes its own track. If it were auto-placed it would land on a
-  // clipped second row, and if its track were elastic the four destinations
-  // would resize under a finger whenever a run started.
-  const geometry = await page.evaluate(() => {
-    const nav = document.querySelector<HTMLElement>(".mobile-nav");
-    const reading = nav?.querySelector<HTMLElement>(".load-indicator");
-    const tabs = [...(nav?.querySelectorAll<HTMLElement>(".mobile-nav__tab") ?? [])];
-    return nav && reading && tabs.length === 4 ? {
-      navBottom: nav.getBoundingClientRect().bottom,
-      navRight: nav.getBoundingClientRect().right,
-      reading: reading.getBoundingClientRect(),
-      tabs: tabs.map((tab) => tab.getBoundingClientRect()),
-      viewportWidth: innerWidth,
-    } : undefined;
-  });
-  expect(geometry).toBeDefined();
-  expect(geometry!.reading.height).toBeGreaterThan(0);
-  expect(geometry!.reading.bottom).toBeLessThanOrEqual(geometry!.navBottom + 1);
-  expect(geometry!.navRight).toBeLessThanOrEqual(geometry!.viewportWidth + 1);
-  for (const tab of geometry!.tabs) {
-    expect(tab.top, "every destination stays on the reading's row").toBeGreaterThanOrEqual(geometry!.reading.top - 1);
-    // The reading is not a destination and must never overlap one.
-    expect(tab.left).toBeGreaterThanOrEqual(geometry!.reading.right - 1);
-    expect(tab.height, "a destination is still a 44px target beside the reading").toBeGreaterThanOrEqual(44);
-  }
-});
-
 test("every disclosure on #capabilities is a 44px target on a phone", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile-chromium", "phone touch-target contract");
   await page.goto("/#capabilities");

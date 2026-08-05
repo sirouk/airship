@@ -375,7 +375,12 @@ test("connecting Chutes discovers an embedding model and seals the corpus to it"
   const failure = page.locator(".context-engine-failure");
   await expect(failure).toBeVisible({ timeout: 30_000 });
   await expect(failure).toContainText("429");
-  await expect(failure).toContainText("pinned to instance instance-embed-journey");
+  // The request proof above owns the exact instance. The transport may then
+  // try a sibling, so the exhausted-pool message describes aggregate capacity
+  // rather than pretending the first instance was the only eligible target.
+  await expect(failure).toContainText(`every instance of chute ${EMBEDDING_CHUTE}`);
+  await expect(failure).toContainText("at capacity (tried 1)");
+  await expect(failure).toContainText("capacity wait rather than a fault");
   // Named, so a reader can tell a rate limit from a bad key: the sentence
   // carries the discovered model it was talking to.
   await expect(failure).toContainText(EMBEDDING_MODEL);

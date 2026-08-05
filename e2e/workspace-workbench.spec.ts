@@ -249,6 +249,8 @@ test("each workbench destination names itself and its modal closes on Escape", a
 
 test("mobile workbench uses pane switching and an explicit folder move sheet", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile-chromium", "mobile workbench contract");
+  const pageErrors: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
   await openIsolatedWorkspace(page);
 
   await page.getByRole("tab", { name: /Source Control/u }).click();
@@ -286,6 +288,7 @@ test("mobile workbench uses pane switching and an explicit folder move sheet", a
   await expect(page.locator(".workbench-notice")).toContainText("Unsaved edits moved with the tab");
   await expect(page.getByRole("textbox", { name: "Edit retrieval.md" })).toHaveValue(/follows its tab/u);
   await page.screenshot({ path: testInfo.outputPath("workspace-workbench-mobile.png"), fullPage: true });
+  expect(pageErrors, "mobile pane and tree measurements must settle without a resize-delivery error").toEqual([]);
 });
 
 test("folders can be created, renamed and deleted, and every step states its real cost", async ({ page }, testInfo) => {

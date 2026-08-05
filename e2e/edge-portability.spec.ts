@@ -54,6 +54,12 @@ test("edge runtime is honest and useful across the portability matrix", async ({
   test.setTimeout(120_000);
   await installPortabilityEnvironment(page, testInfo);
   const runtimeErrors = observeRuntimeErrors(page);
+  const semanticPackRequests: string[] = [];
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname.startsWith("/semantic-pack/v1/")) {
+      semanticPackRequests.push(request.url());
+    }
+  });
 
   await page.goto("/#capabilities");
   await expect(page.getByRole("heading", { name: "Capabilities", level: 1 })).toBeVisible();
@@ -128,6 +134,10 @@ test("edge runtime is honest and useful across the portability matrix", async ({
   // honestly presented unsupported-runtime state is fine; an uncaught page or
   // console error is not graceful degradation.
   await page.waitForTimeout(300);
+  expect(
+    semanticPackRequests,
+    "the portability matrix declares the optional semantic pack absent, so Bootstrap must not probe its URLs",
+  ).toEqual([]);
   expect(runtimeErrors, runtimeErrors.join("\n")).toEqual([]);
 });
 
@@ -351,18 +361,27 @@ async function exerciseCoreLocalSurfaces(page: Page): Promise<void> {
   await expectNoPageOverflow(page, "Editor");
   await expectSemanticAccessibility(page, "Editor");
 
+  await page.goto("/#memory");
+  const memoryIndex = page.locator("#memory-index");
+  if ((await memoryIndex.getAttribute("open")) === null) await memoryIndex.locator("summary").click();
+  await expect(page.getByRole("button", { name: "Local semantic" })).toBeDisabled();
+  await expect(page.locator(".embedding-engine-state"))
+    .toContainText("local semantic not included in this build");
+  await expectNoPageOverflow(page, "Memory");
+  await expectSemanticAccessibility(page, "Memory");
+
   await page.goto("/#terminal");
   await expect(page.getByRole("heading", { name: "Terminal", level: 1 })).toBeVisible();
   await expect(page.getByLabel(/browser terminal/iu)).toBeVisible();
   const setup = page.locator("details.terminal-route__setup");
   if ((await setup.getAttribute("open")) === null) await setup.locator("summary").click();
-  const bridge = page.locator(".terminal-git-bridge");
-  await expect(bridge).toContainText("Authoritative Editor/source-control state");
-  await bridge.getByRole("textbox").fill("git status");
-  await expect(bridge.getByRole("button", { name: "Run", exact: true })).toBeEnabled();
-  await bridge.getByRole("button", { name: "Run", exact: true }).click();
+  const browserGit = page.locator("form.terminal-git");
+  await expect(browserGit).toContainText("Runs against the browser-owned .git");
+  await browserGit.getByRole("textbox", { name: "Browser Git" }).fill("git status");
+  await expect(browserGit.getByRole("button", { name: "Run", exact: true })).toBeEnabled();
+  await browserGit.getByRole("button", { name: "Run", exact: true }).click();
   await expect(page.locator(".terminal-route__footer")).toContainText(
-    "Shared Git command completed against the authoritative browser repository.",
+    /git status answered from the browser-owned repository at .* without changing it/u,
   );
   await expectNoPageOverflow(page, "Terminal");
   await expectSemanticAccessibility(page, "Terminal");

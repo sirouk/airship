@@ -163,6 +163,8 @@ test("a rail click during a turn keeps the conversation on screen instead of rou
 
 test("All conversations stays reachable in the rail once the thread list overflows", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium", "the rail is a desktop surface");
+  const pageErrors: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
 
   await page.goto("/#chat");
   await waitForShellSettled(page);
@@ -213,4 +215,5 @@ test("All conversations stays reachable in the rail once the thread list overflo
   await ledger.click();
   await expect(page).toHaveURL(/#sessions$/);
   await expect(page.getByRole("heading", { name: "All conversations", level: 1 })).toBeVisible();
+  expect(pageErrors, "expanding the measured rail must not create a resize-delivery error").toEqual([]);
 });

@@ -435,6 +435,7 @@ test("the paste-back step warns first and answers while the code is typed", asyn
 
 test("the connect surface is usable on a phone", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile-chromium", "phone layout contract");
+  await page.setViewportSize({ width: 320, height: 844 });
   await openConnect(page);
 
   const layout = await page.evaluate(() => ({
@@ -475,6 +476,19 @@ test("the connect surface is usable on a phone", async ({ page }, testInfo) => {
   for (let index = 0; index < count; index += 1) {
     const box = await headers.nth(index).boundingBox();
     expect(box?.height ?? 0, `lane header ${index} height`).toBeGreaterThanOrEqual(44);
+  }
+
+  const sealRows = await headers.evaluateAll((buttons) => buttons.map((button) => {
+    const row = button.querySelector<HTMLElement>(".connect-lane__seal-row");
+    const seal = row?.querySelector<HTMLElement>(".seal");
+    const rowBox = row?.getBoundingClientRect();
+    const sealBox = seal?.getBoundingClientRect();
+    return { rowWidth: rowBox?.width, sealWidth: sealBox?.width };
+  }));
+  for (const [index, measurement] of sealRows.entries()) {
+    expect(measurement.rowWidth, `lane ${index} status row has measurable width`).toBeDefined();
+    expect(measurement.sealWidth, `lane ${index} status chip has measurable width`).toBeDefined();
+    expect(measurement.rowWidth! - measurement.sealWidth!, `lane ${index} status chip remains intrinsic`).toBeGreaterThan(8);
   }
 });
 

@@ -5,6 +5,7 @@ import { extname, resolve, sep } from "node:path";
 const root = resolve(process.argv[2] ?? "dist");
 const port = boundedPort(process.argv[3] ?? "4193");
 const installDelayMs = boundedDelay(process.argv[4] ?? "0");
+const publicBasePath = normalizedBasePath(process.argv[5] ?? "/");
 const host = "127.0.0.1";
 let workerVersion = 0;
 
@@ -27,15 +28,20 @@ const server = createServer(async (request, response) => {
       return;
     }
     const url = new URL(request.url ?? "/", `http://${host}:${port}`);
-    if (url.pathname === "/__airship_test__/bump-sw") {
+    if (url.pathname === `${publicBasePath}__airship_test__/bump-sw`) {
       workerVersion += 1;
       response.writeHead(204, { "Cache-Control": "no-store" }).end();
       return;
     }
-    const requested = resolveRequest(url.pathname);
+    const relativePath = stripPublicBasePath(url.pathname);
+    if (relativePath === undefined) {
+      response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" }).end("Not found.");
+      return;
+    }
+    const requested = resolveRequest(relativePath);
     const existing = await regularFile(requested);
     const acceptsHtml = request.headers.accept?.includes("text/html") === true;
-    if (!existing && !acceptsHtml && url.pathname !== "/") {
+    if (!existing && !acceptsHtml && relativePath !== "/") {
       response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
       response.end("Not found.");
       return;
@@ -66,7 +72,7 @@ const server = createServer(async (request, response) => {
 });
 
 server.listen(port, host, () => {
-  process.stdout.write(`Airship headerless static fixture listening at http://${host}:${port}\n`);
+  process.stdout.write(`Airship headerless static fixture listening at http://${host}:${port}${publicBasePath}\n`);
 });
 
 for (const signal of ["SIGINT", "SIGTERM"]) {
@@ -85,6 +91,13 @@ function resolveRequest(pathname) {
     throw new Error("Static fixture refused a path outside dist.");
   }
   return candidate;
+}
+
+function stripPublicBasePath(pathname) {
+  if (publicBasePath === "/") return pathname;
+  if (pathname === publicBasePath.slice(0, -1)) return "/";
+  if (!pathname.startsWith(publicBasePath)) return undefined;
+  return `/${pathname.slice(publicBasePath.length)}`;
 }
 
 async function regularFile(path) {
@@ -109,4 +122,15 @@ function boundedDelay(value) {
     throw new TypeError("Static fixture delay must be an integer from 0 through 10000.");
   }
   return parsed;
+}
+
+function normalizedBasePath(value) {
+  if (typeof value !== "string" || !value.startsWith("/") || value.includes("?") || value.includes("#")) {
+    throw new TypeError("Static fixture public base must be an absolute URL path.");
+  }
+  const withTrailingSlash = value.endsWith("/") ? value : `${value}/`;
+  if (withTrailingSlash.includes("//") || withTrailingSlash.split("/").some((part) => part === "." || part === "..")) {
+    throw new TypeError("Static fixture public base must be a normalized URL path.");
+  }
+  return withTrailingSlash;
 }
