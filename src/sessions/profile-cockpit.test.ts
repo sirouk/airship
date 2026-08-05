@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createSessionManifest } from "../core/session-manifest";
 import type { SessionManifest } from "../core/contracts";
-import { EventJournal } from "../core/journal";
+import { EventJournal, type JournalBackend } from "../core/journal";
 import { sha256 } from "../core/hash";
 import { MemoryJournalBackend } from "../core/memory-journal";
 import { auditSessionHistory } from "../core/session-audit";
@@ -45,6 +45,21 @@ async function manifest(systemPrompt: string, overrides: Partial<SessionManifest
     },
   });
   return { ...base, ...overrides } as SessionManifest;
+}
+
+function wrapMemoryBackend(
+  inner: MemoryJournalBackend,
+  overrides: Partial<JournalBackend>,
+): JournalBackend {
+  return {
+    createSession: (session) => inner.createSession(session),
+    getSession: (sessionId) => inner.getSession(sessionId),
+    listSessions: () => inner.listSessions(),
+    readEvents: (sessionId, afterSequence) => inner.readEvents(sessionId, afterSequence),
+    append: (sessionId, expectedHead, events) => inner.append(sessionId, expectedHead, events),
+    deleteSession: (sessionId, expectedHead) => inner.deleteSession(sessionId, expectedHead),
+    ...overrides,
+  };
 }
 
 describe("profile cockpit resume matching", () => {
@@ -297,5 +312,141 @@ describe("durable profile active-conversation pointer", () => {
       expectedTargetHead: { sequence: session.headSequence, digest: session.headDigest },
     })).rejects.toBeInstanceOf(ProfileActiveConversationConflictError);
     await expect(selectProfileActiveConversation(journal, "general", session.id)).rejects.toThrow(/owning profile/u);
+  });
+
+  it("refuses when the target changes after preflight but before the selection append", async () => {
+    const inner = new MemoryJournalBackend();
+    const racingWriter = new EventJournal(inner);
+    let targetSessionId = "";
+    let raceOnList = false;
+    const journal = new EventJournal(wrapMemoryBackend(inner, {
+      async listSessions() {
+        const snapshot = await inner.listSessions();
+        if (raceOnList) {
+          raceOnList = false;
+          await racingWriter.renameSession(targetSessionId, "Changed during selection");
+        }
+        return snapshot;
+      },
+    }));
+    const pinned = await manifest("Head race");
+    const target = await journal.createSession("Audited", pinned);
+    targetSessionId = target.id;
+    const audited = (await journal.getSession(target.id))!;
+    raceOnList = true;
+
+    await expect(selectProfileActiveConversation(journal, "research", target.id, {
+      expectedTargetHead: { sequence: audited.headSequence, digest: audited.headDigest },
+    })).rejects.toBeInstanceOf(ProfileActiveConversationConflictError);
+
+    expect((await journal.getSession(target.id))?.title).toBe("Changed during selection");
+    expect((await journal.readEvents(target.id)).map((event) => event.type))
+      .toEqual(["session.created", "session.renamed"]);
+  });
+
+  it("rechecks the audited head before returning an already-selected target", async () => {
+    const inner = new MemoryJournalBackend();
+    const racingWriter = new EventJournal(inner);
+    let targetSessionId = "";
+    let raceOnList = false;
+    const journal = new EventJournal(wrapMemoryBackend(inner, {
+      async listSessions() {
+        const snapshot = await inner.listSessions();
+        if (raceOnList) {
+          raceOnList = false;
+          await racingWriter.renameSession(targetSessionId, "Changed during no-op selection");
+        }
+        return snapshot;
+      },
+    }));
+    const target = await journal.createSession("Already selected", await manifest("No-op head race"));
+    targetSessionId = target.id;
+    await selectProfileActiveConversation(journal, "research", target.id);
+    const audited = (await journal.getSession(target.id))!;
+    raceOnList = true;
+
+    await expect(selectProfileActiveConversation(journal, "research", target.id, {
+      expectedTargetHead: { sequence: audited.headSequence, digest: audited.headDigest },
+    })).rejects.toBeInstanceOf(ProfileActiveConversationConflictError);
+
+    expect((await journal.readEvents(target.id)).map((event) => event.type))
+      .toEqual([
+        "session.created",
+        PROFILE_ACTIVE_CONVERSATION_EVENT_TYPE,
+        "session.renamed",
+      ]);
+  });
+
+  it("returns the committed selection when cancellation arrives after storage admission", async () => {
+    const inner = new MemoryJournalBackend();
+    const controller = new AbortController();
+    let abortAfterSelectionCommit = false;
+    let selectionBackendSignal: AbortSignal | undefined | null = null;
+    const journal = new EventJournal(wrapMemoryBackend(inner, {
+      async append(sessionId, expectedHead, events, signal) {
+        const committed = await inner.append(sessionId, expectedHead, events);
+        if (
+          abortAfterSelectionCommit
+          && events.some((event) => event.type === PROFILE_ACTIVE_CONVERSATION_EVENT_TYPE)
+        ) {
+          selectionBackendSignal = signal;
+          abortAfterSelectionCommit = false;
+          controller.abort(new DOMException("Stopped after admission", "AbortError"));
+        }
+        return committed;
+      },
+    }));
+    const pinned = await manifest("Commit boundary");
+    const target = await journal.createSession("Target", pinned);
+    const audited = (await journal.getSession(target.id))!;
+    abortAfterSelectionCommit = true;
+
+    const selected = await selectProfileActiveConversation(journal, "research", target.id, {
+      expectedTargetHead: { sequence: audited.headSequence, digest: audited.headDigest },
+      signal: controller.signal,
+    });
+
+    expect(controller.signal.aborted).toBe(true);
+    expect(selectionBackendSignal).toBe(controller.signal);
+    expect(selected).toMatchObject({
+      changed: true,
+      pointer: { sessionId: target.id, generation: 1 },
+      session: { id: target.id, headSequence: audited.headSequence + 1 },
+    });
+    expect(await resolveProfileActiveConversation(journal, "research"))
+      .toMatchObject({ state: "selected", pointer: { eventId: selected.pointer.eventId }, session: { id: target.id } });
+  });
+
+  it("forwards cancellation to a stalled profile session listing", async () => {
+    const inner = new MemoryJournalBackend();
+    const controller = new AbortController();
+    let enteredList!: () => void;
+    const listStarted = new Promise<void>((resolve) => { enteredList = resolve; });
+    let receivedSignal: AbortSignal | undefined;
+    const journal = new EventJournal(wrapMemoryBackend(inner, {
+      listSessions(signal) {
+        receivedSignal = signal;
+        enteredList();
+        return new Promise<never>((_resolve, reject) => {
+          const rejectFromAbort = () => reject(signal?.reason);
+          if (signal?.aborted) rejectFromAbort();
+          else signal?.addEventListener("abort", rejectFromAbort, { once: true });
+        });
+      },
+    }));
+    const target = await journal.createSession("Cancellation target", await manifest("List cancellation"));
+    const audited = (await journal.getSession(target.id))!;
+
+    const selection = selectProfileActiveConversation(journal, "research", target.id, {
+      expectedTargetHead: { sequence: audited.headSequence, digest: audited.headDigest },
+      signal: controller.signal,
+    });
+    await listStarted;
+    expect(receivedSignal).toBe(controller.signal);
+    controller.abort(new DOMException("Return request abandoned", "AbortError"));
+
+    await expect(selection).rejects.toMatchObject({ name: "AbortError" });
+    expect((await journal.readEvents(target.id)).map((event) => event.type))
+      .toEqual(["session.created"]);
   });
 });

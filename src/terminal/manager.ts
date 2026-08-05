@@ -44,6 +44,10 @@ const TERMINAL_LEASE_TTL_MS = 45_000;
 export const TERMINAL_LEASE_RENEW_MS = 12_000;
 /** How stale a takeover observation may be while this page is taking input. */
 const TERMINAL_LEASE_OBSERVE_MS = 1_000;
+/** Do not let a provider-owned spawn promise hold a Profile transition forever. */
+const TERMINAL_PENDING_SPAWN_SETTLE_MS = 1_000;
+/** Bound a provider that does not settle `process.exit` after forced termination. */
+const TERMINAL_KILL_SETTLE_MS = 500;
 const TRANSCRIPT_ENCODING_PREFIX = "airship-terminal-utf8-base64-v1:";
 const MAX_ENCODED_TRANSCRIPT_CHARS = TRANSCRIPT_ENCODING_PREFIX.length + Math.ceil(MAX_ACCEPTED_TRANSCRIPT_BYTES / 3) * 4;
 const DEFAULT_DIMENSIONS = Object.freeze({ cols: 100, rows: 30 });
@@ -78,6 +82,8 @@ type MutableSession = {
   /** Set after this page observes another durable writer; omission preserves the winner. */
   suppressPersistence: boolean;
   process?: WebContainerProcess;
+  /** Settles after an unpublished jsh has either survived or been stopped. */
+  processStart?: Promise<void>;
   writer?: WritableStreamDefaultWriter<string>;
   inputTail: Promise<void>;
 };
@@ -369,8 +375,22 @@ export class BrowserTerminalManager {
 
   async start(sessionId: string, dimensions: TerminalDimensions = DEFAULT_DIMENSIONS, signal = new AbortController().signal): Promise<void> {
     await this.ready;
-    const session = this.requireSession(sessionId);
+    let session = this.requireSession(sessionId);
     if (session.status === "running" || session.status === "starting") return;
+    // A timed-out authority handoff deliberately retains the unpublished
+    // spawn/exit settlement so its cwd stays mounted until cleanup is real.
+    // Auto-start may revisit a restart-required tab immediately; fence that
+    // retry before it can reconcile the retained mount or replace ownership
+    // with a second spawn.
+    const retainedProcessStart = session.processStart;
+    if (retainedProcessStart) {
+      if (!await settlesWithin(retainedProcessStart, TERMINAL_PENDING_SPAWN_SETTLE_MS)) {
+        throw new Error("The previous browser shell is still stopping. Try starting this terminal again once it has stopped.");
+      }
+      session = this.requireSession(sessionId);
+      if (session.status === "running" || session.status === "starting") return;
+      if (session.processStart === retainedProcessStart) session.processStart = undefined;
+    }
     // Read before the transition, because the banner below has to say whether
     // this tab is picking up where a dead process left off or opening cold.
     const priorStatus = session.status;
@@ -394,12 +414,21 @@ export class BrowserTerminalManager {
       const mountRefreshed = !hadMountedHost || this.mountIsQuiescent(session.id);
       if (hadMountedHost) await this.runWorkspaceSync(undefined, mountRefreshed ? "reconcile" : "outgoing");
       if (generation !== session.generation) return;
-      const process = await host.spawn("jsh", [], {
+      const spawned = host.spawn("jsh", [], {
         cwd: hostCwd(session.cwd),
         terminal: boundedDimensions(dimensions),
         env: { TERM: "xterm-256color", AIRSHIP_TERMINAL: "browser-webcontainer" },
       });
-      if (generation !== session.generation) { process.kill(); return; }
+      const processStart = spawned.then(async (process) => {
+        if (generation !== session.generation) await stopTerminalProcess(process, session);
+      }, () => undefined);
+      session.processStart = processStart;
+      const process = await spawned;
+      if (session.processStart === processStart) session.processStart = undefined;
+      if (generation !== session.generation) {
+        await processStart;
+        return;
+      }
       session.process = process;
       session.writer = process.input.getWriter();
       session.status = "running";
@@ -426,15 +455,29 @@ export class BrowserTerminalManager {
       this.emit(session);
       this.queuePersist();
       void this.pumpOutput(session, process, generation).catch((error) => {
-        this.outputFailed(session, process, generation, error);
+        this.processFailed(session, process, generation, "output", error);
       });
-      void process.exit.then((exitCode) => this.processExited(session, process, generation, exitCode));
+      // WebContainer rejects `exit` with a provider-owned object when a live
+      // jsh is killed during workspace authority release. A success-only
+      // handler left that expected teardown as an unhandled page rejection;
+      // an unexpected rejection also left the tab claiming it still ran.
+      void process.exit.then(
+        (exitCode) => this.processExited(session, process, generation, exitCode),
+        (error) => this.processFailed(session, process, generation, "process completion", error),
+      ).catch((error) => this.recordPersistence(error));
     } catch (error) {
       if (generation !== session.generation) return;
-      try { session.process?.kill(); } catch { /* A partially started provider process may already be gone. */ }
+      let failure = error;
+      if (session.process) {
+        try {
+          await stopTerminalProcess(session.process, session);
+        } catch (stopError) {
+          failure = stopError;
+        }
+      }
       releaseProcess(session);
       session.status = "failed";
-      session.detail = error instanceof Error ? error.message : "The browser terminal could not start.";
+      session.detail = failure instanceof Error ? failure.message : "The browser terminal could not start.";
       session.updatedAt = new Date().toISOString();
       this.appendAudit(session, {
         kind: "process-start",
@@ -510,17 +553,11 @@ export class BrowserTerminalManager {
 
   async restart(sessionId: string, dimensions: TerminalDimensions = DEFAULT_DIMENSIONS): Promise<void> {
     const session = this.requireSession(sessionId);
-    if (session.status === "running" || session.status === "starting") {
-      this.appendAudit(session, {
-        kind: "process-exit",
-        outcome: "completed",
-        processEpoch: session.processEpoch,
-        summary: "Stopped the page-local process to start a fresh terminal process epoch.",
-      });
-    }
-    ++session.generation;
-    session.process?.kill();
-    releaseProcess(session);
+    await this.stopSessionForAction(
+      session,
+      "Stopping the previous browser shell before restart…",
+      "Stopped the page-local process to start a fresh terminal process epoch.",
+    );
     session.status = "idle";
     session.detail = "Previous process stopped; starting a fresh browser shell.";
     session.updatedAt = new Date().toISOString();
@@ -530,22 +567,16 @@ export class BrowserTerminalManager {
 
   async close(sessionId: string): Promise<void> {
     const session = this.requireSession(sessionId);
-    if (session.status === "running" || session.status === "starting") {
-      this.appendAudit(session, {
-        kind: "process-exit",
-        outcome: "completed",
-        processEpoch: session.processEpoch,
-        summary: "Stopped the page-local process because its terminal tab was closed.",
-      });
-    }
-    ++session.generation;
-    session.process?.kill();
-    releaseProcess(session);
+    await this.stopSessionForAction(
+      session,
+      "Stopping the browser shell before closing this tab…",
+      "Stopped the page-local process because its terminal tab was closed.",
+    );
     try {
       await this.syncWorkspaceForSession(session.id);
     } catch (error) {
       session.status = "failed";
-      session.detail = `Terminal stopped, but its tab remains open because workspace reconciliation failed: ${error instanceof Error ? error.message : String(error)}`;
+      session.detail = `Terminal stopped, but its tab remains open because workspace reconciliation failed: ${failureMessage(error)}`;
       session.updatedAt = new Date().toISOString();
       this.emit(session);
       this.queuePersist();
@@ -559,6 +590,40 @@ export class BrowserTerminalManager {
     this.emitList();
     this.queuePersist();
     await this.releaseSessionLease(sessionId);
+  }
+
+  private async stopSessionForAction(session: MutableSession, pendingDetail: string, completedSummary: string): Promise<void> {
+    const active = session.status === "running" || session.status === "starting";
+    if (!active && !session.process && !session.processStart) return;
+    ++session.generation;
+    const stopping = stopTerminalSession(session);
+    session.status = "starting";
+    session.detail = pendingDetail;
+    session.updatedAt = new Date().toISOString();
+    this.emit(session);
+    this.queuePersist();
+    try {
+      await stopping;
+    } catch (error) {
+      session.status = "failed";
+      session.detail = `Terminal could not stop: ${failureMessage(error)}`;
+      session.updatedAt = new Date().toISOString();
+      this.appendAudit(session, {
+        kind: "process-exit",
+        outcome: "failed",
+        processEpoch: session.processEpoch,
+        summary: session.detail,
+      });
+      this.emit(session);
+      this.queuePersist();
+      throw error;
+    }
+    if (active) this.appendAudit(session, {
+      kind: "process-exit",
+      outcome: "completed",
+      processEpoch: session.processEpoch,
+      summary: completedSummary,
+    });
   }
 
   /** The operator asked for it explicitly, so this is always the full reconcile. */
@@ -668,7 +733,7 @@ export class BrowserTerminalManager {
           kind: "workspace-reconcile",
           outcome: "failed",
           processEpoch: session.processEpoch,
-          summary: `Workspace reconciliation failed: ${error instanceof Error ? error.message : String(error)}`,
+          summary: `Workspace reconciliation failed: ${failureMessage(error)}`,
         });
         this.emit(session);
         this.queuePersist();
@@ -740,69 +805,65 @@ export class BrowserTerminalManager {
     // reconciled from here. Airship's own deactivation quiesces first; an
     // external teardown does not, and the honest thing is to say so rather than
     // let a restart imply the mount survived.
-    this.stopLiveSessions(
+    const leaseReleases = this.stopLiveSessions(
       "The shared browser runtime was deactivated. Terminal writes made since the last reconciliation were discarded with it. Start this terminal to acquire a fresh isolated host.",
       "Airship runtime deactivated; unreconciled terminal writes were discarded. This terminal requires restart.",
     );
+    void Promise.all(leaseReleases).catch((error) => this.recordPersistence(error));
   }
 
   private async releaseAuthorityWithinLock(reason: string, reconcile: boolean): Promise<readonly string[]> {
     const host = this.host;
     const baseline = this.baseline;
-    this.stopLiveSessions(reason, "Airship changed terminal workspace authority; this terminal requires restart.");
+    const leaseReleases = this.stopLiveSessions(reason, "Airship changed terminal workspace authority; this terminal requires restart.");
     let changed: readonly string[] = Object.freeze([]);
-    let failure: unknown;
-    try {
-      if (reconcile && host && baseline) {
-        const result = await syncTerminalWorkspace(host, this.workspace, baseline);
-        changed = result.changedPaths;
-        this.emitWorkspaceChanges(changed);
-      }
-    } catch (error) {
-      failure = error;
-    } finally {
-      if (host) {
-        try {
-          await host.fs.rm(TERMINAL_WORKSPACE_MOUNT, { recursive: true, force: true });
-        } catch (error) {
-          failure ??= error;
-        }
-      }
-      if (activeHostManager === this) BrowserTerminalManager.setActiveHostManager(undefined);
-      this.clearHostBinding();
-      this.flushTranscriptPersist();
-      // Handled, not awaited bare: a rejection here runs inside `finally` and
-      // would replace the teardown error the caller actually needs to see.
-      // `queuePersist` records the failure, so nothing is swallowed silently.
-      await this.persistenceTail.catch(() => undefined);
-      await Promise.all([...this.sessionLeases.keys()].map((sessionId) => this.releaseSessionLease(sessionId)));
+    // A failed stop keeps both authority and mount intact. Unmounting in a
+    // `finally` block let a provider-owned spawn outlive the cwd it was still
+    // creating, which is exactly the ENOENT this boundary exists to prevent.
+    await settleAllOrThrow(leaseReleases);
+    if (reconcile && host && baseline) {
+      const result = await syncTerminalWorkspace(host, this.workspace, baseline);
+      this.baseline = result.snapshot;
+      changed = result.changedPaths;
+      this.emitWorkspaceChanges(changed);
     }
-    if (failure) throw failure;
+    this.flushTranscriptPersist();
+    await this.persistenceTail.catch(() => undefined);
+    await settleAllOrThrow([...this.sessionLeases.keys()].map((sessionId) => this.releaseSessionLease(sessionId)));
+    if (host) await host.fs.rm(TERMINAL_WORKSPACE_MOUNT, { recursive: true, force: true });
+    if (activeHostManager === this) BrowserTerminalManager.setActiveHostManager(undefined);
+    this.clearHostBinding();
     return Object.freeze([...changed]);
   }
 
-  private stopLiveSessions(detail: string, output: string): void {
+  private stopLiveSessions(detail: string, output: string): readonly Promise<void>[] {
     let changed = false;
+    const leaseReleases: Promise<void>[] = [];
     for (const session of this.sessions.values()) {
-      if (session.status !== "running" && session.status !== "starting") continue;
-      changed = true;
-      ++session.generation;
-      try { session.process?.kill(); } catch { /* The provider host is already torn down. */ }
-      releaseProcess(session);
-      session.status = "restart-required";
-      session.detail = detail;
-      session.updatedAt = new Date().toISOString();
-      this.appendAudit(session, {
-        kind: "process-exit",
-        outcome: "failed",
-        processEpoch: session.processEpoch,
-        summary: detail,
-      });
-      this.appendOutput(session, `\r\n\x1b[33m${output}\x1b[0m\r\n`);
-      this.emit(session);
-      void this.releaseSessionLease(session.id);
+      const active = session.status === "running" || session.status === "starting";
+      if (!active && !session.process && !session.processStart) continue;
+      if (active) {
+        changed = true;
+        ++session.generation;
+        session.status = "restart-required";
+        session.detail = detail;
+        session.updatedAt = new Date().toISOString();
+        this.appendAudit(session, {
+          kind: "process-exit",
+          outcome: "failed",
+          processEpoch: session.processEpoch,
+          summary: detail,
+        });
+        this.appendOutput(session, `\r\n\x1b[33m${output}\x1b[0m\r\n`);
+        this.emit(session);
+      }
+      leaseReleases.push(
+        this.releaseSessionLease(session.id),
+        stopTerminalSession(session),
+      );
     }
     if (changed) this.queuePersist();
+    return Object.freeze(leaseReleases);
   }
 
   private clearHostBinding(): void {
@@ -835,7 +896,7 @@ export class BrowserTerminalManager {
     try {
       while (generation === session.generation) {
         const chunk = await reader.read();
-        if (chunk.done) return;
+        if (chunk.done || generation !== session.generation) return;
         updateCwdFromOsc(session, chunk.value);
         this.appendOutput(session, chunk.value);
       }
@@ -864,16 +925,17 @@ export class BrowserTerminalManager {
       const changed = await this.syncWorkspaceForSession(session.id);
       if (changed.length) this.appendOutput(session, `\r\n\x1b[36mAirship synced ${changed.length} workspace change${changed.length === 1 ? "" : "s"}.\x1b[0m\r\n`);
     } catch (error) {
-      this.appendOutput(session, `\r\n\x1b[33mWorkspace sync requires attention: ${error instanceof Error ? error.message : String(error)}\x1b[0m\r\n`);
+      this.appendOutput(session, `\r\n\x1b[33mWorkspace sync requires attention: ${failureMessage(error)}\x1b[0m\r\n`);
     } finally {
       await this.releaseSessionLease(session.id);
     }
   }
 
-  private outputFailed(
+  private processFailed(
     session: MutableSession,
     process: WebContainerProcess,
     generation: number,
+    phase: "output" | "process completion",
     error: unknown,
   ): void {
     if (generation !== session.generation || session.process !== process) return;
@@ -881,9 +943,10 @@ export class BrowserTerminalManager {
     try { process.kill(); } catch { /* The provider may have failed together with its output stream. */ }
     releaseProcess(session);
     session.status = "failed";
-    session.detail = error instanceof Error
-      ? `Terminal output failed: ${error.message}`
-      : "Terminal output failed before the process completed.";
+    const providerMessage = (error as { message?: unknown } | null)?.message;
+    session.detail = `Terminal ${phase} failed${typeof providerMessage === "string"
+      ? `: ${providerMessage}`
+      : " before the process completed."}`;
     session.updatedAt = new Date().toISOString();
     this.appendAudit(session, {
       kind: "process-exit",
@@ -894,7 +957,7 @@ export class BrowserTerminalManager {
     this.appendOutput(session, `\r\n\x1b[31m${session.detail}\x1b[0m\r\n`);
     this.emit(session);
     this.queuePersist();
-    void this.releaseSessionLease(session.id);
+    void this.releaseSessionLease(session.id).catch((error) => this.recordPersistence(error));
   }
 
   private appendOutput(session: MutableSession, chunk: string): void {
@@ -1051,7 +1114,7 @@ export class BrowserTerminalManager {
   private recordPersistence(error: unknown): void {
     const failure = error === undefined
       ? undefined
-      : error instanceof Error ? error.message : String(error);
+      : failureMessage(error);
     if (failure === this.lastPersistenceFailure) return;
     this.lastPersistenceFailure = failure;
     for (const listener of this.persistenceListeners) {
@@ -1286,7 +1349,13 @@ export class BrowserTerminalManager {
     try {
       await this.workspace.remove(path, { expectedRevision: current.revision });
     } catch (error) {
-      if (!(error instanceof WorkspaceConflictError)) throw error;
+      if (error instanceof WorkspaceConflictError) return;
+      // Some browser-backed filesystems report a concurrent successful remove
+      // as their provider's plain ENOENT object rather than the workspace CAS
+      // conflict type. Re-read the boundary: absence means the idempotent
+      // release is complete; a still-present lease preserves the real error.
+      if (!await this.workspace.read(path)) return;
+      throw error;
     }
   }
 
@@ -1468,6 +1537,61 @@ function releaseProcess(session: MutableSession): void {
   session.writer?.releaseLock();
   session.writer = undefined;
   session.process = undefined;
+  session.inputTail = Promise.resolve();
+}
+
+function stopTerminalSession(session: MutableSession): Promise<void> {
+  const stopping = session.process
+    ? stopTerminalProcess(session.process, session)
+    : session.processStart
+      ? stopPendingTerminalProcess(session.processStart)
+      : Promise.resolve();
+  releaseProcess(session);
+  return stopping;
+}
+
+/**
+ * A Profile switch can overtake `host.spawn()`: there is no published process
+ * to stop yet, but unmounting its cwd before that promise settles makes the
+ * late process reject during cleanup. The manager tracks that promise and
+ * routes both the late-start branch and the authority release through this
+ * rejection-observing stop path.
+ */
+async function stopTerminalProcess(process: WebContainerProcess, session?: MutableSession): Promise<void> {
+  const settled = process.exit.then(() => undefined, () => undefined);
+  if (session) {
+    session.processStart = settled;
+    void settled.then(() => {
+      if (session.processStart === settled) session.processStart = undefined;
+    });
+  }
+  try { process.kill(); } catch { /* The provider host may already be gone. */ }
+  if (!await settlesWithin(settled, TERMINAL_KILL_SETTLE_MS)) {
+    throw new Error("Browser terminal did not confirm it stopped.");
+  }
+}
+
+async function stopPendingTerminalProcess(processStart: Promise<void>): Promise<void> {
+  if (!await settlesWithin(processStart, TERMINAL_PENDING_SPAWN_SETTLE_MS)) {
+    throw new Error("Browser terminal did not settle before workspace release.");
+  }
+}
+
+async function settleAllOrThrow(operations: readonly Promise<unknown>[]): Promise<void> {
+  for (const result of await Promise.allSettled(operations)) {
+    if (result.status === "rejected") throw result.reason;
+  }
+}
+
+function settlesWithin(settlement: Promise<void>, timeoutMs: number): Promise<boolean> {
+  return Promise.race([
+    settlement.then(() => true),
+    new Promise<false>((resolve) => setTimeout(() => resolve(false), timeoutMs)),
+  ]);
+}
+
+function failureMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function rememberInput(session: MutableSession, data: string): readonly string[] {

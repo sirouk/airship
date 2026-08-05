@@ -197,6 +197,8 @@ function gatedWorkspace(base: MemoryWorkspace) {
 /** A host whose spawned process lets the test push PTY output on demand. */
 function streamingHost() {
   let emit!: (chunk: string) => void;
+  let closeOutput!: () => void;
+  let resolveExit!: (code: number) => void;
   const host = {
     fs: {
       async mkdir() { return undefined; },
@@ -206,10 +208,13 @@ function streamingHost() {
     async export() { return {}; },
     async spawn() {
       return {
-        exit: new Promise<number>(() => undefined),
-        input: new WritableStream<string>(),
-        output: new ReadableStream<string>({ start(controller) { emit = (chunk) => controller.enqueue(chunk); } }),
-        kill() {},
+        exit: new Promise<number>((resolve) => { resolveExit = resolve; }),
+        input: new WritableStream<string>({ close() { closeOutput(); resolveExit(0); } }),
+        output: new ReadableStream<string>({ start(controller) {
+          emit = (chunk) => controller.enqueue(chunk);
+          closeOutput = () => controller.close();
+        } }),
+        kill() { closeOutput(); resolveExit(130); },
         resize() {},
       };
     },

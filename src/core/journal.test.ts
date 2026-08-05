@@ -80,6 +80,24 @@ describe("EventJournal concurrent in-page writers", () => {
     const rejected = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
     expect(rejected?.reason).toBeInstanceOf(JournalConflictError);
   });
+
+  it("does not rebase a fenced append onto a head that changed after audit", async () => {
+    const { journal, session } = await seed();
+    const audited = (await journal.getSession(session.id))!;
+    await journal.append(session.id, [{
+      type: "message.user",
+      payload: { content: "landed after the audit" },
+    }]);
+
+    await expect(journal.appendAtHead(
+      session.id,
+      { sequence: audited.headSequence, digest: audited.headDigest },
+      [{ type: "profile.active-conversation.selected", payload: { generation: 1 } }],
+    )).rejects.toBeInstanceOf(JournalConflictError);
+
+    expect((await journal.readEvents(session.id)).map((event) => event.type))
+      .toEqual(["session.created", "message.user"]);
+  });
 });
 
 /*
@@ -140,5 +158,33 @@ describe("EventJournal append queue under a stalled backend", () => {
     for (let index = 1; index < events.length; index += 1) {
       expect(events[index]!.previousDigest).toBe(events[index - 1]!.digest);
     }
+  });
+
+  it("cancels a fenced append before it reaches durable admission", async () => {
+    const { backend, release, stall } = stalling();
+    const journal = new EventJournal(backend);
+    const manifest = await createSessionManifest({ systemPrompt: "test", providerId: "local", model: "demo", tools: [], workspaceId: "workspace" });
+    const session = await journal.createSession("Stalled fence", manifest);
+    const audited = (await journal.getSession(session.id))!;
+    stall();
+    const blocked = journal.append(session.id, [{
+      type: "message.user",
+      payload: { content: "in flight" },
+    }]);
+    const controller = new AbortController();
+    const fenced = journal.appendAtHead(
+      session.id,
+      { sequence: audited.headSequence, digest: audited.headDigest },
+      [{ type: "profile.active-conversation.selected", payload: { generation: 1 } }],
+      controller.signal,
+    );
+
+    controller.abort(new DOMException("Stopped before selection", "AbortError"));
+    await expect(fenced).rejects.toMatchObject({ name: "AbortError" });
+
+    release();
+    await blocked;
+    expect((await journal.readEvents(session.id)).map((event) => event.type))
+      .toEqual(["session.created", "message.user"]);
   });
 });

@@ -16,6 +16,7 @@ import { sha256 } from "../core/hash";
 import type { WorkspaceEntry, WorkspacePort } from "../workspace/contracts";
 import { HashEmbeddingProvider } from "../indexing/hash-embeddings";
 import {
+  readEmbeddingMode,
   readStoredEmbeddingMode,
   SwitchableEmbeddingProvider,
   type EmbeddingMode,
@@ -25,10 +26,13 @@ import type { SemanticProviderState } from "../indexing/semantic-worker-provider
 const DEFAULT_DEBOUNCE_MS = 120;
 const DEFAULT_TURN_HITS = 6;
 const DEFAULT_TURN_BYTES = 24 * 1024;
+const BUILT_IN_SEMANTIC_PACK_AVAILABLE = import.meta.env.VITE_AIRSHIP_SEMANTIC_PACK_AVAILABLE === "true";
 const runtimes = new WeakMap<WorkspacePort, ClientContextRuntime>();
 
 export type ClientContextRuntimeOptions = Omit<ClientContextEngineOptions, "workspace"> & Readonly<{
   debounceMs?: number;
+  /** Overrides the built-in pack declaration for an application-supplied runtime. */
+  semanticPackAvailable?: boolean;
 }>;
 
 /**
@@ -40,6 +44,7 @@ export class ClientContextRuntime {
   private readonly workspace: WorkspacePort;
   private readonly embeddings: ClientContextEngineOptions["embeddings"];
   private readonly switchable?: SwitchableEmbeddingProvider;
+  readonly semanticPackAvailable: boolean;
   private readonly debounceMs: number;
   private timer?: ReturnType<typeof setTimeout>;
   private scheduled?: Promise<ClientContextGeneration>;
@@ -49,10 +54,13 @@ export class ClientContextRuntime {
   private derivedMode?: Promise<void>;
 
   constructor(workspace: WorkspacePort, options: ClientContextRuntimeOptions = {}) {
-    const { debounceMs, ...engineOptions } = options;
+    const { debounceMs, semanticPackAvailable, ...engineOptions } = options;
     this.workspace = workspace;
     this.debounceMs = boundedInteger(debounceMs ?? DEFAULT_DEBOUNCE_MS, 0, 60_000);
-    const embeddings = engineOptions.embeddings ?? createDefaultEmbeddingProvider(engineOptions.dimensions);
+    this.semanticPackAvailable = semanticPackAvailable
+      ?? (engineOptions.embeddings !== undefined || BUILT_IN_SEMANTIC_PACK_AVAILABLE);
+    const embeddings = engineOptions.embeddings
+      ?? createDefaultEmbeddingProvider(engineOptions.dimensions, this.semanticPackAvailable);
     this.embeddings = embeddings;
     if (embeddings instanceof SwitchableEmbeddingProvider) this.switchable = embeddings;
     this.engine = new ClientContextEngine({
@@ -83,6 +91,9 @@ export class ClientContextRuntime {
   /** Switch only after any active generation completes, then rebuild atomically. */
   async setEmbeddingMode(mode: EmbeddingMode): Promise<ClientContextGeneration> {
     if (!this.switchable) throw new Error("This context runtime uses an application-supplied embedding provider.");
+    if (mode === "semantic" && !this.semanticPackAvailable) {
+      throw new Error("Local semantic embeddings are unavailable because this Airship build does not publish the optional semantic pack. Bootstrap remains active; publish the verified pack before selecting Local semantic.");
+    }
     // An explicit selection settles the question the probe exists to answer,
     // including when it arrives before the first generation.
     this.derivedMode = Promise.resolve();
@@ -126,7 +137,7 @@ export class ClientContextRuntime {
   private resolveDerivedEmbeddingMode(): Promise<void> {
     return this.derivedMode ??= (async () => {
       const switchable = this.switchable;
-      if (!switchable || readStoredEmbeddingMode() !== undefined) return;
+      if (!switchable || !this.semanticPackAvailable || readStoredEmbeddingMode() !== undefined) return;
       try {
         const report = await getBrowserCapabilityRegistry().refresh();
         // The probe is not instant, and a person may have chosen during it.
@@ -302,12 +313,12 @@ function isTurnContextRequest(value: TurnContextRequest | AbortSignal | undefine
   return Boolean(value) && typeof value === "object" && "sessionId" in value;
 }
 
-function createDefaultEmbeddingProvider(dimensions?: number) {
+function createDefaultEmbeddingProvider(dimensions: number | undefined, semanticPackAvailable: boolean) {
   // Custom low-dimensional providers remain deterministic for unit tests and
   // embeddings that are not compatible with the pinned 384d semantic model.
   return dimensions && dimensions !== 384
     ? new HashEmbeddingProvider(dimensions)
-    : new SwitchableEmbeddingProvider(384);
+    : new SwitchableEmbeddingProvider(384, semanticPackAvailable ? readEmbeddingMode() : "bootstrap");
 }
 
 function browserContextScheduling(): ClientContextSchedulingPolicy {

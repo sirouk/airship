@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createSessionManifest } from "./agent";
+import { createSessionManifest, materializeMessages } from "./agent";
 import type { CanonicalMessage, JsonValue, ToolCall, ToolDefinition } from "./contracts";
 import { sha256, stableStringify } from "./hash";
 import { EventJournal, type DurableEvent, type SessionRecord } from "./journal";
@@ -85,6 +85,68 @@ describe("auditSessionHistory", () => {
     expect(report.counts).toMatchObject({ events: 5, turns: 1, completedTurns: 1 });
     expect(report.findings).toEqual([]);
     expect(Object.isFrozen(report)).toBe(true);
+  });
+
+  it("reprojects failed and no-work cancelled turns before checking the next request", async () => {
+    for (const terminal of ["turn.failed", "turn.cancelled"] as const) {
+      const fixture = await createFixture([]);
+      await fixture.journal.append(fixture.session.id, [
+        { type: "turn.requested", turnId: "discarded-turn", payload: { content: "Do not replay this." } },
+        { type: terminal, turnId: "discarded-turn", payload: { error: terminal === "turn.failed" ? "Provider failed." : "Stopped before work." } },
+      ]);
+
+      await appendCompletedTurn(fixture, "next-turn", "Continue safely.", []);
+      const report = await auditFixture(fixture);
+      expect(report.status, terminal).toBe("verified");
+      expect(report.findings, terminal).toEqual([]);
+    }
+  });
+
+  it("reprojects a cancelled turn's completed work as a checkpoint before the next request", async () => {
+    const fixture = await createFixture([writeTool]);
+    const turnId = "cancelled-after-work";
+    const call: ToolCall = {
+      id: "call-salvaged",
+      name: "write_file",
+      arguments: { path: "/workspace/report.md", content: "landed" },
+    };
+    const request: CanonicalMessage = { role: "user", content: "Write the report, then keep going." };
+    await fixture.journal.append(fixture.session.id, [
+      { type: "turn.requested", turnId, payload: { content: request.content } },
+    ]);
+    const firstDigest = await inferenceDigest(fixture.session, turnId, 0, [request]);
+    await fixture.journal.append(fixture.session.id, [
+      {
+        type: "inference.started",
+        turnId,
+        operationId: "salvaged-inference",
+        payload: inferencePayload(fixture.session, turnId, 0, firstDigest),
+      },
+      {
+        type: "assistant.completed",
+        turnId,
+        operationId: "salvaged-inference",
+        payload: { message: { role: "assistant", content: "", toolCalls: [call] }, finishReason: "tool-calls" },
+      },
+      { type: "tool.requested", turnId, operationId: call.id, payload: { call } },
+      { type: "tool.approved", turnId, operationId: call.id, payload: { callId: call.id, name: call.name, approval: HUMAN_APPROVAL } },
+      {
+        type: "tool.resulted",
+        turnId,
+        operationId: call.id,
+        payload: { callId: call.id, name: call.name, content: "Wrote report.md", isError: false, metadata: null },
+      },
+      { type: "turn.cancelled", turnId, payload: { error: "Stopped after the write." } },
+    ]);
+
+    const salvagedHistory = materializeMessages(await fixture.journal.readEvents(fixture.session.id));
+    expect(salvagedHistory[0]?.content).toContain("cancelled before it finished");
+    expect(salvagedHistory.some((message) => message.role === "tool" && message.content === "Wrote report.md")).toBe(true);
+    await appendCompletedTurn(fixture, "after-salvage", "Summarize what landed.", salvagedHistory);
+
+    const report = await auditFixture(fixture);
+    expect(report.status).toBe("verified");
+    expect(report.findings).toEqual([]);
   });
 
   it("audits an ordered multi-step tool lifecycle and its transcript-derived second request", async () => {
@@ -1019,6 +1081,56 @@ async function auditFixture(fixture: Awaited<ReturnType<typeof createFixture>>) 
   const session = (await fixture.journal.getSession(fixture.session.id))!;
   const events = await fixture.journal.readEvents(session.id);
   return auditSessionHistory({ session, events }, { checkedAt: "2026-07-18T00:01:00.000Z" });
+}
+
+async function appendCompletedTurn(
+  fixture: Awaited<ReturnType<typeof createFixture>>,
+  turnId: string,
+  requestContent: string,
+  priorMessages: readonly CanonicalMessage[],
+): Promise<void> {
+  const request: CanonicalMessage = { role: "user", content: requestContent };
+  await fixture.journal.append(fixture.session.id, [
+    { type: "turn.requested", turnId, payload: { content: requestContent } },
+  ]);
+  const requestDigest = await inferenceDigest(
+    fixture.session,
+    turnId,
+    0,
+    [...priorMessages, request],
+  );
+  const operationId = `${turnId}-inference`;
+  const response = `Completed ${turnId}.`;
+  const responseDigest = await sha256(response);
+  const receipt = createLocalReceipt({
+    sessionId: fixture.session.id,
+    turnId,
+    provider: fixture.session.manifest.providerId,
+    model: fixture.session.manifest.model,
+    requestDigest,
+    responseDigest,
+    now: "2026-07-18T00:00:40.000Z",
+  });
+  await fixture.journal.append(fixture.session.id, [
+    {
+      type: "inference.started",
+      turnId,
+      operationId,
+      payload: inferencePayload(fixture.session, turnId, 0, requestDigest),
+    },
+    {
+      type: "assistant.completed",
+      turnId,
+      operationId,
+      payload: {
+        message: { role: "assistant", content: response },
+        finishReason: "stop",
+        responseDigest,
+        receipt: receipt as unknown as JsonValue,
+      },
+    },
+    { type: "turn.completed", turnId, payload: { responseDigest, receiptId: receipt.receiptId } },
+  ]);
 }
 
 async function inferenceDigest(

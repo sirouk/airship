@@ -11,6 +11,7 @@ import {
   pinOrtRuntimePaths,
   semanticPackAssetPaths,
   semanticPackBytes,
+  semanticPackRoot,
   unpinnedOrtRuntimeBinaries,
   MAX_ORT_THREADS,
   REQUIRED_ORT_RUNTIME_BINARIES,
@@ -77,6 +78,11 @@ describe("ONNX Runtime acceleration policy", () => {
 });
 
 describe("semantic pack byte accounting", () => {
+  it("resolves the pack beneath the deployed public base", () => {
+    expect(semanticPackRoot("/")).toBe("/semantic-pack/v1/");
+    expect(semanticPackRoot("/airship/")).toBe("/airship/semantic-pack/v1/");
+  });
+
   it("names every pinned asset of a backend exactly once", () => {
     for (const backend of ["webgpu", "wasm"] as const) {
       const paths = semanticPackAssetPaths(backend);
@@ -244,6 +250,16 @@ describe("ONNX Runtime thread workers under Trusted Types", () => {
     ]) {
       expect(() => createScriptURL(refused)).toThrow(/outside the pinned semantic pack runtime/u);
     }
+  });
+
+  it("scopes the nested ORT worker policy to a subpath deployment", () => {
+    const { host, created } = trustedTypesHost();
+    installOrtThreadWorkerPolicy(host, "/airship/semantic-pack/v1/runtime/");
+    const { createScriptURL } = created[0];
+    expect(createScriptURL("/airship/semantic-pack/v1/runtime/ort-wasm-simd-threaded.asyncify.mjs"))
+      .toBe("https://airship.example/airship/semantic-pack/v1/runtime/ort-wasm-simd-threaded.asyncify.mjs");
+    expect(() => createScriptURL("/semantic-pack/v1/runtime/ort-wasm-simd-threaded.asyncify.mjs"))
+      .toThrow(/outside the pinned semantic pack runtime/u);
   });
 
   it("names the CSP directive when the default policy is not allowed", () => {

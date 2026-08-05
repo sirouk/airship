@@ -1,7 +1,7 @@
 import { deepFreeze } from "../core/freeze";
 import type { JsonValue, SessionManifest, SessionProfileBinding } from "../core/contracts";
 import { enforcedMemoryScope } from "../profiles/domain";
-import type { DurableEvent, EventJournal, SessionRecord } from "../core/journal";
+import { JournalConflictError, type DurableEvent, type EventJournal, type SessionRecord } from "../core/journal";
 
 export const PROFILE_ACTIVE_CONVERSATION_EVENT_TYPE = "profile.active-conversation.selected";
 
@@ -80,7 +80,7 @@ export async function resolveProfileActiveConversation(
 ): Promise<ProfileActiveConversationResolution> {
   assertProfileId(profileId);
   signal?.throwIfAborted();
-  const sessions = await journal.listSessions();
+  const sessions = await journal.listSessions(signal);
   signal?.throwIfAborted();
   const profileSessions = sessions.filter((session) => session.manifest.profile?.profileId === profileId);
   const pointers = (await Promise.all(profileSessions.map(async (session) => {
@@ -105,6 +105,12 @@ export async function resolveProfileActiveConversation(
  * the exact same event durable with their authority. The caller may fence the
  * target head after an audit so a concurrent turn cannot be presented from a
  * stale snapshot.
+ *
+ * A successful append commits this selection; it is not a profile-wide lease.
+ * A concurrent selection hosted by another conversation may supersede it under
+ * the resolver's deterministic generation/timestamp/identity order, just as a
+ * later explicit selection can. Both durable choices remain valid history, so
+ * a post-commit read must not relabel either successful append as a failed one.
  */
 export async function selectProfileActiveConversation(
   journal: EventJournal,
@@ -123,42 +129,67 @@ export async function selectProfileActiveConversation(
   if (target.manifest.profile?.profileId !== profileId) {
     throw new Error("An active conversation can only be selected inside its owning profile.");
   }
+  const selectionHead = options.expectedTargetHead ?? {
+    sequence: target.headSequence,
+    digest: target.headDigest,
+  };
   if (
-    options.expectedTargetHead
-    && (target.headSequence !== options.expectedTargetHead.sequence || target.headDigest !== options.expectedTargetHead.digest)
+    target.headSequence !== selectionHead.sequence
+    || target.headDigest !== selectionHead.digest
   ) {
     throw new ProfileActiveConversationConflictError("The selected conversation changed after it was inspected.");
   }
 
   const before = await resolveProfileActiveConversation(journal, profileId, options.signal);
   if (before.state === "selected" && before.session?.id === sessionId) {
-    return deepFreeze({ pointer: before.pointer!, session: structuredClone(target), changed: false });
+    const stableTarget = await journal.getSession(sessionId, options.signal);
+    if (
+      !stableTarget
+      || stableTarget.headSequence !== selectionHead.sequence
+      || stableTarget.headDigest !== selectionHead.digest
+    ) {
+      throw new ProfileActiveConversationConflictError("The selected conversation changed after it was inspected.");
+    }
+    return deepFreeze({ pointer: before.pointer!, session: structuredClone(stableTarget), changed: false });
   }
   const generation = (before.pointer?.generation ?? 0) + 1;
   if (!Number.isSafeInteger(generation) || generation < 1) {
     throw new ProfileActiveConversationConflictError("The active-conversation generation is exhausted.");
   }
-  const appended = await journal.append(sessionId, [{
-    type: PROFILE_ACTIVE_CONVERSATION_EVENT_TYPE,
-    payload: {
-      version: 1,
-      profileId,
-      sessionId,
-      generation,
-      ...(before.pointer ? { previousEventId: before.pointer.eventId } : {}),
-    } as JsonValue,
-  }], options.signal);
-  const event = appended[0];
-  const selected = event ? profileActiveConversationPointer(event) : undefined;
-  if (!selected) throw new Error("The journal did not return the committed active-conversation event.");
-
-  const after = await resolveProfileActiveConversation(journal, profileId, options.signal);
-  if (after.pointer?.eventId !== selected.eventId || after.session?.id !== sessionId) {
-    throw new ProfileActiveConversationConflictError();
+  let committed: Awaited<ReturnType<EventJournal["appendAtHead"]>>;
+  try {
+    committed = await journal.appendAtHead(sessionId, selectionHead, [{
+      type: PROFILE_ACTIVE_CONVERSATION_EVENT_TYPE,
+      payload: {
+        version: 1,
+        profileId,
+        sessionId,
+        generation,
+        ...(before.pointer ? { previousEventId: before.pointer.eventId } : {}),
+      } as JsonValue,
+    }], options.signal);
+  } catch (error) {
+    if (error instanceof JournalConflictError) {
+      throw new ProfileActiveConversationConflictError("The selected conversation changed after it was inspected.");
+    }
+    throw error;
   }
-  const committed = await journal.getSession(sessionId, options.signal);
-  if (!committed) throw new Error(`Selected session disappeared: ${sessionId}`);
-  return deepFreeze({ pointer: selected, session: structuredClone(committed), changed: true });
+  const event = committed.events[0]!;
+  const selected: ProfileActiveConversationPointer = Object.freeze({
+    version: 1,
+    profileId,
+    sessionId,
+    generation,
+    ...(before.pointer ? { previousEventId: before.pointer.eventId } : {}),
+    eventId: event.eventId,
+    recordedAt: event.recordedAt,
+    hostSessionId: event.sessionId,
+  });
+  // The successful CAS above is the selection's linearization point. Everything
+  // needed for the result came back with that commit, so cancellation or a
+  // fallible confirmation read after it cannot turn success into an ambiguous
+  // retry that appends the same human choice twice.
+  return deepFreeze({ pointer: selected, session: structuredClone(committed.session), changed: true });
 }
 
 /**
@@ -202,7 +233,7 @@ export async function resumableProfileConversationCandidates(
   signal?: AbortSignal,
 ): Promise<readonly SessionRecord[]> {
   const pointer = await resolveProfileActiveConversation(journal, profileId, signal);
-  const sessions = (await journal.listSessions()).filter((session) =>
+  const sessions = (await journal.listSessions(signal)).filter((session) =>
     session.manifest.profile?.profileId === profileId
     && resumableProfileManifestMatches(session.manifest, expectedManifest)
   );

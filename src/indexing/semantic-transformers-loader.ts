@@ -6,7 +6,11 @@ import type {
 } from "./semantic-worker-provider";
 import artifactManifest from "./semantic-artifact-manifest.json";
 
-const PACK_ROOT = "/semantic-pack/v1/";
+export function semanticPackRoot(base = import.meta.env.BASE_URL): string {
+  return `${base.endsWith("/") ? base : `${base}/`}semantic-pack/v1/`;
+}
+
+const PACK_ROOT = semanticPackRoot();
 const MODEL_ROOT = `${PACK_ROOT}models/`;
 const RUNTIME_ROOT = `${PACK_ROOT}runtime/`;
 

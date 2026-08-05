@@ -5,6 +5,57 @@ import { MemoryObjectStore } from "./memory-object-store";
 import { WorkspaceRootKey } from "./encrypted-envelope";
 import { EncryptedObjectJournalBackend } from "./encrypted-object-journal";
 
+class StallingPreCasObjectStore extends MemoryObjectStore {
+  private stallNextImmutableWrite = false;
+  private enteredStall?: () => void;
+  receivedSignal?: AbortSignal;
+  compareAndSwapCalls = 0;
+
+  stallNextPut(): Promise<void> {
+    this.stallNextImmutableWrite = true;
+    return new Promise<void>((resolve) => { this.enteredStall = resolve; });
+  }
+
+  override async putIfAbsent(key: string, bytes: Uint8Array, signal?: AbortSignal) {
+    if (!this.stallNextImmutableWrite) return super.putIfAbsent(key, bytes);
+    this.stallNextImmutableWrite = false;
+    this.receivedSignal = signal;
+    this.enteredStall?.();
+    await new Promise<void>((_resolve, reject) => {
+      const refuse = () => reject(signal?.reason ?? new DOMException("Cancelled", "AbortError"));
+      if (signal?.aborted) refuse();
+      else signal?.addEventListener("abort", refuse, { once: true });
+    });
+    throw new Error("The stalled immutable write unexpectedly resumed.");
+  }
+
+  override compareAndSwap(key: string, expectedEtag: string, bytes: Uint8Array) {
+    this.compareAndSwapCalls += 1;
+    return super.compareAndSwap(key, expectedEtag, bytes);
+  }
+}
+
+class AbortAfterCasObjectStore extends MemoryObjectStore {
+  abortAfterNextCas?: AbortController;
+  receivedCasSignal: AbortSignal | undefined | null = null;
+
+  override async compareAndSwap(
+    key: string,
+    expectedEtag: string,
+    bytes: Uint8Array,
+    signal?: AbortSignal,
+  ) {
+    const committed = await super.compareAndSwap(key, expectedEtag, bytes);
+    if (this.abortAfterNextCas) {
+      this.receivedCasSignal = signal;
+      const controller = this.abortAfterNextCas;
+      this.abortAfterNextCas = undefined;
+      controller.abort(new DOMException("Stopped after CAS", "AbortError"));
+    }
+    return committed;
+  }
+}
+
 describe("EncryptedObjectJournalBackend", () => {
   it("round-trips cloud-authoritative sessions without plaintext object bytes", async () => {
     const { key } = await WorkspaceRootKey.generate();
@@ -47,6 +98,57 @@ describe("EncryptedObjectJournalBackend", () => {
     expect(rejected?.reason).toBeInstanceOf(JournalConflictError);
     const events = await seed.readEvents(session.id);
     expect(events).toHaveLength(2);
+  });
+
+  it("cancels a fenced append during remote preparation before the head CAS", async () => {
+    const { key } = await WorkspaceRootKey.generate();
+    const store = new StallingPreCasObjectStore();
+    const backend = new EncryptedObjectJournalBackend(store, key);
+    const journal = new EventJournal(backend, () => "2026-07-18T00:00:00.000Z", () => crypto.randomUUID());
+    const session = await journal.createSession("Cancelable selection", await manifest());
+    const audited = (await journal.getSession(session.id))!;
+    const compareAndSwapCallsBeforeSelection = store.compareAndSwapCalls;
+    const immutableWriteStarted = store.stallNextPut();
+    const controller = new AbortController();
+
+    const selection = journal.appendAtHead(
+      session.id,
+      { sequence: audited.headSequence, digest: audited.headDigest },
+      [{ type: "profile.active-conversation.selected", payload: { generation: 1 } }],
+      controller.signal,
+    );
+    await immutableWriteStarted;
+    controller.abort(new DOMException("Return request abandoned", "AbortError"));
+
+    await expect(selection).rejects.toMatchObject({ name: "AbortError" });
+    expect(store.receivedSignal).toBe(controller.signal);
+    expect(store.compareAndSwapCalls).toBe(compareAndSwapCallsBeforeSelection);
+    expect((await journal.readEvents(session.id)).map((event) => event.type))
+      .toEqual(["session.created"]);
+  });
+
+  it("returns a fenced append that committed before cancellation reached the CAS response", async () => {
+    const { key } = await WorkspaceRootKey.generate();
+    const store = new AbortAfterCasObjectStore();
+    const backend = new EncryptedObjectJournalBackend(store, key);
+    const journal = new EventJournal(backend, () => "2026-07-18T00:00:00.000Z", () => crypto.randomUUID());
+    const session = await journal.createSession("Committed selection", await manifest());
+    const audited = (await journal.getSession(session.id))!;
+    const controller = new AbortController();
+    store.abortAfterNextCas = controller;
+
+    const committed = await journal.appendAtHead(
+      session.id,
+      { sequence: audited.headSequence, digest: audited.headDigest },
+      [{ type: "profile.active-conversation.selected", payload: { generation: 1 } }],
+      controller.signal,
+    );
+
+    expect(controller.signal.aborted).toBe(true);
+    expect(store.receivedCasSignal).toBeUndefined();
+    expect(committed.session.headSequence).toBe(audited.headSequence + 1);
+    expect((await journal.readEvents(session.id)).map((event) => event.type))
+      .toEqual(["session.created", "profile.active-conversation.selected"]);
   });
 });
 

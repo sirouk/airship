@@ -4,7 +4,7 @@ import { MemoryWorkspace } from "../workspace/memory";
 import type { WorkspacePort } from "../workspace/contracts";
 import { TERMINAL_METADATA_PATH, TERMINAL_WORKSPACE_MOUNT, WEB_CONTAINER_TERMINAL_RUNTIME } from "./contracts";
 import { BrowserTerminalManager, TERMINAL_LEASE_RENEW_MS, terminalProcessBanner } from "./manager";
-import type { FileSystemTree, WebContainer } from "@webcontainer/api";
+import type { FileSystemTree, WebContainer, WebContainerProcess } from "@webcontainer/api";
 
 describe("BrowserTerminalManager metadata", () => {
   it("persists tab/thread/history metadata without claiming a process survives reload", async () => {
@@ -473,13 +473,14 @@ describe("BrowserTerminalManager metadata", () => {
   it("kills a partially started process when its input writer cannot be acquired", async () => {
     const workspace = new MemoryWorkspace();
     let killed = false;
+    let resolveExit!: (code: number) => void;
     const input = new WritableStream<string>();
     const lock = input.getWriter();
     const process = {
-      exit: new Promise<number>(() => undefined),
+      exit: new Promise<number>((resolve) => { resolveExit = resolve; }),
       input,
       output: new ReadableStream<string>(),
-      kill() { killed = true; },
+      kill() { killed = true; resolveExit(130); },
       resize() {},
     };
     const host = {
@@ -527,6 +528,369 @@ describe("BrowserTerminalManager metadata", () => {
     expect(killed).toBe(true);
     expect(manager.list()[0]?.detail).toContain("provider output disconnected");
     expect(manager.list()[0]?.bufferedOutput).toContain("Terminal output failed");
+    await manager.quiesce("test cleanup");
+  });
+
+  it("handles a rejected process exit during workspace-authority release", async () => {
+    const workspace = new MemoryWorkspace();
+    let rejectExit!: (reason: unknown) => void;
+    let outputController!: ReadableStreamDefaultController<string>;
+    const process = {
+      exit: new Promise<number>((_resolve, reject) => { rejectExit = reject; }),
+      input: new WritableStream<string>(),
+      output: new ReadableStream<string>({ start(controller) { outputController = controller; } }),
+      kill() {
+        outputController.close();
+        rejectExit({ message: "no such file or directory" });
+      },
+      resize() {},
+    };
+    const host = {
+      fs: { async mkdir() { return undefined; }, async rm() { return undefined; } },
+      async mount() {},
+      async export() { return {}; },
+      async spawn() { return process; },
+    } as unknown as WebContainer;
+    const manager = new BrowserTerminalManager(workspace, { activateHost: async () => host });
+    await manager.ready;
+    const tab = manager.list()[0]!;
+    await manager.start(tab.id);
+
+    await expect(manager.quiesce("Profile authority changed.")).resolves.toEqual([]);
+    await Promise.resolve();
+    expect(manager.list()[0]).toMatchObject({
+      status: "restart-required",
+      detail: "Profile authority changed.",
+    });
+  });
+
+  it("waits for process completion after forcing terminal shutdown", async () => {
+    const workspace = new MemoryWorkspace();
+    let resolveExit!: (code: number) => void;
+    let outputController!: ReadableStreamDefaultController<string>;
+    let killed = false;
+    const process = {
+      exit: new Promise<number>((resolve) => { resolveExit = resolve; }),
+      input: new WritableStream<string>(),
+      output: new ReadableStream<string>({ start(controller) { outputController = controller; } }),
+      kill() { killed = true; outputController.close(); resolveExit(130); },
+      resize() {},
+    };
+    const host = {
+      fs: { async mkdir() { return undefined; }, async rm() { return undefined; } },
+      async mount() {},
+      async export() { return {}; },
+      async spawn() { return process; },
+    } as unknown as WebContainer;
+    const manager = new BrowserTerminalManager(workspace, { activateHost: async () => host });
+    await manager.ready;
+    await manager.start(manager.list()[0]!.id);
+
+    await manager.quiesce("Profile authority changed.");
+    expect(killed).toBe(true);
+    expect(manager.list()[0]).toMatchObject({ status: "restart-required" });
+  });
+
+  it("settles a jsh spawn overtaken by quiesce before unmounting its cwd", async () => {
+    const workspace = new MemoryWorkspace();
+    const order: string[] = [];
+    let resolveSpawn!: (process: WebContainerProcess) => void;
+    let announceSpawn!: () => void;
+    let rejectExit!: (reason: unknown) => void;
+    const spawnRequested = new Promise<void>((resolve) => { announceSpawn = resolve; });
+    const process = {
+      exit: new Promise<number>((_resolve, reject) => { rejectExit = reject; }),
+      input: new WritableStream<string>(),
+      output: new ReadableStream<string>(),
+      kill() {
+        order.push("kill");
+        rejectExit({ code: "ENOENT", message: "no such file or directory" });
+      },
+      resize() {},
+    } as WebContainerProcess;
+    const host = {
+      fs: {
+        async mkdir() { return undefined; },
+        async rm() { order.push("unmount"); },
+      },
+      async mount() {},
+      async export() { return {}; },
+      spawn() {
+        announceSpawn();
+        return new Promise<WebContainerProcess>((resolve) => { resolveSpawn = resolve; });
+      },
+    } as unknown as WebContainer;
+    const manager = new BrowserTerminalManager(workspace, { activateHost: async () => host });
+    await manager.ready;
+    const start = manager.start(manager.list()[0]!.id);
+    await spawnRequested;
+
+    const quiesce = manager.quiesce("Profile authority changed.");
+    resolveSpawn(process);
+    await expect(Promise.all([start, quiesce])).resolves.toBeDefined();
+
+    expect(order).toEqual(["kill", "unmount"]);
+    expect(manager.list()[0]).toMatchObject({ status: "restart-required" });
+  });
+
+  it("bounds a stalled input write before forcing terminal shutdown", async () => {
+    const workspace = new MemoryWorkspace();
+    let resolveExit!: (code: number) => void;
+    let killed = false;
+    const process = {
+      exit: new Promise<number>((resolve) => { resolveExit = resolve; }),
+      input: new WritableStream<string>({ write: () => new Promise<void>(() => undefined) }),
+      output: new ReadableStream<string>(),
+      kill() { killed = true; resolveExit(130); },
+      resize() {},
+    };
+    const host = {
+      fs: { async mkdir() { return undefined; }, async rm() { return undefined; } },
+      async mount() {},
+      async export() { return {}; },
+      async spawn() { return process; },
+    } as unknown as WebContainer;
+    const manager = new BrowserTerminalManager(workspace, { activateHost: async () => host });
+    await manager.ready;
+    const tab = manager.list()[0]!;
+    await manager.start(tab.id);
+    void manager.write(tab.id, "blocked").catch(() => undefined);
+
+    await expect(manager.quiesce("Profile authority changed.")).resolves.toEqual([]);
+    expect(killed).toBe(true);
+  });
+
+  it("restart detaches a stalled old writer before accepting new input", async () => {
+    const workspace = new MemoryWorkspace();
+    const writes: string[] = [];
+    let spawnIndex = 0;
+    const processes = [0, 1].map((index) => {
+      let resolveExit!: (code: number) => void;
+      let output!: ReadableStreamDefaultController<string>;
+      return {
+        exit: new Promise<number>((resolve) => { resolveExit = resolve; }),
+        input: new WritableStream<string>({
+          write(chunk) {
+            if (index === 0) return new Promise<void>(() => undefined);
+            writes.push(chunk);
+          },
+        }),
+        output: new ReadableStream<string>({ start(controller) { output = controller; } }),
+        kill() { output.close(); resolveExit(130); },
+        resize() {},
+      } as WebContainerProcess;
+    });
+    const host = {
+      fs: { async mkdir() { return undefined; }, async rm() { return undefined; } },
+      async mount() {},
+      async export() { return {}; },
+      async spawn() { return processes[spawnIndex++]!; },
+    } as unknown as WebContainer;
+    const manager = new BrowserTerminalManager(workspace, { activateHost: async () => host });
+    await manager.ready;
+    const tab = manager.list()[0]!;
+    await manager.start(tab.id);
+    void manager.write(tab.id, "blocked").catch(() => undefined);
+
+    await manager.restart(tab.id);
+    await expect(Promise.race([
+      manager.write(tab.id, "new process input"),
+      new Promise<void>((_resolve, reject) => setTimeout(() => reject(new Error("new input remained behind the old writer")), 100)),
+    ])).resolves.toBeUndefined();
+
+    expect(spawnIndex).toBe(2);
+    expect(writes).toEqual(["new process input"]);
+    await manager.quiesce("test cleanup");
+  });
+
+  it("close does not archive a tab until its process confirms exit", async () => {
+    const workspace = new MemoryWorkspace();
+    let resolveExit!: (code: number) => void;
+    let output!: ReadableStreamDefaultController<string>;
+    let killed = false;
+    const process = {
+      exit: new Promise<number>((resolve) => { resolveExit = resolve; }),
+      input: new WritableStream<string>(),
+      output: new ReadableStream<string>({ start(controller) { output = controller; } }),
+      kill() { killed = true; },
+      resize() {},
+    } as WebContainerProcess;
+    const host = {
+      fs: { async mkdir() { return undefined; }, async rm() { return undefined; } },
+      async mount() {},
+      async export() { return {}; },
+      async spawn() { return process; },
+    } as unknown as WebContainer;
+    const manager = new BrowserTerminalManager(workspace, { activateHost: async () => host });
+    await manager.ready;
+    const tab = manager.list()[0]!;
+    await manager.start(tab.id);
+
+    let closed = false;
+    const closing = manager.close(tab.id).then(() => { closed = true; });
+    await vi.waitFor(() => expect(killed).toBe(true));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(closed).toBe(false);
+    expect(manager.list()[0]?.status).toBe("starting");
+    expect(manager.list()[0]?.closedAt).toBeUndefined();
+
+    output.close();
+    resolveExit(0);
+    await closing;
+    expect(manager.list()).toEqual([]);
+    await vi.waitFor(async () => {
+      const stored = JSON.parse((await workspace.read(TERMINAL_METADATA_PATH))!.content) as {
+        sessions: Array<{ status: string; closedAt?: string }>;
+      };
+      expect(stored.sessions[0]).toMatchObject({ status: "exited" });
+      expect(stored.sessions[0]?.closedAt).toBeDefined();
+    });
+    await manager.quiesce("test cleanup");
+  });
+
+  it("retains workspace authority when an overtaken spawn misses the shutdown bound", async () => {
+    const workspace = new MemoryWorkspace();
+    const removed: string[] = [];
+    let spawnCount = 0;
+    let resolveSpawn!: (process: WebContainerProcess) => void;
+    let announceSpawn!: () => void;
+    const spawnRequested = new Promise<void>((resolve) => { announceSpawn = resolve; });
+    const host = {
+      fs: {
+        async mkdir() { return undefined; },
+        async rm(path: string) { removed.push(path); },
+      },
+      async mount() {},
+      async export() { return {}; },
+      spawn() {
+        spawnCount += 1;
+        announceSpawn();
+        return new Promise<WebContainerProcess>((resolve) => { resolveSpawn = resolve; });
+      },
+    } as unknown as WebContainer;
+    const manager = new BrowserTerminalManager(workspace, { activateHost: async () => host });
+    await manager.ready;
+    const tab = manager.list()[0]!;
+    const start = manager.start(tab.id);
+    await spawnRequested;
+
+    await expect(manager.quiesce("Profile authority changed."))
+      .rejects.toThrow("Browser terminal did not settle before workspace release.");
+    expect(removed).not.toContain(TERMINAL_WORKSPACE_MOUNT);
+    expect(manager.canReconcile()).toBe(true);
+    await expect(manager.start(tab.id)).rejects.toThrow("previous browser shell is still stopping");
+    expect(spawnCount).toBe(1);
+    expect(removed).not.toContain(TERMINAL_WORKSPACE_MOUNT);
+
+    let resolveExit!: (code: number) => void;
+    let output!: ReadableStreamDefaultController<string>;
+    resolveSpawn({
+      exit: new Promise<number>((resolve) => { resolveExit = resolve; }),
+      input: new WritableStream<string>(),
+      output: new ReadableStream<string>({ start(controller) { output = controller; } }),
+      kill() { output.close(); resolveExit(130); },
+      resize() {},
+    } as WebContainerProcess);
+    await start;
+    await manager.quiesce("Profile authority changed.");
+    expect(removed).toContain(TERMINAL_WORKSPACE_MOUNT);
+  });
+
+  it("records a normal-exit lease release failure without an unhandled rejection", async () => {
+    const base = new MemoryWorkspace();
+    const workspace: WorkspacePort = {
+      read: (path) => base.read(path),
+      readBounded: (path, maxBytes) => base.readBounded(path, maxBytes),
+      list: (path) => base.list(path),
+      write: (path, content, options) => base.write(path, content, options),
+      remove: (path, options) => path.includes("/.airship/terminal/leases/")
+        ? Promise.reject(new Error("lease remove failed"))
+        : base.remove(path, options),
+    };
+    let resolveExit!: (code: number) => void;
+    let output!: ReadableStreamDefaultController<string>;
+    const host = {
+      fs: { async mkdir() { return undefined; }, async rm() { return undefined; } },
+      async mount() {},
+      async export() { return {}; },
+      async spawn() {
+        return {
+          exit: new Promise<number>((resolve) => { resolveExit = resolve; }),
+          input: new WritableStream<string>(),
+          output: new ReadableStream<string>({ start(controller) { output = controller; } }),
+          kill() {},
+          resize() {},
+        } as WebContainerProcess;
+      },
+    } as unknown as WebContainer;
+    const manager = new BrowserTerminalManager(workspace, { activateHost: async () => host });
+    await manager.ready;
+    await manager.start(manager.list()[0]!.id);
+
+    output.close();
+    resolveExit(0);
+    await vi.waitFor(() => expect(manager.persistenceFailure()).toBe("lease remove failed"));
+    expect(manager.list()[0]).toMatchObject({ status: "exited", exitCode: 0 });
+    await manager.quiesce("test cleanup");
+  });
+
+  it("drops process output that arrives after the authority boundary", async () => {
+    const workspace = new MemoryWorkspace();
+    let resolveExit!: (code: number) => void;
+    let output!: ReadableStreamDefaultController<string>;
+    const process = {
+      exit: new Promise<number>((resolve) => { resolveExit = resolve; }),
+      input: new WritableStream<string>(),
+      output: new ReadableStream<string>({ start(controller) { output = controller; } }),
+      kill() {
+        output.enqueue("stale process output");
+        output.close();
+        resolveExit(130);
+      },
+      resize() {},
+    };
+    const host = {
+      fs: { async mkdir() { return undefined; }, async rm() { return undefined; } },
+      async mount() {},
+      async export() { return {}; },
+      async spawn() { return process; },
+    } as unknown as WebContainer;
+    const manager = new BrowserTerminalManager(workspace, { activateHost: async () => host });
+    await manager.ready;
+    await manager.start(manager.list()[0]!.id);
+
+    await manager.quiesce("Profile authority changed.");
+
+    expect(manager.list()[0]?.bufferedOutput).toContain("Airship changed terminal workspace authority");
+    expect(manager.list()[0]?.bufferedOutput).not.toContain("stale process output");
+  });
+
+  it("turns an unexpected rejected process exit into a visible failed tab", async () => {
+    const workspace = new MemoryWorkspace();
+    let rejectExit!: (reason: unknown) => void;
+    let outputController!: ReadableStreamDefaultController<string>;
+    const process = {
+      exit: new Promise<number>((_resolve, reject) => { rejectExit = reject; }),
+      input: new WritableStream<string>(),
+      output: new ReadableStream<string>({ start(controller) { outputController = controller; } }),
+      kill() { outputController.close(); },
+      resize() {},
+    };
+    const host = {
+      fs: { async mkdir() { return undefined; }, async rm() { return undefined; } },
+      async mount() {},
+      async export() { return {}; },
+      async spawn() { return process; },
+    } as unknown as WebContainer;
+    const manager = new BrowserTerminalManager(workspace, { activateHost: async () => host });
+    await manager.ready;
+    const tab = manager.list()[0]!;
+    await manager.start(tab.id);
+
+    rejectExit({ message: "provider exit channel closed" });
+    await vi.waitFor(() => expect(manager.list()[0]?.status).toBe("failed"));
+    expect(manager.list()[0]?.detail).toBe("Terminal process completion failed: provider exit channel closed");
+    expect(manager.list()[0]?.bufferedOutput).toContain("Terminal process completion failed");
     await manager.quiesce("test cleanup");
   });
 
@@ -828,16 +1192,21 @@ describe("BrowserTerminalManager metadata", () => {
   it("publishes the appended chunk and a sequence even once the transcript tail slides", async () => {
     const workspace = new MemoryWorkspace();
     let emit!: (chunk: string) => void;
+    let closeOutput!: () => void;
+    let resolveExit!: (code: number) => void;
     const host = {
       fs: { async mkdir() { return undefined; }, async rm() { return undefined; } },
       async mount() {},
       async export() { return {}; },
       async spawn() {
         return {
-          exit: new Promise<number>(() => undefined),
+          exit: new Promise<number>((resolve) => { resolveExit = resolve; }),
           input: new WritableStream<string>(),
-          output: new ReadableStream<string>({ start(controller) { emit = (chunk) => controller.enqueue(chunk); } }),
-          kill() {},
+          output: new ReadableStream<string>({ start(controller) {
+            emit = (chunk) => controller.enqueue(chunk);
+            closeOutput = () => controller.close();
+          } }),
+          kill() { closeOutput(); resolveExit(130); },
           resize() {},
         };
       },

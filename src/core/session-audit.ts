@@ -697,6 +697,25 @@ async function validateProtocol(
   let verifiedForkContextDigest: string | undefined;
   let projectedTitle: string | undefined;
 
+  /*
+   * Rebuild the transcript with the same canonical projector the runtime uses.
+   * Most events only append, but a failed or cancelled terminal can retract an
+   * entire non-actionable turn or replace its request with a salvage checkpoint.
+   * An incremental array cannot express either transition safely.
+   */
+  const reprojectMessagesThrough = (index: number, injectLatestContext: boolean): void => {
+    messages.splice(0, messages.length, ...materializeMessages(
+      events.slice(0, index + 1),
+      {
+        injectLatestContext,
+        allowEmbeddedContext: session.manifest.turnContext === undefined,
+        allowSelectedContext: session.manifest.turnContext !== "disabled",
+        forkContextScope: { sessionId: session.id, lineage: session.manifest.lineage },
+        verifiedForkContextDigest,
+      },
+    ));
+  };
+
   const requireActive = (event: DurableEvent): TurnState | undefined => {
     if (!active || !event.turnId || event.turnId !== active.id || active.terminal) {
       add({
@@ -881,16 +900,7 @@ async function validateProtocol(
           message: "A context summary must be a verified, digest-linked transcript-prefix delta outside an active turn.",
         });
       } else {
-        messages.splice(0, messages.length, ...materializeMessages(
-          events.slice(0, index + 1),
-          {
-            injectLatestContext: turnBoundPreprocessing,
-            allowEmbeddedContext: session.manifest.turnContext === undefined,
-            allowSelectedContext: session.manifest.turnContext !== "disabled",
-            forkContextScope: { sessionId: session.id, lineage: session.manifest.lineage },
-            verifiedForkContextDigest,
-          },
-        ));
+        reprojectMessagesThrough(index, turnBoundPreprocessing);
         if (active && turnBoundPreprocessing) active.compacted = true;
         if (active?.request) {
           active.request.messageIndex = messages.length - 1;
@@ -1657,6 +1667,15 @@ async function validateProtocol(
       if (event.type === "turn.failed") counts.failedTurns += 1;
       else counts.cancelledTurns += 1;
       active = undefined;
+      /*
+       * This terminal changes history, not just turn state. Failed turns and
+       * no-work cancellations disappear from future provider context; a
+       * cancellation with completed tools becomes a checkpoint plus only the
+       * work that actually landed. Reproject now so the next inference digest
+       * is checked against the same history the runtime will send.
+       */
+      reprojectMessagesThrough(index, false);
+      lastContextMessage = undefined;
     }
   }
 

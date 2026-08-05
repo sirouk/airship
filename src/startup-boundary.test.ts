@@ -82,5 +82,6 @@ describe("application startup module boundary", () => {
     expect(reachable.has("core/agent.ts")).toBe(false);
     expect(reachable.has("git/workspace-adapter.ts")).toBe(false);
     expect(reachable.has("execution/execution-runtime-pack.ts")).toBe(false);
+    expect(reachable.has("ui/skills-manager-view.tsx")).toBe(false);
   });
 });

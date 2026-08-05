@@ -124,7 +124,7 @@ export class SessionLibrary {
 
   async list(query: SessionListQuery = {}, signal?: AbortSignal): Promise<SessionListPage> {
     throwIfAborted(signal);
-    const records = await this.journal.listSessions();
+    const records = await this.journal.listSessions(signal);
     throwIfAborted(signal);
     // Preference writes advance the immutable journal head, but starring or
     // reordering a thread is not conversation activity. Present a derived

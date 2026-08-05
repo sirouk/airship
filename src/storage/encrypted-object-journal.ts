@@ -144,9 +144,11 @@ export class EncryptedObjectJournalBackend implements JournalBackend {
       plaintext: encodeJson(segment),
     });
     const segmentBytes = encodeEnvelope(sealedSegment);
+    signal?.throwIfAborted();
     const created = await this.store.putIfAbsent(segmentCloudKey, segmentBytes, signal);
     let segmentEtag: string;
     if (!created.created) {
+      signal?.throwIfAborted();
       const existing = await this.store.get(segmentCloudKey, signal);
       if (!existing) throw new Error("Encrypted event segment conflicted and then disappeared.");
       segmentEtag = existing.etag;
@@ -184,7 +186,16 @@ export class EncryptedObjectJournalBackend implements JournalBackend {
       throw new Error("Encrypted journal requires segment compaction before another append.");
     }
     const rootBytes = await this.sealHead(nextHead);
-    const swapped = await this.store.compareAndSwap(loaded.record.key, loaded.record.etag, rootBytes, signal);
+    /*
+     * This call is the append's linearization boundary. Cancellation remains
+     * live through every remote read and immutable-segment write above, then is
+     * sampled one final time before the atomic head CAS is admitted. Do not
+     * carry the signal into the CAS: a request aborted after the provider
+     * committed could otherwise reject as "cancelled" and make a safe retry
+     * append the same human choice twice.
+     */
+    signal?.throwIfAborted();
+    const swapped = await this.store.compareAndSwap(loaded.record.key, loaded.record.etag, rootBytes);
     if (!swapped.updated) throw new JournalConflictError();
     return structuredClone(updated);
   }

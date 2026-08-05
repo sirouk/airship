@@ -29,6 +29,11 @@ export type SessionRecord = {
   headDigest: string;
 };
 
+export type JournalAppendCommit = Readonly<{
+  events: DurableEvent[];
+  session: SessionRecord;
+}>;
+
 export interface JournalBackend {
   createSession(session: SessionRecord, signal?: AbortSignal): Promise<void>;
   getSession(sessionId: string, signal?: AbortSignal): Promise<SessionRecord | undefined>;
@@ -38,6 +43,12 @@ export interface JournalBackend {
     sessionId: string,
     expectedHead: { sequence: number; digest: string },
     events: DurableEvent[],
+    /**
+     * Cancellation is admissible only before the backend enters its atomic
+     * compare-and-set. Once that boundary is crossed, an implementation must
+     * return the committed result (or the storage failure) instead of
+     * relabelling a durable write as an abort.
+     */
     signal?: AbortSignal,
   ): Promise<SessionRecord>;
   /**
@@ -176,8 +187,8 @@ export class EventJournal {
     }
   }
 
-  listSessions() {
-    return this.backend.listSessions();
+  listSessions(signal?: AbortSignal) {
+    return this.backend.listSessions(signal);
   }
 
   readEvents(sessionId: string, afterSequence = 0, signal?: AbortSignal) {
@@ -199,6 +210,42 @@ export class EventJournal {
     const result = pending
       ? this.commitAfter(pending, sessionId, drafts, signal)
       : this.commit(sessionId, drafts, signal);
+    return this.trackAppend(sessionId, pending, result);
+  }
+
+  /**
+   * Append only while the durable journal still has the exact head the caller
+   * audited. Unlike `append`, this never rereads and rebases onto a newer head:
+   * the supplied head is both the new events' chain boundary and the backend
+   * compare-and-set precondition.
+   *
+   * Cancellation is checked after queueing and event sealing, then remains live
+   * through the backend's remote reads and immutable-segment preparation. The
+   * backend owns the exact compare-and-set boundary: after crossing it, the
+   * successful commit is returned without a second abort check that could turn
+   * a durable write into an ambiguous failure.
+   */
+  appendAtHead(
+    sessionId: string,
+    expectedHead: Readonly<{ sequence: number; digest: string }>,
+    drafts: EventDraft[],
+    signal?: AbortSignal,
+  ): Promise<JournalAppendCommit> {
+    if (!drafts.length) {
+      return Promise.reject(new TypeError("A fenced append requires at least one event."));
+    }
+    const pending = this.appendQueue.get(sessionId);
+    const result = pending
+      ? this.commitAtHeadAfter(pending, sessionId, expectedHead, drafts, signal)
+      : this.commitAtHead(sessionId, expectedHead, drafts, signal, signal);
+    return this.trackAppend(sessionId, pending, result);
+  }
+
+  private trackAppend<Result>(
+    sessionId: string,
+    pending: Promise<unknown> | undefined,
+    result: Promise<Result>,
+  ): Promise<Result> {
     // The link waits for the predecessor *and then* this append, and swallows
     // failure on both: one refused append must not cascade into everything
     // queued behind it, and a caller that walks away on its own signal must not
@@ -236,13 +283,42 @@ export class EventJournal {
     return this.commit(sessionId, drafts, signal);
   }
 
+  private async commitAtHeadAfter(
+    pending: Promise<unknown>,
+    sessionId: string,
+    expectedHead: Readonly<{ sequence: number; digest: string }>,
+    drafts: EventDraft[],
+    signal?: AbortSignal,
+  ): Promise<JournalAppendCommit> {
+    await (signal ? raceAbort(pending, signal) : pending);
+    return this.commitAtHead(sessionId, expectedHead, drafts, signal, signal);
+  }
+
   private async commit(sessionId: string, drafts: EventDraft[], signal?: AbortSignal): Promise<DurableEvent[]> {
     signal?.throwIfAborted();
     const session = await this.backend.getSession(sessionId, signal);
     if (!session) throw new Error(`Unknown session: ${sessionId}`);
 
-    let sequence = session.headSequence;
-    let previousDigest = session.headDigest;
+    return (await this.commitAtHead(
+      sessionId,
+      { sequence: session.headSequence, digest: session.headDigest },
+      drafts,
+      undefined,
+      signal,
+    )).events;
+  }
+
+  private async commitAtHead(
+    sessionId: string,
+    expectedHead: Readonly<{ sequence: number; digest: string }>,
+    drafts: EventDraft[],
+    preAdmissionSignal?: AbortSignal,
+    backendSignal?: AbortSignal,
+  ): Promise<JournalAppendCommit> {
+    preAdmissionSignal?.throwIfAborted();
+
+    let sequence = expectedHead.sequence;
+    let previousDigest = expectedHead.digest;
     const events: DurableEvent[] = [];
 
     for (const draft of drafts) {
@@ -275,13 +351,14 @@ export class EventJournal {
       previousDigest = digest;
     }
 
-    await this.backend.append(
+    preAdmissionSignal?.throwIfAborted();
+    const session = await this.backend.append(
       sessionId,
-      { sequence: session.headSequence, digest: session.headDigest },
+      expectedHead,
       events,
-      signal,
+      backendSignal,
     );
-    return events;
+    return { events, session };
   }
 }
 

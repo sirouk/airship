@@ -242,11 +242,12 @@ async function liveManager(workspace: MemoryWorkspace): Promise<Readonly<{
   host: Readonly<{ writeMounted(path: string, content: string): void }>;
 }>> {
   let mounted: FileSystemTree = {};
+  let resolveExit!: (code: number) => void;
   const process = {
-    exit: new Promise<number>(() => undefined),
+    exit: new Promise<number>((resolve) => { resolveExit = resolve; }),
     input: new WritableStream<string>(),
     output: new ReadableStream<string>({ start(controller) { controller.enqueue("Airship jsh ready\r\n"); } }),
-    kill() { /* The exit promise intentionally never settles in this fixture. */ },
+    kill() { resolveExit(130); },
     resize() { /* Dimensions are not under test here. */ },
   };
   const container = {
@@ -270,6 +271,6 @@ async function liveManager(workspace: MemoryWorkspace): Promise<Readonly<{
   });
 }
 
-// The fixture above keeps a process alive for the whole file; real timers are
-// what the persistence debounce runs on and nothing here asserts on them.
+// The fixture above keeps a process alive until teardown; real timers are what
+// the persistence debounce runs on and nothing here asserts on them.
 vi.useRealTimers();

@@ -5,6 +5,34 @@ import { ClientContextRuntime, getClientContextRuntime } from "./client-context-
 import type { EmbeddingProvider } from "../indexing/contracts";
 
 describe("ClientContextRuntime", () => {
+  it("keeps Bootstrap active without requesting an absent optional semantic pack", async () => {
+    const preferences = new Map([["airship.context.embedding.v1", "semantic"]]);
+    const worker = vi.fn();
+    const fetch = vi.fn();
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => preferences.get(key) ?? null,
+      setItem: (key: string, value: string) => preferences.set(key, value),
+    });
+    vi.stubGlobal("Worker", worker);
+    vi.stubGlobal("fetch", fetch);
+    try {
+      const workspace = new MemoryWorkspace();
+      await workspace.write("semantic.md", "the optional model pack is not part of this build");
+      const runtime = new ClientContextRuntime(workspace, { semanticPackAvailable: false });
+
+      expect(runtime.semanticPackAvailable).toBe(false);
+      const generation = await runtime.refreshNow();
+      expect(generation.lineage.embeddingPosture).toBe("deterministic-bootstrap");
+      expect(runtime.getEmbeddingMode()).toBe("bootstrap");
+      await expect(runtime.setEmbeddingMode("semantic")).rejects.toThrow(/does not publish the optional semantic pack/u);
+      expect(runtime.getEmbeddingMode()).toBe("bootstrap");
+      expect(worker).not.toHaveBeenCalled();
+      expect(fetch).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("returns one runtime per workspace and reuses an unchanged generation", async () => {
     const workspace = new MemoryWorkspace();
     await workspace.write("docs/runtime.md", "A shared local index serves tools, UI, and automatic context.");
