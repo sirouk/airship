@@ -138,11 +138,11 @@ describe("human-initiated approvals", () => {
  */
 describe("a pending decision cannot be navigated away from", () => {
   /*
-   * The dock is fetched on demand — a permission request cannot exist before a
-   * model is connected and a turn is running, and its accessibility pass had
-   * put 425 lines in the entry chunk that first paint was paying for. It is
-   * still mounted from the same place, which is the whole of what this contract
-   * is about, so the assertion follows the component rather than the import.
+   * The dock is deferred but warmed as soon as the shell mounts, keeping its
+   * accessibility implementation out of first paint without fetching it while
+   * a person waits on a decision. It is still mounted from the same place,
+   * which is the whole of what this contract is about, so the assertion follows
+   * the component rather than the import.
    */
   const dock = "{ApprovalDockView ? <ApprovalDockView broker={approvalBroker} /> : null}";
 
@@ -153,10 +153,18 @@ describe("a pending decision cannot be navigated away from", () => {
     expect(source.indexOf(dock)).toBeGreaterThan(source.indexOf("</main>"));
   });
 
-  it("makes the shell chrome inert while a decision is pending, so there is nothing to navigate with", () => {
-    // The broker's own pending count is what drives it — not a flag some call
-    // site remembers to set.
-    expect(source).toContain("approvalBroker.subscribe((state) => setApprovalPending(state.pending.length > 0))");
+  it("makes the shell inert only when the pending decision has a resident dialog", () => {
+    // The broker's own pending count still drives the modal state, but a failed
+    // chunk may never make controls inert around an empty screen. That request
+    // is denied synchronously instead.
+    expect(source).toContain('"approval-dock",\n    () => import("./approval-dock"),');
+    expect(source).toContain("approvalBroker.subscribe((state) => {");
+    expect(source).toContain("if (approvalDockReady.current) {");
+    expect(source).toContain("if (approvalDockUnavailable.current) {");
+    expect(source).toContain("denyPendingForUnavailableDock(pendingCount);");
+    expect(source).toContain("setApprovalDockWaitingRequests(pendingCount);");
+    expect(source).toContain(">Deny pending request</button>");
+    expect(source).toContain("&& !approvalDockWaitingVisible");
     expect(source).toContain("|| approvalPending || Boolean(profileCockpitTransition)");
     // Topbar, rail, main and the mobile bar: every control that changes route.
     expect(source.match(/inert=\{platformOverlayOpen\}/gu)?.length).toBeGreaterThanOrEqual(4);

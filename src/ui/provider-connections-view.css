@@ -315,12 +315,25 @@
   accent-color: var(--accent-bright);
 }
 
+/*
+ * `.provider-fabric__local-requirements p` used to be in this group and is not
+ * a member of it. The other two are glyph-plus-text rows, where `display: flex`
+ * is the point. That one is prose — a sentence containing `<strong>` and
+ * `<code>` — and flex turns every inline element in a sentence into a flex item
+ * that cannot line-break against its neighbours. Measured at 320px: 455px of
+ * unwrappable row inside a 294px column, overflowing by 161px, and still 91px
+ * over at 390px. It reads as clipped text on every phone.
+ */
 .provider-fabric__notice,
-.provider-fabric__error,
-.provider-fabric__local-requirements p {
+.provider-fabric__error {
   display: flex;
   align-items: flex-start;
   gap: 9px;
+  margin: 0;
+  color: var(--ink-muted);
+}
+
+.provider-fabric__local-requirements p {
   margin: 0;
   color: var(--ink-muted);
 }
@@ -334,7 +347,7 @@
   background: var(--surface-soft);
 }
 
-.provider-fabric__notice > span {
+.provider-fabric__notice > span[aria-hidden="true"] {
   width: 7px;
   height: 7px;
   flex: 0 0 7px;
@@ -342,8 +355,26 @@
   background: var(--v-verified);
 }
 
-.provider-fabric[aria-busy="true"] .provider-fabric__notice > span {
+.provider-fabric[aria-busy="true"] .provider-fabric__notice > span[aria-hidden="true"] {
   background: var(--v-info);
+}
+
+.provider-fabric__return--exact {
+  border-color: color-mix(in srgb, var(--v-info) 34%, var(--line));
+  background: color-mix(in srgb, var(--v-info) 7%, transparent);
+}
+
+.provider-fabric__return--exact > span[aria-hidden="true"] {
+  background: var(--v-info);
+}
+
+.provider-fabric__return--blocked {
+  border-color: color-mix(in srgb, var(--v-caution) 34%, var(--line));
+  background: color-mix(in srgb, var(--v-caution) 7%, transparent);
+}
+
+.provider-fabric__return--blocked > span[aria-hidden="true"] {
+  background: var(--v-caution);
 }
 
 .provider-fabric__notice p {
@@ -357,8 +388,47 @@
   min-height: 34px;
 }
 
+.provider-fabric__return-abandon {
+  min-height: var(--touch-target, 44px);
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.provider-fabric__return-abandon:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
+
+.provider-fabric__return-pending {
+  flex: 0 0 auto;
+  color: var(--ink-muted);
+  white-space: nowrap;
+}
+
 .provider-fabric__error {
   color: var(--v-failed);
+}
+
+.provider-connection__activation-error {
+  align-items: flex-start;
+  margin-top: -4px;
+  font-size: var(--fs-caption);
+  line-height: 1.45;
+}
+
+.provider-setup-card__error {
+  font-size: var(--fs-caption);
+  line-height: 1.45;
+}
+
+.provider-setup-card__error svg {
+  flex: 0 0 auto;
 }
 
 .provider-fabric__local-requirements {
@@ -433,8 +503,10 @@
     grid-template-columns: auto minmax(0, 1fr);
   }
 
-  .provider-fabric__notice button {
+  .provider-fabric__notice button,
+  .provider-fabric__return-pending {
     grid-column: 2;
     justify-self: start;
+    white-space: normal;
   }
 }

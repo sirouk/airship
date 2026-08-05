@@ -741,6 +741,34 @@
   gap: 8px;
 }
 
+.access-connection-release-confirmation {
+  display: grid;
+  gap: 10px;
+  padding: 11px;
+  border: 1px solid color-mix(in srgb, var(--v-caution) 42%, var(--line));
+  border-radius: var(--radius-control);
+  color: var(--v-caution);
+  background: color-mix(in srgb, var(--v-caution) 7%, transparent);
+}
+
+.access-connection-release-confirmation strong,
+.access-connection-release-confirmation small {
+  display: block;
+}
+
+.access-connection-release-confirmation small {
+  margin-top: 4px;
+  color: var(--ink-muted);
+  font-size: var(--fs-caption);
+  line-height: 1.45;
+}
+
+.access-connection-release-confirmation > div {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
 .active-connection-summary dl {
   display: grid;
   gap: 0;
@@ -925,6 +953,49 @@
   font: var(--fs-caption)/1.45 var(--font-mono);
 }
 
+.access-reconnect-intent {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  margin: 0 0 12px;
+  padding: 9px 10px;
+  border: 1px solid color-mix(in srgb, var(--v-info) 34%, var(--line));
+  border-radius: var(--radius-control);
+  color: var(--ink-muted);
+  background: color-mix(in srgb, var(--v-info) 7%, transparent);
+  font: var(--fs-caption)/1.45 var(--font-mono);
+}
+
+.access-reconnect-intent.blocked {
+  border-color: color-mix(in srgb, var(--v-caution) 34%, var(--line));
+  color: var(--v-caution);
+  background: color-mix(in srgb, var(--v-caution) 7%, transparent);
+}
+
+.access-reconnect-intent__abandon {
+  min-height: var(--touch-target, 44px);
+  color: inherit;
+  white-space: nowrap;
+}
+
+.access-reconnect-intent__pending {
+  color: var(--ink-muted);
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .access-reconnect-intent {
+    grid-template-columns: 18px minmax(0, 1fr);
+  }
+
+  .access-reconnect-intent__abandon,
+  .access-reconnect-intent__pending {
+    grid-column: 2;
+    white-space: normal;
+  }
+}
+
 .access-live-status {
   color: var(--signal);
   background: color-mix(in srgb, var(--signal) 6%, transparent);
@@ -1086,7 +1157,8 @@
    */
   .access-section-heading,
   .candidate-actions,
-  .active-connection-actions {
+  .active-connection-actions,
+  .access-connection-release-confirmation > div {
     grid-template-columns: 1fr;
   }
 

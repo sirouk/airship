@@ -34,8 +34,16 @@ export function useBottomFloor(active: boolean): number {
   useEffect(() => {
     if (!active) return;
     const measure = () => setFloor(Math.max(0, ...BOTTOM_BAR_BLOCKERS.map(blockerHeight)));
+    let resizeFrame: number | undefined;
+    const scheduleMeasure = () => {
+      if (resizeFrame !== undefined) return;
+      resizeFrame = requestAnimationFrame(() => {
+        resizeFrame = undefined;
+        measure();
+      });
+    };
     measure();
-    const observer = new ResizeObserver(measure);
+    const observer = new ResizeObserver(scheduleMeasure);
     for (const selector of BOTTOM_BAR_BLOCKERS) {
       const element = document.querySelector(selector);
       if (element) observer.observe(element);
@@ -44,6 +52,7 @@ export function useBottomFloor(active: boolean): number {
     return () => {
       observer.disconnect();
       window.removeEventListener("resize", measure);
+      if (resizeFrame !== undefined) cancelAnimationFrame(resizeFrame);
     };
   }, [active]);
   return active ? floor : 0;

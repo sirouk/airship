@@ -14,8 +14,8 @@ import { CANONICAL_DESTINATIONS, destinationLabel, railTraversal, type Navigatio
 describe("the conversation disclosure's default", () => {
   const source = readFileSync(new URL("./rail.tsx", import.meta.url), "utf8");
 
-  it("opens itself the first time the profile turns out to have conversations", () => {
-    expect(source).toContain("if (recentsChoice.current !== undefined || visibleConversations.length === 0) return;");
+  it("opens itself in the standard rail the first time the profile turns out to have conversations", () => {
+    expect(source).toContain('if (state !== "standard" || recentsChoice.current !== undefined || visibleConversations.length === 0) return;');
     expect(source).toContain("setRecentsOpen(true);");
   });
 

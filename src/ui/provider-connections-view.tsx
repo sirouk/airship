@@ -18,6 +18,13 @@ import type {
   ModelCapability,
 } from "../inference/providers";
 import { providerBoundaryLabel } from "../inference/transport-boundary-label";
+import {
+  accessLaneForProvider,
+  reconnectRouteDisposition,
+  type AccessReconnectIntent,
+  type ConnectLaneId,
+  type ReconnectRouteDisposition,
+} from "./access-intent";
 import { BrandLogo, type BrandLogoName } from "./brand-icons";
 import { Icon } from "./icons";
 import { MenuSelect } from "./menu-select";
@@ -31,8 +38,16 @@ export { providerBoundaryLabel };
 export type ProviderConnectionsViewProps = Readonly<{
   online: boolean;
   activeBinding?: SessionManifest["inferenceBinding"];
-  onActivate(route: ActivatedInferenceRoute): Promise<void>;
+  reconnectIntent?: AccessReconnectIntent;
+  onAbandonReconnect(): void;
+  onActivate(route: ActivatedInferenceRoute, signal: AbortSignal): Promise<void>;
   onDisconnect(connectionId: string): Promise<void>;
+}>;
+
+type ProviderOperationError = Readonly<{
+  connectionId: string;
+  message: string;
+  placement: "connection" | "setup" | "surface";
 }>;
 
 const CLOUD_PROVIDER_IDS = Object.freeze([
@@ -40,6 +55,20 @@ const CLOUD_PROVIDER_IDS = Object.freeze([
   "anthropic",
   "xai",
 ] as const satisfies readonly BrowserCloudProviderId[]);
+
+const PROVIDER_FABRIC_RECONNECT_LANES: ReadonlySet<ConnectLaneId> = new Set([
+  "codex",
+  "claude",
+  "grok",
+  "local",
+]);
+
+/** Leaves Chutes and companion returns to the surfaces that own those lanes. */
+export function providerFabricReconnectIntent(
+  intent?: AccessReconnectIntent,
+): AccessReconnectIntent | undefined {
+  return intent && PROVIDER_FABRIC_RECONNECT_LANES.has(intent.lane) ? intent : undefined;
+}
 
 /**
  * The two loopback services, each with the port its own installer uses.
@@ -84,13 +113,15 @@ const MODEL_CAPABILITY_LABELS: Readonly<Record<ModelCapability, string>> = Objec
 export function ProviderConnectionsView({
   online,
   activeBinding,
+  reconnectIntent,
+  onAbandonReconnect,
   onActivate,
   onDisconnect,
 }: ProviderConnectionsViewProps) {
   const [revision, setRevision] = useState(0);
   const [busyConnection, setBusyConnection] = useState<string>();
   const [notice, setNotice] = useState<string>();
-  const [error, setError] = useState<string>();
+  const [error, setError] = useState<ProviderOperationError>();
   const abort = useRef<AbortController>();
   const focusNoticeAfterRemoval = useRef(false);
   const noticeElement = useRef<HTMLDivElement>(null);
@@ -99,6 +130,16 @@ export function ProviderConnectionsView({
     () => CLOUD_PROVIDER_IDS.map((id) => browserInferenceFabric.providers.require(id).provider),
     [],
   );
+  const fabricReconnectIntent = providerFabricReconnectIntent(reconnectIntent);
+  const reconnectDispositions = reconnectIntent
+    ? new Map(connections.map((entry) => [
+        entry.connection.id,
+        providerReconnectDisposition(reconnectIntent, entry),
+      ] as const))
+    : undefined;
+  const exactReconnectHeld = reconnectDispositions
+    ? [...reconnectDispositions.values()].some((disposition) => disposition === "exact")
+    : false;
 
   useEffect(() => browserInferenceFabric.subscribe(() => setRevision((value) => value + 1)), []);
   useEffect(() => () => abort.current?.abort(new DOMException("Connection view closed.", "AbortError")), []);
@@ -113,7 +154,8 @@ export function ProviderConnectionsView({
     id: string,
     work: (signal: AbortSignal) => Promise<void>,
     requiresInternet = true,
-  ) {
+    errorPlacement: ProviderOperationError["placement"] = "surface",
+  ): Promise<boolean> {
     /*
      * Route activation crosses the provider probe and the App's immutable
      * session commit. It is not safe to supersede that transaction merely by
@@ -121,7 +163,7 @@ export function ProviderConnectionsView({
      * progress. Use a synchronous admission fence in addition to rendered
      * disabled state so two click events in one frame cannot overlap.
      */
-    if (abort.current) return;
+    if (abort.current) return false;
     const controller = new AbortController();
     abort.current = controller;
     setBusyConnection(id);
@@ -129,11 +171,17 @@ export function ProviderConnectionsView({
     setError(undefined);
     try {
       await work(controller.signal);
+      return true;
     } catch (caught) {
       if (!controller.signal.aborted) {
         setNotice(undefined);
-        setError(safeProviderErrorMessage(caught, requiresInternet ? online : true));
+        setError({
+          connectionId: id,
+          message: safeProviderErrorMessage(caught, requiresInternet ? online : true),
+          placement: errorPlacement,
+        });
       }
+      return false;
     } finally {
       if (abort.current === controller) {
         abort.current = undefined;
@@ -157,24 +205,56 @@ export function ProviderConnectionsView({
         <span class="provider-fabric__count">{providerConnectionCountLabel(connections.length)}</span>
       </header>
 
+      {fabricReconnectIntent ? (
+        <div
+          class={`provider-fabric__notice provider-fabric__return provider-fabric__return--${exactReconnectHeld ? "exact" : "blocked"}`}
+          role="status"
+        >
+          <span aria-hidden="true" />
+          <p>{exactReconnectHeld
+            ? "The exact pinned connection is still held in this page. Only that route can continue the requested conversation."
+            : "Exact connection no longer held. A replacement provider credential or generation cannot continue the requested conversation, so it remains unchanged."}</p>
+          {busyConnection
+            ? <span class="provider-fabric__return-pending" aria-disabled="true">Connection change in progress</span>
+            : <button class="provider-fabric__return-abandon" type="button" onClick={onAbandonReconnect}>Abandon return request</button>}
+        </div>
+      ) : null}
+
       {connections.length ? (
         <div class="provider-fabric__connections" role="group" aria-label="Connected inference providers">
           {connections.map((entry) => {
             const active = isActiveConnection(entry, activeBinding);
+            const reconnectDisposition = reconnectDispositions?.get(entry.connection.id);
+            const reconnects = fabricReconnectIntent && reconnectDisposition === "exact"
+              ? fabricReconnectIntent
+              : undefined;
+            const targetAvailable = fabricReconnectIntent
+              && accessLaneForProvider(entry.provider.id) === fabricReconnectIntent.lane
+              && entry.models.some((model) => model.id === fabricReconnectIntent.model);
             return (
               <ConnectedProvider
                 key={`${entry.connection.id}:${entry.connection.generation}`}
                 entry={entry}
                 activeBinding={activeBinding}
+                targetModelId={targetAvailable ? fabricReconnectIntent.model : undefined}
+                returningToConversation={Boolean(reconnects)}
+                reconnectDisposition={reconnectDisposition}
+                activationError={reconnects
+                  && error?.placement === "connection"
+                  && error.connectionId === entry.connection.id
+                  ? error.message
+                  : undefined}
                 busy={busyConnection === entry.connection.id}
                 disabled={Boolean(busyConnection)}
                 onActivate={(modelId) => run(entry.connection.id, async (signal) => {
                   setNotice(`Checking ${entry.provider.label}/${modelId} through this exact connection…`);
                   const route = await browserInferenceFabric.activate(entry.connection.id, modelId, signal);
-                  await onActivate(route);
+                  await onActivate(route, signal);
                   signal.throwIfAborted();
-                  setNotice(`${entry.provider.label}/${modelId} is active in a new pinned conversation.`);
-                }, entry.provider.transportBoundary !== "loopback-local")}
+                  setNotice(reconnects
+                    ? `${entry.provider.label}/${modelId} restored the requested conversation's exact inference route.`
+                    : `${entry.provider.label}/${modelId} is active in a new pinned conversation.`);
+                }, entry.provider.transportBoundary !== "loopback-local", reconnects ? "connection" : "surface")}
                 onDisconnect={() => run(entry.connection.id, async () => {
                   await onDisconnect(entry.connection.id);
                   focusNoticeAfterRemoval.current = true;
@@ -214,6 +294,9 @@ export function ProviderConnectionsView({
                     connected={connected}
                     busy={busyConnection === provider.id}
                     disabled={Boolean(busyConnection)}
+                    connectionError={error?.placement === "setup" && error.connectionId === provider.id
+                      ? error.message
+                      : undefined}
                     onConnect={(apiKey) => run(provider.id, async (signal) => {
                       setNotice(`Reading the live ${provider.label} model catalog…`);
                       await browserInferenceFabric.connectCloud({
@@ -223,7 +306,7 @@ export function ProviderConnectionsView({
                         signal,
                       });
                       setNotice(`${provider.label} is connected in page memory. Select a model to check invocation and create a pinned conversation.`);
-                    })}
+                    }, true, "setup")}
                   />
                 );
               })}
@@ -279,7 +362,9 @@ export function ProviderConnectionsView({
           <p>{notice}</p>
         </div>
       ) : null}
-      {error ? <p class="provider-fabric__error" role="alert"><Icon name="warning" size={16} />{error}</p> : null}
+      {error?.placement === "surface"
+        ? <p class="provider-fabric__error" role="alert"><Icon name="warning" size={16} />{error.message}</p>
+        : null}
     </section>
   );
 }
@@ -287,6 +372,10 @@ export function ProviderConnectionsView({
 function ConnectedProvider({
   entry,
   activeBinding,
+  targetModelId,
+  returningToConversation,
+  reconnectDisposition,
+  activationError,
   busy,
   disabled,
   onActivate,
@@ -294,26 +383,38 @@ function ConnectedProvider({
 }: Readonly<{
   entry: BrowserInferenceConnection;
   activeBinding?: SessionManifest["inferenceBinding"];
+  targetModelId?: string;
+  returningToConversation: boolean;
+  reconnectDisposition?: ReconnectRouteDisposition;
+  activationError?: string;
   busy: boolean;
   disabled: boolean;
-  onActivate(modelId: string): Promise<void>;
-  onDisconnect(): Promise<void>;
+  onActivate(modelId: string): Promise<unknown>;
+  onDisconnect(): Promise<unknown>;
 }>) {
   const titleId = useId();
   const disconnectNoticeId = useId();
+  const returnProtectionId = useId();
+  const activationErrorId = useId();
   const activeModel = isActiveConnection(entry, activeBinding) ? activeBinding?.modelId : undefined;
-  const [modelId, setModelId] = useState(activeModel ?? entry.models[0]?.id ?? "");
+  const [modelId, setModelId] = useState(
+    targetModelId ?? activeModel ?? entry.models[0]?.id ?? "",
+  );
   const [disconnectArmed, setDisconnectArmed] = useState(false);
+  const continuesRequestedConversation = returningToConversation && modelId === targetModelId;
+  const returnBlocked = reconnectDisposition !== undefined && reconnectDisposition !== "exact";
+  const protectsReturn = reconnectDisposition === "exact";
   const selected = entry.models.find((model) => model.id === modelId);
   const supported = selected ? supportedModelCapabilityLabels(selected) : [];
 
   useEffect(() => {
     setModelId((current) => {
+      if (targetModelId && entry.models.some((model) => model.id === targetModelId)) return targetModelId;
       if (activeModel && entry.models.some((model) => model.id === activeModel)) return activeModel;
       return entry.models.some((model) => model.id === current) ? current : entry.models[0]?.id ?? "";
     });
     setDisconnectArmed(false);
-  }, [activeModel, entry.connection.generation, entry.models]);
+  }, [activeModel, entry.connection.generation, entry.models, targetModelId]);
 
   return (
     <article
@@ -335,10 +436,10 @@ function ConnectedProvider({
         <div><dt>Boundary</dt><dd>{providerBoundaryLabel(entry.provider.transportBoundary)}</dd></div>
       </dl>
       <MenuSelect
-        ariaLabel={`${entry.provider.label} model for a new pinned conversation`}
+        ariaLabel={`${entry.provider.label} model for ${returningToConversation ? "the requested conversation" : "a new pinned conversation"}`}
         value={modelId}
         placement="down"
-        disabled={disabled || entry.models.length === 0}
+        disabled={disabled || reconnectDisposition !== undefined || entry.models.length === 0}
         options={entry.models.map((model) => ({
           value: model.id,
           label: model.label,
@@ -355,7 +456,11 @@ function ConnectedProvider({
           : <span>No capabilities confirmed by source evidence</span>}
         {supported.length > 6 ? <span>+{supported.length - 6} more</span> : null}
       </div>
-      {disconnectArmed ? (
+      {protectsReturn ? (
+        <p id={returnProtectionId} class="provider-disconnect-warning" role="status">
+          This exact connection is held for the requested conversation. Abandon the return request before disconnecting it.
+        </p>
+      ) : disconnectArmed ? (
         <p id={disconnectNoticeId} class="provider-disconnect-warning" role="status">
           This conversation stays readable and permanently pinned to this generation. Another connection starts a new conversation.
         </p>
@@ -363,17 +468,28 @@ function ConnectedProvider({
       <footer>
         <button
           type="button"
-          disabled={!modelId || disabled || activeModel === modelId}
-          aria-current={activeModel === modelId ? "true" : undefined}
+          disabled={!modelId || disabled || returnBlocked || (activeModel === modelId && !continuesRequestedConversation)}
+          aria-current={activeModel === modelId && !continuesRequestedConversation ? "true" : undefined}
+          aria-describedby={activationError ? activationErrorId : undefined}
           onClick={() => void onActivate(modelId)}
         >
-          {busy ? "Checking invocation…" : activeModel === modelId ? "Current conversation" : "Use in new conversation"}
+          {busy
+            ? "Checking invocation…"
+            : reconnectDisposition === "replacement"
+              ? "Exact connection no longer held"
+              : reconnectDisposition === "unrelated"
+                ? "Return request active"
+            : continuesRequestedConversation
+              ? "Continue requested conversation"
+              : activeModel === modelId
+                ? "Current conversation"
+                : "Use in new conversation"}
         </button>
         <button
           type="button"
           class={disconnectArmed ? "danger" : "quiet"}
-          disabled={disabled}
-          aria-describedby={disconnectArmed ? disconnectNoticeId : undefined}
+          disabled={disabled || protectsReturn}
+          aria-describedby={protectsReturn ? returnProtectionId : disconnectArmed ? disconnectNoticeId : undefined}
           onClick={() => {
             if (activeModel && !disconnectArmed) {
               setDisconnectArmed(true);
@@ -382,11 +498,32 @@ function ConnectedProvider({
             void onDisconnect();
           }}
         >
-          {disconnectArmed ? "Confirm disconnect" : "Disconnect"}
+          {protectsReturn ? "Connection held for requested return" : disconnectArmed ? "Confirm disconnect" : "Disconnect"}
         </button>
       </footer>
+      {activationError ? (
+        <p id={activationErrorId} class="provider-fabric__error provider-connection__activation-error" role="alert">
+          <Icon name="warning" size={16} />{activationError}
+        </p>
+      ) : null}
     </article>
   );
+}
+
+export function providerReconnectDisposition(
+  intent: AccessReconnectIntent,
+  entry: BrowserInferenceConnection,
+): ReconnectRouteDisposition {
+  const targetAvailable = entry.models.some((model) => model.id === intent.model);
+  return reconnectRouteDisposition(intent, {
+    lane: accessLaneForProvider(entry.provider.id),
+    method: entry.connection.authKind === "oauth-public-pkce"
+      ? "oauth-pkce"
+      : entry.connection.authKind,
+    model: targetAvailable ? intent.model : "",
+    connectionId: entry.connection.id,
+    connectionGeneration: entry.connection.generation,
+  });
 }
 
 function CloudProviderCard({
@@ -396,6 +533,7 @@ function CloudProviderCard({
   connected,
   busy,
   disabled,
+  connectionError,
   onConnect,
 }: Readonly<{
   cardId: string;
@@ -404,10 +542,12 @@ function CloudProviderCard({
   connected: boolean;
   busy: boolean;
   disabled: boolean;
-  onConnect(apiKey: string): Promise<void>;
+  connectionError?: string;
+  onConnect(apiKey: string): Promise<boolean>;
 }>) {
   const inputId = useId();
   const riskId = useId();
+  const errorId = useId();
   const keyInput = useRef<HTMLInputElement>(null);
   const [hasKey, setHasKey] = useState(false);
   const [accepted, setAccepted] = useState(false);
@@ -437,7 +577,7 @@ function CloudProviderCard({
           autoCapitalize="none"
           inputMode="text"
           spellcheck={false}
-          aria-describedby={riskId}
+          aria-describedby={connectionError ? `${riskId} ${errorId}` : riskId}
           disabled={connected || disabled}
           onInput={(event) => setHasKey(Boolean(event.currentTarget.value.trim()))}
           placeholder="Paste credential"
@@ -455,16 +595,28 @@ function CloudProviderCard({
       <button
         type="button"
         disabled={connected || !online || disabled || !accepted || !hasKey}
+        aria-describedby={connectionError ? errorId : undefined}
         onClick={() => {
           const key = keyInput.current?.value ?? "";
-          if (keyInput.current) keyInput.current.value = "";
-          setHasKey(false);
-          setAccepted(false);
-          void onConnect(key);
+          void onConnect(key).then((succeeded) => {
+            if (!succeeded) {
+              keyInput.current?.focus();
+              return;
+            }
+            if (keyInput.current) keyInput.current.value = "";
+            setHasKey(false);
+            setAccepted(false);
+          });
         }}
       >
         {connected ? "Connected above" : busy ? "Connecting…" : `Connect ${provider.label}`}
       </button>
+      {connectionError ? (
+        <p id={errorId} class="provider-fabric__error provider-setup-card__error" role="alert">
+          <Icon name="warning" size={16} />
+          <span>{connectionError} Your credential and acknowledgement were kept. Correct the problem, then try again.</span>
+        </p>
+      ) : null}
     </article>
   );
 }
@@ -501,7 +653,7 @@ function LocalProviderCard({
   connected: boolean;
   busy: boolean;
   disabled: boolean;
-  onConnect(endpoint: string): Promise<void>;
+  onConnect(endpoint: string): Promise<unknown>;
 }>) {
   const endpointId = useId();
   const originsId = useId();

@@ -162,7 +162,13 @@
   white-space: nowrap;
 }
 
-.connect-lane__header .seal {
+.connect-lane__seal-row {
+  display: flex;
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.connect-lane__seal-row .seal {
   flex: 0 0 auto;
 }
 
@@ -688,6 +694,42 @@
 
   .connect-lane__header {
     padding: var(--sp-1) var(--sp-2);
+  }
+
+  /*
+   * The lane's name outranks its state chip, which is the reverse of what the
+   * flex row did.
+   *
+   * `.seal` is `flex: 0 0 auto` so it never yielded, while `.connect-lane__identity`
+   * is `1 1 auto` and yielded everything. Measured at 320px: the icon, a 136px
+   * chip and the chevron took 200px of a 294px row, leaving the *name* 43px
+   * against a 70px longest word — so "Airship Companion" and "Anthropic" were
+   * clipped while "Not installed" sat beside them in full. A person scanning
+   * this list is looking for which provider a row is, not what state it is in;
+   * they read the state after they have found the row.
+   *
+   * The chip drops to its own line rather than ellipsising, because a truncated
+   * verdict ("Not inst…") is worse than a taller row, and because the chip is
+   * the one thing here whose exact word is load-bearing. The header keeps its
+   * 44px floor below and only grows, so no touch target shrinks — the failure
+   * mode a previous wrap fix on this codebase actually hit.
+   */
+  .connect-lane__header {
+    flex-wrap: wrap;
+    row-gap: var(--sp-1);
+  }
+
+  .connect-lane__header > svg { order: 0; }
+  .connect-lane__identity { order: 1; }
+  .connect-lane__facts { order: 2; }
+  .connect-lane__chevron { order: 3; }
+
+  .connect-lane__seal-row {
+    order: 4;
+    /* The wrapper forces the row break. The bordered Seal inside it keeps its
+       intrinsic width, so a verdict reads as a chip instead of a full-width
+       field. */
+    flex: 0 0 100%;
   }
 
   .connect-lane__body {

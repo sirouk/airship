@@ -45,6 +45,8 @@ export type ScrollAffordanceView = Readonly<{
   addEventListener(type: "resize", listener: () => void): void;
   removeEventListener(type: "resize", listener: () => void): void;
   ResizeObserver?: typeof ResizeObserver;
+  requestAnimationFrame?(callback: FrameRequestCallback): number;
+  cancelAnimationFrame?(handle: number): void;
 }>;
 
 /**
@@ -66,8 +68,20 @@ export function observeScrollEdges(
   element.addEventListener("scroll", reconcile, { passive: true });
   // Content growth (an expanded conversation list) changes overflow without a
   // scroll or resize event, so the box and its groups have to be observed too.
+  let resizeFrame: number | undefined;
+  const reconcileAfterResize = () => {
+    if (!view?.requestAnimationFrame) {
+      reconcile();
+      return;
+    }
+    if (resizeFrame !== undefined) return;
+    resizeFrame = view.requestAnimationFrame(() => {
+      resizeFrame = undefined;
+      reconcile();
+    });
+  };
   const Observer = view?.ResizeObserver;
-  const observer = Observer ? new Observer(reconcile) : undefined;
+  const observer = Observer ? new Observer(reconcileAfterResize) : undefined;
   if (observer) {
     observer.observe(element as unknown as Element);
     for (let index = 0; index < element.children.length; index += 1) {
@@ -81,6 +95,7 @@ export function observeScrollEdges(
     element.removeEventListener("scroll", reconcile);
     view?.removeEventListener("resize", reconcile);
     observer?.disconnect();
+    if (resizeFrame !== undefined) view?.cancelAnimationFrame?.(resizeFrame);
   };
 }
 

@@ -1,4 +1,5 @@
 import type { SealState } from "../seal";
+import { CONNECT_LANE_IDS, type ConnectLaneId } from "../access-intent";
 import {
   bridgeCarriesProvider,
   bridgeRefusalReason,
@@ -36,16 +37,7 @@ import {
  */
 export const SIGN_IN_UNAVAILABLE = "Chutes sign-in is not available in this build.";
 
-export const CONNECT_LANE_IDS = Object.freeze([
-  "chutes",
-  "codex",
-  "claude",
-  "grok",
-  "local",
-  "companion",
-] as const);
-
-export type ConnectLaneId = (typeof CONNECT_LANE_IDS)[number];
+export { CONNECT_LANE_IDS, type ConnectLaneId } from "../access-intent";
 
 /**
  * Lane states, in the order a person should try them.

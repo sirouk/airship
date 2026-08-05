@@ -749,12 +749,20 @@ function ProfileScopedWorkspaceView({
   useEffect(() => {
     const element = treeViewport.current;
     if (!element || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(() => {
+    let resizeFrame: number | undefined;
+    const measure = () => {
+      resizeFrame = undefined;
       const height = element.clientHeight;
       if (height > 0) setTreeHeight(height);
+    };
+    const observer = new ResizeObserver(() => {
+      if (resizeFrame === undefined) resizeFrame = requestAnimationFrame(measure);
     });
     observer.observe(element);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      if (resizeFrame !== undefined) cancelAnimationFrame(resizeFrame);
+    };
   }, [mode]);
 
   // The content half of the one search reads real bytes, so it is the half that

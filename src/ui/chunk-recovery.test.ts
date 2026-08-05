@@ -50,7 +50,13 @@ describe("deferred chunk recovery", () => {
     // The retry is a person's decision. Re-fetching inside the same rejection
     // would spend a second request on a network that has just proved it cannot
     // serve the first, and would report a second failure for one attempt.
-    expect(source).toContain("const entry = previous.length ? entryAsset(name, assets) : undefined;");
+    expect(source).toContain("const entry = previousEntry;");
+  });
+
+  it("captures a development-server entry without treating the first failure as a retry", () => {
+    expect(source).toContain("const discoveredEntry = entryAsset(name, assets) ?? developmentEntry;");
+    expect(source).toContain("if (discoveredEntry) failedEntries.set(name, discoveredEntry);");
+    expect(appSource).toContain('developmentChunkEntry("approval-dock.tsx")');
   });
 
   it("restores the chunk's stylesheet before importing it, so a recovered route is never unstyled", () => {
@@ -63,6 +69,11 @@ describe("deferred chunk recovery", () => {
   });
 
   it("is what the Memory route loads through, since that is the failure it was measured on", () => {
-    expect(appSource).toContain('void loadRetryableChunk("memory-view", () => import("./memory-view"))');
+    expect(appSource).toContain('"memory-view",\n      () => import("./memory-view"),');
+  });
+
+  it("also owns the deferred Skills route's retry path", () => {
+    expect(appSource).toContain('"skills-manager-view",\n      () => import("./skills-manager-view"),');
+    expect(appSource).toContain('developmentChunkEntry("skills-manager-view.tsx")');
   });
 });

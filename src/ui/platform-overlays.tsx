@@ -69,6 +69,12 @@ export function CommandPalette({ open, entries, onClose, onOpenShortcuts }: Read
     onClose();
     entry.run();
   };
+  /*
+   * The input owns this listbox through `aria-activedescendant`, so DOM focus
+   * stays there while the active option moves. Handling the composite keys from
+   * the dialog made Enter on the footer's real buttons open whichever result
+   * happened to be highlighted instead.
+   */
   return (
     <div class="platform-scrim" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <div
@@ -79,25 +85,34 @@ export function CommandPalette({ open, entries, onClose, onOpenShortcuts }: Read
         aria-labelledby="command-palette-title"
         onKeyDown={(event) => {
           if (event.key === "Escape") { event.preventDefault(); onClose(); }
-          else if (event.key === "ArrowDown") { event.preventDefault(); setActive((value) => Math.min(filtered.length - 1, value + 1)); }
-          else if (event.key === "ArrowUp") { event.preventDefault(); setActive((value) => Math.max(0, value - 1)); }
-          else if (event.key === "Enter") { event.preventDefault(); choose(filtered[active]); }
           else if (event.key === "Tab") trapFocus(event, dialog.current);
+          else if (event.target === input.current) {
+            if (event.key === "ArrowDown") { event.preventDefault(); setActive((value) => Math.min(filtered.length - 1, value + 1)); }
+            else if (event.key === "ArrowUp") { event.preventDefault(); setActive((value) => Math.max(0, value - 1)); }
+            else if (event.key === "Enter") { event.preventDefault(); choose(filtered[active]); }
+          }
         }}
       >
         <h2 id="command-palette-title" class="sr-only">Airship command palette</h2>
         <div class="command-palette__search">
           <span aria-hidden="true">⌘</span>
-          <input ref={input} value={query} role="combobox" aria-controls="command-palette-results" aria-expanded="true" aria-activedescendant={filtered[active] ? `palette-${safeId(filtered[active]!.id)}` : undefined} placeholder="Go to a view, session, or command…" onInput={(event) => { setQuery(event.currentTarget.value); setActive(0); }} />
-          <kbd>Esc</kbd>
+          <input ref={input} value={query} role="combobox" aria-autocomplete="list" aria-controls="command-palette-results" aria-expanded="true" aria-activedescendant={filtered[active] ? `palette-${safeId(filtered[active]!.id)}` : undefined} placeholder="Go to a view, session, or command…" onInput={(event) => { setQuery(event.currentTarget.value); setActive(0); }} />
+          <p class="sr-only" role="status" aria-live="polite" aria-atomic="true">{filtered.length
+            ? `${filtered.length} result${filtered.length === 1 ? "" : "s"} available.`
+            : "No matching destination or command."}</p>
+          <span class="command-palette__dismiss">
+            <kbd>Esc</kbd>
+            <button type="button" aria-label="Close command palette" onClick={onClose}>Close</button>
+          </span>
         </div>
         <div id="command-palette-results" class="command-palette__results" role="listbox">
-          {filtered.length ? filtered.map((entry, index) => (
-            <button id={`palette-${safeId(entry.id)}`} key={entry.id} type="button" role="option" aria-selected={index === active} aria-disabled={entry.disabled || undefined} class={index === active ? "is-active" : ""} onMouseEnter={() => setActive(index)} onClick={() => choose(entry)}>
+          {filtered.map((entry, index) => (
+            <button id={`palette-${safeId(entry.id)}`} key={entry.id} type="button" role="option" tabIndex={-1} aria-selected={index === active} aria-disabled={entry.disabled || undefined} class={index === active ? "is-active" : ""} onMouseEnter={() => setActive(index)} onClick={() => choose(entry)}>
               <span><strong>{entry.label}</strong><small>{entry.description}</small></span><em>{entry.group}</em>
             </button>
-          )) : <p class="command-palette__empty">No matching destination or command.</p>}
+          ))}
         </div>
+        {!filtered.length ? <p class="command-palette__empty" aria-hidden="true">No matching destination or command.</p> : null}
         {/* The footer printed only how to drive the palette, on the one surface
             in the product that could have taught the eleven chords outside it. */}
         <footer>

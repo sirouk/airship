@@ -86,6 +86,13 @@
 .capability-extension h2 { margin: .2rem 0; font-family: var(--font-display); }
 .capability-extension p { margin: 0; color: var(--ink-muted); }
 .capability-extension > div:last-child { display: flex; flex: 0 0 auto; gap: .5rem; }
+@media (max-width: 860px) {
+  /* At the 768px tablet boundary the persistent rail leaves this route about
+     613px. Four 144px cards cannot hold their status chips or WebAssembly
+     tags, so the grid composes as two readable columns before the phone rule
+     below takes it to one. */
+  .capability-device-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 @media (max-width: 760px) {
   .capabilities-refresh { min-width: 44px; min-height: 44px; }
   .capability-summary, .capability-extension { align-items: stretch; flex-direction: column; }

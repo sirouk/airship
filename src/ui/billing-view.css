@@ -488,6 +488,17 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
+  /* The disconnected preview nests a two-column metric strip inside the
+     gate's own padding. Give those cells' labels the room already available in
+     the card so `SUBSCRIPTION` stays one readable word at 320px. */
+  .billing-gate-preview .metric-strip__cell {
+    padding-inline: var(--sp-2, 8px);
+  }
+
+  .billing-gate-preview .metric-strip__label {
+    letter-spacing: 0.07em;
+  }
+
   .usage-chart {
     grid-template-columns: minmax(0, 1fr);
   }

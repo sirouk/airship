@@ -401,6 +401,12 @@ const VERDICT_TOKEN_TEXT_LEDGER = Object.freeze([
   // Remove, on a card holding a skill someone wrote. Same role as the profile
   // archive action above it: the only destructive verb on the surface.
   "ui/routes.css .skill-authoring .danger --v-failed",
+  // Exact profile-switch refusal, kept beside the Skills control on narrow
+  // screens instead of pointing to the global status line hidden there.
+  "ui/routes.css .skills-toolbar > .profile-switch-failure --v-failed",
+  // A refused new-conversation attempt is owned by the same initiating route;
+  // the ordinary active-turn reason stays muted and never spends this token.
+  "ui/routes.css .skills-toolbar > .skills-toolbar-status.failure --v-failed",
   "ui/shell.css .attestation-chip.asserted --copper",
   "ui/shell.css .attestation-chip.failed --v-failed",
   "ui/shell.css .recent-conversation--thread .recent-conversation__blocked --v-failed",

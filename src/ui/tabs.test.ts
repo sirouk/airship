@@ -200,6 +200,11 @@ describe("one tab grammar", () => {
     expect(coarse).toContain("min-height: var(--touch-target)");
   });
 
+  it("reserves the overflow trigger's full hit width in the tab row", () => {
+    const overflow = routeStyles.match(/\.tabs__overflow \{([^}]+)\}/u)?.[1] ?? "";
+    expect(overflow).toContain("flex: 0 0 var(--touch-target)");
+  });
+
   it("keeps a count as text rather than reinstating a filled badge", () => {
     const count = routeStyles.match(/\.tabs__count \{([^}]+)\}/u)?.[1] ?? "";
     expect(count).toContain("var(--fs-caption)");

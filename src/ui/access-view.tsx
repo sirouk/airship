@@ -28,6 +28,7 @@ import {
   type ModelSourceState,
 } from "../models";
 import { Icon } from "./icons";
+import { reconnectMethodTab, type AccessReconnectIntent } from "./access-intent";
 import { formatInstant } from "./instant-format";
 import { mapUnknownRequestFailure } from "./request-state";
 import { ModelPicker } from "./model-picker";
@@ -127,6 +128,9 @@ export type AccessConnectRequest = Readonly<{
 export type AccessViewProps = Readonly<{
   connection: ChutesConnection;
   online: boolean;
+  reconnectIntent?: AccessReconnectIntent;
+  chutesReconnectExact?: boolean;
+  onAbandonReconnect(): void;
   onConnect: (request: AccessConnectRequest) => Promise<void>;
   onDisconnect: () => Promise<void>;
   models?: readonly AirshipModel[];
@@ -262,6 +266,9 @@ type Candidate = Readonly<{
 export function AccessView({
   connection,
   online,
+  reconnectIntent,
+  chutesReconnectExact = false,
+  onAbandonReconnect,
   onConnect,
   onDisconnect,
   models = [],
@@ -323,10 +330,16 @@ export function AccessView({
   const [strictProof, setStrictProof] = useState(false);
   // `undefined` means "follow what can actually work". A hardcoded initial
   // method made the tab a statement about the build rather than about a choice.
-  const [chutesMethod, setChutesMethod] = useState<"oauth" | "api-key">();
+  const [chutesMethod, setChutesMethod] = useState<"oauth" | "api-key" | undefined>(() =>
+    reconnectIntent?.lane === "chutes" ? reconnectMethodTab(reconnectIntent.method) : undefined
+  );
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string>();
   const [error, setError] = useState<string>();
+  const [connectionReleaseConfirmation, setConnectionReleaseConfirmation] = useState<"switch" | "clear">();
+  const connectionReleaseCancel = useRef<HTMLButtonElement>(null);
+  const switchCredentialButton = useRef<HTMLButtonElement>(null);
+  const clearConnectionButton = useRef<HTMLButtonElement>(null);
   const [oauthDiagnosticError, setOauthDiagnosticError] = useState<string>();
   // `undefined` until the handshake settles. There is no "last known" arm, so
   // an unfinished observation can only render as "checking" — never as absence,
@@ -440,6 +453,25 @@ export function AccessView({
   }, [localOAuthHandler]);
 
   useEffect(() => () => clearEphemeral(), []);
+
+  useEffect(() => {
+    const requested = reconnectIntent?.lane === "chutes"
+      ? reconnectMethodTab(reconnectIntent.method)
+      : undefined;
+    if (requested) setChutesMethod(requested);
+  }, [reconnectIntent?.lane, reconnectIntent?.method, reconnectIntent?.returnSessionId]);
+
+  useEffect(() => {
+    if (reconnectIntent?.lane !== "chutes" || !chutesReconnectExact) {
+      setConnectionReleaseConfirmation(undefined);
+    }
+  }, [chutesReconnectExact, reconnectIntent?.lane, reconnectIntent?.returnSessionId]);
+
+  useEffect(() => {
+    if (!connectionReleaseConfirmation) return;
+    const frame = requestAnimationFrame(() => connectionReleaseCancel.current?.focus({ preventScroll: true }));
+    return () => cancelAnimationFrame(frame);
+  }, [connectionReleaseConfirmation]);
 
   /*
    * Ask an extension whether it is there, once, when this surface opens. The
@@ -636,6 +668,12 @@ export function AccessView({
         throw new Error("Chutes returned no text-in/text-out models explicitly eligible for encrypted confidential-compute invocation.");
       }
       const selection = selectModel(snapshot.models);
+      const requestedModel = reconnectIntent?.lane === "chutes"
+        ? compatibleModels.find((candidate) => candidate.id === reconnectIntent.model)
+        : undefined;
+      if (reconnectIntent?.lane === "chutes" && !requestedModel) {
+        throw new Error(`This Chutes connection does not offer the pinned model ${reconnectIntent.model}. The conversation was left unchanged.`);
+      }
       const transport = new ChutesInferenceTransport({
         apiKey: tokenSource ?? credential.value,
         // Evidence is always acquired and evaluated. Ordinary encrypted chat
@@ -669,7 +707,7 @@ export function AccessView({
         managementState: snapshot.sources.management,
         issues: snapshot.issues,
       }));
-      setModelId(selection.model?.id ?? compatibleModels[0]!.id);
+      setModelId(requestedModel?.id ?? selection.model?.id ?? compatibleModels[0]!.id);
       setDetectedKind(credential.kind);
       setStrictProof(false);
       setStatus(`${compatibleModels.length} encrypted-inference candidate${compatibleModels.length === 1 ? "" : "s"} found. Catalog metadata is not proof. Finish verifies selected-model authorization and arms fresh per-turn evidence collection.`);
@@ -895,6 +933,12 @@ export function AccessView({
       });
       if (models.length === 0) throw new Error("The enriched catalog contained no compatible encrypted text-generation candidates.");
       const selection = selectModel(snapshot.models);
+      const requestedModel = reconnectIntent?.lane === "chutes"
+        ? models.find((candidate) => candidate.id === reconnectIntent.model)
+        : undefined;
+      if (reconnectIntent?.lane === "chutes" && !requestedModel) {
+        throw new Error(`The refreshed Chutes catalog no longer offers the pinned model ${reconnectIntent.model}. The conversation was left unchanged.`);
+      }
       setCandidate(Object.freeze({
         ...prior,
         models,
@@ -903,7 +947,9 @@ export function AccessView({
         managementState: snapshot.sources.management,
         issues: snapshot.issues,
       }));
-      if (!models.some((model) => model.id === modelId)) setModelId(selection.model?.id ?? models[0]!.id);
+      if (!models.some((model) => model.id === modelId)) {
+        setModelId(requestedModel?.id ?? selection.model?.id ?? models[0]!.id);
+      }
       setStatus(snapshot.sources.management === "fresh"
         ? "Live availability and TEE deployment claims loaded. These remain metadata, not attestation proof."
         : "The fast inference catalog remains usable; optional management enrichment was unavailable.");
@@ -928,7 +974,7 @@ export function AccessView({
     requestAnimationFrame(() => credentialInput.current?.focus());
   }
 
-  async function clearConnection(focusInput: boolean) {
+  async function clearConnection(focusInput: boolean, abandonExactReturn = false) {
     setBusy(true);
     setStatus(focusInput ? "Clearing the active connection before switching…" : "Clearing the active connection…");
     setError(undefined);
@@ -936,6 +982,10 @@ export function AccessView({
     try {
       await onDisconnect();
       clearEphemeral();
+      if (abandonExactReturn) {
+        setConnectionReleaseConfirmation(undefined);
+        onAbandonReconnect();
+      }
       setStatus(undefined);
       if (focusInput) {
         /*
@@ -955,6 +1005,24 @@ export function AccessView({
     }
   }
 
+  function requestConnectionRelease(action: "switch" | "clear"): void {
+    if (reconnectIntent?.lane === "chutes" && chutesReconnectExact) {
+      setStatus(undefined);
+      setError(undefined);
+      setConnectionReleaseConfirmation(action);
+      return;
+    }
+    void clearConnection(action === "switch");
+  }
+
+  function cancelConnectionRelease(): void {
+    const trigger = connectionReleaseConfirmation === "switch"
+      ? switchCredentialButton.current
+      : clearConnectionButton.current;
+    setConnectionReleaseConfirmation(undefined);
+    requestAnimationFrame(() => trigger?.focus({ preventScroll: true }));
+  }
+
   /*
    * Re-run a failed OAuth connect leg with the exchange the host still holds.
    * The nonce is in the bootstrap effect's dependency list, so this button
@@ -971,11 +1039,17 @@ export function AccessView({
   async function selectActiveModel(modelId: string) {
     if (!onSelectModel) return;
     setBusy(true);
-    setStatus("Creating a new model-pinned session…");
+    const returning = reconnectIntent?.lane === "chutes"
+      && reconnectIntent.model === modelId;
+    setStatus(returning
+      ? "Verifying the requested conversation against this exact Chutes route…"
+      : "Creating a new model-pinned session…");
     setError(undefined);
     try {
       await onSelectModel(modelId);
-      setStatus("Model changed in a new pinned session; prior history remains intact.");
+      setStatus(returning
+        ? "The requested audited conversation is active."
+        : "Model changed in a new pinned session; prior history remains intact.");
     } catch (caught) {
       setStatus(undefined);
       setError(mapUnknownRequestFailure(caught, online).message);
@@ -987,11 +1061,16 @@ export function AccessView({
   async function useConnectedChutes() {
     if (!onUseConnection) return;
     setBusy(true);
-    setStatus("Creating a new Chutes-pinned conversation…");
+    const returning = reconnectIntent?.lane === "chutes";
+    setStatus(returning
+      ? "Verifying the requested conversation against this exact Chutes route…"
+      : "Creating a new Chutes-pinned conversation…");
     setError(undefined);
     try {
       await onUseConnection();
-      setStatus("Chutes is active in a new pinned conversation; prior history remains intact.");
+      setStatus(returning
+        ? "The requested audited conversation is active."
+        : "Chutes is active in a new pinned conversation; prior history remains intact.");
     } catch (caught) {
       setStatus(undefined);
       setError(mapUnknownRequestFailure(caught, online).message);
@@ -1125,6 +1204,8 @@ export function AccessView({
    * now lives once, in `.oauth-finish-banner`, beside the chooser it names.
    */
   const oauthNoticeVisible = oauthNotice !== undefined && !isChutesConnected(connection);
+  const chutesReturnRequested = reconnectIntent?.lane === "chutes";
+  const chutesReturnBlocked = Boolean(reconnectIntent) && !chutesReconnectExact;
 
   return (
     <section class="access-connection-view" aria-labelledby="access-connection-title">
@@ -1179,6 +1260,17 @@ export function AccessView({
               <Icon name="warning" size={16} />{OFFLINE_INLINE_REASON}
             </p>
           ) : null}
+          {chutesReturnRequested ? (
+            <p class={chutesReconnectExact ? "access-reconnect-intent exact" : "access-reconnect-intent blocked"} role="status">
+              <Icon name={chutesReconnectExact ? "proof" : "warning"} size={16} />
+              <span>{chutesReconnectExact
+                ? "The exact pinned Chutes connection is still held in this page. It must pass the conversation audit before continuation."
+                : "Exact Chutes connection no longer held. A replacement credential or generation cannot continue the requested conversation, so it remains unchanged."}</span>
+              {busy
+                ? <span class="access-reconnect-intent__pending" aria-disabled="true">Connection change in progress</span>
+                : <button class="access-reconnect-intent__abandon" type="button" onClick={onAbandonReconnect}>Abandon return request</button>}
+            </p>
+          ) : null}
           {/*
             Above the lanes, not below them. These two lines answer the button a
             person just pressed, and they used to render after every remaining
@@ -1205,11 +1297,12 @@ export function AccessView({
 
           <ConnectSurface
             input={laneInput}
+            reconnectIntent={reconnectIntent}
             onOpenDirectProviders={additionalProviders ? focusDirectProviders : undefined}
             {...(onCheckLocalProviders ? { onCheckLocalProviders } : {})}
             {...(codexSignIn ? { onStartCodexSignIn: codexSignIn.onStart, onSubmitCodexCode: codexSignIn.onSubmitCode } : {})}
             {...(publishedExtensionInstallUrl ? { extensionInstallUrl: publishedExtensionInstallUrl } : {})}
-            chutesPanel={<>
+            chutesPanel={chutesReturnBlocked ? null : <>
             {/*
               The OAuth notice, at lane level and in every tone, never behind a
               disclosure. It used to render only inside the page-level boundary
@@ -1236,7 +1329,7 @@ export function AccessView({
                       <ModelPicker
                         value={connection.model}
                         models={models}
-                        disabled={busy || models.length < 2}
+                        disabled={busy || Boolean(reconnectIntent) || models.length < 2}
                         onSelect={(modelId) => void selectActiveModel(modelId)}
                       />
                     ) : connection.model}
@@ -1249,14 +1342,50 @@ export function AccessView({
               </dl>
               <p class="model-pinning-note"><Icon name="proof" size={15} />Changing a model creates a new session manifest. Airship never rewrites the provider or model bound to prior turns.</p>
               <div class="active-connection-actions">
-                {!connectionActive && onUseConnection ? (
+                {onUseConnection && (
+                  chutesReturnRequested
+                    ? chutesReconnectExact
+                    : !reconnectIntent && !connectionActive
+                ) ? (
                   <button class="primary" type="button" onClick={() => void useConnectedChutes()} disabled={busy}>
-                    Use Chutes in new conversation
+                    {chutesReturnRequested
+                      ? "Continue requested conversation"
+                      : "Use Chutes in new conversation"}
                   </button>
                 ) : null}
-                <button type="button" onClick={() => void clearConnection(true)} disabled={busy}>Switch credential</button>
-                <button class="danger" type="button" onClick={() => void clearConnection(false)} disabled={busy}>Clear connection</button>
+                <button
+                  ref={switchCredentialButton}
+                  type="button"
+                  onClick={() => requestConnectionRelease("switch")}
+                  disabled={busy || Boolean(connectionReleaseConfirmation)}
+                >Switch credential</button>
+                <button
+                  ref={clearConnectionButton}
+                  class="danger"
+                  type="button"
+                  onClick={() => requestConnectionRelease("clear")}
+                  disabled={busy || Boolean(connectionReleaseConfirmation)}
+                >Clear connection</button>
               </div>
+              {connectionReleaseConfirmation && chutesReturnRequested && chutesReconnectExact ? (
+                <div class="access-connection-release-confirmation" role="alert">
+                  <span>
+                    <strong>{connectionReleaseConfirmation === "switch"
+                      ? "Switching would release this exact return route"
+                      : "Clearing would release this exact return route"}</strong>
+                    <small>The requested conversation stays readable, but this exact Chutes generation cannot be recovered after release. Confirming also abandons the return request.</small>
+                  </span>
+                  <div>
+                    <button ref={connectionReleaseCancel} type="button" onClick={cancelConnectionRelease} disabled={busy}>Keep exact connection</button>
+                    <button
+                      class="danger"
+                      type="button"
+                      onClick={() => void clearConnection(connectionReleaseConfirmation === "switch", true)}
+                      disabled={busy}
+                    >{connectionReleaseConfirmation === "switch" ? "Confirm switch credential" : "Confirm clear connection"}</button>
+                  </div>
+                </div>
+              ) : null}
             </div>
           ) : candidate ? (
             <div class="connection-candidate">

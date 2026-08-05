@@ -59,6 +59,11 @@ describe("a failed turn is a failure in the accessibility tree", () => {
       .slice(app.indexOf("function MessageCard("))
       .replace(/\/\*[\s\S]*?\*\//gu, "")
       .replace(/\{\/\*[\s\S]*?\*\/\}/gu, "");
-    expect(card.slice(0, card.indexOf("</article>"))).not.toContain('role="alert"');
+    const articleStart = card.indexOf("<article");
+    const articleOpeningTag = card.slice(articleStart, card.indexOf(">", articleStart) + 1);
+    expect(articleOpeningTag).not.toContain('role="alert"');
+    // A Copy refusal appears only after a direct action, beside that message;
+    // announcing that new recovery text must not weaken the row-level rule.
+    expect(card).toContain('class="message-copy-failure" role="alert"');
   });
 });

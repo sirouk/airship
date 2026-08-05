@@ -50,6 +50,7 @@ describe("the metric grammar", () => {
     expect(label).toContain("var(--fs-micro)");
     expect(label).toContain("var(--font-mono)");
     expect(label).toContain("text-transform: uppercase");
+    expect(label).toContain("overflow-wrap: anywhere");
     expect(label).not.toContain("var(--font-display)");
   });
 

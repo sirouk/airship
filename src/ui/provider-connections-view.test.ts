@@ -11,14 +11,30 @@ import {
   modelOptionDescription,
   providerBoundaryLabel,
   providerConnectionCountLabel,
+  providerFabricReconnectIntent,
   safeProviderErrorMessage,
   supportedModelCapabilityLabels,
 } from "./provider-connections-view";
 
 const source = await readFile(new URL("./provider-connections-view.tsx", import.meta.url), "utf8");
 const styles = await readFile(new URL("./provider-connections-view.css", import.meta.url), "utf8");
+const declarations = styles.replace(/\/\*[\s\S]*?\*\//gu, "");
 
 describe("provider connection presentation", () => {
+  it("leaves Chutes and companion return requests to the surfaces that own them", () => {
+    const intent = {
+      lane: "codex",
+      method: "api-key",
+      model: "gpt-return",
+      connectionId: "conn-1",
+      connectionGeneration: 1,
+      returnSessionId: "session-1",
+    } as const;
+    expect(providerFabricReconnectIntent(intent)).toBe(intent);
+    expect(providerFabricReconnectIntent({ ...intent, lane: "chutes" })).toBeUndefined();
+    expect(providerFabricReconnectIntent({ ...intent, lane: "companion" })).toBeUndefined();
+  });
+
   it("pluralizes the connected count without ambiguous shorthand", () => {
     expect(providerConnectionCountLabel(0)).toBe("0 connections");
     expect(providerConnectionCountLabel(1)).toBe("1 connection");
@@ -66,11 +82,23 @@ describe("provider connection presentation", () => {
 });
 
 describe("provider connection component contract", () => {
-  it("keeps API keys out of component state and clears the DOM field before connecting", () => {
+  it("keeps API keys DOM-only and clears them only after a successful connection", () => {
     expect(source).toContain("keyInput.current?.value");
     expect(source).toContain('keyInput.current.value = ""');
+    expect(source).toContain("onConnect(key).then((succeeded)");
+    expect(source).toContain("if (!succeeded)");
+    expect(source.indexOf("if (!succeeded)")).toBeLessThan(source.indexOf('keyInput.current.value = ""'));
     expect(source).not.toContain("setApiKey");
     expect(source).not.toContain("value={apiKey}");
+  });
+
+  it("keeps a failed cloud credential and its recovery message in the provider card", () => {
+    expect(source).toContain('}, true, "setup")');
+    expect(source).toContain('error?.placement === "setup"');
+    expect(source).toContain('class="provider-fabric__error provider-setup-card__error" role="alert"');
+    expect(source).toContain("Your credential and acknowledgement were kept");
+    expect(source).toContain("keyInput.current?.focus()");
+    expect(source).toContain("aria-describedby={connectionError ? errorId : undefined}");
   });
 
   it("derives OAuth and API-key warnings from the provider registry", () => {
@@ -79,9 +107,13 @@ describe("provider connection component contract", () => {
     expect(source).not.toContain("const CLOUD =");
   });
 
-  it("requires confirmation before disconnecting the active route", () => {
+  it("requires confirmation for the active route and protects an exact return pin even when inactive", () => {
     expect(source).toContain("Confirm disconnect");
     expect(source).toContain("if (activeModel && !disconnectArmed)");
+    expect(source).toContain('const protectsReturn = reconnectDisposition === "exact"');
+    expect(source).toContain("disabled={disabled || protectsReturn}");
+    expect(source).toContain("Connection held for requested return");
+    expect(source).toContain("This exact connection is held for the requested conversation");
     expect(source).toContain("This conversation remains readable");
     expect(source).toContain("focusNoticeAfterRemoval.current = true");
     expect(source).toContain("tabIndex={-1}");
@@ -96,6 +128,54 @@ describe("provider connection component contract", () => {
     expect(source).toContain("if (abort.current) return");
     expect(source).toContain("disabled={Boolean(busyConnection)}");
     expect(source).not.toContain("A newer connection operation started.");
+  });
+
+  it("offers continuation only to the exact pinned connection generation", () => {
+    expect(source).toContain("const fabricReconnectIntent = providerFabricReconnectIntent(reconnectIntent)");
+    expect(source).toContain("const reconnectDispositions = reconnectIntent");
+    expect(source).toContain("{fabricReconnectIntent ? (");
+    expect(source).toContain("providerReconnectDisposition(reconnectIntent, entry)");
+    expect(source).toContain('reconnectDisposition === "exact"');
+    expect(source).toContain('reconnectDisposition !== "exact"');
+    expect(source).toContain("disabled={disabled || reconnectDisposition !== undefined || entry.models.length === 0}");
+    expect(source).toContain("Exact connection no longer held");
+    expect(source).toContain("onClick={onAbandonReconnect}");
+    expect(source).toContain("Abandon return request");
+  });
+
+  it("cannot abandon a return request while its connection transaction is still running", () => {
+    expect(source).toContain("{busyConnection");
+    expect(source).toContain('aria-disabled="true">Connection change in progress');
+  });
+
+  it("distinguishes an exact return from a blocked return without using verified green for both", () => {
+    expect(source).toContain('provider-fabric__return--${exactReconnectHeld ? "exact" : "blocked"}');
+    expect(declarations).toMatch(/\.provider-fabric__return--exact\s*\{[^}]*--v-info/gu);
+    expect(declarations).toMatch(/\.provider-fabric__return--blocked\s*\{[^}]*--v-caution/gu);
+    expect(declarations).toMatch(/\.provider-fabric__return--blocked > span\[aria-hidden="true"\]\s*\{[^}]*--v-caution/gu);
+  });
+
+  it("sizes only the hidden status marker as a dot", () => {
+    expect(declarations).toMatch(
+      /\.provider-fabric__notice > span\[aria-hidden="true"\]\s*\{[^}]*width:\s*7px;[^}]*flex:\s*0 0 7px;/u,
+    );
+    expect(declarations).not.toMatch(/\.provider-fabric__notice > span\s*\{/u);
+    expect(declarations).not.toMatch(/\.provider-fabric\[aria-busy="true"\] \.provider-fabric__notice > span\s*\{/u);
+  });
+
+  it("keeps a failed return check beside and associated with its continuation control", () => {
+    expect(source).toContain('reconnects ? "connection" : "surface"');
+    expect(source).toContain('error?.placement === "connection"');
+    expect(source).toContain('aria-describedby={activationError ? activationErrorId : undefined}');
+    expect(source).toContain('class="provider-fabric__error provider-connection__activation-error" role="alert"');
+    expect(source).toContain('error?.placement === "surface"');
+  });
+
+  it("keeps reconnect progress in the prose column on narrow screens", () => {
+    const phone = styles.slice(styles.indexOf("@media (max-width: 520px)"));
+    expect(phone).toMatch(
+      /\.provider-fabric__notice button,\s*\.provider-fabric__return-pending \{[^}]*grid-column: 2;[^}]*white-space: normal;/u,
+    );
   });
 
   it("exposes accessible live state and compact mobile layout", () => {

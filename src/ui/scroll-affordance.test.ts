@@ -99,6 +99,28 @@ describe("observeScrollEdges", () => {
     expect(observer.disconnects()).toBe(1);
   });
 
+  it("moves observer-driven presentation changes beyond resize delivery and cancels stale work", () => {
+    const element = stubElement({ scrollTop: 0, scrollHeight: 400, clientHeight: 400 });
+    const observer = stubResizeObserver();
+    const view = stubView(observer.Constructor, true);
+    const seen: string[] = [];
+    const stop = observeScrollEdges(element.node, (edges) => seen.push(edges), view.node);
+
+    element.growTo(785);
+    observer.emit();
+    observer.emit();
+    expect(seen).toEqual(["none"]);
+    expect(view.pendingFrames()).toBe(1);
+    view.flushFrames();
+    expect(seen).toEqual(["none", "end"]);
+
+    element.growTo(900);
+    observer.emit();
+    stop();
+    view.flushFrames();
+    expect(seen).toEqual(["none", "end"]);
+  });
+
   it("observes the scroll box and each of its groups, not just the box", () => {
     const groups = [element("group-a"), element("group-b")];
     const box = stubElement({ scrollTop: 0, scrollHeight: 785, clientHeight: 602 }, groups);
@@ -143,15 +165,31 @@ function element(name: string): Element {
   return { name } as unknown as Element;
 }
 
-function stubView(Observer?: typeof ResizeObserver) {
+function stubView(Observer?: typeof ResizeObserver, deferObserver = false) {
   const listeners = new Set<() => void>();
+  const frames = new Map<number, FrameRequestCallback>();
+  let nextFrame = 1;
   return {
     node: {
       addEventListener: (_type: "resize", listener: () => void) => void listeners.add(listener),
       removeEventListener: (_type: "resize", listener: () => void) => void listeners.delete(listener),
       ...(Observer ? { ResizeObserver: Observer } : {}),
+      ...(deferObserver ? {
+        requestAnimationFrame(callback: FrameRequestCallback) {
+          const handle = nextFrame++;
+          frames.set(handle, callback);
+          return handle;
+        },
+        cancelAnimationFrame(handle: number) { frames.delete(handle); },
+      } : {}),
     },
     listeners: () => listeners.size,
+    pendingFrames: () => frames.size,
+    flushFrames() {
+      const pending = [...frames.values()];
+      frames.clear();
+      for (const callback of pending) callback(0);
+    },
     emitResize() {
       for (const listener of listeners) listener();
     },

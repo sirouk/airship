@@ -1467,7 +1467,7 @@ function SessionReconnectCard({ plan, reasons, disabled, onFork }: {
         * to an address the card can name, so it is one the reader can middle-
         * click, copy, or read in the status bar before committing to it. The
         * lane, auth method, model and the conversation to come back to ride in
-        * the query so `#access` can preselect them; `navigationViewFromHash`
+        * the query so Connection can preselect them; `navigationViewFromHash`
         * splits on `?`, so the route resolves whether or not it reads them.
         */}
       <a class="session-library-reconnect__primary" href={plan.href}>{plan.primaryLabel}</a>

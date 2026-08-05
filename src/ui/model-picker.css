@@ -85,6 +85,12 @@
 .model-picker-list > button[data-active="true"] { border-color:var(--line-strong); background:var(--surface-soft); }
 .model-picker-empty { margin:0; padding:var(--sp-3); color:var(--ink-muted); font-size:var(--fs-caption); }
 
+@media (forced-colors: active) {
+  /* The search field owns this option through aria-activedescendant, so the
+     active row needs a system-color cursor independent of border/fill color. */
+  .model-picker-list > button[data-active="true"] { outline:2px solid Highlight; outline-offset:-3px; }
+}
+
 .model-picker-footer { flex:0 0 auto; display:grid; gap:var(--sp-2); padding:var(--sp-2); border-top:1px solid var(--line); border-radius:0 0 var(--radius-panel) var(--radius-panel); background:var(--surface-raised); }
 .model-picker-provenance { margin:0; color:var(--ink-faint); font-size:var(--fs-micro); line-height:1.45; }
 .model-picker-show-all { width:100%; min-height:40px; }
@@ -109,10 +115,20 @@
   .model-picker .model-picker-status .menu-select-trigger { width:auto; min-height:44px; }
   .model-picker .model-picker-done { width:auto; }
   /* The trigger wraps rather than clipping: the model id and the
-     recommendation that qualifies it are both the answer to "what am I on". */
-  .model-picker-trigger { flex-wrap:wrap; white-space:normal; }
-  .model-picker-value { overflow:visible; white-space:normal; overflow-wrap:anywhere; }
-  .model-picker-badge { flex-basis:100%; overflow:visible; }
+     recommendation that qualifies it are both the answer to "what am I on".
+
+     On the connect surface only. `ModelPicker` has exactly two call sites and
+     the other one is the chat header, where `.session-bar .session-runtime` is
+     capped at 32ch: unscoped, a 31-character id wrapped to four lines, took the
+     trigger to 146px and the phone chat header to 197px of a 932px viewport —
+     the card floating inside the circular runtime glyph the review named. The
+     header is the one place the trigger has no room to grow, and the id is one
+     tap away in the sheet, unabbreviated, and is the trigger's accessible name
+     either way. Measured connected at 430x932: 197.1px header before, 95px
+     after. */
+  .connect-lane .model-picker-trigger { flex-wrap:wrap; white-space:normal; }
+  .connect-lane .model-picker-value { overflow:visible; white-space:normal; overflow-wrap:anywhere; }
+  .connect-lane .model-picker-badge { flex-basis:100%; overflow:visible; }
   /* Model ids never ellipsise here: `…-2507-TEE` and `…-Thinking-TEE` are the
      distinguishing suffixes, so a cut from the right removes the identity. */
   .model-row { grid-template-columns:auto minmax(0,1fr); align-items:start; }

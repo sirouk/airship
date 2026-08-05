@@ -79,12 +79,20 @@ function ProfileScopedWorkspaceTerminalDock(props: WorkspaceTerminalDockProps) {
   useEffect(() => {
     const parent = root.current?.parentElement;
     if (!parent || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(() => {
+    let resizeFrame: number | undefined;
+    const measure = () => {
+      resizeFrame = undefined;
       const nextHeight = terminalDockHeight(state.height, parent.clientHeight);
       if (nextHeight !== state.height) commit({ height: nextHeight }, parent.clientHeight);
+    };
+    const observer = new ResizeObserver(() => {
+      if (resizeFrame === undefined) resizeFrame = requestAnimationFrame(measure);
     });
     observer.observe(parent);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      if (resizeFrame !== undefined) cancelAnimationFrame(resizeFrame);
+    };
   }, [state.height, props.workspaceIdentity, props.profileId]);
 
   const maximum = dockMaximum(root.current);

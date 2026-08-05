@@ -131,6 +131,19 @@ describe("platform shell contracts", () => {
     expect(dialog).toContain("if (entry.disabled) return;");
   });
 
+  it("keeps the active command visible when forced colors flatten fills", () => {
+    const styles = readFileSync(new URL("./platform-shell.css", import.meta.url), "utf8");
+    const forcedColors = styles.match(/@media \(forced-colors: active\) \{([\s\S]*?)\n\}/u)?.[1] ?? "";
+    expect(forcedColors).toContain(".command-palette__results > button.is-active");
+    expect(forcedColors).toContain("outline: 2px solid Highlight");
+  });
+
+  it("announces an empty command search without moving focus", () => {
+    const source = shellSource();
+    expect(source).toContain('class="sr-only" role="status" aria-live="polite" aria-atomic="true">{filtered.length');
+    expect(source).toContain('class="command-palette__empty" aria-hidden="true"');
+  });
+
   /*
    * With nothing typed, the palette's question is "take me back to what I was
    * doing" — and it answered with 15 destinations then ~36 slash commands, with

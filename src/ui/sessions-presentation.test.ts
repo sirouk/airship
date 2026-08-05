@@ -373,15 +373,15 @@ describe("sessionReconnectPlan", () => {
     return { compatibility, plan: sessionReconnectPlan({ pins: sessionPins, runtime: active, compatibility, sessionId: CONVERSATION }) };
   }
 
-  it("names both routes, and says so when reconnecting is the whole remedy", () => {
+  it("names both routes without promising that a replacement credential can continue", () => {
     const { compatibility, plan: reconnect } = plan();
     // The premise: the runtime really is reporting the drift this is keyed on.
     expect(compatibility.action).toBe("fork-required");
     expect(compatibility.reasons.map((reason) => reason.code)).toContain("PROVIDER_MISMATCH");
     expect(reconnect?.header).toBe(
-      "CANNOT CONTINUE HERE — this tab is on airship-demo · demo-v1; this conversation is pinned to Chutes · GLM-5.2-TEE.",
+      "CANNOT CONTINUE HERE — this tab is on airship-demo · demo-v1; this conversation is pinned to Chutes · GLM-5.2-TEE. Check whether this page still holds that exact pinned connection; a replacement cannot continue this conversation.",
     );
-    expect(reconnect?.primaryLabel).toBe("Reconnect Chutes · GLM-5.2-TEE and continue");
+    expect(reconnect?.primaryLabel).toBe("Check exact Chutes · GLM-5.2-TEE connection");
     expect(reconnect?.secondaryLabel).toBe("Fork to a new conversation on airship-demo · demo-v1");
     // A pinned posture the demo runtime cannot offer is a real fourth
     // difference, so the shorter claim below is withheld here.
@@ -389,25 +389,29 @@ describe("sessionReconnectPlan", () => {
   });
 
   /*
-   * The extra sentence is earned, not decorative: it is said only when the
-   * whole set is the inference route, which is the case where one press really
-   * does end the problem.
+   * Pure inference-route drift is still classified for presentation, but it
+   * does not earn a recovery promise: only an already-held exact generation
+   * can continue the source conversation.
    */
-  it("says the connection is the only thing missing only when it is", () => {
+  it("classifies pure route drift without saying a new connection is the missing remedy", () => {
     const { plan: reconnect } = plan(pins(), runtime({ posture: "encrypted-unattested" }));
     expect(reconnect?.connectionOnly).toBe(true);
-    expect(reconnect?.header.endsWith(" The only thing missing is your provider connection.")).toBe(true);
+    expect(reconnect?.header).toContain("Check whether this page still holds that exact pinned connection");
+    expect(reconnect?.header).not.toContain("only thing missing");
+    expect(reconnect?.primaryLabel).not.toContain("continue");
   });
 
-  it("carries the lane, the auth method and the model the conversation pinned", () => {
+  it("carries the lane, auth method, model, and exact connection generation the conversation pinned", () => {
     const href = plan().plan?.href ?? "";
     const query = new URLSearchParams(href.slice(href.indexOf("?") + 1));
-    expect(href.startsWith("#access?")).toBe(true);
+    expect(href.startsWith("#connection?")).toBe(true);
     expect(query.get("method")).toBe("api-key");
     expect(query.get("model")).toBe("zai-org/GLM-5.2-TEE");
+    expect(query.get("connection")).toBe("conn-1");
+    expect(query.get("generation")).toBe("3");
     expect(query.get("return")).toBe(CONVERSATION);
     /*
-     * And the lane token is one `#access` actually has. It is derived from the
+     * And the lane token is one `#connection` actually has. It is derived from the
      * provider id's first segment rather than transcribed, so `chutes-e2ee-v1`
      * and a future `chutes-oauth` land on one lane without a second table to
      * keep in step; this is the assertion that the derivation is not fiction.
@@ -484,11 +488,8 @@ describe("sessionReconnectPlan", () => {
     expect(sessionReconnectPlan({ pins: pins(), compatibility: decideSessionResume(pins(), HISTORY, runtime()), sessionId: CONVERSATION })).toBeUndefined();
   });
 
-  /* An older manifest with no inference binding still has a route to name. */
-  it("falls back to the pinned provider id when no binding was recorded", () => {
+  it("does not promise exact continuation for a legacy manifest with no connection pin", () => {
     const bare = pins({ inferenceBinding: undefined });
-    const reconnect = plan(bare).plan;
-    expect(reconnect?.primaryLabel).toBe("Reconnect chutes-e2ee-v1 · GLM-5.2-TEE and continue");
-    expect(new URLSearchParams(reconnect!.href.slice(reconnect!.href.indexOf("?") + 1)).has("method")).toBe(false);
+    expect(plan(bare).plan).toBeUndefined();
   });
 });

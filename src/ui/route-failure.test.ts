@@ -15,6 +15,7 @@ const DEFERRED_ROUTES: ReadonlyArray<readonly [string, string]> = [
   ["Editor", "editorViewError"],
   ["Terminal", "terminalViewError"],
   ["Memory", "memoryViewError"],
+  ["Skills", "skillsViewError"],
   ["Capabilities", "capabilitiesViewError"],
   ["Vault", "vaultViewError"],
   ["Account", "billingViewError"],
@@ -70,6 +71,7 @@ describe("a failed route chunk is a stated fact with a way out", () => {
       "TerminalScreen, deferredChunkAttempt]",
       "CapabilitiesScreen, deferredChunkAttempt]",
       "MemoryScreen, deferredChunkAttempt]",
+      "SkillsScreen, deferredChunkAttempt]",
     ]) expect(app, `${dependency} re-runs on retry`).toContain(dependency);
   });
 

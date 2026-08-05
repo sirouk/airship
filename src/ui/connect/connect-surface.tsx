@@ -1,5 +1,6 @@
 import type { ComponentChildren } from "preact";
-import { useId, useRef, useState } from "preact/hooks";
+import { useEffect, useId, useRef, useState } from "preact/hooks";
+import { reconnectMethodTab, type AccessReconnectIntent } from "../access-intent";
 import { BrandLogo, type BrandLogoName } from "../brand-icons";
 import { Icon } from "../icons";
 import { Seal } from "../seal";
@@ -40,6 +41,8 @@ export type LocalProviderProbeResult =
 
 export type ConnectSurfaceProps = Readonly<{
   input: ConnectLaneInput;
+  /** A validated conversation return instruction from the Connection URL. */
+  reconnectIntent?: AccessReconnectIntent;
   /**
    * Chutes credential controls. The connection view owns the credential
    * lifecycle, so this surface owns only where they sit and what is said
@@ -121,6 +124,7 @@ export function ConnectSurface({
   onOpenDirectProviders,
   extensionInstallUrl,
   onCheckLocalProviders,
+  reconnectIntent,
 }: ConnectSurfaceProps) {
   const lanes = describeConnectLanes(input);
   // This surface deliberately survives a connection. The heading below promises
@@ -152,7 +156,10 @@ export function ConnectSurface({
    * that opened itself set the state back to "no choice yet" and the default
    * immediately reopened it — a disclosure that could not be closed.
    */
-  const [chosenLane, setChosenLane] = useState<ConnectLaneId | "none">();
+  const [chosenLane, setChosenLane] = useState<ConnectLaneId | "none" | undefined>(() => reconnectIntent?.lane);
+  useEffect(() => {
+    if (reconnectIntent?.lane) setChosenLane(reconnectIntent.lane);
+  }, [reconnectIntent?.lane, reconnectIntent?.returnSessionId]);
   const openLane = chosenLane ?? leadLane;
 
   return (
@@ -169,6 +176,7 @@ export function ConnectSurface({
             {lane.id === "codex" ? (
               <CloudMethodPanel
                 provider="openai"
+                initialMethod={reconnectIntent?.lane === lane.id ? reconnectMethodTab(reconnectIntent.method) : undefined}
                 oauthLabel="Sign in with ChatGPT"
                 oauthStatus={lane.oauthStatus ?? lane.status}
                 onOpenDirectProviders={onOpenDirectProviders}
@@ -180,6 +188,7 @@ export function ConnectSurface({
             {lane.id === "claude" || lane.id === "grok" ? (
               <CloudMethodPanel
                 provider={lane.id === "claude" ? "anthropic" : "xai"}
+                initialMethod={reconnectIntent?.lane === lane.id ? reconnectMethodTab(reconnectIntent.method) : undefined}
                 oauthLabel={lane.id === "claude" ? "Sign in with Anthropic" : "Sign in with xAI"}
                 oauthStatus={lane.oauthStatus ?? lane.status}
                 onOpenDirectProviders={onOpenDirectProviders}
@@ -267,12 +276,14 @@ function CompanionPanel({
 
 function CloudMethodPanel({
   provider,
+  initialMethod,
   oauthLabel,
   oauthStatus,
   onOpenDirectProviders,
   oauthPanel,
 }: Readonly<{
   provider: CloudProviderId;
+  initialMethod?: "oauth" | "api-key";
   oauthLabel: string;
   oauthStatus: ConnectLaneStatus;
   onOpenDirectProviders?: (provider?: CloudProviderId) => void;
@@ -285,7 +296,7 @@ function CloudMethodPanel({
    */
   oauthPanel: (helpers: Readonly<{ useApiKey: () => void }>) => ComponentChildren;
 }>) {
-  const [method, setMethod] = useState<"oauth" | "api-key">(() => initialConnectMethod(oauthStatus));
+  const [method, setMethod] = useState<"oauth" | "api-key">(() => initialMethod ?? initialConnectMethod(oauthStatus));
   const oauthPanelId = useId();
   const keyPanelId = useId();
   const providerLabel = provider === "openai" ? "OpenAI" : provider === "anthropic" ? "Anthropic" : "xAI";
@@ -296,6 +307,9 @@ function CloudMethodPanel({
   // status, and that status's own `detail` sentence rendered nowhere at all.
   const rendered = oauthPanel({ useApiKey });
   const oauthActionable = rendered !== null && rendered !== undefined && rendered !== false;
+  useEffect(() => {
+    if (initialMethod) setMethod(initialMethod);
+  }, [initialMethod]);
 
   return (
     <div class="connect-method">
@@ -424,7 +438,9 @@ function ConnectLaneCard({
             ))}
           </span>
         ) : null}
-        <Seal state={lane.seal} label={lane.status.label} compact />
+        <span class="connect-lane__seal-row">
+          <Seal state={lane.seal} label={lane.status.label} compact />
+        </span>
         <span class="connect-lane__chevron" aria-hidden="true">⌄</span>
       </button>
       <div class="connect-lane__body" id={panelId} role="region" aria-labelledby={titleId} hidden={!open}>

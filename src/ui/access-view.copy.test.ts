@@ -88,6 +88,21 @@ describe("Chutes connection method copy", () => {
     expect(source).toContain('<p class={`oauth-boundary-status ${oauthNotice.tone}`}');
   });
 
+  it("locks Chutes return mode to the pinned model and confirms exact-route release", () => {
+    expect(source).toContain("disabled={busy || Boolean(reconnectIntent) || models.length < 2}");
+    expect(source).toContain("chutesPanel={chutesReturnBlocked ? null : <>");
+    expect(source).toContain('aria-disabled="true">Connection change in progress');
+    expect(source).toContain('if (reconnectIntent?.lane === "chutes" && chutesReconnectExact)');
+    expect(source).toContain('setConnectionReleaseConfirmation(action)');
+    expect(source).toContain("Keep exact connection");
+    expect(source).toContain("Confirm switch credential");
+    expect(source).toContain("Confirm clear connection");
+    expect(source).toContain('clearConnection(connectionReleaseConfirmation === "switch", true)');
+    expect(source.indexOf("await onDisconnect();"))
+      .toBeLessThan(source.indexOf("onAbandonReconnect();", source.indexOf("await onDisconnect();")));
+    expect(styles).toContain(".access-connection-release-confirmation");
+  });
+
   it("gives a cold visitor a route when the sign-in exchange is unconfigured", () => {
     // The measured terminal drop-off: a gold "Recommended" button that returned
     // an operator-addressed error, with the working path collapsed beneath it
@@ -111,7 +126,9 @@ describe("Chutes connection method copy", () => {
     // it forbids the anchors outright rather than checking two call sites, and
     // it pins the remaining programmatic move to the panel a person just
     // filled in rather than to a 589px jump down the document.
-    expect(source).not.toContain('<a href="#');
+    const hashLinks = [...source.matchAll(/<a href="(#[^"]+)"/gu)].map((match) => match[1]);
+    expect(hashLinks).toEqual([]);
+    expect(source).toContain('onClick={onAbandonReconnect}>Abandon return request</button>');
     expect(source).toContain('document.getElementById("connect-surface-card")');
     expect(source).toContain("requestAnimationFrame(() => focusConnectSurface())");
   });
@@ -475,9 +492,11 @@ describe("connecting does not interview the person doing it", () => {
     expect(source).not.toContain("model-candidate-summary");
     expect(styles).not.toContain("model-candidate-summary");
     expect(styles).not.toContain(".candidate-model");
-    // The model the connection pins is still discovered rather than assumed —
-    // it is the catalog's own recommendation, taken without asking.
-    expect(source).toContain("setModelId(selection.model?.id ?? compatibleModels[0]!.id);");
+    // The model the connection pins is still discovered rather than assumed.
+    // A reconnect address may select its already-pinned model, but only from
+    // this same compatible catalog; ordinary connection keeps the catalog's
+    // recommendation and never adds an interview step.
+    expect(source).toContain("setModelId(requestedModel?.id ?? selection.model?.id ?? compatibleModels[0]!.id);");
   });
 
   it("carries a pasted key through to chat exactly as a returning redirect is", () => {

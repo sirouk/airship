@@ -11,6 +11,10 @@ function appSource(): string {
   return readFileSync(new URL("./app.tsx", import.meta.url), "utf8");
 }
 
+function skillsSource(): string {
+  return readFileSync(new URL("./skills-manager-view.tsx", import.meta.url), "utf8");
+}
+
 describe("the id a new skill is proposed under", () => {
   it("always lands inside the authored namespace", () => {
     for (const name of ["House style", "  ", "Ünïcödé!!", "-".repeat(200)]) {
@@ -71,7 +75,7 @@ describe("a skill's ID is fixed once it exists", () => {
    */
   it("is remounted per target by the caller's key", () => {
     expect(editorSource()).toContain("useState<Fields>(() => initialFields(target))");
-    expect(appSource()).toContain(
+    expect(skillsSource()).toContain(
       'key={`${editorTarget.mode}:${editorTarget.mode === "new" ? "" : editorTarget.source.skillId}`}',
     );
   });
@@ -81,8 +85,8 @@ describe("the authoring panel stays off the first-paint path", () => {
   it("is fetched through the recovery loader, not a bare dynamic import", () => {
     // A module URL that has failed once is recorded as failed in the document's
     // module map, so a plain retry issues no request at all.
-    expect(appSource()).toContain('loadRetryableChunk("skill-editor", () => import("./skill-editor"))');
-    expect(appSource()).not.toMatch(/import\s+\{[^}]*SkillEditor[^}]*\}\s+from\s+"\.\/skill-editor"/u);
+    expect(skillsSource()).toContain('"skill-editor",\n      () => import("./skill-editor"),');
+    expect(skillsSource()).not.toMatch(/import\s+\{[^}]*SkillEditor[^}]*\}\s+from\s+"\.\/skill-editor"/u);
   });
 
   it("carries its own stylesheet rather than adding to the route sheet", () => {

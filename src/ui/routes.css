@@ -723,9 +723,33 @@
 
 .boot-screen p {
   margin: 13px 0 0;
+  max-width: min(38rem, calc(100vw - 2rem));
   color: var(--ink-muted);
   font: var(--fs-micro) ui-monospace, SFMono-Regular, Menlo, monospace;
 }
+
+.boot-screen > button {
+  min-width: 10rem;
+  min-height: var(--touch-target);
+  margin-top: var(--sp-4);
+  padding-inline: var(--sp-4);
+  border: 1px solid var(--v-failed);
+  border-radius: var(--radius-control);
+  color: var(--ink);
+  background: var(--surface-raised);
+  font: var(--fw-strong) var(--fs-body)/1 var(--font-body);
+  cursor: pointer;
+}
+
+.boot-screen details {
+  width: min(38rem, calc(100vw - 2rem));
+  margin-top: var(--sp-3);
+  color: var(--ink-muted);
+  text-align: left;
+}
+
+.boot-screen details > summary { min-height: var(--touch-target); cursor: pointer; }
+.boot-screen details code { display: block; overflow-wrap: anywhere; white-space: pre-wrap; }
 
 .management-layout {
   display: grid;
@@ -1077,6 +1101,14 @@
   line-height: 1.45;
 }
 
+.skills-toolbar > .profile-switch-failure {
+  margin: 0;
+  color: var(--v-failed);
+  font-size: var(--fs-micro);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
 .profile-hub-tabs { display: grid; grid-template-columns: repeat(3, minmax(100px, 1fr)); gap: 3px; align-items: center; width: min(1320px, 100%); margin: 0 auto; padding: 3px; border: 1px solid var(--line); border-radius: var(--radius-panel); background: var(--surface-soft); }
 /* One persistent tab geometry. The scope control used to take the flexible
    `1fr` track and demote the three tabs to `auto`, so activating Skills — the
@@ -1134,6 +1166,22 @@
 .skills-toolbar .small-button {
   min-height: 38px;
   cursor: pointer;
+}
+
+.skills-toolbar > .profile-switch-failure {
+  grid-column: 1 / -1;
+}
+
+.skills-toolbar > .skills-toolbar-status {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: var(--fs-micro);
+  line-height: 1.45;
+}
+
+.skills-toolbar > .skills-toolbar-status.failure {
+  color: var(--v-failed);
 }
 
 .skill-grid {
@@ -2516,6 +2564,15 @@
 
   .management-layout {
     grid-template-columns: 210px minmax(0, 1fr);
+  }
+
+  /* The editor's remaining tablet column is too narrow for warning copy,
+     replacement selection, and a destructive verb side by side. Preserve all
+     three in reading order instead of reducing the warning to one word per
+     line. */
+  .profile-archive-zone {
+    grid-template-columns: 1fr;
+    align-items: stretch;
   }
 
   .theme-options,
@@ -4353,6 +4410,10 @@
 }
 
 .tabs__overflow {
+  /* The wrapper reserves the same width as its trigger. Without a flex floor,
+     the wrapper collapsed to its `⌄ 1` text while the 44px touch target painted
+     3px off a 320px Workspace and 12px into Proof's outer gutter. */
+  flex: 0 0 var(--touch-target);
   margin-left: auto;
 }
 
@@ -4452,10 +4513,12 @@
 }
 
 .metric-strip__label {
+  min-width: 0;
   margin: 0;
   color: var(--ink-muted);
   font: var(--fs-micro)/1.3 var(--font-mono);
   letter-spacing: 0.11em;
+  overflow-wrap: anywhere;
   text-transform: uppercase;
 }
 

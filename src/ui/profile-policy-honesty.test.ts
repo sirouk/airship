@@ -48,7 +48,7 @@ describe("policy activation failure honesty", () => {
 describe("theme preview cancel scope", () => {
   const managerBody = app.slice(
     app.indexOf("function ProfileManagerView("),
-    app.indexOf("function SkillsManagerView("),
+    app.indexOf("function RouteBar("),
   );
 
   it("resets only the theme field and clears the preview state", () => {

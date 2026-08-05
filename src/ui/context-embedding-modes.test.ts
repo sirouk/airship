@@ -116,6 +116,12 @@ describe("the engine toggle group always has a pressed member", () => {
     expect(source).toContain(`disabled={embeddingChange === "changing" || !confidentialAvailable}`);
   });
 
+  it("renders an unpublished semantic pack as unavailable before interaction", () => {
+    expect(source).toContain(`disabled={embeddingChange === "changing" || !semanticPackAvailable}`);
+    expect(embeddingStatus("bootstrap", undefined, "idle", true, false))
+      .toBe("Bootstrap active · local semantic not included in this build");
+  });
+
 });
 
 /*

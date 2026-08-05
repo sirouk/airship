@@ -178,7 +178,11 @@ export function ModelPicker({
   const trigger = useRef<HTMLButtonElement>(null);
   const search = useRef<HTMLInputElement>(null);
   const optionsId = useId();
-  useEffect(() => { const timer = window.setTimeout(() => setQuery(draft), 140); return () => window.clearTimeout(timer); }, [draft]);
+  useEffect(() => {
+    if (!draft) return;
+    const timer = window.setTimeout(() => setQuery(draft), 140);
+    return () => window.clearTimeout(timer);
+  }, [draft]);
   useEffect(() => setShowAll(false), [query, facet, sort]);
   const searched = useMemo(() => filterModels(models, { query }), [models, query]);
   const eligible = useMemo(() => sortModels(facetModels(searched, facet), sort), [facet, searched, sort]);
@@ -187,7 +191,12 @@ export function ModelPicker({
   const selected = models.find((model) => model.id === value);
   const close = (restore = true) => { setOpen(false); if (restore) requestAnimationFrame(() => trigger.current?.focus()); };
   const openPicker = () => { setOpen(true); setActive(Math.max(0, visible.findIndex((model) => model.id === value))); requestAnimationFrame(() => search.current?.focus()); };
-  const choose = (index: number) => { const model = visible[index]; if (!model) return; onSelect(model.id); close(); };
+  const choose = (index: number, selectionQuery = query) => {
+    const model = modelForPickerSelection(models, selectionQuery, facet, sort, showAll, index);
+    if (!model) return;
+    onSelect(model.id);
+    close();
+  };
   useEffect(() => setActive((current) => Math.max(0, Math.min(current, visible.length - 1))), [eligible.length, showAll]);
   useEffect(() => {
     if (!open) return;
@@ -213,9 +222,20 @@ export function ModelPicker({
     {attachFacts && selected ? <ModelFactStrip model={selected} /> : null}
     {open ? <div id={`${optionsId}-dialog`} class="model-picker-popover" role="dialog" aria-label="Choose a Chutes model" onKeyDown={(event) => {
       if (event.key === "Escape") { event.preventDefault(); close(); }
-      if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); setActive((current) => nextModelIndex(visible.length, current, event.key === "ArrowDown" ? 1 : -1)); }
-      if (event.key === "Home" || event.key === "End") { event.preventDefault(); setActive(event.key === "Home" ? 0 : Math.max(0, visible.length - 1)); }
-      if (event.key === "Enter" && event.target === search.current) { event.preventDefault(); choose(active); }
+      /* Search owns this listbox's virtual focus. Facets, Sort and Done are
+         ordinary controls and must keep their own Arrow/Enter behaviour. */
+      else if (event.target === search.current) {
+        if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); setActive((current) => nextModelIndex(visible.length, current, event.key === "ArrowDown" ? 1 : -1)); }
+        else if (event.key === "Home" || event.key === "End") { event.preventDefault(); setActive(event.key === "Home" ? 0 : Math.max(0, visible.length - 1)); }
+        else if (event.key === "Enter") {
+          event.preventDefault();
+          // Input and paste update the field before the debounced query state.
+          // Resolve this explicit commit from what the person can already see.
+          const currentDraft = (event.target as HTMLInputElement).value;
+          if (currentDraft !== query) setQuery(currentDraft);
+          choose(active, currentDraft);
+        }
+      }
     }}>
       <div class="model-picker-header">
         {/* Only rendered as a sheet header at ≤640px, where the popover covers
@@ -225,7 +245,15 @@ export function ModelPicker({
           <strong>Session model</strong>
           <button type="button" class="model-picker-done" onClick={() => close()}>Done</button>
         </div>
-        <input ref={search} type="search" value={draft} onInput={(event) => setDraft(event.currentTarget.value)} placeholder="Search models" aria-label="Search models" aria-controls={optionsId} aria-activedescendant={visible[active] ? `${optionsId}-option-${active}` : undefined} />
+        <input ref={search} type="search" value={draft} role="combobox" aria-autocomplete="list" aria-expanded="true" onInput={(event) => {
+          const nextDraft = event.currentTarget.value;
+          setDraft(nextDraft);
+          // Clearing is a completed reset, not another search to debounce. Keep
+          // the listbox and its active descendant in lockstep with the empty
+          // field so keyboard and assistive-tech users never land on no result
+          // after they have already cleared the query.
+          if (!nextDraft) setQuery("");
+        }} placeholder="Search models" aria-label="Search models" aria-controls={optionsId} aria-activedescendant={visible[active] ? `${optionsId}-option-${active}` : undefined} />
         <div class="model-picker-facets" role="group" aria-label="Model capability filters">
           {FACETS.map((item) => (
             /*
@@ -240,11 +268,13 @@ export function ModelPicker({
           ))}
         </div>
         <div class="model-picker-status">
-          <span>{eligible.length} model{eligible.length === 1 ? "" : "s"}</span>
+          <span role="status" aria-live="polite" aria-atomic="true">{eligible.length
+            ? `${eligible.length} model${eligible.length === 1 ? "" : "s"}`
+            : "No matching models."}</span>
           <MenuSelect ariaLabel="Sort models" placement="down" value={sort} options={SORTS} onChange={(value) => setSort(value as PickerSort)} />
         </div>
       </div>
-      <div id={optionsId} class="model-picker-list" role="listbox" aria-label={`${eligible.length} eligible models`}>{visible.map((model, index) => <button id={`${optionsId}-option-${index}`} type="button" role="option" aria-selected={model.id === value} data-active={index === active} data-recommended={model.id === recommendedModelId ? "true" : undefined} onPointerMove={() => setActive(index)} onClick={() => choose(index)} key={model.id}>
+      <div id={optionsId} class="model-picker-list" role="listbox" aria-label={`${eligible.length} eligible models`}>{visible.map((model, index) => <button id={`${optionsId}-option-${index}`} type="button" role="option" tabIndex={-1} aria-selected={index === active} data-active={index === active} data-recommended={model.id === recommendedModelId ? "true" : undefined} onPointerMove={() => setActive(index)} onClick={() => choose(index)} key={model.id}>
         {/*
           The grid lives on this span, not on the `<button>`. A button does not
           grow past its min-height for grid rows it contains, which silently
@@ -280,8 +310,8 @@ export function ModelPicker({
         <span class="model-row-metrics" title={operationalTitle(model)}>{formatContext(model)} · {operationalLabel(model)}</span>
         </span>
       </button>)}
-      {!eligible.length ? <p class="model-picker-empty">No matching models.</p> : null}
       </div>
+      {!eligible.length ? <p class="model-picker-empty" aria-hidden="true">No matching models.</p> : null}
       <div class="model-picker-footer">
         {!showAll && eligible.length > PAGE_SIZE ? <button class="model-picker-show-all" type="button" onClick={() => setShowAll(true)}>Show all {eligible.length}</button> : null}
         <p class="model-picker-provenance">{MODEL_PICKER_PROVENANCE}</p>
@@ -292,6 +322,22 @@ export function ModelPicker({
 
 export function visibleModelCount(total: number, showAll: boolean): number { return showAll ? total : Math.min(PAGE_SIZE, total); }
 export function nextModelIndex(count: number, current: number, delta: -1 | 1): number { return count <= 0 ? -1 : (Math.max(0, current) + delta + count) % count; }
+
+/** Resolve Enter against the query currently visible in Search, even while its
+ * debounced presentation state still describes the previous catalogue. */
+export function modelForPickerSelection(
+  models: readonly AirshipModel[],
+  query: string,
+  facet: Facet,
+  sort: PickerSort,
+  showAll: boolean,
+  active: number,
+): AirshipModel | undefined {
+  const searched = filterModels(models, { query });
+  const eligible = sortModels(facetModels(searched, facet), sort);
+  const visible = showAll ? eligible : eligible.slice(0, PAGE_SIZE);
+  return visible[Math.max(0, Math.min(active, visible.length - 1))];
+}
 
 /** One facet, applied to an already-searched set so counts and list agree. */
 export function facetModels(models: readonly AirshipModel[], facet: Facet): readonly AirshipModel[] {

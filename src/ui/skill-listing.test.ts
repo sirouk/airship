@@ -97,8 +97,9 @@ describe("what /skills prints", () => {
 
   it("keeps the Skills route scoped and names every global switch", () => {
     const app = readFileSync(new URL("./app.tsx", import.meta.url), "utf8");
+    const skillsRoute = readFileSync(new URL("./skills-manager-view.tsx", import.meta.url), "utf8");
     expect(app).toContain('setProfileHubScope("global")');
-    expect(app).toContain('aria-label={`Global default for ${skill.name}`}');
+    expect(skillsRoute).toContain('aria-label={`Global default for ${skill.name}`}');
     /*
      * "Apply … in a new conversation" promised a fresh conversation, but the
      * button runs the same switch the Profiles route's "Switch to this
@@ -106,8 +107,8 @@ describe("what /skills prints", () => {
      * conversation pointer when it still matches. The label names the switch,
      * which is the behavior.
      */
-    expect(app).toContain("Switch to {profile.name}");
-    expect(app).not.toContain("in a new conversation</button>");
+    expect(skillsRoute).toContain("Switch to {profile.name}");
+    expect(skillsRoute).not.toContain("in a new conversation</button>");
     expect(app).toContain("Skill policy changed in this new pinned conversation");
   });
 });

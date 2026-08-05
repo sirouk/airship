@@ -1470,10 +1470,34 @@
     display: grid;
   }
 
+  /*
+   * Reflows to fewer columns instead of clipping the label off a primary
+   * action.
+   *
+   * `repeat(3, minmax(0, 1fr))` is honest about overflow — a zero floor is why
+   * the route never scrolled sideways — but it buys that by letting the button
+   * be narrower than the word inside it. Measured at 320px: three 84px columns
+   * holding a 100px label, so the primary action read "Active conversatio"
+   * with no ellipsis and no way to see the rest. A person cannot choose an
+   * action whose name is cut off.
+   *
+   * `auto-fit` with a real floor keeps three columns wherever three fit and
+   * drops to two, then one, when they do not. The floor is in rem so it tracks
+   * the reader's own type size: this route is reachable at 200% zoom and a px
+   * floor would clip again at the first step.
+   */
   .session-library-actions {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr));
     width: 100%;
+  }
+
+  /* The second safety net, for a localisation longer than any floor: wrap
+     rather than clip. The 46px minimum below is a floor, not a fixed height,
+     so a two-line label grows the row instead of spilling out of it. */
+  .session-library-actions button {
+    white-space: normal;
+    text-align: center;
   }
 
   .session-library-actions button,

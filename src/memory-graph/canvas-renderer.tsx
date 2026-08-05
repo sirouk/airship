@@ -214,9 +214,17 @@ export function CanvasMemoryGraphSurface({ graph, selectedNodeId, onSelect, hidd
       };
       const removeInteractions = bindCanvasInteractions(engine, emitSelection);
       const resize = () => resizeCanvasEngine(engine!);
-      const resizeObserver = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(resize);
+      let resizeFrame: number | undefined;
+      const scheduleResize = () => {
+        if (resizeFrame !== undefined) return;
+        resizeFrame = requestAnimationFrame(() => {
+          resizeFrame = undefined;
+          resize();
+        });
+      };
+      const resizeObserver = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(scheduleResize);
       resizeObserver?.observe(canvas);
-      window.addEventListener("resize", resize, { passive: true });
+      window.addEventListener("resize", scheduleResize, { passive: true });
       const onMotionChange = (event: MediaQueryListEvent) => {
         if (engine) engine.reducedMotion = event.matches;
       };
@@ -233,7 +241,8 @@ export function CanvasMemoryGraphSurface({ graph, selectedNodeId, onSelect, hidd
         if (engine.centerFrame !== undefined) cancelAnimationFrame(engine.centerFrame);
         removeInteractions();
         resizeObserver?.disconnect();
-        window.removeEventListener("resize", resize);
+        window.removeEventListener("resize", scheduleResize);
+        if (resizeFrame !== undefined) cancelAnimationFrame(resizeFrame);
         motionQuery?.removeEventListener?.("change", onMotionChange);
         engineRef.current = undefined;
         context.clearRect(0, 0, canvas.width, canvas.height);

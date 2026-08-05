@@ -50,6 +50,7 @@ export type ContextViewProps = Readonly<{
 
 export function ContextView({ workspace, entries, dimensions = 384, resultLimit = 8, fabricDriver, embedded = false, searchQuery, sharedSearch, onGenerationChange, onReady, onOpenFile, renderProvenance, detailExpanded = false }: ContextViewProps) {
   const runtime = useMemo(() => getClientContextRuntime(workspace, { dimensions }), [dimensions, workspace]);
+  const semanticPackAvailable = runtime.semanticPackAvailable;
   const [engineState, setEngineState] = useState<ClientContextEngineState>(() => runtime.getState());
   const [embeddingMode, setEmbeddingMode] = useState<EmbeddingMode>(() => runtime.getEmbeddingMode());
   const [semanticState, setSemanticState] = useState<SemanticProviderState | undefined>(() => runtime.getSemanticState());
@@ -276,12 +277,21 @@ export function ContextView({ workspace, entries, dimensions = 384, resultLimit 
           </button>
           <p class="embedding-engine-state" role="status" aria-live="polite">
             <span class={semanticTone(embeddingMode, semanticState, confidentialAvailable)} />
-            {embeddingStatus(embeddingMode, semanticState, embeddingChange, confidentialAvailable)}
+            {embeddingStatus(embeddingMode, semanticState, embeddingChange, confidentialAvailable, semanticPackAvailable)}
             {semanticState?.loadedBytes !== undefined ? <small>{formatBytes(semanticState.loadedBytes)}{semanticState.totalBytes ? ` / ${formatBytes(semanticState.totalBytes)}` : ""}</small> : null}
           </p>
           <div class="embedding-engine-actions" role="group" aria-label="Embedding engine">
             <button type="button" class={embeddingMode === "bootstrap" ? "selected" : ""} aria-pressed={embeddingMode === "bootstrap"} disabled={embeddingChange === "changing"} title="Hash vectors keep retrieval immediately available without a model download. They are deterministic test/bootstrap signals, not semantic understanding." onClick={() => void changeEmbeddingMode("bootstrap")}>Bootstrap</button>
-            <button type="button" class={embeddingMode === "semantic" ? "selected" : ""} aria-pressed={embeddingMode === "semantic"} disabled={embeddingChange === "changing"} title="The pinned model executes in an isolated browser worker. WebGPU is preferred; WASM is the automatic fallback." onClick={() => void changeEmbeddingMode("semantic")}>Local semantic</button>
+            <button
+              type="button"
+              class={embeddingMode === "semantic" ? "selected" : ""}
+              aria-pressed={embeddingMode === "semantic"}
+              disabled={embeddingChange === "changing" || !semanticPackAvailable}
+              title={semanticPackAvailable
+                ? "The pinned model executes in an isolated browser worker. WebGPU is preferred; WASM is the automatic fallback."
+                : "Local semantic is unavailable because this build does not include the verified model pack."}
+              onClick={() => void changeEmbeddingMode("semantic")}
+            >Local semantic</button>
             {/*
               * Offered when Chutes is connected — and also whenever it is the
               * mode in force, even after a release. A `toggle` group whose
@@ -994,6 +1004,7 @@ export function embeddingStatus(
   state: SemanticProviderState | undefined,
   change: "idle" | "changing",
   confidentialAvailable = true,
+  semanticPackAvailable = true,
 ): string {
   /*
    * `mode` during a change is still the mode being left — `changeEmbeddingMode`
@@ -1010,6 +1021,7 @@ export function embeddingStatus(
       ? "Confidential embeddings active · text leaves this page"
       : "Confidential embeddings unavailable · Chutes is not connected";
   }
+  if (!semanticPackAvailable) return "Bootstrap active · local semantic not included in this build";
   if (mode === "bootstrap") return "Bootstrap active · no model loaded";
   if (!state || state.phase === "cold") return "Semantic selected · starts on first index operation";
   if (state.phase === "ready") return `${state.backend === "webgpu" ? "WebGPU" : "WASM"} semantic model ready`;

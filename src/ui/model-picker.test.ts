@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { AirshipModel } from "../models";
-import { capabilityLabels, catalogTokens, facetCounts, facetModels, modelFacts, MODEL_PICKER_PROVENANCE, nextModelIndex, visibleModelCount } from "./model-picker";
+import { capabilityLabels, catalogTokens, facetCounts, facetModels, modelFacts, modelForPickerSelection, MODEL_PICKER_PROVENANCE, nextModelIndex, visibleModelCount } from "./model-picker";
 import { MODEL_CAPABILITY_WORDS } from "./model-vocabulary";
 import { TRUST_LABEL_CONNECT_TRUST_READINESS } from "./trust-language";
 
@@ -31,6 +31,31 @@ describe("ModelPicker bounds", () => {
     // the keyboard cursor would roam an unbounded set.
     expect(source).toContain("const PAGE_SIZE = 30");
     expect(source).toContain("Show all {eligible.length}");
+  });
+  it("keeps the active descendant visible when forced colors flatten fills", () => {
+    const forcedColors = styles.match(/@media \(forced-colors: active\) \{([\s\S]*?)\n\}/u)?.[1] ?? "";
+    expect(forcedColors).toContain('.model-picker-list > button[data-active="true"]');
+    expect(forcedColors).toContain("outline:2px solid Highlight");
+  });
+  it("keeps listbox selection on the active-descendant cursor", () => {
+    expect(source).toContain('aria-selected={index === active} data-active={index === active}');
+  });
+  it("announces an empty filtered catalogue without moving focus", () => {
+    expect(source).toContain('<span role="status" aria-live="polite" aria-atomic="true">{eligible.length');
+    expect(source).toContain('class="model-picker-empty" aria-hidden="true"');
+  });
+  it("restores the listbox cursor synchronously when Search is cleared", () => {
+    expect(source).toContain('if (!nextDraft) setQuery("");');
+  });
+  it("commits impatient Enter against the visible draft instead of the debounced query", () => {
+    const models = [
+      model({ id: "vendor/current" }),
+      model({ id: "vendor/pasted-target" }),
+    ];
+    expect(modelForPickerSelection(models, "pasted-target", "all", "name", false, 1)?.id)
+      .toBe("vendor/pasted-target");
+    expect(source).toContain("const currentDraft = (event.target as HTMLInputElement).value;");
+    expect(source).toContain("choose(active, currentDraft);");
   });
 });
 

@@ -253,12 +253,21 @@ export function Tabs({
     window.addEventListener("resize", measure);
     // A tab strip changes width without a scroll or a resize — a file is
     // opened, a count grows a digit — so the box itself has to be observed.
-    const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(measure);
+    let resizeFrame: number | undefined;
+    const scheduleMeasure = () => {
+      if (resizeFrame !== undefined) return;
+      resizeFrame = requestAnimationFrame(() => {
+        resizeFrame = undefined;
+        measure();
+      });
+    };
+    const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(scheduleMeasure);
     observer?.observe(strip);
     return () => {
       strip.removeEventListener("scroll", measure);
       window.removeEventListener("resize", measure);
       observer?.disconnect();
+      if (resizeFrame !== undefined) cancelAnimationFrame(resizeFrame);
     };
   }, [signature]);
 

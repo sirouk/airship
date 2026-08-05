@@ -91,6 +91,14 @@ describe("lane rows", () => {
     expect(styles).toContain("padding: 0 var(--sp-3) var(--sp-3) calc(var(--sp-3) + var(--lane-gutter));");
   });
 
+  it("keeps the phone status seal intrinsic on its own row", () => {
+    const phone = declarations.slice(declarations.indexOf("@media (max-width: 640px)"));
+    expect(source).toContain('<span class="connect-lane__seal-row">');
+    expect(declarations).toMatch(/\.connect-lane__seal-row \.seal\s*\{[^}]*flex:\s*0 0 auto;/u);
+    expect(phone).toMatch(/\.connect-lane__seal-row\s*\{[^}]*order:\s*4;[^}]*flex:\s*0 0 100%;/u);
+    expect(phone).not.toMatch(/\.connect-lane__header \.seal\s*\{[^}]*flex:\s*0 0 100%;/u);
+  });
+
   it("renders every lane at once, so connecting one cannot close the others", () => {
     /*
      * The regression this guards was shipped once: an early `return null` after
@@ -125,7 +133,7 @@ describe("lane rows", () => {
     // `undefined` means "nobody has chosen", so closing the default lane by
     // writing `undefined` handed it straight back to the default — a
     // disclosure that reopened itself on the press that closed it.
-    expect(source).toContain('const [chosenLane, setChosenLane] = useState<ConnectLaneId | "none">();');
+    expect(source).toContain('const [chosenLane, setChosenLane] = useState<ConnectLaneId | "none" | undefined>(() => reconnectIntent?.lane);');
     expect(source).toContain('setChosenLane(openLane === lane.id ? "none" : lane.id)');
   });
 });

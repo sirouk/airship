@@ -1,4 +1,9 @@
 import type { SealState } from "./seal";
+import {
+  accessLaneForProvider,
+  accessReconnectHash,
+  type AccessReconnectMethod,
+} from "./access-intent";
 
 /**
  * How the conversation library says what it knows.
@@ -465,7 +470,7 @@ export type SessionReconnectPlan = Readonly<{
   header: string;
   /** The full-width primary verb. */
   primaryLabel: string;
-  /** `#access`, carrying the lane, auth method and model to preselect. */
+  /** `#connection`, carrying the lane, auth method and model to preselect. */
   href: string;
   /** The fork, demoted to what it is: a second conversation, not this one. */
   secondaryLabel: string;
@@ -473,14 +478,21 @@ export type SessionReconnectPlan = Readonly<{
   disclosureLabel: string;
   /** Pinned-versus-active for every drift that carries a concrete identifier. */
   deltas: readonly SessionPinDelta[];
-  /** True when reconnecting is the *whole* remedy, not merely part of it. */
+  /** True when every current blocker is an inference-route difference. */
   connectionOnly: boolean;
 }>;
 
 type ReconnectPins = Readonly<{
   providerId: string;
   model: string;
-  inferenceBinding?: Readonly<{ providerLabel: string; authMethod: string; modelId: string }>;
+  inferenceBinding?: Readonly<{
+    connectionId: string;
+    connectionGeneration: number;
+    providerId: string;
+    providerLabel: string;
+    authMethod: AccessReconnectMethod;
+    modelId: string;
+  }>;
   posture?: Readonly<{ value?: string }>;
 }>;
 
@@ -490,22 +502,6 @@ type ReconnectRuntime = Readonly<{
   inferenceBinding?: Readonly<{ providerLabel: string }>;
   posture?: string;
 }>;
-
-/**
- * The lane token `#access` groups this provider under.
- *
- * Derived, never transcribed: `chutes-e2ee-v1` and `chutes-oauth` are two
- * revisions of one lane, and a hand-written provider→lane table is a second
- * place for that fact to be wrong. The first identifier segment *is* the lane
- * vocabulary — `connect-lanes.ts` names its lanes `chutes`, `codex`, `claude`,
- * `grok`, `local`, `companion` — and `sessions-presentation.test.ts` imports
- * `CONNECT_LANE_IDS` to prove that, rather than this module importing it: the
- * connect surface is a separate deferred chunk and pulling it in here would
- * merge two release-gate packs to save one `split`.
- */
-function reconnectLane(providerId: string): string {
-  return providerId.split(/[^a-z0-9]+/iu).filter(Boolean)[0]?.toLowerCase() ?? providerId;
-}
 
 /**
  * The model as a person says it.
@@ -547,9 +543,9 @@ function reasonNoun(code: string): string {
  * out the pinned provider id, the pinned model id and the delta, and made the
  * reader carry all three by hand to `#access`.
  *
- * Returns `undefined` when nothing here would be cured by reconnecting — a
- * conversation refused because its profile's approval policy moved has no
- * provider to reconnect, and a button offering to fix it would be a lie that
+ * Returns `undefined` when locating the exact pinned route cannot address any
+ * blocker — a conversation refused because its profile's approval policy moved
+ * has no provider route to check, and a button offering one would be a lie that
  * costs a round trip to discover. That is also why this is keyed on the
  * runtime's own reason codes and not on "some pin differs": `732095e` and
  * `3ea40cf` deliberately narrowed which differences are reported at all.
@@ -562,6 +558,10 @@ export function sessionReconnectPlan(input: Readonly<{
 }>): SessionReconnectPlan | undefined {
   const { pins, runtime, compatibility, sessionId } = input;
   if (!runtime || !compatibility || compatibility.action === "resume") return undefined;
+  // A legacy manifest has no connection id/generation to prove. It may still
+  // be forked, but promising exact continuation would send the Connection
+  // route an instruction its fail-closed preflight can never satisfy.
+  if (!pins.inferenceBinding) return undefined;
   /*
    * An `info` reason is an observation, not a difference: `PROFILE_REVISION_NEWER`
    * and `POSTURE_OBSERVED_ONLY` both say in their own text that they are not a
@@ -589,23 +589,22 @@ export function sessionReconnectPlan(input: Readonly<{
 
   const connectionOnly = codes.every((code) => RECONNECTABLE_CODES.has(code));
   const nouns = codes.map(reasonNoun);
-  const link = new URLSearchParams({
-    lane: reconnectLane(pins.providerId),
-    ...(pins.inferenceBinding ? { method: pins.inferenceBinding.authMethod } : {}),
-    model: pins.inferenceBinding?.modelId ?? pins.model,
-    // Where to come back to. `#access` does not read this yet; emitting it from
-    // the surface that knows the answer is what makes reading it a one-file
-    // change there rather than a re-derivation.
-    return: sessionId,
+  const lane = accessLaneForProvider(pins.inferenceBinding.providerId);
+  if (!lane) return undefined;
+  const href = accessReconnectHash({
+    lane,
+    method: pins.inferenceBinding.authMethod,
+    model: pins.inferenceBinding.modelId,
+    connectionId: pins.inferenceBinding.connectionId,
+    connectionGeneration: pins.inferenceBinding.connectionGeneration,
+    returnSessionId: sessionId,
   });
 
   return Object.freeze({
     header: `CANNOT CONTINUE HERE — this tab is on ${activeRoute}; this conversation is pinned to ${pinnedRoute}.`
-      // Said only when it is true. Five drifts with one cause deserve the
-      // sentence; five drifts with three causes would be misled by it.
-      + (connectionOnly ? " The only thing missing is your provider connection." : ""),
-    primaryLabel: `Reconnect ${pinnedRoute} and continue`,
-    href: `#access?${link.toString()}`,
+      + " Check whether this page still holds that exact pinned connection; a replacement cannot continue this conversation.",
+    primaryLabel: `Check exact ${pinnedRoute} connection`,
+    href,
     // Not the design note's "Fork to a clean session": this route calls the
     // thing a conversation everywhere else, and its own vocabulary test fails
     // the word "session" in anything a reader can see or hear.

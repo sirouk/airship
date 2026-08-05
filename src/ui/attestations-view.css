@@ -593,7 +593,7 @@
   .attestations-export-note { margin-top: 0; }
 }
 
-@media (max-width: 780px) {
+@media (max-width: 860px) {
   .attestations-heading { display: grid; align-items: start; }
   .attestations-heading-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .attestations-acquisition-mode { grid-column: 1 / -1; max-width: none; margin: 0; text-align: left; }

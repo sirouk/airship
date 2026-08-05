@@ -73,7 +73,6 @@ import {
   profileCodeThemeId,
   removeAuthoredSkill,
   setProfileCodeTheme,
-  skillReferences,
   upsertAuthoredSkill,
   type ProfileCatalog,
 } from "../profiles/catalog";
@@ -99,7 +98,6 @@ import {
   createProfileRevision,
   createSkillRevision,
   enforcedMemoryScope,
-  isCustomSkillId,
   resolveProfileSilo,
   resolveProfileForSession,
   resolveSkillDecisions,
@@ -107,7 +105,6 @@ import {
   type ProfileRevision,
   type ResolvedSkillDecision,
   type SkillMode,
-  type SkillRevision,
   type SkillRevisionDraft,
   type ThemeColorScheme,
   type ThemeManifest,
@@ -182,6 +179,16 @@ import type {
   LocalDeviceAtomicRestoreRequest,
 } from "./local-device-vault-setup";
 import { chatHash, chatSessionIdFromHash } from "./chat-route";
+import {
+  accessLaneForProvider,
+  accessReconnectHash,
+  canonicalAccessHash,
+  parseAccessReconnectIntent,
+  reconnectIntentsEqual,
+  reconnectRouteDisposition,
+  type AccessReconnectIntent,
+} from "./access-intent";
+import { useBottomFloor } from "./bottom-floor";
 import { loadRetryableChunk } from "./chunk-recovery";
 import { MenuSelect } from "./menu-select";
 import { MobileNavigation } from "./mobile-navigation";
@@ -336,6 +343,7 @@ import { PostureChip } from "./posture-chip";
 import { durabilityLabel, durabilitySeal, durabilityShort, type DurabilityState } from "./durability-indicator";
 import { RouteFailure } from "./route-failure";
 import { RouteSkeleton } from "./route-skeleton";
+import type { ProfileSwitchFailure } from "./skills-manager-view";
 import type { LocalProviderProbeResult } from "./connect/connect-surface";
 import {
   OFFLINE_INLINE_REASON,
@@ -627,8 +635,7 @@ type TerminalScreenComponent = typeof import("./terminal-view").TerminalView;
 type CapabilitiesScreenComponent = typeof import("./capabilities-view").CapabilitiesView;
 type ModelPickerComponent = typeof import("./model-picker").ModelPicker;
 type MemoryScreenComponent = typeof import("./memory-view").MemoryView;
-type SkillEditorComponent = typeof import("./skill-editor").SkillEditor;
-type SkillEditorTarget = import("./skill-editor").SkillEditorTarget;
+type SkillsScreenComponent = typeof import("./skills-manager-view").SkillsManagerView;
 type GoogleDriveSetupComponent = typeof import("./google-drive-setup").GoogleDriveSetup;
 type LocalLabSetupComponent = typeof import("./local-lab-setup").LocalLabSetup;
 type LocalDeviceVaultSetupComponent = typeof import("./local-device-vault-setup").LocalDeviceVaultSetup;
@@ -710,6 +717,7 @@ type ProfileEditorDraft = {
 };
 
 const CHUTES_OAUTH_ATTEMPT_KEY = "airship.chutes.oauth-attempt.v1";
+const CHUTES_OAUTH_RECONNECT_INTENT_KEY = "airship.chutes.oauth-reconnect-intent.v1";
 
 /**
  * The return ledger, fetched rather than shipped at first paint.
@@ -751,7 +759,11 @@ function loadMessageParts() {
    * connection gets the same event, and the warm below cannot help if the one
    * attempt it makes is the one that fails.
    */
-  return loadRetryableChunk("message-parts-view", () => import("./chat/message-parts-view"));
+  return loadRetryableChunk(
+    "message-parts-view",
+    () => import("./chat/message-parts-view"),
+    developmentChunkEntry("chat/message-parts-view.tsx"),
+  );
 }
 
 /**
@@ -789,9 +801,46 @@ function DeferredMessageParts(props: MessagePartsViewProps) {
   return View ? <View {...props} /> : null;
 }
 
-function loadApprovalDock() {
-  return import("./approval-dock");
+function developmentChunkEntry(path: string): string | undefined {
+  return import.meta.env.DEV ? `${import.meta.env.BASE_URL}src/ui/${path}` : undefined;
 }
+
+function loadApprovalDock() {
+  return loadRetryableChunk(
+    "approval-dock",
+    () => import("./approval-dock"),
+    developmentChunkEntry("approval-dock.tsx"),
+  );
+}
+
+function loadPlatformOverlays() {
+  return loadRetryableChunk(
+    "platform-overlays",
+    () => import("./platform-overlays"),
+    developmentChunkEntry("platform-overlays.tsx"),
+  );
+}
+
+function loadKeyboardShortcutsSheet() {
+  return loadRetryableChunk(
+    "keyboard-shortcuts-sheet",
+    () => import("./keyboard-shortcuts-sheet"),
+    developmentChunkEntry("keyboard-shortcuts-sheet.tsx"),
+  );
+}
+
+type DeferredOverlayName = "Command Center" | "Preferences" | "Keyboard shortcuts";
+
+function deferredOverlayOpenerCandidate(active: Element | null): HTMLElement | undefined {
+  return active instanceof HTMLElement
+    && active !== document.body
+    && !active.closest(".pwa-update,[role=dialog]")
+      ? active
+      : undefined;
+}
+
+const APPROVAL_DOCK_LOAD_FAILURE =
+  "Approval controls did not load. Requests that require a person’s decision remain blocked; automatic reads and Full Access do not use this dialog.";
 
 /**
  * The return ledger, deferred — and remembered once it has arrived.
@@ -1368,6 +1417,9 @@ const DRAFT_DURABLE_PERSIST_MS = 700;
 
 export function App() {
   const [view, setView] = useState<View>(() => readViewHash());
+  const accessReconnectIntent = view === "access" && typeof window !== "undefined"
+    ? parseAccessReconnectIntent(window.location.hash)
+    : undefined;
   const [online, setOnline] = useState(() => readOnlineState(
     typeof navigator === "undefined" ? undefined : navigator,
   ));
@@ -1375,6 +1427,25 @@ export function App() {
   const [narrowComposer, setNarrowComposer] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const deferredOverlayOpener = useRef<HTMLElement>();
+  const deferredOverlayFocusReturn = useRef<number>();
+  const requestDeferredOverlay = (target?: DeferredOverlayName): void => {
+    if (deferredOverlayFocusReturn.current) {
+      cancelAnimationFrame(deferredOverlayFocusReturn.current);
+    }
+    if (target) {
+      const opener = deferredOverlayOpenerCandidate(document.activeElement);
+      if (opener) deferredOverlayOpener.current = opener;
+    } else {
+      const opener = deferredOverlayOpener.current;
+      deferredOverlayFocusReturn.current = requestAnimationFrame(() => {
+        (opener?.isConnected ? opener : textarea.current ?? mainRegion.current)?.focus({ preventScroll: true });
+      });
+    }
+    setPaletteOpen(target === "Command Center");
+    setPreferencesOpen(target === "Preferences");
+    setShortcutsOpen(target === "Keyboard shortcuts");
+  };
   /** Whether the composer's queue is showing its whole backlog. See `.composer-queue`. */
   const [queueExpanded, setQueueExpanded] = useState(false);
   const [preferencesOpen, setPreferencesOpen] = useState(false);
@@ -1450,11 +1521,15 @@ export function App() {
    * teardown that follows a completed turn and the teardown that follows an
    * abort both land on `setBusy(false)`, so the auto-dispatch effect below
    * read a user's Stop as "the model is free, send the next one" and fired the
-   * queue's head immediately. This latch is the missing distinction — set by
-   * `stopTurn`, cleared only by an explicit user send — so a stopped
-   * conversation stays stopped until the person who stopped it says otherwise.
+   * queue's head immediately. The latch is session-scoped: switching away and
+   * back must not reinterpret Stop as permission to send, and two conversations
+   * may each hold a stopped queue. Only an explicit send in that conversation
+   * clears its entry.
    */
-  const [queuePaused, setQueuePaused] = useState(false);
+  const [pausedQueueSessionIds, setPausedQueueSessionIds] = useState<ReadonlySet<string>>(
+    () => new Set<string>(),
+  );
+  const queuePaused = Boolean(sessionId && pausedQueueSessionIds.has(sessionId));
   /*
    * The slash-command module travels with the registry it builds rather than
    * through first paint. Every call site was already gated on `slashRegistry`
@@ -1474,6 +1549,7 @@ export function App() {
     : undefined;
   const [busy, setBusy] = useState(false);
   const [runtimeStatus, setRuntimeLine] = useState("Starting local kernel");
+  const [bootFailure, setBootFailure] = useState<string>();
   /**
    * The turn's own spoken channel, and the shell line's stand-down.
    *
@@ -1581,6 +1657,8 @@ export function App() {
   const [capabilitiesViewError, setCapabilitiesViewError] = useState<string>();
   const [MemoryScreen, setMemoryScreen] = useState<MemoryScreenComponent>();
   const [memoryViewError, setMemoryViewError] = useState<string>();
+  const [SkillsScreen, setSkillsScreen] = useState<SkillsScreenComponent>();
+  const [skillsViewError, setSkillsViewError] = useState<string>();
   const [GoogleDriveSetupScreen, setGoogleDriveSetupScreen] = useState<GoogleDriveSetupComponent>();
   const [LocalLabSetupScreen, setLocalLabSetupScreen] = useState<LocalLabSetupComponent>();
   const [LocalDeviceVaultSetupScreen, setLocalDeviceVaultSetupScreen] = useState<LocalDeviceVaultSetupComponent>();
@@ -1853,38 +1931,182 @@ export function App() {
    * budget. Split out, then warmed on idle after first paint, so the chunk is
    * in cache long before anyone presses Cmd+K and the ceiling gets a real
    * margin back instead of a raise.
-   */
+  */
   const [Overlays, setOverlays] = useState<typeof import("./platform-overlays")>();
+  const requestedDeferredOverlay: DeferredOverlayName | undefined = preferencesOpen
+    ? "Preferences"
+    : paletteOpen
+      ? "Command Center"
+      : shortcutsOpen
+        ? "Keyboard shortcuts"
+        : undefined;
+  const requestedDeferredOverlayRef = useRef<DeferredOverlayName>();
+  requestedDeferredOverlayRef.current = requestedDeferredOverlay;
+  const [deferredOverlayFailure, setDeferredOverlayFailure] = useState<DeferredOverlayName>();
+  const [platformOverlaysLoading, setPlatformOverlaysLoading] = useState(false);
+  const [shortcutSheetLoading, setShortcutSheetLoading] = useState(false);
+  const [deferredOverlayRetryStarted, setDeferredOverlayRetryStarted] = useState(false);
+  const platformOverlaysReady = useRef(false);
+  const platformOverlaysLoad = useRef<Promise<void>>();
+  const deferredOverlayOwnerLive = useRef(true);
+  const beginPlatformOverlaysLoad = useCallback((): void => {
+    const opener = deferredOverlayOpenerCandidate(document.activeElement);
+    if (requestedDeferredOverlayRef.current && opener) deferredOverlayOpener.current = opener;
+    if (platformOverlaysReady.current || platformOverlaysLoad.current) return;
+    if (deferredOverlayOwnerLive.current) setPlatformOverlaysLoading(true);
+    const attempt = loadPlatformOverlays()
+      .then((module) => {
+        platformOverlaysReady.current = true;
+        if (!deferredOverlayOwnerLive.current) return;
+        const requested = requestedDeferredOverlayRef.current;
+        if (
+          (requested === "Command Center" || requested === "Preferences")
+          && deferredOverlayOpener.current?.isConnected
+        ) {
+          deferredOverlayOpener.current.focus({ preventScroll: true });
+        }
+        if (!requested) deferredOverlayOpener.current = undefined;
+        setOverlays(module);
+        setDeferredOverlayFailure(undefined);
+        setDeferredOverlayRetryStarted(false);
+      })
+      .catch(() => {
+        // Publish retry only after the failed attempt releases admission. React
+        // may render the recovery action before the promise's `finally` runs.
+        if (platformOverlaysLoad.current === attempt) platformOverlaysLoad.current = undefined;
+        const requested = requestedDeferredOverlayRef.current;
+        if (!deferredOverlayOwnerLive.current || (requested !== "Command Center" && requested !== "Preferences")) return;
+        requestDeferredOverlay();
+        setDeferredOverlayFailure(requested);
+        setRuntimeLine(`${requested} could not be loaded. The shell remains available.`);
+      });
+    platformOverlaysLoad.current = attempt;
+    void attempt.finally(() => {
+      if (platformOverlaysLoad.current === attempt) platformOverlaysLoad.current = undefined;
+      if (deferredOverlayOwnerLive.current) setPlatformOverlaysLoading(false);
+    });
+  }, []);
   /* The same deferred chunk carries the quarantine card, so the two return
      states of this surface cost one fetch and one stylesheet between them. */
   const [QuarantineReportView, setQuarantineReportView] = useState<(props: QuarantineReportProps) => VNode>();
   /** Which conversation `#sessions` should open on, when the shell sends you. */
   const [sessionsFocusId, setSessionsFocusId] = useState<string>();
   /* Mounted as soon as a broker exists, so the dock is resident before the
-     first request rather than fetched while someone waits on a decision. */
+     first request rather than fetched while someone waits on a decision.
+
+     Readiness is separate from the component value because a broker request can
+     arrive between the chunk resolving and Preact committing the next render.
+     The gate may become modal only when the dialog code is already resident. */
   const [ApprovalDockView, setApprovalDockView] = useState<(props: { broker: typeof approvalBroker }) => VNode>();
+  const [approvalDockLoadFailed, setApprovalDockLoadFailed] = useState(false);
+  const [approvalDockLoading, setApprovalDockLoading] = useState(false);
+  const [approvalDockRetryStarted, setApprovalDockRetryStarted] = useState(false);
+  const [approvalDockBlockedRequests, setApprovalDockBlockedRequests] = useState(0);
+  const [approvalDockWaitingRequests, setApprovalDockWaitingRequests] = useState(0);
+  const [approvalDockFailurePositionReady, setApprovalDockFailurePositionReady] = useState(false);
+  const approvalDockReady = useRef(false);
+  const approvalDockUnavailable = useRef(false);
+  const approvalDockSettlingFailure = useRef(false);
+  const approvalDockLoad = useRef<Promise<void>>();
+  const approvalDockOwnerLive = useRef(true);
+  const approvalDockRetryNeedsFocusReturn = useRef(false);
+  const denyPendingForUnavailableDock = useCallback((pendingCount: number): void => {
+    if (pendingCount === 0 || approvalDockSettlingFailure.current) return;
+    approvalDockSettlingFailure.current = true;
+    try {
+      approvalBroker.denyAll();
+    } finally {
+      approvalDockSettlingFailure.current = false;
+    }
+    if (approvalDockOwnerLive.current) {
+      setApprovalDockBlockedRequests((count) => count + pendingCount);
+    }
+  }, [approvalBroker]);
+  const beginApprovalDockLoad = useCallback((): void => {
+    if (approvalDockReady.current || approvalDockLoad.current) return;
+    approvalDockUnavailable.current = false;
+    if (approvalDockOwnerLive.current) setApprovalDockLoading(true);
+    const attempt = loadApprovalDock()
+      .then((module) => {
+        approvalDockReady.current = true;
+        approvalDockUnavailable.current = false;
+        if (!approvalDockOwnerLive.current) return;
+        const pendingCount = approvalBroker.snapshot().pending.length;
+        setApprovalDockView(() => module.ApprovalDock);
+        setApprovalDockLoadFailed(false);
+        setApprovalDockRetryStarted(false);
+        setApprovalDockBlockedRequests(0);
+        setApprovalDockWaitingRequests(0);
+        // State updates above commit together. The shell becomes inert in the
+        // same render that mounts the dialog, never one render before it.
+        setApprovalPending(pendingCount > 0);
+        if (pendingCount === 0 && approvalDockRetryNeedsFocusReturn.current) {
+          approvalDockRetryNeedsFocusReturn.current = false;
+          requestAnimationFrame(() => {
+            (textarea.current ?? mainRegion.current)?.focus({ preventScroll: true });
+          });
+        }
+      })
+      .catch(() => {
+        // A visible Retry must be able to start a new import immediately.
+        if (approvalDockLoad.current === attempt) approvalDockLoad.current = undefined;
+        approvalDockReady.current = false;
+        approvalDockUnavailable.current = true;
+        const pendingCount = approvalBroker.snapshot().pending.length;
+        denyPendingForUnavailableDock(pendingCount);
+        if (!approvalDockOwnerLive.current) return;
+        setApprovalDockWaitingRequests(0);
+        setApprovalPending(false);
+        setApprovalDockLoadFailed(true);
+      });
+    approvalDockLoad.current = attempt;
+    void attempt.finally(() => {
+      if (approvalDockLoad.current === attempt) approvalDockLoad.current = undefined;
+      if (approvalDockOwnerLive.current) setApprovalDockLoading(false);
+    });
+  }, [approvalBroker, denyPendingForUnavailableDock]);
   const [ShortcutSheetView, setShortcutSheetView] = useState<(props: {
     open: boolean;
     profiles?: readonly Readonly<{ name: string }>[];
     onClose(): void;
   }) => VNode | null>();
   useEffect(() => {
-    let live = true;
-    void loadApprovalDock().then((module) => {
-      if (live) setApprovalDockView(() => module.ApprovalDock);
-    });
+    approvalDockOwnerLive.current = true;
+    beginApprovalDockLoad();
     warmMessageParts();
-    return () => { live = false; };
-  }, []);
+    return () => { approvalDockOwnerLive.current = false; };
+  }, [beginApprovalDockLoad]);
   /* Same deferral, same reason: a sheet nobody has asked for yet is not
      first-paint JavaScript. Fetched the first time `?` (or the palette's own
      footer row) asks for it, and resident from then on. */
   useEffect(() => {
+    deferredOverlayOwnerLive.current = true;
+    return () => { deferredOverlayOwnerLive.current = false; };
+  }, []);
+  useEffect(() => {
+    if ((requestedDeferredOverlay !== "Command Center" && requestedDeferredOverlay !== "Preferences") || Overlays) return;
+    beginPlatformOverlaysLoad();
+  }, [requestedDeferredOverlay, Overlays, beginPlatformOverlaysLoad]);
+  useEffect(() => {
     if (!shortcutsOpen || ShortcutSheetView) return;
     let live = true;
-    void import("./keyboard-shortcuts-sheet").then((module) => {
-      if (live) setShortcutSheetView(() => module.KeyboardShortcutsSheet);
-    });
+    const opener = deferredOverlayOpenerCandidate(document.activeElement);
+    if (opener) deferredOverlayOpener.current = opener;
+    setShortcutSheetLoading(true);
+    void loadKeyboardShortcutsSheet()
+      .then((module) => {
+        if (!live) return;
+        setShortcutSheetView(() => module.KeyboardShortcutsSheet);
+        setDeferredOverlayFailure(undefined);
+        setDeferredOverlayRetryStarted(false);
+      })
+      .catch(() => {
+        if (!live) return;
+        requestDeferredOverlay();
+        setDeferredOverlayFailure("Keyboard shortcuts");
+        setRuntimeLine("Keyboard shortcuts could not be loaded. The shell remains available.");
+      })
+      .finally(() => { if (live) setShortcutSheetLoading(false); });
     return () => { live = false; };
   }, [shortcutsOpen, ShortcutSheetView]);
   useEffect(() => {
@@ -2196,12 +2418,17 @@ export function App() {
    * Rail buttons and overlay-owned navigation (palette entries, trust-sheet
    * rows) call `navigatePrimary` directly and stay ungated.
    */
-  const platformOverlayOpen = mobileMoreOpen || paletteOpen || shortcutsOpen || preferencesOpen || trustSheetOpen || approvalPending || Boolean(profileCockpitTransition);
+  const platformOverlayOpen = mobileMoreOpen
+    || (paletteOpen && Boolean(Overlays))
+    || (shortcutsOpen && Boolean(ShortcutSheetView))
+    || (preferencesOpen && Boolean(Overlays))
+    || trustSheetOpen
+    || approvalPending || Boolean(profileCockpitTransition);
   const platformOverlayOpenRef = useRef(platformOverlayOpen);
   platformOverlayOpenRef.current = platformOverlayOpen;
 
-  useGlobalPaletteShortcut(() => setPaletteOpen((open) => !open));
-  useGlobalShortcutSheet(() => setShortcutsOpen(true), () => !platformOverlayOpenRef.current);
+  useGlobalPaletteShortcut(() => requestDeferredOverlay(paletteOpen ? undefined : "Command Center"));
+  useGlobalShortcutSheet(() => requestDeferredOverlay("Keyboard shortcuts"), () => !platformOverlayOpenRef.current);
   useGlobalNavigationJumps(
     navigatePrimary,
     () => !platformOverlayOpenRef.current,
@@ -2299,6 +2526,53 @@ export function App() {
     : undefined;
   /** True once the boot screen has been replaced by the real shell chrome. */
   const shellMounted = Boolean(catalog && activeProfile && activeTheme);
+  const deferredOverlayRequestIsLoading = requestedDeferredOverlay === "Keyboard shortcuts"
+    ? !ShortcutSheetView && shortcutSheetLoading
+    : Boolean(requestedDeferredOverlay) && !Overlays && platformOverlaysLoading;
+  const deferredOverlayNoticeActive = Boolean(deferredOverlayFailure) || deferredOverlayRequestIsLoading;
+  const deferredOverlayNoticeFloor = useBottomFloor(deferredOverlayNoticeActive && shellMounted);
+  const [deferredOverlayNoticePositionReady, setDeferredOverlayNoticePositionReady] = useState(false);
+  const deferredOverlayRecoveryAction = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!deferredOverlayNoticeActive || !shellMounted) {
+      setDeferredOverlayNoticePositionReady(false);
+      return;
+    }
+    const frame = requestAnimationFrame(() => setDeferredOverlayNoticePositionReady(true));
+    return () => cancelAnimationFrame(frame);
+  }, [deferredOverlayNoticeActive, shellMounted]);
+  useEffect(() => {
+    if (!deferredOverlayFailure || !deferredOverlayNoticePositionReady) return;
+    const frame = requestAnimationFrame(() => {
+      deferredOverlayRecoveryAction.current?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [deferredOverlayFailure, deferredOverlayNoticePositionReady, deferredOverlayRetryStarted]);
+  /* A boot-time chunk refusal predates the composer. Re-bind the shared bottom
+     measurement when the shell appears, rather than observing an empty boot
+     screen forever and leaving the banner over Send. */
+  const approvalDockFailureVisible = approvalDockLoadFailed && activeApprovalMode !== "full-access";
+  const approvalDockWaitingVisible = approvalDockWaitingRequests > 0
+    && !approvalDockReady.current
+    && !approvalDockUnavailable.current
+    && activeApprovalMode !== "full-access";
+  const approvalDockNoticeVisible = approvalDockFailureVisible || approvalDockWaitingVisible;
+  const approvalDockFailureFloor = useBottomFloor(approvalDockNoticeVisible && shellMounted);
+  useEffect(() => {
+    if (!approvalDockNoticeVisible || !shellMounted) {
+      setApprovalDockFailurePositionReady(false);
+      return;
+    }
+    /*
+     * `useBottomFloor` measures after this shell render. Do not paint a fixed
+     * banner at its zero-value first frame: that is exactly the frame where it
+     * would cover the composer's Send button. One animation frame lets the live
+     * composer/mobile-nav measurement commit before the banner can receive a
+     * pointer.
+     */
+    const frame = requestAnimationFrame(() => setApprovalDockFailurePositionReady(true));
+    return () => cancelAnimationFrame(frame);
+  }, [approvalDockNoticeVisible, shellMounted]);
   const activeAttestationPresentation = attestationPresentation
     && runtime.current
     && attestationPresentation.workspace === runtime.current.workspace
@@ -2326,6 +2600,17 @@ export function App() {
     && activeInferenceBinding.authMethod === (connection.kind === "chutes-oauth" ? "oauth-pkce" : "api-key")
     && activeInferenceBinding.transportBoundary === "e2ee-attestable"
     && activeInferenceBinding.modelId === connection.model;
+  const chutesReconnectExact = accessReconnectIntent?.lane === "chutes"
+    && chutesConnected
+    && Boolean(activeChutesAuthorityId)
+    && availableModels.some((candidate) => candidate.id === accessReconnectIntent.model)
+    && reconnectRouteDisposition(accessReconnectIntent, {
+      lane: "chutes",
+      method: connection.kind === "chutes-oauth" ? "oauth-pkce" : "api-key",
+      model: accessReconnectIntent.model,
+      connectionId: activeChutesAuthorityId ?? "",
+      connectionGeneration: Math.max(1, chutesConnectionGeneration.current),
+    }) === "exact";
   const activeExternalResolution = activeExternalRoute && inferenceFabric.current
     ? inferenceFabric.current.resolve(activeExternalRoute.pin)
     : undefined;
@@ -2491,8 +2776,8 @@ export function App() {
   }, [view, sessionId, messages, pendingTranscriptReturn]);
   const paletteEntries = useMemo(() => buildPaletteEntries({
     navigate: navigatePrimary,
-    openPreferences: () => setPreferencesOpen(true),
-    openShortcuts: () => setShortcutsOpen(true),
+    openPreferences: () => requestDeferredOverlay("Preferences"),
+    openShortcuts: () => requestDeferredOverlay("Keyboard shortcuts"),
     commands: slashRegistry?.descriptors(),
     ...(paletteActions ? { actions: paletteActions } : {}),
     sessions: paletteSessions,
@@ -3416,18 +3701,29 @@ export function App() {
       ? attestationFailure.label
       : undefined;
 
-  async function activateSession(session: SessionRecord): Promise<SessionRecord> {
+  async function selectSessionForActivation(
+    session: SessionRecord,
+    sourceRuntime = runtime.current,
+    signal?: AbortSignal,
+  ): Promise<SessionRecord> {
     const sessionProfileId = session.manifest.profile?.profileId;
-    const activeRuntime = runtime.current;
-    if (!sessionProfileId || !activeRuntime) {
+    if (!sessionProfileId || !sourceRuntime) {
       throw new Error("The selected conversation is not bound to an active profile journal.");
     }
-    const selection = await new SessionLibrary(activeRuntime.journal).selectActiveConversation(
+    const selection = await new SessionLibrary(sourceRuntime.journal).selectActiveConversation(
       sessionProfileId,
       session.id,
-      { expectedTargetHead: { sequence: session.headSequence, digest: session.headDigest } },
+      {
+        expectedTargetHead: { sequence: session.headSequence, digest: session.headDigest },
+        ...(signal ? { signal } : {}),
+      },
     );
-    const selected = selection.session;
+    return selection.session;
+  }
+
+  function publishActiveSessionSelection(selected: SessionRecord): SessionRecord {
+    const sessionProfileId = selected.manifest.profile?.profileId;
+    if (!sessionProfileId) throw new Error("The selected conversation is not bound to an active profile journal.");
     // Update the identity fence synchronously. An aborted prior turn can still
     // deliver its final durable signal before Preact commits the next render.
     activeSessionIdentity.current = selected.id;
@@ -3435,9 +3731,11 @@ export function App() {
     setActiveSessionRecord(selected);
     activeSessionByProfile.current.set(sessionProfileId, selected.id);
     setMessageQueue(queuedMessagesBySession.current.get(selected.id) ?? []);
-    // The pause belongs to the conversation that was stopped, not to the app.
-    setQueuePaused(false);
     return selected;
+  }
+
+  async function activateSession(session: SessionRecord): Promise<SessionRecord> {
+    return publishActiveSessionSelection(await selectSessionForActivation(session));
   }
 
   useEffect(() => () => {
@@ -3523,11 +3821,42 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [profileId]);
 
-  // A capability request is a real modal: the shell chrome behind it must go
-  // inert, or Tab and assistive tech reach controls the scrim claims are gone.
+  /*
+   * A capability request is a real modal only once its dialog is resident.
+   *
+   * A failed deferred import used to publish `pending` first, make the whole
+   * shell inert, and render no dialog at all. The request then sat behind an
+   * invisible modal until the broker's five-minute expiry. While the dock is
+   * still loading, the effect remains paused but the shell stays operable. If
+   * loading fails, every waiting request is denied synchronously; the banner
+   * rendered beside the shell states that the effect did not run.
+   */
   useEffect(
-    () => approvalBroker.subscribe((state) => setApprovalPending(state.pending.length > 0)),
-    [approvalBroker],
+    () => approvalBroker.subscribe((state) => {
+      const pendingCount = state.pending.length;
+      if (pendingCount === 0) {
+        setApprovalDockWaitingRequests(0);
+        setApprovalPending(false);
+        return;
+      }
+      if (approvalDockReady.current) {
+        setApprovalDockWaitingRequests(0);
+        setApprovalPending(true);
+        return;
+      }
+      setApprovalPending(false);
+      if (approvalDockUnavailable.current) {
+        setApprovalDockWaitingRequests(0);
+        denyPendingForUnavailableDock(pendingCount);
+        return;
+      }
+      // A real effect is waiting, but the dialog code is not resident yet. Say
+      // so and keep a denial path available instead of leaving the request
+      // behind a silent five-minute broker expiry.
+      setApprovalDockWaitingRequests(pendingCount);
+      beginApprovalDockLoad();
+    }),
+    [approvalBroker, beginApprovalDockLoad, denyPendingForUnavailableDock],
   );
 
   useEffect(() => {
@@ -4073,13 +4402,33 @@ export function App() {
      * and a round trip through Chat — issued zero network requests, and the
      * route stayed dead for the life of the tab.
      */
-    void loadRetryableChunk("memory-view", () => import("./memory-view")).then((module) => {
+    void loadRetryableChunk(
+      "memory-view",
+      () => import("./memory-view"),
+      developmentChunkEntry("memory-view.tsx"),
+    ).then((module) => {
       if (current) setMemoryScreen(() => module.MemoryView);
     }).catch(() => {
       if (current) setMemoryViewError("The private Memory interface could not be loaded. No index or workspace state changed.");
     });
     return () => { current = false; };
   }, [view, MemoryScreen, deferredChunkAttempt]);
+
+  useEffect(() => {
+    if (view !== "skills" || SkillsScreen) return;
+    let current = true;
+    setSkillsViewError(undefined);
+    void loadRetryableChunk(
+      "skills-manager-view",
+      () => import("./skills-manager-view"),
+      developmentChunkEntry("skills-manager-view.tsx"),
+    ).then((module) => {
+      if (current) setSkillsScreen(() => module.SkillsManagerView);
+    }).catch(() => {
+      if (current) setSkillsViewError("The Skills interface could not be loaded. No profile, skill, or conversation state changed.");
+    });
+    return () => { current = false; };
+  }, [view, SkillsScreen, deferredChunkAttempt]);
 
   // When the Proof evidence section opens on a live connection with no evidence yet,
   // probe + verify a currently-live endpoint so the ledger shows real state
@@ -4158,7 +4507,19 @@ export function App() {
         resolvedTargetHash,
       );
     }
+    window.dispatchEvent(new Event("airship:n"));
     return true;
+  }
+
+  function abandonReconnectRequest(): void {
+    if (inferenceRouteChanging.current) return;
+    window.history.replaceState({ view: "access" }, "", "#connection");
+    setDestinationArrival((current) => current + 1);
+    setMobileMoreOpen(false);
+    setView("access");
+    setChatRouteRequest(undefined);
+    setProofSelection(undefined);
+    setProofSection("summary");
   }
 
   function navigatePrimary(next: View) {
@@ -4293,6 +4654,14 @@ export function App() {
     });
     try {
       sessionStorage.setItem(CHUTES_OAUTH_ATTEMPT_KEY, JSON.stringify(request.attempt));
+      if (accessReconnectIntent) {
+        sessionStorage.setItem(
+          CHUTES_OAUTH_RECONNECT_INTENT_KEY,
+          accessReconnectHash(accessReconnectIntent),
+        );
+      } else {
+        sessionStorage.removeItem(CHUTES_OAUTH_RECONNECT_INTENT_KEY);
+      }
     } catch {
       throw new Error("This browser denied the tab-local PKCE state needed for Chutes sign-in. Allow session storage for this Airship origin and retry.");
     }
@@ -4504,8 +4873,10 @@ export function App() {
       setRuntimeStatus("Local kernel ready");
     })().catch((error) => {
       if (disposed) return;
-      setRuntimeStatus(error instanceof Error ? `Local kernel failed to initialize: ${error.message}` : "Local kernel failed to initialize");
-      setMessages([{ id: randomUuid(), role: "assistant", error: true, content: error instanceof Error ? error.message : String(error) }]);
+      const detail = error instanceof Error ? error.message : String(error);
+      setBootFailure(detail);
+      setRuntimeStatus("Airship could not finish starting the local kernel. Reload to try again; this tab never became ready.");
+      setMessages([{ id: randomUuid(), role: "assistant", error: true, content: detail }]);
     });
     return () => {
       disposed = true;
@@ -4555,9 +4926,16 @@ export function App() {
     let disposed = false;
     const callbackSearch = window.location.search;
     let rawAttempt: string | null;
+    let reconnectHash = "#connection";
     try {
       rawAttempt = sessionStorage.getItem(CHUTES_OAUTH_ATTEMPT_KEY);
       sessionStorage.removeItem(CHUTES_OAUTH_ATTEMPT_KEY);
+      const savedReconnectHash = sessionStorage.getItem(CHUTES_OAUTH_RECONNECT_INTENT_KEY);
+      sessionStorage.removeItem(CHUTES_OAUTH_RECONNECT_INTENT_KEY);
+      const restoredIntent = savedReconnectHash
+        ? parseAccessReconnectIntent(savedReconnectHash)
+        : undefined;
+      if (restoredIntent) reconnectHash = accessReconnectHash(restoredIntent);
     } catch {
       window.history.replaceState({ view: "access" }, "", `${import.meta.env.BASE_URL}#connection`);
       setView("access");
@@ -4567,7 +4945,7 @@ export function App() {
       });
       return;
     }
-    window.history.replaceState({ view: "access" }, "", `${import.meta.env.BASE_URL}#connection`);
+    window.history.replaceState({ view: "access" }, "", `${import.meta.env.BASE_URL}${reconnectHash}`);
     setView("access");
     void (async () => {
       let oauth: typeof import("../auth/chutes-oauth") | undefined;
@@ -4641,7 +5019,9 @@ export function App() {
           ? requestedChatSession
             ? chatHash(requestedChatSession)
             : chatHash(activeSessionIdentity.current)
-          : navigationHashForView(next);
+          : next === "access"
+            ? canonicalAccessHash(window.location.hash)
+            : navigationHashForView(next);
       if (window.location.hash !== canonicalHash) window.history.replaceState({ view: next }, "", canonicalHash);
     };
     window.addEventListener("hashchange", updateFromHistory);
@@ -4767,15 +5147,18 @@ export function App() {
   useScrollEdges(primaryNav, `${String(shellMounted)}:${railState}:${view}`);
 
   // `data-rail` is on the document element, not the shell, because the topbar
-  // and the app grid both size their first column from `--rail-width`.
-  useEffect(() => { document.documentElement.dataset.rail = railState; }, [railState]);
+  // and the app grid both size their first column from `--rail-width`. This is
+  // a layout effect because the root grid and the Rail render are one visual
+  // state: publishing after paint exposed a labelled/collapsed mismatch for a
+  // frame after both a shortcut and a viewport-band transition.
+  useLayoutEffect(() => { document.documentElement.dataset.rail = railState; }, [railState]);
 
   useEffect(() => {
     if (Overlays) return;
-    const warm = () => { void import("./platform-overlays").then(setOverlays).catch(() => {}); };
+    const warm = () => beginPlatformOverlaysLoad();
     if (typeof requestIdleCallback === "function") requestIdleCallback(warm, { timeout: 2_000 });
     else setTimeout(warm, 0);
-  }, [Overlays]);
+  }, [Overlays, beginPlatformOverlaysLoad]);
 
   /*
    * J151: tell the service-worker listener what a reload would cost.
@@ -5024,16 +5407,17 @@ export function App() {
   }
 
   /**
-   * Switches the cockpit, and reports whether the switch actually committed.
+   * Switches the cockpit, and reports either the committed outcome or the exact
+   * refusal sentence the initiating surface must show.
    *
-   * The boolean is not decoration: `deleteProfile` archives the outgoing
-   * profile only if the replacement really became active, and a swallowed
-   * failure that still returned `void` would archive the profile the user is
-   * still running on.
+   * The outcome is not decoration: `deleteProfile` archives the outgoing
+   * profile only if the replacement really became active, while each route can
+   * render the exact refusal without scraping a global status line.
    */
-  async function changeProfile(nextId: string, force = false): Promise<boolean> {
+  async function changeProfile(nextId: string, force = false): Promise<ProfileSwitchFailure> {
     const active = runtime.current;
-    if (!active || !catalog || (!force && nextId === profileId)) return false;
+    if (!active || !catalog) return "Profile controls are not ready yet.";
+    if (!force && nextId === profileId) return undefined;
     if (inferenceRouteChanging.current || sessionNavigationChanging.current) {
       throw new Error("Wait for the current session or inference route change before switching profiles.");
     }
@@ -5131,7 +5515,9 @@ export function App() {
       });
       if (!profile || !nextSession || !switched) throw new Error("The profile session was not created.");
       if (runtime.current !== active) throw new Error("The runtime changed before the profile cockpit could be restored.");
-      if (operation !== profileOperation.current) return false;
+      if (operation !== profileOperation.current) {
+        return "A newer profile operation replaced this switch.";
+      }
       // Authority and identity, adjacent. Nothing that can fail sits between
       // them, so `profileId` and `runtime.current` can no longer disagree.
       runtime.current = switched.runtime;
@@ -5145,7 +5531,7 @@ export function App() {
         await publishAuditedSession(restored.fresh, restored.audited, `${profile.name} cockpit restored`);
         await releaseOutgoingProfileTerminals(active.workspace, profile.name);
         navigate("chat");
-        return true;
+        return undefined;
       }
       const activated = await activateSession(nextSession);
       setSessionRevision((value) => value + 1);
@@ -5159,7 +5545,7 @@ export function App() {
       setRuntimeStatus(`${profile.name} cockpit started`);
       await releaseOutgoingProfileTerminals(active.workspace, profile.name);
       navigate("chat");
-      return true;
+      return undefined;
     } catch (error) {
       /*
        * The outgoing cockpit survives, and the user is told.
@@ -5190,11 +5576,14 @@ export function App() {
           setSlashRegistry(previousRegistry);
           publishProfileId(previousProfileId);
         }
-        setRuntimeStatus(ownsRuntime
-          ? `Profile switch failed: ${error instanceof Error ? error.message : String(error)}`
-          : `Profile switch abandoned: ${error instanceof Error ? error.message : String(error)} The storage authority that replaced it stays active.`);
+        const detail = error instanceof Error ? error.message : String(error);
+        const message = ownsRuntime
+          ? `Profile switch failed: ${detail}`
+          : `Profile switch abandoned: ${detail} The storage authority that replaced it stays active.`;
+        setRuntimeStatus(message);
+        return message;
       }
-      return false;
+      return "A newer profile operation replaced this switch.";
     } finally {
       sessionNavigationChanging.current = false;
       setProfileCockpitTransition(undefined);
@@ -5260,12 +5649,13 @@ export function App() {
    * to distinguish "did not activate" from "activated", and it converts the
    * refusal into its own error so archiving the active profile fails loudly.
    */
-  async function requestProfileChange(nextId: string, force = false): Promise<boolean> {
+  async function requestProfileChange(nextId: string, force = false): Promise<ProfileSwitchFailure> {
     try {
       return await changeProfile(nextId, force);
     } catch (error) {
-      setRuntimeStatus(`Profile switch failed: ${error instanceof Error ? error.message : String(error)}`);
-      return false;
+      const message = `Profile switch failed: ${error instanceof Error ? error.message : String(error)}`;
+      setRuntimeStatus(message);
+      return message;
     }
   }
 
@@ -5814,6 +6204,16 @@ export function App() {
     if (activeSessionIdentity.current === targetSessionId) setMessageQueue(next);
   }
 
+  function setQueuePausedForSession(targetSessionId: string, paused: boolean): void {
+    setPausedQueueSessionIds((current) => {
+      if (current.has(targetSessionId) === paused) return current;
+      const next = new Set(current);
+      if (paused) next.add(targetSessionId);
+      else next.delete(targetSessionId);
+      return next;
+    });
+  }
+
   function removeQueuedMessage(targetSessionId: string, queuedMessageId: string): void {
     publishMessageQueue(targetSessionId, (current) => removeThreadQueueItem(current, queuedMessageId));
   }
@@ -5860,7 +6260,7 @@ export function App() {
 
   function editQueuedMessage(item: QueuedComposerItem): void {
     if (!sessionId) return;
-    setQueuePaused(false);
+    setQueuePausedForSession(sessionId, false);
     removeQueuedMessage(sessionId, item.id);
     setInput(item.prompt);
     setAttachments(item.attachments);
@@ -5869,7 +6269,7 @@ export function App() {
 
   function sendQueuedMessageNow(item: QueuedComposerItem): void {
     if (!sessionId || busy) return;
-    setQueuePaused(false);
+    setQueuePausedForSession(sessionId, false);
     queuedDispatch.current = true;
     void sendMessage(item.prompt, item.attachments, {
       onAdmitted: () => removeQueuedMessage(sessionId, item.id),
@@ -5924,7 +6324,7 @@ export function App() {
     // admission bail so a refused send does not silently resume the queue, and
     // scoped to non-queue sends so automatic dispatch can never clear its own
     // latch.
-    if (!queue) setQueuePaused(false);
+    if (!queue) setQueuePausedForSession(admissionSessionId, false);
     const localPresentationAuthority = Object.freeze({
       runtime: admissionRuntime,
       profileId: admissionProfile.profileId,
@@ -6437,7 +6837,8 @@ export function App() {
     if (activePrompt.current) setInput((current) => current.trim() ? current : activePrompt.current ?? current);
     // Latch before the abort: the abort's teardown is what frees `busy`, and
     // the queue effect runs on that same commit.
-    setQueuePaused(true);
+    const stoppedSessionId = activeSessionIdentity.current ?? sessionId;
+    if (stoppedSessionId) setQueuePausedForSession(stoppedSessionId, true);
     activeTurn.current?.abort(new DOMException("Stopped by user", "AbortError"));
   }
 
@@ -8540,7 +8941,9 @@ export function App() {
   }
 
   async function runInferenceRouteTransition<T>(
-    operation: () => Promise<T>,
+    operation: (signal?: AbortSignal) => Promise<T>,
+    reconnectIntent?: AccessReconnectIntent,
+    callerSignal?: AbortSignal,
   ): Promise<T> {
     if (inferenceRouteChanging.current) {
       throw new Error("Another inference route is already being activated.");
@@ -8557,9 +8960,19 @@ export function App() {
     }
     inferenceRouteChanging.current = true;
     setModelSwitching(true);
+    const statusBeforeTransition = runtimeStatus;
+    const reconnectGuard = reconnectIntent
+      ? reconnectSelectionGuard(reconnectIntent, callerSignal)
+      : undefined;
+    const signal = reconnectGuard?.signal ?? callerSignal;
     try {
-      return await operation();
+      signal?.throwIfAborted();
+      return await operation(signal);
+    } catch (error) {
+      if (signal?.aborted) setRuntimeStatus(statusBeforeTransition);
+      throw error;
     } finally {
+      reconnectGuard?.dispose();
       inferenceRouteChanging.current = false;
       setModelSwitching(false);
     }
@@ -8574,6 +8987,7 @@ export function App() {
   ) {
     const routeProfile = activeProfileRef.current;
     if (!runtime.current || !routeProfile || !catalog) throw new Error("The local runtime is not ready.");
+    const reconnectIntent = accessReconnectIntent;
     const parsedCredential = parseChutesCredential(credential);
     if (
       connectionMetadata.model !== model.id ||
@@ -8586,7 +9000,7 @@ export function App() {
     const priorRuntime = runtime.current;
     const priorChutesTransport = chutesTransport.current;
     const expectedChutesAuthorityRevision = chutesAuthorityRevision.current;
-    return runInferenceRouteTransition(async () => {
+    return runInferenceRouteTransition(async (reconnectSignal) => {
       activeTurn.current?.abort(new DOMException("Inference route is changing.", "AbortError"));
       setRuntimeStatus("Pinning encrypted Chutes session");
       const nextGeneration = chutesConnectionGeneration.current + 1;
@@ -8628,6 +9042,7 @@ export function App() {
       };
       let nextSession: SessionRecord | undefined;
       let nextProfile: ProfileRevision | undefined;
+      let reconnectSession: Awaited<ReturnType<typeof prepareReconnectSession>> | undefined;
       await mutateProfileCatalog(async (current) => {
         const selected = current.profiles.find((candidate) => candidate.profileId === routeProfile.profileId);
         if (!selected || runtime.current !== priorRuntime) {
@@ -8635,16 +9050,32 @@ export function App() {
         }
         nextProfile = await bindProfileToRuntime(selected, candidateRuntime);
         const next = nextProfile === selected ? current : replaceProfile(current, nextProfile);
-        nextSession = await createProfileSession(candidateRuntime, nextProfile, next);
+        if (reconnectIntent) {
+          reconnectSession = await prepareReconnectSession(
+            reconnectIntent,
+            candidateRuntime,
+            nextProfile,
+            next,
+            reconnectSignal,
+          );
+        } else {
+          nextSession = await createProfileSession(candidateRuntime, nextProfile, next);
+        }
         return next;
       });
-      if (!nextProfile || !nextSession) throw new Error("The encrypted Chutes session was not created.");
+      if (!nextProfile || (!nextSession && !reconnectSession)) {
+        throw new Error("The encrypted Chutes connection did not produce a conversation transition.");
+      }
       if (
         runtime.current !== priorRuntime
         || chutesAuthorityRevision.current !== expectedChutesAuthorityRevision
       ) {
         throw new Error("The Chutes credential authority changed before the new session could commit.");
       }
+      const reconnectSelection = reconnectSession && reconnectIntent
+        ? await selectPreparedReconnectSession(reconnectSession, reconnectIntent, candidateRuntime, reconnectSignal)
+        : undefined;
+      if (reconnectSession && !reconnectSelection) throw new Error("The requested conversation selection did not commit.");
 
       runtime.current = committedRuntime;
       chutesAvailability.current = nextAvailability;
@@ -8664,21 +9095,31 @@ export function App() {
       }
       activeExternalRouteRef.current = undefined;
       setActiveExternalRoute(undefined);
-      const activated = await activateSession(nextSession);
-      setSessionRevision((value) => value + 1);
-      setMessages([
-        {
-          ...welcomeMessage,
-          id: randomUuid(),
-          content: connectionMetadata.posture === "encrypted-attested"
-            ? `Connected to ${model.id} through Chutes E2EE v1 with a fail-closed proof gate. Before each encrypted invocation, Airship must locally accept fresh endpoint evidence and its key binding. Turn receipts show the evidence actually established; this connection policy alone is not proof.`
-            : `Connected to ${model.id} through Chutes E2EE v1 with the verify-and-record evidence policy. Payloads use E2EE; endpoint evidence is acquired and evaluated after completed invocations. Missing or partial verifier evidence stays visibly unverified and does not block encrypted chat.`,
-        },
-      ]);
-      setEventCount(activated.headSequence);
-      setLastReceipt(undefined);
-      setSessionLifecycle(READY_SESSION_LIFECYCLE);
-      setTranscriptBoundary(undefined);
+      if (reconnectSession) {
+        publishSelectedAuditedSession(
+          reconnectSession.detail,
+          reconnectSelection!,
+          reconnectSession.presentation,
+          `Reconnected ${model.id} · audited conversation resumed`,
+        );
+        setComposerNotice(undefined);
+      } else {
+        const activated = await activateSession(nextSession!);
+        setSessionRevision((value) => value + 1);
+        setMessages([
+          {
+            ...welcomeMessage,
+            id: randomUuid(),
+            content: connectionMetadata.posture === "encrypted-attested"
+              ? `Connected to ${model.id} through Chutes E2EE v1 with a fail-closed proof gate. Before each encrypted invocation, Airship must locally accept fresh endpoint evidence and its key binding. Turn receipts show the evidence actually established; this connection policy alone is not proof.`
+              : `Connected to ${model.id} through Chutes E2EE v1 with the verify-and-record evidence policy. Payloads use E2EE; endpoint evidence is acquired and evaluated after completed invocations. Missing or partial verifier evidence stays visibly unverified and does not block encrypted chat.`,
+          },
+        ]);
+        setEventCount(activated.headSequence);
+        setLastReceipt(undefined);
+        setSessionLifecycle(READY_SESSION_LIFECYCLE);
+        setTranscriptBoundary(undefined);
+      }
       const evidenceClient = await installAttestationEvidenceClient(
         credential,
         connectionMetadata.credentialKind,
@@ -8707,9 +9148,11 @@ export function App() {
       // wrote one, so a connected user kept being told to finish what they had
       // already finished.
       setOauthCallbackStatus(undefined);
-      setRuntimeStatus(encryptedSessionReadyStatus(connectionMetadata.posture));
+      setRuntimeStatus(reconnectSession
+        ? `Audited conversation resumed · ${encryptedSessionReadyStatus(connectionMetadata.posture)}`
+        : encryptedSessionReadyStatus(connectionMetadata.posture));
       navigate("chat");
-    });
+    }, reconnectIntent);
   }
 
   function releaseChutesAuthority(status: string): void {
@@ -8795,7 +9238,8 @@ export function App() {
     }
     const model = availableModels.find((candidate) => candidate.id === modelId);
     if (!model) throw new Error("The selected model is not in the active authoritative Chutes catalog snapshot.");
-    if (model.id === connection.model && activeChutesConnection) return;
+    const reconnectIntent = accessReconnectIntent;
+    if (model.id === connection.model && activeChutesConnection && !reconnectIntent) return;
     const transport = chutesTransport.current;
     const connectionId = chutesConnectionId.current;
     const expectedAuthorityRevision = chutesAuthorityRevision.current;
@@ -8807,10 +9251,12 @@ export function App() {
     }
 
     const priorRuntime = runtime.current;
-    return runInferenceRouteTransition(async () => {
-      setRuntimeStatus("Forking a model-pinned session");
+    return runInferenceRouteTransition(async (reconnectSignal) => {
+      setRuntimeStatus(reconnectIntent
+        ? "Verifying the requested Chutes conversation"
+        : "Forking a model-pinned session");
       activeTurn.current?.abort(new DOMException("Inference model is changing.", "AbortError"));
-      await transport.verifyModelAccess(model.id);
+      await transport.verifyModelAccess(model.id, reconnectSignal);
       if (runtime.current !== priorRuntime) {
         throw new Error("The browser runtime changed while Chutes model access was being checked.");
       }
@@ -8852,6 +9298,7 @@ export function App() {
       };
       let nextSession: SessionRecord | undefined;
       let nextProfile: ProfileRevision | undefined;
+      let reconnectSession: Awaited<ReturnType<typeof prepareReconnectSession>> | undefined;
       await mutateProfileCatalog(async (current) => {
         const selected = current.profiles.find((candidate) => candidate.profileId === routeProfile.profileId);
         if (!selected || runtime.current !== priorRuntime) {
@@ -8859,10 +9306,22 @@ export function App() {
         }
         nextProfile = await bindProfileToRuntime(selected, candidateRuntime);
         const next = nextProfile === selected ? current : replaceProfile(current, nextProfile);
-        nextSession = await createProfileSession(candidateRuntime, nextProfile, next);
+        if (reconnectIntent) {
+          reconnectSession = await prepareReconnectSession(
+            reconnectIntent,
+            candidateRuntime,
+            nextProfile,
+            next,
+            reconnectSignal,
+          );
+        } else {
+          nextSession = await createProfileSession(candidateRuntime, nextProfile, next);
+        }
         return next;
       });
-      if (!nextProfile || !nextSession) throw new Error("The model-pinned session was not created.");
+      if (!nextProfile || (!nextSession && !reconnectSession)) {
+        throw new Error("The Chutes route did not produce a conversation transition.");
+      }
       if (
         runtime.current !== priorRuntime
         || chutesAuthorityRevision.current !== expectedAuthorityRevision
@@ -8872,34 +9331,52 @@ export function App() {
       ) {
         throw new Error("The Chutes credential authority changed before the model switch could commit.");
       }
+      const reconnectSelection = reconnectSession && reconnectIntent
+        ? await selectPreparedReconnectSession(reconnectSession, reconnectIntent, candidateRuntime, reconnectSignal)
+        : undefined;
+      if (reconnectSession && !reconnectSelection) throw new Error("The requested conversation selection did not commit.");
 
       runtime.current = committedRuntime;
       chutesAvailability.current = nextAvailability;
       activeExternalRouteRef.current = undefined;
       setActiveExternalRoute(undefined);
-      const activated = await activateSession(nextSession);
-      setSessionRevision((value) => value + 1);
-      setMessages([{
-        ...welcomeMessage,
-        id: randomUuid(),
-        content: `${model.id} is active in a new pinned session. The prior session and its receipt chain were not rewritten.`,
-      }]);
-      setEventCount(activated.headSequence);
-      setLastReceipt(undefined);
-      setSessionLifecycle(READY_SESSION_LIFECYCLE);
-      setTranscriptBoundary(undefined);
+      if (reconnectSession) {
+        publishSelectedAuditedSession(
+          reconnectSession.detail,
+          reconnectSelection!,
+          reconnectSession.presentation,
+          `Reconnected ${model.id} · audited conversation resumed`,
+        );
+        setComposerNotice(undefined);
+      } else {
+        const activated = await activateSession(nextSession!);
+        setSessionRevision((value) => value + 1);
+        setMessages([{
+          ...welcomeMessage,
+          id: randomUuid(),
+          content: `${model.id} is active in a new pinned session. The prior session and its receipt chain were not rewritten.`,
+        }]);
+        setEventCount(activated.headSequence);
+        setLastReceipt(undefined);
+        setSessionLifecycle(READY_SESSION_LIFECYCLE);
+        setTranscriptBoundary(undefined);
+      }
       attestationOperation.current += 1;
       attestationClient.current?.cancel();
       attestationClient.current?.clear();
       setAttestationPresentation(undefined);
       setInvocationTelemetry(undefined);
       setConnection(nextConnection);
-      setRuntimeStatus(encryptedSessionReadyStatus(connection.posture));
-    });
+      setRuntimeStatus(reconnectSession
+        ? `Audited conversation resumed · ${encryptedSessionReadyStatus(connection.posture)}`
+        : encryptedSessionReadyStatus(connection.posture));
+      if (reconnectSession) navigate("chat");
+    }, reconnectIntent);
   }
 
   async function activateExternalInference(
     route: ActivatedInferenceRoute,
+    callerSignal?: AbortSignal,
     transitionAlreadyClaimed = false,
   ): Promise<void> {
     const routeProfile = activeProfileRef.current;
@@ -8912,14 +9389,17 @@ export function App() {
       throw new Error("The provider, credential generation, and model do not form one immutable route.");
     }
     const priorRuntime = runtime.current;
+    const reconnectIntent = accessReconnectIntent;
     const expectedChutesAuthorityRevision = chutesAuthorityRevision.current;
-    const activate = async () => {
+    const activate = async (reconnectSignal?: AbortSignal) => {
       const fabric = inferenceFabric.current;
       if (!fabric || fabric.preflight(route.pin).transport !== route.transport) {
         throw new Error("The selected inference route changed before its session could be pinned.");
       }
       activeTurn.current?.abort(new DOMException("Inference route is changing.", "AbortError"));
-      setRuntimeStatus(`Creating a ${route.pin.provider.label} session`);
+      setRuntimeStatus(reconnectIntent
+        ? `Verifying the requested ${route.pin.provider.label} conversation`
+        : `Creating a ${route.pin.provider.label} session`);
       const binding = coreInferenceBinding(route);
       const committedRuntime: Runtime = {
         ...priorRuntime,
@@ -8941,6 +9421,7 @@ export function App() {
       };
       let nextSession: SessionRecord | undefined;
       let nextProfile: ProfileRevision | undefined;
+      let reconnectSession: Awaited<ReturnType<typeof prepareReconnectSession>> | undefined;
       await mutateProfileCatalog(async (current) => {
         const selected = current.profiles.find((candidate) => candidate.profileId === routeProfile.profileId);
         if (!selected || runtime.current !== priorRuntime) {
@@ -8948,10 +9429,22 @@ export function App() {
         }
         nextProfile = await bindProfileToRuntime(selected, candidateRuntime);
         const next = nextProfile === selected ? current : replaceProfile(current, nextProfile);
-        nextSession = await createProfileSession(candidateRuntime, nextProfile, next);
+        if (reconnectIntent) {
+          reconnectSession = await prepareReconnectSession(
+            reconnectIntent,
+            candidateRuntime,
+            nextProfile,
+            next,
+            reconnectSignal,
+          );
+        } else {
+          nextSession = await createProfileSession(candidateRuntime, nextProfile, next);
+        }
         return next;
       });
-      if (!nextProfile || !nextSession) throw new Error("The provider-pinned session was not created.");
+      if (!nextProfile || (!nextSession && !reconnectSession)) {
+        throw new Error("The provider route did not produce a conversation transition.");
+      }
       if (
         runtime.current !== priorRuntime
         || chutesAuthorityRevision.current !== expectedChutesAuthorityRevision
@@ -8959,30 +9452,44 @@ export function App() {
       ) {
         throw new Error("The inference connection directory changed before activation committed.");
       }
+      const reconnectSelection = reconnectSession && reconnectIntent
+        ? await selectPreparedReconnectSession(reconnectSession, reconnectIntent, candidateRuntime, reconnectSignal)
+        : undefined;
+      if (reconnectSession && !reconnectSelection) throw new Error("The requested conversation selection did not commit.");
 
       runtime.current = committedRuntime;
       activeExternalRouteRef.current = route;
       setActiveExternalRoute(route);
-      const activated = await activateSession(nextSession);
-      setSessionRevision((value) => value + 1);
-      setMessages([{
-        ...welcomeMessage,
-        id: randomUuid(),
-        // "through <label>." became "Boundary: <label>." when the two boundary
-        // sentences were merged: the surviving label is the Connect route's
-        // titled form, and a titled clause mid-sentence read as a typo.
-        content: `${route.pin.provider.label}/${route.pin.model.id} is active in a new immutable session. Boundary: ${providerBoundaryLabel(route.pin.provider.transportBoundary)}. Its connection generation and model are pinned; existing conversations were not retargeted.`,
-      }]);
-      setEventCount(activated.headSequence);
-      setLastReceipt(undefined);
-      setSessionLifecycle(READY_SESSION_LIFECYCLE);
-      setTranscriptBoundary(undefined);
-      setRuntimeStatus(`${route.pin.provider.label} session ready · invocation checked`);
+      if (reconnectSession) {
+        publishSelectedAuditedSession(
+          reconnectSession.detail,
+          reconnectSelection!,
+          reconnectSession.presentation,
+          `Reconnected ${route.pin.provider.label}/${route.pin.model.id} · audited conversation resumed`,
+        );
+        setComposerNotice(undefined);
+      } else {
+        const activated = await activateSession(nextSession!);
+        setSessionRevision((value) => value + 1);
+        setMessages([{
+          ...welcomeMessage,
+          id: randomUuid(),
+          // "through <label>." became "Boundary: <label>." when the two boundary
+          // sentences were merged: the surviving label is the Connect route's
+          // titled form, and a titled clause mid-sentence read as a typo.
+          content: `${route.pin.provider.label}/${route.pin.model.id} is active in a new immutable session. Boundary: ${providerBoundaryLabel(route.pin.provider.transportBoundary)}. Its connection generation and model are pinned; existing conversations were not retargeted.`,
+        }]);
+        setEventCount(activated.headSequence);
+        setLastReceipt(undefined);
+        setSessionLifecycle(READY_SESSION_LIFECYCLE);
+        setTranscriptBoundary(undefined);
+        setRuntimeStatus(`${route.pin.provider.label} session ready · invocation checked`);
+      }
       navigate("chat");
     };
     return transitionAlreadyClaimed
-      ? activate()
-      : runInferenceRouteTransition(activate);
+      ? activate(callerSignal)
+      : runInferenceRouteTransition(activate, reconnectIntent, callerSignal);
   }
 
   async function switchExternalModel(modelId: string): Promise<void> {
@@ -8996,7 +9503,7 @@ export function App() {
         current.pin.connection.id,
         modelId,
       );
-      await activateExternalInference(route, true);
+      await activateExternalInference(route, undefined, true);
     });
   }
 
@@ -9240,8 +9747,9 @@ export function App() {
       // Archiving the profile the cockpit is still running on is the one
       // outcome this path may never produce, so the switch has to have
       // actually committed — not merely have been attempted.
-      if (!await changeProfile(replacementProfileId, true)) {
-        throw new Error("The replacement profile did not activate, so the active profile was not archived. The status line names the reason.");
+      const failure = await changeProfile(replacementProfileId, true);
+      if (failure) {
+        throw new Error(`The active profile was not archived. ${failure}`);
       }
     }
     await mutateProfileCatalog((current) => archiveProfileRevision(current, profileIdToDelete));
@@ -9396,6 +9904,7 @@ export function App() {
      * running the old UI against the new profile's workspace.
      */
     sourceRuntime = runtime.current,
+    signal?: AbortSignal,
   ): Promise<Readonly<{
     report: SessionAuditReport;
     session: SessionRecord;
@@ -9403,18 +9912,111 @@ export function App() {
   }>> {
     const activeRuntime = sourceRuntime;
     if (!activeRuntime) throw new Error("The local runtime is not ready.");
+    signal?.throwIfAborted();
     const [{ auditSessionHistory }, session] = await Promise.all([
-      loadDeferredCapabilities(),
-      activeRuntime.journal.getSession(targetSessionId),
+      abortableReconnectRead(loadDeferredCapabilities(), signal),
+      activeRuntime.journal.getSession(targetSessionId, signal),
     ]);
+    signal?.throwIfAborted();
     if (!session) throw new Error("The active session is no longer available in this page runtime.");
     if (expectedProfileId) requireProfileOwnedSession(session, expectedProfileId, "open");
-    const events = await activeRuntime.journal.readEvents(targetSessionId);
+    const events = await activeRuntime.journal.readEvents(targetSessionId, 0, signal);
+    const report = await abortableReconnectRead(auditSessionHistory({ session, events }), signal);
+    signal?.throwIfAborted();
     return Object.freeze({
-      report: await auditSessionHistory({ session, events }),
+      report,
       session,
       events: boundedSessionPresentationEvents(events),
     });
+  }
+
+  /**
+   * Proves that one provider activation may return to the addressed conversation.
+   *
+   * The URL is only intent. The journal record, current Profile policy, complete
+   * audit, and exact inference binding all have to agree before the activation
+   * transaction is allowed to skip session creation.
+   */
+  async function prepareReconnectSession(
+    intent: AccessReconnectIntent,
+    candidateRuntime: Runtime,
+    candidateProfile: ProfileRevision,
+    candidateCatalog: ProfileCatalog,
+    signal?: AbortSignal,
+  ): Promise<Readonly<{
+    detail: SessionLibraryDetail;
+    audited: Awaited<ReturnType<typeof loadAuditedSessionSnapshot>>;
+    presentation: SessionMessagePresentation;
+  }>> {
+    signal?.throwIfAborted();
+    const target = await candidateRuntime.journal.getSession(intent.returnSessionId, signal);
+    if (!target) throw new Error("The requested conversation is no longer available in this workspace. No new conversation was created.");
+    requireProfileOwnedSession(target, candidateProfile.profileId, "open");
+    const pinnedBinding = target.manifest.inferenceBinding;
+    if (!pinnedBinding) {
+      throw new Error("This older conversation does not record an exact inference connection generation, so this return request cannot continue it. No new conversation was created.");
+    }
+    const pinnedLane = accessLaneForProvider(pinnedBinding.providerId);
+    if (
+      pinnedLane !== intent.lane
+      || target.manifest.model !== intent.model
+      || pinnedBinding.authMethod !== intent.method
+      || pinnedBinding.connectionId !== intent.connectionId
+      || pinnedBinding.connectionGeneration !== intent.connectionGeneration
+    ) {
+      throw new Error("The return request no longer matches this conversation's immutable provider pin. No new conversation was created.");
+    }
+
+    const candidateManifest = await createProfileSessionManifest(
+      candidateRuntime,
+      candidateProfile,
+      candidateCatalog,
+    );
+    signal?.throwIfAborted();
+    const library = new SessionLibrary(candidateRuntime.journal);
+    const detail = await library.inspect(
+      target.id,
+      sessionManifestRuntime(candidateRuntime, candidateManifest),
+      signal,
+    );
+    if (detail.compatibility?.action !== "resume") {
+      const reasons = detail.compatibility?.reasons.map((reason) => reason.message).join(" ");
+      throw new Error(
+        `${detail.compatibility?.label ?? "The requested conversation cannot resume through this route."}${reasons ? ` ${reasons}` : ""} No new conversation was created.`,
+      );
+    }
+    const audited = await loadAuditedSessionSnapshot(
+      target.id,
+      candidateProfile.profileId,
+      candidateRuntime,
+      signal,
+    );
+    if (audited.report.status !== "verified") {
+      throw new Error("The requested conversation failed its complete local journal audit and was not resumed. No new conversation was created.");
+    }
+    if (
+      audited.session.headSequence !== detail.session.headSequence
+      || audited.session.headDigest !== detail.session.headDigest
+    ) {
+      throw new Error("The requested conversation changed during return verification. Retry against its new immutable head; no new conversation was created.");
+    }
+    const presentation = await stageAuditedSessionPresentation(detail, audited, signal);
+    return Object.freeze({ detail, audited, presentation });
+  }
+
+  async function selectPreparedReconnectSession(
+    prepared: Awaited<ReturnType<typeof prepareReconnectSession>>,
+    intent: AccessReconnectIntent,
+    candidateRuntime: Runtime,
+    signal?: AbortSignal,
+  ): Promise<SessionRecord> {
+    requireCurrentReconnectIntent(intent);
+    signal?.throwIfAborted();
+    return selectSessionForActivation(
+      prepared.audited.session,
+      candidateRuntime,
+      signal,
+    );
   }
 
   /*
@@ -9440,13 +10042,17 @@ export function App() {
     return Object.freeze({ report: audited.report, events: audited.events, title: audited.session.title });
   }
 
-  async function publishAuditedSession(
+  async function stageAuditedSessionPresentation(
     fresh: SessionLibraryDetail,
     audited: Awaited<ReturnType<typeof loadAuditedSessionSnapshot>>,
-    status: string,
-  ): Promise<void> {
-    const { describeSessionPresentationFault, presentSessionMessages } = await loadDeferredCapabilities();
-    const presentation = (() => {
+    signal?: AbortSignal,
+  ): Promise<SessionMessagePresentation> {
+    const { describeSessionPresentationFault, presentSessionMessages } = await abortableReconnectRead(
+      loadDeferredCapabilities(),
+      signal,
+    );
+    signal?.throwIfAborted();
+    return (() => {
       try {
         return presentSessionMessages({
           session: audited.session,
@@ -9459,7 +10065,27 @@ export function App() {
         throw new Error(`“${fresh.session.title}” could not be replayed: ${describeSessionPresentationFault(error)} Its history is intact — open Proof.`);
       }
     })();
-    const activated = await activateSession(audited.session);
+  }
+
+  async function publishAuditedSession(
+    fresh: SessionLibraryDetail,
+    audited: Awaited<ReturnType<typeof loadAuditedSessionSnapshot>>,
+    status: string,
+    stagedPresentation?: SessionMessagePresentation,
+  ): Promise<void> {
+    const presentation = stagedPresentation
+      ?? await stageAuditedSessionPresentation(fresh, audited);
+    const selected = await selectSessionForActivation(audited.session);
+    publishSelectedAuditedSession(fresh, selected, presentation, status);
+  }
+
+  function publishSelectedAuditedSession(
+    fresh: SessionLibraryDetail,
+    selected: SessionRecord,
+    presentation: SessionMessagePresentation,
+    status: string,
+  ): void {
+    const activated = publishActiveSessionSelection(selected);
     setMessages(presentation.rows.length + presentation.markers.length > 0
       ? transcriptMessagesFromPresentation(presentation)
       : [{ ...welcomeMessage, id: randomUuid(), content: `Resumed ${fresh.session.title}. ${welcomeMessage.content}` }]);
@@ -9656,8 +10282,12 @@ export function App() {
     navigate("proof", proofHash(selection));
   }
 
-  if (!catalog || !activeProfile || !activeTheme) {
-    return <BootScreen status={runtimeStatus} />;
+  if (bootFailure || !catalog || !activeProfile || !activeTheme) {
+    return <BootScreen
+      status={runtimeStatus}
+      failure={bootFailure}
+      onReload={() => window.location.reload()}
+    />;
   }
   // `platformOverlayOpen` is computed once, next to the navigation-jump gate.
   const sessionDurability = describeSessionDurability({
@@ -9874,10 +10504,10 @@ export function App() {
               chat route: `document.body.innerText.includes("⌘K")` was false and
               the only carrier was this button's `title` — invisible to touch
               and to anyone who does not hover a bare ⌘ glyph. */}
-          <button class="icon-button command-palette-button" type="button" aria-label="Open command palette" title={`Command palette · ⌘K · ${SHORTCUT_SHEET_CHORD} for all shortcuts`} onClick={() => setPaletteOpen(true)}>
+          <button class="icon-button command-palette-button" type="button" aria-label="Open command palette" title={`Command palette · ⌘K · ${SHORTCUT_SHEET_CHORD} for all shortcuts`} onClick={() => requestDeferredOverlay("Command Center")}>
             <kbd aria-hidden="true">⌘K</kbd>
           </button>
-          <button class="icon-button" type="button" aria-label="Open Preferences" onClick={() => setPreferencesOpen(true)}>
+          <button class="icon-button" type="button" aria-label="Open Preferences" onClick={() => requestDeferredOverlay("Preferences")}>
             <Icon name="settings" />
           </button>
           <button class="icon-button" type="button" aria-label="Open proof" onClick={() => openSessionProof()}>
@@ -10121,7 +10751,10 @@ export function App() {
                       onProof={() => entry.item.receipt && openReceiptProof(entry.item.receipt)}
                       onAttestations={() => entry.item.receipt ? openReceiptAttestation(entry.item.receipt) : openAttestationEvidence()}
                       attestation={describeMessageAttestation(entry.item.receipt, attestationRecords, attestationFailure, attestationNow)}
-                      onCopy={() => void navigator.clipboard.writeText(entry.item.parts?.length ? messagePlainText(entry.item.parts) : entry.item.content)}
+                      onCopy={async () => {
+                        if (!navigator.clipboard) throw new Error("Clipboard access is unavailable in this browser context.");
+                        await navigator.clipboard.writeText(entry.item.parts?.length ? messagePlainText(entry.item.parts) : entry.item.content);
+                      }}
                       onRetry={() => void forkFromMessage(entry.item, "retry")}
                       /* Recovery is not a privilege of durability. A failed
                          turn whose branch boundary never landed still holds the
@@ -10643,16 +11276,14 @@ export function App() {
             activeProfileId={profileId}
             /* Only a switch that actually committed opens Chat. A refused one
                used to throw past this line, which is what kept the editor on
-               screen; now that the refusal is reported instead of thrown, the
-               boolean is what has to hold the editor open. */
+               screen; now the explicit outcome is what holds the editor open. */
             onActivate={async (id) => {
               // The outcome is returned, not inferred. `requestProfileChange`
-              // cannot reject — it converts every refusal into the topbar runtime
-              // line and `false` — so a `Promise<void>` left the editor with
-              // nothing but an unchanged route to read a refusal from.
-              const activated = await requestProfileChange(id, true);
-              if (activated) navigate("chat");
-              return activated;
+              // cannot reject — it returns the same failure sentence sent to the
+              // runtime line — so this route can remain open and explain it.
+              const failure = await requestProfileChange(id, true);
+              if (!failure) navigate("chat");
+              return failure;
             }}
             onSave={saveProfileRevision}
             onFork={forkProfile}
@@ -10665,8 +11296,8 @@ export function App() {
         {view === "capabilities" ? CapabilitiesScreen ? (
           <CapabilitiesScreen inspect={inspectExecutionCapabilities} inspectBrowser={inspectBrowserCapabilities} inspectExtension={observeExtensionBridge} subscribeBrowser={subscribeBrowserCapabilities} onCommand={openCapabilityCommand} onOpenSkills={() => navigate("skills")} />
         ) : capabilitiesViewError ? <RouteFailure title="Capabilities" message={capabilitiesViewError} onRetry={retryDeferredChunk} /> : <RouteSkeleton label="Inspecting browser capabilities" /> : null}
-        {view === "skills" ? (
-          <SkillsManagerView
+        {view === "skills" ? SkillsScreen ? (
+          <SkillsScreen
             catalog={catalog}
             catalogDurability={runtime.current?.profiles.durability ?? "ephemeral"}
             activeProfileId={profileId}
@@ -10675,14 +11306,26 @@ export function App() {
             onSaveSkill={saveSkillRevision}
             onDeleteSkill={deleteSkillRevision}
             onApply={async (id) => {
-              const activated = await requestProfileChange(id, true);
-              if (activated) navigate("chat");
-              return activated;
+              const failure = await requestProfileChange(id, true);
+              if (!failure) navigate("chat");
+              return failure;
             }}
-            onStartConversation={() => void createConversation()}
+            onStartConversation={async () => {
+              try {
+                const created = await createConversation();
+                return created
+                  ? undefined
+                  : "A new conversation could not be started while the current session was changing. Try again.";
+              } catch (error) {
+                return `New conversation failed: ${error instanceof Error ? error.message : String(error)}`;
+              }
+            }}
+            startConversationDisabledReason={busy
+              ? "Stop the active turn before starting a new conversation."
+              : undefined}
             scope={profileHubScope}
           />
-        ) : null}
+        ) : skillsViewError ? <RouteFailure title="Skills" message={skillsViewError} onRetry={retryDeferredChunk} /> : <RouteSkeleton label="Loading Skills" /> : null}
         {view === "vault" ? (
           <div class="work-view">
             {VaultScreen ? <VaultScreen
@@ -10824,15 +11467,22 @@ export function App() {
           <AccessScreen
             connection={connection}
             online={online}
+            reconnectIntent={accessReconnectIntent}
+            chutesReconnectExact={chutesReconnectExact}
+            onAbandonReconnect={abandonReconnectRequest}
             connectionActive={Boolean(activeChutesConnection)}
-            onUseConnection={isChutesConnected(connection)
-              ? () => switchChutesModel(connection.model)
+            onUseConnection={isChutesConnected(connection) && (!accessReconnectIntent || chutesReconnectExact)
+              ? () => switchChutesModel(
+                  accessReconnectIntent?.lane === "chutes"
+                    ? accessReconnectIntent.model
+                    : connection.model,
+                )
               : undefined}
             onConnect={({ connection: nextConnection, transport, model, models, credential }) =>
               connectChutes(transport, model, models, credential, nextConnection)}
             onDisconnect={disconnectChutes}
             models={availableModels}
-            onSelectModel={switchChutesModel}
+            onSelectModel={accessReconnectIntent ? undefined : switchChutesModel}
             onInvocationTelemetry={setInvocationTelemetry}
             oauthNotice={oauthCallbackStatus ? {
               tone: oauthCallbackStatus.kind === "error"
@@ -10865,6 +11515,8 @@ export function App() {
               <ProviderConnectionsScreen
                 online={online}
                 activeBinding={activeInferenceBinding}
+                reconnectIntent={accessReconnectIntent}
+                onAbandonReconnect={abandonReconnectRequest}
                 onActivate={activateExternalInference}
                 onDisconnect={disconnectExternalInference}
               />
@@ -10884,11 +11536,99 @@ export function App() {
         onNavigate={navigatePrimary}
         onOpenMore={() => setMobileMoreOpen(true)}
         onCloseMore={() => setMobileMoreOpen(false)}
-        onOpenCommandPalette={() => { setMobileMoreOpen(false); setPaletteOpen(true); }}
-        onOpenSettings={() => setPreferencesOpen(true)}
+        onOpenCommandPalette={() => { setMobileMoreOpen(false); requestDeferredOverlay("Command Center"); }}
+        onOpenSettings={() => requestDeferredOverlay("Preferences")}
       />
       {ApprovalDockView ? <ApprovalDockView broker={approvalBroker} /> : null}
-      {Overlays ? <Overlays.CommandPalette open={paletteOpen} entries={paletteEntriesWithRail} onClose={() => setPaletteOpen(false)} onOpenShortcuts={() => setShortcutsOpen(true)} /> : null}
+      {deferredOverlayNoticeActive
+        && deferredOverlayNoticePositionReady
+        && !approvalDockWaitingVisible
+        && !(approvalDockLoadFailed && approvalDockBlockedRequests > 0) ? (
+        <div
+          class="pwa-update"
+          role={deferredOverlayFailure ? "alert" : "status"}
+          aria-atomic="true"
+          style={{ "--pwa-update-floor": `${deferredOverlayNoticeFloor}px` }}
+        >
+          <span>
+            <strong>{deferredOverlayFailure
+              ? `${deferredOverlayFailure} unavailable`
+              : `Opening ${requestedDeferredOverlay ?? "controls"}…`}</strong>
+            <small>{deferredOverlayFailure
+              ? deferredOverlayRetryStarted
+                ? "The retry did not load the interface. Reload Airship to fetch a fresh application; current workspace and conversation state stay intact."
+                : "The interface code did not load. The shell remains usable and no preference, navigation, or shortcut action was applied."
+              : "Loading the interface. You can cancel and continue using the shell."}</small>
+          </span>
+          {deferredOverlayFailure ? deferredOverlayRetryStarted ? (
+            <button ref={deferredOverlayRecoveryAction} type="button" onClick={() => window.location.reload()}>Reload Airship</button>
+          ) : (
+            <button ref={deferredOverlayRecoveryAction} type="button" onClick={() => {
+              const failed = deferredOverlayFailure;
+              setDeferredOverlayFailure(undefined);
+              setDeferredOverlayRetryStarted(true);
+              requestDeferredOverlay(failed);
+            }}>{`Retry ${deferredOverlayFailure}`}</button>
+          ) : (
+            <button type="button" onClick={() => {
+              requestDeferredOverlay();
+            }}>Cancel</button>
+          )}
+        </div>
+      ) : null}
+      {approvalDockWaitingVisible
+        && approvalDockFailurePositionReady ? (
+        <div
+          class="pwa-update"
+          role="status"
+          aria-atomic="true"
+          style={{ "--pwa-update-floor": `${approvalDockFailureFloor}px` }}
+        >
+          <span>
+            <strong>Approval controls are loading</strong>
+            <small>{`${approvalDockWaitingRequests === 1 ? "One capability request is" : `${approvalDockWaitingRequests} capability requests are`} waiting. No effect has run. You can deny ${approvalDockWaitingRequests === 1 ? "it" : "them"} now or wait for the controls.`}</small>
+          </span>
+          <button type="button" onClick={() => {
+            approvalBroker.denyAll();
+            requestAnimationFrame(() => {
+              (textarea.current ?? mainRegion.current)?.focus({ preventScroll: true });
+            });
+          }}>Deny pending request</button>
+        </div>
+      ) : null}
+      {approvalDockFailureVisible
+        && approvalDockFailurePositionReady
+        && !approvalDockWaitingVisible
+        && (!deferredOverlayNoticeActive || approvalDockBlockedRequests > 0) ? (
+        <div
+          class="pwa-update"
+          role="alert"
+          aria-atomic="true"
+          style={{ "--pwa-update-floor": `${approvalDockFailureFloor}px` }}
+        >
+          <span>
+            <strong>{approvalDockBlockedRequests > 0
+              ? "Approval unavailable · effect blocked"
+              : "Approval controls unavailable"}</strong>
+            <small>{approvalDockBlockedRequests > 0
+              ? `${approvalDockBlockedRequests === 1 ? "The pending capability request was" : `${approvalDockBlockedRequests} pending capability requests were`} denied because approval controls did not load. ${approvalDockBlockedRequests === 1 ? "Its effect" : "Their effects"} did not run; workspace and conversation state were kept. Retry the controls, then run the action again.`
+              : `${APPROVAL_DOCK_LOAD_FAILURE} Retry the controls before running the action again.`}</small>
+            {approvalDockRetryStarted ? <small>{approvalDockLoading
+              ? "Retrying approval controls now. Reload Airship if this notice does not clear."
+              : "Approval controls still did not load. Reload Airship to fetch the current application."}</small> : null}
+          </span>
+          {approvalDockRetryStarted ? (
+            <button type="button" onClick={() => window.location.reload()}>Reload Airship</button>
+          ) : (
+            <button type="button" onClick={() => {
+              approvalDockRetryNeedsFocusReturn.current = true;
+              setApprovalDockRetryStarted(true);
+              beginApprovalDockLoad();
+            }}>Retry approval controls</button>
+          )}
+        </div>
+      ) : null}
+      {Overlays ? <Overlays.CommandPalette open={paletteOpen} entries={paletteEntriesWithRail} onClose={() => requestDeferredOverlay()} onOpenShortcuts={() => requestDeferredOverlay("Keyboard shortcuts")} /> : null}
       {/* The keyboard layer's only printed form. Eleven chords shipped taught
           nowhere: `?`, `F1` and `Shift+/` all opened nothing, Preferences had no
           keyboard section, and the palette could not find the word "shortcut".
@@ -10898,7 +11638,7 @@ export function App() {
         <ShortcutSheetView
           open={shortcutsOpen}
           profiles={managedProfiles(catalog).map((profile) => ({ name: profile.name }))}
-          onClose={() => setShortcutsOpen(false)}
+          onClose={() => requestDeferredOverlay()}
         />
       ) : null}
       {Overlays ? <Overlays.PreferencesDialog open={preferencesOpen} value={preferences} onChange={(next: PreferenceOverrides) => {
@@ -10907,10 +11647,10 @@ export function App() {
           void changeVaultProvider(next.vaultBackend);
         }
         else setPreferences(next);
-      }} onClose={() => setPreferencesOpen(false)} vaultProviderSwitching={vaultProviderSwitching} vaultAdopted={vaultRuntimeAdopted} profileApproval={{
+      }} onClose={() => requestDeferredOverlay()} vaultProviderSwitching={vaultProviderSwitching} vaultAdopted={vaultRuntimeAdopted} profileApproval={{
         mode: activeApprovalMode,
         onManage: () => {
-          if (openProfileManager(profileId)) setPreferencesOpen(false);
+          if (openProfileManager(profileId)) requestDeferredOverlay();
         },
       }} /> : null}
       <TrustPostureSheet open={trustSheetOpen} axes={trustAxes} conversationFacts={conversationFacts} onClose={() => setTrustSheetOpen(false)} onNavigate={navigatePrimary} />
@@ -11153,6 +11893,59 @@ function coreInferenceBinding(
     transportBoundary: route.pin.provider.transportBoundary,
     modelId: route.pin.model.id,
     boundAt: route.pin.pinnedAt,
+  });
+}
+
+/** The visible URL remains the authority for an in-flight return transaction. */
+function requireCurrentReconnectIntent(intent: AccessReconnectIntent): void {
+  const current = typeof window === "undefined"
+    ? undefined
+    : parseAccessReconnectIntent(window.location.hash);
+  if (!reconnectIntentsEqual(current, intent)) {
+    throw new Error("The return request was abandoned or changed. The conversation and inference route were left unchanged.");
+  }
+}
+
+function reconnectSelectionGuard(intent: AccessReconnectIntent, callerSignal?: AbortSignal): Readonly<{
+  signal: AbortSignal;
+  dispose(): void;
+}> {
+  const controller = new AbortController();
+  const cancelIfChanged = () => {
+    const current = parseAccessReconnectIntent(window.location.hash);
+    if (!reconnectIntentsEqual(current, intent)) {
+      controller.abort(new DOMException("Return request changed before selection.", "AbortError"));
+    }
+  };
+  const cancelFromCaller = () => {
+    controller.abort(callerSignal?.reason ?? new DOMException("Provider activation cancelled.", "AbortError"));
+  };
+  const navigationEvents = ["hashchange", "popstate", "airship:n"] as const;
+  navigationEvents.forEach((type) => window.addEventListener(type, cancelIfChanged));
+  callerSignal?.addEventListener("abort", cancelFromCaller, { once: true });
+  if (callerSignal?.aborted) cancelFromCaller();
+  cancelIfChanged();
+  return Object.freeze({
+    signal: controller.signal,
+    dispose() {
+      navigationEvents.forEach((type) => window.removeEventListener(type, cancelIfChanged));
+      callerSignal?.removeEventListener("abort", cancelFromCaller);
+    },
+  });
+}
+
+/** Abort a read-only preparation step without pretending its underlying work
+ * was cancelled. The guarded import/audit may finish in the background, but it
+ * has no mutation to publish; the route transaction can yield immediately. */
+function abortableReconnectRead<T>(pending: PromiseLike<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return Promise.resolve(pending);
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(signal.reason);
+    signal.addEventListener("abort", abort, { once: true });
+    void Promise.resolve(pending).then(resolve, reject).finally(() => {
+      signal.removeEventListener("abort", abort);
+    });
   });
 }
 
@@ -12061,13 +12854,32 @@ function profileMonogram(label: string): string {
   return (words[0] ?? "A").slice(0, 2).toUpperCase();
 }
 
-function BootScreen({ status }: { status: string }) {
+function BootScreen({ status, failure, onReload }: Readonly<{
+  status: string;
+  failure?: string;
+  onReload(): void;
+}>) {
   return (
-    <main class="boot-screen">
-      <Seal class="boot-seal" state="checking" acting label="Preparing Airship" detail={status} size={32} compact />
+    <main class="boot-screen" data-state={failure ? "failed" : "checking"}>
+      <Seal
+        class="boot-seal"
+        state={failure ? "failed" : "checking"}
+        acting={!failure}
+        label={failure ? "Local kernel did not start" : "Preparing Airship"}
+        detail={status}
+        size={32}
+        compact
+      />
       <span class="eyebrow">Airship edge runtime</span>
-      <h1>Preparing the local kernel</h1>
+      <h1>{failure ? "The local kernel did not start" : "Preparing the local kernel"}</h1>
       <p role="status" aria-live="polite">{status}</p>
+      {failure ? <>
+        <button type="button" onClick={onReload}>Reload Airship</button>
+        <details>
+          <summary>Technical details</summary>
+          <code>{failure.slice(0, 500)}</code>
+        </details>
+      </> : null}
     </main>
   );
 }
@@ -12598,7 +13410,7 @@ function MessageCard({
   onProof: () => void;
   onAttestations: () => void;
   attestation?: MessageAttestation;
-  onCopy: () => void;
+  onCopy: () => Promise<void>;
   onRetry: () => void;
   /** Present only on a failed turn whose prompt this page still holds. */
   onResend?: () => void;
@@ -12607,6 +13419,21 @@ function MessageCard({
   branchDisabled: boolean;
   streamStore: TranscriptStreamStore;
 }) {
+  const [copied, setCopied] = useState(false);
+  const [copyFailure, setCopyFailure] = useState<string>();
+
+  async function copyMessage(): Promise<void> {
+    setCopyFailure(undefined);
+    try {
+      await onCopy();
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1_600);
+    } catch (error) {
+      setCopied(false);
+      setCopyFailure(`Copy failed: ${error instanceof Error ? error.message : String(error)} Select the message text and use your browser's Copy command.`);
+    }
+  }
+
   return (
     <article
       class={`message ${message.role} ${message.error ? "error" : ""}`}
@@ -12725,6 +13552,7 @@ function MessageCard({
             ) : null}
           </div>
         ) : null}
+        {copyFailure ? <p class="message-copy-failure" role="alert">{copyFailure}</p> : null}
         {/* Pointer devices get a reserved footer toolbar that fades on
             hover/focus; touch devices get the disclosure below. This is
             deliberately not one `<details>` for both: engines do not paint a
@@ -12734,8 +13562,8 @@ function MessageCard({
           <div class="message-actions-row">
             <button
               type="button"
-              onClick={onCopy}
-            >Copy</button>
+              onClick={() => void copyMessage()}
+            >{copied ? "Copied" : "Copy"}</button>
             {/* Retry is a regeneration from the immutable pre-turn boundary.
                 The prior answer remains inspectable in the source conversation
                 but cannot contaminate the retry branch's provider context.
@@ -12770,7 +13598,7 @@ function MessageCard({
         <details class="message-actions-touch">
           <summary aria-label="Message actions">•••</summary>
           <div role="group" aria-label="Message actions">
-            <button type="button" onClick={onCopy}>Copy</button>
+            <button type="button" onClick={() => void copyMessage()}>{copied ? "Copied" : "Copy"}</button>
             {/* The same warning, as text a touch device can actually reach.
                 `.message-actions` is `display: none` under `(hover: none)`, so
                 the phone's Retry was this bare button and the only sentence
@@ -12817,13 +13645,11 @@ function ProfileManagerView({
   /**
    * Switches to this profile, and answers whether it actually became active.
    *
-   * The boolean is the contract, not the absence of a rejection: the App-level
-   * wrapper is deliberately unable to reject (`requestProfileChange`), so a
-   * `Promise<void>` gave this editor no way to tell a committed switch from a
-   * refused one and left the refusal legible only as a route that did not
-   * change.
+   * The outcome is the contract, not the absence of a rejection: the App-level
+   * wrapper deliberately converts a refusal into the exact message this route
+   * must render beside its initiating control.
    */
-  onActivate: (profileId: string) => Promise<boolean>;
+  onActivate: (profileId: string) => Promise<ProfileSwitchFailure>;
   onSave: (draft: ProfileEditorDraft) => Promise<ProfileRevision>;
   onFork: (profile: ProfileRevision) => Promise<ProfileRevision>;
   onDelete: (profileId: string, replacementProfileId?: string) => Promise<void>;
@@ -12951,18 +13777,16 @@ function ProfileManagerView({
    * `save`/`fork`/`archive`, including `busy` — a switch in flight must not
    * accept a second one.
    *
-   * A refusal arrives as `false`, not as a rejection: the App wrapper converts
-   * every failure into the topbar runtime line and returns, so awaiting alone
-   * would have surfaced nothing here. The `catch` stays as the defence for a prop
-   * that does reject — it is not what makes a refusal visible.
+   * A refusal carries the same exact message as the global runtime report. The
+   * local alert is the authority on touch layouts where that global line is
+   * hidden or truncated.
    */
   async function activate() {
     setBusy(true);
     setStatus(undefined);
     try {
-      if (!await onActivate(selected.profileId)) {
-        setStatus("This profile did not become active. The runtime status line at the top of the window names the reason.");
-      }
+      const failure = await onActivate(selected.profileId);
+      if (failure) setStatus(failure);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error));
     } finally {
@@ -13138,203 +13962,14 @@ function ProfileManagerView({
   );
 }
 
-function SkillsManagerView({
-  catalog,
-  catalogDurability,
-  activeProfileId,
-  onSetGlobal,
-  onSetProfile,
-  onSaveSkill,
-  onDeleteSkill,
-  onApply,
-  onStartConversation,
-  scope,
-}: {
-  catalog: ProfileCatalog;
-  catalogDurability: ProfileCatalogStore["durability"];
-  activeProfileId: string;
-  onSetGlobal: (skillId: string, enabled: boolean) => Promise<void>;
-  onSetProfile: (profileId: string, skillId: string, mode: SkillMode) => Promise<void>;
-  onSaveSkill: (draft: SkillRevisionDraft) => Promise<void>;
-  onDeleteSkill: (skillId: string) => Promise<void>;
-  /** Switches to the previewed profile, answering whether it became active. */
-  onApply: (profileId: string) => Promise<boolean>;
-  /**
-   * Opens a conversation that will pin whatever this route currently resolves.
-   *
-   * The route's own copy says a change "applies only to a new conversation", and
-   * it had no way to make one: standing on the active profile, the only control
-   * was "Switch to <the profile you are already in>", which returns to the
-   * conversation whose prompt was composed by the *old* set. The measured
-   * result was a route that accepts a change, tells you it is inert here, and
-   * offers nothing.
-   */
-  onStartConversation: () => void;
-  scope: string;
-}) {
-  const [selectedProfileId, setSelectedProfileId] = useState(activeProfileId);
-  const profiles = useMemo(() => managedProfiles(catalog), [catalog]);
-  const scopedProfileId = scope === "global" ? selectedProfileId : scope;
-  const profile = profiles.find((candidate) => candidate.profileId === scopedProfileId) ?? profiles[0]!;
-  const [status, setStatus] = useState<string>();
-  /*
-   * The grid asks `domain.ts` the same question the session pin asks it. It
-   * used to recompute `on` / `inherit` / global-default itself, so a change to
-   * the precedence had to be made here as well to keep the card's "resolved on"
-   * badge honest about what the next conversation would actually load.
-   */
-  const decisions = useMemo(() => skillDecisionsFor(profile, catalog), [profile, catalog]);
-  const decisionBySkillId = useMemo(
-    () => new Map(decisions.map((decision) => [decision.skillId, decision] as const)),
-    [decisions],
-  );
-  const resolvedCount = decisions.filter((decision) => decision.enabled).length;
-  const [editorTarget, setEditorTarget] = useState<SkillEditorTarget>();
-  const [SkillEditorPanel, setSkillEditorPanel] = useState<SkillEditorComponent>();
-  const [editorError, setEditorError] = useState<string>();
-
-  useEffect(() => {
-    if (!editorTarget || SkillEditorPanel) return;
-    let current = true;
-    setEditorError(undefined);
-    /*
-     * Through the recovery loader for the same reason the Memory route uses it:
-     * a module URL that has failed once is recorded as failed in this document's
-     * module map, so a plain retry button issues no network request at all and
-     * the panel stays dead for the life of the tab.
-     */
-    void loadRetryableChunk("skill-editor", () => import("./skill-editor")).then((module) => {
-      if (current) setSkillEditorPanel(() => module.SkillEditor);
-    }).catch(() => {
-      if (current) setEditorError("The skill editor could not be loaded. No skill was created or changed.");
-    });
-    return () => { current = false; };
-  }, [editorTarget, SkillEditorPanel]);
-
-  async function removeSkill(skill: SkillRevision): Promise<void> {
-    setStatus(undefined);
-    try {
-      await onDeleteSkill(skill.skillId);
-      // Closed by id, not unconditionally: removing skill A while editing skill
-      // B must not shut B's unsaved draft.
-      setEditorTarget((current) => (current?.mode === "edit" && current.source.skillId === skill.skillId ? undefined : current));
-      setStatus(`${skill.name} removed.`);
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : String(error));
-    }
-  }
-
-  async function updateGlobal(skillId: string, enabled: boolean): Promise<void> {
-    setStatus(undefined);
-    try {
-      await onSetGlobal(skillId, enabled);
-      setStatus(catalogDurability === "encrypted-vault" ? "Global skill policy saved to the encrypted Vault." : "Global skill policy updated for this page.");
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : String(error));
-    }
-  }
-
-  async function updateProfileSkill(skillId: string, mode: SkillMode): Promise<void> {
-    setStatus(undefined);
-    try {
-      await onSetProfile(profile.profileId, skillId, mode);
-      setStatus(catalogDurability === "encrypted-vault" ? "Profile skill policy saved to the encrypted Vault." : "Profile skill policy updated for this page.");
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : String(error));
-    }
-  }
-
-  /** Same contract as the Profiles editor: a refusal is `false`, not a rejection. */
-  async function applyProfile(): Promise<void> {
-    setStatus(undefined);
-    try {
-      if (!await onApply(profile.profileId)) {
-        setStatus("This profile did not become active. The runtime status line at the top of the window names the reason.");
-      }
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : String(error));
-    }
-  }
-
-  return (
-    <section class="work-view">
-      <RouteBar routeId="skills" title="Skills" eyebrow="Resolved instruction modules" description={scope === "global" ? "Set global skill defaults. Enabled instructions are pinned into the next conversation manifest." : `Set inherit/on/off overrides for ${profile.name}. Existing conversations remain pinned.`} />
-      <div class="skills-toolbar panel">
-        {scope === "global" ? <div class="skill-select-field"><span>Preview resolution for</span><MenuSelect placement="down" ariaLabel="Preview profile resolution" value={profile.profileId} options={profiles.map((candidate) => ({ value: candidate.profileId, label: candidate.name }))} onChange={setSelectedProfileId} /></div> : <div><span class="eyebrow">Profile scope</span><strong>{profile.name}</strong></div>}
-        <div><span class="eyebrow">Effective set</span><strong>{resolvedCount} of {catalog.skills.length}</strong></div>
-        {/* The route closes its own loop. Standing on the profile you are
-            already in, "Switch to <it>" returns to the conversation whose
-            prompt the *old* set composed — so the change the toolbar just
-            counted stays invisible. Here that control is the one action that
-            makes this set live: a conversation pinned to it. */}
-        {profile.profileId === activeProfileId
-          ? <button class="small-button" type="button" title={`Pins the ${resolvedCount} resolved skills into a new conversation's prompt.`} onClick={onStartConversation}>New conversation with this set</button>
-          : <button class="small-button" type="button" onClick={() => void applyProfile()}>Switch to {profile.name}</button>}
-        <button class="small-button" type="button" onClick={() => setEditorTarget({ mode: "new" })}>New skill</button>
-      </div>
-      {editorTarget ? SkillEditorPanel ? (
-        <SkillEditorPanel
-          /*
-           * Keyed by target. `useState(() => initialFields(target))` runs its
-           * initializer on mount only, so pressing Edit on a second skill while
-           * the first panel is open showed the first skill's text under the
-           * second one's heading, and Save then refused with "A skill's ID is
-           * fixed when it is created." about a skill nobody had opened.
-           */
-          key={`${editorTarget.mode}:${editorTarget.mode === "new" ? "" : editorTarget.source.skillId}`}
-          target={editorTarget}
-          onSave={onSaveSkill}
-          onClose={() => setEditorTarget(undefined)}
-        />
-      ) : editorError ? <p class="skill-editor-status" role="status" aria-live="polite">{editorError}</p> : <p role="status" aria-live="polite">Loading the skill editor…</p> : null}
-      <div class="skill-grid">
-        {catalog.skills.map((skill) => {
-          const { mode, globallyEnabled: globalEnabled, enabled } = decisionBySkillId.get(skill.skillId)!;
-          const authored = isCustomSkillId(skill.skillId);
-          /*
-           * Only profiles whose mode actually decides something. An explicit
-           * "inherit" resolves exactly as absence does, so counting it here
-           * would refuse a removal on behalf of a profile the skill does not
-           * reach — the defect `profileSkillModes` and `skillReferences` were
-           * changed together to remove.
-           */
-          const referencing = authored ? skillReferences(catalog, skill.skillId) : [];
-          return (
-            <article class={enabled ? "skill-card panel enabled" : "skill-card panel"} key={skill.skillId}>
-              <header><span class="skill-glyph"><Icon name="skills" /></span><div><h2>{skill.name}</h2><code>{skill.skillId}</code></div><span class={enabled ? "skill-state on" : "skill-state"}>{enabled ? "resolved on" : "resolved off"}</span></header>
-              <p>{skill.description}</p>
-              <div class="skill-controls">
-                {scope === "global" ? <button class={globalEnabled ? "toggle-control on" : "toggle-control"} role="switch" aria-label={`Global default for ${skill.name}`} aria-checked={globalEnabled} type="button" onClick={() => void updateGlobal(skill.skillId, !globalEnabled)}><span /> Global default</button> : <div class="skill-select-field"><span>{profile.name}</span><MenuSelect placement="down" ariaLabel={`${profile.name} mode for ${skill.name}`} value={mode} options={[{ value: "inherit", label: "Inherit global" }, { value: "on", label: "Always on" }, { value: "off", label: "Always off" }]} onChange={(next) => void updateProfileSkill(skill.skillId, next as SkillMode)} /></div>}
-              </div>
-              {authored ? (
-                <div class="skill-authoring">
-                  <button class="small-button" type="button" onClick={() => setEditorTarget({ mode: "edit", source: skill })}>Edit</button>
-                  <button class="small-button danger" type="button" disabled={referencing.length > 0} onClick={() => void removeSkill(skill)}>Remove</button>
-                  {/* Visible, not a `title`: a disabled button does not reliably
-                      raise a tooltip, and on a touch device nothing does. The
-                      refusal has to be readable where the refused control is. */}
-                  {referencing.length > 0 ? <span class="skill-authoring-note">{referencing.join(", ")} set this skill explicitly. Return each to Inherit global first.</span> : null}
-                </div>
-              ) : null}
-              <details class="skill-details"><summary>Instruction boundary</summary><footer><span>{skill.requiredTools.length ? `References ${skill.requiredTools.join(" · ")}` : "Instruction-only"}<br />Tools remain approval-gated.</span><code>{skill.digest.slice(-9)}</code></footer></details>
-            </article>
-          );
-        })}
-      </div>
-      {status ? <p role="status" aria-live="polite">{status}</p> : null}
-      <details class="callout compact-callout"><summary><Icon name="lock" /><strong>Conversation boundary</strong></summary><p>Changes affect future resolution only. Running conversations keep their pinned prompt and skill-set digests.</p></details>
-    </section>
-  );
-}
-
 /**
- * The route bar for the three headers the *entry chunk* renders.
+ * The route bar for the two headers the *entry chunk* renders.
  *
  * Not `<RouteHeader>`, and the reason is a budget rather than a preference:
  * `release-gate.mjs` classifies `route-header.tsx` as "shared route chrome
  * fetched with any route, never at first paint", and importing it from
  * `app.tsx` makes it a modulepreload of the entry — 1.9 KiB gzip of first
- * paint bought for three headers, on a product whose startup cap has never
+ * paint bought for two headers, on a product whose startup cap has never
  * been raised. The classifier rejects the build outright when that happens,
  * which is the budget defending itself.
  *

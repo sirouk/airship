@@ -109,4 +109,17 @@ describe("thread queue surface contract", () => {
   it("restores an aborted prompt only into an empty composer", () => {
     expect(app).toContain("setInput((current) => current.trim() ? current : activePrompt.current ?? current)");
   });
+
+  it("keeps a stopped queue paused across conversation switches and reconnects", () => {
+    expect(app).toContain("const [pausedQueueSessionIds, setPausedQueueSessionIds]");
+    expect(app).toContain("pausedQueueSessionIds.has(sessionId)");
+    expect(app).toContain("setQueuePausedForSession(stoppedSessionId, true)");
+    expect(app).toContain("setQueuePausedForSession(admissionSessionId, false)");
+    const activation = app.slice(
+      app.indexOf("async function activateSession("),
+      app.indexOf("useEffect(() => () => {", app.indexOf("async function activateSession(")),
+    );
+    expect(activation).not.toContain("setQueuePausedForSession");
+    expect(activation).not.toContain("setPausedQueueSessionIds");
+  });
 });

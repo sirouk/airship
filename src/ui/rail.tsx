@@ -368,9 +368,12 @@ export function Rail({
    * time the profile turns out to have something in it, and only while nobody
    * has expressed a choice — a person who collapses it mid-session is not
    * fought on the next render, and the choice survives the reload.
-   */
+  */
   useEffect(() => {
-    if (recentsChoice.current !== undefined || visibleConversations.length === 0) return;
+    // The collapsed state owns a closed panel. Without this guard, sessions
+    // arriving in the same frame as a collapse could run this effect after the
+    // state-transition effect below and throw a 320px flyout over the page.
+    if (state !== "standard" || recentsChoice.current !== undefined || visibleConversations.length === 0) return;
     /*
      * …and only where the rail can afford it.
      *
@@ -390,7 +393,7 @@ export function Rail({
     autoOpened.current = true;
     recentsChoice.current = true;
     setRecentsOpen(true);
-  }, [conversationKeys, navRef]);
+  }, [conversationKeys, navRef, state]);
 
   /*
    * What it opened on its own, it gives back on its own.

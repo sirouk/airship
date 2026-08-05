@@ -9,6 +9,16 @@ const activateSource = accessSource.slice(
 );
 
 describe("remote credential loss continuity contract", () => {
+  it("allows an exact Chutes authority to restore any requested model still present in its live catalog", () => {
+    const reconnectGate = source.slice(
+      source.indexOf("const chutesReconnectExact ="),
+      source.indexOf("const activeExternalResolution ="),
+    );
+    expect(reconnectGate).toContain("availableModels.some((candidate) => candidate.id === accessReconnectIntent.model)");
+    expect(reconnectGate).toContain("model: accessReconnectIntent.model");
+    expect(reconnectGate).not.toContain("model: connection.model");
+  });
+
   it("routes OAuth refresh failure through the non-destructive authority release", () => {
     const refreshEffect = source.match(/if \(connection\.kind !== "chutes-oauth"\)[\s\S]*?\}, \[connection\.kind, oauthTokenRevision\]\);/u)?.[0];
     expect(refreshEffect).toContain("releaseChutesAuthority");
@@ -66,6 +76,86 @@ describe("remote credential loss continuity contract", () => {
     expect(source).toContain("resolveExternalInferencePreflight(");
     expect(source).toContain('externalPreflight.state !== "ready"');
     expect(source).toContain("your prompt, messages, journal, and workspace remain here.");
+  });
+});
+
+describe("exact return transaction contract", () => {
+  it("stages replay presentation and durable selection before publishing route authority", () => {
+    const prepare = source.slice(
+      source.indexOf("async function prepareReconnectSession("),
+      source.indexOf("async function selectPreparedReconnectSession("),
+    );
+    expect(prepare.indexOf("await stageAuditedSessionPresentation(detail, audited, signal)"))
+      .toBeGreaterThan(prepare.indexOf('audited.report.status !== "verified"'));
+
+    const external = source.slice(
+      source.indexOf("async function activateExternalInference("),
+      source.indexOf("async function switchExternalModel("),
+    );
+    const selection = external.indexOf("await selectPreparedReconnectSession(");
+    const routeCommit = external.indexOf("runtime.current = committedRuntime;");
+    const presentationCommit = external.indexOf("publishSelectedAuditedSession(");
+    expect(selection).toBeGreaterThan(-1);
+    expect(selection).toBeLessThan(routeCommit);
+    expect(routeCommit).toBeLessThan(presentationCommit);
+    expect(external.slice(routeCommit, presentationCommit)).not.toContain("await ");
+    expect(source.match(/await selectPreparedReconnectSession\(/gu)).toHaveLength(3);
+    expect(source.match(/reconnectSession\.presentation/gu)).toHaveLength(3);
+  });
+
+  it("rechecks every live URL field and cancels selection when history leaves the return request", () => {
+    const requirement = source.slice(
+      source.indexOf("function requireCurrentReconnectIntent("),
+      source.indexOf("function reconnectSelectionGuard("),
+    );
+    expect(requirement).toContain("parseAccessReconnectIntent(window.location.hash)");
+    expect(requirement).toContain("reconnectIntentsEqual(current, intent)");
+    const guard = source.slice(
+      source.indexOf("function reconnectSelectionGuard("),
+      source.indexOf("function resolveExternalInferencePreflight("),
+    );
+    expect(guard).toContain('["hashchange", "popstate", "airship:n"] as const');
+    expect(guard).toContain("window.addEventListener(type, cancelIfChanged)");
+    expect(guard).toContain("window.removeEventListener(type, cancelIfChanged)");
+    expect(guard).toContain('callerSignal?.addEventListener("abort", cancelFromCaller');
+    expect(guard).toContain("signal: controller.signal");
+    const transition = source.slice(
+      source.indexOf("async function runInferenceRouteTransition"),
+      source.indexOf("async function connectChutes"),
+    );
+    expect(transition.indexOf("reconnectSelectionGuard(reconnectIntent, callerSignal)"))
+      .toBeLessThan(transition.indexOf("return await operation(signal)"));
+    expect(transition).toContain("if (signal?.aborted) setRuntimeStatus(statusBeforeTransition)");
+    const prepare = source.slice(
+      source.indexOf("async function prepareReconnectSession("),
+      source.indexOf("async function selectPreparedReconnectSession("),
+    );
+    expect(prepare).toContain("candidateRuntime.journal.getSession(intent.returnSessionId, signal)");
+    expect(prepare).toContain("stageAuditedSessionPresentation(detail, audited, signal)");
+    const selection = source.slice(
+      source.indexOf("async function selectPreparedReconnectSession("),
+      source.indexOf("async function stageAuditedSessionPresentation("),
+    );
+    expect(selection).toContain("signal?.throwIfAborted()");
+    expect(selection).toContain("candidateRuntime,");
+    expect(selection).toContain("signal,");
+    expect(source).toContain('window.dispatchEvent(new Event("airship:n"))');
+    expect(source).toContain("transport.verifyModelAccess(model.id, reconnectSignal)");
+  });
+
+  it("keeps every boot failure on the document-level recovery screen", () => {
+    expect(source).toContain("if (bootFailure || !catalog || !activeProfile || !activeTheme)");
+    expect(source).toContain("this tab never became ready");
+  });
+
+  it("abandons by replacing the return entry so Back cannot resurrect it", () => {
+    const abandon = source.slice(
+      source.indexOf("function abandonReconnectRequest()"),
+      source.indexOf("function navigatePrimary("),
+    );
+    expect(abandon).toContain('window.history.replaceState({ view: "access" }, "", "#connection")');
+    expect(abandon).not.toContain("pushState");
+    expect(abandon).toContain("setDestinationArrival");
   });
 });
 

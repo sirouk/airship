@@ -32,6 +32,9 @@ let generation = 0;
 /** Asset URLs a named chunk's failed attempt appended, keyed by chunk name. */
 const failedAssets = new Map<string, readonly string[]>();
 
+/** Entry URL captured on the first failure, before a person asks to retry. */
+const failedEntries = new Map<string, string>();
+
 /** Modules recovered under a fresh URL, so one retry makes one instance. */
 const recovered = new Map<string, Promise<unknown>>();
 
@@ -87,7 +90,11 @@ function restyle(href: string, stamp: number): Promise<void> {
  *
  * `name` is both the registry key and the built chunk's file-name stem.
  */
-export async function loadRetryableChunk<T>(name: string, load: () => Promise<T>): Promise<T> {
+export async function loadRetryableChunk<T>(
+  name: string,
+  load: () => Promise<T>,
+  developmentEntry?: string,
+): Promise<T> {
   const already = recovered.get(name);
   if (already) return await already as T;
   const before = new Set(assetHrefs());
@@ -98,10 +105,13 @@ export async function loadRetryableChunk<T>(name: string, load: () => Promise<T>
     const previous = failedAssets.get(name) ?? [];
     const assets = added.length ? added : previous;
     if (assets.length) failedAssets.set(name, assets);
+    const previousEntry = failedEntries.get(name);
+    const discoveredEntry = entryAsset(name, assets) ?? developmentEntry;
+    if (discoveredEntry) failedEntries.set(name, discoveredEntry);
     // The first failure is reported as it happened. Re-fetching immediately
     // would only re-run the request that just failed under a different URL, and
     // the person has not asked for a retry yet.
-    const entry = previous.length ? entryAsset(name, assets) : undefined;
+    const entry = previousEntry;
     if (!entry) throw error;
     const stamp = ++generation;
     const attempt = (async () => {
