@@ -433,7 +433,7 @@ Transitions animate **transform / opacity / color / border-color / background-co
 ### (g) Focus & selection
 
 ```css
-:root { --focus-ring: 2px solid var(--accent-bright); --focus-offset: 2px; }
+:root { --focus-ring: 2px solid var(--accent-bright); --focus-offset: 1px; }
 
 *:focus { outline: none; }
 :where(button, a, input, select, textarea, summary, [tabindex]):focus-visible {

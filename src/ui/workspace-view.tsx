@@ -3318,8 +3318,8 @@ export async function runSourceMutation(git: WorkbenchSourceMutations, operation
   if (operation.kind === "unstage") { await git.unstage(operation.request); return false; }
   if (operation.kind === "commit") { await git.commit(operation.request); return true; }
   // The way back from a bad save. `restore` was implemented, approved and
-  // reachable only by typing `git restore <path>` into the Terminal route's
-  // Browser Git field: a scan of every button, summary and menu item in
+  // reachable only by submitting `git restore <path>` in Terminal for Airship
+  // Browser Git: a scan of every button, summary and menu item in
   // Explorer, the Editor and Source Control for discard/revert/undo returned
   // nothing at all, so the one surface that shows you the damage had no verb
   // for it.

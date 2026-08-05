@@ -123,6 +123,21 @@ the adopted shared lease, invokes the authenticated atomic restore, then
 reopens the restored authority as target-authoritative state. Current
 page-memory state is never merged over a restored backup.
 
+## Replacing an existing local Vault
+
+`Create new` is not an overwrite shortcut. Before a replacement is offered,
+Airship detects the existing origin authority and presents an explicit warning.
+The next step requires a successful encrypted-backup download; replacement is
+disabled until the browser has received that file. The replacement then uses
+the existing atomic object-store wipe path and reloads the app. It preserves
+the identity anchor and the existing recovery key, so the result is an empty
+Vault under the same authority rather than a silently generated second key.
+
+If the runtime is not currently adopted, the backup action may open a temporary
+runtime from the enrolled non-extractable key, export the ciphertext, and close
+it again. A stale object store without an enrolled key cannot be backed up or
+replaced safely from this surface; recover the existing Vault first.
+
 ## Schema and migration
 
 The provider reports storage schema `2`.

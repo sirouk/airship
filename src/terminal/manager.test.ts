@@ -470,6 +470,76 @@ describe("BrowserTerminalManager metadata", () => {
     expect(restored.archived()[0]).toMatchObject({ id: tab.id, reconstructed: true, closedAt: expect.any(String) });
   });
 
+  it("claims each submitted git line once and appends a control-safe Airship Browser Git answer", async () => {
+    const workspace = new MemoryWorkspace();
+    const { host } = recordingHost();
+    const manager = new BrowserTerminalManager(workspace, { activateHost: async () => host });
+    await manager.ready;
+    const tab = manager.list()[0]!;
+    await manager.start(tab.id);
+
+    await manager.write(tab.id, "git status\r");
+    const first = manager.pendingBrowserGitIntent();
+    expect(first).toMatchObject({ sessionId: tab.id, command: "git status", cwd: "/workspace" });
+    expect(manager.claimBrowserGitIntent(first!)).toBe(true);
+    expect(manager.claimBrowserGitIntent(first!)).toBe(false);
+    manager.recordBrowserGitResult(first!, {
+      output: "On branch main\nmalicious\x1b[2Jname\n",
+      changed: false,
+      failed: false,
+    });
+
+    const answered = manager.list()[0]!;
+    expect(answered.bufferedOutput).toContain("Airship Browser Git · completed · BrowserGitClient, not jsh");
+    expect(answered.bufferedOutput).toContain("maliciousname");
+    expect(answered.bufferedOutput).not.toContain("\x1b[2J");
+    expect(answered.audit).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: "browser-git",
+        outcome: "completed",
+        sourceRecordId: first!.sourceRecordId,
+        command: "git status",
+      }),
+    ]));
+    expect(manager.pendingBrowserGitIntent()).toBeUndefined();
+
+    // A compound jsh program is not one Git intent: its suffix could execute
+    // in the real shell even though the `git` binary is absent, so Airship must
+    // not label BrowserGitClient as the author of the whole line.
+    await manager.write(tab.id, "git status && echo shell-effect\r");
+    expect(manager.pendingBrowserGitIntent()).toBeUndefined();
+
+    // The command string may repeat; identity comes from the submitted input
+    // record, not from text that would suppress a legitimate second status.
+    await manager.write(tab.id, "git status\r");
+    const second = manager.pendingBrowserGitIntent();
+    expect(second?.sourceRecordId).not.toBe(first?.sourceRecordId);
+    expect(manager.claimBrowserGitIntent(second!)).toBe(true);
+    manager.recordBrowserGitResult(second!, { output: "clean", changed: false, failed: false });
+    expect(manager.pendingBrowserGitIntent()).toBeUndefined();
+    await manager.quiesce("test cleanup");
+  });
+
+  it("never replays an unhandled git line restored from a prior page", async () => {
+    const workspace = new MemoryWorkspace();
+    const firstHost = recordingHost();
+    const first = new BrowserTerminalManager(workspace, { activateHost: async () => firstHost.host });
+    await first.ready;
+    const tab = first.list()[0]!;
+    await first.start(tab.id);
+    await first.write(tab.id, "git add -A\r");
+    expect(first.pendingBrowserGitIntent()?.command).toBe("git add -A");
+    await first.quiesce("page ended before Browser Git answered");
+
+    const secondHost = recordingHost();
+    const restored = new BrowserTerminalManager(workspace, { activateHost: async () => secondHost.host });
+    await restored.ready;
+    const restoredTab = restored.list()[0]!;
+    await restored.start(restoredTab.id);
+    expect(restored.pendingBrowserGitIntent()).toBeUndefined();
+    await restored.quiesce("test cleanup");
+  });
+
   it("kills a partially started process when its input writer cannot be acquired", async () => {
     const workspace = new MemoryWorkspace();
     let killed = false;

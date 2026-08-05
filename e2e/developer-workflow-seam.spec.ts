@@ -55,10 +55,11 @@ test("the terminal names one directory in both spellings, never a third", async 
     "/home/airship-node/airship-workspace in the shell is the same directory as /workspace in Explorer, the Editor and Source Control.",
   );
 
-  const scope = page.locator("#terminal-git-scope");
-  await expect(scope).toContainText("/workspace");
-  await expect(scope).toContainText("the same directory the jsh process calls");
-  await expect(scope).toContainText("/home/airship-node/airship-workspace");
+  const setup = page.locator("details.terminal-route__setup");
+  if ((await setup.getAttribute("open")) === null) await setup.locator("summary").click();
+  await expect(setup).toContainText("jsh has no git binary");
+  await expect(setup).toContainText("BrowserGitClient");
+  await expect(page.locator("form.terminal-git")).toHaveCount(0);
 });
 
 test("a commit that a reload destroys is named on the route that lost it", async ({ page }) => {
@@ -115,12 +116,11 @@ test("a commit that a reload destroys is named on the route that lost it", async
 
 /*
  * `git` in the terminal of a Git-capable product dead-ended in a raw shell
- * error while the bridge that answers it sat on the same screen — its own
- * placeholder was literally `git status`. Gated like every other test that
- * needs a live WebContainer: this one has to boot a real PTY to observe the
- * refusal it is about.
+ * error while the bridge that answers it sat in a second form on the same
+ * screen. Gated like every other test that needs a live WebContainer: this one
+ * has to boot a real PTY to observe the submitted-line sideband.
  */
-test("a git the shell refuses is answered by the bridge on the same screen", async ({ page }, testInfo) => {
+test("a submitted git line is answered inline by Airship Browser Git", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium", "one authoritative live browser process");
   test.skip(process.env.AIRSHIP_LIVE_WEBCONTAINER !== "1", "Set AIRSHIP_LIVE_WEBCONTAINER=1 for the provider-backed live browser probe.");
   test.setTimeout(120_000);
@@ -137,20 +137,16 @@ test("a git the shell refuses is answered by the bridge on the same screen", asy
   const shellPath = "/home/airship-node/airship-workspace";
   await expect(emulator.locator(".xterm-accessibility-tree")).toContainText(shellPath, { timeout: 30_000 });
   await expect(page.locator(".terminal-panel__bar code").first()).toHaveText(shellPath);
-  await expect(page.locator("#terminal-git-scope")).toContainText(shellPath);
 
   await input.focus();
   await page.keyboard.type("git status");
   await page.keyboard.press("Enter");
-  const handoff = page.locator(".terminal-git__handoff");
-  await expect(handoff).toBeVisible({ timeout: 30_000 });
-  await expect(handoff).toContainText("git status");
-  await handoff.getByRole("button", { name: "Run it here" }).click();
-
-  // A branch and a status line, in the region that exists for bridge output.
-  const answer = page.locator(".terminal-git__notice pre");
-  await expect(answer).toContainText("On branch main", { timeout: 30_000 });
-  await expect(answer).not.toContainText("command not found");
-  await expect(page.getByRole("textbox", { name: "Browser Git" })).toHaveValue("git status");
-  await expect(handoff).toHaveCount(0);
+  const transcript = emulator.locator(".xterm-accessibility-tree");
+  await expect(transcript).toContainText("Airship Browser Git", { timeout: 30_000 });
+  await expect(transcript).toContainText("BrowserGitClient, not jsh");
+  await expect(transcript).toContainText("On branch main");
+  await expect(page.locator(".terminal-route__footer")).toContainText(
+    "Airship Browser Git completed git status",
+  );
+  await expect(page.locator("form.terminal-git")).toHaveCount(0);
 });

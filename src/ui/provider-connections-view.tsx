@@ -332,8 +332,12 @@ export function ProviderConnectionsView({
                 disabled={Boolean(busyConnection)}
                 onConnect={(endpoint) => run(provider.kind, async (signal) => {
                   setNotice(`Checking ${provider.label} at ${endpoint} and reading its installed-model evidence…`);
-                  await browserInferenceFabric.connectLocal({ kind: provider.kind, options: { endpoint }, signal });
-                  setNotice(`${provider.label} is connected directly over this machine's loopback interface at ${endpoint}.`);
+                  const connected = await browserInferenceFabric.connectLocal({ kind: provider.kind, options: { endpoint }, signal });
+                  const firstModel = connected.models[0];
+                  if (!firstModel) throw new Error(`${provider.label} answered but published no selectable models.`);
+                  const route = await browserInferenceFabric.activate(connected.connection.id, firstModel.id, signal);
+                  await onActivate(route, signal);
+                  setNotice(`${provider.label}/${firstModel.label} is active directly over this machine's loopback interface at ${endpoint}.`);
                 }, false)}
               />
             ))}

@@ -37,8 +37,18 @@ describe("ModelPicker bounds", () => {
     expect(forcedColors).toContain('.model-picker-list > button[data-active="true"]');
     expect(forcedColors).toContain("outline:2px solid Highlight");
   });
+  it("keeps model rows borderless while preserving selection and active fills", () => {
+    expect(styles).toMatch(/\.model-picker-list > button \{[^}]*border:0/u);
+    expect(styles).toContain('.model-picker-list > button[aria-selected="true"] { background:');
+    expect(styles).toContain('.model-picker-list > button[data-active="true"] { background:');
+  });
   it("keeps listbox selection on the active-descendant cursor", () => {
     expect(source).toContain('aria-selected={index === active} data-active={index === active}');
+  });
+  it("uses the Chutes logo only when a catalog logo id exists", () => {
+    expect(source).toContain("model.logoId");
+    expect(source).toContain("logos.chutes.ai/logos/");
+    expect(source).toContain('model.tags?.includes("local")');
   });
   it("announces an empty filtered catalogue without moving focus", () => {
     expect(source).toContain('<span role="status" aria-live="polite" aria-atomic="true">{eligible.length');
@@ -115,7 +125,7 @@ describe("row honesty", () => {
 
   it("states the provenance caveat where it cannot scroll away", () => {
     expect(MODEL_PICKER_PROVENANCE).toContain("catalog metadata is not proof");
-    expect(MODEL_PICKER_PROVENANCE).toContain("fresh provider telemetry when available");
+    expect(MODEL_PICKER_PROVENANCE).toContain("fresh provider telemetry");
     expect(source).toContain('<div class="model-picker-footer">');
     expect(source).toContain("{MODEL_PICKER_PROVENANCE}");
     // Only the list scrolls; the header and footer are outside it.

@@ -382,7 +382,7 @@ describe("sessionReconnectPlan", () => {
       "CANNOT CONTINUE HERE — this tab is on airship-demo · demo-v1; this conversation is pinned to Chutes · GLM-5.2-TEE. Check whether this page still holds that exact pinned connection; a replacement cannot continue this conversation.",
     );
     expect(reconnect?.primaryLabel).toBe("Check exact Chutes · GLM-5.2-TEE connection");
-    expect(reconnect?.secondaryLabel).toBe("Fork to a new conversation on airship-demo · demo-v1");
+    expect(reconnect?.secondaryLabel).toBe("Continue with airship-demo · demo-v1");
     // A pinned posture the demo runtime cannot offer is a real fourth
     // difference, so the shorter claim below is withheld here.
     expect(reconnect?.connectionOnly).toBe(false);

@@ -74,6 +74,8 @@ export type TerminalActivityEventPayload = Readonly<{
   origin: TerminalSessionSnapshot["origin"]["kind"];
   cwd: string;
   summary: string;
+  /** Interactive PTY input this Airship-owned sideband answered. */
+  sourceRecordId?: string;
   profileId?: string;
   /** Page-unique writer identity; two writers on one terminal is split lineage. */
   writerId?: string;
@@ -98,6 +100,7 @@ export function terminalActivityEvent(
     origin: session.origin.kind,
     cwd: session.cwd,
     summary: record.summary,
+    ...(record.sourceRecordId ? { sourceRecordId: record.sourceRecordId } : {}),
     ...(session.profileId ? { profileId: session.profileId } : {}),
     ...(record.writerId ? { writerId: record.writerId } : {}),
     ...(record.command ? { command: record.command } : {}),

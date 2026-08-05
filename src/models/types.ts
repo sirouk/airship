@@ -66,11 +66,11 @@ export type ModelTokenPricing = Readonly<{
 }>;
 
 export type ModelFieldProvenance = Readonly<{
-  identity: "llm-models";
-  capabilities: "llm-models" | "partial";
+  identity: "llm-models" | "local-discovery";
+  capabilities: "llm-models" | "partial" | "local-discovery";
   pricing: ModelTokenPricing["authority"];
   availability: "chutes-management" | "unavailable";
-  provider: "inferred-from-model-id";
+  provider: "inferred-from-model-id" | "local-discovery";
   runtimeOwner: "llm-models" | "unavailable";
   tags: "derived-from-declared-metadata";
   popularity: "chutes-utilization" | "chutes-management" | "unavailable";

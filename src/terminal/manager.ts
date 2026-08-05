@@ -7,6 +7,7 @@ import {
   TERMINAL_WORKSPACE_MOUNT,
   WEB_CONTAINER_TERMINAL_RUNTIME,
   type TerminalAuditRecord,
+  type TerminalBrowserGitIntent,
   type TerminalDimensions,
   type TerminalSessionOrigin,
   type TerminalSessionSnapshot,
@@ -221,6 +222,8 @@ export class BrowserTerminalManager {
   private readonly leaseRenewals = new Map<string, Promise<void>>();
   private readonly leaseOwnerProbes = new Map<string, Readonly<{ startedAt: number; inFlight: boolean }>>();
   private readonly sessionListeners = new Map<string, Set<SessionListener>>();
+  /** Synchronous, page-local claim preventing two mounted views from running one line twice. */
+  private readonly claimedBrowserGitSources = new Set<string>();
   private readonly listListeners = new Set<ListSubscription>();
   private readonly workspaceListeners = new Set<WorkspaceListener>();
   private metadataRevision?: string;
@@ -529,6 +532,85 @@ export class BrowserTerminalManager {
       this.emit(session);
       this.queuePersist();
     }
+  }
+
+  /**
+   * The oldest current-page `git …` line that has not received a sideband
+   * answer. Restored input is deliberately ineligible: replaying yesterday's
+   * rejected `git add` after a reload would be a mutation the person did not
+   * ask for now.
+   */
+  pendingBrowserGitIntent(profileId?: string): TerminalBrowserGitIntent | undefined {
+    for (const session of this.sessions.values()) {
+      if (session.closedAt || session.profileId !== profileId || session.status !== "running") continue;
+      const answered = new Set(session.audit
+        .filter((record) => record.kind === "browser-git" && record.sourceRecordId)
+        .map((record) => record.sourceRecordId!));
+      for (const record of session.audit) {
+        const command = record.command?.trim();
+        if (record.kind !== "interactive-input"
+          || record.writerId !== this.leaseOwnerId
+          || record.processEpoch !== session.processEpoch
+          || !command
+          || !isStandaloneBrowserGitLine(command)
+          || answered.has(record.id)
+          || this.claimedBrowserGitSources.has(record.id)) continue;
+        return Object.freeze({ sessionId: session.id, sourceRecordId: record.id, command, cwd: session.cwd });
+      }
+    }
+    return undefined;
+  }
+
+  /** Claim before any approval prompt or repository effect can begin. */
+  claimBrowserGitIntent(intent: TerminalBrowserGitIntent): boolean {
+    const session = this.requireSession(intent.sessionId);
+    const source = session.audit.find((record) => record.id === intent.sourceRecordId);
+    if (!source
+      || source.kind !== "interactive-input"
+      || source.writerId !== this.leaseOwnerId
+      || source.processEpoch !== session.processEpoch
+      || source.command?.trim() !== intent.command
+      || session.audit.some((record) => record.kind === "browser-git" && record.sourceRecordId === source.id)
+      || this.claimedBrowserGitSources.has(source.id)) return false;
+    this.claimedBrowserGitSources.add(source.id);
+    return true;
+  }
+
+  /**
+   * Append BrowserGitClient's answer to the shared transcript without
+   * pretending those bytes came from jsh. Repository content can contain
+   * terminal control bytes, so only printable text, tabs and line breaks cross
+   * into xterm; Airship alone supplies the controlled colour sequences.
+   */
+  recordBrowserGitResult(intent: TerminalBrowserGitIntent, result: Readonly<{
+    output: string;
+    changed: boolean;
+    failed: boolean;
+  }>): void {
+    const session = this.requireSession(intent.sessionId);
+    if (!this.claimedBrowserGitSources.has(intent.sourceRecordId)) {
+      throw new Error("This Browser Git result does not own the submitted terminal line.");
+    }
+    if (session.audit.some((record) => record.kind === "browser-git" && record.sourceRecordId === intent.sourceRecordId)) {
+      this.claimedBrowserGitSources.delete(intent.sourceRecordId);
+      return;
+    }
+    const verdict = result.failed ? "refused" : "completed";
+    this.appendAudit(session, {
+      kind: "browser-git",
+      outcome: result.failed ? "failed" : "completed",
+      processEpoch: session.processEpoch,
+      sourceRecordId: intent.sourceRecordId,
+      command: intent.command,
+      outputTail: result.output,
+      summary: `Airship Browser Git ${verdict} this submitted line through BrowserGitClient; its Git answer did not come from jsh.${result.changed ? " The browser-owned repository changed." : ""}`,
+    });
+    const colour = result.failed ? "31" : "36";
+    const output = terminalPlainText(result.output);
+    this.appendOutput(session, `\r\n\x1b[${colour}mAirship Browser Git · ${verdict} · BrowserGitClient, not jsh\x1b[0m\r\n\x1b[2m${terminalPlainText(intent.command)} · ${terminalPlainText(intent.cwd)}\x1b[0m\r\n${output}${output.endsWith("\r\n") ? "" : "\r\n"}`);
+    this.claimedBrowserGitSources.delete(intent.sourceRecordId);
+    this.emit(session);
+    this.queuePersist();
   }
 
   resize(sessionId: string, dimensions: TerminalDimensions): void {
@@ -1594,6 +1676,40 @@ function failureMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** Render untrusted repository text without allowing terminal escape injection. */
+function terminalPlainText(value: string): string {
+  return value
+    .replace(/\r\n?/gu, "\n")
+    .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/gu, "")
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/gu, "")
+    .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/gu, "")
+    .replace(/\n/gu, "\r\n");
+}
+
+/**
+ * A sideband may answer one Git command, never a compound jsh program. Shell
+ * operators and substitutions outside single quotes could run even when the
+ * missing `git` command fails; routing that whole line as if BrowserGitClient
+ * were its only effect would be false and could hide consequential shell work.
+ */
+function isStandaloneBrowserGitLine(command: string): boolean {
+  if (!/^git(?:\s|$)/u.test(command)) return false;
+  let quote: "'" | '"' | undefined;
+  let escaping = false;
+  for (const character of command) {
+    if (escaping) { escaping = false; continue; }
+    if (character === "\\" && quote !== "'") { escaping = true; continue; }
+    if (quote) {
+      if (character === quote) quote = undefined;
+      else if (quote === '"' && (character === "$" || character === "`")) return false;
+      continue;
+    }
+    if (character === "'" || character === '"') { quote = character; continue; }
+    if (/[;&|<>()`$#]/u.test(character)) return false;
+  }
+  return true;
+}
+
 function rememberInput(session: MutableSession, data: string): readonly string[] {
   const committed: string[] = [];
   for (const character of data) {
@@ -1789,11 +1905,12 @@ function parseAuditRecord(value: unknown): TerminalAuditRecord {
   const item = value as Record<string, unknown>;
   if (typeof item.id !== "string" || !item.id || item.id.length > 256
     || typeof item.sequence !== "number" || !Number.isSafeInteger(item.sequence) || item.sequence < 1
-    || !["interactive-input", "process-start", "process-exit", "workspace-reconcile"].includes(String(item.kind))
+    || !["interactive-input", "process-start", "process-exit", "workspace-reconcile", "browser-git"].includes(String(item.kind))
     || !["submitted", "completed", "failed"].includes(String(item.outcome))
     || typeof item.recordedAt !== "string" || !Number.isFinite(Date.parse(item.recordedAt))
     || typeof item.processEpoch !== "number" || !Number.isSafeInteger(item.processEpoch) || item.processEpoch < 0
     || typeof item.summary !== "string"
+    || (item.sourceRecordId !== undefined && (typeof item.sourceRecordId !== "string" || !item.sourceRecordId || item.sourceRecordId.length > 256))
     || (item.writerId !== undefined && (typeof item.writerId !== "string" || !item.writerId || item.writerId.length > 128))
     || (item.command !== undefined && typeof item.command !== "string")
     || (item.outputTail !== undefined && typeof item.outputTail !== "string")
@@ -1808,6 +1925,7 @@ function parseAuditRecord(value: unknown): TerminalAuditRecord {
     recordedAt: item.recordedAt,
     processEpoch: item.processEpoch,
     summary: item.summary.slice(0, MAX_AUDIT_SUMMARY_CHARS),
+    ...(typeof item.sourceRecordId === "string" ? { sourceRecordId: item.sourceRecordId } : {}),
     ...(typeof item.command === "string" ? { command: item.command.slice(0, MAX_AUDIT_COMMAND_CHARS) } : {}),
     ...(typeof item.outputTail === "string" ? { outputTail: utf8Tail(item.outputTail, MAX_AUDIT_OUTPUT_CHARS) } : {}),
     ...(typeof item.exitCode === "number" ? { exitCode: item.exitCode } : {}),

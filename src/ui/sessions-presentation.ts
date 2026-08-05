@@ -534,7 +534,7 @@ function reasonNoun(code: string): string {
 }
 
 /**
- * What to do instead of forking, when forking is not what the user wants.
+ * The two safe ways forward when in-place replay is unavailable.
  *
  * The measured defect: `#sessions` computed five stacked amber rows that all
  * had one cause — the pinned provider is not connected in this tab — and then
@@ -605,10 +605,9 @@ export function sessionReconnectPlan(input: Readonly<{
       + " Check whether this page still holds that exact pinned connection; a replacement cannot continue this conversation.",
     primaryLabel: `Check exact ${pinnedRoute} connection`,
     href,
-    // Not the design note's "Fork to a clean session": this route calls the
-    // thing a conversation everywhere else, and its own vocabulary test fails
-    // the word "session" in anything a reader can see or hear.
-    secondaryLabel: `Fork to a new conversation on ${activeRoute}`,
+    // Say "continue" at the point of choice; the disclosure immediately below
+    // explains that this is a new conversation, not an in-place rewrite.
+    secondaryLabel: `Continue with ${activeRoute}`,
     disclosureLabel: `${codes.length} pinned value${codes.length === 1 ? "" : "s"} differ (${nouns.join(", ")})`,
     deltas: Object.freeze(deltas),
     connectionOnly,

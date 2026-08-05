@@ -607,8 +607,7 @@
    * threshold and the max keeps the Type scale preference able to raise it.
    * Measured at 12.75px, so tapping "Filter workspace files by path" scaled the
    * whole workbench up and left the reader panning back — on the one control
-   * whose entire job is to get you to a file quickly. The Browser Git field
-   * carries the same rule in `terminal-view.css` for the same reason.
+   * whose entire job is to get you to a file quickly.
    */
   .workspace-filter { font-size: var(--fs-field); }
 }

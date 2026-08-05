@@ -49,6 +49,7 @@ import { withoutCredential } from "../inference/credential-unavailable";
 import type {
   ActivatedInferenceRoute,
   BrowserInferenceFabric,
+  BrowserInferenceConnection,
 } from "../inference/fabric";
 import type {
   InspectInferenceConnectionsTool,
@@ -4554,7 +4555,30 @@ export function App() {
         || activeSessionIdentity.current !== ownerSessionId
         || sessionNavigationChanging.current
       ) throw new Error("The active Profile or conversation changed before the requested conversation could open.");
-      await resumeLibrarySession(detail);
+      const modelChanged = detail.compatibility?.action === "fork-required"
+        && detail.compatibility.reasons.some((reason) => reason.code === "MODEL_MISMATCH");
+      if (modelChanged) {
+        /*
+         * A history click is already an explicit request to continue that
+         * conversation.  When only the model pin differs, use the same
+         * audited, digest-sealed fork path as the visible Sessions action and
+         * bind it to the current authority manifest.  This preserves the
+         * source identity, bounded context seed, profile contract, and exact
+         * credential generation without making the reader reconnect the old
+         * model first.
+         */
+        const result = await new SessionLibrary(ownerRuntime.journal).fork(target.id, {
+          manifest: authoritySession.manifest,
+          expectedSourceHead: {
+            sequence: target.headSequence,
+            digest: target.headDigest,
+          },
+        });
+        await activateForkedSession(result);
+        setComposerNotice(`Continued on ${authoritySession.manifest.model} · ${result.contextMessageCount} carried.`);
+      } else {
+        await resumeLibrarySession(detail);
+      }
     } catch (error) {
       const { describeSessionPresentationFault } = await loadDeferredCapabilities();
       setRuntimeStatus(error instanceof Error
@@ -4572,7 +4596,14 @@ export function App() {
        * was standing in. The reason is already on screen; the library is for
        * faults that outlive the turn, not for waiting out this one.
        */
-      if (!busy) navigate("sessions");
+      if (!busy) {
+        // Keep the conversation the person chose in view.  A model/provider
+        // mismatch is expected to refuse in-place replay, but sending the
+        // reader to an unselected library made the safe continuation branch
+        // look like the conversation had disappeared.
+        setSessionsFocusId(targetSessionId);
+        navigate("sessions");
+      }
     }
   }
 
@@ -6891,6 +6922,38 @@ export function App() {
     return handle.exportEncryptedBackup();
   }
 
+  /**
+   * Export the existing authority even while its runtime is not adopted.
+   *
+   * A stale object store can outlive the browser-profile key handle after a
+   * partial site-data clear. In that state the replacement ceremony must not
+   * guess at ciphertext or silently discard it: only an enrolled key may open
+   * a temporary runtime and produce the encrypted backup required by the UI.
+   */
+  async function exportExistingLocalDeviceBackup(): Promise<Uint8Array> {
+    const active = localDeviceHandle.current;
+    if (active) return active.exportEncryptedBackup();
+    const [{ openLocalDeviceWorkspaceKey }, { openLocalDeviceVault }] = await Promise.all([
+      import("../storage/local-device-keyring"),
+      loadDeferredCapabilities(),
+    ]);
+    const enrolled = await openLocalDeviceWorkspaceKey({ partition: LOCAL_DEVICE_PARTITION });
+    if (!enrolled) {
+      throw new Error("Recover the existing Vault with its saved recovery key before downloading a replacement backup.");
+    }
+    const temporary = await openLocalDeviceVault({
+      partition: LOCAL_DEVICE_PARTITION,
+      workspaceKey: enrolled.key,
+      disposition: "open-existing",
+      displayName: "Airship on this device",
+    });
+    try {
+      return await temporary.exportEncryptedBackup();
+    } finally {
+      await temporary.closeAndWait();
+    }
+  }
+
   async function requestLocalDevicePersistence(): Promise<"granted" | "not-granted" | "unsupported"> {
     const handle = localDeviceHandle.current;
     if (!handle) throw new Error("Open the Local Device Vault before requesting persistence.");
@@ -7930,6 +7993,7 @@ export function App() {
    */
   async function wipeVaultStorage(): Promise<void> {
     const backend = preferences.vaultBackend;
+    let temporaryLocalDeviceHandle: LocalDeviceVaultHandle | undefined;
     setVaultWipeBusy(true);
     /*
      * The continuity records go with the objects they describe.
@@ -7959,8 +8023,22 @@ export function App() {
         return;
       }
       if (backend === "local-device") {
-        const handle = localDeviceHandle.current;
-        if (!handle) throw new Error("Open the Local Device Vault before wiping it.");
+        let handle = localDeviceHandle.current;
+        if (!handle) {
+          const [{ openLocalDeviceWorkspaceKey }, { openLocalDeviceVault }] = await Promise.all([
+            import("../storage/local-device-keyring"),
+            loadDeferredCapabilities(),
+          ]);
+          const enrolled = await openLocalDeviceWorkspaceKey({ partition: LOCAL_DEVICE_PARTITION });
+          if (!enrolled) throw new Error("Recover the existing Vault with its saved recovery key before replacing it.");
+          temporaryLocalDeviceHandle = await openLocalDeviceVault({
+            partition: LOCAL_DEVICE_PARTITION,
+            workspaceKey: enrolled.key,
+            disposition: "open-existing",
+            displayName: "Airship on this device",
+          });
+          handle = temporaryLocalDeviceHandle;
+        }
         const store = handle.runtime.store;
         if (!isReclaimableObjectStore(store)) {
           throw new Error("This Vault cannot reclaim objects, so nothing was wiped.");
@@ -7983,6 +8061,10 @@ export function App() {
     } catch (error) {
       setRuntimeStatus(error instanceof Error ? `Wipe stopped: ${error.message}` : "Wipe stopped safely.");
     } finally {
+      if (temporaryLocalDeviceHandle) {
+        await temporaryLocalDeviceHandle.closeAndWait().catch(() => undefined);
+        temporaryLocalDeviceHandle = undefined;
+      }
       setVaultWipeBusy(false);
     }
   }
@@ -9553,9 +9635,11 @@ export function App() {
     );
     try {
       const results: LocalProviderProbeResult[] = [];
+      const activationCandidates: BrowserInferenceConnection[] = [];
       for (const server of LOCAL_MODEL_SERVERS) {
         const held = fabric.list().find((entry) => entry.provider.id === server.kind);
         if (held) {
+          activationCandidates.push(held);
           results.push(Object.freeze({
             id: server.kind,
             label: server.label,
@@ -9566,6 +9650,7 @@ export function App() {
         }
         try {
           const connected = await fabric.connectLocal({ kind: server.kind, signal: controller.signal });
+          activationCandidates.push(connected);
           results.push(Object.freeze({
             id: server.kind,
             label: server.label,
@@ -9582,6 +9667,15 @@ export function App() {
             outcome: "silent" as const,
             reason: `${server.endpoint} did not answer: ${localProbeCause(caught)}`,
           }));
+        }
+      }
+      if (!activeExternalRouteRef.current && !activeChutesConnection && activationCandidates.length === 1) {
+        const candidate = activationCandidates[0];
+        const model = candidate.models[0];
+        if (model) {
+          setRuntimeStatus(`Activating ${candidate.provider.label}/${model.label}`);
+          const route = await fabric.activate(candidate.connection.id, model.id, controller.signal);
+          await activateExternalInference(route, controller.signal);
         }
       }
       return Object.freeze(results);
@@ -11163,6 +11257,7 @@ export function App() {
             durability={sessionDurability}
             quarantine={quarantinedSession}
             focusSessionId={sessionsFocusId}
+            onFocusSessionConsumed={() => setSessionsFocusId(undefined)}
           />
         ) : sessionsViewError ? (
           <RouteFailure title="All conversations" message={sessionsViewError} onRetry={retryDeferredChunk} />
@@ -11380,6 +11475,8 @@ export function App() {
                   onActivate={activateLocalDeviceWorkspace}
                   onRestoreEncryptedBackup={restoreLocalDeviceBackup}
                   onExportEncryptedBackup={localDeviceStatus ? exportLocalDeviceBackup : undefined}
+                  onExportExistingEncryptedBackup={exportExistingLocalDeviceBackup}
+                  onReplaceExistingVault={() => wipeVaultStorage()}
                   onRequestPersistentStorage={localDeviceStatus ? requestLocalDevicePersistence : undefined}
                 /> : <RouteSkeleton label="Loading Local Device Vault controls" />}
                 {localDeviceError ? <p class="route-error" role="alert">{localDeviceError}</p> : null}

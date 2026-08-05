@@ -524,8 +524,8 @@ describe("composed commit message", () => {
     // Measured before this: a scan of every button, summary and menu item in
     // Explorer, the Editor, Source Control and the file `•••` menu for
     // /discard|revert|restore|undo|reset|checkout|clean/ returned [] — while
-    // `git restore README.md` typed into the Terminal route's Browser Git field
-    // answered "Discarded changes in 1 path."
+    // `git restore README.md` submitted in Terminal and answered by Airship
+    // Browser Git returned "Discarded changes in 1 path."
     const git = recordingGit(() => Promise.resolve(undefined));
     const request = { repositoryId: "repo", worktreeId: "main", paths: ["docs/a.md"], source: "head", expectedWorktreeVersion: "2" } as const;
     await expect(runSourceMutation(git, { kind: "restore", request })).resolves.toBe(false);

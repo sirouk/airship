@@ -81,6 +81,12 @@ export type SessionsViewProps = Readonly<{
    * left the reader to find the row the sentence they just read was about.
    */
   focusSessionId?: string;
+  /**
+   * Clears a one-shot focus request after the requested conversation is
+   * selected, so returning to the library later does not jump back to an old
+   * rail selection.
+   */
+  onFocusSessionConsumed?: () => void;
 }>;
 
 /** The journal-adapter sentence, chosen by the adapter that is live. */
@@ -151,6 +157,7 @@ export function SessionsView({
   durability = { state: "ephemeral", detail: "This journal exists only in page memory. Nothing is synced." },
   quarantine,
   focusSessionId,
+  onFocusSessionConsumed,
 }: SessionsViewProps) {
   const [draftSearch, setDraftSearch] = useState("");
   const [search, setSearch] = useState("");
@@ -299,7 +306,11 @@ export function SessionsView({
 
   // A later request is a later intent: arriving here twice for two different
   // conversations must land on the second one, not on the first still selected.
-  useEffect(() => { if (focusSessionId) setSelectedId(focusSessionId); }, [focusSessionId]);
+  useEffect(() => {
+    if (!focusSessionId) return;
+    setSelectedId(focusSessionId);
+    onFocusSessionConsumed?.();
+  }, [focusSessionId, onFocusSessionConsumed]);
 
   useEffect(() => {
     if (!selectedId) {
@@ -1434,7 +1445,7 @@ function SessionDetail({
 }
 
 /**
- * The way out of "Fork to continue" that is not a fork.
+ * The two safe ways forward when in-place replay is unavailable.
  *
  * Measured on this build: a 110-event conversation pinned to a cloud provider,
  * opened in a tab that had lost its connection on reload, rendered five stacked
@@ -1479,7 +1490,7 @@ function SessionReconnectCard({ plan, reasons, disabled, onFork }: {
           against reintroducing that older, blanker claim. What a person asking
           "will forking bring my conversation" needs to know is the middle
           clause. */}
-      <small>A fork is a new conversation. It carries a bounded, digest-sealed copy of the context — not this transcript — and leaves this one untouched.</small>
+      <small>Continue creates a new conversation on the active model. It carries a bounded, digest-sealed copy of the context — not this transcript — and leaves this one untouched.</small>
       <details class="session-library-reconnect__delta">
         <summary>{plan.disclosureLabel}</summary>
         {plan.deltas.length ? (

@@ -105,7 +105,7 @@ const KNOWN_EVENT_TYPES = new Set([
    */
   TERMINAL_ACTIVITY_EVENT_TYPE,
 ]);
-const TERMINAL_RECORD_KINDS = new Set(["interactive-input", "process-start", "process-exit", "workspace-reconcile"]);
+const TERMINAL_RECORD_KINDS = new Set(["interactive-input", "process-start", "process-exit", "workspace-reconcile", "browser-git"]);
 const TERMINAL_RECORD_OUTCOMES = new Set(["submitted", "completed", "failed"]);
 const TERMINAL_SESSION_ORIGINS = new Set(["terminal-route", "workspace-path", "conversation"]);
 /** The manager's own `MAX_AUDIT_CHANGED_PATHS`; a journal copy may not exceed the record it copies. */
@@ -1139,6 +1139,7 @@ async function validateProtocol(
       const processEpoch = payload?.processEpoch;
       const changedPaths = payload?.changedPaths;
       const writerId = payload?.writerId === undefined ? undefined : boundedString(payload.writerId, 512);
+      const sourceRecordId = payload?.sourceRecordId === undefined ? undefined : boundedString(payload.sourceRecordId, 512);
       if (
         !payload ||
         event.turnId ||
@@ -1158,6 +1159,9 @@ async function validateProtocol(
         !boundedString(payload.summary, TERMINAL_MAX_SUMMARY_CHARS) ||
         !Number.isFinite(Date.parse(String(payload.recordedAt))) ||
         (payload.writerId !== undefined && !writerId) ||
+        (payload.sourceRecordId !== undefined && !sourceRecordId) ||
+        (payload.kind === "browser-git" && !sourceRecordId) ||
+        (payload.kind !== "browser-git" && payload.sourceRecordId !== undefined) ||
         (payload.profileId !== undefined && !boundedString(payload.profileId, 512)) ||
         (payload.command !== undefined && !boundedString(payload.command, TERMINAL_MAX_COMMAND_CHARS)) ||
         (payload.exitCode !== undefined && !Number.isSafeInteger(payload.exitCode)) ||

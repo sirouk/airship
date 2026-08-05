@@ -44,7 +44,7 @@ const SORTS: readonly Readonly<{ value: PickerSort; label: string }>[] = Object.
  * It used to scroll away, which meant the one sentence qualifying every number
  * above it was absent exactly when someone was reading those numbers.
  */
-export const MODEL_PICKER_PROVENANCE = "Capabilities are source-declared; catalog metadata is not proof. Popularity and load use fresh provider telemetry when available.";
+export const MODEL_PICKER_PROVENANCE = "catalog metadata is not proof; fresh provider telemetry";
 
 /**
  * One catalogue fact about one model: a label, a value, and its provenance.
@@ -220,7 +220,7 @@ export function ModelPicker({
         describing the current selection from outside the thing that changes
         it — and the open popover then covered them. */}
     {attachFacts && selected ? <ModelFactStrip model={selected} /> : null}
-    {open ? <div id={`${optionsId}-dialog`} class="model-picker-popover" role="dialog" aria-label="Choose a Chutes model" onKeyDown={(event) => {
+    {open ? <div id={`${optionsId}-dialog`} class="model-picker-popover" role="dialog" aria-label="Choose a model" onKeyDown={(event) => {
       if (event.key === "Escape") { event.preventDefault(); close(); }
       /* Search owns this listbox's virtual focus. Facets, Sort and Done are
          ordinary controls and must keep their own Arrow/Enter behaviour. */
@@ -368,7 +368,7 @@ export function facetCounts(models: readonly AirshipModel[]): Readonly<Record<Fa
 function facetLabel(value: Facet): string { return value[0]!.toUpperCase() + value.slice(1); }
 
 export function capabilityLabels(model: AirshipModel): string[] {
-  if (model.provenance.capabilities !== "llm-models") return [];
+  if (model.provenance.capabilities !== "llm-models" && model.provenance.capabilities !== "local-discovery") return [];
   const labels: string[] = [];
   if (model.inputModalities.some((value) => value.toLowerCase() === "text")) labels.push(MODEL_CAPABILITY_WORDS.text);
   if (model.inputModalities.some((value) => value.toLowerCase() === "image")) labels.push(MODEL_CAPABILITY_WORDS.vision);
@@ -386,7 +386,9 @@ export function capabilityLabels(model: AirshipModel): string[] {
 export function catalogTokens(model: AirshipModel): readonly string[] {
   return Object.freeze([
     model.availability,
-    model.trust.consistency === "conflict" ? "metadata conflict" : "evidence candidate",
+    model.tags?.includes("local")
+      ? "local discovery"
+      : model.trust.consistency === "conflict" ? "metadata conflict" : "evidence candidate",
   ]);
 }
 function formatUsd(value: number | undefined): string {

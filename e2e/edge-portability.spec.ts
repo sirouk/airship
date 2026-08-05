@@ -375,14 +375,9 @@ async function exerciseCoreLocalSurfaces(page: Page): Promise<void> {
   await expect(page.getByLabel(/browser terminal/iu)).toBeVisible();
   const setup = page.locator("details.terminal-route__setup");
   if ((await setup.getAttribute("open")) === null) await setup.locator("summary").click();
-  const browserGit = page.locator("form.terminal-git");
-  await expect(browserGit).toContainText("Runs against the browser-owned .git");
-  await browserGit.getByRole("textbox", { name: "Browser Git" }).fill("git status");
-  await expect(browserGit.getByRole("button", { name: "Run", exact: true })).toBeEnabled();
-  await browserGit.getByRole("button", { name: "Run", exact: true }).click();
-  await expect(page.locator(".terminal-route__footer")).toContainText(
-    /git status answered from the browser-owned repository at .* without changing it/u,
-  );
+  await expect(setup).toContainText("Type Git commands normally");
+  await expect(setup).toContainText("BrowserGitClient");
+  await expect(page.locator("form.terminal-git")).toHaveCount(0);
   await expectNoPageOverflow(page, "Terminal");
   await expectSemanticAccessibility(page, "Terminal");
 

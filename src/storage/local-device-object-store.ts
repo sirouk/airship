@@ -2,7 +2,7 @@ import { ownedArrayBuffer } from "../core/bytes";
 import type { JsonValue } from "../core/contracts";
 import { fromBase64Url, sha256, stableStringify, toBase64Url } from "../core/hash";
 import { randomUuid } from "../core/id";
-import type { WorkspaceRootKey } from "./encrypted-envelope";
+import { WorkspaceRootKey } from "./encrypted-envelope";
 import type {
   CompareAndSwapResult,
   ObjectRange,
@@ -566,6 +566,33 @@ export class LocalDeviceVaultNotFoundError extends Error {
   constructor(message = "No existing local device Vault was found for this partition.") {
     super(message);
     this.name = "LocalDeviceVaultNotFoundError";
+  }
+}
+
+/**
+ * Whether this browser-origin partition has an authoritative local Vault.
+ *
+ * This deliberately authenticates with a throwaway key and reports only the
+ * existence of an authority. It never returns a key, record, or corruption
+ * detail to the caller. The setup ceremony uses it before generating a new
+ * recovery value so `Create new` can become an explicit replacement decision
+ * instead of a late commit failure after the one-time value was shown.
+ */
+export async function localDeviceAuthorityExists(partition: string): Promise<boolean> {
+  const generated = await WorkspaceRootKey.generate();
+  generated.recoveryBytes.fill(0);
+  try {
+    const opened = await openLocalDeviceObjectStore({
+      partition,
+      key: generated.key,
+      disposition: "open-existing",
+    });
+    opened.store.close();
+    return true;
+  } catch (error) {
+    if (error instanceof LocalDeviceVaultNotFoundError) return false;
+    if (error instanceof LocalDeviceVaultCorruptionError) return true;
+    throw error;
   }
 }
 

@@ -31,15 +31,25 @@ export type TerminalAuditRecord = Readonly<{
   /** Page-unique writer identity used to detect split terminal lineage. */
   writerId?: string;
   sequence: number;
-  kind: "interactive-input" | "process-start" | "process-exit" | "workspace-reconcile";
+  kind: "interactive-input" | "process-start" | "process-exit" | "workspace-reconcile" | "browser-git";
   outcome: "submitted" | "completed" | "failed";
   recordedAt: string;
   processEpoch: number;
   summary: string;
+  /** Interactive-input record answered by an Airship-owned sideband. */
+  sourceRecordId?: string;
   command?: string;
   outputTail?: string;
   exitCode?: number;
   changedPaths?: readonly string[];
+}>;
+
+/** One current-page PTY line that Airship's browser-owned Git can answer. */
+export type TerminalBrowserGitIntent = Readonly<{
+  sessionId: string;
+  sourceRecordId: string;
+  command: string;
+  cwd: string;
 }>;
 
 export type TerminalSessionSnapshot = Readonly<{

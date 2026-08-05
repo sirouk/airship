@@ -60,7 +60,7 @@
    * clipped. Everything else uses `--focus-ring-offset`.
    */
   --focus-ring: 2px solid var(--focus);
-  --focus-ring-offset: 2px;
+  --focus-ring-offset: 1px;
   --focus-ring-inset: -2px;
   /*
    * The scrim, once, so it knows what mode it is in.

@@ -93,7 +93,7 @@ describe("focus is drawn one way", () => {
    */
   it("declares the ring, its offset and the one sanctioned inset", () => {
     expect(tokens).toContain("--focus-ring: 2px solid var(--focus);");
-    expect(tokens).toContain("--focus-ring-offset: 2px;");
+    expect(tokens).toContain("--focus-ring-offset: 1px;");
     expect(tokens).toContain("--focus-ring-inset: -2px;");
   });
 

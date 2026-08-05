@@ -46,6 +46,15 @@ describe("terminal lineage in the session journal", () => {
       const tab = manager.create({ threadId: conversation.id, cwd: "/workspace", name: "Build" });
       await manager.start(tab.id);
       await manager.write(tab.id, "npm test\r");
+      await manager.write(tab.id, "git status\r");
+      const gitIntent = manager.pendingBrowserGitIntent();
+      expect(gitIntent).toBeDefined();
+      expect(manager.claimBrowserGitIntent(gitIntent!)).toBe(true);
+      manager.recordBrowserGitResult(gitIntent!, {
+        output: "On branch main\nworking tree clean",
+        changed: false,
+        failed: false,
+      });
       // A file written straight into the mount is a change only reconciliation
       // can see, which is what makes the reconcile record's `changedPaths`
       // meaningful rather than an empty array.
@@ -59,6 +68,8 @@ describe("terminal lineage in the session journal", () => {
       expect(payloads.map((payload) => payload.kind)).toEqual([
         "process-start",
         "interactive-input",
+        "interactive-input",
+        "browser-git",
         "workspace-reconcile",
       ]);
       // The binding an auditor traverses: which terminal, which page-unique
@@ -74,7 +85,13 @@ describe("terminal lineage in the session journal", () => {
         expect(payload.sequence).toBeGreaterThan(0);
       }
       expect(payloads[1]).toMatchObject({ command: "npm test", outcome: "submitted" });
-      expect(payloads[2]?.changedPaths).toEqual(["/workspace/changed.txt"]);
+      expect(payloads[2]).toMatchObject({ command: "git status", outcome: "submitted" });
+      expect(payloads[3]).toMatchObject({
+        command: "git status",
+        outcome: "completed",
+        sourceRecordId: payloads[2]?.recordId,
+      });
+      expect(payloads[4]?.changedPaths).toEqual(["/workspace/changed.txt"]);
       // A shell command is not a turn step; a terminal record wearing a turn
       // identity would make this session's turn accounting describe work no
       // model did.
@@ -96,7 +113,7 @@ describe("terminal lineage in the session journal", () => {
       // Counted under its own name so Proof can state it. Folding shell work
       // into `events` would have left a reader unable to tell a session where
       // no shell ran from one whose shell work was never recorded.
-      expect(report.counts.shellRecords).toBe(3);
+      expect(report.counts.shellRecords).toBe(5);
     } finally {
       unsubscribe();
       await manager.quiesce("test cleanup");

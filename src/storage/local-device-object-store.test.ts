@@ -261,7 +261,44 @@ describe("LocalDeviceObjectStore", () => {
       "reserved",
     );
   });
+
+  it("wipes encrypted contents atomically while retaining the authority anchor", async () => {
+    const { store } = await fixture("replacement");
+    await store.putIfAbsent("state/journal/v1/session", encoder.encode("old transcript"));
+    await store.putIfAbsent("state/profiles/v1/catalog", encoder.encode("old profile"));
+
+    const objects = await store.list("");
+    const receipt = await store.trash(objects.map((object) => object.key));
+
+    expect(receipt.reclaimed).toHaveLength(2);
+    expect(receipt.retained).toEqual([]);
+    await expect(store.list("")).resolves.toEqual([]);
+    await expect(store.verifyOrInitialize("open-existing")).resolves.toBe("verified");
+  });
+
+  it("leaves the existing inventory untouched when the atomic wipe cannot commit", async () => {
+    const generated = await WorkspaceRootKey.generate();
+    const backend = new FailingReplaceBackend();
+    const store = new LocalDeviceObjectStore({
+      partition: "replacement-failure",
+      key: generated.key,
+      backend,
+      revision: sequence(),
+    });
+    await store.verifyOrInitialize("create-new");
+    await store.putIfAbsent("state/journal/v1/session", encoder.encode("keep this"));
+    const before = await store.list("");
+
+    await expect(store.trash(before.map((object) => object.key))).rejects.toThrow("replacement refused");
+    await expect(store.list("")).resolves.toEqual(before);
+  });
 });
+
+class FailingReplaceBackend extends MemoryLocalDeviceRecordBackend {
+  override async replaceAll(): Promise<void> {
+    throw new Error("replacement refused");
+  }
+}
 
 async function fixture(partition: string): Promise<{ store: LocalDeviceObjectStore }> {
   const generated = await WorkspaceRootKey.generate();

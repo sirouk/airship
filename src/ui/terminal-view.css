@@ -5,7 +5,7 @@
    widening the whole route track. Without it, every direct child measured
    302px inside the 294px phone route even though the document itself happened
    to absorb the spill in its outer gutter. */
-.terminal-route{display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:auto auto auto minmax(14rem,1fr) auto auto;gap:10px;width:100%;height:100%;min-height:min-content;min-width:0}
+.terminal-route{display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:auto auto auto minmax(14rem,1fr) auto;gap:10px;width:100%;height:100%;min-height:min-content;min-width:0}
 .terminal-route__header{margin-bottom:2px}
 .terminal-route__actions,.terminal-panel__bar>div{display:flex;align-items:center;gap:8px}
 .terminal-route button{display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:var(--touch-target);border:1px solid var(--line-strong);border-radius:var(--radius-control);background:var(--surface);color:var(--ink);font:inherit}
@@ -102,41 +102,6 @@
 .terminal-panel__lineage li{display:grid;gap:2px;padding-top:6px;border-top:1px solid #32383b}
 .terminal-panel__lineage li>span,.terminal-panel__lineage li>small,.terminal-panel__lineage li>code{overflow-wrap:anywhere}
 .terminal-panel__lineage li>small{color:#9ba6aa;line-height:1.4}
-/*
- * The route's Git command row: the only human path to the shared bridge.
- *
- * `src/git/terminal-commands.ts` implements seventeen verb families against the
- * browser-owned `.git` and nothing in the app called it, so stash, merge, tag,
- * reset, restore, rev-parse and remote management had no reachable surface on
- * any device. Its output is its own region and deliberately never the emulator
- * buffer: writing bridge answers into the PTY scrollback is what made the
- * WebContainer shell look as though it had a git binary.
- */
-.terminal-git{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:6px 9px;align-items:center;padding:7px 10px;border:1px solid var(--line);border-radius:var(--radius-control);background:color-mix(in srgb,var(--surface) 84%,transparent)}
-.terminal-git>label{display:inline-flex;align-items:center;gap:7px;color:var(--ink);font-size:var(--fs-caption);white-space:nowrap}
-.terminal-git__command{min-width:0;min-height:var(--touch-target);padding:5px 10px;border:1px solid var(--line-strong);border-radius:var(--radius-control);background:var(--surface);color:var(--ink);font-family:"SFMono-Regular",Consolas,"Liberation Mono",monospace;font-size:var(--fs-caption)}
-.terminal-git>button{padding:0 14px;font-size:var(--fs-caption)}
-.terminal-git>p{grid-column:1 / -1;max-width:92ch;margin:0;color:var(--ink-muted);font-size:var(--fs-micro);line-height:1.45}
-.terminal-git__notice{grid-column:1 / -1}
-/* The `git`-in-jsh handoff spans the row so its sentence and its two controls
-   stay on one line above the field they fill; it wraps rather than clipping the
-   action, which is the whole point of the row. */
-/* Selector matches `.terminal-git>p`'s specificity deliberately: the row-wide
-   prose rule caps at 92ch, and a notice carrying two controls must reach the
-   edge of the field it is offering to fill. */
-.terminal-git>.terminal-git__handoff{grid-column:1 / -1;max-width:none;flex-wrap:wrap}
-/* `Seal` renders a `<span class="seal">`, so an unqualified `>span` handed the
-   16px mark the growth meant for the sentence and pushed the words 450px right. */
-.terminal-git__handoff>.seal{flex:0 0 auto}
-/* A narrow basis on purpose: the route grid is height-locked, so every row this
-   notice adds is taken out of the tab strip and the runtime band above it.
-   Wrapping the sentence into the space the two controls leave costs 114px→~60px
-   at 390x844, which the panel's own 1fr row can absorb. */
-.terminal-git__handoff>span:not(.seal){flex:1 1 10ch;min-width:0}
-.terminal-git__handoff>button{flex:0 0 auto;padding:0 12px;font-size:var(--fs-micro)}
-.terminal-git__notice>pre{max-height:14rem;margin:0;overflow:auto;padding:9px 11px;border:1px solid var(--line-strong);border-radius:var(--radius-control);background:#0b0e0f;color:#d9d3c7;font-size:var(--fs-micro);line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere}
-.terminal-git__notice>pre[data-failed=true]{border-color:var(--v-failed);color:#f0d9d3}
-
 .terminal-route__footer{display:flex;align-items:center;gap:8px;min-height:30px;color:var(--ink-muted);font-size:var(--fs-caption)}
 .terminal-empty{display:grid;place-items:center;align-content:center;gap:8px;min-height:18rem;border:1px dashed var(--line-strong);border-radius:var(--radius-panel);text-align:center}
 .terminal-empty h2,.terminal-empty p{margin:0}
@@ -146,11 +111,7 @@
  * sessions, not a second terminal implementation. It deliberately omits the
  * route explainer while keeping the runtime boundary on its toolbar.
  */
-/* Five rows, and the PTY keeps a floor. The `git`-in-jsh handoff is a fifth
-   child; against `minmax(0,1fr)` the panel row collapsed to zero and the dock
-   showed a notice about a shell that was no longer on screen. Measured at
-   390x844. */
-.terminal-route--dock{grid-template-rows:auto auto minmax(5.5rem,1fr) auto auto;gap:5px;height:100%;min-height:0;padding:0 7px 6px;background:var(--ground)}
+.terminal-route--dock{grid-template-rows:auto auto minmax(5.5rem,1fr) auto;gap:5px;height:100%;min-height:0;padding:0 7px 6px;background:var(--ground)}
 .terminal-dock__toolbar{display:flex;align-items:center;justify-content:space-between;gap:10px;min-width:0;min-height:42px;border-bottom:1px solid var(--line)}
 .terminal-dock__identity,.terminal-dock__actions{display:flex;align-items:center;gap:8px;min-width:0}
 .terminal-dock__identity>strong{font-size:var(--fs-caption)}
@@ -167,7 +128,7 @@
 .terminal-route--dock .terminal-route__footer>span{overflow:hidden;text-overflow:ellipsis}
 
 @media(max-width:760px){
-  .terminal-route{grid-template-rows:auto auto auto minmax(9rem,1fr) auto auto;gap:8px}
+  .terminal-route{grid-template-rows:auto auto auto minmax(9rem,1fr) auto;gap:8px}
   /* The full route scrolls with the page on a phone. Keeping its six rows
      height-locked collapsed the setup and tab tracks to 2px at 390x664, while
      their visible children painted through the terminal and intercepted one
@@ -236,27 +197,11 @@
      above for why it cannot wait for a hover that never comes. */
   .terminal-tab .terminal-tab__rename{min-width:var(--touch-target);min-height:var(--touch-target);opacity:1}
   .terminal-emulator{padding:6px}
-  /* The label owns its own line so the field keeps a usable measure for a
-     command like `git worktree add <path> <branch>` at 390px. */
-  .terminal-git{grid-template-columns:minmax(0,1fr) auto;padding:6px 8px}
-  .terminal-git>label{grid-column:1 / -1}
-  .terminal-git>button{min-width:var(--touch-target)}
-  /* `--fs-field` is `max(16px, var(--fs-body))`: 16px is the iOS focus-zoom
-     threshold, and the max keeps the reader's Type scale able to raise it.
-     Measured at 12.75px, so tapping the one field that runs Git on a phone
-     scaled the whole route up and left the reader panning back to find "Run". */
-  .terminal-git__command{font-size:var(--fs-field)}
-  .terminal-git__notice>pre{max-height:11rem}
-  /* Full measure, controls beneath. Sharing the row with two 44px buttons left
-     the sentence a 166px column and eight lines of it at 390px — taller than
-     the same words wrapped across the whole card. */
-  .terminal-git__handoff>span:not(.seal){flex:1 1 100%}
-  .terminal-git__handoff>button{flex:1 1 auto}
   .terminal-panel__meta summary{min-height:var(--touch-target);display:flex;align-items:center}
   .terminal-panel__meta{display:grid;gap:4px}
   .terminal-panel__meta-actions{justify-content:flex-end;gap:12px}
   .terminal-panel__popover{width:min(34rem,calc(100vw - 2rem))}
-  .terminal-route--dock{grid-template-rows:auto auto minmax(5.5rem,1fr) auto auto;gap:4px;padding-inline:4px}
+  .terminal-route--dock{grid-template-rows:auto auto minmax(5.5rem,1fr) auto;gap:4px;padding-inline:4px}
   .terminal-dock__toolbar{align-items:stretch;min-height:84px;padding:4px 0}
   .terminal-dock__identity{display:grid;grid-template-columns:auto minmax(0,1fr);align-content:center;gap:2px 6px}
   .terminal-dock__identity>small{grid-column:1 / -1;max-width:13rem}

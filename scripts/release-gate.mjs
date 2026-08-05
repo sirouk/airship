@@ -549,7 +549,12 @@ export const RELEASE_BUDGETS = Object.freeze({
   // raw would have left 91 bytes, below this aggregate's 768-byte floor, so raw
   // takes one further step and leaves 1,115. The existing gzip ceiling leaves
   // 998 bytes. The entry ceiling remains independently fixed.
-  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2106 * 1024, gzip: 671 * 1024 }),
+  // Measured 2111.81 KiB raw / 671.5 KiB gzip in the container release artifact
+  // after automatic terminal Git routing, Airship-labelled sideband transcript
+  // output, and the explicit Local Device Vault replacement flow. Those are
+  // deferred first-party paths; the smallest whole-KiB ceilings above the
+  // reading are 2112 KiB raw and 672 KiB gzip.
+  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2112 * 1024, gzip: 672 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now measures 672.33 KiB raw / 186.61 KiB gzip:
   // the browser-Git pack grew (see optionalBrowserGit) and the Terminal pack
@@ -568,7 +573,10 @@ export const RELEASE_BUDGETS = Object.freeze({
   // 192,979 B gzip. The vendor pins remain byte-identical; the delta is the
   // first-party manager above. The existing ceilings leave 975 / 1,581 bytes,
   // both above the aggregate's 768-byte floor.
-  optionalVendorRuntimeAggregate: Object.freeze({ raw: 679 * 1024, gzip: 190 * 1024 }),
+  // Measured 679.15 KiB raw / 188.84 KiB gzip after the automatic terminal Git
+  // sideband and Local Device Vault replacement work; raw takes the next
+  // whole-KiB ceiling while gzip remains at 190 KiB.
+  optionalVendorRuntimeAggregate: Object.freeze({ raw: 680 * 1024, gzip: 190 * 1024 }),
   // Absolute installed bundle backstop. It includes first-party/routes, both
   // vendor engines, model catalog chunks, and the service worker. Static
   // Pyodide assets remain governed by their separate pack cap below.
@@ -736,7 +744,11 @@ export const RELEASE_BUDGETS = Object.freeze({
   // 2,849,750 B raw / 879,085 B gzip. This is exactly the reviewed first-party
   // and vendor-aggregate growth above. The existing ceilings leave 1,066 /
   // 1,555 bytes, both above the aggregate's 768-byte floor.
-  totalJavaScriptAndWorkers: Object.freeze({ raw: 2784 * 1024, gzip: 860 * 1024 }),
+  // Measured 2791.29 KiB raw / 860.5 KiB gzip in the container release artifact
+  // after the standalone-command safety parser kept compound shell lines with
+  // jsh. The smallest whole-KiB ceilings above this installed graph are 2792
+  // KiB raw and 861 KiB gzip.
+  totalJavaScriptAndWorkers: Object.freeze({ raw: 2792 * 1024, gzip: 861 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. Keep it visible under a dedicated, deliberately small cap.
   serviceWorker: Object.freeze({ raw: 12 * 1024, gzip: 4 * 1024 }),
@@ -1208,12 +1220,13 @@ export const RELEASE_BUDGETS = Object.freeze({
   // The profile-authority shutdown now observes rejected provider exits, waits
   // for an overtaken jsh spawn before unmounting its cwd, and bounds forced
   // termination. Manual restart and close now use the same bounded stop and a
-  // timed-out spawn retains its mounted authority. Measured 430,996 B raw /
-  // 113,256 B gzip. 421 KiB raw would have left 108 bytes and 111 KiB gzip
-  // would have left 408, both below the route's 768-byte tripwire, so each
-  // takes one further step and leaves 1,132 / 1,432 bytes. First paint does
-  // not move. Still fetched only when Terminal opens.
-  optionalTerminal: Object.freeze({ raw: 422 * 1024, gzip: 112 * 1024 }),
+  // timed-out spawn retains its mounted authority. The standalone-command
+  // parser also rejects shell operators and substitutions before the bridge is
+  // claimed, keeping compound lines with jsh. Measured 422.32 KiB raw /
+  // 111.14 KiB gzip; 423 KiB raw and 112 KiB gzip are the tightest whole-KiB
+  // ceilings above those readings. First paint does not move. Still fetched
+  // only when Terminal opens.
+  optionalTerminal: Object.freeze({ raw: 423 * 1024, gzip: 112 * 1024 }),
   // Protocol host only. The reviewed Transformers/ORT/model artifacts remain
   // a separately mounted same-origin semantic pack and are never preloaded.
   optionalSemanticWorker: Object.freeze({ raw: 16 * 1024, gzip: 6 * 1024 }),
@@ -1247,10 +1260,10 @@ export const RELEASE_BUDGETS = Object.freeze({
   // Exact conversation return now classifies every held provider route as the
   // pinned generation, a replacement, or unrelated; locks the pinned model;
   // and keeps abandon unavailable once verification reaches its commit point.
-  // The complete six-pack aggregate now measures 128,800 B raw / 39,447 B
+  // The complete six-pack aggregate now measures 128,800 B raw / 39,446 B
   // gzip. 126 KiB raw would have left 224 bytes and 39 KiB gzip would have
   // left 489, both below the route aggregate's 768-byte floor, so each takes
-  // one further whole-KiB step and leaves 1,248 / 1,513 bytes.
+  // one further whole-KiB step and leaves 1,248 / 1,514 bytes.
   optionalInferenceProviders: Object.freeze({ raw: 127 * 1024, gzip: 40 * 1024 }),
   // Chutes registration metadata plus PKCE/token operations load for Connect,
   // an OAuth callback, or a scheduled refresh—never for first paint.

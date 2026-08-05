@@ -19,7 +19,11 @@ pretending that every device contains a Linux host.
 The Workspace Terminal uses the same singleton WebContainer host through a
 route-lazy xterm.js renderer. xterm.js is a terminal emulator, not a shell. The
 actual interactive process is WebContainer `jsh`; Airship never labels it as
-host Bash, SSH, or access to the user's device filesystem.
+host Bash, SSH, or access to the user's device filesystem. jsh has no native Git
+binary and its workspace projection excludes `.git`. A standalone `git …` line
+is answered by the approval-gated BrowserGitClient as a visibly attributed
+Airship sideband in the same transcript; the Git operation is not executed by
+jsh and does not create a second repository authority.
 
 The agent can call `inspect_execution_runtimes` before choosing an implementation.
 `execute_code` dispatches only to a registered `ready` adapter. The legacy

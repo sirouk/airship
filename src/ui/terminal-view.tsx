@@ -78,6 +78,9 @@ export const TERMINAL_CONTAINER_SCOPE_NOTICE = "Only the workspace mount is Prof
  */
 export const TERMINAL_JOB_CONTROL_NOTICE = "jsh has no job control: `jobs`, `fg` and `bg` are not implemented, and a command backgrounded with `&` runs inside this one process where Airship cannot observe or list it. The tab strip above is the whole of the process listing Airship can stand behind — one row per PTY it started, with its live status.";
 
+/** The exact boundary between a submitted terminal line and browser-owned Git. */
+export const TERMINAL_GIT_BOUNDARY_NOTICE = "Type Git commands normally. jsh has no git binary or .git; standalone `git …` lines run through BrowserGitClient with Editor approval/revision checks, and Airship labels the answer in the transcript. Compound shell lines stay with jsh.";
+
 export type TerminalEmulatorWrite =
   | Readonly<{ kind: "append"; text: string }>
   | Readonly<{ kind: "redraw"; text: string }>
@@ -127,13 +130,17 @@ export function terminalDriftSentence(unreconciled: number): string {
 }
 
 export function terminalUnreconciledInputs(sessions: readonly TerminalSessionSnapshot[]): number {
-  const reconciledAt = sessions
-    .flatMap((session) => session.audit)
+  const audit = sessions.flatMap((session) => session.audit);
+  const reconciledAt = audit
     .filter((record) => record.kind === "workspace-reconcile" && record.outcome === "completed")
     .reduce((latest, record) => record.recordedAt > latest ? record.recordedAt : latest, "");
-  return sessions
-    .flatMap((session) => session.audit)
-    .filter((record) => record.kind === "interactive-input" && record.recordedAt > reconciledAt)
+  const browserGitInputs = new Set(audit
+    .filter((record) => record.kind === "browser-git" && record.sourceRecordId)
+    .map((record) => record.sourceRecordId));
+  return audit
+    .filter((record) => record.kind === "interactive-input"
+      && record.recordedAt > reconciledAt
+      && !browserGitInputs.has(record.id))
     .length;
 }
 
@@ -182,13 +189,10 @@ export type TerminalViewProps = Readonly<{
    *
    * `runTerminalGitCommand` implements seventeen verb families against the same
    * revision-fenced repository the Editor, source control and the agent tools
-   * read, and nothing in `src/**` called it: stash, merge, tag, reset, restore,
-   * rev-parse and remote management were implemented, approval-gated and tested
-   * with no human path on any device. The route's Git command row is that
-   * caller. Its answers land in their own region and never in the PTY
-   * scrollback — the WebContainer shell has no git binary and no `.git` in its
-   * mount, and pasting bridge output into the transcript is what made it look
-   * as though it did.
+   * read. Explicit `git …` lines submitted to the PTY are its human entry
+   * point. The WebContainer shell still has no git binary or `.git` mount;
+   * BrowserGitClient's result is appended as an Airship-labelled sideband so
+   * the transcript never claims those bytes came from jsh.
    */
   git: BrowserGitClient;
   reviewGit: TerminalGitReview;
@@ -284,41 +288,12 @@ export async function runTerminalGitBridge(args: Readonly<{
   }
 }
 
-/**
- * The `git` line the shell cannot run, lifted so the bridge can answer it.
- *
- * `git status` is the likeliest first command in a product whose Source Control
- * tab is two clicks away, and jsh answers it with `jsh: command not found: git`
- * and no pointer to the bridge 200px below — whose placeholder is literally
- * `git status`. Submitted input is the honest trigger: the mount carries no
- * `.git` and the container has no git binary, so every such line has already
- * failed by the time it is in `history`. Only the most recent line counts; an
- * older `git` buried under real shell work is not a live intention.
- */
-export function terminalShellGitHandoff(history: readonly string[] | undefined): string | undefined {
-  const last = history?.at(-1)?.trim();
-  return last && /^git(?:\s|$)/u.test(last) ? last : undefined;
-}
-
-/**
- * One sentence for the offer, in both places it is made.
- *
- * Deliberately short. The route's first draft explained the target and the
- * approval policy too, and at 390px that wrapped to four lines — squeezing the
- * tab strip above it to a 12px sliver and, in the dock, the shell it was
- * describing off the screen entirely. Both facts are already stated by the
- * scope paragraph directly below the field this offer fills.
- */
-export function terminalGitHandoffSentence(command: string): string {
-  return `${command} needs Browser Git: this ${WEB_CONTAINER_TERMINAL_RUNTIME.shellLabel} process has no git binary.`;
-}
-
-/** One line for the route footer; the bridge's own text stays in the output region. */
+/** One line for the route footer; the full answer is retained in the transcript. */
 export function terminalGitNotice(outcome: TerminalGitOutcome): string {
-  if (outcome.failed) return `git was refused at ${outcome.cwd}: ${outcome.output.split("\n")[0] ?? ""}`;
+  if (outcome.failed) return `Airship Browser Git refused ${outcome.command} at ${outcome.cwd}: ${outcome.output.split("\n")[0] ?? ""}`;
   return outcome.changed
-    ? `${outcome.command} changed the browser-owned repository at ${outcome.cwd}. Editor, source control and the agent read that same state.`
-    : `${outcome.command} answered from the browser-owned repository at ${outcome.cwd} without changing it.`;
+    ? `Airship Browser Git completed ${outcome.command} and changed the browser-owned repository at ${outcome.cwd}. Editor, source control and the agent read that same state.`
+    : `Airship Browser Git completed ${outcome.command} against the browser-owned repository at ${outcome.cwd} without changing it.`;
 }
 
 /** Infer only what the workspace port proves. App should pass its richer durability state. */
@@ -360,11 +335,6 @@ function ProfileScopedTerminalView({ workspace, git, reviewGit, onWorkspaceChang
   const [setupOpen, setSetupOpen] = useState(() => readTerminalSetupOpen(globalThis.localStorage));
   const [persistenceFailure, setPersistenceFailure] = useState<string>();
   const [reconcilable, setReconcilable] = useState(false);
-  const [gitCommand, setGitCommand] = useState("");
-  const [gitOutcome, setGitOutcome] = useState<TerminalGitOutcome>();
-  const [gitRunning, setGitRunning] = useState(false);
-  /** The lifted `git` line already answered or waved off, so the offer is made once. */
-  const [gitHandoffSettled, setGitHandoffSettled] = useState<string>();
   /** Shell work no reconciliation has followed into Explorer, from the lineage. */
   const drift = useMemo(() => terminalUnreconciledInputs(sessions), [sessions]);
   const cancelRename = useRef(false);
@@ -448,30 +418,40 @@ function ProfileScopedTerminalView({ workspace, git, reviewGit, onWorkspaceChang
     // a rename would fight the input for the strip's scroll position.
   }, [activeId, sessions.map(({ id }) => id).join(" ")]);
 
+  // Input is a character stream, not a command callback: jsh receives the line
+  // the person typed and records its own refusal. The audit record created at
+  // submission is the first honest command boundary Airship owns. Claim it
+  // synchronously so route and dock presentations cannot execute one Git
+  // mutation twice, then append BrowserGitClient's result with its own author.
+  const gitIntent = manager.pendingBrowserGitIntent(profileId);
+  useEffect(() => {
+    if (!gitIntent || !manager.claimBrowserGitIntent(gitIntent)) return;
+    setNotice(`Routing ${gitIntent.command} through Airship Browser Git; jsh has no git binary.`);
+    void (async () => {
+      try {
+        const outcome = await runTerminalGitBridge({
+          command: gitIntent.command,
+          cwd: gitIntent.cwd,
+          client: git,
+          review: reviewGit,
+        });
+        manager.recordBrowserGitResult(gitIntent, outcome);
+        let message = terminalGitNotice(outcome);
+        if (outcome.changed) {
+          try {
+            await workspaceChanged.current?.();
+          } catch (error) {
+            message = `${message} Workspace views could not refresh: ${error instanceof Error ? error.message : "unknown refresh failure"}`;
+          }
+        }
+        setNotice(message);
+      } catch (error) {
+        setNotice(error instanceof Error ? error.message : "Airship Browser Git could not retain its result.");
+      }
+    })();
+  }, [manager, gitIntent?.sourceRecordId, git, reviewGit]);
+
   const active = sessions.find(({ id }) => id === activeId);
-  // The selected tab's directory is the bridge's cwd, so the row answers about
-  // the repository the panel below it is standing in rather than needing a
-  // `git -C` the user would have to type on every command.
-  const gitCwd = active?.cwd ?? workspaceRoot;
-  // A `git` the shell just refused, offered to the bridge that can answer it.
-  const liftedGit = terminalShellGitHandoff(active?.history);
-  const gitHandoff = liftedGit && liftedGit !== gitHandoffSettled ? liftedGit : undefined;
-  const runGit = async (requested = gitCommand) => {
-    const command = requested.trim();
-    if (!command || gitRunning) return;
-    setGitRunning(true);
-    try {
-      const outcome = await runTerminalGitBridge({ command, cwd: gitCwd, client: git, review: reviewGit });
-      setGitOutcome(outcome);
-      setNotice(terminalGitNotice(outcome));
-      // add, commit, restore, stash, merge and switch all rewrite files the
-      // file tree and the Editor are already showing; without this the two
-      // surfaces disagree until some unrelated refresh happens to land.
-      if (outcome.changed) await workspaceChanged.current?.();
-    } finally {
-      setGitRunning(false);
-    }
-  };
   const createTab = () => {
     const created = manager.create({ ...(profileId ? { profileId } : {}), ...(threadId ? { threadId } : {}), cwd: workspaceRoot, origin: threadId ? { kind: "conversation" } : { kind: "terminal-route" } });
     setActiveId(created.id);
@@ -605,6 +585,7 @@ function ProfileScopedTerminalView({ workspace, git, reviewGit, onWorkspaceChang
               rebooted per Profile without a multi-second teardown. */}
           <p>{TERMINAL_CONTAINER_SCOPE_NOTICE}</p>
           <p>{TERMINAL_JOB_CONTROL_NOTICE}</p>
+          <p>{TERMINAL_GIT_BOUNDARY_NOTICE}</p>
         </div>
       </details> : null}
 
@@ -677,71 +658,6 @@ function ProfileScopedTerminalView({ workspace, git, reviewGit, onWorkspaceChang
       /> : (
         <div class="terminal-empty"><Icon name="terminal" /><h2>No terminal tab</h2><p>Create a tab to cold-start an isolated browser runtime.</p><button type="button" onClick={createTab}>New terminal</button></div>
       )}
-
-      {/* The dock has no command row of its own — it is a 220px PTY strip — so
-          the same refusal routes to the route that does own one, rather than
-          leaving the dock the one place where `git` still dead-ends. */}
-      {variant === "dock" && gitHandoff ? <p class="notice terminal-git__handoff" data-state="attention" role="status">
-        <Seal state="attention" label="Not runnable in this shell" density="dot" size={15} />
-        <span>{terminalGitHandoffSentence(gitHandoff)}</span>
-        {onOpenFullView ? <button type="button" class="primary" onClick={() => { setGitHandoffSettled(gitHandoff); onOpenFullView(); }}>Open Browser Git</button> : null}
-        <button type="button" onClick={() => setGitHandoffSettled(gitHandoff)}>Dismiss</button>
-      </p> : null}
-
-      {/* The route's Git command row. `runTerminalGitCommand` had no caller in
-          `src/**` at all, and seven of its verb families — stash, merge, tag,
-          reset, restore, rev-parse, remote management — have no other surface
-          in the product, so they were reachable only from a unit test. Route
-          variant only: the dock is a 220px-floor strip whose job is the PTY,
-          and its "Full view" control is the path to this. */}
-      {variant === "route" ? <form class="terminal-git" onSubmit={(event) => { event.preventDefault(); void runGit(); }}>
-        <label for="terminal-git-command"><Icon name="branch" size={15} /> Browser Git</label>
-        <input
-          id="terminal-git-command"
-          class="terminal-git__command"
-          type="text"
-          value={gitCommand}
-          placeholder="git status"
-          autoComplete="off"
-          autocapitalize="off"
-          spellcheck={false}
-          aria-describedby="terminal-git-scope"
-          onInput={(event) => setGitCommand(event.currentTarget.value)}
-        />
-        <button type="submit" disabled={gitRunning || !gitCommand.trim()}>{gitRunning ? "Running…" : "Run"}</button>
-        {/*
-          The seam, not a second dead end. `git status` in the PTY answers "jsh:
-          command not found: git" and pointed at nothing; the bridge that can
-          answer it is on the same screen, so the typed line is offered to it
-          verbatim instead of being retyped.
-
-          It stands *in place of* the scope paragraph, carrying that paragraph's
-          id so the field keeps its description. Added as an extra row it cost
-          114px, and this route's grid is height-locked: at 390x844 the browser
-          took every one of those pixels out of the tab strip and the runtime
-          band, crushing a 44px tab to 23px. The actionable form of a sentence
-          belongs where the sentence was.
-        */}
-        {gitHandoff ? <p class="notice terminal-git__handoff" id="terminal-git-scope" data-state="attention" role="status">
-          <Seal state="attention" label="Not runnable in this shell" density="dot" size={15} />
-          <span>{terminalGitHandoffSentence(gitHandoff)} Browser Git runs it against the browser-owned <code>.git</code> holding <code>{gitCwd}</code>, under Editor's approval policy.</span>
-          <button type="button" class="primary" onClick={() => {
-            setGitCommand(gitHandoff);
-            setGitHandoffSettled(gitHandoff);
-            void runGit(gitHandoff);
-          }}>Run it here</button>
-          <button type="button" onClick={() => setGitHandoffSettled(gitHandoff)}>Dismiss</button>
-        </p> : <p id="terminal-git-scope">Runs against the browser-owned <code>.git</code> holding <code>{gitCwd}</code> — the same directory the {WEB_CONTAINER_TERMINAL_RUNTIME.shellLabel} process calls <code>{terminalShellPath(gitCwd)}</code> — under Editor's approval policy. The shell has no git binary, so the answer lands below, never in the scrollback. <code>git help</code> lists the supported verbs and names what is absent.</p>}
-        {/* Live because the answer is the point: the footer announces the
-            one-line verdict, this region carries the bridge's own text. */}
-        <div class="terminal-git__notice" role="status">
-          {gitOutcome ? <pre
-            data-failed={gitOutcome.failed ? "true" : "false"}
-            tabIndex={0}
-            aria-label={`Output of ${gitOutcome.command}`}
-          >{gitOutcome.output}</pre> : null}
-        </div>
-      </form> : null}
 
       <footer class="terminal-route__footer" role="status">
         {persistenceFailure
@@ -1049,6 +965,7 @@ function auditKindLabel(kind: TerminalSessionSnapshot["audit"][number]["kind"]):
   if (kind === "interactive-input") return "PTY input";
   if (kind === "process-start") return "Process start";
   if (kind === "process-exit") return "Process exit";
+  if (kind === "browser-git") return "Airship Browser Git";
   return "Workspace reconcile";
 }
 

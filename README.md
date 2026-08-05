@@ -121,8 +121,8 @@ adapter are in
   protection, revision-fenced editing, desktop drag/drop and context menus,
   mobile move sheets, and a bounded Source Control rail;
 - a standards-compatible browser Git adapter over the same Workspace used by
-  Editor, Source Control, the terminal Git bridge, and agent tools: real
-  `.git` objects, refs, `HEAD`, config, and binary index back status, diff,
+  Editor, Source Control, explicit `git …` lines in Terminal, and agent tools:
+  real `.git` objects, refs, `HEAD`, config, and binary index back status, diff,
   stage/unstage, commit, branch creation, and branch switching; Vault mode
   migrates those exact files through the encrypted Workspace adapter; public
   GitHub snapshots become genuine local repositories, direct Smart HTTP clone
@@ -132,7 +132,8 @@ adapter are in
   ambiguous push outcomes require fetch-before-retry; conventional linked
   worktrees use real `.git` pointers and `.git/worktrees` administration
   records with independent `HEAD` and binary index state over shared objects
-  and refs;
+  and refs; Terminal labels BrowserGitClient answers as Airship sidebands
+  rather than claiming jsh owns a native Git binary;
 - an automatic client context engine over the live virtual workspace with
   coalesced refresh, cancellation, generation-pinned hybrid retrieval, and
   exact digest/revision/chunk/query lineage; its hash embeddings are a

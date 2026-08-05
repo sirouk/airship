@@ -8,7 +8,10 @@ import {
   type LocalDeviceWorkspaceKey,
   type LocalDeviceWorkspaceKeyEnrollment,
 } from "../storage/local-device-keyring";
-import { requestPersistentLocalDeviceStorage } from "../storage/local-device-object-store";
+import {
+  localDeviceAuthorityExists,
+  requestPersistentLocalDeviceStorage,
+} from "../storage/local-device-object-store";
 import type { LocalDeviceVaultStatus } from "../vault/local-device";
 import { importWorkspaceRecoveryKey } from "../vault/recovery";
 import { downloadBytes } from "./file-download";
@@ -75,6 +78,7 @@ export type LocalDeviceAtomicRestoreRequest = Readonly<{
 
 export type LocalDeviceVaultSetupOperations = Readonly<{
   openExisting(partition: string): Promise<LocalDeviceWorkspaceKey | undefined>;
+  hasExistingAuthority?(partition: string): Promise<boolean>;
   beginEnrollment(partition: string): Promise<LocalDeviceWorkspaceKeyEnrollment>;
   importRecovery(partition: string, recoveryKey: string): Promise<LocalDeviceWorkspaceKey>;
   importRecoveryKey(recoveryKey: string): Promise<WorkspaceRootKey>;
@@ -101,6 +105,10 @@ export type LocalDeviceVaultSetupProps = Readonly<{
   ): Promise<Readonly<{ restored: number }>>;
   /** Returns ciphertext-only backup bytes from the currently open handle. */
   onExportEncryptedBackup?(): Promise<Uint8Array>;
+  /** Returns ciphertext-only backup bytes from an existing authority. */
+  onExportExistingEncryptedBackup?(): Promise<Uint8Array>;
+  /** Replaces the existing authority's objects while preserving its key. */
+  onReplaceExistingVault?(): Promise<void>;
   /**
    * Optional handle-bound persistence request. When omitted, the browser
    * StorageManager request is used directly from the button gesture.
@@ -127,6 +135,8 @@ type Notice = Readonly<{
 
 const DEFAULT_OPERATIONS: LocalDeviceVaultSetupOperations = Object.freeze({
   openExisting: (partition) => openLocalDeviceWorkspaceKey({ partition }),
+  hasExistingAuthority: async (partition) =>
+    Boolean(await openLocalDeviceWorkspaceKey({ partition })) || await localDeviceAuthorityExists(partition),
   beginEnrollment: (partition) => prepareLocalDeviceWorkspaceKeyEnrollment({ partition }),
   importRecovery: (partition, recoveryKey) =>
     importLocalDeviceWorkspaceRecoveryKey({ partition, recoveryKey }),
@@ -148,6 +158,8 @@ export function LocalDeviceVaultSetup({
   onActivate,
   onRestoreEncryptedBackup,
   onExportEncryptedBackup,
+  onExportExistingEncryptedBackup,
+  onReplaceExistingVault,
   onRequestPersistentStorage,
   operations = DEFAULT_OPERATIONS,
   backupFileName,
@@ -188,6 +200,10 @@ export function LocalDeviceVaultSetup({
   const [restoreAcknowledged, setRestoreAcknowledged] = useState(false);
   const [restoreDisposition, setRestoreDisposition] =
     useState<"open-existing" | "create-new">("open-existing");
+  const [replacementStage, setReplacementStage] =
+    useState<"idle" | "authority-warning" | "backup-warning">("idle");
+  const [replacementBackupExported, setReplacementBackupExported] = useState(false);
+  const [replacementBusy, setReplacementBusy] = useState(false);
   const busy = operation !== undefined;
 
   useEffect(() => () => {
@@ -258,7 +274,7 @@ export function LocalDeviceVaultSetup({
   }
 
   async function openExisting(): Promise<void> {
-    if (busy) return;
+    if (busy || replacementBusy) return;
     setOperation("opening");
     setNotice(undefined);
     try {
@@ -282,12 +298,17 @@ export function LocalDeviceVaultSetup({
   }
 
   async function beginEnrollment(): Promise<void> {
-    if (busy) return;
+    if (busy || replacementBusy) return;
     cancelEnrollment();
-    const generation = ++enrollmentGeneration.current;
     setOperation("preparing");
     setNotice(undefined);
     try {
+      if (await operations.hasExistingAuthority?.(partition)) {
+        setReplacementStage("authority-warning");
+        setReplacementBackupExported(false);
+        return;
+      }
+      const generation = ++enrollmentGeneration.current;
       const prepared = await operations.beginEnrollment(partition);
       if (!mounted.current || generation !== enrollmentGeneration.current) {
         prepared.cancel();
@@ -300,6 +321,26 @@ export function LocalDeviceVaultSetup({
     } finally {
       finishOperation();
     }
+  }
+
+  function beginReplacementWarning(): void {
+    if (busy || replacementBusy) return;
+    setReplacementStage("authority-warning");
+    setReplacementBackupExported(false);
+    setNotice(undefined);
+  }
+
+  function continueReplacementToBackup(): void {
+    if (busy || replacementBusy || replacementStage !== "authority-warning") return;
+    setReplacementStage("backup-warning");
+    setReplacementBackupExported(false);
+    setNotice(undefined);
+  }
+
+  function cancelReplacement(): void {
+    if (busy || replacementBusy) return;
+    setReplacementStage("idle");
+    setReplacementBackupExported(false);
   }
 
   function acknowledgeGeneratedRecovery(): void {
@@ -319,7 +360,7 @@ export function LocalDeviceVaultSetup({
 
   async function commitEnrollment(): Promise<void> {
     const prepared = enrollment.current;
-    if (!prepared || ceremony !== "acknowledged" || busy) return;
+    if (!prepared || ceremony !== "acknowledged" || busy || replacementBusy) return;
     setOperation("creating");
     setNotice(undefined);
     let committed = false;
@@ -336,6 +377,17 @@ export function LocalDeviceVaultSetup({
       enrollment.current = undefined;
       if (mounted.current) {
         setCeremony("idle");
+        const authorityAlreadyExists = error instanceof Error
+          && error.message.includes("already exists for this partition");
+        if (authorityAlreadyExists) {
+          setReplacementStage("authority-warning");
+          setReplacementBackupExported(false);
+          setNotice({
+            kind: "info",
+            message: "Another tab or process established a Local Device Vault while this ceremony was open. Review the replacement warning before continuing.",
+          });
+          return;
+        }
         setNotice({
           kind: "error",
           message: publicError(
@@ -352,7 +404,7 @@ export function LocalDeviceVaultSetup({
   }
 
   async function recoverExisting(): Promise<void> {
-    if (busy) return;
+    if (busy || replacementBusy) return;
     const input = recoveryInput.current;
     const recoveryKey = input?.value.trim() ?? "";
     clearSecretInput(input);
@@ -382,7 +434,7 @@ export function LocalDeviceVaultSetup({
   }
 
   async function requestPersistence(): Promise<void> {
-    if (busy) return;
+    if (busy || replacementBusy) return;
     setOperation("persisting");
     setNotice(undefined);
     try {
@@ -400,7 +452,7 @@ export function LocalDeviceVaultSetup({
   }
 
   async function exportBackup(): Promise<void> {
-    if (busy || !onExportEncryptedBackup) return;
+    if (busy || replacementBusy || !onExportEncryptedBackup) return;
     setOperation("exporting");
     setNotice(undefined);
     let bytes: Uint8Array | undefined;
@@ -422,6 +474,69 @@ export function LocalDeviceVaultSetup({
     } finally {
       bytes?.fill(0);
       finishOperation();
+    }
+  }
+
+  async function exportExistingBackup(): Promise<void> {
+    if (busy || replacementBusy || !onExportExistingEncryptedBackup) return;
+    setOperation("exporting");
+    setNotice(undefined);
+    let bytes: Uint8Array | undefined;
+    try {
+      bytes = await onExportExistingEncryptedBackup();
+      if (!(bytes instanceof Uint8Array) || bytes.byteLength === 0) {
+        throw new Error("The existing Vault returned an empty encrypted backup.");
+      }
+      downloadBytes(bytes, safeBackupFileName(backupFileName), "application/vnd.airship.vault-backup+json");
+      if (mounted.current) {
+        setReplacementBackupExported(true);
+        setNotice({
+          kind: "success",
+          message: `Encrypted backup prepared (${formatLocalDeviceBytes(bytes.byteLength)}). Keep it with the recovery key before replacing this Vault.`,
+        });
+      }
+    } catch (error) {
+      if (mounted.current) {
+        setNotice({
+          kind: "error",
+          message: publicError(error, "The existing Vault backup could not be prepared. The Vault was not replaced."),
+        });
+      }
+    } finally {
+      bytes?.fill(0);
+      finishOperation();
+    }
+  }
+
+  async function replaceExistingVault(): Promise<void> {
+    if (
+      busy
+      || replacementBusy
+      || replacementStage !== "backup-warning"
+      || !replacementBackupExported
+      || !onReplaceExistingVault
+    ) return;
+    setReplacementBusy(true);
+    setNotice(undefined);
+    try {
+      await onReplaceExistingVault();
+      if (mounted.current) {
+        setReplacementStage("idle");
+        setReplacementBackupExported(false);
+        setNotice({
+          kind: "success",
+          message: "Existing Vault replaced with an empty encrypted Vault. Your existing recovery key still opens this Vault.",
+        });
+      }
+    } catch (error) {
+      if (mounted.current) {
+        setNotice({
+          kind: "error",
+          message: publicError(error, "The Vault was not replaced. Your existing encrypted data remains in place."),
+        });
+      }
+    } finally {
+      if (mounted.current) setReplacementBusy(false);
     }
   }
 
@@ -559,7 +674,7 @@ export function LocalDeviceVaultSetup({
               <strong>Open this browser’s Vault</strong>
               <span>Use the enrolled non-extractable key. No prompt or secret is required.</span>
             </div>
-            <button type="button" onClick={() => void openExisting()} disabled={busy}>
+            <button type="button" onClick={() => void openExisting()} disabled={busy || replacementBusy}>
               {operation === "opening" ? "Opening…" : "Open existing"}
             </button>
           </div>
@@ -569,7 +684,7 @@ export function LocalDeviceVaultSetup({
               <strong>Create a new Vault</strong>
               <span>Generate one recovery key before the first encrypted object is committed.</span>
             </div>
-            <button type="button" class="local-device-vault__secondary" data-vault-create onClick={() => void beginEnrollment()} disabled={busy}>
+            <button type="button" class="local-device-vault__secondary" data-vault-create onClick={() => void beginEnrollment()} disabled={busy || replacementBusy}>
               {operation === "preparing" ? "Preparing…" : ceremony === "idle" ? "Create new" : "Replace ceremony"}
             </button>
           </div>
@@ -679,10 +794,10 @@ export function LocalDeviceVaultSetup({
                     Did not save it? Cancel. Nothing is enrolled until you create, and a new ceremony issues a different key.
                   </p>
                   <div class="local-device-vault__actions">
-                    <button type="button" ref={commitButton} onClick={() => void commitEnrollment()} disabled={busy}>
+                    <button type="button" ref={commitButton} onClick={() => void commitEnrollment()} disabled={busy || replacementBusy}>
                       {operation === "creating" ? "Creating…" : "Create encrypted Vault"}
                     </button>
-                    <button type="button" class="local-device-vault__quiet" onClick={cancelEnrollment} disabled={busy}>
+                    <button type="button" class="local-device-vault__quiet" onClick={cancelEnrollment} disabled={busy || replacementBusy}>
                       Cancel
                     </button>
                   </div>
@@ -709,7 +824,7 @@ export function LocalDeviceVaultSetup({
                 data-1p-ignore="true"
                 onInput={(event) => setRecoveryInputReady(event.currentTarget.value.trim().length > 0)}
               />
-              <button type="button" onClick={() => void recoverExisting()} disabled={busy || !recoveryInputReady}>
+              <button type="button" onClick={() => void recoverExisting()} disabled={busy || replacementBusy || !recoveryInputReady}>
                 {operation === "recovering" ? "Authenticating…" : "Recover and open"}
               </button>
             </div>
@@ -741,7 +856,7 @@ export function LocalDeviceVaultSetup({
                     : "The recovery key authenticates this Vault; it does not contain your data. Restoring on another browser profile or after this one is cleared needs an encrypted backup file too. It never contains the recovery key."}
                 </span>
               </div>
-              <button type="button" class="local-device-vault__secondary" onClick={() => void exportBackup()} disabled={busy}>
+              <button type="button" class="local-device-vault__secondary" onClick={() => void exportBackup()} disabled={busy || replacementBusy}>
                 {operation === "exporting" ? "Preparing…" : backupExported ? "Download a fresh backup" : "Download encrypted backup"}
               </button>
             </article>
@@ -753,11 +868,64 @@ export function LocalDeviceVaultSetup({
               <strong>Reduce eviction risk</strong>
               <span>Permission is requested only from this click. Browser policy remains authoritative.</span>
             </div>
-            <button type="button" class="local-device-vault__secondary" onClick={() => void requestPersistence()} disabled={busy}>
+            <button type="button" class="local-device-vault__secondary" onClick={() => void requestPersistence()} disabled={busy || replacementBusy}>
               {operation === "persisting" ? "Requesting…" : "Request persistent storage"}
             </button>
           </article>
+          {onReplaceExistingVault && onExportExistingEncryptedBackup ? (
+            <article class="local-device-vault__replacement-action">
+              <div>
+                <p class="local-device-vault__eyebrow">Fresh start</p>
+                <strong>Replace this Vault</strong>
+                <span>Download an encrypted backup first, then empty this Vault. Your existing recovery key remains the key for the replacement.</span>
+              </div>
+              <button type="button" class="local-device-vault__secondary" onClick={beginReplacementWarning} disabled={busy || replacementBusy}>
+                Replace this Vault
+              </button>
+            </article>
+          ) : null}
         </div>
+      ) : null}
+
+      {replacementStage !== "idle" ? (
+        <section class="local-device-vault__replacement" role="alert" aria-labelledby="local-device-replacement-title">
+          {replacementStage === "authority-warning" ? (
+            <>
+              <div>
+                <p class="local-device-vault__eyebrow">Existing authority found</p>
+                <strong id="local-device-replacement-title">This browser already has a Local Device Vault</strong>
+              </div>
+              <p>Creating a fresh start will delete every encrypted conversation, workspace file, memory and profile record in this browser. It keeps the Vault authority and its recovery key; this is an empty replacement, not a new recovery ceremony.</p>
+              <div class="local-device-vault__actions">
+                <button type="button" onClick={continueReplacementToBackup} disabled={busy || replacementBusy}>Continue to backup warning</button>
+                <button type="button" class="local-device-vault__quiet" onClick={cancelReplacement} disabled={busy || replacementBusy}>Keep existing Vault</button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div>
+                <p class="local-device-vault__eyebrow">Backup required</p>
+                <strong id="local-device-replacement-title">Download the existing Vault before replacing it</strong>
+              </div>
+              <p>The encrypted backup is the only recovery copy of the current data. It never contains the recovery key. Replacement stays unavailable until Airship successfully hands you this file.</p>
+              <div class="local-device-vault__actions">
+                <button type="button" onClick={() => void exportExistingBackup()} disabled={busy || replacementBusy || !onExportExistingEncryptedBackup}>
+                  {operation === "exporting" ? "Preparing backup…" : replacementBackupExported ? "Download backup again" : "Download backup before replacing"}
+                </button>
+                <button type="button" class="local-device-vault__quiet" onClick={cancelReplacement} disabled={busy || replacementBusy}>Keep existing Vault</button>
+              </div>
+              <label class="local-device-vault__check local-device-vault__replacement-ack">
+                <input type="checkbox" checked={replacementBackupExported} disabled={!replacementBackupExported || busy || replacementBusy} readOnly />
+                <span>I downloaded the encrypted backup and will keep it with the existing recovery key.</span>
+              </label>
+              <div class="local-device-vault__actions">
+                <button type="button" class="local-device-vault__secondary" onClick={() => void replaceExistingVault()} disabled={busy || replacementBusy || !replacementBackupExported || !onReplaceExistingVault}>
+                  {replacementBusy ? "Replacing…" : "Replace with an empty Vault"}
+                </button>
+              </div>
+            </>
+          )}
+        </section>
       ) : null}
 
       {onRestoreEncryptedBackup ? (
@@ -774,7 +942,7 @@ export function LocalDeviceVaultSetup({
                 ref={restoreFileInput}
                 type="file"
                 accept=".airship-vault,.json,application/vnd.airship.vault-backup+json"
-                disabled={busy}
+                disabled={busy || replacementBusy}
                 onChange={(event) => {
                   const file = event.currentTarget.files?.item(0) ?? undefined;
                   setRestoreFile(file);
@@ -796,7 +964,7 @@ export function LocalDeviceVaultSetup({
                 spellcheck={false}
                 data-lpignore="true"
                 data-1p-ignore="true"
-                disabled={busy}
+                disabled={busy || replacementBusy}
                 onInput={(event) => {
                   setRestoreRecoveryReady(event.currentTarget.value.trim().length > 0);
                   setRestoreAcknowledged(false);
@@ -811,7 +979,7 @@ export function LocalDeviceVaultSetup({
                   name="local-device-restore-target"
                   value="open-existing"
                   checked={restoreDisposition === "open-existing"}
-                  disabled={busy}
+                  disabled={busy || replacementBusy}
                   onChange={() => {
                     setRestoreDisposition("open-existing");
                     setRestoreAcknowledged(false);
@@ -825,7 +993,7 @@ export function LocalDeviceVaultSetup({
                   name="local-device-restore-target"
                   value="create-new"
                   checked={restoreDisposition === "create-new"}
-                  disabled={busy}
+                  disabled={busy || replacementBusy}
                   onChange={() => {
                     setRestoreDisposition("create-new");
                     setRestoreAcknowledged(false);
@@ -838,7 +1006,7 @@ export function LocalDeviceVaultSetup({
               <input
                 type="checkbox"
                 checked={restoreAcknowledged}
-                disabled={busy || !restoreFile || !restoreRecoveryReady}
+                disabled={busy || replacementBusy || !restoreFile || !restoreRecoveryReady}
                 onChange={(event) => setRestoreAcknowledged(event.currentTarget.checked)}
               />
               <span>I understand a successful restore atomically replaces every encrypted object in the selected Local Device Vault.</span>
@@ -847,7 +1015,7 @@ export function LocalDeviceVaultSetup({
               <button
                 type="button"
                 onClick={() => void restoreBackup()}
-                disabled={busy || !restoreFile || !restoreRecoveryReady || !restoreAcknowledged}
+                disabled={busy || replacementBusy || !restoreFile || !restoreRecoveryReady || !restoreAcknowledged}
               >
                 {operation === "restoring" ? "Verifying and restoring…" : "Verify and restore"}
               </button>

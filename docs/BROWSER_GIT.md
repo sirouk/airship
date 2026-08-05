@@ -1,6 +1,6 @@
 # Browser-native Git
 
-**Status:** standards-compatible local Git foundation, 2026-07-22
+**Status:** standards-compatible local Git foundation with one Terminal command surface, 2026-08-05
 
 Airship runs Git on the client with `isomorphic-git`. The Git engine reads and
 writes through the same `WorkspacePort` used by Editor, Terminal, tools,
@@ -94,26 +94,39 @@ from `user.name`/`user.email` in the repository config, exactly as Git does. The
 adapter therefore publishes the reviewed request author into `.git/config`
 before writing the stash commit.
 
-The Terminal route exposes a **Browser Git** command row for status, diff, log,
-show, add, restore/reset, commit, branch/switch, merge, stash, tag, worktree
-management, remote inspection and management, fetch, push, clone, and selected
-rev-parse queries; `git help` lists the exact set, including what is absent.
-Local mutations and remote effects go through the same approval policy as
-Editor: `runTerminalGitBridge` (`src/ui/terminal-view.tsx`) requires the review
-callback the bridge itself accepts optionally, so the one human caller cannot be
-the place the policy goes missing.
+The Terminal is the one Git command surface. A person types `git status`,
+`git diff`, `git add`, `git commit`, `git stash`, `git worktree`, or another
+supported command at the ordinary prompt. Once jsh submits that standalone
+`git …` line, Airship claims its terminal audit identity exactly once and runs
+the same text through `BrowserGitClient` against the repository containing that
+tab's working directory. `git help` lists the exact set, including what is
+absent. Local mutations and remote effects still go through Editor's approval
+policy: `runTerminalGitBridge` (`src/ui/terminal-view.tsx`) requires the review
+callback the bridge itself accepts optionally.
 
-The row runs against the repository containing the *selected tab's* working
-directory, and its answers render in the row's own output region — never in the
-PTY scrollback. That separation is load-bearing rather than cosmetic: the
-adjacent interactive WebContainer is a real Node/jsh runtime with no `git`
-binary, and its mount excludes `.git`, which is what prevents unreviewed native
-mutations from bypassing Workspace CAS. Writing bridge output into the
-transcript would claim a capability that shell does not have.
+Compound shell lines are not sideband-routed. Operators or substitutions such
+as `&&`, `;`, pipes, redirects, `$()` and backticks can cause jsh effects even
+when its missing `git` command fails; presenting BrowserGitClient as the author
+of the whole line would conceal that shell work.
 
-The Workspace terminal dock is the same component in its `dock` variant and
-deliberately does not carry the row: it is a 220px-floor strip whose job is the
-PTY, and its "Full view" control is the path to the route that does.
+The answer is appended to the retained transcript under the visible heading
+`Airship Browser Git · … · BrowserGitClient, not jsh`. This is a labelled
+application sideband, not forged PTY output. BrowserGitClient output is stripped
+of terminal control sequences before xterm receives it, the audit record points
+back to the exact submitted-input record, and restored input from a prior page
+is never replayed. The route and Workspace dock share the same manager-owned
+claim, so two mounted presentations cannot execute one mutation twice.
+
+There is intentionally no native Git binary in the WebContainer. WebContainer
+is an in-browser Node.js runtime whose processes are started through its custom
+`jsh`; its documented execution boundary is JavaScript and WebAssembly, and
+native C++ binaries/addons must be ported to WebAssembly. More importantly for
+Airship, exposing `.git` to any guest Git implementation would create an
+unreviewed writer outside `WorkspacePort` CAS and the shared approval policy.
+The mount therefore continues to exclude `.git`; a WASM Git port would not make
+that second authority safe. See the upstream [WebContainer API](https://webcontainers.io/api),
+[interactive terminal tutorial](https://webcontainers.io/tutorial/7-add-interactivity),
+and [native-binary troubleshooting boundary](https://webcontainers.io/guides/troubleshooting).
 
 ### Ignore rules
 

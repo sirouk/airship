@@ -6,6 +6,7 @@ import type { GitOperation } from "../git/types";
 import { MemoryWorkspace } from "../workspace/memory";
 import {
   TERMINAL_CONTAINER_SCOPE_NOTICE,
+  TERMINAL_GIT_BOUNDARY_NOTICE,
   TERMINAL_SETUP_STORAGE_KEY,
   inferredTerminalDurability,
   readTerminalSetupOpen,
@@ -13,12 +14,10 @@ import {
   terminalCloseConfirmation,
   terminalEmulatorWrite,
   terminalFooterNotice,
-  terminalGitHandoffSentence,
   terminalGitNotice,
   terminalPanelAutoStart,
   terminalPersistenceNotice,
   terminalSealState,
-  terminalShellGitHandoff,
   terminalTypography,
   terminalUnreconciledInputs,
   TERMINAL_KEYBOARD_OWNERSHIP,
@@ -226,13 +225,13 @@ describe("the full-view control a thumb has to hit", () => {
   });
 });
 
-describe("the Browser Git row's own controls", () => {
-  it("floors the command field at the same 44px as the button beside it", () => {
+describe("the terminal's one Git command surface", () => {
+  it("has no second form competing with the PTY", () => {
+    const source = terminalViewCode();
     const css = readFileSync(new URL("./terminal-view.css", import.meta.url), "utf8");
-    expect(css).toContain(".terminal-git__command{min-width:0;min-height:var(--touch-target)");
-    // The route's shared button rule already carries the floor, so the Run
-    // button must not restate it — a second literal is a second thing to drift.
-    expect(css).toContain(".terminal-route button{display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:var(--touch-target)");
+    expect(source).not.toContain('<form class="terminal-git"');
+    expect(source).not.toContain("terminal-git-command");
+    expect(css).not.toContain(".terminal-git{");
   });
 });
 
@@ -267,23 +266,25 @@ describe("the shared Git bridge's entry point", () => {
     expect(callers).toContain("ui/terminal-view.tsx");
   });
 
-  it("hands the row the active approval policy rather than the bridge's optional default", () => {
+  it("hands submitted terminal intent the active approval policy rather than the bridge's optional default", () => {
     // The comment that stood on these props — "Retained for app compatibility"
     // — was the audit trail of the deletion: two threaded props, no consumer.
     // The rule it also carried (bridge output never enters PTY scrollback) is
     // still true and still stated; the compatibility excuse is gone.
     const source = readFileSync(new URL("./terminal-view.tsx", import.meta.url), "utf8");
     expect(source).not.toContain("Retained for app compatibility");
-    expect(source).toContain("runTerminalGitBridge({ command, cwd: gitCwd, client: git, review: reviewGit })");
+    expect(source).toMatch(/runTerminalGitBridge\(\{[\s\S]*command: gitIntent\.command,[\s\S]*cwd: gitIntent\.cwd,[\s\S]*client: git,[\s\S]*review: reviewGit,/u);
   });
 
-  it("keeps the row on the route and off the 220px dock strip", () => {
+  it("claims and records the same intent through the manager-owned lineage", () => {
     const source = readFileSync(new URL("./terminal-view.tsx", import.meta.url), "utf8");
-    expect(source).toContain('{variant === "route" ? <form class="terminal-git"');
+    expect(source).toContain("manager.pendingBrowserGitIntent(profileId)");
+    expect(source).toContain("manager.claimBrowserGitIntent(gitIntent)");
+    expect(source).toContain("manager.recordBrowserGitResult(gitIntent, outcome)");
   });
 });
 
-describe("the Terminal route's Git command row", () => {
+describe("the Terminal transcript's Browser Git bridge", () => {
   const openRepository = async (files: Record<string, string> = { "README.md": "ready\n" }) =>
     new BrowserGitClient(await WorkspaceGitAdapter.open(new MemoryWorkspace(), [{
       id: "airship-workspace",
@@ -345,7 +346,7 @@ describe("the Terminal route's Git command row", () => {
     // silently did nothing, so it has to arrive as an answer.
     expect(outcome.failed).toBe(true);
     expect(outcome.output).toContain("denied");
-    expect(terminalGitNotice(outcome)).toContain("git was refused at /workspace");
+    expect(terminalGitNotice(outcome)).toContain("Airship Browser Git refused git add -A at /workspace");
     expect((await client.listRepositories())[0]!.worktrees[0]!.status[0])
       .toEqual(expect.objectContaining({ worktree: { kind: "modified" } }));
   });
@@ -453,8 +454,10 @@ describe("one workspace, one identity, two spellings", () => {
     expect(closing.consequence).toContain("/workspace/sources/repo in Explorer");
   });
 
-  it("keeps the Git bridge's scope note naming the directory the shell resolves", () => {
-    expect(source).toContain("the same directory the {WEB_CONTAINER_TERMINAL_RUNTIME.shellLabel} process calls <code>{terminalShellPath(gitCwd)}</code>");
+  it("states why Git is sideband instead of claiming the WebContainer owns it", () => {
+    expect(TERMINAL_GIT_BOUNDARY_NOTICE).toContain("jsh has no git binary");
+    expect(TERMINAL_GIT_BOUNDARY_NOTICE).toContain("BrowserGitClient");
+    expect(source).toContain("{TERMINAL_GIT_BOUNDARY_NOTICE}");
   });
 });
 
@@ -463,49 +466,20 @@ describe("one workspace, one identity, two spellings", () => {
  * it with "jsh: command not found: git" while the bridge that can answer it sat
  * 200px below with `git status` as its placeholder. The refusal is a seam now.
  */
-describe("a git the shell cannot run", () => {
-  it("lifts only the most recent submitted git line", () => {
-    expect(terminalShellGitHandoff(["ls", "git status"])).toBe("git status");
-    expect(terminalShellGitHandoff(["  git log --oneline  "])).toBe("git log --oneline");
-    expect(terminalShellGitHandoff(["git"])).toBe("git");
-  });
-
-  it("does not offer the bridge a command that is not git, or a stale one", () => {
-    expect(terminalShellGitHandoff(["git status", "ls"])).toBeUndefined();
-    expect(terminalShellGitHandoff(["gitalias status"])).toBeUndefined();
-    expect(terminalShellGitHandoff([])).toBeUndefined();
-    expect(terminalShellGitHandoff(undefined)).toBeUndefined();
-  });
-
-  it("says the same thing in both places it makes the offer", () => {
-    expect(terminalGitHandoffSentence("git status")).toBe("git status needs Browser Git: this jsh process has no git binary.");
-  });
-
-  it("stands where the scope paragraph stood, keeping the field's description", () => {
+describe("a git line submitted to jsh", () => {
+  it("routes automatically without a second field or a dock-only detour", () => {
     const source = readFileSync(new URL("./terminal-view.tsx", import.meta.url), "utf8");
-    // Added as an extra row it cost 114px, and this route's grid is
-    // height-locked: at 390x844 the browser took those pixels out of the tab
-    // strip, crushing a 44px tab to 23px.
-    expect(source).toContain('<p class="notice terminal-git__handoff" id="terminal-git-scope"');
-    expect(source).toContain('aria-describedby="terminal-git-scope"');
-    expect(source.match(/id="terminal-git-scope"/gu)).toHaveLength(2);
-  });
-
-  it("offers the lifted line to the bridge on both the route and the dock", () => {
-    const source = readFileSync(new URL("./terminal-view.tsx", import.meta.url), "utf8");
-    // Route: fills the field and runs it, so the answer lands in the region
-    // that already exists for bridge output rather than in the PTY scrollback.
-    expect(source).toContain("setGitCommand(gitHandoff);");
-    expect(source).toContain("void runGit(gitHandoff);");
-    // Dock: it owns no command row, so the refusal routes to the view that does
-    // instead of dead-ending a second time.
-    expect(source).toContain('{variant === "dock" && gitHandoff ?');
+    expect(source).toContain("const gitIntent = manager.pendingBrowserGitIntent(profileId)");
+    expect(source).toContain("Routing ${gitIntent.command} through Airship Browser Git");
+    expect(source).not.toContain("Open Browser Git");
+    expect(source).not.toContain("Run it here");
   });
 });
 
 describe("the drift a sync button used to ask the reader to guess at", () => {
-  const record = (kind: "interactive-input" | "workspace-reconcile", recordedAt: string) => ({
+  const record = (kind: "interactive-input" | "workspace-reconcile" | "browser-git", recordedAt: string, sourceRecordId?: string) => ({
     id: `${kind}-${recordedAt}`, sequence: 1, kind, outcome: "completed" as const, recordedAt, processEpoch: 1, summary: kind,
+    ...(sourceRecordId ? { sourceRecordId } : {}),
   });
   const session = (audit: readonly ReturnType<typeof record>[]) => ({ audit } as never);
 
@@ -532,6 +506,14 @@ describe("the drift a sync button used to ask the reader to guess at", () => {
       record("interactive-input", "2026-07-31T10:00:00.000Z"),
       record("interactive-input", "2026-07-31T10:00:01.000Z"),
     ])])).toBe(2);
+  });
+
+  it("does not call an Airship Browser Git answer unreconciled shell work", () => {
+    const input = record("interactive-input", "2026-07-31T10:00:00.000Z");
+    expect(terminalUnreconciledInputs([session([
+      input,
+      record("browser-git", "2026-07-31T10:00:01.000Z", input.id),
+    ])])).toBe(0);
   });
 });
 

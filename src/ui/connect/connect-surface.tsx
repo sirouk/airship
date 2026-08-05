@@ -741,7 +741,7 @@ function LocalPanel({
           </ul>
         ) : null}
         {results?.some((result) => result.outcome === "answered") ? (
-          <p class="connect-local__next-step">The models are named below under <strong>Provider fabric</strong> — pick one there and press <strong>Use in new conversation</strong> to chat with it.</p>
+          <p class="connect-local__next-step">When one server answers, Airship verifies its first model and opens Chat. If more than one answers, choose the intended model below under <strong>Provider fabric</strong>.</p>
         ) : null}
       </div>
       {failure ? <p class="connect-lane__failure" role="alert"><Icon name="warning" size={16} />{failure}</p> : null}

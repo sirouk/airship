@@ -161,4 +161,15 @@ describe("ceremony continuity contracts", () => {
     expect(view).toContain("an enrolled key matching this backup is reused");
     expect(view).not.toContain("Fails if this profile already has an enrolled key or object authority");
   });
+
+  it("makes replacement an explicit, backed-up, same-key operation", () => {
+    expect(view).toContain("hasExistingAuthority");
+    expect(view).toContain("Existing authority found");
+    expect(view).toContain("Continue to backup warning");
+    expect(view).toContain("Download backup before replacing");
+    expect(view).toContain("Your existing recovery key still opens this Vault.");
+    expect(view).toContain("!replacementBackupExported");
+    expect(view).toContain("The Vault was not replaced. Your existing encrypted data remains in place.");
+    expect(view).toContain("onReplaceExistingVault");
+  });
 });
