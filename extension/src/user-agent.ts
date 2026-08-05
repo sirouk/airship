@@ -268,9 +268,20 @@ export async function installUserAgentOverride(
   return "unavailable";
 }
 
-/** Identity of the rewrite the retained listener performs, prefix and agent. */
+/**
+ * Identity of the rewrite the retained listener performs, prefix and agent.
+ *
+ * The two delimiters are written as `\u0000` and `\u0001` escapes rather than
+ * as the raw bytes they used to be. The value is identical either way; what
+ * changes is that the file stops being binary. A literal NUL made `grep` treat
+ * this source as a binary blob and report *no* matches for a name it contains,
+ * silently, so searching for `destinationSignature` here found nothing while
+ * `git grep` found two. Control characters are the right separator — neither
+ * can occur in a URL prefix or a User-Agent string, so no pair of destinations
+ * can collide — but they belong in the source as escapes.
+ */
 function destinationSignature(destinations: readonly BridgeDestination[]): string {
   return overrideDestinations(destinations)
-    .map((destination) => `${destination.prefix} ${destination.userAgent ?? ""}`)
-    .join("");
+    .map((destination) => `${destination.prefix}\u0000${destination.userAgent ?? ""}`)
+    .join("\u0001");
 }
