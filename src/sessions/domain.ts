@@ -907,7 +907,14 @@ export function decideSessionResume(
   const add = (reason: SessionCompatibilityReason) => reasons.push(Object.freeze(reason));
 
   if (assessment.status === "suspect") {
-    add({ code: "HISTORY_SUSPECT", severity: "error", message: "Structural history issues must be reviewed before this session can resume." });
+    const firstIssue = assessment.issues.find((issue) => issue.severity === "error") ?? assessment.issues[0];
+    add({
+      code: "HISTORY_SUSPECT",
+      severity: "error",
+      message: firstIssue
+        ? firstIssue.message
+        : "Structural history issues must be reviewed before this session can resume.",
+    });
   } else if (assessment.status === "incomplete") {
     /*
      * Say the one that is true, and only require a fork for it.

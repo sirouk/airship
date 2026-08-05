@@ -2184,6 +2184,11 @@ export function App() {
   const activePrompt = useRef<string>();
   const activeSessionIdentity = useRef<string>();
   const activeSessionByProfile = useRef(new Map<string, string>());
+  const pendingSessionResume = useRef<Readonly<{
+    run(): Promise<void>;
+    resolve(): void;
+    reject(error: unknown): void;
+  }>>();
   /**
    * One workspace authority per Profile, for as long as the storage authority
    * behind it lives.
@@ -2918,19 +2923,11 @@ export function App() {
    * Both loaders below bake an `open` callback into every row they return, and
    * both effects are keyed on `settledSessionRevision` — the trailing edge of a
    * turn's event burst, which by construction settles while that turn is still
-   * running. So the rows a person actually clicks were built during a render
-   * where `busy` was true, and they kept that answer after the turn ended.
+   * running. The rows now call the live opener below, and a request made during
+   * a turn is held for its safe journal boundary rather than being rejected.
    *
-   * Measured on a two-conversation profile, both with one message: clicking the
-   * other thread in the rail threw "Stop the active turn before resuming
-   * another session." and dropped the person on #sessions — the library they
-   * did not ask for — while the composer was enabled and the run indicator on
-   * the same screen read `Idle`. Re-listing the library by any idle route
-   * (toggling a favorite) made the identical click open the identical row.
-   * A stale closure, not a stale journal.
-   *
-   * The indirection is the fix: the row calls whatever the current render's
-   * opener is, so every guard inside it reads live state.
+   * The indirection keeps the row current; the pending-resume boundary keeps a
+   * live turn's transcript projection and journal authority intact.
    */
   const openConversationRef = useRef<(targetSessionId: string) => Promise<void>>();
   openConversationRef.current = openPaletteSession;
@@ -2962,7 +2959,6 @@ export function App() {
       || !sessionLibrary
       || !sessionRuntime
       || !catalog
-      || busy
       // A journal that is still being adopted has not yet failed to hold the
       // address; asking it now is what produced "did not survive the reload"
       // about a conversation restored a second later. See
@@ -4558,6 +4554,10 @@ export function App() {
       const modelChanged = detail.compatibility?.action === "fork-required"
         && detail.compatibility.reasons.some((reason) => reason.code === "MODEL_MISMATCH");
       if (modelChanged) {
+        if (busy) {
+          await queueSessionAction(() => openConversationRef.current?.(target.id) ?? Promise.resolve());
+          return;
+        }
         /*
          * A history click is already an explicit request to continue that
          * conversation.  When only the model pin differs, use the same
@@ -4584,18 +4584,8 @@ export function App() {
       setRuntimeStatus(error instanceof Error
         ? describeSessionPresentationFault(error)
         : "The recent session could not be opened.");
-      /*
-       * A running turn is a "not yet", not a "somewhere else".
-       *
-       * `resumeLibrarySession` will not resume a conversation out from under a
-       * turn that is still writing to the journal — that refusal is correct.
-       * The answer it gave was not: every refusal in here landed on the library
-       * route, so "open this thread" was answered by replacing the thread on
-       * screen with a list of all of them. That is the loudest possible
-       * response to a two-second wait, and it throws away the place the person
-       * was standing in. The reason is already on screen; the library is for
-       * faults that outlive the turn, not for waiting out this one.
-       */
+      /* A live turn queues a requested resume at its safe journal boundary;
+         only faults that survive that boundary belong on the library route. */
       if (!busy) {
         // Keep the conversation the person chose in view.  A model/provider
         // mismatch is expected to refuse in-place replay, but sending the
@@ -10195,8 +10185,7 @@ export function App() {
     setRuntimeStatus(status);
   }
 
-  async function resumeLibrarySession(detail: SessionLibraryDetail): Promise<void> {
-    if (busy) throw new Error("Stop the active turn before resuming another session.");
+  async function resumeLibrarySessionNow(detail: SessionLibraryDetail): Promise<void> {
     if (inferenceRouteChanging.current || sessionNavigationChanging.current) {
       throw new Error("Wait for the current session or inference route transition before resuming.");
     }
@@ -10251,6 +10240,36 @@ export function App() {
       setProfileCockpitTransition(undefined);
     }
   }
+
+  /**
+   * A turn owns its live transcript projection until it settles. A history
+   * click during that window is still a valid request, so hold the exact
+   * inspected target and perform the same audited activation at the first safe
+   * boundary instead of refusing it or routing the person to the library.
+   */
+  function queueSessionAction(run: () => Promise<void>): Promise<void> {
+    if (!busy) return run();
+    pendingSessionResume.current?.reject(new Error("A newer request replaced this one."));
+    const promise = new Promise<void>((resolve, reject) => {
+      pendingSessionResume.current = Object.freeze({ run, resolve, reject });
+    });
+    setRuntimeStatus("Opening conversation after this turn");
+    return promise;
+  }
+
+  function resumeLibrarySession(detail: SessionLibraryDetail): Promise<void> {
+    return queueSessionAction(() => resumeLibrarySessionNow(detail));
+  }
+
+  useEffect(() => {
+    if (busy || !pendingSessionResume.current) return;
+    const pending = pendingSessionResume.current;
+    pendingSessionResume.current = undefined;
+    void pending.run().then(
+      () => pending.resolve(),
+      (error) => pending.reject(error),
+    );
+  }, [busy]);
 
   async function activateForkedSession(result: SessionForkResult): Promise<void> {
     if (sessionNavigationChanging.current) {
@@ -10616,6 +10635,7 @@ export function App() {
         navRef={primaryNav}
         inert={platformOverlayOpen}
         busy={busy}
+        activity={{ activeTurns: busy ? 1 : 0, events: eventCount }}
         unreadTurnCount={unreadTurnCount}
         hasReceipt={Boolean(lastReceipt)}
         conversations={recentProfileConversations}

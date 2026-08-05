@@ -16,6 +16,7 @@ import {
 } from "./navigation-model";
 import { loadRecentsPreference, saveRecentsPreference, type RailState } from "./rail-state";
 import { RuntimeLoadIndicator } from "./runtime-load-indicator";
+import type { SessionActivityReport } from "../capabilities/runtime-load";
 
 /**
  * The left rail.
@@ -67,6 +68,8 @@ export type RailProps = Readonly<{
   navRef: Ref<HTMLElement>;
   inert: boolean;
   busy: boolean;
+  /** Aggregated model-turn activity for every conversation this page owns. */
+  activity?: SessionActivityReport;
   unreadTurnCount: number;
   /** A receipt exists for the active session, so Proof has something to show. */
   hasReceipt: boolean;
@@ -273,6 +276,7 @@ export function Rail({
   navRef,
   inert,
   busy,
+  activity,
   unreadTurnCount,
   hasReceipt,
   conversations,
@@ -1045,13 +1049,13 @@ export function Rail({
           ))}
         </nav>
         <div class="sidebar-spacer" />
-        {/* The live-utilisation reading the shell carries on desktop. It lives
-            here rather than on the Capabilities route alone because "what is
-            this running right now" is a question asked while doing something
-            else, and the rail is the band every route renders at this width.
-            Below the phone breakpoint the rail is `display: none` and the same
-            component rides the mobile tab bar instead. */}
-        <RuntimeLoadIndicator placement="rail" />
+        {/* The live conversation-activity reading the shell carries on desktop.
+            It lives here rather than on the Sessions route alone because
+            "what is happening right now" is a question asked while doing
+            something else, and the rail is the band every route renders at
+            this width. It aggregates turns and durable events across the
+            conversations owned by this page. */}
+        <RuntimeLoadIndicator placement="rail" activity={activity} />
         {/* The drawer handle on the seam. It was a chevron pinned at the rail's
             bottom-left corner — the shipped design, and the owner's verdict on
             it once built was that the affordance belongs in the middle of the

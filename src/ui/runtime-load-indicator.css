@@ -18,8 +18,9 @@
   font-size: var(--fs-micro);
 }
 
-/* Idle is stated in the same ink as everything else at rest. Only a live run
-   earns the accent, because a colour that is always on stops being a signal. */
+/* A settled activity reading is stated in the same ink as everything else at
+   rest. Only live work earns the accent, because a colour that is always on
+   stops being a signal. */
 .load-indicator__count {
   min-width: 1.4em;
   padding: 0 .3em;

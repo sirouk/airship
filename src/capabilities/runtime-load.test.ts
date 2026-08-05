@@ -8,6 +8,8 @@ import {
   measuredBytesLabel,
   runtimeLoadFigures,
   runtimeLoadIndicatorLabel,
+  sessionActivityIndicatorLabel,
+  SESSION_ACTIVITY_BOUNDARY,
   runtimeLoadLaneSummary,
   type RuntimeLoadHost,
 } from "./runtime-load";
@@ -194,7 +196,7 @@ describe("shell load indicator", () => {
     const load = monitor();
     expect(runtimeLoadIndicatorLabel(load.snapshot()).reading).not.toContain(RUNTIME_LOAD_BOUNDARY);
     expect(indicator).toContain("<span class=\"sr-only\">{reading}</span>");
-    expect(indicator).toContain("<span class=\"sr-only\">{RUNTIME_LOAD_BOUNDARY}</span>");
+    expect(indicator).toContain("<span class=\"sr-only\">{boundary}</span>");
     // Splitting the strings only helps if the region is not atomic: `status`
     // implies `aria-atomic="true"`, which would announce the caveat again on
     // every count change and undo the split.
@@ -233,7 +235,7 @@ describe("shell load indicator", () => {
     // desktop width, and the shell renders it unconditionally — no `view ===`
     // guard, no route list — which is what makes the indicator global rather
     // than a second copy of the Capabilities panel.
-    expect(rail).toContain("<RuntimeLoadIndicator placement=\"rail\" />");
+    expect(rail).toContain("<RuntimeLoadIndicator placement=\"rail\" activity={activity} />");
     // One rail, mounted as a sibling of the route outlet rather than inside it,
     // so every destination the outlet can show has the indicator beside it.
     // `<Rail\b` rather than `indexOf("<Rail")`: the shell also declares a
@@ -288,5 +290,17 @@ describe("shell load indicator", () => {
     // of running workers, and this chip is the surface most tempted to blur it.
     expect(indicator).not.toContain("maxWorkerConcurrency");
     expect(indicator).not.toContain("%");
+  });
+
+  it("describes active conversations and their durable events on the rail", () => {
+    expect(sessionActivityIndicatorLabel({
+      activeTurns: 2,
+      events: 7,
+    }).text).toBe("2 active turns · 7 durable events");
+    expect(sessionActivityIndicatorLabel({
+      activeTurns: 0,
+      events: 7,
+    }).text).toBe("Ready · 7 durable events");
+    expect(SESSION_ACTIVITY_BOUNDARY).toContain("Page activity");
   });
 });

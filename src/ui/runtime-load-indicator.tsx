@@ -1,8 +1,11 @@
 import { useEffect, useState } from "preact/hooks";
 import {
   RUNTIME_LOAD_BOUNDARY,
+  SESSION_ACTIVITY_BOUNDARY,
   getRuntimeLoadMonitor,
   runtimeLoadIndicatorLabel,
+  sessionActivityIndicatorLabel,
+  type SessionActivityReport,
   type RuntimeLoadMonitor,
 } from "../capabilities/runtime-load";
 import "./runtime-load-indicator.css";
@@ -28,7 +31,8 @@ export type RuntimeLoadPlacement = "rail" | "nav";
  * It deliberately shows no bar, no percentage and no colour ramp. There is no
  * browser API that tells a page its share of the machine, and a chip that looks
  * like a CPU meter is read as one — which is the exact failure the monitor's own
- * `not-measurable` states exist to prevent. `Idle` and `2 running` are counts.
+ * `not-measurable` states exist to prevent. Execution mode says `0 execution
+ * runs`; the rail's activity mode says `Ready` plus the events it observed.
  *
  * The accessibility structure is load-bearing, not decoration. A live region is
  * announced from its own accessible contents, and `aria-hidden` descendants are
@@ -42,7 +46,12 @@ export type RuntimeLoadPlacement = "rail" | "nav";
 export function RuntimeLoadIndicator({
   monitor = getRuntimeLoadMonitor(),
   placement = "rail",
-}: Readonly<{ monitor?: RuntimeLoadMonitor; placement?: RuntimeLoadPlacement }> = {}) {
+  activity,
+}: Readonly<{
+  monitor?: RuntimeLoadMonitor;
+  placement?: RuntimeLoadPlacement;
+  activity?: SessionActivityReport;
+}> = {}) {
   // Seeded from the snapshot rather than from `undefined`, so the indicator is
   // in the DOM on first paint instead of appearing one frame later: an element
   // that flickers into a rail is worse than one that starts at zero, and zero
@@ -50,7 +59,11 @@ export function RuntimeLoadIndicator({
   const [report, setReport] = useState(() => monitor.snapshot());
   useEffect(() => monitor.subscribe(setReport), [monitor]);
 
-  const { text, reading } = runtimeLoadIndicatorLabel(report);
+  const { text, reading } = activity
+    ? sessionActivityIndicatorLabel(activity)
+    : runtimeLoadIndicatorLabel(report);
+  const boundary = activity ? SESSION_ACTIVITY_BOUNDARY : RUNTIME_LOAD_BOUNDARY;
+  const current = activity?.activeTurns ?? report.current;
   return (
     <div
       class="load-indicator"
@@ -62,17 +75,17 @@ export function RuntimeLoadIndicator({
       // reading. The caveat below is still read whenever the region itself is,
       // and its text never mutates, so it is never announced twice.
       aria-atomic="false"
-      data-running={report.current > 0 ? "true" : undefined}
-      title={RUNTIME_LOAD_BOUNDARY}
+      data-running={current > 0 ? "true" : undefined}
+      title={boundary}
     >
       {/* The count keeps its own element so the icon rail and the narrow nav
           column can clip the words without taking the number off the row. Both
           are hidden from assistive technology because the two text nodes below
           state the same reading in full sentences. */}
-      <span class="load-indicator__count" aria-hidden="true">{report.current}</span>
+      <span class="load-indicator__count" aria-hidden="true">{current}</span>
       <span class="load-indicator__label" aria-hidden="true">{text}</span>
       <span class="sr-only">{reading}</span>
-      <span class="sr-only">{RUNTIME_LOAD_BOUNDARY}</span>
+      <span class="sr-only">{boundary}</span>
     </div>
   );
 }

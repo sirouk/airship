@@ -131,7 +131,7 @@ test("clicking a conversation in the rail opens that conversation, not the libra
   await expect(page.locator(".session-bar__title")).toHaveText("rail journey: thread two");
 });
 
-test("a rail click during a turn keeps the conversation on screen instead of routing to the library", async ({ page }, testInfo) => {
+test("a rail click during a turn queues the requested conversation and opens it after settlement", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium", "the rail is a desktop surface");
 
   await page.goto("/#chat");
@@ -146,19 +146,21 @@ test("a rail click during a turn keeps the conversation on screen instead of rou
   await newConversation(page);
   await startTurn(page, "rail journey: busy thread");
   const busyThread = page.url();
+  await expect(page.locator(".load-indicator")).toContainText("1 active");
 
-  /*
-   * A running turn owns the journal it is writing to, so the runtime will not
-   * resume another conversation underneath it. That refusal is legitimate; the
-   * answer it used to give was not. Replacing the conversation on screen with
-   * the library is the loudest possible response to "wait two seconds", and it
-   * discards the place the person was standing in.
-   */
+  /* A running turn keeps its live projection. The requested row is held as a
+     named pending action, then the exact audited resume runs at the safe
+     journal boundary. */
   await railRows(page).filter({ hasText: "rail journey: original thread" }).first().click();
 
   await expect(page.getByRole("heading", { name: "All conversations", level: 1 })).toHaveCount(0);
   await expect(page).toHaveURL(busyThread);
   await expect(page.locator(".transcript")).toContainText("rail journey: busy thread");
+    await expect(page.locator(".runtime-line__text")).toContainText("after this turn");
+  await finishTurn(page, "rail journey: busy thread");
+  await expect(page.locator(".load-indicator")).toContainText("Ready");
+  await expect(page).toHaveURL(original);
+  await expect(page.locator(".session-bar__title")).toHaveText("rail journey: original thread");
 });
 
 test("All conversations stays reachable in the rail once the thread list overflows", async ({ page }, testInfo) => {
