@@ -52,6 +52,7 @@ describe("local development CSP", () => {
       "assets/workspace-adapter-def.js",
       "assets/local-device-keyring-ghi.js",
       "assets/provider-connections-view-jkl.js",
+      "assets/skills-manager-view-mno.js",
     ];
     expect(resolveAirshipModulePreloadDependencies("index.html", dependencies, {
       hostId: "index.html",

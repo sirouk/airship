@@ -23,7 +23,10 @@ The gate fails the build when it finds:
   same-origin hashed stylesheet entry in `index.html`;
 - a web app manifest that escapes the same-origin root scope or loses its
   reviewed install/icon contract;
-- a missing crypto WASM artifact; or
+- a missing crypto WASM artifact;
+- an optional semantic pack that is partial, contains an unreviewed file, or
+  differs in byte length or SHA-256 from its pinned artifact manifest, including
+  a mismatch between the build's availability declaration and emitted files; or
 - an artifact budget overrun.
 
 The credential scanner deliberately permits documentation-shaped prefixes such
@@ -38,14 +41,14 @@ ceilings are both blocking.
 
 | Class | Raw ceiling | Gzip ceiling |
 | --- | ---: | ---: |
-| HTML-referenced entry JavaScript | 384 KiB | 113 KiB |
-| Baseline JavaScript and workers, lazy packs excluded | 768 KiB | 176 KiB |
-| Deferred advanced capability bundle | 425 KiB | 126 KiB |
-| First-party and other non-vendor JS/workers | 2,079 KiB | 661 KiB |
-| Browser Git + Terminal vendor runtime aggregate | 677 KiB | 188 KiB |
-| Absolute installed JavaScript/worker backstop | 2,755 KiB | 849 KiB |
+| HTML-referenced entry JavaScript | 384 KiB | 115 KiB |
+| Baseline JavaScript and workers, lazy packs excluded | 768 KiB | 181 KiB |
+| Deferred advanced capability bundle | 429 KiB | 127 KiB |
+| First-party and other non-vendor JS/workers | 2,106 KiB | 671 KiB |
+| Browser Git + Terminal vendor runtime aggregate | 679 KiB | 190 KiB |
+| Absolute installed JavaScript/worker backstop | 2,784 KiB | 860 KiB |
 | Service worker | 12 KiB | 4 KiB |
-| Optional execution broker / engine / support | 32 / 56 / 10 KiB | 10 / 14 / 4 KiB |
+| Optional execution broker / engine / support / tools | 32 / 56 / 10 / 60 KiB | 10 / 14 / 4 / 18 KiB |
 | Optional pinned WASI Preview 1 Worker | 32 KiB | 8 KiB |
 | Optional Node/WebContainer pack | 32 KiB | 11 KiB |
 | Optional first-party `airship-sh` shell pack | 100 KiB | 30 KiB |
@@ -53,9 +56,10 @@ ceilings are both blocking.
 | Optional agent runtime / tool bundle | 53 / 128 KiB | 16 / 39 KiB |
 | Optional Workspace / Source Control / browser Git | 85 / 48 / 276 KiB | 28 / 14 / 83 KiB |
 | Optional Sessions / Memory / Memory support / Proof | 64 / 61 / 2 / 89 KiB | 20 / 21 / 1 / 28 KiB |
-| Optional Terminal | 420 KiB | 111 KiB |
+| Optional Skills route / skill editor | 7 / 4 KiB | 3 / 2 KiB |
+| Optional Terminal | 422 KiB | 112 KiB |
 | Optional semantic worker / model catalog | 16 / 33 KiB | 6 / 12 KiB |
-| Optional inference/provider + Companion protocol packs | 124 KiB | 38 KiB |
+| Optional inference/provider + Companion protocol packs | 127 KiB | 40 KiB |
 | Optional Intel DCAP QVL JS / WASM | 32 / 1,536 KiB | 8 / 512 KiB |
 | Pinned same-origin Pyodide distribution | 16 MiB | 8 MiB |
 | HTML-referenced entry CSS | 175 KiB | 32 KiB |
@@ -82,7 +86,7 @@ requires an explicit code and documentation review, in the same change, or the
 gate above fails; a build must not silently learn a larger baseline.
 
 Ceilings move with measurements, not with need. Each one in
-`scripts/release-gate.mjs` carries the reading that sets it, the six named in
+`scripts/release-gate.mjs` carries the reading that sets it, the budgets named in
 `MEASUREMENT_JUSTIFIED_BUDGETS` are required to, and
 `assertDocumentedMeasurementsMatchBuild` compares those readings against the
 artifacts the same run measures — so a justification that quotes a build nobody
@@ -116,10 +120,39 @@ under a separately trusted release key. Until then, the UI and documentation
 must not call this release verified or reproducible merely because the hashes
 exist.
 
+## Browser product acceptance
+
+`npm run check` deliberately keeps the long browser matrices separate. Before a
+browser release candidate is accepted, run the full product journey suite and
+each specialized boundary suite against the same tree:
+
+```sh
+npm run test:e2e
+npm run test:e2e:google-drive
+npm run test:e2e:portability
+npm run test:e2e:master
+npm run test:e2e:static-host
+```
+
+The default suite covers the ordinary product journeys. The specialized runs
+exercise deterministic Google Drive composition, the cross-engine and
+constrained-device portability matrix, the master browser/WebContainer boundary,
+and the built artifact on a headerless static host at the same `/airship/`
+subpath used by the Pages build. The portability and static-host lanes explicitly
+build without the optional semantic pack and require its control to be unavailable
+without issuing a pack request; the opt-in semantic command in
+[Semantic embedding pack](SEMANTIC_EMBEDDING_PACK.md#verification) exercises the
+hash-pinned pack itself. They remain separate because their browser, network, and
+runtime requirements are materially longer and broader than the bounded offline
+check.
+
 ## Explicit live acceptance
 
-`npm run check` remains deterministic, credential-free, and suitable for an
-offline checkout. It does not imply that a paid external provider was reachable.
+`npm run check` remains credential-free and suitable for an offline checkout.
+The checks are deterministic against the artifact they inspect, but Rollup's
+chunk layout is not yet byte-for-byte deterministic across otherwise identical
+checkouts; both reviewed layouts must satisfy the same ceilings. The check does
+not imply that a paid external provider was reachable.
 Before a release that claims real Chutes interoperability, run the separate
 fail-closed gate with a disposable credential and explicit provider model IDs:
 

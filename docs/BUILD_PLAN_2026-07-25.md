@@ -222,18 +222,32 @@ These are the only places where two packages want the same file. Obey these or y
 ### W5 — Ship the semantic pack in production builds
 **Score: 10** · Gap: `semantic-pack-absent-from-production-build`
 
-**Goal.** The "Local semantic" button is enabled on every deployment and 404s on every static host — the pack is served by a Vite **dev/preview middleware only** and is never emitted to `dist/`. The only real retrieval engine in the product is unreachable by anyone who didn't clone the repo.
+**Status: implemented.** A complete prepared pack is hash-verified once, emitted
+under the configured public base, and bound to the built-in runtime declaration;
+an absent or drifted pack leaves a disabled control and no request path.
+
+**Original defect.** The "Local semantic" button was enabled on every deployment
+and 404ed on static hosts: the pack was served by Vite **dev/preview middleware
+only** and never emitted to `dist/`.
 
 **Files.**
-- `/Users/chrisk/chutes-jumpmaster/airship/scripts/semantic-pack-assets.ts` (add `generateBundle`, modeled on `scripts/pyodide-assets.ts:47-56`)
-- `/Users/chrisk/chutes-jumpmaster/airship/scripts/release-gate.mjs` (**second in the serialized queue**: `isOptionalSemanticPackPath` beside `isOptionalPythonPackPath` :873; exclude from `javaScriptFiles` :262 **and** `wasmFiles` :254; new `optionalSemanticPack` budget)
-- `/Users/chrisk/chutes-jumpmaster/airship/src/indexing/semantic-transformers-loader.ts` (:8 `PACK_ROOT` → `${import.meta.env.BASE_URL}semantic-pack/v1/`)
-- `/Users/chrisk/chutes-jumpmaster/airship/src/ui/context-view.tsx` (disable the button with a stated reason when unpublished)
-- `/Users/chrisk/chutes-jumpmaster/airship/.github/workflows/pages.yml`
+- `scripts/semantic-pack-assets.ts` (one verified snapshot for availability,
+  middleware, and `generateBundle` emission)
+- `scripts/release-gate.mjs` (exact optional file-set and byte/hash validation;
+  exclusion from ordinary application JavaScript/WASM budgets)
+- `src/indexing/semantic-transformers-loader.ts` (public-base-aware pack root)
+- `src/ui/context-view.tsx` (disabled action and visible reason when unpublished)
+- the portability and static-host browser gates (absent-pack and subpath proof)
 
-**Approach — three corrections the naive fix misses.** (a) **Do not** hard-fail a missing pack directory unconditionally: the pack is 92.8 MiB fetched live from HuggingFace and the entire design declares it optional. Gate the emit behind `AIRSHIP_PUBLISH_SEMANTIC_PACK=1`; hard-fail only when the flag is set and bytes/SHA-256 drift from `semantic-artifact-manifest.json`. (b) **Do not** chain `semantic:prepare` into `build:static` — that forces every local `npm run check` to pull 93 MiB. Add it to the Pages workflow. (c) **The base path is fatal and unmentioned in the finding's headline:** Pages builds with `AIRSHIP_PUBLIC_BASE_PATH=/airship/` while the loader fetches origin-root `/semantic-pack/v1/`. Emitting to `dist` alone still 404s. (d) The UI gate must be a real **GET + byte-length + SHA-256** on the 675-byte `config.json` — a HEAD probe falsely passes on hosts that rewrite unknown paths to `index.html`.
+**Implemented approach.** A missing pack remains a valid lightweight build and
+`build:static` never downloads it. When the prepared directory is present, Vite
+reads and SHA-256 verifies the complete manifest once, uses that immutable
+snapshot for the compile-time declaration and emitted files, and the release
+gate verifies the emitted set again. `AIRSHIP_DISABLE_SEMANTIC_PACK=1` gives
+credential-free and portability lanes a deterministic absent-pack build. All
+runtime and Trusted Types paths derive from `import.meta.env.BASE_URL`.
 
-**Acceptance test (real).** `AIRSHIP_PUBLISH_SEMANTIC_PACK=1 AIRSHIP_PUBLIC_BASE_PATH=/airship/ npm run build && npm run check:release`, then a Playwright run serving `dist` under `/airship/`: click "Local semantic", get a real embedding. Un-mockable — the loader verifies every asset's byte length and SHA-256 against the pinned manifest. Second case: build **without** the flag and assert the button renders disabled with the stated reason rather than throwing a generic failure.
+**Acceptance test (real).** `npm run semantic:prepare && AIRSHIP_PUBLIC_BASE_PATH=/airship/ npm run build && npm run check:release`, then a Playwright run serving `dist` under `/airship/`: select "Local semantic" and get a real embedding. Un-mockable — the build and loader verify every asset's byte length and SHA-256 against the pinned manifest. Second case: build with `AIRSHIP_DISABLE_SEMANTIC_PACK=1` and assert the button renders disabled with the stated reason without issuing a pack request.
 
 ---
 

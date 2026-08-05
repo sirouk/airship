@@ -79,7 +79,10 @@ adapter are in
   Anthropic, xAI, Ollama, and LM Studio; every conversation pins the provider
   revision, exact credential generation, model, authentication kind, and
   transport boundary, while the agent receives only a bounded,
-  credential-free live availability directory;
+  credential-free live availability directory; session-library return links
+  carry the immutable pin to Connection, where only an exact held route may
+  reopen it after profile, audit, and head verification; a replacement fails
+  closed without creating another conversation;
 - fixed-origin browser transports for OpenAI Responses, Anthropic Messages,
   and xAI Responses plus exact-loopback Ollama and LM Studio discovery and
   streaming; cloud API keys are an explicit advanced compatibility path and
@@ -135,8 +138,10 @@ adapter are in
   exact digest/revision/chunk/query lineage; its hash embeddings are a
   deterministic bootstrap, not a semantic model;
 - an opt-in pinned local semantic embedding pack with WebGPU/WASM backend
-  reporting and an isolated live browser gate; download, activation, and
-  production-hosted generation acceptance remain conditional;
+  reporting and an isolated live browser gate; `npm run semantic:prepare`
+  supplies a hash-verified optional pack that subsequent static builds emit at
+  the configured public base, while builds without it keep the control visibly
+  unavailable and Bootstrap ready;
 - real disposable JavaScript Worker execution and a compact WASI Preview 1
   command runner with args/env/stdout/stderr; an explicit install action probes
   locked Pyodide 314.0.2 and promotes real disposable-worker Python to ready,
@@ -185,6 +190,10 @@ npm run check
 npm run build
 ```
 
+`npm run check` intentionally leaves the long browser matrices separate. Before
+accepting a browser release candidate, also run the full and specialized command
+set in [Browser product acceptance](docs/RELEASE_GATE.md#browser-product-acceptance).
+
 For a reproducible browser + disposable S3 environment, use:
 
 ```bash
@@ -206,7 +215,7 @@ ordinary test suite. Supply its six `AIRSHIP_LOCAL_S3_*` variables from the
 calling environment, then run `npm run test:vault:live`; see
 [Strict browser vault composition](docs/VAULT_COMPOSITION.md#opt-in-live-loopback-harness).
 
-Every production build ends at the deterministic, fail-closed release gate.
+Every production build ends at the fail-closed release gate.
 It rejects source maps and credential-shaped payloads, enforces raw and gzip
 budgets, validates the static-service boundary, and writes an explicitly
 unsigned SHA-256 inventory to `dist/release-manifest.json`. See

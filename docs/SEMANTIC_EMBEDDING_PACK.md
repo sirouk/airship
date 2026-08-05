@@ -124,9 +124,14 @@ fails with a message naming the directive instead of dying inside ORT.
 
 Run `npm run semantic:prepare` to materialize the reviewed public artifacts in
 `.airship-lab/semantic-pack`. The Vite development and production-preview
-plugin exposes only that directory on the same origin. Production hosting must publish the same
-verified directory at the same URL; the model pack is intentionally not
-folded into the startup bundle.
+plugin exposes only the manifest-pinned files on the same origin. A static build
+made with that complete prepared directory emits the exact hash-verified files
+under `semantic-pack/v1/`; Vite's public base places them correctly for both a
+root deployment and a subpath such as `/airship/`. Airship declares the pack
+available to its built-in context runtime from that same immutable snapshot.
+An absent, partial, or same-size-but-changed pack is not emitted: Bootstrap stays
+active and **Local semantic** is visibly unavailable before interaction. The
+model pack remains optional and is never folded into the startup bundle.
 
 Transformers.js may use the browser Cache API for these public, immutable
 model/runtime files. Airship does not give it workspace files, credentials,

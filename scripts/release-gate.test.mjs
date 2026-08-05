@@ -50,10 +50,14 @@ import {
   isOptionalBrowserCapabilityPath,
   isOptionalMemoryViewPath,
   isOptionalMemorySupportPath,
+  isOptionalSkillsManagerViewPath,
   isOptionalProofSurfacePath,
   isOptionalEvidenceAcquisitionPath,
   isOptionalTerminalPath,
   isOptionalSemanticWorkerPath,
+  isOptionalSemanticPackPath,
+  assertOptionalSemanticPackIntegrity,
+  parseSemanticPackState,
   isDeferredCapabilityPackPath,
   assertForkContractDocumented,
   serializeReleaseManifest,
@@ -102,6 +106,56 @@ describe("release gate", () => {
       artifacts: [artifact("assets/a.css", "a"), artifact("z.js", "z")],
     });
     expect(first).not.toMatch(/timestamp|createdAt|generatedAt/iu);
+  });
+
+  it("accepts an optional semantic pack only as the complete reviewed byte set", () => {
+    const runtime = Buffer.from("runtime");
+    const model = Buffer.from("model");
+    const manifest = {
+      assets: {
+        "runtime/transformers.web.js": { bytes: runtime.byteLength, sha256: sha256(runtime) },
+        "models/example/model.onnx": { bytes: model.byteLength, sha256: sha256(model) },
+      },
+    };
+    const complete = [
+      { path: "semantic-pack/v1/runtime/transformers.web.js", payload: runtime },
+      { path: "semantic-pack/v1/models/example/model.onnx", payload: model },
+    ];
+    expect(assertOptionalSemanticPackIntegrity([], manifest)).toEqual([]);
+    expect(() => assertOptionalSemanticPackIntegrity([], manifest, true))
+      .toThrow(/declares the optional semantic pack available/u);
+    expect(() => assertOptionalSemanticPackIntegrity(complete, manifest, false))
+      .toThrow(/declares the optional semantic pack unavailable/u);
+    expect(assertOptionalSemanticPackIntegrity(complete, manifest).map(({ path }) => path)).toEqual([
+      "semantic-pack/v1/models/example/model.onnx",
+      "semantic-pack/v1/runtime/transformers.web.js",
+    ]);
+    expect(() => assertOptionalSemanticPackIntegrity(complete.slice(0, 1), manifest))
+      .toThrow(/missing: semantic-pack\/v1\/models\/example\/model\.onnx/u);
+    expect(() => assertOptionalSemanticPackIntegrity([
+      complete[0],
+      { ...complete[1], payload: Buffer.from("other") },
+    ], manifest)).toThrow(/failed its reviewed byte\/hash pin/u);
+    expect(() => assertOptionalSemanticPackIntegrity([
+      ...complete,
+      { path: "semantic-pack/v1/unreviewed.txt", payload: Buffer.from("extra") },
+    ], manifest)).toThrow(/unreviewed: semantic-pack\/v1\/unreviewed\.txt/u);
+    expect(isOptionalSemanticPackPath("semantic-pack/v1/runtime/transformers.web.js")).toBe(true);
+    expect(isOptionalSemanticPackPath("assets/semantic.worker-A.js")).toBe(false);
+  });
+
+  it("binds the emitted pack declaration to the reviewed model revision", () => {
+    const manifest = { modelRevision: "reviewed", assets: { "model.onnx": { bytes: 1, sha256: "0".repeat(64) } } };
+    expect(parseSemanticPackState(Buffer.from(JSON.stringify({
+      schema: "airship.semantic-pack-state.v1",
+      available: true,
+      modelRevision: "reviewed",
+    })), manifest)).toEqual({ available: true, modelRevision: "reviewed" });
+    expect(() => parseSemanticPackState(Buffer.from(JSON.stringify({
+      schema: "airship.semantic-pack-state.v1",
+      available: true,
+      modelRevision: "other",
+    })), manifest)).toThrow(/does not match its reviewed schema and model revision/u);
   });
 
   it("rejects source maps, inline map directives, and actual credential-shaped values", () => {
@@ -204,6 +258,22 @@ describe("release gate", () => {
     expect(MEASUREMENT_JUSTIFIED_BUDGETS.length).toBeGreaterThan(0);
     for (const name of MEASUREMENT_JUSTIFIED_BUDGETS) expect(RELEASE_BUDGETS[name]).toBeDefined();
 
+    // Every ceiling re-measured by the recovery-and-continuation pass must stay
+    // under the build comparison. Deriving this assertion from the exported
+    // list would let a future omission silently weaken the gate again.
+    for (const name of [
+      "entryJavaScript",
+      "allJavaScriptAndWorkers",
+      "firstPartyJavaScriptAndWorkers",
+      "optionalVendorRuntimeAggregate",
+      "totalJavaScriptAndWorkers",
+      "optionalExecutionTools",
+      "optionalInferenceProviders",
+      "optionalTerminal",
+    ]) {
+      expect(MEASUREMENT_JUSTIFIED_BUDGETS, name).toContain(name);
+    }
+
     // A figure the ceiling beside it would reject describes a build nobody shipped.
     expect(() => assertDocumentedBudgetMeasurements(source.replace("20,591 B gzip", "23,591 B gzip")))
       .toThrow(/optionalMemoryView: its comment records 23,591 B gzip, above the 21\.00 KiB gzip ceiling/u);
@@ -225,7 +295,7 @@ describe("release gate", () => {
     // 84,687 B reading to a "grown from" clause, so that line no longer starts
     // "Re-measured on this build". Blank all four or the operative one survives
     // and the claim proves nothing.
-    expect(() => assertDocumentedBudgetMeasurements(source.replace("Re-measured on this build: 86,284 B raw / 27,586 B gzip", "Re-weighed at 86,284 B and 27,586 B")
+    expect(() => assertDocumentedBudgetMeasurements(source.replace("Re-measured on this build: 86,284 B raw / 27,585 B gzip", "Re-weighed at 86,284 B and 27,585 B")
       .replace("84,687 B raw / 26,979 B gzip", "84,687 B and 26,979 B")
       .replace("Re-measured on this build: 81,152 B raw / 25,637 B gzip", "Re-weighed at 81,152 B and 25,637 B")
       .replace("Re-measured on this build: 78,628 B raw / 24,795 B gzip", "Re-weighed at 78,628 B and 24,795 B")))
@@ -254,10 +324,10 @@ describe("release gate", () => {
       // granted without a sentence behind it is 29.
       ["optionalWorkspaceWorkbench", "gzip: 28 * 1024", "gzip: 29 * 1024"],
       // AMENDED with the ceiling it names: `deferredCapabilities` gzip moved to
-      // 126 KiB when the Connection route stopped interviewing people, and that
-      // step is the tightest one above its recorded measurement — so the step
-      // this row grants without paying for it is now the one past it.
-      ["deferredCapabilities", "gzip: 126 * 1024", "gzip: 127 * 1024"],
+      // 127 KiB when exact continuation began staging the bounded transcript,
+      // and that step is the tightest one above its recorded measurement — so
+      // the step this row grants without paying for it is now the one past it.
+      ["deferredCapabilities", "gzip: 127 * 1024", "gzip: 128 * 1024"],
     ]) {
       const raised = source.replace(new RegExp(`^  ${name}: .*$`, "mu"), (line) => line.replace(ceiling, granted));
       expect(raised, name).not.toBe(source);
@@ -373,8 +443,8 @@ describe("release gate", () => {
     expect(() => assertReleaseGateDocumentationMirrors(doc.replace("| Service worker |", "| Initial JavaScript and module preloads | 640 KiB | 132 KiB |\n| Service worker |")))
       .toThrow(/the table row "Initial JavaScript and module preloads" names no ceiling this file exports/u);
     // Dropping a figure from a multi-class row hides whichever class it omitted.
-    expect(() => assertReleaseGateDocumentationMirrors(doc.replace("| 32 / 56 / 10 KiB |", "| 32 / 56 KiB |")))
-      .toThrow(/"Optional execution broker \/ engine \/ support" raw: the table states 2 figure\(s\) for 3 ceiling\(s\)/u);
+    expect(() => assertReleaseGateDocumentationMirrors(doc.replace("| 32 / 56 / 10 / 60 KiB |", "| 32 / 56 / 10 KiB |")))
+      .toThrow(/"Optional execution broker \/ engine \/ support \/ tools" raw: the table states 3 figure\(s\) for 4 ceiling\(s\)/u);
   });
 
   it("rejects unknown and multiply owned JavaScript artifacts", () => {
@@ -471,6 +541,8 @@ describe("release gate", () => {
     expect(isOptionalMemoryViewPath("assets/memory-graph-Ab_12-CD.js")).toBe(false);
     expect(isOptionalMemorySupportPath("assets/kind-visual-Ab_12-CD.js")).toBe(true);
     expect(isOptionalMemorySupportPath("assets/kind-visual.css")).toBe(false);
+    expect(isOptionalSkillsManagerViewPath("assets/skills-manager-view-Ab_12-CD.js")).toBe(true);
+    expect(isOptionalSkillsManagerViewPath("assets/skills-view-Ab_12-CD.js")).toBe(false);
     expect(isOptionalProofSurfacePath("assets/proof-view-Ab_12-CD.js")).toBe(true);
     expect(isOptionalProofSurfacePath("assets/provider-client-Ab_12-CD.js")).toBe(true);
     expect(isOptionalProofSurfacePath("assets/client-Ab_12-CD.js")).toBe(true);
@@ -598,6 +670,9 @@ describe("release gate", () => {
       '<link rel="modulepreload" href="/assets/memory-view-Ab12.js">',
     )).toThrow(/must not preload/iu);
     expect(() => assertOptionalPacksAreNotPreloaded(
+      '<link rel="modulepreload" href="/assets/skills-manager-view-Ab12.js">',
+    )).toThrow(/must not preload/iu);
+    expect(() => assertOptionalPacksAreNotPreloaded(
       '<link rel="modulepreload" href="/assets/kind-visual-Ab12.js">',
     )).toThrow(/must not preload/iu);
     expect(() => assertOptionalPacksAreNotPreloaded(
@@ -608,6 +683,12 @@ describe("release gate", () => {
     )).toThrow(/must not preload/iu);
     expect(() => assertOptionalPacksAreNotPreloaded(
       '<link rel="modulepreload" href="/assets/terminal-view-Ab12.js">',
+    )).toThrow(/must not preload/iu);
+    expect(() => assertOptionalPacksAreNotPreloaded(
+      '<link rel="modulepreload" href="/airship/assets/terminal-view-Ab12.js">',
+    )).toThrow(/must not preload/iu);
+    expect(() => assertOptionalPacksAreNotPreloaded(
+      '<link rel="modulepreload" href="/assets/manager-Ab12.js">',
     )).toThrow(/must not preload/iu);
     expect(() => assertOptionalPacksAreNotPreloaded(
       '<link rel="modulepreload" href="/assets/terminal-dock-state-Ab12.js">',
@@ -672,6 +753,10 @@ function artifact(path, content) {
   return {
     path,
     bytes: payload.byteLength,
-    sha256: createHash("sha256").update(payload).digest("hex"),
+    sha256: sha256(payload),
   };
+}
+
+function sha256(payload) {
+  return createHash("sha256").update(payload).digest("hex");
 }

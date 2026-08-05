@@ -3,9 +3,9 @@ import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 import { localChutesOAuthBridge } from "./scripts/local-chutes-oauth-bridge";
 import { airshipPyodideAssets } from "./scripts/pyodide-assets";
-import { airshipSemanticPackAssets } from "./scripts/semantic-pack-assets";
+import { airshipSemanticPackAssets, readVerifiedSemanticPack } from "./scripts/semantic-pack-assets";
 
-const DEFERRED_HTML_PRELOAD = /(?:^|\/)(?:deferred-capabilities|load-deferred-capabilities|execution-runtime-pack|execution-engine|runtime-registry|execution-tools|wasi-preview1-worker|node-webcontainer-pack|wasix-pack|wasix-worker|dist|index|agent|multimodal|context-policy|tool-bundle|client-context-runtime|context-selection|repository-admission|editor-view|workspace-binding|content-codec|sources-view|source-selection|workspace-adapter|sessions-route|session-manifest|session-pins|session-fork|fork-context|capabilities-view|browser-runtime|memory-view|skill-editor|kind-visual|proof-view|client|request-state|evidence-acquisition-queue|workspace-evidence-acquisition-persistence|terminal-view|terminal-dock-state|semantic\.worker|client-runtime|telemetry|fabric|openai|provider-connections-view|providers|session-route|inference-bridge-pack|chutes-oauth|chutes-oauth-registration|extension-bridge|local-device-vault-setup|local-device-keyring|encrypted-envelope|local-lab)-[A-Za-z0-9_-]+\.(?:js|css)$/u;
+const DEFERRED_HTML_PRELOAD = /(?:^|\/)(?:deferred-capabilities|load-deferred-capabilities|execution-runtime-pack|execution-engine|runtime-registry|execution-tools|wasi-preview1-worker|node-webcontainer-pack|wasix-pack|wasix-worker|dist|index|agent|multimodal|context-policy|tool-bundle|client-context-runtime|context-selection|repository-admission|editor-view|workspace-binding|content-codec|sources-view|source-selection|workspace-adapter|sessions-route|session-manifest|session-pins|session-fork|fork-context|capabilities-view|browser-runtime|memory-view|skills-manager-view|skill-editor|kind-visual|proof-view|client|request-state|evidence-acquisition-queue|workspace-evidence-acquisition-persistence|terminal-view|terminal-dock-state|semantic\.worker|client-runtime|telemetry|fabric|openai|provider-connections-view|providers|session-route|inference-bridge-pack|chutes-oauth|chutes-oauth-registration|extension-bridge|local-device-vault-setup|local-device-keyring|encrypted-envelope|local-lab)-[A-Za-z0-9_-]+\.(?:js|css)$/u;
 /**
  * Vite may otherwise promote dependencies of dynamic imports into index.html.
  * Preserve its just-in-time JS-host preloads, but keep optional Airship packs
@@ -74,9 +74,16 @@ export const DEVELOPMENT_WATCH_IGNORES = Object.freeze([
 export const DEVELOPMENT_OPTIMIZE_ENTRIES = Object.freeze(["index.html"]);
 
 const PUBLIC_BASE_PATH = resolvePublicBasePath(process.env.AIRSHIP_PUBLIC_BASE_PATH);
+const VERIFIED_SEMANTIC_PACK = process.env.AIRSHIP_DISABLE_SEMANTIC_PACK === "1"
+  ? null
+  : readVerifiedSemanticPack();
+const SEMANTIC_PACK_AVAILABLE = VERIFIED_SEMANTIC_PACK !== null;
 
 export default defineConfig({
   base: PUBLIC_BASE_PATH,
+  define: {
+    "import.meta.env.VITE_AIRSHIP_SEMANTIC_PACK_AVAILABLE": JSON.stringify(SEMANTIC_PACK_AVAILABLE ? "true" : "false"),
+  },
   optimizeDeps: {
     entries: [...DEVELOPMENT_OPTIMIZE_ENTRIES],
   },
@@ -91,7 +98,7 @@ export default defineConfig({
   plugins: [
     preact(),
     airshipPyodideAssets(),
-    airshipSemanticPackAssets(),
+    airshipSemanticPackAssets(VERIFIED_SEMANTIC_PACK),
     localChutesOAuthBridge(),
     {
       name: "airship-local-development-csp",

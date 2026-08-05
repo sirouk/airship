@@ -1,7 +1,7 @@
 # Provider-neutral inference fabric
 
 Status: implemented contracts and isolated browser transports, reviewed
-2026-07-24. This document distinguishes protocol reachability from safe
+2026-08-05. This document distinguishes protocol reachability from safe
 credential custody. A successful CORS preflight is not an OAuth grant, a trust
 claim, or permission to embed a provider secret.
 
@@ -11,8 +11,12 @@ claim, or permission to embed a provider secret.
    connection identity, credential generation, model identity, and transport
    boundary are separate fields.
 2. A session pins all five. Reconnecting an identically named connection,
-   refreshing a catalog, or changing the selected model never rewrites an
-   existing session. Adoption requires a new session or fork.
+   refreshing a catalog, or changing the selected model never rewrites or
+   adopts an existing session. A validated session-library return link locates
+   the immutable pin on Connection; it may reopen a session only when the held
+   route resolves that exact pin and its profile, full audit, and journal head
+   still agree. Otherwise activation fails closed without creating a
+   replacement; deliberate adoption requires a new session or fork.
 3. Credentials do not enter a session manifest, model directory, availability
    snapshot, system prompt, URL, log, receipt, IndexedDB, OPFS, Vault, service
    worker, or local/session storage.
@@ -39,11 +43,16 @@ while explicitly forbidding silent route changes.
 
 The mounted Connection surface keeps multiple validated connections live at
 once. A candidate credential is staged in an isolated page-memory registry;
-model discovery must succeed before it is committed, and a failed reconnect
-cannot destroy an existing working route. Choosing a model performs a bounded
-invocation check and creates a new immutable conversation. Every subsequent
-turn resolves that exact pin again, so disconnects and replacement credentials
-fail closed while the prompt and historical conversation remain intact.
+model discovery must succeed before it is committed, and a failed connection
+attempt cannot destroy an existing working route. Choosing a model performs a
+bounded invocation check and normally creates a new immutable conversation. A
+session-library return link first checks whether this page still holds the
+session's exact connection generation, model, and authentication method. Only
+then, after profile policy, complete local audit, and stable journal-head checks
+also pass, does Connection offer to reopen that conversation without creating
+another. Disconnects and replacement credentials fail closed while the prompt
+and historical conversation remain intact. Every subsequent turn resolves the
+exact pin again.
 
 ## Current provider compatibility
 

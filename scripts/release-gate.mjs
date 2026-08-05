@@ -8,6 +8,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const defaultOutput = resolve(root, "dist");
 
 export const RELEASE_MANIFEST_NAME = "release-manifest.json";
+export const SEMANTIC_PACK_STATE_FILE = "semantic-pack-state.json";
 
 export const RELEASE_BUDGETS = Object.freeze({
   // First paint on a phone, and the strictest ceiling in this file. It held at
@@ -32,9 +33,23 @@ export const RELEASE_BUDGETS = Object.freeze({
   // instead of a measured anchor in script, which returned 217 B of the 548 it
   // first cost. One whole-KiB step; the deferral habit above is still the
   // first tool to reach for, and none of these three had a chunk to defer to.
-  entryJavaScript: Object.freeze({ raw: 384 * 1024, gzip: 113 * 1024 }),
+  //
+  // Re-measured after the complete Skills manager moved behind its route at
+  // 377,857 B raw / 116,554 B gzip. The approval dock, Command Center,
+  // Preferences, shortcut sheet, and route surfaces remain deferred; what stays eager is the small
+  // controller that must survive those chunks refusing to load, deny pending
+  // effects safely, restore boot with a reload, preserve a stopped queue per
+  // conversation, and carry an exact reconnect intent through OAuth. The
+  // audited return now also CAS-fences its selected conversation before the
+  // provider route becomes visible. 114 KiB gzip would have left 182
+  // bytes, below the release tripwire; the fixed 115 KiB gzip ceiling leaves 1,206
+  // bytes. Raw remains at
+  // its reviewed absolute backstop rather than tracking the current minifier
+  // split one KiB at a time.
+  entryJavaScript: Object.freeze({ raw: 384 * 1024, gzip: 115 * 1024 }),
   // Trust composition adds ~1.8 KiB gzip to the baseline while the actual
-  // entry remains below its stricter 110 KiB limit. Heavy QVL stays deferred.
+  // entry remains governed by its stricter entry-specific ceiling above. Heavy
+  // QVL stays deferred.
   //
   // This is the first-paint cost on a phone. It held at 132 KiB through three
   // waves of capability, each absorbed by deferring startup weight rather than
@@ -83,7 +98,18 @@ export const RELEASE_BUDGETS = Object.freeze({
   // `vite.config.ts` gave it a stable name for attribution but did not remove
   // the split, so this covers both forms pending a dedicated deterministic-build
   // repair. Measured 171.49 KiB gzip here, 175.56 KiB gzip from a clean clone.
-  allJavaScriptAndWorkers: Object.freeze({ raw: 768 * 1024, gzip: 176 * 1024 }),
+  //
+  // Re-measured after the Skills route split at 550,331 B raw / 183,890 B gzip.
+  // It includes the eager controller that can
+  // recover a refused shell or approval chunk without freezing the product,
+  // plus the exact connection intent and journal CAS boundary needed to make
+  // conversation continuation atomic under Back, cancellation, and concurrent
+  // writes. The route surfaces and transcript presentation remain deferred.
+  // 180 KiB gzip would have left 430 bytes, below the release tripwire;
+  // the fixed 181 KiB gzip ceiling leaves 1,454 bytes.
+  // The raw ceiling remains the reviewed absolute startup backstop rather than
+  // tracking the current minifier split one KiB at a time.
+  allJavaScriptAndWorkers: Object.freeze({ raw: 768 * 1024, gzip: 181 * 1024 }),
   // Provider routes, capability activation, and the stable lazy broker remain
   // absent from first paint. The broker now also exposes the canonical runtime
   // capability read used by a cold Capabilities deep link before any session
@@ -188,7 +214,7 @@ export const RELEASE_BUDGETS = Object.freeze({
   // reason is stated rather than assumed: 423 KiB raw would have left 37 bytes,
   // and this file does not accept a ceiling a minifier rename could breach.
   //
-  // Re-measured at 434,501 B raw / 128,431 B gzip. The 1,386 bytes trace to
+  // Re-measured at 434,501 B raw / 128,429 B gzip. The 1,384 bytes trace to
   // `chutes: encrypted inference gave up on a full instance while its siblings
   // sat idle` (adbcfc7): the encrypted transport stopped surrendering a turn
   // when the first instance it drew was full and now walks the siblings, and
@@ -198,7 +224,21 @@ export const RELEASE_BUDGETS = Object.freeze({
   // sets the ceiling. Raw takes the tightest whole-KiB step above the new
   // reading, 425 KiB, leaving 699 B. 126 KiB gzip is still the tightest step
   // above its reading and does not move; it now leaves 593 bytes, not 968.
-  deferredCapabilities: Object.freeze({ raw: 425 * 1024, gzip: 126 * 1024 }),
+  //
+  // Re-measured at 436,710 B raw / 129,097 B gzip after continuation began
+  // staging the complete bounded transcript before it commits a provider route,
+  // and the audit learned that a failed turn with no durable work is cancelled
+  // rather than falsely incomplete. 427 KiB raw would have left 538
+  // bytes, so raw takes one further whole step and leaves 1,562; gzip takes the
+  // tightest whole step above the reading and leaves 951 bytes. None of this is
+  // fetched before a deferred audit, transcript, or route capability asks for it.
+  //
+  // Re-measured for the production `/airship/` subpath at 438,287 B raw /
+  // 129,425 B gzip. Public-base-aware semantic and retry URLs add 15 raw bytes
+  // beyond the root build's former ceiling; raw takes the tightest whole-KiB
+  // step and leaves 1,009 bytes. Gzip remains at 127 KiB and leaves 623 bytes.
+  // Both paths stay deferred until a person asks for their owning capability.
+  deferredCapabilities: Object.freeze({ raw: 429 * 1024, gzip: 127 * 1024 }),
   // Core plus every optional route except the two independently delivered
   // vendor engines. The former 384 KiB "all routes" meaning became impossible
   // once full isomorphic-git and xterm engines were deliberately installed:
@@ -356,12 +396,11 @@ export const RELEASE_BUDGETS = Object.freeze({
   // this, `createSkillRevision` had no authoring caller anywhere in the tree —
   // the capability existed in the domain and had no way in.
   //
-  // ENTRY JavaScript did not move past its ceiling and was not allowed to: the
-  // authoring panel and its stylesheet are a separate chunk fetched only when
-  // someone presses New skill or Edit (`optionalSkillEditor` below), so a
-  // visitor who reads the grid pays none of it. What lands in the entry graph
-  // is the grid's own two controls and the three catalog transforms behind
-  // them, which the removal path has to reach from the card.
+  // The authoring panel and its stylesheet are a separate chunk fetched only
+  // when someone presses New skill or Edit (`optionalSkillEditor` below). The
+  // Skills route itself is now separately deferred as well: its grid, controls,
+  // and adjacent profile-switch refusal no longer tax first paint merely so a
+  // person can open them later.
   //
   // Measured 2040.29 KiB raw / 646.84 KiB gzip on the larger of the two
   // `transcript-operations` splits described above, so the ceiling covers both
@@ -481,7 +520,36 @@ export const RELEASE_BUDGETS = Object.freeze({
   // tightest margin it will accept on a 2 MiB aggregate, so raw takes one
   // further step and leaves 1,997. Gzip's tightest step, 661 KiB, leaves 909
   // and is above that line, so it does not need one.
-  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2079 * 1024, gzip: 661 * 1024 }),
+  //
+  // Re-measured after the recovery-and-continuation pass at 2,146,162 B raw /
+  // 682,181 B gzip: eager shell recovery, deferred audit and transcript staging,
+  // the provider return surface, and the fenced journal selection they share.
+  // The vendor engines remain unchanged. 2096 KiB raw would have left 142
+  // bytes, below this aggregate's 768-byte floor, so raw takes one further step
+  // and leaves 1,166. Gzip's tightest step leaves 827 bytes.
+  //
+  // Re-measured after the closed-loop recovery pass at 2,149,575 B raw /
+  // 683,271 B gzip. Retryable deferred chunks, exact cancellation on in-app
+  // navigation, approval failure containment, and keyboard focus restoration
+  // are all first-party state integrity; the independent vendor engines did not
+  // move. Raw and gzip take the tightest whole-KiB steps above the reading,
+  // leaving 825 and 761 bytes respectively.
+  //
+  // Deferring the complete Skills manager removes its grid and refusal state
+  // from first paint, while the new route boundary adds one owned first-party
+  // artifact and loses some cross-chunk compression. Measured 2,153,601 B raw /
+  // 685,536 B gzip. A 2104 KiB raw ceiling leaves 895 bytes, above this
+  // aggregate's 768-byte floor; 670 KiB gzip would have left only 544 bytes, so
+  // gzip takes one further whole-KiB step and leaves 1,568 bytes.
+  // The entry ceiling remains independently fixed at 115 KiB gzip.
+  //
+  // Re-measured after the complete journey pass at 2,155,429 B raw / 686,106 B
+  // gzip. The new weight is first-party recovery, responsive state, and route
+  // integrity; Terminal's independent vendor partition is excluded. 2105 KiB
+  // raw would have left 91 bytes, below this aggregate's 768-byte floor, so raw
+  // takes one further step and leaves 1,115. The existing gzip ceiling leaves
+  // 998 bytes. The entry ceiling remains independently fixed.
+  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2106 * 1024, gzip: 671 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now measures 672.33 KiB raw / 186.61 KiB gzip:
   // the browser-Git pack grew (see optionalBrowserGit) and the Terminal pack
@@ -491,7 +559,16 @@ export const RELEASE_BUDGETS = Object.freeze({
   // separately reviewable.
   // The journey pass adds the Terminal's Git handoff to this pair; both vendor
   // pins are unchanged, so the growth is first-party and reviewed above.
-  optionalVendorRuntimeAggregate: Object.freeze({ raw: 677 * 1024, gzip: 188 * 1024 }),
+  // Re-measured by a clean rebuild at 692,792 B raw /
+  // 192,510 B gzip. 188 KiB gzip would have left 2 bytes, the minifier/chunk
+  // split tripwire documented for the baseline above, not a vendor-code change,
+  // so gzip keeps one further whole-KiB step and leaves 1,026 bytes; raw does
+  // not move.
+  // Re-measured with bounded terminal authority release at 694,321 B raw /
+  // 192,979 B gzip. The vendor pins remain byte-identical; the delta is the
+  // first-party manager above. The existing ceilings leave 975 / 1,581 bytes,
+  // both above the aggregate's 768-byte floor.
+  optionalVendorRuntimeAggregate: Object.freeze({ raw: 679 * 1024, gzip: 190 * 1024 }),
   // Absolute installed bundle backstop. It includes first-party/routes, both
   // vendor engines, model catalog chunks, and the service worker. Static
   // Pyodide assets remain governed by their separate pack cap below.
@@ -636,7 +713,30 @@ export const RELEASE_BUDGETS = Object.freeze({
   // tripwire this file refuses everywhere else, so raw takes one further
   // whole-KiB step and leaves 1,248. Gzip's tightest step, 849 KiB, leaves 953
   // and does not need one. Nothing eager moved; the entry ceiling is untouched.
-  totalJavaScriptAndWorkers: Object.freeze({ raw: 2755 * 1024, gzip: 849 * 1024 }),
+  //
+  // Re-measured with the same reviewed first-party delta at 2,838,954 B raw /
+  // 874,691 B gzip; both vendor pins remain unchanged. 2773 KiB raw would have
+  // left 598 bytes, below the aggregate tripwire, so raw takes one further step
+  // and leaves 1,622. Gzip's tightest step leaves 829 bytes.
+  //
+  // Re-measured after the recovery pass above at 2,842,367 B raw /
+  // 875,786 B gzip. The vendor pins are still unchanged; this is the same
+  // reviewed first-party state-integrity delta. 2776 KiB raw would have left
+  // 257 bytes, below the aggregate tripwire, so raw takes one further step and
+  // leaves 1,281. Gzip takes the tightest whole-KiB step and leaves 758. Nothing
+  // bypasses the independently fixed entry ceiling.
+  //
+  // The Skills route split carries the installed graph with the same owned
+  // first-party route boundary measured above; vendor pins remain unchanged.
+  // Measured 2,846,425 B raw / 878,066 B gzip. 2780 KiB raw would have left
+  // only 295 bytes and 858 KiB gzip would have left only 526 bytes, both below
+  // the aggregate's 768-byte floor. Each takes one further whole-KiB step,
+  // leaving 1,319 and 1,550 bytes respectively.
+  // Re-measured after the complete journey and terminal-authority pass at
+  // 2,849,750 B raw / 879,085 B gzip. This is exactly the reviewed first-party
+  // and vendor-aggregate growth above. The existing ceilings leave 1,066 /
+  // 1,555 bytes, both above the aggregate's 768-byte floor.
+  totalJavaScriptAndWorkers: Object.freeze({ raw: 2784 * 1024, gzip: 860 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. Keep it visible under a dedicated, deliberately small cap.
   serviceWorker: Object.freeze({ raw: 12 * 1024, gzip: 4 * 1024 }),
@@ -666,7 +766,13 @@ export const RELEASE_BUDGETS = Object.freeze({
   // one place, and this is the chunk that both importers share. Total shipped
   // JavaScript did not grow — the copies elsewhere went away — so the honest
   // budget is the new shape rather than the old number.
-  optionalExecutionTools: Object.freeze({ raw: 60 * 1024, gzip: 17 * 1024 }),
+  //
+  // Exact conversation return adds the journal's audited-head append to this
+  // shared implementation: selection must compare-and-set the head it replayed
+  // instead of rebasing onto a concurrent turn. Re-measured at 60,608 B raw /
+  // 17,443 B gzip. Raw still clears its 60 KiB ceiling; 17 KiB is 35 bytes too
+  // small, so gzip takes one whole-KiB step and leaves 989 bytes.
+  optionalExecutionTools: Object.freeze({ raw: 60 * 1024, gzip: 18 * 1024 }),
   // Pinned browser_wasi_shim plus Airship's bounded virtual-filesystem Worker.
   // It is fetched only when the precompiled WASI adapter executes a command.
   optionalWasiPreview1Worker: Object.freeze({ raw: 32 * 1024, gzip: 8 * 1024 }),
@@ -826,7 +932,7 @@ export const RELEASE_BUDGETS = Object.freeze({
   // until Workspace opens. The same pass moved the shared code scanner out of
   // the entry chunk into its own deferred `code-highlight` chunk, which is why
   // `entryJavaScript` falls 3.05 KiB raw in this build rather than rising.
-  // Re-measured on this build: 86,284 B raw / 27,586 B gzip, grown from the
+  // Re-measured on this build: 86,284 B raw / 27,585 B gzip, grown from the
   // 84,687 B raw / 26,979 B gzip this comment recorded. The 1,597 bytes are
   // `editor: 56px of chrome above the first file, and a palette that did not
   // survive a reload` (d11d803), and they are two things: `code-theme-mirror`,
@@ -919,10 +1025,10 @@ export const RELEASE_BUDGETS = Object.freeze({
   // The lazy route now includes the live current/peak execution reading,
   // actionable primitive remediation, and the Companion relay/cache/compute
   // observation instead of making those capabilities settings-only facts.
-  // Measured 12,409 B raw / 4,230 B gzip. Raw holds at 13 KiB, the smallest whole
+  // Measured 12,409 B raw / 4,229 B gzip. Raw holds at 13 KiB, the smallest whole
   // KiB above it — the route had already outgrown 11 KiB, and 12 KiB does not fit
   // at all. Gzip comes back down to a half-KiB step: 4.5 KiB clears the
-  // measurement by 378 bytes, where the 5 KiB it had been raised to granted 21% of
+  // measurement by 379 bytes, where the 5 KiB it had been raised to granted 21% of
   // the pack as headroom that no measurement asked for. This route is fetched on
   // navigation; none of it enters first paint.
   optionalCapabilitiesView: Object.freeze({ raw: 13 * 1024, gzip: 4 * 1024 + 512 }),
@@ -968,6 +1074,12 @@ export const RELEASE_BUDGETS = Object.freeze({
   // Small shared node-shape vocabulary split out by Vite because both the
   // Memory route and deferred graph renderer consume it.
   optionalMemorySupport: Object.freeze({ raw: 2 * 1024, gzip: 1 * 1024 }),
+  // The complete Skills route: resolved-set grid, profile/global controls,
+  // authored-skill removal guard, and the exact adjacent profile-switch
+  // refusal. It is fetched only for `#skills`; the authoring form remains the
+  // second-level `optionalSkillEditor` chunk below. Measured 6,291 B raw /
+  // 2,395 B gzip. The ceilings are the tightest whole-KiB steps above it.
+  optionalSkillsManagerView: Object.freeze({ raw: 7 * 1024, gzip: 3 * 1024 }),
   // The authoring panel for a `custom.` skill: form, its stylesheet's JS shim,
   // and nothing else. Deferred because the Skills route is a grid people read
   // far more often than they write, and the six built-ins cannot be edited at
@@ -1064,12 +1176,12 @@ export const RELEASE_BUDGETS = Object.freeze({
   // counts what actually ran, a receipt for a local turn that previously had
   // none, and provenance a reader can follow from a claim back to its source.
   // Measured 89,774 B raw / 27,986 B gzip, each the tightest whole-KiB step.
-  // Re-measured at 90,166 B raw / 28,113 B gzip. The 392 bytes are the phone
+  // Re-measured at 90,166 B raw / 28,109 B gzip. The raw delta is the phone
   // pass (e764668): Proof now asks `useShellIsPhone` which layout it is drawing
   // and picks its disclosure defaults from the answer, because how much of a
   // claim ledger sits above the fold is DOM state a stylesheet cannot set. Raw
   // takes the next whole-KiB step to 89 KiB and leaves 970 B; 28 KiB gzip is
-  // still the tightest step above its reading and does not move, leaving 559 B.
+  // still the tightest step above its reading and does not move, leaving 563 B.
   // Still fetched only when Proof opens; first paint is untouched.
   optionalProofSurface: Object.freeze({ raw: 89 * 1024, gzip: 28 * 1024 }),
   // Receipt-keyed acquisition scheduling, its WorkspacePort CAS adapter, and
@@ -1093,9 +1205,15 @@ export const RELEASE_BUDGETS = Object.freeze({
   // The human-journey pass added the Git handoff the developer persona found
   // missing — a `git` typed into the PTY now offers to run on the real browser
   // Git bridge instead of failing at a shell with no git binary.
-  // Measured 426,772 B raw / 111,821 B gzip, the tightest whole-KiB step above
-  // each. Still fetched only when Terminal opens.
-  optionalTerminal: Object.freeze({ raw: 420 * 1024, gzip: 111 * 1024 }),
+  // The profile-authority shutdown now observes rejected provider exits, waits
+  // for an overtaken jsh spawn before unmounting its cwd, and bounds forced
+  // termination. Manual restart and close now use the same bounded stop and a
+  // timed-out spawn retains its mounted authority. Measured 430,996 B raw /
+  // 113,256 B gzip. 421 KiB raw would have left 108 bytes and 111 KiB gzip
+  // would have left 408, both below the route's 768-byte tripwire, so each
+  // takes one further step and leaves 1,132 / 1,432 bytes. First paint does
+  // not move. Still fetched only when Terminal opens.
+  optionalTerminal: Object.freeze({ raw: 422 * 1024, gzip: 112 * 1024 }),
   // Protocol host only. The reviewed Transformers/ORT/model artifacts remain
   // a separately mounted same-origin semantic pack and are never preloaded.
   optionalSemanticWorker: Object.freeze({ raw: 16 * 1024, gzip: 6 * 1024 }),
@@ -1125,7 +1243,15 @@ export const RELEASE_BUDGETS = Object.freeze({
   // only the lost cross-chunk compression is new, at 35.59 KiB gzip.
   // Includes the shared page-side companion protocol client used by both the
   // live Providers observation and the opt-in ciphertext cache backend.
-  optionalInferenceProviders: Object.freeze({ raw: 124 * 1024, gzip: 38 * 1024 }),
+  //
+  // Exact conversation return now classifies every held provider route as the
+  // pinned generation, a replacement, or unrelated; locks the pinned model;
+  // and keeps abandon unavailable once verification reaches its commit point.
+  // The complete six-pack aggregate now measures 128,800 B raw / 39,447 B
+  // gzip. 126 KiB raw would have left 224 bytes and 39 KiB gzip would have
+  // left 489, both below the route aggregate's 768-byte floor, so each takes
+  // one further whole-KiB step and leaves 1,248 / 1,513 bytes.
+  optionalInferenceProviders: Object.freeze({ raw: 127 * 1024, gzip: 40 * 1024 }),
   // Chutes registration metadata plus PKCE/token operations load for Connect,
   // an OAuth callback, or a scheduled refresh—never for first paint.
   //
@@ -1295,13 +1421,32 @@ export function assertWithinBudget(label, measurement, budget) {
  * real build, and it may never record a figure its own ceiling would reject.
  */
 export const MEASUREMENT_JUSTIFIED_BUDGETS = Object.freeze([
+  "entryJavaScript",
+  "allJavaScriptAndWorkers",
   "deferredCapabilities",
+  "firstPartyJavaScriptAndWorkers",
+  "optionalVendorRuntimeAggregate",
+  "totalJavaScriptAndWorkers",
+  "optionalExecutionTools",
+  "optionalInferenceProviders",
   "optionalWorkspaceWorkbench",
   "optionalCapabilitiesView",
   "optionalMemoryView",
+  "optionalSkillsManagerView",
   "optionalProofSurface",
   "optionalSkillEditor",
+  "optionalTerminal",
 ]);
+
+/*
+ * These raw ceilings are deliberate absolute parse/memory backstops. Their
+ * gzip roles still follow the ordinary tight whole-KiB rule, and both roles
+ * must still record and match a measurement from the build under review.
+ */
+const MEASUREMENT_TIGHTNESS_EXEMPT_ROLES = Object.freeze({
+  entryJavaScript: Object.freeze(["raw"]),
+  allJavaScriptAndWorkers: Object.freeze(["raw"]),
+});
 
 /*
  * Every ceiling in RELEASE_BUDGETS is justified by a measurement written in the
@@ -1346,6 +1491,7 @@ export function assertDocumentedBudgetMeasurements(source) {
       continue;
     }
     for (const role of ["raw", "gzip"]) {
+      if (MEASUREMENT_TIGHTNESS_EXEMPT_ROLES[entry.name]?.includes(role)) continue;
       const ceiling = entry.budget[role];
       const steps = new RegExp(`${role} would have left \\d`, "u").test(entry.prose) ? 2 : 1;
       const allowed = (Math.floor(documented[role] / 1024) + steps) * 1024;
@@ -1658,8 +1804,8 @@ export const DOCUMENTED_BUDGET_ROWS = Object.freeze([
   Object.freeze({ label: "Absolute installed JavaScript/worker backstop", budgets: Object.freeze(["totalJavaScriptAndWorkers"]) }),
   Object.freeze({ label: "Service worker", budgets: Object.freeze(["serviceWorker"]) }),
   Object.freeze({
-    label: "Optional execution broker / engine / support",
-    budgets: Object.freeze(["optionalExecutionPack", "optionalExecutionEngine", "optionalExecutionSupport"]),
+    label: "Optional execution broker / engine / support / tools",
+    budgets: Object.freeze(["optionalExecutionPack", "optionalExecutionEngine", "optionalExecutionSupport", "optionalExecutionTools"]),
   }),
   Object.freeze({ label: "Optional pinned WASI Preview 1 Worker", budgets: Object.freeze(["optionalWasiPreview1Worker"]) }),
   Object.freeze({ label: "Optional Node/WebContainer pack", budgets: Object.freeze(["optionalNodeExecutionPack"]) }),
@@ -1679,6 +1825,10 @@ export const DOCUMENTED_BUDGET_ROWS = Object.freeze([
   Object.freeze({
     label: "Optional Sessions / Memory / Memory support / Proof",
     budgets: Object.freeze(["optionalSessionLibrary", "optionalMemoryView", "optionalMemorySupport", "optionalProofSurface"]),
+  }),
+  Object.freeze({
+    label: "Optional Skills route / skill editor",
+    budgets: Object.freeze(["optionalSkillsManagerView", "optionalSkillEditor"]),
   }),
   Object.freeze({ label: "Optional Terminal", budgets: Object.freeze(["optionalTerminal"]) }),
   Object.freeze({
@@ -1830,9 +1980,21 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
   const files = await collectFiles(output);
   const manifestPath = posix.normalize(RELEASE_MANIFEST_NAME);
   const releasableFiles = files.filter((file) => file.path !== manifestPath);
+  const semanticArtifactManifest = JSON.parse(
+    await readFile(resolve(root, "src/indexing/semantic-artifact-manifest.json"), "utf8"),
+  );
+  const semanticPackStateFile = releasableFiles.find((file) => file.path === SEMANTIC_PACK_STATE_FILE);
+  if (!semanticPackStateFile) throw new Error(`Required static artifact is missing: ${SEMANTIC_PACK_STATE_FILE}.`);
+  const semanticPackState = parseSemanticPackState(semanticPackStateFile.payload, semanticArtifactManifest);
+  assertOptionalSemanticPackIntegrity(releasableFiles, semanticArtifactManifest, semanticPackState.available);
   const failures = [];
 
   for (const file of releasableFiles) {
+    // These large public model/runtime artifacts have already been matched to
+    // their reviewed byte lengths and SHA-256 pins above. Re-decoding ONNX/WASM
+    // as UTF-8 adds no security signal and can multiply gate memory by hundreds
+    // of MiB.
+    if (isOptionalSemanticPackPath(file.path)) continue;
     for (const finding of inspectPayload(file.path, file.payload)) {
       failures.push(`${redactSensitiveText(file.path)}: ${finding}`);
     }
@@ -1846,6 +2008,7 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
     "favicon.svg",
     "index.html",
     "manifest.webmanifest",
+    SEMANTIC_PACK_STATE_FILE,
     "sw.js",
     "extension/index.html",
     "extension/install.css",
@@ -1865,7 +2028,10 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
     if (!fileMap.has(path)) throw new Error(`Required static artifact is missing: ${path}.`);
   }
 
-  await validatePublicCopies(output, required.filter((path) => path !== "index.html"));
+  await validatePublicCopies(
+    output,
+    required.filter((path) => path !== "index.html" && path !== SEMANTIC_PACK_STATE_FILE),
+  );
   assertForkContractDocumented(await readFile(resolve(root, "docs", "SESSION_LIBRARY.md"), "utf8"));
   assertReleaseGateDocumentationMirrors(await readFile(resolve(root, "docs", "RELEASE_GATE.md"), "utf8"));
   const headers = fileMap.get("_headers").payload.toString("utf8");
@@ -1890,7 +2056,11 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
   ].filter((file, index, files) => files.findIndex((candidate) => candidate.path === file.path) === index);
   const entryCss = requireAsset(fileMap, entries.styles[0], ".css");
   const pyodideFiles = PYODIDE_ASSET_PATHS.map((path) => requireReleaseFile(fileMap, path));
-  const wasmFiles = releasableFiles.filter((file) => file.path.endsWith(".wasm") && !isOptionalPythonPackPath(file.path));
+  const wasmFiles = releasableFiles.filter(
+    (file) => file.path.endsWith(".wasm")
+      && !isOptionalPythonPackPath(file.path)
+      && !isOptionalSemanticPackPath(file.path),
+  );
   if (wasmFiles.length === 0) throw new Error("The production build is missing the Chutes crypto WASM artifact.");
 
   const entryJavaScriptMeasurement = measure(entryJavaScript.payload);
@@ -1901,7 +2071,8 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
   const javaScriptFiles = releasableFiles.filter(
     (file) => (file.path.endsWith(".js") || file.path.endsWith(".mjs"))
       && file.path !== "sw.js"
-      && !isOptionalPythonPackPath(file.path),
+      && !isOptionalPythonPackPath(file.path)
+      && !isOptionalSemanticPackPath(file.path),
   );
   assertNoSimulatedGitRuntime(javaScriptFiles);
   const optionalExecutionPacks = javaScriptFiles.filter((file) => isOptionalExecutionPackPath(file.path));
@@ -2075,6 +2246,11 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
     throw new Error(`Production must contain exactly one optional Memory support chunk; found ${optionalMemorySupportPacks.length}.`);
   }
   const optionalMemorySupportMeasurement = measure(optionalMemorySupportPacks[0].payload);
+  const optionalSkillsManagerViewPacks = javaScriptFiles.filter((file) => isOptionalSkillsManagerViewPath(file.path));
+  if (optionalSkillsManagerViewPacks.length !== 1) {
+    throw new Error(`Production must contain exactly one optional Skills route; found ${optionalSkillsManagerViewPacks.length}.`);
+  }
+  const optionalSkillsManagerViewMeasurement = measure(optionalSkillsManagerViewPacks[0].payload);
   const optionalSkillEditorPacks = javaScriptFiles.filter((file) => isOptionalSkillEditorPath(file.path));
   if (optionalSkillEditorPacks.length !== 1) {
     throw new Error(`Production must contain exactly one optional skill editor; found ${optionalSkillEditorPacks.length}.`);
@@ -2229,6 +2405,7 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
       && !isOptionalBrowserCapabilityPath(file.path)
       && !isOptionalMemoryViewPath(file.path)
       && !isOptionalMemorySupportPath(file.path)
+      && !isOptionalSkillsManagerViewPath(file.path)
       && !isOptionalSkillEditorPath(file.path)
       && !isOptionalProofSurfacePath(file.path)
       && !isOptionalEvidenceAcquisitionPath(file.path)
@@ -2305,6 +2482,7 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
       { name: "browser-capabilities", paths: optionalBrowserCapabilityPacks.map((file) => file.path) },
       { name: "memory-view", paths: optionalMemoryViewPacks.map((file) => file.path) },
       { name: "memory-support", paths: optionalMemorySupportPacks.map((file) => file.path) },
+      { name: "skills-manager-view", paths: optionalSkillsManagerViewPacks.map((file) => file.path) },
       { name: "skill-editor", paths: optionalSkillEditorPacks.map((file) => file.path) },
       { name: "confirm-dialog", paths: optionalConfirmDialogPacks.map((file) => file.path) },
       { name: "shortcut-sheet", paths: optionalShortcutSheetPacks.map((file) => file.path) },
@@ -2420,6 +2598,7 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
   );
   assertWithinBudget("Optional Memory view", optionalMemoryViewMeasurement, RELEASE_BUDGETS.optionalMemoryView);
   assertWithinBudget("Optional Memory support", optionalMemorySupportMeasurement, RELEASE_BUDGETS.optionalMemorySupport);
+  assertWithinBudget("Optional Skills route", optionalSkillsManagerViewMeasurement, RELEASE_BUDGETS.optionalSkillsManagerView);
   assertWithinBudget("Optional skill editor", optionalSkillEditorMeasurement, RELEASE_BUDGETS.optionalSkillEditor);
   assertWithinBudget("Shared confirm dialog", optionalConfirmDialogMeasurement, RELEASE_BUDGETS.optionalConfirmDialog);
   assertWithinBudget("Optional shortcut sheet", optionalShortcutSheetMeasurement, RELEASE_BUDGETS.optionalShortcutSheet);
@@ -2509,12 +2688,21 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
   // first, and because this is the only check in the file that can compare a
   // written justification with the bytes that justify it.
   assertDocumentedMeasurementsMatchBuild(gateSource, {
+    entryJavaScript: entryJavaScriptMeasurement,
+    allJavaScriptAndWorkers: baselineJavaScriptMeasurement,
     deferredCapabilities: deferredCapabilityMeasurement,
+    firstPartyJavaScriptAndWorkers: firstPartyJavaScriptMeasurement,
+    optionalVendorRuntimeAggregate: optionalVendorRuntimeMeasurement,
+    totalJavaScriptAndWorkers: totalJavaScriptMeasurement,
+    optionalExecutionTools: optionalExecutionToolsMeasurement,
+    optionalInferenceProviders: optionalInferenceProviderMeasurement,
     optionalWorkspaceWorkbench: optionalWorkspaceWorkbenchMeasurement,
     optionalCapabilitiesView: optionalCapabilitiesViewMeasurement,
     optionalMemoryView: optionalMemoryViewMeasurement,
+    optionalSkillsManagerView: optionalSkillsManagerViewMeasurement,
     optionalProofSurface: optionalProofSurfaceMeasurement,
     optionalSkillEditor: optionalSkillEditorMeasurement,
+    optionalTerminal: optionalTerminalMeasurement,
   });
 
   const artifacts = releasableFiles.map((file) => ({
@@ -2637,6 +2825,10 @@ export async function runReleaseGate(outputDirectory = defaultOutput) {
       optionalMemorySupport: Object.freeze({
         path: optionalMemorySupportPacks[0].path,
         ...optionalMemorySupportMeasurement,
+      }),
+      optionalSkillsManagerView: Object.freeze({
+        path: optionalSkillsManagerViewPacks[0].path,
+        ...optionalSkillsManagerViewMeasurement,
       }),
       optionalSkillEditor: Object.freeze({
         path: optionalSkillEditorPacks[0].path,
@@ -2922,6 +3114,11 @@ export function isOptionalMemorySupportPath(path) {
   return /^assets\/kind-visual-[A-Za-z0-9_-]+\.js$/u.test(path);
 }
 
+/** The complete route-local Skills manager; see `optionalSkillsManagerView`. */
+export function isOptionalSkillsManagerViewPath(path) {
+  return /^assets\/skills-manager-view-[A-Za-z0-9_-]+\.js$/u.test(path);
+}
+
 /** The `custom.` skill authoring panel; see `optionalSkillEditor`. */
 export function isOptionalSkillEditorPath(path) {
   return /^assets\/skill-editor-[A-Za-z0-9_-]+\.js$/u.test(path);
@@ -3057,8 +3254,68 @@ export function isOptionalPythonPackPath(path) {
   return path.startsWith("execution-packs/pyodide/");
 }
 
+export function isOptionalSemanticPackPath(path) {
+  return path.startsWith("semantic-pack/v1/");
+}
+
+export function parseSemanticPackState(payload, manifest) {
+  let state;
+  try {
+    state = JSON.parse(payload.toString("utf8"));
+  } catch {
+    throw new Error("Semantic pack build state is not valid JSON.");
+  }
+  if (state?.schema !== "airship.semantic-pack-state.v1"
+    || typeof state.available !== "boolean"
+    || state.modelRevision !== manifest?.modelRevision) {
+    throw new Error("Semantic pack build state does not match its reviewed schema and model revision.");
+  }
+  return Object.freeze({ available: state.available, modelRevision: state.modelRevision });
+}
+
+/**
+ * An optional pack is either wholly absent or exactly the reviewed manifest.
+ * This is stronger than a size budget: one missing, added, or same-size changed
+ * byte rejects the release before the large binary payload enters generic scans.
+ */
+export function assertOptionalSemanticPackIntegrity(files, manifest, declaredAvailable = undefined) {
+  const present = files.filter((file) => isOptionalSemanticPackPath(file.path));
+  if (declaredAvailable === true && present.length === 0) {
+    throw new Error("This build declares the optional semantic pack available, but no pack artifacts were emitted.");
+  }
+  if (declaredAvailable === false && present.length > 0) {
+    throw new Error("This build declares the optional semantic pack unavailable, but pack artifacts were emitted.");
+  }
+  if (present.length === 0) return Object.freeze([]);
+  const assets = manifest?.assets;
+  if (!assets || typeof assets !== "object" || Array.isArray(assets) || Object.keys(assets).length === 0) {
+    throw new Error("The reviewed semantic artifact manifest has no usable assets.");
+  }
+  const expected = new Map(
+    Object.entries(assets).map(([relativePath, pin]) => [`semantic-pack/v1/${relativePath}`, pin]),
+  );
+  const actual = new Map(present.map((file) => [file.path, file]));
+  const unknown = present.map((file) => file.path).filter((path) => !expected.has(path));
+  const missing = [...expected.keys()].filter((path) => !actual.has(path));
+  if (unknown.length > 0 || missing.length > 0) {
+    const details = [
+      unknown.length > 0 ? `unreviewed: ${unknown.sort(compareText).join(", ")}` : undefined,
+      missing.length > 0 ? `missing: ${missing.sort(compareText).join(", ")}` : undefined,
+    ].filter(Boolean).join("; ");
+    throw new Error(`Optional semantic pack does not match its reviewed file set (${details}).`);
+  }
+  for (const [path, pin] of expected) {
+    const payload = actual.get(path).payload;
+    const digest = createHash("sha256").update(payload).digest("hex");
+    if (payload.byteLength !== pin.bytes || digest !== pin.sha256) {
+      throw new Error(`Optional semantic pack asset failed its reviewed byte/hash pin: ${path}.`);
+    }
+  }
+  return Object.freeze([...present].sort((left, right) => compareText(left.path, right.path)));
+}
+
 export function assertOptionalPacksAreNotPreloaded(index) {
-  if (/<link\b[^>]*\brel="modulepreload"[^>]*\bhref="\/assets\/(?:deferred-capabilities|load-deferred-capabilities|execution-runtime-pack|execution-engine|runtime-registry|execution-tools|wasi-preview1-worker|node-webcontainer-pack|wasix-pack|wasix-worker|dist|index|agent|multimodal|context-policy|tool-bundle|client-context-runtime|context-selection|repository-admission|editor-view|workspace-binding|content-codec|sources-view|source-selection|workspace-adapter|sessions-route|session-manifest|session-pins|session-fork|fork-context|capabilities-view|browser-runtime|memory-view|kind-visual|proof-view|client|request-state|evidence-acquisition-queue|workspace-evidence-acquisition-persistence|terminal-view|terminal-dock-state|semantic\.worker|client-runtime|telemetry|fabric|openai|provider-connections-view|providers|session-route|chutes-oauth|chutes-oauth-registration|extension-bridge|local-device-vault-setup|local-device-keyring|local-lab|recovery|encrypted-envelope)-/u.test(index)) {
+  if (/<link\b[^>]*\brel="modulepreload"[^>]*\bhref="\/(?:[A-Za-z0-9._~-]+\/)*assets\/(?:deferred-capabilities|load-deferred-capabilities|execution-runtime-pack|execution-engine|runtime-registry|execution-tools|wasi-preview1-worker|node-webcontainer-pack|wasix-pack|wasix-worker|dist|index|agent|multimodal|context-policy|tool-bundle|client-context-runtime|context-selection|repository-admission|editor-view|workspace-binding|content-codec|sources-view|source-selection|workspace-adapter|sessions-route|session-manifest|session-pins|session-fork|fork-context|capabilities-view|browser-runtime|memory-view|skills-manager-view|skill-editor|kind-visual|proof-view|client|request-state|evidence-acquisition-queue|workspace-evidence-acquisition-persistence|terminal-view|manager|terminal-dock-state|semantic\.worker|client-runtime|telemetry|fabric|openai|provider-connections-view|providers|session-route|chutes-oauth|chutes-oauth-registration|extension-bridge|local-device-vault-setup|local-device-keyring|local-lab|recovery|encrypted-envelope)-/u.test(index)) {
     throw new Error("Production HTML must not preload deferred capability or optional execution packs.");
   }
 }
@@ -3354,6 +3611,9 @@ function printResult(result) {
   );
   console.log(
     `Optional Memory support ${formatBytes(measurements.optionalMemorySupport.raw)} raw / ${formatBytes(measurements.optionalMemorySupport.gzip)} gzip`,
+  );
+  console.log(
+    `Optional Skills route ${formatBytes(measurements.optionalSkillsManagerView.raw)} raw / ${formatBytes(measurements.optionalSkillsManagerView.gzip)} gzip`,
   );
   console.log(
     `Optional skill editor ${formatBytes(measurements.optionalSkillEditor.raw)} raw / ${formatBytes(measurements.optionalSkillEditor.gzip)} gzip`,
