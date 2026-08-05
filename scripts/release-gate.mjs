@@ -187,7 +187,18 @@ export const RELEASE_BUDGETS = Object.freeze({
   // 126 KiB, which leaves 968 bytes. Raw takes the second, 424 KiB, and the
   // reason is stated rather than assumed: 423 KiB raw would have left 37 bytes,
   // and this file does not accept a ceiling a minifier rename could breach.
-  deferredCapabilities: Object.freeze({ raw: 424 * 1024, gzip: 126 * 1024 }),
+  //
+  // Re-measured at 434,501 B raw / 128,431 B gzip. The 1,386 bytes trace to
+  // `chutes: encrypted inference gave up on a full instance while its siblings
+  // sat idle` (adbcfc7): the encrypted transport stopped surrendering a turn
+  // when the first instance it drew was full and now walks the siblings, and
+  // that ladder is code this pack carries. This is the aggregate of every
+  // deferred capability, so a few dozen of those bytes are ordinary drift from
+  // commits that named none of it — the reading, not the attribution, is what
+  // sets the ceiling. Raw takes the tightest whole-KiB step above the new
+  // reading, 425 KiB, leaving 699 B. 126 KiB gzip is still the tightest step
+  // above its reading and does not move; it now leaves 593 bytes, not 968.
+  deferredCapabilities: Object.freeze({ raw: 425 * 1024, gzip: 126 * 1024 }),
   // Core plus every optional route except the two independently delivered
   // vendor engines. The former 384 KiB "all routes" meaning became impossible
   // once full isomorphic-git and xterm engines were deliberately installed:
@@ -456,7 +467,21 @@ export const RELEASE_BUDGETS = Object.freeze({
   // one partition every deferred lane adds to — a 2 MiB aggregate whose
   // minifier renames move more than that between builds. So each takes one
   // further whole-KiB step, leaving 1,679 raw and 1,188 gzip.
-  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2070 * 1024, gzip: 658 * 1024 }),
+  //
+  // The phone-and-conversations pass takes it again: 2,127,155 B raw /
+  // 675,955 B gzip, or 2077.30 KiB / 660.11 KiB. This partition holds every
+  // pack re-measured above, and the growth is theirs — Sessions +3,401 B for
+  // the return-to-a-pinned-thread projection, the Workspace workbench +1,597 B
+  // for the palette that survives a reload, the deferred aggregate +1,386 B for
+  // the encrypted-transport failover, Proof +392 B for its phone disclosure
+  // defaults, and 466 B for `phone-viewport` itself, which became a chunk of
+  // its own once Memory and Proof both asked which layout was drawing. All of
+  // it is deferred; `entryJavaScript` is untouched again. 2078 KiB raw would
+  // have left 717 bytes, under the 768 this comment already named as the
+  // tightest margin it will accept on a 2 MiB aggregate, so raw takes one
+  // further step and leaves 1,997. Gzip's tightest step, 661 KiB, leaves 909
+  // and is above that line, so it does not need one.
+  firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2079 * 1024, gzip: 661 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now measures 672.33 KiB raw / 186.61 KiB gzip:
   // the browser-Git pack grew (see optionalBrowserGit) and the Terminal pack
@@ -601,7 +626,17 @@ export const RELEASE_BUDGETS = Object.freeze({
   // so each takes one further whole-KiB step, leaving 1,219 bytes raw and
   // 1,260 gzip. Nothing eager moved — the entry ceiling is untouched and the
   // entry chunk is 3.05 KiB raw lighter than it was.
-  totalJavaScriptAndWorkers: Object.freeze({ raw: 2746 * 1024, gzip: 846 * 1024 }),
+  // The phone-and-conversations pass carries into this aggregate the same way:
+  // the vendor pins did not move, so every added byte is weight already
+  // itemised against `firstPartyJavaScriptAndWorkers` above — the Sessions
+  // return projection, the Workspace palette mirror, the encrypted-transport
+  // failover, Proof's phone disclosure defaults, and the `phone-viewport`
+  // chunk. Measured 2,819,872 B raw / 868,423 B gzip, or 2753.78 KiB /
+  // 848.07 KiB. 2754 KiB raw would have left 224 bytes, far inside the
+  // tripwire this file refuses everywhere else, so raw takes one further
+  // whole-KiB step and leaves 1,248. Gzip's tightest step, 849 KiB, leaves 953
+  // and does not need one. Nothing eager moved; the entry ceiling is untouched.
+  totalJavaScriptAndWorkers: Object.freeze({ raw: 2755 * 1024, gzip: 849 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. Keep it visible under a dedicated, deliberately small cap.
   serviceWorker: Object.freeze({ raw: 12 * 1024, gzip: 4 * 1024 }),
@@ -791,12 +826,20 @@ export const RELEASE_BUDGETS = Object.freeze({
   // until Workspace opens. The same pass moved the shared code scanner out of
   // the entry chunk into its own deferred `code-highlight` chunk, which is why
   // `entryJavaScript` falls 3.05 KiB raw in this build rather than rising.
-  // Re-measured on this build: 84,687 B raw / 26,979 B gzip. 83 KiB raw would
-  // have left 305 bytes, inside the margin a minifier rename moves, so raw
-  // takes the next step to 84 KiB (1,329 B); 27 KiB gzip is the tightest whole
-  // step above its reading and leaves 669 B. The route is still fetched only
-  // when Workspace opens, so first paint is untouched.
-  optionalWorkspaceWorkbench: Object.freeze({ raw: 84 * 1024, gzip: 27 * 1024 }),
+  // Re-measured on this build: 86,284 B raw / 27,586 B gzip, grown from the
+  // 84,687 B raw / 26,979 B gzip this comment recorded. The 1,597 bytes are
+  // `editor: 56px of chrome above the first file, and a palette that did not
+  // survive a reload` (d11d803), and they are two things: `code-theme-mirror`,
+  // which re-applies the chosen palette from stored state on boot so a reload
+  // stops dropping the reader back to the default scheme, and the header rework
+  // that took 56px of chrome off the top of the first file. Both are Workspace
+  // code and neither is reachable until Workspace opens, so first paint is
+  // untouched and the entry chunk does not move. Raw takes the tightest whole
+  // step above the reading, 85 KiB, leaving 756 B. 27 KiB gzip would have left
+  // 62 bytes — well inside the margin a minifier rename moves, and tighter than
+  // the 305 B this comment already declined once — so gzip takes the next step
+  // to 28 KiB (1,086 B).
+  optionalWorkspaceWorkbench: Object.freeze({ raw: 85 * 1024, gzip: 28 * 1024 }),
   // Held only the Git workspace binding, at 519 B raw / 345 B gzip. It now also
   // holds the one bounded content scan: `search_text` and the Explorer's Contents
   // filter both import it, so Rollup gives it to the chunk those two share rather
@@ -850,7 +893,18 @@ export const RELEASE_BUDGETS = Object.freeze({
   // returning the next day was reported as lost work. The route carries the
   // ledger's storage accessor and the forget call. Measured 59.58 KiB raw /
   // 17.78 KiB gzip; both steps move one whole KiB above the new figures.
-  optionalSessionLibrary: Object.freeze({ raw: 60 * 1024, gzip: 18 * 1024 }),
+  //
+  // Re-measured at 64,411 B raw / 19,292 B gzip. The 3,401 bytes are
+  // `conversations: a way back into a pinned conversation that is not a fork`
+  // (ebb61fb): `sessions-presentation` — the projection that decides what a
+  // pinned thread looks like when you return to it rather than branch from it —
+  // and the row and empty-state work in `sessions-view` that renders it. Both
+  // are Sessions code, fetched when the route opens and never at first paint.
+  // 63 KiB raw would have left 101 bytes and 19 KiB gzip would have left 164,
+  // each far inside the margin a minifier rename moves and tighter than the
+  // 305 B this file has already declined once, so both take the next step: raw
+  // to 64 KiB (1,125 B) and gzip to 20 KiB (1,188 B).
+  optionalSessionLibrary: Object.freeze({ raw: 64 * 1024, gzip: 20 * 1024 }),
   // Session pin/digest construction runs during profile-session activation,
   // after the shell can paint. Shared policy/mode code now owns its own lazy
   // chunk, leaving this one at 1,037 B raw / 546 B gzip.
@@ -1010,8 +1064,14 @@ export const RELEASE_BUDGETS = Object.freeze({
   // counts what actually ran, a receipt for a local turn that previously had
   // none, and provenance a reader can follow from a claim back to its source.
   // Measured 89,774 B raw / 27,986 B gzip, each the tightest whole-KiB step.
+  // Re-measured at 90,166 B raw / 28,113 B gzip. The 392 bytes are the phone
+  // pass (e764668): Proof now asks `useShellIsPhone` which layout it is drawing
+  // and picks its disclosure defaults from the answer, because how much of a
+  // claim ledger sits above the fold is DOM state a stylesheet cannot set. Raw
+  // takes the next whole-KiB step to 89 KiB and leaves 970 B; 28 KiB gzip is
+  // still the tightest step above its reading and does not move, leaving 559 B.
   // Still fetched only when Proof opens; first paint is untouched.
-  optionalProofSurface: Object.freeze({ raw: 88 * 1024, gzip: 28 * 1024 }),
+  optionalProofSurface: Object.freeze({ raw: 89 * 1024, gzip: 28 * 1024 }),
   // Receipt-keyed acquisition scheduling, its WorkspacePort CAS adapter, and
   // the credential-free endpoint-evidence record store. All three load only
   // when a Chutes credential can run or recover the worker, and none belongs to
@@ -2800,7 +2860,13 @@ export function isOptionalRoutePrimitivePath(path) {
   // `brand-icons` joined this pack with the vendor logo work: it is shared
   // across the billing, connect, provider-fabric and vault routes, none of
   // which is on first paint, and is for the same reason never preloaded.
-  return /^assets\/(?:route-header|tabs|metric-strip|brand-icons)-[A-Za-z0-9_-]+\.js$/u.test(path);
+  // `phone-viewport` is here for the same reason: the `useShellIsPhone` hook
+  // became its own chunk when Memory and Proof both started asking which
+  // layout the shell is drawing, so Rollup hoisted it out of either route.
+  // It is route chrome — a width question every route may ask — rather than a
+  // Memory or a Proof capability, and like the rest of this pack it is fetched
+  // with a route and never preloaded.
+  return /^assets\/(?:route-header|tabs|metric-strip|brand-icons|phone-viewport)-[A-Za-z0-9_-]+\.js$/u.test(path);
 }
 
 export function isOptionalRequestFailurePath(path) {

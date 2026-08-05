@@ -40,10 +40,10 @@ ceilings are both blocking.
 | --- | ---: | ---: |
 | HTML-referenced entry JavaScript | 384 KiB | 113 KiB |
 | Baseline JavaScript and workers, lazy packs excluded | 768 KiB | 176 KiB |
-| Deferred advanced capability bundle | 424 KiB | 126 KiB |
-| First-party and other non-vendor JS/workers | 2,070 KiB | 658 KiB |
+| Deferred advanced capability bundle | 425 KiB | 126 KiB |
+| First-party and other non-vendor JS/workers | 2,079 KiB | 661 KiB |
 | Browser Git + Terminal vendor runtime aggregate | 677 KiB | 188 KiB |
-| Absolute installed JavaScript/worker backstop | 2,746 KiB | 846 KiB |
+| Absolute installed JavaScript/worker backstop | 2,755 KiB | 849 KiB |
 | Service worker | 12 KiB | 4 KiB |
 | Optional execution broker / engine / support | 32 / 56 / 10 KiB | 10 / 14 / 4 KiB |
 | Optional pinned WASI Preview 1 Worker | 32 KiB | 8 KiB |
@@ -51,8 +51,8 @@ ceilings are both blocking.
 | Optional first-party `airship-sh` shell pack | 100 KiB | 30 KiB |
 | Unpromoted WASIX JavaScript / WASM | 0 / 0 KiB | 0 / 0 KiB |
 | Optional agent runtime / tool bundle | 53 / 128 KiB | 16 / 39 KiB |
-| Optional Workspace / Source Control / browser Git | 84 / 48 / 276 KiB | 27 / 14 / 83 KiB |
-| Optional Sessions / Memory / Memory support / Proof | 60 / 61 / 2 / 88 KiB | 18 / 21 / 1 / 28 KiB |
+| Optional Workspace / Source Control / browser Git | 85 / 48 / 276 KiB | 28 / 14 / 83 KiB |
+| Optional Sessions / Memory / Memory support / Proof | 64 / 61 / 2 / 89 KiB | 20 / 21 / 1 / 28 KiB |
 | Optional Terminal | 420 KiB | 111 KiB |
 | Optional semantic worker / model catalog | 16 / 33 KiB | 6 / 12 KiB |
 | Optional inference/provider + Companion protocol packs | 124 KiB | 38 KiB |

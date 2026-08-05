@@ -207,8 +207,10 @@ describe("release gate", () => {
     // A figure the ceiling beside it would reject describes a build nobody shipped.
     expect(() => assertDocumentedBudgetMeasurements(source.replace("20,591 B gzip", "23,591 B gzip")))
       .toThrow(/optionalMemoryView: its comment records 23,591 B gzip, above the 21\.00 KiB gzip ceiling/u);
+    // AMENDED: the phone pass raised this ceiling to 89 KiB against a re-measured
+    // build, so the message the guard prints names 89.00. The claim is unchanged.
     expect(() => assertDocumentedBudgetMeasurements(source.replace("74,690 B\n  // raw", "94,690 B\n  // raw")))
-      .toThrow(/optionalProofSurface: its comment records 94,690 B raw, above the 88\.00 KiB raw ceiling/u);
+      .toThrow(/optionalProofSurface: its comment records 94,690 B raw, above the 89\.00 KiB raw ceiling/u);
     // …and a raise cannot be laundered by deleting the number it contradicts.
     // AMENDED to the pair the ceiling now rests on: the guard reads the
     // *largest* pair a comment states, so blanking the older 78,628 B reading
@@ -218,7 +220,13 @@ describe("release gate", () => {
     // AMENDED again for the same reason: the editor-theme pass recorded a
     // third, larger pair in this block, and a claim that blanks two of three
     // readings proves nothing while the operative one survives.
-    expect(() => assertDocumentedBudgetMeasurements(source.replace("Re-measured on this build: 84,687 B raw / 26,979 B gzip", "Re-weighed at 84,687 B and 26,979 B")
+    // AMENDED a third time, for the same reason as the first two: the phone
+    // pass recorded a fourth and larger pair in this block and demoted the
+    // 84,687 B reading to a "grown from" clause, so that line no longer starts
+    // "Re-measured on this build". Blank all four or the operative one survives
+    // and the claim proves nothing.
+    expect(() => assertDocumentedBudgetMeasurements(source.replace("Re-measured on this build: 86,284 B raw / 27,586 B gzip", "Re-weighed at 86,284 B and 27,586 B")
+      .replace("84,687 B raw / 26,979 B gzip", "84,687 B and 26,979 B")
       .replace("Re-measured on this build: 81,152 B raw / 25,637 B gzip", "Re-weighed at 81,152 B and 25,637 B")
       .replace("Re-measured on this build: 78,628 B raw / 24,795 B gzip", "Re-weighed at 78,628 B and 24,795 B")))
       .toThrow(/optionalWorkspaceWorkbench: its comment no longer records a measured raw\/gzip pair/u);
@@ -240,7 +248,11 @@ describe("release gate", () => {
       // `deferredCapabilities` row below was: 27 KiB is now the tightest step
       // above this chunk's recorded gzip, so the unpaid-for step is the one
       // past it.
-      ["optionalWorkspaceWorkbench", "gzip: 27 * 1024", "gzip: 28 * 1024"],
+      // AMENDED again: the phone pass re-measured this chunk at 27,586 B gzip
+      // and its comment now pays for the second step in as many words — "27 KiB
+      // gzip would have left 62 bytes". So the ceiling is 28 KiB and the step
+      // granted without a sentence behind it is 29.
+      ["optionalWorkspaceWorkbench", "gzip: 28 * 1024", "gzip: 29 * 1024"],
       // AMENDED with the ceiling it names: `deferredCapabilities` gzip moved to
       // 126 KiB when the Connection route stopped interviewing people, and that
       // step is the tightest one above its recorded measurement — so the step
