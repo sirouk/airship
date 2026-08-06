@@ -40,6 +40,21 @@ this tier, before any model call, and the tier's 30 s boot budget sits inside
 its 10 s/default job boundary with a whole-network preamble removed. A
 persistent kernel kills 95 % of that fixed cost.
 
+**Stream/parse throughput of the ported parsers** (`scripts/bench/parse-throughput.test.ts`,
+200k SSE events streamed through the ported parser + 100k partial-JSON parses):
+
+```
+run isolated (node):  SSE 131.1 MB/s · 1,640,431 events/s → covers 100k-events/step broker budgets ~120×
+                      stream-json partial parse: 30,227 ops/s at ~4 KiB args
+run under vitest full-suite parallelism (same machine, contention):
+                      SSE 58.9 MB/s  · 736,931 events/s
+                      stream-json:   11,728 ops/s
+```
+
+Provider-realistic load (~2–10k SSE events per agent turn with ~400B
+events) is two orders of magnitude below the contended floor, so parsing
+cost never sets the loop budget.
+
 ## 2. The call
 
 **The agentic execution library is TypeScript, integrated in airship, in
