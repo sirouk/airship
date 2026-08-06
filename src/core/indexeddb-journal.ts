@@ -1,6 +1,8 @@
 import {
   JournalConflictError,
   projectedSessionApprovalMode,
+  projectedSessionContextPolicy,
+  projectedSessionModel,
   projectedSessionTitle,
   type DurableEvent,
   type JournalBackend,
@@ -157,6 +159,12 @@ export class IndexedDbJournalBackend implements JournalBackend {
       title: projectedSessionTitle(events, stored.title),
       ...(projectedSessionApprovalMode(events, stored.approvalModeOverride) !== undefined
         ? { approvalModeOverride: projectedSessionApprovalMode(events, stored.approvalModeOverride) }
+        : {}),
+      ...(projectedSessionModel(events, stored.modelOverride) !== undefined
+        ? { modelOverride: projectedSessionModel(events, stored.modelOverride) }
+        : {}),
+      ...(projectedSessionContextPolicy(events, stored.contextPolicyOverride) !== undefined
+        ? { contextPolicyOverride: projectedSessionContextPolicy(events, stored.contextPolicyOverride) }
         : {}),
       updatedAt: last.recordedAt,
       headSequence: last.sequence,

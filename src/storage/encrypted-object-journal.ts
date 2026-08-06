@@ -3,6 +3,8 @@ import { canonicalSessionContextPolicy } from "../core/context-policy";
 import {
   JournalConflictError,
   projectedSessionApprovalMode,
+  projectedSessionContextPolicy,
+  projectedSessionModel,
   projectedSessionTitle,
   type DurableEvent,
   type JournalBackend,
@@ -170,6 +172,12 @@ export class EncryptedObjectJournalBackend implements JournalBackend {
       // absent override means.
       ...(projectedSessionApprovalMode(events, current.approvalModeOverride) !== undefined
         ? { approvalModeOverride: projectedSessionApprovalMode(events, current.approvalModeOverride) }
+        : {}),
+      ...(projectedSessionModel(events, current.modelOverride) !== undefined
+        ? { modelOverride: projectedSessionModel(events, current.modelOverride) }
+        : {}),
+      ...(projectedSessionContextPolicy(events, current.contextPolicyOverride) !== undefined
+        ? { contextPolicyOverride: projectedSessionContextPolicy(events, current.contextPolicyOverride) }
         : {}),
       updatedAt: last.recordedAt,
       headSequence: last.sequence,

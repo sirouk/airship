@@ -685,6 +685,11 @@ export function assessSessionHistory(
     add({ code: "SESSION_CREATION_MISSING", severity: "error", message: "The history does not begin with session.created." });
   }
 
+  // The model this session has routed to at this point in its history. The
+  // manifest names what the thread was created with; `session.model-changed`
+  // is how a continuation addresses newer turns in the same thread.
+  let effectiveModel = session.manifest.model;
+
   for (const event of inspected) {
     const location = {
       ...(Number.isSafeInteger(event.sequence) ? { sequence: event.sequence } : {}),
@@ -742,6 +747,14 @@ export function assessSessionHistory(
       activeSawAssistant = false;
       continue;
     }
+    if (event.type === "session.model-changed") {
+      if (event.turnId || event.operationId || !payload || typeof payload.model !== "string" || !payload.model.trim() || payload.model.length > 256 || !/^[\x20-\x7E]+$/u.test(payload.model)) {
+        add({ ...location, code: "MODEL_CHANGE_MALFORMED", severity: "error", message: "A session model change must carry one printable model id outside any turn." });
+      } else {
+        effectiveModel = payload.model;
+      }
+      continue;
+    }
     if (event.type === "inference.started") {
       const posture = payload?.posture;
       if (typeof posture !== "string" || !POSTURES.has(posture as SecurityPosture)) {
@@ -752,7 +765,7 @@ export function assessSessionHistory(
           add({ ...location, code: "POSTURE_PIN_MISMATCH", severity: "error", message: "Observed inference posture differs from the manifest pin." });
         }
       }
-      if (payload?.providerId !== session.manifest.providerId || payload.model !== session.manifest.model) {
+      if (payload?.providerId !== session.manifest.providerId || payload.model !== effectiveModel) {
         add({ ...location, code: "INFERENCE_BINDING_MISMATCH", severity: "error", message: "An inference event differs from the manifest provider or model." });
       }
     }
@@ -877,7 +890,7 @@ export function extractSessionPins(
   return deepFreeze({
     protocolVersion: session.manifest.protocolVersion,
     providerId: boundedText(session.manifest.providerId, 256) ?? "[invalid provider]",
-    model: boundedText(session.manifest.model, 512) ?? "[invalid model]",
+    model: boundedText(session.modelOverride ?? session.manifest.model, 512) ?? "[invalid model]",
     ...(session.manifest.inferenceBinding
       ? { inferenceBinding: { ...session.manifest.inferenceBinding } }
       : {}),
@@ -1093,7 +1106,11 @@ function summarizeSession(session: SessionRecord): SessionListItem | undefined {
     headSequence: session.headSequence,
     headDigest: session.headDigest,
     providerId: session.manifest.providerId,
-    model: session.manifest.model,
+    // The pinned pin means "model this conversation routes to *now*" — via an
+    // in-flight override the thread never asked to fork for, exactly like the
+    // conversation's approval policy. The manifest seed remains the birth
+    // certificate on the record itself.
+    model: session.modelOverride ?? session.manifest.model,
     workspaceId: session.manifest.workspaceId,
     capabilityTier: session.manifest.capabilityTier,
     ...(session.manifest.securityPosture ? { declaredPosture: session.manifest.securityPosture } : {}),

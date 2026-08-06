@@ -58,6 +58,7 @@ const KNOWN_EVENT_TYPES = new Set([
   "session.renamed",
   "session.favorite.changed",
   "session.approval-policy-changed",
+  "session.model-changed",
   "profile.favorite-order.moved",
   "profile.active-conversation.selected",
   FORK_CONTEXT_EVENT_TYPE,
@@ -747,6 +748,21 @@ async function validateProtocol(
     return activeLocal;
   };
 
+  /*
+   * The model the thread names at this point in the walk. The session's
+   * pinned manifest is the model the thread was created under; a
+   * `session.model-changed` event supersedes it for everything after — which
+   * is the only way digests minted after an in-flight switch can still be
+   * the canonical transcript the audit replays.
+   */
+  // The walk begins at history's first event, before any change could have
+  // happened: the model that binds receipts minted from a manifest-stamped
+  // thread. `session.modelOverride` is never read here for the same reason
+  // the audit never trusts it — it is derived from the same events, so the
+  // walk recomputes the override and gets the reason for free.
+  let effectiveModel: string = session.manifest.model;
+  let effectiveContextPolicy = session.manifest.contextPolicy;
+
   for (let index = 0; index < events.length; index += 1) {
     const event = events[index]!;
     const payload = asPlainRecord(event.payload);
@@ -820,6 +836,25 @@ async function validateProtocol(
     if (event.type === "session.approval-policy-changed") {
       if (event.turnId || event.operationId || !payload || !["ask-first", "auto-approve", "full-access"].includes(String(payload.approvalMode))) {
         add({ severity: "error", category: "protocol", code: "SESSION_APPROVAL_POLICY_MALFORMED", sequence: event.sequence, message: "A session approval-policy change must carry one named mode outside any turn." });
+      }
+      continue;
+    }
+    if (event.type === "session.model-changed") {
+      const policyValue = payload && !Array.isArray(payload) && typeof payload === "object"
+        ? payload.contextPolicy
+        : undefined;
+      const modelValue = payload && !Array.isArray(payload) && typeof payload === "object" ? payload.model : undefined;
+      const malformedModel = typeof modelValue !== "string" || !modelValue.trim() || modelValue.length > 256 || /[\u0000-\u001F\u007F]/u.test(modelValue);
+      const malformedPolicy = policyValue !== undefined && policyValue !== null && !canonicalSessionContextPolicy(policyValue);
+      if (event.turnId || event.operationId || malformedModel || malformedPolicy) {
+        add({ severity: "error", category: "protocol", code: "SESSION_MODEL_CHANGE_MALFORMED", sequence: event.sequence, message: "A session model change must carry one printable model id, and any embedded context policy, outside any turn." });
+      } else {
+        effectiveModel = modelValue as string;
+        if (policyValue !== undefined) {
+          effectiveContextPolicy = policyValue === null
+            ? undefined
+            : canonicalSessionContextPolicy(policyValue) ?? effectiveContextPolicy;
+        }
       }
       continue;
     }
@@ -898,7 +933,7 @@ async function validateProtocol(
       if (
         activeLocal || (!outsideTurn && !turnBoundPreprocessing) || !summary || !valid ||
         summary.sourceEndSequence >= event.sequence ||
-        !summaryMatchesContextPolicy(summary, session.manifest, events.slice(0, index))
+        !summaryMatchesContextPolicy(summary, session.manifest, events.slice(0, index), effectiveModel, effectiveContextPolicy)
       ) {
         add({
           ...eventLocation(event),
@@ -1061,7 +1096,7 @@ async function validateProtocol(
         seenOperations.has(operationId) ||
         boundedString(payload.model, 256) === undefined ||
         (payload.answer !== undefined && (typeof payload.answer !== "string" || payload.answer.length > 4_096)) ||
-        (payload.receipt !== undefined && !receiptIdentityMatches(asPlainRecord(payload.receipt), session, turnId))
+        (payload.receipt !== undefined && !receiptIdentityMatches(asPlainRecord(payload.receipt), session, turnId, effectiveModel))
       ) {
         add({
           ...eventLocation(event),
@@ -1422,7 +1457,7 @@ async function validateProtocol(
       }
       if (
         payload.providerId !== session.manifest.providerId ||
-        payload.model !== session.manifest.model ||
+        payload.model !== effectiveModel ||
         !POSTURES.has(String(payload.posture))
       ) {
         add({ ...eventLocation(event), code: "INFERENCE_BINDING_MISMATCH", category: "protocol", message: "Inference provider, model, or posture does not match the pinned session/runtime vocabulary." });
@@ -1443,7 +1478,7 @@ async function validateProtocol(
         add({ ...eventLocation(event), code: "INFERENCE_REQUEST_METADATA_INVALID", category: "protocol", message: "Inference idempotency key or request digest is invalid." });
       } else {
         const expectedRequestDigest = await sha256(stableStringify({
-          model: session.manifest.model,
+          model: effectiveModel,
           systemPromptDigest: session.manifest.systemPromptDigest,
           messages: boundInferenceHistoryImages(messages),
           tools: session.manifest.tools,
@@ -1551,6 +1586,7 @@ async function validateProtocol(
           String(payload.responseDigest),
           event,
           add,
+          effectiveModel,
         );
         turn.finalAssistant = {
           responseDigest: String(payload.responseDigest),
@@ -1733,8 +1769,10 @@ function summaryMatchesContextPolicy(
   summary: NonNullable<ReturnType<typeof canonicalContextSummary>>,
   manifest: SessionManifest,
   priorEvents: readonly DurableEvent[],
+  effectiveModel: string,
+  effectiveContextPolicy: SessionManifest["contextPolicy"],
 ): boolean {
-  const canonical = canonicalSessionContextPolicy(manifest.contextPolicy);
+  const canonical = canonicalSessionContextPolicy(effectiveContextPolicy);
   if (!canonical) return false;
   if (
     summary.contextWindowTokens !== canonical.contextWindowTokens ||
@@ -1752,7 +1790,7 @@ function summaryMatchesContextPolicy(
     ).length !== canonical.compression.preserveRecentTurns
   ) return false;
   const summarizer = canonical.compression.summarizer;
-  if (!compactionMatchesContextPolicy(summary.compaction, summarizer, manifest)) return false;
+  if (!compactionMatchesContextPolicy(summary.compaction, summarizer, manifest, effectiveModel)) return false;
   if (summarizer.mode === "extractive-fallback") {
     return summary.summaryMethod === "extractive-fallback-v1" &&
       summary.summarizerProvenance === undefined &&
@@ -1760,7 +1798,7 @@ function summaryMatchesContextPolicy(
   }
   if (summary.summaryMethod === "summarizer-port-v1") {
     return summary.summarizerId === summarizer.adapterId &&
-      provenanceMatchesContextPolicy(summary.summarizerProvenance, summarizer.adapterId, manifest);
+      provenanceMatchesContextPolicy(summary.summarizerProvenance, summarizer.adapterId, manifest, effectiveModel);
   }
   return summarizer.onFailure === "extractive-fallback" &&
     summary.summaryMethod === "extractive-fallback-v1" &&
@@ -1779,6 +1817,7 @@ function compactionMatchesContextPolicy(
   compaction: NonNullable<ReturnType<typeof canonicalContextSummary>>["compaction"],
   summarizer: NonNullable<ReturnType<typeof canonicalSessionContextPolicy>>["compression"]["summarizer"],
   manifest: SessionManifest,
+  effectiveModel: string,
 ): boolean {
   if (!compaction) return true;
   if (summarizer.mode === "extractive-fallback") {
@@ -1789,7 +1828,7 @@ function compactionMatchesContextPolicy(
   }
   if (compaction.method === "summarizer-port-v1") {
     return compaction.attempt === undefined &&
-      provenanceMatchesContextPolicy(compaction.provenance, summarizer.adapterId, manifest);
+      provenanceMatchesContextPolicy(compaction.provenance, summarizer.adapterId, manifest, effectiveModel);
   }
   // An extractive tier under a summarizer policy is only legitimate when the
   // policy permits the fallback and the commitment records which summarizer
@@ -1803,10 +1842,11 @@ function provenanceMatchesContextPolicy(
   provenance: ContextSummaryProvenance | undefined,
   adapterId: string,
   manifest: SessionManifest,
+  effectiveModel: string = manifest.model,
 ): boolean {
   return provenance?.adapterId === adapterId &&
     provenance.providerId === manifest.providerId &&
-    provenance.model === manifest.model &&
+    provenance.model === effectiveModel &&
     (manifest.securityPosture === undefined || provenance.posture === manifest.securityPosture);
 }
 
@@ -1849,6 +1889,7 @@ function receiptIdentityMatches(
   receipt: Record<string, unknown> | undefined,
   session: SessionRecord,
   turnId: string,
+  effectiveModel: string = session.manifest.model,
 ): boolean {
   const bindings = asPlainRecord(receipt?.bindings);
   return Boolean(
@@ -1858,7 +1899,7 @@ function receiptIdentityMatches(
     && receipt.sessionId === session.id
     && receipt.turnId === turnId
     && receipt.provider === session.manifest.providerId
-    && (receipt.model === undefined || receipt.model === session.manifest.model)
+    && (receipt.model === undefined || receipt.model === effectiveModel)
     && POSTURES.has(String(receipt.posture))
     && bindings
     && bindings.algorithm === "SHA-256",
@@ -1872,11 +1913,12 @@ function validateReceipt(
   responseDigest: string,
   event: DurableEvent,
   add: (finding: Omit<SessionAuditFinding, "severity"> & { severity?: SessionAuditSeverity }) => void,
+  effectiveModel: string,
 ): string | undefined {
   const receipt = asPlainRecord(value);
   const bindings = asPlainRecord(receipt?.bindings);
   const receiptId = boundedString(receipt?.receiptId, 2_048);
-  if (!receiptIdentityMatches(receipt, session, turn.id)) {
+  if (!receiptIdentityMatches(receipt, session, turn.id, effectiveModel)) {
     add({ ...eventLocation(event), code: "RECEIPT_IDENTITY_MISMATCH", category: "receipt", message: "Receipt does not match the session, turn, provider, model, or digest algorithm." });
     return receiptId;
   }

@@ -14,7 +14,7 @@ import type {
 import { sha256, stableStringify, toolArgumentsDigest } from "./hash";
 import { randomUuid } from "./id";
 import type { DurableEvent, EventDraft } from "./journal";
-import { EventJournal } from "./journal";
+import { effectiveSessionContextPolicy, effectiveSessionModel, EventJournal } from "./journal";
 import { approvalProvenance } from "../approvals/modes";
 import { boundInferenceHistoryImages, canonicalImageInputs } from "./multimodal";
 import {
@@ -244,10 +244,17 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
       }]);
     }
 
-    // A context window is immutable session semantics, never inferred from a
-    // model name or re-read from a mutable catalog during an old-session replay.
-    const pinnedContextCompression = session.manifest.contextPolicy
-      ? contextCompressionOptionsFromPolicy(session.manifest.contextPolicy)
+    /*
+     * A context window is pinned session semantics, read from the journal and
+     * never inferred from a model name or re-read from a mutable catalog
+     * during replay. The pin just stopped being "only the creation manifest":
+     * a same-thread model switch projects its own policy event beside the
+     * model it routes to — still journaled evidence down to which window the
+     * summarizer is fed, still recomputable at any point of a replay.
+     */
+    const effectiveContextPolicy = effectiveSessionContextPolicy(session);
+    const pinnedContextCompression = effectiveContextPolicy
+      ? contextCompressionOptionsFromPolicy(effectiveContextPolicy)
       : undefined;
     if (options.contextCompression) {
       const asserted = resolveContextCompressionOptions(options.contextCompression);
@@ -288,13 +295,13 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
         systemPrompt: session.manifest.systemPrompt,
         tools: session.manifest.tools,
         options: pinnedContextCompression,
-        ...(session.manifest.contextPolicy!.compression.summarizer.mode === "inference-transport" ? {
+        ...(effectiveContextPolicy?.compression.summarizer.mode === "inference-transport" ? {
           summarizer: createInferenceTransportContextSummarizer({
             transport,
-            model: session.manifest.model,
+            model: effectiveSessionModel(session),
             sessionId: session.id,
           }),
-          summarizerFailure: session.manifest.contextPolicy!.compression.summarizer.onFailure === "extractive-fallback"
+          summarizerFailure: effectiveContextPolicy.compression.summarizer.onFailure === "extractive-fallback"
             ? "extractive-fallback" as const
             : "throw" as const,
         } : {}),
@@ -403,7 +410,7 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
       const idempotencyKey = `${options.sessionId}:${turnId}:${step}`;
       const requestDigest = await sha256(
         stableStringify({
-          model: session.manifest.model,
+          model: effectiveSessionModel(session),
           systemPromptDigest: session.manifest.systemPromptDigest,
           messages,
           tools: session.manifest.tools,
@@ -418,7 +425,7 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
           payload: {
             step,
             providerId: transport.id,
-            model: session.manifest.model,
+            model: effectiveSessionModel(session),
             posture: transport.posture,
             requestDigest,
             idempotencyKey,
@@ -436,7 +443,7 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
           requestId,
           sessionId: options.sessionId,
           turnId,
-          model: session.manifest.model,
+          model: effectiveSessionModel(session),
           systemPrompt: session.manifest.systemPrompt,
           messages,
           tools: session.manifest.tools,
@@ -635,7 +642,7 @@ export async function runTurn(options: RunTurnOptions): Promise<TurnResult> {
             sessionId: options.sessionId,
             turnId,
             provider: transport.id,
-            model: session.manifest.model,
+            model: effectiveSessionModel(session),
             requestDigest,
             responseDigest,
           });

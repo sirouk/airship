@@ -1,6 +1,8 @@
 import {
   JournalConflictError,
   projectedSessionApprovalMode,
+  projectedSessionContextPolicy,
+  projectedSessionModel,
   projectedSessionTitle,
   type DurableEvent,
   type JournalBackend,
@@ -76,6 +78,12 @@ export class MemoryJournalBackend implements JournalBackend {
       title: projectedSessionTitle(events, session.title),
       ...(projectedSessionApprovalMode(events, session.approvalModeOverride) !== undefined
         ? { approvalModeOverride: projectedSessionApprovalMode(events, session.approvalModeOverride) }
+        : {}),
+      ...(projectedSessionModel(events, session.modelOverride) !== undefined
+        ? { modelOverride: projectedSessionModel(events, session.modelOverride) }
+        : {}),
+      ...(projectedSessionContextPolicy(events, session.contextPolicyOverride) !== undefined
+        ? { contextPolicyOverride: projectedSessionContextPolicy(events, session.contextPolicyOverride) }
         : {}),
       updatedAt: last.recordedAt,
       headSequence: last.sequence,

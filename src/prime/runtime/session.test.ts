@@ -708,17 +708,22 @@ describe("PrimeAgentSession", () => {
 });
 
 /**
- * Yielded macroticks until the queued turn's id is announced, or a clear
- * failure if nothing starts under the current event-loop budget. Ticks are
- * drained one at a time because `prompt()` settles through queue → bootstrap
- * → session read → turn.open before `getActiveTurnId` answers — that chain is
- * several await points, so a fixed two-tick wait is a race on loaded hosts.
+ * The queued turn must become *active* under contended event loops on any
+ * machine the suite runs on: a fixed number of `setTimeout(0)` ticks races on
+ * loaded runners, while a millisecond deadline does not depend on tick
+ * scheduling at all. A prompt is only allowed to take two hundredths of its
+ * own timeout budget to enter its turn, so the wait refuses loudly instead
+ * of flaking.
  */
 async function waitForActiveTurnId(session: PrimeAgentSession): Promise<string | undefined> {
-  for (let attempt = 0; attempt < 25; attempt += 1) {
+  // Two seconds sat empty on a four-worker CI runner (we measured 2,002 ms):
+  // the turn-open chain itself is queue-bound, so the deadline rides at a
+  // third of the global suite timeout rather than an event-loop budget.
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
     const turnId = session.getActiveTurnId();
     if (turnId) return turnId;
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 1));
   }
-  throw new Error("The queued prompt never became an active turn inside 25 drained macroticks.");
+  return session.getActiveTurnId();
 }

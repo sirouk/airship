@@ -1,4 +1,5 @@
-import type { ApprovalProvenance, JsonValue, SessionManifest } from "./contracts";
+import type { ApprovalProvenance, JsonValue, SessionContextPolicy, SessionManifest } from "./contracts";
+import { canonicalSessionContextPolicy } from "./context-policy";
 import { sha256, stableStringify } from "./hash";
 import { randomUuid } from "./id";
 
@@ -35,6 +36,21 @@ export type SessionRecord = {
    * this file — it is never written anywhere but a session event.
    */
   approvalModeOverride?: ApprovalProvenance["mode"];
+  /**
+   * The conversation's own model selection, carried beside the pinned manifest
+   * exactly like the approval policy is. The manifest names the model the
+   * thread was created under; this is what the person asked for in-flight on
+   * the same thread, and the next turn is routed to it. Never written anywhere
+   * but a `session.model-changed` event.
+   */
+  modelOverride?: string;
+  /**
+   * The compressed-context policy the person asked the new model to carry,
+   * projected beside the model selection that provoked it. Compression must
+   * know the window it writes to, and that window changes with the model —
+   * pinning only the model leaves the summarizer working for the old one.
+   */
+  contextPolicyOverride?: SessionContextPolicy | null;
 };
 
 export type JournalAppendCommit = Readonly<{
@@ -236,6 +252,44 @@ export class EventJournal {
       signal,
     );
     const session = await this.backend.getSession(sessionId, signal);
+    if (!session) throw new Error(`Unknown session: ${sessionId}`);
+    return session;
+  }
+
+  /**
+   * Change this conversation's routed model in flight, on the same thread.
+   *
+   * Model used to be a create-another-pinned-conversation verb on this
+   * control; the same-thread event the approval policy already owns makes the
+   * same move possible here: the manifest's pinned model stays the birth
+   * certificate the audit trail vouches for, and the override applies from
+   * the next turn forward — which is the only honest edge, since digests
+   * minted inside a running turn already name the model they were minted
+   * with. The connection (provider, credential, respiratory authority) does
+   * not move; only which model each next request is addressed to does.
+   */
+  async setSessionModel(
+    sessionId: string,
+    model: string,
+    options: { contextPolicy?: SessionContextPolicy | null; signal?: AbortSignal } = {},
+  ): Promise<SessionRecord> {
+    if (!validSessionModelId(model)) throw new TypeError("Session model override is invalid.");
+    const payloadPartial: Record<string, JsonValue | null> = {};
+    if ("contextPolicy" in options) {
+      if (options.contextPolicy === null) {
+        payloadPartial.contextPolicy = null;
+      } else {
+        const canonical = canonicalSessionContextPolicy(options.contextPolicy);
+        if (!canonical) throw new TypeError("Session model context-policy override is invalid.");
+        payloadPartial.contextPolicy = canonical as unknown as JsonValue;
+      }
+    }
+    await this.append(
+      sessionId,
+      [{ type: "session.model-changed", payload: { model, ...payloadPartial } as JsonValue }],
+      options.signal,
+    );
+    const session = await this.backend.getSession(sessionId, options.signal);
     if (!session) throw new Error(`Unknown session: ${sessionId}`);
     return session;
   }
@@ -443,6 +497,93 @@ export function projectedSessionTitle(events: readonly DurableEvent[], fallback:
       && typeof event.payload === "object"
       && typeof event.payload.title === "string"
     ) return event.payload.title;
+  }
+  return fallback;
+}
+
+/**
+ * The conversation's durable, same-thread model selection, projected from the
+ * last `session.model-changed` event. Turning model switching into a
+ * fork-the-thread operation was what used to strand people behind a new
+ * pinned conversation every time they changed what the thread calls; a
+ * durable override beside it is exactly how it stops doing that, and every
+ * backend's head CAS applies it beside `title` for exactly the reason title
+ * lives here.
+ */
+export function projectedSessionModel(
+  events: readonly DurableEvent[],
+  fallback: string | undefined,
+): string | undefined {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index]!;
+    if (event.type === "session.model-changed") {
+      const model = event.payload && !Array.isArray(event.payload) && typeof event.payload === "object"
+        ? event.payload.model
+        : undefined;
+      if (validSessionModelId(model)) return model;
+    }
+  }
+  return fallback;
+}
+
+/**
+ * The model the record routes to now: the durable in-flight choice when it
+ * exists, else the manifest the thread was created with. Producers of
+ * receipts, request digests, and any other model-pinning form answer with
+ * this and nothing else — the manifest's `model` is the thread's birth
+ * certificate, this is its current address.
+ */
+export function effectiveSessionModel(session: SessionRecord): string {
+  return session.modelOverride ?? session.manifest.model;
+}
+
+/**
+ * The compressed-context rules this record is writing to now: the override
+ * when the person chose one, the manifest when they never did. `null` means
+ * they explicitly went without — no policy at all — never silently
+ * resurrecting the manifest pin because a field happened to be absent.
+ */
+export function effectiveSessionContextPolicy(session: SessionRecord): SessionContextPolicy | undefined {
+  const override = session.contextPolicyOverride;
+  if (override === undefined) return session.manifest.contextPolicy;
+  return override ?? undefined;
+}
+
+function validSessionModelId(model: unknown): model is string {
+  return (
+    typeof model === "string" &&
+    model.trim().length > 0 &&
+    model.length <= 256 &&
+    /^[\x20-\x7E]+$/u.test(model)
+  );
+}
+
+/**
+ * The compressed-context policy this conversation currently writes to,
+ * projected from the same event family as its model selection: the last
+ * `session.model-changed` that honestly named one. Compression lives or dies
+ * by its window; "the person switched models" is exactly when the window
+ * moves, so the policy rides the same durable override and every backend's
+ * head CAS applies it along the same channels as the model itself.
+ */
+export function projectedSessionContextPolicy(
+  events: readonly DurableEvent[],
+  fallback: SessionContextPolicy | null | undefined,
+): SessionContextPolicy | null | undefined {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index]!;
+    if (event.type !== "session.model-changed") continue;
+    const policy = event.payload && !Array.isArray(event.payload) && typeof event.payload === "object"
+      ? event.payload.contextPolicy
+      : undefined;
+    if (policy === null) return null;
+    if (policy !== undefined) {
+      const canonical = canonicalSessionContextPolicy(policy);
+      if (canonical) return canonical;
+    }
+    // An event that names no policy leaves the pool's policy untouched and the
+    // walk keeps looking backwards — switching the model is an address
+    // change, not a silent flush of the flight plan that was already drawn.
   }
   return fallback;
 }
