@@ -7,79 +7,75 @@
  * per-agent sink queues, per the port-manifest §3.5 "transport collapses"
  * verdict. The semantic crown jewels that MUST NOT drift:
  *
- *   - Admission only (invariant 25): `spawn` validates, reserves, records,
- *     emits `subagent-admitted`, and returns the handle. The runtime factory
- *     is invoked *without* awaiting its answer inside a detached task, so the
- *     parent NEVER waits silently for a child answer at spawn time.
+ *   - Admission only (invariant 25): `spawn` validates, depth-gates,
+ *     reserves the name, records, emits `subagent-admitted`, and returns the
+ *     handle. The runtime factory is invoked inside a detached task whose
+ *     answer is NEVER awaited by the spawn promise, so the parent never
+ *     waits silently at spawn time.
  *   - Completion contract (invariant 26): a child either explicitly replies
- *     with `route.send({toId: <parent>})` (emitted as `subagent-reply`,
- *     terminal reason "replied"), or when its turn loop ends the registry
+ *     via `route.send` to its parent (emitted as `subagent-reply`, terminal
+ *     reason "replied"), or when its turn loop ends the registry
  *     synthesizes `subagent-terminal` with reason
  *     "completed_without_reply" and a bounded last-assistant-text preview;
- *     failure names "failed"; `stop` names "stopped". The host-synthesized
- *     notice is also delivered into the owning session's sink so a parent
- *     ALWAYS hears finality, even when the child never spoke.
+ *     failure names "failed"; `stop` names "stopped". For every non-reply
+ *     terminal the registry also delivers a fixed-text notice into the
+ *     owning session's sink: the parent ALWAYS hears finality, even when
+ *     the child never spoke.
  *   - Nuclear-family reach (invariant 26): the router resolves targets only
  *     among parent, siblings, and direct children of the sender; anything
  *     else fails closed with the family-reach error text prime-agent uses.
  *
  * The registry is scoped to one owning node (the session whose kernel calls
  * `rlm(...)`), because the frozen `spawn(prompt, {name?, model?, depth?})`
- * signature carries no fromId: the owner IS the from. Extra nodes (the
- * owner's own parent, sibling roots, deeper relatives) are wired via
+ * signature carries no fromId: the owner IS the from. Extra nodes — the
+ * owner's own parent, sibling roots, deeper relatives — are wired via
  * `attachNode` by the session authority so family walks stay correct in a
  * multi-level tree without weakening the singleton spawn scope.
  */
 
 import type { AssistantMessage, Usage } from "../ai/types";
 import type { AgentEvent, AgentMessage } from "../agent";
+import {
+  canonicalPrimeAgentName,
+  DEFAULT_RLM_MAX_DEPTH,
+  deriveDefaultSubagentName,
+  MAX_AGENT_MESSAGE_CHARS,
+  MAX_AGENT_NAME_CHARS,
+  MAX_PENDING_AGENT_MESSAGES,
+  MAX_SPAWN_PROMPT_CHARS,
+  PRIME_MESSAGE_BURST_CAPACITY,
+  PRIME_MESSAGE_REFILL_MS,
+} from "../runtime/types-prime";
 import type {
   PrimeAgentMessage,
   PrimeAgentMessageReceipt,
+  PrimeAgentRouter,
   PrimeAgentRuntime,
   PrimeRuntimeEvent,
   PrimeSubagentHandle,
 } from "../runtime/types-prime";
 import type {
   PrimeAgentLedger,
+  PrimeAgentLedgerEntry,
   PrimeAgentNodeAttachment,
   PrimeAgentRecorder,
   PrimeAgentRegistryDeps,
   PrimeAgentRuntimeBundle,
   PrimeAgentRuntimeFactory,
-  PrimeAgentRouter,
-  PrimeFamilyRelationship,
-  PrimeMaxDepthSource,
+  PrimeHarnessEntry,
+  PrimeHarnessStore,
   PrimeMaxDepthStatus,
-  PrimePersistedMaxDepthState,
-  PrimeSubagentHarnessStore,
+  PrimeSubagentModelResolver,
   PrimeSubagentSpawnInput,
   PrimeSubagentSpawnOptions,
-  PrimeSubagentModelResolver,
   PrimeUsageView,
 } from "./types";
-import { SUBAGENT_HARNESS_KIND, SUBAGENT_MAX_DEPTH_ENTRY_ID } from "./types";
+import { SUBAGENT_MAX_DEPTH_ENTRY_ID, SUBAGENT_MAX_DEPTH_SCOPE } from "./types";
 
-/** Hard cap on message text; mirrors prime-agent DEFAULT_AGENT_MESSAGE_MAX_CHARS (>= enforced). */
-export const MAX_MESSAGE_CHARS = 16_384;
-/** Token-bucket burst capacity per sender; mirrors prime-agent DEFAULT_AGENT_MESSAGE_RATE_LIMIT_CAPACITY. */
-export const MESSAGE_RATE_CAPACITY = 3;
-/** Token-bucket refill interval; mirrors prime-agent DEFAULT_AGENT_MESSAGE_RATE_LIMIT_REFILL_MS. */
-export const MESSAGE_RATE_REFILL_MS = 1_000;
-/** Max undelivered/queued messages per receiver; mirrors prime-agent DEFAULT_AGENT_MESSAGE_MAX_PENDING_PER_SESSION. */
-export const MAX_PENDING_PER_RECEIVER = 20;
 /** Terminal-preview bound so completed_without_reply notices cannot smuggle whole transcripts into the parent. */
 export const MAX_PREVIEW_CHARS = 512;
-/** Session-name cap; mirrors prime-agent RLM_SUBAGENT_SESSION_NAME_MAX_LENGTH. */
-export const MAX_NAME_CHARS = 64;
-/** Prompt-slug cap for default subagent names (`subagent-<slug>-<8hex>`). */
-export const MAX_PROMPT_SLUG_CHARS = 40;
-/** Recursion default when nothing (chat, global, env) overrides it; roots are depth 0. */
-export const DEFAULT_MAX_DEPTH = 1;
 /** Observe clamp bounds; mirror prime-agent normalizeObserveLimit / normalizeObserveMaxChars. */
-export const OBSERVE_DEFAULT_LIMIT = 8;
 export const OBSERVE_MAX_LIMIT = 50;
-export const OBSERVE_DEFAULT_MAX_CHARS = 800;
 export const OBSERVE_MIN_MAX_CHARS = 80;
 export const OBSERVE_MAX_MAX_CHARS = 2_000;
 /** The one sentence the family walk and prime-agent must agree on. */
@@ -88,10 +84,8 @@ export const AGENT_FAMILY_REACH_ERROR = "Agent reach is limited to parent, sibli
 /** Allowed spawn option keys; anything else is a descriptive TypeError (unsupported rlm.run kwargs). */
 const SPAWN_OPTION_KEYS = Object.freeze(["name", "model", "depth"] as const);
 
-/** Charset rule from the port brief: letters, digits, hyphen, underscore. */
-const NAME_CHARSET = /^[A-Za-z0-9_-]+$/;
-
 type ChildStatus = PrimeSubagentHandle["status"];
+type TerminalReason = "replied" | "completed_without_reply" | "failed" | "stopped";
 
 interface ChildEntry {
   readonly id: string;
@@ -134,16 +128,13 @@ interface CatalogNode {
 
 /** Token bucket per sender, ported 1:1 from prime-agent AgentSessionMessageRateLimiter. */
 class MessageRateLimiter {
-  private readonly capacity: number;
-  private readonly refillMs: number;
-  private readonly now: () => number;
   private readonly buckets = new Map<string, { tokens: number; updatedAt: number }>();
 
-  constructor(capacity: number, refillMs: number, now: () => number) {
-    this.capacity = capacity;
-    this.refillMs = refillMs;
-    this.now = now;
-  }
+  constructor(
+    private readonly capacity: number,
+    private readonly refillMs: number,
+    private readonly now: () => number,
+  ) {}
 
   tryConsume(key: string): { ok: true } | { ok: false; retryAfterMs: number } {
     const now = this.now();
@@ -177,16 +168,21 @@ function assertSupportedSpawnOptions(options: Record<string, unknown>): void {
   }
 }
 
+/**
+ * Name normalization: the error text stays upstream-descriptive per rule,
+ * while the charset verdict itself delegates to canonicalPrimeAgentName so
+ * this port and every other prime module accept exactly the same names.
+ */
 function normalizeSpawnName(value: unknown): string | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== "string") throw new Error("rlm.run name must be a string");
   const name = value.trim();
   if (!name) throw new Error("rlm.run name must not be empty");
-  if (name.length > MAX_NAME_CHARS) {
-    throw new Error(`rlm.run name must be at most ${MAX_NAME_CHARS} characters`);
+  if (name.length > MAX_AGENT_NAME_CHARS) {
+    throw new Error(`rlm.run name must be at most ${MAX_AGENT_NAME_CHARS} characters`);
   }
-  if (!NAME_CHARSET.test(name)) {
-    throw new Error(`rlm.run name contains unsupported characters: use letters, digits, "-" and "_" only`);
+  if (canonicalPrimeAgentName(name) === undefined) {
+    throw new Error(`rlm.run name contains unsupported characters: use letters, digits, ".", "-" and "_" and start with a letter or digit`);
   }
   return name;
 }
@@ -202,29 +198,16 @@ function normalizeSpawnModel(value: unknown): string | undefined {
 function normalizeSpawnDepth(value: unknown): number | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
-    throw new Error("rlm.run depth must be a non-negative integer");
+    throw new TypeError("rlm.run depth must be a non-negative integer");
   }
   return value;
-}
-
-/** Prompt slugging rule from prime-agent createDefaultRlmSubagentSessionName, here capped at MAX_PROMPT_SLUG_CHARS. */
-export function createPromptSlug(prompt: string): string {
-  const slug = prompt
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, MAX_PROMPT_SLUG_CHARS)
-    .replace(/-+$/g, "");
-  return slug || "worker";
 }
 
 function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
-/** Env parse; mirrors prime-agent parseDepth: digits-only strings, everything else is a named error. */
+/** Env parse; mirrors prime-agent parseDepth: digits-only strings, anything else is a named error. */
 function parseEnvDepth(value: string, name: string): number {
   if (!/^\d+$/.test(value)) {
     throw new Error(`${name} must be a non-negative integer`);
@@ -234,10 +217,6 @@ function parseEnvDepth(value: string, name: string): number {
     throw new Error(`${name} must be a non-negative integer`);
   }
   return parsed;
-}
-
-function isPersistedMaxDepth(value: unknown): value is PrimePersistedMaxDepthState {
-  return typeof value === "object" && value !== null && isNonNegativeInteger((value as { maxDepth?: unknown }).maxDepth);
 }
 
 function isAssistantMessage(message: AgentMessage): message is AssistantMessage {
@@ -259,7 +238,7 @@ function boundedPreview(text: string): string {
 export class PrimeAgentRegistry {
   private readonly factory: PrimeAgentRuntimeFactory;
   private readonly ledger?: PrimeAgentLedger;
-  private readonly harnessStore?: PrimeSubagentHarnessStore;
+  private readonly harnessStore?: PrimeHarnessStore;
   private readonly globalMaxDepth?: number;
   private readonly env?: Readonly<Record<string, string | undefined>>;
   private readonly modelResolver?: PrimeSubagentModelResolver;
@@ -271,11 +250,11 @@ export class PrimeAgentRegistry {
   private readonly pendingNames = new Set<string>();
   private readonly listeners = new Set<(event: PrimeRuntimeEvent) => void>();
   private readonly rateLimiter: MessageRateLimiter;
+  private readonly owner: CatalogNode;
   private chatMaxDepth?: number;
 
   /** Frozen router surface; built once so callers can hold the reference. */
   readonly route: PrimeAgentRouter;
-  private readonly owner: CatalogNode;
 
   constructor(deps: PrimeAgentRegistryDeps) {
     this.factory = deps.factory;
@@ -286,14 +265,14 @@ export class PrimeAgentRegistry {
     this.modelResolver = deps.modelResolver;
     this.now = deps.now ?? (() => Date.now());
     this.randomId = deps.randomId ?? (() => globalThis.crypto.randomUUID());
-    this.rateLimiter = new MessageRateLimiter(MESSAGE_RATE_CAPACITY, MESSAGE_RATE_REFILL_MS, this.now);
+    this.rateLimiter = new MessageRateLimiter(PRIME_MESSAGE_BURST_CAPACITY, PRIME_MESSAGE_REFILL_MS, this.now);
     if (!deps.owner.sink) {
       // Fail closed: without an owner sink the host-synthesized terminal
       // notices (the "parent always hears finality" contract) would have
       // nowhere to go and dead children would look alive forever.
       throw new Error("PrimeAgentRegistry requires owner.sink so terminal notices always reach the parent session");
     }
-    this.owner = this.materializeNode(deps.owner, "idle");
+    this.owner = this.materializeNode(deps.owner, "running");
     this.nodes.set(this.owner.id, this.owner);
     this.route = Object.freeze({
       reachableAgents: (fromId) => this.reachableAgents(fromId),
@@ -306,19 +285,23 @@ export class PrimeAgentRegistry {
 
   /**
    * Admit a subagent run. Resolves at ADMISSION with the handle and never
-   * with the answer: validation, depth gate, name reservation, model
-   * resolution, the admission record, and the `subagent-admitted` event all
-   * happen before the detached task below touches the runtime factory.
+   * with the answer: validation, the depth gate, the name reservation, the
+   * model resolution, the admission record, and the `subagent-admitted`
+   * event all happen before the detached task below touches the runtime
+   * factory.
    */
   async spawn(prompt: string, options: PrimeSubagentSpawnOptions = {}): Promise<PrimeSubagentHandle> {
     assertSupportedSpawnOptions(options as Record<string, unknown>);
     if (typeof prompt !== "string" || !prompt.trim()) {
       throw new Error("rlm.run prompt must be a non-empty string");
     }
+    if (prompt.length > MAX_SPAWN_PROMPT_CHARS) {
+      throw new Error(`rlm.run prompt is too long: ${prompt.length} chars exceeds ${MAX_SPAWN_PROMPT_CHARS}`);
+    }
     const requestedName = normalizeSpawnName(options.name);
     const requestedModel = normalizeSpawnModel(options.model);
     const currentDepth = normalizeSpawnDepth(options.depth) ?? this.owner.depth;
-    const depthStatus = this.resolveMaxDepth();
+    const depthStatus = await this.resolveMaxDepth();
     if (currentDepth >= depthStatus.maxDepth) {
       throw new Error(
         `RLM recursion depth limit reached (RLM_DEPTH=${currentDepth}, RLM_MAX_DEPTH=${depthStatus.maxDepth})`,
@@ -326,8 +309,13 @@ export class PrimeAgentRegistry {
     }
 
     const childDepth = currentDepth + 1;
-    const name = requestedName ?? `subagent-${createPromptSlug(prompt)}-${this.randomHex(8)}`;
+    const name = requestedName ?? deriveDefaultSubagentName(prompt, this.randomHex(8));
     this.assertNameAvailable(name, childDepth);
+    if (this.pendingNames.has(name)) {
+      throw new Error(
+        `Agent name "${name}" is unavailable: an agent of that name already exists at depth ${childDepth} under this parent`,
+      );
+    }
     // Pending reservation wraps the awaited model resolution so two spawns
     // racing on the same tick cannot both pass the catalog check first.
     this.pendingNames.add(name);
@@ -378,7 +366,7 @@ export class PrimeAgentRegistry {
     }
   }
 
-  /** Everything the registry itself spawned, newest-first irrelevant; completed children stay listed until reaped. */
+  /** Everything the registry itself spawned; completed children stay listed until reaped. */
   list(): PrimeSubagentHandle[] {
     return [...this.children.keys()].map((id) => this.handleSnapshot(id));
   }
@@ -389,7 +377,7 @@ export class PrimeAgentRegistry {
     return entry?.bundle?.runtime;
   }
 
-  /** Subscribe to registry events; listener failures are contained (events are a side channel, never the spine). */
+  /** Registry event stream; listener failures are contained (events are a side channel, never the spine). */
   onEvent(listener: (event: PrimeRuntimeEvent) => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
@@ -397,7 +385,7 @@ export class PrimeAgentRegistry {
 
   /**
    * Drain completed children: best-effort `stop` on their runtimes, drop
-   * their catalog records and subscriptions, return the count reaped.
+   * their catalog records and event subscriptions, return the count reaped.
    * Running children are architecturally out of scope — reaping a running
    * child is what `stop` is for.
    */
@@ -419,190 +407,94 @@ export class PrimeAgentRegistry {
   /**
    * Stop one running child (by id or name). A stop requested before the
    * factory comes back is remembered and applied the moment the bundle
-   * arrives; either way the run settles with terminal reason "stopped".
+   * arrives; either way the run settles exactly once with terminal reason
+   * "stopped".
    */
   async stop(idOrName: string, reason = "stopped by parent"): Promise<boolean> {
     const entry = this.childByRef(idOrName);
     if (!entry) return false;
-    if (!entry.settled && entry.status === "running") {
-      entry.stopRequested = true;
-      entry.stopReason = reason;
-      if (entry.bundle) {
-        await entry.bundle.runtime.stop(reason).catch(() => undefined);
-        this.settleStopped(entry, reason);
-      }
-      return true;
+    if (entry.settled || entry.status !== "running") return false;
+    entry.stopRequested = true;
+    entry.stopReason = reason;
+    if (entry.bundle) {
+      await entry.bundle.runtime.stop(reason).catch(() => undefined);
+      this.settleStopped(entry, reason);
     }
-    return false;
+    return true;
   }
 
   /**
    * Usage folded for the parent session's attribution: live from the runtime
-   * while running, latched at settlement afterwards. The registry EXPOSES this;
-   * the parent session is the one that records attribution (registry must
-   * never write into the parent account).
+   * while running, latched at settlement afterwards. The registry EXPOSES
+   * this; the parent session records the attribution — the registry must
+   * never write into the parent account.
    */
   usageOf(handleId: string): PrimeUsageView {
     const entry = this.childByRef(handleId);
     if (!entry) return undefined;
     if (entry.usage) return entry.usage;
-    if (entry.bundle) {
-      try {
-        return entry.bundle.runtime.usage();
-      } catch {
-        return undefined;
-      }
-    }
-    return undefined;
+    return this.captureUsage(entry);
   }
 
   // ========================== depth configuration ==========================
 
   /**
-   * Chat-scoped max-depth override; persisted to the harness store under the
-   * reserved entry id when a store is wired, effective immediately either way.
+   * Chat-scoped max-depth override: persisted through the frozen harness
+   * store under the reserved `subagent:max-depth` entry (kind "subagent",
+   * scope "local") with optimistic-concurrency semantics, then effective
+   * immediately in memory either way.
    */
   async setRlmMaxDepth(maxDepth: number): Promise<void> {
     if (!isNonNegativeInteger(maxDepth)) {
       throw new Error("RLM max depth must be a non-negative integer.");
     }
     if (this.harnessStore) {
-      await this.harnessStore.write(SUBAGENT_HARNESS_KIND, SUBAGENT_MAX_DEPTH_ENTRY_ID, { maxDepth });
+      const existing = await this.harnessStore.get(SUBAGENT_MAX_DEPTH_SCOPE, "subagent", SUBAGENT_MAX_DEPTH_ENTRY_ID);
+      if (existing) {
+        await this.harnessStore.update(
+          SUBAGENT_MAX_DEPTH_SCOPE,
+          "subagent",
+          SUBAGENT_MAX_DEPTH_ENTRY_ID,
+          { content: String(maxDepth), metadata: { maxDepth } },
+          { expectedVersion: existing.version },
+        );
+      } else {
+        await this.harnessStore.create(SUBAGENT_MAX_DEPTH_SCOPE, {
+          id: SUBAGENT_MAX_DEPTH_ENTRY_ID,
+          kind: "subagent",
+          title: "RLM max depth (chat-scoped override)",
+          content: String(maxDepth),
+          metadata: { maxDepth },
+        });
+      }
     }
     this.chatMaxDepth = maxDepth;
   }
 
   /**
    * Effective max depth with precedence chat > global setting > env
-   * (RLM_MAX_DEPTH numeric string) > default(1). A malformed env value or a
-   * malformed persisted chat value degrades predictably: env throws the
-   * parse error prime-agent throws; the corrupt harness read is treated as
-   * absent so a bad entry cannot brick every spawn in the chat.
+   * (RLM_MAX_DEPTH numeric string) > default(1). A malformed env value is the
+   * named parse error prime-agent throws; a corrupt harness entry is treated
+   * as absent so a bad persisted record cannot brick every spawn in the chat.
    */
-  getMaxDepthStatus(): PrimeMaxDepthStatus {
+  async getMaxDepthStatus(): Promise<PrimeMaxDepthStatus> {
     return this.resolveMaxDepth();
-  }
-
-  // ============================= family router =============================
-
-  /** Nuclear-family walk: parent, siblings (same parent; roots share none), direct children. */
-  private reachableAgents(fromId: string): PrimeSubagentHandle[] {
-    const from = this.nodes.get(fromId) ?? this.nodeByName(fromId);
-    if (!from) {
-      throw new Error(`Agent "${fromId}" is not registered in this agent family`);
-    }
-    const out: CatalogNode[] = [];
-    if (from.parentId !== undefined) {
-      const parent = this.nodes.get(from.parentId);
-      if (parent) out.push(parent);
-    }
-    for (const node of this.nodes.values()) {
-      if (node.id !== from.id && node.parentId === from.parentId) out.push(node);
-    }
-    for (const node of this.nodes.values()) {
-      if (node.parentId === from.id) out.push(node);
-    }
-    return [...out]
-      .sort((a, b) => a.name.localeCompare(b.name))
-      .map((node) => this.nodeSnapshot(node));
-  }
-
-  private async sendMessage(input: { fromId: string; toId: string; content: string }): Promise<PrimeAgentMessageReceipt> {
-    const { fromId, toId, content } = input;
-    const from = this.nodes.get(fromId) ?? this.nodeByName(fromId);
-    if (!from) {
-      throw new Error(`Agent "${fromId}" is not registered in this agent family`);
-    }
-    const text = content.trim();
-    if (!text) {
-      throw new Error("Agent session message cannot be empty");
-    }
-    if (text.length > MAX_MESSAGE_CHARS) {
-      throw new Error(`Agent session message is too long: ${text.length} chars exceeds ${MAX_MESSAGE_CHARS}`);
-    }
-    const target = this.resolveReachableTarget(from, toId);
-    if (!target.sink) {
-      // Optional degradation is NAMED, never phantom: an attached node with
-      // no live queue is observable but not addressable.
-      throw new Error(`Agent "${toId}" (${target.name}) has no live message sink`);
-    }
-    const pending = target.sink.pendingCount();
-    if (pending >= MAX_PENDING_PER_RECEIVER) {
-      throw new Error(
-        `Target session has too many pending messages: ${pending} unfinished, limit is ${MAX_PENDING_PER_RECEIVER}`,
-      );
-    }
-    const messageId = `agentmsg_${this.randomId()}`;
-    const grant = this.rateLimiter.tryConsume(from.id);
-    if (!grant.ok) {
-      return {
-        delivered: false,
-        queued: false,
-        messageId,
-        reason: `Rate limit exceeded for sender "${from.name}" (${from.id}): retry after ${grant.retryAfterMs}ms`,
-      };
-    }
-    const message: PrimeAgentMessage = Object.freeze({
-      id: messageId,
-      fromId: from.id,
-      fromName: from.name,
-      toId: target.id,
-      toName: target.name,
-      content: text,
-      timestamp: this.now(),
-    });
-    const status = await target.sink.accept(message);
-    await this.appendLedger({
-      kind: "message",
-      agentIds: [from.id, target.id],
-      detail: { messageId, deliveryStatus: status },
-      at: this.now(),
-    });
-    if (from.parentId !== undefined && from.parentId === target.id) {
-      this.recordReply(from.id, message);
-    }
-    return { delivered: status === "delivered", queued: status === "queued", messageId };
-  }
-
-  /** agent_observe: bounded snapshots, family-scoped from the owner's point of view (owner itself is observable). */
-  private recentMessages(agentId: string, limit: number, maxChars: number): PrimeAgentMessage[] {
-    if (!Number.isInteger(limit)) throw new Error("agent_observe limit must be an integer");
-    if (limit < 1 || limit > OBSERVE_MAX_LIMIT) throw new Error(`agent_observe limit must be between 1 and ${OBSERVE_MAX_LIMIT}`);
-    if (!Number.isInteger(maxChars)) throw new Error("agent_observe max_chars must be an integer");
-    if (maxChars < OBSERVE_MIN_MAX_CHARS || maxChars > OBSERVE_MAX_MAX_CHARS) {
-      throw new Error(`agent_observe max_chars must be between ${OBSERVE_MIN_MAX_CHARS} and ${OBSERVE_MAX_MAX_CHARS}`);
-    }
-    if (agentId !== this.owner.id && agentId !== this.owner.name) {
-      this.resolveReachableTarget(this.owner, agentId);
-    }
-    const node = this.nodes.get(agentId) ?? this.nodeByName(agentId);
-    if (!node?.recorder) {
-      throw new Error(`Agent "${agentId}" has no message recorder available`);
-    }
-    // The backing store is bounded by contract; clip again here because a
-    // future journal-backed recorder must not be able to break the bound.
-    return node.recorder.recentMessages(limit, maxChars).map((message) =>
-      message.content.length <= maxChars ? message : { ...message, content: message.content.slice(0, maxChars) },
-    );
   }
 
   // ============================ host integration ===========================
 
   /**
    * Wire an extra family node (the owner's parent, sibling roots, deeper
-   * relatives). Child nodes never need manual attachment — admission does it.
-   * Name and id collisions fail closed with the same unavailable-text the
-   * spawn path uses, because a duplicate handle would make name routing a coin flip.
+   * relatives). Spawned children never need manual attachment — admission
+   * does it. Id and name collisions fail closed with the same unavailable
+   * text as spawn, because a duplicate handle would make name routing a
+   * coin flip.
    */
   attachNode(node: PrimeAgentNodeAttachment): void {
     if (this.nodes.has(node.id)) {
       throw new Error(`Agent id "${node.id}" is already registered in this agent family`);
     }
-    if (this.nodeByName(node.name)) {
-      throw new Error(
-        `Agent name "${node.name}" is unavailable: an agent of that name already exists at depth ${node.depth} under this parent`,
-      );
-    }
+    this.assertNameAvailable(node.name, node.depth);
     const materialized = this.materializeNode(node, "idle");
     this.nodes.set(materialized.id, materialized);
   }
@@ -620,6 +512,11 @@ export class PrimeAgentRegistry {
       content: taskPrompt,
       timestamp: this.now(),
     });
+    const slug = prompt
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 40);
     return {
       childId: entry.id,
       fromId: this.owner.id,
@@ -627,7 +524,7 @@ export class PrimeAgentRegistry {
       prompt,
       taskPrompt,
       name: entry.name,
-      slug: createPromptSlug(prompt),
+      slug: slug.length > 0 ? slug : "task",
       model: entry.model,
       depth: entry.depth,
       sessionPath: entry.sessionPath,
@@ -636,10 +533,10 @@ export class PrimeAgentRegistry {
   }
 
   /**
-   * The run itself: factory without awaiting inside spawn, task delivery
+   * The run itself: factory without being awaited by spawn, task delivery
    * through the sink, event mapping, settlement. A factory throw settles
-   * "stopped" (the registry owns orchestration even when the host cannot
-   * start the child), never an unhandled rejection.
+   * "stopped" — the registry owns orchestration even when the host cannot
+   * start the child — and never an unhandled rejection.
    */
   private async detachedSpawnExecution(entry: ChildEntry, input: PrimeSubagentSpawnInput): Promise<void> {
     try {
@@ -657,8 +554,8 @@ export class PrimeAgentRegistry {
       }
       entry.unsubscribeEvents = bundle.runtime.agent.subscribe((event) => this.onChildAgentEvent(entry, event));
       // Task delivery is plumbing, not conversation: it bypasses the rate
-      // limiter and pending bound on purpose (a child must always receive
-      // its spawn task), but it does report through the ledger.
+      // limiter and the pending bound on purpose (a child must always
+      // receive its spawn task), but it still lands in the ledger.
       const delivery = await bundle.sink.accept(input.spawnMessage);
       await this.appendLedger({
         kind: "message",
@@ -722,11 +619,7 @@ export class PrimeAgentRegistry {
     this.settle(entry, "failed", error);
   }
 
-  private settle(
-    entry: ChildEntry,
-    reason: "replied" | "completed_without_reply" | "failed" | "stopped",
-    preview?: string,
-  ): void {
+  private settle(entry: ChildEntry, reason: TerminalReason, preview?: string): void {
     if (entry.settled) return;
     entry.settled = true;
     entry.status = reason === "failed" ? "failed" : reason === "stopped" ? "stopped" : "idle";
@@ -745,15 +638,20 @@ export class PrimeAgentRegistry {
       at: this.now(),
     });
     if (reason !== "replied") {
+      // The parent always hears finality: a host-synthesized notice straight
+      // into the owner's sink, deliberately bypassing the rate limiter (this
+      // is the host speaking for the child, not conversation). Sink failures
+      // are swallowed because delivery — not finality — is what failed:
+      // finality already went out as the terminal event above.
       const notice = this.materializeTerminalNotice(entry, reason, bounded);
       void this.owner.sink?.accept(notice).catch(() => undefined);
     }
   }
 
-  /** The fixed notice text prime-agent uses (rlm_child_terminal_notice / rlm_child_failure messages). */
+  /** The fixed notice text prime-agent uses for its terminal/failure cards. */
   private materializeTerminalNotice(
     entry: ChildEntry,
-    reason: "completed_without_reply" | "failed" | "stopped",
+    reason: Exclude<TerminalReason, "replied">,
     preview?: string,
   ): PrimeAgentMessage {
     const content =
@@ -773,7 +671,108 @@ export class PrimeAgentRegistry {
     });
   }
 
-  // ============================ internal: events ============================
+  // ============================ internal: router ===========================
+
+  /** Nuclear-family walk: parent, siblings (same parent; roots share none), direct children. */
+  private reachableAgents(fromId: string): PrimeSubagentHandle[] {
+    const from = this.nodes.get(fromId) ?? this.nodeByName(fromId);
+    if (!from) {
+      throw new Error(`Agent "${fromId}" is not registered in this agent family`);
+    }
+    const out: CatalogNode[] = [];
+    if (from.parentId !== undefined) {
+      const parent = this.nodes.get(from.parentId);
+      if (parent) out.push(parent);
+    }
+    for (const node of this.nodes.values()) {
+      if (node.id !== from.id && node.parentId === from.parentId) out.push(node);
+    }
+    for (const node of this.nodes.values()) {
+      if (node.parentId === from.id) out.push(node);
+    }
+    return out.sort((a, b) => a.name.localeCompare(b.name)).map((node) => this.nodeSnapshot(node));
+  }
+
+  private async sendMessage(input: { fromId: string; toId: string; content: string }): Promise<PrimeAgentMessageReceipt> {
+    const { fromId, toId, content } = input;
+    const from = this.nodes.get(fromId) ?? this.nodeByName(fromId);
+    if (!from) {
+      throw new Error(`Agent "${fromId}" is not registered in this agent family`);
+    }
+    const text = content.trim();
+    if (!text) {
+      throw new Error("Agent session message cannot be empty");
+    }
+    if (text.length > MAX_AGENT_MESSAGE_CHARS) {
+      throw new Error(`Agent session message is too long: ${text.length} chars exceeds ${MAX_AGENT_MESSAGE_CHARS}`);
+    }
+    const target = this.resolveReachableTarget(from, toId);
+    if (!target.sink) {
+      // Optional degradation is NAMED, never phantom: an attached node with
+      // no live queue is observable but not addressable.
+      throw new Error(`Agent "${toId}" (${target.name}) has no live message sink`);
+    }
+    const pending = target.sink.pendingCount();
+    if (pending >= MAX_PENDING_AGENT_MESSAGES) {
+      throw new Error(
+        `Target session has too many pending messages: ${pending} unfinished, limit is ${MAX_PENDING_AGENT_MESSAGES}`,
+      );
+    }
+    const messageId = `agentmsg_${this.randomId()}`;
+    const grant = this.rateLimiter.tryConsume(from.id);
+    if (!grant.ok) {
+      return {
+        delivered: false,
+        queued: false,
+        messageId,
+        reason: `Rate limit exceeded for sender "${from.name}" (${from.id}): retry after ${grant.retryAfterMs}ms`,
+      };
+    }
+    const message: PrimeAgentMessage = Object.freeze({
+      id: messageId,
+      fromId: from.id,
+      fromName: from.name,
+      toId: target.id,
+      toName: target.name,
+      content: text,
+      timestamp: this.now(),
+    });
+    const status = await target.sink.accept(message);
+    await this.appendLedger({
+      kind: "message",
+      agentIds: [from.id, target.id],
+      detail: { messageId, deliveryStatus: status },
+      at: this.now(),
+    });
+    if (from.parentId !== undefined && from.parentId === target.id) {
+      this.recordReply(from.id, message);
+    }
+    return { delivered: status === "delivered", queued: status === "queued", messageId };
+  }
+
+  /** agent_observe: bounded snapshots, family-scoped from the owner's point of view (the owner itself is observable). */
+  private recentMessages(agentId: string, limit: number, maxChars: number): PrimeAgentMessage[] {
+    if (!Number.isInteger(limit)) throw new Error("agent_observe limit must be an integer");
+    if (limit < 1 || limit > OBSERVE_MAX_LIMIT) {
+      throw new Error(`agent_observe limit must be between 1 and ${OBSERVE_MAX_LIMIT}`);
+    }
+    if (!Number.isInteger(maxChars)) throw new Error("agent_observe max_chars must be an integer");
+    if (maxChars < OBSERVE_MIN_MAX_CHARS || maxChars > OBSERVE_MAX_MAX_CHARS) {
+      throw new Error(`agent_observe max_chars must be between ${OBSERVE_MIN_MAX_CHARS} and ${OBSERVE_MAX_MAX_CHARS}`);
+    }
+    if (agentId !== this.owner.id && agentId !== this.owner.name) {
+      this.resolveReachableTarget(this.owner, agentId);
+    }
+    const node = this.nodes.get(agentId) ?? this.nodeByName(agentId);
+    if (!node?.recorder) {
+      throw new Error(`Agent "${agentId}" has no message recorder available`);
+    }
+    // The backing store is bounded by contract; clip anyway because a future
+    // journal-backed recorder must not be able to break the bound.
+    return node.recorder.recentMessages(limit, maxChars).map((message) =>
+      message.content.length <= maxChars ? message : { ...message, content: message.content.slice(0, maxChars) },
+    );
+  }
 
   private recordReply(fromId: string, message: PrimeAgentMessage): void {
     const entry = this.children.get(fromId);
@@ -789,6 +788,8 @@ export class PrimeAgentRegistry {
     });
   }
 
+  // ============================ internal: helpers ==========================
+
   private emit(event: PrimeRuntimeEvent): void {
     for (const listener of this.listeners) {
       try {
@@ -799,8 +800,6 @@ export class PrimeAgentRegistry {
       }
     }
   }
-
-  // ============================ internal: helpers ==========================
 
   private materializeNode(node: PrimeAgentNodeAttachment, status: ChildStatus): CatalogNode {
     return {
@@ -829,10 +828,10 @@ export class PrimeAgentRegistry {
   }
 
   /**
-   * Nuclear-family resolution for messaging and observe: named ref must be
-   * the parent, a sibling, or a direct child. The error names the requested
-   * target AND the sender beside the reach rule (mirroring prime-agent's
-   * tone of exactly one descriptive sentence).
+   * Nuclear-family resolution: a named ref is addressable only if it is the
+   * parent, a sibling, or a direct child. The error names BOTH the requested
+   * target and the sender beside the reach rule, mirroring prime-agent's
+   * one-descriptive-sentence tone.
    */
   private resolveReachableTarget(from: CatalogNode, ref: string): CatalogNode {
     const reachable = new Set<string>();
@@ -848,10 +847,16 @@ export class PrimeAgentRegistry {
     );
   }
 
-  private assertNameAvailable(name: string, childDepth: number): void {
-    if (this.nodeByName(name) || this.pendingNames.has(name)) {
+  /**
+   * Names are unique among siblings GLOBALLY (the freeze's consolidation of
+   * the prime-agent upstream rule): across every node this registry knows,
+   * regardless of parent edge, plus pending admissions (checked separately
+   * at the spawn call site so a spawn never fails on its own reservation).
+   */
+  private assertNameAvailable(name: string, depth: number): void {
+    if (this.nodeByName(name)) {
       throw new Error(
-        `Agent name "${name}" is unavailable: an agent of that name already exists at depth ${childDepth} under this parent`,
+        `Agent name "${name}" is unavailable: an agent of that name already exists at depth ${depth} under this parent`,
       );
     }
   }
@@ -868,8 +873,8 @@ export class PrimeAgentRegistry {
     return this.owner.model;
   }
 
-  private resolveMaxDepth(): PrimeMaxDepthStatus {
-    const persisted = this.chatMaxDepth ?? this.readHarnessMaxDepth();
+  private async resolveMaxDepth(): Promise<PrimeMaxDepthStatus> {
+    const persisted = this.chatMaxDepth ?? (await this.readHarnessMaxDepth());
     if (persisted !== undefined) {
       return { maxDepth: persisted, source: "chat" };
     }
@@ -880,14 +885,20 @@ export class PrimeAgentRegistry {
     if (env !== undefined && env !== "") {
       return { maxDepth: parseEnvDepth(env, "RLM_MAX_DEPTH"), source: "env" };
     }
-    return { maxDepth: DEFAULT_MAX_DEPTH, source: "default" };
+    return { maxDepth: DEFAULT_RLM_MAX_DEPTH, source: "default" };
   }
 
-  private readHarnessMaxDepth(): number | undefined {
+  private async readHarnessMaxDepth(): Promise<number | undefined> {
     if (!this.harnessStore) return undefined;
-    const value = this.harnessStore.read(SUBAGENT_HARNESS_KIND, SUBAGENT_MAX_DEPTH_ENTRY_ID);
-    if (!isPersistedMaxDepth(value)) return undefined;
-    return value.maxDepth;
+    const entry = await this.harnessStore.get(SUBAGENT_MAX_DEPTH_SCOPE, "subagent", SUBAGENT_MAX_DEPTH_ENTRY_ID);
+    if (!entry || entry.kind !== "subagent") return undefined;
+    const fromMetadata = (entry.metadata as { maxDepth?: unknown } | undefined)?.maxDepth;
+    if (isNonNegativeInteger(fromMetadata)) return fromMetadata;
+    if (/^\d+$/.test(entry.content)) {
+      const parsed = Number(entry.content);
+      if (isNonNegativeInteger(parsed)) return parsed;
+    }
+    return undefined;
   }
 
   private captureUsage(entry: ChildEntry): Usage | undefined {
@@ -899,7 +910,7 @@ export class PrimeAgentRegistry {
     }
   }
 
-  private async appendLedger(entry: Parameters<PrimeAgentLedger["append"]>[0]): Promise<void> {
+  private async appendLedger(entry: PrimeAgentLedgerEntry): Promise<void> {
     if (!this.ledger) return;
     await this.ledger.append(entry);
   }
@@ -928,7 +939,7 @@ export class PrimeAgentRegistry {
       depth: node.depth,
       model: node.model,
       sessionPath: node.sessionPath,
-      status: node.id === this.owner.id ? "running" : node.status,
+      status: node.status,
     });
   }
 
@@ -936,18 +947,21 @@ export class PrimeAgentRegistry {
     const hex = this.randomId().replace(/[^a-fA-F0-9]/g, "").toLowerCase();
     return (hex + "00000000").slice(0, length);
   }
-
 }
 
-/** Default in-memory ledger for hosts that have not wired the journal yet. */
+/**
+ * Default in-memory ledger for hosts that have not wired the journal yet.
+ * Entries are retrievable in append order; evidence ordering is the whole
+ * point, so `entries()` never sorts.
+ */
 export class InMemoryPrimeAgentLedger implements PrimeAgentLedger {
-  private readonly recorded: Parameters<PrimeAgentLedger["append"]>[0][] = [];
+  private readonly recorded: PrimeAgentLedgerEntry[] = [];
 
-  append(entry: Parameters<PrimeAgentLedger["append"]>[0]): void {
+  append(entry: PrimeAgentLedgerEntry): void {
     this.recorded.push(entry);
   }
 
-  entries(): readonly Parameters<PrimeAgentLedger["append"]>[0][] {
+  entries(): readonly PrimeAgentLedgerEntry[] {
     return this.recorded;
   }
 }

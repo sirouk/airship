@@ -17,20 +17,20 @@
  *     means it waits behind current work.
  *   - {@link PrimeAgentRecorder} backs agent_observe snapshots; the parent
  *     session will later back it with journal-scoped reads, which is why
- *     the contract is synchronous and strictly bounded.
+ *     the contract is bounded in both time (sync signature) and size.
  *   - {@link PrimeAgentLedger} receives spawn/reply/terminal/message
  *     evidence entries; the parent session pipes these into the
  *     `prime.agent_message.*` / `prime.subagent.*` journal vocabulary, so
  *     the registry keeps the evidence chain append-only and transport-free.
- *   - {@link PrimeSubagentHarnessStore} is the chat-scoped persistence slot
- *     for `setRlmMaxDepth` (mirrors prime-agent's `rlm_max_depth_state`
- *     custom entry) under the reserved entry id
- *     {@link SUBAGENT_MAX_DEPTH_ENTRY_ID}. Reads are synchronous because
- *     the depth gate resolves synchronously inside `spawn`.
+ *   - The chat-scoped {@link PrimeHarnessStore} slot for `setRlmMaxDepth`:
+ *     the registry persists the override as a harness entry of kind
+ *     "subagent" under the reserved id {@link SUBAGENT_MAX_DEPTH_ENTRY_ID}
+ *     (scope "local"), mirroring prime-agent's per-session
+ *     `rlm_max_depth_state` custom entry.
  *
- * Layering: this file type-imports from ../runtime/types-prime (the frozen
- * contracts), ../ai/types, and ../agent only. It must not import from
- * src/core or src/sessions — the parent session is the sole bridge there.
+ * Layering: type-imports from ../runtime/types-prime (the frozen contracts),
+ * ../ai/types only. It must not import from src/core or src/sessions — the
+ * parent session is the sole bridge there.
  */
 
 import type { Api, Model, Usage } from "../ai/types";
@@ -40,6 +40,8 @@ import type {
   PrimeAgentRole,
   PrimeAgentRouter,
   PrimeAgentRuntime,
+  PrimeHarnessEntry,
+  PrimeHarnessStore,
   PrimeRuntimeEvent,
   PrimeSubagentHandle,
 } from "../runtime/types-prime";
@@ -53,19 +55,36 @@ export type {
   PrimeAgentRole,
   PrimeAgentRouter,
   PrimeAgentRuntime,
+  PrimeHarnessEntry,
+  PrimeHarnessStore,
   PrimeRuntimeEvent,
   PrimeSubagentHandle,
 } from "../runtime/types-prime";
 
-/** Reserved harness-store kind for subagent-orchestration state entries. */
-export const SUBAGENT_HARNESS_KIND = "subagent";
+// Behavioral constants are frozen in ../runtime/types-prime (the producer
+// and the validator must agree on a single number); re-export them so the
+// port's own modules never define competing copies.
+export {
+  canonicalPrimeAgentName,
+  DEFAULT_RLM_MAX_DEPTH,
+  deriveDefaultSubagentName,
+  MAX_AGENT_MESSAGE_CHARS,
+  MAX_AGENT_NAME_CHARS,
+  MAX_PENDING_AGENT_MESSAGES,
+  MAX_SPAWN_PROMPT_CHARS,
+  PRIME_MESSAGE_BURST_CAPACITY,
+  PRIME_MESSAGE_REFILL_MS,
+} from "../runtime/types-prime";
 
 /**
- * Reserved harness-store entry id holding the chat-scoped RLM max-depth
- * override. Mirrors prime-agent's per-session `rlm_max_depth_state` custom
- * entry; chat scope (not global settings) wins the precedence race.
+ * Reserved harness-store entry id (kind "subagent", scope "local") holding
+ * the chat-scoped RLM max-depth override; chat scope wins the precedence
+ * race, per prime-agent's chat > global > env > default ordering.
  */
 export const SUBAGENT_MAX_DEPTH_ENTRY_ID = "subagent:max-depth";
+
+/** Harness scope the chat-scoped max-depth entry lives in. */
+export const SUBAGENT_MAX_DEPTH_SCOPE = "local";
 
 /** Where the effective max depth came from; mirrors prime-agent's source vocabulary minus "inherited". */
 export type PrimeMaxDepthSource = "default" | "env" | "global" | "chat";
@@ -74,11 +93,6 @@ export type PrimeMaxDepthStatus = Readonly<{
   maxDepth: number;
   source: PrimeMaxDepthSource;
 }>;
-
-/** Persisted shape of the chat-scoped max-depth entry (mirrors prime-agent's {maxDepth}). */
-export interface PrimePersistedMaxDepthState {
-  maxDepth: number;
-}
 
 /**
  * One agent's message intake. Owned by whatever runs that agent's turn
@@ -94,10 +108,33 @@ export interface PrimeAgentMessageSink {
   accept(message: PrimeAgentMessage): Promise<"delivered" | "queued">;
   /**
    * Undelivered backlog depth. The router consults this BEFORE accepting so
-   * the pending bound (max 20) refuses with a capacity error instead of
-   * growing an unbounded queue behind a wedged session.
+   * the pending bound (max 20) refuses with
+   * a capacity error instead of growing an unbounded queue behind a wedged
+   * session.
    */
   pendingCount(): number;
+}
+
+/** Ledger event kinds; the producer and the validator must agree on these strings. */
+export const SUBAGENT_LEDGER_KINDS = Object.freeze(["spawn", "reply", "terminal", "message"] as const);
+
+export type PrimeAgentLedgerKind = (typeof SUBAGENT_LEDGER_KINDS)[number];
+
+export type PrimeAgentLedgerEntry = Readonly<{
+  kind: PrimeAgentLedgerKind;
+  agentIds: readonly string[];
+  detail?: Readonly<Record<string, unknown>>;
+  at: number;
+}>;
+
+/**
+ * Append-only evidence sink for subagent orchestration. The parent session
+ * adapts entries into journal drafts; `append` may be asynchronous for
+ * journal-backed implementations and the registry always awaits it, because
+ * evidence ordering (spawn before terminal) must survive transport delays.
+ */
+export interface PrimeAgentLedger {
+  append(entry: PrimeAgentLedgerEntry): void | Promise<void>;
 }
 
 /**
@@ -147,40 +184,6 @@ export interface PrimeAgentRuntimeFactory {
   create(input: PrimeSubagentSpawnInput): Promise<PrimeAgentRuntimeBundle>;
 }
 
-/** Ledger event kinds; the producer and the validator must agree on these strings. */
-export const SUBAGENT_LEDGER_KINDS = Object.freeze(["spawn", "reply", "terminal", "message"] as const);
-
-export type PrimeAgentLedgerKind = (typeof SUBAGENT_LEDGER_KINDS)[number];
-
-export type PrimeAgentLedgerEntry = Readonly<{
-  kind: PrimeAgentLedgerKind;
-  agentIds: readonly string[];
-  detail?: Readonly<Record<string, unknown>>;
-  at: number;
-}>;
-
-/**
- * Append-only evidence sink for subagent orchestration. The parent session
- * adapts entries into journal drafts; `append` may be asynchronous for
- * journal-backed implementations and the registry always awaits it, because
- * evidence ordering (spawn before terminal) must survive transport delays.
- */
-export interface PrimeAgentLedger {
-  append(entry: PrimeAgentLedgerEntry): void | Promise<void>;
-}
-
-/**
- * Chat-scoped persistence for the RLM max-depth override. Synchronous read
- * because the depth gate resolves synchronously inside `spawn`; the host
- * keeps an in-memory materialization of its journal behind this port.
- * Malformed reads must be treated as absent by the registry (fail-open on
- * corrupt state would otherwise brick every spawn in the chat).
- */
-export interface PrimeSubagentHarnessStore {
-  read(kind: string, id: string): unknown;
-  write(kind: string, id: string, value: unknown): void | Promise<void>;
-}
-
 /**
  * Identity of the node that owns a registry (the session whose kernel calls
  * `rlm(...)`), plus the optional extra nodes the host attaches so the
@@ -219,13 +222,13 @@ export type PrimeSubagentModelResolver = (
   inherited: Model<Api>,
 ) => Model<Api> | Promise<Model<Api>>;
 
-/** Constructor dependencies for the registry: every clock, coin, and catalog is injected. */
+/** Constructor dependencies for the registry: every clock, coin, catalog, and env map is injected. */
 export interface PrimeAgentRegistryDeps {
   factory: PrimeAgentRuntimeFactory;
   owner: PrimeAgentNodeAttachment;
   ledger?: PrimeAgentLedger;
-  harnessStore?: PrimeSubagentHarnessStore;
-  /** Global max-depth setting (airship settings layer); chat-scope and env beat/lose per precedence. */
+  harnessStore?: PrimeHarnessStore;
+  /** Global max-depth setting (airship settings layer); chat-scope beats it, env loses to it. */
   globalMaxDepth?: number;
   /**
    * Injected environment map — the browser host has no process.env, so the
@@ -237,11 +240,6 @@ export interface PrimeAgentRegistryDeps {
   now?: () => number;
   /** Deterministic id source for tests; defaults to crypto.randomUUID(). */
   randomId?: () => string;
-}
-
-/** Router-side helper: the receipt plus the delivered/queued distinction the frozen shape flattens. */
-export interface PrimeAgentRouteResult {
-  receipt: PrimeAgentMessageReceipt;
 }
 
 /** Internal role labels used by the family walk; re-exported for tests. */

@@ -103,75 +103,22 @@ export type PrimeRuntimeEvent =
     }>
   | Readonly<{ type: "kernel-crash"; agentId: string; result: KernelJobResult }>;
 
-// ---- harness contracts (consumed by harness store refinements) ----
+// ---- harness contracts ----
+//
+// The harness layer's own module (src/prime/harness/types.ts,
+// src/prime/harness/store.ts) is the single source of truth for these
+// shapes; these aliases exist so contracts elsewhere never define
+// competing copies.
 
-export const PRIME_HARNESS_KINDS = Object.freeze(["prompt", "memory", "skill", "subagent"] as const);
-export type PrimeHarnessKind = (typeof PRIME_HARNESS_KINDS)[number];
-
-export const PRIME_HARNESS_SCOPES = Object.freeze(["local", "global"] as const);
-export type PrimeHarnessScope = (typeof PRIME_HARNESS_SCOPES)[number];
-
-export type PrimeHarnessEntry = Readonly<{
-  id: string;
-  kind: PrimeHarnessKind;
-  scope: PrimeHarnessScope;
-  title: string;
-  content: string;
-  path?: string;
-  reference?: { type: "python"; import: string; callable?: string; callPattern?: string };
-  arguments?: Readonly<Record<string, unknown>>;
-  metadata?: Readonly<Record<string, unknown>>;
-  source: "agent" | "refine";
-  createdAt: number;
-  updatedAt: number;
-  version: number;
-}>;
-
-export type PrimeHarnessRefinement = Readonly<{
-  id: string;
-  summary: string;
-  rationale: string;
-  expectedOutcome?: string;
-  edits: ReadonlyArray<{
-    action: "create" | "update" | "delete";
-    id: string;
-    kind: PrimeHarnessKind;
-    before?: PrimeHarnessEntry;
-    after?: PrimeHarnessEntry;
-  }>;
-  appliedAt: number;
-  source: "agent" | "auto";
-}>;
-
-export type PrimeHarnessOverview = Readonly<{
-  entries: ReadonlyArray<Pick<PrimeHarnessEntry, "id" | "kind" | "scope" | "title">>;
-  refinements: ReadonlyArray<Pick<PrimeHarnessRefinement, "id" | "summary" | "appliedAt">>;
-  snapshotId: string;
-}>;
-
-export type PrimeHarnessSnapshot = Readonly<{
-  entries: PrimeHarnessEntry[];
-  refinements: PrimeHarnessRefinement[];
-  snapshotId: string;
-  takenAt: number;
-}>;
-
-/**
- * The harness persistence contract. Mutations must fail closed with a
- * named optimistic-concurrency error when the observed version no longer
- * matches the stored one.
- */
-export interface PrimeHarnessStore {
-  list(scope?: PrimeHarnessScope): Promise<PrimeHarnessEntry[]>;
-  get(scope: PrimeHarnessScope, id: string): Promise<PrimeHarnessEntry | undefined>;
-  create(scope: PrimeHarnessScope, entry: Omit<PrimeHarnessEntry, "version">): Promise<PrimeHarnessEntry>;
-  update(scope: PrimeHarnessScope, entry: PrimeHarnessEntry, expectedVersion: number): Promise<PrimeHarnessEntry>;
-  delete(scope: PrimeHarnessScope, id: string): Promise<void>;
-  appendRefinement(refinement: Omit<PrimeHarnessRefinement, "appliedAt">): Promise<PrimeHarnessRefinement>;
-  refinements(limit?: number): Promise<PrimeHarnessRefinement[]>;
-  rollback(refinementId: string): Promise<PrimeHarnessRefinement>;
-  snapshot(): Promise<PrimeHarnessSnapshot>;
-  restore(snapshot: PrimeHarnessSnapshot): Promise<void>;
-  snapshotId(): Promise<string>;
-}
-
+export {
+  HARNESS_ENTRY_KINDS as PRIME_HARNESS_KINDS,
+  HARNESS_SCOPES as PRIME_HARNESS_SCOPES,
+} from "../harness/types";
+export type {
+  HarnessEntry as PrimeHarnessEntry,
+  HarnessEntryKind as PrimeHarnessKind,
+  HarnessRefinementEvent as PrimeHarnessRefinement,
+  HarnessScope as PrimeHarnessScope,
+  HarnessSnapshot as PrimeHarnessSnapshot,
+} from "../harness/types";
+export type { HarnessStore as PrimeHarnessStore } from "../harness/store";

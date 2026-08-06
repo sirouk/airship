@@ -135,11 +135,13 @@ export interface FakeChildScript {
 export interface FakeFactoryHarness {
   factory: PrimeAgentRuntimeFactory;
   created: PrimeSubagentSpawnInput[];
-  byChildId: (childId: string) => { agent: Agent; sink: RecordingSink; runtime: PrimeAgentRuntime; usage: Usage };
+  byChildId: (childId: string) => { agent: Agent; sink: RecordingSink; recorder: RecordingRecorder; runtime: PrimeAgentRuntime; usage: Usage; stopReasons: string[] };
   /** Make ONE next create() call wait on the returned deferred before resolving. */
   deferNextCreate: () => { promise: Promise<PrimeAgentRuntimeBundle>; resolve: (value: PrimeAgentRuntimeBundle) => void; reject: (error: unknown) => void };
   /** Make ONE next create() call reject with this error. */
   failNextCreateWith: (error: Error) => void;
+  /** Build a real fake bundle for one input — used to resolve deferred creates. */
+  buildBundle: (input: PrimeSubagentSpawnInput) => PrimeAgentRuntimeBundle;
 }
 
 function assistantMessage(script: FakeChildScript, input: PrimeSubagentSpawnInput): AssistantMessage {
@@ -186,7 +188,15 @@ function createScriptedStream(script: FakeChildScript, input: PrimeSubagentSpawn
  */
 export function createFakeFactory(scripts: { default?: FakeChildScript } = {}): FakeFactoryHarness {
   const created: PrimeSubagentSpawnInput[] = [];
-  const bundles = new Map<string, { agent: Agent; sink: RecordingSink; runtime: PrimeAgentRuntime; usage: Usage }>();
+  interface BundleState {
+    agent: Agent;
+    sink: RecordingSink;
+    recorder: RecordingRecorder;
+    runtime: PrimeAgentRuntime;
+    usage: Usage;
+    stopReasons: string[];
+  }
+  const bundles = new Map<string, BundleState>();
   const deferredCreates: { promise: Promise<PrimeAgentRuntimeBundle>; resolve: (value: PrimeAgentRuntimeBundle) => void; reject: (error: unknown) => void }[] = [];
   const failures: Error[] = [];
 
@@ -195,6 +205,8 @@ export function createFakeFactory(scripts: { default?: FakeChildScript } = {}): 
     const usage = script.usage ?? createUsage(0);
     const agent = new Agent({ streamFn: createScriptedStream(script, input) });
     const sink = new RecordingSink();
+    const recorder = new RecordingRecorder();
+    const stopReasons: string[] = [];
     const handle: PrimeSubagentHandle = Object.freeze({
       id: input.childId,
       name: input.name,
@@ -212,7 +224,8 @@ export function createFakeFactory(scripts: { default?: FakeChildScript } = {}): 
       execKernel: (_spec: KernelJobSpec): Promise<KernelJobResult> =>
         Promise.reject(new Error("test double does not execute kernel jobs")),
       usage: () => usage,
-      stop: async (_reason: string): Promise<void> => {
+      stop: async (reason: string): Promise<void> => {
+        stopReasons.push(reason);
         agent.abort();
       },
     });
@@ -223,9 +236,9 @@ export function createFakeFactory(scripts: { default?: FakeChildScript } = {}): 
         }
       };
     }
-    const value = { agent, sink, runtime, usage };
+    const value: BundleState = { agent, sink, recorder, runtime, usage, stopReasons };
     bundles.set(input.childId, value);
-    return { runtime, sink };
+    return { runtime, sink, recorder };
   };
 
   const factory: PrimeAgentRuntimeFactory = {
@@ -242,6 +255,7 @@ export function createFakeFactory(scripts: { default?: FakeChildScript } = {}): 
   return {
     factory,
     created,
+    buildBundle,
     byChildId: (childId) => {
       const hit = bundles.get(childId);
       if (!hit) throw new Error(`fake factory never created ${childId}`);

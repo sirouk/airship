@@ -143,10 +143,8 @@ describe("anthropic SSE conformance", () => {
     try {
       const events = await collectEvents(streamAnthropic(createModel(), CONTEXT, { apiKey: "k" }));
       expectEventProtocolConformance(events);
-      const signatureEvents = events.filter(
-        (e) => e.type !== "start" && e.type !== "done" && !(e.type.startsWith("thinking_") || e.type === "start"),
-      );
-      expect(signatureEvents).toEqual([]);
+      const unexpected = events.filter((e) => !(e.type === "start" || e.type === "done" || e.type.startsWith("thinking_")));
+      expect(unexpected).toEqual([]);
       const done = events[events.length - 1];
       if (done.type !== "done") throw new Error("expected done");
       expect(done.message.content).toEqual([
@@ -292,21 +290,21 @@ describe("anthropic SSE conformance", () => {
   });
 
   it.each([
-    ["end_turn", "stop", undefined],
-    ["stop_sequence", "stop", undefined],
-    ["pause_turn", "stop", undefined],
-    ["max_tokens", "length", undefined],
-    ["tool_use", "toolUse", undefined],
-    ["refusal", "error", "refusal"],
-    ["sensitive", "error", "sensitive"],
-  ])("maps stop reason %s to %s", async (raw, expected, expectedRaw) => {
+    ["end_turn", "stop", undefined, undefined],
+    ["stop_sequence", "stop", undefined, undefined],
+    ["pause_turn", "stop", undefined, undefined],
+    ["max_tokens", "length", undefined, undefined],
+    ["tool_use", "toolUse", undefined, undefined],
+    ["refusal", "error", "refusal", "Model refused to respond (refusal)"],
+    ["sensitive", "error", "sensitive", "Response blocked by provider safety filters (sensitive)"],
+  ])("maps stop reason %s to %s", async (raw, expected, expectedRaw, expectedMessage) => {
     const stub = stubFetch(() => sseResponse([messageStart(), messageDelta(raw), sseJson("message_stop", { type: "message_stop" })]));
     try {
       const message = await streamAnthropic(createModel(), CONTEXT, { apiKey: "k" }).result();
       expect(message.stopReason).toBe(expected);
       expect(message.stopReasonRaw).toBe(expectedRaw);
-      if (expected === "error") {
-        expect(message.errorMessage).toContain("Model refused".slice(0, 5));
+      if (expectedMessage !== undefined) {
+        expect(message.errorMessage).toBe(expectedMessage);
       }
     } finally {
       stub.restore();
@@ -340,30 +338,25 @@ describe("anthropic SSE conformance", () => {
     }
   });
 
-  it("captures usage from message_start so early aborts keep input counts", async () => {
-    const controller = new AbortController();
+  it("retains usage captured at message_start when the stream fails mid-conversation", async () => {
+    // Invariant: usage is captured from message_start FIRST so a stream that
+    // dies before message_delta still reports its input counts.
     const stub = stubFetch(() =>
       sseResponse([
         messageStart({ input_tokens: 100 }),
-        // Never finishing; abort arrives via onResponse.
+        {
+          event: "error",
+          data: JSON.stringify({ type: "error", error: { type: "api_error", message: "Internal error" } }),
+        },
       ]),
     );
     try {
-      const events = await collectEvents(
-        streamAnthropic(createModel(), CONTEXT, {
-          apiKey: "k",
-          signal: controller.signal,
-          onResponse: () => {
-            controller.abort();
-          },
-        }),
-      );
+      const events = await collectEvents(streamAnthropic(createModel(), CONTEXT, { apiKey: "k" }));
       const terminal = events[events.length - 1];
       if (terminal.type !== "error") throw new Error("expected error event");
-      expect(terminal.reason).toBe("aborted");
-      expect(terminal.error.stopReason).toBe("aborted");
-      expect(terminal.error.errorMessage).toBe("Request was aborted");
+      expect(terminal.error.stopReason).toBe("error");
       expect(terminal.error.usage.input).toBe(100);
+      expect(terminal.error.errorMessage).toBe("Provider server error (api_error): Internal error");
     } finally {
       stub.restore();
     }

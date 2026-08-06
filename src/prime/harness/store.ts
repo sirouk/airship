@@ -11,7 +11,7 @@
  * stronger than upstream's applied:false markers, because a half-applied
  * multi-edit refinement is exactly the state drift the rollback machinery then
  * has to chase. Optimistic concurrency has two layers, mirroring upstream's
- * baseline compare: proposal-level conflicts become named issues (the model
+ * baseline compare: proposal-level conflicts become named issues (the caller
  * gets the full rejection list at once), adapter-level compare-and-set failure
  * (a genuinely concurrent writer) throws OptimisticConcurrencyError naming the
  * entry.
@@ -32,11 +32,7 @@ import {
   type ValidationIssue,
 } from "./types";
 
-export {
-  HARNESS_EDIT_ACTIONS,
-  HARNESS_ENTRY_KINDS,
-  HARNESS_SCOPES,
-} from "./types";
+export { HARNESS_EDIT_ACTIONS, HARNESS_ENTRY_KINDS, HARNESS_SCOPES } from "./types";
 
 /** Wire schema version; bump only with a migration path. */
 export const HARNESS_SCHEMA_VERSION = 1;
@@ -115,11 +111,12 @@ export type HarnessRefinementApplyOptions = Readonly<{
   id?: string;
   rollbackOf?: string;
   /**
-   * Entries as captured at plan time. When present, the first edit touching a
-   * kind:id whose current state differs from the baseline is rejected with an
-   * `optimistic_conflict` issue — upstream's "entry changed during refinement
-   * planning" rule, because the LLM call between plan and apply can take many
-   * seconds during which another writer may edit the shared store.
+   * Entries as captured at plan time. When present, the first edit in the
+   * proposal touching a kind:id whose CURRENT state differs from the baseline
+   * is rejected with an `optimistic_conflict` issue — upstream's "entry
+   * changed during refinement planning" rule, because the LLM call between
+   * plan and apply can take many seconds during which another writer may edit
+   * the shared store.
    */
   baseline?: readonly HarnessEntry[];
 }>;
@@ -154,8 +151,8 @@ export interface HarnessStore {
 }
 
 // ---------------------------------------------------------------------------
-// Canonicalization helpers (shape-tolerant readers for untrusted persisted
-// or model-emitted JSON; fail closed by rejecting, never by coercing kinds).
+// Canonicalization helpers (shape-tolerant readers for untrusted persisted or
+// model-emitted JSON; fail closed by rejecting, never by coercing kinds).
 // ---------------------------------------------------------------------------
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -164,15 +161,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 /** deterministicStringify: snapshot ids must not depend on key insertion order. */
 export function stableStringify(value: unknown): string {
+  if (value === undefined) return "null";
   if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
   if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
   const record = value as Record<string, unknown>;
   const keys = Object.keys(record).sort();
   return `{${keys.map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`).join(",")}}`;
-}
-
-function canonicalMetadata(value: unknown): Readonly<Record<string, unknown>> | undefined {
-  return isRecord(value) ? value : undefined;
 }
 
 /**
@@ -195,12 +189,17 @@ export function canonicalSkillReference(value: unknown): HarnessSkillReference |
     typeof value.callable === "string" && value.callable.length > 0 ? value.callable : undefined;
   const callPattern =
     typeof value.call_pattern === "string" && value.call_pattern.length > 0
-      ? (value.call_pattern as string)
+      ? value.call_pattern
       : typeof value.callPattern === "string" && value.callPattern.length > 0
         ? value.callPattern
         : undefined;
   if (!callable && !callPattern) return undefined;
-  return { type: "python", import: importName, ...(callable ? { callable } : {}), ...(callPattern ? { callPattern } : {}) };
+  return {
+    type: "python",
+    import: importName,
+    ...(callable ? { callable } : {}),
+    ...(callPattern ? { callPattern } : {}),
+  };
 }
 
 function canonicalScope(value: unknown, fallback: HarnessScope): HarnessScope {
@@ -226,7 +225,10 @@ export function canonicalHarnessEntry(value: unknown, fallbackScope: HarnessScop
   const kind = value.kind as HarnessEntryKind;
   const createdAt = typeof value.createdAt === "number" ? value.createdAt : 0;
   const updatedAt = typeof value.updatedAt === "number" ? value.updatedAt : createdAt;
-  const version = typeof value.version === "number" && Number.isFinite(value.version) && value.version >= 1 ? value.version : 1;
+  const version =
+    typeof value.version === "number" && Number.isFinite(value.version) && value.version >= 1
+      ? value.version
+      : 1;
   const reference = kind === "skill" ? canonicalSkillReference(value.reference) : undefined;
   return {
     id: value.id,
@@ -237,7 +239,7 @@ export function canonicalHarnessEntry(value: unknown, fallbackScope: HarnessScop
     scope: canonicalScope(value.scope, fallbackScope),
     ...(reference ? { reference } : {}),
     ...(isRecord(value.arguments) ? { arguments: value.arguments } : {}),
-    ...(canonicalMetadata(value.metadata) ? { metadata: canonicalMetadata(value.metadata) } : {}),
+    ...(isRecord(value.metadata) ? { metadata: value.metadata } : {}),
     source: value.source === "refine" ? "refine" : "agent",
     createdAt,
     updatedAt,
@@ -251,7 +253,6 @@ function canonicalAppliedEdit(value: unknown): HarnessAppliedEdit | undefined {
   const action = value.action as HarnessAppliedEdit["action"];
   if (!HARNESS_ENTRY_KINDS.includes(kind) || !HARNESS_EDIT_ACTIONS.includes(action)) return undefined;
   if (typeof value.id !== "string") return undefined;
-  const scope = canonicalScope(value.scope, "local");
   return {
     action,
     kind,
@@ -261,14 +262,17 @@ function canonicalAppliedEdit(value: unknown): HarnessAppliedEdit | undefined {
     ...(typeof value.path === "string" ? { path: value.path } : {}),
     ...(value.reference !== undefined ? { reference: value.reference } : {}),
     ...(isRecord(value.arguments) ? { arguments: value.arguments } : {}),
-    ...(canonicalMetadata(value.metadata) ? { metadata: canonicalMetadata(value.metadata) } : {}),
+    ...(isRecord(value.metadata) ? { metadata: value.metadata } : {}),
     ...(typeof value.reason === "string" ? { reason: value.reason } : {}),
-    ...(value.before !== undefined ? { before: canonicalHarnessEntry(value.before, scope) } : {}),
-    ...(value.after !== undefined ? { after: canonicalHarnessEntry(value.after, scope) } : {}),
+    ...(value.before !== undefined ? { before: canonicalHarnessEntry(value.before, "local") } : {}),
+    ...(value.after !== undefined ? { after: canonicalHarnessEntry(value.after, "local") } : {}),
   };
 }
 
-export function canonicalRefinementEvent(value: unknown, fallbackScope: HarnessScope): HarnessRefinementEvent | undefined {
+export function canonicalRefinementEvent(
+  value: unknown,
+  fallbackScope: HarnessScope,
+): HarnessRefinementEvent | undefined {
   if (!isRecord(value)) return undefined;
   if (typeof value.id !== "string" || typeof value.summary !== "string") return undefined;
   const edits = Array.isArray(value.edits)
@@ -319,7 +323,7 @@ export function slugHarnessId(raw: string, fallback: string): string {
 }
 
 function cloneJson<T>(value: T): T {
-  return value === undefined ? value : (JSON.parse(JSON.stringify(value)) as T);
+  return JSON.parse(JSON.stringify(value)) as T;
 }
 
 function cloneEntry(entry: HarnessEntry | undefined): HarnessEntry | undefined {
@@ -355,12 +359,13 @@ export type ValidatedRefinement = Readonly<{
  * action/kind membership, base-system-prompt immutability, id presence,
  * title/content presence, skill reference + arguments contract, existence for
  * update/delete and non-existence for create, and the optimistic baseline
- * compare. The scope filter is what makes global entries read-only during a
- * local refinement: they are simply not in `entries` for that scope, so an
- * update/delete against them reports entry_not_found. Duplicated kind:id
- * targets inside one proposal skip the baseline compare after the first touch,
- * mirroring upstream's proposalModifiedKeys (the second edit's baseline IS the
- * first edit's result).
+ * compare. Duplicated kind:id targets inside one proposal skip the baseline
+ * compare after the first touch, mirroring upstream's proposalModifiedKeys
+ * (the second edit's baseline IS the first edit's result). `entries` must
+ * already be filtered to the target scope: that filter is what makes global
+ * entries read-only during a local refinement — an update/delete against a
+ * global id reports entry_not_found in the local scope, same as upstream
+ * applying against a scope-segregated state file.
  */
 export function validateRefinementEdits(
   entries: readonly HarnessEntry[],
@@ -373,7 +378,8 @@ export function validateRefinementEdits(
   for (const entry of options.baseline ?? []) {
     baselineByKey.set(`${entry.kind}:${entry.id}`, stableStringify(entry));
   }
-  const byKey = new Map<string, HarnessEntry>();
+  const hasBaseline = options.baseline !== undefined;
+  const byKey = new Map<string, HarnessEntry | undefined>();
   for (const entry of entries) {
     byKey.set(`${entry.kind}:${entry.id}`, entry);
   }
@@ -384,7 +390,7 @@ export function validateRefinementEdits(
       issues.push({ code, message, editIndex: index, ...(kind ? { kind } : {}), ...(id ? { id } : {}) });
     };
     if (!HARNESS_EDIT_ACTIONS.includes(edit.action)) {
-      fail("unsupported_action", `unsupported action ${String(edit.action)}`, edit.kind, edit.id);
+      fail("unsupported_action", `unsupported action ${String(edit.action)}`, undefined, edit.id);
       return;
     }
     if (!HARNESS_ENTRY_KINDS.includes(edit.kind)) {
@@ -393,18 +399,16 @@ export function validateRefinementEdits(
     }
     const kind = edit.kind as HarnessEntryKind;
     const computedId =
-      resolveHarnessRef(options.scope, edit.id ?? "").id !== "" || edit.id === undefined
-        ? edit.id !== undefined
-          ? resolveHarnessRef(options.scope, edit.id).id
-          : edit.action === "create"
-            ? slugHarnessId(edit.title ?? kind, kind)
-            : undefined
-        : undefined;
-    if (kind === "prompt" && (edit.id === "base_system_prompt" || computedId === "base_system_prompt")) {
+      edit.id !== undefined
+        ? resolveHarnessRef(options.scope, edit.id).id
+        : edit.action === "create"
+          ? slugHarnessId(edit.title ?? kind, kind)
+          : undefined;
+    if (kind === "prompt" && computedId === "base_system_prompt") {
       fail("immutable_entry", "base system prompt is not editable", kind, computedId);
       return;
     }
-    if (edit.action !== "create" && !computedId) {
+    if (edit.action !== "create" && computedId === undefined) {
       fail("missing_id", `${edit.action} requires id`, kind, undefined);
       return;
     }
@@ -413,49 +417,51 @@ export function validateRefinementEdits(
       fail("missing_fields", `${edit.action} requires title and content`, kind, id);
       return;
     }
-    let reference: HarnessSkillReference | undefined;
-    if (edit.action !== "delete" && kind === "skill") {
-      if (edit.arguments === undefined) {
-        fail("skill_reference_invalid", `${edit.action} skill requires arguments`, kind, id);
-        return;
-      }
-      const before = byKey.get(`${kind}:${id}`);
-      const referenceSource = edit.reference !== undefined ? edit.reference : before?.reference;
-      const canonical = canonicalSkillReference(referenceSource);
-      if (!canonical) {
-        fail(
-          "skill_reference_invalid",
-          `${edit.action} skill requires python reference with type "python", an import, and a callable or call_pattern`,
-          kind,
-          id,
-        );
-        return;
-      }
-      reference = canonical;
+    if (edit.action !== "delete" && kind === "skill" && edit.arguments === undefined) {
+      fail("skill_reference_invalid", `${edit.action} skill requires arguments`, kind, id);
+      return;
     }
     const key = `${kind}:${id}`;
     const before = byKey.get(key);
-    if (
-      options.baseline !== undefined &&
-      baselineByKey.has(key) &&
-      !proposalModifiedKeys.has(key)
-    ) {
-      const current = before ? stableStringify(before) : undefined;
+    let reference: HarnessSkillReference | undefined;
+    if (edit.action !== "delete" && kind === "skill") {
+      // An update that omits `reference` preserves the existing one (mirrors
+      // kernel-side update_skill), so canonicalize against the current entry.
+      const source = edit.reference !== undefined ? edit.reference : before?.reference;
+      const canonical = canonicalSkillReference(source);
+      if (!canonical) {
+        // An update whose target does not exist fails below with
+        // entry_not_found; a reference issue too would only mislead.
+        if (!(edit.action === "update" && before === undefined)) {
+          fail(
+            "skill_reference_invalid",
+            `${edit.action} skill requires a python reference with an import and a callable or call_pattern`,
+            kind,
+            id,
+          );
+          return;
+        }
+      } else {
+        reference = canonical;
+      }
+    }
+    if (hasBaseline && !proposalModifiedKeys.has(key)) {
       const baselineSerialized = baselineByKey.get(key);
-      if (current !== baselineSerialized) {
+      const currentSerialized = before === undefined ? undefined : stableStringify(before);
+      if (currentSerialized !== baselineSerialized) {
         fail("optimistic_conflict", "entry changed during refinement planning", kind, id);
         return;
       }
     }
-    if (edit.action === "delete" && !before) {
+    if (edit.action === "delete" && before === undefined) {
       fail("entry_not_found", `entry not found in the ${options.scope} scope: ${kind}:${id}`, kind, id);
       return;
     }
-    if (edit.action === "create" && before) {
+    if (edit.action === "create" && before !== undefined) {
       fail("entry_exists", `entry already exists in the ${options.scope} scope: ${kind}:${id}`, kind, id);
       return;
     }
-    if (edit.action === "update" && !before) {
+    if (edit.action === "update" && before === undefined) {
       fail("entry_not_found", `entry not found in the ${options.scope} scope: ${kind}:${id}`, kind, id);
       return;
     }
@@ -470,28 +476,31 @@ export function validateRefinementEdits(
       ...(edit.path !== undefined ? { path: edit.path } : {}),
       ...(reference ? { reference } : {}),
       ...(edit.arguments !== undefined ? { arguments: edit.arguments } : {}),
-      ...(canonicalMetadata(edit.metadata) ? { metadata: canonicalMetadata(edit.metadata) } : {}),
+      ...(isRecord(edit.metadata) ? { metadata: edit.metadata } : {}),
       ...(edit.reason !== undefined ? { reason: edit.reason } : {}),
       ...(before ? { before: cloneEntry(before) } : {}),
     });
     // Later edits to the same key validate against this proposal's own write.
     if (edit.action === "delete") {
-      byKey.delete(key);
+      byKey.set(key, undefined);
     } else {
+      const mergedReference = reference ?? before?.reference;
+      const mergedArguments = edit.arguments ?? before?.arguments;
+      const mergedMetadata = edit.metadata ?? before?.metadata;
       byKey.set(key, {
-        ...(before ?? {
-          id,
-          kind,
-          title: edit.title ?? id,
-          content: "",
-          scope: options.scope,
-          source: "refine",
-          createdAt: 0,
-          updatedAt: 0,
-          version: 0,
-        }),
-        ...(edit.title !== undefined ? { title: edit.title } : {}),
-        ...(edit.content !== undefined ? { content: edit.content } : {}),
+        id,
+        kind,
+        title: edit.title ?? before?.title ?? id,
+        content: edit.content ?? before?.content ?? "",
+        path: edit.path ?? before?.path ?? "general",
+        scope: before?.scope ?? options.scope,
+        ...(mergedReference ? { reference: mergedReference } : {}),
+        ...(mergedArguments ? { arguments: mergedArguments } : {}),
+        ...(mergedMetadata ? { metadata: mergedMetadata } : {}),
+        source: "refine",
+        createdAt: before?.createdAt ?? 0,
+        updatedAt: before?.updatedAt ?? 0,
+        version: before ? before.version + 1 : 1,
       });
     }
   });
@@ -506,18 +515,24 @@ export function validateRefinementEdits(
 
 export type HarnessKvRecord = Readonly<{ key: string; value: string }>;
 
+/**
+ * expectedValue semantics: undefined = unchecked write; null = the key must
+ * NOT exist; a string = byte-for-byte compare-and-set. The null case is what
+ * makes concurrent creates of the same id fail instead of silently
+ * last-write-wins.
+ */
 export type HarnessKvWrite =
-  | Readonly<{ type: "put"; key: string; value: string; expectedValue?: string | undefined }>
-  | Readonly<{ type: "delete"; key: string; expectedValue?: string | undefined }>;
+  | Readonly<{ type: "put"; key: string; value: string; expectedValue?: string | null }>
+  | Readonly<{ type: "delete"; key: string; expectedValue?: string | null }>;
 
 export interface HarnessKvAdapter {
   /** Full read; stores are small (capped projections) so scans are cheap and honest. */
   readAll(): Promise<readonly HarnessKvRecord[]>;
   /**
-   * Atomic batch. Every write with expectedValue set must match the currently
-   * stored value byte-for-byte; any mismatch aborts the WHOLE batch and throws
-   * HarnessKvConflictError naming the first conflicting key. This is the
-   * store-level replacement for upstream's tmp+rename file atomicity.
+   * Atomic batch. Every expectation must hold against currently stored state;
+   * any mismatch aborts the WHOLE batch and throws HarnessKvConflictError
+   * naming the first conflicting key. This is the store-level replacement for
+   * upstream's tmp+rename file atomicity.
    */
   transact(writes: readonly HarnessKvWrite[]): Promise<void>;
 }
@@ -529,13 +544,19 @@ export class InMemoryHarnessKvAdapter implements HarnessKvAdapter {
     return Promise.resolve([...this.records.entries()].map(([key, value]) => ({ key, value })));
   }
 
-  transact(writes: readonly HarnessKvWrite[]): Promise<void> {
+  async transact(writes: readonly HarnessKvWrite[]): Promise<void> {
     // Validate against a staging copy first so a mid-batch conflict cannot
     // leave the map half-written; in-memory, the copy is the atomicity.
     const staged = new Map(this.records);
     for (const write of writes) {
       const current = staged.get(write.key);
-      if (write.expectedValue !== undefined && current !== write.expectedValue) {
+      const expectationHolds =
+        write.expectedValue === undefined
+          ? true
+          : write.expectedValue === null
+            ? current === undefined
+            : current === write.expectedValue;
+      if (!expectationHolds) {
         throw new HarnessKvConflictError(write.key);
       }
       if (write.type === "put") {
@@ -550,7 +571,6 @@ export class InMemoryHarnessKvAdapter implements HarnessKvAdapter {
   }
 }
 
-/** entryKey/refinementKey: single place where the adapter key layout is defined. */
 function entryKey(scope: HarnessScope, kind: HarnessEntryKind, id: string): string {
   return `${ENTRY_KEY_PREFIX}${scope}/${kind}/${id}`;
 }
@@ -559,27 +579,46 @@ function refinementKey(scope: HarnessScope, id: string): string {
   return `${EVENT_KEY_PREFIX}${scope}/${id}`;
 }
 
+function keyScope(key: string, prefix: string): HarnessScope {
+  return key.slice(prefix.length, prefix.length + 6) === "global" ? "global" : "local";
+}
+
 export type HarnessStoreOptions = Readonly<{
   /** Injectable clock so tests and deterministic replay never depend on wall time. */
   now?: () => number;
   /**
    * Injectable event id factory; defaults to upstream's `refine_<compact-iso>`
-   * shape with a numeric suffix when the compact timestamp collides.
+   * shape. Collisions (two applies inside one 10 ms tick) get a `_2` suffix.
    */
   createEventId?: (appliedAt: number) => string;
 }>;
+
+type StoreCache = {
+  entries: Map<string, { entry: HarnessEntry; serialized: string }>;
+  refinements: Map<string, HarnessRefinementEvent>;
+};
+
+function compareEntriesForList(a: HarnessEntry, b: HarnessEntry): number {
+  // Upstream kernel list() sorts by (kind, path, title, id); projections stay stable.
+  return (
+    a.kind.localeCompare(b.kind) ||
+    (a.path ?? "general").localeCompare(b.path ?? "general") ||
+    a.title.localeCompare(b.title) ||
+    a.id.localeCompare(b.id)
+  );
+}
 
 /**
  * Shared store authority. Holds an in-memory cache hydrated once from the
  * adapter; every mutation validates against the cache, builds one atomic
  * write batch with compare-and-set expectations taken from the cache, and
- * only then commits the cache. A adapter-level CAS mismatch means another
- * writer owns the record: the cache is dropped (next read re-syncs, the
+ * only then commits the cache. An adapter-level CAS mismatch means another
+ * writer owns the record: the cache is dropped (the next read re-syncs, the
  * kernel-side equivalent of `_sync_from_disk`) and OptimisticConcurrencyError
  * names the contested entry.
  */
 export abstract class HarnessStoreBase implements HarnessStore {
-  private cache?: { entries: Map<string, { entry: HarnessEntry; serialized: string }>; refinements: Map<string, HarnessRefinementEvent> };
+  private cache?: StoreCache;
   private readonly nowFn: () => number;
   private readonly createEventIdFn: (appliedAt: number) => string;
 
@@ -588,43 +627,57 @@ export abstract class HarnessStoreBase implements HarnessStore {
     this.createEventIdFn = options.createEventId ?? ((appliedAt) => defaultRefinementId(new Date(appliedAt)));
   }
 
-  private async ensureCache(): Promise<NonNullable<HarnessStoreBase["cache"]>> {
+  private async ensureCache(): Promise<StoreCache> {
     if (this.cache) return this.cache;
     const records = await this.adapter.readAll();
     const entries = new Map<string, { entry: HarnessEntry; serialized: string }>();
     const refinements = new Map<string, HarnessRefinementEvent>();
     for (const record of records) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(record.value);
+      } catch {
+        // One corrupt record must not break the store (upstream: a corrupt
+        // state file degrades to empty). Skipping it lets later writes heal.
+        continue;
+      }
       if (record.key.startsWith(ENTRY_KEY_PREFIX)) {
-        const scope = record.key.slice(ENTRY_KEY_PREFIX.length, ENTRY_KEY_PREFIX.length + 6) === "global" ? "global" : "local";
-        const parsed = canonicalHarnessEntry(JSON.parse(record.value), scope);
-        // Last write wins on corrupt duplicates; skip records that fail the
-        // spine check entirely (canonicalHarnessEntry returns undefined).
-        if (parsed) entries.set(`${parsed.scope}:${parsed.kind}:${parsed.id}`, { entry: parsed, serialized: record.value });
+        const entry = canonicalHarnessEntry(parsed, keyScope(record.key, ENTRY_KEY_PREFIX));
+        if (entry) entries.set(`${entry.scope}:${entry.kind}:${entry.id}`, { entry, serialized: record.value });
       } else if (record.key.startsWith(EVENT_KEY_PREFIX)) {
-        const parsed = JSON.parse(record.value) as unknown;
-        const scoped = isRecord(parsed) ? parsed : {};
-        const event = canonicalRefinementEvent(parsed, "local");
+        const event = canonicalRefinementEvent(parsed, keyScope(record.key, EVENT_KEY_PREFIX));
         if (event) refinements.set(`${event.scope}:${event.id}`, event);
-        void scoped;
       }
     }
     this.cache = { entries, refinements };
     return this.cache;
   }
 
-  private async commit(
-    writes: readonly HarnessKvWrite[],
-    apply: (cache: NonNullable<HarnessStoreBase["cache"]>) => void,
-  ): Promise<void> {
+  private async commit(writes: readonly HarnessKvWrite[], apply: (cache: StoreCache) => void): Promise<void> {
     const cache = await this.ensureCache();
     try {
       await this.adapter.transact(writes);
     } catch (error) {
+      // Any failed batch invalidates the cache: a conflict means another
+      // writer owns current state, and a generic adapter failure may have
+      // applied a partial batch (custom adapters are allowed to degrade).
+      // Rehydrating on the next read is the only honest recovery.
+      this.cache = undefined;
       if (error instanceof HarnessKvConflictError) {
-        this.cache = undefined;
+        // A create-intent write (put with expectedValue null) that collides on
+        // an entry key names the duplicate rather than a generic conflict: a
+        // concurrent create of the same id and a stale-cache duplicate create
+        // are the same human-facing truth, and the reachability of last-write-
+        // wins was never one of them.
+        const duplicate = writes.find(
+          (write) => write.type === "put" && write.expectedValue === null && write.key === error.key && error.key.startsWith(ENTRY_KEY_PREFIX),
+        );
+        if (duplicate) {
+          throw new Error(`${translateConflictKey(duplicate.key).split("/")[1]} entry '${translateConflictKey(duplicate.key).split("/").pop()}' already exists in the ${translateConflictKey(duplicate.key).split("/")[0]} scope`);
+        }
         throw new OptimisticConcurrencyError(
-          `Harness entry changed concurrently (${translateConflictKey(error.key)}); re-read and retry the operation.`,
-          { id: error.key },
+          `Harness state changed concurrently (${translateConflictKey(error.key)}); re-read and retry the operation.`,
+          { id: translateConflictKey(error.key) },
         );
       }
       throw error;
@@ -637,12 +690,7 @@ export abstract class HarnessStoreBase implements HarnessStore {
     return [...cache.entries.values()]
       .map((record) => cloneJson(record.entry))
       .filter((entry) => (scope === undefined || entry.scope === scope) && (kind === undefined || entry.kind === kind))
-      // Upstream kernel list() sorts by (kind, path, title, id); keeps projections stable.
-      .sort((a, b) =>
-        [a.kind, a.path ?? "general", a.title, a.id]
-          .join("\0")
-          .localeCompare([b.kind, b.path ?? "general", b.title, b.id].join("\0")),
-      );
+      .sort(compareEntriesForList);
   }
 
   async get(scope: HarnessScope, kind: HarnessEntryKind, id: string): Promise<HarnessEntry | undefined> {
@@ -652,25 +700,26 @@ export abstract class HarnessStoreBase implements HarnessStore {
   }
 
   async create(scope: HarnessScope, input: HarnessEntryInput): Promise<HarnessEntry> {
-    const id = resolveHarnessRef(scope, input.id ?? slugHarnessId(input.title, input.kind)).id;
-    const resolvedScope = input.id ? resolveHarnessRef(scope, input.id).scope : scope;
+    const ref = resolveHarnessRef(scope, input.id ?? slugHarnessId(input.title, input.kind));
     const cache = await this.ensureCache();
-    const cacheKey = `${resolvedScope}:${input.kind}:${id}`;
+    const cacheKey = `${ref.scope}:${input.kind}:${ref.id}`;
     if (cache.entries.has(cacheKey)) {
-      throw new Error(`${input.kind} entry '${id}' already exists in the ${resolvedScope} scope`);
+      throw new Error(`${input.kind} entry '${ref.id}' already exists in the ${ref.scope} scope`);
     }
-    if (input.kind === "skill" && input.reference !== undefined && !canonicalSkillReference(input.reference)) {
+    const reference =
+      input.kind === "skill" && input.reference !== undefined ? canonicalSkillReference(input.reference) : undefined;
+    if (input.kind === "skill" && input.reference !== undefined && !reference) {
       throw new Error("skill entries require a python reference with an import and a callable or call_pattern");
     }
     const now = this.nowFn();
     const entry: HarnessEntry = {
-      id,
+      id: ref.id,
       kind: input.kind,
       title: input.title,
       content: input.content,
       path: input.path ?? "general",
-      scope: resolvedScope,
-      ...(input.kind === "skill" && input.reference !== undefined ? { reference: canonicalSkillReference(input.reference) } : {}),
+      scope: ref.scope,
+      ...(reference ? { reference } : {}),
       ...(input.arguments !== undefined ? { arguments: input.arguments } : {}),
       ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
       source: "agent",
@@ -680,8 +729,8 @@ export abstract class HarnessStoreBase implements HarnessStore {
     };
     const serialized = stableStringify(entry);
     await this.commit(
-      [{ type: "put", key: entryKey(resolvedScope, input.kind, id), value: serialized, expectedValue: undefined }],
-      (current) => current.entries.set(cacheKey, { entry, serialized }),
+      [{ type: "put", key: entryKey(ref.scope, input.kind, ref.id), value: serialized, expectedValue: null }],
+      (state) => state.entries.set(cacheKey, { entry, serialized }),
     );
     return cloneJson(entry);
   }
@@ -706,16 +755,19 @@ export abstract class HarnessStoreBase implements HarnessStore {
         { kind, id: ref.id },
       );
     }
-    if (patch.reference !== undefined && !canonicalSkillReference(patch.reference)) {
+    const reference = patch.reference !== undefined ? canonicalSkillReference(patch.reference) : undefined;
+    if (patch.reference !== undefined && !reference) {
       throw new Error("skill reference must be type python with an import and a callable or call_pattern");
     }
     const now = this.nowFn();
+    // Omitted patch fields preserve the current values, mirroring kernel-side
+    // _upsert so a title-only update does not wipe a skill's contract.
     const entry: HarnessEntry = {
       ...current.entry,
       ...(patch.title !== undefined ? { title: patch.title } : {}),
       ...(patch.content !== undefined ? { content: patch.content } : {}),
       ...(patch.path !== undefined ? { path: patch.path } : {}),
-      ...(patch.reference !== undefined ? { reference: canonicalSkillReference(patch.reference) } : {}),
+      ...(patch.reference !== undefined ? { reference } : {}),
       ...(patch.arguments !== undefined ? { arguments: patch.arguments } : {}),
       ...(patch.metadata !== undefined ? { metadata: patch.metadata } : {}),
       updatedAt: now,
@@ -763,8 +815,8 @@ export abstract class HarnessStoreBase implements HarnessStore {
 
   async getRefinement(id: string): Promise<HarnessRefinementEvent | undefined> {
     const cache = await this.ensureCache();
-    const local = cache.refinements.get(`local:${id}`) ?? cache.refinements.get(`global:${id}`);
-    return local ? cloneJson(local) : undefined;
+    const event = cache.refinements.get(`local:${id}`) ?? cache.refinements.get(`global:${id}`);
+    return event ? cloneJson(event) : undefined;
   }
 
   async applyRefinement(
@@ -777,22 +829,37 @@ export abstract class HarnessStoreBase implements HarnessStore {
       throw new HarnessApplyRejectedError(issues);
     }
     const now = this.nowFn();
+    const cache = await this.ensureCache();
     const appliedEdits: HarnessAppliedEdit[] = [];
     const writes: HarnessKvWrite[] = [];
-    const cache = await this.ensureCache();
-    const pendingCacheValues = new Map<string, string | undefined>();
+    // Cache images as this proposal itself mutates them. Tracking (not the raw
+    // cache) is what makes a multi-edit proposal hitting the same key atomic
+    // AND sequential: the second edit's expectation is the first edit's write.
+    const trackedSerialized = new Map<string, string | undefined>();
+    const trackedEntries = new Map<string, HarnessEntry | undefined>();
+    const currentEntryFor = (cacheKey: string): HarnessEntry | undefined =>
+      trackedEntries.has(cacheKey) ? trackedEntries.get(cacheKey) : cache.entries.get(cacheKey)?.entry;
+    const expectedFor = (cacheKey: string): string | null => {
+      const value = trackedSerialized.has(cacheKey)
+        ? trackedSerialized.get(cacheKey)
+        : cache.entries.get(cacheKey)?.serialized;
+      return value === undefined ? null : value;
+    };
 
     for (const edit of prepared) {
       const cacheKey = `${options.scope}:${edit.kind}:${edit.id}`;
-      const before = cloneEntry(cache.entries.get(cacheKey)?.entry);
-      const expectedValue =
-        pendingCacheValues.get(cacheKey) ?? cache.entries.get(cacheKey)?.serialized;
+      const before = cloneEntry(currentEntryFor(cacheKey));
+      const expectedValue = expectedFor(cacheKey);
       if (edit.action === "delete") {
         appliedEdits.push({ ...stripPrepared(edit), ...(before ? { before } : {}) });
         writes.push({ type: "delete", key: entryKey(options.scope, edit.kind, edit.id), expectedValue });
-        pendingCacheValues.set(cacheKey, undefined);
+        trackedSerialized.set(cacheKey, undefined);
+        trackedEntries.set(cacheKey, undefined);
         continue;
       }
+      const afterReference = edit.reference ?? before?.reference;
+      const afterArguments = edit.arguments ?? before?.arguments;
+      const afterMetadata = edit.metadata ?? before?.metadata;
       const after: HarnessEntry = {
         id: edit.id,
         kind: edit.kind,
@@ -800,9 +867,9 @@ export abstract class HarnessStoreBase implements HarnessStore {
         content: edit.content ?? before?.content ?? "",
         path: edit.path ?? before?.path ?? "general",
         scope: before?.scope ?? options.scope,
-        ...(edit.reference ?? before?.reference ? { reference: edit.reference ?? before?.reference } : {}),
-        ...(edit.arguments ?? before?.arguments ? { arguments: edit.arguments ?? before?.arguments } : {}),
-        ...(edit.metadata ?? before?.metadata ? { metadata: edit.metadata ?? before?.metadata } : {}),
+        ...(afterReference ? { reference: afterReference } : {}),
+        ...(afterArguments ? { arguments: afterArguments } : {}),
+        ...(afterMetadata ? { metadata: afterMetadata } : {}),
         source: "refine",
         createdAt: before?.createdAt ?? now,
         updatedAt: now,
@@ -811,7 +878,8 @@ export abstract class HarnessStoreBase implements HarnessStore {
       const serialized = stableStringify(after);
       appliedEdits.push({ ...stripPrepared(edit), ...(before ? { before } : {}), after: cloneJson(after) });
       writes.push({ type: "put", key: entryKey(options.scope, edit.kind, edit.id), value: serialized, expectedValue });
-      pendingCacheValues.set(cacheKey, serialized);
+      trackedSerialized.set(cacheKey, serialized);
+      trackedEntries.set(cacheKey, after);
     }
 
     const eventId = this.uniqueEventId(options.id, cache, now);
@@ -834,10 +902,7 @@ export abstract class HarnessStoreBase implements HarnessStore {
         if (edit.action === "delete") {
           state.entries.delete(cacheKey);
         } else if (edit.after) {
-          state.entries.set(cacheKey, {
-            entry: cloneJson(edit.after),
-            serialized: writes.find((write) => write.type === "put" && write.key === entryKey(options.scope, edit.kind, edit.id))!.value,
-          });
+          state.entries.set(cacheKey, { entry: cloneJson(edit.after), serialized: stableStringify(edit.after) });
         }
       }
       state.refinements.set(`${options.scope}:${eventId}`, cloneJson(event));
@@ -850,40 +915,130 @@ export abstract class HarnessStoreBase implements HarnessStore {
     if (!target) {
       throw new Error(`Refinement '${refinementId}' not found`);
     }
-    // Upstream rebuilds inverse edits from the recorded before/after snapshots
-    // and replays them through the same apply path; the port does the same so
-    // rollback is itself a validated, snapshotted refinement event.
-    const inverseEdits: HarnessRefinementEdit[] = [];
+    // Rollback restores exact recorded records; it never re-applies proposal
+    // inputs. Restoring "before" verbatim (timestamps, source, version) keeps
+    // snapshots byte-identical across a refinement/rollback roundtrip, and
+    // the KV expectedValue guards make any drift after the refinement a
+    // refusal instead of a stomp.
+    const now = this.nowFn();
+    const cache = await this.ensureCache();
+    const writes: HarnessKvWrite[] = [];
+    const restores: Array<{ edit: HarnessAppliedEdit; kind: HarnessEntryKind; id: string; entry?: HarnessEntry }> = [];
+
     for (const edit of [...target.edits].reverse()) {
-      if (edit.before) {
-        inverseEdits.push({
-          action: edit.after ? "update" : "create",
-          kind: edit.kind,
-          id: edit.id,
-          title: edit.before.title,
-          content: edit.before.content,
-          ...(edit.before.path !== undefined ? { path: edit.before.path } : {}),
-          ...(edit.before.reference !== undefined ? { reference: edit.before.reference } : {}),
-          ...(edit.before.arguments !== undefined ? { arguments: edit.before.arguments } : {}),
-          ...(edit.before.metadata !== undefined ? { metadata: edit.before.metadata } : {}),
-          reason: `Rollback ${target.id}`,
+      const cacheKey = `${target.scope}:${edit.kind}:${edit.id}`;
+      const key = entryKey(target.scope, edit.kind, edit.id);
+      const current = cache.entries.get(cacheKey);
+
+      if (edit.after !== undefined && edit.before !== undefined) {
+        if (!current) {
+          throw new Error(`Harness rollback refused: entry '${edit.id}' vanished after refinement ${target.id}.`);
+        }
+        if (current.serialized !== stableStringify(edit.after)) {
+          throw new OptimisticConcurrencyError(
+            `Harness entry drifted after refinement ${target.id} (${edit.kind}:${edit.id}); rollback refuses to stomp a newer write.`,
+            { kind: edit.kind, id: edit.id },
+          );
+        }
+        writes.push({
+          type: "put",
+          key,
+          value: stableStringify(edit.before),
+          expectedValue: current.serialized,
         });
-      } else if (edit.after) {
-        inverseEdits.push({
-          action: "delete",
+        restores.push({
+          edit: {
+            action: "update",
+            kind: edit.kind,
+            id: edit.id,
+            ...(edit.before?.title !== undefined ? { title: edit.before.title } : {}),
+            ...(edit.before?.content !== undefined ? { content: edit.before.content } : {}),
+            ...(edit.before?.path !== undefined ? { path: edit.before.path } : {}),
+            before: cloneJson(edit.after),
+            after: cloneJson(edit.before),
+            reason: `Rollback ${target.id}`,
+          } as HarnessAppliedEdit,
           kind: edit.kind,
           id: edit.id,
-          reason: `Rollback ${target.id}`,
+          entry: cloneJson(edit.before),
+        });
+      } else if (edit.after !== undefined) {
+        if (!current) {
+          throw new Error(`Harness rollback refused: entry '${edit.id}' vanished after refinement ${target.id}.`);
+        }
+        if (current.serialized !== stableStringify(edit.after)) {
+          throw new OptimisticConcurrencyError(
+            `Harness entry drifted after refinement ${target.id} (${edit.kind}:${edit.id}); rollback refuses to stomp a newer write.`,
+            { kind: edit.kind, id: edit.id },
+          );
+        }
+        writes.push({ type: "delete", key, expectedValue: stableStringify(edit.after) });
+        restores.push({
+          edit: {
+            action: "delete",
+            kind: edit.kind,
+            id: edit.id,
+            before: cloneJson(edit.after),
+            reason: `Rollback ${target.id}`,
+          } as HarnessAppliedEdit,
+          kind: edit.kind,
+          id: edit.id,
+        });
+      } else if (edit.before !== undefined) {
+        writes.push({
+          type: "put",
+          key,
+          value: stableStringify(edit.before),
+          expectedValue: current?.serialized ?? null,
+        });
+        restores.push({
+          edit: {
+            action: "create",
+            kind: edit.kind,
+            id: edit.id,
+            ...(edit.before?.title !== undefined ? { title: edit.before.title } : {}),
+            ...(edit.before?.content !== undefined ? { content: edit.before.content } : {}),
+            ...(edit.before?.path !== undefined ? { path: edit.before.path } : {}),
+            after: cloneJson(edit.before),
+            reason: `Rollback ${target.id}`,
+          } as HarnessAppliedEdit,
+          kind: edit.kind,
+          id: edit.id,
+          entry: cloneJson(edit.before),
         });
       }
     }
-    const proposal: HarnessProposal = {
+
+    const appliedEdits: HarnessAppliedEdit[] = restores.map((restore) => restore.edit);
+    const eventId = this.uniqueEventId(undefined, cache, now);
+    const event: HarnessRefinementEvent = {
+      id: eventId,
       summary: `Rollback refinement ${target.id}`,
       rationale: `Restores continual harness state snapshots from refinement ${target.id}.`,
-      expectedOutcome: "Faulty refinement edits are reverted.",
-      edits: inverseEdits,
+      expectedOutcome: `${target.edits.length} recorded edits reversed.`,
+      edits: appliedEdits,
+      rollbackOf: target.id,
+      scope: target.scope,
+      source: "rollback",
+      appliedAt: now,
     };
-    return this.applyRefinement(proposal, { scope: target.scope, source: "rollback", rollbackOf: target.id });
+    writes.push({ type: "put", key: refinementKey(target.scope, eventId), value: stableStringify(event) });
+
+    await this.commit(writes, (state) => {
+      for (const restore of restores) {
+        const cacheKey = `${target.scope}:${restore.kind}:${restore.id}`;
+        if (restore.edit.action === "delete") {
+          state.entries.delete(cacheKey);
+        } else if (restore.entry !== undefined) {
+          state.entries.set(cacheKey, {
+            entry: cloneJson(restore.entry),
+            serialized: stableStringify(restore.entry),
+          });
+        }
+      }
+      state.refinements.set(`${target.scope}:${eventId}`, cloneJson(event));
+    });
+    return cloneJson(event);
   }
 
   async snapshot(): Promise<HarnessSnapshot> {
@@ -900,43 +1055,52 @@ export abstract class HarnessStoreBase implements HarnessStore {
     const events = snapshot.refinements
       .map((event) => canonicalRefinementEvent(event, event.scope))
       .filter((event): event is HarnessRefinementEvent => event !== undefined);
-    const wanted = new Map<string, { key: string; serialized: string }>();
+    const wantedEntries = new Map<string, string>();
     for (const entry of entries) {
-      const serialized = stableStringify(entry);
-      wanted.set(entryKey(entry.scope, entry.kind, entry.id), { key: entryKey(entry.scope, entry.kind, entry.id), serialized });
+      wantedEntries.set(entryKey(entry.scope, entry.kind, entry.id), stableStringify(entry));
     }
     const wantedEvents = new Map<string, string>();
     for (const event of events) {
       wantedEvents.set(refinementKey(event.scope, event.id), stableStringify(event));
     }
     const writes: HarnessKvWrite[] = [];
-    // Replace, not merge: a restore must not resurrect entries the snapshot
+    // Replace, not merge: a restore must not resurrect state the snapshot
     // never knew about, or "all-or-nothing" stops meaning anything.
     for (const { entry, serialized } of cache.entries.values()) {
       const key = entryKey(entry.scope, entry.kind, entry.id);
-      const targetValue = wanted.get(key);
-      if (!targetValue) writes.push({ type: "delete", key, expectedValue: serialized });
-      else if (targetValue.serialized !== serialized)
-        writes.push({ type: "put", key, value: targetValue.serialized, expectedValue: serialized });
-    }
-    for (const [key, value] of wanted) {
-      if (![...cache.entries.values()].some((record) => entryKey(record.entry.scope, record.entry.kind, record.entry.id) === key)) {
-        writes.push({ type: "put", key, value, expectedValue: undefined });
+      const wanted = wantedEntries.get(key);
+      if (wanted === undefined) {
+        writes.push({ type: "delete", key, expectedValue: serialized });
+      } else if (wanted !== serialized) {
+        writes.push({ type: "put", key, value: wanted, expectedValue: serialized });
       }
+      wantedEntries.delete(key);
     }
-    const existingEventKeys = new Set([...cache.refinements.values()].map((event) => refinementKey(event.scope, event.id)));
+    for (const [key, value] of wantedEntries) {
+      writes.push({ type: "put", key, value, expectedValue: null });
+    }
     for (const event of cache.refinements.values()) {
       const key = refinementKey(event.scope, event.id);
-      if (!wantedEvents.has(key)) writes.push({ type: "delete", key });
+      const currentSerialized = stableStringify(event);
+      const wanted = wantedEvents.get(key);
+      if (wanted === undefined) {
+        writes.push({ type: "delete", key, expectedValue: currentSerialized });
+      } else if (wanted !== currentSerialized) {
+        writes.push({ type: "put", key, value: wanted, expectedValue: currentSerialized });
+      }
+      wantedEvents.delete(key);
     }
     for (const [key, value] of wantedEvents) {
-      if (!existingEventKeys.has(key)) writes.push({ type: "put", key, value });
+      writes.push({ type: "put", key, value, expectedValue: null });
     }
     await this.commit(writes, (state) => {
       state.entries.clear();
       state.refinements.clear();
       for (const entry of entries) {
-        state.entries.set(`${entry.scope}:${entry.kind}:${entry.id}`, { entry: cloneJson(entry), serialized: stableStringify(entry) });
+        state.entries.set(`${entry.scope}:${entry.kind}:${entry.id}`, {
+          entry: cloneJson(entry),
+          serialized: stableStringify(entry),
+        });
       }
       for (const event of events) {
         state.refinements.set(`${event.scope}:${event.id}`, cloneJson(event));
@@ -953,20 +1117,14 @@ export abstract class HarnessStoreBase implements HarnessStore {
     return `sha256:${base64UrlEncode(new Uint8Array(digest))}`;
   }
 
-  private uniqueEventId(
-    requested: string | undefined,
-    cache: NonNullable<HarnessStoreBase["cache"]>,
-    now: number,
-  ): string {
-    if (requested && !cache.refinements.has(`local:${requested}`) && !cache.refinements.has(`global:${requested}`)) {
-      return requested;
-    }
+  private uniqueEventId(requested: string | undefined, cache: StoreCache, now: number): string {
+    const collides = (id: string): boolean =>
+      cache.refinements.has(`local:${id}`) || cache.refinements.has(`global:${id}`);
+    if (requested && !collides(requested)) return requested;
     const base = requested ?? this.createEventIdFn(now);
-    if (!cache.refinements.has(`local:${base}`) && !cache.refinements.has(`global:${base}`)) return base;
+    if (!collides(base)) return base;
     let counter = 2;
-    while (cache.refinements.has(`local:${base}_${counter}`) || cache.refinements.has(`global:${base}_${counter}`)) {
-      counter += 1;
-    }
+    while (collides(`${base}_${counter}`)) counter += 1;
     return `${base}_${counter}`;
   }
 }
@@ -1032,10 +1190,16 @@ function idbRequestResult<T>(request: IDBRequest<T>): Promise<T> {
 function idbTransactionDone(transaction: IDBTransaction): Promise<void> {
   return new Promise((resolve, reject) => {
     transaction.addEventListener("complete", () => resolve(), { once: true });
-    transaction.addEventListener("abort", () =>
-      reject(transaction.error ?? new Error("Harness IndexedDB transaction aborted")), { once: true });
-    transaction.addEventListener("error", () =>
-      reject(transaction.error ?? new Error("Harness IndexedDB transaction failed")), { once: true });
+    transaction.addEventListener(
+      "abort",
+      () => reject(transaction.error ?? new Error("Harness IndexedDB transaction aborted")),
+      { once: true },
+    );
+    transaction.addEventListener(
+      "error",
+      () => reject(transaction.error ?? new Error("Harness IndexedDB transaction failed")),
+      { once: true },
+    );
   });
 }
 
@@ -1075,14 +1239,17 @@ export class IndexedDbHarnessKvAdapter implements HarnessKvAdapter {
         // the stored value diverged from the caller's expectation, the abort
         // rolls back every earlier write in this batch.
         const current = (await idbRequestResult(store.get(write.key))) as HarnessKvRecord | undefined;
-        if (current?.value !== write.expectedValue) {
+        const expectationHolds =
+          write.expectedValue === null ? current === undefined : current?.value === write.expectedValue;
+        if (!expectationHolds) {
           transaction.abort();
           await done.catch(() => undefined);
           throw new HarnessKvConflictError(write.key);
         }
       }
       if (write.type === "put") {
-        store.put({ key: write.key, value: write.value } satisfies HarnessKvRecord);
+        const record: HarnessKvRecord = { key: write.key, value: write.value };
+        store.put(record);
       } else {
         store.delete(write.key);
       }
