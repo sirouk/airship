@@ -12,48 +12,48 @@
       "target": "chromium",
       "channel": "release",
       "file": "airship-companion-chromium-release.zip",
-      "bytes": 38278,
-      "sha256": "ed03d384c671c7fae6c03daa7c2154e3479b79035e967d0be7343a55db040a81",
+      "bytes": 38434,
+      "sha256": "5394cbd316b7ebcda90db83d5955d189b6dc8a4681c88b0162adf84a75189135",
       "installable": "unpacked"
     },
     {
       "target": "firefox",
       "channel": "release",
       "file": "airship-companion-firefox-release.zip",
-      "bytes": 38307,
-      "sha256": "f764dc9fb2d79ee91a04ba7ee1c8af4d915028ca4a7b4f5b040b6ebe90cef53f",
+      "bytes": 38463,
+      "sha256": "2f30ad330a8970219294b551797270f4906b145dc62ed3bfc423b80b5f41376b",
       "installable": "temporary-until-amo-signed"
     },
     {
       "target": "safari",
       "channel": "release",
       "file": "airship-companion-safari-release.zip",
-      "bytes": 38265,
-      "sha256": "563decf957ce4b71f78b0b4b81ebfa9f09d3b1bed2b40b622e521023fe4e713a",
+      "bytes": 38421,
+      "sha256": "db21e1613792230cb6a5989e1cee36fff00f588a133c58d5c254a85f21ad06c8",
       "installable": "safari-web-extension-packager-required"
     },
     {
       "target": "chromium",
       "channel": "development",
       "file": "airship-companion-chromium-development.zip",
-      "bytes": 38419,
-      "sha256": "31a5844e0a291026007fb0c049fd9771c55fb184b375c17a601649ef248a7960",
+      "bytes": 38898,
+      "sha256": "5c8f5604e54e37e69ed968bd34a42ffec1623ca39cfdc8998fb75336c9ea254c",
       "installable": "unpacked"
     },
     {
       "target": "firefox",
       "channel": "development",
       "file": "airship-companion-firefox-development.zip",
-      "bytes": 38447,
-      "sha256": "45f4a677cbc80d815847f5b6c6b30898526accd718e98264f5d4bd8fab587159",
+      "bytes": 38925,
+      "sha256": "caf005b95919d7a58dac792a4c4756588ab1d9a4c55bfd3d496f4b5f37a3cdf8",
       "installable": "temporary-until-amo-signed"
     },
     {
       "target": "safari",
       "channel": "development",
       "file": "airship-companion-safari-development.zip",
-      "bytes": 38406,
-      "sha256": "acba2f637b45c851f22c3a20f0232870e3175b17de925f0afd7a6111fbd574ee",
+      "bytes": 38884,
+      "sha256": "1ffa54165e0d04922c8f98b674c2e8562107ef1d1cb723e0071bd6b80cdd80b5",
       "installable": "safari-web-extension-packager-required"
     }
   ]

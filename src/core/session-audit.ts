@@ -57,6 +57,7 @@ const KNOWN_EVENT_TYPES = new Set([
   "session.created",
   "session.renamed",
   "session.favorite.changed",
+  "session.approval-policy-changed",
   "profile.favorite-order.moved",
   "profile.active-conversation.selected",
   FORK_CONTEXT_EVENT_TYPE,
@@ -813,6 +814,12 @@ async function validateProtocol(
     if (event.type === "session.favorite.changed") {
       if (event.turnId || event.operationId || !payload || typeof payload.favorite !== "boolean") {
         add({ severity: "error", category: "protocol", code: "SESSION_FAVORITE_MALFORMED", sequence: event.sequence, message: "A session favorite change must carry one boolean outside any turn." });
+      }
+      continue;
+    }
+    if (event.type === "session.approval-policy-changed") {
+      if (event.turnId || event.operationId || !payload || !["ask-first", "auto-approve", "full-access"].includes(String(payload.approvalMode))) {
+        add({ severity: "error", category: "protocol", code: "SESSION_APPROVAL_POLICY_MALFORMED", sequence: event.sequence, message: "A session approval-policy change must carry one named mode outside any turn." });
       }
       continue;
     }

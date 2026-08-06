@@ -1773,9 +1773,10 @@ export function App() {
   }>>();
   const transcriptStreams = useMemo(() => new TranscriptStreamStore(), []);
   /** A conversation pin wins over global preferences; historical sessions stay semantically intact. */
-  const pinnedApprovalMode = activeSessionRecord?.manifest.profile?.version === 2
-    ? activeSessionRecord.manifest.profile.approvalMode
-    : preferences.approvalMode;
+  const pinnedApprovalMode = activeSessionRecord?.approvalModeOverride
+    ?? (activeSessionRecord?.manifest.profile?.version === 2
+      ? activeSessionRecord.manifest.profile.approvalMode
+      : preferences.approvalMode);
   const activeApprovalMode = liveApprovalMode && liveApprovalMode.sessionId === activeSessionRecord?.id
     ? liveApprovalMode.mode
     : pinnedApprovalMode;
@@ -9903,101 +9904,40 @@ export function App() {
 
   async function changeActiveApprovalMode(nextMode: ApprovalMode): Promise<void> {
     if (nextMode === activeApprovalMode) return;
-    if (busy) {
-      const visibleSessionId = activeSessionRecord?.id ?? sessionId;
-      if (!visibleSessionId) {
-        setComposerNotice("The active conversation is not ready to change its approval policy.");
-        return;
-      }
-      /*
-       * A running turn already owns a stable SwitchableApprovalPolicy. The
-       * live mode is a page-memory decision for this conversation, so the
-      * current turn adopts it on the next review without minting a new
-      * session or rewriting the pinned manifest/audit chain.
-      */
-      setLiveApprovalMode(Object.freeze({ sessionId: visibleSessionId, mode: nextMode }));
-      if (activeTurnSessionId.current === visibleSessionId) {
-        approvalPolicyController.replace(approvalModePolicies[nextMode]);
-      }
-      setComposerNotice(`Approval policy changed to ${approvalModeLabel(nextMode)} for this conversation's active turn. The pinned conversation and audit remain unchanged.`);
-      setRuntimeStatus(`${approvalModeLabel(nextMode)} active for the current turn`);
+    const visibleSessionId = activeSessionRecord?.id ?? sessionId;
+    const conversationRuntime = runtime.current;
+    if (!conversationRuntime || !visibleSessionId || inferenceRouteChanging.current || sessionNavigationChanging.current) {
+      setComposerNotice("The active conversation is not ready to change its approval policy.");
       return;
     }
-    if (
-      !runtime.current
-      || !catalog
-      || !activeSessionRecord
-      || inferenceRouteChanging.current
-      || sessionNavigationChanging.current
-    ) {
-      setComposerNotice("Stop the active turn and wait for model or storage changes before changing the approval policy.");
-      return;
-    }
-    const active = runtime.current;
+    /*
+     * One durable event on the same journal chain is the whole mechanism.
+     * Whatever the new mode is now, it governs the very next call — a tool
+     * check halfway through a running turn, a fresh prompt, or anything a
+     * person triggers next — because after this append the conversation's
+     * record carries the override and the controller below is rebuilt from
+     * the mode it reads back. The manifest's pinned policy stays the birth
+     * certificate the audit trail already references; the pinned-conversation
+     * mint the old path did is what used to fork the reader's thread.
+     */
     sessionNavigationChanging.current = true;
-    // Function scope, not try scope: the catch reads it to tell the default
-    // already committed from a refusal before the write.
-    let defaultCommitted = false;
     try {
-      let revisedProfile: ProfileRevision | undefined;
-      const committed = await mutateProfileCatalog(async (current) => {
-        const profile = current.profiles.find((candidate) => candidate.profileId === profileId);
-        if (!profile) throw new Error("The active profile is no longer available.");
-        revisedProfile = await createProfileRevision({
-          ...profile,
-          parentRevision: profile.revision,
-          approvalMode: nextMode,
-          createdAt: new Date().toISOString(),
-        });
-        return replaceProfile(current, revisedProfile);
-      });
-      if (!revisedProfile) throw new Error("The approval profile revision was not created.");
-      // Commit the profile revision before creating the session that pins it.
-      // A catalog failure therefore cannot leave an orphan journal session
-      // referring to a profile revision that never became authoritative.
-      // From here on the profile's durable default HAS changed: a failure in
-      // the activation leg below must say so instead of reading as if nothing
-      // happened.
-      defaultCommitted = true;
-      const nextSession = await createProfileSession(
-        active,
-        revisedProfile,
-        committed.catalog,
-        `${activeSessionRecord.title} · ${approvalModeLabel(nextMode)}`.slice(0, 240),
-      );
-      if (runtime.current !== active) throw new Error("The runtime changed before the approval policy could become active.");
-      publishProfileId(revisedProfile.profileId);
-      const activated = await activateSession(nextSession);
-      // Say the whole blast radius. The only place an approval mode can live is
-      // a profile revision, and this commits one through `replaceProfile`, so
-      // the profile's *next* conversation starts here too. Describing that as
-      // conversation-scoped made a durable policy change read as a local one.
-      setMessages([{
-        ...welcomeMessage,
-        id: randomUuid(),
-        content: `Approval policy changed to ${approvalModeLabel(nextMode)} in this new pinned conversation, and ${revisedProfile.name} will start new conversations in ${approvalModeLabel(nextMode)} until you change it again. The previous conversation remains unchanged and addressable from its URL and conversation history.`,
-      }]);
-      setEventCount(activated.headSequence);
-      setLastReceipt(undefined);
-      setSessionLifecycle(READY_SESSION_LIFECYCLE);
-      setTranscriptBoundary(undefined);
+      const updated = await conversationRuntime.journal.setSessionApprovalMode(visibleSessionId, nextMode);
+      if (activeTurnSessionId.current === visibleSessionId) {
+        // A running turn already owns a stable SwitchableApprovalPolicy; the
+        // next inner check cannot wait for a journal round trip.
+        approvalPolicyController.replace(approvalModePolicies[nextMode]);
+        setLiveApprovalMode(Object.freeze({ sessionId: visibleSessionId, mode: nextMode }));
+      }
+      if (activeSessionRecord?.id === updated.id) setActiveSessionRecord(updated);
+      setEventCount(updated.headSequence);
       setSessionRevision((value) => value + 1);
+      setRuntimeStatus(`Approval policy changed to ${approvalModeLabel(nextMode)} for this conversation. The profile default for new conversations is unchanged.`);
       setComposerNotice(undefined);
-      setRuntimeStatus(`${approvalModeLabel(nextMode)} active · new pinned conversation · ${revisedProfile.name} default`);
-      navigate("chat", chatHash(nextSession.id));
     } catch (error) {
-      /*
-       * Two different failures, two different sentences. Before the catalog
-       * commit nothing changed and the failure can say exactly that. After it,
-       * the profile's durable default already moved to the new mode — a
-       * "could not be changed" notice would be a false statement about
-       * state the user can verify by reopening the profile, so the notice
-       * names what actually happened: default updated, activation failed.
-       */
-      const detail = error instanceof Error ? error.message : "The approval policy could not be changed.";
-      setComposerNotice(defaultCommitted
-        ? `The profile default was updated to ${approvalModeLabel(nextMode)}, but the new conversation could not be opened. ${detail}`
-        : detail);
+      setComposerNotice(error instanceof Error
+        ? `The approval policy could not be changed for this conversation. ${error.message}`
+        : "The approval policy could not be changed for this conversation.");
     } finally {
       sessionNavigationChanging.current = false;
     }
@@ -11381,10 +11321,11 @@ export function App() {
                           status line that appears when the refusal does.
                         */}
                         <MenuSelect
-                          // While a turn is running this swaps the live
-                          // SwitchableApprovalPolicy in place. When idle it
-                          // keeps the existing immutable-profile flow.
-                          ariaLabel="Conversation approval policy · live during a turn, then starts a pinned conversation when idle"
+                          // One durable journal event beside the manifest pin:
+                          // the mode changes in flight on the same thread and
+                          // the very next check — mid-turn or next message —
+                          // is governed by it.
+                          ariaLabel="Conversation approval policy · changes this conversation in place, next call governed"
                           className={`composer-approval-select policy-${activeApprovalMode}`}
                           value={activeApprovalMode}
                           disabled={modelSwitching || vaultProviderSwitching || localDeviceBusy}

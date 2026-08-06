@@ -1,5 +1,6 @@
 import {
   JournalConflictError,
+  projectedSessionApprovalMode,
   projectedSessionTitle,
   type DurableEvent,
   type JournalBackend,
@@ -73,6 +74,9 @@ export class MemoryJournalBackend implements JournalBackend {
     const updated: SessionRecord = {
       ...session,
       title: projectedSessionTitle(events, session.title),
+      ...(projectedSessionApprovalMode(events, session.approvalModeOverride) !== undefined
+        ? { approvalModeOverride: projectedSessionApprovalMode(events, session.approvalModeOverride) }
+        : {}),
       updatedAt: last.recordedAt,
       headSequence: last.sequence,
       headDigest: last.digest,

@@ -2,6 +2,7 @@ import type { JsonValue, SessionManifest } from "../core/contracts";
 import { canonicalSessionContextPolicy } from "../core/context-policy";
 import {
   JournalConflictError,
+  projectedSessionApprovalMode,
   projectedSessionTitle,
   type DurableEvent,
   type JournalBackend,
@@ -164,6 +165,12 @@ export class EncryptedObjectJournalBackend implements JournalBackend {
     const updated: SessionRecord = {
       ...current,
       title: projectedSessionTitle(events, current.title),
+      // stableStringify cannot carry an explicit undefined key, so the
+      // override is never minted absent — the pinned manifest is what an
+      // absent override means.
+      ...(projectedSessionApprovalMode(events, current.approvalModeOverride) !== undefined
+        ? { approvalModeOverride: projectedSessionApprovalMode(events, current.approvalModeOverride) }
+        : {}),
       updatedAt: last.recordedAt,
       headSequence: last.sequence,
       headDigest: last.digest,

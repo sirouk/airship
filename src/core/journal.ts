@@ -1,4 +1,4 @@
-import type { JsonValue, SessionManifest } from "./contracts";
+import type { ApprovalProvenance, JsonValue, SessionManifest } from "./contracts";
 import { sha256, stableStringify } from "./hash";
 import { randomUuid } from "./id";
 
@@ -27,6 +27,14 @@ export type SessionRecord = {
   updatedAt: string;
   headSequence: number;
   headDigest: string;
+  /**
+   * The conversation's own approval policy, carried beside the pinned manifest
+   * like title is. The manifest names the policy the conversation was created
+   * under; this is what the person asked for in-flight, on the same thread,
+   * and the very next call is governed by it. Read it with the projection in
+   * this file — it is never written anywhere but a session event.
+   */
+  approvalModeOverride?: ApprovalProvenance["mode"];
 };
 
 export type JournalAppendCommit = Readonly<{
@@ -199,6 +207,34 @@ export class EventJournal {
     const normalized = title.trim();
     if (!normalized || normalized.length > 240 || /[\u0000-\u001F\u007F]/u.test(normalized)) throw new TypeError("Session title must be between 1 and 240 printable characters.");
     await this.append(sessionId, [{ type: "session.renamed", payload: { title: normalized } }], signal);
+    const session = await this.backend.getSession(sessionId, signal);
+    if (!session) throw new Error(`Unknown session: ${sessionId}`);
+    return session;
+  }
+
+  /**
+   * Change this conversation's approval policy in flight, on the same thread.
+   *
+   * Title set the precedent this belongs beside: durable journal facts that
+   * are not the pinned manifest. The manifest still carries the approval
+   * policy the conversation was created under; this event supersedes it from
+   * its sequence onward for THIS conversation, and the very next call is
+   * governed by it after the shell refreshes the record. It deliberately is
+   * not two neighbors it resembles:
+   * (a) the running turn's page-memory controller swap, which is the same
+   * decision before the journal catches up; and
+   * (b) the Profile's approval default — a preference for future
+   * conversations, which this event deliberately does not touch.
+   */
+  async setSessionApprovalMode(sessionId: string, mode: ApprovalProvenance["mode"], signal?: AbortSignal): Promise<SessionRecord> {
+    if (!["ask-first", "auto-approve", "full-access"].includes(mode)) {
+      throw new TypeError("Session approval policy must be ask-first, auto-approve, or full-access.");
+    }
+    await this.append(
+      sessionId,
+      [{ type: "session.approval-policy-changed", payload: { approvalMode: mode } }],
+      signal,
+    );
     const session = await this.backend.getSession(sessionId, signal);
     if (!session) throw new Error(`Unknown session: ${sessionId}`);
     return session;
@@ -407,6 +443,32 @@ export function projectedSessionTitle(events: readonly DurableEvent[], fallback:
       && typeof event.payload === "object"
       && typeof event.payload.title === "string"
     ) return event.payload.title;
+  }
+  return fallback;
+}
+
+/**
+ * The conversation's durable, same-thread approval policy, projected from the
+ * last `session.approval-policy-changed` event. The manifest pin is the
+ * conversation's birth certificate for this preferance — this override is the
+ * durable, conflict-free way to change it in flight without forking the
+ * thread, and every backend's head CAS applies it beside `title` for exactly
+ * the reason title lives here: a lost projection was what previously stranded
+ * these decisions as page-memory-only.
+ */
+export function projectedSessionApprovalMode(
+  events: readonly DurableEvent[],
+  fallback: ApprovalProvenance["mode"] | undefined,
+): ApprovalProvenance["mode"] | undefined {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index]!;
+    if (
+      event.type === "session.approval-policy-changed"
+      && event.payload
+      && !Array.isArray(event.payload)
+      && typeof event.payload === "object"
+      && ["ask-first", "auto-approve", "full-access"].includes(String(event.payload.approvalMode))
+    ) return event.payload.approvalMode as ApprovalProvenance["mode"];
   }
   return fallback;
 }

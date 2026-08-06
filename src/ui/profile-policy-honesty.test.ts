@@ -4,11 +4,13 @@ import { describe, expect, it } from "vitest";
 const app = await readFile(new URL("./app.tsx", import.meta.url), "utf8");
 
 /*
- * Approval-policy and skill-policy writes commit the catalog revision BEFORE
- * the activation leg opens the pinned conversation it names. A failure in the
- * activation leg therefore cannot honestly report "the policy could not be
- * changed": the durable default already moved. These pin the truthful copy on
- * that failure path.
+ * Approval-policy change settled on one truth: the policy is a durable event
+ * on the conversation's own journal chain, not a catalog revision plus a new
+ * pinned conversation. Its failure mode is honest by construction — a failed
+ * append leaves nothing half-committed, so the notice can plainly say the
+ * change did not land. The skill-policy write still commits a catalog
+ * revision before its activation leg; that one retains the
+ * default-already-moved honesty case. These pin both truthful copies.
  */
 describe("policy activation failure honesty", () => {
   const approvalBody = app.slice(
@@ -20,15 +22,17 @@ describe("policy activation failure honesty", () => {
     app.indexOf("async function loadBillingSnapshot("),
   );
 
-  it("the approval-policy notice names the committed default when the conversation fails to open", () => {
-    expect(approvalBody).toContain("defaultCommitted = true;");
-    // The flag is set only after `mutateProfileCatalog` resolves: a catalog
-    // failure still reports as a refusal, not as a half-truth.
-    expect(approvalBody.indexOf("defaultCommitted = true;"))
-      .toBeGreaterThan(approvalBody.indexOf("await mutateProfileCatalog("));
-    expect(approvalBody).toContain("The profile default was updated to ${approvalModeLabel(nextMode)}, but the new conversation could not be opened.");
-    // The generic refusal copy survives for failures before the commit.
-    expect(approvalBody).toContain("The approval policy could not be changed.");
+  it("the approval-policy refusal names only what did not happen, because nothing did", () => {
+    // The refusal sentence exists and is conversation-scoped: same thread,
+    // no catalog revision, no session minted, no half-truth about defaults.
+    expect(approvalBody).toContain("The approval policy could not be changed for this conversation.");
+    expect(approvalBody).toContain("journal.setSessionApprovalMode(visibleSessionId, nextMode)");
+    expect(approvalBody).not.toContain("defaultCommitted");
+    expect(approvalBody).not.toContain("createProfileSession");
+    expect(approvalBody).not.toContain("replaceProfile(current, revisedProfile)");
+    // The navigation guard always releases, whether the append landed or not.
+    expect(approvalBody).toContain("sessionNavigationChanging.current = true;");
+    expect(approvalBody).toContain("sessionNavigationChanging.current = false;");
   });
 
   it("the skill-policy error names the profile whose default already moved", () => {
