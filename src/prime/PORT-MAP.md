@@ -61,8 +61,8 @@ needs an explicit host capability / acceptance run.
 | packages/coding-agent harness state json | — | `src/prime/harness/store.ts` | done | IndexedDB adapter + in-memory (browser-native atomicity) |
 | packages/coding-agent subagents/rlm/agent_message/observe | ~1.1k | `src/prime/subagents/*` | done | nuclear-family reach, admission handles, depth gate, rate limits |
 | packages/coding-agent/src/core/system-prompt.ts + prompts | ~500 | `src/prime/system-prompt.ts` | done | layered composer with cache-key fragments |
-| packages/coding-agent/src/core/agent-session.ts | 11188 | `src/prime/runtime/session.ts` | flight | the turn authority (guardrails, receipts, journal mapping) |
-| packages/coding-agent/src/core/session-manager.ts | 2324 | `src/prime/runtime/runtime.ts` | flight | façade: create/attach/list/prompt/dispose over one page runtime |
+| packages/coding-agent/src/core/agent-session.ts | 11188 | `src/prime/runtime/session.ts` | done (authority) | the turn authority (guardrails, receipts, journal mapping) |
+| packages/coding-agent/src/core/session-manager.ts | 2324 | `src/prime/runtime/runtime.ts` | done (facade + gate) | façade: create/attach/list/prompt/dispose over one page runtime |
 | packages/coding-agent/src/core/daemon* (protocol v7) | ~18k | — | excluded | single-page runtime = the inference daemon; replay/lease semantics yield to journal + session cursors |
 | packages/coding-agent TUI/themes/export-html | ~31k | — | excluded | airship owns UI |
 | packages/coding-agent/src/core/skills.ts (+ skill creator) | ~2.3k | `src/prime/tools/skills.ts` | done | markdown skills first; python skills execute through eager kernel |
