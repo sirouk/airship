@@ -182,4 +182,20 @@ describe("ceremony continuity contracts", () => {
     expect(view).toContain("The Vault was not replaced. Your existing encrypted data remains in place.");
     expect(view).toContain("onReplaceExistingVault");
   });
+
+  it("routes a lost enrolled key copy to an honest destruction stage instead of an impossible backup demand", () => {
+    // The enrolled key copy is checked before the backup-warning stage is
+    // offered: without it the backup button can never produce a file, and the
+    // old flow's Replace button stayed permanently locked behind that
+    // impossible condition.
+    expect(view).toContain('setReplacementStage("key-missing")');
+    expect(view).toContain("operations.openExisting(partition)");
+    expect(view).toContain("This browser no longer holds this Vault’s key copy");
+    expect(view).toContain("LocalDeviceEnrollmentMissingError");
+    expect(view).toContain("!replacementLossAcknowledged");
+    expect(view).toContain("permanently destroyed and cannot be recovered by anyone");
+    expect(view).toContain("Destroy the unreadable Vault");
+    // The destructive action must still go through the one sanctioned verb.
+    expect(view).toContain("void replaceExistingVault()");
+  });
 });

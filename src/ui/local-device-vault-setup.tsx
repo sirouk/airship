@@ -201,8 +201,16 @@ export function LocalDeviceVaultSetup({
   const [restoreDisposition, setRestoreDisposition] =
     useState<"open-existing" | "create-new">("open-existing");
   const [replacementStage, setReplacementStage] =
-    useState<"idle" | "authority-warning" | "backup-warning">("idle");
+    useState<"idle" | "authority-warning" | "backup-warning" | "key-missing">("idle");
   const [replacementBackupExported, setReplacementBackupExported] = useState(false);
+  /**
+   * The signed statement the keyless-destruction path exists on. "Anything in
+   * this Vault is already unreadable here" must be an explicit checkbox the
+   * person ticks, not something a button label implies — this is deletion of
+   * encrypted data nobody can decrypt, and the flow that once demanded a
+   * backup download must not be the same flow that skips it.
+   */
+  const [replacementLossAcknowledged, setReplacementLossAcknowledged] = useState(false);
   const [replacementBusy, setReplacementBusy] = useState(false);
   const busy = operation !== undefined;
 
@@ -306,6 +314,7 @@ export function LocalDeviceVaultSetup({
       if (await operations.hasExistingAuthority?.(partition)) {
         setReplacementStage("authority-warning");
         setReplacementBackupExported(false);
+        setReplacementLossAcknowledged(false);
         return;
       }
       const generation = ++enrollmentGeneration.current;
@@ -327,20 +336,43 @@ export function LocalDeviceVaultSetup({
     if (busy || replacementBusy) return;
     setReplacementStage("authority-warning");
     setReplacementBackupExported(false);
+    setReplacementLossAcknowledged(false);
     setNotice(undefined);
   }
 
-  function continueReplacementToBackup(): void {
+  async function continueReplacementToBackup(): Promise<void> {
     if (busy || replacementBusy || replacementStage !== "authority-warning") return;
-    setReplacementStage("backup-warning");
-    setReplacementBackupExported(false);
     setNotice(undefined);
+    /*
+     * The backup step exists only while an enrolled key copy can encrypt it.
+     * Checking is cheap and local, so it happens before the stage is offered:
+     * asking a person to download a file the browser can never produce is how
+     * this flow used to dead-end, with the Replace button permanently locked
+     * behind the impossible condition.
+     */
+    let enrolled: LocalDeviceWorkspaceKey | undefined;
+    try {
+      enrolled = await operations.openExisting(partition);
+    } catch (error) {
+      if (mounted.current) {
+        setNotice({ kind: "error", message: publicError(error, "The enrolled key copy could not be checked. Replacement was not started.") });
+      }
+      return;
+    }
+    if (enrolled) {
+      setReplacementStage("backup-warning");
+      setReplacementBackupExported(false);
+    } else {
+      setReplacementStage("key-missing");
+      setReplacementLossAcknowledged(false);
+    }
   }
 
   function cancelReplacement(): void {
     if (busy || replacementBusy) return;
     setReplacementStage("idle");
     setReplacementBackupExported(false);
+    setReplacementLossAcknowledged(false);
   }
 
   function acknowledgeGeneratedRecovery(): void {
@@ -497,10 +529,21 @@ export function LocalDeviceVaultSetup({
       }
     } catch (error) {
       if (mounted.current) {
-        setNotice({
-          kind: "error",
-          message: publicError(error, "The existing Vault backup could not be prepared. The Vault was not replaced."),
-        });
+        if (error instanceof Error && error.name === "LocalDeviceEnrollmentMissingError") {
+          // No enrolled key copy means no backup is possible. Route to the
+          // stage that says so plainly instead of a button that can never work.
+          setReplacementStage("key-missing");
+          setReplacementLossAcknowledged(false);
+          setNotice({
+            kind: "info",
+            message: "The enrolled key copy for this Vault is gone, so no backup can be made of data it encrypts.",
+          });
+        } else {
+          setNotice({
+            kind: "error",
+            message: publicError(error, "The existing Vault backup could not be prepared. The Vault was not replaced."),
+          });
+        }
       }
     } finally {
       bytes?.fill(0);
@@ -509,11 +552,13 @@ export function LocalDeviceVaultSetup({
   }
 
   async function replaceExistingVault(): Promise<void> {
+    const keyless = replacementStage === "key-missing";
     if (
       busy
       || replacementBusy
-      || replacementStage !== "backup-warning"
-      || !replacementBackupExported
+      || (keyless
+        ? !replacementLossAcknowledged
+        : replacementStage !== "backup-warning" || !replacementBackupExported)
       || !onReplaceExistingVault
     ) return;
     setReplacementBusy(true);
@@ -889,7 +934,30 @@ export function LocalDeviceVaultSetup({
 
       {replacementStage !== "idle" ? (
         <section class="local-device-vault__replacement" role="alert" aria-labelledby="local-device-replacement-title">
-          {replacementStage === "authority-warning" ? (
+          {replacementStage === "key-missing" ? (
+            <>
+              <div>
+                <p class="local-device-vault__eyebrow">Key copy lost</p>
+                <strong id="local-device-replacement-title">This browser no longer holds this Vault’s key copy</strong>
+              </div>
+              <p>Everything in this Vault is encrypted under a key this browser has lost, and a backup can never be prepared without it — a backup is only readable ciphertext while that key stays lost. If you saved the recovery key outside Airship, use{" "}<b>Recover an existing Vault</b> above: it reopens this Vault with all of it. If there is no key, the records are unreadable already; the only thing left to empty is the disk.</p>
+              <label class="local-device-vault__check local-device-vault__replacement-ack">
+                <input
+                  type="checkbox"
+                  checked={replacementLossAcknowledged}
+                  disabled={busy || replacementBusy}
+                  onChange={(event) => setReplacementLossAcknowledged(event.currentTarget.checked)}
+                />
+                <span>I understand every encrypted record in this Vault will be permanently destroyed and cannot be recovered by anyone.</span>
+              </label>
+              <div class="local-device-vault__actions">
+                <button type="button" class="local-device-vault__secondary" onClick={() => void replaceExistingVault()} disabled={busy || replacementBusy || !replacementLossAcknowledged || !onReplaceExistingVault}>
+                  {replacementBusy ? "Destroying…" : "Destroy the unreadable Vault"}
+                </button>
+                <button type="button" class="local-device-vault__quiet" onClick={cancelReplacement} disabled={busy || replacementBusy}>Keep it for now</button>
+              </div>
+            </>
+          ) : replacementStage === "authority-warning" ? (
             <>
               <div>
                 <p class="local-device-vault__eyebrow">Existing authority found</p>
@@ -897,7 +965,7 @@ export function LocalDeviceVaultSetup({
               </div>
               <p>Creating a fresh start will delete every encrypted conversation, workspace file, memory and profile record in this browser. It keeps the Vault authority and its recovery key; this is an empty replacement, not a new recovery ceremony.</p>
               <div class="local-device-vault__actions">
-                <button type="button" onClick={continueReplacementToBackup} disabled={busy || replacementBusy}>Continue to backup warning</button>
+                <button type="button" onClick={() => void continueReplacementToBackup()} disabled={busy || replacementBusy}>Continue to backup warning</button>
                 <button type="button" class="local-device-vault__quiet" onClick={cancelReplacement} disabled={busy || replacementBusy}>Keep existing Vault</button>
               </div>
             </>

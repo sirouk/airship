@@ -26,6 +26,7 @@ export {
 export { GoogleDriveObjectStore } from "./storage/google-drive-object-store";
 export { GoogleDriveWorkspaceManager } from "./storage/google-drive-workspace";
 export {
+  destroyLocalDeviceAuthority,
   LocalDeviceObjectStore,
   openLocalDeviceObjectStore,
   requestPersistentLocalDeviceStorage,

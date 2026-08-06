@@ -7040,7 +7040,11 @@ export function App() {
     ]);
     const enrolled = await openLocalDeviceWorkspaceKey({ partition: LOCAL_DEVICE_PARTITION });
     if (!enrolled) {
-      throw new Error("Recover the existing Vault with its saved recovery key before downloading a replacement backup.");
+      // Named so the setup surface can flip to its keyless-authority stage
+      // instead of presenting an export failure it can never recover from.
+      const missing = new Error("Recover the existing Vault with its saved recovery key before downloading a replacement backup.");
+      missing.name = "LocalDeviceEnrollmentMissingError";
+      throw missing;
     }
     const temporary = await openLocalDeviceVault({
       partition: LOCAL_DEVICE_PARTITION,
@@ -8126,12 +8130,31 @@ export function App() {
       if (backend === "local-device") {
         let handle = localDeviceHandle.current;
         if (!handle) {
-          const [{ openLocalDeviceWorkspaceKey }, { openLocalDeviceVault }] = await Promise.all([
+          const [{ openLocalDeviceWorkspaceKey }, { destroyLocalDeviceAuthority, openLocalDeviceVault }] = await Promise.all([
             import("../storage/local-device-keyring"),
             loadDeferredCapabilities(),
           ]);
           const enrolled = await openLocalDeviceWorkspaceKey({ partition: LOCAL_DEVICE_PARTITION });
-          if (!enrolled) throw new Error("Recover the existing Vault with its saved recovery key before replacing it.");
+          if (!enrolled) {
+            // Keyless authority: the person lost every key copy this browser
+            // ever held, so nothing here is recoverable and the backup step
+            // cannot exist — it is encrypted under the very key that is gone.
+            // Destruction is the honest verb left, and it needs no key.
+            const destruction = await destroyLocalDeviceAuthority(LOCAL_DEVICE_PARTITION);
+            if (!destruction.destroyedAuthority) {
+              throw new Error("No existing Local Device Vault was found; nothing was destroyed.");
+            }
+            const enumerated = destruction.backends
+              .filter((backend) => typeof backend.records === "number")
+              .reduce((sum, backend) => sum + Number(backend.records), 0);
+            setRuntimeStatus(
+              destruction.backends.every((backend) => typeof backend.records === "number")
+                ? `Destroyed the existing Local Device Vault (${enumerated.toLocaleString()} encrypted records).`
+                : "Destroyed the existing Local Device Vault.",
+            );
+            location.reload();
+            return;
+          }
           temporaryLocalDeviceHandle = await openLocalDeviceVault({
             partition: LOCAL_DEVICE_PARTITION,
             workspaceKey: enrolled.key,

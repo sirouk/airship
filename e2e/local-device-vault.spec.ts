@@ -255,3 +255,64 @@ test("device Vault upgrades schema v1 and uses IndexedDB when atomic OPFS is una
     restored: "indexed persistence",
   });
 });
+
+
+test("a lost enrolled key copy gets an honest destruction path instead of an impossible backup demand", async ({ page, baseURL }) => {
+  await page.goto("/#vault", { waitUntil: "domcontentloaded" });
+  const provider = page.getByRole("button", { name: "Vault storage provider" });
+  await provider.click();
+  await page.getByRole("listbox", { name: "Vault storage provider" })
+    .getByRole("option", { name: /^Local Device\b/u }).click();
+  const setup = page.locator(".local-device-vault");
+  await expect(setup).toBeVisible({ timeout: 20_000 });
+  await setup.getByRole("button", { name: "Create new" }).click();
+  const saveButton = setup.getByRole("button", { name: "I wrote it down by hand" });
+  await saveButton.click();
+  await setup.getByText("I saved this recovery key outside Airship").click();
+  await setup.getByRole("button", { name: "Create encrypted Vault" }).click();
+  await expect(setup.getByText("Ready", { exact: true })).toBeVisible({ timeout: 30_000 });
+
+  // The enrolled key record dies; the encrypted authority survives. This is
+  // the state the old flow dead-ended on: an existing Vault whose backup the
+  // browser can never encrypt.
+  await page.evaluate(async () => {
+    const req = indexedDB.open("airship-local-device-keyring-v1");
+    await new Promise<void>((resolve, reject) => {
+      req.onsuccess = () => {
+        const db = req.result;
+        const tx = db.transaction("workspace-keys", "readwrite");
+        tx.objectStore("workspace-keys").clear();
+        tx.oncomplete = () => { db.close(); resolve(); };
+        tx.onerror = () => reject(tx.error);
+      };
+      req.onerror = () => reject(req.error);
+    });
+  });
+
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await expect(setup).toBeVisible({ timeout: 20_000 });
+  await setup.getByRole("button", { name: "Create new" }).click();
+  await expect(setup.getByText("This browser already has a Local Device Vault")).toBeVisible();
+  await setup.getByRole("button", { name: "Continue to backup warning" }).click();
+
+  // No pretense of a backup: the stage names the lost key copy and its exits —
+  // recover with the saved recovery key, or destroy the unreadable authority.
+  await expect(setup.getByText("This browser no longer holds this Vault’s key copy")).toBeVisible();
+  const destroyButton = setup.getByRole("button", { name: "Destroy the unreadable Vault" });
+  await expect(destroyButton).toBeDisabled();
+  await setup.getByText("I understand every encrypted record in this Vault will be permanently destroyed").click();
+  await expect(destroyButton).toBeEnabled();
+
+  // Destruction ends in a reload (the storage authority was replaced
+  // underneath the page); assertions belong to the reloaded page.
+  await Promise.all([
+    page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 30_000 }),
+    destroyButton.click(),
+  ]);
+  await expect(setup.getByRole("button", { name: "Create new" })).toBeVisible({ timeout: 30_000 });
+  const authority = await page.evaluate(async () => {
+    const dbs = await indexedDB.databases();
+    return dbs.some((db) => db.name?.startsWith("airship-local-device-vault-v1-"));
+  });
+  expect(authority).toBe(false);
+});

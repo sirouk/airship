@@ -596,6 +596,186 @@ export async function localDeviceAuthorityExists(partition: string): Promise<boo
   }
 }
 
+export class LocalDeviceDestructionInUseError extends Error {
+  constructor(message = "Another tab holds this Local Device Vault; close it before emptying the Vault.") {
+    super(message);
+    this.name = "LocalDeviceDestructionInUseError";
+  }
+}
+
+export type LocalDeviceAuthorityDestruction = Readonly<{
+  /** Records enumerated immediately before destruction, per backend. */
+  backends: readonly Readonly<{
+    backend: "opfs" | "indexeddb";
+    records: number | "unenumerated";
+  }>[];
+  destroyedAuthority: boolean;
+}>;
+
+/**
+ * Destruction of an authority nobody in this browser can read.
+ *
+ * `localDeviceAuthorityExists` deliberately authenticates with a throwaway
+ * key, so an authority can provably exist while its only key copy is gone. In
+ * that state the replace-with-empty flow cannot prepare the encrypted backup
+ * it asks for — the backup is encrypted under the very key that is missing —
+ * and a person who lost the recovery value is otherwise locked out of their
+ * own storage forever. This verb is the honest exit from that trap: it takes
+ * the same exclusive cross-document lock that runtime opens and restore use,
+ * fails fast with LocalDeviceDestructionInUseError while any adopted runtime holds
+ * its records (rather than waiting, or worse, letting destruction look
+ * finished while another tab still writes), enumerates what it is about to
+ * destroy for the caller's status line, and only then removes the authority.
+ *
+ * No key material is asked for, because destruction needs none. The word in
+ * every caller-facing copy must stay "destroyed": nothing here recovers,
+ * reads, or decrypts a single record.
+ */
+export async function destroyLocalDeviceAuthority(partition: string): Promise<LocalDeviceAuthorityDestruction> {
+  const canonicalPartition = validatePartition(partition);
+  const databaseId = (await sha256(`airship-local-device-vault/v1\0${canonicalPartition}`)).slice("sha256:".length);
+  const lockName = `airship:local-device-vault:${databaseId}`;
+  const locks = typeof navigator === "undefined" ? undefined : navigator.locks;
+
+  const destroy = async (): Promise<LocalDeviceAuthorityDestruction> => {
+    const backends: LocalDeviceAuthorityDestruction["backends"][number][] = [];
+
+    const indexedDbName = `airship-local-device-vault-v1-${databaseId}`;
+    if (typeof indexedDB !== "undefined") {
+      const indexedDbRecords = await enumerateIndexedDbRecords(indexedDbName);
+      if (indexedDbRecords !== undefined) {
+        const deleted = await deleteIndexedDbDatabase(indexedDbName);
+        if (!deleted) {
+          // The owner of the open connections is a page this lock does not
+          // cover, so "destroyed" would be the one word we cannot say yet.
+          throw new LocalDeviceDestructionInUseError();
+        }
+        backends.push(Object.freeze({ backend: "indexeddb" as const, records: indexedDbRecords }));
+      }
+    } else {
+      // No indexedDB means no IndexedDB authority can exist, so there is
+      // nothing to destroy on this backend and nothing honest to claim about
+      // it — the entry is skipped rather than padded with "unenumerated".
+    }
+
+    const storage = typeof navigator === "undefined" ? undefined : navigator.storage as StorageManager & {
+      getDirectory?: () => Promise<FileSystemDirectoryHandle>;
+    };
+    if (typeof storage?.getDirectory === "function") {
+      const opfsRecords = await enumerateAndRemoveOpfsVault(storage, databaseId);
+      if (opfsRecords !== undefined) {
+        backends.push(Object.freeze({ backend: "opfs" as const, records: opfsRecords }));
+      }
+    }
+
+    return Object.freeze({
+      backends: Object.freeze(backends),
+      destroyedAuthority: backends.length > 0,
+    });
+  };
+
+  if (!locks) return destroy();
+  return new Promise((resolve, reject) => {
+    locks.request(lockName, { mode: "exclusive", ifAvailable: true }, async (held) => {
+      if (held === null) {
+        reject(new LocalDeviceDestructionInUseError());
+        return;
+      }
+      try {
+        resolve(await destroy());
+      } catch (error) {
+        reject(error);
+      }
+    }).catch(reject);
+  });
+}
+
+async function enumerateIndexedDbRecords(databaseName: string): Promise<number | undefined> {
+  return new Promise((resolve) => {
+    let request: IDBOpenDBRequest;
+    try {
+      request = indexedDB.open(databaseName);
+    } catch {
+      resolve(undefined);
+      return;
+    }
+    request.onerror = () => resolve(undefined);
+    request.onblocked = () => resolve(undefined);
+    request.onsuccess = async () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains("encrypted-objects")) {
+        // `indexedDB.open` just created a phantom empty database for a name
+        // that never existed; leave the origin exactly as it was found.
+        db.close();
+        await deleteIndexedDbDatabase(databaseName);
+        resolve(undefined);
+        return;
+      }
+      try {
+        const transaction = db.transaction("encrypted-objects", "readonly");
+        const count = transaction.objectStore("encrypted-objects").count();
+        transaction.oncomplete = () => {
+          db.close();
+          resolve(typeof count.result === "number" ? count.result : 0);
+        };
+        transaction.onerror = () => { db.close(); resolve(undefined); };
+        transaction.onabort = () => { db.close(); resolve(undefined); };
+      } catch {
+        db.close();
+        resolve(undefined);
+      }
+    };
+  });
+}
+
+function deleteIndexedDbDatabase(databaseName: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const request = indexedDB.deleteDatabase(databaseName);
+    request.onsuccess = () => resolve(true);
+    request.onerror = () => resolve(false);
+    request.onblocked = () => resolve(false);
+  });
+}
+
+async function enumerateAndRemoveOpfsVault(
+  storage: StorageManager & { getDirectory: () => Promise<FileSystemDirectoryHandle> },
+  partitionId: string,
+): Promise<number | "unenumerated" | undefined> {
+  let root: FileSystemDirectoryHandle;
+  let parent: FileSystemDirectoryHandle;
+  let base: FileSystemDirectoryHandle;
+  try {
+    root = await storage.getDirectory();
+    parent = await root.getDirectoryHandle(OPFS_ROOT);
+    base = await parent.getDirectoryHandle(validateOpaqueId(partitionId, "OPFS partition"));
+  } catch (error) {
+    if (isNotFound(error)) return undefined;
+    return "unenumerated";
+  }
+  let records = 0;
+  try {
+    for await (const entry of (base as OpfsDirectoryIterator).values()) {
+      if (entry.kind === "file") {
+        records += 1;
+      } else if (entry.kind === "directory") {
+        for await (const nested of (entry as OpfsDirectoryIterator & FileSystemDirectoryHandle).values()) {
+          if (nested.kind === "file") records += 1;
+        }
+      }
+    }
+  } catch {
+    return "unenumerated";
+  }
+  try {
+    await parent.removeEntry(validateOpaqueId(partitionId, "OPFS partition"), { recursive: true });
+  } catch {
+    // The enumeration answer is truthful only when the removal landed; the
+    // caller must not print a count for an authority that is still there.
+    return undefined;
+  }
+  return records;
+}
+
 export async function openLocalDeviceObjectStore(args: Readonly<{
   partition: string;
   key: WorkspaceRootKey;
