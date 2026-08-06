@@ -592,12 +592,15 @@ export const RELEASE_BUDGETS = Object.freeze({
   // negative margin, and gzip takes 674 KiB because 673 KiB gzip would have
   // left 34 B, below the 768-byte minifier-rename floor (1,058 B remain).
   //
-  // Re-measured at 2,184,376 B raw / 693,192 B gzip after the Vault
+  // Re-measured at 2,184,375 B raw / 693,163 B gzip after the Vault
   // reclamation machinery — the aged-supersession queue and bounded sweep in
   // the deferred pack, plus the Reclaim storage affordance and status sentence
-  // on the Vault route and in the entry chunk. 2,134 KiB raw leaves 840 B,
-  // above the aggregate's 768-byte floor; 677 KiB gzip would leave 51 B, so
-  // gzip takes one further whole step and leaves 1,075.
+  // on the Vault route and in the entry chunk. The claim states the floor
+  // across both build modes: the origin-inlined Docker variant measures one
+  // raw byte and twenty-nine gzip bytes under the config-free CI artifact.
+  // 2,134 KiB raw leaves 841 B, above the aggregate's 768-byte floor; 677 KiB
+  // gzip would leave 85 B, so gzip takes one further whole step and leaves
+  // 1,109.
   firstPartyJavaScriptAndWorkers: Object.freeze({ raw: 2134 * 1024, gzip: 678 * 1024 }),
   // isomorphic-git and xterm are mutually activated vendor engines with their
   // own per-pack caps. The pair now measures 672.33 KiB raw / 186.61 KiB gzip:
@@ -807,11 +810,13 @@ export const RELEASE_BUDGETS = Object.freeze({
   // journeys above plus their independently cached vendor runtimes. 2,797 KiB
   // raw would have left 717 B, below the 768-byte aggregate floor, so raw takes
   // 2,798 KiB and leaves 1,741 B; gzip takes 862 KiB and leaves 674 B.
-  // Re-measured at 2,811.69 KiB raw / 865.32 KiB gzip. The whole delta is the
+  // Re-measured at 2,811.69 KiB raw / 865.29 KiB gzip. The whole delta is the
   // Vault reclamation machinery above — nothing vendor moved — so the absolute
-  // backstop follows the first-party adjustment: 2,813 KiB raw leaves
-  // 1,341 B; 866 KiB gzip would have left 696 B, below the 768-byte floor, so
-  // gzip takes 867 KiB and leaves 1,720.
+  // backstop follows the first-party adjustment. The claim states the floor
+  // across both build modes: the origin-inlined Docker variant measures
+  // twenty-nine gzip bytes under the config-free CI artifact. 2,813 KiB raw
+  // leaves 1,341 B; 866 KiB gzip would have left 724 B, below the 768-byte
+  // floor, so gzip takes 867 KiB and leaves 1,748.
   totalJavaScriptAndWorkers: Object.freeze({ raw: 2813 * 1024, gzip: 867 * 1024 }),
   // The independently loaded offline shell worker is not application-bundle
   // startup cost. Keep it visible under a dedicated, deliberately small cap.
@@ -1014,9 +1019,11 @@ export const RELEASE_BUDGETS = Object.freeze({
   // until Workspace opens. The same pass moved the shared code scanner out of
   // the entry chunk into its own deferred `code-highlight` chunk, which is why
   // `entryJavaScript` falls 3.05 KiB raw in this build rather than rising.
-  // Re-measured on this build: 87,281 B raw / 27,905 B gzip, grown from the
-  // 86,284 B raw / 27,585 B gzip this comment recorded. The additional bytes
-  // are the editor's default soft-wrap path: a measured text twin keeps the
+  // Re-measured on this build: 87,281 B raw / 27,902 B gzip, grown from the
+  // 86,284 B raw / 27,585 B gzip this comment recorded. The claim states the
+  // floor across both build modes; the config-free CI artifact measures three
+  // gzip bytes more than this origin-inlined Docker variant. The additional
+  // bytes are the editor's default soft-wrap path: a measured text twin keeps the
   // logical line gutter aligned across visual continuation rows, and its
   // setting survives a workspace/profile reload. Both are Workspace code and
   // neither is reachable until Workspace opens, so first paint is untouched
