@@ -76,7 +76,9 @@ import { SUBAGENT_MAX_DEPTH_ENTRY_ID, SUBAGENT_MAX_DEPTH_SCOPE } from "./types";
 /** Terminal-preview bound so completed_without_reply notices cannot smuggle whole transcripts into the parent. */
 export const MAX_PREVIEW_CHARS = 512;
 /** Observe clamp bounds; mirror prime-agent normalizeObserveLimit / normalizeObserveMaxChars. */
+export const OBSERVE_DEFAULT_LIMIT = 8;
 export const OBSERVE_MAX_LIMIT = 50;
+export const OBSERVE_DEFAULT_MAX_CHARS = 800;
 export const OBSERVE_MIN_MAX_CHARS = 80;
 export const OBSERVE_MAX_MAX_CHARS = 2_000;
 /** The one sentence the family walk and prime-agent must agree on. */

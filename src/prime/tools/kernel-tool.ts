@@ -224,7 +224,13 @@ export function createPrimeExecuteCodeTool(
       const rendered = renderJobContent(result);
       return {
         content: rendered.content,
-        isError: result.outcome !== "completed",
+        /*
+         * isError stays absent on success: airship's ToolExecutionResult
+         * treats a missing flag as the success case (agent.ts builds the
+         * tool message from content alone), and a present-but-false flag
+         * is a second vocabulary the transcript audit never wrote.
+         */
+        ...(result.outcome !== "completed" ? { isError: true } : {}),
         metadata: {
           jobId: result.jobId,
           engine: result.engine,

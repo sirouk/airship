@@ -21,6 +21,7 @@ import type {
   KernelBridgeCallRequest,
   KernelBridgeCallResult,
   KernelBudgets,
+  KernelEngineDescription,
   KernelJobEvent,
   KernelJobResult,
   KernelJobSpec,
@@ -118,6 +119,25 @@ export class PrimeKernelHost {
 
   description(): { state: KernelState; engine: "javascript"; generation: number; queuedJobs: number } {
     return { state: this.state, engine: "javascript", generation: this.generation, queuedJobs: this.queue.length + (this.job ? 1 : 0) };
+  }
+
+  /*
+   * Uniform capability record shared with the pyodide engine so callers
+   * wired through engines.ts (createKernelEngine) can read either engine
+   * through one shape. describe() is additive: description() above remains
+   * the pre-existing surface, and no behavior anywhere else changes.
+   */
+  describe(): KernelEngineDescription {
+    return Object.freeze({
+      state: this.state,
+      engine: "javascript",
+      generation: this.generation,
+      queuedJobs: this.queue.length + (this.job ? 1 : 0),
+      workspaceAccess: "none",
+      persistence: "kernel-instance",
+      cancellation: "abort-signal-then-terminate-worker",
+      network: "absent-ambient; tool bridge only",
+    });
   }
 
   onEvent(listener: (event: KernelJobEvent) => void): () => void {
@@ -347,3 +367,10 @@ export class PrimeKernelHost {
   }
 }
 
+/**
+ * The kernel worker TrustedTypes policy, exported for the pyodide engine so
+ * both engines construct default workers under the exact same
+ * blob-only-minted-URL rule. The javascript path above keeps calling the
+ * local definition; this is an alias, not a second policy.
+ */
+export const kernelTrustedWorkerUrl: (url: string) => unknown = trustedWorkerUrl;

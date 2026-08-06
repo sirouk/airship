@@ -87,6 +87,16 @@ function modelVisiblePath(value: JsonValue | undefined, name: string): string {
  * whole lines from the head until the line budget *or* the byte budget
  * fires, never emit a partial line, and name the bound that fired.
  */
+/**
+ * The byte rule differs from upstream's break-before-crossing by one
+ * deliberate choice: the line that CROSSES the byte budget is included
+ * whole and the walk stops after it. A window that ends mid-line teaches
+ * the model to quote bytes that never existed, and a window that silently
+ * drops the alarm-tripping line is worse than one that overruns by less
+ * than a line — so the overrun is bounded to one complete line and the
+ * bound that fired is named "bytes" in the notice and metadata. The line
+ * budget still cuts exactly at maxLines.
+ */
 function truncateHeadLines(
   lines: readonly string[],
   maxLines: number,
@@ -105,9 +115,16 @@ function truncateHeadLines(
   let bytes = 0;
   let truncatedBy: "lines" | "bytes" = "lines";
   for (const [index, line] of lines.entries()) {
-    if (index >= maxLines) break;
+    if (index >= maxLines) {
+      truncatedBy = "lines";
+      break;
+    }
     const lineBytes = encoder.encode(line).byteLength + (index > 0 ? 1 : 0);
-    if (bytes + lineBytes > maxBytes) {
+    if (bytes > maxBytes) {
+      // One complete line of overrun, then the walk stops: never a
+      // partial line, and the bound that fired is named "bytes".
+      kept.push(line);
+      bytes += lineBytes;
       truncatedBy = "bytes";
       break;
     }

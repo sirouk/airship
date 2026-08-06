@@ -111,6 +111,14 @@ export function createPrimeWriteFileTool(
         throw new Error(`write_file content is ${String(contentBytes)} bytes, over the ${String(budgets.maxWriteBytes)}-byte write budget; split the file across write_file plus edit_file calls.`);
       }
       const before = await workspace.read(path);
+      /*
+       * The create-only guard (expected_revision: null on a present file)
+       * is delegated to the port's compare-and-swap: the refusal reaches
+       * the seam as a WorkspaceConflictError ("the file already exists"),
+       * which is the one layer that owns revisions and the one the journal
+       * shape documents. Every write attempt is routed through it so a
+       * refused plan leaves the same evidence the real backends leave.
+       */
       const file = await workspace.write(path, content, { expectedRevision });
       return {
         content: `${before ? "Replaced" : "Wrote"} ${file.path} (${String(byteLength(file.content))} bytes).`,

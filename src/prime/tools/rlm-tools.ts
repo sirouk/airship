@@ -27,26 +27,18 @@
  */
 
 import type { JsonValue, Tool, ToolExecutionResult } from "../../core/contracts";
-import { randomUuid } from "../../core/id";
 import { objectArguments, requiredString } from "../../tools/schema";
 import type { PrimeAgentMessage, PrimeAgentMessageReceipt, PrimeSubagentHandle } from "../runtime/types-prime";
 import {
   canonicalPrimeAgentName,
   MAX_AGENT_MESSAGE_CHARS,
+  MAX_PENDING_AGENT_MESSAGES,
   MAX_SPAWN_PROMPT_CHARS,
   PRIME_MESSAGE_BURST_CAPACITY,
   PRIME_MESSAGE_REFILL_MS,
 } from "../runtime/types-prime";
 import type { PrimeAgentRegistry } from "../subagents/registry";
-import { MAX_PENDING_AGENT_MESSAGES } from "../runtime/types-prime";
-import {
-  OBSERVE_MAX_LIMIT,
-  OBSERVE_MAX_MAX_CHARS,
-  OBSERVE_MIN_MAX_CHARS,
-} from "../subagents/registry";
-/** Defaults mirror upstream agent-observe.ts: limit 8, maxChars 800 (validation bounds live in the registry). */
-export const OBSERVE_DEFAULT_LIMIT = 8;
-export const OBSERVE_DEFAULT_MAX_CHARS = 800;
+import { OBSERVE_MAX_LIMIT, OBSERVE_MAX_MAX_CHARS, OBSERVE_MIN_MAX_CHARS } from "../subagents/registry";
 import type { HarnessStore } from "../harness/store";
 import type { HarnessEntry, HarnessEntryKind, HarnessScope } from "../harness/types";
 
@@ -64,6 +56,10 @@ export type PrimeRlmAgentDeps = Readonly<{
   self: PrimeRlmSelfIdentity;
   registry: PrimeAgentRegistry;
 }>;
+
+/** Observe defaults, mirroring prime-agent's normalizeObserveLimit/normalizeObserveMaxChars defaults (the registry exports only the clamps). */
+const OBSERVE_DEFAULT_LIMIT = 8;
+const OBSERVE_DEFAULT_MAX_CHARS = 800;
 
 /** Structured reach refusal metadata, shared by agent_message and agent_observe. */
 type ReachRefusal = Readonly<{ isError: true; content: string; metadata: JsonValue }>;
@@ -89,11 +85,14 @@ function resolveFamilyTarget(
       ? "parent"
       : handle.parentId === deps.self.id ? "child" : "sibling";
   const candidates = roster.filter((handle) => roleOf(handle) === address.role);
-  const target = candidates.find((handle) =>
-    address.id !== undefined ? handle.id === address.id
-      : address.name !== undefined ? handle.name === address.name
-      : false,
-  );
+  /* The parent is unambiguous: exactly one roster row is the parent, so no id/name narrows it. */
+  const target = address.role === "parent"
+    ? candidates[0]
+    : candidates.find((handle) =>
+      address.id !== undefined ? handle.id === address.id
+        : address.name !== undefined ? handle.name === address.name
+        : false,
+    );
   if (!target) {
     const reachable = candidates.map((handle) => `${handle.name} (${handle.id})`);
     const selfHasNone = address.role === "parent"
@@ -622,7 +621,7 @@ function parseSchedule(value: unknown): PrimeHeartbeatSchedule | Readonly<{ erro
 }
 
 function defaultRandomHex8(): string {
-  return randomUuid().replace(/-/gu, "").slice(0, 8);
+  return globalThis.crypto.randomUUID().replace(/-/gu, "").slice(0, 8);
 }
 
 export function createPrimeRlmHeartbeatTool(deps: PrimeHeartbeatDeps): Tool {
@@ -857,22 +856,23 @@ export function createPrimeHarnessTool(store: HarnessStore): Tool {
         return { content: JSON.stringify({ scope, kind, entries, count: entries.length }, null, 2), metadata: { scope, kind, count: entries.length } };
       }
 
-      const id = optionalString(args, "id");
+      const idValue = optionalString(args, "id");
       if (action === "get" || action === "delete" || action === "update") {
-        if (!id) throw new Error(`prime_harness ${action} requires id.`);
+        if (!idValue) throw new Error(`prime_harness ${action} requires id.`);
       }
+      const id = idValue ?? "";
 
       if (action === "get") {
-        const entry = await store.get(scope, kind, id ?? "");
-        if (!entry) return { content: `No ${kind} entry ${JSON.stringify(id)} in ${scope} scope.`, isError: true, metadata: { scope, kind, id: id ?? null, found: false } };
+        const entry = await store.get(scope, kind, id);
+        if (!entry) return { content: `No ${kind} entry ${JSON.stringify(id)} in ${scope} scope.`, isError: true, metadata: { scope, kind, id, found: false } };
         return { content: JSON.stringify(entry, null, 2), metadata: { entry: entry as unknown as JsonValue } };
       }
 
       if (action === "delete") {
         const expectedVersion = optionalInteger(args, "expected_version");
-        const removed = await store.delete(scope, kind, id ?? "", expectedVersion !== undefined ? { expectedVersion } : {});
-        if (!removed) return { content: `No ${kind} entry ${JSON.stringify(id)} in ${scope} scope to delete.`, isError: true, metadata: { scope, kind, id: id ?? null, deleted: false } };
-        return { content: `Deleted ${kind} entry ${JSON.stringify(id)} from ${scope} scope.`, metadata: { scope, kind, id: id ?? null, deleted: true } };
+        const removed = await store.delete(scope, kind, id, expectedVersion !== undefined ? { expectedVersion } : {});
+        if (!removed) return { content: `No ${kind} entry ${JSON.stringify(id)} in ${scope} scope to delete.`, isError: true, metadata: { scope, kind, id, deleted: false } };
+        return { content: `Deleted ${kind} entry ${JSON.stringify(id)} from ${scope} scope.`, metadata: { scope, kind, id, deleted: true } };
       }
 
       if (action === "create") {
@@ -890,7 +890,7 @@ export function createPrimeHarnessTool(store: HarnessStore): Tool {
         }
         try {
           const entry = await store.create(scope, {
-            ...(id !== undefined ? { id } : {}),
+            ...(idValue !== undefined ? { id: idValue } : {}),
             kind,
             title,
             content,
@@ -935,7 +935,7 @@ export function createPrimeHarnessTool(store: HarnessStore): Tool {
       }
       const expectedVersion = optionalInteger(args, "expected_version");
       try {
-        const entry = await store.update(scope, kind, id ?? "", patch, expectedVersion !== undefined ? { expectedVersion } : {});
+        const entry = await store.update(scope, kind, id, patch, expectedVersion !== undefined ? { expectedVersion } : {});
         return {
           content: `Updated ${kind} entry ${JSON.stringify(entry.id)} in ${entry.scope} scope (version ${String(entry.version)}).`,
           metadata: { entry: entryView(entry), previousVersion: expectedVersion ?? null } satisfies JsonValue,

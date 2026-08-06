@@ -232,9 +232,8 @@ describe("PrimeAgentRouter observe", () => {
     const childId = registry.list()[0]?.id as string;
     expect(() => registry.route.recentMessages(childId, 8, 800)).not.toThrow();
 
-    parent.sink.setPending(0);
-    // uncle is observable-only namespace-wise but unreachable; name the rule.
-    void uncle.node.recorder;
+    // The uncle is a real node but unreachable: observe names the rule.
+    expect(uncle.node.id).toBe("unc");
     expect(() => registry.route.recentMessages("uncle0", 8, 800)).toThrow(new RegExp(AGENT_FAMILY_REACH_ERROR));
     // Attached node with no recorder is a named failure, not a silent empty page.
     registry.attachNode({ ...parent.node, id: "nr", name: "no-recorder", parentId: "owner", recorder: undefined });

@@ -17,11 +17,11 @@ const USAGE_ZERO = {
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
 
-function createModel(overrides: Partial<Model<"test-api">> = {}): Model<"test-api"> {
+function createModel(overrides: Partial<Model<string>> = {}): Model<string> {
   return {
     id: "m1",
     name: "m1",
-    api: "test-api" as "test-api" & string,
+    api: "test-api",
     provider: "test-provider",
     baseUrl: "https://example.com",
     reasoning: true,
@@ -30,7 +30,7 @@ function createModel(overrides: Partial<Model<"test-api">> = {}): Model<"test-ap
     contextWindow: 1000,
     maxTokens: 1000,
     ...overrides,
-  } as Model<"test-api">;
+  };
 }
 
 function assistant(content: AssistantMessage["content"], overrides: Partial<AssistantMessage> = {}): AssistantMessage {
@@ -49,6 +49,15 @@ function assistant(content: AssistantMessage["content"], overrides: Partial<Assi
 
 const user = (content: string | ({ type: "text"; text: string } | ImageContent)[]): Message =>
   ({ role: "user", content, timestamp: 0 }) as Message;
+
+const toolResult = (toolCallId: string, toolName: string, text: string, isError = false): ToolResultMessage => ({
+  role: "toolResult",
+  toolCallId,
+  toolName,
+  content: [{ type: "text", text }],
+  isError,
+  timestamp: 2,
+});
 
 describe("transformMessages", () => {
   it("keeps thinking blocks with signatures for the exact same model triple", () => {
@@ -83,18 +92,11 @@ describe("transformMessages", () => {
   });
 
   it("normalizes tool call ids through the map and rewrites matching tool results", () => {
-    const model = createModel({ provider: "other-provider" }); // different provider -> cross-provider ids normalized
+    const model = createModel({ provider: "other-provider" });
     const messages: Message[] = [
       user("q"),
       assistant([{ type: "toolCall", id: "call/odd+chars==", name: "read", arguments: {} }]),
-      {
-        role: "toolResult",
-        toolCallId: "call/odd+chars==",
-        toolName: "read",
-        content: [{ type: "text", text: "ok" }],
-        isError: false,
-        timestamp: 2,
-      } satisfies ToolResultMessage,
+      toolResult("call/odd+chars==", "read", "ok"),
     ];
     const normalize = (id: string) => id.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64);
     const out = transformMessages(messages, model, normalize);
@@ -105,19 +107,13 @@ describe("transformMessages", () => {
 
   it("does not rewrite ids for same-model tool calls", () => {
     const model = createModel();
+    const normalize = (id: string) => id.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64);
     const messages: Message[] = [
       user("q"),
       assistant([{ type: "toolCall", id: "toolu_fine", name: "read", arguments: {} }]),
-      {
-        role: "toolResult",
-        toolCallId: "toolu_fine",
-        toolName: "read",
-        content: [{ type: "text", text: "ok" }],
-        isError: false,
-        timestamp: 2,
-      } satisfies ToolResultMessage,
+      toolResult("toolu_fine", "read", "ok"),
     ];
-    const out = transformMessages(messages, model, (id) => id.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64));
+    const out = transformMessages(messages, model, normalize);
     expect((out[2] as ToolResultMessage).toolCallId).toBe("toolu_fine");
   });
 
@@ -165,26 +161,18 @@ describe("transformMessages", () => {
     const messages: Message[] = [
       user("q"),
       toolAssistant,
-      {
-        role: "toolResult",
-        toolCallId: "resolved",
-        toolName: "read",
-        content: [{ type: "text", text: "ok" }],
-        isError: false,
-        timestamp: 2,
-      } satisfies ToolResultMessage,
+      toolResult("resolved", "read", "ok"),
       user("interruption"),
       assistant([{ type: "toolCall", id: "tail-orphan", name: "bash", arguments: {} }]),
     ];
     const out = transformMessages(messages, model);
 
-    // boundary healing between the resolved result and the user message
+    // boundary healing: synthetic result lands before the interruption user message
     const healIdx = out.findIndex((m) => m.role === "toolResult" && (m as ToolResultMessage).toolCallId === "orphan");
     expect(healIdx).toBeGreaterThan(-1);
     const healed = out[healIdx] as ToolResultMessage;
     expect(healed).toMatchObject({ toolName: "grep", isError: true });
     expect(healed.content).toEqual([{ type: "text", text: "No result provided" }]);
-    // healed result lands before the interruption user message
     expect(out[healIdx + 1].role).toBe("user");
 
     // conversation-end healing for the tail orphan
