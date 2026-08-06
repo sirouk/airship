@@ -133,7 +133,9 @@ export class PrimeKernelHost {
   }
 
   async exec(spec: KernelJobSpec, listener?: (event: KernelJobEvent) => void): Promise<KernelJobResult> {
-    await this.start();
+    if (!this.bootPromise || this.state === "failed" || this.state === "stopped") {
+      await this.start();
+    }
     const jobId = spec.jobId ?? this.randomId("kernel-job");
     if (spec.code.length > this.budgets.maxSourceChars) {
       return {
@@ -165,7 +167,7 @@ export class PrimeKernelHost {
         stdout: "", stderr: "", bridgeCalls: 0, wallMs: 0,
       };
       queued.resolve(result);
-      this.emit({ type: "cancelled", jobId, result });
+      this.emit({ type: "cancelled", jobId, result }, queued.listeners);
       return true;
     }
     if (this.job && this.job.jobId === jobId) {
@@ -189,15 +191,18 @@ export class PrimeKernelHost {
 
 
   private async bootWorker(): Promise<void> {
-    if (typeof Worker === "undefined" || typeof URL.createObjectURL !== "function") {
-      this.state = "failed";
-      throw new Error("The prime kernel requires browser Workers and URL.createObjectURL.");
+    let worker: KernelWorkerLike;
+    if (this.ports.workerFactory) {
+      worker = this.ports.workerFactory();
+    } else {
+      if (typeof Worker === "undefined" || typeof URL.createObjectURL !== "function") {
+        this.state = "failed";
+        throw new Error("The prime kernel requires browser Workers and URL.createObjectURL.");
+      }
+      const source = kernelWorkerSource(this.budgets);
+      const url = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
+      worker = new Worker(trustedWorkerUrl(url) as string, { name: "prime-kernel" }) as unknown as KernelWorkerLike;
     }
-    const source = kernelWorkerSource(this.budgets);
-    const url = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
-    const worker = this.ports.workerFactory
-      ? this.ports.workerFactory()
-      : (new Worker(trustedWorkerUrl(url) as string, { name: "prime-kernel" }) as unknown as KernelWorkerLike);
     this.worker = worker;
     this.state = "booting";
 
@@ -291,7 +296,7 @@ export class PrimeKernelHost {
     this.job = undefined;
     if (job) {
       job.resolve(result);
-      this.emit({ type: result.outcome === "completed" ? "completed" : result.outcome, jobId: result.jobId, result });
+      this.emit({ type: result.outcome === "completed" ? "completed" : result.outcome, jobId: result.jobId, result }, job.listeners);
     }
     this.state = "ready";
     this.dispatch();
@@ -315,7 +320,7 @@ export class PrimeKernelHost {
         stdout: "", stderr: "", bridgeCalls: 0, wallMs: 0,
       };
       job.resolve(result);
-      this.emit({ type: "crashed", jobId: job.jobId, result });
+      this.emit({ type: "crashed", jobId: job.jobId, result }, job.listeners);
     }
 
     for (const queued of this.queue.splice(0)) {
@@ -324,7 +329,7 @@ export class PrimeKernelHost {
         stdout: "", stderr: "", bridgeCalls: 0, wallMs: 0,
       };
       queued.resolve(result);
-      this.emit({ type: "cancelled", jobId: queued.jobId, result });
+      this.emit({ type: "cancelled", jobId: queued.jobId, result }, queued.listeners);
     }
 
     this.state = "failed";
@@ -335,9 +340,10 @@ export class PrimeKernelHost {
     void this.killWorker("Kernel worker crashed; the namespace was reset.");
   }
 
-  private emit(event: KernelJobEvent): void {
+  private emit(event: KernelJobEvent, jobListeners?: ((event: KernelJobEvent) => void)[]): void {
     for (const listener of this.globalListeners) listener(event);
-    if (this.job) for (const listener of this.job.listeners) listener(event);
+    const target = jobListeners ?? this.job?.listeners;
+    if (target) for (const listener of target) listener(event);
   }
 }
 
