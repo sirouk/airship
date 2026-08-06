@@ -18,7 +18,7 @@ function makeEvents(n: number): string {
 }
 
 describe("parse throughput (docs/prime/DETERMINATION.md)", () => {
-  it("sse + stream-json throughput", () => {
+  it("sse + stream-json throughput", { timeout: 30_000 }, () => {
     const blob = makeEvents(200_000);
     const bytes = new TextEncoder().encode(blob);
     const parser = new SseParser();

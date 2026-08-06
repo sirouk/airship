@@ -33,6 +33,7 @@
  * multi-level tree without weakening the singleton spawn scope.
  */
 
+import { randomUuid } from "../../core/id";
 import type { AssistantMessage, Usage } from "../ai/types";
 import type { AgentEvent, AgentMessage } from "../agent";
 import {
@@ -264,7 +265,7 @@ export class PrimeAgentRegistry {
     this.env = deps.env;
     this.modelResolver = deps.modelResolver;
     this.now = deps.now ?? (() => Date.now());
-    this.randomId = deps.randomId ?? (() => globalThis.crypto.randomUUID());
+    this.randomId = deps.randomId ?? (() => randomUuid());
     this.rateLimiter = new MessageRateLimiter(PRIME_MESSAGE_BURST_CAPACITY, PRIME_MESSAGE_REFILL_MS, this.now);
     if (!deps.owner.sink) {
       // Fail closed: without an owner sink the host-synthesized terminal

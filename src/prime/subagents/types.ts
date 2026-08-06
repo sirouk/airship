@@ -238,7 +238,7 @@ export interface PrimeAgentRegistryDeps {
   env?: Readonly<Record<string, string | undefined>>;
   modelResolver?: PrimeSubagentModelResolver;
   now?: () => number;
-  /** Deterministic id source for tests; defaults to crypto.randomUUID(). */
+  /** Deterministic id source for tests; defaults to randomUuid from core/id. */
   randomId?: () => string;
 }
 
