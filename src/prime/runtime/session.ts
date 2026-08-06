@@ -92,7 +92,7 @@ const OVER_WINDOW_LOOP_ALLOWANCE_TOKENS = RESERVED_RESPONSE_TOKENS * 2;
 /** Mirrors core/agent.ts DEFAULT_BYTES_PER_TOKEN; calibration is a named deferred seam. */
 const DEFAULT_BYTES_PER_TOKEN = 3.6;
 const MAX_OPERATION_ID_CHARS = 512;
-const UNSAFE_OPERATION_ID = /[-]/u;
+const UNSAFE_OPERATION_ID = /[\u0000-\u001F\u007F]/u;
 const KERNEL_NOTICE_NAMESPACE_RESET =
   "The prime kernel worker was terminated; its in-worker namespace was reset and every symbol kernel code defined is gone. " +
   "Subsequent kernel jobs start from an empty namespace.";
@@ -419,26 +419,31 @@ export class PrimeAgentSession {
   private async drain(): Promise<void> {
     if (this.driverBusy) return;
     this.driverBusy = true;
+    /*
+     * Entries settle only after driverBusy drops: resolving a turn's
+     * promise while the driver still looked busy had the caller's very
+     * next prompt racing a false "queued turn is still draining" refusal.
+     */
+    const settled: [entry: QueuedTurnEntry, outcome: { kind: "result"; result: PrimeTurnResult } | { kind: "error"; error: unknown }][] = [];
     try {
       for (;;) {
         if (this.disposed) break;
         const entry = this.steerQueue.shift() ?? this.followUpQueue.shift() ?? this.promptQueue.shift();
         if (!entry) break;
-        await this.runTurnEntry(entry);
+        try {
+          settled.push([entry, { kind: "result", result: await this.runTurn(entry) }]);
+        } catch (error) {
+          settled.push([entry, { kind: "error", error }]);
+        }
       }
     } finally {
       this.driverBusy = false;
+      for (const [entry, outcome] of settled) {
+        if (outcome.kind === "result") entry.resolve(outcome.result);
+        else entry.reject(outcome.error);
+      }
       const waiters = this.idleWaiters.splice(0);
       for (const resolve of waiters) resolve();
-    }
-  }
-
-  private async runTurnEntry(entry: QueuedTurnEntry): Promise<void> {
-    try {
-      const result = await this.runTurn(entry);
-      entry.resolve(result);
-    } catch (error) {
-      entry.reject(error);
     }
   }
 
@@ -1228,7 +1233,14 @@ export class PrimeAgentSession {
         (event.type === "turn.failed" || event.type === "turn.cancelled")
       ).at(-1);
     }
-    const eventsNow = await this.refreshEvents();
+    /*
+     * Full read at settle, replacing the incremental cache: kernel-bridge
+     * and sideband evidence lands in the journal through paths that never
+     * touch this cache, and PrimeTurnResult.events must be the complete
+     * post-settle journal — the same read the audit would do.
+     */
+    const eventsNow = await this.options.journal.readEvents(this.options.sessionId, 0);
+    this.eventsCache = eventsNow;
     const payload = (terminal?.payload ?? undefined) as { error?: string } | undefined;
     if (turn.terminalKind === "completed") {
       return {

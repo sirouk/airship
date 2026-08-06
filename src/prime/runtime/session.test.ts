@@ -145,6 +145,7 @@ function makeKernelBridgeWorker(): { worker: ScriptedKernelWorker } {
     message: [] as ((event: { data?: unknown }) => void)[],
     error: [] as ((event: { message?: string }) => void)[],
   };
+  let readyAnnounced = false;
   const worker: ScriptedKernelWorker = {
     emit(message: unknown) {
       for (const listener of listeners.message) listener({ data: message });
@@ -183,7 +184,14 @@ function makeKernelBridgeWorker(): { worker: ScriptedKernelWorker } {
       // Scripted workers do not hold resources.
     },
     addEventListener(type: string, listener: (event: never) => void) {
-      if (type === "message") listeners.message.push(listener as (event: { data?: unknown }) => void);
+      if (type === "message") {
+        listeners.message.push(listener as (event: { data?: unknown }) => void);
+        // The host waits for exactly one ready handshake after boot.
+        if (!readyAnnounced) {
+          readyAnnounced = true;
+          queueMicrotask(() => worker.emit({ type: "ready", engine: "javascript" }));
+        }
+      }
       if (type === "error") listeners.error.push(listener as (event: { message?: string }) => void);
     },
     removeEventListener(type: string, listener: (event: never) => void) {
@@ -331,7 +339,7 @@ describe("PrimeAgentSession", () => {
     }));
     const contextPolicy = createSessionContextPolicy({
       contextWindowTokens: 2_048,
-      contextWindowSource: { kind: "runtime-config", label: "test-window" },
+      source: { kind: "runtime-config", label: "test-window" },
     });
     const fixture = await makeFixture({ tools: [bigRead], contextPolicy });
     fixture.registration.setResponses([
@@ -413,7 +421,6 @@ describe("PrimeAgentSession", () => {
     expect(second.outcome).toBe("completed");
     expect(eventsOfType(second.events, "turn.cancelled")).toHaveLength(1);
   });
-});
 
   it("t5a: the maxSteps cap journals turn.failed naming the step limit before opening another request", async () => {
     const lookup = makeStubTool("lookup", "read", async () => ({ content: "ok" }));
@@ -578,6 +585,7 @@ describe("PrimeAgentSession", () => {
     expect(jobStarted).toHaveLength(1);
     expect(payloadRecord(jobStarted[0]!).jobId).toBe("prime-exec-kernel-call-1");
 
+    console.log("DBG4.4 events:", result.events.map((event) => `${event.type}:${event.operationId ?? ""}`).join(" | "));
     const bridgeApproved = eventsOfType(result.events, "prime.kernel.tool.approved");
     expect(bridgeApproved).toHaveLength(1);
     expect(bridgeApproved[0]!.operationId).toBe("prime-kernel:prime-exec-kernel-call-1:0");
