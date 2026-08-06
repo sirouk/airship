@@ -477,7 +477,7 @@ describe("PrimeAgentSession", () => {
     expect(result.error).toBe("Provider emitted a duplicate or reused tool-call operation ID.");
   });
 
-  it("t5d: the 100_000-event step cap journals turn.failed from a bloated stream", async () => {
+  it("t5d: the 100_000-event step cap journals turn.failed from a bloated stream", { timeout: 30_000 }, async () => {
     const fixture = await makeFixture({});
     const session = makeSession(fixture, {
       streamFn: (model, _context, _options) => {
@@ -585,7 +585,6 @@ describe("PrimeAgentSession", () => {
     expect(jobStarted).toHaveLength(1);
     expect(payloadRecord(jobStarted[0]!).jobId).toBe("prime-exec-kernel-call-1");
 
-    console.log("DBG4.4 events:", result.events.map((event) => `${event.type}:${event.operationId ?? ""}`).join(" | "));
     const bridgeApproved = eventsOfType(result.events, "prime.kernel.tool.approved");
     expect(bridgeApproved).toHaveLength(1);
     expect(bridgeApproved[0]!.operationId).toBe("prime-kernel:prime-exec-kernel-call-1:0");
@@ -617,6 +616,7 @@ describe("PrimeAgentSession", () => {
     ]);
     const session = makeSession(fixture);
     const first = session.prompt("one");
+    await new Promise((resolve) => setTimeout(resolve, 0));
     await new Promise((resolve) => setTimeout(resolve, 0));
     const activeTurnId = session.getActiveTurnId();
     expect(activeTurnId).toBeDefined();

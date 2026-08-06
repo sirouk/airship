@@ -251,6 +251,20 @@ export async function runPrimeTurn(options: RunTurnOptions & { runtime?: PrimeRu
     throw new Error(`runtime selection mismatch: this session is prime-pinned; fork the session to use the airship-core runtime.`);
   }
 
+  // Seal-on-first-prime-run evidence pin: a session whose journal's first
+  // prime turn lands the seal first, so every later engine decision
+  // about this session reads the same durable evidence the Proof view reads.
+  if (selection === "prime" && !events.some(
+    (event) => event.type.startsWith("prime."),
+  )) {
+    await options.journal.append(options.sessionId, [
+      {
+        type: "prime.session.runtime.seal",
+        payload: { runtime: "prime", pinnedBy: "prime", at: new Date().toISOString() },
+      },
+    ]);
+  }
+
   const manifest = (await options.journal.getSession(options.sessionId))?.manifest;
   if (!manifest) throw new Error(`session ${options.sessionId} does not exist in this journal`);
   if (manifest.providerId && options.transport?.id && manifest.providerId !== options.transport.id) {

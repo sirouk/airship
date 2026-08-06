@@ -545,6 +545,15 @@ export class PrimeAgentSession {
     for (const event of this.eventsCache) {
       if (event.operationId) this.reservedOperationIds.add(event.operationId);
     }
+    /*
+     * Durable runtime-kind evidence: the gate (runtime.ts) classifies
+     * sessions by the presence of prime.* records, so custody has to be
+     * written once, beside the transcript — a plain prime turn otherwise
+     * produces only airship vocabulary and looks airship-core forever.
+     */
+    await this.appendSideband([
+      noticeDraft(`The prime runtime took custody of session ${this.options.sessionId}.`),
+    ]);
   }
 
   /** Incremental refresh after the last sequence this session has seen. */
