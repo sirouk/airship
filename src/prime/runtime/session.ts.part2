@@ -1,0 +1,164 @@
+
+export class PrimeAgentSession {
+  private readonly options: PrimeSessionOptions;
+  private readonly agent: Agent;
+  private kernel?: PrimeKernelHost;
+  private kernelBridge?: KernelToolBridge;
+
+  private eventsCache: DurableEvent[] = [];
+  private turnId?: string;
+  private turnIndex = 0;
+  private stepIndex = 0;
+  private stepEventCount = 0;
+  private pendingStepRequestDigest: string | undefined;
+  private pendingStepRequestId: string | undefined;
+  private lastCanonicalMessages: CanonicalMessage[] = [];
+  private finalAssistant?: AssistantMessage;
+  private finalText = "";
+  private remainingToolOutputBytes: number | undefined;
+  private turnAbort = new AbortController();
+  private sessionAbort = new AbortController();
+  private sessionOperationIds = new Set<string>();
+  private reviewDeniedIds = new Set<string>();
+  private reviewFailedIds = new Set<string>();
+  private repeatCounts = new Map<string, number>();
+  private repeatWarnings = new Set<string>();
+  private usageTotal: Usage = primeZeroUsage();
+  private aborted = false;
+  private disposed = false;
+
+  /** Named max-steps guard; set at construction. */
+  private readonly maxStepsLimit: number;
+
+  constructor(options: PrimeSessionOptions) {
+    this.options = options;
+    this.maxStepsLimit = options.maxSteps ?? PRIME_DEFAULT_MAX_STEPS;
+    this.agent = new Agent({
+      streamFn: this.streamFn(),
+      sessionId: options.sessionId,
+      getApiKey: options.getApiKey,
+    });
+    this.agent.subscribe((event) => this.onAgentEvent(event));
+  }
+
+  get id(): string { return this.options.sessionId; }
+  get manifest(): SessionManifest { return this.options.manifest; }
+  get agentLoop(): Agent { return this.agent; }
+  getUsageTotals(): Usage { return this.usageTotal; }
+  getActiveTurnId(): string | undefined { return this.turnId; }
+  getKernelHost(): PrimeKernelHost | undefined { return this.kernel; }
+
+  private streamFn(): StreamFn {
+    if (this.options.streamFn) return this.instrumentStreamFn(this.options.streamFn);
+    if (this.options.transport) {
+      return this.instrumentStreamFn(
+        createTransportForPrimeModel(this.options.model, this.options.transport, { onReceipt: this.options.onReceipt }),
+      );
+    }
+    return this.instrumentStreamFn(registryStreamSimple);
+  }
+
+  /**
+   * Per-step journal work that must land BEFORE a provider request starts:
+   * write inference.started with the airship requestDigest formula over the
+   * exact canonical message list computed by convertToLlm (the journal's
+   * materialized history, which is what the loop will actually pay for).
+   */
+  private instrumentStreamFn(under: StreamFn): StreamFn {
+    return async (model, context, options) => {
+      await this.prepareStepRequest();
+      return under(model, context, options);
+    };
+  }
+
+  private async prepareStepRequest(): Promise<void> {
+    const turnId = this.turnId;
+    if (!turnId) return;
+    const requestId = randomUuid();
+    const idempotencyKey = `${this.options.sessionId}:${turnId}:${this.stepIndex}`;
+    const requestDigest = await sha256(
+      stableStringify({
+        model: this.options.manifest.model,
+        systemPromptDigest: this.options.manifest.systemPromptDigest,
+        messages: this.lastCanonicalMessages,
+        tools: this.options.manifest.tools,
+        idempotencyKey,
+      } as unknown as JsonValue),
+    );
+    this.pendingStepRequestId = requestId;
+    this.pendingStepRequestDigest = requestDigest;
+    this.stepEventCount = 0;
+    await this.appendJournal([
+      {
+        type: "inference.started",
+        turnId,
+        operationId: requestId,
+        payload: {
+          step: this.stepIndex,
+          providerId: this.options.manifest.providerId,
+          model: this.options.manifest.model,
+          requestDigest,
+          idempotencyKey,
+          ...(this.options.transport ? { posture: this.options.transport.posture } : {}),
+        },
+      },
+    ]);
+    this.stepIndex += 1;
+    if (this.stepIndex > this.maxStepsLimit) {
+      throw new Error(`prime turn step cap exceeded (${this.maxStepsLimit} steps); the context is too large to continue safely — start a new turn.`);
+    }
+  }
+
+  /**
+   * The journal parity seam: rebuild the materialized canonical history
+   * from the journal before every provider request, exactly like
+   * core/agent.ts#runTurn. convertToLlm is the only call-side the loop uses
+   * to assemble a Context, so computing it here guarantees byte parity.
+   */
+  private convertToLlm = async (): Promise<any[]> => {
+    const events = await this.readJournalEvents();
+    this.lastCanonicalMessages = materializeMessages(events, {
+      allowEmbeddedContext: this.options.manifest.contextPolicy?.compression ? true : undefined,
+      allowSelectedContext: this.options.manifest.protocolVersion === 2 && this.options.manifest.turnContext !== "disabled" ? true : undefined,
+    });
+    return this.canonicalToPrimeMessages(this.lastCanonicalMessages);
+  };
+
+  private canonicalToPrimeMessages(canonical: CanonicalMessage[]): AgentMessage[] {
+    const out: AgentMessage[] = [];
+    for (const message of canonical) {
+      if (message.role === "user") {
+        out.push({ role: "user", content: message.content, timestamp: Date.parse(message.timestamp) });
+      } else if (message.role === "assistant") {
+        const content: Array<unknown> = [];
+        if (message.content) content.push({ type: "text", text: message.content });
+        for (const toolCall of message.toolCalls ?? []) {
+          content.push({ type: "toolCall", id: toolCall.id, name: toolCall.name, arguments: toolCall.arguments as Record<string, unknown> });
+        }
+        out.push({
+          role: "assistant", content: [] as never[], fullContent: content as never[], mapping: "canonical",
+          roleTag: "assistant", text: message.content, toolCalls: (message.toolCalls ?? []) as never[],
+          role: "assistant", content: content as never[],
+        } as unknown as AgentMessage);
+      } else if (message.role === "tool") {
+        out.push({
+          role: "toolResult",
+          toolCallId: message.toolCallId,
+          toolName: (message as unknown as { toolName?: string }).toolName ?? "unknown",
+          content: [{ type: "text", text: message.content }],
+          isError: false,
+          timestamp: Date.parse(message.timestamp),
+        } as AgentMessage);
+      }
+    }
+    return out as AgentMessage[];
+  }
+
+  private readJournalEventsFromCache = async (): Promise<DurableEvent[]> => {
+    const tail = this.eventsCache.length > 0 ? this.eventsCache[this.eventsCache.length - 1] : undefined;
+    const events = await this.options.journal.getSession
+      ? await this.options.journal.getSession(this.options.sessionId).then(() => this.options.journal.readEvents(this.options.sessionId))
+      : await this.options.journal.readEvents(this.options.sessionId);
+    this.eventsCache = events;
+    return events;
+  };

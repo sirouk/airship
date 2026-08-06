@@ -1,0 +1,97 @@
+/**
+ * The prime session authority: one prime agent bound to one airship
+ * session journal. Translations of the ported prime-agent loop into
+ * byte-identical airship turn protocol, with receipts and guardrails
+ * preserved exactly.
+ *
+ * Journal rule (never bent): everything the provider sees is journaled
+ * first; the journal is the sole transcript authority across steps;
+ * every turn ends with exactly one durable terminal event; terminal
+ * appends are signal-neutral. Prime-only facts (kernel jobs, harness
+ * records, agent messages, goals) land under the prime.* namespace,
+ * beside the transcript, never inside materialized provider history.
+ */
+
+import { Agent } from "../agent";
+import type { AgentEvent, AgentMessage, StreamFn } from "../agent";
+import { streamSimple as registryStreamSimple } from "../ai/stream";
+import { createTransportForPrimeModel } from "../transport-adapter";
+import type { Api, AssistantMessage, Model, SimpleStreamOptions, Usage } from "../ai/types";
+import { approvalProvenance } from "../../approvals/modes";
+import { boundToolResultContent, materializeMessages } from "../../core/agent";
+import type {
+  AgentSignal,
+  ApprovalPolicy,
+  CanonicalImageInput,
+  CanonicalMessage,
+  JsonValue,
+  SessionManifest,
+  ToolCall as AirshipToolCall,
+  ToolContext,
+} from "../../core/contracts";
+import { sha256, stableStringify, toolArgumentsDigest } from "../../core/hash";
+import { randomUuid } from "../../core/id";
+import type { DurableEvent, EventDraft, EventJournal } from "../../core/journal";
+import { createLocalReceipt, finalizeProviderReceipt } from "../../receipts/types";
+import type { ConversationReceipt } from "../../receipts/types";
+import type { ToolRegistry } from "../../tools/registry";
+import type { KernelBudgets, KernelJobResult, KernelJobSpec } from "../kernel/kernel-contract";
+import type { KernelBridgePort } from "../kernel/kernel-host";
+import { PrimeKernelHost } from "../kernel/kernel-host";
+import { KernelToolBridge } from "../kernel/tool-bridge";
+import { noticeDraft, PRIME_EVENT_TYPES } from "./prime-events";
+
+export const PRIME_MAX_TOOL_CALLS_PER_STEP = 64;
+export const PRIME_MAX_ASSISTANT_CHARS = 4 * 1_024 * 1_024;
+export const PRIME_MAX_STEP_EVENTS = 100_000;
+export const PRIME_DEFAULT_MAX_STEPS = 32;
+export const PRIME_REPEAT_WARN_AT = 2;
+export const PRIME_REPEAT_STOP_AT = 5;
+export const PRIME_TERMINATE_GRACE_MS = 500;
+
+export type PrimeTurnOutcome = "completed" | "failed" | "cancelled";
+
+export type PrimeTurnResult = Readonly<
+  | { turnId: string; outcome: "completed"; text: string; receipt: ConversationReceipt; events: DurableEvent[] }
+  | { turnId: string; outcome: "failed"; error: string; events: DurableEvent[] }
+  | { turnId: string; outcome: "cancelled"; reason: string; events: DurableEvent[] }
+>;
+
+export type PrimeSessionCheckpoint = Readonly<{
+  turnIndex: number;
+  usageTotal: Usage;
+  journalEventCount: number;
+  sessionId: string;
+}>;
+
+export type PrimeSessionOptions = Readonly<{
+  sessionId: string;
+  manifest: SessionManifest;
+  journal: EventJournal;
+  registry: ToolRegistry;
+  approvalPolicy: ApprovalPolicy;
+  model: Model<Api>;
+  streamFn?: StreamFn;
+  transport?: import("../../core/contracts").InferenceTransport;
+  onReceipt?: (receipt: ConversationReceipt) => void;
+  onSignal?: (signal: AgentSignal) => void;
+  getApiKey?: (provider: string) => Promise<string | undefined> | string | undefined;
+  getSystemPrompt?: () => string | Promise<string>;
+  maxSteps?: number;
+  kernelBudgets?: Partial<KernelBudgets>;
+  kernelWorkerFactory?: () => Worker;
+  turnBoundaryCheckpoint?: (checkpoint: PrimeSessionCheckpoint) => Promise<void>;
+  signal?: AbortSignal;
+}>;
+
+export function primeZeroUsage(): Usage {
+  return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
+}
+
+function emptyUsageLike(): Usage {
+  return primeZeroUsage();
+}
+
+function canonicalErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}

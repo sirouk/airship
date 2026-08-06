@@ -1,0 +1,212 @@
+
+  private reviewStepToolCalls(
+    turnId: string,
+    assistant: AssistantMessage,
+    toolCalls: Array<import("../ai/types").ToolCall>,
+  ): void {
+    for (const call of toolCalls) {
+      const context: ToolContext = {
+        sessionId: this.options.sessionId,
+        turnId,
+        operationId: call.id,
+        signal: this.turnAbort.signal,
+        capabilityTier: undefined,
+        onOutput: (chunk: { stream: "stdout" | "stderr" | "combined"; text: string }) => {
+          this.options.onSignal?.({ type: "tool-output", turnId, operationId: call.id, stream: chunk.stream, text: chunk.text });
+        },
+      };
+      let decision: "allow" | "deny";
+      let provenance: import("../../core/contracts").ApprovalProvenance | undefined;
+      try {
+        decision = this.options.registry.review(call.name, call.arguments as JsonValue, context, this.options.approvalPolicy);
+      } catch (error) {
+        provenance = approvalProvenance(this.options.approvalPolicy, context);
+        const message = canonicalErrorMessage(error) + this.guardrailNote(call, "reviewException", canonicalErrorMessage(error));
+        void this.appendJournal([
+          { type: "tool.failed", turnId, operationId: call.id, payload: { callId: call.id, name: call.name, content: message, approval: provenance ?? null } },
+        ]);
+        this.reviewFailedIds.add(call.id);
+        continue;
+      }
+      provenance = approvalProvenance(this.options.approvalPolicy, context);
+      if (decision === "deny") {
+        const note = this.guardrailNote(call, "denied", "Permission denied");
+        this.reviewDeniedIds.add(call.id);
+        void this.appendJournal([
+          {
+            type: "tool.denied",
+            turnId,
+            operationId: call.id,
+            payload: { callId: call.id, name: call.name, content: `Permission denied for ${call.name}.${note}`, approval: provenance ?? null },
+          },
+        ]);
+        continue;
+      }
+      void this.appendJournal([
+        { type: "tool.approved", turnId, operationId: call.id, payload: { callId: call.id, name: call.name, approval: provenance ?? null } },
+      ]);
+    }
+  }
+
+  private guardrailNote(
+    call: import("../ai/types").ToolCall,
+    reason: "denied" | "failed" | "reviewException",
+    errorText: string,
+  ): string {
+    const key = `${call.name}|${shortHashOf(call.name, call.arguments)}`;
+    const count = (this.repeatCounts.get(key) ?? 0) + 1;
+    this.repeatCounts.set(key, count);
+    if (count === PRIME_REPEAT_WARN_AT && !this.repeatWarnings.has(key)) {
+      this.repeatWarnings.add(key);
+      return `\n\n[prime guardrail]: exactly this call has failed ${count} times with the same shape; repair before retry.`;
+    }
+    if (count >= PRIME_REPEAT_STOP_AT) {
+      throw new Error(
+        `prime repeated-identical-failure guardrail hit at ${PRIME_REPEAT_STOP_AT} on "${call.name}"; stopping the turn, since every retry will cost the same.`,
+      );
+    }
+    if (reason === "failed" && count >= PRIME_REPEAT_WARN_AT) {
+      return `\n\n[prime guardrail]: ${reason} count ${count}; changing approach beats another retry.`;
+    }
+    return "";
+  }
+
+  private shortHashOf(name: string, argumentsValue: JsonValue): string {
+    return name + "|" + JSON.stringify(argumentsValue);
+  }
+
+  private async journalStepUsage(turnId: string, assistant: AssistantMessage): Promise<void> {
+    if (!assistant.usage) return;
+    await this.appendJournal([
+      {
+        type: "inference.usage",
+        turnId,
+        operationId: this.pendingStepRequestId ?? this.pendingStepRequestDigest ?? "unknown",
+        payload: {
+          providerId: this.options.manifest.providerId,
+          model: this.options.manifest.model,
+          input: assistant.usage.input,
+          output: assistant.usage.output,
+          cacheRead: assistant.usage.cacheRead,
+          cacheWrite: assistant.usage.cacheWrite,
+        },
+      },
+    ]);
+  }
+
+  private async journalToolResult(turnId: string, message: import("../ai/types").ToolResultMessage): Promise<void> {
+    const operationId = message.toolCallId;
+    if (this.reviewDeniedIds.has(operationId) || this.reviewFailedIds.has(operationId)) {
+      return;
+    }
+    const content = (message.content as Array<{ type?: string; text?: string }>)
+      .filter((block) => block.type === "text")
+      .map((block) => block.text ?? "")
+      .join("\n");
+    const bounded = boundToolResultContent(content, this.remainingToolOutputBytes);
+    if (this.remainingToolOutputBytes !== undefined) {
+      this.remainingToolOutputBytes = Math.max(0, this.remainingToolOutputBytes - bounded.bytes);
+    }
+    const guardrail = message.isError ? this.guardrailNote({ name: message.toolName, arguments: {} } as import("../ai/types").ToolCall, "failed", content) : "";
+    if (this.remainingToolOutputBytes !== undefined && guardrail.length > 0) {
+      this.remainingToolOutputBytes = Math.max(0, this.remainingToolOutputBytes - guardrail.length);
+    }
+    await this.appendJournal([
+      {
+        type: message.isError ? "tool.failed" : "tool.resulted",
+        turnId,
+        operationId,
+        payload: {
+          callId: operationId,
+          name: message.toolName,
+          content: bounded.content + guardrail,
+          isError: message.isError ?? false,
+          ...(bounded.truncated ? { contextBudgetTruncated: true, originalContentBytes: bounded.originalBytes, retainedContentBytes: bounded.bytes } : {}),
+        },
+      },
+    ]);
+  }
+
+  private async onAgentEnd(turnId: string, event: { messages?: AgentMessage[] }): Promise<void> {
+    const lastAssistant = this.finalAssistant;
+    const content = lastAssistant?.content ?? [];
+    const finalReason = lastAssistant?.stopReason ?? "error";
+
+    let terminal: EventDraft;
+    if (this.aborted) {
+      terminal = { type: "turn.cancelled", turnId, payload: { reason: "host aborted" } };
+    } else if (finalReason === "stop") {
+      const text = content
+        .filter((block): block is { type: "text"; text: string } => block.type === "text")
+        .map((block) => block.text).join("");
+      const responseDigest = await sha256(text);
+      const receipt = this.options.transport
+        ? finalizeProviderReceipt(
+            (this.options.onReceipt ? undefined : undefined) ?? createLocalReceipt({
+              sessionId: this.options.sessionId,
+              turnId,
+              provider: this.options.transport.id,
+              model: this.options.manifest.model,
+              requestDigest: this.pendingStepRequestDigest,
+              responseDigest,
+            }),
+            this.options.transport.id,
+            this.pendingStepRequestDigest ?? (await sha256(`pending-${turnId}`)),
+            responseDigest,
+          )
+        : createLocalReceipt({
+            sessionId: this.options.sessionId,
+            turnId,
+            provider: this.options.manifest.providerId,
+            model: this.options.manifest.model,
+            requestDigest: this.pendingStepRequestDigest,
+            responseDigest,
+          });
+      const assistantCompleted: EventDraft = {
+        type: "assistant.completed",
+        turnId,
+        operationId: this.pendingStepRequestId ?? this.pendingStepRequestDigest ?? "unknown",
+        payload: {
+          role: "assistant",
+          finishReason: "stop",
+          content: text,
+          ...(lastAssistant?.model ? { model: lastAssistant.model } : {}),
+          receipt,
+        },
+      };
+      await this.appendJournal([
+        assistantCompleted,
+        { type: "turn.completed", turnId, payload: { receiptId: receipt.receiptId } },
+      ]);
+      return;
+    } else if (finalReason === "aborted") {
+      terminal = { type: "turn.cancelled", turnId, payload: { reason: "aborted" } };
+    } else {
+      terminal = { type: "turn.failed", turnId, payload: { error: (lastAssistant as { errorMessage?: string })?.errorMessage ?? "requested turn failed" } };
+    }
+    await this.appendJournal([terminal]);
+    if (this.turnBoundaryCheckpoint) {
+      await this.turnBoundaryCheckpoint({
+        turnIndex: this.turnIndex,
+        usageTotal: this.usageTotal,
+        journalEventCount: this.eventsCache.length,
+        sessionId: this.options.sessionId,
+      });
+    }
+  }
+
+  private async appendJournal(drafts: readonly EventDraft[]): Promise<void> {
+    await this.options.journal.append(this.options.sessionId, drafts);
+    this.eventsCache.push(...drafts.map((draft: EventDraft) => ({ ...draft, sequence: this.eventsCache.length + 1, digest: "pending" } as unknown as DurableEvent)));
+  }
+
+  private accumulateUsage(assistant: AssistantMessage): void {
+    if (!assistant.usage) return;
+    this.usageTotal = {
+      input: this.usageTotal.input + assistant.usage.input,
+      output: this.usageTotal.output + assistant.usage.output,
+      cacheRead: this.usageTotal.cacheRead + assistant.usage.cacheRead,
+      cacheWrite: this.usageTotal.cacheWrite + assistant.usage.cacheWrite,
+      total: this.usageTotal.cost.total + assistant.usage.cost.total,
+    } as Usage;
+  }

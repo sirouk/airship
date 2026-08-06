@@ -27,6 +27,7 @@
  */
 
 import type { JsonValue, Tool, ToolExecutionResult } from "../../core/contracts";
+import { randomUuid } from "../../core/id";
 import { objectArguments, requiredString } from "../../tools/schema";
 import type { PrimeAgentMessage, PrimeAgentMessageReceipt, PrimeSubagentHandle } from "../runtime/types-prime";
 import {
@@ -621,7 +622,7 @@ function parseSchedule(value: unknown): PrimeHeartbeatSchedule | Readonly<{ erro
 }
 
 function defaultRandomHex8(): string {
-  return globalThis.crypto.randomUUID().replace(/-/gu, "").slice(0, 8);
+  return randomUuid().replace(/-/gu, "").slice(0, 8);
 }
 
 export function createPrimeRlmHeartbeatTool(deps: PrimeHeartbeatDeps): Tool {
