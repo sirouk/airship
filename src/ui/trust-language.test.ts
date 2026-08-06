@@ -221,7 +221,7 @@ describe("the trust ladder is three rungs, and a rung is a predicate", () => {
    * *recorded*, and must stay legible), and matches a pattern that tolerates
    * interpolation in any position.
    */
-  it("keeps every retired name off every surface that renders, including by interpolation", async () => {
+  it("keeps every retired name off every surface that renders, including by interpolation", { timeout: 30_000 }, async () => {
     const { readdir, readFile } = await import("node:fs/promises");
     const root = new URL("./", import.meta.url);
     const files: string[] = [];

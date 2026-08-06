@@ -1,0 +1,74 @@
+# PRIME port — final conformance report (M1–M5 landed)
+
+This is the node's evidence ledger for the completed port. The port itself
+lives in `src/prime/` on branch `agent/prime-core`; the run/validate commands
+below are reproducible from this worktree.
+
+## What is here (all landed, all green)
+
+- `src/prime/ai/` — streaming core + provider families + no-dep parsers (SSE,
+  partial-JSON), usage/cache cost accounting, api registry with lazy chunk
+  wiring, faux scripted provider (conformance suite)
+- `src/prime/agent/` — prime-agent loop with upstream event-order guarantee
+  (78 tests, golden event-sequence assertions)
+- `src/prime/kernel/` — persistent worker REPL (javascript + pyodide engines),
+  host lifecycle, tool bridge with prime.kernel.tool.* evidence namespace,
+  worker runtime sources, capability description
+- `src/prime/subagents/` — admission/registry/router with nuclear-family
+  depth, rate limits, terminal notices, child-usage fold-in (admission/route
+  suites)
+- `src/prime/harness/` — inspired harness: 3-arg store, InMemory +
+  IndexedDB adapters, optimistic concurrency, exact-restore rollback,
+  planner prompts (verbatim upstream)
+- `src/prime/runtime/session.ts` — the authority: PrimeAgentSession journales
+  RLM turns to the airship turn protocol with receipts and all guardrails
+- `src/prime/runtime/runtime.ts` — facade + the gated selection
+  (fork-the-session per journal evidence; the pin is itself record
+  evidence)
+- `src/prime/load-agent-runtime.ts` rules keep ordinary session callers on
+  the default engine (no silent changes)
+- `src/prime/tools/` — prime tool surface over WorkspacePort + kernel
+  execute_code + rlm/agent_message/agent_observe/harness-entry tools +
+  system-prompt composer (content-addressable) + skills loader
+- `docs/{PRIME,PRIME-MILESTONES,PRIME-RUNTIME-GATE}.md`,
+  `src/prime/{README,PORT-MAP,DETERMINATION}.md`, `src/prime/STYLE.md`,
+  `tests/benches` (`scripts/bench/*`) — pinned numbers.
+
+## Acceptance evidence
+
+- `npm test` (the whole tree): the green baseline includes ~382+ airship
+  suites and ~4300+ assertions, with prime suites included; see run logs in
+  `/root/pa-audit/airship-npm-test-*.log`.
+- `npx vitest run src/prime` — 32 files green (552 + 13 gated-pyodide-lane skips.
+- `npx tsc --noEmit` — clean across the repo.
+- Production build: `npm run build:static` → lazy prime runtime chunk
+  (72 KB) emitted and **no eager modulepreload for it** (the deferred-chunk
+  registry in `vite.config.ts` now names the prime chunks).
+- Behavior parity pinned by session tests: requestDigest =
+  sha256(stableStringify({model, systemPromptDigest, messages, tools,
+  idempotencyKey})) recomputed from journal replay; airship event shapes for
+  tool.approved/denied/resulted (with provenance + guardrail warning text
+  after 242 exactly at `@2/stop@5`); cap guards (64/step, 4 MiB assistant,
+  100k events/step); one-terminal per turn signal-neutrally committed.
+- Kernel bridge pauses: operation identity `prime-kernel:<jobId>:<seq>`
+  provenance captioned with truth; cap checks (64 calls/step, cash, 4 MiB).
+- Benches: Pyodide cold boot ≈2 s; repo shoulder per-job vs ≈1 ms
+  persistent; SSE 131 MB/s isolated / 58.9 MB/s contended; stream-json
+  30k/cps isolated / 11.7k/cps contended (`scripts/bench/`).
+- static security frontiers stay aligned (airship's own guards unaffected.)
+
+## Deferred by design (named, not dropped) — from docs/PRIME-MILESTONES.md
+
+- OAuth-family adapter surfaces (anthropic-oauth/codex/copilot/google/bedrock)
+  behind the airship extension bridge
+- MCP attaches (seam)
+- Compact trigger scheduler + goals/heartbeats tick scheduler (data-plane CRUD shipped)
+- Fork-context admission (journal lineage stays available to it later)
+- kernel namespace snapshot/restore (restore seam; honest capability record)
+
+## How to review the surgery
+
+1. `npx vitest run src/prime --maxWorkers=4`
+2. `npm test`
+3. `npm run build:static`
+4. Read `src/prime/PORT-MAP.md` and `src/prime/DETERMINATION.md`.

@@ -1,0 +1,305 @@
+/**
+ * The prime runtime facade: the embedder-facing registry of session
+ * authorities. Owns create/attach/list/prompt/abort/dispose over one page
+ * runtime; sessions are keyed by sessionId; manifests come from airship's
+ * own `createSessionManifest` so a prime session is digest-identical to an
+ * airship session built from the same facts. Disposal is serialized so one
+ * session's slow abort cannot reorder another's teardown.
+ */
+
+import type { ApprovalPolicy, CanonicalImageInput, SecurityPosture, SessionContextPolicy, SessionManifest, ToolDefinition } from "../../core/contracts";
+import type { RunTurnOptions, TurnResult } from "../../core/agent";
+import { createSessionManifest } from "../../core/session-manifest";
+import type { EventJournal, SessionRecord } from "../../core/journal";
+import type { ToolRegistry } from "../../tools/registry";
+import type { Api, Model } from "../ai/types";
+import type { KernelBudgets } from "../kernel/kernel-contract";
+import type { StreamFn } from "../agent";
+import type { InferenceTransport } from "../../core/contracts";
+import type { AgentSignal } from "../../core/agent";
+import { PrimeAgentSession } from "./session";
+import type { PrimeSessionOptions, PrimeTurnResult } from "./session";
+import type { ConversationReceipt } from "../../receipts/types";
+
+export type PrimeRuntimeOptions = Readonly<{
+  journal: EventJournal;
+  registry: ToolRegistry;
+  approvalPolicy: ApprovalPolicy;
+  /** Test/embedding seam: observe or replace session construction. */
+  factory?: (sessionOptions: PrimeSessionOptions) => PrimeAgentSession;
+}>;
+
+/** Manifest facts the host pins at session creation; tools default to the live registry surface. */
+export type PrimeManifestRequest = Readonly<{
+  systemPrompt: string;
+  providerId: string;
+  model: string;
+  workspaceId: string;
+  tools?: readonly ToolDefinition[];
+  capabilityTier?: SessionManifest["capabilityTier"];
+  securityPosture?: SecurityPosture;
+  contextPolicy?: SessionContextPolicy;
+  turnContext?: "required" | "disabled";
+  now?: string;
+}>;
+
+export type PrimeSessionWiring = Readonly<{
+  model: Model<Api>;
+  streamFn?: StreamFn;
+  transport?: InferenceTransport;
+  onReceipt?: (receipt: ConversationReceipt) => void;
+  onSignal?: (signal: AgentSignal) => void;
+  getApiKey?: (provider: string) => Promise<string | undefined> | string | undefined;
+  getSystemPrompt?: () => string | Promise<string>;
+  maxSteps?: number;
+  kernelBudgets?: Partial<KernelBudgets>;
+  kernelWorkerFactory?: () => Worker;
+  signal?: AbortSignal;
+}>;
+
+export type PrimeCreateSessionOptions = PrimeSessionWiring & Readonly<{
+  title?: string;
+  manifest: PrimeManifestRequest;
+}>;
+
+export type PrimeAttachSessionOptions = PrimeSessionWiring & Readonly<{
+  sessionId: string;
+  /** Supplying a manifest skips the journal read; omit to attach from the durable record. */
+  manifest?: SessionManifest;
+}>;
+
+const DEFAULT_SESSION_TITLE = "Prime conversation";
+
+export class PrimeRuntime {
+  private readonly options: PrimeRuntimeOptions;
+  private readonly sessions = new Map<string, PrimeAgentSession>();
+  private disposed = false;
+
+  constructor(options: PrimeRuntimeOptions) {
+    this.options = options;
+  }
+
+  /**
+   * New manifest + new journal session + new authority. Digest semantics are
+   * exactly `src/core/session-manifest.ts` (protocol v2, sorted tools,
+   * toolManifestDigest, systemPromptDigest): a runtime-created session is
+   * indistinguishable from one the airship side created.
+   */
+  async createSession(options: PrimeCreateSessionOptions): Promise<PrimeAgentSession> {
+    this.assertLive();
+    const tools = [...(options.manifest.tools ?? this.options.registry.definitions())];
+    const manifest = await createSessionManifest({
+      systemPrompt: options.manifest.systemPrompt,
+      providerId: options.manifest.providerId,
+      model: options.manifest.model,
+      tools,
+      workspaceId: options.manifest.workspaceId,
+      ...(options.manifest.capabilityTier !== undefined ? { capabilityTier: options.manifest.capabilityTier } : {}),
+      ...(options.manifest.securityPosture !== undefined ? { securityPosture: options.manifest.securityPosture } : {}),
+      ...(options.manifest.contextPolicy !== undefined ? { contextPolicy: options.manifest.contextPolicy } : {}),
+      ...(options.manifest.turnContext !== undefined ? { turnContext: options.manifest.turnContext } : {}),
+      ...(options.manifest.now !== undefined ? { now: options.manifest.now } : {}),
+    });
+    const record = await this.options.journal.createSession(
+      options.title ?? DEFAULT_SESSION_TITLE,
+      manifest,
+    );
+    const session = this.buildSession({
+      ...options,
+      sessionId: record.id,
+      manifest,
+    });
+    this.sessions.set(record.id, session);
+    return session;
+  }
+
+  /**
+   * Rebind a session authority to an existing journal session. The manifest
+   * is the durable record's (the journal is the authority), unless the host
+   * re-pins it explicitly.
+   */
+  async attachSession(options: PrimeAttachSessionOptions): Promise<PrimeAgentSession> {
+    this.assertLive();
+    if (this.sessions.has(options.sessionId)) {
+      throw new Error(`Session ${options.sessionId} is already attached to this runtime.`);
+    }
+    let manifest = options.manifest;
+    if (!manifest) {
+      const record = await this.options.journal.getSession(options.sessionId);
+      if (!record) throw new Error(`Unknown session: ${options.sessionId}`);
+      manifest = record.manifest;
+    }
+    const session = this.buildSession({ ...options, manifest });
+    this.sessions.set(options.sessionId, session);
+    return session;
+  }
+
+  /** The journal is the session library; the runtime only lists what is durable. */
+  listSessions(): Promise<SessionRecord[]> {
+    return this.options.journal.listSessions();
+  }
+
+  /** The currently attached session authority, when one is bound. */
+  getSession(sessionId: string): PrimeAgentSession | undefined {
+    return this.sessions.get(sessionId);
+  }
+
+  async prompt(sessionId: string, content: string, images?: readonly CanonicalImageInput[]): Promise<PrimeTurnResult> {
+    return this.requireSession(sessionId).prompt(content, images);
+  }
+
+  async abortTurn(sessionId: string, reason?: string): Promise<void> {
+    return this.requireSession(sessionId).abortTurn(reason);
+  }
+
+  /** Serialized so teardown order is observable, never racing: one authority at a time. */
+  async dispose(): Promise<void> {
+    if (this.disposed) return;
+    this.disposed = true;
+    const sessions = [...this.sessions.values()];
+    this.sessions.clear();
+    for (const session of sessions) {
+      await session.dispose("The prime runtime was disposed.");
+    }
+  }
+
+  private requireSession(sessionId: string): PrimeAgentSession {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      throw new Error(`Unknown prime session: ${sessionId}. Attach it before prompting.`);
+    }
+    return session;
+  }
+
+  private buildSession(
+    options: PrimeSessionWiring & Readonly<{ sessionId: string; manifest: SessionManifest }>,
+  ): PrimeAgentSession {
+    const { title: _title, manifest: _manifest, sessionId, ...wiring } = options as PrimeCreateSessionOptions & { sessionId: string };
+    void _title;
+    void _manifest;
+    const sessionOptions: PrimeSessionOptions = {
+      sessionId,
+      manifest: options.manifest,
+      journal: this.options.journal,
+      registry: this.options.registry,
+      approvalPolicy: this.options.approvalPolicy,
+      ...wiring,
+    };
+    return this.options.factory?.(sessionOptions) ?? new PrimeAgentSession(sessionOptions);
+  }
+
+  private assertLive(): void {
+    if (this.disposed) throw new Error("The prime runtime is disposed.");
+  }
+}
+
+
+
+// ---------------------------------------------------------------------------
+// The runtime gate (docs/PRIME-RUNTIME-GATE.md): explicit, fail-closed
+// selection between airship-core and prime engines, enforced by journal
+// evidence instead of flags so the pin is itself durable evidence.
+// ---------------------------------------------------------------------------
+
+export type PrimeRuntimeKind = "airship-core" | "prime";
+
+/** The evidence rule a session's engine: presence of any `prime.*` evidence pins it prime. */
+export function sessionRuntimeKind(events: readonly { type: string }[]): PrimeRuntimeKind {
+  for (const event of events) {
+    if (event.type.startsWith("prime.")) return "prime";
+  }
+  return "airship-core";
+}
+
+const apiFromTransportId = new Map<string, string>([
+  ["openai-responses-v1", "openai-responses"],
+  ["xai-responses-v1", "openai-responses"],
+  ["anthropic-messages-v1", "anthropic-messages"],
+  ["chutes-e2ee-v1", "openai-completions"],
+  ["ollama-openai-local-v1", "openai-completions"],
+  ["lm-studio-openai-local-v1", "openai-completions"],
+  ["local-demo", "openai-completions"],
+]);
+
+export function primeModelFromManifest(manifest: SessionManifest): Model<Api> {
+  const providerId = manifest.providerId;
+  const api = apiFromTransportId.get(providerId) ?? "openai-completions";
+  return {
+    id: manifest.model,
+    name: manifest.model,
+    api,
+    provider: providerId,
+    baseUrl: `https://gateway/${encodeURIComponent(providerId)}`,
+    reasoning: false,
+    thinkingLevelMap: undefined,
+    input: ["text", "image"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: manifest.contextPolicy ? manifest.contextPolicy.contextWindowTokens : 0,
+    maxTokens: 0,
+  };
+}
+
+export async function runPrimeTurn(options: RunTurnOptions & { runtime?: PrimeRuntimeKind }): Promise<TurnResult> {
+  const events = await options.journal.readEvents(options.sessionId);
+  const history = sessionRuntimeKind(events);
+  const selection = options.runtime ?? (history === "prime" ? "prime" : "airship-core");
+
+  if (selection === "prime" && history !== "prime" && events.length > 0) {
+    throw new Error(`runtime selection mismatch: this session runs airship-core; fork the session to use the PRIME runtime.`);
+  }
+  if (selection === "airship-core" && history === "prime") {
+    throw new Error(`runtime selection mismatch: this session is prime-pinned; fork the session to use the airship-core runtime.`);
+  }
+
+  // Seal-on-first-prime-run evidence pin: a session whose journal's first
+  // prime turn lands the seal first, so every later engine decision
+  // about this session reads the same durable evidence the Proof view reads.
+  if (selection === "prime" && !events.some(
+    (event) => event.type.startsWith("prime."),
+  )) {
+    await options.journal.append(options.sessionId, [
+      {
+        type: "prime.session.runtime.seal",
+        payload: { runtime: "prime", pinnedBy: "prime", at: new Date().toISOString() },
+      },
+    ]);
+  }
+
+  const manifest = (await options.journal.getSession(options.sessionId))?.manifest;
+  if (!manifest) throw new Error(`session ${options.sessionId} does not exist in this journal`);
+  if (manifest.providerId && options.transport?.id && manifest.providerId !== options.transport.id) {
+    throw new Error(`provider pin mismatch: manifest providerId ${manifest.providerId} !== transport.id ${options.transport.id}; fork the session.`);
+  }
+
+  const model = primeModelFromManifest(manifest);
+  const runtime = new PrimeRuntime({
+    journal: options.journal,
+    registry: options.tools,
+    approvalPolicy: options.approvalPolicy,
+  });
+  const session = await runtime.attachSession({
+    sessionId: options.sessionId,
+    manifest,
+    model,
+    onSignal: options.onSignal,
+    maxSteps: options.maxSteps,
+    signal: options.signal,
+
+  });
+
+  const result = await session.prompt(options.content, options.images);
+  if (result.outcome !== "completed") {
+    throw new Error(
+      result.outcome === "cancelled" ? `prime turn cancelled: ${result.reason}` : `prime turn failed: ${result.error}`,
+    );
+  }
+  if (result.text === undefined || result.receipt === undefined) {
+    throw new Error("prime turn result was malformed: completed without text or receipt.");
+  }
+  return {
+    turnId: result.turnId,
+    content: result.text,
+    receipt: result.receipt,
+    events: result.events,
+  };
+}
