@@ -1,0 +1,706 @@
+/**
+ * Prime session authority tests: the spec's eight named cases, run against
+ * the real ported Agent/loop with the scripted faux provider, the airship
+ * MemoryJournalBackend, and a real ToolRegistry, so every assertion reads
+ * the same journal the session audit would read.
+ */
+
+import { afterEach, describe, expect, it } from "vitest";
+import { createAssistantMessageEventStream } from "../ai/event-stream";
+import type { AssistantMessage, Model, Usage } from "../ai/types";
+import {
+  type FauxProviderRegistration,
+  fauxAssistantMessage,
+  fauxToolCall,
+  registerFauxProvider,
+} from "../ai/providers/faux";
+import { materializeMessages } from "../../core/agent";
+import type {
+  ApprovalPolicy,
+  JsonValue,
+  SessionContextPolicy,
+  SessionManifest,
+  Tool,
+  ToolContext,
+  ToolExecutionResult,
+} from "../../core/contracts";
+import { createSessionContextPolicy } from "../../core/context-policy";
+import { sha256, stableStringify } from "../../core/hash";
+import { EventJournal } from "../../core/journal";
+import type { DurableEvent } from "../../core/journal";
+import { createSessionManifest } from "../../core/session-manifest";
+import { MemoryJournalBackend } from "../../core/memory-journal";
+import { allowAllForTests, ToolRegistry } from "../../tools/registry";
+import { PrimeKernelHost } from "../kernel/kernel-host";
+import type { KernelWorkerLike } from "../kernel/kernel-host";
+import { createPrimeExecuteCodeTool } from "../tools/kernel-tool";
+import { PrimeAgentSession } from "./session";
+import type { PrimeSessionOptions } from "./session";
+import { PRIME_EVENT_TYPES } from "./prime-events";
+
+const SYSTEM_PROMPT = "You are a test assistant.";
+const WORKSPACE_ID = "ws-prime-test";
+
+const registrations: FauxProviderRegistration[] = [];
+
+afterEach(() => {
+  while (registrations.length > 0) registrations.pop()?.unregister();
+});
+
+function zeroUsage(): Usage {
+  return {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 0,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  };
+}
+
+function makeStubTool(
+  name: string,
+  effect: "read" | "write",
+  execute: (args: JsonValue, context: ToolContext) => Promise<ToolExecutionResult>,
+): Tool {
+  return {
+    definition: {
+      name,
+      description: `Test stub tool ${name}.`,
+      effect,
+      inputSchema: {
+        type: "object",
+        properties: { value: { type: "string" } },
+        additionalProperties: true,
+      },
+    },
+    execute,
+  };
+}
+
+type SessionFixture = Readonly<{
+  registration: FauxProviderRegistration;
+  model: Model<string>;
+  journal: EventJournal;
+  registry: ToolRegistry;
+  sessionId: string;
+  manifest: SessionManifest;
+}>;
+
+async function makeFixture(options: Readonly<{
+  tools?: Tool[];
+  contextPolicy?: SessionContextPolicy;
+  faux?: Parameters<typeof registerFauxProvider>[0];
+}> = {}): Promise<SessionFixture> {
+  const registration = registerFauxProvider(options.faux ?? {});
+  registrations.push(registration);
+  const journal = new EventJournal(new MemoryJournalBackend());
+  const registry = new ToolRegistry();
+  for (const tool of options.tools ?? []) registry.register(tool);
+  const model = registration.getModel();
+  if (!model) throw new Error("faux registration has no model");
+  const manifest = await createSessionManifest({
+    systemPrompt: SYSTEM_PROMPT,
+    providerId: "faux",
+    model: model.id,
+    tools: registry.definitions(),
+    workspaceId: WORKSPACE_ID,
+    securityPosture: "local",
+    ...(options.contextPolicy ? { contextPolicy: options.contextPolicy } : {}),
+  });
+  const record = await journal.createSession("prime session authority test", manifest);
+  return { registration, model, journal, registry, sessionId: record.id, manifest };
+}
+
+function makeSession(
+  fixture: SessionFixture,
+  options: Partial<PrimeSessionOptions> = {},
+): PrimeAgentSession {
+  return new PrimeAgentSession({
+    sessionId: fixture.sessionId,
+    manifest: fixture.manifest,
+    journal: fixture.journal,
+    registry: fixture.registry,
+    approvalPolicy: allowAllForTests,
+    model: fixture.model,
+    ...options,
+  });
+}
+
+function eventsOfType(events: readonly DurableEvent[], type: string): DurableEvent[] {
+  return events.filter((event) => event.type === type);
+}
+
+function payloadRecord(event: DurableEvent): Record<string, unknown> {
+  return event.payload as Record<string, unknown>;
+}
+
+/** Scripted kernel worker: answers one tool bridge call per job, then finishes. */
+type ScriptedKernelWorker = KernelWorkerLike & {
+  emit(message: unknown): void;
+};
+
+function makeKernelBridgeWorker(): { worker: ScriptedKernelWorker } {
+  const listeners = {
+    message: [] as ((event: { data?: unknown }) => void)[],
+    error: [] as ((event: { message?: string }) => void)[],
+  };
+  let readyAnnounced = false;
+  const worker: ScriptedKernelWorker = {
+    emit(message: unknown) {
+      for (const listener of listeners.message) listener({ data: message });
+    },
+    postMessage(message: unknown) {
+      const data = message as {
+        type?: string;
+        job?: { jobId: string; code: string; label?: string };
+      };
+      if (data.type === "exec" && data.job) {
+        worker.emit({
+          type: "bridge-request",
+          jobId: data.job.jobId,
+          call: { jobId: data.job.jobId, seq: 0, tool: "echo_stub", arguments: {} },
+        });
+        return;
+      }
+      if (data.type === "bridge-response") {
+        const jobId = (message as { jobId: string }).jobId;
+        worker.emit({
+          type: "finished",
+          jobId,
+          result: {
+            jobId,
+            engine: "javascript",
+            outcome: "completed",
+            stdout: "",
+            stderr: "",
+            bridgeCalls: 1,
+            wallMs: 1,
+          },
+        });
+      }
+    },
+    terminate() {
+      // Scripted workers do not hold resources.
+    },
+    addEventListener(type: string, listener: (event: never) => void) {
+      if (type === "message") {
+        listeners.message.push(listener as (event: { data?: unknown }) => void);
+        // The host waits for exactly one ready handshake after boot.
+        if (!readyAnnounced) {
+          readyAnnounced = true;
+          queueMicrotask(() => worker.emit({ type: "ready", engine: "javascript" }));
+        }
+      }
+      if (type === "error") listeners.error.push(listener as (event: { message?: string }) => void);
+    },
+    removeEventListener(type: string, listener: (event: never) => void) {
+      const bucket = type === "message" ? listeners.message : listeners.error;
+      const index = bucket.indexOf(listener as never);
+      if (index >= 0) bucket.splice(index, 1);
+    },
+  };
+  return { worker };
+}
+
+describe("PrimeAgentSession", () => {
+  it("t1: reproduces core/agent.ts requestDigests from journal replay for every step", async () => {
+    const lookup = makeStubTool("lookup", "read", async () => ({ content: "lookup says hi" }));
+    const fixture = await makeFixture({ tools: [lookup] });
+    fixture.registration.setResponses([
+      fauxAssistantMessage(
+        [fauxToolCall("lookup", { query: "q" }, { id: "call-1" })],
+        { stopReason: "toolUse" },
+      ),
+      fauxAssistantMessage("final answer"),
+    ]);
+    const session = makeSession(fixture);
+    const result = await session.prompt("call the tool then answer");
+    expect(result.outcome).toBe("completed");
+    if (result.outcome !== "completed") throw new Error("expected completion");
+
+    const started = eventsOfType(result.events, "inference.started");
+    expect(started).toHaveLength(2);
+    for (const [step, event] of started.entries()) {
+      const payload = payloadRecord(event);
+      expect(payload.providerId).toBe(fixture.manifest.providerId);
+      expect(payload.model).toBe(fixture.manifest.model);
+      expect(payload.step).toBe(step);
+      expect(payload.posture).toBe("local");
+      expect(payload.idempotencyKey).toBe(`${fixture.sessionId}:${result.turnId}:${step}`);
+      /*
+       * Byte parity: recreate the digest from the journal replay exactly the
+       * way core/agent.ts builds it (protocol-v2 disabled-context options),
+       * so the check fails on any drift in journal→LLM materialization.
+       */
+      const prior = result.events.filter((candidate) => candidate.sequence < event.sequence);
+      const messages = materializeMessages(prior, {
+        allowEmbeddedContext: false,
+        allowSelectedContext: false,
+      });
+      const expected = await sha256(
+        stableStringify({
+          model: fixture.manifest.model,
+          systemPromptDigest: fixture.manifest.systemPromptDigest,
+          messages,
+          tools: fixture.manifest.tools,
+          idempotencyKey: payload.idempotencyKey,
+        } as unknown as JsonValue),
+      );
+      expect(payload.requestDigest).toBe(expected);
+    }
+    const priorToSecond = result.events.filter((event) => event.sequence < started[1]!.sequence);
+    const replayed = materializeMessages(priorToSecond, {
+      allowEmbeddedContext: false,
+      allowSelectedContext: false,
+    });
+    expect(replayed.map((message) => message.role)).toEqual(["user", "assistant", "tool"]);
+
+    const finalized = eventsOfType(result.events, "turn.completed");
+    expect(finalized).toHaveLength(1);
+    expect(payloadRecord(finalized[0]!).receiptId).toBe(result.receipt!.receiptId);
+  });
+
+  it("t2: denial journal shape matches core/agent.ts; repeated denials stop the turn at five", async () => {
+    const writeThing = makeStubTool("write_thing", "write", async () => ({ content: "never runs" }));
+    const fixture = await makeFixture({ tools: [writeThing] });
+    const denyAll: ApprovalPolicy = { review: async () => "deny" };
+    fixture.registration.setResponses(
+      Array.from({ length: 5 }, (_unused, index) =>
+        fauxAssistantMessage(
+          [fauxToolCall("write_thing", { value: "same" }, { id: `deny-call-${index + 1}` })],
+          { stopReason: "toolUse" },
+        ),
+      ),
+    );
+    const session = makeSession(fixture, { approvalPolicy: denyAll });
+    const result = await session.prompt("keep trying");
+    expect(result.outcome).toBe("failed");
+
+    const denied = eventsOfType(result.events, "tool.denied");
+    expect(denied).toHaveLength(5);
+    for (const event of denied) {
+      const payload = payloadRecord(event);
+      expect(payload.name).toBe("write_thing");
+      expect(payload.approval).toBeNull();
+    }
+    expect(payloadRecord(denied[0]!).content).toBe("Permission denied for write_thing.");
+    expect(String(payloadRecord(denied[1]!).content)).toContain(
+      "[Airship guardrail: write_thing has now failed 2 times in this turn with identical arguments",
+    );
+    expect(String(payloadRecord(denied[2]!).content)).toContain("3 times in this turn with identical arguments");
+    expect(payloadRecord(denied[4]!).content).toBe("Permission denied for write_thing.");
+    expect(eventsOfType(result.events, "tool.resulted")).toHaveLength(0);
+    expect(eventsOfType(result.events, "tool.approved")).toHaveLength(0);
+
+    const failed = eventsOfType(result.events, "turn.failed");
+    expect(failed).toHaveLength(1);
+    const stopText =
+      "write_thing failed 5 times in this turn with identical arguments. " +
+      "The turn was stopped instead of spending its remaining steps on a call that is not going to " +
+      "start succeeding; change the arguments or the approach and send it again.";
+    expect(payloadRecord(failed[0]!).error).toBe(stopText);
+    expect(result.error).toBe(stopText);
+
+    // A failed turn is dropped whole from the next turn's actionable history.
+    const materialized = materializeMessages(result.events, {
+      allowEmbeddedContext: false,
+      allowSelectedContext: false,
+    });
+    expect(materialized).toHaveLength(0);
+  });
+
+  it("t2b: the second identical denial carries the guardrail warning inside the tool message", async () => {
+    const writeThing = makeStubTool("write_thing", "write", async () => ({ content: "never runs" }));
+    const fixture = await makeFixture({ tools: [writeThing] });
+    const denyAll: ApprovalPolicy = { review: async () => "deny" };
+    fixture.registration.setResponses([
+      fauxAssistantMessage([fauxToolCall("write_thing", { value: "same" }, { id: "deny-a" })], { stopReason: "toolUse" }),
+      fauxAssistantMessage([fauxToolCall("write_thing", { value: "same" }, { id: "deny-b" })], { stopReason: "toolUse" }),
+      fauxAssistantMessage("gives up"),
+    ]);
+    const session = makeSession(fixture, { approvalPolicy: denyAll });
+    const result = await session.prompt("try twice");
+    expect(result.outcome).toBe("completed");
+    const denied = eventsOfType(result.events, "tool.denied");
+    expect(denied).toHaveLength(2);
+    expect(payloadRecord(denied[1]!).content).toBe(
+      "Permission denied for write_thing.\n\n" +
+      "[Airship guardrail: write_thing has now failed 2 times in this turn with identical arguments, " +
+      "so repeating it unchanged will fail again. Change the arguments, use a different tool, " +
+      "or tell the person what is blocking you. This turn stops at 5 identical failures.]",
+    );
+  });
+
+  it("t3: approved calls journal approved→resulted in order, with bounded content metadata", async () => {
+    const bigRead = makeStubTool("big_read", "read", async () => ({
+      content: "x".repeat(50_000),
+      metadata: { origin: "stub" },
+    }));
+    const contextPolicy = createSessionContextPolicy({
+      contextWindowTokens: 2_048,
+      source: { kind: "runtime-config", label: "test-window" },
+    });
+    const fixture = await makeFixture({ tools: [bigRead], contextPolicy });
+    fixture.registration.setResponses([
+      fauxAssistantMessage([fauxToolCall("big_read", { value: "go" }, { id: "big-1" })], { stopReason: "toolUse" }),
+      fauxAssistantMessage("done reading"),
+    ]);
+    const session = makeSession(fixture);
+    const result = await session.prompt("read everything");
+    expect(result.outcome).toBe("completed");
+
+    const requested = eventsOfType(result.events, "tool.requested")[0]!;
+    const approved = eventsOfType(result.events, "tool.approved")[0]!;
+    const resulted = eventsOfType(result.events, "tool.resulted")[0]!;
+    expect(requested.sequence).toBeLessThan(approved.sequence);
+    expect(approved.sequence).toBeLessThan(resulted.sequence);
+
+    const approval = payloadRecord(approved).approval as Record<string, unknown>;
+    expect(approval.source).toBe("bounded-browser-sandbox");
+    expect(approval.mode).toBe("full-access");
+
+    const resultedPayload = payloadRecord(resulted);
+    expect(resultedPayload.isError).toBe(false);
+    expect(String(resultedPayload.content)).toContain("[Airship truncated this tool result:");
+    const metadata = resultedPayload.metadata as Record<string, unknown>;
+    expect(metadata.contextBudgetTruncated).toBe(true);
+    expect(metadata.origin).toBe("stub");
+    expect(metadata.originalContentBytes).toBe(50_000);
+    expect(Number(metadata.retainedContentBytes)).toBeLessThan(50_000);
+    expect(resultedPayload.callId).toBe("big-1");
+    expect(payloadRecord(approved).callId).toBe("big-1");
+    expect(eventsOfType(result.events, "tool.failed")).toHaveLength(0);
+  });
+
+  it("t3b: errored tool results journal the identical-failure warning at count two", async () => {
+    const flaky = makeStubTool("flaky_write", "write", async () => ({ content: "disk is full", isError: true }));
+    const fixture = await makeFixture({ tools: [flaky] });
+    fixture.registration.setResponses([
+      fauxAssistantMessage([fauxToolCall("flaky_write", { value: "same" }, { id: "flaky-1" })], { stopReason: "toolUse" }),
+      fauxAssistantMessage([fauxToolCall("flaky_write", { value: "same" }, { id: "flaky-2" })], { stopReason: "toolUse" }),
+      fauxAssistantMessage("stopping here"),
+    ]);
+    const session = makeSession(fixture);
+    const result = await session.prompt("write twice");
+    expect(result.outcome).toBe("completed");
+    const resulted = eventsOfType(result.events, "tool.resulted");
+    expect(resulted).toHaveLength(2);
+    expect(payloadRecord(resulted[0]!).isError).toBe(true);
+    expect(String(payloadRecord(resulted[1]!).content)).toContain(
+      "[Airship guardrail: flaky_write has now failed 2 times in this turn with identical arguments",
+    );
+  });
+
+  it("t4: abort mid-flight journals turn.cancelled signal-neutrally and keeps salvage invariants", async () => {
+    const fixture = await makeFixture({ faux: { tokensPerSecond: 2 } });
+    fixture.registration.setResponses([fauxAssistantMessage("slow ".repeat(600))]);
+    const session = makeSession(fixture);
+    const promise = session.prompt("say a lot");
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(session.getActiveTurnId()).toBeDefined();
+    await session.abortTurn("user pressed stop");
+    const result = await promise;
+    expect(result.outcome).toBe("cancelled");
+    expect(result.reason).toBe("user pressed stop");
+
+    const cancelled = eventsOfType(result.events, "turn.cancelled");
+    expect(cancelled).toHaveLength(1);
+    expect(payloadRecord(cancelled[0]!).error).toBe("user pressed stop");
+    expect(eventsOfType(result.events, "turn.completed")).toHaveLength(0);
+
+    // An unproductive cancelled turn drops whole: the next request reads as if it never asked.
+    const materialized = materializeMessages(result.events, {
+      allowEmbeddedContext: false,
+      allowSelectedContext: false,
+    });
+    expect(materialized).toHaveLength(0);
+
+    fixture.registration.appendResponses([fauxAssistantMessage("second works")]);
+    const second = await session.prompt("after the stop");
+    expect(second.outcome).toBe("completed");
+    expect(eventsOfType(second.events, "turn.cancelled")).toHaveLength(1);
+  });
+
+  it("t5a: the maxSteps cap journals turn.failed naming the step limit before opening another request", async () => {
+    const lookup = makeStubTool("lookup", "read", async () => ({ content: "ok" }));
+    const fixture = await makeFixture({ tools: [lookup] });
+    fixture.registration.setResponses(
+      Array.from({ length: 3 }, (_unused, index) =>
+        fauxAssistantMessage(
+          [fauxToolCall("lookup", { query: `q${index}` }, { id: `cap-call-${index}` })],
+          { stopReason: "toolUse" },
+        ),
+      ),
+    );
+    const session = makeSession(fixture, { maxSteps: 2 });
+    const result = await session.prompt("loop forever");
+    expect(result.outcome).toBe("failed");
+    expect(result.error).toBe("Agent exceeded the 2-step turn limit.");
+    expect(payloadRecord(eventsOfType(result.events, "turn.failed")[0]!).error).toBe(
+      "Agent exceeded the 2-step turn limit.",
+    );
+    // Steps 0 and 1 opened; the third request never reached the provider.
+    expect(eventsOfType(result.events, "inference.started")).toHaveLength(2);
+    expect(fixture.registration.state.callCount).toBe(2);
+  });
+
+  it("t5b: the 64-tool-call step cap journals turn.failed before any tool draft exists", async () => {
+    const lookup = makeStubTool("lookup", "read", async () => ({ content: "ok" }));
+    const fixture = await makeFixture({ tools: [lookup] });
+    const calls = Array.from({ length: 65 }, (_unused, index) =>
+      fauxToolCall("lookup", { query: `${index}` }, { id: `call-${index}` }),
+    );
+    fixture.registration.setResponses([fauxAssistantMessage(calls, { stopReason: "toolUse" })]);
+    const session = makeSession(fixture);
+    const result = await session.prompt("call everything");
+    expect(result.outcome).toBe("failed");
+    expect(result.error).toBe("Provider exceeded the 64-tool-call step limit.");
+    // Mismatches raise before the batch is drafted anywhere.
+    expect(eventsOfType(result.events, "tool.requested")).toHaveLength(0);
+    expect(eventsOfType(result.events, "assistant.completed")).toHaveLength(0);
+    expect(payloadRecord(eventsOfType(result.events, "turn.failed")[0]!).error).toBe(
+      "Provider exceeded the 64-tool-call step limit.",
+    );
+  });
+
+  it("t5c: a reused tool-call operation id journals turn.failed naming the reuse", async () => {
+    const lookup = makeStubTool("lookup", "read", async () => ({ content: "ok" }));
+    const fixture = await makeFixture({ tools: [lookup] });
+    fixture.registration.setResponses([
+      fauxAssistantMessage([fauxToolCall("lookup", { query: "a" }, { id: "reused" })], { stopReason: "toolUse" }),
+      fauxAssistantMessage([fauxToolCall("lookup", { query: "b" }, { id: "reused" })], { stopReason: "toolUse" }),
+    ]);
+    const session = makeSession(fixture);
+    const result = await session.prompt("reuse ids");
+    expect(result.outcome).toBe("failed");
+    expect(result.error).toBe("Provider emitted a duplicate or reused tool-call operation ID.");
+  });
+
+  it("t5d: the 100_000-event step cap journals turn.failed from a bloated stream", { timeout: 30_000 }, async () => {
+    const fixture = await makeFixture({});
+    const session = makeSession(fixture, {
+      streamFn: (model, _context, _options) => {
+        const out = createAssistantMessageEventStream();
+        const partial: AssistantMessage = {
+          role: "assistant",
+          content: [{ type: "text", text: "" }],
+          api: fixture.model.api,
+          provider: fixture.model.provider,
+          model: fixture.model.id,
+          usage: zeroUsage(),
+          stopReason: "stop",
+          timestamp: Date.now(),
+        };
+        const final: AssistantMessage = { ...partial, content: [{ type: "text", text: "x" }] };
+        queueMicrotask(() => {
+          out.push({ type: "start", partial });
+          for (let index = 0; index < 100_001; index += 1) {
+            out.push({ type: "text_delta", contentIndex: 0, delta: "x", partial });
+          }
+          out.push({ type: "done", reason: "stop", message: final });
+          out.end(final);
+        });
+        return out;
+      },
+    });
+    const result = await session.prompt("flood the step");
+    expect(result.outcome).toBe("failed");
+    expect(result.error).toBe("Provider exceeded the 100000-event inference step limit.");
+    expect(payloadRecord(eventsOfType(result.events, "turn.failed")[0]!).error).toBe(
+      "Provider exceeded the 100000-event inference step limit.",
+    );
+  });
+
+  it("t5e: assistant text over 4 MiB journals turn.failed naming the byte limit", async () => {
+    const fixture = await makeFixture({});
+    const flood = "x".repeat(4 * 1_024 * 1_024 + 64);
+    const session = makeSession(fixture, {
+      streamFn: (model, _context, _options) => {
+        const out = createAssistantMessageEventStream();
+        const final2: AssistantMessage = {
+          role: "assistant",
+          content: [{ type: "text", text: flood }],
+          api: fixture.model.api,
+          provider: fixture.model.provider,
+          model: fixture.model.id,
+          usage: zeroUsage(),
+          stopReason: "stop",
+          timestamp: Date.now(),
+        };
+        queueMicrotask(() => {
+          out.push({ type: "start", partial: { ...final2, content: [{ type: "text", text: "" }] } });
+          out.push({ type: "text_delta", contentIndex: 0, delta: flood, partial: final2 });
+          out.push({ type: "done", reason: "stop", message: final2 });
+          out.end(final2);
+        });
+        return out;
+      },
+    });
+    const result = await session.prompt("say too much");
+    expect(result.outcome).toBe("failed");
+    expect(result.error).toBe(`Provider response exceeded the ${4 * 1_024 * 1_024}-byte turn limit.`);
+  });
+
+  it("t6: a kernel bridge call journals prime.kernel.tool.* with prime-kernel:<jobId>:<seq> identity", async () => {
+    const echoStub = makeStubTool("echo_stub", "read", async () => ({ content: "echo-ok" }));
+    const probe = await makeFixture({});
+    const definitionProbeHost = new PrimeKernelHost({
+      ports: {
+        bridge: { call: async () => ({ seq: 0, ok: false as const, error: "probe host never routes" }) },
+        workerFactory: () => {
+          throw new Error("definition probe host never boots");
+        },
+      },
+    });
+    const executeCodeDef = createPrimeExecuteCodeTool(definitionProbeHost).definition;
+    const manifest = await createSessionManifest({
+      systemPrompt: SYSTEM_PROMPT,
+      providerId: "faux",
+      model: probe.model.id,
+      tools: [echoStub.definition, executeCodeDef],
+      workspaceId: WORKSPACE_ID,
+      securityPosture: "local",
+    });
+    const record = await probe.journal.createSession("kernel bridge test", manifest);
+
+    const scripted = makeKernelBridgeWorker();
+    const session = makeSession(
+      { ...probe, sessionId: record.id, manifest },
+      { kernelWorkerFactory: () => scripted.worker as unknown as Worker },
+    );
+    probe.registry.register(echoStub);
+    probe.registry.register(createPrimeExecuteCodeTool(session.kernelHost));
+    probe.registration.setResponses([
+      fauxAssistantMessage(
+        [fauxToolCall("execute_code", { code: "await pat.call('echo_stub', {})" }, { id: "kernel-call-1" })],
+        { stopReason: "toolUse" },
+      ),
+      fauxAssistantMessage("kernel finished"),
+    ]);
+    const result = await session.prompt("run code that calls the echo stub");
+    expect(result.outcome).toBe("completed");
+
+    const jobStarted = eventsOfType(result.events, PRIME_EVENT_TYPES.kernelJobStarted);
+    expect(jobStarted).toHaveLength(1);
+    expect(payloadRecord(jobStarted[0]!).jobId).toBe("prime-exec-kernel-call-1");
+
+    const bridgeApproved = eventsOfType(result.events, "prime.kernel.tool.approved");
+    expect(bridgeApproved).toHaveLength(1);
+    expect(bridgeApproved[0]!.operationId).toBe("prime-kernel:prime-exec-kernel-call-1:0");
+    const bridgeApproval = payloadRecord(bridgeApproved[0]!).approval as Record<string, unknown>;
+    expect(bridgeApproval.source).toBe("bounded-browser-sandbox");
+
+    const bridgeResulted = eventsOfType(result.events, "prime.kernel.tool.resulted");
+    expect(bridgeResulted).toHaveLength(1);
+    expect(bridgeResulted[0]!.operationId).toBe("prime-kernel:prime-exec-kernel-call-1:0");
+    expect(payloadRecord(bridgeResulted[0]!).content).toBe("echo-ok");
+    expect(payloadRecord(bridgeResulted[0]!).callId).toBe("prime-kernel:prime-exec-kernel-call-1:0");
+
+    const jobCompleted = eventsOfType(result.events, PRIME_EVENT_TYPES.kernelJobCompleted);
+    expect(jobCompleted).toHaveLength(1);
+    expect(payloadRecord(jobCompleted[0]!).bridgeCalls).toBe(1);
+
+    // The execute_code call itself lives in the ordinary turn vocabulary.
+    expect(eventsOfType(result.events, "tool.approved").map((event) => event.operationId)).toEqual(["kernel-call-1"]);
+    expect(eventsOfType(result.events, "tool.resulted").map((event) => event.operationId)).toEqual(["kernel-call-1"]);
+    expect(result.text ?? "").toContain("kernel finished");
+  });
+
+  it("t7: prompt during an active turn refuses with the serialization error; queued steer lands as next turn", async () => {
+    const fixture = await makeFixture({});
+    fixture.registration.setResponses([
+      fauxAssistantMessage("first answer"),
+      fauxAssistantMessage("steer answer"),
+      fauxAssistantMessage("second answer"),
+    ]);
+    const session = makeSession(fixture);
+    const first = session.prompt("one");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const activeTurnId = session.getActiveTurnId();
+    expect(activeTurnId).toBeDefined();
+    await expect(session.prompt("two")).rejects.toThrow(/steer\/follow-up as next turn/i);
+    await expect(session.prompt("also cannot")).rejects.toThrow(activeTurnId!);
+
+    session.steer("steered while running");
+    const firstResult = await first;
+    expect(firstResult.outcome).toBe("completed");
+    await session.waitForIdle();
+
+    const third = await session.prompt("two");
+    expect(third.outcome).toBe("completed");
+
+    const journal = await fixture.journal.readEvents(fixture.sessionId);
+    const requested = eventsOfType(journal, "turn.requested").map((event) => String(payloadRecord(event).content));
+    expect(requested).toEqual(["one", "steered while running", "two"]);
+    expect(fixture.registration.state.callCount).toBe(3);
+  });
+
+  it("t8: turn.requested images pass through and the receipt chains to the final request digest", async () => {
+    const lookup = makeStubTool("lookup", "read", async () => ({ content: "found it" }));
+    const fixture = await makeFixture({ tools: [lookup] });
+    const capturedContexts: unknown[][] = [];
+    fixture.registration.setResponses([
+      (context) => {
+        capturedContexts.push(context.messages);
+        return fauxAssistantMessage([fauxToolCall("lookup", { query: "q" }, { id: "call-1" })], { stopReason: "toolUse" });
+      },
+      (context) => {
+        capturedContexts.push(context.messages);
+        return fauxAssistantMessage("saw the image");
+      },
+    ]);
+    const image = {
+      type: "image" as const,
+      name: "pic",
+      mediaType: "image/png",
+      dataUrl: "data:image/png;base64,aGVsbG8=",
+      sizeBytes: 5,
+    };
+    const session = makeSession(fixture);
+    const result = await session.prompt("what is in this image", [image]);
+    expect(result.outcome).toBe("completed");
+
+    const requested = eventsOfType(result.events, "turn.requested")[0]!;
+    const images = payloadRecord(requested).images as unknown[];
+    expect(images).toEqual([
+      {
+        type: "image",
+        name: "pic",
+        mediaType: "image/png",
+        dataUrl: "data:image/png;base64,aGVsbG8=",
+        sizeBytes: 5,
+      },
+    ]);
+    expect(capturedContexts).toHaveLength(2);
+
+    // The provider-facing messages carry the image as a prime image block.
+    const userMessage = capturedContexts[0]![0] as { role: string; content: unknown };
+    expect(userMessage.role).toBe("user");
+    const parts = userMessage.content as Array<Record<string, unknown>>;
+    expect(parts).toEqual([
+      { type: "text", text: "what is in this image" },
+      { type: "image", data: "aGVsbG8=", mimeType: "image/png" },
+    ]);
+
+    // The receipt binds the request digest of the step that produced the final answer.
+    const receipt = result.receipt!;
+    const started = eventsOfType(result.events, "inference.started");
+    const lastStarted = started.at(-1)!;
+    expect(receipt.bindings.requestDigest).toBe(payloadRecord(lastStarted).requestDigest);
+    expect(receipt.bindings.responseDigest).toBe(await sha256("saw the image"));
+    expect(receipt.sessionId).toBe(fixture.sessionId);
+    expect(receipt.turnId).toBe(result.turnId);
+    expect(receipt.provider).toBe(fixture.manifest.providerId);
+    expect(receipt.model).toBe(fixture.manifest.model);
+    expect(eventsOfType(result.events, "turn.completed")[0]!.payload).toEqual({
+      responseDigest: await sha256("saw the image"),
+      receiptId: receipt.receiptId,
+    });
+
+    const totals = session.getUsageTotals();
+    expect(totals.input + totals.cacheRead + totals.cacheWrite).toBeGreaterThan(0);
+    expect(totals.output).toBeGreaterThan(0);
+  });
+});
